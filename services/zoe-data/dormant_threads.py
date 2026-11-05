@@ -109,9 +109,9 @@ def match(thread: dict, text: str) -> "tuple[float, int, int]":
     return NAME_WEIGHT * len(shared_names) + WORD_WEIGHT * len(shared_words), len(shared_names), len(shared_words)
 
 
-def candidates(threads: Iterable[dict], signals: Sequence[Signal], today: _dt.date, *, threshold: float = THRESHOLD,
-               limit: int = MAX_PER_SCAN) -> "list[Candidate]":
-    """The best candidates (at most ``limit``) joining a dormant thread to a newer signal. Pure."""
+def candidates(threads: Iterable[dict], signals: Sequence[Signal], today: _dt.date, *, threshold: float = THRESHOLD) -> "list[Candidate]":
+    """The best candidate joining a dormant thread to a newer signal: at most ``MAX_PER_SCAN`` (one), a ceiling no caller can raise.
+    Pure."""
     import night_mind as nm
 
     usable = [s for s in signals if s.text and not nm.topic_of([s.text])]     # a health / grief / money / conflict line is never a cue
@@ -132,7 +132,7 @@ def candidates(threads: Iterable[dict], signals: Sequence[Signal], today: _dt.da
         if best is not None:
             scored.append((best[0], str(t.get("last_day") or ""), best[1]))
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return [c for _s, _d, c in scored[:limit]]
+    return [c for _s, _d, c in scored[:MAX_PER_SCAN]]
 
 
 async def scan(user_id: str, signals: Sequence[Signal], *, today: Optional[_dt.date] = None, backend: Any = None,

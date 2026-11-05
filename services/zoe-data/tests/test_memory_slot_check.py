@@ -64,6 +64,13 @@ def test_slot_of_reads_a_current_single_value(text, slot, value):
     "User's sister works at Acme",           # the sister's job, not the user's
     "User works at Acme and lives in Northcliff",   # two slots in one row: not paired
     "User has a dog named Rex",              # no slot
+    "User said Ana left Acme and now works at Globex",   # a reported claim: Ana's job, not the owner's
+    "User said Ana works at Globex",
+    "User's friend Ana left Acme and now works at Globex",
+    "User works at home",                    # not an employer
+    "User works at weekends",
+    "User lives in fear",                    # not a place
+    "User lives in a flat",
     "",
 ])
 def test_slot_of_refuses_what_is_not_one_current_value(text):
@@ -185,11 +192,15 @@ def test_the_question_carries_each_sides_provenance_in_the_rows_own_words():
     assert "you told me" not in q2.split(", but ")[1]                          # an inference is never "you told me"
 
 
-def test_a_side_without_provenance_falls_back_to_the_plain_dispute_question():
+def test_a_side_without_provenance_phrases_no_question():
     old = MemoryRef(id="old", text="User works at Acme", metadata={"source": "chat_regex", "added_ts": NOW - 40 * D})   # unstamped
     new = _ref("new", "User works at Globex", STATED, 3)
-    q = sc.question(sc.Conflict("self", "employer", "old", "new", sc.ASK), {"old": old, "new": new}, now=NOW)
-    assert q.startswith('Earlier you told me "User works at Acme"')
+    c = sc.Conflict("self", "employer", "old", "new", sc.ASK)
+    assert sc.question(c, {"old": old, "new": new}, now=NOW) == ""
+    assert sc.question(sc.Conflict("self", "employer", "new", "old", sc.ASK), {"old": old, "new": new}, now=NOW) == ""
+    # negative control: stamp the old side and the question is phrased
+    stamped = MemoryRef(id="old", text="User works at Acme", metadata={**STATED, "added_ts": NOW - 40 * D})
+    assert sc.question(c, {"old": stamped, "new": new}, now=NOW).startswith("On 20 September you told me")
 
 
 # ── the serving hook ──────────────────────────────────────────────────────────

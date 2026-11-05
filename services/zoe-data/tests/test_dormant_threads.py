@@ -77,7 +77,11 @@ def test_at_most_one_candidate_per_scan_the_best_score():
     b = _thread(tid="t-b", anchors="@harlan shed primer")
     got = dtm.candidates([a, b], [_sig("Harlan brought primer for the shed")], TODAY)
     assert [c.thread_id for c in got] == ["t-b"]
-    assert len(dtm.candidates([a, b], [_sig("Harlan brought primer for the shed")], TODAY, limit=5)) == 2
+    # the ceiling is not a caller's choice: there is no parameter that raises it
+    with pytest.raises(TypeError):
+        dtm.candidates([a, b], [_sig("Harlan brought primer for the shed")], TODAY, limit=5)
+    # negative control: with b gone the other matching thread is the one candidate (both did match)
+    assert [c.thread_id for c in dtm.candidates([a], [_sig("Harlan brought primer for the shed")], TODAY)] == ["t-a"]
 
 
 def test_scan_is_off_by_default_and_shadow_logs_ids_never_words(monkeypatch, caplog):

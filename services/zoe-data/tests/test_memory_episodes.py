@@ -65,14 +65,20 @@ def test_episode_of_finds_the_turn():
     assert me.episode_of("missing", eps) is None
 
 
-def test_resolve_drops_a_forgotten_turn_and_a_fully_forgotten_episode_is_gone():
-    ep = me.build("member-a", _turns(0, 5, 10))[0]
-    assert me.resolve(ep, {"m0", "m1", "m2"}) is ep
-    shrunk = me.resolve(ep, {"m1", "m2"})
+def test_resolve_rebuilds_from_the_surviving_turns_and_a_fully_forgotten_episode_is_gone():
+    turns = [TurnPointer("m0", "s0", T0), TurnPointer("m1", "s1", T0 + 5 * MIN), TurnPointer("m2", "s1", T0 + 10 * MIN)]
+    ep = me.build("member-a", turns)[0]
+    assert ep.session_ids == ("s0", "s1")
+    assert me.resolve(ep, turns) is ep
+    shrunk = me.resolve(ep, turns[1:])
     assert shrunk.turn_ids == ("m1", "m2") and shrunk.id == me.episode_id("member-a", "m1")
-    assert me.resolve(ep, set()) is None
-    # negative control: a build over a fresh read without the turn gives the same answer as resolve
-    assert me.build("member-a", [t for t in _turns(0, 5, 10) if t.turn_id != "m0"])[0].turn_ids == shrunk.turn_ids
+    # the forgotten turn leaves neither its session id nor its time behind
+    assert shrunk.session_ids == ("s1",) and shrunk.started_at == T0 + 5 * MIN
+    assert me.resolve(ep, []) is None
+    # a pointer that was never in the episode is not adopted
+    assert me.resolve(ep, turns[1:] + [TurnPointer("other", "s9", T0)]).turn_ids == ("m1", "m2")
+    # negative control: a fresh build over the survivors gives exactly the resolved episode
+    assert me.build("member-a", turns[1:])[0] == shrunk
 
 
 class _FakeDb:

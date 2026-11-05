@@ -140,16 +140,32 @@ def _clause_start(low: str, start: int) -> int:
     return max((m.end() for m in _CLAUSE_START_RE.finditer(low, 0, start)), default=0)
 
 
+#: a reported statement is somebody else's claim, not the holder's slot ("User said Ana works at ...")
+_REPORTING = frozenset({"said", "says", "told", "tells", "thinks", "thought", "heard", "hears", "mentioned", "reckons", "claims",
+                        "claimed", "believes", "believed", "asked", "wonders", "wondered"})
+#: phrases the slot patterns catch that are not an employer / a place ("works at home", "lives in fear", "lives in a flat")
+_NOT_VALUES = frozenset({"home", "night", "nights", "weekends", "weekend", "it", "that", "this", "times", "fear", "hope", "peace",
+                         "denial", "comfort", "luxury", "poverty", "harmony", "moment", "past", "present", "future",
+                         "flat", "house", "apartment", "unit", "caravan", "tent", "share house", "town", "city", "country",
+                         "suburbs", "bubble", "hiding", "limbo", "pain", "silence"})
+
+
 def _subject(low: str, start: int, form: str) -> Optional[str]:
     """The subject words of the clause, or None when they do not name ONE holder of the slot ("User's sister works at ..." is the
-    sister's job, not the user's; "Ana's sister's husband" is nobody this row is keyed to)."""
+    sister's job, not the user's; "Ana's sister's husband" is nobody this row is keyed to; "User said Ana works at ..." is a report)."""
     words = [w for w in low[_clause_start(low, start):start].split() if w not in _ADVERBS]
+    if any(w in _REPORTING for w in words):
+        return None
     if not words and form == "verb":
         # a coordinated clause shares the sentence's subject ("User left Acme and now works at Globex"): only the owner's
-        # subject is carried over - a named subject two clauses back is too far to trust
-        head = low[max((m.end() for m in re.finditer(r"[.!?;]\s", low[:start])), default=0):start].split()
+        # subject is carried over ("User's friend Ana left ..." carries nothing), and never across a reported claim
+        # ("User said Ana left Acme and now works at Globex" is Ana's job)
+        a = max((m.end() for m in re.finditer(r"[.!?;]\s", low[:start])), default=0)
+        head = low[a:start].split()
         for n in (2, 1):
             if " ".join(head[:n]) in _SELF_SUBJECTS:
+                if any(w in _REPORTING for w in head[n:]):
+                    return None
                 return " ".join(head[:n])
         return None
     if not words or len(words) > 4:
@@ -176,7 +192,7 @@ def slot_of(text: str) -> Optional[Slot]:
                 break       # negated / past / hoped-for, or an infinitive ("would love to work at"): not a current value
             subject = _subject(low, m.start(), form)
             v = _norm_value(m.group("v"))
-            if v and subject is not None:
+            if v and v not in _NOT_VALUES and subject is not None:
                 found.append(Slot(name, v, subject, form))
             break
     return found[0] if len(found) == 1 else None
@@ -369,8 +385,8 @@ def hidden_ids(found: Iterable[Conflict]) -> "frozenset[str]":
 
 def question(c: Conflict, by_id: Mapping[str, Any], *, now: Optional[float] = None) -> str:
     """ONE question about one conflict, in the rows' own stored words behind their provenance: "On 3 October you told me that you
-    work at Acme, and on Tuesday that you work at Globex - which is right?". Falls back to ``memory_disputes.question_text`` when a
-    side has no speakable provenance (never an invented "you told me")."""
+    work at Acme, and on Tuesday that you work at Globex - which is right?". "" when either side has no speakable provenance (fail
+    closed: never an invented "you told me"; the conflict stays in the report as ids)."""
     import provenance_speech as ps
 
     older, newer = by_id.get(c.older_id), by_id.get(c.newer_id)
@@ -378,16 +394,14 @@ def question(c: Conflict, by_id: Mapping[str, Any], *, now: Optional[float] = No
         return ""
     lead = ps.that_clause(_meta(older), _text(older), now=now, lead=True)
     nprov = ps.of(_meta(newer), _text(newer), now=now)
-    if lead and nprov is not None:
-        import provenance_answers
+    if not lead or nprov is None:
+        return ""        # a side with no honest provenance: no question is phrased (never an invented "you told me")
+    import provenance_answers
 
-        newer_words = provenance_answers.second_person(_text(newer))
-        if nprov.inferred:
-            return f"{lead}, but {nprov.clause()} that {newer_words} - is that right now?"
-        return f"{lead}, and {nprov.clause()} that {newer_words} - which is right?"
-    import memory_disputes
-
-    return memory_disputes.question_text(_text(older), _text(newer))
+    newer_words = provenance_answers.second_person(_text(newer))
+    if nprov.inferred:
+        return f"{lead}, but {nprov.clause()} that {newer_words} - is that right now?"
+    return f"{lead}, and {nprov.clause()} that {newer_words} - which is right?"
 
 
 # ── the serving hook + the whole-store report ─────────────────────────────────

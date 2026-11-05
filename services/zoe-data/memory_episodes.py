@@ -12,8 +12,8 @@ the same turns always give the same id.
 Nothing is stored. ``build`` is a pure function of the turn pointers; ``load_turn_pointers`` reads ids and times from
 ``chat_messages`` (never ``content``) with the same ownership rule the night jobs use (``user_filters.message_owner_expr``) and
 off-the-record turns excluded. A turn that is erased is simply not read next time, so its episode shrinks or disappears; a caller
-that holds an ``Episode`` across a forget re-checks it with ``resolve`` (pointers whose turn is gone are dropped; an episode with no
-turn left is ``None``). There is no derived store to erase: forget-complete by construction.
+that holds an ``Episode`` across a forget re-checks it with ``resolve`` against a fresh read (ids, sessions and times are rebuilt
+from the surviving turns; an episode with no turn left is ``None``). There is no derived store to erase: forget-complete by construction.
 
 Flag ``ZOE_MEMORY_EPISODES`` (default OFF, per-call read) gates the database read (``load``): off = no I/O, ``[]``. The pure
 functions need no flag.
@@ -116,16 +116,15 @@ def episode_of(turn_id: str, episodes: Iterable[Episode]) -> Optional[Episode]:
     return None
 
 
-def resolve(episode: Episode, alive: Iterable[str]) -> Optional[Episode]:
-    """The episode with only the turns that still exist (``alive`` = the turn ids a fresh read returned). None when none is left: a
-    forgotten conversation leaves no episode behind. The id follows the first SURVIVING turn. Pure."""
-    keep = set(alive)
-    ids = tuple(t for t in episode.turn_ids if t in keep)
-    if not ids:
+def resolve(episode: Episode, alive: Iterable[TurnPointer]) -> Optional[Episode]:
+    """The episode rebuilt from only its turns that still exist (``alive`` = the pointers a fresh read returned): ids, sessions and
+    bounds all come from the survivors, so a forgotten turn leaves no session id or time behind. None when none is left. Pure."""
+    mine = set(episode.turn_ids)
+    keep = sorted({p.turn_id: p for p in alive if p.turn_id in mine}.values(), key=lambda t: (t.at, t.turn_id))
+    if not keep:
         return None
-    if ids == episode.turn_ids:
-        return episode
-    return Episode(episode_id(episode.user_id, ids[0]), episode.user_id, ids, episode.session_ids, episode.started_at, episode.ended_at)
+    rebuilt = _make(episode.user_id, keep)
+    return episode if rebuilt == episode else rebuilt
 
 
 # ── the read (ids and times only) ─────────────────────────────────────────────
