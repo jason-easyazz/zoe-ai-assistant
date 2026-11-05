@@ -199,8 +199,12 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
     async def text_logs() -> int:
         import local_text_logs
 
-        # the local JSONL logs that keep utterance text (router shadow log, intent misses): a record naming the entity is dropped
-        return await asyncio.to_thread(local_text_logs.erase_entity, rx)
+        import recall_gate_trace
+
+        # the local JSONL logs that keep utterance text (router shadow log, intent misses): a record naming the entity is dropped;
+        # the owner's opt-in recall-gate trace (owner words + row text) the same way
+        n = await asyncio.to_thread(local_text_logs.erase_entity, rx)
+        return n + await asyncio.to_thread(recall_gate_trace.erase_entity, rx)
 
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)

@@ -17,18 +17,22 @@ Privacy and bounds (each pinned by a test):
   file when its last write is older than that (an abandoned trace does not linger);
 * off (the default) = no directory, no file, no I/O; turning it off stops writing, it does not delete what was written (delete the
   directory by hand when the scoring is done).
-Never raises: a trace failure is logged at debug level and the gate's decision is unaffected.
+Forget (forgotten means forever): ``erase_user`` drops every line of a deleted member (``MemoryService.delete_user``), ``erase_entity``
+drops every line whose owner words or row text name a forgotten entity (the cascade's ``text_logs`` step). Both RAISE on an I/O
+failure, so the forget path records the step as failed.
+
+``record`` never raises and is SILENT on failure (no log line at any level): the trace never leaves a trace in the normal logs.
 """
 from __future__ import annotations
 
 import json
-import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-logger = logging.getLogger(__name__)
+_LOCK = threading.Lock()           # appends (event loop) and the forget path's rewrites (a worker thread) never interleave
 
 ENV = "ZOE_RECALL_GATE_TRACE"
 DAYS_ENV = "ZOE_RECALL_GATE_TRACE_DAYS"
@@ -92,6 +96,11 @@ def _rotate(d: Path) -> None:
 
 
 def _append(line: str, now: float) -> None:
+    with _LOCK:
+        _append_locked(line, now)
+
+
+def _append_locked(line: str, now: float) -> None:
     d = TRACE_DIR
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(d, 0o700)
@@ -133,6 +142,58 @@ def record(user_id: str, dec: Any, owner_words: str, cands: Iterable[Any], *, mo
         }
         _append(json.dumps(row, ensure_ascii=False) + "\n", t)
         return True
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("recall_gate_trace: write failed (%s)", type(exc).__name__)
+    except Exception:  # noqa: BLE001 - silent by contract: no log line, the gate's decision stands
         return False
+
+
+def _files() -> list:
+    d = TRACE_DIR
+    return [p for p in [d / FILE_NAME] + [d / f"{FILE_NAME}.{i}" for i in range(1, KEEP + 1)] if p.exists()]
+
+
+def _texts(obj: dict) -> list:
+    out = [str(obj.get("owner_words") or "")]
+    for k in ("added", "dropped"):
+        out += [str((r or {}).get("text") or "") for r in (obj.get(k) or ()) if isinstance(r, dict)]
+    return out
+
+
+def _rewrite(drop) -> int:
+    """Keep the lines ``drop(obj)`` rejects; a malformed line is dropped too (it could hold a word nothing here can match). The file is
+    replaced atomically and stays 0600. Returns the number of lines dropped. RAISES on an I/O failure."""
+    n = 0
+    with _LOCK:
+        for p in _files():
+            kept = []
+            for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    obj = None
+                if not isinstance(obj, dict) or drop(obj):
+                    n += 1
+                    continue
+                kept.append(line + "\n")
+            tmp = p.with_name(p.name + ".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+                os.write(fd, "".join(kept).encode("utf-8"))
+            finally:
+                os.close(fd)
+            os.replace(tmp, p)
+    return n
+
+
+def erase_user(user_id: str) -> int:
+    """Member erase: drop every trace line of ``user_id``. RAISES on failure (the forget path fails closed)."""
+    uid = str(user_id or "")
+    return _rewrite(lambda o: str(o.get("user") or "") == uid)
+
+
+def erase_entity(rx: Any) -> int:
+    """Entity forget: drop every line whose owner words or row text match ``rx`` (a ``re.Pattern`` or a ledger pattern with
+    ``.search``). RAISES on failure."""
+    return _rewrite(lambda o: any(rx.search(t) for t in _texts(o)))

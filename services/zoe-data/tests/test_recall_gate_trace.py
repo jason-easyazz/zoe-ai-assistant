@@ -177,21 +177,88 @@ async def test_a_trace_failure_never_reaches_the_gate(monkeypatch):
     assert tr.record(UID, _dec(), "x", [], mode="shadow") is False
 
 
-async def test_the_log_line_still_carries_no_text_when_the_trace_is_on(monkeypatch):
+class _All(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_the_trace_is_silent_in_the_normal_logs_whether_it_writes_or_fails(monkeypatch, fail):
+    """Every record ANY logger emits while the gate decides with the trace on (and its write failing) is captured at DEBUG: none comes
+    from the trace module and none carries row text or the owner's words."""
     monkeypatch.setenv(tr.ENV, "1")
-    seen = []
+    if fail:
+        def boom(*a, **k):
+            raise OSError("disk full")
 
-    class H(logging.Handler):
-        def emit(self, record):
-            seen.append(record.getMessage())
-
-    lg = logging.getLogger("recall_gate")
-    h, old = H(logging.DEBUG), lg.level
-    lg.addHandler(h)
-    lg.setLevel(logging.DEBUG)
+        monkeypatch.setattr(tr, "_append", boom)
+    root, h = logging.getLogger(), _All()
+    old = root.level
+    root.addHandler(h)
+    root.setLevel(logging.DEBUG)
     try:
-        rg._log(UID, await _decide(), "shadow")
+        d = await _decide()
+        rg._log(UID, d, "shadow")                           # the RECALL_GATE line itself, as the shadow task writes it
     finally:
-        lg.removeHandler(h)
-        lg.setLevel(old)
-    assert seen and all("Juniper" not in m and "porridge" not in m for m in seen)
+        root.removeHandler(h)
+        root.setLevel(old)
+    msgs = [r.getMessage() for r in h.records]
+    assert any(m.startswith("RECALL_GATE") for m in msgs)    # the capture works: the gate's own line was seen
+    assert not [r for r in h.records if r.name.startswith("recall_gate_trace")]
+    assert all("Juniper" not in m and "porridge" not in m for m in msgs)
+    assert _live().exists() is (not fail)
+
+
+def _seed(lines):
+    tr.TRACE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _live().write_text("".join(json.dumps(x) + "\n" for x in lines))
+    os.chmod(_live(), 0o600)
+
+
+def test_erase_user_drops_only_that_members_lines():
+    other = "demo_bar_00000002"
+    _seed([{"user": UID, "owner_words": "a"}, {"user": other, "owner_words": "b"}, {"user": UID, "owner_words": "c"}])
+    (tr.TRACE_DIR / f"{tr.FILE_NAME}.1").write_text(json.dumps({"user": UID, "owner_words": "d"}) + "\nnot json\n")
+    assert tr.erase_user(UID) == 4                           # 3 of the member's lines + the malformed line
+    rest = [json.loads(x) for x in _live().read_text().splitlines()]
+    assert [r["user"] for r in rest] == [other]
+    assert (tr.TRACE_DIR / f"{tr.FILE_NAME}.1").read_text() == ""
+    assert stat.S_IMODE(os.stat(_live()).st_mode) == 0o600
+    assert tr.erase_user("demo_bar_00000009") == 0           # negative control: an unknown member removes nothing
+    assert len(_live().read_text().splitlines()) == 1
+
+
+def test_erase_entity_drops_lines_naming_the_entity_in_words_or_row_text():
+    import re
+
+    _seed([{"user": UID, "owner_words": "how is Juniper", "added": [], "dropped": []},
+           {"user": UID, "owner_words": "what to cook", "added": [{"id": "x", "text": WALK}], "dropped": []},
+           {"user": UID, "owner_words": "what to cook", "added": [], "dropped": [{"id": "y", "text": FILLER}]}])
+    assert tr.erase_entity(re.compile(r"juniper", re.I)) == 2
+    assert [json.loads(x)["dropped"][0]["text"] for x in _live().read_text().splitlines()] == [FILLER]
+    assert tr.erase_entity(re.compile(r"zebra")) == 0        # negative control
+
+
+def test_the_forget_paths_call_the_trace_erasers():
+    import inspect
+
+    import memory_forget_cascade
+    import memory_service
+
+    assert "recall_gate_trace.erase_user" in inspect.getsource(memory_service.MemoryService.delete_user)
+    assert "recall_gate_trace.erase_entity" in inspect.getsource(memory_forget_cascade)
+
+
+def test_an_eraser_failure_raises_so_the_forget_step_fails_closed(monkeypatch):
+    _seed([{"user": UID, "owner_words": "a"}])
+
+    def boom(*a, **k):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(tr.os, "replace", boom)
+    with pytest.raises(OSError):
+        tr.erase_user(UID)
