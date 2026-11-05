@@ -521,7 +521,7 @@ def test_fragmented_ram_without_sudo_is_refused_before_anything_stops_and_with_s
 def test_a_12b_needs_free_pages_not_just_available_ones_so_compaction_is_retried_then_refused(tmp_path):
     w, host, _ = make(tmp_path, free_gap=5000.0, gap_heal=1000.0)          # 'available' fits but only 6.2 GB is FREE; each compaction frees another GB
     assert w.run() == nw.EXIT_OK, w.outcome
-    assert host.count("compact_memory") == 3 and w.rec["arith"]["free_measured_mib"] >= 7426 and any("compacting again" in e["msg"] for e in w.rec["events"])
+    assert host.count("compact_memory") == 4 and w.rec["arith"]["free_measured_mib"] >= 7426 and any("compacting again" in e["msg"] for e in w.rec["events"])
     w2, host2, _ = make(tmp_path, free_gap=6000.0, gap_heal=0.0)           # compaction cannot make them free: the June 2026 failure (9.2 GB free, cudaMalloc failed)
     assert w2.run() == nw.EXIT_REFUSED and "MemFree" in w2.outcome
     assert not any(c.startswith("systemd-run") for c in host2.joined()) and wake_order(host2) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
@@ -1784,7 +1784,7 @@ def test_the_installer_adds_two_units_absorbs_dreaming_and_the_uninstaller_undoe
     assert dry.returncode == 0 and "DRY-RUN: systemctl --user disable --now zoe-dreaming.timer" in dry.stdout and not (tmp_path / "units").exists() and not (tmp_path / "nd" / "INSTALLED").exists()
     inst = subprocess.run(["bash", script], capture_output=True, text=True, env=env, timeout=60)
     assert inst.returncode == 0, inst.stderr
-    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-window.service", "zoe-night-window.timer"]
+    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-window-restore-retry.service", "zoe-night-window-restore-retry.timer", "zoe-night-window.service", "zoe-night-window.timer"]
     calls = (tmp_path / "calls").read_text()
     assert "disable --now zoe-dreaming.timer" in calls and "enable --now zoe-night-window.timer" in calls and calls.index("daemon-reload") < calls.index("enable --now zoe-night-window")
     assert "dreaming_timer_was=enabled" in (tmp_path / "nd" / "INSTALLED").read_text()
@@ -2645,3 +2645,65 @@ def test_last_resort_ngl_never_exceeds_the_configured_count(tmp_path):
     except Exception:
         pass
     assert w.rec["arith"]["ngl_used"] == 8
+
+
+# ── 2026-11-06: the router (CPU-only, but it still asks CUDA for memory info) died on NvMap error 12 in every restore try ──
+
+class RouterNvmapHost(FakeHost):
+    """The router answers /health only once ``heal_after`` compactions have run before its start (a fragmented NvMap that only a compaction cures)."""
+    def __init__(self, *a, heal_after=1, **kw):
+        super().__init__(*a, **kw)
+        self.heal_after, self.compactions = heal_after, 0
+
+    def run(self, argv, timeout=60.0, mutating=True, env=None):
+        if argv[:1] == ["sudo"] and "compact_memory" in " ".join(argv):
+            self.compactions += 1
+        if argv[:3] in (["systemctl", "--user", "start"], ["systemctl", "--user", "restart"]) and argv[-1] == nw.ROUTER:
+            if self.compactions >= self.heal_after:
+                self.unhealthy.discard(nw.ROUTER)
+            else:
+                self.unhealthy.add(nw.ROUTER)
+        return super().run(argv, timeout, mutating, env)
+
+
+def _router_make(tmp_path, heal_after):
+    w, _host, cfg = make(tmp_path)
+    host = RouterNvmapHost(tmp_path, heal_after=heal_after)
+    host.files = _host.files
+    host.dry = False
+    host.log = w.log
+    w.host = host
+    return w, host, cfg
+
+
+def test_the_router_gets_a_compaction_before_every_try_and_comes_up_on_a_later_one(tmp_path):
+    w, host, cfg = _router_make(tmp_path, heal_after=6)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    info = w.rec["restore"][nw.ROUTER]
+    assert info["ok"] is True and info["attempts"] >= 2                           # the old 2-try limit would have reported it dead
+    assert host.count(f"--user reset-failed {nw.ROUTER}") == info["attempts"] - 1  # a start-limit-hit must not block the next try
+    assert not cfg.marker.exists()
+
+
+def test_a_router_that_never_recovers_is_still_reported_after_the_bounded_tries_negative_control(tmp_path):
+    w, host, cfg = _router_make(tmp_path, heal_after=10 ** 6)
+    assert w.run() == nw.EXIT_RESTORE_FAILED
+    spec = nw.HEALTH[nw.ROUTER]
+    assert w.rec["restore"][nw.ROUTER]["attempts"] == spec.attempts == 4
+    assert host.count(f"--user restart {nw.ROUTER}") == spec.attempts - 1
+    assert cfg.marker.exists() and wake_order(host)[-1] == nw.ZOE_DATA            # zoe-data was still woken; the marker keeps the router for --restore-only
+    assert sum(spec.backoff_s) + spec.attempts * spec.wait_s < 12 * 60            # bounded: inside the restore reserve
+
+
+def test_only_the_router_gets_the_longer_retry_the_others_keep_one_retry():
+    assert nw.HEALTH[nw.ROUTER].compact and nw.HEALTH[nw.ROUTER].attempts > 2
+    assert all(nw.HEALTH[u].attempts == 2 and not nw.HEALTH[u].compact for u in (nw.BRAIN, nw.KOKORO, nw.ZOE_DATA))
+
+
+def test_the_restore_retry_timer_is_tracked_and_installed_and_runs_only_for_a_stuck_marker():
+    d = REPO / "scripts/night/systemd"
+    svc = (d / "zoe-night-window-restore-retry.service").read_text()
+    assert "ConditionPathExists=%h/.zoe/night-window/WINDOW_OPEN" in svc and "night_window.sh --restore-only" in svc and "ExecCondition=" in svc
+    assert "OnUnitInactiveSec=" in (d / "zoe-night-window-restore-retry.timer").read_text()
+    inst = (REPO / "scripts/night/install_night_window.sh").read_text()
+    assert "zoe-night-window-restore-retry.timer" in inst and "zoe-night-window-restore-retry.service" in inst
