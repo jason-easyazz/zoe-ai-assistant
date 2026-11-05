@@ -183,3 +183,13 @@ def test_commit_not_terminated_and_late_outcome_checks(sim, daemon):
 
 def test_run_controls_reports_all_true(sim, daemon):
     assert all(sim.run_controls(daemon).values())
+
+
+def test_commit_latency_is_the_commit_episodes_not_the_resumes(sim, daemon):
+    """Codex #2299: a clip with resume THEN commit must report the commit's decide time, not commit_ms[0] (the resume's)."""
+    r = sim.simulate(daemon, sim.lab_profile([0.95] * 3 + [0.02] * 12 + [0.97] * 16))
+    assert r["outcomes"] == ["resume", "commit"] and len(r["commit_ms"]) == 2
+    assert sim.commit_ms_of(r) == r["commit_ms"][1]
+    assert sim.commit_ms_of({"outcomes": ["resume"], "commit_ms": [300]}) is None          # negative control: no commit, no latency
+    assert sim.commit_ms_of({"outcomes": ["commit"], "commit_ms": [640]}) == 640
+    assert sim.commit_ms_of({"outcomes": ["resume", "commit"], "commit_ms": [300, 900]}) == 900

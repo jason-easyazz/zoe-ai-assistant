@@ -269,6 +269,15 @@ def lab_profile(shape: list[float]) -> list[float]:
     return [0.02] * LEAD + shape + [0.02] * TAIL
 
 
+def commit_ms_of(r: dict[str, Any]) -> int | None:
+    """The BARGE_DECIDE duration that belongs to the COMMIT episode (``commit_ms`` holds one per decided episode, in the order
+    of ``outcomes``: a resume followed by a commit must not report the resume's time as the commit's)."""
+    for outcome, ms in zip(r["outcomes"], r["commit_ms"]):
+        if outcome == "commit":
+            return ms
+    return None
+
+
 def predicted_outcome(r: dict[str, Any]) -> str:
     if "commit" in r["outcomes"]:
         return "commit"
@@ -284,7 +293,7 @@ def run_lab(mod) -> dict[str, Any]:
         correct += ok
         rows.append({"id": b["id"], "what": b["what"], "should": b["should"], "predicted": got,
                      "ok": ok, "violations": violations(mod, r),
-                     "decide_ms": r["commit_ms"][0] if r["commit_ms"] else None})
+                     "decide_ms": commit_ms_of(r)})
     return {"predicted_correct": correct, "of": len(rows), "rows": rows}
 
 
@@ -455,8 +464,8 @@ def run_corpus(mod, corpus: Path, groups: dict[str, list[Path]]) -> dict[str, An
             counts["clips"] += 1
             counts[predicted_outcome(r)] += 1
             counts["stuck"] += bool(violations(mod, r))
-            if r["commit_ms"] and "commit" in r["outcomes"]:
-                commit_ms.append(r["commit_ms"][0])
+            if (ms := commit_ms_of(r)) is not None:
+                commit_ms.append(ms)
         counts["commit_ms_p50"] = ste.pct(commit_ms, 50)
         out[name] = counts
     return out
