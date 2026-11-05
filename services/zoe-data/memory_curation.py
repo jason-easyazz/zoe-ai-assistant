@@ -433,7 +433,14 @@ async def _earlier_revisions(pol: Policy, ref: Any, svc: Any) -> list:
 
 async def forget(db, curator: Account, member_id: str, row_id: str, *, svc: Any = None) -> None:
     """The audited forget: reject through ``MemoryService.review`` (its audit row), then erase for real when physical erase is on.
-    A retry after a failed erase finds the already-rejected row and finishes the erase."""
+    A retry after a failed erase finds the already-rejected row and finishes the erase. Holds the member's lock (the one ``edit`` and
+    the opt-out take) across lookup, rejection and erase: a concurrent edit cannot supersede the row between them, which would leave
+    the approved successor standing behind a ``forgotten`` answer."""
+    async with _member_lock(member_id):
+        await _forget_locked(db, curator, member_id, row_id, svc=svc)
+
+
+async def _forget_locked(db, curator: Account, member_id: str, row_id: str, *, svc: Any) -> None:
     from memory_service import physical_erase_enabled
 
     svc = _svc(svc)

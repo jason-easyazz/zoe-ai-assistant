@@ -3005,6 +3005,25 @@ class MemoryService:
             kind = _auth.kind_of(current.text)
         else:
             if status != "approved":
+                if decision == "edit" and status == "pending":
+                    # an edit PUBLISHES the replacement text as approved: an unrelated pending row must not become a second approved
+                    # row that contradicts a protected (curated) note - the same scan the approved-row edit and ``ingest`` run
+                    res0 = _auth.resolve_write(
+                        actor, (edits or current.text).strip(), anchor_text=anchor_text,
+                        claimed=authority, user_id=user_id, prompt_text=prompt_text,
+                        speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings)
+                    if res0.power < _auth.RANK[_auth.OPERATOR]:
+                        clash0 = await self._protected_conflict(user_id, (edits or current.text).strip(), res0.power)
+                        if clash0 is not None and clash0[0].id != current.id:
+                            _auth.log_blocked(actor, clash0[1], user_id=user_id, action="edit")
+                            if not _auth.enabled():
+                                return False
+                            await self._write_candidate(
+                                (edits or current.text).strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
+                                kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                                entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
+                                basis=res0.basis)
+                            return True
                 return False
             if decision == "edit":
                 res = _auth.resolve_write(
