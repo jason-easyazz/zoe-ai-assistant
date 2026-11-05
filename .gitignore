@@ -199,6 +199,7 @@ credentials/
 !.greptile/config.json
 !.greptile/files.json
 !services/zoe-data/voice_phrases.json
+!services/zoe-data/authority_table.json
 !.mcp.json
 # The desktop UI's two load-bearing manifests. Both were caught by the blanket
 # *.json rule above and existed ONLY as untracked files on the live box: the PWA
