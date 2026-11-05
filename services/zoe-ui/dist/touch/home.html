@@ -787,7 +787,7 @@
   .alchip.day{min-width:56px;padding:0}
   .alchip.danger{color:var(--cat-health)}
   /* The editor is a full-stage sheet on #stage (above the dock z46 and the orb z50), sized to the 1280x720 panel: no part of it may leave the screen. */
-  .aled{position:absolute;inset:0;z-index:60;background:rgba(5,8,18,.97);display:flex;align-items:center;justify-content:center;padding:28px 48px}
+  .aled{position:absolute;inset:0;z-index:60;background:#05080f;display:flex;align-items:center;justify-content:center;padding:28px 48px}
   .aledbox{display:flex;gap:48px;align-items:center;max-height:100%}
   .alwheels{display:flex;align-items:center;gap:6px}
   .alwheel{width:110px;height:192px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;border-radius:20px;background:rgba(255,255,255,.05)}
@@ -803,8 +803,29 @@
   /* playlists: ONE swipeable row, faded at the right edge, never a wall of wrapped chips */
   .alchips.alscroll{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior:contain;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent);padding-right:48px}
   .aldays{display:flex;gap:8px;width:100%}
-  .alacts{display:flex;gap:12px;margin-top:4px;position:sticky;bottom:0;background:rgba(5,8,18,.97)}
+  .alacts{display:flex;gap:12px;margin-top:4px;position:sticky;bottom:0;background:#05080f}
   .alerr{font-size:18px;color:var(--cat-health);min-height:24px}
+  /* simpler editor (owner 2026-11-06 "it's very busy"): time + repeat (+ the day for a once-off) + Save; the rest behind More options */
+  .alside .alrow[hidden],.aldays[hidden],.almorebox[hidden]{display:none!important}
+  .alside{gap:22px}
+  .aldays{margin-top:10px}
+  .almore{align-self:flex-start;min-height:56px;padding:0 24px;border-radius:16px;border:1px dashed rgba(255,255,255,.22);background:none;color:var(--ink-soft);font-size:20px;cursor:pointer;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .almorebox{display:flex;flex-direction:column;gap:22px}
+  .alchips.aldayline{flex-wrap:nowrap;align-items:center}
+  .aldayline .alscroll{flex:1;min-width:0}
+  .aldp{position:absolute;inset:0;z-index:5;background:#05080f;display:flex;align-items:center;justify-content:center}
+  .aldpbox{display:flex;flex-direction:column;align-items:center;gap:12px}
+  .aldphead{display:flex;align-items:center;justify-content:space-between;width:476px}
+  .aldpttl{font-size:28px;font-weight:600}
+  .alnav{width:56px;height:56px;border-radius:50%;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;font-size:30px;cursor:pointer}
+  .alnav:disabled{opacity:.25}
+  .aldpgrid{display:grid;grid-template-columns:repeat(7,64px);gap:6px 4px}
+  .aldpwk{height:28px;display:grid;place-items:center;font-size:15px;letter-spacing:.1em;color:var(--ink-faint)}
+  .aldpday,.aldpblank{width:64px;height:56px;border-radius:16px}
+  .aldpday{border:0;background:rgba(255,255,255,.06);color:#fff;font-size:22px;cursor:pointer}
+  .aldpday.today{box-shadow:inset 0 0 0 1px rgba(255,255,255,.35)}
+  .aldpday.on{background:var(--alr);color:#2a1d06;font-weight:600}
+  .aldpday:disabled{background:none;color:rgba(255,255,255,.22);cursor:default}
   .alring{position:absolute;inset:0;z-index:95;display:none;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(120% 90% at 50% 46%,#1a1230,#05030c 75%);cursor:pointer;overflow:hidden}
   .alring.on{display:flex}
   .alclock{font-size:260px;font-weight:200;line-height:1;letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:#fff;animation:alshake 1.2s ease-in-out infinite;z-index:1}
@@ -1203,7 +1224,7 @@
 <!-- before the estate script: a ?domain=memories arrival calls into it during boot -->
 <script src="/js/touch-memories-space.js?v=mem-1"></script>
 <script src="/js/touch-alarm-sound.js?v=as-1"></script>
-<script src="/js/touch-alarms.js?v=al-3"></script>
+<script src="/js/touch-alarms.js?v=al-4"></script>
 <script>
 (function(){
   var stage=document.getElementById('stage');
