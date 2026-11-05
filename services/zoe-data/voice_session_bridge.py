@@ -220,6 +220,20 @@ async def _unforgotten(uid: str, exchanges: list) -> list:
     return kept
 
 
+async def _unmuted(uid: str, exchanges: list) -> list:
+    """``exchanges`` without any that touch a topic the member MUTED ("stop bringing up the dentist"): removed, never instructed
+    around (restraint law). Mutes bite in ZOE_RESTRAINT=enforce (shadow only logs); an unreadable mute list withholds the bridge (fail closed)."""
+    import restraint
+
+    if restraint.mode() != "enforce" or not exchanges:
+        return exchanges
+    reader = getattr(restraint, "list_mutes_strict", None) or restraint.list_mutes   # strict (fail closed) where the build has it
+    mutes = await asyncio.wait_for(reader(uid), _LEDGER_BUDGET_S)
+    if not mutes:
+        return exchanges
+    return [e for e in exchanges if not restraint.muted(f"{e[1]}\n{e[2]}", "", mutes)]
+
+
 def _verdict() -> Optional[bool]:
     try:
         from restraint import current_verdict
@@ -246,7 +260,7 @@ async def block_for(user_id: str, session_id: str, *, now: Optional[float] = Non
         picked = select(uid, session_id, now=now)
         if not picked:
             return ""
-        kept = await _unforgotten(uid, picked)
+        kept = await _unmuted(uid, await _unforgotten(uid, picked))
         block = render(kept, now=now)
         if block:
             logger.info("VOICE_SESSION_BRIDGE session=%s exchanges=%d chars=%d", session_id[:48], len(kept), len(block))

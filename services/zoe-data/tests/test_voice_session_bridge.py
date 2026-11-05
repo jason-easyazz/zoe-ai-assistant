@@ -357,3 +357,26 @@ def test_voice_session_rollover_records_the_predecessor(monkeypatch):
     monkeypatch.setattr(voice_tts, "_VOICE_SESSION_TTL_S", 0)
     second = voice_tts._get_or_create_voice_session("panel-x")
     assert second != first and vsb._PRED.get(second) == first
+
+
+def test_a_muted_topic_is_not_bridged_into_the_new_session(monkeypatch):
+    """Codex #2305: 'stop bringing up the dentist' said after the exchange - the held dentist exchange must not return after a rollover."""
+    _say(ALICE, "my dentist appointment is on friday", "Noted, Friday at the dentist.")
+    _say(ALICE, "what goes well with roast pumpkin", "Feta and toasted seeds work well.", now=T0 + 5)
+    _rolled()
+    assert "dentist" in _block(now=T0 + 600) and "pumpkin" in _block(now=T0 + 600)          # control: nothing muted, both carried
+    monkeypatch.setenv("ZOE_RESTRAINT", "enforce")
+    mute = restraint.Mute(id="m1", stems=frozenset(restraint.stems("dentist appointment")))
+
+    async def mutes(_uid):
+        return [mute]
+
+    monkeypatch.setattr(restraint, "list_mutes_strict", mutes, raising=False)
+    out = _block(now=T0 + 600)
+    assert "dentist" not in out and "pumpkin" in out
+    # an unreadable mute list withholds the whole bridge (fail closed)
+    async def down(_uid):
+        raise RuntimeError("mute table unreadable")
+
+    monkeypatch.setattr(restraint, "list_mutes_strict", down, raising=False)
+    assert _block(now=T0 + 600) == ""
