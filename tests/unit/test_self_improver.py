@@ -584,3 +584,52 @@ def test_unanswerable_gates_fail_closed(_clear_box, runner, needle):
 def test_the_shipped_seed_passes_the_overlay_rules():
     text, src = si.current_manner(flue_env=Path("/nonexistent"), lexicon=REPO / "services" / "zoe-data" / "lexicons_data" / "en.json")
     assert si.validate_manner(text) == text and src.startswith("lexicon:")
+
+
+# ── review round: process group, reflection deadline, missing SDK, one measurement per night ──────────────────────────────
+
+def test_a_timed_out_probe_takes_its_whole_process_group_down(tmp_path):
+    import subprocess
+    import time
+    pidfile = tmp_path / "child.pid"
+    script = f"import subprocess,sys,time; p=subprocess.Popen(['sleep','60']); open({str(pidfile)!r},'w').write(str(p.pid)); time.sleep(60)"
+    with pytest.raises(subprocess.TimeoutExpired):
+        si.run_in_group([sys.executable, "-c", script], timeout=2)
+    pid = int(pidfile.read_text())
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    os.kill(pid, 9)
+    pytest.fail("the grandchild (the scratch sidecar's stand-in) survived the timeout")
+
+
+def test_reflection_is_not_started_without_time_to_finish(monkeypatch):
+    import time
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+    client = FakeClient(["<manner>One.</manner>", "<manner>Two.</manner>"])
+    r, _ = _reflector(client, _cfg(max_tokens_night=10**6, max_usd_night=5.0))
+    r.deadline_ts = time.time() + 30
+    cands, problems = r.propose(SEED, TRACES, [])
+    assert client.calls == [] and cands == [] and "before the deadline" in problems[0]
+    r.deadline_ts = time.time() + 3600                          # negative control
+    assert len(r.propose(SEED, TRACES, [])[0]) == 2
+
+
+def test_a_missing_sdk_is_a_recorded_problem_not_a_crash(monkeypatch):
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+
+    def boom(_key):
+        raise ModuleNotFoundError("anthropic")
+    r, _ = _reflector(FakeClient([]), _cfg())
+    r.client_factory = boom
+    cands, problems = r.propose(SEED, TRACES, [])
+    assert cands == [] and "ModuleNotFoundError" in problems[0]
+
+
+def test_a_duplicate_measured_night_counts_once():
+    row = {"mode": "live", "status": "measured", "win": True}
+    st = si.stop_state([dict(row, night="2026-11-01"), dict(row, night="2026-11-01"), dict(row, night="2026-11-02")])
+    assert st["measured_nights"] == 2 and st["wins"] == 2

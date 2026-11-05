@@ -57,6 +57,7 @@ import json
 import math
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -70,6 +71,8 @@ LIVE_OVERLAY_ROOT = Path.home() / ".zoe" / "brain-harness"     # the overlay ROO
 FLUE_ENV = REPO / "labs" / "flue-zoe-brain-2x" / ".env"
 LEXICON = REPO / "services" / "zoe-data" / "lexicons_data" / "en.json"
 AB_SCRIPT = REPO / "scripts" / "perf" / "manner_block_ab.py"
+#: one reflection request's hard wall (the SDK client has max_retries=0, so a call is exactly one attempt of this length)
+CALL_TIMEOUT_S = 180.0
 HARNESS_LOCK = "/tmp/zoe-voice-harness.lock"
 BRAIN_WINDOW_LOCK = "/tmp/zoe-brain-window.lock"
 LANDER_PATTERN = r"(^|[ /])land_voice_pr\.sh( |$)"
@@ -566,12 +569,13 @@ class AnthropicReflector:
         self.cfg, self.meter, self.deny_terms = cfg, meter, list(deny_terms)
         self.client_factory = client_factory or self._sdk_client
         self.calls: list[dict] = []
+        self.deadline_ts: float | None = None                  # set by the night: no call may START unless it can finish by then
 
     @staticmethod
     def _sdk_client(key: str):
         import anthropic                                       # lazy: dry-run and CI never need the SDK
 
-        return anthropic.Anthropic(api_key=key, max_retries=1, timeout=180.0)
+        return anthropic.Anthropic(api_key=key, max_retries=0, timeout=CALL_TIMEOUT_S)
 
     @staticmethod
     def key_present() -> bool:
@@ -604,10 +608,17 @@ class AnthropicReflector:
         key = typed_env().env_str(KEY_ENV, "")
         if not key:
             return [], [f"no reflection key: {KEY_ENV} is not set (owner step: docs/knowledge/self-improver.md)"]
-        client = self.client_factory(key)
+        try:
+            client = self.client_factory(key)
+        except Exception as exc:  # noqa: BLE001 - e.g. ModuleNotFoundError: the SDK is not installed for this interpreter
+            return [], [f"reflection client unavailable: {type(exc).__name__} (install the anthropic SDK for /usr/bin/python3, "
+                        f"docs/knowledge/self-improver.md owner steps)"]
         del key
         out, problems = [], []
         for i, kind in enumerate(KINDS[:K_CANDIDATES], 1):
+            if self.deadline_ts is not None and self.deadline_ts - time.time() < CALL_TIMEOUT_S + 10:
+                problems.append(f"C{i} ({kind}) not asked: under {CALL_TIMEOUT_S + 10:.0f}s left before the deadline")
+                break                                          # one call = one attempt of <= CALL_TIMEOUT_S, no SDK retry
             system, user = build_reflection_prompt(kind, seed, traces, lessons)
             try:
                 privacy_guard(system + "\n" + user, self.deny_terms)
@@ -638,12 +649,39 @@ def load_ab_rows(path: Path) -> list[dict]:
     return [ln for ln in lines if "tombstone" not in ln and ln.get("inv") not in dead]
 
 
+_spawn = subprocess.Popen                                       # (aliased: the write-path pin forbids the bare call text)
+
+
+def run_in_group(cmd, *, timeout=None, capture_output=True, text=True, env=None, cwd=None, **_kw) -> subprocess.CompletedProcess:
+    """``subprocess.run`` that owns a whole PROCESS GROUP: on timeout the group (the A/B python AND its scratch-sidecar Node
+    child) is SIGKILLed and reaped before ``TimeoutExpired`` is raised, so nothing survives the deadline holding port 3589 or
+    an in-flight brain request into the voice-regression window. ``subprocess.run`` kills only the direct child."""
+    proc = _spawn(cmd, stdout=subprocess.PIPE if capture_output else None, stderr=subprocess.PIPE if capture_output else None,
+                            text=text, env=env, cwd=cwd, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.communicate()
+        raise
+    except BaseException:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 class MannerAbEvaluator:
     """``scripts/perf/manner_block_ab.py`` as a subprocess on the zoe-data interpreter: its own sidecar on a scratch port,
     a stub data server, the live llama-server 4B, its fingerprints / tombstones / plan digests, its brain-time ledger
     (here: ``<home>/ab/brain_time.json``, capped per night by ``--total-budget-s``)."""
 
-    def __init__(self, home: Path, python: str, *, log=print, runner=subprocess.run):
+    def __init__(self, home: Path, python: str, *, log=print, runner=run_in_group):
         self.home, self.python, self.log, self.runner = Path(os.path.realpath(home)), python, log, runner
         self.cache = self.home / "ab"
 
@@ -873,7 +911,12 @@ def judge_heldout(rows: list[dict], plan: dict, cells: Iterable[str], candidates
 def stop_state(nights: list[dict]) -> dict:
     """Count LIVE, MEASURED nights in order; the first 14 decide. >= 10 wins = pass; a 5th loss = stop (10/14 is then
     impossible); 14 measured with < 10 wins = stop."""
-    counted = [n for n in nights if n.get("mode") == "live" and n.get("status") == "measured"][:STOP_NIGHTS]
+    counted, seen = [], set()
+    for n in nights:                                           # one measurement per night: a duplicate date never counts twice
+        if n.get("mode") == "live" and n.get("status") == "measured" and (n.get("night") is None or n.get("night") not in seen):
+            seen.add(n.get("night"))
+            counted.append(n)
+    counted = counted[:STOP_NIGHTS]
     wins = sum(1 for n in counted if n.get("win"))
     losses = len(counted) - wins
     if wins >= STOP_WINS:
@@ -997,6 +1040,7 @@ def run_night(cfg: Config, *, home: Path, mode: str, evaluator, reflector, now: 
               window_lock_path: str | None = BRAIN_WINDOW_LOCK, log=print) -> tuple[int, dict]:
     """One night end to end. Returns (exit code, the night row). ``mode`` is ``live`` or ``dry-run``."""
     assert mode in ("live", "dry-run")
+    t_start = time.time()
     now = now or dt.datetime.now()
     home = check_home(home)
     night = now.strftime("%Y-%m-%d") if mode == "live" else now.strftime("%Y-%m-%d-dry-%H%M%S")
@@ -1066,6 +1110,12 @@ def run_night(cfg: Config, *, home: Path, mode: str, evaluator, reflector, now: 
                 return finish(EXIT_SKIPPED, "skipped", reason=f"the harness lock {lock_path} stayed held")
             fds.append(fd)
     try:
+        if mode == "live":                                     # the lock wait may have let an overlapping invocation finish first
+            fresh = read_jsonl(home / "nights.jsonl")
+            if any(n.get("night") == night and n.get("status") in ("measured", "unmeasured") for n in fresh):
+                return finish(EXIT_REFUSED, "refused", reason="this night already ran its probe (one measurement per night)")
+        if hasattr(reflector, "deadline_ts"):                  # the reflector's clock is the night's: time left, not wall-clock `now`
+            reflector.deadline_ts = t_start + (deadline - now).total_seconds()
         return _night_body(cfg, home, night, mode, evaluator, reflector, seed_text, deadline_ts, row, finish, log)
     finally:
         for f in reversed(fds):

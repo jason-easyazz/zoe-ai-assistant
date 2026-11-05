@@ -100,6 +100,8 @@ python3 scripts/perf/self_improver.py status               # the stop rule + the
 
 1. **Create the capped key.** In the Anthropic console, a dedicated API key for this job only, in a workspace with a monthly spend
    limit (suggested $10: fourteen nights at the $0.40 hard cap is $5.60).
+   The reflection SDK is imported by the wrapper's `/usr/bin/python3`, not the zoe-data venv: confirm `/usr/bin/python3 -c 'import anthropic'`
+   works (`python3 -m pip install --user anthropic` if not). A missing SDK is recorded as a reflection problem (night = unmeasured), not a crash.
 2. **Store it by name, never on a command line:**
    ```
    install -m 600 /dev/null ~/.zoe/env/self-improver.env
