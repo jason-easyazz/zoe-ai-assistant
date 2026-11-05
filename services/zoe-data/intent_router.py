@@ -2688,6 +2688,11 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
                     return f"You don't have a {list_name} list."
                 _, list_type, list_name = found
                 intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
+            elif not list_name:
+                found = await _phrase_list(db, user_id, slots, list_type)      # "the christmas shopping list", if it exists
+                if found is not None:
+                    _, list_type, list_name = found
+                    intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
             if list_name:
                 cursor = await db.execute(
                     "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"

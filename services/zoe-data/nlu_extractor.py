@@ -265,7 +265,7 @@ async def _extract_list_add(text: str) -> Optional[dict]:
     # The model picks from an enum, so "my pharmacy list" comes back as SOME type (often shopping). A list the user named
     # in the words decides instead - the same resolver as the fast path: a type, or a named list the executor finds or
     # asks about, never a guessed household list (QA 2026-11-06).
-    named = re.search(r"\b(?:to|on|onto|into)\s+(?:the\s+|my\s+|our\s+)?([a-z0-9' -]{1,40}?)\s*list\b", (text or "").lower())
+    named = re.search(r"\b(?:to|on|onto|into)\s+(?:the\s+|my\s+|our\s+)?([^\W_][\w' -]{0,60}?)\s*list\b", (text or "").lower())
     if named:
         from intent_router import _list_slots
 

@@ -249,6 +249,52 @@ async def test_slot_extractor_honours_the_named_list(monkeypatch):
     assert slots["list_type"] == "personal"
 
 
+async def test_brain_tool_a_name_that_means_a_type_overrides_the_enum_guess(db, monkeypatch):
+    import mcp_server
+
+    async def _actor(*_a, **_k):
+        return {"user_id": ME}
+
+    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", _actor)
+    out = await mcp_server._execute_tool(db, "list_add_item", {"list_type": "shopping", "list_name": "my personal to-do",
+                                                               "text": "renew registration"})
+    assert "error" not in out and db.open_items("fam") == ["milk"]
+    assert db.open_items("theirs") == ["renew registration"]          # another member's shared to-do untouched
+    mine = [r for r in db.lists() if r["user_id"] == ME]
+    assert len(mine) == 1 and mine[0]["visibility"] == "personal"
+    # a typed name that is an existing list's exact name lands there, not on the household list of the type
+    db.lst("xmas", OTHER, "Christmas shopping", "shopping", "family")
+    await mcp_server._execute_tool(db, "list_add_item", {"list_type": "shopping", "list_name": "Christmas shopping",
+                                                         "text": "tinsel"})
+    assert db.open_items("xmas") == ["tinsel"] and db.open_items("fam") == ["milk"]
+
+
+async def test_show_a_typed_exact_name_reads_that_list(db):
+    db.lst("xmas", OTHER, "Christmas shopping", "shopping", "family")
+    db.item("x1", "xmas", "tinsel")
+    _, out = await _say("show the christmas shopping list")
+    assert "tinsel" in out.lower() and "milk" not in out.lower()
+
+
+def test_named_lists_never_go_through_the_form():
+    from routers import chat
+
+    assert chat._shows_form("list_add", {"item": "x", "list_type": "shopping"}) is True        # negative control
+    assert chat._shows_form("list_add", {"item": "x", "list_type": "", "list_name": "pharmacy"}) is False
+    assert chat._shows_form("list_add", {"item": "x", "list_type": "shopping", "list_phrase": "christmas shopping"}) is False
+
+
+async def test_slot_extractor_handles_a_non_ascii_list_name(monkeypatch):
+    import nlu_extractor
+
+    async def _model(_text, _schema):
+        return {"item": "medicine", "list_type": "shopping"}
+
+    monkeypatch.setattr(nlu_extractor, "_call_with_tool", _model)
+    slots = await nlu_extractor._extract_list_add("add medicine to my pharmacie \u00e9t\u00e9 list")
+    assert slots["list_type"] == "" and slots["list_name"] == "pharmacie \u00e9t\u00e9"
+
+
 # ---- finding 2: a unit conversion is not weather ------------------------------------------------------------------------------
 @pytest.mark.parametrize("text,conv", [
     ("375 fahrenheit? we're in australia haha, whats that in celsius", True),
