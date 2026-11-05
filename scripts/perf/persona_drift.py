@@ -450,6 +450,19 @@ def run_battery(live: Any, user: str, log) -> list[dict[str, Any]]:
     return out
 
 
+def _typed_env():
+    """services/zoe-data/typed_env.py by FILE PATH (stdlib-only): flags are read through the registry, not os.environ."""
+    import importlib.util
+
+    mod = sys.modules.get("typed_env")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("typed_env", Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "typed_env.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["typed_env"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
 def _flag_state(service_dir: Path, key: str) -> str:
     v = (sb.env_file_value(service_dir, key) or "").strip().lower()
     return "unset" if not v else (v if v in {"on", "off", "0", "1", "enforce", "shadow", "true", "false"} else "set")
@@ -535,7 +548,7 @@ def _main(argv: list[str] | None, ctx: dict) -> int:
     if args.dry_run:
         print(plan_text())
         return 0
-    if os.environ.get("ZOE_PERF") != "1":
+    if _typed_env().env_str("ZOE_PERF") != "1":
         print("persona_drift: skipped - live runs require ZOE_PERF=1 (see --dry-run, --controls)")
         return 0
 

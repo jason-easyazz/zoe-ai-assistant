@@ -237,7 +237,7 @@ def test_harness_never_forces_or_lands_past_quiet_hours():
 
 
 def test_the_live_run_is_off_without_zoe_perf_and_never_runs_at_import():
-    assert 'os.environ.get("ZOE_PERF") != "1"' in SRC.read_text()
+    assert '_typed_env().env_str("ZOE_PERF") != "1"' in SRC.read_text()
 
 
 # ---- review round 1 (cross-review findings) --------------------------------------------------------------------------

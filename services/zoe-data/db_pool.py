@@ -93,6 +93,13 @@ _SQLITE_DATETIME_OFFSET_RE = re.compile(
 )
 _SQLITE_DATETIME_NOW_RE = re.compile(r"datetime\s*\(\s*'now'\s*\)", re.IGNORECASE)
 _NOW_RE = re.compile(r"\bNOW\(\)(?!::)", re.IGNORECASE)
+# NOW() as an OPERAND of timestamp arithmetic (``NOW() - interval '10 seconds'``,
+# ``interval '1 day' + NOW()``, ``NOW() AT TIME ZONE 'UTC'``) must stay a timestamp:
+# ``NOW()::text - interval`` raises "operator does not exist: text - interval", which
+# silently broke every intent_router/brain list add with a dedup window (QA 2026-11-05).
+# ``(NOW()) - x`` counts too: closing parens between NOW() and the operator are skipped.
+_NOW_ARITH_AFTER_RE = re.compile(r"(?:\s*\))*\s*(?:[-+](?!-)|AT\s+TIME\s+ZONE\b)", re.IGNORECASE)
+_NOW_ARITH_BEFORE_RE = re.compile(r"(?<!-)[-+][\s(]*$")
 
 
 async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> None:
@@ -459,7 +466,9 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
 
     Also rewrites bare NOW() → NOW()::text so callers that write timestamps
     into TEXT columns (migrated from SQLite) don't get DatatypeMismatchError.
-    Only replaces NOW() not already followed by :: to avoid double-casting.
+    Only replaces NOW() not already followed by :: to avoid double-casting, and
+    never where NOW() is an operand of +/- or AT TIME ZONE (timestamp arithmetic
+    on text is an error in Postgres).
 
     SQL quoted literals/identifiers are copied verbatim so literal question
     marks and text like 'NOW()' do not become placeholders or casts.
@@ -498,7 +507,14 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
 
         now_match = _NOW_RE.match(sql, pos)
         if now_match is not None:
-            converted.append("NOW()::text")
+            # Text cast only where NOW() is a VALUE (written into / compared with a TEXT column);
+            # as an arithmetic operand it stays timestamptz (see _NOW_ARITH_AFTER_RE).
+            tail = "".join(converted[-64:])
+            before = _NOW_ARITH_BEFORE_RE.search(tail)
+            if before is not None and "--" in tail[tail.rfind("\n", 0, before.start()) + 1:before.start()]:
+                before = None  # the "operator" sits inside a -- line comment
+            is_operand = before is not None or _NOW_ARITH_AFTER_RE.match(sql, now_match.end()) is not None
+            converted.append(now_match.group(0) if is_operand else "NOW()::text")
             pos = now_match.end()
             continue
 

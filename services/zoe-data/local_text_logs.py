@@ -502,18 +502,24 @@ def _bump_epoch(delta: int = 0) -> None:
 def erase_entity(rx: Any) -> int:
     """Drop every record whose text matches ``rx`` (a ``re.Pattern`` or ``memory_forgotten.LedgerPattern``). RAISES on an I/O
     failure so the cascade records the step as failed (a forget that left words behind must not read as done)."""
+    import recall_gate_trace
+
     _bump_epoch(+1)
     try:
-        return sum(_apply(log, match=rx) for log in LOGS)
+        # ... and the owner's opt-in recall-gate trace: a line whose words or row text name the entity, inside the same interval
+        return sum(_apply(log, match=rx) for log in LOGS) + recall_gate_trace.erase_entity(rx)
     finally:
         _bump_epoch(-1)
 
 
 def erase_all_text() -> int:
     """Member erase: the logs cannot be attributed to one member, so clear the text layer of every record. RAISES on failure."""
+    import recall_gate_trace
+
     _bump_epoch(+1)
     try:
-        return sum(_apply(log, everything=True) for log in LOGS)
+        # ... and the owner's opt-in recall-gate trace (owner words + row text) the same household-wide way, inside the same interval
+        return sum(_apply(log, everything=True) for log in LOGS) + recall_gate_trace.erase_all()
     finally:
         _bump_epoch(-1)
 
