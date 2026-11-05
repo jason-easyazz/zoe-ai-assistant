@@ -170,6 +170,19 @@ async function ringing(over, postFn) {
     fail = false; b.advance(2100); await flush(); await flush();
     ok(Object.keys(JSON.parse(b.store.zoe_alarm_acks)).length === 0, 'ack cleared once the server confirms'); }
 
+  // the server goes away mid-ring (zoe-data restart, DB down): the panel still stops itself past stops_at, never rings on and on
+  { let down = false;
+    const b = boot({ get: (u) => (down ? new Error('http 503') : u === '/api/alarms/ringing' ? { now: 1000, ringing: [ring()] } : {}) });
+    b.window.ZoeAlarms.init(b.host); b.advance(400); await flush(); await flush();
+    const ov = b.byId().alarmRing; ok(ov.classList.contains('on'), 'ringing before the outage');
+    down = true; b.advance(590 * 1000); await flush(); ok(ov.classList.contains('on'), 'still ringing inside the limit');
+    b.advance(20 * 1000); await flush();
+    ok(!ov.classList.contains('on') && b.snd.stops >= 1, 'stopped itself past stops_at with the server unreachable'); }
+  // a ringing row whose limit has already passed (the server's auto-stop tick is failing) is never rung
+  for (const sa of [990, 998]) {  // 998: inside the 5 s stop grace, still past stops_at - the grace never STARTS a ring
+    const b = await ringing({ stops_at: sa });
+    ok(!(b.byId().alarmRing && b.byId().alarmRing.classList.contains('on')) && b.snd.starts.length === 0, 'an overdue ring is not started (stops_at ' + sa + ')'); }
+
   // a POST still in flight when the next poll lands is not sent twice
   { let release = null;
     const b = await ringing({}, () => new Promise((r) => { release = r; }));
@@ -226,11 +239,15 @@ async function ringing(over, postFn) {
     ok(t1.hidden === true && a1.hidden === false, 'Alarms tab swaps the panes');
     const neu = a1.querySelectorAll('.alchip').find((c) => c.textContent === '+ New alarm'); ok(!!neu, 'new alarm button');
     fire(neu, 'click');
-    const chips = a1.querySelectorAll('.alchip');
+    // the editor is a full-stage sheet on #stage (above the dock), not inside the pane
+    const stg = b.document.getElementById('stage');
+    ok(stg.querySelectorAll('.aled').length === 1 && a1.querySelectorAll('.aled').length === 0, 'editor opens on the stage');
+    const chips = stg.querySelectorAll('.alchip');
     fire(chips.find((c) => c.textContent === 'Weekdays'), 'click');
-    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Bell'), 'click');
-    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === '15 min'), 'click');
-    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Save'), 'click'); await flush();
+    fire(stg.querySelectorAll('.alchip').find((c) => c.textContent === 'Bell'), 'click');
+    fire(stg.querySelectorAll('.alchip').find((c) => c.textContent === '15 min'), 'click');
+    fire(stg.querySelectorAll('.alchip').find((c) => c.textContent === 'Save'), 'click'); await flush();
+    ok(stg.querySelectorAll('.aled').length === 0, 'a save closes the sheet');
     const p = b.calls.find((c) => c[0] === 'POST' && c[1] === '/api/alarms');
     ok(p && JSON.stringify(p[2]) === JSON.stringify({ time_hhmm: '07:00', repeat: 'weekdays', snooze_minutes: 15, sound_kind: 'tone', sound_id: 'bell' }), 'save body: ' + JSON.stringify(p && p[2])); }
 
@@ -265,10 +282,12 @@ async function ringing(over, postFn) {
     const tabs = b.document.createElement('div'); const t1 = b.document.createElement('div'); const a1 = b.document.createElement('div');
     b.window.ZoeAlarms.attachTabs({ tabsEl: tabs, timersEl: t1, alarmsEl: a1 })('alarms'); await flush(); await flush();
     fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === '+ New alarm'), 'click'); await flush(); await flush();
-    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Sunrise'), 'click');
+    const stg = b.document.getElementById('stage');
+    fire(stg.querySelectorAll('.alchip').find((c) => c.textContent === 'Sunrise'), 'click');
     ok(b.snd.previews.includes('sunrise'), 'tone chip previews');
-    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Morning'), 'click');
-    fire(a1.querySelectorAll('.alchip').find((c) => c.textContent === 'Save'), 'click'); await flush();
+    ok(stg.querySelectorAll('.alscroll').length === 1 && stg.querySelectorAll('.alscroll .alchip').some((c) => c.textContent === 'Morning'), 'playlists are one scrolling row');
+    fire(stg.querySelectorAll('.alchip').find((c) => c.textContent === 'Morning'), 'click');
+    fire(stg.querySelectorAll('.alchip').find((c) => c.textContent === 'Save'), 'click'); await flush();
     const p = b.calls.find((c) => c[0] === 'POST' && c[1] === '/api/alarms');
     ok(p && p[2].sound_kind === 'music' && p[2].sound_id === 'playlist:Morning' && p[2].sound_name === 'Morning', 'music save body: ' + JSON.stringify(p && p[2]));
   }
@@ -303,10 +322,15 @@ async function ringing(over, postFn) {
     const before = made.osc.length; S.start('sunrise', () => 0, 30); S.preview('chime'); ok(made.osc.length === before + S.plan('sunrise').length, 'a preview never overlaps a ring'); S.stop(); }
 
   // the estate wires it: script tag before the inline code, init with the host's api, tabs on the timer screen
-  ok(HOME.includes('<script src="/js/touch-alarms.js?v=al-2"></script>') && HOME.includes('/js/touch-alarm-sound.js?v=as-1'), 'home.html loads the modules');
+  ok(HOME.includes('<script src="/js/touch-alarms.js?v=al-3"></script>') && HOME.includes('/js/touch-alarm-sound.js?v=as-1'), 'home.html loads the modules');
   ok(HOME.includes('ZoeAlarms.init({apiGet:apiGet,apiJson:apiJson,show:show') && HOME.includes('sound:window.ZoeAlarmSound'), 'home.html inits it with the estate api and the tone synth');
   ok(HOME.includes('ZoeAlarms.attachTabs({tabsEl:document.getElementById(\'alTabs\')'), 'timer screen attaches the tabs');
   ok(HOME.indexOf('/js/touch-alarms.js') < HOME.indexOf('function wireTimer'), 'module loads before the wiring runs');
+  // fit on the 1280x720 panel (owner, 2026-11-06): the screen is named Timers/Alarms, the list stops above the dock, the editor is a
+  // full-stage sheet that leaves with its pane, and playlists are one swipeable row instead of a wall of chips
+  ok(HOME.includes('<div class="chttl">Timers/Alarms</div>') && HOME.includes("{id:'timer',n:'Timers/Alarms'"), 'the screen and its launcher tile read Timers/Alarms');
+  ok(/\.alfull\{[^}]*bottom:130px/.test(HOME) && /\.aled\{[^}]*z-index:60/.test(HOME) && /\.alchips\.alscroll\{[^}]*flex-wrap:nowrap/.test(HOME), 'list clears the dock, editor sits above it, playlists scroll in one row');
+  ok(SRC.includes("section('Wake to music', 'alscroll')") && SRC.includes('(stage || root).appendChild(ed)') && SRC.includes('if (!root.isConnected) close()'), 'editor mounts on the stage and closes when its pane goes');
 
   console.log(`${checks} checks passed`);
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1); });
