@@ -292,3 +292,18 @@ def test_script_exit_2_when_nothing_readable(tmp_path):
     assert sc.main(["--app-log", str(missing), "--shadow-log", str(missing), "--misses", str(missing), "--stt-log", str(missing),
                     "--out", str(tmp_path / "o.md")]) == 2
     assert not (tmp_path / "o.md").exists()
+
+
+def test_every_non_household_class_is_excluded_at_each_input_boundary():
+    """Codex #2294: harness, probe AND ci traffic are never household demand - app log, shadow log and the intent-miss file."""
+    for cls in ("harness", "probe", "ci"):
+        assert cg.parse_log_line(L(NOW, f"intent_router: intent_miss: Open the pod bay doors traffic={cls}")) is None
+        assert cg.parse_shadow_record({"actual_routed": "chat", "reason": "low_conf", "ts": NOW, "utt": "aaaaaaaaaaaa",
+                                       "traffic": cls}) is None
+        assert cg.parse_miss_record({"text": "Open the pod bay doors", "ts": NOW, "traffic_class": cls}) is None
+    # negative controls: household traffic (class absent or explicit) still counts at all three boundaries
+    assert cg.parse_log_line(L(NOW, "intent_router: intent_miss: Open the pod bay doors")) is not None
+    assert cg.parse_shadow_record({"actual_routed": "chat", "reason": "low_conf", "ts": NOW, "utt": "aaaaaaaaaaaa",
+                                   "traffic": "household"}) is not None
+    assert cg.parse_miss_record({"text": "Open the pod bay doors", "ts": NOW, "traffic_class": "household"}) is not None
+    assert cg.parse_miss_record({"text": "Open the pod bay doors", "ts": NOW}) is not None

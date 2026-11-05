@@ -202,14 +202,22 @@ def _area_for_name(name: str) -> str:
     return _DOMAIN_AREA.get(name) or classify(name.replace("_", " "))[0]
 
 
+_NON_HOUSEHOLD = ("harness", "probe", "ci")         # traffic_class.NON_HOUSEHOLD (kept literal: this module is also run as a script)
+_TRAFFIC_TOKEN = re.compile(r"\btraffic=(\w+)")
+
+
+def _non_household(value) -> bool:
+    return str(value or "").strip().lower() in _NON_HOUSEHOLD
+
+
 def parse_log_line(line: str) -> Optional[Event]:
     """One service-log line -> an ``Event``, or ``None`` when it is not a capability signal (or is harness traffic)."""
     m = _LINE.match(line.rstrip("\n"))
     if not m:
         return None
     body = m.group(2)
-    if "traffic=harness" in body:
-        return None
+    if any(_non_household(t) for t in _TRAFFIC_TOKEN.findall(body)):
+        return None                                  # harness / probe / ci traffic is never household demand
     try:
         ts = datetime.strptime(m.group(1), _TS_FMT).timestamp()
     except ValueError:
@@ -239,7 +247,7 @@ def parse_log_line(line: str) -> Optional[Event]:
 
 def parse_shadow_record(rec: dict) -> Optional[Event]:
     """One router-shadow JSONL record -> an ``Event`` only for a chat turn the router was unsure about (hash-keyed)."""
-    if not isinstance(rec, dict) or rec.get("traffic") == "harness" or rec.get("actual_routed") != "chat":
+    if not isinstance(rec, dict) or _non_household(rec.get("traffic") or rec.get("traffic_class")) or rec.get("actual_routed") != "chat":
         return None
     if rec.get("reason") not in ("low_conf", "below_gate"):
         return None
@@ -254,6 +262,8 @@ def parse_miss_record(rec: dict) -> Optional[Event]:
     """One ``intent-misses.jsonl`` record (``{"text","ts"}``)."""
     if not isinstance(rec, dict) or not isinstance(rec.get("text"), str) or not isinstance(rec.get("ts"), (int, float)):
         return None
+    if _non_household(rec.get("traffic_class") or rec.get("traffic")):
+        return None                                  # intent_router writes traffic_class into every miss record
     return Event(float(rec["ts"]), SRC_INTENT_MISS, None, text=rec["text"], utt=utterance_hash(rec["text"]))
 
 
