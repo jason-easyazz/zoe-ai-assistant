@@ -70,6 +70,7 @@ const WRITE_CASES: Array<{ name: string; input: Record<string, unknown>; expect:
   { name: 'media', input: { action: 'system_volume', direction: 'up' }, expect: /Turned my speaking volume up\./ },
   { name: 'media', input: { action: 'setup' }, expect: /get your music connected/ },
   { name: 'home', input: { action: 'on', room: 'kitchen' }, expect: /Turned the kitchen lights on\./ },
+  { name: 'alarm', input: { action: 'set', request: 'wake me at 7' }, expect: /Alarm set\./ },
   { name: 'set_timer', input: { minutes: 7, label: 'tea' }, expect: /can't reliably start a real timer/ },
 ];
 

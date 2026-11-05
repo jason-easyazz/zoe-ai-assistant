@@ -28,6 +28,12 @@
    ]
   ],
   [
+   "alarms",
+   [
+    "alarm"
+   ]
+  ],
+  [
    "reminders",
    [
     "list_reminders",
@@ -82,6 +88,7 @@
   ]
  ],
  "purposes": {
+  "alarms": "set or list wake-up alarms",
   "calendar": "show or add events",
   "home": "turn on/off, dim, or brighten the lights",
   "journal": "diary entries, journaling prompts, streak",
@@ -104,6 +111,7 @@
   "show_list",
   "set_timer",
   "add_reminder",
+  "alarm",
   "add_calendar_event",
   "create_note",
   "add_to_list",
