@@ -513,9 +513,13 @@ def erase_all_text() -> int:
     """Member erase: the logs cannot be attributed to one member, so clear the text layer of every record. RAISES on failure."""
     _bump_epoch(+1)
     try:
-        return sum(_apply(log, everything=True) for log in LOGS)
+        n = sum(_apply(log, everything=True) for log in LOGS)
     finally:
         _bump_epoch(-1)
+    # the owner's opt-in recall-gate trace (recall_gate_trace.py, owner words + row text) goes the same household-wide way
+    import recall_gate_trace
+
+    return n + recall_gate_trace.erase_all()
 
 
 def count_malformed(log: TextLog) -> int:

@@ -2050,12 +2050,6 @@ class MemoryService:
                 await asyncio.to_thread(local_text_logs.erase_all_text)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: local text-log erasure failed ({type(exc).__name__})") from exc
-            # ... and the owner's opt-in recall-gate trace (recall_gate_trace.py: the member's words + row text). Same rule: fail closed.
-            try:
-                import recall_gate_trace
-                await asyncio.to_thread(recall_gate_trace.erase_user, user_id)
-            except Exception as exc:
-                raise MemoryServiceError(f"delete_user failed: recall-gate trace erasure failed ({type(exc).__name__})") from exc
             # The member's mutes and thread classes (restraint.py): topic stems and class labels, no words, but a
             # right-to-be-forgotten leaves nothing of the person. Best-effort: a store without migration 0040 has none.
             try:

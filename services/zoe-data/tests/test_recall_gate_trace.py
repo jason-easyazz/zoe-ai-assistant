@@ -219,17 +219,25 @@ def _seed(lines):
     os.chmod(_live(), 0o600)
 
 
-def test_erase_user_drops_only_that_members_lines():
-    other = "demo_bar_00000002"
-    _seed([{"user": UID, "owner_words": "a"}, {"user": other, "owner_words": "b"}, {"user": UID, "owner_words": "c"}])
+def test_a_member_erase_clears_every_trace_file_and_keeps_0600():
+    _seed([{"user": UID, "owner_words": "a"}, {"user": "demo_bar_00000002", "owner_words": "b"}])
     (tr.TRACE_DIR / f"{tr.FILE_NAME}.1").write_text(json.dumps({"user": UID, "owner_words": "d"}) + "\nnot json\n")
-    assert tr.erase_user(UID) == 4                           # 3 of the member's lines + the malformed line
-    rest = [json.loads(x) for x in _live().read_text().splitlines()]
-    assert [r["user"] for r in rest] == [other]
-    assert (tr.TRACE_DIR / f"{tr.FILE_NAME}.1").read_text() == ""
+    assert tr.erase_all() == 4                               # every line, the malformed one included
+    assert _live().read_text() == "" and (tr.TRACE_DIR / f"{tr.FILE_NAME}.1").read_text() == ""
     assert stat.S_IMODE(os.stat(_live()).st_mode) == 0o600
-    assert tr.erase_user("demo_bar_00000009") == 0           # negative control: an unknown member removes nothing
-    assert len(_live().read_text().splitlines()) == 1
+
+
+def test_the_member_erase_of_the_text_logs_reaches_the_trace(monkeypatch):
+    import local_text_logs
+
+    _seed([{"user": UID, "owner_words": "how is Juniper"}])
+    monkeypatch.setattr(local_text_logs, "LOGS", ())          # only the trace is in play here
+    assert local_text_logs.erase_all_text() == 1
+    assert _live().read_text() == ""
+    _seed([{"user": UID, "owner_words": "how is Juniper"}])
+    monkeypatch.setattr(tr, "erase_all", lambda: 0)          # negative control: an eraser that does nothing leaves the line
+    local_text_logs.erase_all_text()
+    assert "Juniper" in _live().read_text()
 
 
 def test_erase_entity_drops_lines_naming_the_entity_in_words_or_row_text():
@@ -249,7 +257,7 @@ def test_the_forget_paths_call_the_trace_erasers():
     import memory_forget_cascade
     import memory_service
 
-    assert "recall_gate_trace.erase_user" in inspect.getsource(memory_service.MemoryService.delete_user)
+    assert "local_text_logs.erase_all_text" in inspect.getsource(memory_service.MemoryService.delete_user)
     assert "recall_gate_trace.erase_entity" in inspect.getsource(memory_forget_cascade)
 
 
@@ -261,4 +269,4 @@ def test_an_eraser_failure_raises_so_the_forget_step_fails_closed(monkeypatch):
 
     monkeypatch.setattr(tr.os, "replace", boom)
     with pytest.raises(OSError):
-        tr.erase_user(UID)
+        tr.erase_all()

@@ -17,7 +17,8 @@ Privacy and bounds (each pinned by a test):
   file when its last write is older than that (an abandoned trace does not linger);
 * off (the default) = no directory, no file, no I/O; turning it off stops writing, it does not delete what was written (delete the
   directory by hand when the scoring is done).
-Forget (forgotten means forever): ``erase_user`` drops every line of a deleted member (``MemoryService.delete_user``), ``erase_entity``
+Forget (forgotten means forever): ``erase_all`` drops every line on a member erase (via ``local_text_logs.erase_all_text``, which
+``MemoryService.delete_user`` calls), ``erase_entity``
 drops every line whose owner words or row text name a forgotten entity (the cascade's ``text_logs`` step). Both RAISE on an I/O
 failure, so the forget path records the step as failed.
 
@@ -187,10 +188,10 @@ def _rewrite(drop) -> int:
     return n
 
 
-def erase_user(user_id: str) -> int:
-    """Member erase: drop every trace line of ``user_id``. RAISES on failure (the forget path fails closed)."""
-    uid = str(user_id or "")
-    return _rewrite(lambda o: str(o.get("user") or "") == uid)
+def erase_all() -> int:
+    """Member erase: drop every trace line (``local_text_logs.erase_all_text`` calls it from ``MemoryService.delete_user``; like those logs,
+    a member erase clears the trace household-wide). RAISES on failure (the forget path fails closed)."""
+    return _rewrite(lambda o: True)
 
 
 def erase_entity(rx: Any) -> int:
