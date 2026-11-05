@@ -356,3 +356,26 @@ def test_a_historical_age_row_does_not_hide_the_current_age():
     ]
     assert person_extractor.stale_age_ids(rows) == set()
     assert "Alice: 10 years old" in _packet(rows)
+
+
+def test_an_unlinked_age_row_joins_the_one_linked_person_of_that_name_but_not_an_ambiguous_one():
+    """Codex #2310 round 2: the turn digest writes no entity_id, the person extractor links its correction to a UUID."""
+    def with_entity(ref, eid):
+        ref.metadata["entity_id"] = eid
+        return ref
+    old = _ref("old", "Alice is 9 years old", ma.USER_STATED, "2026-11-01T08:00:00+00:00")                       # unlinked (digest)
+    new = with_entity(_ref("new", "Alice: 10 years old", ma.USER_STATED, "2026-11-03T08:00:00+00:00"), "e1")      # linked (extractor)
+    assert person_extractor.stale_age_ids([old, new]) == {"old"}
+    assert "Alice: 10 years old" in _packet([old, new]) and "Alice is 9 years old" not in _packet([old, new])
+    # control: two DIFFERENT linked Alices - the unlinked row cannot be attributed to either, so nothing is hidden
+    other = with_entity(_ref("other", "Alice: 41 years old", ma.USER_STATED, "2026-11-02T08:00:00+00:00"), "e2")
+    assert person_extractor.stale_age_ids([old, new, other]) == set()
+
+
+def test_a_misattributed_relatives_age_does_not_borrow_the_correction_cue():
+    """Codex #2310 round 2: 'Alice: 10 years old' from 'actually Alice's son Ben is 10 now' is a model error, not a correction."""
+    anchor = "actually Alice's son Ben is 10 now"
+    wrong = ma.resolve_write("person_extractor_llm", "Alice: 10 years old", anchor_text=anchor, user_id="member_a")
+    assert wrong.basis != "explicit_correction" and not wrong.promoted
+    right = ma.resolve_write("person_extractor_llm", "Ben: 10 years old", anchor_text=anchor, user_id="member_a")
+    assert right.basis == "explicit_correction"                                  # control: the named person still earns it

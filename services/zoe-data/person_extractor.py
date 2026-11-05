@@ -481,16 +481,27 @@ def stale_age_ids(candidates) -> set[str]:
         if not _ma.correction_enabled():
             return set()
         by_person: dict[str, list] = {}
+        claims: list = []
         for ref in candidates or ():
             meta = getattr(ref, "metadata", None) or {}
             if str(meta.get("status") or "active").lower() in _NOT_CURRENT:
                 continue
             claim = person_age_claim(getattr(ref, "text", "") or "")
             if claim:
-                # one PERSON: the resolved entity when the row carries one, else the full name (two people sharing a surname
-                # are two people, however alike the surname)
-                eid = str(meta.get("entity_id") or "").strip()
-                by_person.setdefault(f"entity:{eid}" if eid else claim[0], []).append((ref, claim[1]))
+                claims.append((ref, claim, str(meta.get("entity_id") or "").strip()))
+        # one PERSON: the resolved entity when the row carries one; an UNLINKED row (the turn digest writes none) joins the one linked
+        # person whose name it carries, when that is unambiguous; otherwise its full name (two people sharing a surname - or two
+        # linked entities of one name - stay two people).
+        names_of: dict[str, set] = {}
+        for _ref, (name, _age), eid in claims:
+            if eid:
+                names_of.setdefault(eid, set()).add(name)
+        for ref, (name, age), eid in claims:
+            if not eid:
+                same = [e for e, ns in names_of.items() if name in ns]
+                if len(same) == 1:
+                    eid = same[0]
+            by_person.setdefault(f"entity:{eid}" if eid else name, []).append((ref, age))
         stale: set[str] = set()
         for rows in by_person.values():
             if len({age for _, age in rows}) < 2:

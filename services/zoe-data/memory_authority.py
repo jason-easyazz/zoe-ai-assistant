@@ -700,10 +700,26 @@ _SHAPE_CUES = (
 )
 
 
-def _window_cues(win: str, stems: set[str]) -> set[str]:
+def _third_person_age_names(win: str, fact: str) -> bool:
+    """Does a third-person bare-number age in ``win`` ("Ben is 10") name the person the FACT is about ("Alice: 10 years old")? The
+    subject of the age shape must be a word of the fact: a model that misattributes a relative's age must not borrow the cue."""
+    fact_words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'’-]*", _fold(fact))}
+    fact_words |= {w[:-2] for w in fact_words if w.endswith(("'s", "’s"))}
+    for m in _THIRD_PERSON_AGE_RE.finditer(win):
+        subj = re.match(r"[a-z][a-z'’-]*?(?=['’]s|\s+is|\s+was|['’]re|\s+are)", m.group(0), re.IGNORECASE)
+        if subj and subj.group(0).lower() in fact_words:
+            return True
+    return False
+
+
+def _window_cues(win: str, stems: set[str], fact: str | None = None) -> set[str]:
     out = {_CUE_OF[s] for s in stems if s in _CUE_OF}
-    out |= {cls for cls, rx in _SHAPE_CUES
-            if (rx is not _THIRD_PERSON_AGE_RE or correction_enabled()) and rx.search(win)}
+    for cls, rx in _SHAPE_CUES:
+        if rx is _THIRD_PERSON_AGE_RE:
+            if correction_enabled() and (_third_person_age_names(win, fact) if fact else rx.search(win)):
+                out.add(cls)
+        elif rx.search(win):
+            out.add(cls)
     return out
 
 
@@ -956,7 +972,7 @@ def _support_windows(fact: str, user_text: str):
         stems = {_stem(w) for w in ws}
         if value and not value <= stems:
             continue
-        if cues and not cues <= _window_cues(win, stems):
+        if cues and not cues <= _window_cues(win, stems, fact):
             continue
         if other and len(other & stems) / len(other) < 0.6:
             continue
