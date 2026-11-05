@@ -702,7 +702,8 @@ _SHAPE_CUES = (
 
 def _window_cues(win: str, stems: set[str]) -> set[str]:
     out = {_CUE_OF[s] for s in stems if s in _CUE_OF}
-    out |= {cls for cls, rx in _SHAPE_CUES if rx.search(win)}
+    out |= {cls for cls, rx in _SHAPE_CUES
+            if (rx is not _THIRD_PERSON_AGE_RE or correction_enabled()) and rx.search(win)}
     return out
 
 
@@ -1042,13 +1043,16 @@ def entailing_span(fact: str, user_text: str) -> Optional[str]:
 
 
 _CORRECTION_RE = re.compile(r"\b(?:" + _alt(_EN.get("correction_cues") or ["actually"]) + r")(?=\W|$)", re.IGNORECASE)
+#: Someone ELSE's assertion relayed by the member ("Carol told me Ana's 10 now", "apparently she's 10"): the member is
+#: reporting, not correcting their own fact, so it never earns correction power (it stays the plain anchored class).
+_REPORT_RE = re.compile(r"(?:" + _alt(_EN.get("report_cues") or ["apparently"]) + r")", re.IGNORECASE)
 
 
 def correction_enabled() -> bool:
-    """``ZOE_EXPLICIT_CORRECTION`` (default ON) - "a correction sticks": the speaker's explicit correction of a
-    person fact carries the power of their own words, and the memory packet serves one age per person. ``0``
-    returns both to the old behaviour (the correction is plain ``user_stated_derived``, which cannot replace a
-    value the speaker stated directly; the packet serves every age row). Per-call env read."""
+    """``ZOE_EXPLICIT_CORRECTION`` (default ON) - "a correction sticks", every part of it: the third-person age
+    shape in ``supports``, correction power, the ``age`` fact kind and the multi-valued-kind guard in
+    ``person_extractor``, and one age per person in the recall packets. ``0`` restores the old behaviour of all of
+    them. Per-call env read."""
     from typed_env import env_bool
 
     return env_bool(CORRECTION_ENV, True)
@@ -1060,7 +1064,7 @@ def correction_span(fact: str, user_text: str) -> Optional[str]:
     ``supports`` already refused a question, a wish, a polarity / tense mismatch and a sentence about the speaker's
     relative that the fact does not name; this only adds "and it says it corrects something", plainly."""
     for win in _support_windows(fact, user_text):
-        if _CORRECTION_RE.search(win) and not _HEDGE_RE.search(win):
+        if _CORRECTION_RE.search(win) and not _HEDGE_RE.search(win) and not _REPORT_RE.search(win):
             got = _verbatim([win], user_text)
             if got:
                 return got

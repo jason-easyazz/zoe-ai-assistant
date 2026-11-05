@@ -385,7 +385,8 @@ by authority`, both values stayed approved, and the brain answered 9. Three caus
 * **A paraphrase could not replace a direct statement.** `person_extractor_llm` (`CORRECTION_WRITERS`) writes facts
   about OTHER people, so the self-assertion promotion above never applied. `correction_span(fact, turn)`: one verbatim
   sentence that `supports()` the fact, carries a cue from the lexicon's `correction_cues` ("actually", "no,", "now",
-  "though", "I told you", "not 9" ...) and no hedge or report. Then the write is `user_stated_derived` with basis
+  "though", "I told you", "not 9" ...), no hedge, and no relayed claim (`report_cues`: "Carol told me",
+  "apparently", "according to" - the member's own "I said" / "I told you" are not reports). Then the write is `user_stated_derived` with basis
   `explicit_correction` and **`user_stated` power and standing** (`PROMOTED_BASES`; `row_class` reads it back as
   `user_stated`), so it replaces the value the member stated before. Unchanged: inference never supersedes (a fact
   the turn does not support is still refused); an `operator` row still needs a confirming action (`may_override`);
@@ -401,9 +402,11 @@ by authority`, both values stayed approved, and the brain answered 9. Three caus
 old", from the digest) are not in the supersede chain. `person_extractor.stale_age_ids` drops, from the chat packet
 (`routers/memories._build_memory_prompt_packet`) and the voice recall packet (`routers/voice_tts._voice_recall_packet`),
 every row that gives a named person an age other than their CURRENT one: the newest row in the speaker's voice
-(rank >= `user_stated_derived`); a model inference wins only when no row in the speaker's voice gives an age.
+(rank >= `user_stated_derived`), after authority order - a row above the user classes (operator, curated) is
+never hidden by a newer member statement; a model inference wins only when no row in the speaker's voice gives an age.
 
-`ZOE_EXPLICIT_CORRECTION` (bool, default **on**; `0` = the old behaviour on both halves). Tests:
+`ZOE_EXPLICIT_CORRECTION` (bool, default **on**; `0` restores the old behaviour of every part: the age shape, correction
+power, the `age` kind, the multi-valued guard and the packet filter). Tests:
 `services/zoe-data/tests/test_correction_sticks.py` (the resolver table with hedge / non-age / relative / question /
 inference controls, the whole write path over the real `MemoryService`, the other-member and preference controls, the
 packet, each with a flag-off break-the-fix control).

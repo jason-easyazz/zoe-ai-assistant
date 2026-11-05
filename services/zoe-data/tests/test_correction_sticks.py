@@ -108,6 +108,17 @@ def _apply(value, excerpt, *, user=A, fact_type="preference"):
     return asyncio.run(run())
 
 
+def _seed_model_preference(svc):
+    """A preference the extractor model wrote from the member's turn (``user_stated_derived``, rank 3): a later
+    model write of equal rank MAY replace it, so the multi-valued guard - not the wall - is what keeps it."""
+    ref = asyncio.run(svc.ingest("Alice: hates mushrooms", user_id=A, source="conversation", origin=LLM,
+                                 source_excerpt="Alice hates mushrooms", status="approved",
+                                 entity_type="person", entity_id="pa", memory_type="person",
+                                 metadata={"pattern_type": "preference"}))
+    assert ma.row_class(ref.metadata, ref.text) == ma.USER_STATED_DERIVED
+    return ref
+
+
 def _seed_stated_age(svc, user=A, text="Alice is 9 years old"):
     """The age the member stated directly (a teach-lane row: user_stated), linked to Alice."""
     ref = asyncio.run(svc.ingest(text, user_id=user, source="voice_fact", status="approved", confidence=0.9,
@@ -136,6 +147,8 @@ def test_an_explicit_correction_in_the_members_words_carries_their_power(turn):
     ("actually Alice's mum is 10 now", "unanchored"),   # a relative's number is not Alice's age
     ("is Alice 10 now?", "unanchored"),                 # a question states nothing
     ("actually we were talking about 10 things", "unanchored"),  # the turn never says it (inference)
+    ("Carol told me that actually Alice is 10 now", "anchored_user_turn"),  # someone else's claim, relayed
+    ("apparently Alice is 10 now", "unanchored"),                         # hearsay is not a correction
 ])
 def test_controls_hedges_non_ages_and_inference_get_no_correction_power(turn, basis):
     r = ma.resolve_write(LLM, "Alice: 10 years old", anchor_text=turn, user_id=A)
@@ -143,9 +156,15 @@ def test_controls_hedges_non_ages_and_inference_get_no_correction_power(turn, ba
 
 
 def test_break_the_fix_the_flag_off_returns_the_old_class(monkeypatch):
+    """Flag off = the pre-fix result exactly: the bare-number age shape is off too, so it is unanchored again."""
     monkeypatch.setenv("ZOE_EXPLICIT_CORRECTION", "0")
     r = ma.resolve_write(LLM, "Alice: 10 years old", anchor_text="actually Alice's 10 now", user_id=A)
-    assert r.basis == "anchored_user_turn" and r.power == ma.DERIVED_RANK
+    assert r.basis == "unanchored" and r.power == ma.RANK[ma.MODEL_FROM_TURN]
+
+
+def test_the_members_own_i_said_is_not_a_report():
+    r = ma.resolve_write(LLM, "Alice: 10 years old", anchor_text="no, I told you, Alice is 10 now", user_id=A)
+    assert r.basis == ma.CORRECTION_BASIS
 
 
 def test_a_stored_correction_row_keeps_the_members_standing():
@@ -198,9 +217,7 @@ def test_an_age_filed_as_a_preference_never_retires_a_real_preference(svc):
 
 
 def test_a_second_preference_is_another_fact_not_a_replacement(svc):
-    asyncio.run(svc.ingest("Alice: hates mushrooms", user_id=A, source="voice_fact", status="approved",
-                           entity_type="person", entity_id="pa", memory_type="person",
-                           metadata={"pattern_type": "preference"}))
+    _seed_model_preference(svc)
     _apply("loves chess", "Alice loves chess")
     assert sorted(_rows(svc, A)) == ["Alice: hates mushrooms", "Alice: loves chess"]
     assert _rows(svc, A, "superseded") == []
@@ -256,6 +273,24 @@ def test_different_people_keep_their_own_ages():
     ]
     p = _packet(rows)
     assert "Alice is 9 years old" in p and "Bob is 41 years old" in p
+
+
+def test_an_operator_age_is_never_hidden_by_a_newer_member_statement():
+    """The write wall refuses a member statement over an operator row; the packet must not do it by the back door."""
+    rows = [
+        _ref("op", "Alice is 10 years old", ma.OPERATOR, "2026-11-01T08:00:00+00:00"),
+        _ref("said", "Alice is 9 years old", ma.USER_STATED, "2026-11-04T08:00:00+00:00"),
+    ]
+    p = _packet(rows)
+    assert "Alice is 10 years old" in p and "9 years old" not in p
+
+
+def test_break_the_fix_flag_off_an_age_stays_a_preference_and_preferences_supersede(svc, monkeypatch):
+    """Flag off restores the old write path too: no ``age`` kind, and the old preference supersede."""
+    monkeypatch.setenv("ZOE_EXPLICIT_CORRECTION", "0")
+    _seed_model_preference(svc)
+    _apply("loves chess", "Alice loves chess")
+    assert _rows(svc, A, "superseded") == ["Alice: hates mushrooms"]
 
 
 def test_break_the_fix_the_flag_off_serves_every_age(monkeypatch):

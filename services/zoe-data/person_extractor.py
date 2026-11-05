@@ -486,9 +486,13 @@ def stale_age_ids(candidates) -> set[str]:
                 continue
 
             def _key(item):
+                # Authority order first: a row above the user classes (an operator's cleanup, a curated note) is
+                # never hidden by a newer member statement - the write wall would not let that statement replace
+                # it either. Then the speaker's voice over inference, then the newest.
                 meta = getattr(item[0], "metadata", None) or {}
-                voiced = _ma.row_rank(meta, getattr(item[0], "text", "") or "") >= _ma.DERIVED_RANK
-                return voiced, _added_ts(meta)
+                rank = _ma.row_rank(meta, getattr(item[0], "text", "") or "")
+                tier = 2 if rank > _ma.RANK[_ma.USER_CONFIRMED] else 1 if rank >= _ma.DERIVED_RANK else 0
+                return tier, _added_ts(meta)
 
             current = max(rows, key=_key)[1]
             stale |= {str(ref.id) for ref, age in rows if age != current}
@@ -513,6 +517,15 @@ def _added_ts(meta: dict) -> float:
     return dt.timestamp()
 
 
+def _correction_on() -> bool:
+    try:
+        import memory_authority as _ma
+
+        return _ma.correction_enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _same_kind_row(meta: dict, row_text: str, person_name: str, pattern_type: str) -> bool:
     """Does this same-person row hold the SAME fact kind as the candidate?
 
@@ -526,7 +539,7 @@ def _same_kind_row(meta: dict, row_text: str, person_name: str, pattern_type: st
     stored = str(
         meta.get("pattern_type") or meta.get("candidate_pattern_type") or ""
     ).strip().lower()
-    if pattern_type == "age":
+    if pattern_type == "age" and _correction_on():
         # Age rows written before the extractor keyed them as "age" carry whatever type the model
         # chose ("preference"): the row TEXT decides - any non-birthday row that states an age.
         return stored == "age" or (stored != "birthday" and _is_age_of(row_text, person_name))
@@ -595,7 +608,7 @@ async def _reconcile_same_kind_entity_row(
                 "person_extractor: entity dedup-skip kept=%s kind=%s", r.id, pattern_type
             )
             return r.id
-    if pattern_type in MULTI_VALUED_KINDS:
+    if pattern_type in MULTI_VALUED_KINDS and _correction_on():
         # A multi-valued kind: a different value is ANOTHER fact, never a replacement. Fall
         # through to the text reconcile + plain ingest (which keeps both).
         return None
@@ -1351,7 +1364,7 @@ async def apply_person_fact(
             pattern_type = "bucket"
 
         fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
-        if pattern_type != "birthday" and _is_age_of(fact_text, name):
+        if pattern_type != "birthday" and _correction_on() and _is_age_of(fact_text, name):
             # The model has no "age" type and files an age as whatever it picks: an age is ONE
             # current value per person, so it is keyed "age" and a new age supersedes the old one.
             pattern_type = "age"
