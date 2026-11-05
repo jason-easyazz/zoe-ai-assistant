@@ -284,6 +284,12 @@ def _completion_ellipsis(rest: list, has_target: bool, lang: "_Lang") -> bool:
     return has_target and not any(t in copulas for t in rest)
 
 
+#: Words naming a household / media action Zoe can take that records no tracked write receipt (smart home, media): a generic completion
+#: phrase beside one of them is not a claim to have written to the store.
+_ACTION_DEVICE_WORDS = frozenset({"light", "lights", "lamp", "lamps", "fan", "fans", "heater", "heaters", "thermostat", "tv", "speaker",
+                                  "speakers", "music", "volume", "door", "doors", "blind", "blinds", "plug", "plugs", "switch", "aircon"})
+
+
 def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: bool = True) -> Optional[Claim]:
     """The write this sentence CLAIMS to have made, or None. Pure. Every claim clause of the unit counts: the Claim names the
     kinds of ALL of them, so a receipt for one cannot vouch for another.
@@ -332,6 +338,9 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: b
             if blocked and not promise_only:
                 continue
             phrase_kind = None if promise_only else _phrase_claim(toks, offset, lang)
+            if phrase_kind == "any" and (any(_has_phrase(unit_padded, o) for o in lang.other_targets)
+                                         or any(w in _ACTION_DEVICE_WORDS for w in tokenize(text))):
+                phrase_kind = None      # "Consider it done - the lights are off.": a callable action with no tracked receipt, not a write claim
             if phrase_kind is not None:
                 # "…, got that noted." / "Consider it forgotten.": a whole phrase that says the write is done.
                 found.append(((() if phrase_kind == "any" else (phrase_kind,)), False))
@@ -394,7 +403,8 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: b
                     # A bare "Adding milk to your shopping list by tapping +" / "Setting a timer helps you focus" is an instruction or a
                     # description; only "now" / "for you" (or a first-person subject: "I'm adding") makes it Zoe's own write.
                     continue
-                kinds = _named_kinds(padded, lang)
+                kinds = (verb_kind,) if (verb_kind == "forget" and not needs_target) else _named_kinds(padded, lang)
+                # (a completed FORGET keeps its explicit kind: "I've forgotten that memory" is a deletion claim, not a memory write)
                 implied = bool(progressive and implied_kind and cued)
                 if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds) or implied, lang):
                     continue
