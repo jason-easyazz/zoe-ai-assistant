@@ -97,11 +97,36 @@ landing_head_parked(){
 # landing_artifact_fresh <artifact> <t0-epoch>: 0 only if the artifact file was (re)written at or after <t0> - i.e. by THIS probe attempt.
 landing_artifact_fresh(){ [ "$(stat -c %Y "$1" 2>/dev/null || echo 0)" -ge "$2" ]; }
 
+# landing_running <script-basename>...: 0 if a REAL process is running one of those scripts, else 1. Decided from /proc/<pid>/cmdline
+# argv, NOT `pgrep -f` (which matches any command line that merely MENTIONS the name: 2026-11-05, 37 agent waiter shells
+# `bash -c '... until ! pgrep -f land_voice_pr.sh ...'` self-matched and autoland believed a landing was always running).
+# A match = argv[0] is the script itself, or argv[0] is a shell and the first non-option argument is the script; `bash -c <text>`
+# is never a match. The calling shell and its parent are skipped (a lander must not see itself as "another" one).
+landing_running(){
+  local p c a0 i skip=" $$ $PPID " n b
+  for p in /proc/[0-9]*; do
+    p=${p#/proc/}; case "$skip" in *" $p "*) continue;; esac
+    c=(); mapfile -d '' -t c < "/proc/$p/cmdline" 2>/dev/null || continue
+    [ "${#c[@]}" -gt 0 ] || continue
+    a0=${c[0]##*/}; b=
+    case "$a0" in
+      bash|sh|dash)
+        for ((i=1; i<${#c[@]}; i++)); do
+          if [[ "${c[i]}" =~ ^-[a-zA-Z]*c ]]; then break; fi
+          case "${c[i]}" in -*) continue;; *) b=${c[i]##*/}; break;; esac
+        done;;
+      *) b=$a0;;
+    esac
+    for n in "$@"; do [ "$b" = "$n" ] && return 0; done
+  done
+  return 1
+}
+
 # landing_others_busy: 0 while another chain/lander is running anywhere on the box (the voice loop waits for quiet).
-# ZOE_LANDING_NO_BUSY_WAIT=1 (tests) reports "never busy" - pgrep is system-wide and would see the live loops.
+# ZOE_LANDING_NO_BUSY_WAIT=1 (tests) reports "never busy" - the scan is system-wide and would see the live loops.
 landing_others_busy(){
   [ -n "${ZOE_LANDING_NO_BUSY_WAIT:-}" ] && return 1
-  pgrep -f 'docs_merge_chain\.sh|after_chain_land_1826\.sh|after_1826_land_1848\.sh|^bash .*/(land_queue|land_voice_pr)\.sh' >/dev/null
+  landing_running docs_merge_chain.sh after_chain_land_1826.sh after_1826_land_1848.sh land_queue.sh land_voice_pr.sh
 }
 
 # landing_probe_window <lane-wait-s> <pr> <head> <cmd...>: the Kokoro-silent part of a landing, in the ONLY safe order:

@@ -67,7 +67,9 @@ CACHE = Path.home() / ".cache" / "zoe"
 DEFAULT_BASELINE = CACHE / "samantha_bar_reliability_baseline.json"
 REPO = Path(__file__).resolve().parents[2]
 HARNESS_SCRIPTS = {"bar": "scripts/perf/samantha_bar.py", "day-sim": "scripts/perf/samantha_day_sim.py"}
-LANDER_PATTERN = r"(^|[ /])land_voice_pr\.sh( |$)"   # via bash or exec'd directly
+# ANCHORED to argv[0] (shell, then options, then the script) or an exec'd script: a bare `pgrep -f land_voice_pr.sh` also matches
+# every `bash -c '... pgrep -f land_voice_pr.sh ...'` waiter (and itself), so the bar believed a landing was always running.
+LANDER_PATTERN = r"^([^ ]*/)?(bash|sh|dash)( -[^ ]+)* [^ ]*land_voice_pr\.sh( |$)|^[^ ]*/land_voice_pr\.sh( |$)"
 EXIT_OK, EXIT_RED, EXIT_UNMEASURED = 0, 1, 2
 
 
