@@ -125,7 +125,7 @@ def _env(monkeypatch, tier="owner", busy=False, quiet=False, night=()):
         return tier
 
     async def _night(uid, now):
-        return list(night)
+        return [r if isinstance(r, tuple) else (r, False) for r in night]      # (source_ref, muted)
 
     monkeypatch.setattr(pl, "_tier", _tier)
     monkeypatch.setattr(pl, "_busy", lambda: busy)
@@ -312,3 +312,52 @@ async def test_muted_item_is_row_2_and_ignored_count_comes_from_ledger(monkeypat
     pl._reset_state()
     counts = await pl.observe(MEMBER, [b], NOW)
     assert counts["silent"] == 1
+
+
+async def test_an_unchanged_pending_item_is_not_charged_twice_nor_capped_against_itself(monkeypatch, caplog):
+    """Codex #2283: three due loops cost three card slots ONCE; the next identical poll must still read three cards (not row-13 silence),
+    and a fourth new loop is the one the weekly cap holds."""
+    monkeypatch.setenv("ZOE_PROACTIVE_POLICY_LOG", "log")
+    _env(monkeypatch, tier="owner")
+    items = [_item("open_loop", n) for n in range(1, 4)]
+    first = await pl.observe(MEMBER, items, NOW)
+    assert first["card"] == 3 and first["silent"] == 0
+    with caplog.at_level(logging.INFO, logger=pl.logger.name):
+        again = await pl.observe(MEMBER, items, NOW)
+    assert again["card"] == 3 and again["silent"] == 0
+    assert not [r for r in caplog.records if "PROACTIVE_POLICY " in r.getMessage()], "unchanged decisions are not re-logged"
+    fourth = await pl.observe(MEMBER, items + [_item("open_loop", 4)], NOW)
+    assert fourth["card"] == 3 and fourth["silent"] == 1            # negative control: the cap still holds the genuinely new one
+    dots = [_item("open_loop", n) for n in range(10, 18)]
+    await pl.observe(MEMBER, dots, NOW)                             # dot candidates are charged once too
+    pl._reset_state()
+
+
+async def test_a_muted_night_raise_thread_is_row_2_not_a_logged_dot(monkeypatch):
+    monkeypatch.setenv("ZOE_PROACTIVE_POLICY_LOG", "log")
+    _env(monkeypatch, tier="owner", night=[("night_threads:t1", True)])
+    counts = await pl.observe(MEMBER, [], NOW)
+    assert counts["silent"] == 1 and counts["dot"] == 0 and counts["card"] == 0
+    pl._reset_state()
+    _env(monkeypatch, tier="owner", night=[("night_threads:t1", False)])       # negative control: unmuted is the dot
+    counts = await pl.observe(MEMBER, [], NOW)
+    assert counts["dot"] == 1 and counts["silent"] == 0
+
+
+async def test_night_raise_refs_carry_the_members_current_mutes(monkeypatch):
+    import night_mind
+    import restraint
+
+    async def morning(uid, now=None):
+        return [{"text": "On Tuesday they said: something", "source_ref": "night_threads:t1", "thread_id": "t1"}]
+
+    async def mutes(uid):
+        return ["m"]
+
+    monkeypatch.setattr(night_mind, "morning_items", morning)
+    monkeypatch.setattr(restraint, "mode", lambda: "shadow")
+    monkeypatch.setattr(restraint, "list_mutes", mutes)
+    monkeypatch.setattr(restraint, "muted", lambda text, ref, ms: ref == "night_threads:t1")
+    assert await pl._night_raise_refs(MEMBER, NOW) == [("night_threads:t1", True)]
+    monkeypatch.setattr(restraint, "muted", lambda text, ref, ms: False)
+    assert await pl._night_raise_refs(MEMBER, NOW) == [("night_threads:t1", False)]

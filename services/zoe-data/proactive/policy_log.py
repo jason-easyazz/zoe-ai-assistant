@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -38,7 +37,9 @@ KINDS = ("open_loop", "emotional", "event", "commitment", "night_raise", "change
 
 def mode() -> str:
     """``off`` (default; any value but ``log`` is off) | ``log``."""
-    return "log" if (os.environ.get("ZOE_PROACTIVE_POLICY_LOG", "") or "").strip().lower() == "log" else "off"
+    from typed_env import env_str      # a registered flag, read through the registry (not a direct os.environ read)
+
+    return "log" if (env_str("ZOE_PROACTIVE_POLICY_LOG", "") or "").strip().lower() == "log" else "off"
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,9 @@ def decide(s: Signals) -> Decision:
 # ── the seam ─────────────────────────────────────────────────────────────────
 _seen: set[tuple[str, str, str, str]] = set()       # (member hash, item id, row:rung:action, local day)
 _week: dict[tuple[str, str], dict[str, int]] = {}   # (member hash, iso week) -> {"card": n, "dot": n}; in-memory, resets on restart
+# (member hash, iso week) -> {item id: the rung ("card" | "dot") the weekly budget already charged it}. A pending item the next orb poll
+# observes again must not consume a second slot, nor be reclassified as a cap rejection against its own earlier charge.
+_charged: dict[tuple[str, str], dict[str, str]] = {}
 _SEEN_MAX = 4096
 
 
@@ -121,6 +125,7 @@ def _h(value: str) -> str:
 def _reset_state() -> None:
     _seen.clear()
     _week.clear()
+    _charged.clear()
 
 
 async def _tier(uid: str) -> str:
@@ -142,14 +147,26 @@ def _busy() -> bool:
         return False
 
 
-async def _night_raise_refs(uid: str, now: datetime) -> list[str]:
-    """The night mind's ONE ``raise`` thread as a source_ref (never its text); [] when the night mind is off."""
+async def _night_raise_refs(uid: str, now: datetime) -> list[tuple[str, bool]]:
+    """The night mind's ONE ``raise`` thread as ``(source_ref, muted)`` (never its text); [] when the night mind is off. ``muted`` is
+    the member's CURRENT restraint mute on that thread: a mute added after the nightly decision must keep it out of the raise
+    (``night_mind.morning_items`` checks the stored leave reason and the forget shields, not the mutes)."""
     try:
         import night_mind
 
-        return [str(i.get("source_ref") or "") for i in await night_mind.morning_items(uid, now=now) if i.get("source_ref")]
+        items = [i for i in await night_mind.morning_items(uid, now=now) if i.get("source_ref")]
     except Exception:  # noqa: BLE001
         return []
+    muted: set[str] = set()
+    try:
+        import restraint
+
+        if items and restraint.mode() != "off":
+            mutes = await restraint.list_mutes(uid)
+            muted = {str(i["source_ref"]) for i in items if mutes and restraint.muted(str(i.get("text") or ""), str(i["source_ref"]), mutes)}
+    except Exception:  # noqa: BLE001
+        muted = set()
+    return [(str(i["source_ref"]), str(i["source_ref"]) in muted) for i in items]
 
 
 async def _ignored_by_kind(uid: str, now: datetime) -> dict[str, int]:
@@ -212,14 +229,17 @@ async def _observe(uid: str, items: list, now: datetime) -> dict:
     counts = {r: 0 for r in RUNGS}
     ignored = await _ignored_by_kind(uid, now)
     muted_ids = await _muted_item_ids(uid, items)
-    rows = [(i.id, i.kind, bool(i.sensitivity) or i.id in muted_ids) for i in items] + [(f"night:{_h(r)}", "night_raise", False) for r in refs]
+    rows = ([(i.id, i.kind, bool(i.sensitivity) or i.id in muted_ids) for i in items]
+            + [(f"night:{_h(r)}", "night_raise", bool(m)) for r, m in refs])
     for item_id, kind, sensitive in rows:
         kind = kind if kind in KINDS else "other"
         tally = _week.setdefault(wk, {"card": 0, "dot": 0})
+        charged = _charged.setdefault(wk, {})
+        mine = charged.get(item_id)           # the rung this item already cost the weekly budget (an unchanged item is not a new ask)
         d = decide(Signals(
             kind=kind, verified=verified, guest_present=tier == TIER_BOUND_GUEST, deny_class=sensitive, busy=busy, rest_window=rest,
             panel_near=tier == TIER_OWNER, ignored_in_class=ignored.get(kind, 0),
-            week_cards=tally["card"], week_dots=tally["dot"],
+            week_cards=tally["card"] - (1 if mine == CARD else 0), week_dots=tally["dot"] - (1 if mine == DOT else 0),
         ))
         counts[d.rung] += 1
         key = (me, item_id, f"{d.row}:{d.rung}:{d.action}", day)
@@ -228,8 +248,11 @@ async def _observe(uid: str, items: list, now: datetime) -> dict:
         if len(_seen) >= _SEEN_MAX:
             _seen.clear()
         _seen.add(key)
-        if d.action == "surface" and d.rung in ("card", "dot"):
+        if d.action == "surface" and d.rung in ("card", "dot") and mine != d.rung:
+            if mine in ("card", "dot"):
+                tally[mine] -= 1              # it moved rung: release the old slot, charge the new one
             tally[d.rung] += 1
+            charged[item_id] = d.rung
         logger.info("PROACTIVE_POLICY user=%s item=%s kind=%s row=%d rung=%s reason=%s",
                     me, item_id, kind, d.row, d.rung, d.reason)
     logger.info("PROACTIVE_POLICY_PASS user=%s n=%d silent=%d dot=%d card=%d speak=%d",
