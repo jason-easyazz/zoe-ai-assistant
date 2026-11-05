@@ -346,7 +346,8 @@ def _shift_parse(t: str, now: float) -> Optional[AlarmCommand]:
     clause = re.split(r"[,;]|\s(?:so|but)\s", clause)[0]
     if absolute and hit is absolute:  # "I have to be up at 5" is the request itself, not "I have ..." talk about the past
         clause = re.sub(r"^\s*(?:i|we)\s+(?:have|need|got|'ve\s+got)\s+to\s+", " ", clause)
-    if command_shapes.asks_or_mentions(clause.strip()) or (not unshift and command_shapes._NEGATED_RE.search(clause)):
+    # "never mind" IS the undo word; any other negation ("don't put Friday back to normal") blocks every kind of change
+    if command_shapes.asks_or_mentions(clause.strip()) or command_shapes._NEGATED_RE.search(re.sub(r"\bnever\s*mind\b", " ", clause)):
         return None
     if rel and _repeat_of(t) != "once":
         return AlarmCommand("shift_repeat")
@@ -614,7 +615,19 @@ async def _run_shift(db: Any, cmd: AlarmCommand, v: alarms.Viewer, rows: list[di
     mine = [a for a in rows if alarms.can_edit(a, v) and a["enabled"] and (a["user_id"] == v.user_id or a["user_id"] == alarms.HOUSEHOLD)]
 
     def day_of(a: dict) -> Optional[date]:
-        return resolve_date(cmd.day_spec, a["time_hhmm"], now) if cmd.day_spec else None
+        """The day the words name FOR THIS ALARM: by its effective ring that day (an override's time, a skip, already rung), so
+        "on Friday" means today while today's (possibly moved) ring is still ahead, and next Friday once it has gone."""
+        if not cmd.day_spec:
+            return None
+        d = resolve_date(cmd.day_spec, "23:59", now)
+        if d is None:
+            return None
+        eff = alarms.effective_time(a, d)
+        if eff and alarms._at(d, eff) > now:
+            return d
+        if cmd.day_spec[0] == "weekday" and d == datetime.fromtimestamp(now, alarms.zoe_timezone()).date():
+            return d + timedelta(days=7)
+        return d
 
     if cmd.action == "unshift":
         hits = []
@@ -630,7 +643,7 @@ async def _run_shift(db: Any, cmd: AlarmCommand, v: alarms.Viewer, rows: list[di
         a, d = hits[0]
         await alarms.clear_override(db, a, d.isoformat(), now=now)
         return _result(cmd, f"Back to normal: {alarms.clock_phrase(a['time_hhmm'])} {day_phrase(d, now)}.", "Back to normal")
-    hits = [(a, d) for a in mine for d in [day_of(a)] if d is not None and alarms.rings_on(a, d)]
+    hits = [(a, d) for a in mine for d in [day_of(a)] if d is not None and alarms.effective_time(a, d) is not None]
     if not hits:
         if cmd.time_hhmm:  # "I need to be up at 5 on Friday" with no alarm that day: that IS a new one-off
             d = resolve_date(cmd.day_spec, cmd.time_hhmm, now)
@@ -645,7 +658,7 @@ async def _run_shift(db: Any, cmd: AlarmCommand, v: alarms.Viewer, rows: list[di
     if len(hits) > 1:
         return _result(cmd, f"You have {len(hits)} alarms that day: {', '.join(_name(a) for a, _ in hits[:4])}. Which one?", "Which one?")
     a, d = hits[0]
-    was = alarms.day_time(a, d)
+    was = alarms.effective_time(a, d) or alarms.day_time(a, d)
     new = cmd.time_hhmm or _hm_plus(was, cmd.shift_minutes)
     if new is None:
         return _result(cmd, "That would move it into another day. Tell me the time instead.", "Not changed")

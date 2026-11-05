@@ -1341,7 +1341,15 @@ def test_override_routes(box):
     assert c.post(f"/api/alarms/{a['id']}/overrides", json={"date": "2026-11-06", "time_hhmm": "05:30"}).status_code == 404
 
 
-def test_voice_flight_next_friday_an_hour_earlier(voice):
+def test_voice_flight_next_friday_an_hour_earlier(voice, monkeypatch):
+    import calendar_service
+
+    wrote = []
+
+    async def spy(*a, **k):
+        wrote.append((a, k))
+
+    monkeypatch.setattr(calendar_service, "create_event_record", spy)  # the calendar is OFFERED, never written
     say("set an alarm for 6:30 every weekday")
     r = say("I have a flight next Friday, can you get me up an hour earlier?")
     assert r["spoken_summary"] == ("I'll wake you at 5:30 am on Friday the 6th instead of 6:30 am. "
@@ -1349,7 +1357,7 @@ def test_voice_flight_next_friday_an_hour_earlier(voice):
     db_alarms = run(_all(voice))
     assert len(db_alarms) == 1 and db_alarms[0]["time_hhmm"] == "06:30" and db_alarms[0]["repeat_rule"] == "weekdays"
     assert run(_overrides(voice, db_alarms[0]["id"])) == {"2026-11-06": ("shift", "05:30")}
-    assert not run(_events_named(voice, "calendar"))  # an OFFER only: nothing was written to a calendar
+    assert wrote == []  # an OFFER only: the calendar write boundary was never reached
     r = say("never mind about Friday")
     assert r["spoken_summary"] == "Back to normal: 6:30 am on Friday the 6th."
     assert run(_overrides(voice, db_alarms[0]["id"])) == {}
@@ -1447,3 +1455,47 @@ async def _dismiss(path, aid, now):
         return await alarms.dismiss(db, await alarms.get_alarm(db, aid), now=now)
     finally:
         await db.close()
+
+
+
+def test_a_day_that_has_rung_cannot_be_moved_again_or_rung_twice(dbfile):
+    fri5 = ts(2026, 11, 6, 5, 0)
+    a = run(_mk(dbfile, time_hhmm="06:30", repeat="weekdays", now=fri5))
+
+    async def ov(alarm, day, hhmm, now):
+        db = await _open(dbfile)
+        try:
+            return await alarms.set_override(db, await alarms.get_alarm(db, alarm["id"]), day, time_hhmm=hhmm, now=now)
+        finally:
+            await db.close()
+
+    run(ov(a, "2026-11-06", "05:30", fri5))
+    assert [e for e, _ in run(_tick(dbfile, ts(2026, 11, 6, 5, 30)))] == ["rang"]
+    run(_dismiss(dbfile, a["id"], ts(2026, 11, 6, 5, 31)))
+    with pytest.raises(alarms.AlarmError) as e:  # 06:00: the original 06:30 is still ahead, but Friday has ALREADY rung
+        run(ov(a, "2026-11-06", "06:15", ts(2026, 11, 6, 6, 0)))
+    assert "already gone off" in e.value.reason
+    run(ov(a, "2026-11-09", "05:00", ts(2026, 11, 6, 6, 0)))  # changing another day never re-schedules today's 06:30
+    assert run(_get(dbfile, a["id"]))["next_fire_at"] == ts(2026, 11, 9, 5, 0)
+    assert not run(_tick(dbfile, ts(2026, 11, 6, 6, 30)))
+
+
+def test_voice_targets_the_ring_that_will_actually_happen(voice):
+    say("set an alarm for 6:30 every weekday")
+    (a,) = run(_all(voice))
+
+    async def shift(day, hhmm):
+        db = await _open(voice)
+        try:
+            await alarms.set_override(db, await alarms.get_alarm(db, a["id"]), day, time_hhmm=hhmm, now=NIGHT)
+        finally:
+            await db.close()
+
+    run(shift("2026-11-06", "09:00"))  # Friday moved to 9:00
+    r = say("get me up an hour earlier on friday")  # an hour earlier than FRIDAY's ring (9:00), not the rule's 6:30
+    assert "wake you at 8:00 am on Friday the 6th instead of 9:00 am" in r["spoken_summary"], r
+
+
+@pytest.mark.parametrize("text", ["don't put friday's alarm back to normal", "do not undo the change for friday"])
+def test_voice_a_negated_undo_is_never_a_write(text):
+    assert alarm_voice.parse(text, NIGHT) is None, text

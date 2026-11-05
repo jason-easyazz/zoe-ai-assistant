@@ -492,9 +492,35 @@ def day_time(alarm: dict, d: date) -> str:
     return ov[1] if ov and ov[0] == "shift" and ov[1] else alarm["time_hhmm"]
 
 
+def fired_on(alarm: dict, d: date) -> bool:
+    """Has this alarm already rung on local date ``d`` (``last_fired_at`` falls on it)? A day rings at most once."""
+    lf = alarm.get("last_fired_at")
+    return bool(lf) and datetime.fromtimestamp(lf, zoe_timezone()).date() == d
+
+
+def effective_time(alarm: dict, d: date) -> Optional[str]:
+    """The HH:MM this alarm will actually ring at on ``d`` (rule + that day's override), or None: not a ring day, skipped, or already rung."""
+    if not rings_on(alarm, d) or fired_on(alarm, d):
+        return None
+    ov = (alarm.get("overrides") or {}).get(d.isoformat())
+    if ov and ov[0] == "skip":
+        return None
+    return day_time(alarm, d)
+
+
+def _not_before(alarm: dict, now: float) -> float:
+    """Reschedule from here: never back into a day that has already rung (a moved day must not ring twice)."""
+    lf = alarm.get("last_fired_at")
+    if not lf:
+        return now
+    fired_day = datetime.fromtimestamp(lf, zoe_timezone()).date()
+    return max(now, _at(fired_day, "23:59") + 59)
+
+
 async def _reschedule(db: Any, alarm: dict, ovs: dict, now: float, write) -> dict:
     """Run ``write`` (the override row change) and move ``next_fire_at`` with it, in one transaction guarded by the alarm's version."""
-    nxt = next_occurrence(alarm["time_hhmm"], alarm["repeat_rule"], None, now, ovs) if alarm["enabled"] else alarm["next_fire_at"]
+    nxt = (next_occurrence(alarm["time_hhmm"], alarm["repeat_rule"], None, _not_before(alarm, now), ovs) if alarm["enabled"]
+           else alarm["next_fire_at"])
     async with _atomic(db):
         won = await _rowcount(db, "UPDATE alarms SET next_fire_at = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
                               (nxt, now, alarm["id"], alarm["updated_at"]))
@@ -526,12 +552,14 @@ async def set_override(db: Any, alarm: dict, on_date: Any, *, time_hhmm: Any = N
         raise AlarmError("That day is too far away." if d > today else "That day has already gone.")
     if not rings_on(alarm, d):
         raise AlarmError("That alarm doesn't ring on that day.")
-    if _at(d, alarm["time_hhmm"]) <= now:  # that day's ring has already happened (or is happening): there is nothing left to move
+    ovs = dict((await overrides_of(db, [alarm["id"]])).get(alarm["id"], {}))
+    # That day's ring has already happened (it fired, or its EFFECTIVE time - an existing override's, else the rule's - has gone):
+    # there is nothing left to move, and moving it again could ring the day twice.
+    if fired_on(alarm, d) or _at(d, day_time({**alarm, "overrides": ovs}, d)) <= now:
         raise AlarmError("That alarm has already gone off that day.")
     hhmm = None if skip else normalise_time(time_hhmm)
     if hhmm is not None and _at(d, hhmm) <= now:
         raise AlarmError("That time has already passed.")
-    ovs = dict((await overrides_of(db, [alarm["id"]])).get(alarm["id"], {}))
     key = d.isoformat()
     ovs[key] = ("skip", None) if skip else ("shift", hhmm)
 
