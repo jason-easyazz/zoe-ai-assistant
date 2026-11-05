@@ -81,7 +81,7 @@ def test_the_matched_phrases_still_exist_in_the_daemon():
     """A renamed daemon log line would silently turn every rate to zero: pin the phrases to the daemon source."""
     import re
     src = (Path(__file__).resolve().parents[2] / "scripts" / "setup" / "zoe_voice_daemon.py").read_text()
-    for phrase in tm.TURN_PATTERNS + tm.CUTOFF_PATTERNS + tm.OVERWAIT_PATTERNS + tm.NOT_A_TURN:
+    for phrase in tm.TURN_PATTERNS + tm.CUTOFF_PATTERNS + tm.OVERWAIT_PATTERNS + tm.NOT_A_TURN + tm.BOUNDARY_PATTERNS:
         # the phrase must open an actual log.info / log.warning call (a comment or dead constant does not count)
         pat = r"log\.(?:info|warning)\(\s*\n?\s*\"" + re.escape(phrase.rstrip(":"))
         assert re.search(pat, src), phrase
@@ -105,3 +105,14 @@ def test_a_merged_continuation_clip_is_not_a_second_turn():
     held_none = [L(REC), L("Turn held: transcript ends mid-clause - listening 3.0s for the rest"),
                  L("No continuation - sending the held clip as is"), L(FUP)]
     assert tm.count_events(held_none)["turns"] == 2
+
+
+def test_a_hard_cap_listen_that_hears_nothing_does_not_swallow_the_next_follow_up():
+    """Codex #2295: command -> hard cap -> silence (no log line of its own) -> the turn is answered -> a genuine follow-up.
+    That is TWO turns; the "Transcript:" of the capped turn closes the open listen."""
+    cap = L("Recording ended on the hard cap mid-speech - listening 3.0s for the rest (merge 1/2)")
+    seq = [L(REC), cap, L("Transcript: len=40 utt=abc123abc123"), L(FUP)]
+    r = tm.count_events(seq)
+    assert (r["turns"], r["cutoffs"]) == (2, 1)
+    # negative control: when the listen DID hear the rest, the clip is logged before the Transcript and is still not a turn
+    assert tm.count_events([L(REC), cap, L(FUP), L("Transcript: len=60 utt=abc123abc123")])["turns"] == 1

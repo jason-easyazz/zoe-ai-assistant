@@ -41,6 +41,9 @@ OVERWAIT_PATTERNS = ("No continuation - sending the held clip",)
 # of the turn already counted (it is merged into it), never a turn of its own.
 CONTINUATION_LISTEN = ("Turn held:", "Recording ended on the hard cap mid-speech")
 
+# A new turn begins (or the capped one is being answered): any hard-cap listen still open heard nothing.
+BOUNDARY_PATTERNS = ("Transcript:", "Wake word detected")
+
 TARGETS = {"cutoffs_per_100_max": 5.0, "overwaits_per_100_max": 5.0}
 
 
@@ -49,6 +52,7 @@ def count_events(lines: Iterable[str], since: str | None = None, until: str | No
     turns = cutoffs = overwaits = unparsed = 0
     pending = False   # a counted "Recorded ..." line whose "too short" verdict has not been seen yet
     awaiting_continuation = False   # the daemon is listening for the rest of a turn: the next "Recorded follow-up:" is that clip
+    cap_listen = False              # ... and it is a hard-cap listen, which logs nothing when it hears nothing (see "Transcript:")
     days: set[str] = set()
     for raw in lines:
         m = _LINE.match(raw.rstrip("\n"))
@@ -60,10 +64,14 @@ def count_events(lines: Iterable[str], since: str | None = None, until: str | No
         if (since and day < since) or (until and day > until):
             continue
         if msg.startswith("Turn held:"):
-            awaiting_continuation = True
+            awaiting_continuation, cap_listen = True, False
             continue
+        if msg.startswith(BOUNDARY_PATTERNS) and (cap_listen or msg.startswith("Wake word detected")):
+            # The hard-cap listen has no "no continuation" line of its own, but the turn that follows it ALWAYS logs "Transcript:"
+            # (a continuation clip is logged before it): reaching one with the listen still open means it heard nothing.
+            awaiting_continuation = cap_listen = False
         if awaiting_continuation and msg.startswith("Recorded follow-up:"):
-            awaiting_continuation = False       # a merged continuation clip: not a second turn
+            awaiting_continuation = cap_listen = False       # a merged continuation clip: not a second turn
             pending = False
             days.add(day)
             continue
@@ -82,7 +90,7 @@ def count_events(lines: Iterable[str], since: str | None = None, until: str | No
         elif msg.startswith(CUTOFF_PATTERNS):
             cutoffs += 1
             if msg.startswith(CONTINUATION_LISTEN[1]):
-                awaiting_continuation = True
+                awaiting_continuation = cap_listen = True
         elif msg.startswith(OVERWAIT_PATTERNS):
             overwaits += 1
             awaiting_continuation = False
