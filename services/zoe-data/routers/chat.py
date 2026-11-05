@@ -932,6 +932,12 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         struggle_detector.observe("chat", _words, assistant_response, user_id, session_id)
     except Exception:  # noqa: BLE001
         pass
+    try:  # a person's turn just completed on this lane (fast paths never enter the brain slot): the passes below are post-turn
+        import brain_slot_guard
+
+        brain_slot_guard.note_turn_completed()
+    except Exception:  # noqa: BLE001
+        pass
     import memory_capture_stats
 
     memory_capture_stats.started(user_id)

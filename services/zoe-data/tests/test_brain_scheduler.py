@@ -108,6 +108,17 @@ def test_post_turn_pass_is_allowed_only_while_a_household_turn_is_recent(monkeyp
     assert bs.decide("person_extractor_llm", now=_at(14)).cls == bs.POST_TURN
 
 
+def test_a_fast_path_turn_that_never_entered_the_slot_still_makes_the_post_turn_pass_fresh(monkeypatch):
+    monkeypatch.setenv(bs.ENV_MODE, "enforce")
+    assert bs.decide("person_extractor_llm", now=_at(14)).cls == bs.IDLE   # negative control: no turn of any kind yet
+    g.note_turn_completed()   # what _run_voice_memory_passes / _persist_memory_candidates do for a fast-path reply
+    d = bs.decide("person_extractor_llm", now=_at(14))
+    assert d.cls == bs.POST_TURN and d.allowed
+    assert g._last_activity == 0.0, "the wake 'hot' timer must not be touched"
+    monkeypatch.setattr(g, "_clock", lambda: g._post_turn_stamp + 901)
+    assert bs.decide("person_extractor_llm", now=_at(14)).cls == bs.IDLE
+
+
 def test_extra_exception_label_via_env(monkeypatch):
     assert bs.decide("harness.x", now=_at(14)).cls == bs.IDLE
     monkeypatch.setenv(bs.ENV_ALLOW, "harness.x, other")
