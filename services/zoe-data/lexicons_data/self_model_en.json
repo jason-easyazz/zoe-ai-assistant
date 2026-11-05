@@ -34,7 +34,8 @@
   "weather": {"label": "the weather", "do": "tell you the weather", "ask": "what's the weather like today?", "words": ["weather", "forecast", "rain", "temperature", "umbrella"]},
   "lists": {"actions": ["add", "put(?= .+ (?:on|in|to|onto|into) (?:my |the |our |your )?(?:\\w+ )?(?:list|lists|groceries))"], "label": "your lists", "do": "keep your shopping and to-do lists", "ask": "add milk to my shopping list", "words": ["list", "lists", "shopping", "groceries", "todo", "to-do", "task", "tasks"]},
   "timers": {"actions": ["set (?:a |an )?(?:timer|countdown)", "start (?:a |an )?(?:timer|countdown)"], "label": "timers", "do": "set timers", "ask": "set a timer for ten minutes", "words": ["timer", "timers", "countdown"]},
-  "reminders": {"actions": ["remind", "set (?:a |an |me a )?(?:reminder|alarm)"], "label": "reminders", "do": "set reminders", "ask": "remind me to call the plumber at five", "words": ["remind", "reminder", "reminders"]},
+  "alarms": {"actions": ["(?:set|make) (?:a |an |my |me an )?(?:wake ?up )?alarms?", "wake (?:me|us)(?: up)?"], "label": "alarms", "do": "set wake-up alarms", "ask": "set an alarm for 6:30 tomorrow", "words": ["alarm", "alarms"]},
+  "reminders": {"actions": ["remind", "set (?:a |an |me a )?reminder"], "label": "reminders", "do": "set reminders", "ask": "remind me to call the plumber at five", "words": ["remind", "reminder", "reminders"]},
   "calendar": {"actions": ["schedule", "(?:put|add|create) (?:an? |the )?(?:event|appointment|meeting)"], "label": "your calendar", "do": "check and add calendar events", "ask": "what's on my calendar tomorrow?", "words": ["calendar", "schedule", "appointment", "appointments", "meeting", "event", "events"]},
   "notes": {"actions": ["(?:make|take|save|jot|write) (?:down )?(?:a |an )?note", "jot"], "label": "notes", "do": "save and find notes", "ask": "make a note that the spare key is in the shed", "words": ["note", "notes", "jot"]},
   "journal": {"label": "your journal", "do": "keep a journal with you", "ask": "add a journal entry", "words": ["journal", "diary"]},
@@ -58,7 +59,8 @@
   "persona": "adapt my manner to each person",
   "face_id": "recognise you by your face",
   "music_discovery": "build weekly music discovery playlists",
-  "telegram_media": "understand voice notes and photos on Telegram"
+  "telegram_media": "understand voice notes and photos on Telegram",
+  "alarms": "set wake-up alarms"
  },
  "off_record_phrases": ["off the record"],
  "memory": {

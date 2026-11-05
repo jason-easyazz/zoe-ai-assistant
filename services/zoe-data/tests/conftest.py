@@ -61,6 +61,9 @@ os.environ["ZOE_LOG_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "logs")
 # either would strip the household's real router shadow log / intent-miss log. Read at call time, so this pin holds.
 os.environ["ZOE_ROUTER_HEAD_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "router_head_shadow.jsonl")
 os.environ["ZOE_INTENT_MISS_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "intent-misses.jsonl")
+# ... and the owner's opt-in recall-gate trace, which the same erasers rewrite (recall_gate_trace.erase_all / erase_entity) even when the
+# trace flag is off: unpinned, a forget test would wipe a real trace under ~/.zoe/recall-gate-trace. Read at call time, so this pin holds.
+os.environ["ZOE_RECALL_GATE_TRACE_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "recall-gate-trace")
 # ... and ``local_text_logs.sweep()`` DELETES the owner scripts' one-off backups (router-shadow-*, migrate-hermes-env-*, dead-units-*) past 14 days.
 os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "adhoc-backups")
 # The router retrain ledger (router_retrain_ledger, Phase 3 of the struggle loop) lives under ~/.zoe/router_retrain by default, and every

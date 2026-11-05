@@ -34,7 +34,8 @@
   "weather": {"label": "el tiempo", "do": "decirte el tiempo", "ask": "que tiempo hace hoy?", "words": ["tiempo", "clima", "pronostico", "lluvia", "temperatura", "paraguas"]},
   "lists": {"actions": ["anadir", "agregar", "meter", "poner(?= .+ (?:a|en) (?:mi |la |nuestra |tu )?(?:\\w+ )?(?:lista|listas|compra))"], "label": "tus listas", "do": "llevar tus listas de la compra y de tareas", "ask": "anade leche a mi lista de la compra", "words": ["lista", "listas", "compra", "tareas", "tarea"]},
   "timers": {"actions": ["poner (?:un |una )?(?:temporizador|cuenta atras)", "programar (?:un |una )?temporizador"], "label": "temporizadores", "do": "poner temporizadores", "ask": "pon un temporizador de diez minutos", "words": ["temporizador", "temporizadores", "cuenta atras"]},
-  "reminders": {"actions": ["recordar(?:me)?", "poner (?:un |una )?(?:recordatorio|alarma)", "programar (?:un |una )?(?:recordatorio|alarma)"], "label": "recordatorios", "do": "ponerte recordatorios", "ask": "recuerdame llamar al fontanero a las cinco", "words": ["recuerdame", "recordatorio", "recordatorios"]},
+  "alarms": {"actions": ["poner (?:una |la |mi )?alarmas?", "programar (?:una |la |mi )?alarmas?", "despertar(?:me|nos)?"], "label": "alarmas", "do": "ponerte alarmas para despertarte", "ask": "pon una alarma a las seis y media manana", "words": ["alarma", "alarmas", "despertador"]},
+  "reminders": {"actions": ["recordar(?:me)?", "poner (?:un |una )?recordatorio", "programar (?:un |una )?recordatorio"], "label": "recordatorios", "do": "ponerte recordatorios", "ask": "recuerdame llamar al fontanero a las cinco", "words": ["recuerdame", "recordatorio", "recordatorios"]},
   "calendar": {"actions": ["agendar", "programar (?:una )?(?:cita|reunion|evento)", "anadir (?:una |un )?(?:cita|reunion|evento)"], "label": "tu calendario", "do": "mirar y anadir eventos del calendario", "ask": "que tengo manana en el calendario?", "words": ["calendario", "agenda", "cita", "citas", "reunion", "evento", "eventos"]},
   "notes": {"actions": ["anotar", "apuntar", "tomar (?:una )?nota", "guardar (?:una )?nota"], "label": "notas", "do": "guardar y buscar notas", "ask": "apunta que la llave de repuesto esta en el cobertizo", "words": ["nota", "notas", "apunta"]},
   "journal": {"label": "tu diario", "do": "llevar un diario contigo", "ask": "anade una entrada al diario", "words": ["diario"]},
@@ -58,7 +59,8 @@
   "persona": "adaptar mi manera de hablar a cada persona",
   "face_id": "reconocerte por la cara",
   "music_discovery": "crear listas semanales de musica nueva",
-  "telegram_media": "entender notas de voz y fotos en Telegram"
+  "telegram_media": "entender notas de voz y fotos en Telegram",
+  "alarms": "poner alarmas para despertarte"
  },
  "off_record_phrases": ["que quede entre nosotros", "es confidencial"],
  "memory": {
