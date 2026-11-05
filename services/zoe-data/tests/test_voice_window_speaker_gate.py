@@ -309,7 +309,7 @@ def test_negative_control_without_the_blocking_check_the_low_clip_runs_the_brain
     assert len(turns) == 1 and "skipped" not in body, (turns, body)
 
 
-# -- a SPECULATIVE window turn (daemon ZOE_SPECULATIVE_WINDOWS, 2026-11-06) ------------------------------------------------
+# -- a SPECULATIVE window turn (daemon ZOE_SPECULATIVE_TURN=windows, 2026-11-06) ----------------------------------
 # The pre-brain gates never ran on a speculative turn. A follow-up turn may now be speculative, so the window speaker gate
 # is ASKED (no side effects) and a would-be drop cancels the speculation: the daemon then runs the full recording as the
 # normal window turn, which meets the gate with its side effects (one crowd note, not two).

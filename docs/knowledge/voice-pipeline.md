@@ -1754,13 +1754,14 @@ recording's no-speech limit was `SILENCE_TIMEOUT_S` (1.5 s, 18 chunks) counted f
 holds the chime (~0.27 s) and the speakerphone's echo suppression after it (~0.9 s of near-zero samples), so a
 ~1.5 s pause left almost no time; the transcript was only the wake word and the server's greeting ("Good evening.
 What can I do for you?") then played over the command.
-- `ZOE_POST_WAKE_NO_SPEECH_S` (default **3.0**, 0 = the old rule): the wake recording's own no-speech window,
+- `POST_WAKE_NO_SPEECH_S` (default **3.0**; 0 = the old rule AND the wake-only greeting back - the rollback of both halves;
+  unprefixed like its neighbour `SILENCE_TIMEOUT_S`): the wake recording's own no-speech window,
   counted from listen start — the chime thread has finished (`_wake_chime_done`, waited on at most 1.5 s) AND the
-  muted run after it is over (chunks with mean |amplitude| < `ZOE_POST_WAKE_MUTED_AMP`, default 6; room noise is
-  ~8-18, echo suppression 0-5; skipped for at most `ZOE_POST_WAKE_ECHO_MAX_MS`, default 1200). Follow-up windows and
+  muted run after it is over (chunks with mean |amplitude| < 6, a fixed constant; room noise is
+  ~8-18, echo suppression 0-5; skipped for at most 1200 ms). Follow-up windows and
   the barge seed are unchanged (they start on detected speech). Worst case a wake with no command now records
   ~0.3 + 1.2 + 3.0 s instead of 1.44 s.
-- `ZOE_WAKE_ONLY_LISTEN` (default **on**, 0 = off): a WAKE turn whose transcript is only the wake word is dropped
+- **Wake-only listen** (on whenever the window above is): a WAKE turn whose transcript is only the wake word is dropped
   before any audio plays (the transcript frame leads the stream; closing it cancels the server's work, as for
   junk); the daemon plays the short follow-up cue and listens once (≥ 3 s, no wake word), running what it hears as
   a wake turn. Daemon-only: the server is unchanged. Not applied on a speculative stream.
@@ -1771,7 +1772,7 @@ What can I do for you?") then played over the command.
 two sentences; the recorder closed at 0.8 s any-quiet and the mic stayed closed until Zoe spoke. A plain longer
 tail costs ~0.6 s on every turn, and listening between the close and Zoe's reply cannot safely merge a turn whose
 writes may already have run. So B1.1 speculation now covers follow-up and conversation windows
-(`ZOE_SPECULATIVE_WINDOWS`, default off) — see
+(`ZOE_SPECULATIVE_TURN=windows` on the Pi, default off) — see
 [b1-speculative-turn-start.md](../architecture/b1-speculative-turn-start.md) → *Follow-up and conversation windows*
 for the protocol and the recommended values (speculate at 640 ms, close at ~1.4 s, re-answer a continuation).
 
@@ -1783,8 +1784,7 @@ dated name on its time-of-day part as before. Old `HHMMSS_mmm.wav` names are sti
 **Operator deploy.** Server first (blessed voice-path deploy, poll `/health`), then the Pi daemon from a clean
 worktree at the merged commit with `scripts/setup/deploy-pi-voice.sh` (`DRY_RUN=1` first) — the recipe under
 *Long speech is one turn → Operator deploy* above. No `.env.voice` change is needed for fix 1. Fix 2 is the owner's
-step after the replay gate + a lab check. Rollback for fix 1: `ZOE_POST_WAKE_NO_SPEECH_S=0` and/or
-`ZOE_WAKE_ONLY_LISTEN=0` in `/home/pi/.zoe-voice/.env.voice`, then `systemctl --user restart zoe-voice`.
+step after the replay gate + a lab check. Rollback for fix 1: `POST_WAKE_NO_SPEECH_S=0` in `/home/pi/.zoe-voice/.env.voice`, then `systemctl --user restart zoe-voice`.
 Pinned by `tests/unit/test_voice_daemon_panel_cutoffs.py` (negative controls: the old window closes before the
 command; the live 640/800 values close before the continuation; a follow-up wake-word-only line still plays).
 

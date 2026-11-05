@@ -12,7 +12,7 @@ synthetic audio and phrases only. 80 ms chunks (the daemon default). Pins:
     3. follow-up windows keep their own rule (no post-wake window on _follow_up_listen / the barge seed);
     4. a wake turn whose transcript is only the wake word plays nothing (no greeting over the command) and voice_command
        opens one follow-up listen with the cue instead; a follow-up turn / the flag off is unchanged (controls).
-  CUT-OFF 1 (continuation after a complete sentence, ZOE_SPECULATIVE_WINDOWS, default OFF):
+  CUT-OFF 1 (continuation after a complete sentence, ZOE_SPECULATIVE_TURN=windows on the Pi, default off):
     5. with the recommended values a 1.19 s pause then more speech is ONE recording, fired at 640 ms and ``resumed``;
        NEGATIVE CONTROL: the live 640/800 values close before the continuation;
     6. a follow-up recording speculates only with the flag on, and a cancelled speculation re-runs the FULL recording
@@ -151,7 +151,7 @@ SPEECH_AT = len(CHIME) + len(MUTED) + len(PAUSE)   # 1-based read index of the f
 
 def _record_after_wake(daemon, monkeypatch, *, window_s, script=WAKE_SCRIPT, chime_done_at=3, tail=(10, DEEP)):
     _vad_mode(daemon, monkeypatch)
-    monkeypatch.setattr(daemon, "ZOE_POST_WAKE_NO_SPEECH_S", window_s)
+    monkeypatch.setattr(daemon, "POST_WAKE_NO_SPEECH_S", window_s)
     daemon._wake_chime_done.clear()                       # on_wake() cleared it; the chime thread sets it
     stream = _ScriptStream(daemon, monkeypatch, script, tail=tail,
                            on_read=lambda n: daemon._wake_chime_done.set() if n > chime_done_at else None)
@@ -172,14 +172,14 @@ def test_pause_after_the_chime_records_the_command(daemon, monkeypatch, caplog):
 
 
 def test_negative_control_old_rule_closes_on_the_wake_word_alone(daemon, monkeypatch):
-    """ZOE_POST_WAKE_NO_SPEECH_S=0 is the old rule: SILENCE_TIMEOUT_S (1.5 s) counted from recording start, chime and
+    """POST_WAKE_NO_SPEECH_S=0 is the old rule: SILENCE_TIMEOUT_S (1.5 s) counted from recording start, chime and
     echo suppression included. The recording closes before the command starts - the 2026-11-05 cut-off."""
     wav, reads = _record_after_wake(daemon, monkeypatch, window_s=0.0)
     assert reads == int(1.5 / 0.08) == 18 and reads <= SPEECH_AT, reads   # 18 chunks: the logged 1.44 s
 
 
 def test_window_counts_from_listen_start_not_recording_start(daemon, monkeypatch, caplog):
-    """No command at all: the recording closes exactly ZOE_POST_WAKE_NO_SPEECH_S after the chime + muted run end, and the
+    """No command at all: the recording closes exactly POST_WAKE_NO_SPEECH_S after the chime + muted run end, and the
     log names the rule and when listening started."""
     import logging
     script = CHIME + MUTED
@@ -192,8 +192,8 @@ def test_window_counts_from_listen_start_not_recording_start(daemon, monkeypatch
 
 def test_dead_quiet_room_is_bounded_by_the_echo_cap(daemon, monkeypatch):
     """A room as quiet as echo suppression must still close: the muted run is skipped for at most
-    ZOE_POST_WAKE_ECHO_MAX_MS."""
-    monkeypatch.setattr(daemon, "ZOE_POST_WAKE_ECHO_MAX_MS", 1200)
+    _POST_WAKE_ECHO_MAX_MS."""
+    monkeypatch.setattr(daemon, "_POST_WAKE_ECHO_MAX_MS", 1200)
     wav, reads = _record_after_wake(daemon, monkeypatch, window_s=3.0, script=CHIME, tail=(0, DEEP))
     assert reads == len(CHIME) + _n(1200) + _n(3000), reads
 
@@ -276,7 +276,7 @@ def _greeting_wire(daemon, monkeypatch, transcript):
 
 
 def test_wake_only_wake_turn_plays_no_greeting(daemon, monkeypatch):
-    monkeypatch.setattr(daemon, "ZOE_WAKE_ONLY_LISTEN", True)
+    monkeypatch.setattr(daemon, "WAKE_ONLY_LISTEN", True)
     played = _greeting_wire(daemon, monkeypatch, "Hey Zoe!")
     ok = daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True)
     assert ok is False and played == []
@@ -285,7 +285,7 @@ def test_wake_only_wake_turn_plays_no_greeting(daemon, monkeypatch):
 
 @pytest.mark.parametrize("wake_turn,flag", [(False, True), (True, False)])
 def test_negative_controls_wake_only_followup_or_flag_off_is_played(daemon, monkeypatch, wake_turn, flag):
-    monkeypatch.setattr(daemon, "ZOE_WAKE_ONLY_LISTEN", flag)
+    monkeypatch.setattr(daemon, "WAKE_ONLY_LISTEN", flag)
     monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t, **_k: False)
     played = _greeting_wire(daemon, monkeypatch, "Hey Zoe!")
     daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=wake_turn)
@@ -294,7 +294,7 @@ def test_negative_controls_wake_only_followup_or_flag_off_is_played(daemon, monk
 
 
 def test_a_real_command_on_a_wake_turn_is_played(daemon, monkeypatch):
-    monkeypatch.setattr(daemon, "ZOE_WAKE_ONLY_LISTEN", True)
+    monkeypatch.setattr(daemon, "WAKE_ONLY_LISTEN", True)
     monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t, **_k: False)
     played = _greeting_wire(daemon, monkeypatch, "Hey Zoe, what time is it?")
     daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True)
@@ -428,7 +428,7 @@ def test_followup_recording_fires_the_speculation_and_reports_the_resume(daemon,
 
 def test_window_speculation_only_with_both_flags(daemon, monkeypatch):
     monkeypatch.setattr(daemon, "_speculation_available", lambda: True)
-    monkeypatch.setattr(daemon, "ZOE_SPECULATIVE_WINDOWS", False)
+    monkeypatch.setattr(daemon, "ZOE_SPECULATIVE_WINDOWS", False)   # ZOE_SPECULATIVE_TURN=1: wake only
     assert daemon._window_speculation(_FakePA(), None, "followup") is None          # default OFF: unchanged
     monkeypatch.setattr(daemon, "ZOE_SPECULATIVE_WINDOWS", True)
     spec = daemon._window_speculation(_FakePA(), None, "followup")
@@ -479,3 +479,88 @@ def test_speculative_window_payload_carries_the_window_and_a_wake_one_does_not(d
     daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, speculation=wake)
     assert posted[0]["speculative"] is True and posted[0]["window"] == "followup"
     assert posted[1]["speculative"] is True and "window" not in posted[1]
+
+
+def test_windows_value_turns_on_window_speculation_and_plain_on_does_not():
+    """ZOE_SPECULATIVE_TURN=windows (Pi only) = wake + windows; ``1`` = wake only (unchanged); unset = off."""
+    import os
+    for raw, turn, windows in (("windows", True, True), ("1", True, False), ("", False, False)):
+        old = os.environ.get("ZOE_SPECULATIVE_TURN")
+        os.environ["ZOE_SPECULATIVE_TURN"] = raw
+        try:
+            mod = _load(f"zoe_voice_daemon_specflag_{raw or 'off'}")
+        finally:
+            if old is None:
+                os.environ.pop("ZOE_SPECULATIVE_TURN", None)
+            else:
+                os.environ["ZOE_SPECULATIVE_TURN"] = old
+        assert (mod.ZOE_SPECULATIVE_TURN, mod.ZOE_SPECULATIVE_WINDOWS) == (turn, windows), raw
+
+
+# ── cross-review round 1 (codex, PR #2315) ───────────────────────────────────
+
+def test_a_speculation_the_daemon_cancelled_is_never_committed(daemon, monkeypatch):
+    """Junk on a speculative window stream marks it cancelled; finish() must then send ``cancel``, never
+    ``commit`` (a commit could release deferred writes the re-run repeats). NEGATIVE CONTROL: not cancelled -> commit."""
+    calls: list = []
+    monkeypatch.setattr(daemon, "_api_post", lambda path, body, **k: calls.append(body) or {"verdict": "ok"})
+    spec = daemon._SpeculativeTurn(_FakePA(), window="followup")
+    spec.fired, spec.cancelled, spec.resumed = True, True, True
+    assert spec.finish(b"RIFFfinal") is False
+    assert calls == [{"turn_id": spec.turn_id, "action": "cancel"}]
+    calls.clear()
+    spec2 = daemon._SpeculativeTurn(_FakePA(), window="followup")
+    spec2.fired = True
+    spec2.finish(b"RIFFfinal")
+    assert calls == [{"turn_id": spec2.turn_id, "action": "commit"}]
+
+
+def test_junk_on_a_speculative_window_stream_cancels_it(daemon, monkeypatch):
+    lines = [json.dumps({"transcript": "you"}).encode(),
+             json.dumps({"chunk": 0, "text": "Hm?"}).encode(), base64.b64encode(b"RIFFx")]
+    played = _greeting_wire(daemon, monkeypatch, "unused")
+    monkeypatch.setattr(daemon.requests, "post", lambda *a, **k: _FakeResp(lines), raising=False)
+    monkeypatch.setattr(daemon, "_is_junk_transcript", lambda _t, **_k: True)
+    spec = daemon._SpeculativeTurn(_FakePA(), window="followup")
+    daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", prompt_on_empty=False, speculation=spec, window="followup")
+    assert spec.cancelled is True and played == []
+
+
+def test_a_dropped_wake_recording_abandons_its_fired_speculation(daemon, monkeypatch):
+    abandoned: list = []
+
+    class _Spec2:
+        def __init__(self, pa):
+            pass
+
+        def abandon(self):
+            abandoned.append(True)
+    monkeypatch.setattr(daemon, "_SpeculativeTurn", _Spec2)
+    monkeypatch.setattr(daemon, "_speculation_available", lambda: True)
+    monkeypatch.setattr(daemon, "record_command", lambda pa, stream=None, speculation=None: None)
+    monkeypatch.setattr(daemon, "POST_PLAY_TAIL_S", 0.0)
+    daemon.voice_command(_FakePA(), _OWW(), wake_stream=None)
+    assert abandoned == [True]
+
+
+def test_blocking_wake_only_plays_no_greeting_and_a_stale_flag_never_leaks(daemon, monkeypatch):
+    played: list = []
+    monkeypatch.setattr(daemon, "WAKE_ONLY_LISTEN", True)
+    monkeypatch.setattr(daemon, "_BUFFER_DELAY_S", 5.0)
+    monkeypatch.setattr(daemon, "_speaker_claim_for_turn", lambda _w: None, raising=False)
+    monkeypatch.setattr(daemon, "play_audio_b64", lambda *a, **k: played.append(a))
+    resp = {"ok": True, "text": "Hey Zoe.", "reply": "Good evening.", "audio_base64": "UklGRg=="}
+    monkeypatch.setattr(daemon, "_post_turn_riding_restart", lambda *a, **k: dict(resp))
+    assert daemon._do_single_turn(_FakePA(), b"RIFFwav", wake_turn=True) is False
+    assert played == [] and daemon._last_turn_flags.get("wake_only") is True
+    # a later FAILED blocking turn must not inherit the flag
+    monkeypatch.setattr(daemon, "_post_turn_riding_restart", lambda *a, **k: {"ok": False, "error": "down"})
+    monkeypatch.setattr(daemon, "_espeak_local", lambda _t: None)
+    daemon._do_single_turn(_FakePA(), b"RIFFwav", wake_turn=True)
+    assert "wake_only" not in daemon._last_turn_flags
+
+
+@pytest.mark.parametrize("seconds", [0.0804, 0.081, 3.0, 2.95])
+def test_no_speech_window_is_never_shorter_than_configured(daemon, seconds):
+    ep = daemon._Endpointer(no_speech_s=seconds)
+    assert ep._pre_max_silent * daemon.CHUNK_SIZE / daemon.SAMPLE_RATE >= seconds - 1e-9

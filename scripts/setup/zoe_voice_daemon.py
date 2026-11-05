@@ -243,7 +243,10 @@ ZOE_VAD_HESITATION_TAIL_MS = _int_env("ZOE_VAD_HESITATION_TAIL_MS", 0)
 # default) the endpointer never fires and the payload never carries the
 # fields — byte-identical to today. Design + protocol:
 # docs/architecture/b1-speculative-turn-start.md
-ZOE_SPECULATIVE_TURN = os.environ.get("ZOE_SPECULATIVE_TURN", "false").lower() in ("1", "true", "yes", "on")
+# ``windows`` (Pi only; the server reads the same flag as a plain bool and needs ``1``) also
+# speculates in the follow-up / conversation windows - see ZOE_SPECULATIVE_WINDOWS below.
+_SPECULATIVE_TURN_RAW = os.environ.get("ZOE_SPECULATIVE_TURN", "false").strip().lower()
+ZOE_SPECULATIVE_TURN = _SPECULATIVE_TURN_RAW in ("1", "true", "yes", "on", "windows")
 ZOE_SPECULATIVE_TAIL_MS = _int_env("ZOE_SPECULATIVE_TAIL_MS", 320)
 # ── Post-wake no-speech window (2026-11-06, cut-off fix, ON by default) ──
 # The wake recording used to give up after SILENCE_TIMEOUT_S (1.5 s) of no speech
@@ -251,15 +254,17 @@ ZOE_SPECULATIVE_TAIL_MS = _int_env("ZOE_SPECULATIVE_TAIL_MS", 320)
 # the speakerphone's echo suppression after it (~0.9 s of near-zero samples). A
 # natural ~1.5 s pause after the chime closed the recording on the wake word alone
 # and Zoe then greeted the user over the command they had started. Now the
-# no-speech window (ZOE_POST_WAKE_NO_SPEECH_S) only starts counting once the chime
-# has finished AND the muted run after it is over: chunks whose mean |amplitude|
-# is below ZOE_POST_WAKE_MUTED_AMP (room noise is ~8-18, echo suppression 0-5),
-# skipped for at most ZOE_POST_WAKE_ECHO_MAX_MS so a dead-quiet room still closes.
-# Wake recording only (record_command); follow-up windows keep FOLLOW_UP_LISTEN_S /
-# SILENCE_TIMEOUT_S. 0 = rollback to the old rule (SILENCE_TIMEOUT_S from start).
-ZOE_POST_WAKE_NO_SPEECH_S = max(0.0, _float_env("ZOE_POST_WAKE_NO_SPEECH_S", 3.0))
-ZOE_POST_WAKE_MUTED_AMP = max(0.0, _float_env("ZOE_POST_WAKE_MUTED_AMP", 6.0))
-ZOE_POST_WAKE_ECHO_MAX_MS = max(0, _int_env("ZOE_POST_WAKE_ECHO_MAX_MS", 1200))
+# no-speech window (POST_WAKE_NO_SPEECH_S - an endpoint knob beside SILENCE_TIMEOUT_S,
+# unprefixed like it) only starts counting once the chime has finished AND the muted
+# run after it is over: chunks whose mean |amplitude| is below _POST_WAKE_MUTED_AMP
+# (room noise is ~8-18, echo suppression 0-5), skipped for at most
+# _POST_WAKE_ECHO_MAX_MS so a dead-quiet room still closes. Wake recording only
+# (record_command); follow-up windows keep FOLLOW_UP_LISTEN_S / SILENCE_TIMEOUT_S.
+# 0 = rollback of the whole cut-off fix: the old rule (SILENCE_TIMEOUT_S from start)
+# AND the wake-only greeting plays again (WAKE_ONLY_LISTEN below).
+POST_WAKE_NO_SPEECH_S = max(0.0, _float_env("POST_WAKE_NO_SPEECH_S", 3.0))
+_POST_WAKE_MUTED_AMP = 6.0
+_POST_WAKE_ECHO_MAX_MS = 1200
 # Never wait longer than this for the chime thread to report it finished (a hung
 # aplay must not hold the window open): past it the window counts as if it had.
 _POST_WAKE_CHIME_WAIT_MAX_S = 1.5
@@ -273,15 +278,16 @@ _wake_chime_done.set()
 # ("Good evening. What can I do for you?") which then plays over the command. With
 # this on, the daemon drops that reply before any audio plays (the transcript frame
 # leads the stream; closing the stream cancels the server's work, as for junk),
-# plays the short follow-up cue and opens one follow-up listen instead. 0 = rollback.
-ZOE_WAKE_ONLY_LISTEN = os.environ.get("ZOE_WAKE_ONLY_LISTEN", "true").lower() in ("1", "true", "yes", "on")
+# plays the short follow-up cue and opens one follow-up listen instead. Rolled back
+# with the window above (POST_WAKE_NO_SPEECH_S=0): the two halves of one fix.
+WAKE_ONLY_LISTEN = POST_WAKE_NO_SPEECH_S > 0
 _WAKE_ONLY_RE = re.compile(
     r"^\s*(?:(?:a|ah|uh|um+|hey|hi|hello|ok|okay|oi)[\s,.!]+)?(?:zoe|zoey|zoie|zowie|zoë)[\s,.!?…:;-]*$",
     re.IGNORECASE)
 # B1.1 in the no-wake-word windows (follow-up / conversation), flag-dark: the
 # owner's 2026-11-05 cut-off was a follow-up turn that paused 1.19 s between two
 # sentences, and the recorder closed (0.8 s any-quiet) before the second one.
-# With this AND ZOE_SPECULATIVE_TURN on, a window recording fires its turn at the
+# With ZOE_SPECULATIVE_TURN=windows on the Pi, a window recording fires its turn at the
 # first verdict too and keeps recording, so the real close can be long
 # (recommended: ZOE_SPECULATIVE_TAIL_MS=640, ZOE_VAD_TAIL_MS=1400,
 # VAD_ENDPOINT_SILENCE_S=1.5) without adding that wait to the answer: a
@@ -289,7 +295,7 @@ _WAKE_ONLY_RE = re.compile(
 # merged recording is answered instead. NEEDS the zoe-data side of the same PR
 # (it applies the window speaker gate to speculative window turns); an older
 # server would skip that gate. Off: windows never speculate (unchanged).
-ZOE_SPECULATIVE_WINDOWS = os.environ.get("ZOE_SPECULATIVE_WINDOWS", "false").lower() in ("1", "true", "yes", "on")
+ZOE_SPECULATIVE_WINDOWS = _SPECULATIVE_TURN_RAW == "windows"
 # Process-wide fail-closed latch: set the moment a speculative stream proves
 # the server is NOT gating (audio arrived before this daemon sent its verdict —
 # daemon flag on, server flag off, e.g. a server rollback). No further turn
@@ -1111,15 +1117,15 @@ class _PostWakeGate:
     Called once per pre-speech quiet chunk of the wake recording; returns True from the
     first chunk that is past (1) the wake chime (``_wake_chime_done``, waited on for at
     most _POST_WAKE_CHIME_WAIT_MAX_S of audio) and (2) the speakerphone's echo-suppressed
-    run after it - chunks quieter than ZOE_POST_WAKE_MUTED_AMP, skipped for at most
-    ZOE_POST_WAKE_ECHO_MAX_MS. Latches open. ``opened_ms`` (audio before listening
+    run after it - chunks quieter than _POST_WAKE_MUTED_AMP, skipped for at most
+    _POST_WAKE_ECHO_MAX_MS. Latches open. ``opened_ms`` (audio before listening
     started) is logged with a no_speech close."""
 
     def __init__(self, chime_done: "threading.Event | None" = None):
         self._chime_done = chime_done if chime_done is not None else _wake_chime_done
         per_s = SAMPLE_RATE / float(CHUNK_SIZE)
         self._chime_wait_max = int(math.ceil(_POST_WAKE_CHIME_WAIT_MAX_S * per_s))
-        self._echo_max = -(-ZOE_POST_WAKE_ECHO_MAX_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE))
+        self._echo_max = -(-_POST_WAKE_ECHO_MAX_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE))
         self._seen = 0
         self._muted = 0
         self.opened_ms: "int | None" = None
@@ -1132,7 +1138,7 @@ class _PostWakeGate:
             return False
         if self._muted < self._echo_max:
             amp = float(np.abs(np.frombuffer(data, dtype=np.int16)).mean()) if data else 0.0
-            if amp < ZOE_POST_WAKE_MUTED_AMP:
+            if amp < _POST_WAKE_MUTED_AMP:
                 self._muted += 1
                 return False
         self.opened_ms = int(round((self._seen - 1) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE))
@@ -1146,9 +1152,9 @@ def _is_wake_only_transcript(text: str) -> bool:
 
 def _wake_only_listen(transcript: str, *, wake_turn: bool, played_any: bool, speculative: bool) -> bool:
     """True (and ``_last_turn_flags["wake_only"]`` set) when this wake turn's reply must be
-    dropped because the user said only the wake word (ZOE_WAKE_ONLY_LISTEN). Never once
+    dropped because the user said only the wake word (WAKE_ONLY_LISTEN). Never once
     audio played, never on a speculative stream (its own verdict protocol owns it)."""
-    if not (ZOE_WAKE_ONLY_LISTEN and wake_turn and not played_any and not speculative):
+    if not (WAKE_ONLY_LISTEN and wake_turn and not played_any and not speculative):
         return False
     if not _is_wake_only_transcript(transcript):
         return False
@@ -1198,12 +1204,12 @@ class _Endpointer:
         # recorder's VAD trigger) so the fast tail applies from the first pause.
         self._spoke = spoke
         self._amp_max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
-        # Post-wake no-speech window (ZOE_POST_WAKE_NO_SPEECH_S): None = the legacy rule
+        # Post-wake no-speech window (POST_WAKE_NO_SPEECH_S): None = the legacy rule
         # (SILENCE_TIMEOUT_S of quiet from the first chunk). Otherwise the pre-speech quiet
         # only counts once ``listen_gate(chunk)`` has said listening started (the chime and
         # the echo-suppressed run after it are over); ceil, never earlier than configured.
         self._pre_max_silent = (
-            max(1, -(-int(round(no_speech_s * 1000)) * SAMPLE_RATE // (1000 * CHUNK_SIZE)))
+            max(1, int(math.ceil(no_speech_s * SAMPLE_RATE / CHUNK_SIZE - 1e-9)))
             if no_speech_s is not None and no_speech_s > 0 else None
         )
         self._listen_gate = listen_gate
@@ -2601,9 +2607,9 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
     uploader = _start_stt_stream(frames)
     # The wake recording's no-speech window starts when the chime + echo suppression
-    # end (ZOE_POST_WAKE_NO_SPEECH_S); 0 keeps the legacy SILENCE_TIMEOUT_S-from-start.
-    if ZOE_POST_WAKE_NO_SPEECH_S > 0:
-        endpointer = _Endpointer(no_speech_s=ZOE_POST_WAKE_NO_SPEECH_S, listen_gate=_PostWakeGate())
+    # end (POST_WAKE_NO_SPEECH_S); 0 keeps the legacy SILENCE_TIMEOUT_S-from-start.
+    if POST_WAKE_NO_SPEECH_S > 0:
+        endpointer = _Endpointer(no_speech_s=POST_WAKE_NO_SPEECH_S, listen_gate=_PostWakeGate())
     else:
         endpointer = _Endpointer()
     stop_reason = "max_duration"
@@ -3574,7 +3580,7 @@ class _SpeculativeTurn:
 
     def __init__(self, pa: pyaudio.PyAudio, *, window: str = "", conversation: bool = False):
         self.pa = pa
-        # A follow-up / conversation window turn (ZOE_SPECULATIVE_WINDOWS): carried on the
+        # A follow-up / conversation window turn (ZOE_SPECULATIVE_TURN=windows): carried on the
         # speculative request so the server applies the window speaker gate to it.
         self.window = window
         self.conversation = conversation
@@ -3644,9 +3650,11 @@ class _SpeculativeTurn:
             # there is no gate to post to (409) and nothing may be played or
             # re-POSTed — the prefix WAS processed. Silent turn; latched off.
             return False
-        action = "resolve" if self.resumed else "commit"
+        # A speculation this daemon already dropped (junk on a window stream) must never be
+        # committed: a commit could release deferred writes the caller's re-run repeats.
+        action = "cancel" if self.cancelled else ("resolve" if self.resumed else "commit")
         body: dict = {"turn_id": self.turn_id, "action": action}
-        if self.resumed:
+        if action == "resolve":
             body["audio_base64"] = base64.b64encode(final_wav).decode()
         resp = _api_post("/api/voice/turn_stream/speculation", body, timeout=15, retries=0)
         if resp.get("error") == "HTTP 409":
@@ -3720,7 +3728,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         payload["speculative"] = True
         payload["turn_id"] = speculation.turn_id
     if window in ("followup", "conversation"):
-        # A speculative window turn (ZOE_SPECULATIVE_WINDOWS) carries it too: the server applies the window
+        # A speculative window turn (ZOE_SPECULATIVE_TURN=windows) carries it too: the server applies the window
         # speaker gate to it. A wake turn's speculation has no window, so its payload is unchanged.
         payload["window"] = window
         if _prev_reply_asked:
@@ -3836,7 +3844,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 transcript = obj.get("transcript", "") or transcript
                 # Wake word only ("Hey Zoe."): the user is most likely pausing before the command. The server would
                 # greet ("Good evening. What can I do for you?") over it - drop that before any audio plays; the
-                # caller plays the listening cue and opens a follow-up listen (ZOE_WAKE_ONLY_LISTEN).
+                # caller plays the listening cue and opens a follow-up listen (WAKE_ONLY_LISTEN).
                 if _wake_only_listen(transcript, wake_turn=wake_turn, played_any=played_any,
                                      speculative=speculation is not None):
                     break
@@ -4029,6 +4037,10 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
                     window: str = "", text: "str | None" = None, wake_turn: bool = False) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
+    ``wake_turn``: a wake-word turn whose transcript is only the wake word plays no reply
+    (WAKE_ONLY_LISTEN; the caller listens instead). On this blocking path a slow turn's
+    thinking phrase may already have played; the greeting itself never does.
+
     Returns True if audio was played (eligible for follow-up listening).
     Uses a single HTTP round-trip instead of separate transcribe + command calls.
 
@@ -4047,6 +4059,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     the reply is played exactly as a spoken turn's is. No claim = no verdict, the same as any
     unidentified turn, so a tap never proves a voice.
     """
+    _last_turn_flags.pop("wake_only", None)  # never a previous turn's, whatever path returns below
     import time as _time
     _t_pi_start = _time.monotonic()
 
@@ -4155,7 +4168,6 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
         return False
 
     transcript = resp.get("text", "")
-    _last_turn_flags.pop("wake_only", None)
     if transcript and _wake_only_listen(transcript, wake_turn=wake_turn, played_any=False, speculative=False):
         return False  # the greeting is synthesised but never played
     if transcript:
@@ -4201,7 +4213,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
     ``record_command`` does - set ONLY for a recording that becomes a turn of its own (follow-up / conversation
     window). The continuation listens (hard-cap merge, held-turn resume) leave it off: their audio is merged into an
     earlier clip, so a stream for it could never match the merged WAV and would clobber the earlier clip's id.
-    ``speculation`` (ZOE_SPECULATIVE_WINDOWS) fires at the endpointer's first verdict exactly as in ``record_command``;
+    ``speculation`` (ZOE_SPECULATIVE_TURN=windows) fires at the endpointer's first verdict exactly as in ``record_command``;
     a caller whose recording came back None must ``abandon()`` a fired one.
     """
     global _last_record_capped
@@ -4355,7 +4367,7 @@ def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool =
 
 def _window_speculation(pa: "pyaudio.PyAudio", seed: "bytes | None", window: str,
                         conversation: bool = False) -> "_SpeculativeTurn | None":
-    """A speculation for the next follow-up / conversation recording (ZOE_SPECULATIVE_WINDOWS
+    """A speculation for the next follow-up / conversation recording (ZOE_SPECULATIVE_TURN=windows
     + ZOE_SPECULATIVE_TURN), or None. Never for a barge seed: that audio is already recorded."""
     if seed is not None or not window or not ZOE_SPECULATIVE_WINDOWS or not _speculation_available():
         return None
@@ -4411,6 +4423,8 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                 except Exception as exc:
                     log.debug("wake stream close failed (non-fatal): %s", exc)
         if not wav:
+            if _spec is not None:
+                _spec.abandon()  # fired, then the recording was dropped: never leave the prefix held
             return
 
         _turn_fn = _do_single_turn_stream if VOICE_STREAM_ENABLED else _do_single_turn

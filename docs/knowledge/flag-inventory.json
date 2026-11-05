@@ -11508,63 +11508,6 @@
         },
         "typed_env": false
       },
-      "ZOE_POST_WAKE_ECHO_MAX_MS": {
-        "defaults": [
-          "1200"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/zoe_voice_daemon.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": 1200,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "docs/knowledge/voice-pipeline.md",
-          "type": "int"
-        },
-        "typed_env": false
-      },
-      "ZOE_POST_WAKE_MUTED_AMP": {
-        "defaults": [
-          "6.0"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/zoe_voice_daemon.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": 6.0,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "docs/knowledge/voice-pipeline.md",
-          "type": "float"
-        },
-        "typed_env": false
-      },
-      "ZOE_POST_WAKE_NO_SPEECH_S": {
-        "defaults": [
-          "3.0"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/zoe_voice_daemon.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": 3.0,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "docs/knowledge/voice-pipeline.md",
-          "type": "float"
-        },
-        "typed_env": false
-      },
       "ZOE_PRESENCE_WINDOW_S": {
         "defaults": [
           "''"
@@ -14456,25 +14399,6 @@
         },
         "typed_env": true
       },
-      "ZOE_SPECULATIVE_WINDOWS": {
-        "defaults": [
-          "'false'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/zoe_voice_daemon.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": false,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "docs/architecture/b1-speculative-turn-start.md",
-          "type": "bool"
-        },
-        "typed_env": false
-      },
       "ZOE_STICKY_SESSION": {
         "defaults": [
           "True"
@@ -16633,25 +16557,6 @@
         },
         "typed_env": true
       },
-      "ZOE_WAKE_ONLY_LISTEN": {
-        "defaults": [
-          "'true'"
-        ],
-        "in_env_example": false,
-        "readers": [
-          "scripts/setup/zoe_voice_daemon.py"
-        ],
-        "registered": true,
-        "spec": {
-          "allowed": null,
-          "default": true,
-          "divergent_ok": {},
-          "note": "",
-          "owner_doc": "docs/knowledge/voice-pipeline.md",
-          "type": "bool"
-        },
-        "typed_env": false
-      },
       "ZOE_WARM_SPEAKER_MAX_AGE_S": {
         "defaults": [
           "43200.0"
@@ -17029,7 +16934,7 @@
     "scripts/setup/zoe_enroll_flow.py": 3,
     "scripts/setup/zoe_face_id.py": 1,
     "scripts/setup/zoe_speaker_resnet34.py": 1,
-    "scripts/setup/zoe_voice_daemon.py": 28,
+    "scripts/setup/zoe_voice_daemon.py": 23,
     "scripts/utilities/gemma4_trial_benchmark.py": 1,
     "services/homeassistant-mcp-bridge/main.py": 2,
     "services/omi-sync/omi_sync/radio_lock.py": 1,
