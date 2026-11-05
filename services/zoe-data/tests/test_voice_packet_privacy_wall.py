@@ -296,3 +296,19 @@ def test_chat_off_is_a_no_op(monkeypatch):
     rows = _rows()
     facts, hits, recent = _chat(rows, "tell me something")
     assert [r.text for r in facts] == [r.text for r in rows]
+
+
+@pytest.mark.parametrize("text,want", [
+    ("¿Qué te dije sobre estar preocupado por el examen?", True), ("Te acuerdas de lo que dije del examen", True),
+    ("Estoy preocupado por el examen", False), ("¿Por qué estoy preocupado por el examen?", False),
+    ("Qu'est-ce que je t'ai dit sur l'examen ?", True), ("Rappelle-moi ce que j'ai dit", True),
+    ("Je suis inquiet pour l'examen", False),
+    ("Was habe ich dir über die Prüfung gesagt?", True), ("Weißt du noch, was ich gesagt habe?", True),
+    ("Ich bin besorgt wegen der Prüfung", False),
+    ("我之前跟你说过什么关于考试", True), ("你还记得我说过的话吗", True), ("我很担心考试", False),
+    ("私が前に試験のことを何と言ったか覚えてる", True), ("何て言ったっけ、試験のこと", True), ("試験が心配です", False),
+])
+def test_is_recall_ask_in_the_other_language_packs(text, want):
+    """Codex #2289: recall_leads is populated for every shipped pack, so a verified speaker recalling a past feeling in es / fr / de /
+    zh / ja is not treated as a mood disclosure (negative controls: present-tense statements and why-questions stay False)."""
+    assert restraint.is_recall_ask(text) is want
