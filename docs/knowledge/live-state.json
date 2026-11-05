@@ -3870,6 +3870,13 @@
    "kind": "unknown",
    "readers": 1
   },
+  "ZOE_PROBLEM_LOOP": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
   "ZOE_PROVENANCE_PERSIST": {
    "defaults": [
     "on"
