@@ -796,6 +796,37 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
     return spoken_me(wall, on_screen=shown)
 
 
+# A turn this module's curation lane ANSWERED (a successful add, or a refusal - e.g. Health is off for that child) is the curator's
+# instruction to Zoe, not something the curator said about themselves: the post-turn memory passes must not mine it into the curator's
+# own store ("User asked me to remember: Juno is allergic to peanuts" as an approved row would bypass the sensitive-category opt-in
+# and double every successful add). Keyed by (user, words), short-lived, bounded; read by ``routers/voice_tts._run_voice_memory_passes``.
+_CURATION_TURNS: dict = {}
+_CURATION_TTL_S = 180.0
+_CURATION_MAX = 256
+
+
+def _turn_key(user_id: str, text: str) -> str:
+    return f"{(user_id or '').strip()}\x00{_norm(text)}"
+
+
+def note_curation_handled(user_id: str, text: str, now: Optional[float] = None) -> None:
+    t = time.monotonic() if now is None else now
+    if len(_CURATION_TURNS) >= _CURATION_MAX:
+        for k in [k for k, v in _CURATION_TURNS.items() if t - v > _CURATION_TTL_S] or list(_CURATION_TURNS)[:_CURATION_MAX // 2]:
+            _CURATION_TURNS.pop(k, None)
+    _CURATION_TURNS[_turn_key(user_id, text)] = t
+
+
+def curation_handled(user_id: str, text: str, now: Optional[float] = None) -> bool:
+    """True when this exact turn was answered by the curation lane a moment ago. Never raises."""
+    try:
+        t = time.monotonic() if now is None else now
+        seen = _CURATION_TURNS.get(_turn_key(user_id, text))
+        return seen is not None and t - seen <= _CURATION_TTL_S
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _curate(text: str, user_id: str, extra_ctx: Optional[dict], allow_writes: bool) -> Optional[str]:
     """Caregiver curation by voice (memories-space P7, ``ZOE_MEMORIES_CURATORS``): "remember that Juno's swimming is on Tuesdays" from
     a curator in THEIR OWN panel identity (``scope_user``: a verified voice session or a fresh PIN; never the panel binding, never a
@@ -815,6 +846,9 @@ async def _curate(text: str, user_id: str, extra_ctx: Optional[dict], allow_writ
     reply = await mc.by_voice(text, member)
     if reply:
         logger.info("MEMORIES_VOICE curate user=%s", member)
+        note_curation_handled(user_id, text)          # answered (a write OR a refusal): never mined as the curator's own words
+        if member != user_id:
+            note_curation_handled(member, text)
     return reply
 
 

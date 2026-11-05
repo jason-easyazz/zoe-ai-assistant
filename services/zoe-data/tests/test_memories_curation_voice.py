@@ -196,3 +196,64 @@ def test_the_curator_off_the_record_turn_writes_nothing(env):
         assert say(text, PARENT) == "Okay, I\x27ll remember that for Juno." and len(rows_of(env, KID)) == 1
     finally:
         mp.reset()
+
+
+def _passes_after(monkeypatch, text, user, reply="Okay."):
+    """Run the REAL post-turn pass scheduler with its writers recorded; returns the writers that ran."""
+    import latent_intent_detector
+    import memory_digest
+    import memory_extractor
+    import person_extractor
+    import person_extractor_llm
+    import routers.voice_tts as v
+    import struggle_detector
+
+    called: list = []
+
+    def rec(name):
+        async def fn(*_a, **_k):
+            called.append(name)
+            return 0
+        return fn
+
+    monkeypatch.setattr(memory_extractor, "extract_and_ingest", rec("extract"))
+    monkeypatch.setattr(memory_digest, "run_turn_digest", rec("digest"))
+    monkeypatch.setattr(person_extractor, "process_text", rec("person"))
+    monkeypatch.setattr(person_extractor_llm, "process_text_llm", rec("person_llm"))
+    monkeypatch.setattr(latent_intent_detector, "detect_and_store", rec("suggest"))
+    monkeypatch.setattr(v, "_spawn_bg", lambda coro: asyncio.get_event_loop().create_task(coro))
+    monkeypatch.setattr(struggle_detector, "observe", lambda *a, **k: False)
+
+    async def go():
+        await v._run_voice_memory_passes(text, reply, user, "voice-panel-s1")
+        await asyncio.sleep(0)
+
+    asyncio.run(go())
+    return called
+
+
+def test_a_handled_curation_turn_is_never_mined_into_the_curators_own_store(env, monkeypatch):
+    """Codex #2159: the panel path schedules the memory passes for EVERY answered turn, so a curation write - or its refusal - would
+    otherwise be mined as "User asked me to remember ..." under the curator's account (bypassing the sensitive opt-in)."""
+    mv._CURATION_TURNS.clear()
+    refused = "remember that Juno is allergic to peanuts"            # Health is off for Juno: refused aloud
+    assert say(refused, PARENT) == "Health notes for Juno are off. Turn them on first."
+    assert _passes_after(monkeypatch, refused, PARENT) == []
+    done = "remember that Juno\x27s swimming is on Tuesdays"         # a successful add
+    assert say(done, PARENT) == "Okay, I\x27ll remember that for Juno."
+    assert _passes_after(monkeypatch, done, PARENT) == []
+    # negative control: the same rig DOES mine an ordinary turn of the same member
+    ordinary = "remember that I have a dentist appointment on Friday"
+    assert "extract" in _passes_after(monkeypatch, ordinary, PARENT)
+    mv._CURATION_TURNS.clear()
+    assert "extract" in _passes_after(monkeypatch, done, PARENT)      # and the marker expires / clears: without it the pass runs
+
+
+def test_the_curation_marker_is_exact_and_short_lived():
+    mv._CURATION_TURNS.clear()
+    mv.note_curation_handled("u1", "Remember that Juno's swimming is on Tuesdays.", now=100.0)
+    assert mv.curation_handled("u1", "remember that juno's swimming is on tuesdays", now=101.0)
+    assert not mv.curation_handled("u2", "remember that juno's swimming is on tuesdays", now=101.0)      # another member
+    assert not mv.curation_handled("u1", "remember that juno's swimming is on wednesdays", now=101.0)    # other words
+    assert not mv.curation_handled("u1", "remember that juno's swimming is on tuesdays", now=100.0 + mv._CURATION_TTL_S + 1)
+    mv._CURATION_TURNS.clear()
