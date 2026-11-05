@@ -7,7 +7,8 @@ event lines. It reads no transcript, no audio and no speaker data: the lines it 
 output is integers and rates. Pass a file path (or ``-`` for stdin); the script never opens the panel or the network itself.
 
   turns       "Recorded command:" and "Recorded follow-up:" lines, minus "Command too short" / "Follow-up too short" (a turn that
-              never reached the brain)
+              never reached the brain) and minus a "Recorded follow-up:" that is a CONTINUATION clip (it follows a "Turn held:" or a
+              hard-cap line and is merged into the turn already counted)
   cut-offs    the member was still talking when the turn closed on them:
                 "Continuation merged:"                          they resumed inside the hold window (caught, but the endpoint was early)
                 "Recording ended on the hard cap mid-speech"    the recorder cap closed a speaker mid-sentence
@@ -36,6 +37,9 @@ TURN_PATTERNS = ("Recorded command:", "Recorded follow-up:")
 NOT_A_TURN = ("Command too short", "Follow-up too short")
 CUTOFF_PATTERNS = ("Continuation merged:", "Recording ended on the hard cap mid-speech")
 OVERWAIT_PATTERNS = ("No continuation - sending the held clip",)
+# The daemon logs one of these, THEN listens for the rest of the turn: a "Recorded follow-up:" that follows is the CONTINUATION clip
+# of the turn already counted (it is merged into it), never a turn of its own.
+CONTINUATION_LISTEN = ("Turn held:", "Recording ended on the hard cap mid-speech")
 
 TARGETS = {"cutoffs_per_100_max": 5.0, "overwaits_per_100_max": 5.0}
 
@@ -44,6 +48,7 @@ def count_events(lines: Iterable[str], since: str | None = None, until: str | No
     """Count the event lines. Lines that do not match the daemon format (tracebacks, journal noise) are ignored and counted."""
     turns = cutoffs = overwaits = unparsed = 0
     pending = False   # a counted "Recorded ..." line whose "too short" verdict has not been seen yet
+    awaiting_continuation = False   # the daemon is listening for the rest of a turn: the next "Recorded follow-up:" is that clip
     days: set[str] = set()
     for raw in lines:
         m = _LINE.match(raw.rstrip("\n"))
@@ -54,20 +59,33 @@ def count_events(lines: Iterable[str], since: str | None = None, until: str | No
         day, msg = m["day"], m["msg"]
         if (since and day < since) or (until and day > until):
             continue
+        if msg.startswith("Turn held:"):
+            awaiting_continuation = True
+            continue
+        if awaiting_continuation and msg.startswith("Recorded follow-up:"):
+            awaiting_continuation = False       # a merged continuation clip: not a second turn
+            pending = False
+            days.add(day)
+            continue
         if msg.startswith(NOT_A_TURN):
+            awaiting_continuation = False
             # Only cancels the "Recorded ..." line just counted. An unmatched one (rotated log, --since boundary) cancels nothing.
             if pending:
                 turns -= 1
             pending = False
             continue
         if msg.startswith(TURN_PATTERNS):
+            awaiting_continuation = False
             turns += 1
             pending = True
             days.add(day)
         elif msg.startswith(CUTOFF_PATTERNS):
             cutoffs += 1
+            if msg.startswith(CONTINUATION_LISTEN[1]):
+                awaiting_continuation = True
         elif msg.startswith(OVERWAIT_PATTERNS):
             overwaits += 1
+            awaiting_continuation = False
     turns = max(turns, 0)
 
     def per100(n: int) -> float | None:

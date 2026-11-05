@@ -86,3 +86,22 @@ def test_the_matched_phrases_still_exist_in_the_daemon():
         pat = r"log\.(?:info|warning)\(\s*\n?\s*\"" + re.escape(phrase.rstrip(":"))
         assert re.search(pat, src), phrase
     assert not re.search(r"log\.info\(\s*\"Renamed phrase", src)   # control: the pattern does not match everything
+
+
+def test_a_merged_continuation_clip_is_not_a_second_turn():
+    """Codex #2295: 100 turns with five held-turn continuations must stay 100 turns (and five cut-offs), not 105."""
+    lines = [L(REC)] * 95
+    for _ in range(5):
+        lines += [L(REC), L("Turn held: transcript ends mid-clause - listening 3.0s for the rest"), L(FUP),
+                  L("Continuation merged: one turn of 4.2s")]
+    r = tm.count_events(lines)
+    assert (r["turns"], r["cutoffs"]) == (100, 5)
+    # hard-cap continuation: the clip recorded after the cap line is the rest of the same turn
+    cap = [L(REC), L("Recording ended on the hard cap mid-speech - listening 3.0s for the rest (merge 1/2)"), L(FUP)]
+    assert tm.count_events(cap)["turns"] == 1
+    # negative control: a follow-up with no hold / cap line before it is a real turn
+    assert tm.count_events([L(REC), L(FUP)])["turns"] == 2
+    # a hold that heard nothing does not swallow the NEXT real follow-up turn
+    held_none = [L(REC), L("Turn held: transcript ends mid-clause - listening 3.0s for the rest"),
+                 L("No continuation - sending the held clip as is"), L(FUP)]
+    assert tm.count_events(held_none)["turns"] == 2

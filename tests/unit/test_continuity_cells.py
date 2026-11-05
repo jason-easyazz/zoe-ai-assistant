@@ -129,3 +129,27 @@ def test_selftest_goes_red_when_a_control_is_neutered(monkeypatch):
         pass
     monkeypatch.setattr(cc, "StaleServer", Fresh)
     assert any("stale server" in p for p in cc.run_controls())
+
+
+def test_needles_match_whole_words_not_substrings():
+    """Codex #2295: 'sage' is inside 'message' - a non-answer must not score as carried, and it IS a re-tell."""
+    reply = "I do not have a message about that. What was the colour again?"
+    assert not cc.score_carry(T["L1"], reply)
+    assert cc.score_retell(T["L1"], reply)
+    assert cc.score_carry(T["L1"], "The colour is sage.")                   # negative control: the real word still carries
+    assert cc.score_carry(T["L1"], "Sage, you said.")
+
+
+@pytest.mark.parametrize("reply,stale", [
+    ("You still need to pay the library fine; it has not yet been paid.", True),
+    ("The library fine is not finished yet, you still need to pay it.", True),
+    ("It is not booked, you still have to do it.", True),
+    ("You still need to check, but the fine is paid.", False),             # negative control: an affirmed completion rules it out
+])
+def test_negated_completion_words_do_not_rule_out_an_open_thread(reply, stale):
+    assert cc.score_stale(T["R2"], reply) is stale
+
+
+def test_a_negated_completion_does_not_carry_a_resolved_thread():
+    assert not cc.score_carry(T["R2"], "It has not been paid.")
+    assert cc.score_carry(T["R2"], "That fine was paid.")

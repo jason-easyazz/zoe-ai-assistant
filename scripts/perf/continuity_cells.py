@@ -110,13 +110,34 @@ def norm(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9' -]+", " ", (text or "").lower())).strip()
 
 
+def _bounded(t: str, phrase: str):
+    """``phrase`` as whole tokens inside the normalised text ``t`` ("sage" is not in "message", "paid" is not in "unpaid")."""
+    return re.search(rf"(?<![a-z0-9']){re.escape(phrase)}(?![a-z0-9'])", t)
+
+
 def has(text: str, needle: str) -> bool:
-    return bool(needle) and norm(needle) in norm(text)
+    n = norm(needle)
+    return bool(n) and _bounded(norm(text), n) is not None
 
 
 def any_marker(text: str, markers: Iterable[str]) -> bool:
     t = norm(text)
-    return any(m in t for m in markers)
+    return any(_bounded(t, m) for m in markers)
+
+
+_NEGATORS = frozenset({"not", "never", "no", "isn't", "wasn't", "hasn't", "haven't", "hadn't", "aren't", "weren't", "nothing"})
+
+
+def affirmed_done(text: str) -> bool:
+    """A completion word that AFFIRMS completion: "it has been paid" yes; "it has not yet been paid", "not finished" no (a negator
+    within the four tokens before it turns the marker into the open state it was meant to rule out)."""
+    t = norm(text)
+    for m in _DONE_MARKERS:
+        for hit in re.finditer(rf"(?<![a-z0-9']){re.escape(m)}(?![a-z0-9'])", t):
+            before = t[:hit.start()].split()[-4:]
+            if not any(w in _NEGATORS for w in before):
+                return True
+    return False
 
 
 def probe_text(th: Thread) -> str:
@@ -128,7 +149,7 @@ def probe_text(th: Thread) -> str:
 def score_carry(th: Thread, reply: str) -> bool:
     """C1: the reply holds the thread's CURRENT value. A resolved thread carries by being known and finished: the needle OR a done word."""
     if th.state == "resolved":
-        return has(reply, th.needle) or any_marker(reply, _DONE_MARKERS)
+        return has(reply, th.needle) or affirmed_done(reply)
     return has(reply, th.needle)
 
 
@@ -143,7 +164,7 @@ def score_stale(th: Thread, reply: str) -> bool:
         # superseding word. "It is Marlow, it changed recently" still asserts the old value and stays stale.
         return not (any_marker(reply, _NEGATING_MARKERS) or (new and any_marker(reply, _SUPERSEDE_MARKERS)))
     if th.state == "resolved":
-        return any_marker(reply, _OPEN_MARKERS) and not any_marker(reply, _DONE_MARKERS)
+        return any_marker(reply, _OPEN_MARKERS) and not affirmed_done(reply)
     return False
 
 
