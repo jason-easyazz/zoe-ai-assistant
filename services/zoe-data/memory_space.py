@@ -278,6 +278,14 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     return "forgotten"
 
 
+def guardian_forget_open(meta: dict) -> bool:
+    """True when a row is one a guardian's forget may act on: still approved, OR rejected BY an earlier guardian forget that did not
+    finish (its twins / physical erase / verbatim words may remain), so the retry resumes every remaining step instead of the review
+    route treating the already-rejected row as an ordinary reject and reporting success."""
+    status = str((meta or {}).get("status") or "approved").lower()
+    return status == "approved" or (status == "rejected" and (meta or {}).get("review_note") == "guardian_forget")
+
+
 async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = None) -> str:
     """An ADMIN forgets ONE approved row of ANOTHER member on their behalf - the grown-up's one step for a child, whose own
     screen and voice forget are refused ("ask a grown-up"). The same steps as :func:`forget_row` (the row AND the twins one
@@ -290,11 +298,14 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
     ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S) if rid else None
     if ref is None or not pa._owns(ref.metadata or {}, owner):
         return "gone"
-    if str((ref.metadata or {}).get("status") or "approved").lower() != "approved":
+    if not guardian_forget_open(ref.metadata or {}):
         return "gone"
     twins = await pa.twins_of(owner, ref, svc=svc, strict=True)     # a failed lookup stops us BEFORE the forget
     gone = []
     for row in (ref, *twins):
+        if str((row.metadata or {}).get("status") or "").lower() == "rejected":
+            gone.append(row.id)                  # this row's reject already landed (an earlier, unfinished attempt): go on to the rest
+            continue
         if await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget") is None:
             raise RuntimeError("memory store refused the guardian's forget")
         gone.append(row.id)

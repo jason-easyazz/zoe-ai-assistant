@@ -376,3 +376,40 @@ def test_control_c_without_the_twin_sweep_the_feeling_survives_a_forget(env, mon
     monkeypatch.setattr(pa, "twins_of", no_twins)
     assert run(memory_space.forget_row(OTHER, a.id)) == "forgotten"
     assert _affect_left(env) == ["User heard thunder last night."]
+
+
+def test_c_a_half_finished_guardian_forget_resumes_on_retry(env, monkeypatch):
+    """The first request rejects the row, then the twin's reject fails (503). The retry must NOT be an ordinary single-row reject
+    that reports success with the twin still approved: it finishes every remaining step."""
+    a, b = _child(env, monkeypatch)
+    real = env.svc.review
+    seen = {"failed": False}
+
+    async def flaky(mem_id, **kw):
+        if mem_id == b.id and not seen["failed"]:
+            seen["failed"] = True
+            raise RuntimeError("store blip")
+        return await real(mem_id, **kw)
+
+    monkeypatch.setattr(env.svc, "review", flaky)
+    assert _review_as(ADMIN, a.id).status_code == 503
+    assert run(env.svc.get(a.id)).metadata["status"] == "rejected"
+    assert run(env.svc.get(b.id)).metadata["status"] == "approved"          # the twin is still carrying the feeling
+    r = _review_as(ADMIN, a.id)
+    assert r.status_code == 200, r.text
+    assert _affect_left(env) == []
+    assert run(env.svc.get(b.id)).metadata["status"] == "rejected"
+
+
+def test_c_a_row_rejected_by_something_else_is_not_resumed(env, monkeypatch):
+    import memory_space as ms
+
+    assert ms.guardian_forget_open({"status": "approved"}) and ms.guardian_forget_open({})
+    assert ms.guardian_forget_open({"status": "rejected", "review_note": "guardian_forget"})
+    assert not ms.guardian_forget_open({"status": "rejected", "review_note": "not mine"})
+    assert not ms.guardian_forget_open({"status": "superseded"})
+
+
+@pytest.mark.parametrize("text", ["i'm afraid i'm being followed", "i'm afraid my dad is angry with me"])
+def test_a_present_tense_fear_stays_a_feeling(text):
+    assert extract_affect(text)[0] == "scared"

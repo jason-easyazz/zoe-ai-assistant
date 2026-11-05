@@ -239,12 +239,13 @@ async def review_memory(
     is_admin = (user.get("role") or "").lower() == "admin"
     if owner and owner != user["user_id"] and not is_admin:
         raise HTTPException(status_code=403, detail="Cannot review another user's memory")
+    import memory_space
+
     if (action == "reject" and is_admin and owner and owner != user["user_id"]
-            and str(current.metadata.get("status") or "approved").lower() == "approved"):
+            and memory_space.guardian_forget_open(current.metadata or {})):
         # A guardian's reject of another member's approved row IS that member's forget (a child cannot forget their own):
         # the twins one utterance left go with it, so a feeling cannot survive in a sibling row (memory_space.guardian_forget).
-        import memory_space
-
+        # A row an earlier guardian forget rejected but did not finish resumes here too (guardian_forget_open).
         try:
             outcome = await memory_space.guardian_forget(owner, memory_id, actor=user["user_id"], svc=svc)
         except Exception as exc:  # noqa: BLE001 - half done: say so, the retry finishes it
