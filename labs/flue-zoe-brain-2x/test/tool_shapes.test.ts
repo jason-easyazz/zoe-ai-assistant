@@ -1,5 +1,5 @@
 /**
- * Every tool returns a shape Flue 2.x accepts — table-driven across all 22.
+ * Every tool returns a shape Flue 2.x accepts — table-driven across all 23.
  *
  * THE FAILURE MODE THIS EXISTS FOR IS A RUNTIME THROW, NOT A TYPE ERROR. On 2.x
  * `run()` returns a result envelope `{ output?, terminate? }`. A bare `string` is
@@ -52,6 +52,7 @@ const ARGS: Record<string, Record<string, unknown>> = {
   remember_fact: { fact: 'anniversary is June 3rd' },
   remember_emotional_moment: { moment: 'Jason is anxious about settlement', valence: 'neg' },
   memory_retire: { pick: 1 },
+  alarm: { action: 'set', request: 'set an alarm for 6:30 am tomorrow' },
   activate_abilities: { group: 'calendar' },
 };
 
@@ -69,6 +70,7 @@ const EXTRA_ARGS: Record<string, Record<string, unknown>[]> = {
   home: [{ action: 'off' }, { action: 'dim', room: 'living room' }],
   remember_emotional_moment: [{ moment: 'A milestone', intensity: 0.8 }],
   memory_retire: [{}, { pick: 0 }],
+  alarm: [{ action: 'list' }, { action: 'set' }],
   get_weather: [{ forecast: true, location: 'Perth' }],
 };
 
@@ -125,7 +127,7 @@ describe('tool result shapes (Flue 2.x envelope contract)', () => {
       'zoeTools and the ARGS table have diverged — a tool with no case here would be ' +
         'silently unexercised, which is exactly how a runtime-throwing return reaches production',
     );
-    assert.equal(registered.length, 22, 'expected 22 tools');
+    assert.equal(registered.length, 23, 'expected 23 tools');
   });
 
   it('every tool declares a name and a description', () => {

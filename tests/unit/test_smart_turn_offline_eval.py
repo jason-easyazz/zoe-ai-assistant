@@ -337,3 +337,31 @@ def test_extend_stats_added_wait_rescues_and_inference(ev):
     # negative control: with no measured inference the two means coincide
     z = ev.extend_stats(rows, "EXT T0.5 H1200", inference_ms=0.0)
     assert z["added_incl_inference_mean_ms"] == z["added_wait_mean_ms"] == 160.0
+
+def test_a_short_vad_hop_sequence_is_unscored_not_an_early_end_of_speech(ev):
+    """Codex #2280: process_hops never raises - on an inference failure it returns the completed prefix."""
+    audio = np.zeros(512 * 10, dtype=np.int16)
+
+    class _Vad:
+        def __init__(self, n):
+            self.n = n
+
+        def process_hops(self, _b):
+            return [0.9] * self.n
+
+    class _Mod:
+        n = 10
+
+        @classmethod
+        def create_vad(cls):
+            return _Vad(cls.n)
+
+    assert len(ev.hop_probs_for(_Mod, audio)) == 10                       # negative control: a complete run passes
+    _Mod.n = 4
+    with pytest.raises(ev.UnscoredClip):
+        ev.hop_probs_for(_Mod, audio)
+    before = ev.VAD_INCOMPLETE[0]
+    assert ev.evaluate_stream(None, _Mod, None, np.zeros(512 * 200, dtype=np.int16), gt_threshold=0.35, speech_threshold=0.35,
+                              policies=[], cap_max_ms=1000, first_ms_set=set(), recheck_ms=300, long_pause_ms=500,
+                              preroll_chunks=0) is None
+    assert ev.VAD_INCOMPLETE[0] == before + 1

@@ -369,13 +369,14 @@ async def build(user_id: str, message: str, *, svc: Any = None, session_id: Opti
         if is_guest_memory_user(user_id):
             return Hop((), ())
         svc = svc or get_memory_service()
+        import recall_gate
+
+        trace_ep = recall_gate.trace_epoch()     # the opt-in trace's forget barrier, BEFORE the rows are read (None when the trace is off)
         rows = await asyncio.wait_for(svc.load_durable_for_hop(user_id), timeout=TIMEOUT_S)
         hop = select(message, rows)
         # the relevance gate (ZOE_RECALL_GATE, recall_gate.py): this word-list match is ONE signal of several; shadow returns ``hop``
         # unchanged (and logs what the gate would add or drop), enforce returns the gate's selection. Fail-open to ``hop``.
-        import recall_gate
-
-        hop = await recall_gate.hop_surface(user_id, message, rows, hop, session_id)
+        hop = await recall_gate.hop_surface(user_id, message, rows, hop, session_id, trace_ep=trace_ep)
         if hop.facts:
             hop = await _restrained(user_id, message, hop)
         logger.info("PERSONALISATION_HOP user=%s topics=%s rows=%d facts=%d", user_id, ",".join(topics), len(rows),

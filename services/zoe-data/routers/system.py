@@ -2415,6 +2415,49 @@ _DISPATCHABLE_INTENTS = frozenset({
     # the sentence it is about is the turn zoe_flue_client noted, never an argument. Shadow by default.
     "memory_retire",
 })
+# Alarms (flag-dark ZOE_ALARMS): the brain's `alarm` tool. Kept OUT of _DISPATCHABLE_INTENTS (whose every name has an
+# execute_intent handler, tests/test_intent_direct_handlers.py): these are fulfilled by the SAME narrow spoken grammar the voice
+# path uses (alarm_voice.run_brain_intent). Only "set" and "list" - cancelling / silencing stays on voice + panel.
+_ALARM_DISPATCH_INTENTS = frozenset({"alarm_set", "alarm_list"})
+
+# The fulfilment verdicts a 4xx detail can carry, as fixed slugs: the detail itself can quote the user's words ("due_date
+# '15th of Decmber' is not a date"), so it never reaches the log - only which field failed and how.
+_DISPATCH_FIELDS = ("due_date", "due_time", "recurring_pattern", "recurrence", "alarm")
+_DISPATCH_VERDICTS = (("already past", "past"), ("not a date", "not_a_date"), ("not a clock time", "not_a_time"),
+                      ("not a supported", "unsupported"), ("no upcoming", "no_occurrence"), ("no valid next", "no_occurrence"),
+                      ("not switched on", "off"), ("not understood", "not_understood"))
+
+
+def _dispatch_reason(detail: object) -> str:
+    """A log-safe reason slug for a dispatch verdict (``due_time_not_a_time``) - never the detail text."""
+    d = str(detail or "").strip().lower()
+    field = next((f for f in _DISPATCH_FIELDS if d.startswith(f)), "")
+    verdict = next((slug for cue, slug in _DISPATCH_VERDICTS if cue in d), "")
+    return "_".join(p for p in (field, verdict) if p) or "rejected"
+
+
+def _log_dispatch(intent_name: str, status: int, ok: bool, reason: str, started: float) -> None:
+    # Status and a reason slug only: no slot values, no reply text, no user id (household data stays out of the log).
+    log = logger.info if ok else logger.warning
+    log("INTENT_DISPATCH intent=%s status=%d ok=%d reason=%s ms=%.0f",
+        intent_name, status, int(ok), reason or "-", (time.monotonic() - started) * 1000.0)
+
+
+_AUTHORITY_SHADOW_TASKS: set = set()
+
+
+def _authority_shadow(intent_name: str, slots: dict, user_id: str) -> None:
+    """Schedule the log-only authority check (household_authority.shadow_check). Never raises; off = nothing scheduled."""
+    try:
+        import household_authority
+
+        if not household_authority.shadow_enabled():
+            return
+        task = asyncio.get_running_loop().create_task(household_authority.shadow_check(intent_name, slots, user_id))
+        _AUTHORITY_SHADOW_TASKS.add(task)
+        task.add_done_callback(_AUTHORITY_SHADOW_TASKS.discard)
+    except Exception:  # noqa: BLE001 - evidence gathering must never touch the dispatch
+        return
 
 
 class _IntentDispatchBody(BaseModel):
@@ -2435,17 +2478,23 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     (the same dispatch the live chat path uses). Fails closed on unknown user or
     non-allowlisted intent.
     """
+    started = time.monotonic()
     intent_name = (body.intent or "").strip()
     user_id = (body.user_id or "").strip()
     if not user_id:
+        _log_dispatch("-", 400, False, "no_user", started)
         raise HTTPException(status_code=400, detail="user_id required")
-    if intent_name not in _DISPATCHABLE_INTENTS:
+    if intent_name not in _DISPATCHABLE_INTENTS and intent_name not in _ALARM_DISPATCH_INTENTS:
+        _log_dispatch("-", 400, False, "not_dispatchable", started)
         raise HTTPException(status_code=400, detail=f"intent not dispatchable: {intent_name}")
     # Home control (2026-10-18): this hop carries only the turn's acting id, so a guest id (incl. ``voice-guest``) may not drive
     # the house from here; a member id may.
     import panel_principal as _pp
 
     _pp.record_home_control(not (_pp.is_guest_id(user_id) or user_id.lower() in ("anonymous", "voice-daemon")))
+    # Household authority table (flag-dark ZOE_PROBLEM_LOOP=shadow|on): LOG-ONLY evidence of what the table would say about
+    # this call (AUTHORITY_SHADOW ... would=allow|ask|refuse). Fire-and-forget: it never delays, changes or refuses the dispatch.
+    _authority_shadow(intent_name, dict(body.slots or {}), user_id)
     # B1.1 phase 2: a brain tool write made BY a speculative voice turn (the
     # sidecar echoes its turn id) waits for that turn's verdict and is refused —
     # never run — when the verdict drops it. Any other caller (no id: another
@@ -2453,21 +2502,29 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     import voice_speculation as _vs
     _refused = await _vs.hold_speculative_dispatch(body.speculative_turn_id.strip() or None, intent_name)
     if _refused:
+        _log_dispatch(intent_name, 200, False, "speculative_refused", started)
         return {"intent": intent_name, "ok": False, "result": "", "reason": _refused}
     try:
-        from intent_router import Intent, execute_intent
+        if intent_name in _ALARM_DISPATCH_INTENTS:
+            import alarm_voice
 
-        result = await execute_intent(
-            Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
-        )
-    except HTTPException:
+            result = await alarm_voice.run_brain_intent(intent_name, dict(body.slots or {}), user_id)
+        else:
+            from intent_router import Intent, execute_intent
+
+            result = await execute_intent(
+                Intent(name=intent_name, slots=dict(body.slots or {})), user_id=user_id
+            )
+    except HTTPException as exc:
         # A validation verdict from the fulfilment path (e.g. reminder_service's
         # 422 for an unfireable due_date) is the answer, not a failure: pass it
         # through so the brain's tool sees 4xx, not a generic 500 (Codex P2, #1686).
+        _log_dispatch(intent_name, exc.status_code, False, _dispatch_reason(exc.detail), started)
         raise
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("intent-dispatch failed intent=%s: %s", intent_name, exc)
+        _log_dispatch(intent_name, 500, False, f"error_{type(exc).__name__}", started)
         raise HTTPException(status_code=500, detail="intent execution failed") from exc
+    _log_dispatch(intent_name, 200, result is not None, "" if result is not None else "no_result", started)
     return {"intent": intent_name, "ok": result is not None, "result": result or ""}
 
 
