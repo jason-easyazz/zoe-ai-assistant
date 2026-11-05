@@ -1621,13 +1621,33 @@ async def list_candidates(user_id: str, *, status: str = "pending", day: str = "
     sql += " ORDER BY day_local DESC, kind, created_at LIMIT ?"
     params.append(int(limit))
     async with _db() as db:
-        return [public(r) for r in await _fetch(db, sql, tuple(params))]
+        rows = [public(r) for r in await _fetch(db, sql, tuple(params))]
+    return await _served(user_id, rows)
 
 
 async def get_candidate(user_id: str, cid: str) -> Optional[dict]:
     async with _db() as db:
         rows = await _fetch(db, "SELECT * FROM omi_day_candidates WHERE id = ? AND user_id = ?", (cid, user_id))
-    return public(rows[0]) if rows else None
+    kept = await _served(user_id, [public(rows[0])] if rows else [])
+    return kept[0] if kept else None
+
+
+async def _served(user_id: str, cands: list) -> list:
+    """The candidates that may be SHOWN: one naming a forgotten entity is not (the cascade's ``erase_entity`` deletes it at forget
+    time; this is the second wall for one it missed or a step still pending). Checked after the connection is released (a ledger
+    lookup may borrow its own). An unreadable ledger shows none (fail closed: forgotten means forever)."""
+    out = []
+    for c in cands:
+        text = json.dumps(c.get("payload") or {}, ensure_ascii=False) + " " + " ".join(
+            str(e.get("quote") or "") for e in (c.get("evidence") or []) if isinstance(e, dict))
+        try:
+            if await _forgotten(user_id, text):
+                continue
+        except LedgerUnavailable as exc:
+            logger.warning("omi_day_review: forget ledger unavailable (%s) - no candidates shown", exc)
+            return []
+        out.append(c)
+    return out
 
 
 async def dismiss(user_id: str, cid: str, *, via: str = "desktop") -> bool:

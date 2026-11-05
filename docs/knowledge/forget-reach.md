@@ -87,6 +87,23 @@ Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for a
 reason, or `gap` with the reason AND the key in the `forget-reach gaps:` line of [open-problems.md](open-problems.md). A table that holds **words** cannot be
 `out_of_scope`. Then regenerate the table below.
 
+## Forget completeness (what a layer SERVES after a forget, 2026-11-05)
+
+The inventory says which store the forget path erases; `services/zoe-data/tests/test_forget_completeness_probe.py` (`ci_safe`) says what each
+DERIVED layer still serves. Every layer in its `LAYERS` table is driven through its real serve function over in-process fakes in three arms:
+**forgotten** (ledger + the layer's own erase: the name is never served, a control name still is), **erase_missed** (ledger only - a failed or
+pending cascade step, a row derived later: a `serve_wall` layer still withholds it, an erase-only layer serves it, and the test asserts the recorded
+answer both ways), and **control** (the layer's hooks off: the name IS served, so the instrument is not blind).
+
+- Serve-walled (a strict ledger check at read time, fail closed on an outage): exact words, night mind (cold and cached), the digest transcript
+  loader, the what-do-you-know / Memories wall reads (`provenance_answers.gather`, also behind `memories_voice`), the recall-every-turn packet,
+  person profiles, the user-model card, contact offers (`pending_suggestions`), day-review candidates.
+- Erase-only (the cascade or the forget handler's sweep is the only wall): the palace reads, the portrait, the relationship graph, open loops,
+  proactive candidates. Ledgered in [open-problems.md](open-problems.md) (`forget-completeness erase-only layers`), as are the layers the probe
+  cannot reach in-process (the Flue sidecar's card cache and transcript store, the llama prefix/KV cache, the unmerged now card).
+- Adding a derived layer: a `Layer` row + a `Probe` class (seed / erase / served / disable). A new layer that is erase-only goes in the open-problems
+  line; one the probe cannot drive goes in `UNPROBED` and that line.
+
 ## The inventory
 
 Generated from `forget_reach.py`; do not edit by hand.

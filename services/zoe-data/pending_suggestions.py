@@ -62,6 +62,61 @@ async def _live_contact_names(db, user_id: str) -> list:
         return []
 
 
+# ── forgotten means forever: an offer that names a forgotten entity is never stored, never served ──────────────────────
+#
+# "Add Dana to your contacts?" used to outlive "forget Dana": the forget handler withdraws person offers by exact name only, and
+# not on every exit path, and nothing stopped a later turn's detector from storing a fresh one. So every READ below drops (and
+# deletes) an offer whose words name a forgotten entity, and the WRITE refuses one. The forget-alias question ("did you also mean
+# ...?") is part of the forget itself and is exempt. The ledger is read BEFORE a connection is borrowed (a ledger lookup may borrow
+# its own); an unreadable ledger serves and stores no offers (fail closed).
+
+_FORGET_EXEMPT = frozenset({"forget_alias"})
+
+
+async def _forgotten_filter(user_id: str):
+    """A sync ``named(*texts) -> bool`` (do the texts name an entity this member forgot: the 300 s tombstone or the durable
+    ledger). Raises ``memory_forgotten.LedgerUnavailable`` when the ledger cannot be read."""
+    import memory_forgotten as mf
+    from memory_tombstones import matching_tombstone
+
+    wanted = await mf.active_hashes(user_id, strict=True) if mf.configured() else frozenset()
+
+    def named(*texts) -> bool:
+        text = "\n".join(str(t) for t in texts if t)
+        if not text:
+            return False
+        if matching_tombstone(user_id, text):
+            return True
+        return bool(wanted) and bool(mf.spans_in(user_id, text, wanted, near=False)[0])
+
+    return named
+
+
+def _withhold_all(*_texts) -> bool:
+    return True
+
+
+async def _filter_or_withhold(user_id: str, where: str):
+    """``_forgotten_filter``, or (ledger unreadable) a filter that withholds every non-exempt offer."""
+    try:
+        return await _forgotten_filter(user_id)
+    except Exception as exc:  # noqa: BLE001 - LedgerUnavailable: fail closed
+        logger.warning("pending_suggestions.%s: forget ledger unavailable (%s) - offers withheld", where, type(exc).__name__)
+        return _withhold_all
+
+
+def _offer_named(named, action_type, *texts) -> bool:
+    return str(action_type or "") not in _FORGET_EXEMPT and named(*texts)
+
+
+async def _drop_offer(db, offer_id) -> None:
+    """Delete an offer that names a forgotten entity (its words ARE the name: resolving it would keep them)."""
+    try:
+        await db.execute("DELETE FROM pending_suggestions WHERE id = $1", offer_id)
+    except Exception as exc:  # noqa: BLE001 - it is not served either way
+        logger.debug("pending_suggestions: forgotten offer delete failed (%s)", type(exc).__name__)
+
+
 def person_suggestions_enabled() -> bool:
     """Contact suggestions (`person_create` action) — default OFF.
 
@@ -78,6 +133,12 @@ async def store_suggestions(
     suggestions: list[dict],
 ) -> int:
     if not suggestions or is_unidentified(user_id):
+        return 0
+    named = await _filter_or_withhold(user_id, "store")
+    suggestions = [s for s in suggestions if not _offer_named(
+        named, s.get("action_type"), s.get("offer_phrase"), s.get("description"),
+        json.dumps(s.get("pre_filled_slots") or {}, default=str))]
+    if not suggestions:
         return 0
     now = datetime.now(timezone.utc).isoformat()
     stored = 0
@@ -164,10 +225,11 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
     if user_id in ("guest", ""):
         return ""
     lines: list[str] = []
+    named = await _filter_or_withhold(user_id, "load_for_prompt")
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
-                """SELECT id, action_type, offer_phrase, turns_elapsed, expire_after_turns
+                """SELECT id, action_type, offer_phrase, turns_elapsed, expire_after_turns, description, pre_filled_slots
                    FROM pending_suggestions
                    WHERE user_id = $1 AND session_id = $2 AND resolved = 0
                    ORDER BY created_at ASC LIMIT $3""",
@@ -176,6 +238,10 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
                 limit,
             )
             for row in rows:
+                if _offer_named(named, row["action_type"], row["offer_phrase"], row["description"], row["pre_filled_slots"]):
+                    if named is not _withhold_all:
+                        await _drop_offer(db, row["id"])
+                    continue
                 # person_create offers are aged per USER TURN by
                 # age_person_offers_on_user_turn (QA review F5) — never age them
                 # here too, or a turn that builds both packets double-ages them.
@@ -206,6 +272,7 @@ async def load_for_prompt(user_id: str, session_id: str, *, limit: int = 3) -> s
 
 
 async def list_active(user_id: str, session_id: str) -> list[dict]:
+    named = await _filter_or_withhold(user_id, "list_active")
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
@@ -219,6 +286,8 @@ async def list_active(user_id: str, session_id: str) -> list[dict]:
             )
         out = []
         for r in rows:
+            if _offer_named(named, r["action_type"], r["offer_phrase"], r["description"], r["pre_filled_slots"]):
+                continue
             slots = {}
             try:
                 slots = json.loads(r["pre_filled_slots"] or "{}")
@@ -248,6 +317,7 @@ async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
     """
     if user_id in ("guest", ""):
         return []
+    named = await _filter_or_withhold(user_id, "list_pending_contacts")
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
@@ -260,6 +330,8 @@ async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
             )
         out = []
         for r in rows:
+            if _offer_named(named, "person_create", r["offer_phrase"], r["pre_filled_slots"]):
+                continue
             slots = {}
             try:
                 slots = json.loads(r["pre_filled_slots"] or "{}")
@@ -291,6 +363,7 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
     if user_id in ("guest", ""):
         return []
     out: list[dict] = []
+    named = await _filter_or_withhold(user_id, "surface_pending_contacts_for_prompt")
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
@@ -303,6 +376,10 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
             )
             contact_names = await _live_contact_names(db, user_id) if rows else []
             for row in rows:
+                if _offer_named(named, "person_create", row["offer_phrase"], row["pre_filled_slots"]):
+                    if named is not _withhold_all:
+                        await _drop_offer(db, row["id"])
+                    continue
                 try:
                     _offered = json.loads(row["pre_filled_slots"] or "{}").get("name") or ""
                 except (json.JSONDecodeError, AttributeError):
@@ -386,6 +463,7 @@ async def surfaced_person_offers(user_id: str, *, limit: int = 5) -> list[dict]:
     if user_id in ("guest", ""):
         return []
     out: list[dict] = []
+    named = await _filter_or_withhold(user_id, "surfaced_person_offers")
     try:
         async with get_db_ctx() as db:
             rows = await db.fetch(
@@ -398,6 +476,8 @@ async def surfaced_person_offers(user_id: str, *, limit: int = 5) -> list[dict]:
                 limit,
             )
         for row in rows:
+            if _offer_named(named, "person_create", row["offer_phrase"], row["pre_filled_slots"]):
+                continue
             slots = {}
             try:
                 slots = json.loads(row["pre_filled_slots"] or "{}")
