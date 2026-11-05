@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -99,6 +100,8 @@ def test_every_shipped_country_renders_safely(code):
     line = hl.render(code)
     assert line and len(line) <= hl.MAX_LINE_CHARS
     assert not _TRIGGER_RE.search(line), f"{code}: a tool-group trigger word would arm a group on every turn"
+    # groups the identity_facts mirror does not carry (cross-review N1): alarms, the people / memory phrasings
+    assert not re.search(r"\balarms?\b|\bwake (?:me|us)\b|\bwho\s+is\b|\bremember\b|\bremind", line, re.IGNORECASE), code
     assert "[" not in line and "]" not in line
 
 
