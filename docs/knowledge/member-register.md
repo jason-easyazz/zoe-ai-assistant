@@ -19,7 +19,7 @@ Everything is behind `ZOE_MEMBER_REGISTER` (default `off`, read per call); the c
 |---|---|---|---|
 | L0 invariants | honesty, hold the fact, no flattery, no hooks, one question | soul + doctrines in the sidecar prompt, guards in code | untouched (the stable cached prefix) |
 | L1 manner | counted behaviours, one voice | `manner_block.py` / `lexicons_data` | untouched |
-| L2 register | length, formality, humour, pace, up to 5 liked topics, per member | table `member_register` (alembic `0066`), `member_register.py` | **new** |
+| L2 register | length, formality, humour, pace, up to 5 liked topics, per member | table `member_register` (alembic `0068`), `member_register.py` | **new** |
 | L3 situational | late-night quiet (22:00 to 06:00 household time) | computed per turn, no storage | **new** |
 
 Only L2 + L3 are rendered, as ONE line (`MAX_REGISTER_TOKENS` = 100, measured chars/4; the longest possible render is a test).
@@ -78,7 +78,7 @@ count-based, never a model judge.
 
 ## Owner steps
 
-Nothing is live. Order: merge and deploy (the migration `0066` runs on deploy; the sidecar restarts because `src/` changed) ->
+Nothing is live. Order: merge and deploy (the migration `0068` runs on deploy; the sidecar restarts because `src/` changed) ->
 `ZOE_MEMBER_REGISTER=on` in `services/zoe-data/.env` and restart zoe-data -> set a register through the route for one adult and read the
 line back with `GET` -> run the replay gate and `register_consistency.py` -> only then consider `ZOE_MEMBER_REGISTER_KIDS=on`, together
 with the minor rows being set and the distress hand-off decision.

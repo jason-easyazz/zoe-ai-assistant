@@ -6,7 +6,7 @@ function of layers, none a free-text adjective list:
   L0 invariants   the soul + doctrines + guards          sidecar prompt / code          NOT touched here (the stable cached prefix)
   L1 manner       counted behaviours, one voice          ``manner_block.py``            NOT touched here
   L2 register     length / formality / humour / pace /   ``member_register`` table       THIS module: per member, stored, editable
-                  liked topics                           (alembic 0066)
+                  liked topics                           (alembic 0068)
   L3 situational  late-night quiet                       the clock, computed per turn   THIS module: ``situational_line``
 
 Only L2 + L3 are rendered here, as ONE short line (``MAX_REGISTER_TOKENS``) that rides a ``zoe-register:`` envelope line and is appended
@@ -166,7 +166,7 @@ def render(entries: list[Entry], now: Optional[datetime] = None) -> str:
     return out
 
 
-# ── storage (alembic 0066) ────────────────────────────────────────────────────────────────────
+# ── storage (alembic 0068) ────────────────────────────────────────────────────────────────────
 def _db(db=None):
     import persona_layer
 

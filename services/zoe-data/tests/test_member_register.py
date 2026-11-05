@@ -63,7 +63,7 @@ def _clean(monkeypatch):
 
 
 def _migration_ddl() -> str:
-    spec = importlib.util.spec_from_file_location("mig_0066", SVC / "alembic/versions/0066_member_register.py")
+    spec = importlib.util.spec_from_file_location("mig_0068", SVC / "alembic/versions/0068_member_register.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod._DDL

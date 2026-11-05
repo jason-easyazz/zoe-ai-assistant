@@ -1,4 +1,4 @@
-"""0066 - ``member_register`` (how Zoe speaks with THIS person; flag-dark ``ZOE_MEMBER_REGISTER``).
+"""0068 - ``member_register`` (how Zoe speaks with THIS person; flag-dark ``ZOE_MEMBER_REGISTER``).
 
 One row per (member, slot). ``slot`` is the register key for a single-valued setting (``length``, ``formality``, ``humour``,
 ``pace``) or ``topic:<normalised>`` for a liked topic. ``provenance`` is ``stated`` (the member's own words, or an owner edit),
@@ -13,8 +13,8 @@ cache, rebuilt by the member saying it again.
 
 from alembic import op
 
-revision = "0066"
-down_revision = "0065"
+revision = "0068"
+down_revision = "0067"
 branch_labels = None
 depends_on = None
 
