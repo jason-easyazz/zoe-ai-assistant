@@ -2,9 +2,9 @@
 type: research
 title: Recall gate shadow-log replay (2026-11-05) - Samantha Initiative experiment 1 (lane C E2)
 date: 2026-11-05
-status: experiment run; verdict DO NOT ENFORCE YET (the precision criterion could not be scored from logs, and the real sample is below the bar). Nothing flipped; ZOE_RECALL_GATE stays shadow.
+status: experiment run; verdict DO NOT ENFORCE YET. Live precision not scorable from logs (real sample 28 adds); synthetic precision 0.63 (n=24 adds, in the 0.6-0.8 fix band), drop precision 0.997 (n=655). An opt-in private trace (ZOE_RECALL_GATE_TRACE, default off) now exists to score live turns. Nothing flipped; ZOE_RECALL_GATE stays shadow.
 description: Every RECALL_GATE shadow line in the live zoe-data logs (2026-10-10 to 2026-11-05) was collected and split into real household turns and synthetic harness turns. The would_add precision test the initiative record asks for cannot be run from the logs (by design they carry 8-character row ids and counts, never text), and the real would_add sample is 28 decisions over 7 distinct rows. What the logs do show - coverage, packet shrink, empty packets, budget use, latency - is reported here, with the fix that unblocks the precision test.
-evidence: ~/.zoe-logs/zoe-data.app.log{,.1,.2,.4} RECALL_GATE / RECALL_EVIDENCE / RESTRAINT lines (counts and ids only; raw lines kept in a private chmod-700 scratch dir, not committed). A hermetic CPU benchmark of recall_gate.evaluate_packet on synthetic rows (no live store). No database was read.
+evidence: ~/.zoe-logs/zoe-data.app.log{,.1,.2,.4} RECALL_GATE / RECALL_EVIDENCE / RESTRAINT lines (counts and ids only; raw lines kept in a private chmod-700 scratch dir, not committed). A hermetic CPU benchmark of recall_gate.evaluate_packet on synthetic rows (no live store). An extended hermetic replay (scripts/perf/recall_gate_replay.py worlds, 72 extra asks) hand-scored for the synthetic precision. No database was read.
 builds_on: docs/research/samantha-initiative-2026-11-03.md (section 8 row 1), docs/knowledge/recall-gate.md ("What enforce needs" item 1)
 ---
 
@@ -70,6 +70,44 @@ The second-resolution timestamps put the background decision within 1 s of the f
 
 Re-decide when items 1 and 2 give >= 50 scored adds and >= 30 scored drops: precision >= 0.8 -> enforce; < 0.6 -> do not; between ->
 tune `SIM_NEAR` / threshold on the misses.
+
+## Follow-up: synthetic scoring (2026-11-05)
+
+The replay's worlds are synthetic (`demo_bar_*` users, fixture rows), so their row text is available without the live store. The
+world: every approved row of the replay's crowded cells (the week, 18 hobby rows, the bar's sister / dad / filler rows, the sculling
+routine, an inferred row; 45 rows) plus the superseded mum row. 54 asks each in a fresh session (targeted asks by keyword or name,
+the same targets paraphrased without the keyword, advice turns a stored constraint should shape, chit-chat, generic tasks) and one
+18-turn conversation. Plus the stock 29-ask replay. Same rubric as the live plan: an add is relevant when the row is about what the
+ask asks, or a stored constraint that should shape the answer; a drop is harmful when the dropped row is relevant by the same test.
+
+| | n | relevant / correct | precision |
+|---|---|---|---|
+| adds, first turn of a session (stock + extended) | 10 | 9 | 0.90 |
+| adds, later turns of a conversation (the 18-turn one + the stock 2-turn X2) | 14 | 6 | 0.43 |
+| **adds, all** | **24** | **15** | **0.63** |
+| **drops (the 72 extended asks; the stock replay's 94 are in the gate doc's table)** | **655** | **653** | **0.997** |
+
+- n = 24 adds is below the 50 the record asked for: the gate adds rarely. The 0.63 is in the 0.6-0.8 band (name the fix, do not enforce).
+- **Every later-turn misfire is carry-over** (8 of 8): a row triggered on an earlier turn of the conversation (the dog, the work
+  project, the diet, the race) re-enters on a later, unrelated turn ("how's my mum", "what should I cook", "I'm nervous about it",
+  "thanks, that's all"). The one first-turn misfire is filler on a cooking ask.
+- **The 2 harmful drops are the costly kind**: a paraphrased targeted ask ("what time do I take the dog out", "a birthday present for
+  my dad") where the floor carried the answer row and the gate served an empty packet.
+- **Joint misses**: 7 paraphrased asks (the dog, the work deadline, the race, the job, a Friday plan, a dog outing) where neither the
+  floor nor the gate carried the row - the semantic-signal gap ("What enforce needs" item 4), not a gate regression.
+- Empty enforce packets: 24 of 72 decisions; 16 are chit-chat or generic tasks (correct), 8 targeted asks.
+
+**The fix, in order:** (1) a held (sticky) row re-enters only while it still shares a key, name or clock time with the current
+turn, or `sticky` 0 on the packet surface - this alone lifts the later-turn 6/14 toward the first-turn 9/10; (2) a
+semantic signal for paraphrases (item 4), which also closes both harmful drops; (3) `abstain=False` for the first enforce so a
+targeted ask the gate cannot match keeps the floor's packet. Re-run the synthetic set and the live trace after (1).
+
+## Follow-up: the opt-in private trace
+
+`ZOE_RECALL_GATE_TRACE` (default off; `services/zoe-data/recall_gate_trace.py`) is the code half of "what unblocks the precision
+test" item 1: when the owner turns it on, each decision writes id + text of the added and dropped rows and the owner's words to a 0600
+file under `~/.zoe/recall-gate-trace/` (rotated, 7-day retention), never to the repo or the normal logs. Owner steps and the bounds:
+[recall-gate](../knowledge/recall-gate.md) "The opt-in private trace".
 
 ## Method and privacy
 
