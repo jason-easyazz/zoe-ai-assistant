@@ -114,7 +114,7 @@ async def _drop_offer(db, offer_id) -> None:
     try:
         await db.execute("DELETE FROM pending_suggestions WHERE id = $1", offer_id)
     except Exception as exc:  # noqa: BLE001 - it is not served either way
-        logger.debug("pending_suggestions: forgotten offer delete failed (%s)", type(exc).__name__)
+        logger.warning("pending_suggestions: forgotten offer delete failed - still withheld at read time (%s)", type(exc).__name__)
 
 
 def person_suggestions_enabled() -> bool:

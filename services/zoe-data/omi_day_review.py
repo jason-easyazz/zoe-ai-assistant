@@ -1401,12 +1401,13 @@ class LedgerUnavailable(RuntimeError):
     """The forget ledger could not be read: nothing is stored (a forgotten name must never land in the candidate store)."""
 
 
-async def _forgotten(user_id: str, text: str) -> bool:
-    """Does ``text`` name an entity the member forgot? An unreadable ledger RAISES ``LedgerUnavailable`` (fail closed); an
+async def _forgotten(user_id: str, text: str, *, near: bool = True) -> bool:
+    """Does ``text`` name an entity the member forgot? ``near=False`` is the SERVE-side read (near spellings off on reads: a
+    candidate about a similarly named person stays visible; only an exact forgotten name hides one). An unreadable ledger RAISES ``LedgerUnavailable`` (fail closed); an
     unconfigured ledger (no salt: nothing can have been forgotten) is a clean no."""
     try:
         import memory_forgotten as mf
-        return bool(await mf.spans(user_id, text, strict=True))
+        return bool(await mf.spans(user_id, text, near=near, strict=True))
     except Exception as exc:  # noqa: BLE001
         raise LedgerUnavailable(type(exc).__name__) from exc
 
@@ -1641,7 +1642,7 @@ async def _served(user_id: str, cands: list) -> list:
         text = json.dumps(c.get("payload") or {}, ensure_ascii=False) + " " + " ".join(
             str(e.get("quote") or "") for e in (c.get("evidence") or []) if isinstance(e, dict))
         try:
-            if await _forgotten(user_id, text):
+            if await _forgotten(user_id, text, near=False):
                 continue
         except LedgerUnavailable as exc:
             logger.warning("omi_day_review: forget ledger unavailable (%s) - no candidates shown", exc)
