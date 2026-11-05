@@ -2813,6 +2813,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
             )
         logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
+        import write_receipts
+
+        write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list_removed", item_id,
+                              "list_remove_direct")
         await _notify_lists_ui(
             "list_updated",
             {"action": "item_completed", "list_id": list_id, "item_id": item_id, "actor": actor},
@@ -4206,6 +4210,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             _tomb_clear(user_id, text)
         except Exception:
             pass
+        import write_receipts
+
+        write_receipts.record(user_id, "memory", getattr(ref, "id", "") or user_turn_id, "memory_store")
         return "Got it — I'll remember that."
 
     # ── A2A Federation Status ──────────────────────────────────────────────────

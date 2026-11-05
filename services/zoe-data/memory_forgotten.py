@@ -394,6 +394,9 @@ async def add(user_id: str, name: str, *, actor: str = "", scope: str = SCOPE_EN
     _invalidate(user_id)
     await _add_near(user_id, name, start=start, until=until, actor=actor or user_id)
     logger.info("memory_forgotten: recorded a forgotten entity for user=%s scope=%s (hash only)", user_id, scope)
+    import write_receipts
+
+    write_receipts.record(user_id, "forget", digest[:16], "memory_forgotten.add")     # the write-claim guard's "forget" kind
     return True
 
 

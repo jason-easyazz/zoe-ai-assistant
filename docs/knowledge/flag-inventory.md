@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-05T00:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-05T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-05. The table body is deterministic (sorted, no
+Last generated: 2026-11-06. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 811 prod flags; 225 read through `typed_env`.
+- 812 prod flags; 226 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-811 flags; 760 not documented in `.env.example`.
+812 flags; 761 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -865,6 +865,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_WEB_SEARCH_TOOL` | bool | `False` | - | `docs/knowledge/self-model.md` | `'0'` | no | yes | `services/zoe-data/research_evidence.py` |
 | `ZOE_WORKTREE_PRUNE_INTERVAL_S` | float | `86400.0` | - | `docs/architecture/multica-retirement-gates.md` | `86400.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_WORKTREE_ROOT` | str | `''` | - | `docs/guides/MULTICA_HERMES_PR_LOOP.md` | `''` | no | NO | `services/zoe-data/worktree_bootstrap.py` |
+| `ZOE_WRITE_CLAIM_CORRECTION` | bool | `False` | - | `docs/knowledge/write-claim-guard.md` | `False` | yes | NO | `services/zoe-data/claim_correction.py` |
 | `ZOE_WRITE_CLAIM_GUARD` | str | `'enforce'` | `off`, `shadow`, `enforce` | `docs/knowledge/write-claim-guard.md` | `'enforce'` | no | NO | `services/zoe-data/write_claim_guard.py` |
 | `ZOE_WS_IDLE_TIMEOUT_SECONDS` | float | `120.0` | - | `docs/knowledge/voice-pipeline.md` | `120.0` | yes | NO | `services/zoe-data/main.py` |
 | `ZOE_YTMUSIC_POLL_S` | float | `2.0` | - | - | `'2.0'` | no | NO | `services/zoe-data/ytmusic_signin.py` |

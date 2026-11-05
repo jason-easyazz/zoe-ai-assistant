@@ -919,6 +919,7 @@ _ENTRIES = (
     _f('ZOE_WEB_SEARCH_TOOL', 'bool', False, doc='docs/knowledge/self-model.md'),
     _f('ZOE_WORKTREE_PRUNE_INTERVAL_S', 'float', 86400.0, doc='docs/architecture/multica-retirement-gates.md'),
     _f('ZOE_WORKTREE_ROOT', 'str', '', doc='docs/guides/MULTICA_HERMES_PR_LOOP.md'),
+    _f('ZOE_WRITE_CLAIM_CORRECTION', 'bool', False, doc='docs/knowledge/write-claim-guard.md'),
     _f('ZOE_WRITE_CLAIM_GUARD', 'str', 'enforce', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/write-claim-guard.md', note='live: unset (code default in force)'),
     _f('ZOE_WS_IDLE_TIMEOUT_SECONDS', 'float', 120.0, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_YTMUSIC_POLL_S', 'float', 2.0),
