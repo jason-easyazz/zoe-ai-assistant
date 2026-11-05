@@ -3144,8 +3144,8 @@ _NOT_A_DEVICE_WORDS = frozenset({
     "timer", "timers", "alarm", "alarms", "news", "screen", "brightness", "it", "that", "this", "them", "those", "these",
     "up", "down", "everything", "all", "anything", "something", "off", "on", "back", "around", "over", "out", "in",
     "story", "card", "leaf", "corner", "tide", "heat", "table", "tables", "key", "wheel", "car", "engine", "head",
-    "speaker", "speakers", "stereo", "player", "spotify", "netflix", "youtube", "playlist", "album", "track", "mic",
-    "microphone", "wifi", "bluetooth", "airplane", "mode", "subtitles", "captions", "do", "not", "disturb",
+    "player", "spotify", "netflix", "youtube", "playlist", "album", "track", "mic",
+    "microphone", "bluetooth", "airplane", "mode", "subtitles", "captions", "do", "not", "disturb",
 })
 _UNVERIFIED_BEFORE_RE = re.compile(r"^\s*(?:(?:please|zoe)\s+)*(?:turn|switch|flip)\s+(?P<onoff>on|off)\s+(?:the\s+|my\s+|our\s+)(?P<obj>[a-z']+(?:\s+[a-z']+){0,2})\s*$")
 _UNVERIFIED_AFTER_RE = re.compile(r"^\s*(?:(?:please|zoe)\s+)*(?:turn|switch|flip)\s+(?:the\s+|my\s+|our\s+)(?P<obj>[a-z']+(?:\s+[a-z']+){0,2})\s+(?P<onoff>on|off)\s*$")

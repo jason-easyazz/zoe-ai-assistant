@@ -63,6 +63,9 @@ NOT_CALENDAR_READS = [
     "do I have anything in the fridge",
     "what's the weather tomorrow",
     "what's on my mind",
+    "my calendar is a mess",                           # statements / complaints
+    "something is wrong with my calendar",
+    "what happened to my calendar",
     "what time is my dentist appointment on friday",   # an event-TIME question: brain + recall floor, not a calendar dump
 ]
 
@@ -81,8 +84,7 @@ def test_calendar_read_ask_negative_control(text):
 def test_intent_router_reads_the_calendar(text, qualifier):
     got = intent_router.detect_intent(text, log_miss=False)
     assert got is not None and got.name == "calendar_show", (text, got)
-    if qualifier:
-        assert (got.slots.get("qualifier") or "") in (qualifier, "") or qualifier in got.slots.get("qualifier", "")
+    assert (got.slots.get("qualifier") or "") == qualifier, (text, got.slots)
 
 
 @pytest.mark.parametrize("text", NOT_CALENDAR_READS)
@@ -200,8 +202,6 @@ def test_unknown_noun_is_claimed_only_as_an_unverified_device(text, action, quer
     "turn off everything now",
     "turn the corner",
     "what's on tv",
-    "turn the speaker on",
-    "turn on the wifi",
     "turn the channel over",
 ])
 def test_near_misses_are_not_device_commands(text):

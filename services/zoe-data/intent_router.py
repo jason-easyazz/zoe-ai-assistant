@@ -988,6 +988,8 @@ def detect_intent(
         m = re.match(pattern, t)
         if m:
             qualifier = (m.group(1) if m.lastindex else "").strip()
+            # "for tomorrow" / "for friday" / "this weekend": the trailing words carry the date (they used to fall to "the next 7 days")
+            qualifier = command_shapes.calendar_qualifier(qualifier) or qualifier
             return Intent("calendar_show", {"qualifier": qualifier})
     # The class those patterns are samples of (command_shapes.calendar_read_ask): "do I have anything on my calendar", "am I free
     # this weekend", "what am I doing friday", "can you see my calendar". A complaint or a TV question is not one.

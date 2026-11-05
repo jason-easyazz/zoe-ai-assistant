@@ -552,7 +552,9 @@ _CAL_FILLER_LEAD = re.compile(
 _CAL_NOT_A_READ = re.compile(
     r"^(?:that|this|it)(?:'s|\s+is|\s+was)?\s+(?:not|isn'?t|wasn'?t)\b"
     r"|^(?:how\s+come|why)\b"
-    r"|\b(?:couldn'?t|didn'?t|wouldn'?t|wasn'?t|weren'?t|hasn'?t|haven'?t|can'?t|won'?t)\b",
+    r"|\b(?:couldn'?t|didn'?t|wouldn'?t|wasn'?t|weren'?t|hasn'?t|haven'?t|can'?t|won'?t)\b"
+    r"|\b(?:wrong|broken|mess|messy|outdated|out\s+of\s+date)\b|\bwhat\s+happened\b"
+    r"|^(?:my|the|our)\s+(?:calendar|schedule|diary|agenda)\s+(?:is|looks|seems|has|was|keeps)\b",
     re.IGNORECASE,
 )
 # A statement by the speaker ("I have a meeting tomorrow"): reported, not asked.
