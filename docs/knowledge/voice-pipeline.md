@@ -1563,8 +1563,9 @@ Clean-tail cut risk was checked the same way on the newest 400 corpus clips, 246
 had speech after the wake pre-roll. The probabilities came from the v6.0 ONNX Silero on the
 Jetson, not the Pi's torch-hub copy, so read chunk counts as ±1.
 
-- **The endpoint is already ~0.7–0.9 s, not 1.5 s.** `silence_timeout=1.50s` in the
-  `Recorded …` line is the amplitude timeout used before any speech. After speech, the live
+- **The endpoint is already ~0.7–0.9 s, not 1.5 s.** The old `silence_timeout=1.50s` field of the
+  `Recorded …` line was the amplitude timeout used before any speech (since 2026-11-06 the line logs
+  `close=<rule>=<ms>`, the rule that really closed it). After speech, the live
   close is 640 ms of deep quiet (or 800 ms of any quiet). Silero decays through the ambiguous
   band for 1–2 chunks before the deep count starts, so the measured gap from speech end to
   close is **720–880 ms**.
@@ -1743,6 +1744,49 @@ new fields, and an old server ignores them, so the order is only a convenience.
   `cp -p /home/pi/.zoe-voice/zoe_voice_daemon.py.bak-<ts> /home/pi/.zoe-voice/zoe_voice_daemon.py`
   (same for `zoe_voice_announce.py`) and `systemctl --user restart zoe-voice`. A server rollback needs
   nothing on the Pi: an old server ignores the new fields.
+
+## Panel cut-offs — the pause after the chime, and the continuation (2026-11-06)
+
+Two cut-offs from the owner's first evening session (2026-11-05; evidence is private, not in the repo).
+
+**1. A pause after "Hey Zoe" closed the recording on the wake word (fixed, ON by default).** The wake
+recording's no-speech limit was `SILENCE_TIMEOUT_S` (1.5 s, 18 chunks) counted from recording START. That span
+holds the chime (~0.27 s) and the speakerphone's echo suppression after it (~0.9 s of near-zero samples), so a
+~1.5 s pause left almost no time; the transcript was only the wake word and the server's greeting ("Good evening.
+What can I do for you?") then played over the command.
+- `ZOE_POST_WAKE_NO_SPEECH_S` (default **3.0**, 0 = the old rule): the wake recording's own no-speech window,
+  counted from listen start — the chime thread has finished (`_wake_chime_done`, waited on at most 1.5 s) AND the
+  muted run after it is over (chunks with mean |amplitude| < `ZOE_POST_WAKE_MUTED_AMP`, default 6; room noise is
+  ~8-18, echo suppression 0-5; skipped for at most `ZOE_POST_WAKE_ECHO_MAX_MS`, default 1200). Follow-up windows and
+  the barge seed are unchanged (they start on detected speech). Worst case a wake with no command now records
+  ~0.3 + 1.2 + 3.0 s instead of 1.44 s.
+- `ZOE_WAKE_ONLY_LISTEN` (default **on**, 0 = off): a WAKE turn whose transcript is only the wake word is dropped
+  before any audio plays (the transcript frame leads the stream; closing it cancels the server's work, as for
+  junk); the daemon plays the short follow-up cue and listens once (≥ 3 s, no wake word), running what it hears as
+  a wake turn. Daemon-only: the server is unchanged. Not applied on a speculative stream.
+- The `Recorded command|follow-up` line now logs `close=<rule>=<ms>` (e.g. `close=deep=640ms`,
+  `close=no_speech=3040ms+listen@1120ms`) instead of the misleading `silence_timeout=1.50s`.
+
+**2. A continuation after a complete sentence was never heard (flag-dark).** A follow-up turn paused 1.19 s between
+two sentences; the recorder closed at 0.8 s any-quiet and the mic stayed closed until Zoe spoke. A plain longer
+tail costs ~0.6 s on every turn, and listening between the close and Zoe's reply cannot safely merge a turn whose
+writes may already have run. So B1.1 speculation now covers follow-up and conversation windows
+(`ZOE_SPECULATIVE_WINDOWS`, default off) — see
+[b1-speculative-turn-start.md](../architecture/b1-speculative-turn-start.md) → *Follow-up and conversation windows*
+for the protocol and the recommended values (speculate at 640 ms, close at ~1.4 s, re-answer a continuation).
+
+**Small fixes in the same change.** zoe-data's `voice claim rejected` line logs the threshold to 3 decimals (a
+0.3506 vs 0.351 rejection printed as `< 0.35`). Corpus captures are named `YYYYmmdd-HHMMSS_mmm.wav`;
+`scripts/lib/panel_voice_log.clip_time` reads the date from the name, and `replay_samples.py --since` compares a
+dated name on its time-of-day part as before. Old `HHMMSS_mmm.wav` names are still read.
+
+**Operator deploy.** Server first (blessed voice-path deploy, poll `/health`), then the Pi daemon from a clean
+worktree at the merged commit with `scripts/setup/deploy-pi-voice.sh` (`DRY_RUN=1` first) — the recipe under
+*Long speech is one turn → Operator deploy* above. No `.env.voice` change is needed for fix 1. Fix 2 is the owner's
+step after the replay gate + a lab check. Rollback for fix 1: `ZOE_POST_WAKE_NO_SPEECH_S=0` and/or
+`ZOE_WAKE_ONLY_LISTEN=0` in `/home/pi/.zoe-voice/.env.voice`, then `systemctl --user restart zoe-voice`.
+Pinned by `tests/unit/test_voice_daemon_panel_cutoffs.py` (negative controls: the old window closes before the
+command; the live 640/800 values close before the continuation; a follow-up wake-word-only line still plays).
 
 ## STT accuracy score — a local, weakly-labelled word-error proxy + the keyterm A/B (2026-10-14)
 

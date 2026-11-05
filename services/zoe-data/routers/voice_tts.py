@@ -3019,7 +3019,10 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
 
         d = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
         os.makedirs(d, exist_ok=True)
-        dst = os.path.join(d, f"{_t.strftime('%H%M%S')}_{int(_t.time()*1000)%1000:03d}.wav")
+        # YYYYmmdd-HHMMSS_mmm.wav: the date is in the name (2026-11-06) - an HHMMSS-only name repeats every day, so
+        # a clip could only be dated by its mtime. Readers accept both forms (scripts/lib/panel_voice_log.clip_time).
+        _now = _t.time()
+        dst = os.path.join(d, f"{_t.strftime('%Y%m%d-%H%M%S', _t.localtime(_now))}_{int(_now*1000)%1000:03d}.wav")
         # Copy synchronously (fast) before the caller unlinks the original.
         shutil.copyfile(wav_path, dst)
     except Exception as exc:
@@ -5770,12 +5773,14 @@ async def voice_command(
     }
 
 
-async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str) -> Optional[dict]:
+async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str,
+                               side_effects: bool = True) -> Optional[dict]:
     """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member, else None.
 
     ONE rule for both /turn and /turn_stream: the daemon's streaming request falls back to the blocking /turn when it dies before a
     response, and a /turn that skipped this check let a background clip clear only the wake bar. Side effects of a drop (crowd note,
     voice-session close) live here so the two paths cannot drift. An ERROR while judging a window turn FAILS CLOSED (dropped).
+    ``side_effects=False`` only asks (a speculative window turn: it is cancelled and the normal turn re-runs this with them).
     """
     if (payload or {}).get("window") not in _utterance_shape.WINDOWS:
         return None
@@ -5793,7 +5798,7 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     except Exception as _win_exc:
         logger.warning("voice/%s window speaker frame failed (dropping the window turn): %s", route, _win_exc)
         _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
-    if _gate is not None:
+    if _gate is not None and side_effects:
         # The rejected voice is still SOMEONE in the room: record it in the crowd log (no session, no brain, no memory write), so the
         # day-review summary is not spoken aloud on the strength of a crowd that only ever spoke into skipped follow-ups.
         try:
@@ -6113,6 +6118,31 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # listens a short extra window and re-sends ONE merged clip. ``skipped``: a follow-up
     # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
     # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
+    if _spec_gate is not None and (payload or {}).get("window") in _utterance_shape.WINDOWS:
+        # A speculative FOLLOW-UP / CONVERSATION turn (B1.1 in no-wake-word windows): the pre-brain gates below never run on a
+        # speculative turn, so ask them here WITHOUT side effects. One that would drop the turn (an unconfirmed voice, side
+        # speech) cancels the speculation instead: nothing ran, so the daemon runs the FULL recording as a normal window turn,
+        # which meets the same gates with their side effects. Fail-closed: an error cancels too.
+        try:
+            _would_drop = await _window_speaker_drop(payload, caller, transcript, panel_id, route="turn_stream",
+                                                     side_effects=False)
+            if _would_drop is None:
+                _would_drop = _utterance_shape.gate_frame(payload, transcript)
+        except Exception as _spec_win_exc:
+            logger.warning("voice/turn_stream speculative window gate failed (cancelling): %s", _spec_win_exc)
+            _would_drop = {"error": True}
+        if _would_drop is not None:
+            _speculation.close_gate(_spec_gate)
+            _speculation.record_outcome("window_gate")
+            _gate_for_window = _spec_gate
+
+            async def _window_cancelled():
+                yield _speculation.ack_frame(_gate_for_window)
+                yield _speculation.cancelled_frame(_gate_for_window, reason="window_gate")
+            return StreamingResponse(
+                _window_cancelled(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+            )
+
     _gate = None
     # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate RAN on and did not confirm is
     # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
@@ -7077,7 +7107,7 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     if threshold is not None and score >= threshold:
         return user
     logger.info(
-        "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold or 0.0
+        "voice claim rejected: user=%s score=%.4f < threshold=%.3f", user, score, threshold or 0.0
     )
     return None
 

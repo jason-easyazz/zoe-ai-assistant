@@ -315,3 +315,34 @@ All of these, in order; any miss keeps the flag dark:
 
 Not proven: daemon-side timing on the Pi, the replay gate against either head, and any
 live cancel rate. All are required before staging the flag.
+
+## Follow-up and conversation windows (`ZOE_SPECULATIVE_WINDOWS`, 2026-11-06, flag-dark)
+
+The first live cut-off this design addresses was a **follow-up** turn (owner session
+2026-11-05: a complete sentence, a 1.19 s pause, then a second sentence the recorder never
+heard because it closed on the 0.8 s any-quiet rule). Until now only the wake recording
+speculated. With `ZOE_SPECULATIVE_WINDOWS=1` on the Pi (plus `ZOE_SPECULATIVE_TURN` on both
+ends) `_follow_up_listen` fires at the first verdict too:
+
+- the speculative request carries `window` (`followup` / `conversation`), so the server's
+  stricter window claim bar applies to it;
+- the pre-brain window gates (speaker drop, addressedness) never ran on a speculative
+  turn, so the server now ASKS them without side effects; a would-be drop answers
+  `cancelled` (`reason: window_gate`) and the daemon runs the full recording as the
+  normal window turn, which meets the gates with their side effects exactly once;
+- junk on a speculative window stream cancels it the same way (the daemon's junk filter);
+- a cancelled window speculation re-runs through `_turn_with_monitor` (hard-cap merge and
+  the trailing-"and" hold included), reusing the claim already scored;
+- a recording that fired and was then dropped sends `cancel` (`_SpeculativeTurn.abandon`).
+
+**Recommended values** (Pi `.env.voice`, after the replay gate + a lab check):
+`ZOE_SPECULATIVE_TURN=1 ZOE_SPECULATIVE_WINDOWS=1 ZOE_SPECULATIVE_TAIL_MS=640
+ZOE_VAD_TAIL_MS=1400 VAD_ENDPOINT_SILENCE_S=1.5`; server `ZOE_SPECULATIVE_TURN=1`. The
+brain still starts at 640 ms of deep quiet (today's close), the real close moves to
+~1.4 s, and a continuation inside it is recorded and answered as one turn (`resolve` →
+transcripts differ → cancel → the merged recording is answered). The cost falls on
+cancelled turns only (a second STT pass and brain start) and on fast paths, which wait
+for the verdict. **Order: server first** — an older server ignores `window` on a
+speculative turn and would skip the window speaker gate. Pinned by
+`tests/unit/test_voice_daemon_panel_cutoffs.py` and
+`services/zoe-data/tests/test_voice_window_speaker_gate.py`.

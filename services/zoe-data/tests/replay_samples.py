@@ -149,8 +149,11 @@ def _select(sample_dir: str, args) -> list[str]:
     # --since stays NAME-based on purpose (see its help): it is a time-of-day
     # filter spanning every date, not a recency filter. Changing its meaning
     # silently would be the same bug in the other direction.
+    # Dated captures (``YYYYmmdd-HHMMSS_mmm.wav``, 2026-11-06 on) compare on their time-of-day part, as the
+    # older ``HHMMSS_mmm.wav`` names always did.
     if args.since:
-        rows = [r for r in rows if r[1] >= args.since]
+        rows = [r for r in rows if (r[1].split("-", 1)[1] if r[1][:8].isdigit() and r[1][8:9] == "-" else r[1])
+                >= args.since]
 
     files = [r[2] for r in rows]
     if args.last:
