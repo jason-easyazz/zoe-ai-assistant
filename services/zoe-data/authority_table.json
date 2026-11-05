@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "doc": "docs/knowledge/authority-table.md",
+  "roles": ["owner", "adult", "child", "guest", "unrecognised_voice"],
+  "verdicts": ["allow", "ask_first", "never"],
+  "classes": {
+    "read_public": {
+      "risk": "low",
+      "what": "facts that belong to nobody: weather, time, date, sums",
+      "rows": {"owner": "allow", "adult": "allow", "child": "allow", "guest": "allow", "unrecognised_voice": "allow"}
+    },
+    "read_private": {
+      "risk": "low",
+      "what": "the member's own calendar, reminders, notes, people, briefing, alarms (voice is a password: no account, no private read)",
+      "rows": {"owner": "allow", "adult": "allow", "child": "allow", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "household_list": {
+      "risk": "low",
+      "what": "read, add, tick off or remove ITEMS on family-visible lists (fridge rule: anyone at the panel; the panel check stays in list_service)",
+      "rows": {"owner": "allow", "adult": "allow", "child": "allow", "guest": "allow", "unrecognised_voice": "allow"}
+    },
+    "panel_utility": {
+      "risk": "low",
+      "what": "kitchen timer, volume, music play/pause/skip at the panel (music writes: a member or the panel)",
+      "rows": {"owner": "allow", "adult": "allow", "child": "allow", "guest": "allow", "unrecognised_voice": "allow"}
+    },
+    "personal_write": {
+      "risk": "low",
+      "what": "a reminder, note, journal entry, alarm or own calendar event the member asked for",
+      "rows": {"owner": "allow", "adult": "allow", "child": "allow", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "home_control": {
+      "risk": "low",
+      "what": "lights and devices within the room's normal use (a guest id may not drive the house, 2026-10-18)",
+      "rows": {"owner": "allow", "adult": "allow", "child": "allow", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "memory_write_stated": {
+      "risk": "low",
+      "what": "write a fact the member stated, or a person they named (a child's profile needs a guardian; guests never get memory)",
+      "rows": {"owner": "allow", "adult": "allow", "child": "ask_first", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "memory_write_inferred": {
+      "risk": "high",
+      "what": "write a fact Zoe inferred (D1 approve-before-write; never an inference about a child)",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "calendar_shared": {
+      "risk": "high",
+      "what": "create or change a calendar entry with other attendees",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "home_security": {
+      "risk": "high",
+      "what": "locks, alarm system, garage, cameras, heating setpoints: a device outside the room's normal use",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "settings": {
+      "risk": "high",
+      "what": "household settings and connecting an app or account (QR on the panel, finish on the phone)",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "messaging": {
+      "risk": "irreversible",
+      "what": "send a message to a person or post anywhere (a sent message cannot be unsent)",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "purchase": {
+      "risk": "irreversible",
+      "what": "spend money, buy, subscribe",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "memory_forget": {
+      "risk": "irreversible",
+      "what": "forget or retire a memory (forgotten means forever; a child asks a grown-up)",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "irreversible_other": {
+      "risk": "irreversible",
+      "what": "anything else that cannot be undone: delete or rename a list, cancel a booking, remove a person",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "self_modify": {
+      "risk": "irreversible",
+      "what": "change Zoe's own code, prompts or flags (owner review path only, never this loop)",
+      "rows": {"owner": "never", "adult": "never", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    },
+    "unknown": {
+      "risk": "high",
+      "what": "a tool the table does not name (unknown tool = ask)",
+      "rows": {"owner": "ask_first", "adult": "ask_first", "child": "never", "guest": "never", "unrecognised_voice": "never"}
+    }
+  },
+  "intents": {
+    "weather": {"class": "read_public"},
+    "time_query": {"class": "read_public"},
+    "date_query": {"class": "read_public"},
+    "calculate": {"class": "read_public"},
+    "calendar_show": {"class": "read_private"},
+    "reminder_list": {"class": "read_private"},
+    "note_search": {"class": "read_private"},
+    "people_search": {"class": "read_private"},
+    "journal_streak": {"class": "read_private"},
+    "journal_prompt": {"class": "read_private"},
+    "daily_briefing": {"class": "read_private"},
+    "alarm_list": {"class": "read_private"},
+    "list_show": {"class": "household_list"},
+    "list_add": {"class": "household_list", "receipt": "list"},
+    "list_remove": {"class": "household_list"},
+    "timer_create": {"class": "panel_utility", "receipt": "timer"},
+    "music_play": {"class": "panel_utility"},
+    "music_control": {"class": "panel_utility"},
+    "music_volume": {"class": "panel_utility"},
+    "set_volume": {"class": "panel_utility"},
+    "reminder_create": {"class": "personal_write", "receipt": "reminder"},
+    "calendar_create": {"class": "personal_write", "receipt": "calendar"},
+    "note_create": {"class": "personal_write", "receipt": "note"},
+    "journal_create": {"class": "personal_write"},
+    "alarm_set": {"class": "personal_write", "receipt": "timer"},
+    "smart_home": {"class": "home_control"},
+    "memory_store": {"class": "memory_write_stated"},
+    "people_create": {"class": "memory_write_stated"},
+    "memory_retire": {"class": "memory_forget"},
+    "music_setup": {"class": "settings"}
+  }
+}
