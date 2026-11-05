@@ -85,8 +85,8 @@ LAYERS: dict[str, Layer] = {l.name: l for l in (
     Layer("relationship_graph", False, "memory_forget_cascade people/edges", "zoe_memory_compose._fetch_relational"),
     Layer("user_model_card", True, "memory_forget_cascade card", "user_model_card.load_card_block"),
     Layer("portrait", False, "memory_forget_cascade portrait", "user_portrait.load_portrait"),
-    Layer("open_loops", False, "memory_forget_cascade open_loops", "open_loops unresolved read (proactive selector)"),
-    Layer("proactive_candidates", False, "memory_forget_cascade proactive_candidates", "proactive_candidates read"),
+    Layer("open_loops", False, "memory_forget_cascade open_loops", "panel_review_cards.member_loops (the panel / spoken loops)"),
+    Layer("proactive_candidates", False, "memory_forget_cascade proactive_candidates", "proactive.pull.pending_items (the raise)"),
     Layer("contact_offers", True, "pending_suggestions.resolve_person_offers_by_name",
           "pending_suggestions load_for_prompt / surface / list_* / surfaced_person_offers"),
     Layer("day_review", True, "omi_day_review.erase_entity", "omi_day_review.list_candidates / get_candidate"),
@@ -229,8 +229,11 @@ class _PalaceBacked(Probe):
         monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "0")       # the fake collection has no sqlite file to scrub
 
     async def seed(self):
+        self.ids = []
         for text in (f"User's friend {FRIEND} lives in Hobart.", f"User's friend {KEEP} plays the cello."):
-            assert await self.svc.ingest(text, user_id=USER, source="voice_fact", confidence=0.9) is not None
+            ref = await self.svc.ingest(text, user_id=USER, source="voice_fact", confidence=0.9)
+            assert ref is not None
+            self.ids.append(ref.id)
 
     async def erase(self):
         reply = await _forget_handler()
@@ -256,7 +259,10 @@ class PalaceReads(_PalaceBacked):
     async def served(self):
         rows = [r.text for r in self.svc._metadata_read(USER, 50)]
         rows += [r.text for r in await self.svc.list_by_status(user_id=USER, status="approved")]
-        rows += [d for d, m in self.svc._col.rows.values() if m.get("user_id") == USER and m.get("status") == "approved"]
+        for mem_id in self.ids:                                       # the by-id read (provenance, cards) - no status filter of its own
+            ref = await self.svc.get(mem_id)
+            if ref is not None and str((ref.metadata or {}).get("status") or "approved") == "approved":
+                rows.append(ref.text)
         return "\n".join(rows)
 
     def disable(self, monkeypatch):
@@ -439,18 +445,37 @@ class UserModelCard(_CascadeBacked):
 class OpenLoops(_CascadeBacked):
     step = "open_loops"
 
+    async def setup(self, monkeypatch, request):
+        await super().setup(monkeypatch, request)
+        import db_compat
+        await self.db.execute("ALTER TABLE open_loops ADD COLUMN created_at TEXT DEFAULT '2026-11-04T10:00:00Z'")
+        await self.db.commit()
+        db = self.db
+
+        @contextlib.asynccontextmanager
+        async def compat():
+            yield db
+        monkeypatch.setattr(db_compat, "get_compat_db", compat)
+
     async def seed(self):
         for t in (f"Ring {FRIEND} back about the weekend", f"Return {KEEP}'s drill"):
             await self.db.execute("INSERT INTO open_loops (user_id, loop_text, follow_up_hint) VALUES (?, ?, '')", (USER, t))
         await self.db.commit()
 
     async def served(self):
-        return "\n".join(r[0] for r in await self.rows(
-            "SELECT loop_text FROM open_loops WHERE user_id = ? AND resolved IS NOT TRUE", (USER,)))
+        import panel_review_cards
+        return "\n".join(lp["text"] for lp in await panel_review_cards.member_loops(USER, wall=False))
 
 
 class ProactiveCandidates(_CascadeBacked):
     step = "proactive_candidates"
+
+    async def setup(self, monkeypatch, request):
+        await super().setup(monkeypatch, request)
+        for col in ("source_ref TEXT DEFAULT ''", "salience REAL DEFAULT 1", "expires_at TEXT DEFAULT '9999-12-31T00:00:00Z'",
+                    "cooldown_until TEXT", "surfaced_count INTEGER DEFAULT 0"):
+            await self.db.execute(f"ALTER TABLE proactive_candidates ADD COLUMN {col}")
+        await self.db.commit()
 
     async def seed(self):
         for i, t in enumerate((f"{FRIEND} is visiting on Saturday", f"{KEEP}'s birthday is next week")):
@@ -458,7 +483,8 @@ class ProactiveCandidates(_CascadeBacked):
         await self.db.commit()
 
     async def served(self):
-        return "\n".join(r[0] for r in await self.rows("SELECT text FROM proactive_candidates WHERE user_id = ?", (USER,)))
+        from proactive import pull
+        return "\n".join(f"{i.text} {i.hint}" for i in await pull.pending_items(self.db, USER))
 
 
 class RelationshipGraph(_CascadeBacked):
