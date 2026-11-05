@@ -202,6 +202,8 @@ def test_offers_only_reach_the_events_owner(dbpath):
         guest = await ant.pick_for_turn("guest", "chat-g", now=NOW, db=db)
         panel = await ant.pick_for_turn("panel-kitchen", "chat-p", now=NOW, db=db)
         voice = await ant.pick_for_turn(ANN, "voice-panel-1", now=NOW, db=db)
+        for shared in ("panel-kitchen-1", "kiosk-1", "Touch-abc"):     # a shared screen, even with the member signed in
+            assert await ant.pick_for_turn(ANN, shared, now=NOW, db=db) is None
         ann = await ant.pick_for_turn(ANN, "chat-a", now=NOW, db=db)
         return bob, guest, panel, voice, ann, await _offers(db, BOB)
 

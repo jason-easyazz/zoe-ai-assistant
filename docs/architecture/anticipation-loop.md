@@ -46,7 +46,8 @@ offer kind, `when_hint` = expiry (UTC ISO), `amount_hint` = dedupe key `kind:eve
 ## Rules
 
 * **Who sees it.** Only the event's owner (`events.user_id`), only on a turn that identified them: a real member account in their own
-  chat session. Guests, panel principals, synthetic ids and voice sessions get nothing (voice surfacing is phase 1b, voice-path).
+  chat session. Guests, panel principals, synthetic ids, voice sessions and shared-screen session ids (`panel*`/`kiosk*`/`touch*`) get
+  nothing, even with a member signed in (voice surfacing is phase 1b, voice-path).
 * **Kids.** A member who is not positively an adult (`manner_block.is_adult`) gets no alarm offers (an alarm change is a parent's
   call); leave-by and packing stay, same plain wording.
 * **Pacing.** One offer per turn; at most 2 a local day; the same offer at most once a day and twice in all (then `ignored`);
@@ -60,7 +61,8 @@ offer kind, `when_hint` = expiry (UTC ISO), `amount_hint` = dedupe key `kind:eve
 * **Learning.** Every answer is an outcome: acted / dismissed / ignored, kept on the row and sent to the outcome edge
   (`proactive.outcome_edges`, if that module is present and `ZOE_OUTCOME_EDGES` on).
 * **Forget.** The entity forget cascade has an `anticipation_offers` step: any offer whose title, location or line names the
-  forgotten thing is deleted. Deleting the event withdraws its offers.
+  forgotten thing is deleted. It is deliberately not flag-gated (forgotten means forever: offers made while the flag was on are
+  still reached after it is turned off). Deleting the event withdraws its offers.
 * **Logs.** Counts only: `ANTICIPATION mode=... user=... events=N wake=a leave=b packing=c stored=s`, `ANTICIPATION_SURFACE`,
   `ANTICIPATION_OUTCOME`. Never a title, a place or a line.
 

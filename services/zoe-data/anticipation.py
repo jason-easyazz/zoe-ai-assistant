@@ -242,7 +242,8 @@ def is_member(uid: str) -> bool:
 
 def _chat_session(session_id: str) -> bool:
     sid = str(session_id or "")
-    return bool(sid) and not sid.startswith("voice") and sid != SESSION
+    # a voice turn (phase 1b) and any shared-screen session id (panel / kiosk / touch) never carry an offer, whoever is signed in
+    return bool(sid) and sid != SESSION and not sid.lower().startswith(("voice", "panel", "kiosk", "touch"))
 
 
 async def _is_adult(uid: str, db: Any = None) -> bool:
@@ -664,7 +665,8 @@ async def on_dismissed(suggestion_id: str, user_id: str) -> None:
 async def erase_entity(db: Any, user_id: str, rx: Any) -> int:
     """The forget cascade's ``anticipation_offers`` step: delete every offer (any state) whose event title, place or line names
     the forgotten thing. ``rx`` has ``.search`` (a regex or the forget ledger's pattern). Raises on a store error (the cascade
-    records the step as failed)."""
+    records the step as failed). Deliberately NOT flag-gated: forgotten means forever, so a forget still reaches offers made while
+    the flag was on (with the flag never on this is one empty SELECT inside a forget, never on a turn)."""
     rows = await _all(db, "SELECT id, description, offer_phrase, pre_filled_slots FROM pending_suggestions WHERE user_id = ? AND"
                           " action_type = ?", (user_id, ACTION))
     n = 0
