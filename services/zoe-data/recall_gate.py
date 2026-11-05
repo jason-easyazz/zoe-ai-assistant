@@ -689,14 +689,24 @@ def _log(user_id: str, d: Decision, m: str) -> None:
 
 # ── the surfaces ────────────────────────────────────────────────────────────────────────────
 
-def _trace(user_id: str, dec: Decision, owner: str, cands: Iterable) -> None:
+def _trace_epoch() -> Optional[int]:
+    """The opt-in trace's forget-barrier epoch when the trace is on (one env read when off). Never raises."""
+    try:
+        import recall_gate_trace
+
+        return recall_gate_trace.epoch() if recall_gate_trace.enabled() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _trace(user_id: str, dec: Decision, owner: str, cands: Iterable, ep: Optional[int]) -> None:
     """The owner's opt-in private trace (``ZOE_RECALL_GATE_TRACE``, default off; ``recall_gate_trace.py``): row text + the owner's words to
     a 0600 file under ~/.zoe, never to the log line above. Off = one env read, nothing else. Never raises."""
     try:
         import recall_gate_trace
 
         if recall_gate_trace.enabled():
-            recall_gate_trace.record(user_id, dec, owner, list(cands), mode=mode())
+            recall_gate_trace.record(user_id, dec, owner, list(cands), mode=mode(), ep=ep)
     except Exception:  # noqa: BLE001
         return
 
@@ -768,6 +778,7 @@ async def evaluate_packet(svc: Any, user_id: str, message: str, *, facts: list, 
     raises (an error is a ``skipped`` decision: the floor stands)."""
     try:
         t = time.monotonic() if now is None else now
+        ep = _trace_epoch()                  # BEFORE any row is read (the opt-in trace's forget barrier; None when the trace is off)
         if _is_guest(user_id):
             return _skip("packet", "guest")
         if not (message or "").strip():
@@ -802,7 +813,7 @@ async def evaluate_packet(svc: Any, user_id: str, message: str, *, facts: list, 
             if str(ref.id) in ok:
                 cands[str(ref.id)] = _cand(ref, "pool")
         dec = decide(sess, turn, list(cands.values()), owner, extra=extra, cfg=cfg, surface="packet", presented=presented)
-        _trace(user_id, dec, owner, cands.values())
+        _trace(user_id, dec, owner, cands.values(), ep)
         sess.cache[key] = dec
         _forget_old(sess, turn)
         return dec
@@ -868,6 +879,7 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
     ids the hop's own English topic match selected (a signal here - the legacy floor - not the only one)."""
     try:
         t = time.monotonic() if now is None else now
+        ep = _trace_epoch()
         if _is_guest(user_id):
             return _skip("hop", "guest")
         if not (message or "").strip():
@@ -892,7 +904,7 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
             c.topic = hop_topics.get(rid, "")
             cands.append(c)
         dec = decide(sess, turn, cands, owner, extra=extra, cfg=cfg, surface="hop", presented=hop_ids)
-        _trace(user_id, dec, owner, cands)
+        _trace(user_id, dec, owner, cands, ep)
         sess.cache[key] = dec
         _forget_old(sess, turn)
         return dec

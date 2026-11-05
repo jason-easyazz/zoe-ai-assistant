@@ -127,7 +127,7 @@ def test_rotation_past_the_size_cap_keeps_at_most_keep_files(monkeypatch):
     monkeypatch.setenv(tr.ENV, "1")
     monkeypatch.setattr(tr, "MAX_BYTES", 300)
     for _ in range(40):
-        assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow")
+        assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch())
     names = sorted(p.name for p in tr.TRACE_DIR.iterdir())
     assert names == [tr.FILE_NAME] + [f"{tr.FILE_NAME}.{i}" for i in range(1, tr.KEEP + 1)]
     for p in tr.TRACE_DIR.iterdir():
@@ -137,7 +137,7 @@ def test_rotation_past_the_size_cap_keeps_at_most_keep_files(monkeypatch):
     for p in list(tr.TRACE_DIR.iterdir()):
         p.unlink()
     for _ in range(40):
-        tr.record(UID, _dec(), "how is Juniper", [], mode="shadow")
+        tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch())
     assert [p.name for p in tr.TRACE_DIR.iterdir()] == [tr.FILE_NAME]
 
 
@@ -151,7 +151,7 @@ def test_retention_deletes_files_older_than_the_day_cap(monkeypatch):
     now = time.time()
     os.utime(old, (now - 3 * 86400, now - 3 * 86400))
     os.utime(fresh, (now - 1 * 86400, now - 1 * 86400))
-    tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", now=now)
+    tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch(), now=now)
     assert not old.exists() and fresh.exists() and _live().exists()
 
 
@@ -161,20 +161,97 @@ def test_an_abandoned_live_file_past_retention_is_replaced_not_appended(monkeypa
     _live().write_text('{"stale": true}\n')
     now = time.time()
     os.utime(_live(), (now - 30 * 86400, now - 30 * 86400))
-    tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", now=now)
+    tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch(), now=now)
     assert "stale" not in _live().read_text()
 
 
-async def test_a_trace_failure_never_reaches_the_gate(monkeypatch):
+def _snap(d):
+    return (d.surface, d.turn, d.ids, d.added, d.dropped, d.budget_used, d.budget, d.held, d.cooled, d.delayed, d.skipped,
+            [(p.id, p.score, p.reasons) for p in d.selected])
+
+
+@pytest.mark.parametrize("trace", ["off", "on", "failing"])
+async def test_the_trace_never_changes_the_decision(monkeypatch, trace):
+    """The whole decision (ids, order, adds, drops, budget, counters, scores) is identical with the trace off, on, and failing."""
+    async def three_turns():
+        rg._reset_state()
+        restraint._reset_state()
+        return [_snap(await rg.evaluate_packet(Svc([ref("zoe_demo_walk0001", WALK), ref("zoe_demo_book0001", BOOKS),
+                                                    ref("zoe_demo_fill0000", FILLER)]), UID, m,
+                                               facts=[ref("zoe_demo_fill0000", FILLER)], hits=[], recent=None,
+                                               presented=["zoe_demo_fill0000"], mood=False, now=T0 + k, session_id="s"))
+                for k, m in enumerate(("How is Juniper getting on?", "and the lighthouse novel?", "thanks"))]
+
+    baseline = await three_turns()
+    if trace != "off":
+        monkeypatch.setenv(tr.ENV, "1")
+    if trace == "failing":
+        def boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(tr, "_append", boom)
+    assert await three_turns() == baseline
+    assert _live().exists() is (trace == "on")
+    if trace == "failing":
+        assert tr.record(UID, _dec(), "x", [], mode="shadow", ep=tr.epoch()) is False
+
+
+def test_a_symlinked_trace_directory_or_file_is_refused_and_nothing_reaches_the_target(monkeypatch, tmp_path):
     monkeypatch.setenv(tr.ENV, "1")
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    tr.TRACE_DIR.symlink_to(target, target_is_directory=True)
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is False
+    assert list(target.iterdir()) == []
+    with pytest.raises(OSError):
+        tr.erase_all()                                        # the erasers refuse it too (fail closed, never follow)
+    tr.TRACE_DIR.unlink()
+    tr.TRACE_DIR.mkdir(mode=0o700)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("")
+    _live().symlink_to(victim)
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is False
+    assert victim.read_text() == ""
+    # negative control: a plain directory and file are written
+    _live().unlink()
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is True
 
-    def boom(*a, **k):
-        raise OSError("disk full")
 
-    monkeypatch.setattr(tr, "_append", boom)
-    d = await _decide()
-    assert d.added and not d.skipped                  # the decision stands
-    assert tr.record(UID, _dec(), "x", [], mode="shadow") is False
+def test_a_retention_failure_abandons_the_write(monkeypatch):
+    monkeypatch.setenv(tr.ENV, "1")
+    tr.TRACE_DIR.mkdir(mode=0o700)
+    old = tr.TRACE_DIR / f"{tr.FILE_NAME}.2"
+    old.write_text("old\n")
+    now = time.time()
+    os.utime(old, (now - 30 * 86400, now - 30 * 86400))
+    real_unlink = type(old).unlink
+
+    def stuck(self, *a, **k):
+        if self.name.endswith(".2"):
+            raise PermissionError("busy")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(type(old), "unlink", stuck)
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch(), now=now) is False
+    assert not _live().exists()
+    monkeypatch.setattr(type(old), "unlink", real_unlink)     # negative control: retention enforceable -> written
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch(), now=now) is True
+
+
+def test_no_append_during_an_erase_or_after_one_that_finished_since_the_rows_were_read(monkeypatch):
+    import local_text_logs as ltl
+
+    monkeypatch.setenv(tr.ENV, "1")
+    ep = tr.epoch()
+    ltl._bump_epoch(+1)                                       # an erase is running
+    try:
+        assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is False
+    finally:
+        ltl._bump_epoch(-1)
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=ep) is False      # stale epoch: the forget finished
+    assert not _live().exists()
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=None) is False    # no barrier reading: not written
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is True  # negative control
 
 
 class _All(logging.Handler):
@@ -251,14 +328,20 @@ def test_erase_entity_drops_lines_naming_the_entity_in_words_or_row_text():
     assert tr.erase_entity(re.compile(r"zebra")) == 0        # negative control
 
 
-def test_the_forget_paths_call_the_trace_erasers():
-    import inspect
+def test_the_entity_forget_of_the_text_logs_reaches_the_trace(monkeypatch):
+    """The cascade's text_logs step calls local_text_logs.erase_entity (pinned by test_forget_reach_inventory); it reaches the trace."""
+    import re
 
-    import memory_forget_cascade
-    import memory_service
+    import local_text_logs
 
-    assert "local_text_logs.erase_all_text" in inspect.getsource(memory_service.MemoryService.delete_user)
-    assert "recall_gate_trace.erase_entity" in inspect.getsource(memory_forget_cascade)
+    monkeypatch.setattr(local_text_logs, "LOGS", ())
+    _seed([{"user": UID, "owner_words": "how is Juniper"}, {"user": UID, "owner_words": "what to cook"}])
+    assert local_text_logs.erase_entity(re.compile(r"juniper", re.I)) == 1
+    assert [json.loads(x)["owner_words"] for x in _live().read_text().splitlines()] == ["what to cook"]
+    monkeypatch.setattr(tr, "erase_entity", lambda rx: 0)    # negative control: a do-nothing eraser leaves the line
+    _seed([{"user": UID, "owner_words": "how is Juniper"}])
+    local_text_logs.erase_entity(re.compile(r"juniper", re.I))
+    assert "Juniper" in _live().read_text()
 
 
 def test_an_eraser_failure_raises_so_the_forget_step_fails_closed(monkeypatch):

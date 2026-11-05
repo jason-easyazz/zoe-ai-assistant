@@ -219,8 +219,11 @@ mode, the owner's words (512 characters), the selected ids, and id + text of eve
 - Rotation at 2 MB (about 2,000 decisions) into `trace.jsonl.1`..`.3`; the oldest is deleted.
 - Retention `ZOE_RECALL_GATE_TRACE_DAYS` (default 7): older files are deleted on the next write, including an abandoned live file.
 - Off (default, or any value other than 1/true/yes/on) = one env read per decision, no directory, no file.
-- Forget reaches it: a member erase (`MemoryService.delete_user` -> `local_text_logs.erase_all_text`) clears it household-wide, an entity forget drops every line naming
-  the entity (cascade step `text_logs`); both fail closed. A trace write failure is silent (no log line at any level).
+- Forget reaches it, inside `local_text_logs`' erase barrier: a member erase (`MemoryService.delete_user` ->
+  `local_text_logs.erase_all_text`) clears it household-wide, an entity forget (`local_text_logs.erase_entity`, cascade step
+  `text_logs`) drops every line naming the entity; both fail closed. No append lands while an erase runs, nor for a decision whose rows
+  were read before an erase that has since finished. A symlinked trace directory or file is refused (never followed).
+- Silent: a trace write failure leaves no log line at any level, and the gate's decision is identical with the trace off, on or failing.
 - Turning it off stops writing; it does not delete. Delete `~/.zoe/recall-gate-trace/` when the scoring is done.
 - Tests: `services/zoe-data/tests/test_recall_gate_trace.py` (off by default, explicit-on only, perms, rotation, retention, skipped
   decisions, a write failure never reaches the gate, the log line stays text-free).

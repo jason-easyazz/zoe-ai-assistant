@@ -17,10 +17,10 @@ Privacy and bounds (each pinned by a test):
   file when its last write is older than that (an abandoned trace does not linger);
 * off (the default) = no directory, no file, no I/O; turning it off stops writing, it does not delete what was written (delete the
   directory by hand when the scoring is done).
-Forget (forgotten means forever): ``erase_all`` drops every line on a member erase (via ``local_text_logs.erase_all_text``, which
-``MemoryService.delete_user`` calls), ``erase_entity``
-drops every line whose owner words or row text name a forgotten entity (the cascade's ``text_logs`` step). Both RAISE on an I/O
-failure, so the forget path records the step as failed.
+Forget (forgotten means forever): the trace shares ``local_text_logs``' erase barrier. ``erase_all`` (member erase) and
+``erase_entity`` (entity forget) run INSIDE that module's erase interval; an append is refused while an erase runs, and a decision whose
+rows were read before an erase that has since finished is not written (``epoch``). Both erasers RAISE on an I/O failure, so the forget
+path records the step as failed. Symlinked trace paths are refused, for writing and for erasing.
 
 ``record`` never raises and is SILENT on failure (no log line at any level): the trace never leaves a trace in the normal logs.
 """
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import threading
 import time
 from pathlib import Path
@@ -68,23 +69,45 @@ def _retention_s() -> float:
     return max(1, int(days)) * 86400.0
 
 
+class _Unsafe(OSError):
+    """The trace directory or a trace file is a symlink or not what it should be: nothing is written or read through it."""
+
+
+def _no_link(p: Path) -> None:
+    if p.is_symlink():
+        raise _Unsafe(f"symlink refused: {p.name}")
+
+
+def _safe_dir() -> Path:
+    """The trace directory, created 0700; a symlinked or non-directory path is REFUSED (a pre-planted link must not redirect the
+    owner's words into the repo or anywhere else)."""
+    d = TRACE_DIR
+    _no_link(d)
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = os.lstat(d)
+    if not stat.S_ISDIR(st.st_mode):
+        raise _Unsafe("trace path is not a directory")
+    os.chmod(d, 0o700)
+    return d
+
+
+def _paths(d: Path) -> list:
+    return [d / FILE_NAME] + [d / f"{FILE_NAME}.{i}" for i in range(1, KEEP + 1)]
+
+
 def _prune(d: Path, now: float) -> None:
-    """Delete rotated files older than the retention window, and the live file if it was last written before it."""
+    """Delete rotated files older than the retention window, and the live file if it was last written before it. RAISES when
+    retention cannot be enforced, so the append is abandoned rather than adding to an unbounded trace."""
     horizon = now - _retention_s()
-    for p in [d / FILE_NAME] + [d / f"{FILE_NAME}.{i}" for i in range(1, KEEP + 1)]:
-        try:
-            if p.exists() and p.stat().st_mtime < horizon:
-                p.unlink()
-        except OSError:
-            pass
+    for p in _paths(d):
+        _no_link(p)
+        if p.exists() and p.stat().st_mtime < horizon:
+            p.unlink()
 
 
 def _rotate(d: Path) -> None:
     live = d / FILE_NAME
-    try:
-        if not live.exists() or live.stat().st_size < MAX_BYTES:
-            return
-    except OSError:
+    if not live.exists() or live.stat().st_size < MAX_BYTES:
         return
     oldest = d / f"{FILE_NAME}.{KEEP}"
     if oldest.exists():
@@ -96,23 +119,38 @@ def _rotate(d: Path) -> None:
     live.rename(d / f"{FILE_NAME}.1")
 
 
-def _append(line: str, now: float) -> None:
-    with _LOCK:
-        _append_locked(line, now)
+def _erase_state() -> tuple:
+    """``(erase in progress, erase epoch)`` of the forget path's text-log barrier (``local_text_logs``), which the trace shares."""
+    import local_text_logs
+
+    return local_text_logs.erase_in_progress(), local_text_logs.erase_epoch()
 
 
-def _append_locked(line: str, now: float) -> None:
-    d = TRACE_DIR
-    d.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(d, 0o700)
-    _prune(d, now)
-    _rotate(d)
-    fd = os.open(d / FILE_NAME, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+def epoch() -> Optional[int]:
+    """The forget barrier's epoch, captured by the gate BEFORE it reads the rows a decision is built on. Never raises."""
     try:
-        os.fchmod(fd, 0o600)          # an existing file created looser is tightened, not trusted
-        os.write(fd, line.encode("utf-8"))
-    finally:
-        os.close(fd)
+        return _erase_state()[1]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _append(line: str, now: float, ep: Optional[int] = None) -> bool:
+    """Append under the lock the erasers hold. Refused (False) while a forget runs, or when one ran since ``ep`` was captured: the
+    decision's words and rows may predate a forget that has already finished."""
+    with _LOCK:
+        busy, cur = _erase_state()
+        if busy or ep is None or cur != ep:
+            return False
+        d = _safe_dir()
+        _prune(d, now)
+        _rotate(d)
+        fd = os.open(d / FILE_NAME, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        try:
+            os.fchmod(fd, 0o600)          # an existing file created looser is tightened, not trusted
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return True
 
 
 def _cut(s: Any, n: int) -> str:
@@ -120,9 +158,11 @@ def _cut(s: Any, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def record(user_id: str, dec: Any, owner_words: str, cands: Iterable[Any], *, mode: str, now: Optional[float] = None) -> bool:
+def record(user_id: str, dec: Any, owner_words: str, cands: Iterable[Any], *, mode: str, ep: Optional[int] = None,
+           now: Optional[float] = None) -> bool:
     """Write one trace line for ``dec`` when the flag is on. ``cands`` are the gate's candidates (``id`` + ``text``), so the dropped
-    rows' text is known. Returns True when a line was written. Never raises."""
+    rows' text is known; ``ep`` is ``epoch()`` captured before the gate read them (None = no barrier reading = not written).
+    Returns True when a line was written. Never raises."""
     if not enabled():
         return False
     try:
@@ -141,15 +181,23 @@ def record(user_id: str, dec: Any, owner_words: str, cands: Iterable[Any], *, mo
             "dropped": [{"id": str(i), "text": _cut(text.get(str(i), ""), TEXT_CHARS)} for i in dec.dropped],
             "budget_used": dec.budget_used,
         }
-        _append(json.dumps(row, ensure_ascii=False) + "\n", t)
-        return True
+        return _append(json.dumps(row, ensure_ascii=False) + "\n", t, ep)
     except Exception:  # noqa: BLE001 - silent by contract: no log line, the gate's decision stands
         return False
 
 
 def _files() -> list:
     d = TRACE_DIR
-    return [p for p in [d / FILE_NAME] + [d / f"{FILE_NAME}.{i}" for i in range(1, KEEP + 1)] if p.exists()]
+    if d.is_symlink():
+        raise _Unsafe("symlinked trace directory")
+    if not d.exists():
+        return []
+    out = []
+    for p in _paths(d):
+        _no_link(p)
+        if p.exists():
+            out.append(p)
+    return out
 
 
 def _texts(obj: dict) -> list:
@@ -178,7 +226,9 @@ def _rewrite(drop) -> int:
                     continue
                 kept.append(line + "\n")
             tmp = p.with_name(p.name + ".tmp")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            if tmp.exists() or tmp.is_symlink():
+                tmp.unlink()                  # a stale tmp (or a planted link: unlink removes the link, never its target)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             try:
                 os.fchmod(fd, 0o600)
                 os.write(fd, "".join(kept).encode("utf-8"))
@@ -189,12 +239,12 @@ def _rewrite(drop) -> int:
 
 
 def erase_all() -> int:
-    """Member erase: drop every trace line (``local_text_logs.erase_all_text`` calls it from ``MemoryService.delete_user``; like those logs,
-    a member erase clears the trace household-wide). RAISES on failure (the forget path fails closed)."""
+    """Member erase: drop every trace line. Called by ``local_text_logs.erase_all_text`` (from ``MemoryService.delete_user``) INSIDE its
+    erase interval, so no append lands meanwhile; like those logs, a member erase clears the trace household-wide. RAISES on failure."""
     return _rewrite(lambda o: True)
 
 
 def erase_entity(rx: Any) -> int:
     """Entity forget: drop every line whose owner words or row text match ``rx`` (a ``re.Pattern`` or a ledger pattern with
-    ``.search``). RAISES on failure."""
+    ``.search``). Called by ``local_text_logs.erase_entity`` (the cascade's ``text_logs`` step) inside its erase interval. RAISES on failure."""
     return _rewrite(lambda o: any(rx.search(t) for t in _texts(o)))
