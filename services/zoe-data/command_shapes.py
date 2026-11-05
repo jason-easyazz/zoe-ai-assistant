@@ -597,6 +597,12 @@ _CAL_EXPLICIT_DATE = re.compile(
     r"|\bthe\s+\d{1,2}(?:st|nd|rd|th)\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b",
     re.IGNORECASE,
 )
+# "next month", "last week", "this year", "in 2 weeks": relative periods calendar_qualifier has no word for - declined, not read as today.
+_CAL_UNSUPPORTED_PERIOD = re.compile(
+    r"\b(?:(?:next|last|previous|following)\s+(?:month|year|weekend)|this\s+year|(?:the\s+)?(?:week|month)\s+after\s+next"
+    r"|in\s+(?:a|an|\d+|one|two|three|four|five|six)\s+(?:days?|weeks?|months?|years?)|(?:in\s+)?the\s+(?:next|coming)\s+month)\b",
+    re.IGNORECASE,
+)
 _CAL_WEEK_LIKE = re.compile(r"\b(?:my|our)\s+(?:day|week|weekend)\b", re.IGNORECASE)
 _CAL_NOT_TV = re.compile(
     r"\bon\s+(?:the\s+)?(?:tv|telly|television|netflix|youtube|stan|disney|prime|foxtel|radio|channel\s*\d*|screen|speaker|stereo"
@@ -648,7 +654,7 @@ def calendar_read_ask(text: str) -> Optional[str]:
     if not raw:
         return None
     t = _CAL_FILLER_LEAD.sub("", raw, count=1).strip()
-    if not t or _CAL_STATEMENT.match(t) or calendar_not_a_read(raw) or _CAL_EXPLICIT_DATE.search(t):
+    if not t or _CAL_STATEMENT.match(t) or calendar_not_a_read(raw) or _CAL_EXPLICIT_DATE.search(t) or _CAL_UNSUPPORTED_PERIOD.search(t):
         return None  # an explicit calendar date cannot ride a qualifier word: decline rather than read the wrong day
     if re.match(r"^what(?:'s|s|\s+is)\s+(?:coming\s+up|on|left)(?:\s+for\s+me)?\s+today$", t):
         return None  # the daily briefing owns this exact phrase (intent_router), not a calendar read

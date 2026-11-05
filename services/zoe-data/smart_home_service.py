@@ -594,6 +594,15 @@ def _offline_card() -> dict[str, Any]:
     }
 
 
+_STRICT_NOUNS = frozenset({"heater", "kettle", "aircon", "airconditioner", "conditioner", "diffuser", "humidifier",
+                           "dehumidifier", "lantern"})
+
+
+def _noun_stem(word: str) -> str:
+    w = (word or "").lower()
+    return w[:-1] if w.endswith("s") and len(w) > 3 and not w.endswith("ss") else w
+
+
 def _not_a_device_command() -> dict[str, Any]:
     """The turn is not Zoe's: handled False, so the caller goes on exactly as for an unclassified utterance."""
     return {"handled": False, "intent": None, "spoken_summary": "", "cards": [], "actions": []}
@@ -739,6 +748,13 @@ async def resolve_smart_home(
             targets, ambiguous = devices_by_word, len(devices_by_word) > 1
         else:
             targets, ambiguous = _select_targets(devices, query, action, room_eids)
+            # A device noun Zoe only recently learned (heater, kettle, aircon ...) must be MET by the target: "the bedroom heater" is
+            # not satisfied by a room-only token match on "Bedroom Lamp" - that is the documented "couldn't find", not a lamp switched on.
+            need = {_noun_stem(w) for w in _tokens(query) if _noun_stem(w) in _STRICT_NOUNS}
+            if need and targets:
+                targets = [d for d in targets
+                           if need <= {_noun_stem(w) for w in _tokens(f"{d.get('name', '')} {d.get('entity_id', '')}")}]
+                ambiguous = ambiguous and len(targets) > 1
         # A SPECIFIC command tied across several devices — ask rather than toggle
         # unintended ones. (Bare plural "the lights" sweeps and is not ambiguous.)
         if ambiguous:
