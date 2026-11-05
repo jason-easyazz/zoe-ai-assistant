@@ -79,11 +79,14 @@ def _no_link(p: Path) -> None:
 
 
 def _safe_dir() -> Path:
-    """The trace directory, created 0700; a symlinked or non-directory path is REFUSED (a pre-planted link must not redirect the
-    owner's words into the repo or anywhere else)."""
+    """The trace directory, created 0700; a symlinked directory, a symlinked ANCESTOR, or a non-directory path is REFUSED (a pre-planted
+    link must not redirect the owner's words into the repo or anywhere else)."""
     d = TRACE_DIR
+    parent = d.parent
+    if os.path.realpath(parent) != os.path.abspath(parent):
+        raise _Unsafe("a symlinked ancestor of the trace directory")    # e.g. ~/.zoe pointing into the repo or a synced folder
     _no_link(d)
-    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    d.mkdir(mode=0o700, exist_ok=True)                                  # never creates ancestors: the parent must exist as itself
     st = os.lstat(d)
     if not stat.S_ISDIR(st.st_mode):
         raise _Unsafe("trace path is not a directory")
@@ -188,8 +191,8 @@ def record(user_id: str, dec: Any, owner_words: str, cands: Iterable[Any], *, mo
 
 def _files() -> list:
     d = TRACE_DIR
-    if d.is_symlink():
-        raise _Unsafe("symlinked trace directory")
+    if d.is_symlink() or os.path.realpath(d.parent) != os.path.abspath(d.parent):
+        raise _Unsafe("symlinked trace directory or ancestor")
     if not d.exists():
         return []
     out = []

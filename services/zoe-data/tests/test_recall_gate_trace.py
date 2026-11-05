@@ -217,6 +217,20 @@ def test_a_symlinked_trace_directory_or_file_is_refused_and_nothing_reaches_the_
     assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is True
 
 
+def test_a_symlinked_ancestor_is_refused_and_nothing_reaches_the_target(monkeypatch, tmp_path):
+    monkeypatch.setenv(tr.ENV, "1")
+    real = tmp_path / "real-zoe"
+    real.mkdir()
+    (tmp_path / "zoe-link").symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(tr, "TRACE_DIR", tmp_path / "zoe-link" / "recall-gate-trace")
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is False
+    assert list(real.iterdir()) == []
+    with pytest.raises(OSError):
+        tr.erase_all()
+    monkeypatch.setattr(tr, "TRACE_DIR", real / "recall-gate-trace")    # negative control: the real path is written
+    assert tr.record(UID, _dec(), "how is Juniper", [], mode="shadow", ep=tr.epoch()) is True
+
+
 def test_a_retention_failure_abandons_the_write(monkeypatch):
     monkeypatch.setenv(tr.ENV, "1")
     tr.TRACE_DIR.mkdir(mode=0o700)

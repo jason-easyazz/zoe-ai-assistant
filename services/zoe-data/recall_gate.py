@@ -702,11 +702,12 @@ def _trace_epoch() -> Optional[int]:
 def _trace(user_id: str, dec: Decision, owner: str, cands: Iterable, ep: Optional[int]) -> None:
     """The owner's opt-in private trace (``ZOE_RECALL_GATE_TRACE``, default off; ``recall_gate_trace.py``): row text + the owner's words to
     a 0600 file under ~/.zoe, never to the log line above. Off = one env read, nothing else. Never raises."""
+    if ep is None:                       # trace off (or no barrier reading): nothing to do, and no second env read
+        return
     try:
         import recall_gate_trace
 
-        if recall_gate_trace.enabled():
-            recall_gate_trace.record(user_id, dec, owner, list(cands), mode=mode(), ep=ep)
+        recall_gate_trace.record(user_id, dec, owner, list(cands), mode=mode(), ep=ep)
     except Exception:  # noqa: BLE001
         return
 
