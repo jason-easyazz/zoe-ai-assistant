@@ -43,6 +43,8 @@ import own_words
 import memory_authority
 import recall_evidence
 import restraint
+import memory_slot_check
+import provenance_speech
 
 logger = logging.getLogger(__name__)
 
@@ -578,6 +580,7 @@ def _build_memory_prompt_packet(
     evidence: bool = False,
     quotes: bool = False,
     now: Optional[float] = None,
+    speak: bool = False,
 ) -> dict[str, Any]:
     """Compile a compact, cited memory packet for system-prompt injection.
 
@@ -665,6 +668,10 @@ def _build_memory_prompt_packet(
             felt = memory_affect(ref)
             prefix = f"(recent, felt {felt}) {prefix}" if felt else f"(recent) {prefix}"
         when = recall_evidence.date_suffix(meta, now=now) if evidence else ""
+        if speak:
+            # ZOE_SPEAKABLE_PROVENANCE: WHO it came from and when ("you told me on Tuesday", "I picked up yesterday - not
+            # confirmed"); a row with no stamped provenance keeps the plain date (or nothing): never an invented "you told me"
+            when = provenance_speech.packet_suffix(meta, text, now=now) or when
         dated += bool(when)
         if quotes and not (pasted_row or instruction_row):
             quote_by_id[ref.id] = recall_evidence.quote_for(meta, text[:200])
@@ -1091,9 +1098,15 @@ async def memory_for_prompt(
     if restraint.mode() != "off":
         mood = continuity or emo_turn or _is_continuity_turn(message, user_id)
         facts, hits, recent = await restraint.apply_to_packet(user_id, message, facts, hits, recent, mood=mood)
+    # Person-keyed single-value contradictions (ZOE_MEMORY_SLOT_CHECK off|shadow|on, default off; memory_slot_check): two rows
+    # the packet was about to serve that disagree about one person's employer / city / partner / diet. ``on`` drops the row the
+    # authority ladder holds (an inference never outranks what the person said); shadow logs counts only. Pure, no I/O.
+    if memory_slot_check.mode() != "off":
+        facts, hits, recent = memory_slot_check.apply_to_packet(user_id, facts, hits, recent)
+    speak = not continuity and provenance_speech.enabled()
     result = _build_memory_prompt_packet(
         facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent,
-        evidence=evidence, quotes=quotes,
+        evidence=evidence, quotes=quotes, speak=speak,
     )
     # The relevance gate (ZOE_RECALL_GATE off|shadow|enforce, default shadow; recall_gate.py, blueprint 2.8 / BM4): which durable rows
     # enter the packet and in what order, from entity triggers + similarity + sticky / cooldown / delay + a token budget. Shadow returns
@@ -1106,7 +1119,7 @@ async def memory_for_prompt(
             svc, user_id, message, result, facts=facts, hits=hits, recent=recent,
             mood=bool(emo_turn or _is_continuity_turn(message, user_id)),
             rebuild=lambda rows: _build_memory_prompt_packet(
-                rows, [], max_facts=limit, evidence=evidence, quotes=quotes),
+                rows, [], max_facts=limit, evidence=evidence, quotes=quotes, speak=speak),
             # (called in-process the default is the Query() descriptor, not a str: the gate then uses this task's own session)
             session_id=session_id if isinstance(session_id, str) else None,
         )

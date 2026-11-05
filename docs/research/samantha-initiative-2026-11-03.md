@@ -147,7 +147,7 @@ Not a rewrite. A closed loop over the components that exist, with a scheduler po
 **Medium term (substantial engineering; one to three months)**
 13. Self-evolution Phase 1: GEPA-style improver on one overlay file, two candidates vs a sampling control, shadow-apply, 04:00 slot, cloud reflection on a capped key, fourteen-night stop rule (lane B E1).
 14. Capability-gap clustering of can't-do/fallthrough events into a ranked backlog; recipe-builder pilot after the skill loader is restored (lane B E3, E6).
-15. Memory layers as views over pointers: episode objects, pointer-assembled chapters, dormant-thread matcher, person-keyed contradiction and ageing, speakable provenance, forget-completeness probe across derived layers (lane C E4, E7-E11).
+15. Memory layers as views over pointers: episode objects, pointer-assembled chapters, dormant-thread matcher, person-keyed contradiction and ageing, speakable provenance, forget-completeness probe across derived layers (lane C E4, E7-E11). First slice (episodes, slot contradictions + ageing, speakable provenance, dormant matcher; flag-dark): [memory-views](../knowledge/memory-views.md).
 16. Identity as four stored layers with a per-member register and a drift probe battery per release (lane F E1, E4).
 17. The household problem-solving loop: authority table, 6-step/90-second budget, escalation card, code-checked success (lane F E7).
 18. Engineering harness out of the household process; slice 2 of the retired-runtime removal; the cut list.
