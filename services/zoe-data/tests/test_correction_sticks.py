@@ -314,3 +314,45 @@ def test_break_the_fix_the_flag_off_serves_every_age(monkeypatch):
 ])
 def test_person_age_claim(text, claim):
     assert person_extractor.person_age_claim(text) == claim
+
+
+@pytest.mark.parametrize("text,claim", [
+    ("Alice Smith is 9 years old", ("alice smith", 9)),               # the full name, not the surname alone
+    ("Alice was 9 years old when she moved to Perth", None),          # a HISTORICAL age is not a current-age assertion
+    ("Alice used to be 9 years old", None),
+    ("Alice is 10 years old back then", None),
+    ("Alice is 10 years old", ("alice", 10)),                          # control: the current shape still parses
+])
+def test_person_age_claim_keeps_the_full_name_and_skips_historical_ages(text, claim):
+    assert person_extractor.person_age_claim(text) == claim
+
+
+def test_two_people_sharing_a_surname_never_hide_each_others_age():
+    """Codex #2310: 'Alice Smith is 9' and 'Bob Smith is 41' were both claims about 'smith' - the older one was hidden."""
+    rows = [
+        _ref("a", "Alice Smith is 9 years old", ma.USER_STATED, "2026-11-01T08:00:00+00:00"),
+        _ref("b", "Bob Smith is 41 years old", ma.USER_STATED, "2026-11-03T08:00:00+00:00"),
+    ]
+    assert person_extractor.stale_age_ids(rows) == set()
+    p = _packet(rows)
+    assert "Alice Smith is 9 years old" in p and "Bob Smith is 41 years old" in p
+
+
+def test_distinct_entities_are_never_one_person_and_one_entity_still_reconciles():
+    def with_entity(ref, eid):
+        ref.metadata["entity_id"] = eid
+        return ref
+    a = with_entity(_ref("a", "Sam: 9 years old", ma.USER_STATED, "2026-11-01T08:00:00+00:00"), "e1")
+    b = with_entity(_ref("b", "Sam: 41 years old", ma.USER_STATED, "2026-11-03T08:00:00+00:00"), "e2")
+    assert person_extractor.stale_age_ids([a, b]) == set()                      # two different Sams
+    c = with_entity(_ref("c", "Sam: 10 years old", ma.USER_STATED, "2026-11-04T08:00:00+00:00"), "e1")
+    assert person_extractor.stale_age_ids([a, b, c]) == {"a"}                    # control: the same Sam's older age is the stale one
+
+
+def test_a_historical_age_row_does_not_hide_the_current_age():
+    rows = [
+        _ref("cur", "Alice: 10 years old", ma.USER_STATED, "2026-11-01T08:00:00+00:00"),
+        _ref("hist", "Alice was 9 years old when she moved to Perth", ma.USER_STATED, "2026-11-03T08:00:00+00:00"),
+    ]
+    assert person_extractor.stale_age_ids(rows) == set()
+    assert "Alice: 10 years old" in _packet(rows)

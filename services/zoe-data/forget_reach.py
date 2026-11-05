@@ -186,6 +186,11 @@ OTHER: tuple[Store, ...] = (
           member="local_text_logs.erase_all_text", entity="local_text_logs.erase_entity", markers=("router_head_shadow.jsonl",)),
     Store("intent_miss_log", "file", WORDS, REACHED, "Same module and rules as the router shadow log (records are dropped, not stripped).",
           member="local_text_logs.erase_all_text", entity="local_text_logs.erase_entity", markers=("intent-misses.jsonl",)),
+    Store("recall_gate_trace", "file", WORDS, REACHED, "~/.zoe/recall-gate-trace/: the owner's opt-in trace (ZOE_RECALL_GATE_TRACE, default off) - the "
+          "owner's words + row text per gate decision, 0600, 7-day retention, never off-box. A member erase clears it household-wide (via "
+          "local_text_logs.erase_all_text), an entity forget drops every line naming the entity (via local_text_logs.erase_entity, cascade step text_logs); both inside "
+          "that module's erase barrier, which the trace's appends honour.",
+          member="local_text_logs.erase_all_text", entity="local_text_logs.erase_entity", markers=("trace.jsonl",)),
     Store("production_feedback_log", "file", WORDS, OUT_OF_SCOPE, "Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and "
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
     Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "

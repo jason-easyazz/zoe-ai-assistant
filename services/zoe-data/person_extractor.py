@@ -428,8 +428,12 @@ def age_of(text: str) -> Optional[int]:
 #: years old", "a daughter named Ana who is 9 years old", "Ana turned 10"). Possessive kin in between ("Ana's mum
 #: is 40 years old") is not Ana's age, so nothing but a copula / "who" may stand between the name and the age.
 _AGE_SUBJECT_RE = re.compile(
-    r"\b(?P<name>[A-Z][a-z]+)\s*(?::|,)?\s*(?:(?:who|which)\s+)?(?:(?:is|was|has|just|now|already)\s+)*(?:aged?\s*:?\s*)?$")
+    r"\b(?P<name>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*(?::|,)?\s*(?:(?:who|which)\s+)?(?:(?:is|was|has|just|now|already)\s+)*(?:aged?\s*:?\s*)?$")
 _NOT_A_NAME = frozenset({"user", "the", "i", "my", "our", "a", "an", "he", "she", "they", "it"})
+
+
+_HISTORICAL_BEFORE_RE = re.compile(r"\b(?:was|were|used\s+to\s+be|back\s+then)\b", re.IGNORECASE)
+_HISTORICAL_AFTER_RE = re.compile(r"^\W*(?:when|back|then|at\s+the\s+time|before|until|in\s+(?:19|20)\d\d)\b", re.IGNORECASE)
 
 
 def person_age_claim(text: str) -> Optional[tuple[str, int]]:
@@ -444,13 +448,17 @@ def person_age_claim(text: str) -> Optional[tuple[str, int]]:
     subj = _AGE_SUBJECT_RE.search((text or "")[:m.start()])
     if not subj or subj.group("name").lower() in _NOT_A_NAME:
         return None
+    # A HISTORICAL age is not the current one: "Alice was 9 years old when she moved to Perth", "he used to be 9", "at 9 back then".
+    between = (text or "")[subj.start():m.start()]
+    if _HISTORICAL_BEFORE_RE.search(between) or _HISTORICAL_AFTER_RE.match((text or "")[m.end():m.end() + 40]):
+        return None
     return subj.group("name").lower(), n
 
 
 def _is_age_of(text: str, person_name: str) -> bool:
     """Does ``text`` state THIS person's age ("Ana Lee: 10 years old" for "Ana Lee")?"""
     claim = person_age_claim(text)
-    return claim is not None and claim[0] in {t.lower() for t in (person_name or "").split()}
+    return claim is not None and set(claim[0].split()) <= {t.lower() for t in (person_name or "").split()}
 
 
 _NOT_CURRENT = frozenset({"superseded", "archived", "rejected", "pending"})
@@ -479,7 +487,10 @@ def stale_age_ids(candidates) -> set[str]:
                 continue
             claim = person_age_claim(getattr(ref, "text", "") or "")
             if claim:
-                by_person.setdefault(claim[0], []).append((ref, claim[1]))
+                # one PERSON: the resolved entity when the row carries one, else the full name (two people sharing a surname
+                # are two people, however alike the surname)
+                eid = str(meta.get("entity_id") or "").strip()
+                by_person.setdefault(f"entity:{eid}" if eid else claim[0], []).append((ref, claim[1]))
         stale: set[str] = set()
         for rows in by_person.values():
             if len({age for _, age in rows}) < 2:
