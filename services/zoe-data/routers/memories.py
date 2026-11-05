@@ -1000,6 +1000,11 @@ async def memory_for_prompt(
         description="Run the semantic search whatever the message looks like (the "
         "named-person floor, for a person with no contact row to focus)",
     ),
+    tool_call: bool = Query(
+        False,
+        description="The packet is for a brain TOOL call (recall_memory), whose message is the model's own query, not the "
+        "user's utterance: it never ticks the contact-offer cooldown nor carries an offer (the seam owns both at the user-turn boundary)",
+    ),
     session_id: Optional[str] = Query(
         None,
         max_length=128,
@@ -1238,7 +1243,7 @@ async def memory_for_prompt(
     # TURN — the core brain's in-process packet and memory.ts pass the user's
     # message in relevance mode — decided by the one trigger predicate the seam
     # and the offer ager use (Greptile #1768).
-    if not continuity and not _is_continuity_turn(message, user_id):
+    if not continuity and not tool_call and not _is_continuity_turn(message, user_id):
         result = await _fold_pending_contact_offers(result, user_id, message)
     return result
 

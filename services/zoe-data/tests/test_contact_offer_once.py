@@ -154,3 +154,10 @@ async def test_unoffered_rows_are_unmarked(monkeypatch):
     monkeypatch.setattr(cop, "unmark_unoffered", fake_unmark)
     await _fold("u1", "turn one")
     assert seen == [(["a", "b"], ["a"])]  # only Alder entered the prompt
+
+
+def test_tool_call_param_exists_and_defaults_off():
+    # a brain tool call (recall_memory) passes tool_call=1: its model-made query must not tick the cooldown or carry an offer
+    import inspect
+    d = inspect.signature(mem.memory_for_prompt).parameters["tool_call"].default
+    assert getattr(d, "default", d) is False

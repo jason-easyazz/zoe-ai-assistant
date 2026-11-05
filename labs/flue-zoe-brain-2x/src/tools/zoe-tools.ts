@@ -351,6 +351,7 @@ const recallMemory = defineTool({
     try {
       const url = new URL('/api/memories/for-prompt', zoeDataUrl());
       url.searchParams.set('user_id', userId);
+      url.searchParams.set('tool_call', '1'); // the query is the model's, not the user's turn: no offer-cooldown tick
       const query = String(data?.query ?? '').trim();
       // The packet size and query ceiling are the harness overlay's recall shape (src/harness.ts
       // recall-shape.json; compiled-in 24 / 500, byte-identical with ZOE_BRAIN_HARNESS_DIR unset),
