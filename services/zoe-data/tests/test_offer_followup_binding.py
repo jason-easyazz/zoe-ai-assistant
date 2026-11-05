@@ -194,3 +194,11 @@ def test_the_shared_fast_tier_dispatch_defers_an_offer_reply(monkeypatch):
 
     monkeypatch.setattr(intent_router, "reminder_offer_reply_text", bound)
     assert asyncio.run(fast_tiers.resolve("yes please, 2:45 so i'm not late", "u", "s1", channel="chat")) is None
+
+
+def test_a_remind_you_offer_binds_with_its_task_and_an_unrecoverable_task_declines():
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to call the dentist?", FRESH) == \
+        "remind me to call the dentist at 3 pm"
+    # the offer is a reminder offer but names no task: never a reminder about "that"
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to set a reminder?", FRESH) is None
+    assert bind_reminder_offer_reply("sure, 3pm", OFFER, FRESH) == "remind me about pickup at 3 pm"      # control

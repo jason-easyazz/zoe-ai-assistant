@@ -2128,6 +2128,9 @@ def _offer_followup_ttl_s() -> float:
 
 def _reminder_offer_title(previous: str) -> tuple[str, str]:
     """(connector, title) read from Zoe's offer text; falls back to a neutral 'about that'."""
+    m = re.search(r"\bremind\s+you\s+(to|about|of)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\b|\bso\b|$)", previous, re.IGNORECASE)
+    if m:   # "Want me to remind you to call the dentist?" -> the task is "call the dentist"
+        return ("to" if m.group(1).lower() == "to" else "about"), m.group(2).strip()
     m = re.search(r"reminder\s+(for|to|about)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\b|\bso\b|$)", previous, re.IGNORECASE)
     if m:
         conn = "to" if m.group(1).lower() == "to" else "about"
@@ -2172,6 +2175,8 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         mer = "pm"  # "2:45" to a pickup offer means the afternoon
     when = f"{hour}:{minute}" if minute else str(hour)
     conn, title = _reminder_offer_title(sentences[-1])     # the SAME final offer sentence that passed the checks above
+    if title == "that":
+        return None   # the accepted task cannot be recovered: never create a reminder without it; the brain, which has the talk, acts
     return f"remind me {conn} {title} at {when}{(' ' + mer) if mer else ''}"
 
 
