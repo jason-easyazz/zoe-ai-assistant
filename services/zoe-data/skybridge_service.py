@@ -794,6 +794,15 @@ def _calendar_weekend_range(text: str, today: date) -> tuple[str, date, date] | 
     return "this weekend", sat, sat + timedelta(days=1)
 
 
+def _calendar_month_range(text: str, today: date) -> tuple[str, date, date] | None:
+    """"this month" for a calendar READ: the whole of the current month (the same scope intent_router's calendar_show gives it)."""
+    if not re.search(r"\bthis\s+month\b", text):
+        return None
+    import calendar as _cal
+
+    return "this month", today.replace(day=1), today.replace(day=_cal.monthrange(today.year, today.month)[1])
+
+
 def _list_type_from_text(text: str) -> str:
     for key, value in LIST_TYPE_ALIASES.items():
         if f" {key} " in text:
@@ -2210,7 +2219,8 @@ def classify_skybridge_intent(
     if (not write_led and not create_led and (_cal_read or _CALENDAR_KEYWORD_RE.search(text))
             and not command_shapes.calendar_not_a_read(raw_message)):
         today = _today()
-        parsed_range = _calendar_weekend_range(text, today) or _calendar_date_from_text(text, today)
+        parsed_range = (_calendar_weekend_range(text, today) or _calendar_month_range(text, today)
+                        or _calendar_date_from_text(text, today))
         if parsed_range is not None:
             label, start, end = parsed_range
             return SkybridgeIntent("calendar", "show", label, start, end)
@@ -3049,6 +3059,12 @@ def _classify_home_parse(raw_message: str, text: str) -> "SkybridgeIntent | None
     return _classify_smart_home(stripped) or original
 
 
+_NEGATED_OR_REPORTED_SWITCH_RE = re.compile(
+    r"\b(?:don'?t|do\s+not|never|didn'?t|won'?t|no\s+need\s+to|stop)\s+(?:\w+\s+){0,2}?(?:turn|switch|flip|put|dim|brighten)\b"
+    r"|\b(?:i|we|you|he|she|they|someone|somebody|who|nobody)\s+(?:(?:just|already|have|had|'ve)\s+)*(?:turned|switched|flipped)\b"
+    r"|\b(?:i|we)'ve\s+(?:(?:just|already)\s+)*(?:turned|switched|flipped)\b")
+
+
 def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     """Classify a smart-home command for the Home Assistant bridge. `text` is the
     lowercased message padded with surrounding spaces. Device control is
@@ -3090,6 +3106,10 @@ def _classify_smart_home(text: str) -> "SkybridgeIntent | None":
     m = re.search(r"\bscene\s+(?:called\s+)?(.+?)\s*$", text)
     if m:
         return SkybridgeIntent(domain="smart_home", action="activate_scene", query=m.group(1).strip())
+    # A NEGATED or REPORTED switch ("don't turn the heater on", "I turned the heater off") is not a command: the toggle shapes
+    # below are unanchored and would otherwise act on it. It goes on to the brain.
+    if _NEGATED_OR_REPORTED_SWITCH_RE.search(text):
+        return None
     has_device = bool(_HOME_DEVICE_NOUN.search(text))
     # Brightness: "dim the kitchen lamp to 40%", "set the lights to 80 percent".
     # (No trailing \b after % — a "%" before a space is not a word boundary.)

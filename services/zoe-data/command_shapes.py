@@ -590,6 +590,13 @@ _CAL_REST_WORDS = frozenset({
     "evening", "morning", "afternoon", "night", "a", "free", "busy", "booked", "anything", "to", "do", "and", "week", "weekend",
     "day", "got", "have", "plans", "today", "tomorrow", "tonight", "o", "clock", "all", "then", "happening",
 })
+_CAL_MONTHS = r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+# "12 november", "november 12th", "the 13th", "13/11", "2026-11-13": a date the qualifier words cannot represent.
+_CAL_EXPLICIT_DATE = re.compile(
+    rf"\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:of\s+)?{_CAL_MONTHS}\b|\b{_CAL_MONTHS}\s+\d{{1,2}}(?:st|nd|rd|th)?\b"
+    r"|\bthe\s+\d{1,2}(?:st|nd|rd|th)\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b",
+    re.IGNORECASE,
+)
 _CAL_WEEK_LIKE = re.compile(r"\b(?:my|our)\s+(?:day|week|weekend)\b", re.IGNORECASE)
 _CAL_NOT_TV = re.compile(
     r"\bon\s+(?:the\s+)?(?:tv|telly|television|netflix|youtube|stan|disney|prime|foxtel|radio|channel\s*\d*|screen|speaker|stereo"
@@ -641,8 +648,10 @@ def calendar_read_ask(text: str) -> Optional[str]:
     if not raw:
         return None
     t = _CAL_FILLER_LEAD.sub("", raw, count=1).strip()
-    if not t or _CAL_STATEMENT.match(t) or calendar_not_a_read(raw):
-        return None
+    if not t or _CAL_STATEMENT.match(t) or calendar_not_a_read(raw) or _CAL_EXPLICIT_DATE.search(t):
+        return None  # an explicit calendar date cannot ride a qualifier word: decline rather than read the wrong day
+    if re.match(r"^what(?:'s|s|\s+is)\s+(?:coming\s+up|on|left)(?:\s+for\s+me)?\s+today$", t):
+        return None  # the daily briefing owns this exact phrase (intent_router), not a calendar read
     has_noun = re.search(rf"\b{_CAL_NOUN}\b", t) is not None
     if has_noun and _CAL_READ_FRAME.match(t):
         return calendar_qualifier(t)

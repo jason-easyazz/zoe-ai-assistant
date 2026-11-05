@@ -66,6 +66,8 @@ NOT_CALENDAR_READS = [
     "my calendar is a mess",                           # statements / complaints
     "something is wrong with my calendar",
     "what happened to my calendar",
+    "do I have any appointments on Friday 13 November",  # an explicit date no qualifier word can carry: declined, not misread
+    "do I have any appointments on 12 November",
     "what time is my dentist appointment on friday",   # an event-TIME question: brain + recall floor, not a calendar dump
 ]
 
@@ -298,3 +300,24 @@ def test_two_devices_with_the_same_word_ask_which(home, monkeypatch):
     monkeypatch.setattr(shs, "list_devices", _two)
     out = _run(shs.resolve_smart_home(_I("turn_on", "heater", True)))
     assert out["handled"] is True and home == []      # asks "which one", switches nothing
+
+
+@pytest.mark.parametrize("phrase", [
+    "don't turn the heater on", "do not switch the kettle off", "I turned the heater off", "I just switched the heater on",
+    "someone turned the heater off",
+])
+def test_negated_or_reported_switch_is_not_a_device_command(phrase):
+    from skybridge_service import _classify_smart_home
+
+    assert _classify_smart_home(f" {phrase.lower()} ") is None
+
+
+def test_skybridge_this_month_reads_the_whole_month(monkeypatch):
+    import skybridge_service as sb
+    from datetime import date
+
+    monkeypatch.setattr(sb, "_today", lambda: date(2026, 6, 11))
+    for phrase in ("am I free this month", "what am I doing this month"):
+        intent = sb.classify_skybridge_intent(phrase)
+        assert intent.domain == "calendar" and intent.range_label == "this month"
+        assert (intent.start_date, intent.end_date) == (date(2026, 6, 1), date(2026, 6, 30))
