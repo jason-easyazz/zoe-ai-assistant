@@ -258,6 +258,19 @@ async def recent_deliveries(db, user_id: str, now: datetime) -> list[tuple]:
         return [tuple(r) for r in await cur.fetchall()]
 
 
+async def _line_created_at(db, line_id: str) -> datetime | None:
+    """When a ledger line was written (UTC), or None when unreadable - the delivery's own moment, for the day its edge lives on."""
+    try:
+        async with db.execute("SELECT created_at FROM proactive_ledger_lines WHERE id = ?", (line_id,)) as cur:
+            row = await cur.fetchone()
+        if not row or not row[0]:
+            return None
+        at = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
+        return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def record_tap(user_id: str, signal: str, *, target_id: str = "", channel: str = "",
                      now: datetime | None = None) -> int:
     """A one-tap signal about the most recent raise / pull (or the one named by ``target_id``).
@@ -293,7 +306,7 @@ async def record_tap(user_id: str, signal: str, *, target_id: str = "", channel:
                     wrote += 1
                 from proactive import outcome_edges  # flag-dark: the tap decides the item's edge
 
-                await outcome_edges.on_tap(db, user_id, str(ref), signal, now)
+                await outcome_edges.on_tap(db, user_id, str(ref), signal, now, delivered_at=await _line_created_at(db, tid))
     except Exception as exc:  # noqa: BLE001
         logger.warning("delivery-lines: tap failed user=%s: %r", user_id, exc)
         return 0

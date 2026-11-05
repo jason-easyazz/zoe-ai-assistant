@@ -30,6 +30,7 @@ chat instead. No item text is ever logged.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
@@ -440,6 +441,16 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
         from db_compat import get_compat_db
         from proactive import ledger, outcome_edges
 
+        # The member's first turn of the local day may BE this pull ("anything for me?" is answered by the fast tier, which returns
+        # before the brain lanes' selector.prepare ever runs): re-score today's due items before the queue is read, so the pull
+        # delivers today's ranking. A dry replay (commit=False) writes nothing, so it never triggers it.
+        if commit and outcome_edges.enabled():
+            try:
+                from proactive.selector import _PREPARE_TIMEOUT_S
+
+                await asyncio.wait_for(outcome_edges.on_presence(uid, now), timeout=_PREPARE_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - a slow re-score must not cost the pull its answer
+                logger.debug("pull: presence re-score skipped (non-fatal): %r", exc)
         async with get_compat_db() as db:
             items = await pending_items(db, uid, now)
             if not items:

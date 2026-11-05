@@ -1,4 +1,4 @@
-"""0066 - proactive_outcome_edges: the outcome edge of the proactive loop (flag-dark).
+"""0069 - proactive_outcome_edges: the outcome edge of the proactive loop (flag-dark).
 
 ``proactive/outcome_edges.py`` (``ZOE_OUTCOME_EDGES`` = off | on, default off) writes ONE edge per
 (member, item, local day, touch point): the item is the selector's ``source_ref`` (an opaque id such
@@ -18,8 +18,8 @@ per-table ``user_id`` teardown deletes in any order); ``MemoryService.delete_use
 
 from alembic import op
 
-revision = "0066"
-down_revision = "0065"
+revision = "0069"
+down_revision = "0068"
 branch_labels = None
 depends_on = None
 

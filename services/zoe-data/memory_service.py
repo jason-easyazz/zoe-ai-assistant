@@ -2057,7 +2057,7 @@ class MemoryService:
                 await restraint.erase_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
-            # The member's proactive outcome edges (proactive/outcome_edges.py, migration 0066): item ids + outcomes, no
+            # The member's proactive outcome edges (proactive/outcome_edges.py, migration 0069): item ids + outcomes, no
             # words, but nothing of the person stays. Erased whatever ZOE_OUTCOME_EDGES says; best-effort like restraint.
             try:
                 import proactive.outcome_edges as outcome_edges

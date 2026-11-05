@@ -614,7 +614,116 @@ S8 FAIL (see *Live compares*) was the same flake.
 - **Rule:** a single red S4 or S8 is a hypothesis, not a regression. Re-run the compare (after
   the deploy run has completed — runbook §16) before concluding or reverting.
 - **Follow-up:** a majority-of-N for S4/S8 in the harness itself (whole-scenario repeats for
-  S4, sampled asks for S8), so one compare gives a stable verdict.
+  S4, sampled asks for S8), so one compare gives a stable verdict. The whole-bar version of
+  this landed as [repeat-run reliability](#repeat-run-reliability-passk-and-collateral-damage-lane-b-e2-2026-11-04).
+
+## Repeat-run reliability (pass^k) and collateral damage (lane B E2, 2026-11-04)
+
+`scripts/perf/bar_reliability.py` (tests `tests/unit/test_bar_reliability.py`, ci_safe, synthetic
+results only). Samantha Initiative item 12 ([the plan](../research/samantha-initiative-2026-11-03.md)):
+the gate the owner wants before any capped-credit GEPA improver night. It never talks to the brain
+itself: it runs the UNCHANGED bar k times per arm and does arithmetic on the results files.
+
+**What it reports, per arm** (n valid runs, k default 3):
+
+- per scenario: the verdict of every run, passes `c/n`, `pass_hat_k` = C(c,k)/C(n,k) (every one of k
+  draws passes; tau-bench's unbiased estimator), `pass_at_k` = 1 - C(n-c,k)/C(n,k) (at least one
+  does), and one label: `PASS` (every run), `FLAKY` (some), `ERROR` (an instrument error and no pass),
+  or the uniform non-pass (`FAIL` / `SKIP`);
+- overall: mean pass^k, pass@k, pass^1 (the plain pass rate), and today's single-run score (run 1
+  alone), plus the `flaky` and `errored` lists;
+- a run that was refused, errored or has an unproven teardown is listed under `rejected_runs` and not
+  counted; fewer than k valid runs = `incomplete`; runs that disagree on the scenario set, `samples`,
+  the judge rubric or the served code (tree + tracked diff) are not repeats of one thing = `error`.
+
+**Candidate vs control (collateral damage).** A scenario that passed on control and does not on the
+candidate is a REGRESSION, named, whatever the total did. Two kinds block: `reliability` (control
+passed every run, the candidate did not; a single new flake on S3 counts) and `lost` (control passed
+at least once, the candidate never). A smaller drop on a scenario control was already flaky on is
+`weakened`: reported, not blocking (with k=3 it is inside the noise). `net` is `better` / `equal` /
+`worse` on overall pass^k; `net_no_collateral` is true only for `better` with zero regressions.
+
+**Admissible** (`compare --admissible`, `bar_reliability.admissible()`): both arms complete (`ok`)
+and FULL coverage, no ERROR cell in either, comparable (same scenario set, k, samples, rubric, harness), candidate
+pass^k NOT worse than control's, and ZERO regressions. Exit 0 admissible / 1 measured and not / 2 not
+measurable. The negative control is pinned: a candidate that fixes S5 and S6 but breaks S4 wins
+overall (pass^3 4/6 -> 5/6) and is NOT admissible.
+
+**Coverage.** Every aggregate carries `coverage`: `full`, `partial` (the runs were `--only` / `--axis`
+selections: the run's `partial` flag or `status: partial`, so a red partial run that the harness
+re-labelled `regression` is still partial) or `unknown` (a payload that does not say). k partial runs
+aggregate to `status: partial`, never `ok`: they cannot record the reliability baseline and are never
+admissible, not even against an identical selection - three PASS-only S1 runs never exercised the
+rest of the bar. Runs of mixed coverage are not repeats (`error`).
+
+**k=1 is today's bar.** One run's verdicts come through unchanged, pass^1 = pass@1 = the pass rate,
+and the regressions equal `samantha_bar.compare_baseline`'s (pinned). A bar baseline file
+(`{"scenarios": {id: verdict}}`) reads as one run, so `compare --k 1 --control samantha_bar_baseline.json
+--candidate samantha_bar_last.json` is the old compare in the new shape.
+
+CLI:
+
+```bash
+# aggregate one arm (files and/or dirs of run-*.json); baseline-compared like the replay lane
+python3 scripts/perf/bar_reliability.py score DIR [--k 3] [--label control] [--out agg.json]
+python3 scripts/perf/bar_reliability.py score DIR --record-baseline    # complete, no ERROR, every run commit-bound
+python3 scripts/perf/bar_reliability.py score DIR --compare-baseline   # exit 1 = a baseline pass regressed
+# candidate vs control; the GEPA improver gate
+python3 scripts/perf/bar_reliability.py compare --control A --candidate B --admissible [--out cmp.json] [--json]
+```
+
+Reliability baseline: `~/.cache/zoe/samantha_bar_reliability_baseline.json` (the aggregate JSON,
+schema `zoe.bar_reliability/1`). `run` writes `<out-dir>/<arm>/run-<i>.json` (each the bar's own
+results file), `<out-dir>/<arm>/trend.jsonl` (kept out of the weekly trend) and
+`<out-dir>/reliability.json` = `{"arms": {name: aggregate}, "compare": comparison | null}`.
+
+**The night command (prepared, not yet run).** `run` is a NIGHT job under the same rules as the bar
+(scripts/AGENTS.md: harness quiet hours, the measured night pause, no daytime 4B outside a person's
+turn). Before EVERY step it asks `harness_quiet.check` (quiet hours + panel), the measured night pause
+(`night_busy.sh voice` via `ZOE_NIGHT_BUSY`; the fixed 01:50-04:55 window when that is unreadable) and
+`pgrep` for a running `land_voice_pr.sh` (via bash or exec'd directly); the quiet-hours check is asked
+with the force and landing bypasses OFF, and both variables are stripped from every step's env, so an
+inherited `ZOE_HARNESS_FORCE` cannot open the hours for the runner or the bar it starts. It queues for `/tmp/zoe-voice-harness.lock` no longer than
+`harness_quiet.lock_wait_s` allows, re-checks inside the lock, and kills a step (TERM, KILL 60 s later)
+at `harness_quiet.deadline_s`. Arms interleave, the order alternating each round, so drift over the
+night lands on both. Finished run files are kept: a night cut short resumes with the same command.
+A kept run is reused ONLY for the same arm identity, recorded beside it as `<arm>/identity-<i>.json`:
+the checkout's commit + tree (+ the tracked-diff sha when dirty), the harness and the exact extra
+args. A changed checkout or other args re-runs that slot (the stale file is deleted first), and the
+final aggregate reads exactly `run-1..k` of the requested identity: a mismatched file is a rejected
+run, never the new candidate's evidence. A checkout that changes while a step runs discards that run
+and stops the night; a checkout git cannot vouch for never reuses a cached run.
+Each step is the bar with its own gates (`ZOE_PERF=1`, scratch stack, proven teardown). Each arm is a
+CHECKOUT (the scratch stack serves that checkout's code), with the Flue sidecar built in it. Do NOT set
+`ZOE_HARNESS_LANDING` (the lander-only exemption) or `ZOE_HARNESS_FORCE`. Six bar runs at `--samples 3`
+are about 2-3 h, so start at 22:00 (the runner stops on its own before the night pause):
+
+```bash
+# once: the two checkouts (control = the deployed commit, candidate = the change), each with Flue built;
+# git from an existing NON-live worktree, never in ~/assistant itself
+git -C ~/.worktrees/landing-quiet fetch origin
+git -C ~/.worktrees/landing-quiet worktree add --detach ~/.worktrees/bar-control origin/main
+git -C ~/.worktrees/landing-quiet worktree add ~/.worktrees/bar-candidate <candidate-branch>
+# the night run (schedule it: systemd-run --user --on-calendar='YYYY-MM-DD 22:00' --unit zoe-bar-passk ...)
+cd ~/.worktrees/bar-control && ZOE_PERF=1 ZOE_NIGHT_BUSY=$HOME/assistant/scripts/landing/night_busy.sh \
+  nice -n 5 python3 scripts/perf/bar_reliability.py run \
+    --out-dir ~/.cache/zoe/bar_reliability/<candidate-slug> \
+    --arm control=$HOME/.worktrees/bar-control --arm candidate=$HOME/.worktrees/bar-candidate \
+    --k 3 --step-min 35 -- --samples 3
+# the morning answer (exit 0 admissible / 1 not / 2 not measured yet)
+python3 scripts/perf/bar_reliability.py compare --admissible \
+  --control ~/.cache/zoe/bar_reliability/<candidate-slug>/control \
+  --candidate ~/.cache/zoe/bar_reliability/<candidate-slug>/candidate
+```
+
+`--dry-run` prints the six steps and which are still to run. `--harness day-sim` runs
+`samantha_day_sim.py` instead (its `asks` are read the same way).
+
+Limits: a flag-ON candidate cannot be expressed yet. The scratch stack copies the LIVE flags into
+every arm, so an arm differs only by its checkout (a prompt, overlay or code change: what the GEPA
+improver produces). A flag A/B needs a per-arm flag override in `harness_scratch.harness_env`, not
+built. k=3 bounds what a single scenario can show: a 3/3 control vs a 2/3 candidate blocks by
+design (conservative), while `weakened` on an already-flaky scenario does not.
 
 ## Teardown (the demo-users-only guardrail)
 

@@ -1,7 +1,7 @@
 """Outcome edges (``proactive/outcome_edges.py``, ``ZOE_OUTCOME_EDGES``) - Samantha initiative lane D, E1/E7.
 
 Fixtures only - no household text, no real ids. The DB edge is a real SQLite file built by migrations
-0033 + 0036 + 0041 + 0066 behind db_pool's own cursor types (the ``test_proactive_ledger`` harness), so
+0033 + 0036 + 0041 + 0069 behind db_pool's own cursor types (the ``test_proactive_ledger`` harness), so
 the idempotent INSERTs, the precedence UPDATE and the selector's own SQL run for real; the two
 Postgres-only chat reads of the delivery ledger are replaced by fakes.
 
@@ -76,7 +76,7 @@ def env(monkeypatch, tmp_path):
     path = str(tmp_path / "zoe.db")
     engine = sa.create_engine(f"sqlite:///{path}")
     for fname in ("0033_proactive_candidates.py", "0036_proactive_deliveries.py",
-                  "0041_proactive_ledger_lines.py", "0066_outcome_edges.py"):
+                  "0041_proactive_ledger_lines.py", "0069_outcome_edges.py"):
         _migrate(engine, fname)
     db = _Sqlite(path)
     db.conn.execute(
@@ -166,16 +166,16 @@ async def _raise_one(env, ref="open_loops:1", sid="s1", cue="interview"):
 
 
 # -- migration ---------------------------------------------------------------------------------
-def test_migration_0066_is_idempotent_chained_and_unique_per_key():
+def test_migration_0069_is_idempotent_chained_and_unique_per_key():
     engine = sa.create_engine("sqlite://")
-    mod = _migrate(engine, "0066_outcome_edges.py")
-    assert (mod.revision, mod.down_revision) == ("0066", "0065")
-    _migrate(engine, "0066_outcome_edges.py")
+    mod = _migrate(engine, "0069_outcome_edges.py")
+    assert (mod.revision, mod.down_revision) == ("0069", "0068")
+    _migrate(engine, "0069_outcome_edges.py")
     with engine.connect() as conn:
         cols = {r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({TABLE})")}
         assert cols == {"id", "user_id", "item_id", "kind", "local_day", "touch_point", "outcome", "outcome_at",
                         "outcome_source", "rescore_rank", "score_before", "score_after", "created_at"}
-    _migrate(engine, "0066_outcome_edges.py", "downgrade")
+    _migrate(engine, "0069_outcome_edges.py", "downgrade")
     with engine.connect() as conn:
         assert not conn.exec_driver_sql(f"SELECT name FROM sqlite_master WHERE name='{TABLE}'").fetchall()
 
@@ -467,3 +467,52 @@ async def test_no_production_write_path_stores_item_text_or_an_utterance(env):
     await oe.sweep(now=NOW + timedelta(hours=2))
     dump = " ".join(str(v) for row in env["db"].rows(f"SELECT * FROM {TABLE}") for v in row if v is not None)
     assert dump and "fixture text" not in dump and "secret-utterance-marker" not in dump and "interview" not in dump
+
+
+# -- review round (Codex #2286): cancellation-safe marker, the delivery's own day, the fast-tier pull --------------------------
+@pytest.mark.asyncio
+async def test_a_cancelled_presence_rescore_takes_its_marker_back_so_a_later_turn_retries(env, monkeypatch):
+    """selector.prepare wraps the re-score in a 2 s ``wait_for``: a timeout CANCELS it after the (auto-committed) marker insert; the
+    CancelledError must not strand the day with a marker and no re-score."""
+    import asyncio
+
+    _seed_due(env)
+
+    async def slow(*a, **k):
+        raise asyncio.CancelledError()
+    real = oe._due_today
+    monkeypatch.setattr(oe, "_due_today", slow)
+    with pytest.raises(asyncio.CancelledError):
+        await oe.on_presence(MEMBER, NOW)
+    assert _edges(env, "1=1") == []                                       # the marker is gone
+    monkeypatch.setattr(oe, "_due_today", real)
+    assert await oe.on_presence(MEMBER, NOW + timedelta(minutes=1)) == ["open_loops:2", "open_loops:1"]   # the retry runs
+
+
+@pytest.mark.asyncio
+async def test_a_tap_after_midnight_decides_the_deliverys_own_day(env):
+    """A 23:58 delivery tapped at 00:02 (inside the ten-minute tap window) updates the edge of the day it was delivered on."""
+    _loop(env, 1, "2026-09-30 15:00:00")
+    _cand(env, "open_loops:1", "open_loop", 0.8)
+    late = datetime(2026, 9, 30, 23, 58, tzinfo=timezone.utc)
+    res = await pull.pull(MEMBER, "s1", channel="chat", now=late)
+    assert res is not None and res.delivered == 1
+    assert await lines.record_tap(MEMBER, "not_now", now=late + timedelta(minutes=4)) == 1
+    rows = env["db"].rows(f"SELECT local_day, outcome, outcome_source FROM {TABLE} WHERE touch_point = 'pull'")
+    assert rows == [("2026-09-30", "dismissed", "tap")]                  # control: the tap's own day (10-01) has no edge to update
+
+
+@pytest.mark.asyncio
+async def test_the_fast_tier_pull_rescores_first_presence_before_it_reads_its_queue(env):
+    _seed_due(env)
+    res = await pull.pull(MEMBER, "s1", channel="chat", now=NOW)         # the member's first turn is "anything for me?"
+    assert res is not None
+    got = {r[1] for r in _edges(env, "1=1")}
+    assert oe.DAY_MARKER in got                                          # the presence re-score ran
+    assert _sal(env, "open_loops:3") == 0.9                              # not due today: untouched, like prepare's re-score
+    # a dry replay (commit=False) writes nothing, so it does not trigger the re-score
+    env["db"].conn.execute(f"DELETE FROM {TABLE}")
+    env["db"].conn.execute("UPDATE proactive_candidates SET salience = 0.5, surfaced_count = 0, cooldown_until = NULL")
+    oe._reset_state()
+    await pull.pull(MEMBER, "s2", channel="chat", now=NOW, commit=False)
+    assert _edges(env, "1=1") == [] and _sal(env, "open_loops:1") == 0.5

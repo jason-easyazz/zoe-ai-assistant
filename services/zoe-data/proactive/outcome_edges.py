@@ -3,7 +3,7 @@
 The proactive loop already decides what is worth raising (``selector``), carries it (a raise, a
 pull) and counts the delivery (``ledger``, ``lines``). It never wrote down what the person DID with
 an item, so follow-through could not be measured and a dismissed item was only ever tuned at the
-class level. This module is that edge, in one small table (migration 0066, ``proactive_outcome_edges``)
+class level. This module is that edge, in one small table (migration 0069, ``proactive_outcome_edges``)
 keyed ``(member, item, local day, touch point)`` and fed ONLY by events Zoe already records - no model,
 no new text:
 
@@ -32,6 +32,7 @@ deletes the member's rows whatever the flag says; rows hold opaque ids and label
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
@@ -158,13 +159,15 @@ async def set_outcome(db, *, user_id: str, source_ref: str, outcome: str, source
     return n
 
 
-async def on_tap(db, user_id: str, source_ref: str, signal: str, now: datetime) -> int:
-    """The member's one-tap signal about a delivery (``lines.record_tap``)."""
+async def on_tap(db, user_id: str, source_ref: str, signal: str, now: datetime,
+                 delivered_at: datetime | None = None) -> int:
+    """The member's one-tap signal about a delivery (``lines.record_tap``). The edge belongs to the DELIVERY's local day: a 23:58 raise
+    tapped at 00:02 decides yesterday's edge (``delivered_at``), not today's (which does not exist)."""
     outcome = _TAP_OUTCOME.get(signal)
     if outcome is None:
         return 0
     return await set_outcome(db, user_id=user_id, source_ref=source_ref, outcome=outcome,
-                             source="tap", now=now)
+                             source="tap", now=now, day=_day(delivered_at) if delivered_at else None)
 
 
 async def on_ledger_close(db, delivery_id: str, ledger_outcome: str, now: datetime) -> int:
@@ -352,18 +355,28 @@ async def on_presence(uid: str, now: datetime | None = None) -> list[str] | None
         _seen[uid] = day
         logger.info("OUTCOME_RESCORE user=%s due=%d", uid, len(order))
         return [s.source_ref for s in order]
-    except Exception as exc:  # noqa: BLE001 - presence must never break a turn
-        logger.warning("outcome-edges: presence re-score failed user=%s: %r", uid, exc)
-        if marked:   # let the next turn retry rather than strand the day
+    except BaseException as exc:  # noqa: BLE001 - presence must never break a turn; a CANCEL (selector.prepare's timeout) too
+        cancelled = isinstance(exc, asyncio.CancelledError)
+        if not cancelled and not isinstance(exc, Exception):
+            raise
+        logger.warning("outcome-edges: presence re-score %s user=%s: %r", "cancelled" if cancelled else "failed", uid, exc)
+        if marked:   # let the next turn retry rather than strand the day: the production DB wrapper commits each statement, so the
+            # marker is already durable - take it back, shielded so a second cancel cannot interrupt the cleanup
             try:
-                from db_compat import get_compat_db
-
-                async with get_compat_db() as db:
-                    await db.execute("DELETE FROM proactive_outcome_edges WHERE user_id = ? AND item_id = ? "
-                                     "AND local_day = ? AND touch_point = ?", (uid, DAY_MARKER, day, PRESENCE))
-            except Exception:  # noqa: BLE001
+                await asyncio.shield(_unmark_presence(uid, day))
+            except BaseException:  # noqa: BLE001
                 pass
+        if cancelled:
+            raise
         return None
+
+
+async def _unmark_presence(uid: str, day: str) -> None:
+    from db_compat import get_compat_db
+
+    async with get_compat_db() as db:
+        await db.execute("DELETE FROM proactive_outcome_edges WHERE user_id = ? AND item_id = ? "
+                         "AND local_day = ? AND touch_point = ?", (uid, DAY_MARKER, day, PRESENCE))
 
 
 # -- forget ------------------------------------------------------------------------------------
