@@ -19641,5 +19641,8 @@
       "typed_env": false
     }
   },
-  "registry_unread": []
+  "registry_unread": [
+    "ZOE_VOICE_SESSION_BRIDGE",
+    "ZOE_VOICE_SESSION_BRIDGE_TTL_S"
+  ]
 }
