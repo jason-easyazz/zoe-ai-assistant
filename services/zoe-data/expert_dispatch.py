@@ -584,6 +584,15 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
         _forget_words = bool(re.search(r"(?<!don't )(?<!dont )(?<!do not )\bforget\b|\b(?:don'?t|do\s+not)\s+remember\b",
                                        text, re.IGNORECASE))
     if _forget_cmd:
+        # The own-words wall comes FIRST for a destructive command: a pasted message that merely starts with a retraction ("oh forget
+        # that I said I live in Paris\nSent from my iPhone") is someone else's text, and must not erase the caller's last memory.
+        try:
+            import own_words as _ow
+
+            if _ow.analyze(text).changed:
+                return None
+        except Exception:  # noqa: BLE001 - cannot vet the text: do not delete on it
+            return None
         from intent_router import Intent, execute_intent
         return await execute_intent(Intent("memory_forget_last", {}), user_id)
     if _forget_words:

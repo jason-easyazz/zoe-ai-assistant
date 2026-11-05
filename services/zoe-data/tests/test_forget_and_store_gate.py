@@ -203,3 +203,32 @@ def test_extractor_skips_a_negated_remember_inside_a_longer_turn():
 def test_extractor_still_mines_an_explicit_teach():
     cands = memory_extractor._extract_plain("remember that my sister's birthday is in May")
     assert any(c.text.startswith("User asked me to remember") for c in cands)
+
+
+# -- review round 2 (Codex #2308) ----------------------------------------------------------------------------------------
+def test_a_pasted_message_starting_with_a_retraction_does_not_erase_the_last_memory(lane):
+    svc, executed = lane
+    pasted = "oh forget that I said I live in Paris\nSent from my iPhone"
+    assert _run(expert_dispatch.store_fact("memory", pasted, "demo-user")) is None
+    assert executed == [] and svc.ingested == []                       # the own-words wall comes before the destructive dispatch
+    _run(expert_dispatch.store_fact("memory", "oh forget that I said I live in Paris", "demo-user"))
+    assert executed == ["memory_forget_last"]                          # control: the owner's own retraction still runs
+
+
+def test_a_first_person_memory_loss_is_a_fact_not_a_retraction():
+    text = "I don't remember that accident because I suffered a head injury"
+    assert memory_quality.has_forget_wording(text) is False
+    assert memory_quality.is_storable_fact(text)[0] is True
+    for command in ("no, don't remember that! forget that", "please don't save that", "Zoe, do not store this"):
+        assert memory_quality.has_forget_wording(command), command      # control: commands addressed to Zoe still count
+
+
+def test_the_agent_tool_reject_log_carries_a_tag_not_the_words(monkeypatch, caplog):
+    import logging
+
+    zoe_agent = pytest.importorskip("zoe_agent")
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(zoe_agent, "_invalidate_user_facts_cache", lambda *a, **k: None, raising=False)
+    _run(zoe_agent._mempalace_add("Please forget that I said my password is violet", "jason"))
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert "MEMORY_QUALITY_REJECT" in logged and "violet" not in logged and "utt=" in logged

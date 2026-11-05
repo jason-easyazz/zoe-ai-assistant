@@ -281,9 +281,10 @@ FORGET_MAX_WORDS = 20
 # Retraction wording at a clause start, or "don't remember|save|store that|this|it" anywhere. Never "don't forget
 # that ..." (a teach). A candidate holding one is the command's own words, never a fact.
 _FORGET_CLAUSE_RE = re.compile(
-    r"(?:^|[.!?;,:]\s*|\b(?:no|oh|please|actually|wait)\s+)"
-    r"(?:forget\s+(?:that|what\s+i\s+(?:just\s+)?(?:said|told\s+you))\b|forget\s+(?:that\s+)?i\s+(?:just\s+)?said\b)"
-    r"|\b(?:don'?t|do\s+not)\s+(?:remember|save|store)\s+(?:that|this|it)\b",
+    r"(?:^|[.!?;,:]\s*|\b(?:no|oh|please|actually|wait|zoe|hey)\s+)"
+    r"(?:forget\s+(?:that|what\s+i\s+(?:just\s+)?(?:said|told\s+you))\b|forget\s+(?:that\s+)?i\s+(?:just\s+)?said\b"
+    # a COMMAND addressed to Zoe (clause-initial / after an opener), never the speaker's own "I don't remember that accident"
+    r"|(?:don'?t|do\s+not)\s+(?:remember|save|store)\s+(?:that|this|it)\b)",
     re.IGNORECASE,
 )
 
