@@ -40,6 +40,7 @@ Pure of HTTP: ``routers/memories_curation.py`` turns :class:`CurationRefused` in
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import hashlib
 import logging
@@ -348,7 +349,22 @@ async def refuse_forgotten(curator: Account, member: Account, clean: str, stored
         raise CurationRefused(503, "I can't check what was forgotten right now, so nothing was added.")
 
 
+# One lock per MEMBER serialises a curator's permission-check -> write with the member's own opt-in / opt-out (restamp + revoke): an
+# opt-out that lands between a curator's policy read and its ingest would otherwise leave a ``curated`` note in a category that is
+# now OFF - one the curator cannot reach through ``policy`` and the adult's own edit / forget refuse. In-process (zoe-data is one process).
+_member_locks: dict = {}
+
+
+def _member_lock(member_id: str) -> asyncio.Lock:
+    return _member_locks.setdefault(str(member_id or ""), asyncio.Lock())
+
+
 async def add(db, curator: Account, member_id: str, text: str, category: str, *, via: str = "desktop", svc: Any = None) -> dict:
+    async with _member_lock(member_id):
+        return await _add_locked(db, curator, member_id, text, category, via=via, svc=svc)
+
+
+async def _add_locked(db, curator: Account, member_id: str, text: str, category: str, *, via: str, svc: Any) -> dict:
     pol = await policy(db, curator, member_id)
     clean, cat, sensitive = check_text(text, category, pol)
     await refuse_forgotten(curator, pol.member, clean, _store_text(clean, pol.member))
@@ -365,6 +381,11 @@ async def add(db, curator: Account, member_id: str, text: str, category: str, *,
 
 
 async def edit(db, curator: Account, member_id: str, row_id: str, text: str, *, via: str = "desktop", svc: Any = None) -> dict:
+    async with _member_lock(member_id):
+        return await _edit_locked(db, curator, member_id, row_id, text, via=via, svc=svc)
+
+
+async def _edit_locked(db, curator: Account, member_id: str, row_id: str, text: str, *, via: str, svc: Any) -> dict:
     pol = await policy(db, curator, member_id)
     old = await _one(pol, row_id, svc)
     clean, cat, sensitive = check_text(text, str((old.metadata or dict()).get("curated_category") or "other"), pol)
@@ -558,11 +579,12 @@ async def set_my_optin(db, user_id: str, category: str, on: bool, *, svc: Any = 
         return await svc.set_curated_standing(user_id, ids, protect=on, actor=user_id) if ids else 0
 
     restamped = 0
-    if not on:
-        restamped = await _restamp()
-    changed = await _set_optin(db, user_id, cat, on, user_id)
-    if on:
-        restamped = await _restamp()
+    async with _member_lock(user_id):         # the whole restamp -> flip -> restamp is one step against a curator's add / edit
+        if not on:
+            restamped = await _restamp()
+        changed = await _set_optin(db, user_id, cat, on, user_id)
+        if on:
+            restamped = await _restamp()
     await _finished(db, user_id, user_id, action, True, cat)
     return dict(category=cat, on=on, changed=changed, rows=restamped)
 

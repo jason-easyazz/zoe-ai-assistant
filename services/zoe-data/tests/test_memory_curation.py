@@ -777,3 +777,32 @@ def test_no_affect_off_rule_for_a_child_own_feelings(env):
     assert curate(env, "Juno feels sad about the move", "other").status_code == 422
     ref = run(env.svc.ingest("User feels sad about the move.", user_id=KID, source="chat_regex", status="approved"))
     assert ref is not None and ref.metadata["status"] == "approved"
+
+
+def test_an_opt_out_cannot_interleave_with_a_curators_in_flight_add(env):
+    """Codex #2158: the curator's permission check and its ingest are one step against the adult's opt-out (restamp + revoke). The add
+    is paused right before its ingest and the opt-out runs 'at the same time': the note must not end up ``curated`` in a category
+    that is now OFF (the curator cannot reach it, the adult's own controls refuse it)."""
+    async def scenario():
+        curator = await mc.account(env.db, PARENT)
+        await mc.set_my_optin(env.db, ADULT, "routines", True, svc=env.svc)
+        gate, entered = asyncio.Event(), asyncio.Event()
+        real = env.svc.ingest
+
+        async def paused(*a, **k):
+            entered.set()
+            await gate.wait()
+            return await real(*a, **k)
+
+        env.svc.ingest = paused
+        adding = asyncio.create_task(mc.add(env.db, curator, ADULT, "Wren's bins go out on Monday night", "routines", svc=env.svc))
+        await entered.wait()
+        opting_out = asyncio.create_task(mc.set_my_optin(env.db, ADULT, "routines", False, svc=env.svc))
+        await asyncio.sleep(0.05)                       # the opt-out runs now unless the add holds the member's lock
+        gate.set()
+        await asyncio.gather(adding, opting_out)
+
+    run(scenario())
+    for row in rows_of(env, ADULT):
+        assert row.metadata["authority_class"] != ma.CURATED, "a curated note survived the opt-out"
+    assert run(mc.live_optins(env.db, ADULT)) == {} or "routines" not in run(mc.live_optins(env.db, ADULT))
