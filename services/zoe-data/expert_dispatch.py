@@ -426,8 +426,8 @@ def _record_quality_reject(source: str, reason: str, text: str) -> None:
         # + zoe_memory_quality_reject_count (do not .inc() it again here)
     except Exception:
         pass
-    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
-                source, reason, (text or "")[:120])
+    from log_redaction import utterance_tag  # the log is outside the forget cascade: tag, never the words
+    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s %s", source, reason, utterance_tag(text or ""))
 
 
 async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
