@@ -342,9 +342,8 @@ async def on_presence(uid: str, now: datetime | None = None) -> list[str] | None
             marked = True
             order = rescore(await _due_today(db, uid, now), await _prior(db, uid, now))
             for s in order:
-                if s.after != s.before:
-                    await db.execute("UPDATE proactive_candidates SET salience = ?, updated_at = ? "
-                                     "WHERE id = ? AND user_id = ?", (s.after, _iso(now), s.candidate_id, uid))
+                # The edge FIRST: it records the item's stable before-score, which is what a failed attempt's rollback restores
+                # (_unmark_presence). The statement-by-statement auto-commit wrapper has no transaction to roll back.
                 await db.execute(
                     """INSERT INTO proactive_outcome_edges (id, user_id, item_id, kind, local_day, touch_point,
                            rescore_rank, score_before, score_after, created_at)
@@ -352,6 +351,9 @@ async def on_presence(uid: str, now: datetime | None = None) -> list[str] | None
                        ON CONFLICT (user_id, item_id, local_day, touch_point) DO NOTHING""",
                     (uuid.uuid4().hex, uid, s.source_ref, s.kind, day, PRESENCE, s.rank, s.before, s.after,
                      _iso(now)))
+                if s.after != s.before:
+                    await db.execute("UPDATE proactive_candidates SET salience = ?, updated_at = ? "
+                                     "WHERE id = ? AND user_id = ?", (s.after, _iso(now), s.candidate_id, uid))
         _seen[uid] = day
         logger.info("OUTCOME_RESCORE user=%s due=%d", uid, len(order))
         return [s.source_ref for s in order]
@@ -372,11 +374,39 @@ async def on_presence(uid: str, now: datetime | None = None) -> list[str] | None
 
 
 async def _unmark_presence(uid: str, day: str) -> None:
+    """Take a failed / cancelled re-score back COMPLETELY: put every touched candidate's salience back to its recorded before-score,
+    drop the attempt's presence edges, then the day marker - so the retry starts from the true scores and an audit record never
+    reports a score the retry then compounded."""
     from db_compat import get_compat_db
 
     async with get_compat_db() as db:
+        async with db.execute(
+            "SELECT item_id, score_before FROM proactive_outcome_edges WHERE user_id = ? AND local_day = ? AND touch_point = ? "
+            "AND item_id <> ? AND score_before IS NOT NULL", (uid, day, PRESENCE, DAY_MARKER),
+        ) as cur:
+            done = [(str(r[0]), r[1]) for r in await cur.fetchall()]
+        for ref, before in done:
+            await db.execute("UPDATE proactive_candidates SET salience = ? WHERE user_id = ? AND source_ref = ?",
+                             (before, uid, ref))
+        await db.execute("DELETE FROM proactive_outcome_edges WHERE user_id = ? AND local_day = ? AND touch_point = ? "
+                         "AND item_id <> ?", (uid, day, PRESENCE, DAY_MARKER))
         await db.execute("DELETE FROM proactive_outcome_edges WHERE user_id = ? AND item_id = ? "
                          "AND local_day = ? AND touch_point = ?", (uid, DAY_MARKER, day, PRESENCE))
+
+
+async def todays_ranks(db, uid: str, now: datetime | None = None) -> dict[str, int]:
+    """source_ref -> the rank today's first-presence re-score gave it ({} when off, not run yet, or on any fault). Delivery uses it
+    to break equal-salience ties the way the re-score decided (due time, then ref), not by kind / candidate id."""
+    if not enabled() or not uid:
+        return {}
+    try:
+        async with db.execute(
+            "SELECT item_id, rescore_rank FROM proactive_outcome_edges WHERE user_id = ? AND local_day = ? AND touch_point = ? "
+            "AND item_id <> ? AND rescore_rank IS NOT NULL", (uid, _day(now or _now()), PRESENCE, DAY_MARKER),
+        ) as cur:
+            return {str(r[0]): int(r[1]) for r in await cur.fetchall()}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 # -- forget ------------------------------------------------------------------------------------

@@ -516,3 +516,49 @@ async def test_the_fast_tier_pull_rescores_first_presence_before_it_reads_its_qu
     oe._reset_state()
     await pull.pull(MEMBER, "s2", channel="chat", now=NOW, commit=False)
     assert _edges(env, "1=1") == [] and _sal(env, "open_loops:1") == 0.5
+
+
+@pytest.mark.asyncio
+async def test_a_partly_applied_rescore_is_rolled_back_so_the_retry_does_not_compound(env):
+    """Codex #2286: an error after one candidate's update used to leave that score committed (0.5 -> 0.7) with only the marker removed;
+    the retry then re-applied the formula (0.9) and the audit edge still said 0.7."""
+    _seed_due(env)
+    db = env["db"]
+    real = db.execute
+    seen = {"n": 0}
+
+    def flaky(sql, params=()):
+        if sql.startswith("UPDATE proactive_candidates SET salience"):
+            seen["n"] += 1
+            if seen["n"] == 2:
+                raise RuntimeError("db down mid re-score")
+        return real(sql, params)
+
+    db.execute = flaky
+    assert await oe.on_presence(MEMBER, NOW) is None
+    db.execute = real
+    assert _sal(env, "open_loops:1") == 0.5 and _sal(env, "open_loops:2") == 0.5     # every touched score is back to its before value
+    assert _edges(env, "1=1") == []                                                  # no half audit trail, no marker
+    assert await oe.on_presence(MEMBER, NOW + timedelta(minutes=1)) == ["open_loops:2", "open_loops:1"]
+    assert _sal(env, "open_loops:1") == 0.7 and _sal(env, "open_loops:2") == 0.7     # control: the retry scores ONCE
+    got = {r[1]: r for r in _edges(env, "1=1")}
+    assert got["open_loops:1"][6:] == (0.5, 0.7)
+
+
+@pytest.mark.asyncio
+async def test_equal_scores_are_delivered_in_the_rescores_own_order(env):
+    """Two due items with the same score: the re-score ranks the overdue one first; the pull's cap and the raise pick must follow."""
+    _loop(env, 1, "2026-09-30 15:00:00")      # due later today
+    _loop(env, 2, "2026-09-29 20:00:00")      # overdue -> rank 1
+    _cand(env, "open_loops:1", "open_loop", 0.50)
+    _cand(env, "open_loops:2", "open_loop", 0.50)
+    assert await oe.on_presence(MEMBER, NOW) == ["open_loops:2", "open_loops:1"]
+    assert _sal(env, "open_loops:1") == _sal(env, "open_loops:2")
+    ranks = await oe.todays_ranks(env["db"], MEMBER, NOW)
+    assert ranks == {"open_loops:2": 1, "open_loops:1": 2}
+    items = await pull.pending_items(env["db"], MEMBER, NOW)
+    assert [i.source_ref for i in items] == ["open_loops:2", "open_loops:1"]
+    # control: with no re-score recorded the old kind / id order applies
+    env["db"].conn.execute(f"DELETE FROM {TABLE}")
+    items = await pull.pending_items(env["db"], MEMBER, NOW)
+    assert [i.source_ref for i in items] == ["open_loops:1", "open_loops:2"]

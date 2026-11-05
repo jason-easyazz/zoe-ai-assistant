@@ -528,7 +528,17 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
     # with an instruction not to say it.
     rturn = restraint.make_turn(message, verdict=restraint.current_verdict()) if restraint.mode() != "off" else None
     rctx: dict = {}   # mutes + stored classes, read once and only when a candidate actually matches this turn
-    for r in sorted(rows, key=lambda r: float(r[4] or 0), reverse=True):
+    ranks: dict = {}
+    try:   # equal salience: the first-presence re-score's own order (due time, ref), not row order (ZOE_OUTCOME_EDGES; {} when off)
+        from db_compat import get_compat_db
+        from proactive import outcome_edges
+
+        if outcome_edges.enabled():
+            async with get_compat_db() as _rdb:
+                ranks = await outcome_edges.todays_ranks(_rdb, uid, now_dt)
+    except Exception:  # noqa: BLE001
+        ranks = {}
+    for r in sorted(rows, key=lambda r: (-float(r[4] or 0), ranks.get(str(r[12]), 1_000_000))):
         if str(r[7]) <= now or (r[8] and str(r[8]) > now) or int(r[9] or 0) >= MAX_SURFACED:
             continue
         if (shape == "greeting" and int(r[5] or 0)) or (shape == "cue" and words & set(str(r[6]).split())):

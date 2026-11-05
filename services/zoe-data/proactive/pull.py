@@ -203,7 +203,13 @@ async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]
             sal = 0.0
         items.append(Item(str(r[0]), str(r[1]), str(r[2]), str(r[3] or ""), str(r[4] or ""), sal,
                           str(r[6] or ""), int(r[9] or 0)))
-    items.sort(key=lambda i: (-i.salience, i.kind, i.id))
+    try:   # equal salience: the first-presence re-score's own order first (ZOE_OUTCOME_EDGES; {} when off)
+        from proactive import outcome_edges
+
+        ranks = await outcome_edges.todays_ranks(db, uid, now)
+    except Exception:  # noqa: BLE001
+        ranks = {}
+    items.sort(key=lambda i: (-i.salience, ranks.get(i.source_ref, 1_000_000), i.kind, i.id))
     sens = await lines.sensitivity_of(db, [i.id for i in items])
     # The shipped schema has no ``proactive_candidates.sensitivity`` column: the restraint tier keeps a candidate's class in
     # ``restraint_classes`` (keyed by source_ref), and recomputes it from the text when none is stored - the selector's own read
