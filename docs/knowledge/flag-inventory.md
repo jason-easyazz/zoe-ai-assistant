@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-05T00:00:00Z
+timestamp: 2026-11-06T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-05T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-05. The table body is deterministic (sorted, no
+Last generated: 2026-11-06. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 815 prod flags; 229 read through `typed_env`.
+- 819 prod flags; 233 read through `typed_env`.
 - 758 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 16 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -59,7 +59,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-815 flags; 764 not documented in `.env.example`.
+819 flags; 768 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -618,6 +618,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROACTIVE_SLOW_LOOP_S` | int | `300` | - | - | `'300'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | yes | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN_TRIGGERS` | str | `'morning_checkin'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'morning_checkin'` | no | yes | `services/zoe-data/proactive/engine.py` |
+| `ZOE_PROBLEM_LOOP` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/authority-table.md` | `'off'` | yes | NO | `services/zoe-data/household_authority.py` |
 | `ZOE_PROVENANCE_PERSIST` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/reply_ledger.py` |
 | `ZOE_PROVISION_CODE_TTL_S` | int | `300` | - | `docs/architecture/panel-anywhere.md` | `'300'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
 | `ZOE_PROVISION_PICKUP_GRACE_S` | int | `120` | - | `services/zoe-data/routers/AGENTS.md` | `'120'` | no | NO | `services/zoe-data/routers/panel_provision.py` |
@@ -650,6 +651,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_RECALL_EVERY_TURN_HARNESS` | bool | `False` | - | `docs/knowledge/recall-every-turn.md` | `False` | yes | NO | `services/zoe-data/recall_every_turn.py` |
 | `ZOE_RECALL_EVIDENCE` | bool | `False` | - | `docs/knowledge/recall-gate.md` | `False` | yes | NO | `services/zoe-data/recall_evidence.py` |
 | `ZOE_RECALL_GATE` | str | `'shadow'` | `off`, `shadow`, `enforce` | `docs/knowledge/recall-gate.md` | `'shadow'` | yes | NO | `services/zoe-data/recall_gate.py` |
+| `ZOE_RECALL_GATE_TRACE` | str | `''` | - | `docs/knowledge/recall-gate.md` | `''` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
+| `ZOE_RECALL_GATE_TRACE_DAYS` | int | `7` | - | `docs/knowledge/recall-gate.md` | `7` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
+| `ZOE_RECALL_GATE_TRACE_DIR` | str | `''` | - | `docs/knowledge/recall-gate.md` | `''` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
 | `ZOE_RELAY_HOSTNAME` | str | `''` | - | `docs/knowledge/panel-relay-r1-box.md` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |

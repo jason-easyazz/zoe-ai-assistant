@@ -31,6 +31,8 @@ What is ON is not what the rest of this page may still call "flag-dark". Re-read
 ### The Samantha Initiative (research, 2026-11-03)
 - Record: [`docs/research/samantha-initiative-2026-11-03.md`](research/samantha-initiative-2026-11-03.md) + seven-lane bundle. Verdict: no new architecture; close the circuit between what Zoe knows and what she says (recall 0/51 turns, continuity 0/91, history 3 rows), make the turn judged not timed, record outcomes. Ten opportunities and eight first experiments in the record; absorbs the 10-07/09 gap, best-ideas, mind-layer and person-likeness records.
 
+- **Item 17 built flag-dark (2026-11-05, `feat/authority-table`):** household authority table (`services/zoe-data/authority_table.json`, floors in `household_authority.py`), log-only `AUTHORITY_SHADOW` at the brain's tool dispatch, bounded 6-step / 90 s loop with escalation card + receipt-checked success (`problem_loop.py`). `ZOE_PROBLEM_LOOP` default off; next = owner sets `shadow`, two weeks of evidence, then a reviewed enforce PR. Doc: [`knowledge/authority-table.md`](knowledge/authority-table.md).
+
 ### Person-centred memory (design 2026-11-02; owner ask: "memories and contacts ... think Samantha")
 - Design: [`docs/architecture/person-centred-memory.md`](architecture/person-centred-memory.md). Measured: the May CRM is built but starved of data (0 birthdays/dates/gifts, 66% of approved memories unlinked to any person); plan = per-person profile read-model, write-time subject resolution, curation loop, Person page, dates/gift/keep-in-touch candidates into the pull queue. Phases 1-6 + owner decisions D1-D12 in the doc; **owner accepted D1-D12 on 2026-11-03**. Next: phase 1 slice plus the birthday trigger fix (D12).
 
