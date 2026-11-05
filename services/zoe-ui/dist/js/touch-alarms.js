@@ -45,8 +45,24 @@
     // dates are household-local 'YYYY-MM-DD' strings (the panel's clock IS the household's: same timezone as the server)
     function pad2(n) { return (n < 10 ? '0' : '') + n; }
     function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
-    function parseYmd(k) { var p = String(k).split('-'); return new Date(+p[0], +p[1] - 1, +p[2]); }
-    function addDays(k, n) { var d = parseYmd(k); return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)); }
+    // calendar arithmetic on Y-M-D only, at local NOON so no DST edge can move a day; which day it IS comes from householdNow()
+    function parseYmd(k) { var p = String(k).split('-'); return new Date(+p[0], +p[1] - 1, +p[2], 12); }
+    function addDays(k, n) { var d = parseYmd(k); return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n, 12)); }
+    function addYear(k) { var d = parseYmd(k); return ymd(new Date(d.getFullYear() + 1, d.getMonth(), d.getDate(), 12)); }
+    // The HOUSEHOLD's today and clock (the server's zone, sent as `tz` with GET /api/alarms), never the browser's own zone: a panel
+    // whose OS zone differs would otherwise send the wrong once_date. No zone yet (or no Intl) = the browser's clock.
+    function householdNow(ms, tz) {
+        if (tz && typeof Intl === 'object' && Intl.DateTimeFormat) {
+            try {
+                var parts = {};
+                new Intl.DateTimeFormat('en-GB', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+                    .formatToParts(new Date(ms)).forEach(function (x) { parts[x.type] = x.value; });
+                if (parts.year && parts.hour) return { ymd: parts.year + '-' + parts.month + '-' + parts.day, hm: parts.hour + ':' + parts.minute };
+            } catch (e) { /* an unknown zone name: fall back below */ }
+        }
+        var d = new Date(ms);
+        return { ymd: ymd(d), hm: pad2(d.getHours()) + ':' + pad2(d.getMinutes()) };
+    }
     // "Today" / "Tomorrow" / "Fri 7" (same month) / "Mon 1 Dec"; `long` always names the month ("Fri 7 Nov")
     function dayLabel(k, today, long) {
         var d = parseYmd(k), t = parseYmd(today), diff = Math.round((d - t) / 864e5);
@@ -264,8 +280,9 @@
     function openDatePicker(host_el, today, chosen, onPick) {
         var sheet = el('div', 'aldp'), box = el('div', 'aldpbox');
         sheet.appendChild(box);
-        var t = parseYmd(today), base = parseYmd(chosen || today), view = new Date(base.getFullYear(), base.getMonth(), 1);
-        var first = new Date(t.getFullYear(), t.getMonth(), 1), last = new Date(t.getFullYear() + 1, t.getMonth(), 1);
+        var t = parseYmd(today), base = parseYmd(chosen || today), view = new Date(base.getFullYear(), base.getMonth(), 1, 12);
+        var first = new Date(t.getFullYear(), t.getMonth(), 1, 12), last = new Date(t.getFullYear() + 1, t.getMonth(), 1, 12);
+        var cutoff = addYear(today);  // a year ahead to the DAY: the last month's later days are drawn but cannot be tapped
         function close() { if (sheet.parentNode) sheet.parentNode.removeChild(sheet); }
         function draw() {
             clear(box);
@@ -273,8 +290,8 @@
             var prev = el('button', 'alnav', '‹'), next = el('button', 'alnav', '›');
             prev.setAttribute('aria-label', 'Previous month'); next.setAttribute('aria-label', 'Next month');
             prev.disabled = view <= first; next.disabled = view >= last;
-            prev.addEventListener('click', function () { if (!prev.disabled) { view = new Date(view.getFullYear(), view.getMonth() - 1, 1); draw(); } });
-            next.addEventListener('click', function () { if (!next.disabled) { view = new Date(view.getFullYear(), view.getMonth() + 1, 1); draw(); } });
+            prev.addEventListener('click', function () { if (!prev.disabled) { view = new Date(view.getFullYear(), view.getMonth() - 1, 1, 12); draw(); } });
+            next.addEventListener('click', function () { if (!next.disabled) { view = new Date(view.getFullYear(), view.getMonth() + 1, 1, 12); draw(); } });
             head.appendChild(prev);
             head.appendChild(el('div', 'aldpttl', MONTHS_LONG[view.getMonth()] + ' ' + view.getFullYear()));
             head.appendChild(next);
@@ -289,7 +306,8 @@
                     if (past) b.disabled = true;
                     else b.addEventListener('click', function () { close(); onPick(key); });
                     grid.appendChild(b);
-                })(ymd(new Date(view.getFullYear(), view.getMonth(), d)), ymd(new Date(view.getFullYear(), view.getMonth(), d)) < today);
+                })(ymd(new Date(view.getFullYear(), view.getMonth(), d, 12)), ymd(new Date(view.getFullYear(), view.getMonth(), d, 12)) < today
+                   || ymd(new Date(view.getFullYear(), view.getMonth(), d, 12)) > cutoff);
             }
             box.appendChild(grid);
             box.appendChild(chip('Cancel', false, close, 'ghost'));
@@ -306,12 +324,11 @@
                   kind: alarm ? alarm.sound_kind : 'tone', tone: alarm && alarm.sound_kind === 'tone' ? alarm.sound_id : 'sunrise',
                   music: alarm && alarm.sound_kind === 'music' ? alarm.sound_id : '', musicName: alarm && alarm.sound_kind === 'music' ? alarm.sound_name : '',
                   snooze: alarm ? alarm.snooze_minutes : 9, more: false };
-        var today = ymd(new Date(nowMs()));
+        var today = householdNow(nowMs(), st.tz).ymd;
         // A once-off with no day picked yet: today while the time is still ahead, else tomorrow (what the server would pick).
         function autoDate() {
             if (!s.dateAuto) return;
-            var hhmm = to24h(s.h, s.mi, s.mer), d = new Date(nowMs());
-            var ahead = hhmm > (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
+            var ahead = to24h(s.h, s.mi, s.mer) > householdNow(nowMs(), st.tz).hm;
             s.date = ahead ? today : addDays(today, 1);
         }
         autoDate();
@@ -438,9 +455,12 @@
             var repeat = s.custom ? repeatOf('', s.days) : repeatOf(s.preset, []);
             var body = { time_hhmm: to24h(s.h, s.mi, s.mer), repeat: repeat, snooze_minutes: s.snooze };
             if (repeat === 'once') {
-                autoDate();
-                var d = new Date(nowMs()), nowHm = (d.getHours() < 10 ? '0' : '') + d.getHours() + ':' + (d.getMinutes() < 10 ? '0' : '') + d.getMinutes();
-                if (s.date < today || (s.date === today && body.time_hhmm <= nowHm)) { err.textContent = 'That time has already passed today. Pick another day.'; return; }
+                // Never re-pick the day here: what is on screen is what is saved, and a Today whose time went by while the editor
+                // stood open is refused in place (the user sees it and picks), not quietly moved to tomorrow.
+                var hn = householdNow(nowMs(), st.tz);
+                if (s.date < hn.ymd || (s.date === hn.ymd && body.time_hhmm <= hn.hm)) {
+                    s.dateAuto = false; err.textContent = 'That time has already passed today. Pick another day.'; return;
+                }
                 body.once_date = s.date;
             }
             if (s.kind === 'music' && s.music) { body.sound_kind = 'music'; body.sound_id = s.music; body.sound_name = s.musicName; }
@@ -471,7 +491,19 @@
         r.appendChild(tm);
         var info = el('div', 'alinfo');
         info.appendChild(el('div', 'alname', a.masked ? 'Private alarm' : (a.label || (a.household ? 'Household alarm' : 'Alarm'))));
-        info.appendChild(el('div', 'alsub', subline(a, ymd(new Date(nowMs())))));
+        info.appendChild(el('div', 'alsub', subline(a, householdNow(nowMs(), st.tz).ymd)));
+        // One day's change ("an hour earlier next Friday", set by voice): shown on the row; tapping it puts that day back to normal.
+        (a.overrides || []).slice(0, 2).forEach(function (o) {
+            var txt = dayLabel(o.date, householdNow(nowMs(), st.tz).ymd, true) + ': ' + (o.action === 'skip' ? 'off' : clockText(o.time_hhmm));
+            if (!a.editable) { info.appendChild(el('div', 'alov', txt)); return; }
+            var b = el('button', 'alov', txt + '  ·  Undo');
+            b.setAttribute('aria-label', 'Put ' + dayLabel(o.date, householdNow(nowMs(), st.tz).ymd, true) + ' back to ' + clockText(a.time_hhmm));
+            b.addEventListener('click', function (e) {
+                e.stopPropagation();
+                host.apiJson('DELETE', '/api/alarms/' + encodeURIComponent(a.id) + '/overrides/' + encodeURIComponent(o.date)).then(refresh).catch(function () {});
+            });
+            info.appendChild(b);
+        });
         r.appendChild(info);
         if (a.editable) {
             var sw = el('button', 'alsw' + (a.enabled ? ' on' : ''));
@@ -490,6 +522,7 @@
         function refresh() {
             host.apiGet('/api/alarms').then(function (d) {
                 st.tones = (d && d.tones) || st.tones;
+                if (d && d.tz) st.tz = String(d.tz);
                 clear(root);
                 var head = el('div', 'alhead');
                 head.appendChild(el('div', 'alhelp', 'Say “wake me at 7”, or tap New alarm'));
@@ -544,6 +577,6 @@
 
     window.ZoeAlarms = { init: init, attachTabs: attachTabs, mount: mount, _poll: poll, _state: st,
                          pure: { to24h: to24h, from24h: from24h, clockText: clockText, wheelIndex: wheelIndex, repeatOf: repeatOf, chipsOf: chipsOf,
-                                 addDays: addDays, dayLabel: dayLabel, subline: subline },
+                                 addDays: addDays, dayLabel: dayLabel, subline: subline, householdNow: householdNow },
                          HOLD_MS: HOLD_MS };
 })();

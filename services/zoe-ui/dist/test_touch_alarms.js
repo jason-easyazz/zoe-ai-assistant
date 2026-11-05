@@ -277,8 +277,8 @@ async function ringing(over, postFn) {
     ok(b.snd.starts.length === 1 && b.snd.stops === 0, 'late music never silences the fallback tone (the server fails it past the deadline)'); }
 
   // SIMPLER EDITOR + ONE-OFF ON A DAY (owner 2026-11-06): time, repeat and (for Once) the day show; the rest waits behind More options
-  async function editorOpen(clockMs, alarmsRows) {
-    const b = boot({ get: (u) => (u === '/api/alarms' ? { alarms: alarmsRows || [], tones: { sunrise: 'Sunrise', bell: 'Bell' }, now: 1 } : { now: clockMs / 1000, ringing: [] }) });
+  async function editorOpen(clockMs, alarmsRows, tz) {
+    const b = boot({ get: (u) => (u === '/api/alarms' ? { alarms: alarmsRows || [], tones: { sunrise: 'Sunrise', bell: 'Bell' }, now: 1, tz: tz || 'UTC' } : { now: clockMs / 1000, ringing: [] }) });
     b.window.ZoeAlarms.init(b.host); b.advance(400); await flush(); await flush();
     const tabs = b.document.createElement('div'); const t1 = b.document.createElement('div'); const a1 = b.document.createElement('div');
     b.window.ZoeAlarms.attachTabs({ tabsEl: tabs, timersEl: t1, alarmsEl: a1 })('alarms'); await flush(); await flush();
@@ -329,6 +329,46 @@ async function ringing(over, postFn) {
     fire(stg.querySelectorAll('.aldays .alchip')[4], 'click'); fire(chipT(stg, 'Save'), 'click'); await flush();
     const p = b.calls.find((c) => c[0] === 'POST' && c[1] === '/api/alarms');
     ok(p && p[2].repeat === 'days:5' && !('once_date' in p[2]), 'Days → Fri sends a repeat, no once_date: ' + JSON.stringify(p && p[2])); }
+  // the HOUSEHOLD zone decides today, not the panel's OS zone (this file pins TZ=UTC): 00:16 UTC is already 08:16 in Perth
+  { const { stg, a1 } = await editorOpen(1000000, [], 'Australia/Perth');
+    fire(chipT(a1, '+ New alarm'), 'click'); await flush();
+    const dayRow = stg.querySelectorAll('.alrow').find((r) => r.children[0].textContent === 'Day');
+    ok(dayRow.querySelectorAll('.alchip.on').map((c) => c.textContent).join() === 'Tomorrow', 'household zone: 7:00 has gone in Perth, so Tomorrow');
+    const P = boot().window.ZoeAlarms.pure;
+    ok(JSON.stringify(P.householdNow(1000000, 'Australia/Perth')) === '{"ymd":"1970-01-01","hm":"08:16"}' && P.householdNow(1000000, 'UTC').hm === '00:16', 'householdNow reads the given zone');
+    ok(P.householdNow(1000000, 'Not/AZone').ymd === '1970-01-01', 'an unknown zone falls back to the browser clock'); }
+  // a Today whose time went by while the editor stood open is refused - never quietly saved for tomorrow
+  { const { b, a1, stg } = await editorOpen(1000000 + 6 * 3600000 + 30 * 60000);  // 06:46 UTC, a 7:00 alarm: Today is the default
+    b.advance(6 * 3600000 + 30 * 60000); await flush();
+    fire(chipT(a1, '+ New alarm'), 'click'); await flush();
+    const dayRow = stg.querySelectorAll('.alrow').find((r) => r.children[0].textContent === 'Day');
+    ok(dayRow.querySelectorAll('.alchip.on').map((c) => c.textContent).join() === 'Today', 'Today while 7:00 is ahead');
+    b.advance(20 * 60000);  // 07:06: the editor stood open past 7:00
+    fire(chipT(stg, 'Save'), 'click'); await flush();
+    ok(!b.calls.some((c) => c[0] === 'POST' && c[1] === '/api/alarms') && /already passed/.test(stg.querySelector('.alerr').textContent), 'refused in place, not moved to tomorrow'); }
+  // the month grid stops at a year ahead to the DAY, not at the end of that month
+  { const { b, a1, stg } = await editorOpen(1000000 + 5 * 86400000);  // 6 Jan 1970
+    b.advance(5 * 86400000); await flush();
+    fire(chipT(a1, '+ New alarm'), 'click'); await flush();
+    fire(chipT(stg, 'Pick a date'), 'click');
+    for (let i = 0; i < 12; i++) fire(stg.querySelector('.aldp').querySelectorAll('.alnav')[1], 'click');
+    const jan71 = stg.querySelector('.aldp').querySelectorAll('.aldpday');
+    ok(jan71.length === 31 && !jan71[5].disabled && jan71[6].disabled === true && jan71[30].disabled === true, 'Jan 1971: the 6th can be picked, the 7th and later cannot');
+    ok(stg.querySelector('.aldp').querySelectorAll('.alnav')[1].disabled === true, 'no month past the year'); }
+
+  // one day's change shows on the row and a tap puts that day back (DELETE .../overrides/<date>); someone else's is shown, not tappable
+  { const row = (ed) => ({ id: 'w1', time_hhmm: '06:30', repeat_rule: 'weekdays', repeat_phrase: 'on weekdays', enabled: true, when: 'x', label: 'Work',
+                           editable: ed, overrides: [{ date: '1970-01-09', action: 'shift', time_hhmm: '05:30' }] });
+    const { b, a1 } = await editorOpen(1000000, [row(true)]);
+    const ov = a1.querySelectorAll('.alov')[0];
+    ok(ov && ov.tagName === 'BUTTON' && ov.textContent === 'Fri 9 Jan: 5:30 am  ·  Undo', 'override shown on the row: ' + (ov && ov.textContent));
+    fire(ov, 'click'); await flush();
+    ok(b.calls.some((c) => c[0] === 'DELETE' && c[1] === '/api/alarms/w1/overrides/1970-01-09'), 'tap clears that day');
+    ok(!b.calls.some((c) => c[0] === 'PATCH'), 'and does not open the editor or change the alarm');
+    const r2 = await editorOpen(1000000, [row(false)]);
+    const ov2 = r2.a1.querySelectorAll('.alov')[0];
+    ok(ov2 && ov2.tagName === 'DIV' && !/Undo/.test(ov2.textContent), 'not editable: shown, not tappable'); }
+
   // the list names a once-off's day
   { const P = boot().window.ZoeAlarms.pure;
     ok(P.subline({ repeat_rule: 'once', once_date: '2026-11-07', enabled: true }, '2026-11-05') === 'Once · Sat 7 Nov', 'Once · Sat 7 Nov');
