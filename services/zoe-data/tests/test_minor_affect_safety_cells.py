@@ -413,3 +413,25 @@ def test_c_a_row_rejected_by_something_else_is_not_resumed(env, monkeypatch):
 @pytest.mark.parametrize("text", ["i'm afraid i'm being followed", "i'm afraid my dad is angry with me"])
 def test_a_present_tense_fear_stays_a_feeling(text):
     assert extract_affect(text)[0] == "scared"
+
+
+def test_c_a_guardian_forget_erases_the_childs_verbatim_words_by_the_rows_provenance(env, monkeypatch):
+    """Codex #2302: the extracted text ('User was scared of the thunder ...') is not the utterance, so the erase must carry the row's
+    stored quote and turn id or the child's words stay searchable behind a success."""
+    import provenance_answers as pa
+
+    a, _b = _child(env, monkeypatch)
+    seen = []
+
+    async def record(user_id, exp, *extra):
+        seen.append(exp)
+        return 0
+
+    monkeypatch.setattr(pa, "_erase_words", record)
+    assert run(memory_space.guardian_forget(OTHER, a.id, actor=ME)) == "forgotten"
+    assert seen and seen[0].quote == EXCERPT                                # the verbatim words, not just the extracted text
+    seen.clear()
+    b2 = run(env.svc.ingest("User was nervous about the dentist.", user_id=OTHER, source="digest", memory_type="emotional_moment",
+                            status="approved", source_excerpt="i am nervous about the dentist", captured_at="2026-10-07T02:00:00Z"))
+    assert run(memory_space.forget_row(OTHER, b2.id)) == "forgotten"       # the member's own forget uses the same provenance
+    assert seen and seen[0].quote == "i am nervous about the dentist"

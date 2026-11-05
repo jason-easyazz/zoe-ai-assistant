@@ -253,7 +253,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
         return "gone"          # pending / disputed / archived rows are not on the screen: nothing here to forget
     if await curated_locked(user_id, ref.metadata):
         return "protected"
-    exp = mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or "")
+    exp = _explained_for(rid, ref)
     twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)    # a failed lookup stops us BEFORE the forget: retryable
     if status == "approved":
         if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
@@ -276,6 +276,14 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     if status == "rejected" and len(gone) == 1 and not erased and not physical:
         return "gone"          # already forgotten earlier and nothing was left to remove
     return "forgotten"
+
+
+def _explained_for(rid: str, ref: Any) -> "mp.Explained":
+    """The row as a forget target WITH its provenance: an extracted memory's text ("User was scared of the thunder") is not the child's
+    verbatim utterance, so the erase must also use the row's stored turn id and quote, or the words stay searchable."""
+    meta = ref.metadata or {}
+    return mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or "", quote=str(meta.get("source_excerpt") or ""),
+                        turn_id=str(meta.get("user_turn_id") or ""))
 
 
 def guardian_forget_open(meta: dict) -> bool:
@@ -314,7 +322,7 @@ async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = Non
 
         if physical_erase_enabled():
             await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
-    await pa._erase_words(owner, mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or ""), ref.text or "")
+    await pa._erase_words(owner, _explained_for(rid, ref), ref.text or "")
     logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))
     return "forgotten"
 
