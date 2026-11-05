@@ -168,6 +168,11 @@ def _loosen(mutate):
                                               r["classes"]["purchase"]["rows"].__setitem__("child", "allow"))),
     ("forget_remapped_to_read", lambda r: r["intents"].__setitem__("memory_retire", {"class": "read_public"})),
     ("memory_store_remapped", lambda r: r["intents"].__setitem__("memory_store", {"class": "panel_utility"})),
+    ("private_read_remapped_public", lambda r: r["intents"].__setitem__("calendar_show", {"class": "read_public"})),
+    ("personal_write_remapped_list", lambda r: r["intents"].__setitem__("reminder_create", {"class": "household_list"})),
+    ("guest_drives_the_house", lambda r: r["classes"]["home_control"]["rows"].__setitem__("guest", "allow")),
+    ("guest_personal_write", lambda r: r["classes"]["personal_write"]["rows"].__setitem__("unrecognised_voice", "allow")),
+    ("new_intent_mapped_loose", lambda r: r["intents"].__setitem__("send_money", {"class": "read_public"})),
     ("unknown_allows", lambda r: r["classes"]["unknown"]["rows"].__setitem__("owner", "allow")),
     ("unknown_removed", lambda r: r["classes"].pop("unknown")),
     ("self_modify_removed", lambda r: r["classes"].pop("self_modify")),
@@ -179,6 +184,13 @@ def _loosen(mutate):
 def test_loosened(name, mutate):
     with pytest.raises(ha.AuthorityTableError):
         ha.validate(_loosen(mutate))
+
+
+def test_remap_to_a_stricter_class_is_fine():
+    raw = _loosen(lambda r: r["intents"].__setitem__("weather", {"class": "read_private"}))
+    assert ha.validate(raw).intents["weather"].action_class == "read_private"
+    raw = _loosen(lambda r: r["intents"].__setitem__("send_money", {"class": "purchase"}))
+    assert ha.validate(raw).intents["send_money"].action_class == "purchase"
 
 
 def test_invalid_table_file_refuses_everything(monkeypatch, tmp_path):

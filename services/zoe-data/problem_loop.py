@@ -60,7 +60,7 @@ class StepRecord:
 @dataclass(frozen=True)
 class EscalationCard:
     goal: str
-    reason: str               # step_budget | time_budget | ask_first | never | repeat | unverified
+    reason: str               # step_budget | time_budget | ask_first | never | repeat | unverified | failed | planner_failed
     tried: tuple[str, ...]
     need: str
     to: str = "member"        # member | guardian | owner
@@ -120,6 +120,8 @@ async def run(goal: str, *, user_id: str, role: str, plan_next: Planner, execute
     those; ``never`` stays never). Never raises for a planner/executor failure: that is a ``failed`` step or a card."""
     if not enabled():
         return LoopOutcome("off")
+    max_steps = max(0, min(int(max_steps), MAX_STEPS))           # a caller may tighten the budget, never widen it
+    max_seconds = max(0.0, min(float(max_seconds), MAX_SECONDS))
     started = clock()
     records: list[StepRecord] = []
     seen: set[str] = set()
@@ -139,7 +141,7 @@ async def run(goal: str, *, user_id: str, role: str, plan_next: Planner, execute
         if remaining() <= 0:
             return escalate("time_budget", "this is taking longer than I should take on my own - shall I keep going?")
         try:
-            step = await asyncio.wait_for(_call_planner(plan_next, tuple(records)), timeout=remaining())
+            step = await _bounded(_call_planner(plan_next, tuple(records)), remaining())
         except asyncio.TimeoutError:
             return escalate("time_budget", "this is taking longer than I should take on my own - shall I keep going?")
         except Exception as exc:  # noqa: BLE001
@@ -152,8 +154,9 @@ async def run(goal: str, *, user_id: str, role: str, plan_next: Planner, execute
                 return escalate("unverified", "a quick check that " + ", ".join(_label(r.step) for r in unproven)
                                 + " really happened - I couldn't confirm it.")
             failed = [r for r in records if r.status == "failed"]
-            if failed and not any(r.status == "done" for r in records):
-                return escalate("unverified", "another way to do this - nothing I tried worked.")
+            if failed:                                       # one failed step = the problem is not solved
+                return escalate("failed", "another way to " + ", ".join(_label(r.step) for r in failed)
+                                + " - it didn't work.")
             logger.info("PROBLEM_LOOP done steps=%d", len(records))
             return LoopOutcome("done", tuple(records), None, clock() - started)
 
@@ -176,6 +179,18 @@ async def run(goal: str, *, user_id: str, role: str, plan_next: Planner, execute
         records.append(await _run_step(step, decision, user_id, execute, remaining()))
 
 
+async def _bounded(aw, timeout_s: float):
+    """Await ``aw`` for at most ``timeout_s`` - a HARD bound: on expiry the task is cancelled and NOT awaited, so a callback
+    that suppresses or stalls on cancellation cannot hold the loop past its budget (``asyncio.wait_for`` waits for it)."""
+    task = asyncio.ensure_future(aw)
+    done, _ = await asyncio.wait({task}, timeout=max(timeout_s, 0.001))
+    if not done:
+        task.cancel()
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())   # retrieve, so no "never retrieved" warning
+        raise asyncio.TimeoutError
+    return task.result()
+
+
 async def _run_step(step: Step, decision: authority.Decision, user_id: str, execute: Executor,
                     budget_s: float) -> StepRecord:
     """Execute one allowed step in its own receipt turn and prove it by code."""
@@ -183,7 +198,7 @@ async def _run_step(step: Step, decision: authority.Decision, user_id: str, exec
     turn = ctx.run(write_receipts.begin)          # receipts this step's task writes are stamped with ITS turn
     try:
         task = ctx.run(asyncio.ensure_future, execute(step))
-        result = await asyncio.wait_for(task, timeout=max(budget_s, 0.001))
+        result = await _bounded(task, budget_s)
     except asyncio.TimeoutError:
         return StepRecord(step, decision.action_class, decision.verdict, "failed", "")
     except Exception as exc:  # noqa: BLE001

@@ -36,9 +36,10 @@ The `intents` block maps every dispatchable intent (`routers/system.py` `_DISPAT
 and, where a writer records one, the `write_receipts` kind that proves it landed. A test fails if the two sets drift.
 
 **Floors live in code, not data** (`household_authority.validate`): a high/irreversible class is `never` for child, guest and
-unrecognised voice; nobody is `allow` on an irreversible class; `self_modify` is never for everyone; guests never read private
-data or write memory; `unknown` allows nobody; the floor classes keep a minimum risk; the memory, settings and home intents keep
-their class. A table that breaks a floor does not load, and every decision is then `never` (`table_invalid`).
+unrecognised voice; nobody is `allow` on an irreversible class; `self_modify` is never for everyone; guests and unrecognised
+voices never read private data, make a personal write, drive the house or write memory; `unknown` allows nobody; the floor
+classes keep a minimum risk; every intent has a baseline class in code and the data may re-map it only to a class at least as
+strict for every role (an intent with no baseline is judged against `unknown`). A table that breaks a floor does not load, and every decision is then `never` (`table_invalid`).
 
 `decide(class, role, confirmed=...)` is pure. `confirmed` (the member said yes to this action) turns `ask_first` into allow and
 nothing else: **`never` cannot be overridden**.
@@ -67,8 +68,9 @@ decision first (`ask_first` unconfirmed or `never` = stop before running); each 
 code-checked: a write counts as done only when `write_receipts` holds a receipt of its kind for this member from this step's
 turn, a read when its result is ok; a write with no receipt kind (lights, music, memory) is `unverified`, never done. Stops with
 an `EscalationCard` (`"Here's what I tried: ... Here's what I need from you: ..."`, addressed to the member, a guardian for a
-child, or the owner for self-modify) on: 6 steps, 90 seconds (also enforced per call), the same tool with the same arguments
-twice, an unverified write, a planner failure.
+child, or the owner for self-modify) on: 6 steps, 90 seconds, the same tool with the same arguments twice, an unverified
+write, any failed step, a planner failure. A caller may tighten the budget, never widen it; the time bound is hard (an expired
+planner/executor call is cancelled and not awaited, so a callback that ignores cancellation cannot hold the loop).
 
 ## Evidence plan
 

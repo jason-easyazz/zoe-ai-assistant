@@ -10,11 +10,12 @@ decision is then ``never`` with reason ``table_invalid`` - fail closed):
   1. A ``high`` or ``irreversible`` class is ``never`` for a child, a guest and an unrecognised voice.
   2. An ``irreversible`` class is never ``allow`` for anyone: at most ``ask_first``.
   3. ``self_modify`` is ``never`` for every role (the owner review path is the only way to change Zoe).
-  4. A guest and an unrecognised voice ``never`` read private data (voice is a password) or write memory (guests never get
-     memory, affect included).
+  4. A guest and an unrecognised voice ``never`` read private data (voice is a password), make a personal write, drive the
+     house, or write memory (guests never get memory, affect included).
   5. ``unknown`` exists and is not ``allow`` for anyone (unknown tool = ask).
   6. The classes the floors are about keep a minimum risk (``purchase`` cannot be relabelled ``low``).
-  7. The memory, settings and home intents keep their class (``memory_retire`` cannot be re-mapped to a read).
+  7. Every intent has a baseline class in code; the data may re-map it only to a class at least as strict for every role
+     (``calendar_show`` cannot become ``read_public``); an intent with no baseline is judged against ``unknown``.
 
 ``never`` cannot be overridden: ``confirmed=True`` (the member said yes) turns ``ask_first`` into ``allow`` and nothing else.
 
@@ -48,6 +49,9 @@ UNKNOWN_CLASS = "unknown"
 SELF_MODIFY_CLASS = "self_modify"
 PRIVATE_CLASSES = ("read_private",)
 MEMORY_CLASSES = ("memory_write_stated", "memory_write_inferred", "memory_forget")
+# Floor 4: no account = no private read, no personal write, no driving the house, no memory.
+NO_ACCOUNT_NEVER_CLASSES = PRIVATE_CLASSES + ("personal_write", "home_control") + MEMORY_CLASSES
+_STRICTNESS = {"allow": 0, "ask_first": 1, "never": 2}
 # Ids that are a voice nobody recognised (the voice lane's fallback) or no person at all.
 UNRECOGNISED_IDS = frozenset({"", "voice-guest", "anonymous", "voice-daemon"})
 # Slots that make a calendar write involve other people (calendar_shared, not personal_write).
@@ -61,13 +65,23 @@ _MIN_RISK = {
     "irreversible_other": "irreversible", "self_modify": "irreversible",
     "memory_write_inferred": "high", "calendar_shared": "high", "home_security": "high", "settings": "high", "unknown": "high",
 }
-# Floor 7: intents whose class is pinned - so a data edit cannot dodge the floors by re-mapping ``memory_retire`` to a read.
-_PINNED_INTENT_CLASSES = {
-    "memory_retire": frozenset({"memory_forget"}),
-    "memory_store": frozenset({"memory_write_stated", "memory_write_inferred"}),
-    "people_create": frozenset({"memory_write_stated", "memory_write_inferred"}),
-    "music_setup": frozenset({"settings"}),
-    "smart_home": frozenset({"home_control", "home_security"}),
+# Floor 7: the BASELINE class of every known intent, held in code. The data file may re-map an intent only to a class that is,
+# role by role, at least as strict as its baseline - so ``calendar_show`` cannot be moved to ``read_public`` (voice is a
+# password) nor ``memory_retire`` to a read. An intent with no baseline must map to a class at least as strict as ``unknown``.
+_INTENT_BASELINE = {
+    "weather": "read_public", "time_query": "read_public", "date_query": "read_public", "calculate": "read_public",
+    "calendar_show": "read_private", "reminder_list": "read_private", "note_search": "read_private",
+    "people_search": "read_private", "journal_streak": "read_private", "journal_prompt": "read_private",
+    "daily_briefing": "read_private", "alarm_list": "read_private",
+    "list_show": "household_list", "list_add": "household_list", "list_remove": "household_list",
+    "timer_create": "panel_utility", "music_play": "panel_utility", "music_control": "panel_utility",
+    "music_volume": "panel_utility", "set_volume": "panel_utility",
+    "reminder_create": "personal_write", "calendar_create": "personal_write", "note_create": "personal_write",
+    "journal_create": "personal_write", "alarm_set": "personal_write",
+    "smart_home": "home_control",
+    "memory_store": "memory_write_stated", "people_create": "memory_write_stated",
+    "memory_retire": "memory_forget",
+    "music_setup": "settings",
 }
 
 
@@ -129,7 +143,7 @@ def validate(raw: Mapping[str, Any]) -> Table:
         if risk == "irreversible" and any(v == "allow" for v in rows.values()):
             raise AuthorityTableError(f"floor: {name} is irreversible, nobody may be allow")
         # Floor 4
-        if name in PRIVATE_CLASSES or name in MEMORY_CLASSES:
+        if name in NO_ACCOUNT_NEVER_CLASSES:
             for role in NO_ACCOUNT_ROLES:
                 if rows[role] != "never":
                     raise AuthorityTableError(f"floor: {name} must be never for {role}")
@@ -141,7 +155,7 @@ def validate(raw: Mapping[str, Any]) -> Table:
     unk = classes.get(UNKNOWN_CLASS)
     if not unk or any(v == "allow" for v in unk["rows"].values()):
         raise AuthorityTableError("floor: unknown must exist and allow nobody")
-    for floor_class in PRIVATE_CLASSES + MEMORY_CLASSES:
+    for floor_class in NO_ACCOUNT_NEVER_CLASSES:
         if floor_class not in classes:
             raise AuthorityTableError(f"floor: {floor_class} must exist")
     # Floor 6
@@ -153,9 +167,13 @@ def validate(raw: Mapping[str, Any]) -> Table:
         if not isinstance(spec, Mapping) or spec.get("class") not in classes:
             raise AuthorityTableError(f"intent {intent}: unknown class")
         # Floor 7
-        pinned = _PINNED_INTENT_CLASSES.get(intent)
-        if pinned is not None and spec["class"] not in pinned:
-            raise AuthorityTableError(f"floor: intent {intent} must map to one of {sorted(pinned)}")
+        baseline = _INTENT_BASELINE.get(intent, UNKNOWN_CLASS)
+        if baseline not in classes:
+            raise AuthorityTableError(f"floor: baseline class {baseline} of {intent} must exist")
+        mapped_rows, base_rows = classes[spec["class"]]["rows"], classes[baseline]["rows"]
+        for role in ROLES:
+            if _STRICTNESS[mapped_rows[role]] < _STRICTNESS[base_rows[role]]:
+                raise AuthorityTableError(f"floor: intent {intent} re-mapped to a looser class for {role} (baseline {baseline})")
         parsed[intent] = IntentSpec(str(spec["class"]), str(spec.get("receipt") or ""))
     return Table(classes={k: dict(v) for k, v in classes.items()}, intents=parsed)
 

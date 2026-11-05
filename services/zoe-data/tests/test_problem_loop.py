@@ -144,6 +144,55 @@ def test_slow_step_is_cut_at_the_budget():
     assert out.elapsed_s < 0.9
 
 
+def test_caller_cannot_widen_the_step_budget():
+    counter = itertools.count()
+    ex = Exec()
+    out = asyncio.run(pl.run("g", user_id=USER, role="adult", execute=ex, max_steps=50,
+                             plan_next=lambda h: Step("weather", {"n": next(counter)})))
+    assert out.card.reason == "step_budget" and len(ex.calls) == 6
+
+
+def test_caller_cannot_widen_the_time_budget():
+    t = itertools.count(0, 50)                             # 50 s per clock read: a 1000 s budget would allow many steps
+    counter = itertools.count()
+    ex = Exec()
+    out = asyncio.run(pl.run("g", user_id=USER, role="adult", execute=ex, max_seconds=1000.0, clock=lambda: float(next(t)),
+                             plan_next=lambda h: Step("weather", {"n": next(counter)})))
+    assert out.card.reason == "time_budget" and len(ex.calls) <= 1
+
+
+def test_a_failed_write_after_a_good_read_is_not_done():
+    class FailWrites(Exec):
+        async def __call__(self, step):
+            self.calls.append(step.intent)
+            return {"ok": step.intent == "calendar_show"}
+
+    out, _ = run([Step("calendar_show", {}), Step("reminder_create", {"title": "t"}, why="set the reminder")], ex=FailWrites())
+    assert out.status == "escalated" and out.card.reason == "failed"
+    assert "set the reminder" in out.card.need
+
+
+def test_a_step_that_ignores_cancellation_cannot_outlive_the_budget():
+    import time
+
+    async def stubborn(step):
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.6)                       # suppresses + stalls on cancellation
+        return {"ok": True}
+
+    async def main():
+        t0 = time.monotonic()
+        out = await pl.run("g", user_id=USER, role="adult", plan_next=planner([Step("weather", {})]), execute=stubborn,
+                           max_seconds=0.1)
+        return out, time.monotonic() - t0
+
+    out, took = asyncio.run(main())
+    assert out.status == "escalated" and out.steps[0].status == "failed"
+    assert took < 0.5
+
+
 def test_repeat_escalates():
     ex = Exec()
     out = asyncio.run(pl.run("g", user_id=USER, role="adult", execute=ex,
