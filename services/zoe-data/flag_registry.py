@@ -662,6 +662,7 @@ _ENTRIES = (
     _f('ZOE_PROACTIVE_SLOW_LOOP_S', 'int', 300),
     _f('ZOE_PROACTIVE_SPOKEN', 'str', '', doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_PROACTIVE_SPOKEN_TRIGGERS', 'str', 'morning_checkin', doc='docs/knowledge/feature-audit-2026-09-25.md'),
+    _f('ZOE_PROBLEM_LOOP', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/authority-table.md'),
     _f('ZOE_PROVENANCE_PERSIST', 'bool', True, doc='docs/knowledge/samantha-bar.md'),
     _f('ZOE_PROVISION_CODE_TTL_S', 'int', 300, doc='docs/architecture/panel-anywhere.md'),
     _f('ZOE_PROVISION_PICKUP_GRACE_S', 'int', 120, doc='services/zoe-data/routers/AGENTS.md'),
