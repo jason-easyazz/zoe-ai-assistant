@@ -44,8 +44,21 @@ KEEP = 3                           # rotated files kept beside the live one
 WORDS_CHARS = 512
 TEXT_CHARS = 600
 
-#: the trace directory; a module constant so tests can point it at a temp dir. Never inside the repo or ~/.zoe-logs.
-TRACE_DIR = Path(os.path.expanduser("~/.zoe/recall-gate-trace"))
+#: the trace directory. Never inside the repo or ~/.zoe-logs (the off-box backup excludes the name ``recall-gate-trace``).
+DEFAULT_DIR = "~/.zoe/recall-gate-trace"
+TRACE_DIR: Optional[Path] = None     # a test override; None = ``ZOE_RECALL_GATE_TRACE_DIR`` (read per call; the test conftest pins it) or the default
+
+
+def trace_dir() -> Path:
+    if TRACE_DIR is not None:
+        return Path(TRACE_DIR)
+    try:
+        from typed_env import env_str
+
+        raw = env_str("ZOE_RECALL_GATE_TRACE_DIR", "").strip()
+    except Exception:  # noqa: BLE001
+        raw = ""
+    return Path(os.path.expanduser(raw or DEFAULT_DIR))
 FILE_NAME = "trace.jsonl"
 
 
@@ -81,7 +94,7 @@ def _no_link(p: Path) -> None:
 def _safe_dir() -> Path:
     """The trace directory, created 0700; a symlinked directory, a symlinked ANCESTOR, or a non-directory path is REFUSED (a pre-planted
     link must not redirect the owner's words into the repo or anywhere else)."""
-    d = TRACE_DIR
+    d = trace_dir()
     parent = d.parent
     if os.path.realpath(parent) != os.path.abspath(parent):
         raise _Unsafe("a symlinked ancestor of the trace directory")    # e.g. ~/.zoe pointing into the repo or a synced folder
@@ -190,7 +203,7 @@ def record(user_id: str, dec: Any, owner_words: str, cands: Iterable[Any], *, mo
 
 
 def _files() -> list:
-    d = TRACE_DIR
+    d = trace_dir()
     if d.is_symlink() or os.path.realpath(d.parent) != os.path.abspath(d.parent):
         raise _Unsafe("symlinked trace directory or ancestor")
     if not d.exists():

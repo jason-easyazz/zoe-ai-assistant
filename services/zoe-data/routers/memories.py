@@ -1021,6 +1021,11 @@ async def memory_for_prompt(
     # prefix, so this slice == the narrow read). Continuity reads recency
     # directly below, so it does not need the wide ranked scan.
     scan = _EMO_PIN_SCAN if emo_turn else limit
+    import recall_gate
+
+    # the opt-in recall-gate trace's forget barrier, read BEFORE any row is (None, no I/O, when the trace is off): a forget that
+    # completes while this turn awaits its reads keeps the rows read before it out of the trace
+    trace_ep = recall_gate.trace_epoch()
     all_rows = await svc.load_for_prompt(user_id, limit=scan)
     facts = all_rows[:limit]
     hits: list[MemoryRef] = []
@@ -1109,6 +1114,7 @@ async def memory_for_prompt(
                 rows, [], max_facts=limit, evidence=evidence, quotes=quotes),
             # (called in-process the default is the Query() descriptor, not a str: the gate then uses this task's own session)
             session_id=session_id if isinstance(session_id, str) else None,
+            trace_ep=trace_ep,
         )
     if evidence:
         ev = result.pop("evidence", None) or {}

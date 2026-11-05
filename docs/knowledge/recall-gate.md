@@ -223,6 +223,9 @@ mode, the owner's words (512 characters), the selected ids, and id + text of eve
   `local_text_logs.erase_all_text`) clears it household-wide, an entity forget (`local_text_logs.erase_entity`, cascade step
   `text_logs`) drops every line naming the entity; both fail closed. No append lands while an erase runs, nor for a decision whose rows
   were read before an erase that has since finished. A symlinked trace directory or file is refused (never followed).
+- The barrier epoch is read by the CALLERS (`memory_for_prompt`, `personalisation_hop.build`) before their own row reads and passed as
+  `trace_ep`; a decision without one is never traced. `ZOE_RECALL_GATE_TRACE_DIR` overrides the directory (the test conftest pins it;
+  the off-box exclusion matches the default name `recall-gate-trace`, so keep that name if you override it).
 - Silent: a trace write failure leaves no log line at any level, and the gate's decision is identical with the trace off, on or failing.
 - Turning it off stops writing; it does not delete. Delete `~/.zoe/recall-gate-trace/` when the scoring is done.
 - Tests: `services/zoe-data/tests/test_recall_gate_trace.py` (off by default, explicit-on only, perms, rotation, retention, skipped

@@ -68,7 +68,7 @@ async def _decide(message="How is Juniper getting on?", *, floor=(FILLER,)):
     walk, books = ref("zoe_demo_walk0001", WALK), ref("zoe_demo_book0001", BOOKS)
     fill = [ref(f"zoe_demo_fill{i:04d}", t) for i, t in enumerate(floor)]
     return await rg.evaluate_packet(Svc([walk, books] + fill), UID, message, facts=fill, hits=[], recent=None,
-                                    presented=[r.id for r in fill], mood=False, now=T0)
+                                    presented=[r.id for r in fill], mood=False, now=T0, trace_ep=rg.trace_epoch())
 
 
 async def test_off_by_default_writes_nothing_and_creates_no_directory():
@@ -179,7 +179,8 @@ async def test_the_trace_never_changes_the_decision(monkeypatch, trace):
         return [_snap(await rg.evaluate_packet(Svc([ref("zoe_demo_walk0001", WALK), ref("zoe_demo_book0001", BOOKS),
                                                     ref("zoe_demo_fill0000", FILLER)]), UID, m,
                                                facts=[ref("zoe_demo_fill0000", FILLER)], hits=[], recent=None,
-                                               presented=["zoe_demo_fill0000"], mood=False, now=T0 + k, session_id="s"))
+                                               presented=["zoe_demo_fill0000"], mood=False, now=T0 + k, session_id="s",
+                                               trace_ep=rg.trace_epoch()))
                 for k, m in enumerate(("How is Juniper getting on?", "and the lighthouse novel?", "thanks"))]
 
     baseline = await three_turns()
@@ -367,3 +368,64 @@ def test_an_eraser_failure_raises_so_the_forget_step_fails_closed(monkeypatch):
     monkeypatch.setattr(tr.os, "replace", boom)
     with pytest.raises(OSError):
         tr.erase_all()
+
+
+# ── the callers read the barrier BEFORE their own row reads (codex #2303: a forget during the caller's awaits) ─────────────
+
+class _FloorSvc:
+    """What memory_for_prompt reads; ``erase_during_read`` completes a forget while the caller is reading its rows."""
+
+    def __init__(self, rows, erase_during_read):
+        self.rows, self.erase = list(rows), erase_during_read
+
+    def _maybe_erase(self):
+        if self.erase:
+            import local_text_logs as ltl
+
+            ltl._bump_epoch(+1)
+            ltl._bump_epoch(-1)                                 # a whole erase, start to finish, inside the caller's read
+
+    async def load_for_prompt(self, user_id, *, limit):
+        self._maybe_erase()
+        return self.rows[:limit]
+
+    async def load_recent_for_prompt(self, user_id, *, window_s, limit, emotional_first=False):
+        return []
+
+    async def search(self, query, *, user_id, limit=6, **_):
+        return []
+
+    async def load_durable_for_hop(self, user_id):
+        self._maybe_erase()
+        return list(self.rows)
+
+
+@pytest.mark.parametrize("erase", [True, False])
+async def test_a_forget_during_the_packet_callers_reads_keeps_those_rows_out_of_the_trace(monkeypatch, erase):
+    import routers.memories as memories
+
+    monkeypatch.setenv(tr.ENV, "1")
+    svc = _FloorSvc([ref("zoe_demo_fill0000", FILLER), ref("zoe_demo_walk0001", WALK)], erase)
+    monkeypatch.setattr(memories, "_svc", lambda: svc)
+    await memories.memory_for_prompt(user_id=UID, message="How is Juniper getting on?", limit=12, _=None)
+    await rg.drain()
+    assert _live().exists() is (not erase)                  # negative control: no forget -> the decision IS traced
+
+
+@pytest.mark.parametrize("erase", [True, False])
+async def test_a_forget_during_the_hop_callers_read_keeps_those_rows_out_of_the_trace(monkeypatch, erase):
+    import personalisation_hop as hop
+
+    monkeypatch.setenv(tr.ENV, "1")
+    await hop.build(UID, "What should I wear tomorrow? It's meant to be really cold.",
+                    svc=_FloorSvc([ref("zoe_demo_walk0001", WALK)], erase))
+    await rg.drain()
+    assert _live().exists() is (not erase)
+
+
+def test_the_test_suite_pins_the_trace_directory_away_from_home(monkeypatch):
+    monkeypatch.setattr(tr, "TRACE_DIR", None)
+    d = tr.trace_dir()
+    assert not str(d).startswith(os.path.expanduser("~/.zoe")), d     # the conftest pin (ZOE_RECALL_GATE_TRACE_DIR) holds
+    monkeypatch.delenv("ZOE_RECALL_GATE_TRACE_DIR", raising=False)
+    assert str(tr.trace_dir()) == os.path.expanduser(tr.DEFAULT_DIR)    # negative control: unpinned = the owner's real path

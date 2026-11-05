@@ -689,8 +689,9 @@ def _log(user_id: str, d: Decision, m: str) -> None:
 
 # ── the surfaces ────────────────────────────────────────────────────────────────────────────
 
-def _trace_epoch() -> Optional[int]:
-    """The opt-in trace's forget-barrier epoch when the trace is on (one env read when off). Never raises."""
+def trace_epoch() -> Optional[int]:
+    """The opt-in trace's forget-barrier epoch when the trace is on (one env read when off). A caller reads it BEFORE it reads the rows
+    it hands the gate and passes it as ``trace_ep``; a decision with no reading is never traced. Never raises."""
     try:
         import recall_gate_trace
 
@@ -774,12 +775,11 @@ def _forget_old(sess: Session, turn: int) -> None:
 
 async def evaluate_packet(svc: Any, user_id: str, message: str, *, facts: list, hits: list, recent: Optional[list],
                           presented: list, mood: bool, now: Optional[float] = None, cfg: Optional[Config] = None,
-                          session_id: Optional[str] = None) -> Decision:
+                          session_id: Optional[str] = None, trace_ep: Optional[int] = None) -> Decision:
     """The gate's decision for the recall packet of the conversation ``(user_id, session_id)`` (None: see ``_turn_context``). Never
     raises (an error is a ``skipped`` decision: the floor stands)."""
     try:
         t = time.monotonic() if now is None else now
-        ep = _trace_epoch()                  # BEFORE any row is read (the opt-in trace's forget barrier; None when the trace is off)
         if _is_guest(user_id):
             return _skip("packet", "guest")
         if not (message or "").strip():
@@ -814,7 +814,7 @@ async def evaluate_packet(svc: Any, user_id: str, message: str, *, facts: list, 
             if str(ref.id) in ok:
                 cands[str(ref.id)] = _cand(ref, "pool")
         dec = decide(sess, turn, list(cands.values()), owner, extra=extra, cfg=cfg, surface="packet", presented=presented)
-        _trace(user_id, dec, owner, cands.values(), ep)
+        _trace(user_id, dec, owner, cands.values(), trace_ep)
         sess.cache[key] = dec
         _forget_old(sess, turn)
         return dec
@@ -847,7 +847,7 @@ async def _shadow_packet(svc: Any, user_id: str, message: str, kw: dict) -> None
 
 
 async def packet_surface(svc: Any, user_id: str, message: str, result: dict, *, facts: list, hits: list, recent: Optional[list],
-                         mood: bool, rebuild: Callable, session_id: Optional[str] = None) -> dict:
+                         mood: bool, rebuild: Callable, session_id: Optional[str] = None, trace_ep: Optional[int] = None) -> dict:
     """``routers.memories.memory_for_prompt`` calls this right after the floor built ``result``. ``off``: ``result`` untouched. ``shadow``:
     ``result`` is returned untouched at once and the decision is evaluated and logged in the background. ``enforce``: the decision is
     awaited and ``rebuild(rows)`` (the packet builder over the gate's rows, in the gate's order) replaces ``result``. ``session_id`` binds the
@@ -859,7 +859,7 @@ async def packet_surface(svc: Any, user_id: str, message: str, result: dict, *, 
         presented = [str(e.get("id")) for e in (result.get("refs") or []) if e.get("id")]
         sid = session_id if isinstance(session_id, str) else current_session()      # resolved HERE: a spawned shadow task keeps it
         kw = dict(facts=list(facts), hits=list(hits), recent=list(recent) if recent else None, presented=presented, mood=mood,
-                  session_id=sid)
+                  session_id=sid, trace_ep=trace_ep)
         if m == "shadow":
             _spawn(_shadow_packet(svc, user_id, message, kw))
             return result
@@ -875,12 +875,12 @@ async def packet_surface(svc: Any, user_id: str, message: str, result: dict, *, 
 
 
 async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, hop_topics: dict, *,
-                       now: Optional[float] = None, cfg: Optional[Config] = None, session_id: Optional[str] = None) -> Decision:
+                       now: Optional[float] = None, cfg: Optional[Config] = None, session_id: Optional[str] = None,
+                       trace_ep: Optional[int] = None) -> Decision:
     """The gate's decision for the personalisation hop: ``rows`` are the owner's durable rows (``load_durable_for_hop``), ``hop_ids`` the
     ids the hop's own English topic match selected (a signal here - the legacy floor - not the only one)."""
     try:
         t = time.monotonic() if now is None else now
-        ep = _trace_epoch()
         if _is_guest(user_id):
             return _skip("hop", "guest")
         if not (message or "").strip():
@@ -905,7 +905,7 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
             c.topic = hop_topics.get(rid, "")
             cands.append(c)
         dec = decide(sess, turn, cands, owner, extra=extra, cfg=cfg, surface="hop", presented=hop_ids)
-        _trace(user_id, dec, owner, cands, ep)
+        _trace(user_id, dec, owner, cands, trace_ep)
         sess.cache[key] = dec
         _forget_old(sess, turn)
         return dec
@@ -914,14 +914,16 @@ async def evaluate_hop(user_id: str, message: str, rows: list, hop_ids: list, ho
         return _skip("hop", "error")
 
 
-async def _shadow_hop(user_id: str, message: str, rows: list, hop_ids: list, topics: dict, session_id: Optional[str]) -> None:
+async def _shadow_hop(user_id: str, message: str, rows: list, hop_ids: list, topics: dict, session_id: Optional[str],
+                     trace_ep: Optional[int] = None) -> None:
     try:
-        _log(user_id, await evaluate_hop(user_id, message, rows, hop_ids, topics, session_id=session_id), "shadow")
+        _log(user_id, await evaluate_hop(user_id, message, rows, hop_ids, topics, session_id=session_id, trace_ep=trace_ep), "shadow")
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall_gate: shadow hop failed (%s)", type(exc).__name__)
 
 
-async def hop_surface(user_id: str, message: str, rows: list, hop: Any, session_id: Optional[str] = None) -> Any:
+async def hop_surface(user_id: str, message: str, rows: list, hop: Any, session_id: Optional[str] = None,
+                      trace_ep: Optional[int] = None) -> Any:
     """``personalisation_hop.build`` calls this with the hop it selected. ``off``/``shadow``: that same ``hop``. ``enforce``: a hop
     built from the gate's selection. Never raises."""
     try:
@@ -932,9 +934,9 @@ async def hop_surface(user_id: str, message: str, rows: list, hop: Any, session_
         topics = {f.id: f.topic for f in hop.facts}
         sid = session_id if isinstance(session_id, str) else current_session()
         if m == "shadow":
-            _spawn(_shadow_hop(user_id, message, list(rows), hop_ids, topics, sid))
+            _spawn(_shadow_hop(user_id, message, list(rows), hop_ids, topics, sid, trace_ep))
             return hop
-        dec = await evaluate_hop(user_id, message, rows, hop_ids, topics, session_id=sid)
+        dec = await evaluate_hop(user_id, message, rows, hop_ids, topics, session_id=sid, trace_ep=trace_ep)
         _log(user_id, dec, "enforce")
         if dec.skipped or (not dec.selected and not HOP.abstain):
             return hop
