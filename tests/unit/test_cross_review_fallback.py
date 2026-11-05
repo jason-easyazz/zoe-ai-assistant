@@ -361,7 +361,7 @@ def test_polly_window_shrinks_to_fit_but_never_exceeds_its_default(rig):
     assert full.returncode == 0 and tight.returncode == 0, tight.stderr
     t = int(re.search(r"T=(\d+)", rig.call_lines("polly")[1]).group(1))
     # 1700 - 20 margin - 600 polly overhead - a second or two already spent
-    assert 1060 <= t <= 1080, t
+    assert 860 <= t <= 880, t  # reserve: 1700 - 20 - 600 polly overhead - 200 teardown reserve
 
 
 def test_a_short_pi_report_below_the_old_80_byte_bar_is_still_kept(rig):
@@ -588,8 +588,9 @@ exec sleep 300
 """
 
 _STUB_REAPER = r"""#!/usr/bin/env python3
-import os, sys
+import os, sys, time
 if "--count-app-servers" in sys.argv:
+    time.sleep(float(os.environ.get("STUB_COUNT_SLEEP", "0")))
     print(os.environ.get("STUB_COUNT", "0"))
 else:
     open(os.environ["STUB_LOG"], "a").write("reaper " + " ".join(sys.argv[1:]) + "\n")
@@ -637,6 +638,7 @@ def leakrig(rig, tmp_path):
             return [int(x) for x in pids.read_text().split()]
 
         reaper_stub = reaper
+        pi_stub = tmp_path / "pi"
 
     lr = LeakRig()
     yield lr, rig
@@ -744,3 +746,30 @@ def test_no_omnigent_script_puts_a_secret_on_a_command_line():
             if f.suffix == ".py" and ln.lstrip().startswith(("#", '"', "'")):
                 continue
             assert not pat.search(code), f"{f.name}:{n} looks like a secret on a command line: {ln.strip()}"
+
+
+def test_one_stubbed_backend_does_not_disable_the_sweep_for_the_real_one(leakrig):
+    """P2: a stub on pi must not stop the cwd sweep after a REAL docker-exec codex run."""
+    lr, rig = leakrig
+    r = lr.run(CROSS_REVIEW_PI_BIN=lr.pi_stub)
+    assert r.returncode == 2, r.stderr
+    assert not [p for p in lr.pids() if _alive(p)], "straggler survived: sweep was disabled"
+
+
+def test_polly_budget_reserves_teardown_time(leakrig):
+    """P1: with the caller timeout this tight, polly + cap steps + teardown cannot fit."""
+    lr, rig = leakrig
+    r = lr.run(CROSS_REVIEW_BACKENDS="polly codex", CROSS_REVIEW_CALLER_TIMEOUT_S=900,
+               CROSS_REVIEW_REAPER_SCRIPT=lr.reaper_stub)
+    assert "polly" not in rig.calls(), "polly started with no room left for teardown"
+    assert "polly unavailable — insufficient time budget" in r.stderr
+
+
+def test_negative_control_polly_window_is_net_of_reserve_and_cap_step_time(leakrig):
+    lr, rig = leakrig
+    r = lr.run(CROSS_REVIEW_BACKENDS="polly", CROSS_REVIEW_CALLER_TIMEOUT_S=1100,
+               CROSS_REVIEW_REAPER_SCRIPT=lr.reaper_stub, STUB_COUNT_SLEEP=3)
+    assert r.returncode == 0, r.stderr
+    t = int(re.search(r"T=(\d+)", rig.call_lines("polly")[0]).group(1))
+    # 1100 - margin 20 - overhead 600 - teardown reserve 200 = 280, minus the 3 s the count took
+    assert 120 <= t <= 277, t

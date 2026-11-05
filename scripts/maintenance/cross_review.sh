@@ -107,6 +107,9 @@ MIN_REPORT_BYTES=40
 # cross_review_polly.sh (570 s) with a little slack. Polly's worst-case wall is
 # poll window + this, so the window is clamped to what the caller's timeout leaves.
 POLLY_OVERHEAD_S=600
+# Worst-case teardown after polly: cwd sweep (30 s + kill-after) + app-server sweep (90 s +
+# kill-after) + slack. Reserved so the caller's timeout never lands inside `cleanup`.
+TEARDOWN_RESERVE_S=200
 DIFF_FETCH_MAX_S=60
 
 POLLY_TIMEOUT_S="${CROSS_REVIEW_POLLY_TIMEOUT_S:-1200}"
@@ -157,6 +160,7 @@ REVIEW_DIR=""        # per-review scratch dir (the reviewers' cwd); created lazi
 REVIEW_REF=""        # refs/zoe-review/... holding the PR head; deleted on exit
 LIVE_BEFORE=""       # "<sha> <symbolic-ref|DETACHED>" of the live checkout before any backend
 GUARD_DONE=""
+CONTAINER_RUN=""     # set once a real `docker exec` backend was launched (cwd sweep applies)
 POLLY_TRIED=""       # set once a polly session may have been started (its app-server may leak)
 
 # ------------------------------------------------------ the live-checkout tripwire ---
@@ -259,7 +263,7 @@ in_container() {  # <override-bin-or-empty> <binary> <host-budget-s> -> sets CMD
   local inner=$(( ${3:-0} - IN_CONTAINER_MARGIN_S ))
   [ "$inner" -ge 1 ] || inner=1
   if [ -n "$1" ]; then CMD=("$1")
-  else CMD=(docker exec -i -w "$REVIEW_DIR" "$CONTAINER" timeout -k 5 "$inner" "$2"); fi
+  else CONTAINER_RUN=1; CMD=(docker exec -i -w "$REVIEW_DIR" "$CONTAINER" timeout -k 5 "$inner" "$2"); fi
 }
 
 # Kill every process in the container whose cwd is the review dir (or under it): codex, its
@@ -269,7 +273,9 @@ in_container() {  # <override-bin-or-empty> <binary> <host-budget-s> -> sets CMD
 # shellcheck disable=SC2329  # invoked via cleanup
 kill_review_dir_procs() {
   [ -n "$REVIEW_DIR" ] || return 0
-  [ -n "${CROSS_REVIEW_CODEX_BIN:-}${CROSS_REVIEW_PI_BIN:-}" ] && return 0
+  # Only when a REAL container run was launched (in_container sets the flag): a stub on one
+  # backend must not disable the sweep for the other, real, one.
+  [ -n "$CONTAINER_RUN" ] || return 0
   # shellcheck disable=SC2016  # runs INSIDE the container: $d/$p/$$ must reach it unexpanded
   timeout -k "$KILL_AFTER_S" 30 docker exec "$CONTAINER" sh -c \
     'd="$1"; for p in /proc/[0-9]*; do pid=${p#/proc/}; [ "$pid" = "$$" ] && continue
@@ -377,10 +383,6 @@ try_polly() {
   # to what the caller's timeout leaves after them — otherwise a non-default order
   # (e.g. "codex pi polly") could start polly with less time than it can need and be
   # killed by the caller mid-review, orphaning the detached worker.
-  left=$(( $(remaining) - POLLY_OVERHEAD_S ))
-  budget=$POLLY_TIMEOUT_S
-  [ "$left" -lt "$budget" ] && budget=$left
-  if [ "$budget" -lt "$MIN_PHASE_S" ]; then note polly "insufficient time budget"; return 1; fi
   # Concurrency cap: collect orphans first, then refuse to add another app-server tree to a box
   # that is already carrying too many (the 2026-11-04/05 starvation). Unknown count = proceed.
   n_as=$(app_server_count)
@@ -391,6 +393,12 @@ try_polly() {
       note polly "$n_as codex app-server trees already resident (cap $MAX_APP_SERVERS) — not adding another"; return 1
     fi
   fi
+  # Computed AFTER the cap steps above (count + sweep can take ~150 s) and net of the teardown
+  # reserve, so the caller's outer timeout cannot kill this wrapper before `cleanup` has run.
+  left=$(( $(remaining) - POLLY_OVERHEAD_S - TEARDOWN_RESERVE_S ))
+  budget=$POLLY_TIMEOUT_S
+  [ "$left" -lt "$budget" ] && budget=$left
+  if [ "$budget" -lt "$MIN_PHASE_S" ]; then note polly "insufficient time budget"; return 1; fi
   ensure_review_worktree || { note polly "$REVIEW_ERR"; return 1; }
   POLLY_TRIED=1
   CROSS_REVIEW_DIR="$REVIEW_DIR" CROSS_REVIEW_TIMEOUT_S="$budget" "$POLLY_SCRIPT" "$PR" "$CONTRACT" > "$out" &
