@@ -28,6 +28,14 @@ WHAT IT DOES, PER CLIP (endpointing starts after the wake pre-roll, as in record
    mid-utterance word boundary (--synthetic-gaps): the corpus was captured behind the live
    endpointer, so long real pauses are rare in it by construction.
 
+5. EXTEND-ONLY arms (``--extend-thresholds``, lane E E1 follow-up): the live fixed tail still
+   decides WHEN to consider closing; Smart Turn may only HOLD the turn open past that point
+   (``extend_close`` drives the real endpointer and vetoes its closes). It can never close
+   earlier than today, so it cannot cut more than today; it is charged its measured inference
+   time per check. ``unfinished_trailer`` is the trailer lexicon ("and", "um", "so"...) as a
+   pure text rule: the corpus has no transcripts and none are made, so the corpus run measures
+   the model half only. Reproduce: ``--extend-only --extend-thresholds 0.3,0.5,0.7,0.85,0.95``.
+
 Writes ONLY aggregate numbers (--work-dir: per-clip numbers, no names/audio/text; keep it
 outside the repo). No transcription. Changes nothing live. Limits and results:
 docs/knowledge/smart-turn-offline-eval-2026-11-04.md.
@@ -209,6 +217,98 @@ def simulate_smart_turn(chunk_probs: list[float], scores: dict[int, float],
             if score >= policy.threshold:
                 return j, "model"
     return None, "never"
+
+
+class ExtendPolicy(NamedTuple):
+    """Extend-only Smart Turn (lane E E1 follow-up): the live fixed tail still decides WHEN to
+    consider closing; Smart Turn may only HOLD the turn open past that point. At the live
+    close it scores the capture; P(complete) >= ``threshold`` closes there (exactly today),
+    otherwise it re-checks every ``recheck_ms`` of further quiet and closes at the first
+    ``>= threshold`` or at ``cap_ms`` of total quiet. It can never close earlier than the
+    fixed tail, so it can never cut more than today (speech that resumes in the extension
+    restarts the quiet run, as in the live endpointer)."""
+    threshold: float
+    recheck_ms: int
+    cap_ms: int
+
+    @property
+    def name(self) -> str:
+        return f"EXT T{self.threshold:g} H{self.cap_ms}"
+
+
+# Trailer lexicon: words a speaker does not END a finished thought on. Fillers and
+# conjunctions are unambiguous; determiners/prepositions only ever lead into a noun phrase.
+# "so" is the exception that proves the rule ("I think so"), handled below.
+_FILLERS = frozenset({"um", "uh", "er", "erm", "umm", "uhh", "ah", "hmm", "mm", "like"})
+_CONJUNCTIONS = frozenset({"and", "but", "or", "because", "cause", "then", "also", "plus",
+                           "if", "when", "while", "although", "though", "whether", "that"})
+_LEADERS = frozenset({"the", "a", "an", "my", "your", "his", "her", "their", "our", "to", "of",
+                      "for", "with", "at", "from", "into", "about"})
+_SO_ENDS_A_THOUGHT = frozenset({"think", "hope", "guess", "believe", "suppose", "said", "do",
+                                "did", "does", "so", "why", "how", "if", "and", "not", "i", "we",
+                                "you", "they", "he", "she", "it"})
+
+
+def unfinished_trailer(text: str) -> bool:
+    """True when ``text`` ends the way an unfinished thought does: a trailing filler or
+    conjunction, an article/preposition that must be followed by more, a dangling ``so``
+    (unless it closes "I think so"), or an ellipsis / trailing dash. Pure text rule - the
+    caller supplies a transcript; no transcript means no opinion (False)."""
+    t = text.strip()
+    if not t:
+        return False
+    if t.endswith(("...", "\u2026", "-", "\u2014", "\u2013", ",")):
+        return True
+    words = [w for w in "".join(c if c.isalnum() or c in "' " else " " for c in t.lower()).split() if w]
+    if not words:
+        return False
+    last = words[-1].strip("'")
+    if last in _FILLERS or last in _CONJUNCTIONS or last in _LEADERS:
+        return True
+    if last == "so":
+        return len(words) < 2 or words[-2] not in _SO_ENDS_A_THOUGHT
+    return False
+
+
+def extend_close(mod: types.ModuleType, chunk_probs: list[float], config: dict[str, Any],
+                 policy: ExtendPolicy, score_at, frame_offset: int = 0,
+                 speech_threshold: float | None = None, hold_at=None,
+                 chunk_ms: float = CHUNK_MS) -> tuple[int | None, str, int]:
+    """(closing chunk index, reason, n_model_checks) of the REAL ``_Endpointer`` run under
+    ``config`` with ``policy`` allowed to veto its closes. ``score_at(j)`` returns P(complete)
+    for the capture through chunk ``j`` (memoised by the caller); ``hold_at(j)`` (optional)
+    says a transcript lexicon wants the turn held open at chunk ``j``. reason: 'live'
+    (Smart Turn agreed), 'model' (agreed after extending), 'cap'."""
+    thr = mod.VAD_ENDPOINT_THRESHOLD if speech_threshold is None else speech_threshold
+    mod.VAD_ENDPOINT_SILENCE_S = config["VAD_ENDPOINT_SILENCE_S"]
+    mod.ZOE_VAD_TAIL_MS = config["ZOE_VAD_TAIL_MS"]
+    mod._vad_prob = lambda vad, _chunk, sample_rate=16000: vad.next()
+    ep = mod._Endpointer(vad=_ScriptedVad(chunk_probs))
+    if ep.mode != "vad":
+        raise RuntimeError("endpointer is not in VAD mode - refusing to measure the amplitude path")
+    blank = bytes(2 * CHUNK)
+    q = 0
+    q_first: int | None = None      # quiet-run length at which the live tail first wanted to close
+    checks = 0
+    for j, p in enumerate(chunk_probs):
+        wants_close = ep.push(blank, frame_offset + j + 1)
+        q = 0 if p >= thr else q + 1
+        if q == 0:
+            q_first = None
+        if not wants_close:
+            continue
+        if q_first is None:
+            q_first = q
+        q_ms = q * chunk_ms
+        if q_ms >= policy.cap_ms:
+            return j, "cap", checks
+        if round((q - q_first) * chunk_ms) % policy.recheck_ms:
+            continue                  # between re-checks: keep holding
+        checks += 1
+        held = bool(hold_at and hold_at(j))
+        if not held and score_at(j) >= policy.threshold:
+            return j, ("live" if q == q_first else "model"), checks
+    return None, "never", checks
 
 
 def outcome(close_sample: int | None, speech_end: int, pauses: list[tuple[int, int]],
@@ -413,7 +513,8 @@ def _evaluate_stream(mod, vad_mod, det, audio: np.ndarray, *, gt_threshold: floa
                     speech_threshold: float, policies: list[TurnPolicy], cap_max_ms: int,
                     first_ms_set: set[int], recheck_ms: int, long_pause_ms: int,
                     preroll_chunks: int = 0, insert_ms: int = 0,
-                    st_times: list[float] | None = None) -> dict[str, Any] | None:
+                    st_times: list[float] | None = None,
+                    extend_policies: list[ExtendPolicy] | None = None) -> dict[str, Any] | None:
     """Score every arm on one clip, optionally with a ``insert_ms`` pause of room tone
     inserted at its mid-utterance word boundary. None = nothing to score (no speech after
     the pre-roll, or no word boundary for the synthetic arm).
@@ -461,6 +562,23 @@ def _evaluate_stream(mod, vad_mod, det, audio: np.ndarray, *, gt_threshold: floa
     for cfg in FIXED_VARIANTS:
         j = fixed_close(mod, cprobs, cfg, frame_offset=preroll_chunks)
         row["arms"][cfg["name"]] = outcome(close_sample(j), end_gt, long_pauses)
+    if det is not None and extend_policies:
+        memo: dict[int, float] = {}
+
+        def score_at(j: int) -> float:
+            if j not in memo:
+                t0 = time.perf_counter()
+                memo[j] = det.end_of_turn_prob(full[: off + (j + 1) * CHUNK])
+                if st_times is not None:
+                    st_times.append(1000.0 * (time.perf_counter() - t0))
+            return memo[j]
+
+        for pol in extend_policies:
+            j, reason, n_checks = extend_close(mod, cprobs, LIVE_FIXED, pol, score_at,
+                                               frame_offset=preroll_chunks)
+            o = outcome(close_sample(j), end_gt, long_pauses)
+            o.update(checks=n_checks, reason=reason)
+            row["arms"][pol.name] = o
     if det is not None and policies:
         # the endpointer's own minimum-recording guard, counted in frames incl. the pre-roll
         min_chunks = max(0, int(0.5 * RATE / CHUNK) - preroll_chunks)
@@ -578,7 +696,35 @@ def cached_batch(part: Path | None, fingerprint: str, key: str) -> dict[str, Any
 
 # ── aggregation + CLI ─────────────────────────────────────────────────────────────
 
-def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def extend_stats(rows: list[dict[str, Any]], name: str, inference_ms: float = 0.0) -> dict[str, Any]:
+    """Extend-only arm vs the live tail, clip by clip: how much later it closes (model time
+    excluded and included), how many live cut-offs it rescued, how often it held at all.
+    ``inference_ms`` (measured p50 per Smart Turn check) is charged once per check."""
+    live = LIVE_FIXED["name"]
+    added, added_inc, rescued, extended, checks = [], [], 0, 0, 0
+    for r in rows:
+        a, b = r["arms"].get(live), r["arms"].get(name)
+        if not a or not b or not b.get("closed"):
+            continue
+        checks += b.get("checks", 0)
+        if a.get("cut") and not b.get("cut"):
+            rescued += 1
+        if a.get("cut") or b.get("cut"):
+            continue
+        d = b["latency_ms"] - a["latency_ms"]
+        added.append(d)
+        added_inc.append(d + inference_ms * b.get("checks", 0))
+        extended += d > 0
+    n = len(added)
+    return {"extended_turns": extended, "extended_rate": round(extended / n, 4) if n else None,
+            "cuts_rescued": rescued, "checks_per_turn": round(checks / len(rows), 2) if rows else None,
+            "added_wait_mean_ms": round(statistics.fmean(added), 1) if added else None,
+            "added_wait_p50_ms": pct(added, 50), "added_wait_p90_ms": pct(added, 90),
+            "added_incl_inference_mean_ms": round(statistics.fmean(added_inc), 1) if added_inc else None,
+            "added_incl_inference_p50_ms": pct(added_inc, 50)}
+
+
+def aggregate(rows: list[dict[str, Any]], inference_ms: float = 0.0) -> dict[str, Any]:
     arms: dict[str, list[dict[str, Any]]] = {}
     long_arms: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
@@ -596,6 +742,8 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         lp = long_arms.get(name, [])
         s["long_pause_held"] = sum(1 for o in lp if not o.get("cut_in_pause"))
         s["long_pause_cut"] = sum(1 for o in lp if o.get("cut_in_pause"))
+        if name.startswith("EXT "):
+            s.update(extend_stats(rows, name, inference_ms))
         out["arms"][name] = s
     return out
 
@@ -610,6 +758,19 @@ def print_table(title: str, agg: dict[str, Any]) -> None:
         print(f"  {name:<26} {s['cuts']:>5} {100 * (s['cut_rate'] or 0):>5.1f}% {s['over_waits']:>5} "
               f"{100 * (s['correct_rate'] or 0):>7.1f}% {f(s['latency_mean_ms']):>6} {f(s['latency_p50_ms']):>6} "
               f"{f(s['latency_p90_ms']):>6} {s['long_pause_held']:>6} {s['long_pause_cut']:>5}")
+
+
+def print_extend(agg: dict[str, Any]) -> None:
+    ext = {n: a for n, a in agg["arms"].items() if n.startswith("EXT ")}
+    if not ext:
+        return
+    print(f"  {'extend-only arm':<18} {'extended':>8} {'rescued':>7} {'chk/turn':>8} {'+mean':>6} {'+p50':>6} "
+          f"{'+p90':>6} {'+p50 w/ inference':>18}")
+    f = lambda v: "-" if v is None else f"{v:.0f}"  # noqa: E731
+    for n, a in ext.items():
+        print(f"  {n:<18} {100 * (a['extended_rate'] or 0):>7.1f}% {a['cuts_rescued']:>7} {a['checks_per_turn']:>8} "
+              f"{f(a['added_wait_mean_ms']):>6} {f(a['added_wait_p50_ms']):>6} {f(a['added_wait_p90_ms']):>6} "
+              f"{f(a['added_incl_inference_p50_ms']):>18}")
 
 
 def main() -> int:
@@ -632,6 +793,10 @@ def main() -> int:
     ap.add_argument("--synthetic-gaps", default="1000,2000", help="inserted mid-utterance pauses (ms); '' = off")
     ap.add_argument("--synthetic-every", type=int, default=2, help="synthetic arm on every Nth clip")
     ap.add_argument("--threads", type=int, default=2, help="ORT threads for Smart Turn (1..4)")
+    ap.add_argument("--extend-thresholds", default="", help="extend-only Smart Turn arms (E1 follow-up): "
+                    "thresholds, e.g. 0.3,0.5,0.7,0.85,0.95 ('' = none)")
+    ap.add_argument("--extend-caps", default="1000,1200,1600", help="extend-only hold ceiling (ms of total quiet)")
+    ap.add_argument("--extend-only", action="store_true", help="skip the standalone Smart Turn arms")
     ap.add_argument("--no-smart-turn", action="store_true", help="fixed arms only (negative control)")
     ap.add_argument("--json", type=Path, help="write the aggregate summary here")
     args = ap.parse_args()
@@ -646,16 +811,23 @@ def main() -> int:
         if (f - firsts[0]) % args.recheck_ms:
             print("--first-ms values must share the --recheck-ms grid", file=sys.stderr)
             return 2
-    policies = [] if args.no_smart_turn else build_policies(
+    policies = [] if (args.no_smart_turn or args.extend_only) else build_policies(
         firsts, [float(x) for x in args.thresholds.split(",") if x.strip()], caps, args.recheck_ms)
     gaps = [int(x) for x in args.synthetic_gaps.split(",") if x.strip()]
+    ext_caps = [int(x) for x in args.extend_caps.split(",") if x.strip()]
+    extend_policies = [] if args.no_smart_turn else [
+        ExtendPolicy(float(t), args.recheck_ms, c) for c in ext_caps
+        for t in args.extend_thresholds.split(",") if t.strip()]
     kw = dict(gt_threshold=args.gt_threshold, speech_threshold=mod.VAD_ENDPOINT_THRESHOLD,
-              policies=policies, cap_max_ms=max(caps + [1200]), first_ms_set=set(firsts),
+              policies=policies, extend_policies=extend_policies,
+              cap_max_ms=max(caps + ext_caps + [1200]), first_ms_set=set(firsts),
               recheck_ms=args.recheck_ms, long_pause_ms=args.long_pause_ms,
               preroll_chunks=args.preroll_chunks)
 
     fingerprint = json.dumps({**{k: (sorted(v) if isinstance(v, set) else v) for k, v in kw.items()
-                                 if k != "policies"}, "policies": [p.name for p in policies],
+                                 if k not in ("policies", "extend_policies")},
+                              "policies": [p.name for p in policies],
+                              "extend": [p.name for p in extend_policies],
                               "gaps": gaps, "every": args.synthetic_every,
                               "fixed": FIXED_VARIANTS}, sort_keys=True)
     files = sorted(args.corpus.glob("*.wav"))
@@ -717,15 +889,18 @@ def main() -> int:
         if not rows:
             print("every clip was unscored: the VAD cannot infer - refusing to report an empty run as a measurement", file=sys.stderr)
             return 2
+    inf_p50 = pct(st_times, 50) or 0.0
     summary = {"corpus_clips": len(files), "skipped_no_speech_or_format": skipped, "unscored_vad_incomplete": vad_incomplete,
-               "config": {k: (sorted(v) if isinstance(v, set) else v) for k, v in kw.items() if k != "policies"},
-               "policies": [p.name for p in policies],
-               "natural": aggregate(rows),
-               "synthetic": {str(g): aggregate(v) for g, v in synth.items()},
+               "config": {k: (sorted(v) if isinstance(v, set) else v) for k, v in kw.items() if k not in ("policies", "extend_policies")},
+               "policies": [p.name for p in policies], "extend": [p.name for p in extend_policies],
+               "natural": aggregate(rows, inf_p50),
+               "synthetic": {str(g): aggregate(v, inf_p50) for g, v in synth.items()},
                "smart_turn_ms": {"calls": len(st_times), "p50": pct(st_times, 50), "p90": pct(st_times, 90)}}
     print_table("Natural clips (true end = last Silero hop >= %.2f)" % args.gt_threshold, summary["natural"])
+    print_extend(summary["natural"])
     for g, agg in summary["synthetic"].items():
         print_table(f"Synthetic {g} ms mid-utterance pause (LP = the inserted pause)", agg)
+        print_extend(agg)
     print(f"\nSmart Turn inference on this box: {summary['smart_turn_ms']}")
     if args.json:
         args.json.write_text(json.dumps(summary, indent=2), encoding="utf-8")

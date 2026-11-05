@@ -228,6 +228,116 @@ def test_cached_batch_is_bound_to_its_exact_slice(ev, tmp_path):
     assert "clip0" not in key
 
 
+# ── extend-only Smart Turn (E1 follow-up) ─────────────────────────────────────────────
+
+def _ext(ev, daemon, probs, score, thr=0.5, cap=1200, hold=None, offset=20):
+    pol = ev.ExtendPolicy(thr, 160, cap)
+    asked: list[int] = []
+
+    def score_at(j):
+        asked.append(j)
+        return score(j) if callable(score) else score
+
+    j, why, n = ev.extend_close(daemon, probs, ev.LIVE_FIXED, pol, score_at, frame_offset=offset, hold_at=hold)
+    return j, why, n, asked
+
+
+def test_extend_agreeing_model_closes_exactly_where_the_live_tail_does(ev, daemon):
+    probs = [S] * 10 + [DEEP] * 30
+    live = ev.fixed_close(daemon, probs, ev.LIVE_FIXED, frame_offset=20)
+    j, why, n, asked = _ext(ev, daemon, probs, 0.9)
+    assert (j, why, n, asked) == (live, "live", 1, [live]) and live == 17
+
+
+def test_extend_holds_on_incomplete_rechecks_every_160ms_and_caps(ev, daemon):
+    probs = [S] * 10 + [DEEP] * 30
+    j, why, n, asked = _ext(ev, daemon, probs, 0.1, cap=1200)
+    assert asked == [17, 19, 21, 23]            # q = 8, 10, 12, 14 chunks (640..1120 ms)
+    assert (j, why, n) == (24, "cap", 4)        # q = 15 chunks = 1200 ms of quiet
+    # a later confident check ends the hold before the cap
+    j, why, n, _ = _ext(ev, daemon, probs, lambda j: 0.9 if j >= 21 else 0.1)
+    assert (j, why, n) == (21, "model", 3)
+    # negative control: a lower cap closes sooner (the cap is the limit)
+    assert _ext(ev, daemon, probs, 0.1, cap=800)[:2] == (19, "cap")
+
+
+def test_extend_never_closes_earlier_than_the_fixed_tail_but_standalone_can(ev, daemon):
+    import random
+    rng = random.Random(7)
+    earlier_standalone = 0
+    for _ in range(60):
+        probs = []
+        for _seg in range(rng.randint(1, 3)):
+            probs += [S] * rng.randint(2, 12) + [rng.choice([DEEP, AMB])] * rng.randint(1, 12)
+        probs += [DEEP] * 30
+        scores = {j: rng.random() for j in range(len(probs))}
+        fixed = ev.fixed_close(daemon, probs, ev.LIVE_FIXED, frame_offset=20)
+        j, _why, _n, _a = _ext(ev, daemon, probs, lambda j: scores[j], thr=rng.choice([0.3, 0.7, 0.95]))
+        if fixed is not None:
+            assert j is not None and j >= fixed
+        sj, _ = ev.simulate_smart_turn(probs, scores, ev.TurnPolicy(160, 0.5, 160, 800), 0.35, 0)
+        if fixed is not None and sj is not None and sj < fixed:
+            earlier_standalone += 1
+    assert earlier_standalone > 0     # negative control: the instrument CAN see an earlier close
+
+
+def test_extend_rescues_a_cut_when_speech_resumes_inside_the_hold(ev, daemon):
+    probs = [S] * 10 + [DEEP] * 9 + [S] * 3 + [DEEP] * 30     # live closes at 17, before the resume at 19
+    assert ev.fixed_close(daemon, probs, ev.LIVE_FIXED, frame_offset=20) == 17
+    j, why, n, asked = _ext(ev, daemon, probs, lambda j: 0.1 if j < 19 else 0.9)
+    assert asked[0] == 17 and j == 29 and why == "live"       # fresh run: new live close, model agrees
+    # negative control: a model that says "complete" at the first consult closes at 17 = today's cut
+    assert _ext(ev, daemon, probs, 0.9)[0] == 17
+
+
+def test_extend_lexicon_hold_overrides_a_confident_model_until_the_cap(ev, daemon):
+    probs = [S] * 10 + [DEEP] * 30
+    assert _ext(ev, daemon, probs, 0.99, hold=lambda j: True)[:2] == (24, "cap")
+    assert _ext(ev, daemon, probs, 0.99, hold=lambda j: False)[:2] == (17, "live")
+    # hold_at is asked per consult, so a lexicon that lets go at q=12 closes there
+    assert _ext(ev, daemon, probs, 0.99, hold=lambda j: j < 21)[:2] == (21, "model")
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("set a timer for ten minutes and", True), ("um", True), ("turn on the", True),
+    ("remind me to", True), ("what's the weather like in the...", True),
+    ("play some music, so", True), ("so", True), ("and then", True), ("my…", True),
+    ("I mean, but", True), ("uh", True), ("call my", True),
+    ("turn on the lights", False), ("set a timer for ten minutes", False),
+    ("I think so", False), ("do you think so", False), ("yes please do so", False),
+    ("", False), ("   ", False), ("what time is it", False), ("stop", False),
+])
+def test_trailer_lexicon(ev, text, expected):
+    assert ev.unfinished_trailer(text) is expected
+
+
+def test_trailer_lexicon_is_the_last_word_only(ev):
+    # the same fillers MID-sentence say nothing (negative control): only the trailer counts
+    assert ev.unfinished_trailer("and then turn it off") is False
+    assert ev.unfinished_trailer("um turn it off") is False
+    assert ev.unfinished_trailer("turn it off um") is True
+
+
+def _row(ev, live, ext):
+    return {"arms": {ev.LIVE_FIXED["name"]: live, "EXT T0.5 H1200": ext}, "long_pause": False, "real_tone": True}
+
+
+def test_extend_stats_added_wait_rescues_and_inference(ev):
+    def ok(lat, checks=0):
+        return {"closed": True, "cut": False, "latency_ms": lat, "checks": checks}
+    cut = {"closed": True, "cut": True, "cut_in_pause": True}
+    rows = [_row(ev, ok(768), ok(768, 1)),                  # model agreed: +0
+            _row(ev, ok(768), ok(1088, 3)),                 # held 320 ms
+            _row(ev, cut, ok(900, 2))]                      # cut rescued: not in the wait
+    s = ev.extend_stats(rows, "EXT T0.5 H1200", inference_ms=100.0)
+    assert s["extended_turns"] == 1 and s["cuts_rescued"] == 1
+    assert s["added_wait_mean_ms"] == 160.0
+    assert s["added_incl_inference_mean_ms"] == pytest.approx((100 + 620) / 2)
+    assert s["checks_per_turn"] == 2.0
+    # negative control: with no measured inference the two means coincide
+    z = ev.extend_stats(rows, "EXT T0.5 H1200", inference_ms=0.0)
+    assert z["added_incl_inference_mean_ms"] == z["added_wait_mean_ms"] == 160.0
+
 def test_a_short_vad_hop_sequence_is_unscored_not_an_early_end_of_speech(ev):
     """Codex #2280: process_hops never raises - on an inference failure it returns the completed prefix."""
     audio = np.zeros(512 * 10, dtype=np.int16)

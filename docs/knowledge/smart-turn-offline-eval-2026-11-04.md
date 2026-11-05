@@ -124,3 +124,9 @@ As an "extend when unsure" signal, Smart Turn holds about a third of real-soundi
 - **A Smart Turn cut is not always harmful.** It may be a complete command followed by an afterthought, and the two cannot be told apart without transcripts. None were run, deliberately.
 - **The synthetic boundary is a simplification.** It is the internal quiet run nearest the utterance midpoint, and some of those boundaries really are complete.
 - **No private data leaves the box.** Only aggregate numbers are recorded here. No audio, transcript or clip name is in the repo, the PR or this record.
+
+## Follow-up: extend-only arms (2026-11-05, run pending)
+
+The recommended next experiment is built into the same script: `--extend-only --extend-thresholds 0.3,0.5,0.7,0.85,0.95 --extend-caps 1000,1200,1600`. The live 640deep/800 tail stays the closer; Smart Turn is consulted at that close and may only hold the turn open (re-check every 160 ms, close at P(complete) >= T or at the cap). It can never close earlier than today, so it cannot cut more than today (pinned by a randomised test with a negative control). It reports correct %, cut-offs, cuts rescued, how often it held, median added wait with and without the ~120 ms inference charged per check, and the held-through share of the synthetic 1 s and 2 s pauses. The trailer lexicon (`unfinished_trailer`) is a pure text rule, unit-tested; the corpus has no transcripts, so it is not part of the corpus numbers.
+
+**Not yet measured:** voice landings held the box (the guard refuses while one runs) for the whole session. Run `nice -n 10 python3 scripts/perf/smart_turn_offline_eval.py --work-dir <outside repo> --lock /tmp/zoe-voice-harness.lock --extend-only --extend-thresholds 0.3,0.5,0.7,0.85,0.95 --json <file>` in a quiet window and record the aggregates here. The pass bar is at least 90 % correct with no more cut-offs than the live tail.
