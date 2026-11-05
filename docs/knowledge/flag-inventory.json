@@ -11755,6 +11755,29 @@
         },
         "typed_env": false
       },
+      "ZOE_PROBLEM_LOOP": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_authority.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/authority-table.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_PROVENANCE_PERSIST": {
         "defaults": [
           "True"
