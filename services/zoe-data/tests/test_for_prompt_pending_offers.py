@@ -8,14 +8,15 @@ self-hosted full-dir lane.
 import pytest
 
 import pending_suggestions
+import contact_offer_policy as cop
 import routers.memories as mem
 
 
 @pytest.fixture(autouse=True)
 def _clear_offer_state():
-    mem._OFFER_STATE.clear()
+    cop._STATE.clear()
     yield
-    mem._OFFER_STATE.clear()
+    cop._STATE.clear()
 
 
 def _base():

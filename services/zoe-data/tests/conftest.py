@@ -155,6 +155,19 @@ def _db_pool_never_initialised(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _contact_offer_policy_starts_empty():
+    """``contact_offer_policy``'s per-user cooldown is process-global: an offer voiced in one test must not be cooling down in the next."""
+    try:
+        import contact_offer_policy
+    except Exception:  # noqa: BLE001
+        yield
+        return
+    contact_offer_policy.reset()
+    yield
+    contact_offer_policy.reset()
+
+
+@pytest.fixture(autouse=True)
 def _voice_activity_stamp_starts_empty(monkeypatch):
     """``voice_activity``'s household stamp is process-global: any earlier test that drives a voice endpoint leaves a fresh stamp,
     and ``omi_recordings.last_voice_age_s`` (min of the stamp and the session table) then reads "panel busy", so every pendant

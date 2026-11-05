@@ -774,78 +774,6 @@ def _safe_prompt_inline(s: str, cap: int = _PENDING_FIELD_CAP) -> str:
     return s[:cap]
 
 
-# One contact offer per turn, never on a forget / correction / decline turn, and
-# the same offer is not repeated on the next turns after it was voiced (ignored
-# or declined). Deterministic, in-process (zoe-data is one worker; a restart just
-# forgets the cooldown, which fails towards asking once more, never towards nagging).
-_OFFER_COOLDOWN_TURNS = 3
-_OFFER_STATE: dict[str, dict[str, Any]] = {}
-_OFFER_STATE_MAX_USERS = 256
-_NO_OFFER_TURN_RE = re.compile(
-    # a bare leading no / nope / nah (not "no problem", "no kidding", "no way")
-    r"^\s*(?:(?:no|nope|nah|nay)\b(?=\s*(?:[,.!?;]|$|thanks?\b|thank\s+you\b|not\b|don'?t\b|i\b|it\b|that\b|she\b|he\b|they\b))"
-    r"|please\s+no\b|thanks?,?\s+but\s+no\b)"
-    r"|\b(?:forget\s+(?:that|it|about)|never\s*mind|not\s+(?:right\s+)?now|not\s+today|"
-    r"maybe\s+later|i'?d\s+rather\s+not|skip\s+(?:it|that)|leave\s+(?:it|that)|"
-    r"that'?s\s+(?:not\s+(?:right|true|correct)|wrong)|i\s+(?:didn'?t|did\s+not)\s+(?:say|mean)|"
-    r"you\s+(?:misheard|misunderstood)|actually\s*,|i\s+meant|just\s+checking|"
-    r"don'?t\s+(?:ask|add)|stop\s+(?:asking|that))",
-    re.IGNORECASE,
-)
-# Two packet builds for the same message within this many seconds are one turn
-# (several builders per turn); a later identical message is a new turn.
-_OFFER_SAME_TURN_S = 10.0
-
-
-def _no_offer_turn(message: str) -> bool:
-    """Forget / correction / decline / "not now" turns never carry an offer."""
-    return bool(_NO_OFFER_TURN_RE.search(message or ""))
-
-
-def _tick_offer_turn(user_id: str, message: str) -> dict[str, Any]:
-    """Advance this user's turn counter (called on EVERY fold, including
-    suppressed forget/decline turns, which count toward the cooldown). A rebuild
-    of the packet for the same message within ``_OFFER_SAME_TURN_S`` is the same
-    turn; LRU-evicts users at the cap and prunes expired offer keys."""
-    import time as _t
-
-    key = (message or "").strip().lower()
-    now = _t.monotonic()
-    st = _OFFER_STATE.pop(user_id, None)  # re-insert below = most recent last (LRU)
-    if st is None:
-        if len(_OFFER_STATE) >= _OFFER_STATE_MAX_USERS:
-            _OFFER_STATE.pop(next(iter(_OFFER_STATE)))
-        st = {"key": None, "turn": 0, "ts": 0.0, "offered": {}}
-    if key != st["key"] or now - st["ts"] > _OFFER_SAME_TURN_S:
-        st["turn"] += 1
-        st["offered"] = {k: v for k, v in st["offered"].items()
-                         if st["turn"] - v <= _OFFER_COOLDOWN_TURNS}
-    st["key"], st["ts"] = key, now
-    _OFFER_STATE[user_id] = st
-    return st
-
-
-def _offer_cooldown_filter(user_id: str, message: str, pend: list[dict]) -> list[dict]:
-    """Drop offers voiced within the last ``_OFFER_COOLDOWN_TURNS`` distinct user
-    turns (the turn was already ticked by the fold)."""
-    st = _OFFER_STATE.get(user_id) or _tick_offer_turn(user_id, message)
-    turn = st["turn"]
-    return [p for p in pend
-            if (at := st["offered"].get(_offer_key(p))) is None
-            or at == turn or turn - at > _OFFER_COOLDOWN_TURNS]
-
-
-def _offer_key(p: dict) -> str:
-    return str(p.get("id") or p.get("name") or "")
-
-
-def _note_offered(user_id: str, offers: list[dict]) -> None:
-    st = _OFFER_STATE.get(user_id)
-    if st:
-        for p in offers:
-            st["offered"].setdefault(_offer_key(p), st["turn"])
-
-
 async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str,
                                        message: str = "") -> dict[str, Any]:
     """Surface pending `person_create` proposals into the for-prompt packet so the
@@ -866,8 +794,10 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str,
         )
         if not person_suggestions_enabled():
             return packet
-        _tick_offer_turn(user_id, message)  # every turn counts toward the cooldown
-        if _no_offer_turn(message):
+        import contact_offer_policy as _cop
+
+        _cop.tick(user_id, message)  # every turn counts toward the cooldown
+        if _cop.no_offer_turn(message):
             return packet  # deferred, not lost: not surfaced, so it does not age
         # Non-destructive read: surfacing marks the offer as seen; aging happens
         # once per real user turn (age_person_offers_on_user_turn), never here.
@@ -878,16 +808,20 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str,
     except Exception:
         logger.exception("memories: pending-contact offer fold failed (user=%s)", user_id)
         return packet
-    pend = _offer_cooldown_filter(user_id, message, pend)
+    surfaced = pend
+    pend = _cop.eligible(user_id, message, pend)
     if not pend:
+        await _cop.unmark_unoffered(user_id, surfaced, [])
         return packet
     if batch:
         # ZOE_CONTACT_OFFER_BATCH: ONE enumerated question for the whole set
         # (a single yes then accepts all of it - intent_router batch matcher).
         q = _cc.offer_question(pend, _safe_prompt_inline)
         if not q:
+            await _cop.unmark_unoffered(user_id, surfaced, [])
             return packet
-        _note_offered(user_id, pend)
+        _cop.note_offered(user_id, pend)
+        await _cop.unmark_unoffered(user_id, surfaced, pend)
         _cc.record_asked(user_id, q, pend)  # the set a following yes/no may bind to
         section = (
             "## People mentioned recently (not contacts yet)\n"
@@ -905,7 +839,8 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str,
         name = _safe_prompt_inline(p.get("name") or "")
         if not name:
             continue
-        _note_offered(user_id, [p])
+        _cop.note_offered(user_id, [p])
+        await _cop.unmark_unoffered(user_id, surfaced, [p])
         rel = _safe_prompt_inline(p.get("relationship") or "")
         # Give the 4B model the exact question to voice — the earlier soft
         # "you may offer to add them" phrasing was never voiced in live review
@@ -914,6 +849,7 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str,
         bullets.append(f'- Ask the user: "{question}" [pending-contact]')
         break  # at most ONE offer per turn
     if not bullets:
+        await _cop.unmark_unoffered(user_id, surfaced, [])
         return packet
     section = (
         "## People mentioned recently (not contacts yet)\n"

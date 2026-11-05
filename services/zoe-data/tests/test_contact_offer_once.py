@@ -6,14 +6,15 @@ Not `ci_safe`: importing routers.memories pulls memory_service (full-dir lane).
 import pytest
 
 import pending_suggestions
+import contact_offer_policy as cop
 import routers.memories as mem
 
 
 @pytest.fixture(autouse=True)
 def _clear_offer_state():
-    mem._OFFER_STATE.clear()
+    cop._STATE.clear()
     yield
-    mem._OFFER_STATE.clear()
+    cop._STATE.clear()
 
 
 def _base():
@@ -78,7 +79,7 @@ async def test_same_offer_not_repeated_next_turn(monkeypatch):
 async def test_offer_returns_after_cooldown(monkeypatch):
     _two(monkeypatch)
     assert "Alder" in await _fold("u1", "t0")
-    for i in range(1, mem._OFFER_COOLDOWN_TURNS + 1):
+    for i in range(1, cop.COOLDOWN_TURNS + 1):
         assert "Alder" not in await _fold("u1", f"t{i}")  # every intervening turn
     assert "Alder" in await _fold("u1", "later")
 
@@ -97,7 +98,7 @@ async def test_identical_text_is_a_new_turn_after_the_window(monkeypatch):
     _two(monkeypatch)
     assert "Alder" in await _fold("u1", "okay")
     assert "Alder" in await _fold("u1", "okay")  # rebuild inside the window
-    monkeypatch.setattr(mem, "_OFFER_SAME_TURN_S", -1.0)  # window elapsed
+    monkeypatch.setattr(cop, "SAME_TURN_S", -1.0)  # window elapsed
     p = await _fold("u1", "okay")
     assert "Alder" not in p and "Birch" in p
 
@@ -105,9 +106,51 @@ async def test_identical_text_is_a_new_turn_after_the_window(monkeypatch):
 @pytest.mark.asyncio
 async def test_state_is_lru_and_bounded(monkeypatch):
     _two(monkeypatch)
-    monkeypatch.setattr(mem, "_OFFER_STATE_MAX_USERS", 2)
+    monkeypatch.setattr(cop, "MAX_USERS", 2)
     await _fold("a", "x")
     await _fold("b", "x")
     await _fold("a", "y")   # a is now most recent
     await _fold("c", "x")   # evicts b, not a
-    assert set(mem._OFFER_STATE) == {"a", "c"}
+    assert set(cop._STATE) == {"a", "c"}
+
+
+@pytest.mark.asyncio
+async def test_flue_fallback_follows_the_same_policy(monkeypatch):
+    import zoe_flue_client as zf
+
+    _two(monkeypatch)
+    monkeypatch.setenv("ZOE_SEAM_OFFER_INJECT", "1")
+    b1 = await zf._pending_offer_block("u1", "turn one")
+    assert "Alder" in b1 and "Birch" not in b1               # one offer
+    b2 = await zf._pending_offer_block("u1", "turn two")
+    assert "Alder" not in b2 and "Birch" in b2               # no repeat
+    assert await zf._pending_offer_block("u1", "turn three") == ""  # both cooling down
+    assert await zf._pending_offer_block("u1", "forget that") == ""  # decline turn
+
+
+@pytest.mark.asyncio
+async def test_bare_yes_binds_to_the_offer_voiced_not_the_oldest(monkeypatch):
+    import intent_router
+
+    _two(monkeypatch)
+    await _fold("u1", "turn one")   # voices Alder
+    await _fold("u1", "turn two")   # voices Birch (Alder cooling down)
+
+    async def surfaced(user_id, *, limit=5):
+        return [{"id": "a", "name": "Alder", "relationship": "husband"},
+                {"id": "b", "name": "Birch", "relationship": None}]
+    monkeypatch.setattr(pending_suggestions, "surfaced_person_offers", surfaced)
+    intent = await intent_router._match_pending_offer_reply("yes", "u1")
+    assert intent is not None and intent.slots["suggestion_id"] == "b"
+
+
+@pytest.mark.asyncio
+async def test_unoffered_rows_are_unmarked(monkeypatch):
+    _two(monkeypatch)
+    seen = []
+
+    async def fake_unmark(user_id, pend, offered):
+        seen.append(([p["id"] for p in pend], [p["id"] for p in offered]))
+    monkeypatch.setattr(cop, "unmark_unoffered", fake_unmark)
+    await _fold("u1", "turn one")
+    assert seen == [(["a", "b"], ["a"])]  # only Alder entered the prompt

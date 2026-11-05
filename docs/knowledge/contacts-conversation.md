@@ -57,8 +57,11 @@ no new state), then `ZOE_CONTACT_OFFER_BATCH`. Samantha bar S13 and S14 pass wit
 
 ## One offer per turn, not a nag (2026-11-05)
 
-Hands-on QA found every pending offer voiced on every unrelated turn. The fold in
-`routers/memories.py` (`_fold_pending_contact_offers`) now, flag OFF or ON:
+Hands-on QA found every pending offer voiced on every unrelated turn. One shared policy,
+`services/zoe-data/contact_offer_policy.py`, drives the for-prompt fold
+(`routers/memories.py`), the Flue fallback block (`zoe_flue_client._pending_offer_block`) and the
+bare yes/no binder (`intent_router` binds to the offer last voiced, not the oldest row). Rows the
+surfacing read marked but that did not enter the prompt are un-marked so they do not age unseen. Flag OFF or ON:
 
 - emits at most ONE offer per turn (the first not cooling down);
 - emits none on forget / correction / decline / "not now" turns (`_NO_OFFER_TURN_RE`); the offer is
