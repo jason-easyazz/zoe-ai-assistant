@@ -11774,6 +11774,29 @@
         },
         "typed_env": false
       },
+      "ZOE_PROBLEM_LOOP": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_authority.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/authority-table.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_PROVENANCE_PERSIST": {
         "defaults": [
           "True"
@@ -12395,6 +12418,63 @@
           "default": "shadow",
           "divergent_ok": {},
           "note": "live: unset (code default in force)",
+          "owner_doc": "docs/knowledge/recall-gate.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_RECALL_GATE_TRACE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_gate_trace.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "opt-in private trace (row text + owner words to ~/.zoe/recall-gate-trace, 0600); default off",
+          "owner_doc": "docs/knowledge/recall-gate.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_RECALL_GATE_TRACE_DAYS": {
+        "defaults": [
+          "7"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_gate_trace.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 7,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/recall-gate.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_RECALL_GATE_TRACE_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/recall_gate_trace.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "default ~/.zoe/recall-gate-trace; the test conftest pins it",
           "owner_doc": "docs/knowledge/recall-gate.md",
           "type": "str"
         },

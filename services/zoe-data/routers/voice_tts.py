@@ -4942,7 +4942,7 @@ async def voice_command(
             try:
                 from intent_router import reminder_offer_reply_text as _rem_offer_reply
 
-                if await _rem_offer_reply(text, effective_user):
+                if await _rem_offer_reply(text, effective_user, session_id=session_id):
                     _pub_intent = None
             except Exception:
                 pass

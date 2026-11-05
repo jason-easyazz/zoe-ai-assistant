@@ -2103,6 +2103,13 @@ async def _previous_assistant_message(user_id: str) -> Optional[str]:
 _REMINDER_OFFER_RE = re.compile(r"\b(?:remind\s+you|(?:a|the|that)\s+(?:[\w']+\s+){0,3}reminder|reminder)\b", re.IGNORECASE)
 _OFFER_TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\w:])", re.IGNORECASE)
 _OFFER_ACTION_FIRST = _OFFER_AFFIRM_FIRST | {"please"}
+# A reply carrying scheduling information the rewrite cannot retain ("sure, tomorrow at 3pm", "every Monday at 9") is NOT bound: the
+# rewritten sentence would silently lose the day / recurrence and the reminder extractor would assign today's date.
+_OFFER_SCHEDULE_QUAL_RE = re.compile(
+    r"\b(?:tomorrow|tonight|today|yesterday|next|every|each|daily|weekly|monthly|yearly|weekdays?|weekends?|mornings?|evenings?|"
+    r"mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|"
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?|in\s+\d+\s+(?:minutes?|mins?|hours?|days?|weeks?)|\d{1,2}(?:st|nd|rd|th)|\d{1,2}/\d{1,2})\b", re.IGNORECASE)
 _OFFER_ACTION_MAX_TOKENS = 12
 _OFFER_QUESTION_WORDS = frozenset({"what", "what's", "whats", "when", "where", "who", "why", "how", "which"})
 
@@ -2145,6 +2152,8 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         return None
     if "?" in text or any(_OFFER_REPLY_PUNCT_RE.sub("", t) in _OFFER_QUESTION_WORDS for t in tokens[1:]):
         return None  # "yes, what time is it at 2:45?" is a question, not a slot
+    if _OFFER_SCHEDULE_QUAL_RE.search(" ".join(tokens[1:])):
+        return None  # a day / recurrence the rewrite would drop: let the brain, which has the conversation, act on it
     m = _OFFER_TIME_RE.search(" ".join(tokens[1:]))
     if m is None or not (m.group(2) or m.group(3)):
         return None  # a bare number is not a clock time
@@ -2162,11 +2171,12 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
     if not mer and 1 <= hour <= 6:
         mer = "pm"  # "2:45" to a pickup offer means the afternoon
     when = f"{hour}:{minute}" if minute else str(hour)
-    conn, title = _reminder_offer_title(previous)
+    conn, title = _reminder_offer_title(sentences[-1])     # the SAME final offer sentence that passed the checks above
     return f"remind me {conn} {title} at {when}{(' ' + mer) if mer else ''}"
 
 
-async def _previous_assistant_turn(user_id: str, current_text: str = "") -> tuple[Optional[str], Optional[float]]:
+async def _previous_assistant_turn(user_id: str, current_text: str = "",
+                                   session_id: Optional[str] = None) -> tuple[Optional[str], Optional[float]]:
     """(content, age in seconds) of Zoe's reply ONLY when it is the message immediately before this turn; (None, None) when
     unknown or when a user turn intervened (fail closed). The current turn may already be saved: it is skipped once."""
     try:
@@ -2175,10 +2185,12 @@ async def _previous_assistant_turn(user_id: str, current_text: str = "") -> tupl
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
+            # With a session id the lookup is THIS conversation's: a reply in one session never binds to an offer made in another, and
+            # activity elsewhere cannot hide the genuine pending offer.
             cur = await db.execute(
                 "SELECT m.role, m.content, m.created_at FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id"
-                " WHERE s.user_id = ? ORDER BY m.created_at DESC LIMIT 2",
-                (user_id,),
+                " WHERE s.user_id = ?" + (" AND m.session_id = ?" if session_id else "") + " ORDER BY m.created_at DESC LIMIT 2",
+                (user_id, session_id) if session_id else (user_id,),
             )
             rows = list(await cur.fetchall())
         if rows and rows[0]["role"] == "user" and str(rows[0]["content"] or "").strip() == (current_text or "").strip():
@@ -2198,7 +2210,7 @@ async def _previous_assistant_turn(user_id: str, current_text: str = "") -> tupl
 
 
 async def reminder_offer_reply_text(text: str, user_id: str, previous: Optional[str] = None,
-                                    age_s: Optional[float] = None) -> Optional[str]:
+                                    age_s: Optional[float] = None, session_id: Optional[str] = None) -> Optional[str]:
     """Flag-gated, cheap-shape-first wrapper: the rewritten reminder sentence, or None. Callers that already hold Zoe's last
     reply (the voice session) pass ``previous``/``age_s``; otherwise the stored transcript is read."""
     if not offer_followup_binding_enabled():
@@ -2208,7 +2220,7 @@ async def reminder_offer_reply_text(text: str, user_id: str, previous: Optional[
             _OFFER_REPLY_PUNCT_RE.sub("", tokens[0]) not in _OFFER_ACTION_FIRST:
         return None
     if previous is None:
-        previous, age_s = await _previous_assistant_turn(user_id, text)
+        previous, age_s = await _previous_assistant_turn(user_id, text, session_id)
     return bind_reminder_offer_reply(text, previous, age_s)
 
 
@@ -2319,6 +2331,7 @@ async def detect_and_extract_intent(
     text: str,
     user_id: str = "guest",  # fail-open to least-privilege, not admin (#1021/#1032 posture)
     context: "Optional[ConversationContext]" = None,
+    session_id: Optional[str] = None,
 ) -> Optional["Intent"]:
     """
     Async wrapper around detect_intent that populates structured slots for create
@@ -2442,7 +2455,7 @@ async def detect_and_extract_intent(
         return _offer_reply
 
     try:
-        _rewritten = await reminder_offer_reply_text(text, user_id)
+        _rewritten = await reminder_offer_reply_text(text, user_id, session_id=session_id)
     except Exception as _rem_exc:  # never let the offer path break routing
         logger.debug("detect_and_extract_intent: reminder-offer binding failed: %s", _rem_exc)
         _rewritten = None

@@ -141,3 +141,56 @@ def test_doctrine_source_states_ai_honesty():
 ])
 def test_drift_probe_honest_replies_keep_the_persona_register(reply, ok):
     assert pd.style_checks(reply, pl.default_persona())["no_selfid"] is ok
+
+
+# -- review round (Codex #2309) ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("reply", [
+    "sure, tomorrow at 3pm", "yes every Monday at 9am", "yes 3pm on friday", "yeah next week 3pm", "yes in 20 minutes at 3pm",
+    "sure 3pm on the 14th",
+])
+def test_scheduling_qualifiers_the_rewrite_would_drop_are_not_bound(reply):
+    """The rewritten sentence cannot carry a day or recurrence; the extractor would put the reminder on TODAY. Decline instead."""
+    assert bind_reminder_offer_reply(reply, OFFER, FRESH) is None
+    assert bind_reminder_offer_reply("sure, 3pm", OFFER, FRESH) is not None          # negative control: no qualifier binds
+
+
+def test_the_title_comes_from_the_final_offer_sentence_only():
+    prev = "I set a reminder for the dentist. Want me to set a reminder for the pickup?"
+    assert bind_reminder_offer_reply("sure, 3pm", prev, FRESH) == "remind me about pickup at 3 pm"
+
+
+def test_the_transcript_lookup_is_scoped_to_the_current_session(monkeypatch):
+    seen = {}
+
+    class _Cur:
+        async def fetchall(self):
+            return [_row("assistant", OFFER)]
+
+    class _Db:
+        async def execute(self, sql, params=()):
+            seen["sql"], seen["params"] = sql, params
+            return _Cur()
+
+    import contextlib
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield _Db()
+
+    import database
+    monkeypatch.setattr(database, "get_db_ctx", ctx)
+    prev, _age = asyncio.run(intent_router._previous_assistant_turn("u", "yes 2:45", "sess-B"))
+    assert "m.session_id = ?" in seen["sql"] and seen["params"] == ("u", "sess-B") and prev == OFFER
+    asyncio.run(intent_router._previous_assistant_turn("u", "yes 2:45"))
+    assert "m.session_id" not in seen["sql"].split("WHERE", 1)[1] and seen["params"] == ("u",)   # control: no session id = as before
+
+
+def test_the_shared_fast_tier_dispatch_defers_an_offer_reply(monkeypatch):
+    """Both channels call fast_tiers.resolve; it must hand an offer reply back (None) instead of dispatching it to the time expert."""
+    import fast_tiers
+
+    async def bound(text, uid, previous=None, age_s=None, session_id=None):
+        return "remind me about pickup at 2:45 pm" if text.startswith("yes please") else None
+
+    monkeypatch.setattr(intent_router, "reminder_offer_reply_text", bound)
+    assert asyncio.run(fast_tiers.resolve("yes please, 2:45 so i'm not late", "u", "s1", channel="chat")) is None
