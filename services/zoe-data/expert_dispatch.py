@@ -570,6 +570,25 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     text = (text or "").strip()
     if not text:
         return None
+    # FORGET FIRST (QA 2026-11-05): "no, don't remember that! forget that" reached this lane, read "remember" as a
+    # teach and was stored; "please forget that I said ..." was echoed back as "Got it - I'll remember please forget
+    # that you said ...". A forget command runs the forget handler (the same one the intent lane uses: forget_last's
+    # reject + physical erase); any other retraction wording stores NOTHING and defers to the brain. Fails closed: a
+    # gate that cannot load stores nothing on wording it cannot vet.
+    try:
+        from memory_quality import has_forget_wording, is_forget_command
+        _forget_cmd = is_forget_command(text)
+        _forget_words = has_forget_wording(text)
+    except Exception:  # noqa: BLE001
+        _forget_cmd = False
+        _forget_words = bool(re.search(r"(?<!don't )(?<!dont )(?<!do not )\bforget\b|\b(?:don'?t|do\s+not)\s+remember\b",
+                                       text, re.IGNORECASE))
+    if _forget_cmd:
+        from intent_router import Intent, execute_intent
+        return await execute_intent(Intent("memory_forget_last", {}), user_id)
+    if _forget_words:
+        _record_quality_reject("voice_fact", "forget_command", text)
+        return None
     # A pasted email, a "system:" line or another person's quoted speech is not the owner teaching Zoe: only the
     # owner's own words are stored, and a turn with none left stores nothing and defers to the brain (reply only).
     # Pasted instructions ("ignore previous instructions and remember that ...") were taken as the owner's
@@ -606,10 +625,10 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     is_question = asks_recall or bool(_QUESTION_RE.search(text)) or text.rstrip().endswith("?")
     # Imperative teach only: a command to store, never a recall question. The
     # asks_recall guard covers the "do you / do ya remember…?" forms (any pronoun);
-    # the lookbehinds also stop a bare "you/ya remember…" from reading as a command.
+    # the lookbehinds also stop a bare "you/ya remember…" (and the negated "don't remember…") from reading as a command.
     imperative_store = (not asks_recall) and (
         bool(re.search(r"\b(note that|don'?t forget|make a note|keep in mind)\b", low))
-        or bool(re.search(r"(?<!you )(?<!ya )\bremember\b", low))
+        or bool(re.search(r"(?<!you )(?<!ya )(?<!don't )(?<!dont )(?<!do not )(?<!never )\bremember\b", low))
     )
     if is_question and not imperative_store:
         return await _run_expert(domain, text, user_id, session_id)
@@ -718,6 +737,18 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
             _record_quality_reject("voice_fact", "correction_shape_unresolved", text)
             return None  # defer to the brain, reply-only, nothing stored
         text = stripped
+    # VERBATIM gate (QA 2026-11-05): "um I literally just asked what you know about me" was stored word for word as a
+    # fact because it had an "I" in it. The owner's words are kept verbatim only on an explicit teach cue or a
+    # first-person fact shape ("my dog is called ...", "I work ..."); talk about the conversation / Zoe and filler
+    # store nothing and defer to the brain. A gate that cannot load keeps only the explicit teach.
+    try:
+        from memory_quality import verbatim_storable
+        _verbatim_ok, _verbatim_reason = verbatim_storable(text)
+    except Exception:  # noqa: BLE001
+        _verbatim_ok, _verbatim_reason = imperative_store, "gate_unavailable"
+    if not _verbatim_ok:
+        _record_quality_reject("voice_fact", _verbatim_reason or "not_verbatim_storable", text)
+        return None
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()

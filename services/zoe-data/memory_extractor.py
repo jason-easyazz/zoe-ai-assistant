@@ -196,6 +196,12 @@ def _should_skip(user_message: str) -> bool:
     msg = _clean(user_message).lower()
     if not msg:
         return True
+    from memory_quality import is_forget_command
+
+    if is_forget_command(msg):
+        # a retraction ("please forget that I said I live in <town>") is never mined: storing anything from it
+        # keeps exactly what the owner asked Zoe to forget (QA 2026-11-05)
+        return True
     if msg.startswith("remember "):
         return False
     return any(msg.startswith(prefix) for prefix in _SKIP_PREFIXES)
@@ -701,6 +707,16 @@ def _remember_is_a_question(text: str, m: "re.Match[str]") -> bool:
     return bool(_ADDRESSED_TO_YOU_RE.search(text[:rpos]))
 
 
+_NEGATED_BEFORE_RE = re.compile(r"\b(?:don'?t|do\s+not|never|not)\s*$", re.IGNORECASE)
+
+
+def _remember_is_negated(text: str, m: "re.Match[str]") -> bool:
+    """True when the "remember" the template matched is NEGATED: "no, don't remember that! forget that" asks Zoe NOT
+    to keep something, and was stored as "User asked me to remember: that! forget that" (QA 2026-11-05)."""
+    rpos = text.lower().find("remember", m.start())
+    return rpos >= 0 and bool(_NEGATED_BEFORE_RE.search(text[:rpos]))
+
+
 #: the templates whose single capture is a PLACE (home, workplace, origin): ``memory_quality.clean_place_value`` decides what is left of it
 _PLACE_TEMPLATES = frozenset({"User lives in {0}", "User works at/for {0}", "User is from {0}"})
 _AUX_BEFORE_SUBJECT_RE = re.compile(
@@ -763,7 +779,8 @@ def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[Memo
         m = re.search(pattern, text, flags=re.IGNORECASE)
         if not m:
             continue
-        if template.startswith("User asked me to remember") and _remember_is_a_question(text, m):
+        if template.startswith("User asked me to remember") and (
+                _remember_is_a_question(text, m) or _remember_is_negated(text, m)):
             continue
         if _asked_not_said(text, m, template):
             continue
