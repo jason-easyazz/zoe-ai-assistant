@@ -2416,9 +2416,13 @@ _QUESTION_PRECEDENCE_REASONS = frozenset({"evidence_question", "event_time_quest
 _LIST_TERRITORY_RE = re.compile(
     r"\b(?:lists?|shopping|groceries|grocery|to[- ]?dos?|todos?|items?|add|put|remove|tick|cross|buy|need|bought|pick\s+up)\b",
     re.IGNORECASE)
+# ONE clause, nothing after the device phrase but "please" / punctuation: "turn on the lamp ... then tell me a joke" is two
+# requests, and the router's verdict on the whole turn is not second-guessed for it.
 _SWITCH_COMMAND_RE = re.compile(
     r"^\s*(?:(?:hey|ok|okay|zoe|zoey|please|kindly|just|can you|could you|would you|will you)[,\s]+)*"
-    r"(?:(?:turn|switch|flip)\s+(?:on|off)\b|(?:turn|switch|flip)\s+(?:the\s+)?[a-z']+(?:\s+[a-z']+)?\s+(?:on|off)\s*[.!?]*$)",
+    r"(?:(?:turn|switch|flip)\s+(?:on|off)\s+(?:the\s+|my\s+|all\s+the\s+)?[a-z']+(?:\s+[a-z']+){0,3}"
+    r"|(?:turn|switch|flip)\s+(?:the\s+|my\s+)?[a-z']+(?:\s+[a-z']+)?\s+(?:on|off))"
+    r"(?:\s+please)?\s*[.!?]*\s*$",
     re.IGNORECASE)
 
 

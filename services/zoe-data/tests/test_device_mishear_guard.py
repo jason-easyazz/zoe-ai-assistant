@@ -81,7 +81,23 @@ def test_flag_off_is_unchanged(guard_off, text):
     assert sky._repair_light_mishear("turn on the white") == "turn on the light"   # the live repair is untouched
 
 
-@pytest.mark.parametrize("text", ["Shone the lots.", "turn on the light", "switch the lamp off", "can you turn off the lights"])
+def _pre_change_repair(value: str) -> str:
+    """The repair exactly as it was before the flag existed (base regexes, only lies/lice plural)."""
+    def _fix(m):
+        return f"{m.group('lead')}turn {m.group('onoff')} the {'lights' if m.group('noun').lower() in ('lies', 'lice') else 'light'}"
+    return sky._LIGHT_MISHEAR_AFTER_RE.sub(_fix, sky._LIGHT_MISHEAR_RE.sub(_fix, value))
+
+
+@pytest.mark.parametrize("text", [
+    "Shone the lots.", " shone the lots ", "turn on the lot", "turn the lots off", "turn on the white", "turn the lies off",
+    "Okay, switch off the watch. Then the fan.", "please turn on the lite please", "turn on the lamp", "",
+])
+def test_flag_off_repair_is_byte_identical(guard_off, text):
+    assert sky._repair_light_mishear(text) == _pre_change_repair(text)
+
+
+@pytest.mark.parametrize("text", ["Shone the lots.", "turn on the light", "switch the lamp off", "can you turn off the lights",
+                                  "turn on the lamp in the bedroom please"])
 def test_gate_lets_a_device_command_through_a_lists_verdict(guard_on, text):
     intent = sky.classify_skybridge_intent(text)
     assert intent is not None and intent.domain == "smart_home", (text, intent)
@@ -97,6 +113,7 @@ def test_gate_keeps_the_veto_when_the_flag_is_off(guard_off, monkeypatch, text):
 
 @pytest.mark.parametrize("text,router", [
     ("turn on the light and add bulbs to the shopping list", "lists"),   # a list word: the lists verdict stands
+    ("turn on the lamp in the bedroom then tell me a joke", "lists"),   # two requests: not a single switch clause
     ("turn on the light", "music"),                                      # only a lists verdict is second-guessed
     ("turn on the light", "chat"),                                       # a chat verdict still vetoes
 ])
