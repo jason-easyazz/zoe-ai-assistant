@@ -166,6 +166,9 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
         # lists expert read the shopping list aloud). Never answer one domain's question with another domain's data.
         logger.info("EXPERT_NAMED_MISMATCH domain=%s score=%.2f → brain", domain, score)
         return None
+    if domain == "weather" and _is_unit_conversion(text):
+        logger.info("EXPERT_CONVERSION_NOT_WEATHER score=%.2f → brain", score)
+        return None
     user_id = str(ctx.get("user_id") or "guest")
     session_id = str(ctx.get("session_id") or "")
     t0 = time.monotonic()
@@ -261,6 +264,18 @@ _NAMED_FAMILY = {
     "reminders": frozenset({"reminders", "calendar"}),
     "timers": frozenset({"timers"}),
 }
+
+
+# A unit CONVERSION ("375 fahrenheit? what's that in celsius") is arithmetic, not weather: the router head scores the unit words
+# as weather (QA 2026-11-06: answered with today's forecast at 0.976). A number, a convert-to-unit cue and no weather word.
+_TEMP_CONVERSION_RE = re.compile(
+    r"\b(?:in|to|into)\s+(?:celsius|centigrade|fahrenheit|degrees\s+[cf])\b|\bconvert\b", re.IGNORECASE)
+_WEATHER_WORD_RE = re.compile(
+    r"\b(?:weather|forecast|rain\w*|outside|sunny|wind\w*|humid\w*|storm\w*|today|tomorrow|tonight|week)\b", re.IGNORECASE)
+
+
+def _is_unit_conversion(text: str) -> bool:
+    return bool(re.search(r"\d", text) and _TEMP_CONVERSION_RE.search(text) and not _WEATHER_WORD_RE.search(text))
 
 
 def _names_another_domain(domain: str, text: str) -> bool:

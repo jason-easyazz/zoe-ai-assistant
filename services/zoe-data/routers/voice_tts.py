@@ -4643,9 +4643,11 @@ async def voice_command(
                     _list_type = str(slots.get("list_type", "shopping"))
                     _list_title = "Shopping List" if _list_type == "shopping" else f"{_list_type.title()} List"
 
-                    if _item_text and not _panel_is_live(panel_id):
+                    if _item_text and (not _panel_is_live(panel_id) or not str(slots.get("list_type") or "").strip()):
                         # Nobody can tap Done on a panel that is not rendering: do the add NOW and say what really
                         # happened ("Added …", or that it did not work) - never "check the panel".
+                        # A list the user NAMED that is no type ("my pharmacy list") also goes straight to the executor:
+                        # it adds to that list or ASKS - the shopping-list form must never stand in for it (QA 2026-11-06).
                         from intent_router import execute_intent as _exec_list_direct
 
                         reply_text = (await _exec_list_direct(_quick_intent, effective_user)) or (
