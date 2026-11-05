@@ -396,6 +396,123 @@ def _normalized_fact_value(text: str, person_name: str) -> str:
     return re.sub(r"\s+", " ", t).strip().lower().rstrip(".")
 
 
+#: Fact kinds a person has MANY values of: "Ana loves chess" is a second preference, never a
+#: correction of "Ana hates mushrooms", so a different value of one of these is a new row, never an
+#: entity-keyed supersede (QA round 2, 2026-11-05: an age fact the model filed as "preference" would
+#: otherwise have retired an unrelated preference row of the same person and archived the rest as
+#: "stale duplicates"). Every other kind (birthday, work, age, and any kind the model invents) keeps
+#: one current value per person: a new value supersedes the old one.
+MULTI_VALUED_KINDS = frozenset({"preference", "meeting", "gift_idea", "gift_given", "bucket", "bucket_list"})
+
+#: An AGE claim inside a person fact ("10 years old", "a 10-year-old", "aged 10", "turned 10").
+#: The person extractor's model has no "age" fact type, so it files an age under whatever type it
+#: picks; ``age_of`` lets the extractor key it as ``age`` (single-valued) whatever the model said.
+_AGE_RE = re.compile(
+    r"\b(?:(?P<a>\d{1,3})\s*-?\s*(?:years?|yrs?)\s*-?\s*old\b"
+    r"|aged?\s*:?\s*(?P<b>\d{1,3})\b"
+    r"|turn(?:ed|s)\s+(?P<c>\d{1,3})\b)",
+    re.IGNORECASE)
+
+
+def age_of(text: str) -> Optional[int]:
+    """The age a person fact states, or None ("Ana: 10 years old" -> 10). Only an explicit
+    age shape counts - a bare number ("Ana: 10") says nothing about what it counts."""
+    m = _AGE_RE.search(text or "")
+    if not m:
+        return None
+    n = int(next(g for g in m.group("a", "b", "c") if g))
+    return n if 0 < n <= 120 else None
+
+
+#: The person an age claim is about: the capitalised name right before the age ("Ana: 10 years old", "Ana is 10
+#: years old", "a daughter named Ana who is 9 years old", "Ana turned 10"). Possessive kin in between ("Ana's mum
+#: is 40 years old") is not Ana's age, so nothing but a copula / "who" may stand between the name and the age.
+_AGE_SUBJECT_RE = re.compile(
+    r"\b(?P<name>[A-Z][a-z]+)\s*(?::|,)?\s*(?:(?:who|which)\s+)?(?:(?:is|was|has|just|now|already)\s+)*(?:aged?\s*:?\s*)?$")
+_NOT_A_NAME = frozenset({"user", "the", "i", "my", "our", "a", "an", "he", "she", "they", "it"})
+
+
+def person_age_claim(text: str) -> Optional[tuple[str, int]]:
+    """``(name lower-cased, age)`` when the row states ONE named person's age, else None. Read-only helper for the
+    memory packet (``routers.memories``): two rows giving the same person different ages are one fact, changed."""
+    m = _AGE_RE.search(text or "")
+    if not m:
+        return None
+    n = age_of(m.group(0))
+    if n is None:
+        return None
+    subj = _AGE_SUBJECT_RE.search((text or "")[:m.start()])
+    if not subj or subj.group("name").lower() in _NOT_A_NAME:
+        return None
+    return subj.group("name").lower(), n
+
+
+def _is_age_of(text: str, person_name: str) -> bool:
+    """Does ``text`` state THIS person's age ("Ana Lee: 10 years old" for "Ana Lee")?"""
+    claim = person_age_claim(text)
+    return claim is not None and claim[0] in {t.lower() for t in (person_name or "").split()}
+
+
+_NOT_CURRENT = frozenset({"superseded", "archived", "rejected", "pending"})
+
+
+def stale_age_ids(candidates) -> set[str]:
+    """Ids of memory rows that give a named person an age OTHER than that person's current one.
+
+    QA round 2 (2026-11-05): a member corrected a family member's age three times; the packet still held
+    "<name> is 9 years old" beside "<name>: 10 years old" (different writers, so no supersede chain links them) and
+    the 4B brain answered 9. An age is ONE value per person and the row text says whose and what, so of the rows
+    giving one person different ages only the CURRENT one is served: the newest row in the speaker's own voice
+    (authority rank >= ``user_stated_derived``: their words, or a model paraphrase their turn supports). A model
+    inference never hides what the speaker said (owner rule: inference never supersedes) - the newest inferred row
+    wins only when no row in the speaker's voice gives an age. Pure; never raises. ``ZOE_EXPLICIT_CORRECTION=0``
+    returns nothing (every row served, as before)."""
+    try:
+        import memory_authority as _ma
+
+        if not _ma.correction_enabled():
+            return set()
+        by_person: dict[str, list] = {}
+        for ref in candidates or ():
+            meta = getattr(ref, "metadata", None) or {}
+            if str(meta.get("status") or "active").lower() in _NOT_CURRENT:
+                continue
+            claim = person_age_claim(getattr(ref, "text", "") or "")
+            if claim:
+                by_person.setdefault(claim[0], []).append((ref, claim[1]))
+        stale: set[str] = set()
+        for rows in by_person.values():
+            if len({age for _, age in rows}) < 2:
+                continue
+
+            def _key(item):
+                meta = getattr(item[0], "metadata", None) or {}
+                voiced = _ma.row_rank(meta, getattr(item[0], "text", "") or "") >= _ma.DERIVED_RANK
+                return voiced, _added_ts(meta)
+
+            current = max(rows, key=_key)[1]
+            stale |= {str(ref.id) for ref, age in rows if age != current}
+        return stale
+    except Exception as exc:  # noqa: BLE001 - a packet must never fail on this filter
+        logger.debug("stale_age_ids skipped (%s)", type(exc).__name__)
+        return set()
+
+
+def _added_ts(meta: dict) -> float:
+    raw = (meta or {}).get("added_at")
+    if not raw:
+        return float("-inf")
+    try:
+        dt = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return float("-inf")
+    if dt.tzinfo is None:
+        from datetime import timezone
+
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
 def _same_kind_row(meta: dict, row_text: str, person_name: str, pattern_type: str) -> bool:
     """Does this same-person row hold the SAME fact kind as the candidate?
 
@@ -409,6 +526,10 @@ def _same_kind_row(meta: dict, row_text: str, person_name: str, pattern_type: st
     stored = str(
         meta.get("pattern_type") or meta.get("candidate_pattern_type") or ""
     ).strip().lower()
+    if pattern_type == "age":
+        # Age rows written before the extractor keyed them as "age" carry whatever type the model
+        # chose ("preference"): the row TEXT decides - any non-birthday row that states an age.
+        return stored == "age" or (stored != "birthday" and _is_age_of(row_text, person_name))
     if stored:
         return stored == pattern_type
     if pattern_type != "birthday":
@@ -474,6 +595,10 @@ async def _reconcile_same_kind_entity_row(
                 "person_extractor: entity dedup-skip kept=%s kind=%s", r.id, pattern_type
             )
             return r.id
+    if pattern_type in MULTI_VALUED_KINDS:
+        # A multi-valued kind: a different value is ANOTHER fact, never a replacement. Fall
+        # through to the text reconcile + plain ingest (which keeps both).
+        return None
     # Different value for the same person+kind → supersede in place. One row
     # per kind is the invariant; extra stale duplicates are archived.
     target, *extras = matches
@@ -1226,6 +1351,10 @@ async def apply_person_fact(
             pattern_type = "bucket"
 
         fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
+        if pattern_type != "birthday" and _is_age_of(fact_text, name):
+            # The model has no "age" type and files an age as whatever it picks: an age is ONE
+            # current value per person, so it is keyed "age" and a new age supersedes the old one.
+            pattern_type = "age"
         try:
             res = await _resolve_person(name, user_id, _db)
         except Exception as exc:  # noqa: BLE001

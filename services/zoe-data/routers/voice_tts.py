@@ -371,7 +371,15 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
 
     seen: set[str] = set()
     lines: list[str] = []
+    try:   # one current age per person, as chat's packet (person_extractor.stale_age_ids)
+        from person_extractor import stale_age_ids
+
+        stale_ages = stale_age_ids(refs or [])
+    except Exception:  # noqa: BLE001
+        stale_ages = set()
     for ref in refs or []:
+        if str(getattr(ref, "id", "")) in stale_ages:
+            continue
         fact = (getattr(ref, "text", "") or "").strip()
         if not fact:
             continue

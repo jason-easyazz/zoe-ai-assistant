@@ -4694,6 +4694,25 @@
         },
         "typed_env": false
       },
+      "ZOE_EXPLICIT_CORRECTION": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_authority.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-authority.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_EXPRESSIVE_GENTLE_FROM_H": {
         "defaults": [
           "22"
