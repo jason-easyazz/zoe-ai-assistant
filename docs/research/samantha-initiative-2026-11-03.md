@@ -191,7 +191,7 @@ Forty-seven experiments are specified across the lanes with hypothesis, implemen
 | 7 | Proactive policy log-only (F E3) | the table's choices would have been welcome | ≥ 70% welcome, 0 unwelcome spoken | > 10% unwelcome | 2 weeks logging |
 | 8 | GEPA improver on manner.md (B E1) | an improver beats repeated sampling at equal cost | wins on held-out cells 10 of 14 nights | ≤ sampling → stop | 2-week lab build + 14 nights |
 
-Experiment 1 was run on 2026-11-05: [recall-gate-shadow-replay-2026-11-05.md](recall-gate-shadow-replay-2026-11-05.md) (precision not scorable from logs, 28 real adds; do not enforce yet).
+Experiment 1 was run on 2026-11-05: [recall-gate-shadow-replay-2026-11-05.md](recall-gate-shadow-replay-2026-11-05.md) (precision not scorable from logs, 28 real adds; synthetic add precision 0.63 on n=24, drop precision 0.997; do not enforce yet - fix the session carry-over first; an opt-in private trace, `ZOE_RECALL_GATE_TRACE`, now exists for live scoring).
 
 ## 9. Success metrics and baselines (12.8)
 
