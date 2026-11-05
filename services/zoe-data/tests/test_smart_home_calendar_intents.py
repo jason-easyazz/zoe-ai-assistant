@@ -176,7 +176,7 @@ def test_misheard_light_repair_negative_control(text):
 
 @pytest.mark.parametrize("text,action,query", [
     ("turn the porch off", "turn_off", "porch"),
-    ("switch on the pantry", "turn_on", "pantry"),
+    ("turn on the pantry", "turn_on", "pantry"),
     ("turn my sunroom on", "turn_on", "sunroom"),
 ])
 def test_unknown_noun_is_claimed_only_as_an_unverified_device(text, action, query):

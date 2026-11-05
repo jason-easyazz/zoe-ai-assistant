@@ -1304,7 +1304,10 @@ def detect_intent(
     # Every other household device the Skybridge parser knows how to switch ("turn the heater on", "switch off the lamp"): the lights
     # pattern above is one sample of it. Same parser, so the two matchers cannot disagree; a device whose noun Zoe has no word for
     # (device_unverified) is Skybridge's, which can check the house's own device list.
-    if not _SMART_HOME_QUESTION_RE.match(t):
+    # (only a command that OPENS with a switch verb: "make fan mode here to off" and "put the thermostat fan on auto" are not
+    # on/off commands - the phrasing corpus caught both)
+    if not _SMART_HOME_QUESTION_RE.match(t) and re.match(r"^(?:(?:please|zoe|hey|can you|could you|would you|will you)\s+)*(?:turn|switch|flip)\b", t) \
+            and not re.search(r"\b(?:mode|speed|setting|temperature|temp)\b|\bto\s+(?:on|off)\b", t):
         try:
             import skybridge_service as _sky_home
 

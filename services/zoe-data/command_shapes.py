@@ -583,6 +583,11 @@ _CAL_PLAN_NOUN_FRAME = re.compile(
     r"|(?:any|are\s+there\s+any|is\s+there\s+an?)\s+(?:appointments?|meetings?|events?)\b)",
     re.IGNORECASE,
 )
+_CAL_REST_WORDS = frozenset({
+    "on", "for", "in", "at", "my", "our", "the", "this", "next", "like", "look", "looks", "planned", "scheduled", "coming", "up",
+    "evening", "morning", "afternoon", "night", "a", "free", "busy", "booked", "anything", "to", "do", "and", "week", "weekend",
+    "day", "got", "have", "plans", "today", "tomorrow", "tonight", "o", "clock", "all", "then", "happening",
+})
 _CAL_WEEK_LIKE = re.compile(r"\b(?:my|our)\s+(?:day|week|weekend)\b", re.IGNORECASE)
 _CAL_NOT_TV = re.compile(
     r"\bon\s+(?:the\s+)?(?:tv|telly|television|netflix|youtube|stan|disney|prime|foxtel|radio|channel\s*\d*|screen|speaker|stereo"
@@ -641,8 +646,14 @@ def calendar_read_ask(text: str) -> Optional[str]:
         return calendar_qualifier(t)
     if _CAL_PLAN_NOUN_FRAME.match(t):
         return calendar_qualifier(t)
-    if _CAL_DAY_FRAME.match(t):
+    frame = _CAL_DAY_FRAME.match(t)
+    if frame:
         has_period = re.search(rf"\b{_CAL_PERIOD}\b", t) is not None
+        # What follows the frame must be only date / filler words: "anything I should know about the weather today" is a
+        # weather question that happens to carry a date, not a calendar read.
+        rest = re.sub(rf"\b{_CAL_PERIOD}\b", " ", t[frame.end():])
+        if any(w not in _CAL_REST_WORDS for w in re.findall(r"[a-z']+", rest)):
+            return None
         if has_period or _CAL_WEEK_LIKE.search(t):
             # "what's on tonight" with no possessive / noun is as likely the TV as the calendar: left to the brain.
             if re.match(r"^what(?:'s|s|\s+is)\s+on\s+(?:tonight|this\s+(?:evening|afternoon))$", t):

@@ -358,6 +358,8 @@ def _plan(domain: str, text: str):
         ask = command_shapes.calendar_read_ask(text)
         if ask is not None:
             return ("calendar_show", {"qualifier": ask}, "read")
+        if command_shapes.calendar_not_a_read(text):
+            return None      # a complaint / definition / TV question that names the calendar: never a read, never a default create
         # A regex-recognised calendar WRITE whose slots still need extraction ("make an appointment with ..."): the create-cue
         # list below misses wordings the intent regex catches, which dropped them to the brain with no plan.
         if det and det.name == "calendar_create":
