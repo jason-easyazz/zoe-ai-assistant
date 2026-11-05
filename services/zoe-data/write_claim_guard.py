@@ -352,7 +352,10 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: b
                     if (now_ or sure or standing_) and _particle_after(toks, i, p_particles):
                         # "I'll add that to your list right now": a write promised for THIS turn. Never with an "if" anywhere in
                         # the unit ("I'll add it now if you like" is an offer).
-                        kinds = _named_kinds(padded, lang)
+                        # A verb that names its OWN kind (remind / remember / forget) keeps it: the nouns of its CONTENT ("I'll remind you to
+                        # add milk to your shopping list at 3pm", "I'll remember your appointment is on Friday") do not turn the
+                        # promise into a list / calendar write that needs a different receipt.
+                        kinds = (p_kind,) if (p_kind != "any" and not p_needs) else _named_kinds(padded, lang)
                         if not kinds:
                             if any(_has_phrase(padded, o) for o in lang.other_targets):
                                 continue

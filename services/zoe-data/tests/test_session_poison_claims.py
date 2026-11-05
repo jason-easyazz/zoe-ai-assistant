@@ -82,6 +82,9 @@ GAP_CLAIMS = [
     ("I've cancelled your morning alarm.", ("timer_removed",)),
     ("I'll take the lunch off your calendar.", ("calendar_removed",)),
     ("Let me set that reminder for you right now.", ("reminder",)),
+    # Codex #2312: a promise verb that names its own kind keeps it over the nouns of its CONTENT
+    ("I'll remind you to add milk to your shopping list at 3pm.", ("reminder",)),
+    ("I'll remember your appointment is on Friday.", ("memory",)),
 ]
 
 NOT_CLAIMS = [
