@@ -409,13 +409,12 @@ class Turn:
 
 
 def is_recall_ask(message: Any) -> bool:
-    """True for a question about the past: the words end on a question mark, or open with a recall lead of the lexicon
-    (``recall_leads``: "what did i ...", "do you remember ...", "remind me ..."; the text's own language first, then the
+    """True for a question about the past: the words open with a recall lead of the lexicon. A trailing question mark alone is
+    NOT enough ("why am I feeling worried about the exam?" asks about the present, so it stays a mood turn and a private
+    feeling is not released to the room); Leads are ``recall_leads`` ("what did i ...", "do you remember ...", "remind me ..."; the text's own language first, then the
     others). Separates "what did I tell you about feeling worried before the exam" (a recall) from "I'm worried about the
     exam" (a mood statement) on the voice surface. Pure."""
     raw = str(message or "").strip()
-    if raw.endswith(("?", "？")):
-        return True
     low = _norm(raw)
     for p in _lex.packs_for(raw):
         for lead in p.recall_leads:

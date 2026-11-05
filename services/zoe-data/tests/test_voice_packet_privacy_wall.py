@@ -171,7 +171,8 @@ def test_a_question_about_a_past_feeling_by_a_verified_voice_pulls_it(monkeypatc
 
 @pytest.mark.parametrize("text,want", [
     ("I'm worried about the exam", False), ("I am so worried about the exam", False), ("feeling low today", False),
-    ("what did I say about the exam", True), ("remind me what happened", True), ("is it raining?", True),
+    ("what did I say about the exam", True), ("remind me what happened", True), ("is it raining?", False),
+    ("why am I feeling worried about the exam?", False), ("am I worried about the exam?", False),
 ])
 def test_is_recall_ask(text, want):
     assert restraint.is_recall_ask(text) is want
