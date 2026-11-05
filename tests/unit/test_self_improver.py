@@ -44,6 +44,14 @@ NIGHT = dt.datetime(2026, 11, 6, 4, 0, 0)
 
 
 @pytest.fixture(autouse=True)
+def _clock_is_the_fake_night(monkeypatch):
+    """The module compares its deadline (built from the injected ``now``) to ``time.time()``; pin that clock to NIGHT so these
+    tests do not rot once the real clock passes the fixed 04:25 deadline (they began failing the day they were written)."""
+    import time as _t
+    monkeypatch.setattr(si, "time", SimpleNamespace(time=lambda: NIGHT.timestamp(), monotonic=_t.monotonic, sleep=lambda *_: None))
+
+
+@pytest.fixture(autouse=True)
 def _isolated(tmp_path, monkeypatch):
     """A fake live overlay root and flue env per test; the key env var unset unless a test sets it."""
     monkeypatch.setattr(si, "LIVE_OVERLAY_ROOT", tmp_path / "live-overlay")
@@ -586,47 +594,59 @@ def test_the_shipped_seed_passes_the_overlay_rules():
     assert si.validate_manner(text) == text and src.startswith("lexicon:")
 
 
-# ── review round: process group, reflection deadline, missing SDK, one measurement per night ──────────────────────────────
+# ── deadline bounds (cross-review: the probe's process group, reflection time, SDK provisioning) ─────────────────────────
 
-def test_a_timed_out_probe_takes_its_whole_process_group_down(tmp_path):
+def test_a_probe_timeout_kills_the_whole_process_group_including_a_grandchild(tmp_path):
     import subprocess
     import time
-    pidfile = tmp_path / "child.pid"
-    script = f"import subprocess,sys,time; p=subprocess.Popen(['sleep','60']); open({str(pidfile)!r},'w').write(str(p.pid)); time.sleep(60)"
+
+    pidfile = tmp_path / "grandchild.pid"
+    script = f"import subprocess,sys,time;p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);open(r'{pidfile}','w').write(str(p.pid));time.sleep(60)"
     with pytest.raises(subprocess.TimeoutExpired):
-        si.run_in_group([sys.executable, "-c", script], timeout=2)
+        si.run_in_group([sys.executable, "-c", script], capture_output=True, text=True, timeout=2)
     pid = int(pidfile.read_text())
-    for _ in range(20):
+    deadline = time.time() + 5
+    alive = True
+    while time.time() < deadline and alive:
         try:
             os.kill(pid, 0)
+            time.sleep(0.1)
         except ProcessLookupError:
-            return
-        time.sleep(0.1)
-    os.kill(pid, 9)
-    pytest.fail("the grandchild (the scratch sidecar's stand-in) survived the timeout")
+            alive = False
+    assert not alive                                          # negative control: plain subprocess.run would leave it running
 
 
-def test_reflection_is_not_started_without_time_to_finish(monkeypatch):
+def test_reflection_is_not_started_past_the_nightly_deadline(monkeypatch):
     import time
+
     monkeypatch.setenv(si.KEY_ENV, SENTINEL)
-    client = FakeClient(["<manner>One.</manner>", "<manner>Two.</manner>"])
-    r, _ = _reflector(client, _cfg(max_tokens_night=10**6, max_usd_night=5.0))
-    r.deadline_ts = time.time() + 30
-    cands, problems = r.propose(SEED, TRACES, [])
-    assert client.calls == [] and cands == [] and "before the deadline" in problems[0]
-    r.deadline_ts = time.time() + 3600                          # negative control
-    assert len(r.propose(SEED, TRACES, [])[0]) == 2
+    client = FakeClient(["<manner>x</manner><why>y</why>"])
+    r, _ = _reflector(client)
+    cands, problems = r.propose(SEED, TRACES, [], deadline_ts=si.time.time() + 5)
+    assert cands == [] and client.calls == [] and any("deadline" in p for p in problems)
+
+
+def test_reflection_passes_the_remaining_time_as_the_request_timeout(monkeypatch):
+    import time
+
+    monkeypatch.setenv(si.KEY_ENV, SENTINEL)
+    client = FakeClient(["<manner>Name a real problem first, kindly.</manner><why>general</why>",
+                         "<manner>If a plan risks health, say so first.</manner><why>targeted</why>"])
+    r, _ = _reflector(client)
+    r.propose(SEED, TRACES, [], deadline_ts=si.time.time() + 100)
+    assert all(0 < c["timeout"] <= 100 for c in client.calls)
 
 
 def test_a_missing_sdk_is_a_recorded_problem_not_a_crash(monkeypatch):
     monkeypatch.setenv(si.KEY_ENV, SENTINEL)
 
-    def boom(_key):
-        raise ModuleNotFoundError("anthropic")
-    r, _ = _reflector(FakeClient([]), _cfg())
-    r.client_factory = boom
+    def boom(key):
+        raise ImportError("no anthropic")
+
+    cfg = _cfg()
+    r = si.AnthropicReflector(cfg, si.CostMeter(cfg.model, cfg.max_tokens_night, cfg.max_usd_night), client_factory=boom)
     cands, problems = r.propose(SEED, TRACES, [])
-    assert cands == [] and "ModuleNotFoundError" in problems[0]
+    assert cands == [] and any("SDK" in p for p in problems)
 
 
 def test_a_duplicate_measured_night_counts_once():

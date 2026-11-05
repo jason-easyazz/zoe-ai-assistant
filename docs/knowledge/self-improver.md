@@ -100,24 +100,25 @@ python3 scripts/perf/self_improver.py status               # the stop rule + the
 
 1. **Create the capped key.** In the Anthropic console, a dedicated API key for this job only, in a workspace with a monthly spend
    limit (suggested $10: fourteen nights at the $0.40 hard cap is $5.60).
-   The reflection SDK is imported by the wrapper's `/usr/bin/python3`, not the zoe-data venv: confirm `/usr/bin/python3 -c 'import anthropic'`
-   works (`python3 -m pip install --user anthropic` if not). A missing SDK is recorded as a reflection problem (night = unmeasured), not a crash.
 2. **Store it by name, never on a command line:**
    ```
    install -m 600 /dev/null ~/.zoe/env/self-improver.env
    ${EDITOR:-nano} ~/.zoe/env/self-improver.env        # one line: ZOE_IMPROVER_ANTHROPIC_KEY=<the key>
    ```
    Optional lines in the same file: `ZOE_IMPROVER_MAX_USD_NIGHT=0.40`, `ZOE_IMPROVER_MAX_TOKENS_NIGHT=40000`.
-3. **Optional:** `~/.zoe/self-improver/deny-terms.txt`, one household name per line (the guard refuses any payload carrying one).
-4. **Install the timer:**
+3. **Provision the SDK for the wrapper's interpreter.** `scripts/maintenance/self_improver_night.sh` runs `/usr/bin/python3`, not the
+   zoe-data venv: `/usr/bin/python3 -m pip install --user 'anthropic>=0.86,<1'` (check: `/usr/bin/python3 -c "import anthropic"`). Without it
+   the night records `no reflection SDK` as a problem and ends unmeasured; it never crashes.
+4. **Optional:** `~/.zoe/self-improver/deny-terms.txt`, one household name per line (the guard refuses any payload carrying one).
+5. **Install the timer:**
    ```
    cp ~/assistant/scripts/setup/systemd/zoe-self-improver.{service,timer} ~/.config/systemd/user/
    systemctl --user daemon-reload
    systemctl --user enable --now zoe-self-improver.timer
    systemctl --user list-timers zoe-self-improver.timer
    ```
-5. **Watch:** `tail -n 40 ~/.zoe-logs/self-improver.log`; `python3 ~/assistant/scripts/perf/self_improver.py status`.
-6. **Stop at any time:** `systemctl --user disable --now zoe-self-improver.timer`, and revoke the key in the console.
+6. **Watch:** `tail -n 40 ~/.zoe-logs/self-improver.log`; `python3 ~/assistant/scripts/perf/self_improver.py status`.
+7. **Stop at any time:** `systemctl --user disable --now zoe-self-improver.timer`, and revoke the key in the console.
 
 **Promotion is a separate, human decision** (Phase 2 of the design: apply + canary). Nothing here does it. If the fourteen-night
 rule passes and the owner wants a shadow winner live: put it in a new overlay version and switch with

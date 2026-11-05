@@ -26,11 +26,11 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 819 prod flags; 233 read through `typed_env`.
-- 758 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
-- 16 flags whose readers hard-code different effective defaults (table below).
+- 819 prod flags; 234 read through `typed_env`.
+- 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
-- 7 flags read but not registered (CI fails on any).
+- 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 0 registered flags with no reader in the scanned sources.
 
@@ -50,7 +50,6 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_LOCATION_CITY` | `'Geraldton'` | `'Geraldton'`, `unset` | `services/zoe-data/identity_facts.py` |
 | `ZOE_LOCATION_COUNTRY` | `'AU'` | `'AU'`, `unset` | `services/zoe-data/distress_handoff.py`, `services/zoe-data/identity_facts.py` |
 | `ZOE_MOONSHINE_ARCH` | `'MEDIUM_STREAMING'` | `'MEDIUM_STREAMING'`, `'v2'` | `services/zoe-data/routers/voice_tts.py` |
-| `ZOE_NIGHT_BUSY` | `'~/.zoe/agent-tools/night_busy.sh'` | `'~/.zoe/agent-tools/night_busy.sh'`, `unset` | no |
 | `ZOE_PANEL_ID` | `'zoe-touch-pi'` | `'post-merge-probe'`, `'zoe-touch-pi'` | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_SELF_URL` | `'http://127.0.0.1:8000'` | `'http://127.0.0.1:8000'`, `'http://localhost:8000'` | `services/zoe-data/intent_router.py` |
 | `ZOE_SPEAKER_MODEL` | `'resnet34'` | `'resnet34'`, `unset` | `scripts/setup/zoe_enroll_flow.py`, `scripts/setup/zoe_voice_daemon.py` |
@@ -309,13 +308,13 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_IDLE_CONSOLIDATION_IDLE_S` | int | `180` | - | `docs/architecture/samantha-evolution-packets.md` | `180` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_IDLE_CONSOLIDATION_LOOKBACK_S` | int | `3600` | - | `docs/architecture/zoe-memory-samantha-buildplan.md` | `3600` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
 | `ZOE_IDLE_CONSOLIDATION_MIN_TURNS` | int | `2` | - | - | `2` | no | NO | `services/zoe-data/memory_idle_consolidation.py` |
-| `ZOE_IMPROVER_ANTHROPIC_KEY` | **UNREGISTERED** | - | - | - | `''` | yes | NO | `scripts/perf/self_improver.py` |
-| `ZOE_IMPROVER_BRAIN_BUDGET_S` | **UNREGISTERED** | - | - | - | `1500.0` | yes | NO | `scripts/perf/self_improver.py` |
-| `ZOE_IMPROVER_CELLS` | **UNREGISTERED** | - | - | - | `('flaw', 'good')` | yes | NO | `scripts/perf/self_improver.py` |
-| `ZOE_IMPROVER_DEADLINE` | **UNREGISTERED** | - | - | - | `'04:25'` | yes | NO | `scripts/perf/self_improver.py` |
-| `ZOE_IMPROVER_MAX_TOKENS_NIGHT` | **UNREGISTERED** | - | - | - | `40000` | yes | NO | `scripts/perf/self_improver.py` |
-| `ZOE_IMPROVER_MAX_USD_NIGHT` | **UNREGISTERED** | - | - | - | `0.4` | yes | NO | `scripts/perf/self_improver.py` |
-| `ZOE_IMPROVER_MODEL` | **UNREGISTERED** | - | - | - | `'claude-sonnet-5-5'` | yes | NO | `scripts/perf/self_improver.py` |
+| `ZOE_IMPROVER_ANTHROPIC_KEY` | str | `''` | - | `docs/knowledge/self-improver.md` | `''` | yes | NO | `scripts/perf/self_improver.py` |
+| `ZOE_IMPROVER_BRAIN_BUDGET_S` | float | `1500.0` | - | `docs/knowledge/self-improver.md` | `1500.0` | yes | NO | `scripts/perf/self_improver.py` |
+| `ZOE_IMPROVER_CELLS` | list | `('flaw', 'good')` | - | `docs/knowledge/self-improver.md` | `('flaw', 'good')` | yes | NO | `scripts/perf/self_improver.py` |
+| `ZOE_IMPROVER_DEADLINE` | str | `'04:25'` | - | `docs/knowledge/self-improver.md` | `'04:25'` | yes | NO | `scripts/perf/self_improver.py` |
+| `ZOE_IMPROVER_MAX_TOKENS_NIGHT` | int | `40000` | - | `docs/knowledge/self-improver.md` | `40000` | yes | NO | `scripts/perf/self_improver.py` |
+| `ZOE_IMPROVER_MAX_USD_NIGHT` | float | `0.4` | - | `docs/knowledge/self-improver.md` | `0.4` | yes | NO | `scripts/perf/self_improver.py` |
+| `ZOE_IMPROVER_MODEL` | str | `'claude-sonnet-5-5'` | - | `docs/knowledge/self-improver.md` | `'claude-sonnet-5-5'` | yes | NO | `scripts/perf/self_improver.py` |
 | `ZOE_INTENT_DISPATCH_REQUIRE_TOKEN` | str | `''` | - | `docs/knowledge/fable-handoff-2026-07-06.md` | `''` | no | yes | `services/zoe-data/auth.py` |
 | `ZOE_INTENT_MISS_LOG` | str | `''` | - | `services/zoe-data/AGENTS.md` | `dynamic` | no | NO | `services/zoe-data/local_text_logs.py` |
 | `ZOE_INTENT_ROUTER_GATE` | bool | `True` | - | `docs/architecture/beat-the-bar-2026-program.md` | `'1'` | no | NO | `services/zoe-data/fast_tiers.py` |
@@ -483,7 +482,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MUSIC_OBSERVE_DEDUP_H` | int | `12` | - | - | `'12'` | no | NO | `services/zoe-data/music_history.py` |
 | `ZOE_MUSIC_SETUP_SECRET` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_MUSIC_SETUP_TTL_S` | int | `900` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
-| `ZOE_NIGHT_BUSY` | str | `'~/.zoe/agent-tools/night_busy.sh'` | - | - | `'~/.zoe/agent-tools/night_busy.sh'`, `-` | no | NO | `scripts/maintenance/harness_quiet.py`<br>`scripts/perf/self_improver.py` |
+| `ZOE_NIGHT_BUSY` | str | `'~/.zoe/agent-tools/night_busy.sh'` | - | - | `'~/.zoe/agent-tools/night_busy.sh'` | yes | NO | `scripts/maintenance/harness_quiet.py`<br>`scripts/perf/self_improver.py` |
 | `ZOE_NIGHT_MIND` | str | `'off'` | `off`, `shadow`, `enforce`, `serve` | `docs/knowledge/night-mind.md` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py`<br>`services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CHUNK_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CTX_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |

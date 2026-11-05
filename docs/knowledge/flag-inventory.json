@@ -201,24 +201,6 @@
         ]
       }
     },
-    "ZOE_NIGHT_BUSY": {
-      "acknowledged": false,
-      "effective": [
-        "'~/.zoe/agent-tools/night_busy.sh'",
-        "unset"
-      ],
-      "sites": {
-        "scripts/maintenance/harness_quiet.py": [
-          "'~/.zoe/agent-tools/night_busy.sh'"
-        ],
-        "scripts/perf/self_improver.py": [
-          "-"
-        ]
-      },
-      "unacknowledged_sites": [
-        "scripts/perf/self_improver.py"
-      ]
-    },
     "ZOE_PANEL_ID": {
       "acknowledged": true,
       "effective": [
@@ -5916,8 +5898,15 @@
         "readers": [
           "scripts/perf/self_improver.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
         "typed_env": true
       },
       "ZOE_IMPROVER_BRAIN_BUDGET_S": {
@@ -5928,8 +5917,15 @@
         "readers": [
           "scripts/perf/self_improver.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 1500.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "float"
+        },
         "typed_env": true
       },
       "ZOE_IMPROVER_CELLS": {
@@ -5940,8 +5936,18 @@
         "readers": [
           "scripts/perf/self_improver.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": [
+            "flaw",
+            "good"
+          ],
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "list"
+        },
         "typed_env": true
       },
       "ZOE_IMPROVER_DEADLINE": {
@@ -5952,8 +5958,15 @@
         "readers": [
           "scripts/perf/self_improver.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "04:25",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
         "typed_env": true
       },
       "ZOE_IMPROVER_MAX_TOKENS_NIGHT": {
@@ -5964,8 +5977,15 @@
         "readers": [
           "scripts/perf/self_improver.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 40000,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "int"
+        },
         "typed_env": true
       },
       "ZOE_IMPROVER_MAX_USD_NIGHT": {
@@ -5976,8 +5996,15 @@
         "readers": [
           "scripts/perf/self_improver.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.4,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "float"
+        },
         "typed_env": true
       },
       "ZOE_IMPROVER_MODEL": {
@@ -5988,8 +6015,15 @@
         "readers": [
           "scripts/perf/self_improver.py"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "claude-sonnet-5-5",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
         "typed_env": true
       },
       "ZOE_INTENT_DISPATCH_REQUIRE_TOKEN": {
@@ -9232,8 +9266,7 @@
       },
       "ZOE_NIGHT_BUSY": {
         "defaults": [
-          "'~/.zoe/agent-tools/night_busy.sh'",
-          "-"
+          "'~/.zoe/agent-tools/night_busy.sh'"
         ],
         "in_env_example": false,
         "readers": [
@@ -9249,7 +9282,7 @@
           "owner_doc": "",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_NIGHT_MIND": {
         "defaults": [
@@ -17048,7 +17081,6 @@
     "scripts/perf/samantha_bar.py": 3,
     "scripts/perf/samantha_day_sim.py": 1,
     "scripts/perf/samantha_person.py": 2,
-    "scripts/perf/self_improver.py": 1,
     "scripts/perf/tool_use_bench.py": 1,
     "scripts/perf/user_model_ab.py": 4,
     "scripts/perf/zmb/arms/z0.py": 1,
