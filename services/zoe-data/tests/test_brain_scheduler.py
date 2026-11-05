@@ -219,3 +219,66 @@ def test_undeclared_label_is_idle():   # negative control for the pin above
 def test_the_scheduler_is_installed_at_startup():
     src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
     assert "brain_scheduler.install()" in src
+
+
+# -- cross-review fixes (#2296): fail-open, endpoint matching, guard-off label, overnight window -------------------------------
+
+async def test_a_scheduler_fault_never_breaks_the_request(monkeypatch):
+    monkeypatch.setattr(bs, "is_day", lambda now=None: True)
+    bs.install()
+
+    def boom():
+        raise RuntimeError("label discovery broke")
+
+    monkeypatch.setattr(bs, "_caller_label", boom)
+    r = await idle_caller()   # log mode (and enforce): a fault is swallowed, the request goes through
+    assert r.status_code == 200
+    monkeypatch.setenv(bs.ENV_MODE, "enforce")
+    assert (await idle_caller()).status_code == 200
+    # negative control: the intentional refusal still propagates
+    monkeypatch.undo()
+    monkeypatch.setattr(bs, "is_day", lambda now=None: True)
+    monkeypatch.setenv(bs.ENV_MODE, "enforce")
+    with pytest.raises(bs.BrainSchedulerDeferred):
+        await idle_caller()
+
+
+@pytest.mark.parametrize("url,hit", [
+    ("http://127.0.0.1:11434/v1/chat/completions", True),
+    ("http://localhost:11434/v1/chat/completions", True),
+    ("http://[::1]:11434/v1/chat/completions", True),
+    ("http://127.0.0.1:11434/slots", False),
+    ("http://127.0.0.1:11435/v1/chat/completions", False),
+])
+def test_loopback_brain_matches_any_loopback_spelling(url, hit):
+    assert bs.is_brain_generation(httpx.Request("POST", url)) is hit
+
+
+def test_remote_brain_matches_only_itself_and_https_defaults_to_443(monkeypatch):
+    monkeypatch.setenv("GEMMA_SERVER_URL", "https://brain.example.test/v1")
+    assert bs.is_brain_generation(httpx.Request("POST", "https://brain.example.test/v1/chat/completions"))
+    assert not bs.is_brain_generation(httpx.Request("POST", "http://127.0.0.1:443/v1/chat/completions"))
+    assert not bs.is_brain_generation(httpx.Request("POST", "https://other.example.test/v1/chat/completions"))
+
+
+async def test_the_label_survives_the_slot_guard_being_off(monkeypatch):
+    monkeypatch.setattr(bs, "is_day", lambda now=None: True)
+    monkeypatch.setenv(bs.ENV_MODE, "enforce")
+    monkeypatch.setenv(g.ENV, "off")
+    bs.install()
+    g.turn_started()
+    g.turn_finished()
+    r = await g.run_background("person_extractor_llm", idle_caller)   # declared post-turn: allowed
+    assert r.status_code == 200 and bs.STATS["post_turn"] == 1
+
+
+def test_overnight_day_window_wraps_and_equal_bounds_are_invalid(monkeypatch):
+    monkeypatch.setenv(bs.ENV_DAY, "22:00-07:00")
+    assert bs.is_day(_at(23)) and bs.is_day(_at(3)) and not bs.is_day(_at(12))
+    monkeypatch.setenv(bs.ENV_DAY, "08:00-08:00")
+    assert bs.is_day(_at(12)) and not bs.is_day(_at(23))   # invalid -> default 07:00-22:00
+
+
+def test_the_scheduler_is_installed_before_any_background_loop():
+    src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+    assert src.index("brain_scheduler.install()") < src.index("_wait_for_brain_startup(), name=")

@@ -253,7 +253,8 @@ async def run_background(label: str, call: "Callable[[], Awaitable[T]]") -> "T":
     """
     global _flush, _preempted_at
     if not enabled():
-        return await call()
+        with brain_scheduler.declare(label):   # the guard being off must not change how the scheduler names this call
+            return await call()
     preempts = 0
     while True:
         async with background_slot(label):

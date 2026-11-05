@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import contextvars
 import logging
-import os
 import sys
 import threading
 from contextlib import contextmanager
@@ -45,6 +44,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterator, Optional
 from zoneinfo import ZoneInfo
+
+from typed_env import env_float, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -99,18 +100,19 @@ class Decision:
 
 
 def mode() -> str:
-    raw = (os.environ.get(ENV_MODE) or "log").strip().lower()
+    raw = (env_str(ENV_MODE, "log") or "log").strip().lower()
     if raw in ("0", "off", "false", "no", "disabled"):
         return "off"
     return "enforce" if raw == "enforce" else "log"
 
 
 def _parse_day(raw: str) -> tuple[int, int]:
+    """``HH:MM-HH:MM`` as (start, end) minutes. ``start > end`` is an overnight window; equal bounds are invalid."""
     try:
         a, b = (raw or "").split("-")
         (ah, am), (bh, bm) = (int(x) for x in a.split(":")), (int(x) for x in b.split(":"))
         lo, hi = ah * 60 + am, bh * 60 + bm
-        if 0 <= lo < hi <= 24 * 60:
+        if 0 <= lo <= 24 * 60 and 0 <= hi <= 24 * 60 and lo != hi:
             return lo, hi
     except (ValueError, TypeError):
         pass
@@ -119,7 +121,7 @@ def _parse_day(raw: str) -> tuple[int, int]:
 
 def _tz() -> ZoneInfo:
     try:
-        return ZoneInfo(os.environ.get("ZOE_TIMEZONE") or "Australia/Perth")
+        return ZoneInfo(env_str("ZOE_TIMEZONE", "Australia/Perth") or "Australia/Perth")
     except Exception:  # noqa: BLE001 - a bad zone name must not stop the brain
         return ZoneInfo("Australia/Perth")
 
@@ -127,20 +129,18 @@ def _tz() -> ZoneInfo:
 def is_day(now: Optional[datetime] = None) -> bool:
     """True inside the day window (household time): the hours the slot belongs to a person's turn."""
     local = (now or datetime.now(_tz())).astimezone(_tz())
-    lo, hi = _parse_day(os.environ.get(ENV_DAY) or DEFAULT_DAY)
-    return lo <= local.hour * 60 + local.minute < hi
+    lo, hi = _parse_day(env_str(ENV_DAY, DEFAULT_DAY) or DEFAULT_DAY)
+    t = local.hour * 60 + local.minute
+    return lo <= t < hi if lo < hi else (t >= lo or t < hi)
 
 
 def _post_turn_window_s() -> float:
-    try:
-        v = float((os.environ.get(ENV_POST_TURN_S) or "").strip())
-        return v if v >= 0 else DEFAULT_POST_TURN_S
-    except ValueError:
-        return DEFAULT_POST_TURN_S
+    v = env_float(ENV_POST_TURN_S, DEFAULT_POST_TURN_S)
+    return v if v >= 0 else DEFAULT_POST_TURN_S
 
 
 def _extra_allowed() -> set:
-    return {x.strip() for x in (os.environ.get(ENV_ALLOW) or "").split(",") if x.strip()}
+    return {x.strip() for x in (env_str(ENV_ALLOW, "") or "").split(",") if x.strip()}
 
 
 def _turn_age_s() -> Optional[float]:
@@ -229,22 +229,34 @@ def _caller_label() -> str:
     return "unknown"
 
 
-def _brain_hostport() -> tuple[str, int]:
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _effective_port(url) -> int:
+    return url.port or (443 if url.scheme == "https" else 80)
+
+
+def _brain_target() -> tuple[str, int]:
     from urllib.parse import urlsplit
 
     from gemma_endpoint import gemma_base
 
     u = urlsplit(gemma_base())
-    return (u.hostname or "127.0.0.1"), (u.port or 80)
+    return (u.hostname or "127.0.0.1"), (u.port or (443 if u.scheme == "https" else 80))
 
 
 def is_brain_generation(request) -> bool:
-    """True for a generation request to the brain's llama-server (not /slots, /tokenize or /health)."""
+    """True for a generation request to the brain's llama-server (not /slots, /tokenize or /health).
+
+    The host must be the configured one; a loopback brain also matches any loopback spelling (127.0.0.1 / localhost / ::1),
+    a remote brain matches only itself."""
     try:
-        host, port = _brain_hostport()
+        host, port = _brain_target()
         u = request.url
-        return (u.port == port and u.host in (host, "127.0.0.1", "localhost")
-                and u.path.rstrip("/") in _GENERATION_PATHS)
+        if _effective_port(u) != port or u.path.rstrip("/") not in _GENERATION_PATHS:
+            return False
+        h = (u.host or "").strip("[]").lower()
+        return h == host.lower() or (host.lower() in _LOOPBACK and h in _LOOPBACK)
     except Exception:  # noqa: BLE001 - classification must never break a request
         return False
 
@@ -259,8 +271,13 @@ def install() -> bool:
     _orig_send = httpx.AsyncClient.send
 
     async def send(self, request, *args, **kwargs):
-        if mode() != "off" and is_brain_generation(request):
-            admit(_caller_label())
+        try:
+            if mode() != "off" and is_brain_generation(request):
+                admit(_caller_label())
+        except BrainSchedulerDeferred:
+            raise
+        except Exception:  # noqa: BLE001 - fail OPEN: a scheduler fault must never break (or change) a brain request
+            logger.debug("brain_scheduler: classification failed; request passed through", exc_info=True)
         return await _orig_send(self, request, *args, **kwargs)
 
     httpx.AsyncClient.send = send
