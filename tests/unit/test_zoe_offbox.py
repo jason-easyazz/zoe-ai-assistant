@@ -62,6 +62,7 @@ ZOE_FILES = {
     "logs/l.txt": b"no",
     "poll.log.3": b"no",
     "omi-recordings/u/r.wav": b"no",
+    "recall-gate-trace/trace.jsonl": b"no",      # the opt-in recall-gate trace (raw turns + row text) never leaves the box
     "secrets/vapid_keys.json": b"no",
     "env/x.env": b"no",
     "bakeoff-2026-10/pg/f": b"no",
