@@ -1243,7 +1243,9 @@ async def memory_for_prompt(
     # TURN — the core brain's in-process packet and memory.ts pass the user's
     # message in relevance mode — decided by the one trigger predicate the seam
     # and the offer ager use (Greptile #1768).
-    if not continuity and not tool_call and not _is_continuity_turn(message, user_id):
+    # ``tool_call is True`` (never merely truthy): an in-process caller that omits it receives the FastAPI ``Query(False)`` default
+    # OBJECT, which is truthy and would silently skip the fold for every core / Flue packet.
+    if not continuity and tool_call is not True and not _is_continuity_turn(message, user_id):
         result = await _fold_pending_contact_offers(result, user_id, message)
     return result
 
