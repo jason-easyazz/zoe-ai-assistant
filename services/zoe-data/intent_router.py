@@ -2319,6 +2319,15 @@ async def detect_and_extract_intent(
     except Exception as _alias_exc:  # never let the alias path break routing
         logger.debug("detect_and_extract_intent: forget-alias reply match failed: %s", _alias_exc)
     try:
+        # a bare yes / no to the anticipation offer Zoe just made ("By the way - want a reminder to leave by 7:10?"); off = None, no I/O
+        import anticipation as _anticipation
+        _ant_reply = await _anticipation.match_reply(user_id, text, _previous_assistant_message)
+        if _ant_reply is not None:
+            return Intent("pending_offer_accept" if _ant_reply[1] else "pending_offer_dismiss",
+                          {"suggestion_id": _ant_reply[0], "anticipation": True})
+    except Exception as _ant_exc:  # never let the anticipation path break routing
+        logger.debug("detect_and_extract_intent: anticipation reply match failed: %s", type(_ant_exc).__name__)
+    try:
         _offer_reply = await _match_pending_offer_reply(text, user_id)
     except Exception as _offer_exc:  # never let the offer path break routing
         logger.debug("detect_and_extract_intent: offer-reply match failed: %s", _offer_exc)
@@ -3741,6 +3750,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # card's accept route); refusal dismisses so the offer stops re-surfacing.
     if intent.name == "people_same_person_reply":
         return await _execute_same_person_reply(intent, user_id)
+
+    if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("anticipation"):
+        import anticipation
+        return await anticipation.answer(
+            user_id, str(intent.slots.get("suggestion_id") or ""), intent.name == "pending_offer_accept")
 
     if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("forget_alias"):
         import memory_forget_alias

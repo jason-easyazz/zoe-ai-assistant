@@ -3281,6 +3281,17 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
     except Exception as exc:
         logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, exc)
 
+    # Phase 1.65: anticipation offers from the member's calendar (ZOE_ANTICIPATION, default
+    # off — a no-op without I/O when off). Code only: no model call, no network.
+    try:
+        from anticipation import generate_for_user
+
+        anticipated = await generate_for_user(user_id)
+        if anticipated is not None:
+            result["anticipation"] = anticipated
+    except Exception as exc:
+        logger.warning("dreaming: anticipation failed user=%s: %s", user_id, exc)
+
     # Phase 1.7: implicit-conflict pass (ZOE_MEMORY_IMPLICIT_SUPERSEDE, default OFF — a
     # no-op without I/O when off). Before the Sunday portrait and the
     # card rebuild, so both see its result.
