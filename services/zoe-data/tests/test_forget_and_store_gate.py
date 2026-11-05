@@ -158,6 +158,20 @@ def test_teach_lane_does_not_hijack_a_long_story(lane):
     svc, executed = lane
     _run(expert_dispatch.store_fact("memory", LONG_STORY, "demo-user"))
     assert executed == []
+    assert svc.ingested == []   # no teach cue, no fact shape: the story is the brain's, never a verbatim row
+
+
+@pytest.mark.parametrize("text", [
+    "remember that I just asked what you know about me",
+    "note that you said you'd do it",
+    "don't forget that you're not listening",
+])
+def test_a_teach_cue_does_not_make_conversation_talk_a_fact(lane, text):
+    svc, executed = lane
+    _run(expert_dispatch.store_fact("memory", text, "demo-user"))
+    assert svc.ingested == [], text
+    assert memory_quality.is_storable_fact(text) == (False, "conversation_meta")
+    assert memory_quality.verbatim_storable(text) == (False, "conversation_meta")
 
 
 # ── the write-quality gate and the post-turn extractor ──────────────────────────────────────────────────────────
@@ -183,7 +197,7 @@ def test_extractor_mines_nothing_from_a_forget(text):
 
 def test_extractor_skips_a_negated_remember_inside_a_longer_turn():
     cands = memory_extractor._extract_plain("no, don't remember that I was joking about the beach house")
-    assert not any(c.text.startswith("User asked me to remember") for c in cands)
+    assert cands == [], [c.text for c in cands]
 
 
 def test_extractor_still_mines_an_explicit_teach():

@@ -314,7 +314,8 @@ _CONVERSATION_META_RE = re.compile(
     r"\bi\s+(?:literally\s+|only\s+|really\s+)*(?:just|already)\s+(?:asked|said|told\s+you|mentioned|meant)\b"
     r"|\bwhat\s+(?:do\s+)?you\s+(?:know|remember|have)\s+(?:about|on)\s+me\b"
     r"|\byou\s+(?:just\s+|already\s+)?(?:said|asked|told\s+me)\b"
-    r"|\byou(?:'re|\s+are)\s+(?:not\s+)?(?:listening|wrong|confused|broken|useless|stupid|annoying|repeating)\b"
+    r"|\b(?:you(?:'re|\s+are)|zoe(?:'s|\s+is))\s+(?:not\s+)?(?:listening|wrong|confused|broken|useless|stupid|annoying|"
+    r"repeating)\b"
     r"|\byou\s+(?:don'?t|didn'?t|never|can'?t|do\s+not)\s+(?:listen|understand|get\s+it|hear)\b"
     r"|\byou\s+keep\s+(?:saying|asking|doing|getting)\b"
     r"|\bthat'?s\s+not\s+what\s+i\s+(?:said|asked|meant)\b"
@@ -374,10 +375,10 @@ def verbatim_storable(text: str) -> tuple[bool, str]:
     raw = _straight(text)
     if is_forget_command(raw) or has_forget_wording(raw):
         return False, "forget_command"
-    cue = has_teach_cue(raw)
-    if not cue and is_conversation_meta(raw):
+    if is_conversation_meta(raw):
+        # even behind a teach cue ("remember that I just asked what you know about me"): never a fact about the person
         return False, "conversation_meta"
-    if cue or _FIRST_PERSON_FACT_RE.match(raw) or _NAMED_FACT_RE.match(raw):
+    if has_teach_cue(raw) or _FIRST_PERSON_FACT_RE.match(raw) or _NAMED_FACT_RE.match(raw):
         return True, ""
     return False, "no_teach_cue_or_fact_shape"
 
@@ -511,13 +512,13 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
     if _SPEAKER_ECHO_RE.match(raw) or _TRANSCRIPT_ECHO_RE.match(raw):
         return False, "transcript_echo"
 
-    if has_memory_command:
-        return True, ""
-
     # Talk about the conversation or about Zoe ("I literally just asked what you know about me") is not a fact
-    # about the person, whatever pronoun it carries. An explicit teach (accepted above) keeps its words.
+    # about the person, whatever pronoun it carries - even behind a teach cue ("remember that I just asked ...").
     if is_conversation_meta(raw):
         return False, "conversation_meta"
+
+    if has_memory_command:
+        return True, ""
 
     # Ephemeral weather report captured as a "fact" (e.g. an extractor scraping an
     # assistant weather reply). Never durable — reject before the concrete-token
