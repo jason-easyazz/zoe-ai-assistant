@@ -98,9 +98,10 @@
     }
     // A ring never outlives the server's own limit (stops_at = ring start + RING_MAX_S), even when the server cannot be reached to
     // say so (zoe-data restarting, the DB down in the night window): the panel stops itself STOP_GRACE_MS after it.
-    function overdue(a) { return !!(a && a.stops_at && nowMs() >= a.stops_at * 1000 + STOP_GRACE_MS); }
+    // `grace` is only for stopping a ring already on screen; a ring first seen past stops_at is never started (grace 0).
+    function overdue(a, grace) { return !!(a && a.stops_at && nowMs() >= a.stops_at * 1000 + (grace || 0)); }
     function tickClock() {
-        if (overdue(st.ring)) { stopRing(); return; }
+        if (overdue(st.ring, STOP_GRACE_MS)) { stopRing(); return; }
         var c = document.querySelector('#alarmRing .alclock');
         if (!c) return;
         var d = new Date(nowMs()), h = d.getHours() % 12 || 12, m = d.getMinutes();
@@ -208,7 +209,7 @@
             } else if (st.ring) stopRing();  // answered elsewhere, auto-stopped, or edited off
             schedule(POLL_MS);
         }).catch(function (e) {
-            if (overdue(st.ring)) stopRing();  // the server is unreachable past the ring's own limit: never ring on and on
+            if (overdue(st.ring, STOP_GRACE_MS)) stopRing();  // the server is unreachable past the ring's own limit: never ring on and on
             if (/http 404/.test(String(e && e.message))) { st.enabled = false; hideTabs(); schedule(OFF_RECHECK_MS); } else schedule(POLL_MS * 2);
         });
     }

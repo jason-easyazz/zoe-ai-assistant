@@ -179,8 +179,9 @@ async function ringing(over, postFn) {
     b.advance(20 * 1000); await flush();
     ok(!ov.classList.contains('on') && b.snd.stops >= 1, 'stopped itself past stops_at with the server unreachable'); }
   // a ringing row whose limit has already passed (the server's auto-stop tick is failing) is never rung
-  { const b = await ringing({ stops_at: 990 });
-    ok(!(b.byId().alarmRing && b.byId().alarmRing.classList.contains('on')) && b.snd.starts.length === 0, 'an overdue ring is not started'); }
+  for (const sa of [990, 998]) {  // 998: inside the 5 s stop grace, still past stops_at - the grace never STARTS a ring
+    const b = await ringing({ stops_at: sa });
+    ok(!(b.byId().alarmRing && b.byId().alarmRing.classList.contains('on')) && b.snd.starts.length === 0, 'an overdue ring is not started (stops_at ' + sa + ')'); }
 
   // a POST still in flight when the next poll lands is not sent twice
   { let release = null;
