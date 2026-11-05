@@ -475,8 +475,15 @@
         "readers": [
           "labs/flue-zoe-brain-2x/src/context-window.ts"
         ],
-        "registered": false,
-        "spec": null,
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 8,
+          "divergent_ok": {},
+          "note": "Flue sidecar history floor (labs/flue-zoe-brain-2x context-window.ts); 3 = the pre-2026-11-05 rollback, 0 = no floor",
+          "owner_doc": "docs/knowledge/recall-every-turn.md",
+          "type": "int"
+        },
         "typed_env": false
       },
       "ZOE_BRAIN_MAX_TOOL_ITERS": {
