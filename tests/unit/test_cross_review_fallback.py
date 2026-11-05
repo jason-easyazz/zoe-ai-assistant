@@ -14,6 +14,7 @@ report is never accepted as cross-vendor.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
@@ -553,3 +554,193 @@ def test_polly_refuses_a_review_dir_in_the_live_checkout_or_with_shell_metachars
     )
     assert r.returncode == 1, (r.returncode, r.stderr)
     assert "CROSS_REVIEW_DIR" in r.stderr
+
+
+# ------------------------------------- the codex app-server leak (2026-11-04/05) ---
+#
+# Host-side `timeout` signals the `docker exec` CLIENT only; the process INSIDE the container
+# keeps running, and a codex review leaves `codex app-server` trees (~45 MB each; 93 of them
+# held ~15 GB of swap) behind. Fix: an in-container `timeout` + a teardown sweep rooted in the
+# per-review dir + a concurrency cap. These tests drive the REAL `docker exec` path against a
+# fake `docker` that runs the command locally, so "the container" is this machine and a
+# straggler is a real process we can check is dead.
+
+_FAKE_DOCKER = r"""#!/usr/bin/env bash
+[ "$1" = exec ] || exit 99
+shift; dir=""
+while [ $# -gt 0 ]; do
+  case "$1" in -i|-t|-d) shift ;; -w) dir="$2"; shift 2 ;; *) break ;; esac
+done
+shift   # the container name
+[ -n "$dir" ] && cd "$dir"
+echo "dockerexec $1 $2 $3 $4 $5" >> "$STUB_LOG"
+exec "$@"
+"""
+
+# A codex that hangs past its deadline AND leaves a detached straggler (its own session, like an
+# app-server): `timeout` signals only its own process group, so only the sweep can reach it.
+_HANGING_CODEX = r"""#!/usr/bin/env bash
+cat > /dev/null
+setsid sleep 300 &
+echo $! >> "$STUB_PIDS"
+echo $$ >> "$STUB_PIDS"
+exec sleep 300
+"""
+
+_STUB_REAPER = r"""#!/usr/bin/env python3
+import os, sys
+if "--count-app-servers" in sys.argv:
+    print(os.environ.get("STUB_COUNT", "0"))
+else:
+    open(os.environ["STUB_LOG"], "a").write("reaper " + " ".join(sys.argv[1:]) + "\n")
+"""
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # a zombie is dead for our purposes
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+@pytest.fixture()
+def leakrig(rig, tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name, body in (("docker", _FAKE_DOCKER), ("codex", _HANGING_CODEX)):
+        (bindir / name).write_text(body)
+        (bindir / name).chmod(0o755)
+    pids = tmp_path / "pids"
+    pids.write_text("")
+    reaper = tmp_path / "reaper_stub.py"
+    reaper.write_text(_STUB_REAPER)
+
+    class LeakRig:
+        def run(self, script: Path = _SCRIPT, **overrides):
+            env = {
+                "PATH": f"{bindir}:{os.environ['PATH']}",
+                "STUB_PIDS": pids,
+                "CROSS_REVIEW_CODEX_BIN": "",     # the REAL `docker exec ... codex` path
+                "CROSS_REVIEW_PI_BIN": "",
+                "CROSS_REVIEW_BACKENDS": "codex",
+                "CROSS_REVIEW_CODEX_TIMEOUT_S": 6,
+                **overrides,
+            }
+            return rig.run(script, **env)
+
+        def pids(self) -> list[int]:
+            return [int(x) for x in pids.read_text().split()]
+
+        reaper_stub = reaper
+
+    lr = LeakRig()
+    yield lr, rig
+    for pid in lr.pids():   # never leave a straggler behind, whatever the assertions did
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, 9)
+
+
+def test_codex_runs_under_an_in_container_timeout_inside_the_host_deadline(leakrig):
+    lr, rig = leakrig
+    r = lr.run()
+    assert r.returncode == 2, r.stderr
+    line = next(ln for ln in rig.log_text().splitlines() if ln.startswith("dockerexec timeout"))
+    # dockerexec timeout -k 5 <inner> codex
+    toks = line.split()
+    assert toks[1:4] == ["timeout", "-k", "5"] and toks[5] == "codex", line
+    assert 1 <= int(toks[4]) < 6, "the in-container deadline must fire before the host one"
+    assert "timed out" in r.stderr
+
+
+def test_a_timed_out_review_leaves_zero_children(leakrig):
+    lr, rig = leakrig
+    r = lr.run()
+    assert r.returncode == 2, r.stderr
+    pids = lr.pids()
+    assert len(pids) == 2
+    assert not [p for p in pids if _alive(p)], f"leaked review processes: {[p for p in pids if _alive(p)]}"
+    assert not list(rig.review_root.glob("review-*")), "review dir must be removed"
+
+
+def test_negative_control_without_the_sweep_the_straggler_survives(leakrig, tmp_path):
+    """Remove only the teardown sweep: the detached straggler must outlive the review. This is
+    what proves the test above can go red (and that `timeout` alone does not reach it)."""
+    lr, rig = leakrig
+    broken = tmp_path / "cross_review_nosweep.sh"
+    text = _SCRIPT.read_text()
+    assert text.count("\n  kill_review_dir_procs\n") == 1
+    broken.write_text(text.replace("\n  kill_review_dir_procs\n", "\n"))
+    broken.chmod(0o755)
+    r = lr.run(broken)
+    assert r.returncode == 2, r.stderr
+    survivors = [p for p in lr.pids() if _alive(p)]
+    assert survivors, "expected the detached straggler to survive without the sweep"
+
+
+def test_the_sweep_only_touches_the_review_dirs_own_processes(leakrig, tmp_path):
+    lr, rig = leakrig
+    bystander = subprocess.Popen(["sleep", "300"], cwd=tmp_path)   # not under the review dir
+    try:
+        r = lr.run()
+        assert r.returncode == 2, r.stderr
+        assert bystander.poll() is None, "the sweep killed a process outside the review dir"
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+
+def test_app_server_cap_skips_polly_and_falls_back_to_codex(leakrig):
+    lr, rig = leakrig
+    r = lr.run(
+        CROSS_REVIEW_BACKENDS="polly codex",
+        CROSS_REVIEW_REAPER_SCRIPT=lr.reaper_stub, STUB_COUNT=9,
+        CROSS_REVIEW_MAX_APP_SERVERS=6,
+    )
+    assert "polly" not in rig.calls(), "polly must not add an app-server tree above the cap"
+    assert "codex app-server trees already resident (cap 6)" in r.stderr
+    assert "reaper --app-servers-only --execute" in rig.log_text(), "orphans must be swept first"
+
+
+def test_negative_control_under_the_cap_polly_runs(leakrig):
+    lr, rig = leakrig
+    r = lr.run(
+        CROSS_REVIEW_BACKENDS="polly codex",
+        CROSS_REVIEW_REAPER_SCRIPT=lr.reaper_stub, STUB_COUNT=2,
+        CROSS_REVIEW_MAX_APP_SERVERS=6,
+    )
+    assert r.returncode == 0, r.stderr
+    assert rig.calls()[0] == "polly"
+
+
+def test_a_polly_review_collects_orphaned_app_servers_on_exit(leakrig):
+    lr, rig = leakrig
+    lr.run(CROSS_REVIEW_BACKENDS="polly", CROSS_REVIEW_REAPER_SCRIPT=lr.reaper_stub)
+    assert "reaper --app-servers-only --execute" in rig.log_text()
+
+
+def test_a_codex_only_review_does_not_run_the_app_server_sweep(leakrig):
+    lr, rig = leakrig
+    lr.run(CROSS_REVIEW_REAPER_SCRIPT=lr.reaper_stub)
+    assert "reaper " not in rig.log_text()
+
+
+def test_no_omnigent_script_puts_a_secret_on_a_command_line():
+    """A key was seen in a process list on 2026-11-05. Secrets travel by environment or file,
+    never argv: no key-shaped literal, no --api-key style flag, no inline KEY=value prefix."""
+    import re
+    pat = re.compile(
+        r"(--(api[-_]?key|token|password|secret)\b|\b[A-Z_]*(API_KEY|TOKEN|SECRET|PASSWORD)=\S|"
+        r"Bearer\s+[A-Za-z0-9]|\bsk-[A-Za-z0-9]{8,})"
+    )
+    for f in (_SCRIPT, _POLLY, _REPO_ROOT / "scripts/maintenance/cross_review_poll.py",
+              _REPO_ROOT / "scripts/maintenance/reap_stale_omnigent_runners.py"):
+        for n, ln in enumerate(f.read_text().splitlines(), 1):
+            code = ln.split("#", 1)[0] if f.suffix == ".sh" else ln
+            if f.suffix == ".py" and ln.lstrip().startswith(("#", '"', "'")):
+                continue
+            assert not pat.search(code), f"{f.name}:{n} looks like a secret on a command line: {ln.strip()}"

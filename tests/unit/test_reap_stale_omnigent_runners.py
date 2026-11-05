@@ -558,3 +558,127 @@ def test_an_unrecognised_status_keeps_the_runner(status):
 def test_negative_control_the_known_terminal_statuses_still_reap(status):
     """The allowlist must not have turned the reaper off."""
     assert reaper.classify(runner(), **policy(status=status)) is not None
+
+
+# ------------------------------------------- orphaned `codex app-server` trees ---
+#
+# The second leak class (2026-11-04/05: 93 then 42-46 app-server trees, the box
+# starved and hard-reset). `omnigent host` is a child subreaper, so an app-server
+# whose runner died reparents to the host and lives on; Omnigent's own crash-reaper
+# cannot see it because the node shebang strips its argv[0] tag.
+
+APP_SERVER_ARGV = ["node", "/usr/local/bin/codex", "app-server", "--listen", "ws://127.0.0.1:43629"]
+VENDOR_ARGV = ["/usr/local/lib/node_modules/@openai/codex/vendor/codex", "app-server"]
+HELPER_ARGV = ["/usr/local/lib/node_modules/@openai/codex/vendor/codex-code-mode-host"]
+ENTRYPOINT_ARGV = ["bash", "/usr/local/bin/omnigent-entrypoint.sh"]
+
+
+def build_tree(fp, *, app_ppid, app_pid=500, age_s=3600.0):
+    """entrypoint(1) -> host(91); app-server(app_pid) with its two helpers."""
+    fp.add(1, ENTRYPOINT_ARGV, ppid=0)
+    fp.add(91, HOST_ARGV, ppid=1)
+    fp.add(app_pid, APP_SERVER_ARGV, ppid=app_ppid, age_s=age_s, rss_kb=30_000)
+    fp.add(app_pid + 1, VENDOR_ARGV, ppid=app_pid, age_s=age_s, rss_kb=20_000)
+    fp.add(app_pid + 2, HELPER_ARGV, ppid=app_pid + 1, age_s=age_s, rss_kb=10_000)
+
+
+def _kill_removing(fp, log):
+    """A `kill` that records the signal and makes the fake process vanish."""
+    import shutil
+
+    def kill(pid, sig):
+        log.append((pid, sig))
+        shutil.rmtree(fp.root / str(pid), ignore_errors=True)
+
+    return kill
+
+
+def test_app_server_whose_parent_is_the_host_is_an_orphan(fp):
+    build_tree(fp, app_ppid=91)
+    table = reaper.proc_table(str(fp.root))
+    (p,) = reaper.find_app_servers(table)
+    assert reaper.app_server_orphan_reason(p, table, grace_s=60) is not None
+
+
+def test_negative_control_app_server_with_a_live_runner_is_kept(fp):
+    """Flip the one fact that makes it live (its parent is a runner): it must be KEPT."""
+    fp.add(1, ENTRYPOINT_ARGV, ppid=0)
+    fp.add(91, HOST_ARGV, ppid=1)
+    fp.add(300, RUNNER_ARGV, ppid=91)
+    fp.add(500, APP_SERVER_ARGV, ppid=300, rss_kb=30_000)
+    table = reaper.proc_table(str(fp.root))
+    (p,) = reaper.find_app_servers(table)
+    assert reaper.app_server_orphan_reason(p, table, grace_s=60) is None
+
+
+def test_a_young_app_server_is_never_touched(fp):
+    build_tree(fp, app_ppid=91, age_s=10.0)
+    table = reaper.proc_table(str(fp.root), now=fp.now())   # FakeProc's clock, not wall time
+    (p,) = reaper.find_app_servers(table)
+    assert reaper.app_server_orphan_reason(p, table, grace_s=60) is None
+
+
+def test_the_operators_host_side_codex_is_out_of_scope(fp):
+    """Same argv, but no omnigent host/entrypoint in its ancestry: never listed, never reaped."""
+    fp.add(2000, ["bash", "-l"], ppid=1)
+    fp.add(2001, APP_SERVER_ARGV, ppid=2000)
+    table = reaper.proc_table(str(fp.root))
+    assert reaper.find_app_servers(table) == []
+    reaped, kept = reaper.sweep_app_servers(
+        proc_root=str(fp.root), execute=True, grace_s=0, term_wait=0.1, my_uid=1000,
+        kill=lambda *a: pytest.fail("must not signal an out-of-scope codex"))
+    assert (reaped, kept) == (0, 0)
+
+
+def test_execute_reaps_the_whole_orphan_tree_and_spares_a_live_one(fp):
+    import signal
+    build_tree(fp, app_ppid=91, app_pid=500)              # orphan: 500, 501, 502
+    fp.add(300, RUNNER_ARGV, ppid=91)
+    fp.add(600, APP_SERVER_ARGV, ppid=300)                 # live sibling
+    fp.add(601, VENDOR_ARGV, ppid=600)
+    sent = []
+    reaped, kept = reaper.sweep_app_servers(
+        proc_root=str(fp.root), execute=True, grace_s=60, term_wait=1.0, my_uid=1000,
+        kill=_kill_removing(fp, sent))
+    assert (reaped, kept) == (1, 1)
+    assert {pid for pid, _ in sent} == {500, 501, 502}
+    assert all(sig == signal.SIGTERM for _, sig in sent)
+    assert (fp.root / "600").exists() and (fp.root / "601").exists(), "live tree touched"
+    assert not (fp.root / "500").exists() and not (fp.root / "502").exists(), "leaked tree survived"
+
+
+def test_a_term_ignoring_tree_is_killed(fp):
+    import signal
+    build_tree(fp, app_ppid=91)
+    sent = []
+
+    def stubborn(pid, sig):
+        sent.append((pid, sig))
+        if sig == signal.SIGKILL:
+            import shutil
+            shutil.rmtree(fp.root / str(pid), ignore_errors=True)
+
+    reaper.sweep_app_servers(proc_root=str(fp.root), execute=True, grace_s=0,
+                             term_wait=0.3, my_uid=1000, kill=stubborn)
+    assert any(sig == signal.SIGKILL for _, sig in sent)
+    assert not (fp.root / "500").exists()
+
+
+def test_a_recycled_pid_is_not_signalled(fp):
+    build_tree(fp, app_ppid=91)
+    table = reaper.proc_table(str(fp.root))
+    (p,) = reaper.find_app_servers(table)
+    stale = dataclasses.replace(p, start_ticks=p.start_ticks + 99)
+    out = reaper.reap_app_server(stale, proc_root=str(fp.root), term_wait=0.1,
+                                 kill=lambda *a: pytest.fail("signalled a recycled pid"))
+    assert out.startswith("SKIPPED")
+
+
+def test_dry_run_and_count_do_not_signal(fp, capsys):
+    build_tree(fp, app_ppid=91)
+    assert reaper.main(["--proc-root", str(fp.root), "--count-app-servers"]) == 0
+    assert capsys.readouterr().out.strip() == "1"
+    rc = reaper.main(["--proc-root", str(fp.root), "--server", "http://x", "--app-servers-only"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "WOULD-REAP  app-server pid=500" in out
+    assert (fp.root / "500").exists()

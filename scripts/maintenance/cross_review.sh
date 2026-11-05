@@ -69,6 +69,14 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POLLY_SCRIPT="${CROSS_REVIEW_POLLY_SCRIPT:-$HERE/cross_review_polly.sh}"
+# The orphaned-app-server collector. Empty (= disabled) under the offline harness, which stubs
+# polly and must never scan or signal the real /proc, unless a test supplies its own stub.
+if [ -n "${CROSS_REVIEW_REAPER_SCRIPT:-}" ]; then REAPER="$CROSS_REVIEW_REAPER_SCRIPT"
+elif [ -z "${CROSS_REVIEW_POLLY_SCRIPT:-}" ]; then REAPER="$HERE/reap_stale_omnigent_runners.py"
+else REAPER=""; fi
+# Concurrency cap: polly sessions spawn a `codex app-server` tree each. Above this many resident
+# (after sweeping orphans) polly is skipped and the direct codex fallback runs instead.
+MAX_APP_SERVERS="${CROSS_REVIEW_MAX_APP_SERVERS:-6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
 REPO_SLUG="${CROSS_REVIEW_REPO:-jason-easyazz/zoe-ai-assistant}"
 BACKENDS="${CROSS_REVIEW_BACKENDS:-polly codex pi}"
@@ -107,7 +115,7 @@ PI_TIMEOUT_S="${CROSS_REVIEW_PI_TIMEOUT_S:-420}"
 CODEX_DIFF_MAX_BYTES="${CROSS_REVIEW_CODEX_DIFF_MAX_BYTES:-600000}"
 PI_DIFF_MAX_BYTES="${CROSS_REVIEW_PI_DIFF_MAX_BYTES:-600000}"
 
-for v in CALLER_TIMEOUT_S POLLY_TIMEOUT_S CODEX_TIMEOUT_S PI_TIMEOUT_S CODEX_DIFF_MAX_BYTES PI_DIFF_MAX_BYTES; do
+for v in CALLER_TIMEOUT_S POLLY_TIMEOUT_S CODEX_TIMEOUT_S PI_TIMEOUT_S CODEX_DIFF_MAX_BYTES PI_DIFF_MAX_BYTES MAX_APP_SERVERS; do
   case "${!v}" in (*[!0-9]*|''|0) echo "ALARM: $v must be a positive integer, got: ${!v}" >&2; exit 1;; esac
 done
 
@@ -149,6 +157,7 @@ REVIEW_DIR=""        # per-review scratch dir (the reviewers' cwd); created lazi
 REVIEW_REF=""        # refs/zoe-review/... holding the PR head; deleted on exit
 LIVE_BEFORE=""       # "<sha> <symbolic-ref|DETACHED>" of the live checkout before any backend
 GUARD_DONE=""
+POLLY_TRIED=""       # set once a polly session may have been started (its app-server may leak)
 
 # ------------------------------------------------------ the live-checkout tripwire ---
 live_state() {
@@ -237,8 +246,54 @@ ensure_review_worktree() {
 }
 
 # Run a binary inside the omnigent container with the review dir as its working directory.
-in_container() {  # <override-bin-or-empty> <binary> -> sets CMD=(...)
-  if [ -n "$1" ]; then CMD=("$1"); else CMD=(docker exec -i -w "$REVIEW_DIR" "$CONTAINER" "$2"); fi
+#
+# THE LEAK THIS GUARDS (2026-11-05: 42-46 `codex app-server` trees, ~2 GB; 11-04: 93, ~15 GB swap).
+# The host-side `timeout` signals the `docker exec` CLIENT only — it does NOT reach the process
+# inside the container, which keeps running (and, for codex, keeps its app-server children)
+# after the review has been abandoned. So the binary is wrapped in an IN-CONTAINER `timeout`
+# with a deadline a few seconds inside the host one: the container-side process group
+# (timeout makes its own group and signals all of it) dies on schedule no matter what happens
+# to the docker client. `cleanup` then sweeps whatever is still rooted in the review dir.
+IN_CONTAINER_MARGIN_S=3
+in_container() {  # <override-bin-or-empty> <binary> <host-budget-s> -> sets CMD=(...)
+  local inner=$(( ${3:-0} - IN_CONTAINER_MARGIN_S ))
+  [ "$inner" -ge 1 ] || inner=1
+  if [ -n "$1" ]; then CMD=("$1")
+  else CMD=(docker exec -i -w "$REVIEW_DIR" "$CONTAINER" timeout -k 5 "$inner" "$2"); fi
+}
+
+# Kill every process in the container whose cwd is the review dir (or under it): codex, its
+# app-server, helpers. The dir is unique per review (mktemp, pid-stamped), so this can never
+# touch another review or an unrelated session. Bounded: a wedged docker daemon must not
+# stretch teardown past the caller's budget. Skipped when a stub binary is in use.
+# shellcheck disable=SC2329  # invoked via cleanup
+kill_review_dir_procs() {
+  [ -n "$REVIEW_DIR" ] || return 0
+  [ -n "${CROSS_REVIEW_CODEX_BIN:-}${CROSS_REVIEW_PI_BIN:-}" ] && return 0
+  # shellcheck disable=SC2016  # runs INSIDE the container: $d/$p/$$ must reach it unexpanded
+  timeout -k "$KILL_AFTER_S" 30 docker exec "$CONTAINER" sh -c \
+    'd="$1"; for p in /proc/[0-9]*; do pid=${p#/proc/}; [ "$pid" = "$$" ] && continue
+       c=$(readlink "$p/cwd" 2>/dev/null)
+       case "$c" in "$d"|"$d"/*) kill -KILL "$pid" 2>/dev/null ;; esac
+     done' sh "$REVIEW_DIR" >/dev/null 2>&1 || true
+}
+
+# Collect orphaned codex app-server trees (polly's runner is gone but the subreaping host kept
+# the app-server — see reap_stale_omnigent_runners.py). --app-servers-only: no runner pass, no
+# session lookups, so this is cheap and cannot stop a live session.
+sweep_app_servers() {
+  [ -n "$REAPER" ] && [ -f "$REAPER" ] || return 0
+  timeout -k "$KILL_AFTER_S" 90 python3 "$REAPER" --app-servers-only --execute \
+    --app-server-grace-s 30 >/dev/null 2>&1 || true
+}
+
+# Number of omnigent codex app-server trees resident right now; empty when unknown.
+app_server_count() {
+  local n
+  [ -n "$REAPER" ] && [ -f "$REAPER" ] || return 0
+  n=$(timeout -k 5 30 python3 "$REAPER" --count-app-servers 2>/dev/null) || return 0
+  case "$n" in (*[!0-9]*|'') return 0 ;; esac
+  printf '%s' "$n"
 }
 
 # shellcheck disable=SC2329  # invoked via trap
@@ -248,6 +303,8 @@ cleanup() {  # <exit status to keep unless the tripwire fires> -> returns it, or
     GUARD_DONE=1
     assert_live_untouched || rc=3
   fi
+  kill_review_dir_procs
+  [ -n "$POLLY_TRIED" ] && sweep_app_servers
   if [ -n "$REVIEW_DIR" ]; then
     [ -d "$REVIEW_DIR/pr-head" ] && { git -C "$LIVE" worktree remove --force "$REVIEW_DIR/pr-head" >/dev/null 2>&1 \
       || echo "cross-review: WARNING could not remove the review worktree $REVIEW_DIR/pr-head" >&2; }
@@ -262,7 +319,10 @@ on_exit() { cleanup "$?"; exit $?; }
 # shellcheck disable=SC2329  # invoked via trap
 on_signal() {
   local rc
-  [ -n "$CHILD" ] && kill -TERM "$CHILD" 2>/dev/null
+  if [ -n "$CHILD" ]; then
+    pkill -TERM -P "$CHILD" 2>/dev/null
+    kill -TERM "$CHILD" 2>/dev/null
+  fi
   cleanup 130; rc=$?
   trap - EXIT
   exit "$rc"
@@ -312,7 +372,7 @@ sweep_stale_reviews
 
 # ---------------------------------------------------------------- backend: polly ---
 try_polly() {
-  local budget left out="$WORK/polly.out" rc vendor
+  local budget left out="$WORK/polly.out" rc vendor n_as
   # polly's worst-case wall is its poll window PLUS its bounded phases, so clamp the window
   # to what the caller's timeout leaves after them — otherwise a non-default order
   # (e.g. "codex pi polly") could start polly with less time than it can need and be
@@ -321,7 +381,18 @@ try_polly() {
   budget=$POLLY_TIMEOUT_S
   [ "$left" -lt "$budget" ] && budget=$left
   if [ "$budget" -lt "$MIN_PHASE_S" ]; then note polly "insufficient time budget"; return 1; fi
+  # Concurrency cap: collect orphans first, then refuse to add another app-server tree to a box
+  # that is already carrying too many (the 2026-11-04/05 starvation). Unknown count = proceed.
+  n_as=$(app_server_count)
+  if [ -n "$n_as" ] && [ "$n_as" -gt "$MAX_APP_SERVERS" ]; then
+    sweep_app_servers
+    n_as=$(app_server_count)
+    if [ -n "$n_as" ] && [ "$n_as" -gt "$MAX_APP_SERVERS" ]; then
+      note polly "$n_as codex app-server trees already resident (cap $MAX_APP_SERVERS) — not adding another"; return 1
+    fi
+  fi
   ensure_review_worktree || { note polly "$REVIEW_ERR"; return 1; }
+  POLLY_TRIED=1
   CROSS_REVIEW_DIR="$REVIEW_DIR" CROSS_REVIEW_TIMEOUT_S="$budget" "$POLLY_SCRIPT" "$PR" "$CONTRACT" > "$out" &
   CHILD=$!
   wait "$CHILD"; rc=$?
@@ -407,7 +478,7 @@ try_codex() {
   # stray-diff incident, then the 2026-11-02 detached-HEAD incident). The PR head sits in
   # its pr-head/ subdir: codex loads AGENTS.md from its cwd, and PR content is not instructions.
   # No --model: the ChatGPT-account Codex rejects invented ids (gpt-5-codex -> HTTP 400).
-  in_container "${CROSS_REVIEW_CODEX_BIN:-}" codex
+  in_container "${CROSS_REVIEW_CODEX_BIN:-}" codex "$budget"
   timeout -k "$KILL_AFTER_S" "$budget" "${CMD[@]}" exec -s read-only --skip-git-repo-check --ephemeral -C "$REVIEW_DIR" - \
     < "$WORK/prompt.codex" > "$out" 2> "$err"
   rc=$?
@@ -432,7 +503,7 @@ try_pi() {
   # not be the read-only live checkout (the image WORKDIR is /workspace).
   ensure_review_dir || { note pi "$REVIEW_ERR"; return 1; }
   build_prompt pi "$PI_DIFF_MAX_BYTES"
-  in_container "${CROSS_REVIEW_PI_BIN:-}" pi
+  in_container "${CROSS_REVIEW_PI_BIN:-}" pi "$budget"
   timeout -k "$KILL_AFTER_S" "$budget" "${CMD[@]}" --provider openrouter --model "$PI_MODEL" \
     --no-tools --no-session --no-extensions --no-skills --no-context-files \
     -p "Perform the code review described in the input and answer with the report only." \

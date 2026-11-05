@@ -325,6 +325,19 @@ runner at once (verified 2026-08-04: 20 → 1, ~956 MB recovered) but **only wit
 no review in flight** — it kills live dispatches. Prefer
 `reap_stale_omnigent_runners.py --execute`, which is safe to run at any time.
 
+**Second leak class — orphaned `codex app-server` trees (2026-11-04/05, 93 then 42-46
+resident, box hard-reset):** `omnigent host` is a child subreaper, so an app-server
+whose runner died reparents to the host, and Omnigent's own crash-reaper cannot see it
+(the node shebang strips its argv tag). Binding rules: (1) `cross_review.sh` runs the
+container binary under an in-container `timeout` (host `timeout` only kills the
+`docker exec` client); (2) its `cleanup` kills container processes by the unique
+review-dir cwd and sweeps orphaned app-servers after a polly run; (3) polly is skipped
+above `CROSS_REVIEW_MAX_APP_SERVERS` (default 6) resident trees; (4) the reaper below
+also reaps orphaned app-server trees (`--app-servers-only` for the cheap teardown form,
+`--count-app-servers` for the cap), scoped by `omnigent host` ancestry so host-side
+Codex is never touched; (5) no secret on any command line in these scripts. Detail:
+`docs/knowledge/omnigent-cross-review.md`.
+
 - `reap_stale_omnigent_runners.py` — dry-run-first sweeper for leaked
   per-session runners, and the safety net for teardowns that never ran: a
   wrapper SIGKILLed by its caller's 2500s timeout skips the EXIT trap entirely,
