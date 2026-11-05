@@ -83,11 +83,12 @@ def test_recipient_sql_survives_compat_shim():
         assert "NOW()" not in sql
 
 
-def test_bare_now_interval_would_be_mangled():
-    # Documents WHY CURRENT_TIMESTAMP is used instead of NOW(): the shim turns
-    # bare NOW() into NOW()::text, yielding invalid `text - interval` SQL.
-    bad = "SELECT 1 WHERE created_at > NOW() - INTERVAL '7 days'"
-    assert "NOW()::text - INTERVAL" in _adapt_params(bad, ())[0]
+def test_now_interval_arithmetic_is_not_mangled():
+    # The shim used to turn this into invalid `NOW()::text - INTERVAL` SQL (the
+    # reason this module uses CURRENT_TIMESTAMP). It now leaves NOW() typed when it
+    # is an arithmetic operand - see test_db_pool_now_arithmetic.py for the class.
+    sql = "SELECT 1 WHERE created_at > NOW() - INTERVAL '7 days'"
+    assert _adapt_params(sql, ())[0] == sql
 
 
 def _as_dt(s: str) -> datetime:
