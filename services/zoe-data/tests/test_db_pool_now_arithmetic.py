@@ -61,6 +61,8 @@ def test_type_model_rejects_the_live_failing_shape():
     "SELECT 1 WHERE x > interval '1 day' + NOW()",
     "SELECT 1 WHERE x > interval '1 day' +\n        NOW()",
     "SELECT NOW() AT TIME ZONE 'UTC'",
+    "SELECT (NOW()) - interval '1 day'",
+    "SELECT interval '1 day' + (NOW())",
 ])
 def test_now_as_arithmetic_operand_is_not_text_cast(sql):
     out, _ = db_pool._adapt_params(sql, ())
@@ -74,6 +76,10 @@ def test_now_as_arithmetic_operand_is_not_text_cast(sql):
     ("INSERT INTO t (a, b) VALUES (?, NOW())", "INSERT INTO t (a, b) VALUES ($1, NOW()::text)"),
     ("UPDATE t SET a = COALESCE(a, now()), b = NOW() -- trailing comment", "UPDATE t SET a = COALESCE(a, NOW()::text), b = NOW()::text -- trailing comment"),
     ("SELECT 'NOW() - 1'", "SELECT 'NOW() - 1'"),  # literals untouched
+    # an operator inside a -- line comment is not arithmetic: still a value
+    ("UPDATE t SET a = 1 -- bump +\n, updated_at = NOW()", "UPDATE t SET a = 1 -- bump +\n, updated_at = NOW()::text"),
+    ("SELECT -- +\n NOW()", "SELECT -- +\n NOW()::text"),
+    ("SELECT --\nNOW()", "SELECT --\nNOW()::text"),
 ])
 def test_now_as_value_is_still_text_cast(sql, expected):
     assert db_pool._adapt_params(sql, ())[0] == expected

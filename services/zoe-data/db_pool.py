@@ -97,8 +97,9 @@ _NOW_RE = re.compile(r"\bNOW\(\)(?!::)", re.IGNORECASE)
 # ``interval '1 day' + NOW()``, ``NOW() AT TIME ZONE 'UTC'``) must stay a timestamp:
 # ``NOW()::text - interval`` raises "operator does not exist: text - interval", which
 # silently broke every intent_router/brain list add with a dedup window (QA 2026-11-05).
-_NOW_ARITH_AFTER_RE = re.compile(r"\s*(?:[-+](?!-)|AT\s+TIME\s+ZONE\b)", re.IGNORECASE)
-_NOW_ARITH_BEFORE_RE = re.compile(r"[-+]\s*$")
+# ``(NOW()) - x`` counts too: closing parens between NOW() and the operator are skipped.
+_NOW_ARITH_AFTER_RE = re.compile(r"(?:\s*\))*\s*(?:[-+](?!-)|AT\s+TIME\s+ZONE\b)", re.IGNORECASE)
+_NOW_ARITH_BEFORE_RE = re.compile(r"(?<!-)[-+][\s(]*$")
 
 
 async def _release_safely(pool: "asyncpg.Pool", conn: "asyncpg.Connection") -> None:
@@ -509,10 +510,10 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
             # Text cast only where NOW() is a VALUE (written into / compared with a TEXT column);
             # as an arithmetic operand it stays timestamptz (see _NOW_ARITH_AFTER_RE).
             tail = "".join(converted[-64:])
-            is_operand = (
-                _NOW_ARITH_AFTER_RE.match(sql, now_match.end()) is not None
-                or _NOW_ARITH_BEFORE_RE.search(tail) is not None
-            )
+            before = _NOW_ARITH_BEFORE_RE.search(tail)
+            if before is not None and "--" in tail[tail.rfind("\n", 0, before.start()) + 1:before.start()]:
+                before = None  # the "operator" sits inside a -- line comment
+            is_operand = before is not None or _NOW_ARITH_AFTER_RE.match(sql, now_match.end()) is not None
             converted.append(now_match.group(0) if is_operand else "NOW()::text")
             pos = now_match.end()
             continue
