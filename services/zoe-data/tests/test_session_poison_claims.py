@@ -196,6 +196,31 @@ def test_standing_promise_streams_like_the_one_shot_guard():
     assert HONEST in want
 
 
+EVERY_CUT_REPLIES = [
+    "Sure. I'll remind you to call the dentist at half past two tomorrow. Anything else?",
+    "Okay, I've taken that dinner event off your calendar. Talk soon.",
+    "You've got a work call at three, got that noted. Bye!",
+    "I can add it to your list if you like. Consider it forgotten.",
+]
+
+
+@pytest.mark.parametrize("reply", EVERY_CUT_REPLIES)
+def test_new_claim_shapes_stream_like_the_one_shot_guard_at_every_cut(reply):
+    """Cross-review: the streamed output equals guard_text for the new constructs at EVERY character boundary."""
+    want = g.guard_text(reply, UID, wr.begin(), user_text="please do it")
+    assert want != reply                                    # each reply really holds an unsupported claim
+
+    async def run(parts):
+        async def gen():
+            for p in parts:
+                yield p
+
+        return "".join([d async for d in g.guard_stream(gen(), UID, wr.begin(), user_text="please do it")])
+
+    for cut in range(1, len(reply)):
+        assert _run(run([reply[:cut], reply[cut:]])) == want, cut
+
+
 # ── 1. session poisoning: the correction note ──────────────────────────────────────────────────────────────────────────
 
 def test_a_replaced_claim_notes_a_correction_for_the_session(monkeypatch):
@@ -205,6 +230,18 @@ def test_a_replaced_claim_notes_a_correction_for_the_session(monkeypatch):
     line = cc.take(SID)
     assert line.startswith("(Note: my previous reply said a timer or alarm was done") and "tool call" in line
     assert cc.take(SID) == ""                              # once
+
+
+def test_a_spanish_replaced_claim_is_corrected_and_neutralised_too(monkeypatch):
+    """Cross-review: the guard also enforces Spanish; a Spanish replacement must get a note and never stay in history."""
+    _on(monkeypatch)
+    out = g.guard_text("He añadido leche a tu lista de compras.", UID, wr.begin(), session_id=SID)
+    es_honest = "No logré añadir eso; ¿quieres que lo intente otra vez?"
+    assert out == es_honest
+    assert cc.take(SID).startswith("(Nota: mi respuesta anterior dijo que se hizo un cambio en una lista")
+    assert es_honest not in cc.history_safe("Vale. " + es_honest)
+    # a language row with no note of its own falls back to one that has it, never to nothing
+    assert cc.render("xx", ("timer",)).startswith("(Note: my previous reply said a timer or alarm")
 
 
 def test_no_correction_when_the_flag_is_off():

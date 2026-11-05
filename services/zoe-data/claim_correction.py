@@ -80,7 +80,11 @@ def take(session_id: str) -> str:
 
 def render(lang_code: str, kinds: tuple) -> str:
     """The language's ``correction_note`` naming what was claimed (``correction_kinds``), or '' when the language has none."""
-    lex = _lexicon().get(lang_code) or {}
+    rows = _lexicon()
+    lex = rows.get(lang_code) or {}
+    if not str(lex.get("correction_note") or "").strip():
+        # A language with no note still gets one: the brain must never be left with the uncorrected claim (cross-review).
+        lex = rows.get("en") or next((r for r in rows.values() if str(r.get("correction_note") or "").strip()), {})
     template = str(lex.get("correction_note") or "").strip()
     if not template:
         return ""
@@ -98,8 +102,10 @@ def history_safe(text: str) -> str:
         return text
     try:
         out = text
-        for lex in _lexicon().values():
-            marker = str(lex.get("history_marker") or "").strip()
+        rows = _lexicon()
+        fallback = str((rows.get("en") or {}).get("history_marker") or "").strip()
+        for lex in rows.values():
+            marker = str(lex.get("history_marker") or "").strip() or fallback
             if not marker:
                 continue
             lines = [str(lex.get("honest") or "")] + [str(v) for v in (lex.get("honest_by_kind") or {}).values()]

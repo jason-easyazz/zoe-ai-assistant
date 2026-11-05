@@ -191,6 +191,9 @@
     "discourse_openers": ["bueno", "pues", "vale", "entonces", "oye", "a ver", "ok", "okay", "y", "pero", "ah", "eh", "hmm"],
     "clause_starts": ["eso", "esto", "el", "ella", "ellos", "no", "tampoco", "yo", "tu"],
     "recap_cues": ["lo anadiste", "lo has anadido", "ya lo", "anadiste", "has anadido", "lo agregaste", "lo programaste", "esta en", "quedo"],
-    "honest": "No logré añadir eso; ¿quieres que lo intente otra vez?"
+    "honest": "No logré añadir eso; ¿quieres que lo intente otra vez?",
+    "correction_note": "(Nota: mi respuesta anterior dijo que se hizo {what}, pero no se guardó nada - ninguna herramienta lo confirmó - y se le dijo al usuario. Un cambio solo ocurre con una llamada a una herramienta que funcione; si ninguna puede hacerlo, dilo.)",
+    "correction_kinds": {"list": "un cambio en una lista", "calendar": "un cambio en el calendario", "reminder": "un recordatorio", "timer": "un temporizador o una alarma", "note": "una nota", "any": "un cambio"},
+    "history_marker": "(no se guardó nada en esa respuesta)"
   }
 }
