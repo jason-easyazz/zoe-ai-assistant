@@ -321,7 +321,14 @@ async def line_for(user_id: str, now: Optional[datetime] = None, db=None) -> str
             return KID_REGISTER if kids_enabled() else ""
         if who != AUDIENCE_ADULT:
             return ""
-        return render(await list_entries((user_id or "").strip(), db=db), now=now)
+        import asyncio
+
+        import manner_block
+
+        # The register read has the same short budget as the audience lookups: a slow store means "no line" this turn, never
+        # a pool-acquisition / 30 s command wait that silences a voice turn.
+        entries = await asyncio.wait_for(list_entries((user_id or "").strip(), db=db), timeout=manner_block.LOOKUP_BUDGET_S)
+        return render(entries, now=now)
     except Exception:  # noqa: BLE001 - a register is optional; the turn is not
         logger.warning("MEMBER_REGISTER failed; no line", exc_info=True)
         return ""

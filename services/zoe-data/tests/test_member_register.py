@@ -229,6 +229,28 @@ def test_only_stated_and_confirmed_rows_reach_the_line(rdb, monkeypatch):
     assert "light humour" in run(mr.line_for("ada_uid"))
 
 
+def test_a_slow_register_read_means_no_line_within_the_budget(rdb, monkeypatch):
+    """Codex #2297: the register read sits on the voice path before the brain call; a stalled store must cost the lookup budget, not the
+    pool's 30 s command timeout."""
+    import time
+
+    import manner_block
+
+    monkeypatch.setenv("ZOE_MEMBER_REGISTER", "on")
+    put("ada_uid", "humour", "light", "stated")
+    assert "light humour" in run(mr.line_for("ada_uid"))                        # control: the read works
+    monkeypatch.setattr(manner_block, "LOOKUP_BUDGET_S", 0.05)
+
+    async def stalled(*_a, **_k):
+        await asyncio.sleep(5)
+        return []
+
+    monkeypatch.setattr(mr, "list_entries", stalled)
+    t0 = time.monotonic()
+    assert run(mr.line_for("ada_uid")) == ""
+    assert time.monotonic() - t0 < 2
+
+
 def test_confirm_never_invents_a_setting_or_confirms_a_different_value(rdb):
     assert run(mr.confirm("ada_uid", "humour", "light")) == "kept"             # nothing proposed
     put("ada_uid", "humour", "light", "inferred")
