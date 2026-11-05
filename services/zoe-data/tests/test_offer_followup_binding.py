@@ -45,6 +45,8 @@ def test_rewrite_reaches_the_reminder_intent_with_the_slot():
     "yes please, 7",                        # bare number is not a clock time
     "no thanks, 2:45",                      # refusal
     "yes what's the weather like tomorrow in the city this week",  # unrelated + too long / no time
+    "yes, what time is it at 2:45?",        # a question carrying a time is not a slot
+    "yeah when does it start 2:45",
 ])
 def test_unrelated_or_incomplete_replies_are_not_hijacked(reply):
     assert bind_reminder_offer_reply(reply, OFFER, FRESH) is None
@@ -55,6 +57,56 @@ def test_no_pending_offer_never_binds():
     assert bind_reminder_offer_reply("yes please, 2:45", None, FRESH) is None
     # an offer that is not a reminder offer is not this binding's business
     assert bind_reminder_offer_reply("yes 2:45", "Want me to read you the headlines?", FRESH) is None
+
+
+def test_only_the_final_offer_counts():
+    mixed = "I set a reminder for pickup. Want me to play some music?"
+    assert bind_reminder_offer_reply("yes, 2:45", mixed, FRESH) is None
+
+
+class _Cur:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def fetchall(self):
+        return self._rows
+
+
+class _Db:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, *_a, **_k):
+        return _Cur(self._rows)
+
+
+def _patch_db(monkeypatch, rows):
+    import contextlib
+
+    import database
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield _Db(rows)
+
+    monkeypatch.setattr(database, "get_db_ctx", ctx)
+
+
+def _row(role, content):
+    return {"role": role, "content": content, "created_at": "2099-01-01 00:00:00+00"}
+
+
+def test_an_intervening_user_turn_unbinds_the_offer(monkeypatch):
+    # newest first: [user "ok thanks", assistant offer] -> the user spoke after the offer -> no binding
+    _patch_db(monkeypatch, [_row("user", "ok thanks"), _row("assistant", OFFER)])
+    prev, age = asyncio.run(intent_router._previous_assistant_turn("u", "yes 2:45"))
+    assert prev is None and age is None
+
+
+def test_the_current_turn_saved_already_is_skipped_once(monkeypatch):
+    _patch_db(monkeypatch, [_row("user", "yes 2:45"), _row("assistant", OFFER)])
+    prev, _age = asyncio.run(intent_router._previous_assistant_turn("u", "yes 2:45"))
+    assert prev == OFFER
 
 
 def test_offer_expires_and_unknown_age_fails_closed():

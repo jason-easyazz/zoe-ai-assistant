@@ -2104,17 +2104,19 @@ _REMINDER_OFFER_RE = re.compile(r"\b(?:remind\s+you|(?:a|the|that)\s+(?:[\w']+\s
 _OFFER_TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\w:])", re.IGNORECASE)
 _OFFER_ACTION_FIRST = _OFFER_AFFIRM_FIRST | {"please"}
 _OFFER_ACTION_MAX_TOKENS = 12
+_OFFER_QUESTION_WORDS = frozenset({"what", "what's", "whats", "when", "where", "who", "why", "how", "which"})
 
 
 def offer_followup_binding_enabled() -> bool:
-    return str(os.environ.get("ZOE_OFFER_FOLLOWUP_BINDING") or "").strip().lower() in {"1", "true", "yes", "on"}
+    from typed_env import flag
+
+    return bool(flag("ZOE_OFFER_FOLLOWUP_BINDING"))
 
 
 def _offer_followup_ttl_s() -> float:
-    try:
-        return max(30.0, float(os.environ.get("ZOE_OFFER_FOLLOWUP_TTL_S") or 600.0))
-    except ValueError:
-        return 600.0
+    from typed_env import flag
+
+    return max(30.0, float(flag("ZOE_OFFER_FOLLOWUP_TTL_S")))
 
 
 def _reminder_offer_title(previous: str) -> tuple[str, str]:
@@ -2141,6 +2143,8 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         return None
     if any(_OFFER_REPLY_PUNCT_RE.sub("", t) in ("no", "nope", "dont", "don't") for t in tokens[1:]):
         return None
+    if "?" in text or any(_OFFER_REPLY_PUNCT_RE.sub("", t) in _OFFER_QUESTION_WORDS for t in tokens[1:]):
+        return None  # "yes, what time is it at 2:45?" is a question, not a slot
     m = _OFFER_TIME_RE.search(" ".join(tokens[1:]))
     if m is None or not (m.group(2) or m.group(3)):
         return None  # a bare number is not a clock time
@@ -2150,7 +2154,8 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
     try:
         from conversation_cues import ends_with_offer
 
-        if not (ends_with_offer(previous) and _REMINDER_OFFER_RE.search(previous[-240:])):
+        sentences = [x for x in re.split(r"(?<=[.!?])\s+", previous.strip()) if x.strip()]
+        if not sentences or not (ends_with_offer(previous) and _REMINDER_OFFER_RE.search(sentences[-1])):
             return None
     except Exception:  # noqa: BLE001
         return None
@@ -2161,8 +2166,9 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
     return f"remind me {conn} {title} at {when}{(' ' + mer) if mer else ''}"
 
 
-async def _previous_assistant_turn(user_id: str) -> tuple[Optional[str], Optional[float]]:
-    """(content, age in seconds) of the user's latest assistant message; (None, None) when unknown (fail closed)."""
+async def _previous_assistant_turn(user_id: str, current_text: str = "") -> tuple[Optional[str], Optional[float]]:
+    """(content, age in seconds) of Zoe's reply ONLY when it is the message immediately before this turn; (None, None) when
+    unknown or when a user turn intervened (fail closed). The current turn may already be saved: it is skipped once."""
     try:
         from datetime import datetime, timezone
 
@@ -2170,19 +2176,22 @@ async def _previous_assistant_turn(user_id: str) -> tuple[Optional[str], Optiona
 
         async with get_db_ctx() as db:
             cur = await db.execute(
-                "SELECT m.content, m.created_at FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id"
-                " WHERE s.user_id = ? AND m.role = 'assistant' ORDER BY m.created_at DESC LIMIT 1",
+                "SELECT m.role, m.content, m.created_at FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id"
+                " WHERE s.user_id = ? ORDER BY m.created_at DESC LIMIT 2",
                 (user_id,),
             )
-            row = await cur.fetchone()
-        if row is None:
+            rows = list(await cur.fetchall())
+        if rows and rows[0]["role"] == "user" and str(rows[0]["content"] or "").strip() == (current_text or "").strip():
+            rows = rows[1:]
+        if not rows or rows[0]["role"] != "assistant":
             return None, None
-        ts = row["created_at"]
+        ts = rows[0]["created_at"]
         if not isinstance(ts, datetime):
-            ts = datetime.fromisoformat(str(ts).strip().replace(" ", "T", 1))
+            raw_ts = re.sub(r"([+-]\d{2})$", r"\1:00", str(ts).strip().replace(" ", "T", 1))  # PG "+08" -> "+08:00" (py<3.11)
+            ts = datetime.fromisoformat(raw_ts)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        return str(row["content"] or "") or None, (datetime.now(timezone.utc) - ts).total_seconds()
+        return str(rows[0]["content"] or "") or None, (datetime.now(timezone.utc) - ts).total_seconds()
     except Exception as exc:  # noqa: BLE001
         logger.debug("_previous_assistant_turn: lookup failed: %s", type(exc).__name__)
         return None, None
@@ -2199,7 +2208,7 @@ async def reminder_offer_reply_text(text: str, user_id: str, previous: Optional[
             _OFFER_REPLY_PUNCT_RE.sub("", tokens[0]) not in _OFFER_ACTION_FIRST:
         return None
     if previous is None:
-        previous, age_s = await _previous_assistant_turn(user_id)
+        previous, age_s = await _previous_assistant_turn(user_id, text)
     return bind_reminder_offer_reply(text, previous, age_s)
 
 
