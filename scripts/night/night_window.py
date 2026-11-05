@@ -115,6 +115,8 @@ class UnitSpec:
     #: ``cudaMemGetInfo``, which needs one NvMap handle: on fragmented RAM that dies "NvMapMemAllocInternalTagged error 12" -> CUDA OOM -> SEGV/ABRT
     #: in about 1 s (2026-11-06: three restores x 2 tries, 40 min, all the same crash; the cold start of a router that CAN start is seconds).
     compact: bool = False
+    #: total seconds this unit's tries may spend (0 = no budget): no new try starts once it is spent, so a stuck unit cannot eat the restore reserve the units behind it need
+    budget_s: float = 0.0
 
 
 def _status_ok(text: str) -> bool:
@@ -129,7 +131,7 @@ def _kokoro_ok(text: str) -> bool:
 HEALTH = {
     BRAIN: UnitSpec(BRAIN, "http://127.0.0.1:11434/health", _status_ok, 240.0, "the 4B brain"),
     KOKORO: UnitSpec(KOKORO, "http://127.0.0.1:10201/health", _kokoro_ok, 240.0, "Kokoro (pipeline_loaded, device cuda)"),
-    ROUTER: UnitSpec(ROUTER, "http://127.0.0.1:11436/health", _status_ok, 90.0, "the FunctionGemma router", attempts=4, backoff_s=(10.0, 20.0, 40.0), compact=True),
+    ROUTER: UnitSpec(ROUTER, "http://127.0.0.1:11436/health", _status_ok, 90.0, "the FunctionGemma router", attempts=4, backoff_s=(10.0, 20.0, 40.0), compact=True, budget_s=420.0),
     ZOE_DATA: UnitSpec(ZOE_DATA, "http://127.0.0.1:8000/health", _status_ok, 240.0, "zoe-data"),
 }
 
@@ -2152,13 +2154,18 @@ class NightWindow(bk.Window):
         """Start ``unit`` and require its OWN health answer. ``spec.attempts`` tries (a start, then restarts after ``spec.backoff_s``; a fresh compaction before each try for the brain's retry and for every try of a ``spec.compact`` unit); then the failure is reported, not hidden."""
         spec = HEALTH[unit]
         info: "dict[str, Any]" = {"ok": False, "attempts": 0, "what": spec.what}
+        t0 = self.host.mono()
         for attempt in range(1, max(1, spec.attempts) + 1):
             verb = "start" if attempt == 1 else "restart"
+            pause = spec.backoff_s[min(attempt - 2, len(spec.backoff_s) - 1)] if (attempt >= 2 and spec.backoff_s) else 0.0
+            if attempt >= 2 and spec.budget_s and self.host.mono() - t0 + pause + spec.wait_s > spec.budget_s:
+                self.event(f"RESTORE: {unit} out of time ({spec.budget_s:.0f}s budget) after {attempt - 1} try(s): the units behind it must still be woken")
+                break
             info["attempts"] = attempt
             if attempt >= 2:
                 self.event(f"RESTORE: {unit} not healthy after {spec.wait_s:.0f}s - retrying with a restart (try {attempt}/{spec.attempts})")
-                if spec.backoff_s:
-                    self.host.sleep(spec.backoff_s[min(attempt - 2, len(spec.backoff_s) - 1)])
+                if pause:
+                    self.host.sleep(pause)
                 self.host.run(["systemctl", "--user", "reset-failed", unit], timeout=30)     # a start-limit-hit would refuse the next start outright
             if unit == BRAIN:
                 if attempt >= 2:

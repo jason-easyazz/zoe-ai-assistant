@@ -2677,7 +2677,7 @@ def _router_make(tmp_path, heal_after):
 
 
 def test_the_router_gets_a_compaction_before_every_try_and_comes_up_on_a_later_one(tmp_path):
-    w, host, cfg = _router_make(tmp_path, heal_after=6)
+    w, host, cfg = _router_make(tmp_path, heal_after=5)
     assert w.run() == nw.EXIT_OK, w.outcome
     info = w.rec["restore"][nw.ROUTER]
     assert info["ok"] is True and info["attempts"] >= 2                           # the old 2-try limit would have reported it dead
@@ -2689,10 +2689,28 @@ def test_a_router_that_never_recovers_is_still_reported_after_the_bounded_tries_
     w, host, cfg = _router_make(tmp_path, heal_after=10 ** 6)
     assert w.run() == nw.EXIT_RESTORE_FAILED
     spec = nw.HEALTH[nw.ROUTER]
-    assert w.rec["restore"][nw.ROUTER]["attempts"] == spec.attempts == 4
-    assert host.count(f"--user restart {nw.ROUTER}") == spec.attempts - 1
+    assert 2 <= w.rec["restore"][nw.ROUTER]["attempts"] <= spec.attempts == 4
+    assert host.count(f"--user restart {nw.ROUTER}") == w.rec["restore"][nw.ROUTER]["attempts"] - 1
     assert cfg.marker.exists() and wake_order(host)[-1] == nw.ZOE_DATA            # zoe-data was still woken; the marker keeps the router for --restore-only
-    assert sum(spec.backoff_s) + spec.attempts * spec.wait_s < 12 * 60            # bounded: inside the restore reserve
+    assert spec.budget_s + spec.wait_s < 12 * 60                                  # the budget (plus one last wait) sits inside the 12 min restore reserve
+
+
+def test_the_router_budget_is_enforced_on_the_clock_not_just_in_the_config(tmp_path):
+    """Review (pi, #2318): the tries must stop when the budget is spent, measured on the host clock (every health poll advances it)."""
+    w, host, cfg = _router_make(tmp_path, heal_after=10 ** 6)
+    spec = nw.HEALTH[nw.ROUTER]
+    t0 = host.mono()
+    info = w.bring_back(nw.ROUTER)
+    spent = host.mono() - t0
+    assert info["ok"] is False and spent <= spec.budget_s + 5
+    nw.HEALTH[nw.ROUTER] = tight = nw.dataclasses.replace(spec, budget_s=100.0)          # negative control: a tighter budget stops sooner, with fewer tries
+    try:
+        w2, host2, _ = _router_make(tmp_path / "b", heal_after=10 ** 6) if (tmp_path / "b").mkdir() is None else (None, None, None)
+        t1 = host2.mono()
+        info2 = w2.bring_back(nw.ROUTER)
+        assert host2.mono() - t1 <= tight.budget_s + 5 and info2["attempts"] < info["attempts"]
+    finally:
+        nw.HEALTH[nw.ROUTER] = spec
 
 
 def test_only_the_router_gets_the_longer_retry_the_others_keep_one_retry():
