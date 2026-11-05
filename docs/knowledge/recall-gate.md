@@ -197,6 +197,10 @@ JSON lands in `~/.cache/zoe/recall_gate_replay_last.json`).
    hermetic replay over fixtures, not the live store. Read `RECALL_GATE` lines for at least a few days of real turns
    (`grep RECALL_GATE ~/.zoe-logs/*`): the share of turns with `would_add`, what `would_drop` removes on turns the owner went on to
    answer well, and `skipped=` reasons. A `would_drop` that held the row a reply needed is the regression to look for.
+   **Read 2026-11-05** ([shadow-log replay](../research/recall-gate-shadow-replay-2026-11-05.md)): 54 real packet decisions in 26 days
+   (most on two days), 28 adds over 7 distinct rows, every decision drops rows (floor median 20.5 -> gate 2) and 20% would be empty
+   packets; budget never above 155 of 400. Add precision cannot be scored from this line (ids, no text) - it needs a private text
+   read or an opt-in trace - so the verdict is **not yet**. Score the drops first, and consider `abstain=False` for a first enforce.
 2. **Calibrate the similarity floor on the live embedder.** `SIM_NEAR / SIM_BEST / SIM_MID` (0.69 / 0.80 / 0.90) were measured on
    the replay fixtures with Chroma's default MiniLM (answering row 0.46-0.69, irrelevant 0.70-1.05; one irrelevant row sat at 0.699).
    They belong to the embedder: re-measure from the live distribution (the log can carry it) before the flip.
