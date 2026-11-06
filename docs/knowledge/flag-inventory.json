@@ -16370,6 +16370,44 @@
         },
         "typed_env": true
       },
+      "ZOE_VOICE_SESSION_BRIDGE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session_bridge.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-session-bridge.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_VOICE_SESSION_BRIDGE_TTL_S": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_session_bridge.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 7200,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-session-bridge.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
       "ZOE_VOICE_SESSION_TTL_S": {
         "defaults": [
           "120"
