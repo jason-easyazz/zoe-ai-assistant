@@ -143,7 +143,7 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       assert(/\.ltab\{[^}]*min-height:48px/.test(homeSrc) && /\.rm \.rchip\{[^}]*min-height:48px/.test(homeSrc), 'list tabs + scene chips 48 px (found by scripts/maintenance/estate_touch_targets.py)');
       assert(!/\.srow2 input\[type=range\]\{[^}]*height:34px/.test(homeSrc) && !/\.rm \.rvol input\[type=range\]\{[^}]*height:40px/.test(homeSrc), 'range inputs are 48 px tall');
       assert(/var RM=false;try\{var _rmq=window\.matchMedia\('\(prefers-reduced-motion: reduce\)'\)/.test(homeSrc), 'RM flag reads the media query');
-      assert(/ctx\.globalAlpha=RM\?\.72:/.test(homeSrc) && /if\(RM\)\{setTimeout\(function\(\)\{requestAnimationFrame\(frame\);\},1000\);\}/.test(homeSrc), 'star canvas is still under reduced motion');
+      assert(/ctx\.globalAlpha=starA\*\(RM\?\.72:/.test(homeSrc) && /if\(RM\)\{setTimeout\(function\(\)\{requestAnimationFrame\(frame\);\},1000\);\}/.test(homeSrc), 'star canvas is still under reduced motion');
       assert(/if\(RM\|\|Math\.abs\(target-_cf\.focus\)>CF_WIN_DRAG\)\{/.test(homeSrc), 'Cover Flow spring lands directly under reduced motion');
       ok('polish: steppers/sources/settings/list/day-view/queue controls ≥48 px; JS motion honours reduced motion');
       // 2026-10-09: ONE stop for every panel-scoped auth failure. A member not bound to the panel
