@@ -2057,6 +2057,13 @@ class MemoryService:
                 await restraint.erase_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+            # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
+            # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
+            try:
+                import forget_redact
+                forget_redact.clear_turn_caches(user_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
             # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
             try:
                 import warm_speaker
