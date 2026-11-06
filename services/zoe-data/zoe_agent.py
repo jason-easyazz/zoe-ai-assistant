@@ -1232,8 +1232,10 @@ async def _mempalace_add(
         from memory_quality import is_storable_fact
         storable, reason = is_storable_fact(summary)
         if not storable:
-            logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
-                        added_by or "zoe_agent", reason, summary[:120])
+            from log_redaction import utterance_tag   # the log is outside the forget cascade: tag, never the words
+
+            logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s %s",
+                        added_by or "zoe_agent", reason, utterance_tag(summary))
             try:
                 from memory_reject_ledger import record_reject
                 record_reject(added_by or "zoe_agent", reason)
