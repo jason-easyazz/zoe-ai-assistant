@@ -10,6 +10,8 @@ stored anywhere new):
   * ``user_model_cards``    - deleted likewise; ``load_card_block`` rebuilds from the live rows
   * ``open_loops``          - an unresolved loop naming the entity is RESOLVED (archived, history kept)
   * ``proactive_candidates``- deleted (derived, rebuilt nightly from loops / moments / events)
+  * ``anticipation offers`` - the calendar offers (``anticipation``, rows of ``pending_suggestions``) whose event title, place
+                              or line names the entity are DELETED, whatever their state
   * ``people``              - the row is SOFT-deleted (``deleted = 1``, the row and its history are kept),
                               and the person's current relationship edges are CLOSED (``valid_to``)
   * ``contacts``            - the contact model (migration 0053, ``contacts_store.forget_entity``): the person's contact fields,
@@ -63,10 +65,10 @@ RETRY_DELAY_S = 0.25   # one retry of a failed step after this pause (a pool bli
 #: The cascade's fixed step labels (what ``CascadeResult.failed`` holds and what a pending marker is keyed by). ``database`` is the
 #: connection itself: when it is pending every DB step is.
 DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
-                      "calendar_attendees"))
+                      "calendar_attendees", "anticipation_offers"))
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
-              "calendar_attendees", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs")
+              "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -83,6 +85,7 @@ class CascadeResult:
     contacts: int = 0       # contact-model rows removed / tombstoned (0053)
     voiceprints: int = 0    # learned voiceprints erased
     attendees: int = 0
+    offers: int = 0         # anticipation offers deleted
     person_ids: list[str] = field(default_factory=list)
     closed_at: str = ""
     failed: list[str] = field(default_factory=list)   # labels of the stores that could NOT be cleared (after a retry)
@@ -98,7 +101,7 @@ class CascadeResult:
 
     @property
     def touched(self) -> bool:
-        return bool(self.summary_cleared or self.people or self.contacts or self.voiceprints or self.attendees)
+        return bool(self.summary_cleared or self.people or self.contacts or self.voiceprints or self.attendees or self.offers)
 
 
 def _now_iso() -> str:
@@ -431,6 +434,11 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
             await db.commit()
         return n
 
+    async def anticipation_offers() -> int:
+        import anticipation
+
+        return await anticipation.erase_entity(db, user_id, rx)
+
     def want(label: str) -> bool:
         return only is None or label in only
 
@@ -452,6 +460,8 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
         res.voiceprints = await _step("voiceprints", voiceprints, res)
     if want("calendar_attendees"):
         res.attendees = await _step("calendar_attendees", attendees, res)
+    if want("anticipation_offers"):
+        res.offers = await _step("anticipation_offers", anticipation_offers, res)
     if "people" in res.failed and "edges" not in res.failed:
         # edges closes the relationships of the people the people step resolved; with that step failed there were no ids, so edges
         # "succeeded" over nothing. It is pending together with its parent, or the contact's open edges would stay open for good.

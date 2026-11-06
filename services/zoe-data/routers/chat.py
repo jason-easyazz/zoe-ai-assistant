@@ -936,6 +936,12 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         struggle_detector.observe("chat", _words, assistant_response, user_id, session_id)
     except Exception:  # noqa: BLE001
         pass
+    try:  # a person's turn just completed on this lane (fast paths never enter the brain slot): the passes below are post-turn
+        import brain_slot_guard
+
+        brain_slot_guard.note_turn_completed()
+    except Exception:  # noqa: BLE001
+        pass
     import memory_capture_stats
 
     memory_capture_stats.started(user_id)
@@ -2119,6 +2125,30 @@ async def chat_stream_generator(
                     )
                     if _compose_ev is not None:
                         yield emit(_compose_ev)
+                _brain_text = full_response
+                # Anticipation (ZOE_ANTICIPATION, default off = None with no I/O): at most ONE
+                # "By the way - ..." offer from the member's own calendar, appended to a reply
+                # they asked for (never unprompted), plus its Yes/No card below.
+                _anticipated = None
+                if full_response.strip():
+                    try:
+                        import anticipation as _anticipation
+                        _anticipated = await asyncio.wait_for(
+                            _anticipation.pick_for_turn(user_id, session_id), timeout=_anticipation.PICK_BUDGET_S)
+                    except Exception as _ant_exc:
+                        logger.debug("anticipation offer skipped (non-fatal): %s", type(_ant_exc).__name__)
+                    if _anticipated is not None:
+                        _ant_delta = "\n\n" + _anticipated.text
+                        full_response += _ant_delta
+                        yield recorder.emit(
+                            enc,
+                            TextMessageChunkEvent(
+                                type=EventType.TEXT_MESSAGE_CHUNK,
+                                message_id=assistant_message_id,
+                                role="assistant",
+                                delta=_ant_delta,
+                            ),
+                        )
                 response_text = full_response
                 yield recorder.emit(
                     enc,
@@ -2137,7 +2167,10 @@ async def chat_stream_generator(
                         yield emit(CustomEvent(name="zoe.ui_component", value=_scomp))
                 except Exception as _psc:
                     logger.debug("pending suggestion cards (non-fatal): %s", _psc)
-                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                if _anticipated is not None:
+                    yield emit(CustomEvent(name="zoe.ui_component", value=_anticipation.card(_anticipated)))
+                # Memory candidates come from the brain's own words, never Zoe's anticipation line.
+                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, _brain_text))
                 # Persist assistant reply so Zoe Agent has context on the next turn.
                 # Awaited (not fire-and-forget) so `persisted_assistant` reflects
                 # whether the row actually landed: marking it persisted while the
