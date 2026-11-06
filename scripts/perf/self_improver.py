@@ -288,7 +288,10 @@ def current_manner(flue_env: Path | None = None, lexicon: Path | None = None) ->
     if configured:
         p = Path(os.path.expanduser(configured)) / "manner.md"
         if p.is_file():
-            return p.read_text(encoding="utf-8"), f"overlay:{p}"
+            text = p.read_text(encoding="utf-8")
+            if text.endswith("\n"):          # harness.ts decodeText strips exactly ONE trailing newline (renderCompiledFiles appends it)
+                text = text[:-1]
+            return text, f"overlay:{p}"
     return json.loads(Path(lexicon).read_text(encoding="utf-8"))["manner"]["block"], f"lexicon:{lexicon.name}"
 
 
@@ -1139,7 +1142,10 @@ def _night_body(cfg, home, night, mode, evaluator, reflector, seed_text, deadlin
         return finish(EXIT_UNMEASURED, "error", reason=f"no known cell in {cfg.cells}")
 
     # DEV traces of the seed: cached per seed sha (resumed by the A/B's own fingerprints), the only input to reflection
-    dev_id = f"dev-{sha(seed_text)[:12]}" if mode == "live" else f"dev-{night}"
+    # The cache is keyed by the seed AND by what the rig measures with: a changed harness version or split would otherwise point at
+    # rows the rig itself refuses (row_problems) yet load_ab_rows would hand back - a different id never meets the old cache.
+    rig = sha(f"{plan.get('harness_version', '')}|{plan.get('split_digest', '')}")[:8]
+    dev_id = f"dev-{sha(seed_text)[:12]}-{rig}" if mode == "live" else f"dev-{night}"
     dev_rows = arm_rows(evaluator.run("dev", {"R0": seed_text}, dev_id, cells=cells, budget_s=budget_left(),
                                       deadline_ts=deadline_ts), "R0", "dev")
     dev_keys = [tuple(k) for c in cells for k in plan["plans"]["dev"][c]]
@@ -1181,7 +1187,9 @@ def _night_body(cfg, home, night, mode, evaluator, reflector, seed_text, deadlin
         reg_rows = evaluator.run("regress", {"R0": seed_text, winner: arms[winner]}, f"regress-{night}",
                                  scale=cfg.regress_scale, budget_s=budget_left(), deadline_ts=deadline_ts)
         keys = [tuple(k) for k in plan["plans"]["regress"][str(cfg.regress_scale)]]
-        cov = [p for a in ("R0", winner) if (p := coverage_problem(reg_rows, a, "regress", keys, plan["regression"]))]
+        # a regression ask may score only a manner-extra half (the p5c-excite asks return P5c.u): any KNOWN half counts as scored
+        known = list(plan["regression"]) + list(plan.get("manner_extra") or [])
+        cov = [p for a in ("R0", winner) if (p := coverage_problem(reg_rows, a, "regress", keys, known))]
         row["regress"] = {"arms": ["R0", winner], "scale": cfg.regress_scale}
         if cov:                       # an unconfirmed win is UNMEASURED - never a counted loss, never a win
             row["regress"]["problems"] = cov

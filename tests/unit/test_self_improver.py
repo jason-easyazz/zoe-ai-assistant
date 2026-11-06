@@ -653,3 +653,24 @@ def test_a_duplicate_measured_night_counts_once():
     row = {"mode": "live", "status": "measured", "win": True}
     st = si.stop_state([dict(row, night="2026-11-01"), dict(row, night="2026-11-01"), dict(row, night="2026-11-02")])
     assert st["measured_nights"] == 2 and st["wins"] == 2
+
+
+def test_an_overlay_manner_file_with_one_trailing_newline_is_accepted(tmp_path):
+    """Codex #2304: harness-overlay.ts renderCompiledFiles appends a newline; harness.ts decodeText strips exactly one."""
+    overlay = tmp_path / "overlay"
+    overlay.mkdir()
+    (overlay / "manner.md").write_text("Talk like a friend.\n", encoding="utf-8")
+    env = tmp_path / "flue.env"
+    env.write_text(f"ZOE_BRAIN_HARNESS_DIR={overlay}\n", encoding="utf-8")
+    text, src = si.current_manner(flue_env=env, lexicon=REPO / "services" / "zoe-data" / "lexicons_data" / "en.json")
+    assert text == "Talk like a friend." and src.startswith("overlay:") and si.validate_manner(text) == text
+    (overlay / "manner.md").write_text("Talk like a friend.\n\n", encoding="utf-8")       # two newlines: still refused downstream
+    text2, _ = si.current_manner(flue_env=env, lexicon=REPO / "services" / "zoe-data" / "lexicons_data" / "en.json")
+    with pytest.raises(ValueError):
+        si.validate_manner(text2)
+
+
+def test_regression_coverage_accepts_an_ask_that_scores_only_a_manner_extra_half():
+    rows = [{"arm": "on:R0", "phase": "regress", "ask": "p5c-excite-1", "sample": 0, "scored": {"P5c.u": [True, ""]}}]
+    assert si.coverage_problem(rows, "R0", "regress", [("p5c-excite-1", 0)], ["P7.a"]) is not None       # the old check
+    assert si.coverage_problem(rows, "R0", "regress", [("p5c-excite-1", 0)], ["P7.a", "P5c.u"]) is None
