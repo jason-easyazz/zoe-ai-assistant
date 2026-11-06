@@ -1031,7 +1031,7 @@ def review_day(monkeypatch, rules, *, dry=True, mode=None):
     if mode:
         monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", mode)
 
-    async def no_ledger(user_id, text):
+    async def no_ledger(user_id, text, **_kw):
         return False
     monkeypatch.setattr(dr, "_forgotten", no_ledger)
     seen: list = []

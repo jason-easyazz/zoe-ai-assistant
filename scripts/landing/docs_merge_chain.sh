@@ -13,7 +13,9 @@ for PR in "$@"; do
   log "=== #$PR"; updated=0; holds=0
   for i in $(seq 1 90); do
     h=$(date -d "@$(landing_now)" +%H%M); if [ "$h" -ge 0350 ] && [ "$h" -le 0455 ]; then log "nightly voice gate window - chain paused (no update/arm until 04:55)"; sleep 300; continue; fi
-    [ -e "$HOME/.zoe/night-window/WINDOW_OPEN" ] && { log "#$PR night window open (WINDOW_OPEN) - chain paused, no update/arm until it closes"; sleep 120; continue; }
+    stale=$(landing_window_open); wrc=$?
+    [ "$wrc" = 0 ] && { log "#$PR night window open (WINDOW_OPEN) - chain paused, no update/arm until it closes"; sleep 120; continue; }
+    [ -n "$stale" ] && log "#$PR WARNING: WINDOW_OPEN is STALE ($stale, owner gone): a failed night restore was never cleared - NOT pausing; wake the box: scripts/night/night_window.sh --restore-only"
     landing_is_held "$PR" && { log "#$PR went on HOLD - skipping"; break; }
     bash "$LANDING_DIR/night_busy.sh" deploy && { log "deploy pause (night_busy deploy) - chain paused, no update/arm"; sleep "$NIGHT_S"; continue; }
     st=$(gh pr view "$PR" --json state,mergeStateStatus,autoMergeRequest,isDraft,headRefOid --jq '"\(.state) \(.mergeStateStatus) \(.autoMergeRequest!=null) \(.isDraft) \(.headRefOid)"'); set -- $st; state=$1; ms=$2; armed=$3; draft=${4:-unknown}; head=${5:-}
