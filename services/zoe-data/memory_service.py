@@ -2849,9 +2849,9 @@ class MemoryService:
         (docs/governance/emotional-safety-note.md section 6). Modes (``memory_authority.affect_gate_mode``):
 
         * ``household`` (DEFAULT): every household member incl. children, no stored consent row.
-          Guests are refused - a guest is the sentinel principal in ``user_filters.GUEST_USERS``
-          (``guest`` / ``anonymous`` / ``voice-guest`` / ``voice-daemon`` / empty), the same set
-          the batch memory passes and ``auth`` use. A person with no ``member_modes`` row is a
+          Guests are refused - a guest is ``user_filters.is_unidentified``: the sentinels
+          (``guest`` / ``anonymous`` / ``voice-guest`` / ``voice-daemon`` / empty) and any
+          ``guest-<id>`` principal, case and whitespace ignored. A person with no ``member_modes`` row is a
           member. A failed member lookup refuses (closed).
         * ``members``: as above but a member flagged a minor is refused; a failed lookup fails
           OPEN with a warning (the minor flag lives in Postgres; a DB blip must not silence it).
@@ -2861,14 +2861,11 @@ class MemoryService:
         if mode == "off":
             return True
         uid = (user_id or "").strip()
-        try:
-            from user_filters import GUEST_USERS
-
-            if uid.lower() in GUEST_USERS:
-                return False
-        except Exception:  # noqa: BLE001
-            if not uid or uid.lower() in {"guest", "anonymous", "voice-guest", "voice-daemon"}:
-                return False
+        # ONE guest predicate (``user_filters.is_unidentified``): the sentinels AND the per-session ``guest-<id>``
+        # principal. This gate knew only the sentinels, so ``guest-<id>`` passed it as a "member" under ``household``
+        # (measured by the minor-affect cell, 2026-11-05); ingest's identity wall stopped it first, this is the backstop.
+        if _is_unidentified(uid):
+            return False
         try:
             from persona_layer import UNSET_MODE, load_member_mode
 
