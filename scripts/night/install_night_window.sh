@@ -27,7 +27,7 @@ for a in "$@"; do
     *) echo "unknown argument: $a" >&2; exit 2 ;;
   esac
 done
-UNITS=(zoe-night-window.service zoe-night-window.timer)
+UNITS=(zoe-night-window.service zoe-night-window.timer zoe-night-window-restore-retry.service zoe-night-window-restore-retry.timer)
 
 do_it() { if [ "$DRY" = 1 ]; then echo "DRY-RUN: $*"; else "$@"; fi; }
 ctl() { if [ "$DRY" = 1 ]; then echo "DRY-RUN: systemctl --user $*"; else "$SYSTEMCTL" --user "$@"; fi; }
@@ -82,6 +82,7 @@ install() {
     disabled_it=1
     ctl disable --now zoe-dreaming.timer || { say "could not disable zoe-dreaming.timer: rolling back"; rollback_dreaming 1; exit 1; }
   fi
+  ctl enable --now zoe-night-window-restore-retry.timer || say "WARNING: could not enable zoe-night-window-restore-retry.timer: a failed restore will wait for the operator"
   ctl enable --now zoe-night-window.timer || { say "could not enable zoe-night-window.timer: rolling back"; rollback_dreaming "$disabled_it"; exit 1; }
   say "done. Next: $HERE/night_window.sh --dry-run   (the arithmetic for tonight), then  systemctl --user list-timers | grep night"
 }
@@ -90,6 +91,7 @@ uninstall() {
   local was=""
   [ -e "$STATE" ] && was=$(sed -n 's/^dreaming_timer_was=//p' "$STATE")
   ctl disable --now zoe-night-window.timer || true
+  ctl disable --now zoe-night-window-restore-retry.timer || true
   for u in "${UNITS[@]}"; do do_it rm -f "$DST/$u"; done
   ctl daemon-reload
   if [ "$was" = enabled ]; then

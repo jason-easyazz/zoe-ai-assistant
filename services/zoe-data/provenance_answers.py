@@ -612,15 +612,33 @@ async def load_people(user_id: str) -> list:
         return []
 
 
+def _row_words(ref: Any) -> str:
+    """Every text a row can be said back through: the row, the owner's excerpt (``owner_quote``) and a retire quote."""
+    meta = getattr(ref, "metadata", None) or {}
+    return "\n".join(str(t) for t in (getattr(ref, "text", "") or "", meta.get("source_excerpt") or "", meta.get("retire_quote") or "") if t)
+
+
+async def _drop_forgotten(user_id: str, items: list, text_of: Any) -> list:
+    """``items`` without the ones naming an entity the owner forgot (the durable ledger, then the 300 s tombstone). A READ path:
+    the cascade erases the rows at forget time, this is the second wall for a row it missed (forgotten means forever). A ledger
+    outage RAISES (``memory_forgotten.LedgerUnavailable``) - the caller answers "can't reach my memory", never the rows."""
+    import memory_forgotten
+    from memory_tombstones import matching_tombstone
+
+    kept, _dropped = await memory_forgotten.keep_unforgotten(user_id, list(items), text_of=text_of, near=False, strict=True)
+    return [i for i in kept if not matching_tombstone(user_id, text_of(i) or "")]
+
+
 async def gather(user_id: str, *, svc: Any = None) -> Known:
     """The owner's approved rows, sorted into public items (grouped) and private ones (counted by class), plus the people table.
-    Own rows only; pasted, instruction-shaped, unverified and recorded-change rows are left out. Raises on a store failure
+    Own rows only; pasted, instruction-shaped, unverified, recorded-change and forgotten rows are left out. Raises on a store failure
     (the caller says so)."""
     import memory_authority as auth
     import own_words
 
     svc = svc or _svc_default()
     rows = await asyncio.wait_for(svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT), READ_BUDGET_S)
+    rows = await _drop_forgotten(user_id, rows, _row_words)
     known = Known()
     for ref in rows:
         meta = ref.metadata or {}
@@ -657,7 +675,7 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
     known.items.sort(key=lambda i: i.epoch or 0.0, reverse=True)
     for lst in known.private.values():
         lst.sort(key=lambda i: i.epoch or 0.0, reverse=True)
-    known.people = await load_people(user_id)
+    known.people = await _drop_forgotten(user_id, await load_people(user_id), lambda p: p[0])
     return known
 
 
@@ -1043,7 +1061,7 @@ async def evidence_for_row(user_id: str, row_id: str, *, svc: Any = None) -> Evi
     try:
         import memory_forgotten
 
-        if await memory_forgotten.matches(user_id, ref.text or "", strict=True):
+        if await memory_forgotten.matches(user_id, _row_words(ref), strict=True):     # the quoted excerpt too, not just the row
             ev.refusal = FORGOTTEN_REPLY
             return ev
     except Exception:  # noqa: BLE001 - fail CLOSED (incl. LedgerUnavailable): a source we cannot vet is not quoted

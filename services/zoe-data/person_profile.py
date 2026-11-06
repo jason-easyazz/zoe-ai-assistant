@@ -220,6 +220,8 @@ async def compose(db, user_id: str, person_id: str, *, svc: Any = None, today: O
     pid, name, rel, legacy_bday, met = (str(x or "").strip() for x in got[0])
     if not name or await _forgotten(user_id, name):
         return None
+    if met and await _forgotten(user_id, met):     # "through Dana at the climbing gym": the free-text column can name a forgotten person
+        met = ""
     prof = Profile(pid, name, rel, met, child=person_may_be_child({"relationship": rel, "birthday": legacy_bday}))
     today = today or date.today()
 
