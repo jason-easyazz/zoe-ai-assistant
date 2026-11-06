@@ -1,6 +1,6 @@
 """Warmth probes - deterministic checks that a reply meets a feeling or a self-disclosure like a friend, not a form.
 
-An offline instrument (nothing live calls it) and a library a persona-drift battery can reuse (``scripts/perf/persona_drift.py``,
+An offline instrument (nothing live calls it) and a library a persona-drift battery can reuse (the scripts/perf persona-drift probe script,
 #2282, scores reply style; these four score the QA "half-baked robot" findings of 2026-11-05/06). Each probe takes ONE exchange
 (the user's words, Zoe's reply) and returns ``"pass"``, ``"fail"`` or ``"na"`` (the probe does not apply):
 

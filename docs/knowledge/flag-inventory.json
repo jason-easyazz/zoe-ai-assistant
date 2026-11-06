@@ -256,6 +256,9 @@
         "unset"
       ],
       "sites": {
+        "services/zoe-data/brain_scheduler.py": [
+          "'Australia/Perth'"
+        ],
         "services/zoe-data/calendar_ical.py": [
           "'Australia/Perth'"
         ],
@@ -1389,6 +1392,29 @@
         },
         "typed_env": false
       },
+      "ZOE_ANTICIPATION": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/anticipation.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/anticipation-loop.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_API": {
         "defaults": [
           "'https://192.168.1.218'"
@@ -2015,6 +2041,82 @@
           "note": "",
           "owner_doc": "",
           "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER": {
+        "defaults": [
+          "'log'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "log",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER_ALLOW": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER_DAY": {
+        "defaults": [
+          "'07:00-22:00'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "07:00-22:00",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER_POST_TURN_S": {
+        "defaults": [
+          "900.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 900.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "float"
         },
         "typed_env": true
       },
@@ -4223,6 +4325,28 @@
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/distress-handoff.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_DORMANT_THREADS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/dormant_threads.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
           "type": "str"
         },
         "typed_env": true
@@ -8095,6 +8219,44 @@
         },
         "typed_env": false
       },
+      "ZOE_MEMORY_EPISODES": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_episodes.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMORY_EPISODE_GAP_S": {
+        "defaults": [
+          "2700.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_episodes.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2700.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMORY_HEAP_SCRUB": {
         "defaults": [
           "''"
@@ -8341,6 +8503,29 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_MEMORY_SLOT_CHECK": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_slot_check.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_MEMORY_STARTUP_STRICT": {
         "defaults": [
@@ -11708,6 +11893,25 @@
         },
         "typed_env": false
       },
+      "ZOE_PROACTIVE_POLICY_LOG": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/policy_log.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/proactive-policy-log.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_PROACTIVE_RAISE_GAP_S": {
         "defaults": [
           "7200"
@@ -14077,6 +14281,25 @@
         },
         "typed_env": false
       },
+      "ZOE_SPEAKABLE_PROVENANCE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/provenance_speech.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_SPEAKER_ADAPT": {
         "defaults": [
           "'off'"
@@ -15244,6 +15467,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/brain_scheduler.py",
           "services/zoe-data/calendar_ical.py",
           "services/zoe-data/household_locale.py",
           "services/zoe-data/identity_facts.py",
@@ -18463,6 +18687,7 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/memory_authority_backfill.py",
+        "scripts/maintenance/memory_views_report.py",
         "scripts/perf/recall_gate_replay.py",
         "services/zoe-data/live_store_guard.py",
         "services/zoe-data/mcp_server.py",

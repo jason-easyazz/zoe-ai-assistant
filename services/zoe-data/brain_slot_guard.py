@@ -39,6 +39,8 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
+import brain_scheduler
+
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
@@ -50,6 +52,7 @@ DEFAULT_MAX_DEFER_S = 240.0
 _POLL_S = 0.5
 
 _active = 0                 # brain turns in flight
+_post_turn_stamp = 0.0      # monotonic stamp of the last COMPLETED person turn on ANY reply lane (note_turn_completed); never read by the wake 'hot' timer
 _last_activity = 0.0        # monotonic stamp of the last turn start / end (0 = never)
 _lock: Optional[asyncio.Lock] = None
 _keeper_activity = 0.0      # monotonic stamp of the last idle-time keeper warm (holds helpers off, NOT the conversation's timer)
@@ -93,7 +96,8 @@ def max_defer_s() -> float:
 
 def reset() -> None:
     """Test hook."""
-    global _active, _last_activity, _lock, _waiters, _flush, _keeper_activity, _household, _preempted_at
+    global _active, _last_activity, _lock, _waiters, _flush, _keeper_activity, _household, _preempted_at, _post_turn_stamp
+    _post_turn_stamp = 0.0
     _active = 0
     _household = 0
     _preempted_at = 0.0
@@ -155,6 +159,23 @@ def starts() -> int:
     """How many brain turns have started in this process (monotonic). Compare two readings to learn whether any turn
     began in between, even one that has already finished."""
     return _starts
+
+
+def note_turn_completed() -> None:
+    """A person's turn finished on ANY reply lane (a fast-path reply never enters the brain slot, so ``turn_finished`` is
+    not called for it). Stamps only the post-turn freshness clock ``last_turn_age_s`` reads; the wake 'hot' timer is
+    untouched."""
+    global _post_turn_stamp
+    _post_turn_stamp = _clock()
+
+
+def last_turn_age_s() -> Optional[float]:
+    """Seconds since a household turn last started or ended, on any reply lane (None = none yet in this process).
+    ``brain_scheduler`` uses it to tell a post-turn pass (derived from a turn that just finished) from an idle call."""
+    stamp = max(_last_activity, _post_turn_stamp)
+    if stamp <= 0.0:
+        return None
+    return max(0.0, _clock() - stamp)
 
 
 def waiters() -> int:
@@ -243,14 +264,16 @@ async def run_background(label: str, call: "Callable[[], Awaitable[T]]") -> "T":
     """
     global _flush, _preempted_at
     if not enabled():
-        return await call()
+        with brain_scheduler.declare(label):   # the guard being off must not change how the scheduler names this call
+            return await call()
     preempts = 0
     while True:
         async with background_slot(label):
             # No await between the gate's release check and this registration: a turn cannot slip in between.
             preempt = asyncio.get_running_loop().create_future()
             _holders.add(preempt)
-            task = asyncio.ensure_future(call())
+            with brain_scheduler.declare(label):   # the scheduler's choke point names this call (the task copies the context)
+                task = asyncio.ensure_future(call())
             try:
                 await asyncio.wait({task, preempt}, return_when=asyncio.FIRST_COMPLETED)
             except BaseException:

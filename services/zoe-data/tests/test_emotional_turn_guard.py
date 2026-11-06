@@ -213,7 +213,7 @@ def _seam(monkeypatch, *, mode="on", reply="ok"):
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
     calls = {"offer": 0, "brief": 0}
 
-    async def fake_offer(uid):
+    async def fake_offer(uid, message=""):
         calls["offer"] += 1
         return ('[PENDING CONTACT OFFER — do not mention this block]\n- After answering, ask the user exactly: '
                 '"Would you like me to add Alex (your partner) as a contact?"\n[END PENDING CONTACT OFFER]')
