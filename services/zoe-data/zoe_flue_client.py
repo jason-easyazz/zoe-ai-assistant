@@ -2742,9 +2742,16 @@ async def _run_flue_brain_streaming_turn(
     import flue_fastpath_context
 
     fastpath_block = await flue_fastpath_context.block_for(uid, session_id, message)
+    # Where we left off (ZOE_VOICE_SESSION_BRIDGE, default OFF; voice_session_bridge.py): a panel voice session that rolled after
+    # the idle TTL starts with history=0 in the sidecar, so its first few brain turns carry the SAME confirmed speaker's last
+    # exchanges from the session it replaced - in memory, forget-ledger checked (strict), token-capped. Ahead of the fast-path
+    # block (it is older), inside the latest user message: the cached prefix is untouched. Off => "" before any work.
+    import voice_session_bridge
+
+    bridge_block = await voice_session_bridge.block_for(uid, session_id)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
-    # order is fixed: identity → recall → offer → the user's words. "" when the flag is
+    # order is fixed: identity → bridge → fast-path → recall → offer → the user's words. "" when the flag is
     # off or the id is not a registered account → the bytes are exactly what they were.
     identity_block = await _identity_context_block(uid)
     # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): label the stored-context blocks this turn carries that do not come through /for-prompt,
@@ -2758,7 +2765,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
-    _blocks = "\n".join(b for b in (identity_block, fastpath_block, recall_block, offer_block,
+    _blocks = "\n".join(b for b in (identity_block, bridge_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable
