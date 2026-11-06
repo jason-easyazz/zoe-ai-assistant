@@ -15,7 +15,7 @@
     'use strict';
     if (window.ZoeAlarms) return;
 
-    var POLL_MS = 2000, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64, MUSIC_DEADLINE_MS = 10000;
+    var POLL_MS = 2000, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64, MUSIC_DEADLINE_MS = 10000, STOP_GRACE_MS = 5000;
     var ACK_KEY = 'zoe_alarm_acks';
     var DAYS = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]];
     var PRESETS = [['Once', 'once'], ['Every day', 'daily'], ['Weekdays', 'weekdays'], ['Weekends', 'weekends']];
@@ -96,7 +96,12 @@
         ov.querySelector('.aloff').classList.toggle('only', !a.can_snooze);
         tickClock();
     }
+    // A ring never outlives the server's own limit (stops_at = ring start + RING_MAX_S), even when the server cannot be reached to
+    // say so (zoe-data restarting, the DB down in the night window): the panel stops itself STOP_GRACE_MS after it.
+    // `grace` is only for stopping a ring already on screen; a ring first seen past stops_at is never started (grace 0).
+    function overdue(a, grace) { return !!(a && a.stops_at && nowMs() >= a.stops_at * 1000 + (grace || 0)); }
     function tickClock() {
+        if (overdue(st.ring, STOP_GRACE_MS)) { stopRing(); return; }
         var c = document.querySelector('#alarmRing .alclock');
         if (!c) return;
         var d = new Date(nowMs()), h = d.getHours() % 12 || 12, m = d.getMinutes();
@@ -188,7 +193,7 @@
         host.apiGet('/api/alarms/ringing').then(function (d) {
             st.enabled = true;
             if (d && d.now) st.skew = d.now * 1000 - Date.now();
-            var live = ((d && d.ringing) || []).filter(function (a) { return !st.acks[ackKey(a)]; });
+            var live = ((d && d.ringing) || []).filter(function (a) { return !st.acks[ackKey(a)] && !overdue(a); });
             var listed = {};
             ((d && d.ringing) || []).forEach(function (a) { listed[ackKey(a)] = 1; });
             Object.keys(st.acks).forEach(function (k) { if (!listed[k] && !st.inflight[k]) delete st.acks[k]; });
@@ -204,6 +209,7 @@
             } else if (st.ring) stopRing();  // answered elsewhere, auto-stopped, or edited off
             schedule(POLL_MS);
         }).catch(function (e) {
+            if (overdue(st.ring, STOP_GRACE_MS)) stopRing();  // the server is unreachable past the ring's own limit: never ring on and on
             if (/http 404/.test(String(e && e.message))) { st.enabled = false; hideTabs(); schedule(OFF_RECHECK_MS); } else schedule(POLL_MS * 2);
         });
     }
@@ -260,7 +266,7 @@
         box.appendChild(wheels);
         var side = el('div', 'alside');
         box.appendChild(side);
-        function section(title) { var r = el('div', 'alrow'); r.appendChild(el('div', 'alk', title)); var c = el('div', 'alchips'); r.appendChild(c); side.appendChild(r); return c; }
+        function section(title, cls) { var r = el('div', 'alrow'); r.appendChild(el('div', 'alk', title)); var c = el('div', 'alchips' + (cls ? ' ' + cls : '')); r.appendChild(c); side.appendChild(r); return c; }
         var rep = section('Repeat');
         function drawRep() {
             clear(rep);
@@ -289,7 +295,7 @@
         }
         drawSnd();
         // Clock radio: the last thing played, or a playlist from Music Assistant. If it cannot start within 10 s the alarm rings a tone instead.
-        var mus = section('Wake to music'), lists = [];
+        var mus = section('Wake to music', 'alscroll'), lists = [];  // one swipeable row: playlist names are long
         function drawMus() {
             clear(mus);
             var opts = [['Last played', 'last']].concat(lists.slice(0, 6).map(function (n) { return [n, 'playlist:' + n]; }));
@@ -314,7 +320,8 @@
         side.appendChild(acts);
         var err = el('div', 'alerr');
         side.appendChild(err);
-        function close() { if (ed.parentNode) ed.parentNode.removeChild(ed); }
+        var watch = null;
+        function close() { if (watch) { watch.disconnect(); watch = null; } if (ed.parentNode) ed.parentNode.removeChild(ed); }
         acts.appendChild(chip('Cancel', false, close, 'ghost'));
         if (!isNew) {
             acts.appendChild(chip('Delete', false, function () {
@@ -329,7 +336,14 @@
             var req = isNew ? host.apiJson('POST', '/api/alarms', body) : host.apiJson('PATCH', '/api/alarms/' + encodeURIComponent(alarm.id), body);
             req.then(function () { close(); done(); }).catch(function () { err.textContent = 'Couldn’t save that. Try again.'; });
         }, 'save'));
-        root.appendChild(ed);
+        // The sheet covers the whole 1280x720 stage (above the dock and the orb), so it lives on #stage, not inside the Alarms
+        // pane - and goes away with the pane: any surface change replaces the pane's parent's children (a voice turn, Home).
+        var stage = document.getElementById('stage'), surface = root.parentNode;
+        (stage || root).appendChild(ed);
+        if (stage && surface && typeof MutationObserver === 'function') {
+            watch = new MutationObserver(function () { if (!root.isConnected) close(); });
+            watch.observe(surface, { childList: true });
+        }
     }
     function row(a, root, refresh) {
         var r = el('div', 'alrowitem' + (a.enabled ? '' : ' off'));
