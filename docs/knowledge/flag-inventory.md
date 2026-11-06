@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 824 prod flags; 239 read through `typed_env`.
+- 825 prod flags; 240 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-824 flags; 773 not documented in `.env.example`.
+825 flags; 774 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -613,6 +613,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_LEDGER` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
+| `ZOE_PROACTIVE_POLICY_LOG` | str | `''` | - | `docs/knowledge/proactive-policy-log.md` | `''` | yes | NO | `services/zoe-data/proactive/policy_log.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | int | `7200` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | int | `2` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | str | `''` | - | `docs/knowledge/samantha-bar.md` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |

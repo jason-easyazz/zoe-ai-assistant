@@ -11827,6 +11827,25 @@
         },
         "typed_env": false
       },
+      "ZOE_PROACTIVE_POLICY_LOG": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/policy_log.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/proactive-policy-log.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_PROACTIVE_RAISE_GAP_S": {
         "defaults": [
           "7200"
