@@ -239,6 +239,22 @@ async def review_memory(
     is_admin = (user.get("role") or "").lower() == "admin"
     if owner and owner != user["user_id"] and not is_admin:
         raise HTTPException(status_code=403, detail="Cannot review another user's memory")
+    import memory_space
+
+    if (action == "reject" and is_admin and owner and owner != user["user_id"]
+            and memory_space.guardian_forget_open(current.metadata or {})):
+        # A guardian's reject of another member's approved row IS that member's forget (a child cannot forget their own):
+        # the twins one utterance left go with it, so a feeling cannot survive in a sibling row (memory_space.guardian_forget).
+        # A row an earlier guardian forget rejected but did not finish resumes here too (guardian_forget_open).
+        try:
+            outcome = await memory_space.guardian_forget(owner, memory_id, actor=user["user_id"], svc=svc)
+        except Exception as exc:  # noqa: BLE001 - half done: say so, the retry finishes it
+            logger.warning("memories review: guardian forget failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="That forget did not finish. Try again in a moment.")
+        if outcome != "forgotten":
+            raise HTTPException(status_code=404, detail="Memory not found")
+        ref = await svc.get(memory_id)
+        return _ref_to_dict(ref) if ref is not None else {"id": memory_id, "status": "rejected"}
     try:
         ref = await svc.review(
             memory_id,
