@@ -414,6 +414,15 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _is_forget_command(text: str) -> bool:
+    """memory_quality.is_forget_command, never raising (an unavailable gate leaves the anchored regex alone)."""
+    try:
+        from memory_quality import is_forget_command
+        return is_forget_command(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # "forget what I told you about X" / "forget everything about X" -- entity-scoped
 # forget (QA review F14). Deterministic, no LLM. The captured entity must pass
 # strict name validation (person_extractor._looks_like_person_name) before the
@@ -815,8 +824,10 @@ def detect_intent(
         return Intent("panel_list", {})
 
     # "forget that" — retract the most recent memory write for the caller.
-    # Matched very early so it never collides with other verbs.
-    if _FORGET_LAST_RE.match(t):
+    # Matched very early so it never collides with other verbs. memory_quality.is_forget_command adds the
+    # shapes the anchored regex missed live (QA 2026-11-05): a leading "no," / "oh" / "wait", two acts in a row
+    # ("no, don't remember that! forget that"), and "forget that I said ..." - short utterances only.
+    if _FORGET_LAST_RE.match(t) or _is_forget_command(t):
         return Intent("memory_forget_last", {})
 
     # "keep the contact" -- undo the contact removal the last forget cascade announced.
