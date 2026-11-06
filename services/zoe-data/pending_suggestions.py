@@ -641,6 +641,10 @@ async def mark_resolved(suggestion_id: str, user_id: str) -> bool:
                 user_id,
             )
         for r in rows:
+            if r["action_type"] == "anticipation":
+                import anticipation
+
+                await anticipation.on_dismissed(suggestion_id, user_id)  # a no: the cooldown and the outcome
             if r["action_type"] == "forget_alias":
                 # "No, leave it": the spelling is a different name from here on (it passes the forget ledger's near guard); counted by
                 # reason only (never the spelling), and the question row is scrubbed
@@ -911,6 +915,12 @@ async def _execute_action(conn, action: str, slots: dict, user_id: str) -> dict:
 
 
 async def execute_suggestion(suggestion_id: str, user_id: str) -> dict:
+    import anticipation
+
+    if anticipation.mode() != "off":  # an anticipation offer runs its own tool (alarm / reminder / private list); off = no I/O
+        mine = await anticipation.execute_if_ours(suggestion_id, user_id)
+        if mine is not None:
+            return mine
     try:
         pool = get_pool()
         async with pool.acquire() as conn:

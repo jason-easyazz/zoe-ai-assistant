@@ -117,7 +117,9 @@ TABLES: tuple[Store, ...] = (
        entity="forget_redact.on_forget"),
     _t("chat_feedback", WORDS, GAP, "Holds a corrected_response (words); neither path reaches it."),
     _t("background_tasks", WORDS, GAP, "Holds the task text and its result; neither path reaches it."),
-    _t("pending_suggestions", WORDS, GAP, "Offer text naming people can outlive the forget (only person offers are withdrawn by name)."),
+    _t("pending_suggestions", WORDS, GAP, "Offer text naming people can outlive the forget (person offers are withdrawn by name; "
+       "anticipation offers naming the entity are deleted by the cascade); delete_user does not reach the table.",
+       entity="memory_forget_cascade._run"),
     # --- member-owned product data: the member's own lists, notes, calendar, journal, money ---
     _t("notes", WORDS, GAP, _OWN + " Holds free text."),
     _t("journal_entries", WORDS, GAP, _OWN + " Holds free text."),

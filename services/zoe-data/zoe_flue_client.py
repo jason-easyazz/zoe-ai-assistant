@@ -89,6 +89,7 @@ and never changes what is yielded or retried.
 from __future__ import annotations
 
 import asyncio
+import brain_scheduler
 import brain_slot_guard
 import contextvars
 import errno
@@ -2417,6 +2418,7 @@ async def warm_kv_prefix(member: str = "", *, yield_to_helpers: bool = False) ->
         # Preparation that swallowed its cancellation and returned late must not go on to take the guard and submit.
         if asyncio.get_running_loop().time() - t0 >= _KV_WARM_MAX_S:
             return "failed:timeout", -1, -1
+        brain_scheduler.note("prefix_keeper" if yield_to_helpers else "wake_prewarm")   # declared exceptions: one log line + count
         brain_slot_guard.turn_started(keeper=yield_to_helpers)
         acquired = True
         starts_after_mine = brain_slot_guard.starts()   # any later start is a REAL turn, even one already finished
