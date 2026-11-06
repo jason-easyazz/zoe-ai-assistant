@@ -467,6 +467,25 @@
         },
         "typed_env": false
       },
+      "ZOE_BRAIN_KEEP_TURNS": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/src/context-window.ts"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 8,
+          "divergent_ok": {},
+          "note": "Flue sidecar history floor (labs/flue-zoe-brain-2x context-window.ts); 3 = the pre-2026-11-05 rollback, 0 = no floor",
+          "owner_doc": "docs/knowledge/recall-every-turn.md",
+          "type": "int"
+        },
+        "typed_env": false
+      },
       "ZOE_BRAIN_MAX_TOOL_ITERS": {
         "defaults": [
           "-"
@@ -10632,6 +10651,7 @@
           "scripts/perf/measure_tts.py",
           "scripts/perf/measure_voice.py",
           "scripts/perf/person_half_enforce_ab.py",
+          "scripts/perf/persona_drift.py",
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",

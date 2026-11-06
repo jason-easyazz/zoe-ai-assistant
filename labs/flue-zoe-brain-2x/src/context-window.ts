@@ -205,8 +205,24 @@ export function estimateContextTokens(context: Context): number {
  */
 const ANCHOR_QUANTUM_FRACTION = 0.25;
 
-/** Earlier turns (before the in-flight one) the quantised head may never drop while the budget can still be met. */
-export const MIN_KEEP_TURNS = 3;
+/** The pre-2026-11-05 floor, kept as the documented rollback value (`ZOE_BRAIN_KEEP_TURNS=3`). */
+export const LEGACY_KEEP_TURNS = 3;
+/** Default floor: the last 8 earlier turns survive a window step (Samantha initiative lane E3). */
+export const DEFAULT_KEEP_TURNS = 8;
+const MAX_KEEP_TURNS = 64;
+
+/**
+ * Earlier turns (before the in-flight one) the quantised head may never drop while the budget can still be met.
+ * `ZOE_BRAIN_KEEP_TURNS` (default 8, rollback 3), read fresh per call; invalid values fall back to the default. It is a
+ * FLOOR on a token-bounded window, never a quota: the budget arithmetic and safety valve in `windowHeadIndex` still drop
+ * older turns whenever system + tools + history would not fit, so a long turn cannot blow the context. History sits
+ * after the cached system+tools prefix, so the floor changes only the (short) history region of the prompt.
+ */
+export function minKeepTurns(): number {
+  const raw = (process.env.ZOE_BRAIN_KEEP_TURNS ?? '').trim();
+  if (!/^\d+$/.test(raw)) return DEFAULT_KEEP_TURNS;
+  return Math.min(Number(raw), MAX_KEEP_TURNS);
+}
 
 /** Start index of every turn block: a block begins at each `user` message. */
 function turnBlockStarts(messages: Message[]): number[] {
@@ -301,8 +317,8 @@ export function windowHeadIndex(context: Context): number | null {
     // turn), so "the first block whose cumulative drop meets the target" falls off the end of the list and lands on the
     // NEWEST block: all history gone for a few tokens of overshoot, and a slot-filling follow-up ("add a doctor's
     // appointment Friday" -> "Doctor's appointment.") loses its context. So quantising may never push the head past the
-    // point where the last MIN_KEEP_TURNS earlier turns are still in the window, unless merely fitting the budget needs
-    // it (the safety valve below still decides that). The head then creeps for at most MIN_KEEP_TURNS turns and holds.
+    // point where the last minKeepTurns() earlier turns are still in the window, unless merely fitting the budget needs
+    // it (the safety valve below still decides that). The head then creeps for at most minKeepTurns() turns and holds.
     let minimalHead = blockStarts.length - 1;
     for (let k = 0; k < blockStarts.length; k++) {
       if (cumulative[k] >= requiredDrop) {
@@ -310,7 +326,7 @@ export function windowHeadIndex(context: Context): number | null {
         break;
       }
     }
-    const keepHead = Math.max(0, blockStarts.length - 1 - MIN_KEEP_TURNS);
+    const keepHead = Math.max(0, blockStarts.length - 1 - minKeepTurns());
     head = Math.min(head, Math.max(minimalHead, keepHead));
   }
 
