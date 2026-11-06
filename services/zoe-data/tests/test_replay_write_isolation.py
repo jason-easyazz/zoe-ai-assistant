@@ -88,7 +88,7 @@ def wire(monkeypatch):
     async def _no_recall(message, uid):
         return ""
 
-    async def _no_offer(uid):
+    async def _no_offer(uid, message=""):
         return ""
 
     monkeypatch.setattr(zoe_flue_client, "_recall_context_block", _no_recall)
