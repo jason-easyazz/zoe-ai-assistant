@@ -1208,7 +1208,9 @@ async def apply_person_fact(
         return False
     if await _opted_out(user_id, source, origin):
         return False
-    if await _names_forgotten(user_id, name, origin or source):
+    # the value too: "Tove visits Dana every week" must not land as Tove's activity once Dana is forgotten (the excerpt it was mined
+    # from is the third place the name can ride in)
+    if await _names_forgotten(user_id, "\n".join(t for t in (name, value, source_excerpt or "") if t), origin or source):
         return False
 
     _db, should_close = await _ensure_db(db)
