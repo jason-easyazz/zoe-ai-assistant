@@ -241,6 +241,22 @@ async def review_memory(
     is_admin = (user.get("role") or "").lower() == "admin"
     if owner and owner != user["user_id"] and not is_admin:
         raise HTTPException(status_code=403, detail="Cannot review another user's memory")
+    import memory_space
+
+    if (action == "reject" and is_admin and owner and owner != user["user_id"]
+            and memory_space.guardian_forget_open(current.metadata or {})):
+        # A guardian's reject of another member's approved row IS that member's forget (a child cannot forget their own):
+        # the twins one utterance left go with it, so a feeling cannot survive in a sibling row (memory_space.guardian_forget).
+        # A row an earlier guardian forget rejected but did not finish resumes here too (guardian_forget_open).
+        try:
+            outcome = await memory_space.guardian_forget(owner, memory_id, actor=user["user_id"], svc=svc)
+        except Exception as exc:  # noqa: BLE001 - half done: say so, the retry finishes it
+            logger.warning("memories review: guardian forget failed (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="That forget did not finish. Try again in a moment.")
+        if outcome != "forgotten":
+            raise HTTPException(status_code=404, detail="Memory not found")
+        ref = await svc.get(memory_id)
+        return _ref_to_dict(ref) if ref is not None else {"id": memory_id, "status": "rejected"}
     try:
         ref = await svc.review(
             memory_id,
@@ -581,6 +597,7 @@ def _build_memory_prompt_packet(
     quotes: bool = False,
     now: Optional[float] = None,
     speak: bool = False,
+    user_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Compile a compact, cited memory packet for system-prompt injection.
 
@@ -668,7 +685,10 @@ def _build_memory_prompt_packet(
             felt = memory_affect(ref)
             prefix = f"(recent, felt {felt}) {prefix}" if felt else f"(recent) {prefix}"
         when = recall_evidence.date_suffix(meta, now=now) if evidence else ""
-        if speak:
+        # a family-visible row another member stated is NOT "you told me" to the member asking: second-person provenance only binds
+        # to the requesting member's own rows (the plain date still applies)
+        _row_owner = str(meta.get("user_id") or meta.get("wing") or "")
+        if speak and not (user_id and _row_owner and _row_owner != user_id):
             # ZOE_SPEAKABLE_PROVENANCE: WHO it came from and when ("you told me on Tuesday", "I picked up yesterday - not
             # confirmed"); a row with no stamped provenance keeps the plain date (or nothing): never an invented "you told me"
             when = provenance_speech.packet_suffix(meta, text, now=now) or when
@@ -781,7 +801,8 @@ def _safe_prompt_inline(s: str, cap: int = _PENDING_FIELD_CAP) -> str:
     return s[:cap]
 
 
-async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> dict[str, Any]:
+async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str,
+                                       message: str = "") -> dict[str, Any]:
     """Surface pending `person_create` proposals into the for-prompt packet so the
     brain (incl. flue) can OFFER them — the "Observe & Suggest" rung of the
     human-in-the-loop ladder (ADR-contacts-production-hardening P1).
@@ -800,6 +821,11 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
         )
         if not person_suggestions_enabled():
             return packet
+        import contact_offer_policy as _cop
+
+        _cop.tick(user_id, message)  # every turn counts toward the cooldown
+        if _cop.no_offer_turn(message):
+            return packet  # deferred, not lost: not surfaced, so it does not age
         # Non-destructive read: surfacing marks the offer as seen; aging happens
         # once per real user turn (age_person_offers_on_user_turn), never here.
         import contacts_conversation as _cc
@@ -809,12 +835,20 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
     except Exception:
         logger.exception("memories: pending-contact offer fold failed (user=%s)", user_id)
         return packet
+    surfaced = pend
+    pend = _cop.eligible(user_id, message, pend)
+    if not pend:
+        await _cop.unmark_unoffered(user_id, surfaced, [])
+        return packet
     if batch:
         # ZOE_CONTACT_OFFER_BATCH: ONE enumerated question for the whole set
         # (a single yes then accepts all of it - intent_router batch matcher).
         q = _cc.offer_question(pend, _safe_prompt_inline)
         if not q:
+            await _cop.unmark_unoffered(user_id, surfaced, [])
             return packet
+        _cop.note_offered(user_id, pend)
+        await _cop.unmark_unoffered(user_id, surfaced, pend)
         _cc.record_asked(user_id, q, pend)  # the set a following yes/no may bind to
         section = (
             "## People mentioned recently (not contacts yet)\n"
@@ -832,17 +866,21 @@ async def _fold_pending_contact_offers(packet: dict[str, Any], user_id: str) -> 
         name = _safe_prompt_inline(p.get("name") or "")
         if not name:
             continue
+        _cop.note_offered(user_id, [p])
+        await _cop.unmark_unoffered(user_id, surfaced, [p])
         rel = _safe_prompt_inline(p.get("relationship") or "")
         # Give the 4B model the exact question to voice — the earlier soft
         # "you may offer to add them" phrasing was never voiced in live review
         # (QA review F5b). One explicit ask-this line per offer.
         question = f"Would you like me to add {name}{f' (your {rel})' if rel else ''} as a contact?"
         bullets.append(f'- Ask the user: "{question}" [pending-contact]')
+        break  # at most ONE offer per turn
     if not bullets:
+        await _cop.unmark_unoffered(user_id, surfaced, [])
         return packet
     section = (
         "## People mentioned recently (not contacts yet)\n"
-        "IMPORTANT: In this reply, after answering the user, ask the FIRST question "
+        "IMPORTANT: In this reply, after answering the user, ask the question "
         "below word-for-word. If the user answers yes, the contact is saved for them "
         "automatically (you may also use the people_create tool); if they say no, "
         "drop it and don't ask again.\n"
@@ -989,6 +1027,11 @@ async def memory_for_prompt(
         description="Run the semantic search whatever the message looks like (the "
         "named-person floor, for a person with no contact row to focus)",
     ),
+    tool_call: bool = Query(
+        False,
+        description="The packet is for a brain TOOL call (recall_memory), whose message is the model's own query, not the "
+        "user's utterance: it never ticks the contact-offer cooldown nor carries an offer (the seam owns both at the user-turn boundary)",
+    ),
     session_id: Optional[str] = Query(
         None,
         max_length=128,
@@ -1106,7 +1149,7 @@ async def memory_for_prompt(
     speak = not continuity and provenance_speech.enabled()
     result = _build_memory_prompt_packet(
         facts, hits, max_facts=limit, boost_emotional=emo_turn, recent=recent,
-        evidence=evidence, quotes=quotes, speak=speak,
+        evidence=evidence, quotes=quotes, speak=speak, user_id=user_id,
     )
     # The relevance gate (ZOE_RECALL_GATE off|shadow|enforce, default shadow; recall_gate.py, blueprint 2.8 / BM4): which durable rows
     # enter the packet and in what order, from entity triggers + similarity + sticky / cooldown / delay + a token budget. Shadow returns
@@ -1118,8 +1161,11 @@ async def memory_for_prompt(
         result = await recall_gate.packet_surface(
             svc, user_id, message, result, facts=facts, hits=hits, recent=recent,
             mood=bool(emo_turn or _is_continuity_turn(message, user_id)),
+            # the gate expands the pool from the durable store: the slot policy applies to the rows it selects too, or a row this
+            # check just removed could come back as the selected answer
             rebuild=lambda rows: _build_memory_prompt_packet(
-                rows, [], max_facts=limit, evidence=evidence, quotes=quotes, speak=speak),
+                (memory_slot_check.apply_to_packet(user_id, rows, [], None)[0] if memory_slot_check.mode() != "off" else rows),
+                [], max_facts=limit, evidence=evidence, quotes=quotes, speak=speak, user_id=user_id),
             # (called in-process the default is the Query() descriptor, not a str: the gate then uses this task's own session)
             session_id=session_id if isinstance(session_id, str) else None,
         )
@@ -1233,8 +1279,10 @@ async def memory_for_prompt(
     # TURN — the core brain's in-process packet and memory.ts pass the user's
     # message in relevance mode — decided by the one trigger predicate the seam
     # and the offer ager use (Greptile #1768).
-    if not continuity and not _is_continuity_turn(message, user_id):
-        result = await _fold_pending_contact_offers(result, user_id)
+    # ``tool_call is True`` (never merely truthy): an in-process caller that omits it receives the FastAPI ``Query(False)`` default
+    # OBJECT, which is truthy and would silently skip the fold for every core / Flue packet.
+    if not continuity and tool_call is not True and not _is_continuity_turn(message, user_id):
+        result = await _fold_pending_contact_offers(result, user_id, message)
     return result
 
 

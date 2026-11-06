@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 817 prod flags; 231 read through `typed_env`.
+- 819 prod flags; 233 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-817 flags; 766 not documented in `.env.example`.
+819 flags; 768 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -556,7 +556,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PANEL_REVIEW_CARDS` | bool | `False` | - | `docs/knowledge/day-review-raise.md` | `False` | yes | NO | `services/zoe-data/panel_review_cards.py` |
 | `ZOE_PANEL_SESSION_TRUST_WINDOW_S` | int | `900` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'900'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_PANEL_TOKEN_VIA_CF` | str | `'guest'` | - | `services/zoe-data/AGENTS.md` | `'guest'` | no | NO | `services/zoe-data/panel_principal.py` |
-| `ZOE_PERF` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `-` | yes | NO | `scripts/perf/bar_reliability.py`<br>`scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_cold_first_turn.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
+| `ZOE_PERF` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `-` | yes | NO | `scripts/perf/bar_reliability.py`<br>`scripts/perf/engine_bench.py`<br>`scripts/perf/hop_placement_ab.py`<br>`scripts/perf/kokoro_first_chunk_probe.py`<br>`scripts/perf/measure_cold_first_turn.py`<br>`scripts/perf/measure_first_sound.py`<br>`scripts/perf/measure_speed.py`<br>`scripts/perf/measure_tts.py`<br>`scripts/perf/measure_voice.py`<br>`scripts/perf/person_half_enforce_ab.py`<br>`scripts/perf/persona_drift.py`<br>`scripts/perf/recall_evidence_probe.py`<br>`scripts/perf/samantha_bar.py`<br>`scripts/perf/samantha_day_sim.py`<br>`scripts/perf/samantha_person.py`<br>`scripts/perf/tool_use_bench.py`<br>`scripts/perf/user_model_ab.py` |
 | `ZOE_PERSONALISATION_HOP` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_PLACEMENT` | str | `'block'` | - | `docs/knowledge/samantha-bar.md` | `'block'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
 | `ZOE_PERSONALISATION_HOP_WORDING` | str | `'natural'` | - | `docs/knowledge/samantha-bar.md` | `'natural'` | yes | NO | `services/zoe-data/personalisation_hop.py` |
@@ -852,6 +852,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_VOICE_SAMPLE_DIR` | str | `'/home/zoe/.zoe-voice-samples'` | - | `docs/research/arousal-detection-licence-scope-2026-10-04.md` | `'/home/zoe/.zoe-voice-samples'`, `dynamic` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_corpus_strata.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SESSION` | bool | `False` | - | `docs/knowledge/voice-verified-session.md` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
+| `ZOE_VOICE_SESSION_BRIDGE` | bool | `False` | - | `docs/knowledge/voice-session-bridge.md` | `False` | yes | NO | `services/zoe-data/voice_session_bridge.py` |
+| `ZOE_VOICE_SESSION_BRIDGE_TTL_S` | int | `7200` | - | `docs/knowledge/voice-session-bridge.md` | `dynamic` | yes | NO | `services/zoe-data/voice_session_bridge.py` |
 | `ZOE_VOICE_SESSION_TTL_S` | int | `120` | - | `docs/knowledge/voice-verified-session.md` | `120` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_STITCH_ENABLED` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `'0'` | no | NO | `services/zoe-data/main.py`<br>`services/zoe-data/voice_stitch.py` |
 | `ZOE_VOICE_STREAM` | bool | `True` | - | `docs/research/inference-speech-stack-2026-10-03.md` | `'1'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -882,7 +884,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-38 flags; 36 not documented in `.env.example`.
+39 flags; 37 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -893,6 +895,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_CONTEXT_WINDOW` | str | `''` | - | `docs/architecture/zoe-flue-integration.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-window.ts` |
 | `ZOE_BRAIN_DB` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `dynamic` | no | NO | `labs/flue-zoe-brain-2x/src/db.ts` |
 | `ZOE_BRAIN_ELIDE_STALE_BLOCKS` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-blocks.ts` |
+| `ZOE_BRAIN_KEEP_TURNS` | int | `8` | - | `docs/knowledge/recall-every-turn.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-window.ts` |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | str | `''` | - | `docs/research/flue-and-agent-runtimes-2026-10-03.md` | `-` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts` |
 | `ZOE_BRAIN_OPEN` | str | `''` | - | - | `-` | no | NO | `labs/flue-zoe-brain-2x/src/auth.ts` |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | bool | `True` | - | `docs/architecture/zoe-flue-integration.md` | `'true'` | no | NO | `labs/flue-zoe-brain-2x/src/tools/tool-groups.ts` |

@@ -150,3 +150,15 @@ def test_a_confirmation_is_dated_from_the_review_not_the_capture():
     meta = _m("user_confirmed", "review_ui", 30, reviewed_at=iso)          # captured 30 days ago, approved yesterday
     assert ps.of(meta, now=NOW).clause() == "you confirmed it yesterday"
     assert ps.of(_m("user_confirmed", "review_ui", 30, reviewed_at="not a date"), now=NOW).clause() == "you confirmed it"
+
+
+def test_second_person_provenance_binds_to_the_requesting_member(clock):
+    """Codex #2301: a family-visible row member A stated is not 'you told me' to member B asking."""
+    rows = [MemoryRef(id="aaaa1111", text="User lives in Northcliff",
+                      metadata={**_m("user_stated", "chat_regex", 3), "user_id": "member-a"})]
+    mine = _build_memory_prompt_packet(rows, [], speak=True, user_id="member-a")["packet"]
+    assert "(you told me on Tuesday)" in mine
+    theirs = _build_memory_prompt_packet(rows, [], speak=True, user_id="member-b")["packet"]
+    assert "you told me" not in theirs and "User lives in Northcliff" in theirs          # the fact is served, the false attribution is not
+    anon = _build_memory_prompt_packet(rows, [], speak=True)["packet"]
+    assert "(you told me on Tuesday)" in anon                                           # control: no requesting id = as before

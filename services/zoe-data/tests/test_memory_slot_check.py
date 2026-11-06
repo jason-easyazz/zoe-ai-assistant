@@ -294,3 +294,19 @@ def test_self_subject_keys_carry_the_row_owner():
     assert sc.conflicts(rows) == []                                          # two members' employers are not one contradiction
     rows[1]["metadata"]["user_id"] = "ana"
     assert len(sc.conflicts(rows)) == 1                                      # negative control: one owner, two employers
+
+
+@pytest.mark.asyncio
+async def test_the_relevance_gate_rebuild_applies_the_slot_policy_to_the_expanded_pool(svc, monkeypatch):
+    """Codex #2301: the gate re-loads the durable pool and rebuilds the packet from rows the slot check never saw."""
+    import recall_gate
+
+    async def expanding(_svc, _uid, _msg, result, **kw):
+        return kw["rebuild"](_pair()[0] + _pair()[1])          # the pool the gate itself selected, held row included
+
+    monkeypatch.setattr(recall_gate, "packet_surface", expanding)
+    monkeypatch.setenv(sc.ENV, "on")
+    on = await _packet()
+    assert "[mem:keep0001]" in on and "[mem:held0001]" not in on
+    monkeypatch.delenv(sc.ENV)
+    assert "[mem:held0001]" in await _packet()                   # control: off serves both
