@@ -1385,6 +1385,29 @@
         },
         "typed_env": false
       },
+      "ZOE_ANTICIPATION": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/anticipation.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/anticipation-loop.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_API": {
         "defaults": [
           "'https://192.168.1.218'"

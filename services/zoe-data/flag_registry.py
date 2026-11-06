@@ -98,6 +98,7 @@ _ENTRIES = (
     _f('ZOE_ALARMS', 'bool', False, doc='docs/architecture/alarms.md'),
     _f('ZOE_ALARM_MUSIC_PLAYER', 'str', 'Zoe Panel', doc='docs/architecture/alarms.md'),
     _f('ZOE_ALLOWED_WS_ORIGINS','list', (), doc='docs/knowledge/incident-runbook.md'),
+    _f('ZOE_ANTICIPATION', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/architecture/anticipation-loop.md'),
     _f('ZOE_ANNOUNCE_POLL_ENABLED', 'bool', True, doc='scripts/AGENTS.md'),
     _f('ZOE_ANNOUNCE_POLL_S', 'float', 5.0, doc='docs/knowledge/mac-virtual-panel.md'),
     _f('ZOE_ANNOUNCE_STRICT_PANEL', 'str', '', doc='docs/knowledge/zoe-driven-voice-enrollment.md'),
