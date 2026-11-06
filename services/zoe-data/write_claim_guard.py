@@ -345,7 +345,10 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: b
                 # "…, got that noted." / "Consider it forgotten.": a whole phrase that says the write is done.
                 found.append(((() if phrase_kind == "any" else (phrase_kind,)), False))
                 prev_claimed = True
-                continue
+                if phrase_kind != "any":
+                    continue
+                # a GENERIC phrase ("got that noted") adds no kind of its own: the clause's specific claim ("I've added milk to your
+                # list, got that noted") still needs ITS receipt, so the verb scan below runs too instead of being skipped
             for i, tok in enumerate(toks):
                 if offset + i >= LEAD_TOKENS:
                     break               # streaming cannot see past here before it must release the unit (module docstring)

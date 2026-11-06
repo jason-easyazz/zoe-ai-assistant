@@ -86,6 +86,7 @@ GAP_CLAIMS = [
     ("I'll remind you to add milk to your shopping list at 3pm.", ("reminder",)),
     ("I'll remember your appointment is on Friday.", ("memory",)),
     ("I've forgotten that memory.", ("forget",)),
+    ("I've added milk to your list, got that noted.", ("list",)),         # a generic phrase never replaces the clause's specific claim
 ]
 
 NOT_CLAIMS = [

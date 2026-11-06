@@ -30,6 +30,7 @@ chat instead. No item text is ever logged.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
@@ -297,6 +298,13 @@ async def pending_state(uid: str, now: datetime | None = None) -> dict:
         return state
     state["count"] = len(items)
     state["top"] = lines.klass_of(items[0].kind) if items else None
+    from proactive import policy_log
+
+    if policy_log.mode() == "log":      # lane F E3: record the rung the decision table WOULD pick; delivers nothing, never raises
+        try:
+            await asyncio.wait_for(policy_log.observe(uid, items, now), timeout=1.0)
+        except Exception as exc:  # noqa: BLE001 - an observer fault or stall (timeout) must never touch the orb poll
+            logger.debug("pull: policy log skipped (%s)", type(exc).__name__)
     return state
 
 

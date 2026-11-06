@@ -208,7 +208,7 @@ def test_a_failing_end_of_run_measure_still_tears_the_stack_down(monkeypatch):
 
 # -- the wiring of the three harness mains ------------------------------------------
 
-HARNESSES = {"samantha_bar.py": "Live(", "samantha_day_sim.py": "DayLive(", "samantha_person.py": "PersonLive("}
+HARNESSES = {"samantha_bar.py": "Live(", "samantha_day_sim.py": "DayLive(", "samantha_person.py": "PersonLive(", "persona_drift.py": "Live("}
 
 
 def _main_source(fname: str) -> str:
