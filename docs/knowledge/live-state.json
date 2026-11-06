@@ -5546,6 +5546,20 @@
    "kind": "bool",
    "readers": 1
   },
+  "ZOE_VOICE_SESSION_BRIDGE": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_VOICE_SESSION_BRIDGE_TTL_S": {
+   "defaults": [
+    "dynamic"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
   "ZOE_VOICE_SESSION_TTL_S": {
    "defaults": [
     "120"

@@ -258,6 +258,20 @@ import re as _re
 
 _EXPLICIT_FORGET_RE = _re.compile(r"^\s*(?:please\s+)?(?:forget\s+|never\s+mind\s+what\s+i\b|scrap\s+what\s+i\b)",
                                   _re.IGNORECASE)
+# The opener / chained shapes memory_quality.is_forget_command recognises ("no, don't remember that! forget that",
+# "oh please forget that I said ...", QA 2026-11-05) are just as explicit - when they NAME memory (forget / remember /
+# save / store). "delete that" / "scrap that" alone still go to the head, for the reason above.
+_NAMES_MEMORY_RE = _re.compile(r"\b(?:forget|remember|save|store)\b", _re.IGNORECASE)
+
+
+def _explicit_forget(text: str) -> bool:
+    if _EXPLICIT_FORGET_RE.match(text or ""):
+        return True
+    try:
+        from memory_quality import is_forget_command
+        return is_forget_command(text) and bool(_NAMES_MEMORY_RE.search(text or ""))
+    except Exception:  # noqa: BLE001 - the gate must never break a turn
+        return False
 
 
 def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
@@ -268,7 +282,7 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     try:
         if not intent_gate_enabled() or intent_name not in _INTENT_ROUTER_DOMAINS:
             return True
-        if intent_name == "memory_forget_last" and _EXPLICIT_FORGET_RE.match(text or ""):
+        if intent_name == "memory_forget_last" and _explicit_forget(text):
             logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_forget_command", lane, intent_name)
             return True
         import semantic_router as _sr
