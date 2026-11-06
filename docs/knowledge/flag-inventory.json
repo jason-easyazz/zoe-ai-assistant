@@ -10632,6 +10632,7 @@
           "scripts/perf/measure_tts.py",
           "scripts/perf/measure_voice.py",
           "scripts/perf/person_half_enforce_ab.py",
+          "scripts/perf/persona_drift.py",
           "scripts/perf/recall_evidence_probe.py",
           "scripts/perf/samantha_bar.py",
           "scripts/perf/samantha_day_sim.py",
