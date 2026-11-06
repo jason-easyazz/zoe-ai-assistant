@@ -1388,6 +1388,13 @@ class _Endpointer:
             return False
         amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
         if amplitude >= RECORD_SILENCE_AMPLITUDE:
+            if not self._spoke and self._pre_max_silent is not None and self._listen_gate is not None:
+                # Post-wake window, amplitude mode: a LOUD chunk before the listen gate has opened is the wake chime (or its echo), not
+                # the person - it must not count as speech, or the no-speech window is unreachable and the recording closes in the
+                # pause after the chime. The gate is advanced by this chunk too (it counts time); the chunk is neither speech nor
+                # quiet toward the window.
+                if not self._listen_gate(data):
+                    return False
             self._quiet = 0
             self._spoke = True
             self._note(True)

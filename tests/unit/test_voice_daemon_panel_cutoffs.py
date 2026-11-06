@@ -238,6 +238,36 @@ def test_amplitude_mode_gets_the_same_window(daemon, monkeypatch):
     assert any(closed)
 
 
+def test_amplitude_mode_a_loud_chime_does_not_count_as_speech_before_the_gate_opens(daemon, monkeypatch):
+    """Codex #2315: the chime is LOUD (above RECORD_SILENCE_AMPLITUDE); in amplitude mode it set _spoke before the listen gate was
+    consulted, so the post-chime pause closed the recording at ~1.7 s, before the command."""
+    monkeypatch.setattr(daemon, "VAD_ENDPOINT_ENABLED", False)
+    monkeypatch.setattr(daemon, "SILENCE_TIMEOUT_S", 1.5)
+    done = threading.Event()
+    gate = daemon._PostWakeGate(done)
+    ep = daemon._Endpointer(no_speech_s=3.0, listen_gate=gate)
+    n = 20
+    for _ in range(3):                                    # the wake chime, loud, chime thread still running
+        n += 1
+        assert ep.push(_chunk(3300), n) is False
+    assert not ep._spoke
+    done.set()
+    for _ in range(11):                                   # the speakerphone's echo-suppressed run
+        n += 1
+        assert ep.push(_chunk(1), n) is False
+    for i in range(_n(1700)):                              # the pause before the command: room noise
+        n += 1
+        assert ep.push(_chunk(10), n) is False, i
+    n += 1
+    assert ep.push(_chunk(4000), n) is False and ep._spoke
+    # NEGATIVE CONTROL: with the chime thread already finished, a loud chunk IS the person speaking
+    ep2 = daemon._Endpointer(no_speech_s=3.0, listen_gate=daemon._PostWakeGate(done))
+    for i in range(14):
+        ep2.push(_chunk(1), 20 + i)
+    ep2.push(_chunk(4000), 40)
+    assert ep2._spoke
+
+
 # ── CUT-OFF 2: a wake-word-only transcript is not greeted ────────────────────
 
 @pytest.mark.parametrize("text,expected", [
