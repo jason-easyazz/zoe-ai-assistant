@@ -69,8 +69,9 @@ class FakeProc:
         self.root = root
         (root / "stat").write_text(f"cpu 1 2 3\nbtime {int(self.BOOT)}\n")
 
-    def add(self, pid, argv, *, ppid=1000, uid=1000, age_s=3600.0, rss_kb=51_200,
+    def add(self, pid, argv, *, ppid=1000, uid=None, age_s=3600.0, rss_kb=51_200,
             log_env="__default__", extra_env=()):
+        uid = os.getuid() if uid is None else uid     # main() compares against os.getuid(): a CI runner is not uid 1000
         d = self.root / str(pid)
         d.mkdir()
         (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
@@ -625,7 +626,7 @@ def test_the_operators_host_side_codex_is_out_of_scope(fp):
     table = reaper.proc_table(str(fp.root))
     assert reaper.find_app_servers(table) == []
     reaped, kept = reaper.sweep_app_servers(
-        proc_root=str(fp.root), execute=True, grace_s=0, term_wait=0.1, my_uid=1000,
+        proc_root=str(fp.root), execute=True, grace_s=0, term_wait=0.1, my_uid=os.getuid(),
         kill=lambda *a: pytest.fail("must not signal an out-of-scope codex"))
     assert (reaped, kept) == (0, 0)
 
@@ -638,7 +639,7 @@ def test_execute_reaps_the_whole_orphan_tree_and_spares_a_live_one(fp):
     fp.add(601, VENDOR_ARGV, ppid=600)
     sent = []
     reaped, kept = reaper.sweep_app_servers(
-        proc_root=str(fp.root), execute=True, grace_s=60, term_wait=1.0, my_uid=1000,
+        proc_root=str(fp.root), execute=True, grace_s=60, term_wait=1.0, my_uid=os.getuid(),
         kill=_kill_removing(fp, sent))
     assert (reaped, kept) == (1, 1)
     assert {pid for pid, _ in sent} == {500, 501, 502}
@@ -659,7 +660,7 @@ def test_a_term_ignoring_tree_is_killed(fp):
             shutil.rmtree(fp.root / str(pid), ignore_errors=True)
 
     reaper.sweep_app_servers(proc_root=str(fp.root), execute=True, grace_s=0,
-                             term_wait=0.3, my_uid=1000, kill=stubborn)
+                             term_wait=0.3, my_uid=os.getuid(), kill=stubborn)
     assert any(sig == signal.SIGKILL for _, sig in sent)
     assert not (fp.root / "500").exists()
 
