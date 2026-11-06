@@ -879,7 +879,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-38 flags; 36 not documented in `.env.example`.
+39 flags; 37 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -890,6 +890,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_CONTEXT_WINDOW` | str | `''` | - | `docs/architecture/zoe-flue-integration.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-window.ts` |
 | `ZOE_BRAIN_DB` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `dynamic` | no | NO | `labs/flue-zoe-brain-2x/src/db.ts` |
 | `ZOE_BRAIN_ELIDE_STALE_BLOCKS` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-blocks.ts` |
+| `ZOE_BRAIN_KEEP_TURNS` | int | `8` | - | `docs/knowledge/recall-every-turn.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/context-window.ts` |
 | `ZOE_BRAIN_MAX_TOOL_ITERS` | str | `''` | - | `docs/research/flue-and-agent-runtimes-2026-10-03.md` | `-` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts` |
 | `ZOE_BRAIN_OPEN` | str | `''` | - | - | `-` | no | NO | `labs/flue-zoe-brain-2x/src/auth.ts` |
 | `ZOE_BRAIN_PROGRESSIVE_TOOLS` | bool | `True` | - | `docs/architecture/zoe-flue-integration.md` | `'true'` | no | NO | `labs/flue-zoe-brain-2x/src/tools/tool-groups.ts` |
