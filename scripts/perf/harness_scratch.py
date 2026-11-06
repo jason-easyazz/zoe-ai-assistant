@@ -78,6 +78,19 @@ SHARED_MODEL_CACHES = ("chroma", "huggingface")
 _LOCAL_HOSTS = frozenset(("localhost", "127.0.0.1", "::1", "0.0.0.0", "zoe-database", "host.docker.internal", ""))
 
 
+#: per-arm flag overrides (bar_reliability.py ``--arm-env``): a JSON object {ZOE_NAME: "value"} the parent puts in THIS variable
+#: and ``_serve`` layers ON TOP of the copied live flags, in this stack's zoe-data env only
+ARM_ENV_VAR = "ZOE_HARNESS_ARM_ENV"
+ARM_ENV_NAME_RE = re.compile(r"^ZOE_[A-Z0-9_]+$")
+ARM_ENV_VALUE_RE = re.compile(r"^[A-Za-z0-9_.,:+@%-]{0,64}$")      # plain: no path separator, space or shell character
+#: stricter than ``SECRET_RE`` / ``LOCATION_RE`` (which only filter the COPIED flags): an override is the one ingress for a
+#: name those already dropped, so it also refuses the spellings with no underscore (APIKEY, FILENAME, DATABASE ...)
+ARM_ENV_SECRETISH_RE = re.compile(r"(TOKEN|SECRET|PASSW|PWD|CREDENTIAL|COOKIE|PRIVATE|SALT|SIGNING|BEARER|CERT|AUTH|DSN|APIKEY"
+                                  r"|(^|_)KEYS?(_|$))")
+ARM_ENV_LOCATIONISH_RE = re.compile(r"(^|_)(URL|URI|HOST|PORT|DIR|PATH|FILE|DB|DATABASE|ROOT|HOME|SOCKET|ADDR|ENDPOINT|FOLDER)S?(_|$)"
+                                    r"|(DIRECTORY|FILENAME|DATABASE|ENDPOINT)")
+
+
 class Refused(RuntimeError):
     """The scratch stack refuses (a live DSN, too little memory, docker missing)."""
 
@@ -151,6 +164,44 @@ def flag_env(live_env: dict) -> dict:
                 and "://" not in v)
 
 
+def validate_arm_env(overrides: dict) -> dict:
+    """The per-arm flag overrides a harness stack may take, or ``Refused`` (names only in the message, never a value).
+    Only ``ZOE_*`` flag names; never a ``ZOE_HARNESS*`` name (the quiet-hours bypasses and this module's own isolation pins), a
+    secret-looking name, a location (URL/dir/file/db) name, or an endpoint the stack sets itself; values are short plain
+    strings with no URL. Returns a clean ``{name: value}`` copy (stable order)."""
+    if not isinstance(overrides, dict):
+        raise Refused("arm env override must be a {NAME: value} mapping")
+    pinned = set(HOUSE_URLS) | set(SELF_URLS) | set(COMPUTE_URLS) | {
+        "ZOE_INTERNAL_TOKEN", "ZOE_BRAIN_TOKEN", "ZOE_FLUE_BRAIN_URL", "ZOE_MULTICA", "ZOE_VOICE_SAVE_AUDIO", "ZOE_PI_HOST",
+        "ZOE_TTS_MODE", "ZOE_STT_DISABLED"}
+    out: dict = {}
+    for name in sorted(overrides, key=str):
+        value = overrides[name]
+        if not isinstance(name, str) or not ARM_ENV_NAME_RE.match(name):
+            raise Refused(f"arm env override {str(name)[:40]!r}: only ZOE_* names are allowed")
+        if name.startswith("ZOE_HARNESS"):
+            raise Refused(f"arm env override {name}: ZOE_HARNESS* names are never overridable (quiet-hours bypasses / isolation pins)")
+        if (name in pinned or SECRET_RE.search(name) or LOCATION_RE.search(name)
+                or ARM_ENV_SECRETISH_RE.search(name) or ARM_ENV_LOCATIONISH_RE.search(name)):
+            raise Refused(f"arm env override {name}: a secret, location, endpoint or isolation pin is never overridable")
+        if not isinstance(value, str) or not ARM_ENV_VALUE_RE.match(value) or "://" in value:
+            raise Refused(f"arm env override {name}: the value must be a short plain flag value (no URL, no control characters)")
+        out[name] = value
+    return out
+
+
+def arm_env_from_environ(environ=None) -> dict:
+    """The validated per-arm overrides in ``ARM_ENV_VAR`` ({} when unset); ``Refused`` on anything malformed."""
+    raw = (os.environ if environ is None else environ).get(ARM_ENV_VAR)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise Refused(f"{ARM_ENV_VAR} is not valid JSON") from None
+    return validate_arm_env(data)
+
+
 def scratch_path() -> str:
     """The scratch zoe-data PATH: the fixed system dirs plus the directories holding ``pi`` and ``node`` as THIS user resolves them
     (``pi`` is an NVM-installed node script, so a core-backed instance cannot start it from the bare system PATH)."""
@@ -164,10 +215,13 @@ def scratch_path() -> str:
     return ":".join(dirs + ["/usr/local/bin", "/usr/bin", "/bin"])
 
 
-def harness_env(live_env: dict, *, root: Path, dsn: str, token: str, brain_token: str, flue_url: str, self_url: str) -> dict:
-    """The scratch zoe-data environment: the live FLAGS, scratch everything else. Pure (tests pin it)."""
+def harness_env(live_env: dict, *, root: Path, dsn: str, token: str, brain_token: str, flue_url: str, self_url: str,
+                arm_env: Optional[dict] = None) -> dict:
+    """The scratch zoe-data environment: the live FLAGS (then this arm's validated overrides on top), scratch everything else.
+    Pure (tests pin it)."""
     env = dict(PATH=scratch_path(), LANG="C.UTF-8", LC_ALL="C.UTF-8", TZ=os.environ.get("TZ") or "Australia/Perth")
     env.update(flag_env(live_env))
+    env.update(validate_arm_env(arm_env or {}))
     for name in COMPUTE_URLS:
         if live_env.get(name):
             env[name] = live_env[name]
@@ -388,6 +442,7 @@ def apply_auth_ddl(container: str) -> None:
 def up(tag: str, *, service_dir: Path, serve: bool = False, python: Optional[str] = None, min_mem_mb: Optional[int] = None,
        log=print) -> dict:
     """Start the scratch stack and write its state. Anything half-built is torn down on failure."""
+    arm_env_from_environ()                     # a malformed / forbidden override refuses BEFORE anything starts
     if not shutil.which("docker"):
         raise Refused("docker is not available")
     sweep_stale(log)
@@ -464,8 +519,12 @@ def _serve(state: dict, *, service_dir: Path, live_env: dict, python: str, log=p
     fenv = flue_env(parse_env_file(flue_settings_dir / ".env"), root=root, port=fport, data_url=self_url, token=token, brain_token=brain_token)
     state["procs"]["flue"] = _spawn([node, "dist/server.mjs"], env=fenv, cwd=flue_dir, log=root / "logs" / "flue.log")
     _write_state(state)                        # persist per spawn: if the next spawn fails, down() must still find (and stop) this one
+    arm_env = arm_env_from_environ()
+    state["arm_env"] = arm_env                 # recorded in the run's JSON (public()); names only in the log
+    if arm_env:
+        log(f"arm env override on this stack: {', '.join(sorted(arm_env))}")
     zenv = harness_env(live_env, root=root, dsn=state["dsn"], token=token, brain_token=brain_token, flue_url=flue_url,
-                       self_url=self_url)
+                       self_url=self_url, arm_env=arm_env)
     assert_not_live(zenv["POSTGRES_URL"], live_env.get("POSTGRES_URL"))
     state["procs"]["zoe_data"] = _spawn([python, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(zport)],
                                         env=zenv, cwd=code_dir, log=root / "logs" / "zoe-data.log")
@@ -566,7 +625,7 @@ class ScratchStack:
 
     def public(self) -> dict:
         """What a harness may write into its results: no DSN, no token."""
-        keep = ("tag", "image", "pg_port", "zoe_data_port", "flue_port", "migrate_s", "ram", "ram_at_end", "mem_available_before_mb")
+        keep = ("tag", "image", "pg_port", "zoe_data_port", "flue_port", "migrate_s", "ram", "ram_at_end", "mem_available_before_mb", "arm_env")
         return dict((k, self.state.get(k)) for k in keep if k in self.state)
 
 
