@@ -202,3 +202,28 @@ def test_a_remind_you_offer_binds_with_its_task_and_an_unrecoverable_task_declin
     # the offer is a reminder offer but names no task: never a reminder about "that"
     assert bind_reminder_offer_reply("sure, 3pm", "Want me to set a reminder?", FRESH) is None
     assert bind_reminder_offer_reply("sure, 3pm", OFFER, FRESH) == "remind me about pickup at 3 pm"      # control
+
+
+# -- review round 3 (Codex #2309) ---------------------------------------------------------------------------------------------
+def test_both_offer_cues_are_judged_on_the_final_sentence():
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to play music? I set a reminder for pickup.", FRESH) is None
+    assert bind_reminder_offer_reply("sure, 3pm", "I set a reminder for the dentist. Want me to set a reminder for the pickup?",
+                                     FRESH) == "remind me about pickup at 3 pm"                    # control
+
+
+def test_a_task_containing_a_plain_at_keeps_its_full_text():
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to look at the invoice?", FRESH) == \
+        "remind me to look at the invoice at 3 pm"
+    assert bind_reminder_offer_reply("sure, 4pm", "Want me to set a reminder to call the dentist?", FRESH) == \
+        "remind me to call the dentist at 4 pm"                                                    # control
+
+
+def test_an_offer_that_carries_its_own_day_or_time_is_not_rewritten():
+    for offer in ("Want me to set a reminder for pickup at 3pm tomorrow?", "Want me to set a reminder for pickup tomorrow?",
+                  "Want me to set a reminder for pickup at 3pm?"):
+        assert bind_reminder_offer_reply("sure, 4pm", offer, FRESH) is None, offer
+
+
+def test_competing_clock_times_in_the_reply_decline():
+    assert bind_reminder_offer_reply("sure 3pm is too early, 4pm please", OFFER, FRESH) is None
+    assert bind_reminder_offer_reply("sure, 4pm please", OFFER, FRESH) == "remind me about pickup at 4 pm"      # control: one slot

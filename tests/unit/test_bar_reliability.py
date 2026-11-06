@@ -235,6 +235,7 @@ def test_lander_pattern_matches_bash_and_direct_launches():
     assert pat.search("bash /home/zoe/assistant/scripts/landing/land_voice_pr.sh 2278")
     assert pat.search("/home/zoe/.zoe/agent-tools/land_voice_pr.sh 2278")
     assert not pat.search("python3 land_voice_pr.sh.bak")
+    assert not pat.search("bash -c until ! pgrep -f scripts/landing/land_voice_pr.sh; do sleep 5; done")
 
 
 def test_an_instrument_error_makes_the_comparison_unmeasured():

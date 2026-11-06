@@ -2139,10 +2139,10 @@ def _offer_followup_ttl_s() -> float:
 
 def _reminder_offer_title(previous: str) -> tuple[str, str]:
     """(connector, title) read from Zoe's offer text; falls back to a neutral 'about that'."""
-    m = re.search(r"\bremind\s+you\s+(to|about|of)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\b|\bso\b|$)", previous, re.IGNORECASE)
+    m = re.search(r"\bremind\s+you\s+(to|about|of)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
     if m:   # "Want me to remind you to call the dentist?" -> the task is "call the dentist"
         return ("to" if m.group(1).lower() == "to" else "about"), m.group(2).strip()
-    m = re.search(r"reminder\s+(for|to|about)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\b|\bso\b|$)", previous, re.IGNORECASE)
+    m = re.search(r"reminder\s+(for|to|about)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
     if m:
         conn = "to" if m.group(1).lower() == "to" else "about"
         return conn, m.group(2).strip()
@@ -2168,8 +2168,11 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         return None  # "yes, what time is it at 2:45?" is a question, not a slot
     if _OFFER_SCHEDULE_QUAL_RE.search(" ".join(tokens[1:])):
         return None  # a day / recurrence the rewrite would drop: let the brain, which has the conversation, act on it
-    m = _OFFER_TIME_RE.search(" ".join(tokens[1:]))
-    if m is None or not (m.group(2) or m.group(3)):
+    reply_times = [t for t in _OFFER_TIME_RE.finditer(" ".join(tokens[1:])) if t.group(2) or t.group(3)]
+    if len(reply_times) > 1:
+        return None  # "3pm is too early, 4pm please": competing clock times - a correction is the brain's, never the first match
+    m = reply_times[0] if reply_times else None
+    if m is None:
         return None  # a bare number is not a clock time
     hour, minute, mer = int(m.group(1)), m.group(2), (m.group(3) or "").replace(".", "").lower()
     if hour > 12 or (minute and int(minute) > 59) or (hour == 0 and not mer):
@@ -2178,8 +2181,12 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         from conversation_cues import ends_with_offer
 
         sentences = [x for x in re.split(r"(?<=[.!?])\s+", previous.strip()) if x.strip()]
-        if not sentences or not (ends_with_offer(previous) and _REMINDER_OFFER_RE.search(sentences[-1])):
+        # BOTH cues are judged on the SAME final sentence: "Want me to play music? I set a reminder for pickup." has an offer (music)
+        # and a reminder (already done) but no pending reminder offer
+        if not sentences or not (ends_with_offer(sentences[-1]) and _REMINDER_OFFER_RE.search(sentences[-1])):
             return None
+        if _OFFER_SCHEDULE_QUAL_RE.search(sentences[-1]) or any(t.group(2) or t.group(3) for t in _OFFER_TIME_RE.finditer(sentences[-1])):
+            return None  # the offer itself carries a day / recurrence / clock time the rewrite would drop or contradict
     except Exception:  # noqa: BLE001
         return None
     if not mer and 1 <= hour <= 6:
@@ -2329,7 +2336,13 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     ]
     if len(named) > 1:
         return None  # ambiguous — let the brain sort it out
-    offer = named[0] if named else offers[0]
+    # A bare reply binds to the offer most recently VOICED (cooldown rotation means
+    # that is not always the oldest surfaced row); no record -> the oldest.
+    import contact_offer_policy as _cop
+
+    _last = _cop.last_offered_id(user_id)
+    _voiced = next((o for o in offers if str(o.get("id")) == _last), None) if _last else None
+    offer = named[0] if named else (_voiced or offers[0])
     kind = _offer_reply_kind(text, offer.get("name") or "")
     if kind is None:
         return None
@@ -2462,6 +2475,15 @@ async def detect_and_extract_intent(
                           {"suggestion_id": _alias_reply[0], "forget_alias": True})
     except Exception as _alias_exc:  # never let the alias path break routing
         logger.debug("detect_and_extract_intent: forget-alias reply match failed: %s", _alias_exc)
+    try:
+        # a bare yes / no to the anticipation offer Zoe just made ("By the way - want a reminder to leave by 7:10?"); off = None, no I/O
+        import anticipation as _anticipation
+        _ant_reply = await _anticipation.match_reply(user_id, text, _previous_assistant_message)
+        if _ant_reply is not None:
+            return Intent("pending_offer_accept" if _ant_reply[1] else "pending_offer_dismiss",
+                          {"suggestion_id": _ant_reply[0], "anticipation": True})
+    except Exception as _ant_exc:  # never let the anticipation path break routing
+        logger.debug("detect_and_extract_intent: anticipation reply match failed: %s", type(_ant_exc).__name__)
     try:
         _offer_reply = await _match_pending_offer_reply(text, user_id)
     except Exception as _offer_exc:  # never let the offer path break routing
@@ -3849,6 +3871,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     ),
                 },
                 fallback,
+                in_turn=True,
             )
         except (ImportError, RuntimeError, TypeError, ValueError) as _e:
             logger.warning("good_evening composer failed: %s", _e)
@@ -3894,6 +3917,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # card's accept route); refusal dismisses so the offer stops re-surfacing.
     if intent.name == "people_same_person_reply":
         return await _execute_same_person_reply(intent, user_id)
+
+    if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("anticipation"):
+        import anticipation
+        return await anticipation.answer(
+            user_id, str(intent.slots.get("suggestion_id") or ""), intent.name == "pending_offer_accept")
 
     if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("forget_alias"):
         import memory_forget_alias
@@ -4798,7 +4826,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "portrait_refresh":
         try:
             from user_portrait import run_portrait_synthesis  # type: ignore[import]
-            result = await run_portrait_synthesis(user_id)
+            import brain_scheduler
+            with brain_scheduler.declare("turn:portrait_refresh"):   # the person asked for it: a turn call
+                result = await run_portrait_synthesis(user_id)
             status = result.get("status", "unknown")
             if status == "ok":
                 chars = result.get("chars", 0)

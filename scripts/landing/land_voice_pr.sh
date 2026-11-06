@@ -49,7 +49,7 @@ export ZOE_VOICE_REPLAY_STT=remote ZOE_REPLAY_BASE_URL=http://127.0.0.1:8000; un
 export ZOE_HARNESS_LANDING=1
 [ "$(gh pr view "$PR" --json mergeable --jq .mergeable)" = CONFLICTING ] && { if "$LANDING_RESOLVE_SCRIPT" "$PR"; then log "conflict auto-resolved before the probe"; sleep 20; else log "CONFLICTING and not auto-resolvable - exit 5"; exit 5; fi; }
 # wait out any running docs chain BEFORE updating the branch (2026-10-13: #2013 merged after #2004 updated -> BEHIND after its probe, a wasted cycle)
-for i in $(seq 1 90); do pgrep -f docs_merge_chain.sh >/dev/null || break; need_probe_time "waiting for the docs chain"; log "docs chain running - waiting"; sleep 60; done
+for i in $(seq 1 90); do landing_running docs_merge_chain.sh || break; need_probe_time "waiting for the docs chain"; log "docs chain running - waiting"; sleep 60; done
 gh pr update-branch "$PR" >/dev/null 2>&1 && log "branch updated" || log "update-branch: $(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)"
 if [ "$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)" = DIRTY ]; then if "$LANDING_RESOLVE_SCRIPT" "$PR"; then log "DIRTY -> inventory/ledger conflict auto-resolved (sig 48)"; sleep 90; gh pr update-branch "$PR" >/dev/null 2>&1; else log "DIRTY -> needs a hand merge (sig 48) - NOT landing"; exit 8; fi; fi
 sleep 8; git -C "$WT" fetch -q --no-write-fetch-head origin "+refs/heads/$BR:$LREF" && git -C "$WT" reset -q --hard "$LREF"; cp -n "$LANDING_REPO/services/zoe-data/.env" "$WT/services/zoe-data/.env" 2>/dev/null || true
