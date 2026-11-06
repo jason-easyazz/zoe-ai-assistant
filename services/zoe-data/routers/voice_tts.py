@@ -3438,6 +3438,11 @@ async def _run_voice_memory_passes(
 
     ``interrupted`` = the streamed reply ended early (barge-in / disconnect): only the struggle detector reads it.
     """
+    try:  # a person's turn just completed on this lane (fast paths never enter the brain slot): the post-turn passes below are fresh
+        import brain_slot_guard
+        brain_slot_guard.note_turn_completed()
+    except Exception:  # noqa: BLE001
+        pass
     try:  # the struggle detector (post-turn, already off the reply path; a bounded put_nowait that never raises)
         import struggle_detector
 
