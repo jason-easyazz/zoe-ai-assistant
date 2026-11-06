@@ -674,3 +674,22 @@ def test_regression_coverage_accepts_an_ask_that_scores_only_a_manner_extra_half
     rows = [{"arm": "on:R0", "phase": "regress", "ask": "p5c-excite-1", "sample": 0, "scored": {"P5c.u": [True, ""]}}]
     assert si.coverage_problem(rows, "R0", "regress", [("p5c-excite-1", 0)], ["P7.a"]) is not None       # the old check
     assert si.coverage_problem(rows, "R0", "regress", [("p5c-excite-1", 0)], ["P7.a", "P5c.u"]) is None
+
+
+def test_concurrent_ledger_appends_lose_no_row(tmp_path):
+    """Codex #2304: two invocation modes appending at once must not replace each other's row (read-modify-replace is locked)."""
+    import threading
+    home = tmp_path / "home"
+    n = 12
+    errs = []
+
+    def writer(i):
+        try:
+            si.append_jsonl(home, "nights.jsonl", {"night": f"n{i}", "mode": "live" if i % 2 else "dry-run", "status": "measured"})
+        except Exception as exc:  # noqa: BLE001
+            errs.append(exc)
+
+    ts = [threading.Thread(target=writer, args=(i,)) for i in range(n)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errs and sorted(r["night"] for r in si.read_jsonl(home / "nights.jsonl")) == sorted(f"n{i}" for i in range(n))

@@ -256,9 +256,21 @@ def safe_write(home: Path, rel: str | Path, text: str, *, extra_forbidden: Itera
 
 
 def append_jsonl(home: Path, rel: str, row: dict, **kw) -> None:
-    path = Path(os.path.realpath(home)) / rel
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    safe_write(home, rel, existing + json.dumps(row, sort_keys=True) + "\n", **kw)
+    """Append one row. The read-modify-replace is serialised by a state-directory lock shared by EVERY invocation mode (live, dry-run,
+    refused, skipped): atomic replacement stops a torn file, not a lost update when two writers read the same previous contents."""
+    home_real = check_home(home, kw.get("extra_forbidden", ()))
+    home_real.mkdir(parents=True, exist_ok=True)
+    lock = home_real / ".ledger.lock"
+    if lock.is_symlink():
+        raise ShadowViolation(f"{lock}: is a symlink")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        path = home_real / rel
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        safe_write(home, rel, existing + json.dumps(row, sort_keys=True) + "\n", **kw)
+    finally:
+        os.close(fd)                                           # closing releases the flock
 
 
 def read_jsonl(path: Path) -> list[dict]:
