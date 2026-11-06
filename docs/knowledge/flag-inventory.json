@@ -4246,6 +4246,28 @@
         },
         "typed_env": true
       },
+      "ZOE_DORMANT_THREADS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/dormant_threads.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_DRILL_HELPER": {
         "defaults": [
           "(required)",
@@ -8052,6 +8074,44 @@
         },
         "typed_env": false
       },
+      "ZOE_MEMORY_EPISODES": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_episodes.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMORY_EPISODE_GAP_S": {
+        "defaults": [
+          "2700.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_episodes.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2700.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMORY_HEAP_SCRUB": {
         "defaults": [
           "''"
@@ -8298,6 +8358,29 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_MEMORY_SLOT_CHECK": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_slot_check.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_MEMORY_STARTUP_STRICT": {
         "defaults": [
@@ -14034,6 +14117,25 @@
         },
         "typed_env": false
       },
+      "ZOE_SPEAKABLE_PROVENANCE": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/provenance_speech.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-views.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_SPEAKER_ADAPT": {
         "defaults": [
           "'off'"
@@ -18418,6 +18520,7 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/memory_authority_backfill.py",
+        "scripts/maintenance/memory_views_report.py",
         "scripts/perf/recall_gate_replay.py",
         "services/zoe-data/live_store_guard.py",
         "services/zoe-data/mcp_server.py",
