@@ -55,6 +55,24 @@ except for the bug fixes in the table above. Enable `ZOE_CONTACTS_CONVERSATIONAL
 no new state), then `ZOE_CONTACT_OFFER_BATCH`. Samantha bar S13 and S14 pass with the flags off; S15 needs
 `ZOE_CONTACTS_CONVERSATIONAL`; S16 SKIPs until the offer flags are on (see [samantha-bar.md](samantha-bar.md)).
 
+## One offer per turn, not a nag (2026-11-05)
+
+Hands-on QA found every pending offer voiced on every unrelated turn. One shared policy,
+`services/zoe-data/contact_offer_policy.py`, drives the for-prompt fold
+(`routers/memories.py`), the Flue fallback block (`zoe_flue_client._pending_offer_block`) and the
+bare yes/no binder (`intent_router` binds to the offer last voiced, not the oldest row). Rows the
+surfacing read marked but that did not enter the prompt are un-marked so they do not age unseen. Flag OFF or ON:
+
+- emits at most ONE offer per turn (the first not cooling down);
+- emits none on forget / correction / decline / "not now" turns (`_NO_OFFER_TURN_RE`); the offer is
+  deferred, not lost (nothing is surfaced, so it does not age);
+- does not repeat an offer for `_OFFER_COOLDOWN_TURNS` (3) distinct user turns after it was voiced
+  (in-process per-user state; a rebuild of the packet for the same message is the same turn).
+
+`ZOE_CONTACT_OFFER_BATCH` default stays OFF: batch asks ONE enumerated question and a single yes accepts the
+whole set, a different accept contract, so it is an explicit opt-in rather than the fix for nagging.
+The cooldown and decline suppression apply to the batch branch too.
+
 ## Safety rules added after review (PR #1854)
 
 * **Relation lookups** ("who is my son") match `people.relationship` only, whole value, any spelling of
