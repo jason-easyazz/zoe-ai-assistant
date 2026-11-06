@@ -1,0 +1,11 @@
+[Unit]
+Description=Zoe night window: look for a stuck restore every 10 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=10min
+AccuracySec=30s
+Unit=zoe-night-window-restore-retry.service
+
+[Install]
+WantedBy=timers.target
