@@ -149,7 +149,7 @@ def _busy() -> bool:
 
 async def _night_raise_refs(uid: str, now: datetime) -> list[tuple[str, bool]]:
     """The night mind's ONE ``raise`` thread as ``(source_ref, muted)`` (never its text); [] when the night mind is off. ``muted`` is
-    the member's CURRENT restraint mute on that thread: a mute added after the nightly decision must keep it out of the raise
+    True when the member's CURRENT restraint mute covers the thread OR the restraint classifier marks it sensitive (deny-class): a mute added after the nightly decision must keep it out of the raise
     (``night_mind.morning_items`` checks the stored leave reason and the forget shields, not the mutes)."""
     try:
         import night_mind
@@ -164,6 +164,10 @@ async def _night_raise_refs(uid: str, now: datetime) -> list[tuple[str, bool]]:
         if items and restraint.mode() != "off":
             mutes = await restraint.list_mutes(uid)
             muted = {str(i["source_ref"]) for i in items if mutes and restraint.muted(str(i.get("text") or ""), str(i["source_ref"]), mutes)}
+            # the night mind's leave policy is narrower than the restraint classifier ("my daughter is sad about her school play"
+            # passes it): a thread the CLASSIFIER marks sensitive is deny-class too, exactly as a pending item's stamped class is.
+            # Classified here, before the text is discarded; the cached head only (never embeds on this path).
+            muted |= {str(i["source_ref"]) for i in items if restraint.classify(str(i.get("text") or ""), head="cache")}
     except Exception:  # noqa: BLE001
         muted = set()
     return [(str(i["source_ref"]), str(i["source_ref"]) in muted) for i in items]

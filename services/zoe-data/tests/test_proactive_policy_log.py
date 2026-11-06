@@ -377,3 +377,22 @@ async def test_returning_to_a_logged_rung_still_reconciles_the_weekly_charge(mon
     assert (await pl.observe(MEMBER, items, NOW))["card"] == 3
     fourth = await pl.observe(MEMBER, items + [_item("open_loop", 4)], NOW)
     assert fourth["card"] == 3 and fourth["silent"] == 1
+
+
+async def test_a_night_thread_the_classifier_marks_sensitive_is_deny_class_without_any_mute(monkeypatch):
+    """Codex #2283: the night mind's leave policy lets "my daughter is sad about her school play" through; the observer must still
+    treat it as row 2 (deny-class), like a pending item whose stamped class is non-empty."""
+    import night_mind
+    import restraint
+
+    async def morning(uid, now=None):
+        return [{"text": "My daughter is sad about her school play", "source_ref": "night_threads:t9", "thread_id": "t9"},
+                {"text": "The garden hose needs a new nozzle", "source_ref": "night_threads:t10", "thread_id": "t10"}]
+
+    async def no_mutes(uid):
+        return []
+
+    monkeypatch.setattr(night_mind, "morning_items", morning)
+    monkeypatch.setattr(restraint, "mode", lambda: "shadow")
+    monkeypatch.setattr(restraint, "list_mutes", no_mutes)
+    assert await pl._night_raise_refs(MEMBER, NOW) == [("night_threads:t9", True), ("night_threads:t10", False)]
