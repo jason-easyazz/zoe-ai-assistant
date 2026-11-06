@@ -2222,7 +2222,13 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     ]
     if len(named) > 1:
         return None  # ambiguous — let the brain sort it out
-    offer = named[0] if named else offers[0]
+    # A bare reply binds to the offer most recently VOICED (cooldown rotation means
+    # that is not always the oldest surfaced row); no record -> the oldest.
+    import contact_offer_policy as _cop
+
+    _last = _cop.last_offered_id(user_id)
+    _voiced = next((o for o in offers if str(o.get("id")) == _last), None) if _last else None
+    offer = named[0] if named else (_voiced or offers[0])
     kind = _offer_reply_kind(text, offer.get("name") or "")
     if kind is None:
         return None
