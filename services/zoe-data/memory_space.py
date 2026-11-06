@@ -253,7 +253,7 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
         return "gone"          # pending / disputed / archived rows are not on the screen: nothing here to forget
     if await curated_locked(user_id, ref.metadata):
         return "protected"
-    exp = mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or "")
+    exp = _explained_for(rid, ref)
     twins = await pa.twins_of(user_id, ref, svc=svc, strict=True)    # a failed lookup stops us BEFORE the forget: retryable
     if status == "approved":
         if await svc.review(ref.id, decision="reject", actor=user_id, note="forget_memory_space") is None:
@@ -275,6 +275,55 @@ async def forget_row(user_id: str, row_id: str, *, svc: Any = None) -> str:
     logger.info("MEMORY_SPACE_FORGET user=%s rows=%d", user_id, len(gone))
     if status == "rejected" and len(gone) == 1 and not erased and not physical:
         return "gone"          # already forgotten earlier and nothing was left to remove
+    return "forgotten"
+
+
+def _explained_for(rid: str, ref: Any) -> "mp.Explained":
+    """The row as a forget target WITH its provenance: an extracted memory's text ("User was scared of the thunder") is not the child's
+    verbatim utterance, so the erase must also use the row's stored turn id and quote, or the words stay searchable."""
+    meta = ref.metadata or {}
+    return mp.Explained(seq=0, row_id=rid, ts=0.0, text=ref.text or "", quote=str(meta.get("source_excerpt") or ""),
+                        turn_id=str(meta.get("user_turn_id") or ""))
+
+
+def guardian_forget_open(meta: dict) -> bool:
+    """True when a row is one a guardian's forget may act on: still approved, OR rejected BY an earlier guardian forget that did not
+    finish (its twins / physical erase / verbatim words may remain), so the retry resumes every remaining step instead of the review
+    route treating the already-rejected row as an ordinary reject and reporting success."""
+    status = str((meta or {}).get("status") or "approved").lower()
+    return status == "approved" or (status == "rejected" and (meta or {}).get("review_note") == "guardian_forget")
+
+
+async def guardian_forget(owner: str, row_id: str, *, actor: str, svc: Any = None) -> str:
+    """An ADMIN forgets ONE approved row of ANOTHER member on their behalf - the grown-up's one step for a child, whose own
+    screen and voice forget are refused ("ask a grown-up"). The same steps as :func:`forget_row` (the row AND the twins one
+    utterance left, physical erase when on, the member's verbatim words), but every reject is the admin's
+    (``origin="admin"``, operator class), never the member's own. ``'forgotten'`` | ``'gone'`` (absent, not ``owner``'s, or
+    not approved). RAISES when a step could not finish; calling again finishes it. Minor-affect safety cell (c),
+    docs/governance/emotional-safety-note.md section 4.1: a feeling must not survive the guardian's forget in a twin."""
+    svc = svc or pa._svc_default()
+    rid = str(row_id or "").strip()
+    ref = await asyncio.wait_for(svc.get(rid), pa.READ_BUDGET_S) if rid else None
+    if ref is None or not pa._owns(ref.metadata or {}, owner):
+        return "gone"
+    if not guardian_forget_open(ref.metadata or {}):
+        return "gone"
+    twins = await pa.twins_of(owner, ref, svc=svc, strict=True)     # a failed lookup stops us BEFORE the forget
+    gone = []
+    for row in (ref, *twins):
+        if str((row.metadata or {}).get("status") or "").lower() == "rejected":
+            gone.append(row.id)                  # this row's reject already landed (an earlier, unfinished attempt): go on to the rest
+            continue
+        if await svc.review(row.id, decision="reject", actor=actor, origin="admin", note="guardian_forget") is None:
+            raise RuntimeError("memory store refused the guardian's forget")
+        gone.append(row.id)
+    if hasattr(svc, "erase_rows"):
+        from memory_service import physical_erase_enabled
+
+        if physical_erase_enabled():
+            await svc.erase_rows(owner, gone, actor=actor, reason="forgotten by a guardian")
+    await pa._erase_words(owner, _explained_for(rid, ref), ref.text or "")
+    logger.info("MEMORY_SPACE_GUARDIAN_FORGET rows=%d", len(gone))
     return "forgotten"
 
 
