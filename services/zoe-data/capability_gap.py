@@ -314,15 +314,16 @@ def _drop_redacted_twins(events: Iterable[Event]) -> list:
     # a twin is a record of ANOTHER source (the service log): two records of the same file are two requests, however close they are
     twins = sorted((e for e in evs if e.source == SRC_INTENT_MISS and e.origin != "jsonl" and not (e.text and _REDACTED.search(e.text))),
                    key=lambda e: e.ts)
-    used: set = set()
+    # a log record that already has its EXACT-hash JSONL counterpart is spoken for: its request is accounted for, so a redacted record
+    # (a different request, in the same second) must not be attached to it
+    exact = {e.utt for e in evs if e.source == SRC_INTENT_MISS and e.origin == "jsonl" and e.utt and not (e.text and _REDACTED.search(e.text))}
+    used: set = {i for i, t in enumerate(twins) if t.utt and t.utt in exact}
     drop: set = set()
     for r in sorted((e for e in evs if e.source == SRC_INTENT_MISS and e.text and _REDACTED.search(e.text)), key=lambda e: e.ts):
-        best = None
-        for i, t in enumerate(twins):
-            if i in used or abs(t.ts - r.ts) > REDACT_TWIN_S:
-                continue
-            if best is None or abs(t.ts - r.ts) < abs(twins[best].ts - r.ts):
-                best = i
+        near = sorted((abs(t.ts - r.ts), i) for i, t in enumerate(twins) if i not in used and abs(t.ts - r.ts) <= REDACT_TWIN_S)
+        if len(near) > 1 and near[1][0] - near[0][0] < 1e-6:
+            continue                    # two equally close candidates: no timestamp tie is a match - keep the record rather than guess
+        best = near[0][1] if near else None
         if best is not None:
             used.add(best)
             drop.add(id(r))

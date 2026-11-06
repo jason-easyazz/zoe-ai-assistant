@@ -355,3 +355,21 @@ def test_the_redacted_wording_survives_the_merge_with_the_hash_only_twin():
                                 cg.parse_miss_record({"text": "send a message to [NAME]", "ts": NOW - DAY + 1.5})],
                                now=NOW, days=14, resolver={h: "send a message to Ada Lovelace"})
     assert ranked[0].examples == ["send a message to Ada Lovelace"]           # the original words win when the STT log has them
+
+
+def test_exact_hash_pairs_are_reserved_before_a_redacted_record_is_matched():
+    """Codex #2294: two log misses in the same second, then their JSONL records - the redacted one belongs to the request that has
+    no exact-hash counterpart, never to the timer that does."""
+    ada = cg.utterance_hash("send a message to Ada Lovelace")
+    tea = cg.utterance_hash("set a timer for tea")
+    log_tea = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt=tea)
+    log_ada = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt=ada)
+    j_tea = cg.parse_miss_record({"text": "set a timer for tea", "ts": NOW - DAY + 0.5})
+    j_ada = cg.parse_miss_record({"text": "send a message to [NAME]", "ts": NOW - DAY + 0.6})
+    ranked = cg.cluster_events([log_tea, log_ada, j_tea, j_ada], now=NOW, days=14)
+    areas = sorted(c.area for c in ranked)
+    assert sum(c.count for c in ranked) == 2 and areas == ["communications", "timers"]
+    # a genuine tie between two candidates with no exact counterpart is not guessed: both stay (over-count beats misattribution)
+    t1, t2 = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt="aaaaaaaaaaaa"), cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt="bbbbbbbbbbbb")
+    red = cg.parse_miss_record({"text": "send a message to [NAME]", "ts": NOW - DAY + 1})
+    assert len(cg.dedupe([t1, t2, red])) == 3
