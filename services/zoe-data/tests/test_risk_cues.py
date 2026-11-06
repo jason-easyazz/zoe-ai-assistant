@@ -673,7 +673,7 @@ def test_the_seam_has_one_construction_site_and_it_is_after_the_other_blocks():
     src = Path(zc.__file__).read_text()
     assert src.count("risk_block = await _risk_cue_block(message, uid, session_id)") == 1
     assert src.count('brain_message = f"{brain_message}\\n{risk_block}"') == 1
-    assert src.index("offer_block = await _pending_offer_block(uid)") < src.index("risk_block = await _risk_cue_block(")
+    assert src.index("offer_block = await _pending_offer_block(uid, message)") < src.index("risk_block = await _risk_cue_block(")
 
 
 def test_the_lexicon_identity_of_the_other_sections_is_untouched(monkeypatch):
