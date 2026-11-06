@@ -375,6 +375,18 @@ async def _live_ids(user_id: str, ids: list[str]) -> set[str] | None:
     return live
 
 
+async def _forgotten_items(user_id: str, items: list) -> set[str]:
+    """The mem ids of card items whose text names an entity ``user_id`` forgot (the 300 s tombstone or the durable ledger).
+    Raises ``memory_forgotten.LedgerUnavailable`` when the ledger cannot be read."""
+    import memory_forgotten
+    from memory_tombstones import matching_tombstone
+
+    rows = [it for it in items if len(it) >= 3]
+    kept, _n = await memory_forgotten.keep_unforgotten(user_id, rows, text_of=lambda it: str(it[1] or ""), near=False, strict=True)
+    kept = [it for it in kept if not matching_tombstone(user_id, str(it[1] or ""))]
+    return {str(it[2]) for it in rows} - {str(it[2]) for it in kept}
+
+
 async def load_card_block(user_id: str, *, build_missing: bool = True) -> dict[str, str]:
     """``{"version", "text"}`` for an id already cleared by ``user_model_enabled``.
 
@@ -414,6 +426,14 @@ async def load_card_block(user_id: str, *, build_missing: bool = True) -> dict[s
         withheld = {str(it[2]) for it in items} - kept
     except Exception as exc:  # noqa: BLE001 - restraint must never break a turn
         logger.debug("user-model card: restraint filter skipped user=%s: %s", user_id, exc)
+    # Forgotten means forever: an item naming an entity the member forgot is off the card even when its row is still approved
+    # (the cascade deletes a card that names the name at forget time; this is the second wall for one it missed, or a pending
+    # step). Unlike the liveness check this FAILS CLOSED: an unreadable ledger serves no card rather than one that may name it.
+    try:
+        withheld |= await _forgotten_items(user_id, card.get("items") or [])
+    except Exception as exc:  # noqa: BLE001 - memory_forgotten.LedgerUnavailable included
+        logger.warning("user-model card: forget ledger unavailable (%s) - card withheld user=%s", type(exc).__name__, user_id)
+        return empty
     if withheld:
         live = (set(ids) if live is None else set(live)) - withheld
     if live is None or len(live) == len(set(ids)):

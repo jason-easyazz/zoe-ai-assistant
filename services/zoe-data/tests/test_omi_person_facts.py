@@ -140,7 +140,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.delenv("ZOE_MEMORY_AUTHORITY", raising=False)
     erase_gate.reset()
 
-    async def no_ledger(user_id, text):
+    async def no_ledger(user_id, text, **_kw):
         return False
     monkeypatch.setattr(dr, "_forgotten", no_ledger)
 
