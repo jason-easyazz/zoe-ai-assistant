@@ -38,3 +38,19 @@ def test_template_and_dropin_timeouts_agree_and_exceed_the_brain_wait(kok):
     for f in (_UNITS / "kokoro-tts.service", _UNITS / "kokoro-tts.service.d" / "70-start-timeout.conf"):
         m = re.search(r"^TimeoutStartSec=(\d+)\s*$", f.read_text(encoding="utf-8"), re.MULTILINE)
         assert m and int(m.group(1)) > kok._BRAIN_WAIT_S + 30, f.name
+
+
+def test_every_start_logs_one_countable_line_with_the_degraded_flag(kok):
+    ok = kok.start_line("cuda", None, 12.34, 77)
+    assert ok == "KOKORO_START device=cuda degraded=0 reason=- load_s=12.3 pid=77"
+    bad = kok.start_line("cpu", "CUDA unavailable (NVML\nassertion failed)", 40.0, 78)
+    assert bad.startswith("KOKORO_START device=cpu degraded=1 reason=CUDA_unavailable_(NVML_assertion_failed)")
+    assert len(bad.splitlines()) == 1
+    # negative control: a healthy start is never counted as degraded
+    assert "degraded=1" not in ok
+
+
+def test_lifespan_emits_the_start_line_right_after_the_pipeline_loads(kok):
+    src = _SCRIPT.read_text(encoding="utf-8")
+    life = src[src.index("async def lifespan"):]
+    assert life.index("_load_pipeline") < life.index("start_line(") < life.index("Warming up Kokoro")
