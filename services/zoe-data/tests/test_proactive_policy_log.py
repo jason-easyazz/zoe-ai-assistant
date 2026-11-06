@@ -322,6 +322,7 @@ async def test_an_unchanged_pending_item_is_not_charged_twice_nor_capped_against
     items = [_item("open_loop", n) for n in range(1, 4)]
     first = await pl.observe(MEMBER, items, NOW)
     assert first["card"] == 3 and first["silent"] == 0
+    caplog.clear()      # the first pass's INFO lines are already captured when another test left this logger at INFO (CI lane order)
     with caplog.at_level(logging.INFO, logger=pl.logger.name):
         again = await pl.observe(MEMBER, items, NOW)
     assert again["card"] == 3 and again["silent"] == 0
