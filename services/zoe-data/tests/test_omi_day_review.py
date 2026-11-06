@@ -100,7 +100,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
     erase_gate.reset()
 
-    async def no_ledger(user_id, text):
+    async def no_ledger(user_id, text, **_kw):
         return False
     monkeypatch.setattr(dr, "_forgotten", no_ledger)
     app = FastAPI()
@@ -546,7 +546,7 @@ def test_a_forgotten_name_is_never_proposed_and_never_written(env, monkeypatch):
     add_rec(env, "rec1", GOLDEN)
     dr.set_llm(fake_model(GOLDEN_RULES))
 
-    async def ledger_knows_priya(user_id, text):
+    async def ledger_knows_priya(user_id, text, **_kw):
         return "Priya" in text
     monkeypatch.setattr(dr, "_forgotten", ledger_knows_priya)
     review()
@@ -888,3 +888,21 @@ def test_owner_facts_with_opposite_polarity_or_a_different_predicate_never_merge
         merged = dr.merge([cand(x, "rec1"), cand(y, "rec2")])
         assert len(merged) == 1 and len(merged[0].evidence) == 2, (x, y)
 
+
+
+def test_serving_reads_use_exact_ledger_matching_and_ingestion_keeps_near(monkeypatch):
+    """Near spellings are OFF on reads: forgetting 'Marisol' must not hide a candidate about 'Marisal' (no alias clarification is
+    queued on this path, so it would silently vanish). The create-side check keeps near matching."""
+    import memory_forgotten
+
+    seen = []
+
+    async def spans(user_id, text, *, near=True, strict=False):
+        seen.append(near)
+        return []
+    monkeypatch.setattr(memory_forgotten, "spans", spans)
+    cand = {"id": "c1", "payload": {"item": "Marisal"}, "evidence": [{"quote": "Marisal's birthday"}]}
+    assert run(dr._served(OWNER, [cand])) == [cand]
+    assert seen == [False]                                         # the serve filter asks for EXACT matching
+    run(REAL_FORGOTTEN(OWNER, "Marisal"))
+    assert seen == [False, True]                                   # ingestion still asks for near spellings
