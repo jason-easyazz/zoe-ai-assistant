@@ -256,6 +256,9 @@
         "unset"
       ],
       "sites": {
+        "services/zoe-data/brain_scheduler.py": [
+          "'Australia/Perth'"
+        ],
         "services/zoe-data/calendar_ical.py": [
           "'Australia/Perth'"
         ],
@@ -1385,6 +1388,29 @@
         },
         "typed_env": false
       },
+      "ZOE_ANTICIPATION": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/anticipation.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/architecture/anticipation-loop.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_API": {
         "defaults": [
           "'https://192.168.1.218'"
@@ -2011,6 +2037,82 @@
           "note": "",
           "owner_doc": "",
           "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER": {
+        "defaults": [
+          "'log'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "log",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER_ALLOW": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER_DAY": {
+        "defaults": [
+          "'07:00-22:00'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "07:00-22:00",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_BRAIN_SCHEDULER_POST_TURN_S": {
+        "defaults": [
+          "900.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/brain_scheduler.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 900.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/reasoning-scheduler-2026-11-05.md",
+          "type": "float"
         },
         "typed_env": true
       },
@@ -11725,6 +11827,25 @@
         },
         "typed_env": false
       },
+      "ZOE_PROACTIVE_POLICY_LOG": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/policy_log.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/proactive-policy-log.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_PROACTIVE_RAISE_GAP_S": {
         "defaults": [
           "7200"
@@ -15280,6 +15401,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "services/zoe-data/brain_scheduler.py",
           "services/zoe-data/calendar_ical.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/mcp_server.py",
@@ -15307,7 +15429,7 @@
           "owner_doc": "docs/knowledge/synthetic-users-and-proactive-recipients.md",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_TOUCH_PANEL_OFFLINE_CACHE": {
         "defaults": [

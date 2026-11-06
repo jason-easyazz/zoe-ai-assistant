@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-06T00:00:00Z
+timestamp: 2026-11-07T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-06T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-06. The table body is deterministic (sorted, no
+Last generated: 2026-11-07. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 819 prod flags; 233 read through `typed_env`.
+- 825 prod flags; 240 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-819 flags; 768 not documented in `.env.example`.
+825 flags; 774 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -77,6 +77,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_ANNOUNCE_POLL_S` | float | `5.0` | - | `docs/knowledge/mac-virtual-panel.md` | `'5.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ANNOUNCE_STRICT_PANEL` | str | `''` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
 | `ZOE_ANNOUNCE_TTL_S` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
+| `ZOE_ANTICIPATION` | str | `'off'` | `off`, `shadow`, `on` | `docs/architecture/anticipation-loop.md` | `'off'` | yes | NO | `services/zoe-data/anticipation.py` |
 | `ZOE_API` | str | `'https://192.168.1.218'` | - | `scripts/AGENTS.md` | `'https://192.168.1.218'` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_APP_LOG` | str | `''` | - | - | `dynamic` | no | NO | `scripts/perf/user_model_ab.py` |
 | `ZOE_ASK_TO_REMEMBER` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/ask_to_remember.py` |
@@ -109,6 +110,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_PREFIX_KEEPER` | bool | `True` | - | `docs/knowledge/cold-wake-2026-11-02.md` | `True` | yes | NO | `services/zoe-data/brain_prefix_keeper.py` |
 | `ZOE_BRAIN_PREFIX_KEEPER_MIN_TOKENS` | int | `2000` | - | `docs/knowledge/cold-wake-2026-11-02.md` | `2000` | yes | NO | `services/zoe-data/brain_prefix_keeper.py` |
 | `ZOE_BRAIN_PREWARM_ON_WAKE` | bool | `True` | - | - | `'1'`, `True` | yes | NO | `services/zoe-data/routers/voice_livekit.py`<br>`services/zoe-data/routers/voice_tts.py` |
+| `ZOE_BRAIN_SCHEDULER` | str | `'log'` | - | `docs/knowledge/reasoning-scheduler-2026-11-05.md` | `'log'` | yes | NO | `services/zoe-data/brain_scheduler.py` |
+| `ZOE_BRAIN_SCHEDULER_ALLOW` | str | `''` | - | `docs/knowledge/reasoning-scheduler-2026-11-05.md` | `''` | yes | NO | `services/zoe-data/brain_scheduler.py` |
+| `ZOE_BRAIN_SCHEDULER_DAY` | str | `'07:00-22:00'` | - | `docs/knowledge/reasoning-scheduler-2026-11-05.md` | `'07:00-22:00'` | yes | NO | `services/zoe-data/brain_scheduler.py` |
+| `ZOE_BRAIN_SCHEDULER_POST_TURN_S` | float | `900.0` | - | `docs/knowledge/reasoning-scheduler-2026-11-05.md` | `900.0` | yes | NO | `services/zoe-data/brain_scheduler.py` |
 | `ZOE_BRAIN_SLOT_GUARD` | bool | `True` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `'on'` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_MAX_DEFER_S` | str | `''` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
 | `ZOE_BRAIN_SLOT_QUIET_S` | str | `''` | - | `docs/knowledge/brain-prefix-cache-2026-10-12.md` | `''` | no | NO | `services/zoe-data/brain_slot_guard.py` |
@@ -608,6 +613,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROACTIVE_ARRIVAL_RESPONSE_S` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_BRIEF_ON_ARRIVAL` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | NO | `services/zoe-data/proactive/arrival.py` |
 | `ZOE_PROACTIVE_LEDGER` | str | `''` | - | `docs/knowledge/person-half-enforce-pack-2026-10-09.md` | `''` | no | NO | `services/zoe-data/proactive/ledger.py` |
+| `ZOE_PROACTIVE_POLICY_LOG` | str | `''` | - | `docs/knowledge/proactive-policy-log.md` | `''` | yes | NO | `services/zoe-data/proactive/policy_log.py` |
 | `ZOE_PROACTIVE_RAISE_GAP_S` | int | `7200` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `7200` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_RAISE_PER_DAY` | int | `2` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `2` | yes | NO | `services/zoe-data/proactive/selector.py` |
 | `ZOE_PROACTIVE_SELECTOR` | str | `''` | - | `docs/knowledge/samantha-bar.md` | `''` | no | NO | `services/zoe-data/proactive/selector.py` |
@@ -790,7 +796,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_TEMPORAL_RELATIONSHIPS_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/person_extractor.py` |
 | `ZOE_TEXT_LOG_RETENTION_DAYS` | str | `''` | - | `docs/knowledge/forget-reach.md` | `-` | no | NO | `services/zoe-data/local_text_logs.py` |
 | `ZOE_TIMER_STORE` | str | `''` | - | `services/zoe-data/AGENTS.md` | `''` | yes | NO | `services/zoe-data/skybridge_service.py` |
-| `ZOE_TIMEZONE` | str | `'Australia/Perth'` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''`, `'Australia/Perth'` | no | NO | `services/zoe-data/calendar_ical.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/multica_autopilot_sync.py`<br>`services/zoe-data/proactive/arrival.py`<br>`services/zoe-data/proactive/engine.py`<br>`services/zoe-data/proactive/triggers/emotional_followup.py`<br>`services/zoe-data/proactive/triggers/evening_windown.py`<br>`services/zoe-data/proactive/triggers/evolution_weekly_digest.py`<br>`services/zoe-data/proactive/triggers/people_health.py`<br>`services/zoe-data/proactive/triggers/reminder_scan.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/time_utils.py`<br>`services/zoe-data/voice_greeting.py` |
+| `ZOE_TIMEZONE` | str | `'Australia/Perth'` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''`, `'Australia/Perth'` | yes | NO | `services/zoe-data/brain_scheduler.py`<br>`services/zoe-data/calendar_ical.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/multica_autopilot_sync.py`<br>`services/zoe-data/proactive/arrival.py`<br>`services/zoe-data/proactive/engine.py`<br>`services/zoe-data/proactive/triggers/emotional_followup.py`<br>`services/zoe-data/proactive/triggers/evening_windown.py`<br>`services/zoe-data/proactive/triggers/evolution_weekly_digest.py`<br>`services/zoe-data/proactive/triggers/people_health.py`<br>`services/zoe-data/proactive/triggers/reminder_scan.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/time_utils.py`<br>`services/zoe-data/voice_greeting.py` |
 | `ZOE_TOUCH_PANEL_OFFLINE_CACHE` | bool | `False` | - | `docs/knowledge/ui-deep-review-2026-10-04.md` | `'0'` | no | NO | `services/zoe-auth/touch_panel/quick_auth.py` |
 | `ZOE_TOUCH_PROBE_DEVICE_TOKEN` | str | `''` | - | - | `''` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
 | `ZOE_TOUCH_PROBE_PANEL_ID` | str | `'zoe-touch-pi'` | - | - | `'zoe-touch-pi'` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
