@@ -28,10 +28,11 @@ _SYSTEM = (
 )
 
 
-async def compose_message(trigger_type: str, context: dict, fallback: str) -> str:
+async def compose_message(trigger_type: str, context: dict, fallback: str, *, in_turn: bool = False) -> str:
     """
     Given a trigger_type and a context dict, ask the LLM for a short message.
-    Returns fallback on failure or if the LLM is unavailable.
+    Returns fallback on failure or if the LLM is unavailable (including a daytime refusal by ``brain_scheduler`` in enforce
+    mode). ``in_turn`` marks a call made while answering a person's own request; the proactive engine leaves it False.
     """
     try:
         from time_utils import clock_stamp
@@ -51,8 +52,11 @@ async def compose_message(trigger_type: str, context: dict, fallback: str) -> st
         "stream": False,
     }
     try:
+        import brain_scheduler
+
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            r = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
+            with brain_scheduler.declare("turn:compose_message" if in_turn else "proactive.composer.compose_message"):
+                r = await client.post(f"{gemma_base()}/v1/chat/completions", json=payload)
             r.raise_for_status()
             msg = r.json()["choices"][0]["message"]["content"].strip()
             return msg or fallback

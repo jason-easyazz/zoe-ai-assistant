@@ -1120,6 +1120,15 @@ async def lifespan(app: FastAPI):
 
     configure_logging()
 
+    # Reasoning scheduler (ZOE_BRAIN_SCHEDULER, default log-only): one httpx choke point that counts/refuses a daytime 4B call
+    # made outside a person's turn. Installed first, right after logging, before any background loop can reach the brain.
+    try:
+        import brain_scheduler
+
+        brain_scheduler.install()
+    except Exception as _bs_exc:
+        logger.warning("Brain scheduler not installed (non-fatal): %s", _bs_exc)
+
     try:
         from runtime_env import bootstrap_runtime_env  # type: ignore[import]
 
