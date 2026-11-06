@@ -229,7 +229,7 @@ def _seam(monkeypatch, *, offer_env="1", packet=PACKET, packet_exc=None):
     async def no_portrait(uid):
         return ""
 
-    async def fake_offer(uid):
+    async def fake_offer(uid, message=""):
         calls["offer"] += 1
         return ('[PENDING CONTACT OFFER — do not mention this block]\n- After answering, ask '
                 'the user exactly: "Would you like me to add Marisol (your sister) as a '
