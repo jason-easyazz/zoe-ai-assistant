@@ -763,28 +763,32 @@
   .altabs{position:absolute;top:38px;right:122px;height:48px;display:flex;gap:8px;z-index:30}
   .altab{font-size:22px;font-weight:500;color:rgba(255,255,255,.5);padding:0 24px;min-height:48px;border-radius:999px;border:0;background:none;cursor:pointer}
   .altab.on{background:rgba(255,255,255,.12);color:#fff;font-weight:600}
-  .alfull{position:absolute;left:60px;right:60px;top:110px;bottom:60px;display:flex;flex-direction:column;gap:18px}
+  /* bottom:130px keeps the list clear of the dock (top edge y605) and the orb (y608) */
+  .alfull{position:absolute;left:60px;right:60px;top:110px;bottom:130px;display:flex;flex-direction:column;gap:18px}
   .alhead{display:flex;align-items:center;justify-content:space-between;gap:20px}
   .alhelp{font-size:20px;color:var(--ink-soft)}
-  .allist{display:flex;flex-direction:column;gap:12px;overflow:auto}
+  .allist{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none}
+  .allist::-webkit-scrollbar{display:none}
+  .alrowitem{flex:none}
   .alempty{font-size:24px;color:var(--ink-faint);text-align:center;margin-top:60px}
   .alrowitem{display:flex;align-items:center;gap:26px;padding:16px 28px;border-radius:24px;background:rgba(255,255,255,.06);border:1px solid var(--line);cursor:pointer;min-height:84px}
   .alrowitem.off{opacity:.55}
   .altime{font-size:54px;font-weight:300;font-variant-numeric:tabular-nums;min-width:200px}
   .altime .alm{font-size:24px;margin-left:8px;color:var(--ink-soft)}
-  .alinfo{flex:1}
-  .alname{font-size:26px;font-weight:600}
-  .alsub{font-size:19px;color:var(--ink-soft);margin-top:4px}
+  .alinfo{flex:1;min-width:0}
+  .alname{font-size:26px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .alsub{font-size:19px;color:var(--ink-soft);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .alsw{width:92px;height:52px;border-radius:999px;border:0;background:rgba(255,255,255,.18);position:relative;cursor:pointer;flex:none}
   .alsw.on{background:var(--alr)}
   .alknob{position:absolute;top:5px;left:5px;width:42px;height:42px;border-radius:50%;background:#fff;transition:.2s}
   .alsw.on .alknob{left:45px}
-  .alchip{font-size:22px;min-height:56px;padding:0 26px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;cursor:pointer}
+  .alchip{flex:none;white-space:nowrap;font-size:22px;min-height:56px;padding:0 26px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;cursor:pointer}
   .alchip.on{background:var(--alr);color:#2a1d06;border-color:transparent;font-weight:600}
   .alchip.day{min-width:56px;padding:0}
   .alchip.danger{color:var(--cat-health)}
-  .aled{position:absolute;inset:0;z-index:40;background:rgba(5,8,18,.94);display:flex;align-items:center;justify-content:center}
-  .aledbox{display:flex;gap:40px;align-items:center}
+  /* The editor is a full-stage sheet on #stage (above the dock z46 and the orb z50), sized to the 1280x720 panel: no part of it may leave the screen. */
+  .aled{position:absolute;inset:0;z-index:60;background:rgba(5,8,18,.97);display:flex;align-items:center;justify-content:center;padding:28px 48px}
+  .aledbox{display:flex;gap:48px;align-items:center;max-height:100%}
   .alwheels{display:flex;align-items:center;gap:6px}
   .alwheel{width:110px;height:192px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;border-radius:20px;background:rgba(255,255,255,.05)}
   .alwheel::-webkit-scrollbar{display:none}
@@ -792,16 +796,19 @@
   .alitem{height:64px;display:grid;place-items:center;font-size:40px;font-weight:300;color:var(--ink-faint);scroll-snap-align:center;cursor:pointer}
   .alitem.sel{color:#fff;font-weight:600}
   .alcolon{font-size:44px;font-weight:300}
-  .alside{display:flex;flex-direction:column;gap:18px;max-width:560px}
+  .alside{display:flex;flex-direction:column;gap:14px;width:720px;max-height:664px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none}
+  .alside::-webkit-scrollbar,.alscroll::-webkit-scrollbar{display:none}
   .alk{font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:8px}
   .alchips{display:flex;flex-wrap:wrap;gap:10px}
+  /* playlists: ONE swipeable row, faded at the right edge, never a wall of wrapped chips */
+  .alchips.alscroll{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior:contain;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent);padding-right:48px}
   .aldays{display:flex;gap:8px;width:100%}
-  .alacts{display:flex;gap:12px;margin-top:6px}
+  .alacts{display:flex;gap:12px;margin-top:4px;position:sticky;bottom:0;background:rgba(5,8,18,.97)}
   .alerr{font-size:18px;color:var(--cat-health);min-height:24px}
   .alring{position:absolute;inset:0;z-index:95;display:none;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(120% 90% at 50% 46%,#1a1230,#05030c 75%);cursor:pointer;overflow:hidden}
   .alring.on{display:flex}
   .alclock{font-size:260px;font-weight:200;line-height:1;letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:#fff;animation:alshake 1.2s ease-in-out infinite;z-index:1}
-  .allabel{font-size:44px;font-weight:600;color:var(--alr);min-height:56px;margin-top:6px;z-index:1}
+  .allabel{font-size:44px;font-weight:600;color:var(--alr);min-height:56px;margin-top:6px;z-index:1;max-width:1160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .alhint{font-size:28px;color:var(--ink-soft);margin-top:14px;z-index:1}
   .alpulse{position:absolute;left:50%;top:44%;width:300px;height:300px;margin:-150px 0 0 -150px;border-radius:50%;border:3px solid rgba(255,191,94,.55);animation:alripple 3s ease-out infinite;pointer-events:none}
   .alpulse.p1{animation-delay:1s}.alpulse.p2{animation-delay:2s}
@@ -1196,7 +1203,7 @@
 <!-- before the estate script: a ?domain=memories arrival calls into it during boot -->
 <script src="/js/touch-memories-space.js?v=mem-1"></script>
 <script src="/js/touch-alarm-sound.js?v=as-1"></script>
-<script src="/js/touch-alarms.js?v=al-2"></script>
+<script src="/js/touch-alarms.js?v=al-3"></script>
 <script>
 (function(){
   var stage=document.getElementById('stage');
@@ -1292,7 +1299,7 @@
         +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button><button data-qt="sources">Sources</button></div>'
         +'<div id="mQList" class="mqlist"></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
-      html:'<div class="chttl">Timers</div><div class="altabs" id="alTabs" hidden></div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div><div class="alfull" id="alFull" hidden></div>'},
+      html:'<div class="chttl">Timers/Alarms</div><div class="altabs" id="alTabs" hidden></div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div><div class="alfull" id="alFull" hidden></div>'},
     list:{home:true, bg:GROUND, canvas:false,
       html:'<div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
@@ -1920,7 +1927,7 @@
     {id:'rooms',n:'Rooms',ic:'rooms',c:'linear-gradient(150deg,#63b8ff,#3f7bd8)'},
     {id:'reminder',n:'Reminders',ic:'reminders',c:'linear-gradient(150deg,#ff9e6a,#f0742e)'},
     {id:'person',n:'Contacts',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
-    {id:'timer',n:'Timers',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
+    {id:'timer',n:'Timers/Alarms',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
     {id:'sleep',n:'Sleep',ic:'sleep',c:'linear-gradient(150deg,#5b6bb0,#3a4788)'},
     {id:'memories',n:'Memories',ic:'memories',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
     {id:'settings',n:'Settings',ic:'settings',c:'linear-gradient(150deg,#9aa6bd,#6f7c96)'}
@@ -4411,7 +4418,7 @@
     // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
 
-  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['memories','Memories'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings']];
+  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['memories','Memories'],['weather','Weather'],['music','Music'],['timer','Timers/Alarms'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
   home.onclick=function(){lclose();show('home');};
   setInterval(refreshHA,30000);   // keep dock HA state fresh + recover from a failed load

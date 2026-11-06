@@ -321,3 +321,30 @@ def test_skybridge_this_month_reads_the_whole_month(monkeypatch):
         intent = sb.classify_skybridge_intent(phrase)
         assert intent.domain == "calendar" and intent.range_label == "this month"
         assert (intent.start_date, intent.end_date) == (date(2026, 6, 1), date(2026, 6, 30))
+
+
+def test_a_known_new_noun_must_be_met_by_the_target_not_just_the_room(monkeypatch, home):
+    """Codex #2306: 'turn the bedroom heater on' with only a 'Bedroom Lamp' must say it couldn't find it, not switch the lamp on."""
+    lamp_only = [{"entity_id": "light.bedroom_lamp", "name": "Bedroom Lamp", "domain": "light", "on": False, "available": True,
+                  "dimmable": True}]
+
+    async def _devices():
+        return [dict(d) for d in lamp_only]
+
+    monkeypatch.setattr(shs, "list_devices", _devices)
+    out = _run(shs.resolve_smart_home(_I("turn_on", "bedroom heater", False)))
+    assert home == [] and "couldn" in out["spoken_summary"].lower()
+    # control: the heater that exists IS switched, and the lamp is still reachable by its own noun
+    monkeypatch.setattr(shs, "list_devices", lambda: _all())
+    _run(shs.resolve_smart_home(_I("turn_on", "hall heater", False)))
+    assert home == [("switch.hall_heater", True)]
+
+
+async def _all():
+    return [dict(d) for d in DEVICES]
+
+
+def test_relative_periods_the_qualifier_cannot_carry_are_declined():
+    for phrase in ("do I have any appointments next month", "what am I doing next weekend", "what are my plans in 2 weeks"):
+        assert command_shapes.calendar_read_ask(phrase) is None, phrase
+    assert command_shapes.calendar_read_ask("do I have any appointments today") == "today"            # control
