@@ -1401,12 +1401,13 @@ class LedgerUnavailable(RuntimeError):
     """The forget ledger could not be read: nothing is stored (a forgotten name must never land in the candidate store)."""
 
 
-async def _forgotten(user_id: str, text: str) -> bool:
-    """Does ``text`` name an entity the member forgot? An unreadable ledger RAISES ``LedgerUnavailable`` (fail closed); an
+async def _forgotten(user_id: str, text: str, *, near: bool = True) -> bool:
+    """Does ``text`` name an entity the member forgot? ``near=False`` is the SERVE-side read (near spellings off on reads: a
+    candidate about a similarly named person stays visible; only an exact forgotten name hides one). An unreadable ledger RAISES ``LedgerUnavailable`` (fail closed); an
     unconfigured ledger (no salt: nothing can have been forgotten) is a clean no."""
     try:
         import memory_forgotten as mf
-        return bool(await mf.spans(user_id, text, strict=True))
+        return bool(await mf.spans(user_id, text, near=near, strict=True))
     except Exception as exc:  # noqa: BLE001
         raise LedgerUnavailable(type(exc).__name__) from exc
 
@@ -1621,13 +1622,33 @@ async def list_candidates(user_id: str, *, status: str = "pending", day: str = "
     sql += " ORDER BY day_local DESC, kind, created_at LIMIT ?"
     params.append(int(limit))
     async with _db() as db:
-        return [public(r) for r in await _fetch(db, sql, tuple(params))]
+        rows = [public(r) for r in await _fetch(db, sql, tuple(params))]
+    return await _served(user_id, rows)
 
 
 async def get_candidate(user_id: str, cid: str) -> Optional[dict]:
     async with _db() as db:
         rows = await _fetch(db, "SELECT * FROM omi_day_candidates WHERE id = ? AND user_id = ?", (cid, user_id))
-    return public(rows[0]) if rows else None
+    kept = await _served(user_id, [public(rows[0])] if rows else [])
+    return kept[0] if kept else None
+
+
+async def _served(user_id: str, cands: list) -> list:
+    """The candidates that may be SHOWN: one naming a forgotten entity is not (the cascade's ``erase_entity`` deletes it at forget
+    time; this is the second wall for one it missed or a step still pending). Checked after the connection is released (a ledger
+    lookup may borrow its own). An unreadable ledger shows none (fail closed: forgotten means forever)."""
+    out = []
+    for c in cands:
+        text = json.dumps(c.get("payload") or {}, ensure_ascii=False) + " " + " ".join(
+            str(e.get("quote") or "") for e in (c.get("evidence") or []) if isinstance(e, dict))
+        try:
+            if await _forgotten(user_id, text, near=False):
+                continue
+        except LedgerUnavailable as exc:
+            logger.warning("omi_day_review: forget ledger unavailable (%s) - no candidates shown", exc)
+            return []
+        out.append(c)
+    return out
 
 
 async def dismiss(user_id: str, cid: str, *, via: str = "desktop") -> bool:
