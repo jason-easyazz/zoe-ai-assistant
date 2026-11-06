@@ -855,3 +855,18 @@ def test_a_curators_forget_cannot_be_overtaken_by_a_concurrent_edit(env):
 
     run(scenario())
     assert not [r for r in rows_of(env, KID) if "teacher" in r.text], "an approved teacher note survived the forget"
+
+
+def test_approving_a_pending_row_that_predates_a_curated_note_cannot_publish_a_contradiction(env):
+    """Codex #2158 (round 4): the pending row has no contradicts_id (it existed before the curator's note), so approval skipped the
+    protected-conflict scan and left two approved teachers."""
+    pending = run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="pending"))
+    assert pending.metadata["status"] == "pending"
+    rid = _curated_teacher(env)                                    # the curator adds "User's teacher is Ms Lee" AFTER
+    run(env.svc.review(pending.id, decision="approve", actor=KID))
+    assert env.col.rows[pending.id][1]["status"] != "approved", "the contradicting row was approved"
+    assert env.col.rows[rid][1]["status"] == "approved"
+    assert "Brown" not in " ".join(r.text for r in rows_of(env, KID))
+    ok = run(env.svc.ingest("User likes trains.", user_id=KID, source="chat_regex", status="pending"))
+    run(env.svc.review(ok.id, decision="approve", actor=KID))      # control: a non-contradicting pending row is approved as before
+    assert env.col.rows[ok.id][1]["status"] == "approved"

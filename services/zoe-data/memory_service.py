@@ -3005,6 +3005,23 @@ class MemoryService:
             # a candidate raised AGAINST a row is that row's owner's to approve
             if not (status in ("pending", "disputed") and meta.get("contradicts_id")
                     and _auth.writer_is_inferred(actor, user_id=user_id)):
+                if status == "pending" and not meta.get("contradicts_id"):
+                    # a pending row that PRE-DATES a curator's note has no conflict link: approving it would publish text that
+                    # disagrees with a protected row. Run the same scan ingest / edit run, against the rows protected NOW.
+                    res0 = _auth.resolve_write(actor, current.text.strip(), claimed=authority, user_id=user_id,
+                                               prompt_text=prompt_text, speaker_verified=speaker_verified)
+                    if res0.power < _auth.RANK[_auth.OPERATOR]:
+                        clash0 = await self._protected_conflict(user_id, current.text.strip(), res0.power)
+                        if clash0 is not None and clash0[0].id != current.id:
+                            _auth.log_blocked(actor, clash0[1], user_id=user_id, action="approve")
+                            if not _auth.enabled():
+                                return False
+                            await self._write_candidate(
+                                current.text.strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
+                                kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                                entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
+                                basis=res0.basis)
+                            return True
                 return False
             kind = _auth.kind_of(current.text)
         else:
