@@ -555,3 +555,76 @@ def test_the_scratch_path_carries_the_directories_of_pi_and_node(monkeypatch):
     parts = env["PATH"].split(":")
     assert parts[0] == "/home/u/.nvm/versions/node/v22/bin" and parts.count("/home/u/.nvm/versions/node/v22/bin") == 1
     assert parts[-3:] == ["/usr/local/bin", "/usr/bin", "/bin"]
+
+
+# ── per-arm flag overrides (bar_reliability.py --arm-env) ────────────────────────────────────────────────────────────
+
+def _arm_env(arm_env=None):
+    return hs.harness_env(LIVE_ENV, root=Path("/tmp/x"), dsn="postgresql://s", token="t", brain_token="b",
+                          flue_url="http://127.0.0.1:1", self_url="http://127.0.0.1:2", arm_env=arm_env)
+
+
+def test_arm_env_override_layers_on_top_of_the_copied_flags_for_that_stack_only():
+    base = _arm_env()
+    arm = _arm_env({"ZOE_RECALL_EVERY_TURN": "on", "ZOE_RESTRAINT": "enforce"})
+    assert base["ZOE_RESTRAINT"] == "shadow" and "ZOE_RECALL_EVERY_TURN" not in base      # the control stack is untouched
+    assert arm["ZOE_RECALL_EVERY_TURN"] == "on" and arm["ZOE_RESTRAINT"] == "enforce"      # wins over the copied live flag
+    assert {k: v for k, v in arm.items() if k not in ("ZOE_RECALL_EVERY_TURN", "ZOE_RESTRAINT")} == \
+        {k: v for k, v in base.items() if k != "ZOE_RESTRAINT"}                            # nothing else moved
+    assert arm["ZOE_HARNESS"] == "1" and arm["ZOE_INTERNAL_TOKEN"] == "t"                  # isolation pins still hold
+
+
+@pytest.mark.parametrize("name", [
+    "PATH", "HOME", "POSTGRES_URL", "HA_TOKEN", "zoe_lower",                                # not ZOE_*
+    "ZOE_HARNESS_FORCE", "ZOE_HARNESS_LANDING", "ZOE_HARNESS", "ZOE_HARNESS_ARM_ENV",       # never ZOE_HARNESS*
+    "ZOE_INTERNAL_TOKEN", "ZOE_WEBHOOK_SECRET", "ZOE_VAPID_PRIVATE_KEY",                    # secrets
+    "ZOE_LOG_DIR", "ZOE_DATA_DB", "ZOE_FOO_URL",                                            # locations
+    "ZOE_HA_BRIDGE_URL", "ZOE_DATA_URL", "ZOE_MULTICA", "ZOE_TTS_MODE", "ZOE_STT_DISABLED",  # endpoints / isolation pins
+])
+def test_arm_env_refuses_non_zoe_and_forbidden_names(name):
+    with pytest.raises(hs.Refused):
+        hs.validate_arm_env({name: "secretvalue9"})
+    with pytest.raises(hs.Refused) as exc:
+        _arm_env({name: "secretvalue9"})
+    assert "secretvalue9" not in str(exc.value)                                             # names only, never the value
+
+
+@pytest.mark.parametrize("value", ["http://evil/x", "a\nb", "x" * 65, "$(id)"])
+def test_arm_env_refuses_url_control_and_oversized_values(value):
+    with pytest.raises(hs.Refused) as exc:
+        hs.validate_arm_env({"ZOE_RECALL_EVERY_TURN": value})
+    assert value not in str(exc.value)
+
+
+def test_arm_env_comes_from_one_json_variable_and_is_validated():
+    assert hs.arm_env_from_environ({}) == {}
+    assert hs.arm_env_from_environ({hs.ARM_ENV_VAR: '{"ZOE_RECALL_EVERY_TURN": "on"}'}) == {"ZOE_RECALL_EVERY_TURN": "on"}
+    for bad in ("not json", '["ZOE_X"]', '{"ZOE_HARNESS_FORCE": "1"}'):
+        with pytest.raises(hs.Refused):
+            hs.arm_env_from_environ({hs.ARM_ENV_VAR: bad})
+
+
+def test_the_arm_env_is_recorded_in_the_public_state_without_a_secret():
+    st = hs.ScratchStack.__new__(hs.ScratchStack)
+    st.state = {"tag": "t", "dsn": "postgresql://secret", "token": "tok", "arm_env": {"ZOE_RECALL_EVERY_TURN": "on"}}
+    pub = st.public()
+    assert pub["arm_env"] == {"ZOE_RECALL_EVERY_TURN": "on"} and "dsn" not in pub and "token" not in pub
+
+
+@pytest.mark.parametrize("name", ["ZOE_APIKEY", "ZOE_DATABASE", "ZOE_FILENAME", "ZOE_X_KEY", "ZOE_AUTH_MODE", "ZOE_DB",
+                                  "ZOE_STATE_DIRECTORY", "ZOE_PG_DSN", "ZOE_SESSION_COOKIE", "ZOE_BEARER_X"])
+def test_arm_env_refuses_the_spellings_the_copied_flag_filter_alone_would_miss(name):
+    with pytest.raises(hs.Refused):
+        hs.validate_arm_env({name: "abc"})
+
+
+@pytest.mark.parametrize("name", ["ZOE_RECALL_EVERY_TURN", "ZOE_RECALL_EVERY_TURN_HARNESS", "ZOE_MEMORY_NOW_CARD",
+                                  "ZOE_RESTRAINT", "ZOE_VOICE_KEYTERMS_MODE"])
+def test_arm_env_still_accepts_ordinary_flag_names(name):
+    assert hs.validate_arm_env({name: "on"}) == {name: "on"}
+
+
+@pytest.mark.parametrize("value", ["/tmp/x", "/etc/passwd", "a b", "~/x", "a;b"])
+def test_arm_env_refuses_path_and_shell_shaped_values(value):
+    with pytest.raises(hs.Refused):
+        hs.validate_arm_env({"ZOE_RECALL_EVERY_TURN": value})
