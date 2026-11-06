@@ -436,6 +436,12 @@ _HISTORICAL_BEFORE_RE = re.compile(r"\b(?:was|were|used\s+to\s+be|back\s+then)\b
 _HISTORICAL_AFTER_RE = re.compile(r"^\W*(?:when|back|then|at\s+the\s+time|before|until|in\s+(?:19|20)\d\d)\b", re.IGNORECASE)
 
 
+_FUTURE_BEFORE_RE = re.compile(r"\b(?:will|going\s+to|about\s+to|turning)\b|['’]ll\b", re.IGNORECASE)
+_FUTURE_AFTER_RE = re.compile(r"^\W*(?:tomorrow|tonight|soon|next\s+(?:week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+                              r"|on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|in\s+(?:a|an|\d+)\s+\w+)\b",
+                              re.IGNORECASE)
+
+
 def person_age_claim(text: str) -> Optional[tuple[str, int]]:
     """``(name lower-cased, age)`` when the row states ONE named person's age, else None. Read-only helper for the
     memory packet (``routers.memories``): two rows giving the same person different ages are one fact, changed."""
@@ -451,6 +457,10 @@ def person_age_claim(text: str) -> Optional[tuple[str, int]]:
     # A HISTORICAL age is not the current one: "Alice was 9 years old when she moved to Perth", "he used to be 9", "at 9 back then".
     between = (text or "")[subj.start():m.start()]
     if _HISTORICAL_BEFORE_RE.search(between) or _HISTORICAL_AFTER_RE.match((text or "")[m.end():m.end() + 40]):
+        return None
+    # A FUTURE age is not the current one either: "Alice turns 10 tomorrow", "will be 10", "is turning 10", "10 next week".
+    if (m.group(0).lower().startswith("turns") or _FUTURE_BEFORE_RE.search(between)
+            or _FUTURE_AFTER_RE.match((text or "")[m.end():m.end() + 40])):
         return None
     return subj.group("name").lower(), n
 

@@ -705,9 +705,13 @@ def _third_person_age_names(win: str, fact: str) -> bool:
     subject of the age shape must be a word of the fact: a model that misattributes a relative's age must not borrow the cue."""
     fact_words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'’-]*", _fold(fact))}
     fact_words |= {w[:-2] for w in fact_words if w.endswith(("'s", "’s"))}
+    fact_numbers = set(re.findall(r"\d{1,3}", fact))
     for m in _THIRD_PERSON_AGE_RE.finditer(win):
         subj = re.match(r"[a-z][a-z'’-]*?(?=['’]s|\s+is|\s+was|['’]re|\s+are)", m.group(0), re.IGNORECASE)
-        if subj and subj.group(0).lower() in fact_words:
+        nums = re.findall(r"\d{1,3}", m.group(0))
+        # the SUBJECT and the NUMBER of the same match must both be the fact's: "Alice is 9 and Ben is 10" supports Ben: 10, never
+        # Alice: 10 (Alice's 9 and Ben's 10 are two separate matches)
+        if subj and subj.group(0).lower() in fact_words and nums and nums[-1] in fact_numbers:
             return True
     return False
 

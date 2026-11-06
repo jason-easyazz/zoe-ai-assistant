@@ -379,3 +379,20 @@ def test_a_misattributed_relatives_age_does_not_borrow_the_correction_cue():
     assert wrong.basis != "explicit_correction" and not wrong.promoted
     right = ma.resolve_write("person_extractor_llm", "Ben: 10 years old", anchor_text=anchor, user_id="member_a")
     assert right.basis == "explicit_correction"                                  # control: the named person still earns it
+
+
+def test_the_age_cue_needs_the_matched_subject_and_number_together():
+    """Codex #2310 round 3: 'Alice is 9 and Ben is 10 now' must not support 'Alice: 10 years old' (Alice's 9 + Ben's 10)."""
+    anchor = "actually Alice is 9 and Ben is 10 now"
+    wrong = ma.resolve_write("person_extractor_llm", "Alice: 10 years old", anchor_text=anchor, user_id="member_a")
+    assert wrong.basis != "explicit_correction" and not wrong.promoted
+    assert ma.resolve_write("person_extractor_llm", "Ben: 10 years old", anchor_text=anchor, user_id="member_a").basis == "explicit_correction"
+
+
+@pytest.mark.parametrize("text", ["Alice turns 10 tomorrow", "Alice will be 10 next month", "Alice is turning 10", "Alice is 10 next week"])
+def test_a_future_age_is_not_a_current_age_claim(text):
+    assert person_extractor.person_age_claim(text) is None
+    rows = [_ref("cur", "Alice is 9 years old", ma.USER_STATED, "2026-11-01T08:00:00+00:00"),
+            _ref("fut", text, ma.USER_STATED, "2026-11-03T08:00:00+00:00")]
+    assert person_extractor.stale_age_ids(rows) == set()
+    assert person_extractor.person_age_claim("Alice turned 10 last month") == ("alice", 10)               # control
