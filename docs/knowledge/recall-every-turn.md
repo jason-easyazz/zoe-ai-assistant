@@ -66,5 +66,5 @@ In shadow and on, every eligible household brain turn logs one line (ids, counts
 
 ## Not in this change
 
-* The voice history window (`routers/voice_tts.py` loads 3 rows) is not widened: the Flue lane ignores zoe-data's history kwargs - the sidecar keeps its own session context (`history=` / `tail=` in `FLUE_CONTEXT_BUDGET`), so widening it would change nothing on the live lane.
 * The per-member "now card" (speaker, open threads, next date, one stated fact) is its own flag: [now-card.md](now-card.md).
+* The voice history window. Widened separately (2026-11-05, lane E3): the live history is the sidecar session window, whose floor is now 8 earlier turns (`ZOE_BRAIN_KEEP_TURNS`, default 8, rollback 3; see `services/zoe-data/AGENTS.md`). `routers/voice_tts.py`'s `limit=3` only feeds non-Flue lanes and was left alone.
