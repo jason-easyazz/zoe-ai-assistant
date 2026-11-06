@@ -775,9 +775,9 @@ def test_seam_offer_block_is_one_question_when_batched(monkeypatch):
         return [dict(o) for o in FAMILY[:limit]]
 
     monkeypatch.setattr(ps, "surface_pending_contacts_for_prompt", surface)
-    # flag OFF: legacy shape - one ask line per offer (capped at two), asked one by one
+    # flag OFF: legacy shape - ONE ask line per turn (the first offer), never the whole list
     legacy = asyncio.run(zf._pending_offer_block(USER))
-    assert legacy.count("ask the user exactly") == 2 and "Wren" not in legacy
+    assert legacy.count("ask the user exactly") == 1 and "Rodrigo" in legacy and "Wren" not in legacy
     monkeypatch.setenv("ZOE_CONTACT_OFFER_BATCH", "1")
     block = asyncio.run(zf._pending_offer_block(USER))
     assert block.count("ask the user exactly") == 1

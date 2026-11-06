@@ -1798,7 +1798,11 @@ async def snapshot(user_id: str, *, use_cache: bool = False, all_threads: bool =
     now = time.monotonic()
     hit = _CACHE.get(user_id)
     if use_cache and hit and now - hit[0] < _CACHE_TTL_S:
-        return (list(hit[1]), list(hit[2])) if all_threads else _only_significant(hit[1], hit[2])
+        # a forget since the cache was filled (a tombstone or a ledger entry, and an erase that did not land) still hides the quote
+        cached = [o for o in hit[2] if not await _shielded(user_id, o["quote"])]
+        alive_c = {o["thread_id"] for o in cached}
+        threads_c = [t for t in hit[1] if t["id"] in alive_c]
+        return (threads_c, cached) if all_threads else _only_significant(threads_c, cached)
     backend = night_store.get_backend()
     threads = await backend.threads(user_id)
     obs = await backend.observations(user_id, states=("current",))

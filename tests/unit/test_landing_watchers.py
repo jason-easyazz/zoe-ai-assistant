@@ -190,3 +190,62 @@ def test_watchd_reports_unknown_not_zero_when_the_thread_read_fails(rig):
     watchd(rig)
     ev = events(rig)
     assert len(ev) == 1 and "BLOCKED: unknown unresolved thread(s)" in ev[0], ev
+
+
+# ---- WINDOW_OPEN staleness (2026-11-06: a failed night restore left the marker and paused every landing for 2 h) -----
+
+def _marker(rig, age_s, pid=None):
+    import json as _json
+    import os as _os
+    m = rig.tmp / ".zoe" / "night-window" / "WINDOW_OPEN"
+    m.parent.mkdir(parents=True, exist_ok=True)
+    m.write_text(_json.dumps({"pid": pid if pid is not None else 2 ** 22 + 7, "stopped": ["functiongemma-router.service"]}))
+    t = int(NOON) - age_s
+    _os.utime(m, (t, t))
+    return m
+
+
+def _window_open(rig):
+    import subprocess
+    r = subprocess.run(["bash", "-c", f". {REPO}/scripts/landing/landing_lib.sh; landing_window_open"], env=rig.env(ZOE_LANDING_NOW_EPOCH=NOON),
+                       capture_output=True, text=True, timeout=30)
+    return r.returncode, r.stdout.strip()
+
+
+def test_a_young_marker_is_an_open_window(rig):
+    _marker(rig, 40 * 60)
+    assert _window_open(rig) == (0, "")
+
+
+def test_no_marker_is_not_open(rig):
+    assert _window_open(rig)[0] == 1
+
+
+def test_an_old_marker_with_a_dead_owner_is_stale_and_says_so(rig):
+    _marker(rig, 130 * 60)
+    rc, out = _window_open(rig)
+    assert rc == 1 and out.startswith("STALE 7800s")
+
+
+def test_an_old_marker_whose_owner_is_a_live_night_window_is_still_open_negative_control(rig):
+    """Never skip a genuinely open window: a long run whose process is alive keeps landings paused however old the marker."""
+    import subprocess
+    import sys
+    fake = rig.tmp / "night_window.py"
+    fake.write_text("import time; time.sleep(60)\n")
+    p = subprocess.Popen([sys.executable, str(fake)])
+    try:
+        _marker(rig, 300 * 60, pid=p.pid)
+        assert _window_open(rig) == (0, "")
+        p.kill()
+        p.wait()
+        assert _window_open(rig)[0] == 1
+    finally:
+        p.kill()
+
+
+def test_the_chain_stops_pausing_on_a_stale_marker_and_logs_it_loudly(rig):
+    _marker(rig, 130 * 60)
+    state(rig, {"21": {"isDraft": True, "mergeStateStatus": "CLEAN", "checks": [{"name": "validate", "state": "SUCCESS"}], "files": ["docs/x.md"]}})
+    r, log = chain(rig)
+    assert r.returncode == 0 and "STALE" in log and "restore-only" in log and "draft" in log and "chain paused" not in log

@@ -1,0 +1,14 @@
+# zoe-night-window-restore-retry.service - re-runs `night_window.sh --restore-only` while a FAILED night restore has left the WINDOW_OPEN marker behind.
+# 2026-11-06: the router would not start inside the restore (NvMap error 12), the marker stayed from 03:23 to 05:33 and every landing was paused until a human ran
+# --restore-only. Fired by zoe-night-window-restore-retry.timer every 10 minutes; does nothing at all unless the marker exists AND no window / restore is running.
+# --restore-only itself is idempotent and does nothing while the marker's owner process is alive. Install with scripts/night/install_night_window.sh.
+[Unit]
+Description=Zoe night window: retry a failed restore (marker still present)
+ConditionPathExists=%h/.zoe/night-window/WINDOW_OPEN
+
+[Service]
+Type=oneshot
+# not while the window (or its own ExecStopPost restore) is running: "activating" and "deactivating" count as running
+ExecCondition=/bin/sh -c 'case "$(systemctl --user show -p ActiveState --value zoe-night-window.service)" in inactive|failed) exit 0;; *) exit 1;; esac'
+ExecStart=%h/assistant/scripts/night/night_window.sh --restore-only
+TimeoutStartSec=1500
