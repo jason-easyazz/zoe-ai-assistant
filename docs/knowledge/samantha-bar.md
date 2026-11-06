@@ -675,7 +675,8 @@ python3 scripts/perf/bar_reliability.py compare --control A --candidate B --admi
 Reliability baseline: `~/.cache/zoe/samantha_bar_reliability_baseline.json` (the aggregate JSON,
 schema `zoe.bar_reliability/1`). `run` writes `<out-dir>/<arm>/run-<i>.json` (each the bar's own
 results file), `<out-dir>/<arm>/trend.jsonl` (kept out of the weekly trend) and
-`<out-dir>/reliability.json` = `{"arms": {name: aggregate}, "compare": comparison | null}`.
+`<out-dir>/reliability.json` = `{"arms": {name: aggregate}, "compare": comparison | null,
+"declared_arm_env": {arm: overrides}}`.
 
 **The night command (prepared, not yet run).** `run` is a NIGHT job under the same rules as the bar
 (scripts/AGENTS.md: harness quiet hours, the measured night pause, no daytime 4B outside a person's
@@ -719,10 +720,42 @@ python3 scripts/perf/bar_reliability.py compare --admissible \
 `--dry-run` prints the six steps and which are still to run. `--harness day-sim` runs
 `samantha_day_sim.py` instead (its `asks` are read the same way).
 
-Limits: a flag-ON candidate cannot be expressed yet. The scratch stack copies the LIVE flags into
-every arm, so an arm differs only by its checkout (a prompt, overlay or code change: what the GEPA
-improver produces). A flag A/B needs a per-arm flag override in `harness_scratch.harness_env`, not
-built. k=3 bounds what a single scenario can show: a 3/3 control vs a 2/3 candidate blocks by
+**A flag A/B (`--arm-env`).** The scratch stack copies the LIVE flags into every arm, so without
+help an arm differs only by its checkout. `--arm-env ARM:ZOE_FLAG=value,ZOE_FLAG2=value` (repeatable)
+layers per-arm overrides ON TOP of the copied flags inside that arm's scratch zoe-data only (the
+night runner hands them to that arm's steps in `ZOE_HARNESS_ARM_ENV`, one JSON object, and drops any
+inherited one). Only `ZOE_*` names are accepted, never `ZOE_HARNESS*` (`ZOE_HARNESS_FORCE` /
+`_LANDING` / the isolation pins), a secret-looking name, a location (`_URL`, `_DIR`, `_PATH`, `_DB`...)
+or an endpoint the stack sets itself; values are short plain strings (no URL). Refused flags and
+values are never echoed (names only), and the dry-run shows only short plain values (anything else as
+its length). The stack records the overrides it applied in each run (`scratch.arm_env`), the
+aggregate carries `arm_env`, `reliability.json` carries `declared_arm_env` and the comparison
+`arm_env` / `arm_env_differs`. The arms may differ ONLY in the declared override + checkout: a run
+whose recorded override is not the declared one (the override never reached the stack, or another did)
+makes the arms not comparable (exit 2), runs of one arm that disagree are `error`, and a kept run is
+reused only for the same override (it is part of the arm identity). An overridden arm never records
+the reliability baseline. Control and candidate may point at the SAME checkout (the A/B is then the
+flag alone). The override applies to the zoe-data process, not the Flue sidecar.
+
+The recall-every-turn A/B ([recall-every-turn.md](recall-every-turn.md) step 2), PREPARED, NOT RUN. It
+runs the FULL bar (an `--axis` subset is `partial` and can never be admissible), so it replaces the
+off-vs-on `--axis d,e` pair there; `ZOE_RECALL_EVERY_TURN_HARNESS=1` is what admits the harness's
+`demo_*` ids:
+
+```bash
+cd ~/.worktrees/bar-control && ZOE_PERF=1 ZOE_NIGHT_BUSY=$HOME/assistant/scripts/landing/night_busy.sh \
+  nice -n 5 python3 scripts/perf/bar_reliability.py run \
+    --out-dir ~/.cache/zoe/bar_reliability/recall-every-turn \
+    --arm control=$HOME/.worktrees/bar-control --arm candidate=$HOME/.worktrees/bar-control \
+    --arm-env candidate:ZOE_RECALL_EVERY_TURN=on,ZOE_RECALL_EVERY_TURN_HARNESS=1 \
+    --k 3 --step-min 35 -- --samples 3
+# the same shape for the shadow flag: --arm-env candidate:ZOE_MEMORY_NOW_CARD=shadow
+```
+
+KEEP only if the morning `compare --admissible` is exit 0 AND the probe check in recall-every-turn.md
+holds (the bar scores replies, not the cached-prefix fraction).
+
+Limits: k=3 bounds what a single scenario can show: a 3/3 control vs a 2/3 candidate blocks by
 design (conservative), while `weakened` on an already-flaky scenario does not.
 
 ## Teardown (the demo-users-only guardrail)
