@@ -26,7 +26,7 @@ while [ "$(date +%s)" -lt "$STOP_AT" ]; do
       continue
     fi
     exec 9>"$C/docs-chain.lock"; flock 9
-    while pgrep -f 'land_voice_pr\.sh|land_queue\.sh|docs_merge_chain\.sh' >/dev/null; do sleep 5; done
+    while landing_running land_voice_pr.sh land_queue.sh docs_merge_chain.sh; do sleep 5; done
     quiet || bash "$LANDING_DIR/docs_merge_chain.sh" "$pr" >> "$LANDING_LOG" 2>&1
     flock -u 9
     grep -qE '^[0-9]+ ' "$P/voice-pending.txt" 2>/dev/null && sleep 240

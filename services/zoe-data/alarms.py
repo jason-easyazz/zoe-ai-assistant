@@ -165,6 +165,11 @@ def next_once_date(hhmm: str, now: float) -> str:
     return (today if _at(today, hhmm) > now else today + timedelta(days=1)).isoformat()
 
 
+def household_tz_name() -> str:
+    """The IANA name of the household zone (sent to the panel so its dates are the household's); "" if the zone has none."""
+    return str(getattr(zoe_timezone(), "key", "") or "")
+
+
 def clock_phrase(hhmm: str) -> str:
     h, m = int(hhmm[:2]), int(hhmm[3:])
     return f"{h % 12 or 12}:{m:02d} {'am' if h < 12 else 'pm'}"

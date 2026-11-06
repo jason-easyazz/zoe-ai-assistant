@@ -59,7 +59,8 @@ async def _load(db, alarm_id: str, v: alarms.Viewer, check) -> dict:
 async def list_alarms(request: Request, user: dict = Depends(require_member_or_panel), db=Depends(get_db)):
     v, now = viewer_of(user), time.time()
     rows = [a for a in await alarms.list_alarms(db, v) if alarms.can_see(a, v)]
-    return {"alarms": [alarms.present(a, v, now) for a in rows], "now": now, "tones": alarms.TONES}
+    # tz: the household zone, so the panel picks "today" and a once-off's date in the household's day, not its OS zone's
+    return {"alarms": [alarms.present(a, v, now) for a in rows], "now": now, "tones": alarms.TONES, "tz": alarms.household_tz_name()}
 
 
 @router.get("/ringing")
