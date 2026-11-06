@@ -187,7 +187,8 @@ def test_control_with_the_gate_off_the_measured_defect_returns(svc, monkeypatch)
     _night(svc, monkeypatch, _all_proposals())
     approved = _by_status(svc, "approved")
     assert all(f in approved for f in LF.proposals_fabricated)                         # a fabricated link is served again
-    assert any("you told me" in t.lower() for t in approved)                           # and an invention presented as said
+    # (an invention presented as "you told me ..." is no longer in this list even with the gate off: the write-quality gate's
+    # conversation_meta rule now stops talk-about-the-conversation on its own - a second layer, not this control's subject)
     assert any(" probably " in t for t in approved)                                    # and a guess about something said plainly
     assert "false" in {cap.classify_observation(t, GOLD)[0] for t in approved}
 

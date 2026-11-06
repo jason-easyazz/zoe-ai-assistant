@@ -104,8 +104,10 @@ and `deploy.yml` restarts the sidecar on any change there.
   against persona sentences minus a negative seed set) + style adherence + trait-cue rates. CLI:
   `python3 services/zoe-data/persona_drift.py transcript.jsonl [--persona p.json] [--embedder
   lexical|bge] [--member companion|mentor|helper|guest|kid] [--json]` — plain text (no labels) is
-  refused without `--member`; unlabeled rows are never scored; exit 0 ok / 1 exceeded / 2 error / 3 insufficient sample. Skips kid and
-  minor rows, keeps no text or ids, writes nothing. The bar (≥30 replies, deviation ≤10 %, style
+  refused without `--member`; unlabeled rows are never scored; exit 0 ok / 1 exceeded / 2 error / 3 insufficient sample. Kid and
+  minor rows are scored under the zero-tolerance kid-safe rubric (`kid_safe_checks`: no bond, secrecy,
+  diagnosis, therapy claim, teasing, mood label, self-id or markdown; a trusted adult on a `crisis` turn),
+  never the adult anchors (governance note §4.1 cell d); keeps no text, ids or per-child figure, writes nothing. The bar (≥30 replies, deviation ≤10 %, style
   pass ≥90 %) and band thresholds are **provisional** until a baseline week is measured. Nothing
   live calls it (`ZOE_PERSONA_DRIFT` gates the unused in-process hook).
 
