@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 814 prod flags; 228 read through `typed_env`.
+- 815 prod flags; 229 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 1 registered flags with no reader in the scanned sources.
+- 0 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-814 flags; 763 not documented in `.env.example`.
+815 flags; 764 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -77,6 +77,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_ANNOUNCE_POLL_S` | float | `5.0` | - | `docs/knowledge/mac-virtual-panel.md` | `'5.0'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ZOE_ANNOUNCE_STRICT_PANEL` | str | `''` | - | `docs/knowledge/zoe-driven-voice-enrollment.md` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
 | `ZOE_ANNOUNCE_TTL_S` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | yes | `services/zoe-data/voice_announce.py` |
+| `ZOE_ANTICIPATION` | str | `'off'` | `off`, `shadow`, `on` | `docs/architecture/anticipation-loop.md` | `'off'` | yes | NO | `services/zoe-data/anticipation.py` |
 | `ZOE_API` | str | `'https://192.168.1.218'` | - | `scripts/AGENTS.md` | `'https://192.168.1.218'` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_APP_LOG` | str | `''` | - | - | `dynamic` | no | NO | `scripts/perf/user_model_ab.py` |
 | `ZOE_ASK_TO_REMEMBER` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/ask_to_remember.py` |
@@ -1174,9 +1175,3 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZMB_ORT_THREADS` | `'2'` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `ZMB_PROBE_NEEDLE` | `''` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
 | `ZMB_REAL_HOME` | `dynamic` | no | NO | `scripts/perf/zmb/arms/mpa_palace.py` |
-
-## Registered but not read by any scanned source
-
-Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
-
-`ZOE_ANTICIPATION`
