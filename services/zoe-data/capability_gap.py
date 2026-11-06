@@ -174,6 +174,8 @@ class Event:
     utt: Optional[str] = None         # utterance hash, when the source is hash-keyed
     area: Optional[str] = None        # area when the source names one (a domain) instead of words
     note: str = ""                    # short private detail (signal, intent name)
+    origin: str = ""                  # "jsonl" for an intent-misses.jsonl record (the only source that holds PII-REDACTED words)
+    alt_text: Optional[str] = None    # the redacted wording of a hash-only event, kept when its redacted twin is merged into it
 
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%S%z"
@@ -264,7 +266,7 @@ def parse_miss_record(rec: dict) -> Optional[Event]:
         return None
     if _non_household(rec.get("traffic_class") or rec.get("traffic")):
         return None                                  # intent_router writes traffic_class into every miss record
-    return Event(float(rec["ts"]), SRC_INTENT_MISS, None, text=rec["text"], utt=utterance_hash(rec["text"]))
+    return Event(float(rec["ts"]), SRC_INTENT_MISS, None, text=rec["text"], utt=utterance_hash(rec["text"]), origin="jsonl")
 
 
 def build_resolver(transcripts: Iterable[str]) -> dict:
@@ -309,7 +311,9 @@ def _drop_redacted_twins(events: Iterable[Event]) -> list:
     un-redacted intent-miss twin written within ``REDACT_TWIN_S`` of it (one-to-one) is that same request: drop the redacted copy
     and keep the twin (its hash can still be resolved to words from the local STT log). A redacted record with no twin is kept."""
     evs = list(events)
-    twins = sorted((e for e in evs if e.source == SRC_INTENT_MISS and not (e.text and _REDACTED.search(e.text))), key=lambda e: e.ts)
+    # a twin is a record of ANOTHER source (the service log): two records of the same file are two requests, however close they are
+    twins = sorted((e for e in evs if e.source == SRC_INTENT_MISS and e.origin != "jsonl" and not (e.text and _REDACTED.search(e.text))),
+                   key=lambda e: e.ts)
     used: set = set()
     drop: set = set()
     for r in sorted((e for e in evs if e.source == SRC_INTENT_MISS and e.text and _REDACTED.search(e.text)), key=lambda e: e.ts):
@@ -322,6 +326,8 @@ def _drop_redacted_twins(events: Iterable[Event]) -> list:
         if best is not None:
             used.add(best)
             drop.add(id(r))
+            if twins[best].text is None and twins[best].alt_text is None:
+                twins[best].alt_text = r.text      # the only wording a typed PII request has: kept for clustering, never for display of the hash
     return [e for e in evs if id(e) not in drop]
 
 
@@ -348,7 +354,9 @@ def dedupe(events: Iterable[Event]) -> list:
 
 def _resolve(ev: Event, resolver: dict) -> Event:
     if ev.text is None and ev.utt and ev.utt in resolver:
-        ev.text = resolver[ev.utt]
+        ev.text = resolver[ev.utt]            # the original words from the local STT log beat the redacted copy
+    elif ev.text is None and ev.alt_text:
+        ev.text = ev.alt_text                 # else the redacted wording ("send a message to [NAME]") still classifies the request
     return ev
 
 

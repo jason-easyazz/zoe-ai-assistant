@@ -327,11 +327,31 @@ def test_script_exit_2_when_every_existing_source_is_unreadable(tmp_path):
 def test_a_redacted_miss_record_and_its_log_line_are_one_request():
     """Codex #2294: the log line carries the original hash, intent-misses.jsonl a [NAME]-redacted copy; they are one miss."""
     log = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt=cg.utterance_hash("send a message to Ada Lovelace"))
-    red = cg.Event(NOW - DAY + 1.5, cg.SRC_INTENT_MISS, None, text="send a message to [NAME]", utt=cg.utterance_hash("send a message to [NAME]"))
+    red = cg.Event(NOW - DAY + 1.5, cg.SRC_INTENT_MISS, None, text="send a message to [NAME]", utt=cg.utterance_hash("send a message to [NAME]"), origin="jsonl")
     kept = cg.dedupe([log, red])
     assert len(kept) == 1 and kept[0] is log
     ranked = cg.cluster_events([log, red], now=NOW, days=14, resolver={cg.utterance_hash("send a message to Ada Lovelace"): "send a message to Ada Lovelace"})
     assert sum(c.count for c in ranked) == 1
-    far = cg.Event(NOW - DAY + 600, cg.SRC_INTENT_MISS, None, text="send a message to [NAME]", utt=cg.utterance_hash("send a message to [NAME]"))
+    far = cg.Event(NOW - DAY + 600, cg.SRC_INTENT_MISS, None, text="send a message to [NAME]", utt=cg.utterance_hash("send a message to [NAME]"), origin="jsonl")
     assert len(cg.dedupe([log, far])) == 2                   # negative control: a redacted record with no nearby twin still counts
     assert len(cg.dedupe([red])) == 1
+
+
+def test_two_records_of_the_jsonl_are_never_twins_of_each_other():
+    """Codex #2294: with the service log absent, a redacted miss and an unrelated plain one seconds apart are two requests."""
+    a = cg.parse_miss_record({"text": "send a message to [NAME]", "ts": NOW - DAY})
+    b = cg.parse_miss_record({"text": "set a timer for tea", "ts": NOW - DAY + 2})
+    assert a.origin == b.origin == "jsonl" and len(cg.dedupe([a, b])) == 2
+
+
+def test_the_redacted_wording_survives_the_merge_with_the_hash_only_twin():
+    """Codex #2294: a typed PII request has no STT transcript; its only words are the redacted copy - keep them to classify it."""
+    h = cg.utterance_hash("send a message to Ada Lovelace")
+    log = cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt=h)
+    red = cg.parse_miss_record({"text": "send a message to [NAME]", "ts": NOW - DAY + 1.5})
+    ranked = cg.cluster_events([log, red], now=NOW, days=14)
+    assert sum(c.count for c in ranked) == 1 and ranked[0].area == "communications"
+    ranked = cg.cluster_events([cg.Event(NOW - DAY, cg.SRC_INTENT_MISS, None, utt=h),
+                                cg.parse_miss_record({"text": "send a message to [NAME]", "ts": NOW - DAY + 1.5})],
+                               now=NOW, days=14, resolver={h: "send a message to Ada Lovelace"})
+    assert ranked[0].examples == ["send a message to Ada Lovelace"]           # the original words win when the STT log has them
