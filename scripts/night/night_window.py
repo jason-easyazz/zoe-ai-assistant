@@ -107,6 +107,16 @@ class UnitSpec:
     ok: Callable[[str], bool]
     wait_s: float
     what: str
+    #: how many start tries before the unit is reported NOT HEALTHY (the first is ``start``, the rest ``restart``)
+    attempts: int = 2
+    #: seconds to wait before try 2, 3, ... (the last value repeats); lets freed GPU/NvMap memory settle
+    backoff_s: "tuple[float, ...]" = ()
+    #: compact RAM (page cache + ``compact_memory``) before EVERY try. The router is CPU-only (``--n-gpu-layers 0``) yet still calls
+    #: ``cudaMemGetInfo``, which needs one NvMap handle: on fragmented RAM that dies "NvMapMemAllocInternalTagged error 12" -> CUDA OOM -> SEGV/ABRT
+    #: in about 1 s (2026-11-06: three restores x 2 tries, 40 min, all the same crash; the cold start of a router that CAN start is seconds).
+    compact: bool = False
+    #: total seconds this unit's tries may spend (0 = no budget): no new try starts once it is spent, so a stuck unit cannot eat the restore reserve the units behind it need
+    budget_s: float = 0.0
 
 
 def _status_ok(text: str) -> bool:
@@ -121,7 +131,7 @@ def _kokoro_ok(text: str) -> bool:
 HEALTH = {
     BRAIN: UnitSpec(BRAIN, "http://127.0.0.1:11434/health", _status_ok, 240.0, "the 4B brain"),
     KOKORO: UnitSpec(KOKORO, "http://127.0.0.1:10201/health", _kokoro_ok, 240.0, "Kokoro (pipeline_loaded, device cuda)"),
-    ROUTER: UnitSpec(ROUTER, "http://127.0.0.1:11436/health", _status_ok, 120.0, "the FunctionGemma router"),
+    ROUTER: UnitSpec(ROUTER, "http://127.0.0.1:11436/health", _status_ok, 90.0, "the FunctionGemma router", attempts=4, backoff_s=(10.0, 20.0, 40.0), compact=True, budget_s=420.0),
     ZOE_DATA: UnitSpec(ZOE_DATA, "http://127.0.0.1:8000/health", _status_ok, 240.0, "zoe-data"),
 }
 
@@ -2141,17 +2151,28 @@ class NightWindow(bk.Window):
             self.log(f"RESTORE: cold-start helper errored ({type(exc).__name__}: {exc}); starting the brain without it")
 
     def bring_back(self, unit: str) -> "dict[str, Any]":
-        """Start ``unit`` and require its OWN health answer. One retry (a restart, with a fresh compaction for the brain); then the failure is reported, not hidden."""
+        """Start ``unit`` and require its OWN health answer. ``spec.attempts`` tries (a start, then restarts after ``spec.backoff_s``; a fresh compaction before each try for the brain's retry and for every try of a ``spec.compact`` unit); then the failure is reported, not hidden."""
         spec = HEALTH[unit]
         info: "dict[str, Any]" = {"ok": False, "attempts": 0, "what": spec.what}
-        for attempt, verb in ((1, "start"), (2, "restart")):
+        t0 = self.host.mono()
+        for attempt in range(1, max(1, spec.attempts) + 1):
+            verb = "start" if attempt == 1 else "restart"
+            pause = spec.backoff_s[min(attempt - 2, len(spec.backoff_s) - 1)] if (attempt >= 2 and spec.backoff_s) else 0.0
+            if attempt >= 2 and spec.budget_s and self.host.mono() - t0 + pause + spec.wait_s > spec.budget_s:
+                self.event(f"RESTORE: {unit} out of time ({spec.budget_s:.0f}s budget) after {attempt - 1} try(s): the units behind it must still be woken")
+                break
             info["attempts"] = attempt
-            if attempt == 2:
-                self.event(f"RESTORE: {unit} not healthy after {spec.wait_s:.0f}s - retrying with a restart")
-                if unit == BRAIN:
-                    self.compact_before_brain()
+            if attempt >= 2:
+                self.event(f"RESTORE: {unit} not healthy after {spec.wait_s:.0f}s - retrying with a restart (try {attempt}/{spec.attempts})")
+                if pause:
+                    self.host.sleep(pause)
+                self.host.run(["systemctl", "--user", "reset-failed", unit], timeout=30)     # a start-limit-hit would refuse the next start outright
             if unit == BRAIN:
+                if attempt >= 2:
+                    self.compact_before_brain()
                 self.cold_start_guard()
+            elif spec.compact:
+                self.compact_memory(f"before {unit} try {attempt}")
             self.host.run(["systemctl", "--user", verb, unit], timeout=spec.wait_s + 60)
             if self.poll_health(spec.url, spec.ok, spec.wait_s, unit=unit, guard=False):
                 info["ok"] = True

@@ -183,3 +183,17 @@ landing_wait_merged(){
   done
   gh pr merge "$pr" --disable-auto >/dev/null 2>&1; return 1
 }
+
+# landing_window_open: is the 12B night window genuinely open? A WINDOW_OPEN marker left behind by a FAILED restore (2026-11-06: the router would not start,
+# the marker stayed 2 h and paused every landing) must not pause landings forever. The marker is rewritten (mtime refreshed) after every unit the window
+# wakes, so one is STALE only when it is older than ZOE_NIGHT_MARKER_MAX_S (default 5400 s: the 65-min cap plus the restore) AND the pid that wrote it is
+# gone. A live owner, or a young marker, is always "open". Prints "STALE <age>s" on stdout (and returns 1) so the caller can log it loudly.
+landing_window_open(){
+  local m="${ZOE_NIGHT_MARKER:-$HOME/.zoe/night-window/WINDOW_OPEN}" max="${ZOE_NIGHT_MARKER_MAX_S:-5400}" mt age pid
+  [ -e "$m" ] || return 1
+  mt=$(stat -c %Y "$m" 2>/dev/null || echo 0); age=$(( $(landing_now) - mt ))
+  [ "$age" -lt "$max" ] && return 0
+  pid=$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' "$m" 2>/dev/null | head -1)
+  if [ -n "$pid" ] && [ -e "/proc/$pid" ] && grep -q night_window "/proc/$pid/cmdline" 2>/dev/null; then return 0; fi
+  echo "STALE ${age}s"; return 1
+}
