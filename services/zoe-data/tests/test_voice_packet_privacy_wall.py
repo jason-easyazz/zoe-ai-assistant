@@ -312,3 +312,13 @@ def test_is_recall_ask_in_the_other_language_packs(text, want):
     """Codex #2289: recall_leads is populated for every shipped pack, so a verified speaker recalling a past feeling in es / fr / de /
     zh / ja is not treated as a mood disclosure (negative controls: present-tense statements and why-questions stay False)."""
     assert restraint.is_recall_ask(text) is want
+
+
+@pytest.mark.parametrize("text", [
+    "Tell me about why I'm feeling worried about the exam", "What do you know about why I'm worried about the exam",
+    "Cuéntame sobre por qué estoy preocupado por el examen", "Erzähl mir von meiner Sorge wegen der Prüfung",
+])
+def test_generic_explanation_requests_are_not_historical_recall(text):
+    """Codex #2289: 'tell me about ...' / 'what do you know about ...' ask about the PRESENT feeling; only a past-tense lead earns the recall bypass."""
+    assert restraint.is_recall_ask(text) is False
+    assert restraint.is_recall_ask("what did I tell you about feeling worried before the exam") is True      # control
