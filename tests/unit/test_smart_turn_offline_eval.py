@@ -365,3 +365,20 @@ def test_a_short_vad_hop_sequence_is_unscored_not_an_early_end_of_speech(ev):
                               policies=[], cap_max_ms=1000, first_ms_set=set(), recheck_ms=300, long_pause_ms=500,
                               preroll_chunks=0) is None
     assert ev.VAD_INCOMPLETE[0] == before + 1
+
+
+def test_the_voice_night_gate_is_consulted_before_the_lock_and_fails_closed(ev, tmp_path, monkeypatch):
+    """Codex #2280: a corpus run must not start (or hold the harness lock) when the measured night pause says wait."""
+    gate = tmp_path / "night_busy.sh"
+    gate.write_text("#!/bin/sh\nexit 0\n")                      # 0 = pause
+    gate.chmod(0o755)
+    monkeypatch.setenv("ZOE_NIGHT_BUSY", str(gate))
+    why = ev.night_gate_busy()
+    assert why and "pause" in why
+    assert ev.box_busy(1) == why                                  # the first thing box_busy asks, so it holds before the lock
+    held = []
+    monkeypatch.setattr(ev, "box_busy", lambda _m: why)
+    monkeypatch.setattr(ev.time, "sleep", lambda _s: (_ for _ in ()).throw(RuntimeError("waited")))
+    with pytest.raises(RuntimeError, match="waited"):             # it WAITS (never reaches the lock-taking branch)
+        ev.acquire_quiet_lock(tmp_path / "lock", 1, "t", busy=ev.box_busy, wait_s=0)
+    assert not (tmp_path / "lock").exists() and not held

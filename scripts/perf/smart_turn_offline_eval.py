@@ -611,10 +611,31 @@ def mem_available_mb() -> int:
     return 0
 
 
+BATCH_BUDGET_MIN = 20     # what one scored batch may take: the night gate refuses a start it could still be running through at 01:50
+
+
+def night_gate_busy(budget_min: int = BATCH_BUDGET_MIN) -> str | None:
+    """The voice night gate (scripts/AGENTS.md "Brain-window quiet hours"): ``harness_quiet.night_pause_verdict`` = ``night_busy.sh
+    voice`` (the measured 12B window / nightly voice regression / waking hours), falling back to the fixed 01:50-04:55 span, and
+    refusing a start that a ``budget_min`` batch would still be alive through at 01:50. The night window treats the harness lock as
+    a landing in progress, so this runs BEFORE the lock is taken and again before every batch. Fails closed."""
+    try:
+        spec = importlib.util.spec_from_file_location("harness_quiet_st_eval", REPO / "scripts" / "maintenance" / "harness_quiet.py")
+        hq = importlib.util.module_from_spec(spec)
+        sys.modules["harness_quiet_st_eval"] = hq              # its dataclass resolves its own module by name
+        spec.loader.exec_module(hq)
+        v = hq.night_pause_verdict("smart_turn_offline_eval", budget_min=budget_min)
+    except Exception as exc:  # noqa: BLE001
+        return f"cannot read the voice night gate ({type(exc).__name__})"
+    return None if v.allowed else v.reason
+
+
 def box_busy(min_mem_mb: int) -> str | None:
     """Why this batch must wait, or None. Mirrors scripts/landing/night_busy.sh `test`
     (night window or backup running) + a voice landing + the RAM floor. Fails CLOSED: a
     probe that cannot answer is a reason to wait, never a green light."""
+    if (why := night_gate_busy()):
+        return why
     for unit in ("zoe-night-window.service", "zoe-backup.service"):
         try:
             r = subprocess.run(["systemctl", "--user", "is-active", unit],
