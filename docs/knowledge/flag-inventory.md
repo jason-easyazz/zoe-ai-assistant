@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-07T00:00:00Z
+timestamp: 2026-11-08T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-07T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-07. The table body is deterministic (sorted, no
+Last generated: 2026-11-08. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 846 prod flags; 257 read through `typed_env`.
+- 850 prod flags; 261 read through `typed_env`.
 - 762 legacy direct read sites in prod code across 227 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-846 flags; 795 not documented in `.env.example`.
+850 flags; 799 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -200,6 +200,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_DEFAULT_MEDIA_PLAYER` | str | `'media_player.all'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DELIVERY_LEDGER` | str | `'shadow'` | `off`, `shadow`, `on` | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | yes | NO | `services/zoe-data/proactive/lines.py` |
 | `ZOE_DEPLOY_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_DEVICE_CONFIRM_GUARD` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `True` | yes | NO | `services/zoe-data/device_confirm.py` |
 | `ZOE_DEVICE_ID` | str | `''` | - | - | `(required)` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_DEVICE_TOKEN` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | str | `''` | - | `docs/architecture/panel-anywhere.md` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
@@ -449,6 +450,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MEMORY_LINT_STALE_DAYS` | int | `365` | - | - | `'365'` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LOOP_LOG_PATH` | str | `'~/.zoe/zoe-data-memory-loops.log'` | - | `services/zoe-data/AGENTS.md` | `'~/.zoe/zoe-data-memory-loops.log'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `-` | no | NO | `services/zoe-data/memory_metrics.py` |
+| `ZOE_MEMORY_NOW_CARD` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/now-card.md` | `'off'` | yes | NO | `services/zoe-data/now_card.py` |
+| `ZOE_MEMORY_NOW_CARD_HARNESS` | bool | `False` | - | `docs/knowledge/now-card.md` | `False` | yes | NO | `services/zoe-data/now_card.py` |
 | `ZOE_MEMORY_PHYSICAL_ERASE` | bool | `True` | - | `docs/knowledge/forgotten-text-physical-erase.md` | `'1'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_PROVENANCE_ANSWERS` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/memory_provenance.py` |
 | `ZOE_MEMORY_REJECT_LEDGER` | str | `''` | - | `services/zoe-data/AGENTS.md` | `-` | no | NO | `services/zoe-data/memory_reject_ledger.py` |
@@ -756,6 +759,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SMART_TURN_MODEL` | str | `'/home/zoe/models/smart-turn-v3.2-cpu.onnx'` | - | `docs/knowledge/voice-pipeline.md` | `'/home/zoe/models/smart-turn-v3.2-cpu.onnx'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THREADS` | int | `1` | - | `docs/research/incomplete-turn-marker-2026-10-04.md` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THRESHOLD` | float | `0.5` | - | `docs/knowledge/voice-pipeline.md` | `'0.5'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
+| `ZOE_SPACER_REQUIRE_CLAIM` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `True` | yes | NO | `services/zoe-data/voice_spacer.py` |
 | `ZOE_SPEAKABLE_PROVENANCE` | bool | `False` | - | `docs/knowledge/memory-views.md` | `False` | yes | NO | `services/zoe-data/provenance_speech.py` |
 | `ZOE_SPEAKER_ADAPT` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/speaker-resnet34-switch.md` | `'off'` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_ALPHA` | float | `0.05` | - | - | `0.05` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
@@ -911,7 +915,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-39 flags; 37 not documented in `.env.example`.
+40 flags; 38 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -936,6 +940,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_URL` | str | `''` | - | - | `'http://127.0.0.1:3579'`, `'http://127.0.0.1:8000'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
 | `ZOE_BRAIN_USER_ID` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts`<br>`labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts` |
 | `ZOE_DATA_URL` | str | `'http://127.0.0.1:8000'` | - | `docs/research/telegram-calls-voice-photos-2026-10-04.md` | `'http://127.0.0.1:8000'`, `-` | no | NO | `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`<br>`labs/flue-zoe-brain-2x/src/user-model.ts`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
+| `ZOE_EMOTIONAL_CUES_PATH` | str | `''` | - | `docs/knowledge/write-claim-guard.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/tools/emotional-cues.ts` |
 | `ZOE_ENV_FILE` | str | `'/home/zoe/assistant/services/zoe-data/.env'` | - | - | `dynamic` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_DISPATCH` | str | `'dry'` | - | `docs/architecture/multica-executor-migration.md` | `'dry'` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_MODE` | str | `'lab'` | - | `docs/architecture/multica-executor-migration.md` | `'lab'` | no | NO | `labs/flue-executor/src/config.ts` |

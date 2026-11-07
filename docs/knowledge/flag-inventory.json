@@ -749,6 +749,25 @@
         },
         "typed_env": false
       },
+      "ZOE_EMOTIONAL_CUES_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/src/tools/emotional-cues.ts"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
+          "type": "str"
+        },
+        "typed_env": false
+      },
       "ZOE_ENV_FILE": {
         "defaults": [
           "dynamic"
@@ -3796,6 +3815,25 @@
           "note": "",
           "owner_doc": "",
           "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_DEVICE_CONFIRM_GUARD": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/device_confirm.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "2026-11-07: confirm-then-act for a garbled short light command at the panel; kill switch",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
         },
         "typed_env": true
       },
@@ -8658,6 +8696,48 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_MEMORY_NOW_CARD": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/now_card.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "live: unset (code default in force)",
+          "owner_doc": "docs/knowledge/now-card.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMORY_NOW_CARD_HARNESS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/now_card.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "measured bar runs only",
+          "owner_doc": "docs/knowledge/now-card.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_MEMORY_PHYSICAL_ERASE": {
         "defaults": [
@@ -14590,6 +14670,25 @@
           "type": "float"
         },
         "typed_env": false
+      },
+      "ZOE_SPACER_REQUIRE_CLAIM": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_spacer.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "2026-11-07: a domain spacer needs the words to name the domain; kill switch",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_SPEAKABLE_PROVENANCE": {
         "defaults": [

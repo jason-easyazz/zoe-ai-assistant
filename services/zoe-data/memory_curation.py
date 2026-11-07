@@ -611,3 +611,99 @@ async def members_for(db, curator: Account) -> list:
                         categories=_category_list(pol.allowed), sensitive_on=sorted(pol.sensitive_on),
                         sensitive_switchable=list(SENSITIVE) if pol.member.kind == "child" else []))
     return out
+
+
+# -- by voice: the curator own verified session at the panel ----------------------------------------
+
+_VOICE_RE = re.compile(
+    r"^\W*(?:(?:hey|ok(?:ay)?|zoe)[\s,]+)*(?:please\s+)?(?:can\s+you\s+)?remember\s+(?:that\s+)?"
+    r"(?P<name>[A-Za-z][A-Za-z-]{1,30})(?P<pos>’s|\x27s)?\s+(?P<rest>\S.{2,240}?)[\s.!?]*$", re.IGNORECASE | re.DOTALL)
+#: words the name slot must never take ("remember that I ...", "remember to ...": the member own teach path, unchanged)
+_NOT_A_NAME = frozenset(("i", "im", "me", "my", "we", "our", "us", "you", "your", "to", "the", "this", "it", "its", "that", "there",
+                         "they", "he", "she", "his", "her", "a", "an", "when", "where", "what", "how", "if", "about", "everything"))
+_SCHOOL_RE = re.compile(r"\b(?:school|teacher|class(?:room)?|homework|kindy|kindergarten|daycare|bus|uniform)\b", re.IGNORECASE)
+_DATES_RE = re.compile(r"\b(?:birthday|anniversary|born\s+on|due\s+date)\b", re.IGNORECASE)
+_MEDS_RE = re.compile(r"\b(?:medicines?|medications?|meds?|tablets?|pills?|prescriptions?|inhalers?|puffers?|ventolin|epipens?|doses?)\b", re.IGNORECASE)
+SAVED_REPLY = "Okay, I\x27ll remember that for {name}."
+AMBIGUOUS_REPLY = "I know more than one {name}. Add it on your phone, in Family memories."
+OFF_RECORD_REPLY = "Okay, that's off the record, so I won't keep it."
+
+
+def _off_record(speaker_id: str, text: str, sentence: str) -> bool:
+    """Did the SPEAKER put this turn off the record? ``fast_tiers._provenance_tier`` claims the turn against the speaker's id, but the
+    curated note is written under the MEMBER's id, so the ingest choke point (which checks the member's marks) would not see it:
+    the curator path asks the speaker's marks itself, before anything is written. A cue in these very words counts too. Fails CLOSED
+    (a broken check keeps nothing)."""
+    try:
+        import memory_provenance as mp
+
+        if not mp.enabled():
+            return False
+        return bool(mp.parse_off_record(text) is not None or mp.is_off_record(speaker_id, text)
+                    or mp.blocks_write(speaker_id, sentence, text))
+    except Exception:  # noqa: BLE001
+        logger.warning("memory_curation: off-the-record check failed - nothing written")
+        return True
+
+
+def parse_voice(text: str) -> Optional[tuple]:
+    """``(name, sentence)`` for "remember that Juno\x27s swimming is on Tuesdays", else None. Pure."""
+    m = _VOICE_RE.match(text or "")
+    if not m or m.group("name").lower() in _NOT_A_NAME:
+        return None
+    name = m.group("name")
+    return name, name + (m.group("pos") or "") + " " + m.group("rest").strip()
+
+
+def guess_category(sentence: str, pol: Policy) -> str:
+    """The category a spoken note goes under: medication / health / money by the words (refused unless opted in), else by topic.
+    A medication word is ALWAYS medication: never downgraded to an enabled Health switch when Medication is off (no human picks
+    the category on this path, so the per-member medication switch stays an independent wall). ``pol`` is unused on purpose."""
+    import provenance_answers as pa
+
+    if _MEDS_RE.search(sentence):
+        return "medication"
+    found = _sensitive_of(sentence)
+    if "health" in found:
+        return "health"
+    if "money" in found:
+        return "money"
+    for cat, rx in (("school", _SCHOOL_RE), ("dates", _DATES_RE), ("routines", pa._ROUTINE_RE), ("likes", pa._PREF_RE),
+                    ("people", pa._RELATION_RE)):
+        if rx.search(sentence):
+            return cat
+    return "other"
+
+
+async def by_voice(text: str, member_id: str, *, svc: Any = None) -> Optional[str]:
+    """A curator says "remember that Juno\x27s swimming is on Tuesdays" in THEIR OWN verified panel session (the caller passes the
+    turn identity, never the panel binding). The spoken reply, or None when this is not a curation turn (not the shape, the flag is
+    off, the speaker is not an adult admin, or the name is none of the people they curate): the existing teach path then runs."""
+    from db_compat import get_compat_db
+
+    if not enabled():
+        return None
+    got = parse_voice(text)
+    if got is None:
+        return None
+    name, sentence = got
+    async with get_compat_db() as db:
+        me = await account(db, member_id)
+        if me.role not in ADMIN_ROLES or me.kind != "adult":
+            return None
+        matches = [m for m in await members_for(db, me) if m["name"].split(" ")[0].lower() == name.lower()]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            return AMBIGUOUS_REPLY.format(name=name)
+        if _off_record(member_id, text, sentence):
+            return OFF_RECORD_REPLY                      # the curator asked not to keep it: no note for anyone
+        try:
+            pol = await policy(db, me, matches[0]["user_id"])
+            cat = guess_category(sentence, pol)
+            if pol.member.kind == "adult" and cat not in pol.allowed:
+                return None                              # not a category the adult opted in: their own word, untouched (D9)
+            await add(db, me, pol.member.user_id, sentence, cat, via="voice", svc=svc)
+        except CurationRefused as exc:
+            return exc.detail
+    return SAVED_REPLY.format(name=name)

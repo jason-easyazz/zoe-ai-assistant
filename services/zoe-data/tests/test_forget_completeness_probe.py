@@ -15,9 +15,9 @@ in-process fakes (no live DB, no network, no model) in three arms:
   control       the layer's forget hooks switched off (no erase, serve wall disabled): the name IS served - the instrument sees
                 a leak when there is one.
 
-Layers the probe cannot drive in-process (the Flue sidecar's own caches and transcript store, the llama prefix/KV cache, the now
-card while #2281 is unmerged) are ``UNPROBED`` with a reason and must appear in the open-problems entry; ``now_card.py`` landing
-without a probe row fails ``test_now_card_is_probed_once_it_exists``.
+Layers the probe cannot drive in-process (the Flue sidecar's own caches and transcript store, the llama prefix/KV cache) are
+``UNPROBED`` with a reason and must appear in the open-problems entry; ``now_card.py`` (#2281) has its probe row, and
+``test_now_card_is_probed_once_it_exists`` keeps it there.
 
 Invented names only (``Dana`` is the forgotten friend, ``Leo`` the control): the repo is public.
 """
@@ -91,6 +91,7 @@ LAYERS: dict[str, Layer] = {l.name: l for l in (
           "pending_suggestions load_for_prompt / surface / list_* / surfaced_person_offers"),
     Layer("day_review", True, "omi_day_review.erase_entity", "omi_day_review.list_candidates / get_candidate"),
     Layer("self_review", True, "self_review.erase_entity (cascade step self_review)", "self_review.load_reviews (the owner's --show)"),
+    Layer("now_card", True, "now_card.erase_entity (intent_router memory_forget_entity)", "now_card._live (card_for)"),
 )}
 
 #: Derived layers the probe cannot drive in-process. Each key must appear in the open-problems "forget-completeness" entry.
@@ -100,7 +101,6 @@ UNPROBED: dict[str, str] = {
     "flue_conversation_store": "the sidecar's own transcript store (ZOE_BRAIN_DB) is reached only by the offline redact_backups.py "
                                "with the brain stopped; no runtime forget path touches it",
     "llama_prefix_kv": "the llama-server prompt/KV cache holds the same history and is never flushed on forget",
-    "now_card": "PR #2281 (unmerged): has a serve-time _forgotten wall and an invalidate() hook; probe it when it lands",
     "relationship_free_text": "people.notes / context, person_relationships.notes and person_activities of OTHER live people are "
                               "served by zoe_memory_compose._fetch_relational with no ledger check and are not erased by the cascade",
     "commitments_sweep": "commitments._names_forgotten fails OPEN on a ledger outage at sweep time (the cascade erase is the only wall then)",
@@ -653,12 +653,66 @@ class SelfReview(Probe):
         monkeypatch.setattr(mf, "keep_unforgotten", keep_all)
 
 
+class NowCard(Probe):
+    """The nightly per-member now card (``now_card``): a stored card whose date lines name FRIEND and KEEP. The erase is the real
+    ``now_card.erase_entity`` (the memory_forget_entity handler's step); the serve is ``now_card._live``, the check every served card
+    passes (strict ledger wall + mutes). ``disable`` switches the ledger wall off."""
+
+    class _Store:
+        def __init__(self):
+            self.row = None
+
+        async def read(self, uid):
+            return self.row
+
+        async def remove(self, uid):
+            n, self.row = (1 if self.row else 0), None
+            return n
+
+    async def setup(self, monkeypatch, request):
+        import now_card as nc
+        import restraint
+        self.nc = nc
+        self.store = self._Store()
+        prev = nc.set_store(self.store)
+        monkeypatch.setattr(nc, "_store", self.store)
+        self._prev = prev
+
+        async def no_mutes(_uid):
+            return []
+        monkeypatch.setattr(restraint, "list_mutes_strict", no_mutes)
+        self.monkeypatch = monkeypatch
+
+    async def seed(self):
+        lines = [["date", f"{FRIEND}'s birthday is on Sunday", "calendar:1"], ["date", f"{KEEP}'s dentist is on Friday", "calendar:2"]]
+        card = {"lines": lines}
+        self.store.row = (json.dumps(card), "\n".join(t for _k, t, _r in lines), "v1", "2026-11-05", "2026-11-05T03:00:00Z")
+
+    async def erase(self):
+        await self.nc.erase_entity(USER, FRIEND)
+
+    async def served(self):
+        if self.store.row is None:
+            return f"(no card) {KEEP}"                     # rebuilt nightly from rows without the name
+        lines = json.loads(self.store.row[0])["lines"]
+        kept = await self.nc._live(USER, lines)
+        return "\n".join(t for _k, t, _r in kept) or f"(no card) {KEEP}"
+
+    def disable(self, monkeypatch):
+        async def never(*_a, **_k):
+            return False
+        monkeypatch.setattr(self.nc, "_forgotten", never)
+
+    async def teardown(self):
+        self.nc.set_store(self._prev)
+
+
 PROBES: dict[str, Callable[[], Probe]] = {
     "exact_words": ExactWords, "night_mind": NightMind, "digest_transcript": DigestTranscript, "memories_wall": MemoriesWall,
     "palace_reads": PalaceReads, "recall_packet": RecallPacket, "person_profile": PersonProfile,
     "relationship_graph": RelationshipGraph, "user_model_card": UserModelCard, "portrait": Portrait, "open_loops": OpenLoops,
     "proactive_candidates": ProactiveCandidates, "contact_offers": ContactOffers, "day_review": DayReview,
-    "self_review": SelfReview,
+    "self_review": SelfReview, "now_card": NowCard,
 }
 
 
