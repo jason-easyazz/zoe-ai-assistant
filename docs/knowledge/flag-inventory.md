@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-07T00:00:00Z
+timestamp: 2026-11-08T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-07T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-07. The table body is deterministic (sorted, no
+Last generated: 2026-11-08. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 841 prod flags; 257 read through `typed_env`.
+- 843 prod flags; 259 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-841 flags; 790 not documented in `.env.example`.
+843 flags; 792 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -449,6 +449,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MEMORY_LINT_STALE_DAYS` | int | `365` | - | - | `'365'` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LOOP_LOG_PATH` | str | `'~/.zoe/zoe-data-memory-loops.log'` | - | `services/zoe-data/AGENTS.md` | `'~/.zoe/zoe-data-memory-loops.log'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `-` | no | NO | `services/zoe-data/memory_metrics.py` |
+| `ZOE_MEMORY_NOW_CARD` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/now-card.md` | `'off'` | yes | NO | `services/zoe-data/now_card.py` |
+| `ZOE_MEMORY_NOW_CARD_HARNESS` | bool | `False` | - | `docs/knowledge/now-card.md` | `False` | yes | NO | `services/zoe-data/now_card.py` |
 | `ZOE_MEMORY_PHYSICAL_ERASE` | bool | `True` | - | `docs/knowledge/forgotten-text-physical-erase.md` | `'1'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_PROVENANCE_ANSWERS` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/memory_provenance.py` |
 | `ZOE_MEMORY_REJECT_LEDGER` | str | `''` | - | `services/zoe-data/AGENTS.md` | `-` | no | NO | `services/zoe-data/memory_reject_ledger.py` |

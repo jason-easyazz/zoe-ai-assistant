@@ -576,6 +576,36 @@ def _wrap_message_with_manner(message: str, block: str) -> str:
     return f"{_MANNER_ENVELOPE_PREFIX}{json.dumps(block, ensure_ascii=True)}\n{message}"
 
 
+# Machine-readable NOW-CARD envelope (ZOE_MEMORY_NOW_CARD, now_card.py). MUST match the sidecar parser
+# (labs/flue-zoe-brain-2x src/now-card.ts NOW_CARD_ENVELOPE_PREFIX / _RE). zoe-data owns the card (built at night, read by key) and
+# the per-turn decision (household, a CONFIRMED voice); the sidecar appends it to THAT turn's system prompt after the user-model card.
+#
+# WIRE ORDER: between the manner line and the identity line:
+#   " zoe-spec:<id>\n zoe-replay:1\n zoe-persona:<JSON>\n zoe-manner:<JSON>\n zoe-nowcard:<JSON string>\n zoe-uid:<id>\n<blocks>\n<message>"
+# Flag off or shadow, no card, a guest / unverified voice, a failure or wire 1 = NO line = the bytes are exactly what they were.
+_NOW_CARD_ENVELOPE_PREFIX = " zoe-nowcard:"
+
+
+async def _now_card_context_block(user_id: str, voice: bool) -> str:
+    """The member's now card for THIS turn, or "" (= no line). Never raises; a 1.x sidecar does not parse the line."""
+    try:
+        if _wire_version() < _WIRE_2:
+            return ""
+        import now_card
+
+        return await now_card.block_for(user_id, voice=voice)
+    except Exception:  # noqa: BLE001 - the card is optional; the turn is not
+        logger.warning("NOW_CARD failed; no card", exc_info=True)
+        return ""
+
+
+def _wrap_message_with_now_card(message: str, card: str) -> str:
+    """Prefix ``message`` with the now-card envelope, or return it unchanged (no card)."""
+    if not card:
+        return message
+    return f"{_NOW_CARD_ENVELOPE_PREFIX}{json.dumps(card, ensure_ascii=True)}\n{message}"
+
+
 # Machine-readable REPLAY-ISOLATION envelope. MUST match the sidecar's parser
 # (labs/flue-zoe-brain-2x src/replay-mode.ts REPLAY_ENVELOPE_PREFIX / _RE).
 #
@@ -2159,7 +2189,7 @@ def _kv_warm_message() -> str:
     return f"{_IDENTITY_ENVELOPE_PREFIX}{_KV_WARM_IDENTITY}\n{body}"
 
 
-_ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona|locale):([^\n]*)\n")
+_ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona|locale|nowcard):([^\n]*)\n")
 
 
 def prefix_key(message: str, requested_card_version: str = "") -> str:
@@ -2190,6 +2220,8 @@ def prefix_key(message: str, requested_card_version: str = "") -> str:
         h.update(b"\x00")
     if seen.get("locale"):   # the household-locale line joins the system prompt too; absent = the key exactly as before
         h.update(b"locale\x00" + seen["locale"].encode("utf-8", "replace"))
+    if seen.get("nowcard"):   # only when sent: a turn without a card keeps the key it always had
+        h.update(b"nowcard\x00" + seen["nowcard"].encode("utf-8", "replace"))
     return h.hexdigest()[:10]
 
 
@@ -2300,9 +2332,22 @@ async def _kv_warm_outbound(member: str) -> "tuple[str, str]":
         manner_line = _wrap_message_with_manner("", await _manner_context_block(uid, _KV_WARM_MESSAGE))
         persona_line = _wrap_message_with_persona("", await _persona_context_block(uid))
     msg = _wrap_message_with_identity(_wrap_message_with_locale(_KV_WARM_MESSAGE, _household_locale_line()), uid)
+    msg = _wrap_message_with_now_card(msg, await _now_card_warm_block(uid))   # fresh, not memoised: it changes nightly
     msg = persona_line + manner_line + msg
     msg = _wrap_message_with_replay(msg, True)
     return msg, prefix_key(msg, await _card_version(uid))
+
+
+async def _now_card_warm_block(uid: str) -> str:
+    """The card the member's next real turn would send (ZOE_MEMORY_NOW_CARD=on only), so the warm prefills the same prompt."""
+    try:
+        if _wire_version() < _WIRE_2:
+            return ""
+        import now_card
+
+        return await now_card.warm_block(uid)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _kv_warm_session_id() -> str:
@@ -2891,6 +2936,10 @@ async def _run_flue_brain_streaming_turn(
     # The household conventions line rides as an envelope the sidecar moves into the system prompt - never inside the user's
     # message, where the brain read it as something the user said (QA round 3b; _LOCALE_ENVELOPE_PREFIX).
     outbound_message = _wrap_message_with_identity(_wrap_message_with_locale(brain_message, _household_locale_line()), uid)
+    # Now card (ZOE_MEMORY_NOW_CARD, default OFF; now_card.py): the member's nightly card, between the manner line and the identity
+    # line; the sidecar puts it in the SYSTEM prompt after the user-model card. "" (off, shadow, a guest, an unverified voice) = unchanged bytes.
+    outbound_message = _wrap_message_with_now_card(
+        outbound_message, await _now_card_context_block(uid, bool(kwargs.get("voice_mode"))))
     # Manner block (ZOE_MANNER_BLOCK, default OFF; adults only): rides between the persona line and the identity line. "" = unchanged bytes.
     outbound_message = _wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
