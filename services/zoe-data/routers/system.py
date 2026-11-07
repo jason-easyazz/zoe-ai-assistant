@@ -2481,6 +2481,15 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     started = time.monotonic()
     intent_name = (body.intent or "").strip()
     user_id = (body.user_id or "").strip()
+    try:
+        # The brain's sidecar calls here with the token and no traffic header, so a harness id's tool call was classed
+        # household: its INTENT_DISPATCH / AUTHORITY_SHADOW lines then counted as the household's. The acting id decides
+        # (only ever AWAY from household, like auth's refine).
+        import traffic_class as _tc
+
+        _tc.refine_for_user(user_id)
+    except Exception:  # noqa: BLE001 - instrumentation never touches the dispatch
+        pass
     if not user_id:
         _log_dispatch("-", 400, False, "no_user", started)
         raise HTTPException(status_code=400, detail="user_id required")

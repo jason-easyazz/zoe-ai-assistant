@@ -299,3 +299,25 @@ async def test_memory_store_unknown_memory_type_falls_back_to_fact(monkeypatch):
     assert calls["kwargs"]["memory_type"] == "fact"
     assert calls["kwargs"]["confidence"] == 0.85
     assert calls["kwargs"]["user_turn_id"].startswith("fact-")
+
+
+@pytest.mark.parametrize("user_id, want", [("demo_bar_0a1b2c3d", "harness"), ("family-admin", "household")])
+def test_dispatch_is_classed_by_the_acting_id(monkeypatch, user_id, want):
+    """The sidecar's call carries no traffic header: a harness id's tool call (and its INTENT_DISPATCH / AUTHORITY_SHADOW lines)
+    must not be counted as the household's. Negative control: a member id stays household."""
+    import traffic_class
+
+    monkeypatch.setattr(auth, "_ZOE_INTERNAL_TOKEN", "tok")
+    seen = {}
+
+    async def fake_execute_intent(intent, user_id="family-admin"):
+        seen["cls"] = traffic_class.current()
+        return "ok"
+
+    monkeypatch.setattr(intent_router, "execute_intent", fake_execute_intent)
+    resp = TestClient(_app()).post(
+        "/api/system/intent-dispatch",
+        json={"user_id": user_id, "intent": "list_show", "slots": {"list_type": "personal"}},
+        headers={"X-Internal-Token": "tok"},
+    )
+    assert resp.status_code == 200 and seen["cls"] == want

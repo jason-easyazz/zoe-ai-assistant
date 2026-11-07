@@ -8351,6 +8351,50 @@
         },
         "typed_env": false
       },
+      "ZOE_MEMBER_REGISTER": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/member_register.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/member-register.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMBER_REGISTER_KIDS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/member_register.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/member-register.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMORIES_CURATORS": {
         "defaults": [
           "False"
