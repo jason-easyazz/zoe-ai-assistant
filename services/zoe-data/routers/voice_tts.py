@@ -4379,7 +4379,9 @@ async def voice_command(
                         "stt_snap_from": "device_confirm",
                         "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
                         "session_id": session_id,
-                        "user_id": effective_user,
+                        # a light at the panel needs the PANEL, not a member: an unverified ask is a guest's, so the same
+                        # unverified voice's "yes" may answer it (a member id from the recent-user fallback would hold it forever)
+                        "user_id": effective_user if _confirm_speaker else "voice-guest",
                         "speaker": _confirm_speaker,
                     }
                     from types import SimpleNamespace as _DcNS

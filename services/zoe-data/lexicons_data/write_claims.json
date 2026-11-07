@@ -122,7 +122,7 @@
     },
     "kind_objects": {
       "_note": "A DEVICE switch claim ('I've turned the light on', 'Turning it off now', 'I'll turn the lights on for you') needs one of these in its clause: the verbs keep their own kind 'device' and need a receipt the Skybridge smart-home resolver records after a switch it really made (2026-11-07: 'I'll turn the lights on for you.' with no tool call).",
-      "device": ["light", "lights", "lamp", "lamps", "fan", "fans", "heater", "heaters", "aircon", "tv", "television", "plug", "plugs", "switch", "blind", "blinds", "it", "them", "everything", "both"]
+      "device": ["light", "lights", "lamp", "lamps", "fan", "fans", "heater", "heaters", "aircon", "tv", "television", "plug", "plugs", "switch", "blind", "blinds", "it", "them", "that", "those", "everything", "both"]
     },
     "progressive_subjects": ["i'm", "im", "we're"],
     "progressive_aux": ["am", "are"],

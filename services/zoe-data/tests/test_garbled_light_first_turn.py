@@ -149,7 +149,9 @@ def test_the_voice_lane_asks_before_skybridge_and_reuses_the_snap_confirmation()
     assert i_snap < i_guard < i_sky
     block = src[i_guard - 400:src.index("voice/command device confirm failed")]
     for needle in ("_dc.at_the_panel(caller)", "_dc.enabled()", '"stt_snap_text": _dc_ask.command', '_dc_refused("device_confirm")',
-                   "_PENDING_CONFIRMATIONS.pop(panel_id, None)", '"speaker": _confirm_speaker'):
+                   "_PENDING_CONFIRMATIONS.pop(panel_id, None)", '"speaker": _confirm_speaker',
+                   # an unverified ask is a guest's, so the same unverified voice's yes can answer it (a light needs the panel)
+                   '"user_id": effective_user if _confirm_speaker else "voice-guest"'):
         assert needle in block, needle
 
 
@@ -202,6 +204,7 @@ def test_the_timer_filler_follows_the_same_rule(monkeypatch):
     "I've switched the lamp off.",
     "Done, the light's on.",
     "Sure, I'll switch the fan on.",
+    "Let me turn that off for you.",
 ])
 def test_a_switch_claim_is_a_device_claim(sentence):
     claim = g.find_claim(sentence)
