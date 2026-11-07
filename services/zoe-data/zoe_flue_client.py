@@ -668,6 +668,16 @@ def _strip_replay_envelope(message: str) -> str:
     return message
 
 
+def _claim_correction_line(session_id: str) -> str:
+    """The pending write-claim correction for this session (``claim_correction.take``), or ''. Never raises."""
+    try:
+        import claim_correction
+
+        return claim_correction.take(session_id)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _wrap_message_with_replay(message: str, replay: bool) -> str:
     """Prefix ``message`` with the replay-isolation envelope when ``replay`` is set.
 
@@ -2823,6 +2833,12 @@ async def _run_flue_brain_streaming_turn(
     # when there is no identity line ahead of it — both blocks return "" for a blank
     # uid — but strip unconditionally rather than depend on that coupling.
     safe_message = _strip_replay_envelope(message)
+    # The write-claim guard REPLACED this session's last reply (claim_correction, ZOE_WRITE_CLAIM_CORRECTION, default OFF): the
+    # sidecar's history still holds the claim the model made with no tool call, so this turn opens with one plain line saying it
+    # did not happen. Not a delimited block, so the sidecar's stale-block elision keeps it next to the claim it corrects.
+    correction = "" if kwargs.get("replay_isolation") else _claim_correction_line(session_id)
+    if correction:
+        safe_message = f"{correction}\n{safe_message}"
     brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"

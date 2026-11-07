@@ -17219,6 +17219,25 @@
         },
         "typed_env": false
       },
+      "ZOE_WRITE_CLAIM_CORRECTION": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/claim_correction.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_WRITE_CLAIM_GUARD": {
         "defaults": [
           "'enforce'"

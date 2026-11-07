@@ -1952,6 +1952,12 @@ async def chat_stream_generator(
                         )
                         rows = await rows.fetchall()
                         prior_history = [{"role": r[0], "content": r[1]} for r in reversed(rows)]
+                    # A write-claim guard replacement line ("I didn't manage to add that…") in the history teaches a brain
+                    # "tools fail": the neutral marker instead (claim_correction, ZOE_WRITE_CLAIM_CORRECTION; off = unchanged).
+                    import claim_correction as _cc
+
+                    prior_history = [dict(h, content=_cc.history_safe(h["content"])) if h["role"] == "assistant" else h
+                                     for h in prior_history]
                 except Exception as _he:
                     logger.debug("history load failed (non-fatal): %s", _he)
                 # Zoe Agent loads MemPalace facts internally. We also load a copy here
