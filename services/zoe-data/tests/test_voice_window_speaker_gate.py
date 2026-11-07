@@ -38,7 +38,7 @@ def _block(score, speech_s=3.0, member=MEMBER, verified=None):
     return {"verified": verified, "member": member, "score": score, "model_id": RESNET, "speech_s": speech_s}
 
 
-def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardiologist", raw=None):
+def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardiologist", raw=None, extra=None):
     import routers.voice_tts as vt
 
     real_claim = vt._accepted_voice_claim
@@ -61,6 +61,7 @@ def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardio
         payload["window"] = window
     if speaker is not None:
         payload["speaker"] = speaker
+    payload.update(extra or {})
     with TestClient(app) as client:
         r = client.post("/api/voice/turn_stream", json=payload)
         assert r.status_code == 200, r.text
@@ -306,3 +307,47 @@ def test_negative_control_without_the_blocking_check_the_low_clip_runs_the_brain
     monkeypatch.setattr(shape, "window_speaker_frame", lambda *_a, **_k: None)
     turns, body = _run_turn(monkeypatch, window="followup", speaker=_block(0.30))
     assert len(turns) == 1 and "skipped" not in body, (turns, body)
+
+
+# -- a SPECULATIVE window turn (daemon ZOE_SPECULATIVE_TURN=windows, 2026-11-06) ----------------------------------
+# The pre-brain gates never ran on a speculative turn. A follow-up turn may now be speculative, so the window speaker gate
+# is ASKED (no side effects) and a would-be drop cancels the speculation: the daemon then runs the full recording as the
+# normal window turn, which meets the gate with its side effects (one crowd note, not two).
+
+def _cancel_reason(frames):
+    import json as _json
+
+    done = [_json.loads(f) for f in frames if b'"done"' in f]
+    return done[-1].get("reason") if done and done[-1].get("cancelled") else None
+
+
+def test_speculative_window_turn_the_gate_would_drop_is_cancelled_without_side_effects(monkeypatch):
+    import day_review_raise
+
+    monkeypatch.setenv("ZOE_SPECULATIVE_TURN", "1")
+    notes = []
+    monkeypatch.setattr(day_review_raise, "note_voice_turn", lambda *a, **k: notes.append((a, k)))
+    turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.30),
+                         extra={"speculative": True, "turn_id": "specwin-drop"})
+    assert turns == [], "the brain ran for a speculative window utterance that did not match the member"
+    assert _cancel_reason(frames) == "window_gate", frames
+    assert notes == [], "the speculative ask must not write the crowd note (the normal re-run does)"
+
+
+def test_speculative_window_turn_with_a_matching_voice_is_not_cancelled_by_the_gate(monkeypatch):
+    monkeypatch.setenv("ZOE_SPECULATIVE_TURN", "1")
+    # Nobody sends a verdict here, so the turn waits (Phase 2 holds it) and the hold valve ends it: reaching
+    # ``hold_timeout`` proves the window gate let it through to the ordinary speculative path.
+    monkeypatch.setenv("ZOE_SPECULATIVE_MAX_HOLD_MS", "100")
+    _turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.55),
+                          extra={"speculative": True, "turn_id": "specwin-ok"})
+    assert _cancel_reason(frames) == "hold_timeout", frames
+
+
+def test_negative_control_a_speculative_wake_turn_never_meets_the_window_gate(monkeypatch):
+    """The same low score that cancels a speculative WINDOW turn leaves a speculative wake turn alone."""
+    monkeypatch.setenv("ZOE_SPECULATIVE_TURN", "1")
+    monkeypatch.setenv("ZOE_SPECULATIVE_MAX_HOLD_MS", "100")
+    _turns, frames = _run(monkeypatch, window="", speaker=_block(0.30),
+                          extra={"speculative": True, "turn_id": "specwake"})
+    assert _cancel_reason(frames) == "hold_timeout", frames
