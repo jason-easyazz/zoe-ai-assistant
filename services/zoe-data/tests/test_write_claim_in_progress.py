@@ -77,6 +77,9 @@ IN_PROGRESS_CLAIMS = [
     # STANDING promises (QA 2026-11-05: "I'll remind you to …" / "I'll add … to your list" with no tool call): no "now" needed
     ("I'll add it to your list.", ("list",)),
     ("I will add it to your list.", ("list",)),
+    # QA round 3b: "I'm going to ..." is the same promise as "I'll ..." ("I'm going to remember how much that stung", no tool call)
+    ("I'm going to add milk to your shopping list.", ("list",)),
+    ("I'm going to remember that.", ("memory",)),
 ]
 
 NOT_IN_PROGRESS_CLAIMS = [
@@ -87,7 +90,7 @@ NOT_IN_PROGRESS_CLAIMS = [
     "I'll add it to your list when you're ready.",                  # a promise for later, not this turn
     "I'll add it to your list later.",
     "I'll add that to your list now if you like.",                  # an offer
-    "I'm going to add milk to your shopping list.",                 # future
+    "I'm going to add milk to your shopping list later.",           # a promise for later
     "I'm not adding anything to your list.",
     "I was adding milk to your list when it failed.",
     "You're adding a lot to your list!",

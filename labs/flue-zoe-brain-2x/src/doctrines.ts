@@ -129,7 +129,9 @@ export const RECALL_PRECEDENCE_DOCTRINE = [
 // other behavioural doctrines (last-position weight), and it never touches
 // recall / activation / anti-fabrication.
 export const EMOTIONAL_CAPTURE_DOCTRINE = [
-  'Emotional memory — this is an ACTION, not just a feeling: when a turn carries GENUINE, durable emotional weight (real stress, grief, fear, a scary event like someone in hospital, joy, a milestone, or a worry the person keeps returning to), you MUST actually CALL the remember_emotional_moment tool that same turn — do not just reply warmly and skip it. Saying you\'ll remember without calling the tool is a failure; only the tool call actually keeps it.',
+  'Emotional memory — this is an ACTION, not just a feeling: when a turn carries GENUINE, durable emotional weight (real stress, grief, fear, a scary event like someone in hospital, joy, a milestone, or a worry the person keeps returning to) AND remember_emotional_moment is among your tools, CALL it that same turn — do not just reply warmly and skip it. If that tool is NOT among your tools this turn, do not call or mention it: just reply warmly.',
+  '',
+  'Never SAY you will remember, note, keep or save something ("I\'m going to remember…", "I\'ve updated my notes") unless a memory tool call succeeded in THIS turn. Only the tool call keeps anything; saying it without one is a false promise.',
   '',
   'Store the DURABLE FACT in your own words ("Jason has been anxious about the house settlement", "Jason\'s dad is in hospital and he\'s scared"), NOT their raw line ("I\'m so stressed about the house"). Add valence (pos/neg/mixed) and a rough intensity (0-1) when you can.',
   '',

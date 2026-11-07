@@ -3830,6 +3830,103 @@ async def _forget_alias_note(user_id: str, name: str, svc: Any) -> str:
         return ""
 
 
+FORGET_WHICH_REPLY = "Which thing should I forget? Tell me what it was and I'll forget it."
+FORGET_ALREADY_REPLY = "That's already forgotten."
+FORGET_STORE_DOWN_REPLY = ("I couldn't reach the memory store just now, so I can't be sure it's gone. "
+                           "I won't save anything new from it - say \"forget that\" again in a minute and I'll finish.")
+FORGET_PARTIAL_REPLY = ("I forgot part of it, but I couldn't remove all of it just now, so some is still saved. "
+                        "Say \"forget that\" again in a minute and I'll finish.")
+
+
+def _forget_preview(text: str) -> str:
+    preview = " ".join((text or "").split())
+    return preview if len(preview) <= 80 else preview[:77].rstrip() + "…"
+
+
+async def _execute_forget_last(user_id: str) -> str:
+    """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - the rows written from it, its in-flight capture
+    (refused from now on), its exact-words index entry and its transcript row (flagged off the record for the nightly
+    readers). Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. Never raises."""
+    import turn_forget
+
+    turn = turn_forget.previous_turn(user_id)
+    if turn is None:
+        logger.info("memory_forget_last: user=%s no previous turn - asking", user_id)
+        return FORGET_WHICH_REPLY
+    if not turn.text:
+        return FORGET_ALREADY_REPLY
+    text, ts = turn.text, turn.ts
+    # FIRST: from here on nothing this turn's capture writes can land (the digest may still be minutes away)
+    turn_forget.retract(user_id, turn)
+    try:
+        from memory_service import get_memory_service
+        svc = get_memory_service()
+        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
+        return FORGET_STORE_DOWN_REPLY
+    gone: list = []
+    failed = 0
+
+    async def _reject(row) -> bool:
+        try:
+            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
+            return False
+
+    for r in rows:
+        if await _reject(r):
+            gone.append(r)
+        else:
+            failed += 1
+    # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too
+    try:
+        import ask_to_remember as _atr_f
+
+        ids = {r.id for r in gone}
+        for r in list(gone):
+            for _sib in await _atr_f.siblings_of(svc, user_id, r):
+                if _sib.id in ids:
+                    continue
+                ids.add(_sib.id)
+                if await _reject(_sib):
+                    gone.append(_sib)
+                else:
+                    failed += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
+    # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
+    # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
+    if gone and hasattr(svc, "erase_rows"):
+        try:
+            from memory_service import physical_erase_enabled
+            if physical_erase_enabled():
+                await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
+    try:
+        import exact_words
+        await exact_words.erase_text(user_id, text)
+        await exact_words.forget_transcript(user_id, text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
+    if failed:
+        # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
+        return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
+    if gone:
+        # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
+        # found the target stays - a store that answered nothing may simply have been down, so a retry must still work.
+        turn_forget.mark_forgotten(user_id, turn)
+        more = len(gone) - 1
+        tail = f" (and {more} more from what you said there)" if more > 0 else ""
+        return f"Done — I forgot: \"{_forget_preview(gone[0].text)}\"{tail}."
+    if text.rstrip().endswith("?"):
+        return FORGET_WHICH_REPLY       # a question keeps nothing to forget: they mean something else
+    return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -3974,46 +4071,12 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             "if I ask again, another no will clear it."
         )
 
-    # "forget that" / "never mind what I said" — retract the last MemPalace write.
-    # Scoped to the caller's user_id and to writes within the last 10 minutes so
-    # a stale retraction can't wipe anything older. Short window keeps the
-    # semantics predictable across voice + SSE clients.
+    # "forget that" / "never mind what I said" — retract what the owner's PREVIOUS TURN said (turn_forget): the rows
+    # written from that turn, and its capture still in flight (which then never lands). NEVER "the newest write":
+    # capture runs minutes behind a chat, so the newest write is usually another turn's (QA round 3b, 2026-11-07: a
+    # "forget that" after a remark about the kitchen erased an unrelated, important row). No turn to bind to -> ask.
     if intent.name == "memory_forget_last":
-        try:
-            from memory_service import get_memory_service
-            svc = get_memory_service()
-            ref = await svc.forget_last(user_id=user_id)
-        except Exception as exc:
-            logger.info("memory_forget_last: service unavailable: %s", exc)
-            return "I couldn't reach the memory store right now, so nothing was changed."
-        if ref is None:
-            return "There's nothing recent I can forget — no new memories in the last few minutes."
-        preview = (ref.text or "").strip()
-        if len(preview) > 80:
-            preview = preview[:77] + "…"
-        # "remember that X" leaves the owner's verbatim row AND a near-identical row the post-turn capture derived
-        # from the same turn: "forget that" retracts both, or the fact would come straight back (ask_to_remember)
-        _also = []
-        try:
-            import ask_to_remember as _atr_f
-
-            for _sib in await _atr_f.siblings_of(svc, user_id, ref):
-                if await svc.review(_sib.id, decision="reject", actor=user_id, note="forget_last") is not None:
-                    _also.append(_sib)
-        except Exception as exc:  # noqa: BLE001 - the primary retraction already happened
-            logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
-        # "forget that" is a forget like any other: the rejected row still holds the text. Erase it for real
-        # (see memory_forget_entity below); the reject already hid it, so a failed erase changes nothing visible.
-        if hasattr(svc, "erase_rows"):
-            try:
-                from memory_service import physical_erase_enabled
-                if physical_erase_enabled():
-                    await svc.erase_rows(user_id, [ref.id] + [r.id for r in _also], actor=user_id,
-                                         reason="forgotten by request (last)")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_forget_last: physical erase failed (%s) - row stays rejected",
-                               type(exc).__name__)
-        return f"Done — I forgot: \"{preview}\"."
+        return await _execute_forget_last(user_id)
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
         # "keep the contact": put back the contact(s) + edges the last forget cascade removed.

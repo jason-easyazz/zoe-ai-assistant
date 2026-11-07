@@ -36,27 +36,31 @@ MEMORY_TRIGGER_WORDS = frozenset({
 # one ("I've been so stressed", "feeling overwhelmed") — both are cues to pull
 # past emotional continuity. Both valences on purpose (the 4B brain under-captures
 # joy, so we must not also under-recall it).
-EMOTIONAL_TRIGGER_WORDS = frozenset({
-    # "how have I been" style state-of-being recall. NOTE: bare "feeling" and bare
-    # "how am i" are deliberately NOT here — they over-fire ("feeling like pizza",
-    # "how am I supposed to configure this"); anchor to the emotional phrasings.
-    "how i feel", "how i'm feeling", "how i've been feeling", "how i've been",
-    "how have i been", "how i been", "been feeling", "how are you feeling",
-    "feeling down", "feeling low", "feeling anxious", "feeling overwhelmed",
-    "feeling stressed", "feeling sad", "feeling lonely", "feeling numb",
-    "how am i doing", "how am i feeling", "how am i holding up",
-    "how are things", "how's things",
-    "stressed", "stressing", "stress about", "anxious", "anxiety",
-    "worried", "worrying", "overwhelmed", "depressed", "burnt out", "burned out",
-    "lonely", "grieving", "grief", "heartbroken", "upset", "struggling",
-    "coping", "mental health", "my mood", "been down",
-    # "going through" anchored so it doesn't fire on "going through my email".
-    "going through a lot", "going through a hard", "going through a rough",
-    "going through a tough",
-    # positive-valence emotional recall (symmetry with joy capture)
-    "excited about", "so happy", "happy about", "made me happy", "makes me happy",
-    "made me smile", "proud of", "thrilled", "over the moon",
-})
+def _emotional_cues() -> dict:
+    """``lexicons_data/emotional_cues.json`` (en): the ONE list of emotional-weight words, read here AND by the Flue brain
+    sidecar (labs/flue-zoe-brain-2x/src/tools/tool-groups.ts), so the turns Zoe treats as emotional are the turns the brain
+    is handed remember_emotional_moment on. A missing / broken file leaves both sets empty (logged): nothing crashes."""
+    import json
+    from pathlib import Path
+
+    try:
+        raw = json.loads((Path(__file__).resolve().parent / "lexicons_data" / "emotional_cues.json").read_text("utf-8"))
+        return raw.get("en") or {}
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning("memory_gate: emotional_cues.json unreadable (%s)", type(exc).__name__)
+        return {}
+
+
+_CUES = _emotional_cues()
+# "how have I been" style state-of-being recall plus a shared feeling ("I've been so stressed"), both valences. Bare
+# "feeling" / "how am i" are deliberately NOT cues ("feeling like pizza", "how am I supposed to configure this");
+# "going through" is anchored ("going through a lot", never "going through my email").
+EMOTIONAL_TRIGGER_WORDS = frozenset(str(w).lower() for w in _CUES.get("recall_cues") or ())
+# Everyday feeling and hard-event phrasing ("had a fall", "the embarrassment", "I feel guilty"; QA round 3b): what makes a
+# turn EMOTIONAL for the write-claim guard and the brain's tool disclosure, beyond the recall cues.
+EMOTIONAL_WEIGHT_WORDS = frozenset(str(w).lower() for w in _CUES.get("weight_cues") or ())
 
 
 # A possessive self-reference ("my dad", "our house") — a strong recall signal.
@@ -754,3 +758,14 @@ def extract_affect(message: str) -> tuple[str, str]:
         if best is not None:
             return best[1], sentence.strip()
     return "", ""
+
+
+def is_emotional_turn(message: str) -> bool:
+    """Does the user's turn carry feeling - a first-person feeling (``extract_affect``) or any cue of
+    ``lexicons_data/emotional_cues.json`` (the same data the brain sidecar discloses remember_emotional_moment on)? Pure."""
+    if not (message or "").strip():
+        return False
+    if extract_affect(message)[0]:
+        return True
+    low = (message or "").replace("’", "'").replace("‘", "'").lower()
+    return any(cue in low for cue in EMOTIONAL_TRIGGER_WORDS) or any(cue in low for cue in EMOTIONAL_WEIGHT_WORDS)
