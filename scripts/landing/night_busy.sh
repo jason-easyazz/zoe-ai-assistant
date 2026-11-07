@@ -8,7 +8,7 @@
 #   deploy: a deploy restarts zoe-data, which collides with the window's stops -> pause 02:45 until it has finished.
 #   test  : RAM -> pause while the night window or the backup is running.
 # `night_busy.sh deadline` prints the epoch second a voice lander must be GONE by (see below).
-# Test hook: ZOE_LANDING_NOW_EPOCH pretends "now" (the clock is otherwise `date`); ZOE_LANDING_HOME/voice-day-ok is the day gate.
+# Test hook: ZOE_LANDING_NOW_EPOCH pretends "now" (the clock is otherwise `date`); ZOE_LANDING_HOME/voice-day-ok is the day gate (today's date, or `always`).
 . "$(dirname "${BASH_SOURCE[0]}")/landing_lib.sh"
 kind=${1:-deploy}
 now=$(landing_now); hm=$(date -d "@$now" +%H%M); today=$(date -d "@$now" +%F)
@@ -36,8 +36,11 @@ case "$kind" in
     # resume, and an overwrite between a lander's probe and the deploy's read gets that deploy refused. Busy while it is activating or active.
     active zoe-voice-regression.service && exit 0
     # 2026-10-20: a voice landing STOPS Kokoro for ~15 min (the probe) - Zoe goes silent. Never while the household is awake.
-    # Owner may lift the daytime pause for one day: $ZOE_LANDING_HOME/voice-day-ok containing today's date (YYYY-MM-DD).
-    if [ "$hm" -ge 0700 ] && [ "$hm" -lt 2200 ] && [ "$(cat "$LANDING_HOME/voice-day-ok" 2>/dev/null)" != "$today" ]; then exit 0; fi
+    # Owner may lift the daytime pause: $LANDING_HOME/voice-day-ok containing today's date (YYYY-MM-DD) lifts it for one day, or the
+    # exact token `always` (whitespace-trimmed; owner 2026-11-07) lifts it as a standing mode. Neither touches the night window,
+    # the 01:55 pre-window pause, the 04:00-04:55 replay slot, or the lander's own household-quiet gate.
+    dayok=$(tr -d '[:space:]' < "$LANDING_HOME/voice-day-ok" 2>/dev/null)
+    if [ "$hm" -ge 0700 ] && [ "$hm" -lt 2200 ] && [ "$dayok" != "$today" ] && [ "$dayok" != always ]; then exit 0; fi
     if [ "$hm" -ge 0155 ] && [ "$hm" -lt 0400 ]; then
       finished_tonight && exit 1
       # never ran tonight (box was busy/refused?) - stay paused until 03:30 at the latest, then let work resume
