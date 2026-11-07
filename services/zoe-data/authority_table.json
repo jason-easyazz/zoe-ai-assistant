@@ -116,7 +116,7 @@
     "note_create": {"class": "personal_write", "receipt": "note"},
     "journal_create": {"class": "personal_write"},
     "alarm_set": {"class": "personal_write", "receipt": "timer"},
-    "smart_home": {"class": "home_control"},
+    "smart_home": {"class": "home_control", "receipt": "device"},
     "memory_store": {"class": "memory_write_stated"},
     "people_create": {"class": "memory_write_stated"},
     "memory_retire": {"class": "memory_forget"},

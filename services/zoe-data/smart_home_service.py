@@ -623,6 +623,22 @@ def _which_one(targets: list[dict[str, Any]]) -> str:
 
 # ── Skybridge resolver ────────────────────────────────────────────────────────
 
+def record_device_receipt(user_id: Any, result: Any, source: str = "smart_home") -> None:
+    """A switch the resolver REALLY made (``controlled_entities``: the ids ``set_device`` confirmed) is the evidence the
+    write-claim guard needs before a brain reply may say "I've turned the light on" (receipt kind ``device``). Nothing switched
+    = no receipt. Never raises."""
+    try:
+        controlled = (result or {}).get("controlled_entities") if isinstance(result, dict) else None
+        if not controlled:
+            return
+        import write_receipts
+
+        for eid in controlled:
+            write_receipts.record(str(user_id or ""), "device", str(eid), source)
+    except Exception:  # noqa: BLE001 - bookkeeping never fails the switch that already happened
+        return
+
+
 async def resolve_smart_home(
     intent: Any, room_eids: set[str] | None = None
 ) -> dict[str, Any]:

@@ -63,7 +63,9 @@
       "erasing": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
       "wiping": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
       "taking": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive", "particles": ["off", "out"]},
-      "crossing": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive", "particles": ["off"]}
+      "crossing": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive", "particles": ["off"]},
+      "turned": {"kind": "device", "particles": ["on", "off"]}, "switched": {"kind": "device", "particles": ["on", "off"]}, "flicked": {"kind": "device", "particles": ["on", "off"]}, "flipped": {"kind": "device", "particles": ["on", "off"]},
+      "turning": {"kind": "device", "form": "progressive", "particles": ["on", "off"]}, "switching": {"kind": "device", "form": "progressive", "particles": ["on", "off"]}, "flicking": {"kind": "device", "form": "progressive", "particles": ["on", "off"]}
     },
     "claim_phrases": {
       "got that noted": {"kind": "any"}, "got it noted": {"kind": "any"},
@@ -71,7 +73,10 @@
       "noted that down": {"kind": "any"}, "noted it down": {"kind": "any"},
       "consider it done": {"kind": "any"},
       "consider it forgotten": {"kind": "forget"}, "consider that forgotten": {"kind": "forget"},
-      "that's forgotten": {"kind": "forget"}, "it's forgotten": {"kind": "forget"}
+      "that's forgotten": {"kind": "forget"}, "it's forgotten": {"kind": "forget"},
+      "done the light's on": {"kind": "device"}, "done the light's off": {"kind": "device"},
+      "done the light is on": {"kind": "device"}, "done the light is off": {"kind": "device"},
+      "done the lights are on": {"kind": "device"}, "done the lights are off": {"kind": "device"}
     },
     "removal_kinds": {"list": "list_removed", "calendar": "calendar_removed", "reminder": "reminder_removed", "timer": "timer_removed", "note": "forget", "memory": "forget"},
     "targets": {
@@ -112,7 +117,12 @@
       "erase": {"kind": "any", "needs_target": true, "action": "remove"},
       "wipe": {"kind": "any", "needs_target": true, "action": "remove"},
       "take": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off", "out"]},
-      "cross": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off"]}
+      "cross": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off"]},
+      "turn": {"kind": "device", "particles": ["on", "off"]}, "switch": {"kind": "device", "particles": ["on", "off"]}, "flick": {"kind": "device", "particles": ["on", "off"]}, "flip": {"kind": "device", "particles": ["on", "off"]}
+    },
+    "kind_objects": {
+      "_note": "A DEVICE switch claim ('I've turned the light on', 'Turning it off now', 'I'll turn the lights on for you') needs one of these in its clause: the verbs keep their own kind 'device' and need a receipt the Skybridge smart-home resolver records after a switch it really made (2026-11-07: 'I'll turn the lights on for you.' with no tool call).",
+      "device": ["light", "lights", "lamp", "lamps", "fan", "fans", "heater", "heaters", "aircon", "tv", "television", "plug", "plugs", "switch", "blind", "blinds", "it", "them", "everything", "both"]
     },
     "progressive_subjects": ["i'm", "im", "we're"],
     "progressive_aux": ["am", "are"],
@@ -132,10 +142,11 @@
       "list_removed": "I didn't manage to remove that, so it's still there.",
       "calendar_removed": "I didn't manage to remove that, so it's still there.",
       "reminder_removed": "I didn't manage to remove that, so it's still there.",
-      "timer_removed": "I didn't manage to remove that, so it's still there."
+      "timer_removed": "I didn't manage to remove that, so it's still there.",
+      "device": "I didn't manage to switch that, so nothing's changed. Want me to try again?"
     },
     "correction_note": "(Note: my previous reply said {what} was done, but nothing was saved - no successful tool call backed it - and the user was told so. A change only happens through a successful tool call; if no tool can make it, say so.)",
-    "correction_kinds": {"list": "a list change", "calendar": "a calendar change", "reminder": "a reminder", "timer": "a timer or alarm", "note": "a note", "memory": "a memory", "forget": "a forget", "list_removed": "a list removal", "calendar_removed": "a calendar removal", "reminder_removed": "a reminder removal", "timer_removed": "a timer or alarm removal", "any": "a change"},
+    "correction_kinds": {"list": "a list change", "calendar": "a calendar change", "reminder": "a reminder", "timer": "a timer or alarm", "note": "a note", "memory": "a memory", "forget": "a forget", "list_removed": "a list removal", "calendar_removed": "a calendar removal", "reminder_removed": "a reminder removal", "timer_removed": "a timer or alarm removal", "device": "a device switch", "any": "a change"},
     "history_marker": "(nothing was saved in that reply)"
   },
   "es": {

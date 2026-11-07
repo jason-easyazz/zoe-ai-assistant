@@ -148,6 +148,9 @@ class _Lang:
     # A REMOVAL verb ("removed", "taken … off") claims the removal kind of its target ("list" -> "list_removed").
     removal_kinds: dict = None
     honest_by_kind: dict = None               # receipt kind -> the honest line for a claim of that kind
+    # A kind whose verbs name it THEMSELVES ("turned ... on" is a device switch, 2026-11-07): such a verb keeps its own kind (the
+    # nouns around it never re-file it) and claims only with one of the kind's objects in its clause ("the light", "it").
+    kind_objects: dict = None                 # kind -> frozenset of object phrases
 
     def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
         if tok in self.adverbs or tok in self.modifiers:
@@ -227,6 +230,8 @@ def _langs() -> tuple:
             claim_phrases=claim_phrases, phrase_firsts=frozenset(p[0] for p, _ in claim_phrases),
             removal_kinds={str(k): str(v) for k, v in (lex.get("removal_kinds") or {}).items()},
             honest_by_kind={str(k): str(v).strip() for k, v in (lex.get("honest_by_kind") or {}).items() if str(v).strip()},
+            kind_objects={str(k): frozenset(p for p in (_phrase(x) for x in (v or [])) if p)
+                          for k, v in (lex.get("kind_objects") or {}).items() if not str(k).startswith("_")},
         ))
     return tuple(out)
 
@@ -361,13 +366,15 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: b
                     # defers it ("later", a trailing "once you confirm") either. Never with an "if" anywhere in the unit.
                     standing_ = bool(standing_unit and not now_ and not sure and not temporal_tail
                                      and _promise_led(toks, i, lang))
-                    if (now_ or sure or standing_) and _particle_after(toks, i, p_particles):
+                    if (now_ or sure or standing_) and _particle_after(toks, i, p_particles) \
+                            and _own_object(p_kind, padded, lang) is not False:
                         # "I'll add that to your list right now": a write promised for THIS turn. Never with an "if" anywhere in
                         # the unit ("I'll add it now if you like" is an offer).
                         # A verb that names its OWN kind (remind / remember / forget) keeps it: the nouns of its CONTENT ("I'll remind you to
                         # add milk to your shopping list at 3pm", "I'll remember your appointment is on Friday") do not turn the
                         # promise into a list / calendar write that needs a different receipt.
-                        kinds = (p_kind,) if (p_kind != "any" and not p_needs) else _named_kinds(padded, lang)
+                        kinds = (p_kind,) if ((p_kind != "any" and not p_needs) or _own_object(p_kind, padded, lang)) \
+                            else _named_kinds(padded, lang)
                         if not kinds:
                             if any(_has_phrase(padded, o) for o in lang.other_targets):
                                 continue
@@ -401,12 +408,15 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: b
                     continue
                 if not _particle_after(toks, i, parts):
                     continue            # "I've taken note of it" is no removal; "I've taken it OFF your calendar" is
+                own = _own_object(verb_kind, padded, lang)
+                if own is False:
+                    continue            # "I turned it over in my mind" / "switched on to the idea": no device object, no switch claim
                 cued = any(_has_phrase(padded, c) for c in lang.implied_cues)
                 if progressive and not cued and not _has_subject_before(toks, i, lang, extra, aux_ok):
                     # A bare "Adding milk to your shopping list by tapping +" / "Setting a timer helps you focus" is an instruction or a
                     # description; only "now" / "for you" (or a first-person subject: "I'm adding") makes it Zoe's own write.
                     continue
-                kinds = (verb_kind,) if (verb_kind == "forget" and not needs_target) else _named_kinds(padded, lang)
+                kinds = (verb_kind,) if ((verb_kind == "forget" and not needs_target) or own) else _named_kinds(padded, lang)
                 # (a completed FORGET keeps its explicit kind: "I've forgotten that memory" is a deletion claim, not a memory write)
                 implied = bool(progressive and implied_kind and cued)
                 if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds) or implied, lang):
@@ -446,6 +456,15 @@ def _action_kinds(kinds: tuple, removal: bool, lang: "_Lang") -> tuple:
         if r not in out:
             out.append(r)
     return tuple(out)
+
+
+def _own_object(kind: str, padded: str, lang: "_Lang") -> Optional[bool]:
+    """For a kind with its own objects (``kind_objects``: "device"): True when the clause names one ("the light", "it"), False
+    when it names none (the verb is then no claim at all). None for every other kind."""
+    objects = (lang.kind_objects or {}).get(kind)
+    if objects is None:
+        return None
+    return any(_has_phrase(padded, o) for o in objects)
 
 
 def _particle_after(toks: list, i: int, particles: frozenset) -> bool:

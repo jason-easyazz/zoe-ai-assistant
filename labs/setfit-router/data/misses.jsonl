@@ -24,3 +24,11 @@
 {"text": "how old is my mum", "label": "people", "source": "own_fact_miss_2026-10-04"}
 {"text": "what's my sister's phone number", "label": "people", "source": "own_fact_miss_2026-10-04"}
 {"text": "when is my partner's birthday", "label": "people", "source": "own_fact_miss_2026-10-04"}
+{"text": "shone the lots", "label": "smart_home", "source": "garbled_light_2026-11-07"}
+{"text": "I've shone a lot", "label": "smart_home", "source": "garbled_light_2026-11-07"}
+{"text": "sound the lamp", "label": "smart_home", "source": "garbled_light_2026-11-07"}
+{"text": "two of the one", "label": "smart_home", "source": "garbled_light_2026-11-07"}
+{"text": "do the one please", "label": "smart_home", "source": "garbled_light_2026-11-07"}
+{"text": "a little bit of the lot", "label": "smart_home", "source": "garbled_light_2026-11-07"}
+{"text": "turn on the line", "label": "smart_home", "source": "garbled_light_2026-11-07"}
+{"text": "I can't turn the lights off", "label": "smart_home", "source": "garbled_light_2026-11-07"}
