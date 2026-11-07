@@ -3818,6 +3818,25 @@
         },
         "typed_env": true
       },
+      "ZOE_DEVICE_CONFIRM_GUARD": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/device_confirm.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "2026-11-07: confirm-then-act for a garbled short light command at the panel; kill switch",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_DEVICE_ID": {
         "defaults": [
           "(required)"
@@ -14576,6 +14595,25 @@
           "type": "float"
         },
         "typed_env": false
+      },
+      "ZOE_SPACER_REQUIRE_CLAIM": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_spacer.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "2026-11-07: a domain spacer needs the words to name the domain; kill switch",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_SPEAKABLE_PROVENANCE": {
         "defaults": [
