@@ -185,21 +185,26 @@ class Clip:
     duration_s: float
 
 
-_NAME = re.compile(r"^(\d{2})(\d{2})(\d{2})_(\d{3})\.wav$")
+_NAME = re.compile(r"^(?:(\d{4})(\d{2})(\d{2})-)?(\d{2})(\d{2})(\d{2})_(\d{3})\.wav$")
 
 
 def clip_time(name: str, mtime: float) -> Optional[dt.datetime]:
-    """Capture time of a corpus clip ``HHMMSS_mmm.wav`` (voice_tts._maybe_capture_stt). The name has no date, so the
-    mtime supplies it; a name more than 120 s from its mtime's clock (a copied / restored file) is unusable -> None."""
+    """Capture time of a corpus clip (voice_tts._maybe_capture_stt): ``YYYYmmdd-HHMMSS_mmm.wav`` since 2026-11-06, or the
+    older ``HHMMSS_mmm.wav``, whose date the mtime supplies. A name more than 120 s from its mtime's clock (a copied /
+    restored file) is unusable -> None."""
     m = _NAME.match(name)
     if not m:
         return None
     mt = dt.datetime.fromtimestamp(mtime)
     try:
-        t = mt.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=int(m.group(3)),
-                       microsecond=int(m.group(4)) * 1000)
+        t = mt.replace(hour=int(m.group(4)), minute=int(m.group(5)), second=int(m.group(6)),
+                       microsecond=int(m.group(7)) * 1000)
+        if m.group(1):
+            t = t.replace(year=int(m.group(1)), month=int(m.group(2)), day=int(m.group(3)))
     except ValueError:
         return None
+    if m.group(1):
+        return t if abs((t - mt).total_seconds()) <= 120 else None
     for cand in (t, t - dt.timedelta(days=1), t + dt.timedelta(days=1)):  # a capture straddling midnight
         if abs((cand - mt).total_seconds()) <= 120:
             return cand

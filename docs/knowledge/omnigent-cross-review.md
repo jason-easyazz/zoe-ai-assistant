@@ -399,6 +399,62 @@ runner at once (verified: 20 → 1, ~956 MB recovered) but **kills any review in
 flight**, so use it only when nothing is dispatched. The reaper is the safe
 equivalent and can be run at any time.
 
+## Leaked `codex app-server` trees — the second memory failure (2026-11-04/05)
+
+MEASURED: 93 `codex app-server --listen` trees (+ the codex vendor binary and
+`codex-code-mode-host` under each) held ~15 GB of swap on 11-04; 42-46 (~2 GB)
+accumulated again on 11-05 across many `cross_review.sh` runs; the box then
+starved and hard-reset at 04:33 on 11-06.
+
+**Who spawns them:** the omnigent *runner* (`runner/native/orchestration.py`,
+`build_codex_native_server`) — one tree per codex-harness session (polly's codex
+worker). The direct `codex exec` fallback in `cross_review.sh` is a second, smaller
+source (below). **Why they outlive the session**, three independent defects:
+
+1. `omnigent host` sets itself as a child *subreaper* (`host/connect.py`). When a
+   runner dies without its own teardown (SIGTERM/SIGKILL, OOM, host restart) its
+   app-server is not collected: it reparents to the host and lives on. Live check
+   2026-11-06: both resident app-servers had the host as parent and there were zero
+   runners.
+2. Omnigent's own crash-reaper (`codex_native_process_registry.py`) is blind to this.
+   It kills a registered pid only if `/proc/<pid>/cmdline` still contains
+   `omnigent_crash_teardown_tag=…`, but the tag is set as argv[0] and `codex` is a node
+   *shebang* script, so the kernel rewrites the command line to
+   `node /usr/local/bin/codex app-server …`. 0 of the live processes carried the tag, the
+   registry file was empty (entries are silently dropped, nothing killed), and 396
+   owner-lock files had piled up. Upstream defect; we cannot patch the installed package.
+3. `cross_review.sh` ran the direct fallback as `timeout … docker exec … codex exec`. The
+   host `timeout` signals the `docker exec` CLIENT, not the process inside the container,
+   so a timed-out or interrupted review left codex (and its app-server) running.
+
+**Fix (all in this repo):**
+
+- `cross_review.sh`: the container binary now runs under an *in-container* `timeout -k 5`
+  whose deadline is `IN_CONTAINER_MARGIN_S` (3 s) inside the host one (timeout signals its
+  whole process group); `cleanup` (EXIT/INT/TERM) then kills every container process whose
+  cwd is the unique per-review dir (`kill_review_dir_procs` — catches detached stragglers
+  `timeout` cannot reach) and, if polly was started, runs
+  `reap_stale_omnigent_runners.py --app-servers-only --execute`. SIGTERM also takes the
+  polly child's children.
+- **Concurrency cap:** before starting polly, `cross_review.sh` counts resident app-server
+  trees (`reap_stale_omnigent_runners.py --count-app-servers`), sweeps orphans if over
+  `CROSS_REVIEW_MAX_APP_SERVERS` (default 6), and if still over skips polly (the direct
+  codex fallback runs instead). Unknown count = proceed.
+- `reap_stale_omnigent_runners.py` now also reaps **orphaned app-server trees**: any
+  `node codex app-server` under an `omnigent host`/entrypoint ancestor whose *parent* is
+  the host or entrypoint rather than a runner, older than `--app-server-grace-s` (60 s).
+  Whole tree (children first), SIGTERM then SIGKILL, identity-bound by process start time.
+  No server lookup is needed — a parentless app-server is dead weight whatever its
+  session says. Scoped by ancestry so the operator's own host-side Codex can never match.
+  The 30-minute cron already runs it with `--execute`, so existing installs pick this up
+  with no new unit.
+- No secret travels on a command line in these scripts (pinned by
+  `test_no_omnigent_script_puts_a_secret_on_a_command_line`). The OpenRouter key reaches
+  the container by compose environment and `config.yaml` stores only an `env:` ref.
+
+Residual: an upstream fix (tag survival through the shebang, or `PR_SET_PDEATHSIG` on the
+app-server) would remove the cause; until then the reaper is the collector.
+
 ## Constraints
 
 - ONE polly worker at a time repo-wide (RAM discipline). The wrapper flock

@@ -389,7 +389,7 @@ overlay; it never edits code. Loader: `src/harness.ts`. Control: `scripts/harnes
 | Overlay file | Replaces | Rules |
 | --- | --- | --- |
 | `soul.md` | `ZOE_SOUL` | must OPEN with the code-held persona + identity paragraphs byte for byte and keep the recall floor paragraph (`SOUL_RECALL_FLOOR`) verbatim |
-| `doctrines/<slot>.md` | one doctrine; slots `voice-delivery`, `activator`, `in-session-context`, `recall-precedence`, `personal-recall`, `emotional-recall`, `emotional-capture` | `activator.md` must keep the code-derived group catalogue |
+| `doctrines/<slot>.md` | one doctrine; slots `voice-delivery`, `warmth`, `activator`, `in-session-context`, `recall-precedence`, `personal-recall`, `emotional-recall`, `emotional-capture` | `activator.md` must keep the code-derived group catalogue |
 | `manner.md` | zoe-data's ENGLISH manner block | applied only when zoe-data already sent that block (its flag on, an adult member) |
 | `tool-guidance.md` | tool DESCRIPTIONS, `## <tool>` sections | 21 tools; `web_search` and `memory_retire` are code-held |
 | `recall-shape.json` | `recall_memory` packet size / query cap | exactly `{"version":1,"recall_tool":{"limit":1..40,"query_max_chars":50..1000}}` |
