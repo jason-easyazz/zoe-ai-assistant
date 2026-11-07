@@ -33,6 +33,9 @@ import write_receipts
 # Auto-creating it as the first speaker's PERSONAL list made the next person's "add milk" find nothing and create a second
 # list - the duplicate shopping lists seen on the panel (2026-10-15).
 PERSONAL_LIST_TYPES = frozenset({"personal", "tasks"})
+# The list types a voice/MCP add may auto-create as HOUSEHOLD (family-visible). Anything else - a personal type, or a type the
+# brain invented ("pharmacy") - is created personal: an unrecognised list is never conjured as a shared one (QA 2026-11-06).
+HOUSEHOLD_LIST_TYPES = frozenset({"shopping", "work", "bucket"})
 # The only list a panel guest may bring into existence; every other household list must already exist.
 GUEST_CREATABLE_LIST_TYPES = frozenset({"shopping"})
 
@@ -42,8 +45,8 @@ class HouseholdListUnavailable(Exception):
 
 
 def default_visibility(list_type: str) -> str:
-    """Visibility the voice/MCP add paths give a list they auto-create."""
-    return "personal" if list_type in PERSONAL_LIST_TYPES else "family"
+    """Visibility the voice/MCP add paths give a list they auto-create: family only for a known household type."""
+    return "family" if list_type in HOUSEHOLD_LIST_TYPES else "personal"
 
 
 # ── Item text hygiene (live 2026-10-12: "Can you add noodles? Noodles. To the shopping list." stored "noodles? Noodles";
@@ -460,7 +463,18 @@ def _rows_changed(res) -> Optional[int]:
 async def find_list_id(db, *, user_id: str, list_type: str, name: str) -> Optional[str]:
     """Resolve the list an add lands on: the household (family-visible) list of the TYPE first, whatever it is called; only when
     there is none, the user's own list of that exact name. A guest identity owns nothing: it resolves to the household list only.
-    """
+
+    A PERSONAL type (to-do / tasks) is the member's OWN list - never another member's family-visible one: their list of that exact
+    name, else their oldest list of the type, else None (the caller creates theirs). "my to-do" must not land on someone else's
+    list because it happens to be shared (QA 2026-11-06)."""
+    if list_type in PERSONAL_LIST_TYPES and not panel_principal.is_guest_id(user_id):
+        cursor = await db.execute(
+            "SELECT id FROM lists WHERE list_type=? AND deleted=0 AND user_id=?"
+            " ORDER BY CASE WHEN name=? THEN 0 ELSE 1 END, created_at ASC, id ASC LIMIT 1",
+            (list_type, user_id, name),
+        )
+        row = await cursor.fetchone()
+        return row["id"] if row else None
     household = await find_household_list_id(db, list_type=list_type, name=name)
     if household is not None or panel_principal.is_guest_id(user_id):
         return household
@@ -512,8 +526,12 @@ async def add_item_to_list(
     new_list_visibility: str,
     dedup_window_s: int = 0,
     receipts: Optional[list] = None,
+    list_id: Optional[str] = None,
 ) -> dict:
     """Resolve-or-create a list and add one item — the shared voice/MCP add.
+
+    ``list_id`` (optional) is a list the CALLER already resolved and checked is visible to the user (a list the user named);
+    it is used as-is and never created.
 
     Behaviour choices stay with the caller: ``new_list_visibility`` sets the
     auto-created list's visibility (pass :func:`default_visibility`'s result to
@@ -532,7 +550,8 @@ async def add_item_to_list(
     """
     text = normalize_item_text(text) or text
     guest = panel_principal.is_guest_id(user_id)
-    list_id = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
+    if list_id is None:
+        list_id = await find_list_id(db, user_id=user_id, list_type=list_type, name=list_name)
     if list_id is None and guest and list_type not in GUEST_CREATABLE_LIST_TYPES:
         # A guest adds to a household list that exists; it never conjures a new list of another type.
         raise HouseholdListUnavailable(list_type)

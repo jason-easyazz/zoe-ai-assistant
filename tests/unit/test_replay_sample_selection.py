@@ -212,6 +212,19 @@ def test_since_and_since_date_compose(corpus):
     assert picked == ["235000_000.wav", "090000_000.wav"]
 
 
+def test_since_compares_a_dated_name_on_its_time_of_day(tmp_path):
+    """Captures since 2026-11-06 carry the date in front (YYYYmmdd-HHMMSS_mmm.wav); --since keeps its time-of-day
+    meaning for them. NEGATIVE CONTROL in the last assert: a plain string compare admits every dated name."""
+    d = tmp_path / "samples"
+    d.mkdir()
+    _wav(str(d), "20261106-080000_000.wav", BASE)
+    _wav(str(d), "20261106-093000_000.wav", BASE + 1)
+    _wav(str(d), "100000_000.wav", BASE + 2)
+    picked = _names(SELECT(str(d), _args(since="0900")))
+    assert picked == ["20261106-093000_000.wav", "100000_000.wav"]
+    assert "20261106-080000_000.wav" >= "0900"
+
+
 # ── the dependency pin ────────────────────────────────────────────────────────
 
 def test_select_needs_only_glob_and_os(corpus):

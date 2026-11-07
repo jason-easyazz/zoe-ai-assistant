@@ -137,7 +137,9 @@ async def test_execute_tool_dispatches_list_add_item_through_production_path(mon
     )
 
     assert result["status"] == "added"
-    assert result["list"] == "Groceries"
+    # "Groceries" clearly means the shopping TYPE: it lands on the household shopping list ("Shopping"), not a new list that shares
+    # nothing with it (the list-target privacy rule, #2320)
+    assert result["list"] == "Shopping"
     assert result["text"] == "bread"
     assert any("INSERT INTO lists" in sql for sql, _params in db.calls)
     assert any("INSERT INTO list_items" in sql for sql, _params in db.calls)

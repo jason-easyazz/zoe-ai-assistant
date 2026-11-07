@@ -393,6 +393,9 @@ async def decide(svc: Any, user_id: str, prep: Prepared, *, pick: Optional[int] 
     ok = await svc.retire_with_quote(user_id, chosen.id, quote=quote, turn_ref=prep.turn_ref, lane=lane, cue=prep.cue)
     if not ok:
         return done("refused", R_STORE, chosen, rank)
+    import write_receipts
+
+    write_receipts.record(user_id, "forget", getattr(chosen, "id", ""), "memory_retire")    # a retired note is a "forget" receipt
     return done("retired", "", chosen, rank)
 
 
