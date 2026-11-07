@@ -51,6 +51,10 @@
       "sentinel": true,
       "variants": ["Hmm — I couldn't save that just now. Mind telling me again in a moment?"]
     },
+    "capture_lag": {
+      "_why": "provenance_answers.render_summary: memory_capture_stats says a capture is still in flight, so the list is a moment behind what the user just said",
+      "variants": ["I'm still filing a few things you just told me."]
+    },
     "hold_on": {
       "_why": "panel daemon, zoe-data restarting: spoken locally before the one retry",
       "sentinel": true,
