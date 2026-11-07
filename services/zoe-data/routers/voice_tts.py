@@ -3476,6 +3476,16 @@ async def _run_voice_memory_passes(
                 return
         except Exception:
             pass
+        # A turn the caregiver-curation lane answered (memories_voice._curate: the write OR its refusal) is an instruction, not the
+        # curator's own words: no extractor / digest / person / suggestion pass may mine it into the curator's store.
+        try:
+            import memories_voice as _mv
+
+            if _mv.curation_handled(user_id, user_text):
+                logger.info("CURATION_TURN user=%s skipped=memory_passes lane=voice", user_id)
+                return
+        except Exception:  # noqa: BLE001
+            pass
         # BM5: an off-the-record spoken turn reaches no extractor, digest, person extractor or suggestion detector.
         try:
             import memory_provenance as _mp

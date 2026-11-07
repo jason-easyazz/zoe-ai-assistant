@@ -453,13 +453,20 @@ _KEEP_CONTACT_RE = re.compile(
 # "how well do you know me" / "what do you understand about me" → reveal portrait
 _PORTRAIT_REVEAL_RE = re.compile(
     r"(?:how\s+well\s+do\s+you\s+know\s+me"
-    r"|what\s+do\s+you\s+(?:really\s+)?(?:know|understand|think)\s+about\s+me"
+    r"|what\s+do\s+you\s+(?:really\s+)?(?:understand|think)\s+about\s+me"
     r"|what'?s?\s+your\s+understanding\s+of\s+me"
-    r"|describe\s+(?:me|who\s+i\s+am)\s+(?:to\s+me|back\s+to\s+me)?"
+    r"|describe\s+(?:me|who\s+i\s+am)\b(?:\s+(?:to\s+me|back\s+to\s+me))?"
+    r"|how\s+would\s+you\s+describe\s+me\b"
+    r"|what\s+am\s+i\s+like\b"
+    r"|(?:your|the)\s+(?:picture|portrait|impression)\s+of\s+me"
     r"|how\s+well\s+(?:do\s+you\s+)?understand\s+me"
     r"|what\s+do\s+you\s+see\s+when\s+you\s+think\s+of\s+me)",
     re.IGNORECASE,
 )
+
+# Plain "what do you know about me" (any lead-in, "now", "so far") asks for the FACTS, not the portrait: it routes to the same
+# provenance summary as the bare ask, so a lead-in ("sorry, got distracted. what do you know about me now?") is not a different answer.
+_KNOW_ABOUT_ME_RE = re.compile(r"what\s+do\s+you\s+(?:really\s+)?know\s+about\s+me", re.IGNORECASE)
 
 # "update your understanding" / "rebuild your portrait of me" → regenerate portrait now
 _PORTRAIT_REFRESH_RE = re.compile(
@@ -860,10 +867,13 @@ def detect_intent(
             return Intent("memory_forget_entity", {"name": _entity})
 
     # Portrait intents — how well Zoe knows the user, and rebuilding understanding.
-    if _PORTRAIT_REVEAL_RE.search(t):
-        return Intent("portrait_reveal", {})
+    # Refresh first: "update/rebuild your portrait of me" also contains "your portrait of me".
     if _PORTRAIT_REFRESH_RE.search(t):
         return Intent("portrait_refresh", {})
+    if _PORTRAIT_REVEAL_RE.search(t):
+        return Intent("portrait_reveal", {})
+    if _KNOW_ABOUT_ME_RE.search(t):
+        return Intent("portrait_reveal", {"facts": True})
 
     # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
     # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
@@ -4158,6 +4168,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             logger.warning("memory_forget_entity: night-mind erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the now card that names it (one row per member, rebuilt next night without the name): same rule, fail closed
+        try:
+            import now_card
+            await now_card.erase_entity(user_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: now-card erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the struggle detector's summaries of turns that named it (struggle_events): same rule, fail closed
         try:
             import struggle_detector
@@ -4890,19 +4908,27 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         return _random.choice(_acks)
 
     if intent.name == "portrait_reveal":
+        portrait = ""
+        if not intent.slots.get("facts"):
+            try:
+                from user_portrait import load_portrait  # type: ignore[import]
+                portrait = await load_portrait(user_id)
+            except Exception as exc:
+                logger.debug("portrait_reveal: load failed: %s", exc)
+        if portrait:
+            return f"Here's how I understand you:\n\n{portrait}"
+        # No portrait asked for or built yet: answer with the FACTS (the same summary as the bare "what do you know about me"),
+        # never a refusal that tells the user to ask what they just asked.
         try:
-            from user_portrait import load_portrait  # type: ignore[import]
-            portrait = await load_portrait(user_id)
+            import provenance_answers as _pa  # type: ignore[import]
+            facts = await _pa.handle("what do you know about me", user_id, allow_writes=False)
         except Exception as exc:
-            logger.debug("portrait_reveal: load failed: %s", exc)
-            portrait = ""
-        if not portrait:
-            return (
-                "I don't have a deep portrait of you yet — that takes a few weeks of "
-                "conversations for me to put together. The more we talk, the better I'll understand you. "
-                "I do have some facts stored — try asking what I know about you."
-            )
-        return f"Here's how I understand you:\n\n{portrait}"
+            logger.debug("portrait_reveal: facts summary failed: %s", exc)
+            facts = None
+        return facts or (
+            "I don't have a deep portrait of you yet; that takes a few weeks of conversations. "
+            "The more we talk, the better I'll understand you."
+        )
 
     if intent.name == "portrait_refresh":
         try:

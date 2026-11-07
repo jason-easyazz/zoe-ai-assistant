@@ -2740,6 +2740,20 @@
    "kind": "unknown",
    "readers": 1
   },
+  "ZOE_MEMORY_NOW_CARD": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "unknown",
+   "readers": 1
+  },
+  "ZOE_MEMORY_NOW_CARD_HARNESS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
   "ZOE_MEMORY_PHYSICAL_ERASE": {
    "defaults": [
     "on"
