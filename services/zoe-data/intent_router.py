@@ -188,6 +188,10 @@ def _infer_event_category(text: str) -> str:
     return "general"
 
 
+#: a courtesy tail on a list command ("..., please", "thanks", "for me"); the list-add patterns read the text without it
+_LIST_TRAILING_COURTESY_RE = re.compile(r"(?:,?\s+(?:please|thanks|thank you|cheers|for me))+$")
+
+
 def _normalize_chat_intent_text(raw: str) -> str:
     """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
@@ -1385,6 +1389,10 @@ def detect_intent(
         return Intent("music_setup", {})
 
     # === LIST PATTERNS (checked after domain-specific) ===
+    # A trailing courtesy ("... to my personal list please") is not part of the item or the list name: with it, the
+    # "$"-anchored target patterns missed and the implicit "add (.+)" stored "sultanas to my personal list please" on the
+    # SHOPPING list (a private item on the shared list; rollout QA 2026-11-07).
+    lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [
@@ -1393,7 +1401,7 @@ def detect_intent(
         r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks)$",
         r"^(?:(?:can|could) you |please )?(?:add|put) (.+?) (?:to|on) (?:the |my )?(.+?) ?list$",
     ]:
-        m = re.match(pattern, t)
+        m = re.match(pattern, lt)
         if m:
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
@@ -1414,7 +1422,7 @@ def detect_intent(
         r"^(?:i'?d|id|and|at|it|hey|a)?\s*(?:go to |goto )?(.+?) "
         r"to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)"
         r" list[.!?]?$",
-        t,
+        lt,
     )
     if m:
         item = _sanitize_list_item(m.group(1))
@@ -1440,7 +1448,7 @@ def detect_intent(
             r"^(?:(?:can|could) you |please )?add (.+)$",
             r"^(?:(?:can|could) you |please )?put (.+)$",
         ]:
-            m = re.match(pattern, t)
+            m = re.match(pattern, lt)
             if m:
                 item = _sanitize_list_item(m.group(1))
                 if not _list_item_ok(item):
@@ -1450,7 +1458,7 @@ def detect_intent(
 
     # --- LIST ADD (natural language shopping) ---
     m = re.match(
-        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", t
+        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", lt
     )
     if m:
         item = _sanitize_list_item(m.group(1))
