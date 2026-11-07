@@ -974,6 +974,13 @@
    "kind": "str",
    "readers": 1
   },
+  "ZOE_DEVICE_CONFIRM_GUARD": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
   "ZOE_DEVICE_ID": {
    "defaults": [
     "required"
@@ -4872,6 +4879,13 @@
     "0.5"
    ],
    "kind": "number",
+   "readers": 1
+  },
+  "ZOE_SPACER_REQUIRE_CLAIM": {
+   "defaults": [
+    "on"
+   ],
+   "kind": "bool",
    "readers": 1
   },
   "ZOE_SPEAKABLE_PROVENANCE": {
