@@ -287,6 +287,15 @@ def test_clip_time_rejects_a_name_far_from_its_mtime():
     assert pvl.clip_time("notaclip.wav", ts.timestamp()) is None
 
 
+def test_clip_time_reads_the_date_from_a_dated_name():
+    """Captures since 2026-11-06 are YYYYmmdd-HHMMSS_mmm.wav: the date comes from the NAME, not the mtime."""
+    ts = dt.datetime(2026, 11, 6, 20, 45, 37, 105000)
+    assert pvl.clip_time("20261106-204537_105.wav", ts.timestamp()) == ts
+    assert pvl.clip_time("20261106-204537_105.wav", (ts + dt.timedelta(seconds=1)).timestamp()) == ts
+    # a dated name whose mtime is a different day (a copied / restored file) is unusable, never re-dated
+    assert pvl.clip_time("20261105-204537_105.wav", ts.timestamp()) is None
+
+
 def test_fetch_lines_fails_loudly_when_the_pi_is_unreadable():
     def runner(cmd, **kw):
         assert cmd[:3] == ["timeout", "30", "ssh"] and "BatchMode=yes" in cmd

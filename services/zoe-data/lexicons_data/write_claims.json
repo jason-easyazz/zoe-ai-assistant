@@ -1,5 +1,5 @@
 {
-  "_doc": "Per-language WORDS for write_claim_guard.py: how a reply CLAIMS it saved something (a list item, a calendar event, a reminder, a note, a timer). Data, not code: a new language or phrasing is a new row here, never a new regex. A claim verb counts in the active (I've added) and the completed passive (passive_done: has been added; passive_past: was added, which also needs a target noun unless the verb is added); a present-tense passive (passive_state: is scheduled for Friday) describes the calendar and is a claim only for a verb marked state_claim (is added). Every word is matched after NFKC + casefold + diacritic stripping (so 'anadi' == 'añadí'), against whole tokens. 'reviewed' = read by a native speaker; en is, es is not yet (E6 in docs/research/structural-floors-2026-10-09.md). clause_temporals (after, when, once, before): a TRAILING one opens a clause of its own, so a completed claim before it still counts (I have added milk, after you asked me to); a LEADING one blocks its own clause; a present-tense passive before one (is added once you tap Done) stays a description. IN-PROGRESS claims (a claim verb with form 'progressive' - Adding X to your list now, I'm setting a reminder - or a promise_verbs base form, which counts ONLY after a promise_subjects word (I'll, I will: the promise_blockers 'will' then blocks only the other claim forms) AND with an immediacy word in its clause - I'll add that to your list right now) say the write is happening in THIS turn (a bare sentence-opening progressive needs one of implied_cues - now, for you - or a first-person subject: 'Adding milk to your list by tapping +' is an instruction): they are judged at the END of the turn (the brain may narrate just before its tool call), and blocked only if no receipt landed by then. A bare 'I'll add it' / 'Shall I add it?' / 'I can add it' stays a promise or an offer, never a claim. An ASSURANCE - a promise verb after assurance_subjects (I can) with one of assurance_words (certainly, absolutely) in its unit - is an in-progress claim only in a turn whose write was deferred to the brain or with an immediacy word: 'I can certainly set that reminder for you' (QA 2026-11-05: said, then the tool failed). In a turn whose write the fast path DEFERRED to the brain, an in-progress claim with no target noun ('Adding those now.') claims the deferred kind, but only with one of implied_cues in its clause ('Adding salt makes it better' is no claim).",
+  "_doc": "Per-language WORDS for write_claim_guard.py: how a reply CLAIMS it saved something (a list item, a calendar event, a reminder, a note, a timer). Data, not code: a new language or phrasing is a new row here, never a new regex. A claim verb counts in the active (I've added) and the completed passive (passive_done: has been added; passive_past: was added, which also needs a target noun unless the verb is added); a present-tense passive (passive_state: is scheduled for Friday) describes the calendar and is a claim only for a verb marked state_claim (is added). Every word is matched after NFKC + casefold + diacritic stripping (so 'anadi' == 'añadí'), against whole tokens. 'reviewed' = read by a native speaker; en is, es is not yet (E6 in docs/research/structural-floors-2026-10-09.md). clause_temporals (after, when, once, before): a TRAILING one opens a clause of its own, so a completed claim before it still counts (I have added milk, after you asked me to); a LEADING one blocks its own clause; a present-tense passive before one (is added once you tap Done) stays a description. IN-PROGRESS claims (a claim verb with form 'progressive' - Adding X to your list now, I'm setting a reminder - or a promise_verbs base form, which counts ONLY after a promise_subjects word (I'll, I will: the promise_blockers 'will' then blocks only the other claim forms) AND with an immediacy word in its clause - I'll add that to your list right now) say the write is happening in THIS turn (a bare sentence-opening progressive needs one of implied_cues - now, for you - or a first-person subject: 'Adding milk to your list by tapping +' is an instruction): they are judged at the END of the turn (the brain may narrate just before its tool call), and blocked only if no receipt landed by then. STANDING PROMISES (standing_promises: a promise subject + a promise verb with NO immediacy word - 'I'll remind you to call the plumber at 2:30', 'I'll add milk to your list') are in-progress claims too, unless the unit holds a promise_deferrals word (later, as soon as) or an 'if', opens with a temporal clause (After I've added milk, I'll set a reminder), or the promise's clause is followed by a temporal one (once you confirm), or the user's own turn opens with one of standing_skip_openers ('what reminders have I got?': a future-tense reply then DESCRIBES). An untargeted 'I'll add it' (needs_target), 'Shall I add it?' and 'I can add it if you like' stay offers, never claims. REMOVALS (claim / promise verbs with action 'remove': removed, taken ... off, I'll cancel) claim the REMOVAL kind of their target (removal_kinds: list -> list_removed; a note or a memory -> forget); 'particles' are words that must follow the verb in its clause (taken OFF, forgotten THAT). claim_phrases are whole-phrase claims (got that noted, consider it forgotten) with their kind. honest_by_kind replaces the honest line for a claim whose first kind is listed. correction_note / correction_kinds / history_marker are what ZOE_WRITE_CLAIM_CORRECTION hands the brain after a blocked claim (claim_correction.py). An ASSURANCE - a promise verb after assurance_subjects (I can) with one of assurance_words (certainly, absolutely) in its unit - is an in-progress claim only in a turn whose write was deferred to the brain or with an immediacy word: 'I can certainly set that reminder for you' (QA 2026-11-05: said, then the tool failed). In a turn whose write the fast path DEFERRED to the brain, an in-progress claim with no target noun ('Adding those now.') claims the deferred kind, but only with one of implied_cues in its clause ('Adding salt makes it better' is no claim).",
   "en": {
     "reviewed": true,
     "enabled": true,
@@ -42,16 +42,47 @@
       "booking": {"kind": "calendar", "form": "progressive"},
       "pencilling": {"kind": "calendar", "form": "progressive"},
       "penciling": {"kind": "calendar", "form": "progressive"},
-      "jotting": {"kind": "note", "needs_target": false, "form": "progressive"}
+      "jotting": {"kind": "note", "needs_target": false, "form": "progressive"},
+      "stored": {"kind": "any", "needs_target": true},
+      "removed": {"kind": "any", "needs_target": true, "action": "remove"},
+      "deleted": {"kind": "any", "needs_target": true, "action": "remove"},
+      "cancelled": {"kind": "any", "needs_target": true, "action": "remove"},
+      "canceled": {"kind": "any", "needs_target": true, "action": "remove"},
+      "cleared": {"kind": "any", "needs_target": true, "action": "remove"},
+      "erased": {"kind": "any", "needs_target": true, "action": "remove"},
+      "wiped": {"kind": "any", "needs_target": true, "action": "remove"},
+      "taken": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off", "out"]},
+      "took": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off", "out"]},
+      "crossed": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off"]},
+      "forgotten": {"kind": "forget", "needs_target": false, "particles": ["that", "it", "all", "everything"]},
+      "removing": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
+      "deleting": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
+      "cancelling": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
+      "canceling": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
+      "clearing": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
+      "erasing": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
+      "wiping": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive"},
+      "taking": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive", "particles": ["off", "out"]},
+      "crossing": {"kind": "any", "needs_target": true, "action": "remove", "form": "progressive", "particles": ["off"]}
     },
+    "claim_phrases": {
+      "got that noted": {"kind": "any"}, "got it noted": {"kind": "any"},
+      "got that written down": {"kind": "any"}, "got it written down": {"kind": "any"},
+      "noted that down": {"kind": "any"}, "noted it down": {"kind": "any"},
+      "consider it done": {"kind": "any"},
+      "consider it forgotten": {"kind": "forget"}, "consider that forgotten": {"kind": "forget"},
+      "that's forgotten": {"kind": "forget"}, "it's forgotten": {"kind": "forget"}
+    },
+    "removal_kinds": {"list": "list_removed", "calendar": "calendar_removed", "reminder": "reminder_removed", "timer": "timer_removed", "note": "forget", "memory": "forget"},
     "targets": {
       "list": ["list", "lists", "shopping", "grocery", "groceries", "to-do", "todo", "todos", "to do", "tasks", "task"],
       "calendar": ["calendar", "schedule", "agenda", "diary", "meeting", "appointment", "event", "booking"],
       "reminder": ["reminder", "reminders", "alert"],
       "timer": ["timer", "timers", "alarm", "countdown"],
-      "note": ["note", "notes"]
+      "note": ["note", "notes"],
+      "memory": ["memory", "memories"]
     },
-    "other_targets": ["contact", "contacts", "people", "person", "memory", "memories", "journal", "playlist", "queue", "favourites", "favorites", "favourite", "favorite", "library", "ticket", "backlog", "board", "profile", "household", "family", "device", "lights", "routine", "scene"],
+    "other_targets": ["contact", "contacts", "people", "person", "journal", "playlist", "queue", "favourites", "favorites", "favourite", "favorite", "library", "ticket", "backlog", "board", "profile", "household", "family", "device", "lights", "routine", "scene"],
     "blockers": ["not", "never", "nothing", "unable", "if", "unless", "whether", "wasn't", "weren't", "didn't", "couldn't", "haven't", "hasn't", "can't", "cannot", "won't", "wouldn't", "isn't", "aren't", "wasnt", "werent", "didnt", "couldnt", "havent", "hasnt", "cant", "wont", "wouldnt", "isnt", "arent", "wish", "would", "could", "should", "might", "maybe", "perhaps", "when", "once", "before", "until", "after", "want", "wanted", "need", "needed", "try", "tried", "trying", "going", "gonna", "will", "shall", "let"],
     "clause_joiners": ["but", "so", "so that", "and then", "because", "as", "although", "though", "even though", "while", "whereas", "however", "since", "which", "then", "just in case", "in case"],
     "clause_conditionals": ["if", "unless", "whether"],
@@ -69,17 +100,43 @@
       "create": {"kind": "any", "needs_target": true},
       "schedule": {"kind": "calendar", "needs_target": true},
       "book": {"kind": "calendar", "needs_target": true},
-      "jot": {"kind": "note", "needs_target": true}
+      "jot": {"kind": "note", "needs_target": true},
+      "remind": {"kind": "reminder", "needs_target": false},
+      "remember": {"kind": "memory", "needs_target": false},
+      "note": {"kind": "note", "needs_target": false},
+      "forget": {"kind": "forget", "needs_target": false},
+      "remove": {"kind": "any", "needs_target": true, "action": "remove"},
+      "delete": {"kind": "any", "needs_target": true, "action": "remove"},
+      "cancel": {"kind": "any", "needs_target": true, "action": "remove"},
+      "clear": {"kind": "any", "needs_target": true, "action": "remove"},
+      "erase": {"kind": "any", "needs_target": true, "action": "remove"},
+      "wipe": {"kind": "any", "needs_target": true, "action": "remove"},
+      "take": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off", "out"]},
+      "cross": {"kind": "any", "needs_target": true, "action": "remove", "particles": ["off"]}
     },
     "progressive_subjects": ["i'm", "im", "we're"],
     "progressive_aux": ["am", "are"],
-    "promise_subjects": ["i'll", "we'll", "i will", "we will"],
-    "promise_blockers": ["will"],
+    "promise_subjects": ["i'll", "we'll", "i will", "we will", "let me", "let's"],
+    "promise_blockers": ["will", "let"],
+    "standing_promises": true,
+    "promise_deferrals": ["later", "later on", "next time", "another time", "some time", "sometime", "as soon as", "whenever"],
+    "standing_skip_openers": ["what", "what's", "whats", "which", "when", "where", "how", "who", "whose", "do i have", "have i got", "is there", "are there", "any"],
     "assurance_subjects": ["i can", "we can"],
     "assurance_words": ["certainly", "absolutely", "definitely", "of course", "sure", "happily", "gladly", "no problem"],
     "immediacy": ["now", "right now", "right away", "straight away", "immediately"],
     "implied_cues": ["now", "right now", "right away", "straight away", "immediately", "for you", "in there", "on there"],
-    "honest": "I didn't manage to add that; want me to try again?"
+    "honest": "I didn't manage to add that; want me to try again?",
+    "honest_by_kind": {
+      "memory": "I didn't manage to save that; want me to try again?",
+      "forget": "I haven't been able to forget that yet, so it's still saved.",
+      "list_removed": "I didn't manage to remove that, so it's still there.",
+      "calendar_removed": "I didn't manage to remove that, so it's still there.",
+      "reminder_removed": "I didn't manage to remove that, so it's still there.",
+      "timer_removed": "I didn't manage to remove that, so it's still there."
+    },
+    "correction_note": "(Note: my previous reply said {what} was done, but nothing was saved - no successful tool call backed it - and the user was told so. A change only happens through a successful tool call; if no tool can make it, say so.)",
+    "correction_kinds": {"list": "a list change", "calendar": "a calendar change", "reminder": "a reminder", "timer": "a timer or alarm", "note": "a note", "memory": "a memory", "forget": "a forget", "list_removed": "a list removal", "calendar_removed": "a calendar removal", "reminder_removed": "a reminder removal", "timer_removed": "a timer or alarm removal", "any": "a change"},
+    "history_marker": "(nothing was saved in that reply)"
   },
   "es": {
     "reviewed": false,
@@ -134,6 +191,9 @@
     "discourse_openers": ["bueno", "pues", "vale", "entonces", "oye", "a ver", "ok", "okay", "y", "pero", "ah", "eh", "hmm"],
     "clause_starts": ["eso", "esto", "el", "ella", "ellos", "no", "tampoco", "yo", "tu"],
     "recap_cues": ["lo anadiste", "lo has anadido", "ya lo", "anadiste", "has anadido", "lo agregaste", "lo programaste", "esta en", "quedo"],
-    "honest": "No logré añadir eso; ¿quieres que lo intente otra vez?"
+    "honest": "No logré añadir eso; ¿quieres que lo intente otra vez?",
+    "correction_note": "(Nota: mi respuesta anterior dijo que se hizo {what}, pero no se guardó nada - ninguna herramienta lo confirmó - y se le dijo al usuario. Un cambio solo ocurre con una llamada a una herramienta que funcione; si ninguna puede hacerlo, dilo.)",
+    "correction_kinds": {"list": "un cambio en una lista", "calendar": "un cambio en el calendario", "reminder": "un recordatorio", "timer": "un temporizador o una alarma", "note": "una nota", "any": "un cambio"},
+    "history_marker": "(no se guardó nada en esa respuesta)"
   }
 }

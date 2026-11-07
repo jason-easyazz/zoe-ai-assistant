@@ -482,6 +482,8 @@ labs/router-90-campaign/results/gen1-lineage.json
 modules/omnigent/wheels/
 # The distress hand-off's per-country crisis-line table (reference data keyed by ZOE_HOUSEHOLD_COUNTRY): tracked data, no secrets.
 !services/zoe-data/distress_data/*.json
+# The household-conventions table (units, oven heat, spelling, local words; keyed by ZOE_HOUSEHOLD_COUNTRY): tracked data, no secrets.
+!services/zoe-data/locale_data/*.json
 # The ResNet34 speaker embedder's PUBLIC artifacts (cohort centring vector from LibriSpeech, self-test reference of a synthetic signal):
 # the panel daemon refuses to run without it, so it must be tracked. No voiceprint, no household data.
 !scripts/setup/zoe_speaker_resnet34_artifacts.json
@@ -492,3 +494,8 @@ modules/omnigent/wheels/
 
 # Relay listener (panel-anywhere R1): the household CA / leaf and the rendered nginx listener live on the box only.
 ssl/relay/
+
+# node_modules ANYWHERE, no trailing slash: "node_modules/" matches only a directory, so a
+# node_modules SYMLINK (worktree trick) slipped past it and was tracked (#2251). See
+# tests/unit/test_no_tracked_symlinks.py.
+node_modules

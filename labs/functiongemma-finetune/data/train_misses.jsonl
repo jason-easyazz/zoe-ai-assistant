@@ -19,3 +19,29 @@
 {"text": "when is our anniversary", "tool": "recall_memory", "args": {"query": "our anniversary"}, "source": "own_fact_miss_2026-10-04"}
 {"text": "what's my date of birth", "tool": "recall_memory", "args": {"query": "my date of birth"}, "source": "own_fact_miss_2026-10-04"}
 {"text": "what do I do for work", "tool": "recall_memory", "args": {"query": "what I do for work"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "turn the heater on", "tool": "home", "args": {"action": "on"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn the heater off", "tool": "home", "args": {"action": "off"}, "source": "capability_gap_2026-11-05"}
+{"text": "switch the kettle on", "tool": "home", "args": {"action": "on"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn off the kettle", "tool": "home", "args": {"action": "off"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn the bedroom lamp on", "tool": "home", "args": {"action": "on", "room": "bedroom"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn the lounge fan off", "tool": "home", "args": {"action": "off", "room": "lounge"}, "source": "capability_gap_2026-11-05"}
+{"text": "switch off the porch light", "tool": "home", "args": {"action": "off", "room": "porch"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn the hallway light on", "tool": "home", "args": {"action": "on", "room": "hallway"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn the diffuser on", "tool": "home", "args": {"action": "on"}, "source": "capability_gap_2026-11-05"}
+{"text": "switch the humidifier off", "tool": "home", "args": {"action": "off"}, "source": "capability_gap_2026-11-05"}
+{"text": "can you turn the study lamp on", "tool": "home", "args": {"action": "on", "room": "study"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn the office fan on please", "tool": "home", "args": {"action": "on", "room": "office"}, "source": "capability_gap_2026-11-05"}
+{"text": "turn on the garden lights", "tool": "home", "args": {"action": "on", "room": "garden"}, "source": "capability_gap_2026-11-05"}
+{"text": "switch the air conditioner off", "tool": "home", "args": {"action": "off"}, "source": "capability_gap_2026-11-05"}
+{"text": "do I have anything on my calendar", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "capability_gap_2026-11-05"}
+{"text": "is there anything on my calendar today", "tool": "show_calendar", "args": {"qualifier": "today"}, "source": "capability_gap_2026-11-05"}
+{"text": "have I got anything on tomorrow", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "capability_gap_2026-11-05"}
+{"text": "what do I have on this week", "tool": "show_calendar", "args": {"qualifier": "this week"}, "source": "capability_gap_2026-11-05"}
+{"text": "what am I doing on friday", "tool": "show_calendar", "args": {"qualifier": "friday"}, "source": "capability_gap_2026-11-05"}
+{"text": "am I free this weekend", "tool": "show_calendar", "args": {"qualifier": "this weekend"}, "source": "capability_gap_2026-11-05"}
+{"text": "what's my week look like", "tool": "show_calendar", "args": {"qualifier": "this week"}, "source": "capability_gap_2026-11-05"}
+{"text": "can you see my calendar", "tool": "show_calendar", "args": {"qualifier": ""}, "source": "capability_gap_2026-11-05"}
+{"text": "what's on the calendar for next week", "tool": "show_calendar", "args": {"qualifier": "next week"}, "source": "capability_gap_2026-11-05"}
+{"text": "anything on my schedule tomorrow", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "capability_gap_2026-11-05"}
+{"text": "are we busy on saturday", "tool": "show_calendar", "args": {"qualifier": "saturday"}, "source": "capability_gap_2026-11-05"}
+{"text": "what appointments do I have today", "tool": "show_calendar", "args": {"qualifier": "today"}, "source": "capability_gap_2026-11-05"}
