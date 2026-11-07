@@ -1607,6 +1607,17 @@ class MemoryService:
                     return None
             except Exception:
                 pass  # fail-open: a ledger blip must never lose a fact
+            # "forget that" retracted the turn this write comes from (turn_forget): its capture, still in flight when the
+            # owner asked, never lands - nor does any row whose evidence is that turn's words.
+            try:
+                import turn_forget
+                if turn_forget.blocks_write(user_id, source_excerpt or anchor_text or ""):
+                    self._bump("turn_forgotten_drop", source)
+                    logger.info("memory_service: ingest dropped — its turn was retracted (user=%s source=%s)",
+                                user_id, source)
+                    return None
+            except Exception:  # noqa: BLE001
+                pass
 
         idem_key = self._idempotency_key(
             user_id,
@@ -2045,6 +2056,12 @@ class MemoryService:
                 await night_mind.delete_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: night-mind erasure failed ({type(exc).__name__})") from exc
+            # ... and the now card (quotes of the same words, by key) - same rule, fail closed
+            try:
+                import now_card
+                await now_card.forget_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: now-card erasure failed ({type(exc).__name__})") from exc
             # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
             try:
                 import struggle_detector
@@ -2174,40 +2191,6 @@ class MemoryService:
             return list(await self._run_sync(self._list_by_status_sync, user_id, status))
         except Exception as exc:
             raise MemoryServiceError(f"list_all_by_status_strict failed: {exc}") from exc
-
-    async def forget_last(
-        self,
-        *,
-        user_id: str,
-        actor: Optional[str] = None,
-        window_s: int = 600,
-        note: Optional[str] = None,
-    ) -> Optional[MemoryRef]:
-        """Soft-delete the most recently ingested memory for a user."""
-        self._require(user_id, "user_id is required")
-        approved = await self.list_by_status(user_id=user_id, status="approved", limit=5)
-        pending = await self.list_by_status(user_id=user_id, status="pending", limit=5)
-        candidates = approved + pending
-        if not candidates:
-            return None
-        candidates.sort(key=lambda r: r.metadata.get("added_at", ""), reverse=True)
-        newest = candidates[0]
-        added_at = newest.metadata.get("added_at", "")
-        try:
-            from datetime import datetime, timezone
-            dt = datetime.fromisoformat(added_at.replace("Z", "+00:00")) if added_at else None
-            if dt is not None:
-                now = datetime.now(timezone.utc)
-                if (now - dt).total_seconds() > window_s:
-                    return None
-        except Exception:
-            return None
-        return await self.review(
-            newest.id,
-            decision="reject",
-            actor=actor or user_id,
-            note=note or "forget_last",
-        )
 
     async def sweep_soft_archive(
         self,
@@ -2361,6 +2344,18 @@ class MemoryService:
                     return None
             except Exception:  # noqa: BLE001
                 pass
+            # ... nor does a supersede mined from a turn the owner retracted ("forget that", turn_forget). The owner editing
+            # their own row is not a capture and is never refused here.
+            if actor != user_id:
+                try:
+                    import turn_forget
+                    if turn_forget.blocks_write(user_id, source_excerpt or anchor_text or ""):
+                        self._bump("turn_forgotten_drop", actor)
+                        logger.info("memory_service: edit dropped — its turn was retracted (user=%s source=%s)",
+                                    user_id, actor)
+                        return None
+                except Exception:  # noqa: BLE001
+                    pass
         if (
             decision == "edit"
             and actor in MEMORY_OPT_OUT_SOURCES
