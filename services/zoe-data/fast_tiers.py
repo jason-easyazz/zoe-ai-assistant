@@ -862,6 +862,17 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
 
 
 async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
+    # A reply that ANSWERS Zoe's own pending reminder offer ("yes please, 2:45 so i'm not late") is not a time question: the domain
+    # tiers would hand the bare words to the time expert ("It's 8:54 AM"). Defer the whole turn (flag-gated ZOE_OFFER_FOLLOWUP_BINDING,
+    # default off, a cheap shape check first) so the caller's reminder / brain lane, which has the conversation, acts on the offer.
+    if kwargs.get("phase") != "conversation":
+        try:
+            from intent_router import reminder_offer_reply_text as _rem_offer
+
+            if await _rem_offer(text, user_id, session_id=session_id):
+                return None
+        except Exception:  # noqa: BLE001 - the binding never breaks a turn
+            pass
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":

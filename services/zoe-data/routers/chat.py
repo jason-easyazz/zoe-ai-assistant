@@ -1724,7 +1724,7 @@ async def chat_stream_generator(
                     yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
                     return
         intent = await detect_and_extract_intent(
-            message_for_processing, user_id, context=_chat_ctx
+            message_for_processing, user_id, context=_chat_ctx, session_id=session_id
         ) if use_intent_fast_path else None
         # The router head is the authority over a keyword claim (INTENT_GATE):
         # "who is flying in on Thursday…" must reach the brain + recall packet,
@@ -2546,7 +2546,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                         },
                     }
 
-            intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
+            intent = await detect_and_extract_intent(message_for_processing, user_id, session_id=session_id) if use_intent_fast_path else None
             # The router head is the authority over a keyword claim (INTENT_GATE) —
             # Samantha bar S1 was answered here by the "who is <X>" contacts lookup.
             if intent is not None:

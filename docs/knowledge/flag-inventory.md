@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 840 prod flags; 256 read through `typed_env`.
+- 842 prod flags; 258 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-840 flags; 789 not documented in `.env.example`.
+842 flags; 791 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -520,6 +520,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OFFBOX_SNAPSHOT_TIME` | str | `''` | - | - | `(required)`, `-` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_STAGE_DIR` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFBOX_STATE_DIR` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
+| `ZOE_OFFER_FOLLOWUP_BINDING` | bool | `False` | - | `services/zoe-data/AGENTS.md` | `False` | yes | NO | `services/zoe-data/intent_router.py` |
+| `ZOE_OFFER_FOLLOWUP_TTL_S` | float | `600.0` | - | `services/zoe-data/AGENTS.md` | `600.0` | yes | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_OMI_AUDIO_DIR` | str | `''` | - | `docs/architecture/omi-integration-plan.md` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIO_RETENTION_DAYS` | int | `7` | - | `docs/architecture/omi-integration-plan.md` | `7` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIT_PATH` | str | `''` | - | `docs/knowledge/bluetooth-settings.md` | `''` | yes | NO | `services/zoe-data/omi_devices.py` |
