@@ -710,3 +710,110 @@ async def test_a_merge_supersedes_a_decision_held_by_quiet_hours():
     await run(gh, bot, at("07:10"))
     assert all("waiting on you" not in d["text"] for d in bot.delivered)
     assert cn.load_state()["deliveries"]["u-owner|pr:84:decision"]["status"] == "superseded"
+
+
+# ── owner env default + dot-point "went live" notices ─────────────────────────
+def test_bullets_from_each_source_in_order():
+    hh = cn.bullets("fix: x", "## Summary\n- not me\n\nFor-The-Household: Music resumes after a call. Volume is kept.")
+    assert hh == ["Music resumes after a call.", "Volume is kept."]
+    sm = cn.bullets("fix: x", "Intro.\n\n- other list\n\n## Summary\n\n- First `thing` fixed\n- Second thing\n- Third\n"
+                              "- Fourth\n- Fifth\n\n## Test plan\n- ran it")
+    assert sm == ["First thing fixed", "Second thing", "Third", "Fourth"]
+    assert cn.bullets("fix: x", "## Notes\n- a list only\n- two") == ["A list only", "Two"]
+    para = cn.bullets("fix: x", "Alarms ring again. They had stopped after the update. Third one here. Fourth. Fifth.")
+    assert para[:2] == ["Alarms ring again.", "They had stopped after the update."] and len(para) == 4
+    assert cn.bullets("fix: x", "") == []  # negative control: nothing invented
+    assert cn.bullets("fix: x", "For-The-Household: nothing visible\n\n- real point") == ["Real point"]
+    assert all(len(b) <= cn.BULLET_CHARS for b in cn.bullets("fix: x", "- " + "word " * 100))
+
+
+def _env_owner(cap=50) -> cn.Recipient:
+    doc = comm_prefs.normalise({"preset": "everything", "daily_instant_cap": cap}, "admin")
+    return cn.Recipient("u-owner", "admin", OWNER_TID, doc, env_default=True)
+
+
+async def _two_live(people):
+    gh, bot = FakeGitHub(), FakeBot()
+    await run(gh, bot, at("09:00"), people=people)
+    gh.merge(50, "feat: one", "- Alpha thing\n- Beta thing", at=at("12:00"))
+    await run(gh, bot, at("12:05"), people=people)
+    gh.merge(51, "feat: two", "- Gamma thing", at=at("12:10"))
+    await run(gh, bot, at("12:15"), people=people)
+    return bot
+
+
+async def test_live_notice_is_title_plus_dot_points_one_message_per_pr():
+    bot = await _two_live([_env_owner()])
+    assert [d["text"] for d in bot.delivered] == ["Live now: #50 feat: one\n• Alpha thing\n• Beta thing",
+                                                  "Live now: #51 feat: two\n• Gamma thing"]
+
+
+async def test_control_saved_prefs_owner_keeps_the_30_minute_spacing():
+    saved = await _two_live([owner({"preset": "everything", "daily_instant_cap": 50})])
+    assert len(saved.delivered) == 1
+
+
+async def test_batched_live_notices_keep_each_prs_bullets():
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner()]
+    await run(gh, bot, at("09:00"), people=people)
+    for n in (60, 61, 62):
+        gh.merge(n, f"feat: p{n}", f"- point a{n}\n- point b{n}", at=at("12:00"))
+    await run(gh, bot, at("12:05"), people=people)
+    assert len(bot.delivered) == 1
+    t = bot.delivered[0]["text"]
+    assert t.startswith("3 updates from Zoe:") and all(f"Point a{n}" in t and f"Point b{n}" in t for n in (60, 61, 62))
+
+
+async def test_a_long_live_notice_stays_under_1000_chars():
+    gh, bot = FakeGitHub(), FakeBot()
+    people = [_env_owner()]
+    await run(gh, bot, at("09:00"), people=people)
+    gh.merge(70, "feat: " + "t" * 300, "\n".join(f"- {'x' * 200} {i}" for i in range(6)), at=at("12:00"))
+    await run(gh, bot, at("12:05"), people=people)
+    assert 0 < len(bot.delivered[0]["text"]) <= 1000
+
+
+def test_env_default_applies_only_without_saved_prefs(monkeypatch):
+    monkeypatch.setenv("ZOE_CHANGE_NOTICES_OWNER_PRESET", "everything")
+    monkeypatch.setenv("ZOE_CHANGE_NOTICES_INSTANT_CAP", "50")
+    raw, used = comm_prefs.with_env_default(None)
+    doc = comm_prefs.normalise(raw, "admin")
+    assert used and doc["preset"] == "everything" and doc["daily_instant_cap"] == 50
+    assert doc["categories"]["fixed"]["cadence"] == "instant"
+    saved, used = comm_prefs.with_env_default({"preset": "weekly"})  # saved prefs win (negative control)
+    assert not used and comm_prefs.normalise(saved, "admin")["preset"] == "weekly"
+    _, used = comm_prefs.with_env_default({})  # even an empty saved document is a saved choice
+    assert not used
+    monkeypatch.setenv("ZOE_CHANGE_NOTICES_OWNER_PRESET", "custom")
+    monkeypatch.setenv("ZOE_CHANGE_NOTICES_INSTANT_CAP", "999")
+    assert comm_prefs.env_owner_default() == {}  # invalid values never apply
+    monkeypatch.delenv("ZOE_CHANGE_NOTICES_OWNER_PRESET")
+    monkeypatch.delenv("ZOE_CHANGE_NOTICES_INSTANT_CAP")
+    assert comm_prefs.with_env_default(None) == (None, False)
+    assert comm_prefs.normalise(None, "member") is None  # still owner-only
+
+
+async def test_env_default_cap_holds():
+    two = _env_owner(cap=2)
+    bot = await _two_live([two])
+    assert len(bot.delivered) == 2
+    gh = FakeGitHub()
+    gh.merge(52, "feat: three", "- Delta", at=at("13:00"))
+    await run(gh, bot, at("13:05"), people=[two])
+    assert len(bot.delivered) == 2  # cap of 2 respected: rolls to the digest
+
+
+async def test_control_stock_owner_gets_no_instant_merged_work():
+    assert (await _two_live([owner()])).delivered == []
+
+
+async def test_quiet_hours_still_hold_overnight_with_the_env_default():
+    people = [_env_owner()]
+    gh, bot = FakeGitHub(), FakeBot()
+    await run(gh, bot, at("09:00"), people=people)
+    gh.merge(80, "feat: night", "- Late point", at=at("22:30"))
+    await run(gh, bot, at("23:00"), people=people)
+    assert bot.delivered == []
+    await run(gh, bot, at("07:05", day=20), people=people)
+    assert len(bot.delivered) == 1
