@@ -7,6 +7,7 @@ forward the facts/portrait, normalise empty → None, and be best-effort (a memo
 backend hiccup must never break the turn).
 """
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,12 +25,12 @@ def test_forwards_facts_and_portrait(monkeypatch):
     import user_portrait
 
     async def _facts(user_id, limit=20):
-        return "## What I know about you:\n- My dad's name is Neil"
+        return [SimpleNamespace(id="m1", text="My dad's name is Neil", metadata={})]
 
     async def _portrait(user_id):
         return "Warm, dry sense of humour."
 
-    monkeypatch.setattr(zoe_agent, "_mempalace_load_user_facts", _facts)
+    monkeypatch.setattr(zoe_agent, "_mempalace_user_fact_refs", _facts)
     monkeypatch.setattr(user_portrait, "load_portrait", _portrait)
     db_memory, portrait = _run(v._voice_brain_memory("jason"))
     assert db_memory and "Neil" in db_memory
@@ -43,7 +44,7 @@ def test_empty_results_become_none(monkeypatch):
     async def _empty(*a, **k):
         return ""
 
-    monkeypatch.setattr(zoe_agent, "_mempalace_load_user_facts", _empty)
+    monkeypatch.setattr(zoe_agent, "_mempalace_user_fact_refs", _empty)
     monkeypatch.setattr(user_portrait, "load_portrait", _empty)
     db_memory, portrait = _run(v._voice_brain_memory("guest"))
     assert db_memory is None and portrait is None
@@ -56,7 +57,7 @@ def test_best_effort_on_backend_error(monkeypatch):
     async def _boom(*a, **k):
         raise RuntimeError("memory backend down")
 
-    monkeypatch.setattr(zoe_agent, "_mempalace_load_user_facts", _boom)
+    monkeypatch.setattr(zoe_agent, "_mempalace_user_fact_refs", _boom)
     monkeypatch.setattr(user_portrait, "load_portrait", _boom)
     # Must not raise — a recall turn still proceeds (brain just gets no context).
     db_memory, portrait = _run(v._voice_brain_memory("jason"))

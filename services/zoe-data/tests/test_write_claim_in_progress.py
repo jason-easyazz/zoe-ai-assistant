@@ -74,6 +74,9 @@ IN_PROGRESS_CLAIMS = [
     ("I'll add that to your shopping list right now.", ("list",)),
     ("I'll put the dentist on your calendar straight away.", ("calendar",)),
     ("I'll set a timer now.", ("timer",)),
+    # STANDING promises (QA 2026-11-05: "I'll remind you to …" / "I'll add … to your list" with no tool call): no "now" needed
+    ("I'll add it to your list.", ("list",)),
+    ("I will add it to your list.", ("list",)),
 ]
 
 NOT_IN_PROGRESS_CLAIMS = [
@@ -81,7 +84,7 @@ NOT_IN_PROGRESS_CLAIMS = [
     "I can add balloons to your shopping list.",
     "Do you want me to add balloons to your shopping list now?",
     "Want me to start adding things to your shopping list?",
-    "I'll add it to your list.",                                    # a promise, no "now"
+    "I'll add it to your list when you're ready.",                  # a promise for later, not this turn
     "I'll add it to your list later.",
     "I'll add that to your list now if you like.",                  # an offer
     "I'm going to add milk to your shopping list.",                 # future
@@ -99,7 +102,7 @@ NOT_IN_PROGRESS_CLAIMS = [
     "Setting a timer for ten minutes helps you focus.",
     "They are adding milk to your list.",
     "Are we adding milk to your list?",
-    "I will add it to your list.",
+    "I will add it to your list later.",
     "I will add milk to your list now if you want.",
     "I will definitely not add it now.",
 ]

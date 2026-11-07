@@ -87,8 +87,9 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   in-progress clause waits for the end of the turn as a whole (each kind still needs its own receipt). The brain may say that
   just BEFORE its tool call, so such a claim (`Claim.in_progress`) is judged at the END of the turn: `guard_stream` holds that
   unit - and everything after it - until a receipt backs it (re-checked on every delta and sentinel, so a tool that lands
-  releases it at once) or the turn ends; `guard_text` sees the whole reply anyway. A bare "I'll add it", "Shall I add it?",
-  "I can add it", "I was adding…", "Adding salt makes it better" stay non-claims. A comma before a joiner's first word splits
+  releases it at once) or the turn ends; `guard_text` sees the whole reply anyway. An untargeted "I'll add it", "Shall I add it?",
+  "I can add it if you like", "I was adding…", "Adding salt makes it better" stay non-claims. STANDING promises (QA
+  2026-11-05) need no immediacy word - see "Gaps closed 2026-11-05" below. A comma before a joiner's first word splits
   the clause only when the whole joiner follows or a new subject follows it ("…, and I'm not sure about eggs"), so a list's last
   item keeps its verb's target.
 * **Deferred writes**: the chat lane does not let the fast path write (`fast_tiers` `"chat": allow_writes False`), so
@@ -121,6 +122,63 @@ chat, Telegram, LiveKit). `_claim_guarded` wraps the lane stream (`write_claim_g
   turn and a chat turn overlapping for one user therefore cannot vouch for each other's in-process write. A brain TOOL write
   (a separate `/api/system/intent-dispatch` request) is unstamped and counts for every turn of the user - the safe direction;
   closing it needs the turn id echoed on the dispatch call (ledgered).
+
+## Gaps closed 2026-11-05 (hands-on QA round 2, typed chat)
+
+Replies that claimed a write with no tool call and passed the guard: "I'll remind you to call the plumber at 2:30 pm
+tomorrow.", "I'll add X, Y and Z to your to-do list.", "I've taken that lunch event off your calendar.", "…, got that noted.",
+"I've removed the note about you being …", "I'll remember …". All are now claims, each against its OWN receipt kind - all
+of it lexicon data (`write_claims.json`), no word list in code:
+
+* **Standing promises** (`standing_promises`): a `promise_subjects` word ("I'll", "I will", now also "let me" / "let's") + a
+  promise verb with NO immediacy word is an in-progress claim (judged at the end of the turn, like "I'll add it now"). Not
+  when the unit holds a `promise_deferrals` word ("later", "as soon as") or an "if", opens with a temporal clause ("After I've
+  added milk, I'll set a reminder"), or the promise is followed by a temporal clause ("… once you confirm"); and not at all in
+  a turn whose user opened with a describe-question (`standing_skip_openers`: "what reminders have I got?" -> "I'll remind you
+  at 2:30" describes). New promise verbs: `remind` (reminder), `remember` (memory), `note` (note), `forget` (forget), and the
+  removals below.
+* **Removals** (verbs with `"action": "remove"`: removed / deleted / cancelled / cleared / erased / wiped, `taken|took …
+  off|out`, `crossed … off`, their -ing forms and base-form promises): a removal claims the REMOVAL kind of its target
+  (`removal_kinds`: list -> `list_removed`, calendar -> `calendar_removed`, reminder -> `reminder_removed`, timer/alarm ->
+  `timer_removed`, a note or a memory -> `forget`). A create receipt of the same target never vouches for a removal.
+  `particles` must follow the verb in its clause, so "I've taken note of that" is no removal.
+* **Memory / forget**: `memory` is now a target kind (it was an `other_target`, i.e. ignored); "forgotten that/it" and the
+  `claim_phrases` "consider it forgotten" / "that's forgotten" claim `forget`; "got that noted" / "noted that down" /
+  "consider it done" claim any write.
+* **Receipts**: `write_receipts.KINDS` gained `memory`, `forget`, `list_removed`, `calendar_removed`, `reminder_removed`,
+  `timer_removed` (note<->memory and calendar_removed<->reminder_removed back each other). Writers: the `memory_store` intent
+  (the brain's `remember_fact` / `remember_emotional_moment`) records `memory`; `memory_forgotten.add` (every forget-shield
+  entry) and `memory_retire` (a retired note) record `forget`; `_execute_list_remove_direct` (the brain's `list_remove`)
+  records `list_removed`. The brain has NO calendar / reminder / alarm delete tool, so such a removal claim in a brain turn is
+  always replaced - which is the truth.
+* **Honest lines per kind** (`honest_by_kind`): a memory claim gets "I didn't manage to save that…", a forget "I haven't been
+  able to forget that yet, so it's still saved.", a removal "I didn't manage to remove that, so it's still there." - "want me
+  to try again?" is not offered where no tool could do it.
+
+## Session poisoning (2026-11-05) - `claim_correction.py`, `ZOE_WRITE_CLAIM_CORRECTION`
+
+A replaced claim poisoned the rest of its session: after one timer request was answered with a claim and no tool call, every
+later timer / alarm / reminder request in the session (and "yes, try again") came back with no tool call; a fresh session
+worked. Mechanism: the Flue sidecar keeps its OWN per-session history of what the model GENERATED, so it held the model's
+original claim - a write "done" with no tool call - which the 4B model copies on later write turns. The user saw the honest
+line; the brain never did. (The honest line itself is in `chat_messages`, which reaches a brain only via
+`flue_fastpath_context` rows or the core lane's `history`.)
+
+Fix (flag-dark, `ZOE_WRITE_CLAIM_CORRECTION=1` to enable): when the guard REPLACES a claim (enforce mode, not shadow) it notes
+the claimed kinds for the session (`brain_dispatch` passes `session_id`); the session's next Flue turn opens with one plain line
+before the user's words (`correction_note` in the lexicon: "(Note: my previous reply said a timer or alarm was done, but
+nothing was saved - no successful tool call backed it - and the user was told so. A change only happens through a successful
+tool call; if no tool can make it, say so.)"). It is a fact, not a "tools fail" lesson, and not a delimited `[MEMORY CONTEXT`
+block, so the sidecar's stale-block elision keeps it in history beside the claim it corrects. Once per replaced reply (kinds
+merged), 30 min, 256 sessions, in process. `claim_correction.history_safe` swaps any honest line for the neutral
+`history_marker` ("(nothing was saved in that reply)") in the `flue_fastpath_context` block and the chat lane's `history`.
+Pinned by `tests/test_session_poison_claims.py` (a multi-turn test drives the real `brain_oneshot` -> guard -> Flue client
+against a fake sidecar that copies its last write turn, as the live model did: flag on, turn 2 calls the tool; flag off, it
+does not).
+
+**Timer status reads are NOT tool-backed.** The brain has `set_timer` but no timer list/status tool (zoe-data has
+`skybridge_service.active_timers_for`, no intent exposes it), so "how long's left on the pasta timer?" reaching the brain is
+answered from its history ("still running for 12 minutes" - invented). Ledgered in `open-problems.md`.
 
 ## Parser and gate fixes that came with it
 

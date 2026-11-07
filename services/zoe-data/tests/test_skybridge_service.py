@@ -472,9 +472,9 @@ def test_classify_calendar_date_and_range_requests(monkeypatch):
 
     weekend = classify_skybridge_intent("what is happening this weekend")
     assert weekend.domain == "calendar"
-    assert weekend.range_label == "today"
-    assert weekend.start_date == date(2026, 6, 11)
-    assert weekend.end_date == date(2026, 6, 11)
+    assert weekend.range_label == "this weekend"
+    assert weekend.start_date == date(2026, 6, 13)
+    assert weekend.end_date == date(2026, 6, 14)
 
 
 @pytest.mark.asyncio

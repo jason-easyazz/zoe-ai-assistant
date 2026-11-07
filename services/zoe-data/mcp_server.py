@@ -1551,11 +1551,33 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
         lt = args["list_type"]
         ln = args.get("list_name", lt.capitalize())
+        target_id = None
+        spoken = str(args.get("list_name") or "").strip()
+        if spoken:
+            # A list the user NAMED that is no list type ("my pharmacy list") is that list or nothing: the household list of
+            # ``lt`` never stands in for it (QA 2026-11-06). Nothing is written; the brain asks which list.
+            # A NAME that clearly means a type ("my personal to-do") overrides the brain's enum guess; a longer typed name
+            # ("Christmas shopping") prefers an existing list of exactly that name.
+            from intent_router import _list_slots, _named_list, _phrase_list
+
+            said = _list_slots(spoken)
+            if not said["list_type"]:
+                found = await _named_list(db, user_id, said["list_name"])
+                if found is None:
+                    return {"error": f"There is no list called {spoken!r}. Nothing was added - ask the user which list "
+                                     "(their to-do list or the shopping list) instead of guessing."}
+            else:
+                lt = said["list_type"]
+                ln = lt.capitalize()
+                found = await _phrase_list(db, user_id, said, lt)
+            if found is not None:
+                target_id, lt, ln = found
         outcome = await add_items_to_list(
             db,
             user_id=user_id,
             list_type=lt,
             list_name=ln,
+            list_id=target_id,
             text=args["text"],
             quantity=args.get("quantity"),
             category=args.get("category"),

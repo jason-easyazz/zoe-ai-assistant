@@ -17,8 +17,8 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    # Lane step timeouts sum to 74 min; a healthy run is ~19. See test_required_gate_workflows.py.
-    timeout-minutes: 90
+    # Lane step timeouts sum to 90 min; a healthy run is ~35 (zoe-data lane 19-24, tests/unit 10-13). See test_required_gate_workflows.py.
+    timeout-minutes: 100
 
     env:
       CI_DB_PASSWORD: ${{ secrets.POSTGRES_CI_PASSWORD || 'ci-postgres-pw' }}
@@ -232,7 +232,7 @@ jobs:
       # module IDENTITY (test_metrics_auth_regression got the same fix).
       - name: Lane — zoe-data (ci_safe)
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
-        timeout-minutes: 24
+        timeout-minutes: 40
         run: |
           pytest services/zoe-data/tests -m ci_safe \
             -o faulthandler_timeout=300 \
@@ -360,7 +360,7 @@ jobs:
   # occurrence of that literal in the repo instead of two.
   zoe-data-py312:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 70
 
     steps:
       - uses: actions/checkout@v7
@@ -390,7 +390,7 @@ jobs:
 
       - name: Lane — zoe-data (ci_safe) on Python 3.12
         if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
-        timeout-minutes: 24
+        timeout-minutes: 40
         run: |
           python3 --version
           pytest services/zoe-data/tests -m ci_safe \

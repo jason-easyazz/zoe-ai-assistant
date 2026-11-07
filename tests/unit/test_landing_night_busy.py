@@ -59,6 +59,35 @@ def test_voice_day_ok_does_not_open_the_night_window(rig):
     assert busy(rig, "voice", "02:30") == PAUSE
 
 
+@pytest.mark.parametrize("hhmm", ["07:00", "12:00", "21:59"])
+@pytest.mark.parametrize("value", ["always", "  always \t"])
+def test_voice_day_ok_always_lifts_the_daytime_pause_standing(rig, hhmm, value):
+    day_ok(rig, value)
+    assert busy(rig, "voice", hhmm) == RUN
+
+
+@pytest.mark.parametrize("value", ["", "Always", "always-not", "alway", "never"])
+def test_voice_day_ok_not_exactly_always_stays_paused(rig, value):
+    day_ok(rig, value)
+    assert busy(rig, "voice", "12:00") == PAUSE
+
+
+def test_voice_day_ok_always_still_pauses_while_the_window_is_active(rig):
+    day_ok(rig, "always")
+    assert busy(rig, "voice", "12:00", FAKE_ACTIVE="zoe-night-window.service") == PAUSE
+
+
+@pytest.mark.parametrize("hhmm", ["01:55", "02:30", "04:00", "04:30"])
+def test_voice_day_ok_always_does_not_open_night_slots(rig, hhmm):
+    day_ok(rig, "always")
+    assert busy(rig, "voice", hhmm) == PAUSE
+
+
+def test_voice_day_ok_always_still_pauses_for_the_regression_service(rig):
+    day_ok(rig, "always")
+    assert busy(rig, "voice", "12:00", FAKE_ACTIVE="zoe-voice-regression.service") == PAUSE
+
+
 # ---- voice: the night window ------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("hhmm", ["01:55", "02:30", "02:50", "03:29"])

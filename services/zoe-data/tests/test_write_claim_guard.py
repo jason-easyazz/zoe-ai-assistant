@@ -81,7 +81,7 @@ NOT_CLAIMS_EN = [
     "I couldn't add that to your list.",
     "I didn't manage to add that; want me to try again?",
     "Do you want me to add oat milk to your shopping list?",
-    "I'll add it to your list.",
+    "I'll add it to your list later.",          # a bare "I'll add it to your list." is a STANDING promise (claim) since QA 2026-11-05
     "Would you like me to schedule the physio?",
     "You added oat milk earlier.",
     "Your dentist appointment is scheduled for Friday.",       # describes the calendar, claims no write
@@ -108,7 +108,7 @@ NOT_CLAIMS_EN = [
     "I've definitely not added milk to your shopping list.",
     "I've really been meaning to add milk to your shopping list.",
     "Have I definitely added milk to your shopping list?",
-    "I will definitely add milk to your shopping list.",
+    "I could definitely add milk to your shopping list.",
 ]
 
 CLAIMS_ES = [

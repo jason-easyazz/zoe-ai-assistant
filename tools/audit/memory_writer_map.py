@@ -44,7 +44,7 @@ UNIQUE_METHODS = frozenset({
     "ingest", "record_candidate", "supersede_by", "restore_superseded", "archive_duplicate",
     "archive_by_entity", "sweep_soft_archive", "forget_last",
     "retire_with_quote", "erase_rows", "relink_entity", "scrub_residue", "compact_index", "edit_outranked",
-    "tick_access", "tick_consolidation", "flag_challenged",
+    "tick_access", "tick_consolidation", "flag_challenged", "set_curated_standing",
 })
 # Generic names: only counted on a recognised MemoryService receiver.
 GENERIC_METHODS = frozenset({"review", "delete_user"})

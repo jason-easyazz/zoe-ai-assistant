@@ -30,10 +30,17 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Dict, Iterable, Optional
 
-# The kinds a reply can claim. "calendar" and "reminder" satisfy each other (both are "a time-anchored thing was saved");
-# every other kind stands alone. "any" is a claim that names no target ("I've added it").
-KINDS = ("list", "calendar", "reminder", "note", "timer")
-_COMPATIBLE = {"calendar": {"calendar", "reminder"}, "reminder": {"calendar", "reminder"}}
+# The kinds a reply can claim. "calendar" and "reminder" satisfy each other (both are "a time-anchored thing was saved"), as do
+# "note" and "memory" ("I've made a note of that" after a memory write) and the two time-anchored removals; every other kind stands
+# alone. "any" is a claim that names no target ("I've added it"). A REMOVAL has its own kind (QA 2026-11-05: "I've taken that off
+# your calendar" with no delete): "list_removed" / "calendar_removed" / "reminder_removed" / "timer_removed", and "forget" for a
+# memory that was forgotten or retired - a write of the same target never vouches for its removal.
+KINDS = ("list", "calendar", "reminder", "note", "timer", "memory", "forget",
+         "list_removed", "calendar_removed", "reminder_removed", "timer_removed")
+_COMPATIBLE = {"calendar": {"calendar", "reminder"}, "reminder": {"calendar", "reminder"},
+               "note": {"note", "memory"}, "memory": {"note", "memory"},
+               "calendar_removed": {"calendar_removed", "reminder_removed"},
+               "reminder_removed": {"calendar_removed", "reminder_removed"}}
 
 _TTL_S = 3600.0
 _MAX_PER_USER = 64
