@@ -9,20 +9,21 @@ answered by the brain left the previous turn's capture running, so both rows wer
 The contract here:
 
 * Every saved user turn is noted (``note_user_turn``, called from ``routers/chat._save_chat_message`` - every lane saves its
-  user turns there). The text is kept in-process for ``TURN_TTL_S`` only, at most ``_MAX_TURNS`` per user.
+  user turns there) as one turn INSTANCE with its own id (``Turn.tid``): the same words said twice are two turns. The text is
+  kept in-process for ``TURN_TTL_S`` only, at most ``_MAX_TURNS`` per user.
 * ``previous_turn`` is the newest noted turn that is not itself a forget command: what "forget that" points at.
-* ``retract`` tombstones that turn for ``RETRACT_TTL_S`` (longer than the worst measured capture lag): the turn's text is
-  dropped from the note, only its hash and stemmed content words stay (never the words themselves, so nothing retains what it
-  was asked to forget). From then on ``blocks_write`` refuses any write the turn's capture would make:
-
-    - the capture task of that turn (``capture_scope`` - a context variable set by ``routers/chat`` around the capture
-      passes; asyncio tasks inherit it, so the digest's late write still carries it);
-    - any write whose evidence excerpt IS that turn, or whose excerpt's content words are (almost) all that turn's.
-
+* ``retract`` installs the WALL for that turn instance for ``RETRACT_TTL_S`` (longer than the worst measured capture lag):
+  ``blocks_write`` refuses every write that turn's capture makes. The capture runs inside ``capture_scope`` (a context
+  variable ``routers/chat`` sets around the capture passes; asyncio tasks inherit it, so the digest's late write carries it),
+  which names the turn INSTANCE it captures - another turn's capture, even one with the same words, is never blocked. A write
+  made outside any capture scope is refused only when its evidence excerpt IS a retracted turn's words.
   ``MemoryService.ingest`` and ``MemoryService.review(edit)`` consult it (an explicit re-teach by the owner is exempt, exactly
   like the forget ledger).
-* ``rows_from_turn`` finds the rows already written FROM that turn (its ``user_turn_id`` hash, or a source excerpt that is the
-  turn's own words), never by recency. Nothing from another turn is ever touched.
+* ``rows_from_turn`` finds the rows already written FROM that turn: its ``user_turn_id`` hash, or a source excerpt that is
+  exactly the turn's words (never "contains" - a longer turn that merely includes the words is another turn), and never a
+  row written before the turn was said.
+* ``mark_forgotten`` drops the turn's words from the notes, ONLY once every row was removed: until then the target stays, so
+  "forget that" again retries the same turn (a store failure must never leave rows behind a "done").
 
 In-process only: a restart drops the notes (and also kills every in-flight capture), so "forget that" after a restart finds no
 turn and asks which thing to forget instead of guessing. The durable half (the nightly digest re-reading ``chat_messages``) is
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import itertools
 import logging
 import re
 import threading
@@ -46,8 +48,6 @@ logger = logging.getLogger(__name__)
 TURN_TTL_S = 1800.0
 #: How long a retracted turn's capture is refused (the measured capture lag reached 30+ minutes, QA round 3b).
 RETRACT_TTL_S = 6 * 3600.0
-#: An excerpt whose content words are at least this share of a retracted turn's words is that turn's.
-EXCERPT_OVERLAP = 0.9
 #: A row is "from" a turn only if it was written no earlier than this before the turn was saved (clock slack).
 ROW_SLACK_S = 5.0
 #: How many recent rows (per status) are read when looking for a turn's rows.
@@ -57,6 +57,7 @@ _MAX_TURNS = 6
 _MAX_RETRACTED = 16
 
 _LOCK = threading.Lock()
+_IDS = itertools.count(1)
 
 
 @dataclass
@@ -64,18 +65,19 @@ class Turn:
     text: str
     ts: float
     h: str
+    tid: int = 0
 
 
 @dataclass(frozen=True)
 class _Retracted:
+    tid: int
     h: str
-    words: frozenset
     until: float
 
 
 _turns: "OrderedDict[str, deque]" = OrderedDict()
 _retracted: "OrderedDict[str, list]" = OrderedDict()
-# (user_id, turn hash, turn content words) of the turn whose post-turn capture is running in this context
+# (user_id, turn instance id or 0 when the turn was never noted, turn hash) of the capture running in this context
 _CAPTURE: contextvars.ContextVar = contextvars.ContextVar("zoe_turn_forget_capture", default=None)
 
 
@@ -100,15 +102,6 @@ def extractor_turn_ids(text: str) -> frozenset:
         if variant:
             out.add(hashlib.sha1(variant.encode("utf-8", "ignore")).hexdigest()[:16])
     return frozenset(out)
-
-
-def _words(text: str) -> frozenset:
-    try:
-        from exact_words import content_tokens
-
-        return frozenset(content_tokens(text or ""))
-    except Exception:  # noqa: BLE001 - a plain fallback keeps the wall up
-        return frozenset(w for w in re.findall(r"[a-z0-9']+", (text or "").lower()) if len(w) >= 3)
 
 
 def _tracked(user_id: Optional[str]) -> bool:
@@ -158,16 +151,16 @@ def note_user_turn(user_id: Optional[str], text: str, *, now: Optional[float] = 
                 while len(_turns) > _MAX_USERS:
                     _turns.popitem(last=False)
             _turns.move_to_end(user_id)
-            if dq and dq[-1].h == h:
+            if dq and dq[-1].h == h and dq[-1].text:
                 return
-            dq.append(Turn(clean, t, h))
+            dq.append(Turn(clean, t, h, next(_IDS)))
     except Exception:  # noqa: BLE001 - bookkeeping must never lose a turn
         logger.debug("turn_forget.note_user_turn failed", exc_info=True)
 
 
 def previous_turn(user_id: Optional[str], *, now: Optional[float] = None) -> Optional[Turn]:
-    """The owner's newest saved turn that is not itself a forget command (within ``TURN_TTL_S``), or None. A turn already
-    retracted comes back with ``text == ""`` - a second "forget that" must answer "already forgotten", never walk on to the
+    """The owner's newest saved turn that is not itself a forget command (within ``TURN_TTL_S``), or None. A turn already fully
+    forgotten comes back with ``text == ""`` - a second "forget that" must answer "already forgotten", never walk on to the
     turn before it."""
     t = _now(now)
     with _LOCK:
@@ -177,32 +170,43 @@ def previous_turn(user_id: Optional[str], *, now: Optional[float] = None) -> Opt
             return None
         if turn.text and is_forget_turn(turn.text):
             continue
-        return Turn(turn.text, turn.ts, turn.h)
+        return Turn(turn.text, turn.ts, turn.h, turn.tid)
     return None
+
+
+def _newest_tid(user_id: str, h: str) -> int:
+    with _LOCK:
+        for turn in reversed(list(_turns.get(user_id) or ())):
+            if turn.h == h:
+                return turn.tid
+    return 0
 
 
 # ── retraction ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def retract(user_id: str, turn: Turn, *, now: Optional[float] = None) -> None:
-    """Tombstone ``turn``: its pending capture never lands, and its words leave the notes. Idempotent. Never raises."""
+    """Install the wall for this turn INSTANCE: its pending capture never lands. Idempotent; the words stay in the notes until
+    ``mark_forgotten`` (so a failed cleanup can be retried). Never raises."""
     try:
         t = _now(now)
-        entry = _Retracted(turn.h, _words(turn.text), t + RETRACT_TTL_S)
         with _LOCK:
-            live = [e for e in (_retracted.get(user_id) or []) if e.until >= t and e.h != turn.h]
-            live.append(entry)
+            live = [e for e in (_retracted.get(user_id) or []) if e.until >= t and e.tid != turn.tid]
+            live.append(_Retracted(turn.tid, turn.h, t + RETRACT_TTL_S))
             _retracted[user_id] = live[-_MAX_RETRACTED:]
             _retracted.move_to_end(user_id)
             while len(_retracted) > _MAX_USERS:
                 _retracted.popitem(last=False)
-            dq = _turns.get(user_id)
-            if dq is not None:
-                for tr in dq:
-                    if tr.h == turn.h:
-                        tr.text = ""          # still occupies its slot (it IS the previous turn), its words are gone
         logger.info("TURN_FORGET user=%s retracted=1", user_id)
     except Exception:  # noqa: BLE001
         logger.warning("turn_forget.retract failed", exc_info=True)
+
+
+def mark_forgotten(user_id: str, turn: Turn) -> None:
+    """Every row of the turn is gone: drop its words from the notes (it keeps its slot - it IS still the previous turn)."""
+    with _LOCK:
+        for tr in _turns.get(user_id) or ():
+            if tr.tid == turn.tid:
+                tr.text = ""
 
 
 def _live(user_id: str, t: float) -> list:
@@ -210,21 +214,14 @@ def _live(user_id: str, t: float) -> list:
         return [e for e in (_retracted.get(user_id) or []) if e.until >= t]
 
 
-def is_retracted(user_id: Optional[str], text: str, *, now: Optional[float] = None) -> bool:
-    """Is ``text`` a turn the owner retracted? Never raises."""
-    try:
-        h = turn_hash(text)
-        return any(e.h == h for e in _live(user_id or "", _now(now)))
-    except Exception:  # noqa: BLE001
-        return False
-
-
 class capture_scope:
-    """``with capture_scope(user_id, user_message):`` marks the post-turn capture of that turn in this context (and in every
-    task created inside it), so ``blocks_write`` can refuse its writes once the turn is retracted."""
+    """``with capture_scope(user_id, user_message):`` marks the post-turn capture of that turn INSTANCE (the newest noted turn
+    with those words) in this context and every task created inside it, so ``blocks_write`` can refuse its writes once that
+    turn is retracted - and only that turn's."""
 
     def __init__(self, user_id: str, text: str) -> None:
-        self._val = (user_id or "", turn_hash(text), _words(text))
+        h = turn_hash(text)
+        self._val = (user_id or "", _newest_tid(user_id or "", h), h)
         self._tok = None
 
     def __enter__(self) -> "capture_scope":
@@ -237,24 +234,21 @@ class capture_scope:
 
 
 def blocks_write(user_id: Optional[str], excerpt: str = "", *, now: Optional[float] = None) -> bool:
-    """Would this write store what a retracted turn said? True for a write made by that turn's own capture, or whose evidence
-    excerpt is that turn's words. A row about anything else is never blocked. Never raises."""
+    """Would this write store what a retracted turn said? Inside a capture scope: only when the scope's turn INSTANCE was
+    retracted (another turn with the same words is never blocked). Outside one: only when the write's evidence excerpt IS a
+    retracted turn's words. Never raises."""
     try:
         live = _live(user_id or "", _now(now))
         if not live:
             return False
         cap = _CAPTURE.get()
         if cap is not None and cap[0] == user_id:
-            if any(e.h == cap[1] for e in live):
-                return True
-            if cap[2] and any(e.words and cap[2] == e.words for e in live):
-                return True
+            if cap[1]:
+                return any(e.tid == cap[1] for e in live)
+            return any(e.h == cap[2] for e in live)      # a capture of a turn that was never noted: its words are all there is
         if excerpt and excerpt.strip():
-            if any(e.h == turn_hash(excerpt) for e in live):
-                return True
-            ew = _words(excerpt)
-            if len(ew) >= 2 and any(e.words and len(ew & e.words) / len(ew) >= EXCERPT_OVERLAP for e in live):
-                return True
+            h = turn_hash(excerpt)
+            return any(e.h == h for e in live)
         return False
     except Exception:  # noqa: BLE001
         return False
@@ -281,23 +275,19 @@ def _added_ts(meta: dict) -> Optional[float]:
 
 
 def row_is_from_turn(meta: dict, turn_text: str, turn_ts: Optional[float] = None) -> bool:
-    """Was a row (its metadata) written FROM this turn? Its ``user_turn_id`` is the turn's hash, or its source excerpt is the
-    turn's own words (equal, or one inside the other when the shorter has at least three words). Never by time alone."""
+    """Was a row (its metadata) written FROM this turn? Its ``user_turn_id`` is the turn's hash, or its source excerpt is
+    exactly the turn's words. Never "one contains the other" (a longer turn that includes the words is another turn), never
+    by time alone, and never a row written before the turn was said."""
     meta = meta or {}
     if turn_ts is not None:
         ts = _added_ts(meta)
         if ts is not None and ts < turn_ts - ROW_SLACK_S:
-            return False                       # written before the turn was said: it cannot come from it
+            return False
     tid = str(meta.get("user_turn_id") or "")
     if tid and any(tid.startswith(p) for p in extractor_turn_ids(turn_text)):
         return True
     ex, key = norm(str(meta.get("source_excerpt") or "")), norm(turn_text)
-    if not ex or not key:
-        return False
-    if ex == key:
-        return True
-    shorter = ex if len(ex) < len(key) else key
-    return len(shorter.split()) >= 3 and (ex in key or key in ex)
+    return bool(ex and key and ex == key)
 
 
 async def rows_from_turn(svc: Any, user_id: str, turn_text: str, turn_ts: Optional[float] = None) -> list:
@@ -324,6 +314,6 @@ def reset() -> None:  # tests
 
 
 __all__ = [
-    "Turn", "note_user_turn", "previous_turn", "retract", "is_retracted", "capture_scope", "blocks_write",
+    "Turn", "note_user_turn", "previous_turn", "retract", "mark_forgotten", "capture_scope", "blocks_write",
     "rows_from_turn", "row_is_from_turn", "is_forget_turn", "reset",
 ]

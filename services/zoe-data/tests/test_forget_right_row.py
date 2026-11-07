@@ -136,10 +136,68 @@ def test_a_second_forget_never_walks_back_to_an_older_turn(svc):
     turn_forget.note_user_turn(UID, FALL, now=time.time() - 60)
     capture(svc, FALL, FALL_ROW)
     turn_forget.note_user_turn(UID, SHED)
-    forget()
+    capture(svc, SHED, SHED_ROW)
+    assert forget().startswith("Done — I forgot")
     turn_forget.note_user_turn(UID, "forget that")
     assert forget() == intent_router.FORGET_ALREADY_REPLY
     assert texts(svc) == [FALL_ROW]
+
+
+def test_a_second_forget_with_nothing_stored_retries_the_same_turn(svc):
+    turn_forget.note_user_turn(UID, FALL, now=time.time() - 60)
+    capture(svc, FALL, FALL_ROW)
+    turn_forget.note_user_turn(UID, SHED)
+    forget()
+    turn_forget.note_user_turn(UID, "forget that")
+    assert "shed" in forget()                     # the same target again, never the turn before it
+    assert texts(svc) == [FALL_ROW]
+
+
+# ── cross-review (#2329): ownership is the turn instance, never wording ──────────────────────────────────────────────
+
+def test_a_longer_turn_that_contains_the_words_is_another_turn(svc):
+    tea, longer = "I like green tea", "I like green tea but my sister prefers coffee"
+    turn_forget.note_user_turn(UID, longer, now=time.time() - 120)
+    turn_forget.note_user_turn(UID, tea)
+    # the longer turn's capture lands AFTER the tea turn was said (capture lags): still the longer turn's row
+    capture(svc, longer, "User's sister prefers coffee.")
+    forget()
+    assert texts(svc) == ["User's sister prefers coffee."]
+    assert not turn_forget.row_is_from_turn({"source_excerpt": longer}, tea)
+    assert not turn_forget.row_is_from_turn({"source_excerpt": tea}, longer)
+
+
+def test_the_same_words_in_another_turn_are_not_walled(svc):
+    turn_forget.note_user_turn(UID, SHED, now=time.time() - 300)       # said once, its capture still in flight
+    turn_forget.note_user_turn(UID, "what's on tomorrow?", now=time.time() - 200)
+    turn_forget.note_user_turn(UID, SHED)                             # said AGAIN, then retracted
+    forget()
+    first = turn_forget._turns[UID][0].tid
+
+    async def earlier_capture():
+        tok = turn_forget._CAPTURE.set((UID, first, turn_forget.turn_hash(SHED)))
+        try:
+            return await svc.ingest(SHED_ROW, user_id=UID, source="turn_digest", status="approved", source_excerpt=SHED)
+        finally:
+            turn_forget._CAPTURE.reset(tok)
+    assert run(earlier_capture()) is not None, "the first saying's capture was blocked by the second's forget"
+    assert capture(svc, SHED, "User dislikes their shed colour.") is None   # the retracted (newest) saying's capture is
+
+
+def test_a_failed_reject_is_never_confirmed_and_the_retry_finishes(svc, monkeypatch):
+    turn_forget.note_user_turn(UID, SHED)
+    capture(svc, SHED, SHED_ROW)
+    real = svc.review
+
+    async def down(*a, **k):
+        raise RuntimeError("store down")
+    monkeypatch.setattr(svc, "review", down)
+    assert forget() == intent_router.FORGET_STORE_DOWN_REPLY
+    assert texts(svc) == [SHED_ROW]
+    monkeypatch.setattr(svc, "review", real)
+    turn_forget.note_user_turn(UID, "forget that")
+    assert forget().startswith("Done — I forgot")
+    assert texts(svc) == []
 
 
 def test_a_stale_turn_is_no_target(svc):
@@ -205,8 +263,9 @@ def test_a_forget_the_brain_answered_still_retracts_the_turn(svc):
     assert capture(svc, plan, "User is thinking of leaving their job.") is None   # the digest, landing late
 
 
-def test_turn_notes_keep_no_words_once_retracted(svc):
+def test_turn_notes_keep_no_words_once_forgotten(svc):
     turn_forget.note_user_turn(UID, SHED)
+    capture(svc, SHED, SHED_ROW)
     forget()
     with turn_forget._LOCK:
         held = [t.text for t in turn_forget._turns[UID]]

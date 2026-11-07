@@ -3795,6 +3795,8 @@ FORGET_WHICH_REPLY = "Which thing should I forget? Tell me what it was and I'll 
 FORGET_ALREADY_REPLY = "That's already forgotten."
 FORGET_STORE_DOWN_REPLY = ("I couldn't reach the memory store just now, so I can't be sure it's gone. "
                            "I won't save anything new from it - say \"forget that\" again in a minute and I'll finish.")
+FORGET_PARTIAL_REPLY = ("I forgot part of it, but I couldn't remove all of it just now, so some is still saved. "
+                        "Say \"forget that\" again in a minute and I'll finish.")
 
 
 def _forget_preview(text: str) -> str:
@@ -3825,12 +3827,20 @@ async def _execute_forget_last(user_id: str) -> str:
         logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
         return FORGET_STORE_DOWN_REPLY
     gone: list = []
-    for r in rows:
+    failed = 0
+
+    async def _reject(row) -> bool:
         try:
-            if await svc.review(r.id, decision="reject", actor=user_id, note="forget_last") is not None:
-                gone.append(r)
+            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
+            return False
+
+    for r in rows:
+        if await _reject(r):
+            gone.append(r)
+        else:
+            failed += 1
     # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too
     try:
         import ask_to_remember as _atr_f
@@ -3838,10 +3848,13 @@ async def _execute_forget_last(user_id: str) -> str:
         ids = {r.id for r in gone}
         for r in list(gone):
             for _sib in await _atr_f.siblings_of(svc, user_id, r):
-                if _sib.id not in ids and await svc.review(
-                        _sib.id, decision="reject", actor=user_id, note="forget_last") is not None:
-                    ids.add(_sib.id)
+                if _sib.id in ids:
+                    continue
+                ids.add(_sib.id)
+                if await _reject(_sib):
                     gone.append(_sib)
+                else:
+                    failed += 1
     except Exception as exc:  # noqa: BLE001
         logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
     # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
@@ -3859,8 +3872,14 @@ async def _execute_forget_last(user_id: str) -> str:
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
-    logger.info("memory_forget_last: user=%s rows=%d", user_id, len(gone))
+    logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
+    if failed:
+        # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
+        return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
     if gone:
+        # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
+        # found the target stays - a store that answered nothing may simply have been down, so a retry must still work.
+        turn_forget.mark_forgotten(user_id, turn)
         more = len(gone) - 1
         tail = f" (and {more} more from what you said there)" if more > 0 else ""
         return f"Done — I forgot: \"{_forget_preview(gone[0].text)}\"{tail}."
