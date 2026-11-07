@@ -37,12 +37,16 @@ def test_show_plan_names_the_list(text, expected):
     assert _plan_slots(text) == expected
 
 
-def test_negative_control_the_old_empty_plan_read_the_shopping_list():
-    # what the plan used to return: no slots -> the executor's shopping default. Kept to prove the default still exists, so the
-    # tests above are what stop a read reaching it.
-    slots = {}
-    lt = str(slots.get("list_type") or "").strip() or ("" if slots.get("list_name") else "shopping")
-    assert lt == "shopping"
+def test_a_long_list_name_is_still_named():
+    assert _plan_slots("what's on my very important pharmacy study revision list at the moment") == {
+        "list_type": "", "list_name": "very important pharmacy study revision"}
+
+
+def test_a_list_it_cannot_read_goes_to_the_brain_never_the_shopping_list():
+    # "list" is said but no my/the/our name and no type word: no guess - the brain asks
+    assert expert_dispatch._plan("lists", "what's on pharmacy revision list at the moment") is None
+    # negative control: no list named at all is the household list (the fridge rule)
+    assert _plan_slots("what do i have to get, is there anything on it") == {}
 
 
 def test_detect_intent_tolerates_a_trailing_filler_word():

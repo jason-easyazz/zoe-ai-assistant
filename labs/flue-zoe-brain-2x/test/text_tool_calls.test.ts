@@ -54,6 +54,13 @@ describe('parseTextToolCall', () => {
     });
   });
 
+  it('string literals are decoded faithfully, or the call is refused', () => {
+    assert.deepEqual(ttc.parseTextToolCall('add_to_list(item="caf\\u00e9")'), { name: 'add_to_list', args: { item: 'café' } });
+    assert.deepEqual(ttc.parseTextToolCall('add_to_list(item="say \\"hi\\"")'), { name: 'add_to_list', args: { item: 'say "hi"' } });
+    assert.equal(ttc.parseTextToolCall('add_to_list(item="a\\qb")'), null);      // an unknown escape: never guessed
+    assert.equal(ttc.parseTextToolCall('add_to_list(item="caf\\u00")'), null);   // a truncated \\u
+  });
+
   it('NEGATIVE CONTROL: anything ambiguous is not a call', () => {
     for (const text of [
       'add_to_list("swim goggles")',                         // positional
@@ -75,6 +82,29 @@ describe('toolCallFor', () => {
     const call = ttc.toolCallFor(parsed({ item: 'goggles', list_type: 'personal' }), [ADD_TOOL], 'id1');
     assert.deepEqual(call, { type: 'toolCall', id: 'id1', name: 'add_to_list', arguments: { item: 'goggles', list_type: 'personal' } });
   });
+  it('the full scalar schema is checked: enum, integer, length, range, null, non-scalar properties', () => {
+    const tool = {
+      name: 'add_to_list', description: 'd',
+      parameters: {
+        type: 'object', required: ['item'],
+        properties: {
+          item: { type: 'string', minLength: 1, maxLength: 10 },
+          list_type: { type: 'string', enum: ['shopping', 'personal'] },
+          n: { type: 'integer', minimum: 1, maximum: 5 },
+          tags: { type: 'array' },
+        },
+      },
+    } as never;
+    assert.ok(ttc.toolCallFor(parsed({ item: 'milk', list_type: 'shopping', n: 2 }), [tool], 'ok'));  // positive control
+    assert.equal(ttc.toolCallFor(parsed({ item: 'milk', list_type: 'tasks/to-do' }), [tool], 'x'), null);
+    assert.equal(ttc.toolCallFor(parsed({ item: 'milk', n: 2.5 }), [tool], 'x'), null);
+    assert.equal(ttc.toolCallFor(parsed({ item: 'milk', n: 9 }), [tool], 'x'), null);
+    assert.equal(ttc.toolCallFor(parsed({ item: '' }), [tool], 'x'), null);
+    assert.equal(ttc.toolCallFor(parsed({ item: 'a very long item' }), [tool], 'x'), null);
+    assert.equal(ttc.toolCallFor(parsed({ item: 'milk', list_type: null }), [tool], 'x'), null);
+    assert.equal(ttc.toolCallFor(parsed({ item: 'milk', tags: 'x' }), [tool], 'x'), null);
+  });
+
   it('NEGATIVE CONTROL: undisclosed tool, unknown key, wrong type or a missing required one is refused', () => {
     assert.equal(ttc.toolCallFor(parsed({ item: 'goggles' }), [], 'x'), null);
     assert.equal(ttc.toolCallFor(parsed({ item: 'goggles', colour: 'red' }), [ADD_TOOL], 'x'), null);

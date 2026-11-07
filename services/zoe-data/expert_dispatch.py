@@ -290,15 +290,17 @@ def _names_another_domain(domain: str, text: str) -> bool:
 
 
 # The list a READ names ("what's on my to do list now" -> "to do"): the words between my/the/our and "list".
-_LIST_REF_RE = re.compile(r"\b(?:my|the|our)\s+((?:[\w'-]+\s+){0,4}?)lists?\b", re.IGNORECASE)
+_LIST_REF_RE = re.compile(r"\b(?:my|the|our)\s+((?:[\w'-]+\s+){0,8}?)lists?\b", re.IGNORECASE)
+_LIST_WORD_RE = re.compile(r"\blists?\b", re.IGNORECASE)
 
 
-def _list_show_slots(text: str) -> dict:
+def _list_show_slots(text: str) -> Optional[dict]:
     """Slots for a list READ the regex fast path missed (a filler word: "whats on my to do list now"). The named list resolves
     exactly as an add does (``intent_router._list_slots``): my to-do -> the member's own list, an unknown name -> that named
     list (the executor says it doesn't exist and asks which), a bare "the list" -> the household shopping list (fridge rule).
     A type word with no "list" ("what's on my to dos") still names its type. Never empty slots for a named list - the
-    executor's empty default is the household SHOPPING list (QA round 3b, 2026-11-07). Pure."""
+    executor's empty default is the household SHOPPING list (QA round 3b, 2026-11-07): a turn that says "list" but whose list
+    name cannot be read (or a name over eight words) is None, so the read goes to the brain instead of guessing. Pure."""
     from intent_router import _LIST_TYPE_WORDS, _list_slots
 
     low = " ".join(str(text or "").lower().replace("-", " ").split())
@@ -310,6 +312,8 @@ def _list_show_slots(text: str) -> dict:
         return {"list_type": "tasks" if found == {"tasks"} else "personal"}
     if len(found) == 1:
         return {"list_type": found.pop()}
+    if _LIST_WORD_RE.search(low):
+        return None
     return {}
 
 
@@ -409,6 +413,8 @@ def _plan(domain: str, text: str):
                 slots = {"qualifier": _calendar_qualifier(text)}
             elif show_intent == "list_show":
                 slots = _list_show_slots(text)
+                if slots is None:       # it names a list we cannot read: the brain asks, never the shopping list
+                    return None
             else:
                 slots = {}
             return (show_intent, slots, "read")

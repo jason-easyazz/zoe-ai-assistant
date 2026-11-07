@@ -14,8 +14,9 @@
  * isolation, untrusted turn) and the model answers from the result - only when it is unambiguous:
  *   - exactly one call and nothing else (a fence / backticks / a trailing `;` aside);
  *   - `name` is a tool DISCLOSED to this round (in `context.tools` after the policies) - never a hidden or unknown one;
- *   - keyword arguments only (`k=v` or `k: v`, or one JSON object), literal values, every key a schema property of the right
- *     scalar type, every required property present.
+ *   - keyword arguments only (`k=v` or `k: v`, or one JSON object), literal values decoded faithfully (an escape we cannot
+ *     decode refuses), every key a SCALAR schema property the value fits (type, integer, enum, length, range; no null), every
+ *     required property present.
  * Anything else is passed through untouched; zoe-data's `tool_text_guard.py` then makes sure call syntax is never shown or
  * spoken. A real tool call or thinking-only round is never touched.
  *
@@ -48,13 +49,21 @@ type Scalar = string | number | boolean | null;
 function parseValue(src: string, i: number): { value: Scalar; end: number } | null {
   const q = src[i];
   if (q === '"' || q === "'") {
+    const simple: Record<string, string> = { n: '\n', t: '\t', r: '\r', '\\': '\\', "'": "'", '"': '"' };
     let out = '';
     for (let j = i + 1; j < src.length; j++) {
       const c = src[j];
-      if (c === '\\' && j + 1 < src.length) {
+      if (c === '\\') {
         const n = src[j + 1];
-        out += n === 'n' ? '\n' : n === 't' ? '\t' : n;
-        j++;
+        if (n !== undefined && n in simple) {
+          out += simple[n];
+          j++;
+          continue;
+        }
+        const hex = n === 'u' ? /^[0-9a-fA-F]{4}/.exec(src.slice(j + 2)) : null;
+        if (!hex) return null; // an escape we cannot decode faithfully: never guess a value
+        out += String.fromCharCode(parseInt(hex[0], 16));
+        j += 5;
         continue;
       }
       if (c === q) return { value: out, end: j + 1 };
@@ -118,7 +127,42 @@ export function parseTextToolCall(text: string): { name: string; args: Record<st
   return { name, args };
 }
 
-type JsonSchemaLike = { type?: unknown; properties?: Record<string, { type?: unknown }>; required?: unknown };
+type PropSchema = {
+  type?: unknown;
+  enum?: unknown;
+  minLength?: unknown;
+  maxLength?: unknown;
+  minimum?: unknown;
+  maximum?: unknown;
+};
+type JsonSchemaLike = { type?: unknown; properties?: Record<string, PropSchema>; required?: unknown };
+
+const num = (x: unknown): number | undefined => (typeof x === 'number' && Number.isFinite(x) ? x : undefined);
+
+/** True when the scalar fits this property's schema - type, enum, length and range. Anything we cannot check is a refusal. */
+function fits(prop: PropSchema, v: Scalar): boolean {
+  const want = prop.type;
+  if (want === 'string') {
+    if (typeof v !== 'string') return false;
+    const min = num(prop.minLength);
+    const max = num(prop.maxLength);
+    if (min !== undefined && v.length < min) return false;
+    if (max !== undefined && v.length > max) return false;
+  } else if (want === 'number' || want === 'integer') {
+    if (typeof v !== 'number') return false;
+    if (want === 'integer' && !Number.isInteger(v)) return false;
+    const lo = num(prop.minimum);
+    const hi = num(prop.maximum);
+    if (lo !== undefined && v < lo) return false;
+    if (hi !== undefined && v > hi) return false;
+  } else if (want === 'boolean') {
+    if (typeof v !== 'boolean') return false;
+  } else {
+    return false; // an array / object / untyped property: a printed scalar is never guessed into it
+  }
+  if (Array.isArray(prop.enum) && !prop.enum.includes(v)) return false;
+  return true;
+}
 
 /** The call as a ToolCall when `name` is a disclosed tool and the arguments fit its schema; null otherwise. Pure. */
 export function toolCallFor(parsed: { name: string; args: Record<string, Scalar> }, tools: readonly Tool[] | undefined,
@@ -131,12 +175,7 @@ export function toolCallFor(parsed: { name: string; args: Record<string, Scalar>
   const args: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(parsed.args)) {
     const prop = props[k];
-    if (!prop) return null;
-    if (v === null) continue; // an explicit None/null is "not given"
-    const want = prop.type;
-    if (want === 'string' && typeof v !== 'string') return null;
-    if ((want === 'number' || want === 'integer') && typeof v !== 'number') return null;
-    if (want === 'boolean' && typeof v !== 'boolean') return null;
+    if (!prop || v === null || !fits(prop, v)) return null; // a None/null is not guessed into "not given"
     args[k] = v;
   }
   for (const r of required) if (!(r in args)) return null;
