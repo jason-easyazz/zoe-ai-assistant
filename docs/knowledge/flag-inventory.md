@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 837 prod flags; 253 read through `typed_env`.
+- 840 prod flags; 256 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-837 flags; 786 not documented in `.env.example`.
+840 flags; 789 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -139,7 +139,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CAP_WEB_BROWSE` | int | `6000` | - | - | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_WEB_RESEARCH` | int | `6000` | - | - | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CHANGE_NOTICES` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/change-notices.md` | `'off'` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_CHANGE_NOTICES_INSTANT_CAP` | str | `''` | - | `docs/knowledge/change-notices.md` | `''` | yes | NO | `services/zoe-data/comm_prefs.py` |
 | `ZOE_CHANGE_NOTICES_INTERVAL_S` | int | `600` | - | `docs/knowledge/change-notices.md` | `600` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_CHANGE_NOTICES_OWNER_PRESET` | str | `''` | - | `docs/knowledge/change-notices.md` | `''` | yes | NO | `services/zoe-data/comm_prefs.py` |
 | `ZOE_CHANGE_NOTICES_STALE_MIN` | int | `60` | - | `docs/knowledge/change-notices.md` | `60` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHANGE_NOTICES_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHAT_CONTEXT_MAX_SESSIONS` | int | `2000` | - | - | `'2000'` | no | NO | `services/zoe-data/routers/chat.py` |
@@ -429,6 +431,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MCP_STRICT_USER_ID` | bool | `True` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'true'` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ID` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ROLE` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
+| `ZOE_MEMORIES_CURATORS` | bool | `False` | - | `docs/knowledge/memory-curation.md` | `False` | yes | NO | `services/zoe-data/memory_curation.py` |
 | `ZOE_MEMORIES_VOICE` | bool | `False` | - | `docs/knowledge/memories-voice.md` | `False` | yes | NO | `services/zoe-data/memories_voice.py` |
 | `ZOE_MEMORY_AUDIT_COLLECTION` | str | `'mempalace_audit'` | - | - | `'mempalace_audit'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_AUTHORITY` | str | `'enforce'` | `off`, `shadow`, `enforce` | `docs/knowledge/memory-authority.md` | `-` | no | NO | `services/zoe-data/memory_authority.py` |
@@ -902,7 +905,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-39 flags; 37 not documented in `.env.example`.
+40 flags; 38 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -927,6 +930,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_URL` | str | `''` | - | - | `'http://127.0.0.1:3579'`, `'http://127.0.0.1:8000'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
 | `ZOE_BRAIN_USER_ID` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts`<br>`labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts` |
 | `ZOE_DATA_URL` | str | `'http://127.0.0.1:8000'` | - | `docs/research/telegram-calls-voice-photos-2026-10-04.md` | `'http://127.0.0.1:8000'`, `-` | no | NO | `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`<br>`labs/flue-zoe-brain-2x/src/user-model.ts`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
+| `ZOE_EMOTIONAL_CUES_PATH` | str | `''` | - | `docs/knowledge/write-claim-guard.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/tools/emotional-cues.ts` |
 | `ZOE_ENV_FILE` | str | `'/home/zoe/assistant/services/zoe-data/.env'` | - | - | `dynamic` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_DISPATCH` | str | `'dry'` | - | `docs/architecture/multica-executor-migration.md` | `'dry'` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_MODE` | str | `'lab'` | - | `docs/architecture/multica-executor-migration.md` | `'lab'` | no | NO | `labs/flue-executor/src/config.ts` |
