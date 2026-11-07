@@ -999,7 +999,14 @@ def detect_intent(
         m = re.match(pattern, t)
         if m:
             qualifier = (m.group(1) if m.lastindex else "").strip()
+            # "for tomorrow" / "for friday" / "this weekend": the trailing words carry the date (they used to fall to "the next 7 days")
+            qualifier = command_shapes.calendar_qualifier(qualifier) or qualifier
             return Intent("calendar_show", {"qualifier": qualifier})
+    # The class those patterns are samples of (command_shapes.calendar_read_ask): "do I have anything on my calendar", "am I free
+    # this weekend", "what am I doing friday", "can you see my calendar". A complaint or a TV question is not one.
+    _cal_ask = command_shapes.calendar_read_ask(text)
+    if _cal_ask is not None:
+        return Intent("calendar_show", {"qualifier": _cal_ask})
 
     # --- REMINDERS CREATE (keyword classifier → LLM fills slots via detect_and_extract_intent) ---
     # Pattern 1: "remind me to/at/in/on/about X", "set a reminder to/for/at/in/on X",
@@ -1307,6 +1314,24 @@ def detect_intent(
         )
         room = _room_m.group(1).replace(" ", "_") if _room_m else None
         return Intent("smart_home", {"action": action, "entity": "light", "room": room})
+    # Every other household device the Skybridge parser knows how to switch ("turn the heater on", "switch off the lamp"): the lights
+    # pattern above is one sample of it. Same parser, so the two matchers cannot disagree; a device whose noun Zoe has no word for
+    # (device_unverified) is Skybridge's, which can check the house's own device list.
+    # (only a command that OPENS with a switch verb: "make fan mode here to off" and "put the thermostat fan on auto" are not
+    # on/off commands - the phrasing corpus caught both)
+    if not _SMART_HOME_QUESTION_RE.match(t) and re.match(r"^(?:(?:please|zoe|hey|can you|could you|would you|will you)\s+)*(?:turn|switch|flip)\b", t) \
+            and not re.search(r"\b(?:mode|speed|setting|temperature|temp)\b|\bto\s+(?:on|off)\b", t):
+        try:
+            import skybridge_service as _sky_home
+
+            _bare = re.sub(r"[.!?,;:]+$", "", (text or "").strip().lower())
+            _home = _sky_home._classify_home(text or "", f" {_bare} ")
+        except Exception:  # noqa: BLE001 - never break intent detection over a device parse
+            _home = None
+        if (_home is not None and _home.domain == "smart_home" and _home.action in ("turn_on", "turn_off")
+                and not _home.device_unverified and not _home.entity_id and _home.query):
+            _act = "delayed" if command_shapes.delayed_command(t) else _home.action
+            return Intent("smart_home", {"action": _act, "entity": "device", "room": None, "query": _home.query})
 
     # A change to a RUNNING timer ("add 5 minutes to the timer", "take a minute off the pizza timer", "pause the
     # timer") has no executor in this module; the Skybridge timer store owns it. The list-add/remove patterns below
@@ -3028,31 +3053,45 @@ def _say_clock(hhmm: str) -> str:
         return ""
 
 
+def _calendar_show_scope(qualifier: str, today_d):
+    """(start, end, spoken scope) for a calendar_show qualifier: today (none) / tomorrow / this week / next week / this weekend /
+    this month / a weekday name (its next occurrence, never today) / otherwise the next 7 days."""
+    from datetime import timedelta
+    q = (qualifier or "").strip().lower()
+    q = re.sub(r"^(?:on|this|next|for)\s+(?=(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$)", "", q)
+    if q in ("today", "today's", "tonight", ""):
+        return today_d, today_d, "today"
+    if q == "tomorrow":
+        d = today_d + timedelta(days=1)
+        return d, d, "tomorrow"
+    if q in ("this week", "this week's"):
+        return today_d - timedelta(days=today_d.weekday()), today_d + timedelta(days=6 - today_d.weekday()), "this week"
+    if q == "next week":
+        start = today_d + timedelta(days=7 - today_d.weekday())
+        return start, start + timedelta(days=6), "next week"
+    if q == "this weekend":
+        sat = today_d + timedelta(days=(5 - today_d.weekday()) % 7)
+        if today_d.weekday() == 6:      # Sunday: what is left of it
+            return today_d, today_d, "today"
+        return sat, sat + timedelta(days=1), "this weekend"
+    if q in ("this month", "this month's"):
+        import calendar as cal_mod
+        _, last = cal_mod.monthrange(today_d.year, today_d.month)
+        return today_d.replace(day=1), today_d.replace(day=last), "this month"
+    days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    if q in days:
+        d = today_d + timedelta(days=((days.index(q) - today_d.weekday()) % 7) or 7)
+        return d, d, q
+    return today_d, today_d + timedelta(days=7), "in the next week"
+
+
 async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Read the calendar straight from the events table for the acting user
     (qualifier → date range: today (no qualifier) / tomorrow / this week / this month / otherwise the next 7 days)."""
-    from datetime import timedelta
     slots = intent.slots or {}
     qualifier = str(slots.get("qualifier", "")).strip().lower()
     today_d = today_for_zoe_tz()
-    if qualifier in ("today", "today's", ""):
-        start = end = today_d
-        scope = "today"
-    elif qualifier == "tomorrow":
-        start = end = today_d + timedelta(days=1)
-        scope = "tomorrow"
-    elif qualifier in ("this week", "this week's"):
-        start = today_d - timedelta(days=today_d.weekday())
-        end = today_d + timedelta(days=6 - today_d.weekday())
-        scope = "this week"
-    elif qualifier in ("this month", "this month's"):
-        import calendar as cal_mod
-        _, last = cal_mod.monthrange(today_d.year, today_d.month)
-        start = today_d.replace(day=1); end = today_d.replace(day=last)
-        scope = "this month"
-    else:
-        start = today_d; end = today_d + timedelta(days=7)
-        scope = "in the next week"
+    start, end, scope = _calendar_show_scope(qualifier, today_d)
     try:
         from database import get_db_ctx
         async with get_db_ctx() as db:
@@ -6065,6 +6104,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         # The resolver matches on words, not ids: hand it the room the pattern
         # found (if any) plus the device class, and let it find what exists.
         query = f"{room.replace('_', ' ')} light" if room else "light"
+        if slots.get("query"):
+            query = str(slots["query"])       # a device the Skybridge parser named ("heater"): the resolver matches it on the house's own list
 
         class _I:
             domain = "smart_home"

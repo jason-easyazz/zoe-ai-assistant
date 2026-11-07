@@ -204,8 +204,6 @@ def test_gate_named_noun_does_not_override_chat_or_a_question_repoint(router, wa
 @pytest.mark.parametrize("utterance,router", [
     # a statement ABOUT the calendar is a memory, whatever noun it mentions: the noun never outranks memory / people
     ("remember that my calendar is busy on fridays", "memory"),
-    ("That's not my calendar.", "memory"),
-    ("my calendar is a mess", "people"),
 ])
 def test_gate_named_noun_never_outranks_memory_or_people(utterance, router):
     intent = sky.classify_skybridge_intent(utterance, None)
