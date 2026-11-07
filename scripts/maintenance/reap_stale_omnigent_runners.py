@@ -67,6 +67,25 @@ prefix, every lookup would 404, and rule 4 would read that as "gone". Rules 1-3
 still stand in that case and the blast radius is the relaunch above, but revisit
 this if session ids ever grow.
 
+SECOND LEAK CLASS — ORPHANED `codex app-server` TREES (measured 2026-11-04/05: 93
+resident holding ~15 GB of swap, then 42-46 / ~2 GB; the box starved and hard-reset).
+Every codex-harness session makes its runner spawn `node codex app-server --listen
+ws://...` (+ the codex vendor binary + `codex-code-mode-host`). `omnigent host` is a
+child SUBREAPER, so when a runner dies by any path that skips its own teardown (this
+tool's SIGTERM/SIGKILL of a runner, a host restart, an OOM kill) the app-server is not
+collected: it reparents to the host and lives on. Omnigent ships its own crash-reaper
+(codex_native_process_registry.py) and it is BLIND to exactly this case: it only kills a
+registered pid whose /proc cmdline still contains its `omnigent_crash_teardown_tag=`
+marker, but the launcher sets that marker as argv[0] and `codex` is a node SHEBANG
+script, so the kernel rewrites the command line to `node /usr/local/bin/codex
+app-server ...` and the tag is gone. Verified live: 0 running app-servers carry the tag,
+the registry file was empty, 396 owner-lock files had piled up. Reconciliation drops each
+entry without killing anything. We cannot patch the installed package, so this tool
+recognises the leak by what the kernel DOES preserve: the parent. A live app-server's
+parent is its runner (`omnigent.runner._entry`); an orphaned one's parent is the
+`omnigent host` daemon or the container entrypoint. Such a tree is dead weight whatever
+its session says, so it is reaped without consulting the server.
+
 Dry-run by default; pass --execute to actually stop/kill. Pair with the shipped
 user timer (scripts/setup/systemd/zoe-omnigent-runner-reaper.{service,timer}).
 
@@ -474,6 +493,177 @@ def reap(p: RunnerProc, *, poller, server: str, term_wait: float,
         return "SKIPPED (owned by another user)"
 
 
+# ---------------------------------------------------------------- codex app-servers ---
+
+# Match on argv, not comm: the process is `node /usr/local/bin/codex app-server ...`.
+APP_SERVER_ARGV = ("codex", "app-server")
+
+# Parents that mean "the runner that owned this app-server is gone" (see the module
+# docstring). The host daemon is a child subreaper; the entrypoint is PID 1 in the
+# container and adopts anything the host does not.
+ORPHAN_PARENT_MARKERS = ("omnigent host", "omnigent-entrypoint.sh")
+
+# An app-server younger than this is never touched: it is forked FROM its runner so it
+# cannot be born an orphan, but a relaunch race costs nothing to avoid.
+DEFAULT_APP_SERVER_GRACE_S = 60.0
+
+
+@dataclass
+class ProcInfo:
+    pid: int
+    ppid: int
+    uid: int
+    age_s: float
+    rss_kb: int
+    cmdline: str
+    start_ticks: float
+
+
+def proc_table(proc_root: str = "/proc", now: float | None = None) -> dict[int, ProcInfo]:
+    """Every readable process as pid -> ProcInfo (one pass; races are skipped)."""
+    now = now if now is not None else time.time()
+    boot = _boot_time_s(proc_root)
+    ticks = os.sysconf("SC_CLK_TCK")
+    table: dict[int, ProcInfo] = {}
+    for entry in os.listdir(proc_root):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        try:
+            cmdline = (_read_proc(proc_root, pid, "cmdline", binary=True)
+                       .replace(b"\0", b" ").decode(errors="replace").strip())
+            after = _read_proc(proc_root, pid, "stat").rsplit(")", 1)[1].split()
+            ppid = int(after[1])
+            start_ticks = float(after[19])
+            rss_kb, uid = 0, -1
+            for line in _read_proc(proc_root, pid, "status").splitlines():
+                if line.startswith("VmRSS:"):
+                    rss_kb = int(line.split()[1])
+                elif line.startswith("Uid:"):
+                    uid = int(line.split()[1])
+        except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError, ValueError):
+            continue
+        table[pid] = ProcInfo(pid, ppid, uid, now - (boot + start_ticks / ticks),
+                              rss_kb, cmdline, start_ticks)
+    return table
+
+
+def _is_app_server(p: ProcInfo) -> bool:
+    toks = p.cmdline.split()
+    return (len(toks) >= 3 and os.path.basename(toks[0]) == "node"
+            and os.path.basename(toks[1]) == APP_SERVER_ARGV[0]
+            and toks[2] == APP_SERVER_ARGV[1])
+
+
+def find_app_servers(table: dict[int, ProcInfo]) -> list[ProcInfo]:
+    """The `node codex app-server` roots that belong to an Omnigent container.
+
+    Scoped by ancestry: the parent chain must reach an `omnigent host` daemon or the
+    container entrypoint. The operator's own host-side Codex (same argv) never does, so
+    it can never be listed, counted or reaped here.
+    """
+    found = []
+    for p in table.values():
+        if not _is_app_server(p):
+            continue
+        cur, hops = p, 0
+        while cur is not None and hops < 16:
+            if any(m in cur.cmdline for m in ORPHAN_PARENT_MARKERS):
+                found.append(p)
+                break
+            cur, hops = table.get(cur.ppid), hops + 1
+    return sorted(found, key=lambda x: x.pid)
+
+
+def app_server_orphan_reason(p: ProcInfo, table: dict[int, ProcInfo], *,
+                             grace_s: float) -> str | None:
+    """A reap reason, or None to KEEP. Orphan == parent is the host/entrypoint."""
+    if p.age_s < grace_s:
+        return None
+    parent = table.get(p.ppid)
+    if parent is None:
+        return None  # parent unreadable/unknown: cannot prove it is gone -> keep
+    if RUNNER_MARKER in parent.cmdline:
+        return None  # its runner is alive
+    if any(m in parent.cmdline for m in ORPHAN_PARENT_MARKERS):
+        return f"orphaned: parent pid {parent.pid} is the omnigent host, not a runner"
+    return None  # some other parent (a CLI session, a kick): not ours to judge
+
+
+def descendants(root_pid: int, table: dict[int, ProcInfo]) -> list[ProcInfo]:
+    """root + every transitive child, children before parents."""
+    kids: dict[int, list[int]] = {}
+    for p in table.values():
+        kids.setdefault(p.ppid, []).append(p.pid)
+    order, stack = [], [root_pid]
+    while stack:
+        pid = stack.pop()
+        if pid in table:
+            order.append(table[pid])
+        stack.extend(kids.get(pid, []))
+    return list(reversed(order))
+
+
+def reap_app_server(p: ProcInfo, *, proc_root: str = "/proc", term_wait: float = 10.0,
+                    kill=os.kill) -> str:
+    """SIGTERM the whole tree, SIGKILL whatever survives. Identity-bound by start time."""
+    table = proc_table(proc_root)
+    cur = table.get(p.pid)
+    if cur is None or cur.start_ticks != p.start_ticks or not _is_app_server(cur):
+        return "SKIPPED (PID reused or exited — no longer the scanned app-server)"
+    tree = descendants(p.pid, table)
+
+    def survivors() -> list[ProcInfo]:
+        # One /proc pass per poll; start time keeps a recycled pid from counting as ours.
+        now = proc_table(proc_root)
+        return [m for m in tree
+                if m.pid in now and now[m.pid].start_ticks == m.start_ticks]
+
+    def signal_all(sig) -> None:
+        for member in survivors():
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                kill(member.pid, sig)
+
+    signal_all(signal.SIGTERM)
+    end = time.time() + term_wait
+    while time.time() < end and survivors():
+        time.sleep(0.2)
+    if not survivors():
+        return f"terminated ({len(tree)} process(es))"
+    signal_all(signal.SIGKILL)
+    return f"killed ({len(tree)} process(es), ignored SIGTERM)"
+
+
+def sweep_app_servers(*, proc_root: str, execute: bool, grace_s: float,
+                      term_wait: float, my_uid: int, kill=os.kill) -> tuple[int, int]:
+    """Reap orphaned app-server trees. Returns (reaped_or_would, kept)."""
+    table = proc_table(proc_root)
+    servers = find_app_servers(table)
+    reaped = kept = 0
+    for p in sorted(servers, key=lambda x: -x.rss_kb):
+        tree = descendants(p.pid, table)
+        ident = (f"app-server pid={p.pid} age={p.age_s / 3600:.1f}h "
+                 f"tree={len(tree)}proc rss={sum(m.rss_kb for m in tree) // 1024}MB ppid={p.ppid}")
+        reason = app_server_orphan_reason(p, table, grace_s=grace_s)
+        if reason is None:
+            kept += 1
+            print(f"KEEP  {ident}")
+        elif p.uid != my_uid:
+            kept += 1
+            print(f"SKIP  {ident} — {reason}, but owned by uid {p.uid}")
+        elif not execute:
+            reaped += 1
+            print(f"WOULD-REAP  {ident} — {reason} (dry run; pass --execute)")
+        else:
+            outcome = reap_app_server(p, proc_root=proc_root, term_wait=term_wait, kill=kill)
+            print(f"REAP  {ident} — {reason} -> {outcome}")
+            if "SKIPPED" in outcome:
+                kept += 1
+            else:
+                reaped += 1
+    return reaped, kept
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--server", default=DEFAULT_SERVER,
@@ -486,13 +676,25 @@ def main(argv=None) -> int:
                     help="budget for the graceful stop_session attempt")
     ap.add_argument("--http-timeout-s", type=float, default=10.0,
                     help="per-request timeout when asking about a session")
+    ap.add_argument("--app-server-grace-s", type=float, default=DEFAULT_APP_SERVER_GRACE_S,
+                    help="never touch a codex app-server younger than this (default 60s)")
+    ap.add_argument("--app-servers-only", action="store_true",
+                    help="skip the runner pass (no session lookups); only collect orphaned "
+                         "codex app-server trees (used by cross_review.sh teardown)")
+    ap.add_argument("--count-app-servers", action="store_true",
+                    help="print the number of omnigent codex app-server trees and exit "
+                         "(used by cross_review.sh for its concurrency cap)")
     ap.add_argument("--proc-root", default="/proc", help=argparse.SUPPRESS)
     ap.add_argument("--execute", action="store_true",
                     help="actually stop/kill; without this flag it is a dry run")
     args = ap.parse_args(argv)
 
+    if args.count_app_servers:
+        print(len(find_app_servers(proc_table(args.proc_root))))
+        return 0
+
     poller = _load_poller()
-    procs = scan(args.proc_root)
+    procs = [] if args.app_servers_only else scan(args.proc_root)
     busy = live_conversations(args.proc_root)
     status_of = make_status_of(poller, args.server, args.http_timeout_s)
     # One lookup per session id, not per process: several runners can share an
@@ -541,6 +743,13 @@ def main(argv=None) -> int:
     # the run at a glance.
     print(f"\n{len(procs)} omnigent runner(s): {mode} {reaped}, kept {kept}, "
           f"skipped {skipped}")
+
+    # Orphaned codex app-server trees — AFTER the runner pass, so app-servers whose
+    # runner was just stopped above are collected in the same run, not 30 minutes later.
+    a_reaped, a_kept = sweep_app_servers(
+        proc_root=args.proc_root, execute=args.execute, grace_s=args.app_server_grace_s,
+        term_wait=args.term_wait, my_uid=my_uid)
+    print(f"\ncodex app-server tree(s): {mode} {a_reaped}, kept {a_kept}")
     return 0
 
 

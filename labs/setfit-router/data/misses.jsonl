@@ -24,3 +24,29 @@
 {"text": "how old is my mum", "label": "people", "source": "own_fact_miss_2026-10-04"}
 {"text": "what's my sister's phone number", "label": "people", "source": "own_fact_miss_2026-10-04"}
 {"text": "when is my partner's birthday", "label": "people", "source": "own_fact_miss_2026-10-04"}
+{"text": "turn the heater on", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn the heater off", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "switch the kettle on", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn off the kettle", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn the bedroom lamp on", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn the lounge fan off", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "switch off the porch light", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn the hallway light on", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn the diffuser on", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "switch the humidifier off", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "can you turn the study lamp on", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn the office fan on please", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "turn on the garden lights", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "switch the air conditioner off", "label": "smart_home", "source": "capability_gap_2026-11-05"}
+{"text": "do I have anything on my calendar", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "is there anything on my calendar today", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "have I got anything on tomorrow", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "what do I have on this week", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "what am I doing on friday", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "am I free this weekend", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "what's my week look like", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "can you see my calendar", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "what's on the calendar for next week", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "anything on my schedule tomorrow", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "are we busy on saturday", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "what appointments do I have today", "label": "calendar", "source": "capability_gap_2026-11-05"}

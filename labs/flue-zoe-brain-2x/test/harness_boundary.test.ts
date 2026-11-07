@@ -98,6 +98,7 @@ describe('the overlay schema never touches a code-held concern', () => {
           'tool-guidance.md',
           'recall-shape.json',
           'doctrines/voice-delivery.md',
+          'doctrines/warmth.md',
           'doctrines/activator.md',
           'doctrines/in-session-context.md',
           'doctrines/recall-precedence.md',
@@ -107,6 +108,7 @@ describe('the overlay schema never touches a code-held concern', () => {
         ],
         doctrineSlots: [
           'voice-delivery',
+          'warmth',
           'activator',
           'in-session-context',
           'recall-precedence',

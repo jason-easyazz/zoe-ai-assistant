@@ -1265,6 +1265,7 @@
             <div class="insights-header">
                 <h2 class="insights-title">Memory Collections</h2>
                 <button type="button" id="aboutMeOpen" class="about-me-open" hidden>What Zoe knows about me</button>
+                <button type="button" id="curationOpen" class="about-me-open" hidden>Family memories</button>
             </div>
             
             <div class="search-box">
@@ -1294,6 +1295,8 @@
 
     <!-- "What Zoe knows about you" (js/memories-about-me.js, flag-dark ZOE_MEMORIES_VOICE): hidden until the server offers it -->
     <section id="aboutMe" class="about-me" hidden aria-label="What Zoe knows about you"></section>
+    <!-- Family memories (js/memories-curation.js, flag-dark ZOE_MEMORIES_CURATORS): hidden until the server offers it -->
+    <section id="curation" class="about-me" hidden aria-label="Family memories"></section>
     
     <div class="modal-overlay" id="newCollectionModal">
         <div class="modal">
@@ -1422,6 +1425,10 @@
     <script src="/js/notifications-panel.js"></script>
     <script src="js/ai-processor.js"></script>
     <script src="/js/memories-about-me.js?v=am-2"></script>
+    <script src="/js/memories-curation.js?v=cu-1"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () { if (window.ZoeCuration) window.ZoeCuration.init(document); });
+    </script>
     <script>
         document.addEventListener('DOMContentLoaded', function () { if (window.ZoeAboutMe) window.ZoeAboutMe.init(document); });
         window.addEventListener('hashchange', function () {
