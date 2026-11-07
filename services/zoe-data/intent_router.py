@@ -1393,6 +1393,8 @@ def detect_intent(
     # "$"-anchored target patterns missed and the implicit "add (.+)" stored "sultanas to my personal list please" on the
     # SHOPPING list (a private item on the shared list; rollout QA 2026-11-07).
     lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
+    if len(lt.split()) < 2:
+        lt = t          # the courtesy word WAS the whole object ("add cheers"): keep it as before
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [

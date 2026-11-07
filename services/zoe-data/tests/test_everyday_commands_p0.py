@@ -389,6 +389,20 @@ def test_a_courtesy_tail_never_swallows_the_list_target(text, item, list_type):
     assert (hit.slots.get("item"), hit.slots.get("list_type")) == (item, list_type)
 
 
+@pytest.mark.parametrize("text", ["add cheers", "add thanks", "buy cheers"])
+def test_a_lone_courtesy_object_is_still_the_item(text):
+    """Cross-review #2334: the strip must never eat the WHOLE object - it behaves exactly as without the strip."""
+    import re
+
+    hit = intent_router.detect_intent(text, log_miss=False)
+    old = intent_router._LIST_TRAILING_COURTESY_RE
+    try:
+        intent_router._LIST_TRAILING_COURTESY_RE = re.compile(r"(?!x)x")
+        assert hit == intent_router.detect_intent(text, log_miss=False)
+    finally:
+        intent_router._LIST_TRAILING_COURTESY_RE = old
+
+
 def test_break_the_fix_courtesy_tail_lands_on_the_shared_list(monkeypatch):
     import re
 
