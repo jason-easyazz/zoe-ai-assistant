@@ -1,4 +1,4 @@
-"""warmth_probes - the four deterministic probes for the QA "half-baked robot" findings, each with a negative control.
+"""warmth_probes - the deterministic probes for the QA "half-baked robot" findings, each with a negative control.
 
 Fixtures are neutral, written for this file (no household data): the failing reply SHAPES are the ones the QA rounds recorded.
 """
@@ -108,3 +108,21 @@ def test_cli_prints_counts_only_and_after_guard_fixes_extras(tmp_path, capsys):
     assert "weather" not in before and "pharmacist" not in before   # no text is printed
     assert wp.main([str(f), "--country", "AU", "--after-guard"]) == 0
     assert "no_extras  pass=  1 fail=  0" in capsys.readouterr().out
+
+
+# -- background context is never acknowledged (QA round 3b) ----------------------------------------------------------------
+
+@pytest.mark.parametrize("reply", [
+    "Not that I know of! I've noted all those details about the household for you, and I'll make sure to use metric and "
+    "Australian English from now on.",
+    "I've noted all those details about the household context.",
+])
+def test_ctx_ack_fails_when_the_reply_acknowledges_the_background(reply):
+    assert wp.no_ctx_ack("do i have a pet?", reply) == "fail"
+
+
+def test_ctx_ack_negative_controls():
+    assert wp.no_ctx_ack("do i have a pet?", "I don't have a pet noted for you - do you have one?") == "pass"
+    assert wp.no_ctx_ack("give me a cake recipe", "Preheat the oven to 180 degrees Celsius and line a tin.") == "pass"
+    # the user asked about the conventions: naming them is right
+    assert wp.no_ctx_ack("can you use metric and australian english?", "Sure, I'll use metric.") == "na"

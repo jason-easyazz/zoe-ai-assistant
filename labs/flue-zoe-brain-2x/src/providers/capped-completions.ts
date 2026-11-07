@@ -111,6 +111,8 @@ import {
   windowContextToBudget,
 } from '../context-window.ts';
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
+import { recoverTextToolCalls } from '../text-tool-calls.ts';
+import { forwardedLocaleFromMessages, stripLocaleEnvelope, withLocaleBlock } from '../household-locale.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
 import { activeHarness, harnessForTurn, harnessManner, harnessRenderedInto, stripRenderMark, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
@@ -241,7 +243,10 @@ export function applyPolicies(context: Context, userModelSuffix = '', turnHarnes
   const afterPersona = stripPersonaEnvelope(unwrapped);
   // An overlay manner.md replaces only the English block zoe-data already chose to send.
   const manner = harnessManner(forwardedMannerFromMessages(afterPersona), harness);
-  const clean = { ...context, messages: stripIdentityEnvelope(stripMannerEnvelope(afterPersona)) };
+  // The household-locale line (src/household-locale.ts) is the first line AFTER the identity line; same read-then-strip.
+  const afterIdentity = stripIdentityEnvelope(stripMannerEnvelope(afterPersona));
+  const locale = forwardedLocaleFromMessages(afterIdentity);
+  const clean = { ...context, messages: stripLocaleEnvelope(afterIdentity) };
   // ZOE_BRAIN_ELIDE_STALE_BLOCKS (src/context-blocks.ts): older user messages lose
   // their injected blocks before windowing. Disclosure below still reads `clean`,
   // so the session-sticky tool block never retracts when a block is elided.
@@ -251,7 +256,11 @@ export function applyPolicies(context: Context, userModelSuffix = '', turnHarnes
   // windowing, so the history budget is charged for it. '' → unchanged.
   // The persona swap and the manner block happen BEFORE windowing too, so the history budget is charged for them.
   // The manner block goes ahead of the user-model card: the bytes up to the card are the same for every member.
-  const prepared = withUserModelBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), userModelSuffix);
+  // The locale line is the same for every member of the house, so it goes ahead of the manner block too.
+  const prepared = withUserModelBlock(
+    withMannerBlock(withLocaleBlock(withPersonaBlock(sent, persona), locale), manner),
+    userModelSuffix,
+  );
   // Overlay tool guidance replaces DESCRIPTIONS only (never schemas, groups or permissions), before
   // disclosure and windowing so the budget is charged for the text actually sent.
   const safe = withToolGuidance(stripCodingBuiltins(prepared), harness);
@@ -291,7 +300,7 @@ export function promptSections(context: Context): PromptSections {
   const tokens = (ms: Message[]) => ms.reduce((n, m) => n + estimateMessageTokens(m), 0);
   let last = sent.messages.length;
   while (last > 0 && sent.messages[last - 1].role !== 'user') last -= 1;
-  const stored = stripIdentityEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped)));
+  const stored = stripLocaleEnvelope(stripIdentityEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped))));
   return {
     system: estimateTextTokens(sent.systemPrompt ?? ''),
     tools: estimateToolTokens(sent.tools),
@@ -379,10 +388,11 @@ function cappedStream(
   options?: StreamOptions,
 ): AssistantMessageEventStream {
   bindIdentityForRound(context, options?.signal);
-  return streamOpenAICompletions(
-    model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
-    withBrainTemperature(options),
+  const sent = applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt));
+  // A call the model PRINTED as text becomes a real call of a tool disclosed to this round (src/text-tool-calls.ts).
+  return recoverTextToolCalls(
+    streamOpenAICompletions(model as Model<'openai-completions'>, sent, withBrainTemperature(options)),
+    sent.tools,
   );
 }
 
@@ -392,10 +402,10 @@ function cappedStreamSimple(
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
   bindIdentityForRound(context, options?.signal);
-  return streamSimpleOpenAICompletions(
-    model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
-    withBrainTemperature(options),
+  const sent = applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt));
+  return recoverTextToolCalls(
+    streamSimpleOpenAICompletions(model as Model<'openai-completions'>, sent, withBrainTemperature(options)),
+    sent.tools,
   );
 }
 
