@@ -15,6 +15,7 @@ import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from types import SimpleNamespace
 from urllib.parse import quote_plus
 
 import httpx
@@ -346,12 +347,19 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
     truncated to a few hundred chars of only the facts relevant to what was asked.
     Falls back to the full for-prompt dump when search returns nothing (e.g. a
     chit-chat turn with no recall intent, or an embedder hiccup) so recall never
-    silently degrades. Best-effort: guest-safe and never raises."""
+    silently degrades. Best-effort: guest-safe and never raises.
+
+    PRIVACY WALL (person-centred memory D6, ``restraint.VOICE_SURFACE``): every row -
+    the searched facts, the relational lines and the fallback dump - passes the SAME
+    ``restraint.apply_to_packet`` the chat packet uses, on the voice surface: a private
+    class (health, money, grief, family trouble, feelings; a curated health / medication
+    / money note) reaches the brain only when the speaker gate verified THIS voice and the
+    words name it. It bites in every ``ZOE_RESTRAINT`` mode and fails closed."""
     query = (text or "").strip()
     if not query:
         # No turn text (e.g. prewarm) — warm/return the fallback dump instead so
         # the underlying facts cache stays primed.
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
     try:
         from memory_service import get_memory_service, is_guest_memory_user
         if is_guest_memory_user(user_id):
@@ -376,7 +384,8 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
     if not refs and not relational_lines:
         # Search found nothing relevant — fall back to the for-prompt dump so a
         # recall question still has facts to draw on.
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
+    refs, relational_lines = await _voice_private_wall(user_id, query, list(refs or []), relational_lines)
 
     seen: set[str] = set()
     lines: list[str] = []
@@ -404,8 +413,24 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
         seen.add(key)
         lines.append("- " + line)
     if not lines:
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
     return "[What you remember]\n" + "\n".join(lines)
+
+
+async def _voice_private_wall(user_id: str, query: str, refs: list, relational_lines: list[str]) -> tuple[list, list[str]]:
+    """``(refs, relational_lines)`` with what the voice privacy wall withholds removed: one
+    ``restraint.apply_to_packet`` call on ``restraint.VOICE_SURFACE`` (the relational lines ride
+    as id-less rows, judged by their text). Fails closed (nothing)."""
+    try:
+        import restraint
+
+        rel_rows = [SimpleNamespace(id="", text=line, metadata={}) for line in relational_lines]
+        kept_rel, kept_refs, _ = await restraint.apply_to_packet(
+            user_id, query, rel_rows, refs, surface=restraint.VOICE_SURFACE)
+        return list(kept_refs), [r.text for r in kept_rel]
+    except Exception as exc:  # noqa: BLE001 - the wall cannot judge: nothing private may pass, so nothing passes
+        logger.warning("voice recall privacy wall failed (no recall this turn): %r", exc)
+        return [], []
 
 
 async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
@@ -453,13 +478,19 @@ async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
     return out
 
 
-async def _voice_recall_fallback(user_id: str) -> Optional[str]:
-    """Full for-prompt metadata dump (the previous behaviour). Used when the
-    query-relevant search yields nothing, and to warm the facts cache on prewarm.
-    Best-effort / never raises."""
+async def _voice_recall_fallback(user_id: str, query: str = "") -> Optional[str]:
+    """Full for-prompt metadata dump (the previous behaviour), built from the
+    ROWS (``zoe_agent._mempalace_user_fact_refs``, the same cached read) so each
+    passes the voice privacy wall (``_voice_private_wall``) before it is formatted.
+    Used when the query-relevant search yields nothing, and to warm the facts cache
+    on prewarm (no ``query``: nothing private is pulled). Best-effort / never raises."""
     try:
-        from zoe_agent import _mempalace_load_user_facts
-        return (await _mempalace_load_user_facts(user_id)) or None
+        from zoe_agent import _format_user_facts, _mempalace_user_fact_refs
+        refs = await _mempalace_user_fact_refs(user_id)
+        if not refs:
+            return None
+        kept, _ = await _voice_private_wall(user_id, query, refs, [])
+        return (_format_user_facts(kept) if kept else "") or None
     except Exception as exc:
         logger.debug("voice recall fallback load failed (non-fatal): %s", exc)
         return None
