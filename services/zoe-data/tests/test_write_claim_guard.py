@@ -87,7 +87,7 @@ NOT_CLAIMS_EN = [
     "Your dentist appointment is scheduled for Friday.",       # describes the calendar, claims no write
     "Sure thing. What should I call the meeting?",
     "I've added Marcus to your contacts.",                      # not a kind this guard owns
-    "I've turned the lights on.",
+    # "I've turned the lights on." is a DEVICE claim since 2026-11-07 (it needs a device receipt: test_garbled_light_first_turn.py)
     "I've set the lights to blue.",
     "Did I add it to your list?",
     # review (#2004, P1) - the same passive, said honestly: a read of what is ALREADY there, or a denial
