@@ -55,6 +55,22 @@ export const VOICE_DELIVERY_DOCTRINE = [
   'How you speak (this shapes phrasing, not whether to use a tool — the tool rules above still come first): this is spoken aloud, so reply the way you\'d actually say it — usually 1-3 short, complete sentences. No markdown, bullet lists, headings, or code blocks; no bold or asterisks. Once you actually have your answer, lead with it and skip preamble and recaps; be brief but never clipped — finish your thought, then stop. If the message carries emotional weight, acknowledge that first, in a few words.',
 ].join('\n');
 
+// Warmth doctrine (2026-11-06, the "half-baked robot" QA rounds): emotional turns got one generic line and no
+// follow-up, a member who named a job / partner / child got "Thanks for sharing that with me" and no question back,
+// replies parroted the user's words, and one lonely turn had stale weather tacked on. The soul says "acknowledge it
+// first" and "ask a real question"; this says what that looks like, in counted behaviours (a specific reflection, ONE
+// open question, nothing unrelated appended, follow up later), plus the emotional-safety floor (no therapy claims,
+// an unsafe person is pointed to a human - a trusted adult for a child; docs/governance/emotional-safety-note.md 4, 7).
+// It reaches EVERY member, children included (the manner block is adults only). Phrasing only: it sits right after
+// voice delivery, ahead of the behavioural doctrines, and says so, so it can never nudge a reply over a tool call.
+export const WARMTH_DOCTRINE = [
+  'How you meet people (phrasing only - the tool rules still come first):',
+  '',
+  "Feelings: name the specific thing they're carrying, in your own words (never echo their sentence), then ask ONE gentle, open question about it. Keep that reply about them: nothing unrelated added (no weather, offers or news). If something hard came up before, ask how it's going. You're a caring friend, not a therapist: never diagnose. If they might be unsafe, warmly urge them to reach someone they trust now (a trusted adult, for a child) or emergency help. With a child, keep it simple and gentle.",
+  '',
+  'About themselves or their people (a job, partner, child, pet, a move): react warmly to one specific detail and ask ONE natural follow-up, like a new friend would. Never list back what they said; no stock lines ("Thanks for sharing").',
+].join('\n');
+
 // In-session context doctrine, appended AFTER the soul + activator doctrine.
 // The soul's recall imperative ("you do NOT know anything about the person from
 // your own head; ALWAYS call recall_memory first") is correct for PAST-conversation
@@ -188,6 +204,7 @@ export const PROMPT_CONFIDENTIALITY_DOCTRINE = [
 /** The doctrine slots a harness overlay may replace, in prompt order (each is `doctrines/<slot>.md`). */
 export const OVERLAY_DOCTRINE_SLOTS = [
   'voice-delivery',
+  'warmth',
   'activator',
   'in-session-context',
   'recall-precedence',
@@ -201,6 +218,7 @@ export type OverlayDoctrineSlot = (typeof OVERLAY_DOCTRINE_SLOTS)[number];
 /** The compiled-in text of every overlay slot. */
 export const COMPILED_DOCTRINES: Readonly<Record<OverlayDoctrineSlot, string>> = Object.freeze({
   'voice-delivery': VOICE_DELIVERY_DOCTRINE,
+  warmth: WARMTH_DOCTRINE,
   activator: ACTIVATOR_DOCTRINE,
   'in-session-context': IN_SESSION_CONTEXT_DOCTRINE,
   'recall-precedence': RECALL_PRECEDENCE_DOCTRINE,
@@ -229,7 +247,8 @@ export function composeInstructions(soul: string, doctrines: Readonly<Record<Ove
  * activate-first / never-fabricate rules keep the last-position weight closest to
  * the generation boundary (Greptile #997 P2 — on a 4B model a trailing "lead with
  * the answer" could otherwise nudge a direct reply over a needed activate_abilities
- * call). Delivery is also self-scoped ("this shapes phrasing, not whether to use a
+ * call). Warmth (how to meet a feeling or a self-disclosure) follows delivery for the same
+ * reason: phrasing, self-scoped, ahead of every tool rule. Delivery is also self-scoped ("this shapes phrasing, not whether to use a
  * tool — the tool rules above still come first"). Recall-precedence sits right
  * after in-session context (both govern how to USE known facts, before the
  * when-to-recall rules). Personal-recall, emotional-

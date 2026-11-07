@@ -999,7 +999,14 @@ def detect_intent(
         m = re.match(pattern, t)
         if m:
             qualifier = (m.group(1) if m.lastindex else "").strip()
+            # "for tomorrow" / "for friday" / "this weekend": the trailing words carry the date (they used to fall to "the next 7 days")
+            qualifier = command_shapes.calendar_qualifier(qualifier) or qualifier
             return Intent("calendar_show", {"qualifier": qualifier})
+    # The class those patterns are samples of (command_shapes.calendar_read_ask): "do I have anything on my calendar", "am I free
+    # this weekend", "what am I doing friday", "can you see my calendar". A complaint or a TV question is not one.
+    _cal_ask = command_shapes.calendar_read_ask(text)
+    if _cal_ask is not None:
+        return Intent("calendar_show", {"qualifier": _cal_ask})
 
     # --- REMINDERS CREATE (keyword classifier → LLM fills slots via detect_and_extract_intent) ---
     # Pattern 1: "remind me to/at/in/on/about X", "set a reminder to/for/at/in/on X",
@@ -1307,6 +1314,24 @@ def detect_intent(
         )
         room = _room_m.group(1).replace(" ", "_") if _room_m else None
         return Intent("smart_home", {"action": action, "entity": "light", "room": room})
+    # Every other household device the Skybridge parser knows how to switch ("turn the heater on", "switch off the lamp"): the lights
+    # pattern above is one sample of it. Same parser, so the two matchers cannot disagree; a device whose noun Zoe has no word for
+    # (device_unverified) is Skybridge's, which can check the house's own device list.
+    # (only a command that OPENS with a switch verb: "make fan mode here to off" and "put the thermostat fan on auto" are not
+    # on/off commands - the phrasing corpus caught both)
+    if not _SMART_HOME_QUESTION_RE.match(t) and re.match(r"^(?:(?:please|zoe|hey|can you|could you|would you|will you)\s+)*(?:turn|switch|flip)\b", t) \
+            and not re.search(r"\b(?:mode|speed|setting|temperature|temp)\b|\bto\s+(?:on|off)\b", t):
+        try:
+            import skybridge_service as _sky_home
+
+            _bare = re.sub(r"[.!?,;:]+$", "", (text or "").strip().lower())
+            _home = _sky_home._classify_home(text or "", f" {_bare} ")
+        except Exception:  # noqa: BLE001 - never break intent detection over a device parse
+            _home = None
+        if (_home is not None and _home.domain == "smart_home" and _home.action in ("turn_on", "turn_off")
+                and not _home.device_unverified and not _home.entity_id and _home.query):
+            _act = "delayed" if command_shapes.delayed_command(t) else _home.action
+            return Intent("smart_home", {"action": _act, "entity": "device", "room": None, "query": _home.query})
 
     # A change to a RUNNING timer ("add 5 minutes to the timer", "take a minute off the pizza timer", "pause the
     # timer") has no executor in this module; the Skybridge timer store owns it. The list-add/remove patterns below
@@ -1365,7 +1390,7 @@ def detect_intent(
     for pattern in [
         r"^add (.+?) to (?:the |my )?(.+?) ?list$",
         r"^put (.+?) on (?:the |my )?(.+?) ?list$",
-        r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket)$",
+        r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks)$",
         r"^(?:(?:can|could) you |please )?(?:add|put) (.+?) (?:to|on) (?:the |my )?(.+?) ?list$",
     ]:
         m = re.match(pattern, t)
@@ -1373,8 +1398,7 @@ def detect_intent(
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
                 continue            # a sentence, not an item: never stored, never claimed
-            list_type = _normalize_list(lst)
-            return Intent("list_add", {"item": item, "list_type": list_type})
+            return Intent("list_add", {"item": item, **_list_slots(lst)})
 
     # --- LIST ADD (STT-garbled leading "add") ---
     # Moonshine renders a leading "Add" as near-homophones: "Add council to my
@@ -1450,8 +1474,7 @@ def detect_intent(
             lst = m.group(1).strip() if m.lastindex else "shopping"
             if lst in ("my list", "the list", "list", "my"):
                 lst = "shopping"
-            list_type = _normalize_list(lst)
-            return Intent("list_show", {"list_type": list_type})
+            return Intent("list_show", _list_slots(lst))
 
     # --- LIST REMOVE ---
     for pattern in [
@@ -1467,7 +1490,7 @@ def detect_intent(
             if not command_shapes.plain_list_item(item):
                 break  # "remove all but the milk", "the second item", "everything": never a guessed delete
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
-            return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
+            return Intent("list_remove", {"item": item, **_list_slots(lst)})
 
     # --- LIST RENAME ("change noodles to rice noodles [on the shopping list]") ---
     # ONE parser, shared with Skybridge (questions about changing, and "change the timer to ..." are not list writes there).
@@ -2642,14 +2665,53 @@ def _extract_simple_calendar_slots(text: str) -> Optional[dict]:
 _EXPLICIT_LIST_CMD_RE = re.compile(r"^(?:(?:can|could) you |please )?(?:add|put)\b")
 
 
+# Words that NAME a list type, matched as whole words inside a spoken list name ("my personal to-do" -> personal).
+_LIST_TYPE_WORDS = (
+    ("shopping", re.compile(r"\b(?:shopping|grocery|groceries)\b")),
+    ("personal", re.compile(r"\b(?:to ?dos?|personal|private|own)\b")),
+    ("tasks", re.compile(r"\btasks?\b")),
+    ("work", re.compile(r"\bwork\b")),
+    ("bucket", re.compile(r"\bbucket\b")),
+)
+_LIST_NAME_LEAD_RE = re.compile(r"^(?:(?:the|my|our)(?:\s+|$))+")
+# A spoken name that IS a type word ("shopping", "to do") - anything longer may also be the exact name of an existing list.
+_BARE_TYPE_NAMES = frozenset({"shopping", "grocery", "groceries", "todo", "todos", "to do", "to dos", "personal", "tasks",
+                              "task", "work", "bucket"})
+
+
+def _list_target(raw: str) -> tuple[str, str]:
+    """``(list_type, list_name)`` for a spoken list name - exactly one is set. A name that clearly names ONE type ("shopping",
+    "personal to-do", "my tasks") gives that type; anything else ("pharmacy", "work shopping", "christmas") is a NAMED list
+    the executor must find among the member's own / household lists by name - never a silent default to the household
+    shopping list (QA 2026-11-06: "my personal to-do list" landed on the shared shopping list)."""
+    name = " ".join(str(raw or "").lower().replace("-", " ").split())
+    name = _LIST_NAME_LEAD_RE.sub("", name).strip()
+    if name.endswith(" list"):
+        name = name[: -len(" list")].strip()
+    if not name:
+        return "shopping", ""        # a bare "the list" / "my list": the household list, as before
+    found = {lt for lt, rx in _LIST_TYPE_WORDS if rx.search(name)}
+    if found and found <= {"personal", "tasks"}:
+        return ("tasks" if found == {"tasks"} else "personal"), ""
+    if len(found) == 1:
+        return found.pop(), ""
+    return "", name
+
+
 def _normalize_list(raw: str) -> str:
-    mapping = {
-        "shopping": "shopping", "grocery": "shopping", "groceries": "shopping",
-        "todo": "personal", "to do": "personal", "to-do": "personal",
-        "personal": "personal", "work": "work", "tasks": "tasks",
-        "bucket": "bucket",
-    }
-    return mapping.get(raw, "shopping")
+    """The list TYPE a spoken name means, or "" when it names no single type (a named list - see :func:`_list_target`)."""
+    return _list_target(raw)[0]
+
+
+def _list_slots(raw: str) -> dict:
+    """Intent slots for a spoken list name. ``list_phrase`` carries a typed name that is more than a type word ("christmas
+    shopping", "personal to do") so the executor can prefer an existing list of exactly that name first."""
+    lt, name = _list_target(raw)
+    if not lt:
+        return {"list_type": "", "list_name": name}
+    phrase = _LIST_NAME_LEAD_RE.sub("", " ".join(str(raw or "").lower().replace("-", " ").split())).strip()
+    phrase = phrase[: -len(" list")].strip() if phrase.endswith(" list") else phrase
+    return {"list_type": lt, "list_phrase": phrase} if phrase and phrase not in _BARE_TYPE_NAMES else {"list_type": lt}
 
 
 _TASK_KEYWORDS = {
@@ -2811,14 +2873,26 @@ def _escape_like_pattern(value: str) -> str:
 
 async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
     slots = intent.slots or {}
-    list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
     list_name = str(slots.get("list_name") or "").strip()
+    list_type = str(slots.get("list_type") or "").strip() or ("" if list_name else "shopping")
     if _is_guest_identity(user_id):
         user_id = panel_principal.HOUSEHOLD_VIEWER  # a guest owns no list: household (family-visible) lists only
     try:
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
+            if not list_type:
+                # A list the user NAMED that is no type ("my pharmacy list"): that list, never the shopping list instead.
+                found = await _named_list(db, user_id, list_name)
+                if found is None:
+                    return f"You don't have a {list_name} list."
+                _, list_type, list_name = found
+                intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
+            elif not list_name:
+                found = await _phrase_list(db, user_id, slots, list_type)      # "the christmas shopping list", if it exists
+                if found is not None:
+                    _, list_type, list_name = found
+                    intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
             if list_name:
                 cursor = await db.execute(
                     "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
@@ -2875,6 +2949,42 @@ async def _notify_lists_ui(event_type: str, data: dict) -> None:
         logger.debug("lists UI notify skipped: %s", exc)
 
 
+async def _named_list(db, user_id: str, name: str, *, own_only: bool = False) -> Optional[tuple[str, str, str]]:
+    """``(list_id, list_type, list_name)`` of the list the user NAMED - their own first, then a household one with exactly that
+    name (``list_service.find_named_list_id``; a guest sees household lists only). ``own_only``: the member's own list or
+    nothing (a personal "my to-do" name never lands on someone else's shared list). None when there is no such list."""
+    from list_service import find_named_list_id
+
+    if not name:
+        return None
+    list_id = await find_named_list_id(db, user_id=user_id, name=name)
+    if list_id is None:
+        return None
+    cursor = await db.execute("SELECT list_type, name, user_id FROM lists WHERE id=?", (list_id,))
+    row = await cursor.fetchone()
+    if row is None or (own_only and str(row["user_id"] or "") != str(user_id)):
+        return None
+    return list_id, str(row["list_type"] or ""), str(row["name"] or name)
+
+
+async def _phrase_list(db, user_id: str, slots: dict, list_type: str) -> Optional[tuple[str, str, str]]:
+    """An existing list whose exact name the user said ("christmas shopping") before the TYPE's default list. A personal type
+    only ever matches the member's own list."""
+    from list_service import PERSONAL_LIST_TYPES
+
+    phrase = str(slots.get("list_phrase") or "").strip()
+    if not phrase:
+        return None
+    return await _named_list(db, user_id, phrase, own_only=list_type in PERSONAL_LIST_TYPES)
+
+
+def _no_such_list_reply(name: str, item: str = "") -> str:
+    """The ASK for a list the user named that does not exist: nothing is written, and no shared list is guessed."""
+    what = f" {item}" if item else " that"
+    return (f"You don't have a {name} list, so I haven't put{what} anywhere. "
+            "Which list should it go on - your to-do list or the shopping list?")
+
+
 async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Add an item to the user's list straight through the DB, mirroring
     mcp_server's list_add_item tool (same list resolution, family/personal
@@ -2884,19 +2994,33 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     item = str(slots.get("item") or "").strip()
     if not item:
         return None
-    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
-    ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    named = str(slots.get("list_name") or "").strip()
+    lt = str(slots.get("list_type") or "").strip() or ("" if named else "shopping")
+    ln = named or lt.capitalize()
     actor = panel_principal.household_actor({"user_id": user_id})  # the member, or "panel" for an unidentified guest
     try:
         from database import get_db_ctx
         from list_service import add_items_to_list, add_reply, default_visibility
 
         async with get_db_ctx() as db:
+            target_id = None
+            if not lt:
+                # A list the user NAMED that is no list type ("my pharmacy list"): that list or nothing - never the
+                # household shopping list by default (QA 2026-11-06). Nothing is written when it does not exist.
+                found = await _named_list(db, user_id, named)
+                if found is None:
+                    return _no_such_list_reply(named, item)
+                target_id, lt, ln = found
+            else:
+                found = await _phrase_list(db, user_id, slots, lt)
+                if found is not None:
+                    target_id, lt, ln = found
             outcome = await add_items_to_list(
                 db,
                 user_id=user_id,
                 list_type=lt,
                 list_name=ln,
+                list_id=target_id,
                 text=item,
                 quantity=slots.get("quantity"),
                 category=slots.get("category"),
@@ -2919,7 +3043,10 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 "list_updated",
                 {"action": "item_added", "list_id": list_id, "item": {"id": one["item_id"], "text": one["_text"]}, "actor": actor},
             )
-        friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
+        if target_id is not None:
+            friendly = f"{ln} list" if not ln.lower().endswith(" list") else ln
+        else:
+            friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         return _format_response(
             intent,
             json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item,
@@ -2943,7 +3070,8 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     item = str(slots.get("item") or "").strip()
     if not item:
         return None
-    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    named = str(slots.get("list_name") or "").strip()
+    lt = str(slots.get("list_type") or "").strip() or ("" if named else "shopping")
     actor = panel_principal.household_actor({"user_id": user_id})  # BEFORE the viewer swap: the sentinel would read as a member
     if _is_guest_identity(user_id):
         user_id = panel_principal.HOUSEHOLD_VIEWER  # household (family-visible) lists only
@@ -2951,19 +3079,37 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
+            # Which lists the item may come off: the lists of the TYPE, or - for a list the user NAMED that is no type
+            # ("my pharmacy list") - that one list, never the household shopping list by default (QA 2026-11-06).
+            scope_sql, scope_arg = "l.list_type=?", lt
+            if not lt:
+                found = await _named_list(db, user_id, named)
+                if found is None:
+                    return f"You don't have a {named} list, so nothing came off any list."
+                scope_sql, scope_arg = "l.id=?", found[0]
+                lt = found[1]
+            else:
+                found = await _phrase_list(db, user_id, slots, lt)
+                if found is not None:
+                    scope_sql, scope_arg, named = "l.id=?", found[0], found[2]
+            # "my to-do" is the member's OWN list: never tick off an item on another member's shared to-do list.
+            from list_service import PERSONAL_LIST_TYPES
+
+            who_sql = ("l.user_id=?" if lt in PERSONAL_LIST_TYPES and not named and not _is_guest_identity(user_id)
+                       and user_id != panel_principal.HOUSEHOLD_VIEWER else "(l.user_id=? OR l.visibility='family')")
             cursor = await db.execute(
                 "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
-                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
+                " WHERE " + who_sql + " AND " + scope_sql + " AND LOWER(li.text)=LOWER(?)"
                 " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
-                (user_id, lt, item),
+                (user_id, scope_arg, item),
             )
             row = await cursor.fetchone()
             if not row:
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
-                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
+                    " WHERE " + who_sql + " AND " + scope_sql + " AND li.text LIKE ? ESCAPE '\\'"
                     " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
-                    (user_id, lt, f"%{_escape_like_pattern(item)}%"),
+                    (user_id, scope_arg, f"%{_escape_like_pattern(item)}%"),
                 )
                 row = await cursor.fetchone()
             if not row:
@@ -2972,10 +3118,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
 
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id, li.text FROM list_items li JOIN lists l ON li.list_id = l.id"
-                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " WHERE " + who_sql + " AND " + scope_sql +
                     " AND li.deleted=0 AND l.deleted=0 AND (li.completed IS NULL OR li.completed=0)"
                     " ORDER BY l.created_at ASC, li.id ASC",
-                    (user_id, lt),
+                    (user_id, scope_arg),
                 )
                 row = find_matching_item(await cursor.fetchall(), item)
             if not row:
@@ -2988,6 +3134,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
             )
         logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
+        import write_receipts
+
+        write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list_removed", item_id,
+                              "list_remove_direct")
         await _notify_lists_ui(
             "list_updated",
             {"action": "item_completed", "list_id": list_id, "item_id": item_id, "actor": actor},
@@ -3052,31 +3202,45 @@ def _say_clock(hhmm: str) -> str:
         return ""
 
 
+def _calendar_show_scope(qualifier: str, today_d):
+    """(start, end, spoken scope) for a calendar_show qualifier: today (none) / tomorrow / this week / next week / this weekend /
+    this month / a weekday name (its next occurrence, never today) / otherwise the next 7 days."""
+    from datetime import timedelta
+    q = (qualifier or "").strip().lower()
+    q = re.sub(r"^(?:on|this|next|for)\s+(?=(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$)", "", q)
+    if q in ("today", "today's", "tonight", ""):
+        return today_d, today_d, "today"
+    if q == "tomorrow":
+        d = today_d + timedelta(days=1)
+        return d, d, "tomorrow"
+    if q in ("this week", "this week's"):
+        return today_d - timedelta(days=today_d.weekday()), today_d + timedelta(days=6 - today_d.weekday()), "this week"
+    if q == "next week":
+        start = today_d + timedelta(days=7 - today_d.weekday())
+        return start, start + timedelta(days=6), "next week"
+    if q == "this weekend":
+        sat = today_d + timedelta(days=(5 - today_d.weekday()) % 7)
+        if today_d.weekday() == 6:      # Sunday: what is left of it
+            return today_d, today_d, "today"
+        return sat, sat + timedelta(days=1), "this weekend"
+    if q in ("this month", "this month's"):
+        import calendar as cal_mod
+        _, last = cal_mod.monthrange(today_d.year, today_d.month)
+        return today_d.replace(day=1), today_d.replace(day=last), "this month"
+    days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    if q in days:
+        d = today_d + timedelta(days=((days.index(q) - today_d.weekday()) % 7) or 7)
+        return d, d, q
+    return today_d, today_d + timedelta(days=7), "in the next week"
+
+
 async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Read the calendar straight from the events table for the acting user
     (qualifier → date range: today (no qualifier) / tomorrow / this week / this month / otherwise the next 7 days)."""
-    from datetime import timedelta
     slots = intent.slots or {}
     qualifier = str(slots.get("qualifier", "")).strip().lower()
     today_d = today_for_zoe_tz()
-    if qualifier in ("today", "today's", ""):
-        start = end = today_d
-        scope = "today"
-    elif qualifier == "tomorrow":
-        start = end = today_d + timedelta(days=1)
-        scope = "tomorrow"
-    elif qualifier in ("this week", "this week's"):
-        start = today_d - timedelta(days=today_d.weekday())
-        end = today_d + timedelta(days=6 - today_d.weekday())
-        scope = "this week"
-    elif qualifier in ("this month", "this month's"):
-        import calendar as cal_mod
-        _, last = cal_mod.monthrange(today_d.year, today_d.month)
-        start = today_d.replace(day=1); end = today_d.replace(day=last)
-        scope = "this month"
-    else:
-        start = today_d; end = today_d + timedelta(days=7)
-        scope = "in the next week"
+    start, end, scope = _calendar_show_scope(qualifier, today_d)
     try:
         from database import get_db_ctx
         async with get_db_ctx() as db:
@@ -4387,6 +4551,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             _tomb_clear(user_id, text)
         except Exception:
             pass
+        import write_receipts
+
+        write_receipts.record(user_id, "memory", getattr(ref, "id", "") or user_turn_id, "memory_store")
         return "Got it — I'll remember that."
 
     # ── A2A Federation Status ──────────────────────────────────────────────────
@@ -6086,6 +6253,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         # The resolver matches on words, not ids: hand it the room the pattern
         # found (if any) plus the device class, and let it find what exists.
         query = f"{room.replace('_', ' ')} light" if room else "light"
+        if slots.get("query"):
+            query = str(slots["query"])       # a device the Skybridge parser named ("heater"): the resolver matches it on the house's own list
 
         class _I:
             domain = "smart_home"

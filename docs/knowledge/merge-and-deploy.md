@@ -569,3 +569,17 @@ PR forever:**
   `git checkout`/`reset`) against the same working tree you're editing — it has silently wiped
   uncommitted work. Commit first, or isolate in a separate worktree.
 - Branches die at merge (`delete_branch_on_merge`); merged task worktrees are auto-reclaimed.
+
+## Restore: flue-zoe-telegram crash-loop from a tracked `node_modules` symlink (2026-11-06)
+
+Symptom: `flue-zoe-telegram.service` crash-loops with `ERR_MODULE_NOT_FOUND @flue/runtime`. Cause: #2251 tracked
+`labs/flue-zoe-telegram-2x/node_modules` as a symlink to its own live path (a worktree test trick); deploy checked it
+out over the real dir. Fixed by untracking it, ignoring `node_modules` (no trailing slash — `node_modules/` never
+matched a symlink) and `tests/unit/test_no_tracked_symlinks.py`. After the fix deploys, on the box:
+
+    cd /home/zoe/assistant/labs/flue-zoe-telegram-2x
+    [ -L node_modules ] && rm node_modules      # only if it is a symlink
+    npm ci --omit=dev
+    systemctl --user restart flue-zoe-telegram
+
+Never commit a worktree's `node_modules` symlink; the guard test fails any tracked symlink into `/home/` or any tracked `node_modules`.

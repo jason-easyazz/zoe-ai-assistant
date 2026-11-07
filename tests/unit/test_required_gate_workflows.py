@@ -419,20 +419,21 @@ def test_every_validate_workflow_job_has_a_job_timeout_above_its_step_sum():
         assert "timeout-minutes" in _load("validate.yml")["jobs"][ctx]
 
 
-# Exact budgets, from p90 of 15 green runs (2026-10): tests/unit 602 s, zoe-data 466 s,
-# py312 428 s, every other pytest step < 20 s; whole `validate` job ~19 min. Loosening
+# Exact budgets. Raised 2026-11-07: the suite grew and the runner shares a box, so the
+# zoe-data lanes now take 18-24 min (8 recent runs; the old 24 min cap tripped) -> 40 = ~1.6x
+# max; tests/unit 10-13 min; whole `validate` job 31-38 min. Loosening
 # one is a deliberate edit to this table (floor: >= 2x p90, so a slow runner never
 # turns a healthy lane red; ceiling: well under GitHub's 6 h default).
 _STEP_BUDGET_MIN = {
-    ("validate", "Lane — zoe-data (ci_safe)"): 24,
+    ("validate", "Lane — zoe-data (ci_safe)"): 40,
     ("validate", "Lane — Home Assistant MCP bridge"): 5,
     ("validate", "Lane — tests/unit (ci_safe)"): 30,
     ("validate", "Lane — zoe-auth (full)"): 5,
     ("validate", "People MemPalace integration cleanup"): 5,
     ("validate", "People graph invariants on CI PostgreSQL"): 5,
-    ("zoe-data-py312", "Lane — zoe-data (ci_safe) on Python 3.12"): 24,
+    ("zoe-data-py312", "Lane — zoe-data (ci_safe) on Python 3.12"): 40,
 }
-_JOB_BUDGET_MIN = {"validate": 90, "zoe-data-py312": 45, "deps-resolvable": 15, "secret-scan": 10}
+_JOB_BUDGET_MIN = {"validate": 100, "zoe-data-py312": 70, "deps-resolvable": 15, "secret-scan": 10}
 
 
 _PER_TEST_HANG_S = 300   # no ci_safe test legitimately runs 5 minutes
