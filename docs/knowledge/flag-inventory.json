@@ -171,7 +171,7 @@
         "unset"
       ],
       "sites": {
-        "services/zoe-data/distress_handoff.py": [
+        "services/zoe-data/household_locale.py": [
           "''"
         ],
         "services/zoe-data/identity_facts.py": [
@@ -261,6 +261,9 @@
         ],
         "services/zoe-data/calendar_ical.py": [
           "'Australia/Perth'"
+        ],
+        "services/zoe-data/household_locale.py": [
+          "''"
         ],
         "services/zoe-data/identity_facts.py": [
           "''"
@@ -1052,6 +1055,7 @@
           "allowed": null,
           "default": "Australia/Perth",
           "divergent_ok": {
+            "services/zoe-data/household_locale.py": "'' = the zone was not set explicitly, so it is never a country hint for the conventions line",
             "services/zoe-data/identity_facts.py": "'' only feeds a region lookup; no timezone is asserted"
           },
           "note": "live .env: Australia/Perth",
@@ -4500,6 +4504,29 @@
         },
         "typed_env": false
       },
+      "ZOE_EMOTIONAL_TURN_GUARD": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/emotional_turn_guard.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/samantha-warmth.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_ENGINEERING_MODE": {
         "defaults": [
           "'interactive'"
@@ -4836,6 +4863,25 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_EXPLICIT_CORRECTION": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_authority.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-authority.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_EXPRESSIVE_GENTLE_FROM_H": {
         "defaults": [
@@ -5868,7 +5914,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/distress_handoff.py"
+          "services/zoe-data/household_locale.py"
         ],
         "registered": true,
         "spec": {
@@ -6032,6 +6078,142 @@
           "type": "int"
         },
         "typed_env": false
+      },
+      "ZOE_IMPROVER_ANTHROPIC_KEY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_BRAIN_BUDGET_S": {
+        "defaults": [
+          "1500.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 1500.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_CELLS": {
+        "defaults": [
+          "('flaw', 'good')"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": [
+            "flaw",
+            "good"
+          ],
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "list"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_DEADLINE": {
+        "defaults": [
+          "'04:25'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "04:25",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_MAX_TOKENS_NIGHT": {
+        "defaults": [
+          "40000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 40000,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_MAX_USD_NIGHT": {
+        "defaults": [
+          "0.4"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.4,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_MODEL": {
+        "defaults": [
+          "'claude-sonnet-5-5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "claude-sonnet-5-5",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_INTENT_DISPATCH_REQUIRE_TOKEN": {
         "defaults": [
@@ -7386,6 +7568,44 @@
         },
         "typed_env": false
       },
+      "ZOE_LOCALE_FILE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_locale.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/samantha-warmth.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_LOCALE_HINT": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/household_locale.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/samantha-warmth.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_LOCAL_BACKUP_ENCRYPT": {
         "defaults": [
           "''"
@@ -7475,7 +7695,7 @@
         ],
         "in_env_example": false,
         "readers": [
-          "services/zoe-data/distress_handoff.py",
+          "services/zoe-data/household_locale.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/routers/weather.py"
         ],
@@ -7485,6 +7705,7 @@
           "default": "AU",
           "divergent_ok": {
             "services/zoe-data/distress_handoff.py": "empty = no country-specific crisis line; the handoff stays neutral",
+            "services/zoe-data/household_locale.py": "empty = no conventions line from the country (the explicit-timezone fallback, else none); nothing is guessed",
             "services/zoe-data/identity_facts.py": "asserts no country unless configured"
           },
           "note": "live: unset (code default in force)",
@@ -9338,7 +9559,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/harness_quiet.py"
+          "scripts/maintenance/harness_quiet.py",
+          "scripts/perf/self_improver.py"
         ],
         "registered": true,
         "spec": {
@@ -9349,7 +9571,7 @@
           "owner_doc": "",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_NIGHT_MIND": {
         "defaults": [
@@ -15403,6 +15625,7 @@
         "readers": [
           "services/zoe-data/brain_scheduler.py",
           "services/zoe-data/calendar_ical.py",
+          "services/zoe-data/household_locale.py",
           "services/zoe-data/identity_facts.py",
           "services/zoe-data/mcp_server.py",
           "services/zoe-data/memory_digest.py",
@@ -15423,6 +15646,7 @@
           "allowed": null,
           "default": "Australia/Perth",
           "divergent_ok": {
+            "services/zoe-data/household_locale.py": "'' = the zone was not set explicitly, so it is never a country hint for the conventions line",
             "services/zoe-data/identity_facts.py": "'' only feeds a region lookup; no timezone is asserted"
           },
           "note": "live .env: Australia/Perth",
@@ -17013,6 +17237,25 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_WRITE_CLAIM_CORRECTION": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/claim_correction.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_WRITE_CLAIM_GUARD": {
         "defaults": [

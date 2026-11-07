@@ -143,11 +143,24 @@ def select_unseen(rows_newest_first: list, uid: str, message: str, seen_row_ids:
     return out[-(_MAX_EXCHANGES * 2):]
 
 
+def _history_safe(text: str) -> str:
+    """A write-claim guard replacement line shown to the brain teaches it "tools fail": swap it for the neutral marker
+    (``claim_correction.history_safe``, ``ZOE_WRITE_CLAIM_CORRECTION``; unchanged when off)."""
+    try:
+        import claim_correction
+
+        return claim_correction.history_safe(text)
+    except Exception:  # noqa: BLE001
+        return text
+
+
 def render(pairs: list[tuple[str, str]]) -> str:
     """The delimited block for ``pairs`` (oldest first), newest kept under the char cap; '' when nothing fits."""
     lines: list[str] = []
     used = 0
     for role, text in reversed(pairs):
+        if role != "user":
+            text = _history_safe(text)
         line = f"{'User' if role == 'user' else 'Zoe'}: {_clean(text, _SIDE_CHARS)}"
         if used + len(line) > _TOTAL_CHARS and lines:
             break

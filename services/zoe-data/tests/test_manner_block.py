@@ -34,10 +34,13 @@ pytestmark = pytest.mark.ci_safe
 
 LAB = Path(__file__).resolve().parents[3] / "labs" / "flue-zoe-brain-2x"
 
-# sha256 of the block text per language: editing the words is a deliberate act with a measured A/B in the PR (docs/knowledge/samantha-person.md)
+# sha256 of the block text per language: editing the words is a deliberate act with a measured A/B in the PR (docs/knowledge/samantha-person.md).
+# Re-pinned 2026-11-06 (the warmth pass, docs/knowledge/samantha-warmth.md): "one short clause, then carry on ... otherwise end on a
+# statement" became "react to one specific detail, then ONE gentle open question" for a feeling or a self-disclosure - the QA rounds
+# measured a bland acknowledgement and no question back. The A/B on the live brain is an owner step in that doc.
 GOLDEN_SHA256 = {
-    "en": "e3ae667ccca09fdeca31170f5c028edbd416ac3ad804f5c58d1846d6e7927ee4",
-    "es": "cc771621c1176c54990a213b180bc3cc43bd8551d4ae6a00a618210180a8d6c6",
+    "en": "43bda7de120191d34ff70f92e0c09998c0a182c847841a401d4db4c906468263",
+    "es": "5988a0b3f67a1d9f7f4f3fa63f50cf2102877ded25e2ed8cdba22b607b83ea80",
 }
 
 
