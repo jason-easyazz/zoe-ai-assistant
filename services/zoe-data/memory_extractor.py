@@ -142,7 +142,9 @@ _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     # "my wife is [name]" (without "named/called" — lower confidence, name heuristic)
     (
         r"my\s+(wife|husband|partner|girlfriend|boyfriend|son|daughter|brother|sister|dad|mom|father|mother)\s+is\s+"
-        r"([A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
+        # "my wife is called Sarah" is the named/called template's: "called" / "named" is never the name (it stored a second,
+        # value-less "User's wife is called" row that contradicted the real one)
+        r"(?!(?:called|named)\b)([A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
         "User's {0} is {1}", 0.78,
     ),
 
@@ -310,7 +312,7 @@ _PERSON_INTRO_RES = (
     # flag too: "My wife is Emma" must still anchor).
     re.compile(
         rf"my\s+(?P<rel>{_RELATION_WORDS})\s+is\s+"
-        r"(?P<name>[A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
+        r"(?!(?:called|named)\b)(?P<name>[A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
         re.IGNORECASE,
     ),
     # "I have a friend Caitlin Farrell" / "my friend Caitlin" / "my coworker named
