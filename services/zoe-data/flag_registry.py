@@ -281,6 +281,7 @@ _ENTRIES = (
     _f('ZOE_EDGE_TTS_TIMEOUT_S', 'int', 5),
     _f('ZOE_EDGE_TTS_VOICE', 'str', ''),
     _f('ZOE_EMBEDDING_MODEL_VERSION', 'str', 'minilm-v1'),
+    _f('ZOE_EMOTIONAL_CUES_PATH', 'str', '', doc='docs/knowledge/write-claim-guard.md'),
     _f('ZOE_EMOTIONAL_FOLLOWUP_ENABLED', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
     _f('ZOE_EMOTIONAL_RECALL_ENABLED', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
     _f('ZOE_EMOTIONAL_TURN_GUARD', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/samantha-warmth.md'),

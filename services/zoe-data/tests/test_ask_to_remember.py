@@ -57,7 +57,13 @@ def svc(monkeypatch):
     monkeypatch.setattr(memory_service, "_user_opted_out", opted_in)
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: s)
     s._col = col
-    return s
+    import exact_words
+    import turn_forget
+    turn_forget.reset()
+    exact_words.set_backend(exact_words.MemoryBackend())
+    yield s
+    exact_words.set_backend(None)
+    turn_forget.reset()
 
 
 def run(coro):
@@ -69,6 +75,9 @@ def rows(svc, user=UID, status="approved"):
 
 
 def say(svc, text, user=UID, **kw):
+    # the chat lane saves every user turn (routers.chat._save_chat_message notes it for "forget that", turn_forget)
+    import turn_forget
+    turn_forget.note_user_turn(user, text)
     return run(atr.handle(text, user, "s1", svc=svc, **kw))
 
 
@@ -357,8 +366,8 @@ def test_forget_that_takes_the_captures_twin_too(svc):
 def test_forget_that_leaves_an_unrelated_row_alone(svc):
     say(svc, TEA)
     run(svc.ingest("I work night shifts in the hospital pharmacy", user_id=UID, source="chat_regex", status="approved"))
-    _execute(svc, "memory_forget_last")           # retracts only the newest write
-    assert [r.text for r in rows(svc)] == ["my favourite tea is lapsang souchong"]
+    _execute(svc, "memory_forget_last")           # retracts the PREVIOUS TURN's rows only, never the newest write
+    assert [r.text for r in rows(svc)] == ["I work night shifts in the hospital pharmacy"]
 
 
 def test_siblings_need_the_ask_tag_negative_control(svc):
@@ -508,10 +517,10 @@ def test_recall_still_answers_a_verified_or_unjudged_speaker(svc):
 def test_forget_that_leaves_a_different_person_with_the_same_predicate_alone(svc):
     say(svc, "Remember that my son Rowan is allergic to peanuts")
     run(svc.ingest("My daughter Wren is allergic to peanuts", user_id=UID, source="voice_fact", status="approved"))
-    out = _execute(svc, "memory_forget_last")       # retracts the newest write only
+    out = _execute(svc, "memory_forget_last")       # retracts the previous turn's row (and its true twins) only
     assert out.startswith("Done — I forgot")
-    assert [r.text for r in rows(svc)] == ["my son Rowan is allergic to peanuts"], \
-        "a separate fact that shares two content words was retracted with the capture's copy"
+    assert [r.text for r in rows(svc)] == ["My daughter Wren is allergic to peanuts"], \
+        "a separate fact that shares two content words was retracted as the forgotten row's twin"
 
 
 class _Ref:
