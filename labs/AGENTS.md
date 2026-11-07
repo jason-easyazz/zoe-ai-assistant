@@ -259,7 +259,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   by `tests/unit/test_untrusted_fence_markers.py`: change all three or none
   (`test/quoted_untrusted.test.ts`).
   Carries the **harness overlay seam** (flag-dark `ZOE_BRAIN_HARNESS_DIR`, self-evolution
-  Phase 0 S-M, `src/harness.ts`, README "Harness overlay"): soul, the seven overlay doctrine
+  Phase 0 S-M, `src/harness.ts`, README "Harness overlay"): soul, the eight overlay doctrine
   slots (`src/doctrines.ts`), the English manner block, tool DESCRIPTIONS and the recall
   tool's shape may be loaded from an overlay directory; unset = `ZOE_INSTRUCTIONS` byte for
   byte, absent file = compiled-in text, anything outside `OVERLAY_SCHEMA` refuses the whole
