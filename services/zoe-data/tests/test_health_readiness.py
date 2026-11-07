@@ -53,8 +53,10 @@ def test_health_stays_200_liveness_on_cold_box(monkeypatch):
             "detail": payload["db_pool"]["detail"],
         },
         "last_voice_turn_age_s": payload["last_voice_turn_age_s"],
+        "panel_speaker": payload["panel_speaker"],
     }
     assert payload["db_pool"]["healthy"] is True
+    assert set(payload["panel_speaker"]) == {"alarm", "panels"}         # panel_speaker_health.snapshot(): states + minutes, no panel id
 
 
 def test_health_exposes_last_voice_turn_age_for_the_deploy_quiet_wait(monkeypatch):

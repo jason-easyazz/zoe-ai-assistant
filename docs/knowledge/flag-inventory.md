@@ -29,7 +29,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 844 prod flags; 260 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 245 non-`ZOE_` env names read by prod code (table below).
+- 249 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 0 registered flags with no reader in the scanned sources.
@@ -956,7 +956,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-245 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+249 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -991,6 +991,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `BAKEOFF_MIN_AVAIL_MB` | `'1200'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_MIN_CONTIG_BLOCKS` | `'64'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_PANEL_HOST` | `'zoe-pi'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
+| `BAKEOFF_PANEL_UNREADABLE_WAIT_MIN` | `'10'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_QUIET_POLL_S` | `'60'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_QUIET_S` | `'600'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_QUIET_WAIT_MIN` | `'180'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
@@ -999,6 +1000,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `BAKEOFF_SHIM_MODEL` | `'auto'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_SKIP_BRAIN_STOP` | `-` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_SMOKE_CELLS` | `'0'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
+| `BAKEOFF_VOICE_AGE_URL` | `'http://127.0.0.1:8000/health'` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BAKEOFF_Z0N` | `-` | no | NO | `scripts/perf/zmb/bakeoff.py` |
 | `BARGE_DUCK_DB` | `-` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `BARGE_DUCK_ENABLED` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
@@ -1157,6 +1159,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `SPEAKER_ID_SHADOW_LOG` | `dynamic` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `SPEAKER_ID_SYNC_TTL_S` | `'3600'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `SPEAKER_RESNET34_MODEL_DIR` | `dynamic` | no | NO | `scripts/setup/zoe_speaker_resnet34.py` |
+| `SPEAKER_RESNET34_RETRY_S` | `'60,300,900,3600'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `SPEAKER_RESNET34_SELFTEST_DELAY_S` | `'20'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `SPEAKER_SHADOW_BOOT` | `'300'` | no | NO | `scripts/voice/speaker_shadow_eval.py` |
 | `SPEAKER_SHADOW_CORPUS` | `-` | no | NO | `scripts/voice/speaker_shadow_embed.py` |
 | `SPEAKER_SHADOW_DIR` | `dynamic` | no | NO | `scripts/voice/speaker_shadow_embed.py`<br>`scripts/voice/speaker_shadow_eval.py` |

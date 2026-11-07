@@ -141,6 +141,27 @@ def test_followup_with_no_verdict_at_all_is_unchanged(monkeypatch):
     assert len(turns) == 1 and turns[0]["verdict"] is None and not _skipped(frames), (turns, frames)
 
 
+def test_a_followup_with_no_verdict_because_the_panel_cannot_score_passes_as_a_guest_and_says_so(monkeypatch, caplog, tmp_path):
+    """2026-11-07: the panel's speaker model was refused at boot, every turn went up with no claim, and every follow-up passed in silence.
+    Decision (voice is a password): it still passes - in GUEST scope, no claim was accepted so no identity - but it is logged loudly."""
+    import logging
+
+    import panel_speaker_health
+
+    monkeypatch.setenv("ZOE_PANEL_SPEAKER_HEALTH_PATH", str(tmp_path / "psh.json"))       # the health bookkeeping never writes to ~/.zoe in a test
+    panel_speaker_health._reset_for_tests()
+    caplog.set_level(logging.WARNING, logger="routers.voice_tts")
+    refused = {"model": RESNET, "state": "refused", "reason": "too slow", "down_s": 120}
+    turns, frames = _run(monkeypatch, window="followup", speaker=None, extra={"speaker_model_state": refused})
+    assert len(turns) == 1 and turns[0]["verdict"] is None and not _skipped(frames), (turns, frames)
+    assert any("NO speaker verdict" in r.getMessage() and "refused" in r.getMessage() for r in caplog.records)
+    # negative control: a ready model with no verdict (shadow mode) is today's behaviour, without the warning
+    caplog.clear()
+    turns, frames = _run(monkeypatch, window="followup", speaker=None, extra={"speaker_model_state": {"model": RESNET, "state": "ready"}})
+    assert len(turns) == 1 and not _skipped(frames)
+    assert not any("NO speaker verdict" in r.getMessage() for r in caplog.records)
+
+
 def test_a_window_utterance_that_names_zoe_is_answered_as_a_guest_never_the_member(monkeypatch):
     turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.30), text="Zoe tell me about the cardiologist")
     assert len(turns) == 1 and not _skipped(frames), (turns, frames)
