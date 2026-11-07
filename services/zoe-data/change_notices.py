@@ -59,6 +59,7 @@ KEEP_SEEN = timedelta(days=30)
 SEND_GAP_S = 1.1  # Telegram: about one message a second per chat
 AUDIT_MAX_BYTES = 5 * 1024 * 1024
 NEEDS_OWNER_LABEL = "needs-owner"
+DEPLOY_BRANCH = "main"  # only a merge INTO this branch is ever deployed; a stacked PR merged into a feature branch is not
 
 FINAL = frozenset({"sent", "shadow", "refused", "failed", "superseded", "skipped", "no_channel", "uncertain_reported"})
 
@@ -230,7 +231,7 @@ class GhCli:
     async def merged_prs(self, since: str) -> list[dict]:
         return await self._json(["pr", "list", "--repo", self.repo, "--state", "merged", "--limit", "100",
                                  "--search", f"merged:>={since}",
-                                 "--json", "number,title,body,url,mergedAt,mergeCommit,labels"]) or []
+                                 "--json", "number,title,body,url,mergedAt,mergeCommit,labels,baseRefName"]) or []
 
     async def contains(self, deployed: str, sha: str) -> Optional[bool]:
         """Is ``sha`` an ancestor of (or equal to) ``deployed``? ``None`` = unknown (try again next tick)."""
@@ -666,11 +667,12 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             if seen:
                 continue
             sha = ((pr.get("mergeCommit") or {}).get("oid") or "").strip()
-            if silent or not sha:
-                continue
+            base = str(pr.get("baseRefName") or DEPLOY_BRANCH)
+            if silent or not sha or base != DEPLOY_BRANCH:
+                continue  # merged into a stacked/feature branch: it never deploys, so it can never be "stuck"
             title = pr.get("title", "")
             st["pending_live"][str(n)] = {"number": n, "title": title, "sha": sha, "url": pr.get("url"),
-                                          "merged_at": pr.get("mergedAt") or _iso(c.now),
+                                          "merged_at": pr.get("mergedAt") or _iso(c.now), "base": base,
                                           "summary": summarise(title, pr.get("body", "")),
                                           "bullets": bullets(title, pr.get("body", "")),
                                           "category": category_for_title(title)}
@@ -691,6 +693,17 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             st["pending_live"].pop(n_s, None)
             audit("pending_expired", number=p["number"])
             continue
+        if "base" not in p:  # recorded before the base filter: drop one that was never merged into the deploy branch
+            try:
+                on_main = await gh.contains(DEPLOY_BRANCH, p["sha"])
+            except Exception:  # noqa: BLE001
+                on_main = None
+            if on_main is False:
+                st["pending_live"].pop(n_s, None)
+                audit("pending_dropped", number=p["number"], reason="not_on_deploy_branch")
+                continue
+            if on_main:
+                p["base"] = DEPLOY_BRANCH
         live: Optional[bool] = None
         if deployed and checks < LIVE_CHECKS_PER_TICK:
             checks += 1
@@ -921,6 +934,8 @@ async def tick(*, gh: Optional[GitHub] = None, sender: Sender = telegram_sender,
         st["bootstrapped"] = True
         audit("bootstrapped", seen=len(st["seen"]))
     members = await (recipients or load_recipients)()
+    if not members and c.new_keys:  # new notices with nobody to send them to are otherwise lost without a trace
+        audit("no_recipients", new=len(c.new_keys))
     _fan_out(c, members)
     c.persist()
     if m == "on" and sender is telegram_sender and not telegram_notify.available():
