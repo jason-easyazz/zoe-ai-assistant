@@ -201,7 +201,7 @@ def test_every_marker_is_still_in_the_code():
 # ── 3. what 'reached' means ───────────────────────────────────────────────────────────────
 
 def _module_file(mod: str) -> Path:
-    for base in (SVC, REPO / "scripts" / "maintenance"):
+    for base in (SVC, SVC / "proactive", REPO / "scripts" / "maintenance"):
         p = base / f"{mod}.py"
         if p.exists():
             return p

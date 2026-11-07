@@ -139,6 +139,7 @@ TABLES: tuple[Store, ...] = (
     _t("music_listening_events", METADATA, OUT_OF_SCOPE, "Listening history: titles/artists, no household words; the music journal has its own controls."),
     # --- proactive / voice delivery plumbing ---
     _t("proactive_deliveries", DERIVED, GAP, "Delivery ledger rows keyed by candidate; text is in the candidate, not here."),
+    _t("proactive_outcome_edges", DERIVED, REACHED, member="outcome_edges.erase_user"),   # opaque item ids + outcomes only: no word for an entity forget to erase
     _t("proactive_ledger_lines", WORDS, GAP, "Holds the spoken line (words); neither path reaches it."),
     _t("proactive_pending", WORDS, GAP, "Holds the message text; neither path reaches it."),
     _t("proactive_scheduled", WORDS, GAP, "Holds the message text; neither path reaches it."),

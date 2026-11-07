@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-108 stores: 37 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+109 stores: 38 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -173,6 +173,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `notifications` | pg_table | words | gap | - | Delivered notification titles/messages; neither path reaches them. |
 | `music_listening_events` | pg_table | metadata | out_of_scope | - | Listening history: titles/artists, no household words; the music journal has its own controls. |
 | `proactive_deliveries` | pg_table | derived | gap | - | Delivery ledger rows keyed by candidate; text is in the candidate, not here. |
+| `proactive_outcome_edges` | pg_table | derived | reached | member: `outcome_edges.erase_user` | - |
 | `proactive_ledger_lines` | pg_table | words | gap | - | Holds the spoken line (words); neither path reaches it. |
 | `proactive_pending` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |
 | `proactive_scheduled` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |

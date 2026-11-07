@@ -203,7 +203,13 @@ async def pending_items(db, uid: str, now: datetime | None = None) -> list[Item]
             sal = 0.0
         items.append(Item(str(r[0]), str(r[1]), str(r[2]), str(r[3] or ""), str(r[4] or ""), sal,
                           str(r[6] or ""), int(r[9] or 0)))
-    items.sort(key=lambda i: (-i.salience, i.kind, i.id))
+    try:   # equal salience: the first-presence re-score's own order first (ZOE_OUTCOME_EDGES; {} when off)
+        from proactive import outcome_edges
+
+        ranks = await outcome_edges.todays_ranks(db, uid, now)
+    except Exception:  # noqa: BLE001
+        ranks = {}
+    items.sort(key=lambda i: (-i.salience, ranks.get(i.source_ref, 1_000_000), i.kind, i.id))
     sens = await lines.sensitivity_of(db, [i.id for i in items])
     # The shipped schema has no ``proactive_candidates.sensitivity`` column: the restraint tier keeps a candidate's class in
     # ``restraint_classes`` (keyed by source_ref), and recomputes it from the text when none is stored - the selector's own read
@@ -446,8 +452,18 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
     spoken = channel in _SPOKEN_CHANNELS
     try:
         from db_compat import get_compat_db
-        from proactive import ledger
+        from proactive import ledger, outcome_edges
 
+        # The member's first turn of the local day may BE this pull ("anything for me?" is answered by the fast tier, which returns
+        # before the brain lanes' selector.prepare ever runs): re-score today's due items before the queue is read, so the pull
+        # delivers today's ranking. A dry replay (commit=False) writes nothing, so it never triggers it.
+        if commit and outcome_edges.enabled():
+            try:
+                from proactive.selector import _PREPARE_TIMEOUT_S
+
+                await asyncio.wait_for(outcome_edges.on_presence(uid, now), timeout=_PREPARE_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - a slow re-score must not cost the pull its answer
+                logger.debug("pull: presence re-score skipped (non-fatal): %r", exc)
         async with get_compat_db() as db:
             items = await pending_items(db, uid, now)
             if not items:
@@ -478,6 +494,9 @@ async def pull(uid: str, session_id: str, *, channel: str = "chat",
                     db, user_id=uid, candidate_id=i.id, kind=i.kind, source_ref=i.source_ref,
                     shape="pull", delivered_by="pull", session_id=session_id, cue_words=i.cues,
                     now=now, outcome="accepted", voiced=1)
+                await outcome_edges.open_edge(
+                    db, user_id=uid, source_ref=i.source_ref, kind=i.kind, touch_point=outcome_edges.PULL,
+                    now=now, outcome="acted", source="pull_ask")
                 await lines.record(
                     db, user_id=uid, line="pulled", kind=i.kind, source_ref=i.source_ref,
                     reason="asked", score=i.salience, shape="pull", channel=channel,
