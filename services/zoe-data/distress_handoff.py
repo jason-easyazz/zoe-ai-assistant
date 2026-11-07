@@ -190,15 +190,11 @@ class Config:
 
 
 def config() -> Config:
-    raw = env_str("ZOE_HOUSEHOLD_COUNTRY", "") or env_str("ZOE_LOCATION_COUNTRY", "")
-    if len(raw) > 2:
-        try:
-            from identity_facts import _COUNTRY_NAMES
-            raw = next((k for k, v in _COUNTRY_NAMES.items() if v.lower() == raw.lower()), raw)
-        except Exception:  # noqa: BLE001
-            pass
+    # The household country the operator SET (never a guess from the timezone): the one answer household_locale also uses.
+    from household_locale import explicit_country
+
     notify = env_str("ZOE_DISTRESS_NOTIFY", "all").lower()
-    return Config({"UK": "GB"}.get(raw.upper(), raw.upper()), env_str("ZOE_DISTRESS_CONTACT_NAME", ""),
+    return Config(explicit_country(), env_str("ZOE_DISTRESS_CONTACT_NAME", ""),
                   env_str("ZOE_DISTRESS_CONTACT_USER", ""), notify if notify in {"all", "minors", "off"} else "all")
 
 

@@ -584,4 +584,6 @@ def test_maybe_capture_stt_saves_corpus_without_whisper_ab(monkeypatch, tmp_path
 
     saved = list(sample_dir.glob("*.wav"))
     assert len(saved) == 1  # corpus capture kept
+    import re
+    assert re.fullmatch(r"\d{8}-\d{6}_\d{3}\.wav", saved[0].name), saved[0].name  # the date is in the name (2026-11-06)
     assert spawned == []  # no background whisper A/B scheduled

@@ -1,0 +1,34 @@
+# Zoe self-improver - one night of self-evolution Phase 1 (Samantha initiative item 13, lane B E1): a GEPA-style
+# reflective improver over the brain's manner.md, two candidates vs a repeated-sampling control on the 4B, scored on the
+# held-out manner cells with the pass^k / collateral gate. SHADOW-APPLY ONLY: nothing live changes.
+# TEMPLATE, NOT INSTALLED: operator opt-in, ships inert (no [Install] here; the timer carries it). Install (owner):
+#   install -m 600 /dev/null ~/.zoe/env/self-improver.env   # then add the capped key line by hand (see the doc)
+#   cp zoe-self-improver.{service,timer} ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now zoe-self-improver.timer
+# RE-INSTALL NOTE: the installed unit is a COPY - after any change here, re-copy and daemon-reload.
+# The script refuses outside 03:30-04:25, while the night window / backup / voice regression / a voice landing runs, while
+# the brain-window lock is held, on low MemAvailable, without the key, and once the fourteen-night stop rule is decided.
+[Unit]
+Description=Zoe self-improver (shadow-only manner.md improver, one night)
+After=network-online.target zoe-data.service
+
+[Service]
+Type=oneshot
+# 04:00 -> the script's own 04:25 deadline; the slack covers teardown of the A/B rig's scratch sidecar.
+TimeoutStartSec=2100
+WorkingDirectory=%h/assistant
+Environment=HOME=%h
+Environment=PATH=%h/.nvm/current/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# The capped reflection key, by NAME only (ZOE_IMPROVER_ANTHROPIC_KEY=...), in a 0600 file the owner creates. Optional ("-"):
+# without it every live night is refused (exit 4) - never inline the key here.
+EnvironmentFile=-%h/.zoe/env/self-improver.env
+ExecStartPre=/usr/bin/mkdir -p %h/.zoe-logs
+ExecStart=/bin/bash %h/assistant/scripts/maintenance/self_improver_night.sh
+# 2 = unmeasured (probe cut short), 3 = skipped by a gate, 4 = refused (no key / stop rule decided): results, not failures.
+SuccessExitStatus=2 3 4
+StandardOutput=append:%h/.zoe-logs/self-improver.log
+StandardError=append:%h/.zoe-logs/self-improver.log
+Nice=5
+# the A/B rig imports zoe-data in-process and starts a scratch Flue sidecar; the cap keeps it from starving the voice stack
+MemoryHigh=1200M
+MemoryMax=1600M
