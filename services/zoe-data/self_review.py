@@ -233,7 +233,7 @@ def exclusion(t: Turn) -> str:
         if t.traffic in ("harness", "probe", "ci"):
             return t.traffic
     low = (t.user_id or "").lower()
-    if low.startswith(("demo_", "demo-", "bench", "probe", "test_", "test-", "ci_", "ci-", "e2e")):
+    if low.startswith(("demo_", "demo-", "bench_", "bench-", "probe_", "probe-", "test_", "test-", "ci_", "ci-", "e2e_", "e2e-")):
         return "demo"           # a demo id an operator re-admitted as a person is still a demo for this review
     if t.panel_id.lower().startswith(("replay", "test", "probe", "ci-", "e2e", "bench", "demo")):
         return "probe"
@@ -276,7 +276,8 @@ def _words(text: str) -> list[str]:
 
 def garbled(t: Turn) -> bool:
     """A transcript that looks misheard: the struggle detector said so, a word repeated 3+ times in a row, far too few characters
-    for the audio's length, or mostly one/two-letter fragments."""
+    for the audio's length (3 s or more of audio, under 1.5 characters a second: a short word with the panel's silence padding is not
+    garbled), or mostly one/two-letter fragments."""
     if any(s.get("signal") == "MISHEAR" or s.get("fix_type") in ("stt", "stt_snapped") for s in t.struggles if s.get("turn_id") == t.id):
         return True
     if t.channel != "voice":
@@ -284,7 +285,7 @@ def garbled(t: Turn) -> bool:
     ws = _words(t.text)
     if any(ws[i] == ws[i + 1] == ws[i + 2] for i in range(len(ws) - 2)):
         return True
-    if t.audio_s and t.audio_s >= 2.0 and len(t.text) / t.audio_s < 2.0:
+    if t.audio_s and t.audio_s >= 3.0 and len(t.text) / t.audio_s < 1.5:
         return True
     return len(ws) >= 4 and sum(1 for w in ws if len(w) <= 2) / len(ws) >= 0.6
 
@@ -519,7 +520,9 @@ def review_prompt(t: Turn) -> list:
     if t.audio_s:
         did.append(f"audio_s={t.audio_s:.1f}")
     flags = "; ".join(f"{f} ({CLASS_WORDS[f]})" for f in t.flags)
-    user = (f"What was asked (the transcript): {t.text[:400]!r}\nWhat I did: {', '.join(did)}\n"
+    # a child's words are never quoted, not even to the local model: the rubric judges MY reply and the shape of the ask
+    asked = (f"(a child's words, not shown: {len(_words(t.text))} words)" if t.role == ROLE_CHILD else repr(t.text[:400]))
+    user = (f"What was asked (the transcript): {asked}\nWhat I did: {', '.join(did)}\n"
             f"What I said: {(t.reply or '(nothing)')[:REPLY_CLIP]!r}\nWhat the checks flagged: {flags}")
     return [{"role": "system", "content": _SYSTEM + (_KID_RUBRIC if t.role == ROLE_CHILD else "")}, {"role": "user", "content": user}]
 
@@ -599,23 +602,34 @@ async def review_turn(t: Turn, llm: Llm, budget: Budget) -> tuple[str, Optional[
     return "ok", rv
 
 
+_FUNCTION = frozenset("it's that's there's what's i'm i've i'd i'll you're we're they're isn't don't can't won't there here out "
+                      "is are was were do does did have has had get got not no yes up down some any all with from about like very "
+                      "too again now then what when where who why how one".split())
+_COMMON_STARTS = frozenset("i i'm i've i'd i'll it it's its the a an this that these those there there's what what's when where "
+                           "who why how can could would will is are was do does did please hey ok okay so just my our we you your "
+                           "let's let tell turn put set add play show remind no yes not still oh well really maybe someone something nothing "
+                           "everyone anyone sometimes today tonight".split())
 _BEHAVIOUR = {EMOTION_MISREAD: "a short, plain remark gets a plain answer, not comfort it did not ask for",
               "manner": "the reply's manner fits the ask (length, warmth, directness)"}
 
 
 def paraphrase_ok(original: str, cand: str, deny_terms: Iterable[str] = ()) -> bool:
-    """A synthetic ask may enter the self-improver's candidate file only when it carries NONE of the household's words: no run of
-    three of the original's words, no deny term, no email / long number, no capitalised word but the first and "I", 2-24 words."""
+    """A synthetic ask may enter the self-improver's candidate file only when it carries NONE of the household's words: no content
+    word of the original at all (function words like "the", "it's" aside), no deny term, no email / long number / URL, no capitalised
+    word anywhere but a sentence-initial common word and "I", 2-24 words."""
     c = (cand or "").strip().strip('"').strip()
     ws = c.split()
     if not 2 <= len(ws) <= 24 or "\n" in c:
         return False
-    if echoes(original, c, 3):
+    if echoes(original, c, 3) or ((_tokens(original) - _FUNCTION) & (_tokens(c) - _FUNCTION)):
         return False
     if re.search(r"\S+@\S+|\d{4,}|https?://", c):
         return False
     if any(w[:1].isupper() and w.strip(".,!?'\"") not in ("I", "I'm", "I've", "I'd", "I'll") for w in ws[1:]):
         return False
+    first = ws[0].strip(".,!?'\"")
+    if first[:1].isupper() and first.lower() not in _COMMON_STARTS:
+        return False                          # a leading capital is a name until shown otherwise
     low = c.lower()
     return not any(t.strip() and t.strip().lower() in low for t in deny_terms)
 
@@ -855,12 +869,16 @@ def append_candidates(cells: list[dict]) -> int:
         return 0
     d = _private_dir(improver_dir())
     p = d / CANDIDATES_FILE
+    have = {str(r.get("ask") or "").strip().lower() for r in _read_records(p)}
+    new = [c for c in cells if c["ask"].strip().lower() not in have]          # a re-run of a night adds no ask twice
+    if not new:
+        return 0
     fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
     os.fchmod(fd, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as fh:
-        for c in cells:
+        for c in new:
             fh.write(json.dumps(c, sort_keys=True) + "\n")
-    return len(cells)
+    return len(new)
 
 
 # ── the night ────────────────────────────────────────────────────────────────
@@ -947,7 +965,8 @@ async def run_night(inp: NightInputs, *, llm: Optional[Llm], budget: Budget, nig
         _write_private(summary_path(night, d), json.dumps(summary, indent=1, sort_keys=True))
         _write_private(report_path(night, d), render_report(night, records, summary))
         written += [records_path(night, d).name, summary_path(night, d).name, report_path(night, d).name]
-        _write_private(d / "state.json", json.dumps({"reviewed_until": inp.until, "night": night}))
+        if status != "llm_unreachable":       # the model never answered: the next night reads the same turns again (records merge by turn id)
+            _write_private(d / "state.json", json.dumps({"reviewed_until": inp.until, "night": night}))
     if run_mode == "on":
         try:
             summary["struggle_rows"] = await store_struggles(struggle_rows(flagged, night))
@@ -1035,17 +1054,34 @@ def _rewrite(d: Path, keep: Callable[[dict], bool]) -> int:
     return removed
 
 
+def _erase_candidates(rx) -> int:
+    """The second wall for the self-improver's candidate file: the guard keeps household words out of it, and any ask that still
+    names the entity goes too (a candidate carries no member, so the forgetting member's pattern is applied to every line)."""
+    p = improver_dir() / CANDIDATES_FILE
+    if not p.exists():
+        return 0
+    with _locked(improver_dir()):
+        recs = _read_records(p)
+        kept = [r for r in recs if not rx.search(str(r.get("ask") or ""))]
+        if len(kept) != len(recs):
+            _write_private(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in kept))
+        return len(recs) - len(kept)
+
+
 async def erase_entity(user_id: str, rx, *, strict: bool = False) -> int:
     """The forget cascade's ``self_review`` step: every review record of ``user_id`` whose words or review name the entity (``rx``: a
     ``re.Pattern`` or ``memory_forgotten.LedgerPattern``) is dropped and the night's report re-rendered without it. RAISES with
     ``strict`` (a forget that could not erase is not confirmed); a missing directory is nothing stored."""
     d = state_dir()
-    if not user_id or not d.exists():
+    if not user_id or not (d.exists() or (improver_dir() / CANDIDATES_FILE).exists()):
         return 0
     try:
         def run() -> int:
+            if not d.exists():
+                return _erase_candidates(rx)
             with _locked(d):
-                return _rewrite(d, lambda r: not (r.get("user_id") == user_id and rx.search(_record_text(r))))
+                n = _rewrite(d, lambda r: not (r.get("user_id") == user_id and rx.search(_record_text(r))))
+            return n + _erase_candidates(rx)
         return await asyncio.to_thread(run)
     except Exception as exc:  # noqa: BLE001
         if strict:

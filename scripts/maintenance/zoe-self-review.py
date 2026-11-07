@@ -8,8 +8,9 @@ The night window's job ``self_review`` runs this on the 12B (port 11500) after t
     zoe-self-review.py --show 2026-11-08             # the owner: a night's records, re-checked against the forget ledger
 
 Flags
-  --model-url URL        the llama-server. Loopback only; the live 4B's port (11434) is REFUSED: the review never runs on the
-                         daytime brain (owner policy: the 12B night lane only). --no-model runs the deterministic checks alone.
+  --model-url URL        the llama-server. Loopback only, no override (household words never leave the box); the live 4B's port
+                         (11434) is REFUSED: the review never runs on the daytime brain (owner policy: the 12B night lane only).
+                         --no-model runs the deterministic checks alone.
   --budget-s S           the seconds this process may spend (the window passes what it has left); a review the remaining time cannot
                          hold is not started (``no_time``). Token and call caps: ZOE_SELF_REVIEW_MAX_TOKENS / _MAX_CALLS.
   --night YYYY-MM-DD     the night label (default: today, Zoe's timezone). The window reviewed is since the last run (<= 36 h).
@@ -39,18 +40,18 @@ DEFAULT_STT = Path.home() / ".zoe-voice" / "voice_stt.jsonl"
 DEFAULT_FLUE_DB = Path(os.environ.get("ZOE_SELF_REVIEW_FLUE_DB", "") or REPO / "labs" / "flue-zoe-brain-2x" / "data" / "zoe-brain.db")
 
 
-def check_model_url(url: str, allow_remote: bool = False) -> str:
-    """Loopback only, and never the live daytime 4B."""
+def check_model_url(url: str) -> str:
+    """Loopback only (there is deliberately no override), and never the live daytime 4B on any host."""
     p = urllib.parse.urlparse(url)
     host = p.hostname or ""
     try:
         ok = host == "localhost" or ipaddress.ip_address(host).is_loopback
     except ValueError:
         ok = False
-    if not ok and not allow_remote:
-        raise SystemExit(f"refusing the non-loopback --model-url {url!r}")
-    if ok and (p.port or 80) == LIVE_4B_PORT:
+    if (p.port or 80) == LIVE_4B_PORT:
         raise SystemExit("refusing the live 4B (port 11434): the self-review runs on the 12B night lane only")
+    if not ok:
+        raise SystemExit(f"refusing the non-loopback --model-url {url!r}: household words never leave the box")
     return url
 
 
@@ -94,7 +95,6 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--night", default="")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-model", action="store_true")
-    ap.add_argument("--allow-remote", action="store_true")
     ap.add_argument("--show", default="", metavar="NIGHT")
     ap.add_argument("--app-log", type=Path, default=DEFAULT_APP_LOG)
     ap.add_argument("--stt-log", type=Path, default=DEFAULT_STT)
@@ -122,7 +122,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     if not args.no_model:
         if not args.model_url:
             raise SystemExit("--model-url is required (or --no-model)")
-        llm = make_llm(check_model_url(args.model_url, args.allow_remote), args.model_name or "night", args.decode_tok_s or 6.5,
+        llm = make_llm(check_model_url(args.model_url), args.model_name or "night", args.decode_tok_s or 6.5,
                        args.prefill_tok_s or 180.0)
     budget = sr.Budget(deadline=(started + args.budget_s) if args.budget_s > 0 else 0.0, calls_left=sr.max_calls(),
                        tokens_left=sr.max_tokens(), decode_tok_s=args.decode_tok_s or 6.5, prefill_tok_s=args.prefill_tok_s or 180.0)

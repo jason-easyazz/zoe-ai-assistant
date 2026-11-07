@@ -2792,7 +2792,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
         cfg.night_dir = args.night_dir
     unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_day_review")]
     if unknown:
-        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, struggle_proposals, omi_day_review)")
+        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, struggle_proposals, self_review, omi_day_review)")
     return cfg
 
 

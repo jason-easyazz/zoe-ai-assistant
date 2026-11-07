@@ -210,10 +210,11 @@ OTHER: tuple[Store, ...] = (
           "step self_review); a member erase drops all of the member's records and summary events; load_reviews re-checks the ledger.",
           member="struggle_detector.delete_user", entity="self_review.erase_entity",
           markers=(".self-review.jsonl", ".self-review-summary.json")),
-    Store("self_improver_candidates", "file", DERIVED, OUT_OF_SCOPE, "~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B "
-          "invented in the SHAPE of a manner failure; a guard refuses any that reuses three household words, a deny term, a name-like word, "
-          "a number or an address, and no record names its turn or member, so nothing in it can be located by a forget.",
-          markers=("candidate-cells.jsonl",)),
+    Store("self_improver_candidates", "file", DERIVED, REACHED, "~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B "
+          "invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, "
+          "a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming "
+          "the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate.",
+          entity="self_review.erase_entity", markers=("candidate-cells.jsonl",)),
     Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
           "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
           member="warm_speaker.forget_user", markers=("warm-speaker.json",)),

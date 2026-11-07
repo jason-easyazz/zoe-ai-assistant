@@ -25,8 +25,8 @@ human-supervised owner-session reviews do - look at real interactions, find what
 | the morning-brief line | `proactive/triggers/morning_checkin.py` (`self_review_line`) |
 | tests (ci_safe, fakes only) | `services/zoe-data/tests/test_self_review.py` |
 
-**One night.** The window hands the job the 12B (port 11500) and the seconds it has left. The CLI refuses the live 4B's port (11434)
-and any non-loopback model: the review never runs on the daytime brain.
+**One night.** The window hands the job the 12B (port 11500) and the seconds it has left. The CLI refuses the live 4B's port (11434, on
+any host) and any non-loopback model, with no override flag: the review never runs on the daytime brain or off the box.
 
 1. **Gather** the turns since the last run (`state.json` `reviewed_until`, never more than 36 h back): `chat_messages` through the
    app's own helpers (`user_filters.message_owner_expr`, `memory_provenance.off_record_sql`) - Zoe's own process reading its own
@@ -60,18 +60,20 @@ and any non-loopback model: the review never runs on the daytime brain.
 |---|---|---|---|
 | the owner (`household_authority.lookup_role` = owner) | yes | words + reply + review | counts, ids, hashes |
 | another adult | no | ids + classes, "words not shown" | counts, ids, hashes |
-| a child (or a role lookup that failed) | yes, under the kid-safe rubric | ids + classes + review; a review echoing four of the child's words is withheld | counts, ids, hashes |
+| a child (or a role lookup that failed) | the kid-safe rubric, Zoe's reply and the ask's length only - never the child's words | ids + classes + review; a review echoing four of the child's words is withheld | counts, ids, hashes |
 | a guest / an unverified voice | no | ids + classes | counts |
 
 Household words never leave the box; the model is the local 12B. The summary carries a 12-hex utterance hash (the same key the logs
 already carry) and a fixed area label from capability_gap's lexicon, never words. A candidate cell carries no turn id and no member,
-and the guard (`paraphrase_ok`) refuses one that reuses three of the original's words, a deny term
-(`~/.zoe/self-improver/deny-terms.txt`), a name-like capitalised word, a number of four digits or more, an address or a URL.
+and the guard (`paraphrase_ok`) refuses one that shares ANY content word with the original, a deny term
+(`~/.zoe/self-improver/deny-terms.txt`), a name-like capitalised word (a leading capital too, unless a common opener), a number of
+four digits or more, an address or a URL; the entity forget sweeps the candidate file as a second wall.
 Candidates are NOT the self-improver's frozen held-out split: promoting one is a human step (the split is pinned by
 `manner_block_ab.py` `SPLIT_DIGEST`).
 
 **Forget.** "Forget Dana": the cascade step `self_review` (`self_review.erase_entity`, strict, retried from the ledger hashes like
-every step) drops each of the member's records naming the entity and re-renders the night's report and summary without it. A member
+every step) drops each of the member's records naming the entity, re-renders the night's report and summary without it, and drops
+any candidate cell naming it. A member
 erase (`MemoryService.delete_user` -> `struggle_detector.delete_user` -> `self_review.delete_user`) drops all their records and
 summary events. The owner's reader (`--show`, `load_reviews`) re-checks the ledger on every read.
 

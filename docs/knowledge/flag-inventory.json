@@ -14165,6 +14165,103 @@
         },
         "typed_env": true
       },
+      "ZOE_SELF_REVIEW": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
+      "ZOE_SELF_REVIEW_FLUE_DB": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe-self-review.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
+      "ZOE_SELF_REVIEW_IMPROVER_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
+      "ZOE_SELF_REVIEW_MAX_CALLS": {
+        "defaults": [
+          "20"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 20,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "int"
+        },
+        "typed_env": false
+      },
+      "ZOE_SELF_REVIEW_MAX_TOKENS": {
+        "defaults": [
+          "4000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 4000,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "int"
+        },
+        "typed_env": false
+      },
       "ZOE_SELF_URL": {
         "defaults": [
           "'http://127.0.0.1:8000'",
@@ -17444,6 +17541,7 @@
     "scripts/maintenance/voice_regression_probe.py": 19,
     "scripts/maintenance/zoe-night-mind.py": 1,
     "scripts/maintenance/zoe-nightly-dreaming.py": 3,
+    "scripts/maintenance/zoe-self-review.py": 1,
     "scripts/maintenance/zoe_apply_intent_gap_contract.py": 1,
     "scripts/maintenance/zoe_cheap_pr_agent.py": 3,
     "scripts/maintenance/zoe_health.py": 2,
@@ -17604,6 +17702,7 @@
     "services/zoe-data/routers/voice_livekit.py": 18,
     "services/zoe-data/routers/voice_tts.py": 16,
     "services/zoe-data/routers/weather.py": 8,
+    "services/zoe-data/self_review.py": 4,
     "services/zoe-data/semantic_router.py": 13,
     "services/zoe-data/setup_qr.py": 1,
     "services/zoe-data/skybridge_service.py": 3,
@@ -20247,9 +20346,5 @@
       "typed_env": false
     }
   },
-  "registry_unread": [
-    "ZOE_SELF_REVIEW",
-    "ZOE_SELF_REVIEW_MAX_CALLS",
-    "ZOE_SELF_REVIEW_MAX_TOKENS"
-  ]
+  "registry_unread": []
 }

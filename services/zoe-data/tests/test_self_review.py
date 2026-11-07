@@ -171,6 +171,7 @@ def test_garbled_stt_misroute_and_cant_do_come_from_receipts_and_text():
     assert sr.GARBLED_STT in sr.flag_turn(T("the the the lights", channel="voice"), None)
     assert sr.GARBLED_STT in sr.flag_turn(T("on", channel="voice", audio_s=4.0), None)
     assert sr.GARBLED_STT not in sr.flag_turn(T("turn on the lights", channel="voice", audio_s=1.5), None)
+    assert sr.GARBLED_STT not in sr.flag_turn(T("yes", channel="voice", audio_s=2.5), None)           # a short word + the panel's silence padding
     assert sr.GARBLED_STT not in sr.flag_turn(T("the the the lights", channel="chat"), None)           # typed words are not heard
     t = T("dim the hall", id="x1", struggles=[{"signal": "FALLTHROUGH", "fix_type": "router_training", "turn_id": "x1"},
                                               {"signal": "CANT_DO", "fix_type": "capability_gap", "turn_id": "x1"}])
@@ -217,6 +218,7 @@ def test_a_childs_turn_gets_the_kid_rubric_is_never_quoted_and_an_echo_is_withhe
     llm = FakeLlm(lambda m: json.dumps({"cause": f"it misread {ask}", "fix": "answer_quality", "note": "say why the sky is blue"}))
     s = night(inputs(exchange(0, "chat-k", ask, "", T0, owner=CHILD)), llm=llm)
     assert "CHILD" in llm.calls[0][0][0]["content"] and "NEVER quote" in llm.calls[0][0][0]["content"]
+    assert "sky" not in json.dumps(llm.calls) and "not shown" in llm.calls[0][0][1]["content"]       # not even the local model sees them
     rec = sr._read_records(sr.records_path("2026-11-04"))[0]
     assert rec["policy"] == "kid" and "text" not in rec and "withheld" in rec["review"]["cause"]
     for path in (sr.records_path("2026-11-04"), sr.summary_path("2026-11-04"), sr.report_path("2026-11-04")):
@@ -348,9 +350,41 @@ def test_a_manner_failure_becomes_a_neutral_synthetic_candidate_cell():
     ("Tell Dana it's windy", False),             # a name-like word
     ("call me on 0412345678", False),            # a number
     ("ok", False),                               # too short
+    ("someone left the cold milk out", False),   # ONE content word of the household's is one too many
 ])
 def test_the_paraphrase_guard(cand, ok):
     assert sr.paraphrase_ok("it's cold today", cand) is ok
+
+
+def test_a_rerun_adds_no_candidate_twice_and_an_unreachable_model_keeps_the_window_open():
+    def reply(messages):
+        if "invented" in messages[0]["content"]:
+            return "It's windy out there."
+        return json.dumps({"cause": "comfort for a plain remark", "fix": "manner", "note": ""})
+    rows = exchange(0, "chat-1", "it's cold today", "I'm sorry to hear that. I'm here for you.", T0)
+    night(inputs(rows), llm=FakeLlm(reply), run_mode="on")
+    night(inputs(rows), llm=FakeLlm(reply), run_mode="on")
+    assert len((sr.improver_dir() / sr.CANDIDATES_FILE).read_text().splitlines()) == 1
+    before = (sr.state_dir() / "state.json").read_text()
+
+    async def down(_m, _n):
+        raise ConnectionError("refused")
+    s = night(inputs(rows, until=T0 + 9999), llm=down, run_mode="on")
+    assert s["status"] == "llm_unreachable" and (sr.state_dir() / "state.json").read_text() == before
+
+
+def test_a_leading_name_and_a_shared_name_are_refused():
+    assert not sr.paraphrase_ok("Dana called me", "Dana needs help now")
+    assert not sr.paraphrase_ok("dana called me", "someone asked dana for help")
+    assert sr.paraphrase_ok("Dana called me", "Someone rang earlier today")
+
+
+def test_forget_also_sweeps_the_candidate_file():
+    import memory_forgotten as mf
+
+    sr.append_candidates([{"ask": "ask Dana about it", "class": "emotion_misread"}, {"ask": "it's windy out there", "class": "emotion_misread"}])
+    assert run(sr.erase_entity(OWNER, mf.name_pattern("Dana"), strict=True)) == 1
+    assert [json.loads(x)["ask"] for x in (sr.improver_dir() / sr.CANDIDATES_FILE).read_text().splitlines()] == ["it's windy out there"]
 
 
 def test_the_paraphrase_guard_refuses_a_deny_term():
@@ -403,7 +437,17 @@ def test_the_cli_refuses_the_daytime_4b_and_a_remote_model():
         cli.check_model_url("http://127.0.0.1:11434/v1")
     with pytest.raises(SystemExit, match="non-loopback"):
         cli.check_model_url("http://10.0.0.5:11500/v1")
+    with pytest.raises(SystemExit, match="11434"):
+        cli.check_model_url("http://10.0.0.5:11434/v1")                           # the 4B's port on any host
     assert cli.check_model_url("http://127.0.0.1:11500/v1")
+    with pytest.raises(SystemExit):                                              # there is no override flag
+        run(cli.amain(["--model-url", "http://10.0.0.5:11500/v1", "--allow-remote"]))
+
+
+def test_the_cli_refuses_a_remote_model_end_to_end(monkeypatch):
+    monkeypatch.setenv("ZOE_SELF_REVIEW", "shadow")
+    with pytest.raises(SystemExit, match="non-loopback"):
+        run(_cli().amain(["--model-url", "http://10.0.0.5:11500/v1"]))
 
 
 def test_dry_run_writes_nothing():
