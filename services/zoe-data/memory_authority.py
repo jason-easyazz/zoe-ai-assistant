@@ -97,8 +97,12 @@ USER_STATED_DERIVED = "user_stated_derived"  # a MODEL's paraphrase that the use
 USER_UNVERIFIED = "user_unverified"   # voice turn attributed only by panel binding (P1.3, follow-up)
 MODEL_FROM_TURN = "model_from_turn"
 MODEL_FROM_TRANSCRIPT = "model_from_transcript"
+#: a row a CURATOR wrote for a member (memories-space P7, ``memory_curation``; owner D9, 2026-10-19): the curated rows of a child,
+#: and those of an adult in a category that adult opted in. Only a curator or an operator changes it - not a passing statement of
+#: the member, not their review UI (``may_override``). A released row (the adult opted the category out) is restamped user_stated.
+CURATED = "curated"
 RANK = {
-    OPERATOR: 6, USER_CONFIRMED: 5, USER_STATED: 4, USER_STATED_DERIVED: 3, USER_UNVERIFIED: 2,
+    OPERATOR: 6, CURATED: 6, USER_CONFIRMED: 5, USER_STATED: 4, USER_STATED_DERIVED: 3, USER_UNVERIFIED: 2,
     MODEL_FROM_TURN: 1, MODEL_FROM_TRANSCRIPT: 0,
 }
 CLASSES = tuple(RANK)
@@ -118,7 +122,9 @@ PROTECTED = frozenset({USER_STATED, USER_CONFIRMED})
 def authority_of(cls: str) -> str:
     if cls in (OPERATOR, USER_CONFIRMED):
         return USER_CONFIRMED
-    if cls in (USER_STATED, USER_STATED_DERIVED):
+    # a curated row is the GUARDIAN's own statement (person-centred memory D1 / D7, 2026-11-03): stated, not confirmed by the
+    # member it is about; its author is ``curated_by``. Its RANK (who may change it) is separate and stays the curator's.
+    if cls in (USER_STATED, USER_STATED_DERIVED, CURATED):
         return USER_STATED
     return INFERRED
 
@@ -208,6 +214,8 @@ OPERATOR_WRITERS = frozenset({
     "samantha_live_cleanup",
 })
 #: The review UI IS the person: approving / editing a row there is "yes, that's right".
+#: A curator writing for a member (``memory_curation`` is the ONLY caller that names it; a static test pins that).
+CURATOR_WRITERS = frozenset({"curator"})
 USER_CONFIRMED_WRITERS = frozenset({"review_ui", "user_confirmed", "omi_review"})   # omi_review: the owner approved a pendant candidate quoting their own words (omi_review_apply)
 #: The person's own words, typed or dictated, or a deterministic extractor over their turn
 #: (assistant text is never mined — tests/test_memory_extractor_purity.py).
@@ -233,6 +241,16 @@ MODEL_FROM_TURN_WRITERS = frozenset({
 #: rejected) the write carries ``user_stated`` power (``VERBATIM_BASIS``) - the owner's own change of mind, stated plainly.
 SPAN_WRITERS = frozenset({"turn_digest", "voice_turn_digest"})
 VERBATIM_BASIS = "verbatim_user_span"
+#: Per-turn model writers of facts about OTHER people (not self-assertions): when one verbatim sentence of the
+#: speaker's turn supports the fact AND that sentence is an explicit correction ("actually Ana's 10 now", "no, she's
+#: 10") with no hedge, the write carries ``user_stated`` power (``CORRECTION_BASIS``) - the speaker correcting what
+#: they said before (owner rule: user-stated > confirmed > inferred; a member's own explicit correction is
+#: user-stated). QA round 2, 2026-11-05: three corrections of a family member's age never replaced the first value.
+CORRECTION_WRITERS = frozenset({"person_extractor_llm"})
+CORRECTION_BASIS = "explicit_correction"
+#: bases whose row is ``user_stated_derived`` by class but carries the power and standing of the speaker's own words
+PROMOTED_BASES = frozenset({VERBATIM_BASIS, CORRECTION_BASIS})
+CORRECTION_ENV = "ZOE_EXPLICIT_CORRECTION"
 #: The teach lane: the text (or the user turn it was dictated from) IS the owner's own words.
 TEACH_WRITERS = frozenset({"voice_fact", "review_ui", "explicit_teach"})
 #: Writers whose evidence (``source_excerpt``) is, by contract, a USER turn: a row from one of them says which turn.
@@ -257,6 +275,8 @@ def writer_class(writer: str, *, user_id: str = "") -> str:
     w = (writer or "").strip()
     if w in OPERATOR_WRITERS:
         return OPERATOR
+    if w in CURATOR_WRITERS:
+        return CURATED
     if w in USER_CONFIRMED_WRITERS or (user_id and w == user_id):
         return USER_CONFIRMED
     if w in USER_STATED_WRITERS or w in USER_STATED_WRITERS_EXTRA or w.startswith(USER_STATED_PREFIXES):
@@ -276,7 +296,7 @@ def is_known_writer(writer: str) -> bool:
     """On the allow-list (a lane / writer name, as opposed to an account id or a stray
     string): only these become a row's ``source``."""
     w = (writer or "").strip()
-    return (w in OPERATOR_WRITERS or w in USER_CONFIRMED_WRITERS or w in USER_STATED_WRITERS
+    return (w in OPERATOR_WRITERS or w in CURATOR_WRITERS or w in USER_CONFIRMED_WRITERS or w in USER_STATED_WRITERS
             or w in USER_STATED_WRITERS_EXTRA or w.startswith(USER_STATED_PREFIXES) or w in MODEL_FROM_TURN_WRITERS
             or w in TRANSCRIPT_WRITERS or w in LLM_WRITERS or w in _automatic_sources())
 
@@ -349,6 +369,8 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
             return Resolved(USER_UNVERIFIED, "speaker_not_verified")
         if claimed == USER_CONFIRMED and base == USER_STATED:
             return Resolved(USER_CONFIRMED, "user_confirmed")
+        if base == CURATED:
+            return Resolved(CURATED, "curator")
         return Resolved(base, "deterministic_user_turn" if w in DETERMINISTIC_USER_WRITERS
                         else "explicit_source")
     if w in MODEL_FROM_TURN_WRITERS or w in TRANSCRIPT_WRITERS:
@@ -371,6 +393,11 @@ def _resolve_model_lexical(w: str, base: str, text: str, anchor_text: Optional[s
             # the owner's own words, one verbatim sentence, ENTAIL the fact: their change of mind
             # (C1 / C5) is the user speaking, not a model's guess at them
             return Resolved(USER_STATED_DERIVED, VERBATIM_BASIS, promoted=True)
+        if (w in CORRECTION_WRITERS and anchor_text and correction_enabled()
+                and correction_span(text, anchor_text) is not None):
+            # the speaker's own verbatim sentence supports the fact and says it CORRECTS something: their word,
+            # not a model's guess at it (it may replace a value they stated before)
+            return Resolved(USER_STATED_DERIVED, CORRECTION_BASIS, promoted=True)
         return Resolved(USER_STATED_DERIVED, "anchored_user_turn")
     if w in TRANSCRIPT_WRITERS and anchor_text and observation_gate_mode() != "off":
         # a nightly paraphrase that joins two things the owner put in ONE sentence ("X accepted the offer from Y" from
@@ -389,7 +416,7 @@ def label_of_meta(meta: Mapping[str, Any]) -> str:
     """The LEXICAL label (promote | anchor | hold) a STORED row's class stands for - what ``_label_of`` said when it was written,
     re-derived from the row's own stamps (the post-turn claim reader compares a claim row to it after the write)."""
     cls = str((meta or {}).get("authority_class") or "")
-    if cls == USER_STATED_DERIVED and str((meta or {}).get("authority_basis") or "") == VERBATIM_BASIS:
+    if cls == USER_STATED_DERIVED and str((meta or {}).get("authority_basis") or "") in PROMOTED_BASES:
         return "promote"
     return "anchor" if cls in (USER_STATED_DERIVED, USER_UNVERIFIED) else "hold"
 
@@ -471,6 +498,9 @@ def may_override(power: int, target_cls: str) -> bool:
         # an operator's deliberate cleanup is not undone by a spoken sentence a panel may have
         # mis-attributed (P1.3): it takes a confirming action (the review UI) or an operator
         return power >= RANK[USER_CONFIRMED]
+    if target_cls == CURATED:
+        # a curated row (owner D9): only a curator or an operator - never a sentence or the review UI of the member
+        return power >= RANK[CURATED]
     return power >= USER_RANK or power >= RANK.get(target_cls, 0)
 
 
@@ -521,7 +551,7 @@ def row_class(meta: Mapping[str, Any], text: str = "") -> str:
     meta = meta or {}
     c = str(meta.get("authority_class") or "")
     if c in RANK:
-        if c == USER_STATED_DERIVED and str(meta.get("authority_basis") or "") == VERBATIM_BASIS:
+        if c == USER_STATED_DERIVED and str(meta.get("authority_basis") or "") in PROMOTED_BASES:
             return USER_STATED   # the user's own turn entailed it verbatim: standing (and power) of the user's words
         return c
     a = str(meta.get("authority") or "")
@@ -661,10 +691,22 @@ def _stem(tok: str) -> str:
 _CUE_OF: dict[str, str] = {_stem(w): cls for cls, words in _CUE_WORDS.items() for w in words.split()}
 
 
+#: Another person's age with no age word: "Ana's 10 now", "she is 10 though", "he's 9." - a subject, a copula and a
+#: bare number that ENDS the clause (or is followed by a time / correction word), so "Ana's 10 minutes away" or
+#: "it's 10 now" never reads as an age, nor does a relative's or a pet's ("Ana's mum is 40", "her dog is 3": the fact
+#: must name THAT subject). QA round 2, 2026-11-05: "actually <name>'s 10 now" did not support "<name>: 10 years
+#: old", so the speaker's own correction landed with no standing and never replaced the old age.
+_THIRD_PERSON_AGE_RE = re.compile(
+    r"\b(?!(?:it|that|this|there|what|where|who|which|time|" + _alt(_EN["kin_pattern"] + _EN["pet_words"])
+    + r")s?\b)[a-z][a-z'’-]*?(?:['’]s|\s+is|\s+was|['’]re|\s+are)"
+    r"\s+(?:now\s+|only\s+|just\s+|already\s+)?\d{1,3}"
+    r"(?=\s*(?:$|[,.!;)]|(?:now|though|tho|already|actually|too|and|but|so|lol|haha|years?|yrs?|this|next|last|since|"
+    r"btw|then|today|yet|not)\b))", re.IGNORECASE)
 # First-person present / change-of-state shapes that name the attribute without its noun:
 # "I'm 41 now" (age), "I'm in Perth now" (home), "I'm at Acme now" (work), "I'm Alex" (name).
 _SHAPE_CUES = (
     ("age", re.compile(r"\bI(?:['’]m| am)\s+\d{1,3}\b|\bturn(?:ed|ing|s)?\s+\d{1,3}\b", re.IGNORECASE)),
+    ("age", _THIRD_PERSON_AGE_RE),
     ("home", re.compile(r"\bI(?:['’]m| am)\s+(?:now\s+)?in\s+\w+(?:\s+\w+){0,3}?\s+now\b"
                         r"|\bI(?:['’]m| am)\s+now\s+in\s+\w+", re.IGNORECASE)),
     ("work", re.compile(r"\bI(?:['’]m| am)\s+(?:now\s+)?at\s+\w+(?:\s+\w+){0,3}?\s+now\b"
@@ -673,9 +715,30 @@ _SHAPE_CUES = (
 )
 
 
-def _window_cues(win: str, stems: set[str]) -> set[str]:
+def _third_person_age_names(win: str, fact: str) -> bool:
+    """Does a third-person bare-number age in ``win`` ("Ben is 10") name the person the FACT is about ("Alice: 10 years old")? The
+    subject of the age shape must be a word of the fact: a model that misattributes a relative's age must not borrow the cue."""
+    fact_words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'’-]*", _fold(fact))}
+    fact_words |= {w[:-2] for w in fact_words if w.endswith(("'s", "’s"))}
+    fact_numbers = set(re.findall(r"\d{1,3}", fact))
+    for m in _THIRD_PERSON_AGE_RE.finditer(win):
+        subj = re.match(r"[a-z][a-z'’-]*?(?=['’]s|\s+is|\s+was|['’]re|\s+are)", m.group(0), re.IGNORECASE)
+        nums = re.findall(r"\d{1,3}", m.group(0))
+        # the SUBJECT and the NUMBER of the same match must both be the fact's: "Alice is 9 and Ben is 10" supports Ben: 10, never
+        # Alice: 10 (Alice's 9 and Ben's 10 are two separate matches)
+        if subj and subj.group(0).lower() in fact_words and nums and nums[-1] in fact_numbers:
+            return True
+    return False
+
+
+def _window_cues(win: str, stems: set[str], fact: str | None = None) -> set[str]:
     out = {_CUE_OF[s] for s in stems if s in _CUE_OF}
-    out |= {cls for cls, rx in _SHAPE_CUES if rx.search(win)}
+    for cls, rx in _SHAPE_CUES:
+        if rx is _THIRD_PERSON_AGE_RE:
+            if correction_enabled() and (_third_person_age_names(win, fact) if fact else rx.search(win)):
+                out.add(cls)
+        elif rx.search(win):
+            out.add(cls)
     return out
 
 
@@ -928,7 +991,7 @@ def _support_windows(fact: str, user_text: str):
         stems = {_stem(w) for w in ws}
         if value and not value <= stems:
             continue
-        if cues and not cues <= _window_cues(win, stems):
+        if cues and not cues <= _window_cues(win, stems, fact):
             continue
         if other and len(other & stems) / len(other) < 0.6:
             continue
@@ -1012,6 +1075,35 @@ def entailing_span(fact: str, user_text: str) -> Optional[str]:
     if not is_self_assertion(fact):
         return None
     return _verbatim((w for w in _support_windows(fact, user_text) if _plainly_first_person(w, fact)), user_text)
+
+
+_CORRECTION_RE = re.compile(r"\b(?:" + _alt(_EN.get("correction_cues") or ["actually"]) + r")(?=\W|$)", re.IGNORECASE)
+#: Someone ELSE's assertion relayed by the member ("Carol told me Ana's 10 now", "apparently she's 10"): the member is
+#: reporting, not correcting their own fact, so it never earns correction power (it stays the plain anchored class).
+_REPORT_RE = re.compile(r"(?:" + _alt(_EN.get("report_cues") or ["apparently"]) + r")", re.IGNORECASE)
+
+
+def correction_enabled() -> bool:
+    """``ZOE_EXPLICIT_CORRECTION`` (default ON) - "a correction sticks", every part of it: the third-person age
+    shape in ``supports``, correction power, the ``age`` fact kind and the multi-valued-kind guard in
+    ``person_extractor``, and one age per person in the recall packets. ``0`` restores the old behaviour of all of
+    them. Per-call env read."""
+    from typed_env import env_bool
+
+    return env_bool(CORRECTION_ENV, True)
+
+
+def correction_span(fact: str, user_text: str) -> Optional[str]:
+    """The speaker's own VERBATIM sentence that supports ``fact`` AND is an explicit correction (a cue from
+    ``correction_cues``: "actually", "no,", "now", "I told you" ...) with no hedge or report in it, else None.
+    ``supports`` already refused a question, a wish, a polarity / tense mismatch and a sentence about the speaker's
+    relative that the fact does not name; this only adds "and it says it corrects something", plainly."""
+    for win in _support_windows(fact, user_text):
+        if _CORRECTION_RE.search(win) and not _HEDGE_RE.search(win) and not _REPORT_RE.search(win):
+            got = _verbatim([win], user_text)
+            if got:
+                return got
+    return None
 
 
 def is_self_assertion(text: str) -> bool:
@@ -1282,12 +1374,35 @@ def find_conflict(new_text: str, rows: list[Any], writer_power: int, *,
         if getattr(r, "id", "") == exclude_id or str(meta.get("status") or "") != "approved":
             continue
         text = getattr(r, "text", "") or ""
-        if may_override(writer_power, row_class(meta, text)):
+        target = row_class(meta, text)
+        if may_override(writer_power, target):
             continue
         kind = conflict_kind(new_text, text)
+        if not kind and target == CURATED and negation_flip(new_text, text):
+            kind = kind_of(text)   # "User is not allergic to peanuts" against a curated "User is allergic to peanuts"
         if kind:
             return r, kind
     return None
+
+
+_NEG_TOKENS = frozenset({"not", "no", "never", "longer", "anymore"})
+_AUX_TOKENS = frozenset({"is", "are", "am", "was", "were", "does", "do", "did", "has", "have", "be"})
+_NT_RE = re.compile(r"(\w+)n\u2019t\b|(\w+)n\x27t\b")
+
+
+def _neg_norm(text: str) -> tuple:
+    t = _NT_RE.sub(lambda m: (m.group(1) or m.group(2)) + " not", (text or "").lower())
+    words = re.findall(r"[a-z0-9]+", t)
+    neg = sum(1 for w in words if w in _NEG_TOKENS)
+    return frozenset(w for w in words if w not in _NEG_TOKENS and w not in _AUX_TOKENS), neg
+
+
+def negation_flip(new_text: str, old_text: str) -> bool:
+    """The same statement with a negation added or removed ("User is not allergic to peanuts" / "User is allergic to peanuts").
+    Consulted only against a CURATED row: a curated fact is not quietly contradicted by a passing denial. Pure."""
+    a, na = _neg_norm(new_text)
+    b, nb = _neg_norm(old_text)
+    return bool(a) and a == b and (na > 0) != (nb > 0)
 
 
 #: How the recall packet labels a row a voice the speaker gate did NOT confirm said (it is

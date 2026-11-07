@@ -81,6 +81,7 @@
  * Part of the live Zoe brain (flue-zoe-brain-2x.service, :3579).
  */
 import type { Context, Message } from '@earendil-works/pi-ai';
+import { hasEmotionalWeight } from './emotional-cues.ts';
 
 /** The always-disclosed activator tool (defined in zoe-tools.ts). */
 export const ACTIVATOR_TOOL_NAME = 'activate_abilities';
@@ -225,18 +226,19 @@ const GROUP_TRIGGERS: Record<AbilityGroup, RegExp> = {
   home:
     /\blights?\b|\b(?:turn|switch|flip)\s+(?:on|off)\b|\b(?:dim|brighten)\b/i,
   // Explicit "remember (that) ...", "don't forget ...", "keep in mind ...",
-  // "make a note that ..." style WRITE requests, PLUS genuine emotional-weight
-  // cues so remember_emotional_moment is pre-disclosed on emotional turns (the
-  // doctrine in agents/zoe.ts is the always-on fallback via the activator, but
-  // pre-disclosing the tool on clear emotional language is the defence-in-depth
-  // layer — same rationale as weather's washing/laundry widening). The model still
-  // decides SPARSELY whether to actually call it; a false positive only discloses
-  // one extra schema. Recall stays the always-on core recall_memory.
+  // "make a note that ..." style WRITE requests. Emotional-weight turns are NOT
+  // matched here: they come from zoe-data's own cue data (src/tools/emotional-cues.ts
+  // reads services/zoe-data/lexicons_data/emotional_cues.json, the words
+  // memory_gate.is_emotional_turn uses), so remember_emotional_moment is disclosed on
+  // exactly the turns the server treats as emotional (QA round 3b: a regex copy here
+  // missed "had a fall", "keep worrying", "the embarrassment", "guilty"). The model
+  // still decides SPARSELY whether to call it; a false positive only discloses one
+  // extra schema. Recall stays the always-on core recall_memory.
   // ... PLUS a plain statement that something CHANGED or ENDED ("I gave up the cello", "I sold the Corolla", "the goldfish died", "I switched
   // to tea", "we moved"), so memory_retire (the chat lane's judge for a change of state, ZOE_QUOTE_RETIRE) is pre-disclosed on it. The cues are
   // the ending / replacing verbs only: a false positive costs one extra schema, and the server's own prefilter and walls decide what is retired.
   memory:
-    /\bremember (?:that|this|i|my|to keep)\b|\b(?:gave|given)\s+(?:\w+\s+){0,2}?(?:up|away)\b|\b(?:stopped|quit|sold|cancel(?:l)?ed|dropped out|stepped down|got rid of|passed away|died|no longer|any ?more|switched to|moved (?:to|from|away))\b|\bdon'?t forget\b|\bkeep in mind\b|\bmake a mental note\b|\b(?:stressed|anxious|worried|scared|afraid|terrified|heartbroken|grieving|devastated|overwhelmed|depressed|miserable|ecstatic|overjoyed|thrilled|proud|delighted)\b|\b(?:passed away|in hospital|has cancer|diagnosed|so happy|really happy|over the moon|breaking up|broke up|lost my|miss(?:ing)? (?:him|her|them|my)|got (?:the|our) keys|bought (?:a|our|my) (?:new )?(?:house|home)|got engaged|getting married|had (?:a|our) baby)\b/i,
+    /\bremember (?:that|this|i|my|to keep)\b|\b(?:gave|given)\s+(?:\w+\s+){0,2}?(?:up|away)\b|\b(?:stopped|quit|sold|cancel(?:l)?ed|dropped out|stepped down|got rid of|passed away|died|no longer|any ?more|switched to|moved (?:to|from|away))\b|\bdon'?t forget\b|\bkeep in mind\b|\bmake a mental note\b/i,
 };
 
 /** Reverse map: tool name → its group. */
@@ -319,6 +321,7 @@ export function groupActivationOrder(messages: Message[]): AbilityGroup[] {
       if (!text) continue;
       for (const group of GROUP_NAMES) {
         if (GROUP_TRIGGERS[group].test(text)) add(group);
+        else if (group === 'memory' && hasEmotionalWeight(text)) add(group);
       }
       continue;
     }

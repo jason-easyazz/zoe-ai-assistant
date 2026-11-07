@@ -166,6 +166,9 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
         # lists expert read the shopping list aloud). Never answer one domain's question with another domain's data.
         logger.info("EXPERT_NAMED_MISMATCH domain=%s score=%.2f → brain", domain, score)
         return None
+    if domain == "weather" and _is_unit_conversion(text):
+        logger.info("EXPERT_CONVERSION_NOT_WEATHER score=%.2f → brain", score)
+        return None
     user_id = str(ctx.get("user_id") or "guest")
     session_id = str(ctx.get("session_id") or "")
     t0 = time.monotonic()
@@ -263,6 +266,18 @@ _NAMED_FAMILY = {
 }
 
 
+# A unit CONVERSION ("375 fahrenheit? what's that in celsius") is arithmetic, not weather: the router head scores the unit words
+# as weather (QA 2026-11-06: answered with today's forecast at 0.976). A number, a convert-to-unit cue and no weather word.
+_TEMP_CONVERSION_RE = re.compile(
+    r"\b(?:in|to|into)\s+(?:celsius|centigrade|fahrenheit|degrees\s+[cf])\b|\bconvert\b", re.IGNORECASE)
+_WEATHER_WORD_RE = re.compile(
+    r"\b(?:weather|forecast|rain\w*|outside|sunny|wind\w*|humid\w*|storm\w*|today|tomorrow|tonight|week)\b", re.IGNORECASE)
+
+
+def _is_unit_conversion(text: str) -> bool:
+    return bool(re.search(r"\d", text) and _TEMP_CONVERSION_RE.search(text) and not _WEATHER_WORD_RE.search(text))
+
+
 def _names_another_domain(domain: str, text: str) -> bool:
     """True when ``domain``'s expert is about to answer words that name ONLY other domains' nouns. Pure."""
     family = _NAMED_FAMILY.get(domain)
@@ -277,16 +292,9 @@ def _names_another_domain(domain: str, text: str) -> bool:
 def _calendar_qualifier(text: str) -> str:
     """Parse a date scope from a calendar query so 'tomorrow'/'this week' aren't
     lost when the show-intent comes through without slots (→ defaulted to today)."""
-    low = (text or "").lower()
-    if "tomorrow" in low:
-        return "tomorrow"
-    if "this month" in low:
-        return "this month"
-    if "this week" in low or "the week" in low or "weekend" in low:
-        return "this week"
-    if "today" in low or "tonight" in low:
-        return "today"
-    return ""
+    import command_shapes
+
+    return command_shapes.calendar_qualifier(text)
 
 
 def _plan(domain: str, text: str):
@@ -356,6 +364,21 @@ def _plan(domain: str, text: str):
         if det.name == "calendar_show" and not slots.get("qualifier"):
             slots["qualifier"] = _calendar_qualifier(text)
         return (det.name, slots, kind)
+
+    if domain == "calendar":
+        import command_shapes
+
+        # The calendar expert used to have NO plan for a calendar question the show-intent regexes missed ("have I got anything on
+        # today", "what am I doing friday", "can you see my calendar"): EXPERT_MISS, the brain answered. Read it.
+        ask = command_shapes.calendar_read_ask(text)
+        if ask is not None:
+            return ("calendar_show", {"qualifier": ask}, "read")
+        if command_shapes.calendar_not_a_read(text):
+            return None      # a complaint / definition / TV question that names the calendar: never a read, never a default create
+        # A regex-recognised calendar WRITE whose slots still need extraction ("make an appointment with ..."): the create-cue
+        # list below misses wordings the intent regex catches, which dropped them to the brain with no plan.
+        if det and det.name == "calendar_create":
+            return ("calendar_create", {}, "write")
 
     table = {
         "lists": ("list_add", "list_show"),

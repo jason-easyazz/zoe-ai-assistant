@@ -33,6 +33,11 @@ receipt lands or the turn ends). When the fast path DEFERRED a write to the brai
 chat lane's ``EXPERT_DEFER_WRITE``), the request already named the target, so an in-progress claim with none of its own ("Adding
 those now.") claims that kind.
 
+QA 2026-11-05: STANDING promises with no immediacy word ("I'll remind you to call the plumber at 2:30"), REMOVALS ("I've taken that
+off your calendar" - a removal receipt kind, never the create's), memory / forget claims and whole-phrase claims ("got that
+noted") joined the lexicon. A REPLACED claim is noted for its session (``session_id``; ``claim_correction``,
+``ZOE_WRITE_CLAIM_CORRECTION``) so the brain's next turn learns the write did not happen - its own history still holds the claim.
+
 Stdlib only; never raises into a turn.
 """
 from __future__ import annotations
@@ -94,7 +99,7 @@ class _Lang:
     second_person: frozenset
     openers: frozenset
     adverbs: frozenset
-    verbs: dict           # token -> (kind, needs_target, state_claim, progressive)
+    verbs: dict           # token -> (kind, needs_target, state_claim, progressive, removal, particles)
     targets: dict         # kind -> tuple of phrases
     other_targets: tuple
     blockers: tuple
@@ -121,6 +126,7 @@ class _Lang:
     progressive_subjects: frozenset = frozenset()
     promise_verbs: dict = None                # base form -> (kind, needs_target)
     promise_subjects: frozenset = frozenset()
+    promise_fillers: frozenset = frozenset()  # words a promise subject may stand behind ("I'll MAKE SURE I remember")
     immediacy: tuple = ()
     implied_cues: tuple = ()                  # "now" / "for you": an untargeted in-progress claim stands for a DEFERRED write's kind
     progressive_aux: frozenset = frozenset()  # "am" / "are" between a subject and a progressive verb ("I am adding")
@@ -131,6 +137,19 @@ class _Lang:
     # and "Can you do reminders?" -> "I can certainly set reminders for you!" stay offers / descriptions.
     assurance_subjects: frozenset = frozenset()
     assurance_words: tuple = ()
+    # STANDING promises (QA 2026-11-05: "I'll remind you to call the plumber at 2:30 pm tomorrow." with no tool call): a promise
+    # subject + a promise verb with no immediacy word is an in-progress claim too, unless a deferral word ("later") or a trailing
+    # temporal / conditional clause is in its clause, or the user's own turn opened with a describe-question ("what …").
+    standing_promises: bool = False
+    promise_deferrals: tuple = ()
+    standing_skip_openers: tuple = ()
+    # Whole-phrase claims ("got that noted", "consider it forgotten"): (token tuple, kind) - "any" = any receipt.
+    claim_phrases: tuple = ()
+    phrase_firsts: frozenset = frozenset()    # their first words: a unit holding one early may become a claim (streaming hold)
+    # A REMOVAL verb ("removed", "taken … off") claims the removal kind of its target ("list" -> "list_removed").
+    removal_kinds: dict = None
+    honest_by_kind: dict = None               # receipt kind -> the honest line for a claim of that kind
+    emotional_quiet: str = ""                 # said on an emotional turn when dropping a memory claim left nothing else
 
     def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
         if tok in self.adverbs or tok in self.modifiers:
@@ -164,17 +183,26 @@ def _langs() -> tuple:
         def phrases(key: str) -> tuple:
             return tuple(p for p in (_phrase(x) for x in lex.get(key) or []) if p)
 
+        def particles(spec: dict) -> frozenset:
+            return frozenset(w for w in (_phrase(x) for x in (spec.get("particles") or [])) if w)
+
         verbs = {}
         for verb, spec in (lex.get("claim_verbs") or {}).items():
-            tok = _phrase(verb)
+            tok, spec = _phrase(verb), spec or {}
             if tok:
-                verbs[tok] = (str((spec or {}).get("kind") or "any"), bool((spec or {}).get("needs_target")),
-                              bool((spec or {}).get("state_claim")), (spec or {}).get("form") == "progressive")
+                verbs[tok] = (str(spec.get("kind") or "any"), bool(spec.get("needs_target")),
+                              bool(spec.get("state_claim")), spec.get("form") == "progressive",
+                              spec.get("action") == "remove", particles(spec))
         promise_verbs = {}
         for verb, spec in (lex.get("promise_verbs") or {}).items():
-            tok = _phrase(verb)
+            tok, spec = _phrase(verb), spec or {}
             if tok:
-                promise_verbs[tok] = (str((spec or {}).get("kind") or "any"), bool((spec or {}).get("needs_target")))
+                promise_verbs[tok] = (str(spec.get("kind") or "any"), bool(spec.get("needs_target")),
+                                      spec.get("action") == "remove", particles(spec))
+        claim_phrases = tuple(sorted(
+            ((tuple(p.split()), str((spec or {}).get("kind") or "any"))
+             for p, spec in ((_phrase(k), v) for k, v in (lex.get("claim_phrases") or {}).items()) if p),
+            key=lambda x: len(x[0]), reverse=True))
         targets = {kind: phrases_ for kind, phrases_ in ((k, tuple(p for p in (_phrase(x) for x in v) if p))
                                                           for k, v in (lex.get("targets") or {}).items())}
         temporals = tuple(sorted((tuple(p.split()) for p in phrases("clause_temporals")), key=len, reverse=True))
@@ -192,10 +220,17 @@ def _langs() -> tuple:
             temporal_clause_starts=tuple(sorted((tuple(p.split()) for p in phrases("temporal_clause_starts")), key=len, reverse=True)),
             discourse=words("discourse_openers"),
             progressive_subjects=words("progressive_subjects"), promise_verbs=promise_verbs,
-            promise_subjects=words("promise_subjects"), immediacy=phrases("immediacy"),
+            promise_subjects=words("promise_subjects"), promise_fillers=words("promise_fillers"),
+            immediacy=phrases("immediacy"),
             implied_cues=phrases("implied_cues"), progressive_aux=words("progressive_aux"),
             promise_blockers=words("promise_blockers"),
             assurance_subjects=words("assurance_subjects"), assurance_words=phrases("assurance_words"),
+            standing_promises=bool(lex.get("standing_promises")), promise_deferrals=phrases("promise_deferrals"),
+            standing_skip_openers=tuple(tuple(p.split()) for p in phrases("standing_skip_openers")),
+            claim_phrases=claim_phrases, phrase_firsts=frozenset(p[0] for p, _ in claim_phrases),
+            removal_kinds={str(k): str(v) for k, v in (lex.get("removal_kinds") or {}).items()},
+            honest_by_kind={str(k): str(v).strip() for k, v in (lex.get("honest_by_kind") or {}).items() if str(v).strip()},
+            emotional_quiet=str(lex.get("emotional_quiet") or "").strip(),
         ))
     return tuple(out)
 
@@ -253,12 +288,20 @@ def _completion_ellipsis(rest: list, has_target: bool, lang: "_Lang") -> bool:
     return has_target and not any(t in copulas for t in rest)
 
 
-def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional[Claim]:
+#: Words naming a household / media action Zoe can take that records no tracked write receipt (smart home, media): a generic completion
+#: phrase beside one of them is not a claim to have written to the store.
+_ACTION_DEVICE_WORDS = frozenset({"light", "lights", "lamp", "lamps", "fan", "fans", "heater", "heaters", "thermostat", "tv", "speaker",
+                                  "speakers", "music", "volume", "door", "doors", "blind", "blinds", "plug", "plugs", "switch", "aircon"})
+
+
+def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: bool = True) -> Optional[Claim]:
     """The write this sentence CLAIMS to have made, or None. Pure. Every claim clause of the unit counts: the Claim names the
     kinds of ALL of them, so a receipt for one cannot vouch for another.
 
     ``implied_kind``: this turn is a write the fast path DEFERRED to the brain (``write_receipts.take_deferred_write``), so the
-    request already named its target - an in-progress claim with no target noun of its own ("Adding those now.") claims THAT kind."""
+    request already named its target - an in-progress claim with no target noun of its own ("Adding those now.") claims THAT kind.
+    ``standing``: a promise with no immediacy word ("I'll remind you at 2:30") counts as an in-progress claim (``standing_allowed``
+    turns it off for a turn whose user asked a describe-question, "what reminders have I got?")."""
     text = (sentence or "").strip()
     if not text:
         return None
@@ -275,6 +318,14 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
         # milk to your list, but I'm not sure about eggs" and "… as you wanted" still claim the milk (review, #2004).
         found: list = []            # (kinds, in_progress) for each claiming clause
         conditional = any(t in lang.conditionals for t in tokenize(text))
+        # A standing promise needs the WHOLE unit free of what makes it a plan: a deferral ("later", "as soon as you say") or a
+        # leading temporal clause ("After I've added milk, I'll set a reminder").
+        unit_toks = tokenize(text)
+        while unit_toks and unit_toks[0] in lang.discourse:
+            unit_toks = unit_toks[1:]
+        standing_unit = bool(standing and lang.standing_promises
+                             and not any(_has_phrase(unit_padded, w) for w in lang.promise_deferrals)
+                             and not (unit_toks and unit_toks[0] in lang.temporal_firsts))
         prev_claimed = False        # did the clause just before this one claim a write?
         for offset, toks, temporal_tail, head in _clauses(text, lang):
             if head and prev_claimed:
@@ -290,32 +341,55 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
             promise_only = bool(blocked) and blocked <= lang.promise_blockers
             if blocked and not promise_only:
                 continue
+            phrase_kind = None if promise_only else _phrase_claim(toks, offset, lang)
+            if phrase_kind == "any" and (any(_has_phrase(unit_padded, o) for o in lang.other_targets)
+                                         or any(w in _ACTION_DEVICE_WORDS for w in tokenize(text))):
+                phrase_kind = None      # "Consider it done - the lights are off.": a callable action with no tracked receipt, not a write claim
+            if phrase_kind is not None:
+                # "…, got that noted." / "Consider it forgotten.": a whole phrase that says the write is done.
+                found.append(((() if phrase_kind == "any" else (phrase_kind,)), False))
+                prev_claimed = True
+                if phrase_kind != "any":
+                    continue
+                # a GENERIC phrase ("got that noted") adds no kind of its own: the clause's specific claim ("I've added milk to your
+                # list, got that noted") still needs ITS receipt, so the verb scan below runs too instead of being skipped
             for i, tok in enumerate(toks):
                 if offset + i >= LEAD_TOKENS:
                     break               # streaming cannot see past here before it must release the unit (module docstring)
                 promise = (lang.promise_verbs or {}).get(tok)
-                if promise is not None and not conditional and (
-                        _promised_now(toks, i, padded, lang)
-                        or (assured and _assured_now(toks, i, padded, lang, implied_kind))):
-                    # "I'll add that to your list right now": a write promised for THIS turn. Never with an "if" anywhere in the
-                    # unit ("I'll add it now if you like" is an offer).
-                    kinds = _named_kinds(padded, lang)
-                    if not kinds:
-                        if any(_has_phrase(padded, o) for o in lang.other_targets):
-                            continue
-                        if implied_kind:
-                            kinds = (implied_kind,)     # _promised_now already required an immediacy word
-                        elif promise[1]:
-                            continue
-                        else:
-                            kinds = () if promise[0] == "any" else (promise[0],)
-                    found.append((kinds, True))
-                    prev_claimed = True
-                    break
+                if promise is not None and not conditional:
+                    p_kind, p_needs, p_removal, p_particles = promise
+                    now_ = _promised_now(toks, i, padded, lang)
+                    sure = bool(assured and _assured_now(toks, i, padded, lang, implied_kind))
+                    # A STANDING promise ("I'll remind you to call the plumber at 2:30"): no immediacy word, but nothing that
+                    # defers it ("later", a trailing "once you confirm") either. Never with an "if" anywhere in the unit.
+                    standing_ = bool(standing_unit and not now_ and not sure and not temporal_tail
+                                     and _promise_led(toks, i, lang))
+                    if (now_ or sure or standing_) and _particle_after(toks, i, p_particles):
+                        # "I'll add that to your list right now": a write promised for THIS turn. Never with an "if" anywhere in
+                        # the unit ("I'll add it now if you like" is an offer).
+                        # A verb that names its OWN kind (remind / remember / forget) keeps it: the nouns of its CONTENT ("I'll remind you to
+                        # add milk to your shopping list at 3pm", "I'll remember your appointment is on Friday") do not turn the
+                        # promise into a list / calendar write that needs a different receipt.
+                        kinds = (p_kind,) if (p_kind != "any" and not p_needs) else _named_kinds(padded, lang)
+                        if not kinds:
+                            if any(_has_phrase(padded, o) for o in lang.other_targets):
+                                continue
+                            if p_kind != "any" and not p_needs:
+                                kinds = (p_kind,)       # the verb names its own kind ("I'll remind you", "I'll forget that")
+                            elif implied_kind:
+                                kinds = (implied_kind,)
+                            elif p_needs:
+                                continue
+                            else:
+                                kinds = ()
+                        found.append((_action_kinds(kinds, p_removal, lang), True))
+                        prev_claimed = True
+                        break
                 spec = lang.verbs.get(tok)
                 if spec is None or promise_only:
                     continue
-                verb_kind, needs_target, state_claim, progressive = spec
+                verb_kind, needs_target, state_claim, progressive, removal, parts = spec
                 pre = toks[max(0, i - 4):i]
                 aux = "" if progressive else _passive_aux(pre, lang)       # "I was adding …" is no passive
                 passive = aux in lang.passive_done or aux in lang.passive_past or (state_claim and aux in lang.passive_state)
@@ -329,12 +403,15 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
                           or _subject_then_modifiers(toks, i, lang, extra, aux_ok))
                 if not (active or passive):
                     continue
+                if not _particle_after(toks, i, parts):
+                    continue            # "I've taken note of it" is no removal; "I've taken it OFF your calendar" is
                 cued = any(_has_phrase(padded, c) for c in lang.implied_cues)
                 if progressive and not cued and not _has_subject_before(toks, i, lang, extra, aux_ok):
                     # A bare "Adding milk to your shopping list by tapping +" / "Setting a timer helps you focus" is an instruction or a
                     # description; only "now" / "for you" (or a first-person subject: "I'm adding") makes it Zoe's own write.
                     continue
-                kinds = _named_kinds(padded, lang)
+                kinds = (verb_kind,) if (verb_kind == "forget" and not needs_target) else _named_kinds(padded, lang)
+                # (a completed FORGET keeps its explicit kind: "I've forgotten that memory" is a deletion claim, not a memory write)
                 implied = bool(progressive and implied_kind and cued)
                 if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds) or implied, lang):
                     continue
@@ -349,16 +426,59 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None) -> Optional
                         continue        # "The restaurant was booked solid": a past passive with no target noun claims no write
                     else:
                         kinds = () if verb_kind == "any" else (verb_kind,)
-                found.append((kinds, progressive))
+                found.append((_action_kinds(kinds, removal, lang), progressive))
                 prev_claimed = True
                 break                   # one claim per clause: its target nouns are already all in ``kinds``
         if found:
             specific = {k for kinds, _ in found for k in kinds}
             ordered = tuple(k for k in lang.targets if k in specific) + tuple(sorted(specific - set(lang.targets)))
+            honest = (lang.honest_by_kind or {}).get(ordered[0], lang.honest) if ordered else lang.honest
             # ANY in-progress clause defers the whole unit to the end of the turn (a reminder "I'm setting now" may land after the
             # sentence); judged then, every kind still needs its own receipt.
-            return Claim(kinds=ordered, lang=lang.code, honest=lang.honest, in_progress=any(p for _, p in found))
+            return Claim(kinds=ordered, lang=lang.code, honest=honest, in_progress=any(p for _, p in found))
     return None
+
+
+def _action_kinds(kinds: tuple, removal: bool, lang: "_Lang") -> tuple:
+    """The receipt kinds a claim needs: its target kinds, or - for a REMOVAL verb - their removal kinds ("list" -> "list_removed",
+    a note / memory -> "forget"; ``removal_kinds`` data)."""
+    if not removal:
+        return kinds
+    out: list = []
+    for k in kinds:
+        r = (lang.removal_kinds or {}).get(k) or f"{k}_removed"
+        if r not in out:
+            out.append(r)
+    return tuple(out)
+
+
+def _particle_after(toks: list, i: int, particles: frozenset) -> bool:
+    """A verb that needs a particle ("taken … OFF", "forgotten THAT") has one later in its clause; True when it needs none."""
+    return not particles or any(t in particles for t in toks[i + 1:])
+
+
+def _phrase_claim(toks: list, offset: int, lang: "_Lang") -> Optional[str]:
+    """The kind of a whole-phrase claim ("got that noted") starting within the unit's first ``LEAD_TOKENS`` words, else None."""
+    if not lang.claim_phrases:
+        return None
+    for k in range(len(toks)):
+        if offset + k >= LEAD_TOKENS:
+            break
+        for ptoks, kind in lang.claim_phrases:
+            if tuple(toks[k:k + len(ptoks)]) == ptoks:
+                return kind
+    return None
+
+
+def standing_allowed(user_text: str) -> bool:
+    """False when the user's own turn opens with a describe-question ("what reminders have I got?", ``standing_skip_openers``):
+    a future-tense reply then describes what exists ("I'll remind you at 2:30") rather than promising a write."""
+    toks = tokenize(user_text or "")
+    langs = _langs()
+    discourse = frozenset().union(*(lang.discourse for lang in langs)) if langs else frozenset()
+    while toks and toks[0] in discourse:
+        toks = toks[1:]
+    return not any(toks[:len(p)] == list(p) for lang in langs for p in lang.standing_skip_openers)
 
 
 def _named_kinds(padded: str, lang: "_Lang") -> tuple:
@@ -369,13 +489,22 @@ def _named_kinds(padded: str, lang: "_Lang") -> tuple:
 def _promised_now(toks: list, i: int, padded: str, lang: "_Lang") -> bool:
     """The promise verb at ``toks[i]`` is led by a promise subject ("I'll", "we'll") through nothing but openers and modifiers, and
     its clause says NOW ("now", "right away"): "I'll add that to your list right now" - not "I'll add it later", "I can add it"."""
-    if not lang.promise_subjects or not any(_has_phrase(padded, w) for w in lang.immediacy):
+    if not any(_has_phrase(padded, w) for w in lang.immediacy):
+        return False
+    return _promise_led(toks, i, lang)
+
+
+def _promise_led(toks: list, i: int, lang: "_Lang") -> bool:
+    """The promise verb at ``toks[i]`` is led by a promise subject ("I'll", "we'll", "let me") through nothing but openers and
+    modifiers."""
+    if not lang.promise_subjects:
         return False
     for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
         tok = toks[j]
-        if tok in lang.promise_subjects or (j > 0 and f"{toks[j - 1]} {tok}" in lang.promise_subjects):
+        # a subject of up to three words ending here: "I'll", "I will", "I'm going to"
+        if any(" ".join(toks[j - n:j + 1]) in lang.promise_subjects for n in range(0, min(3, j + 1))):
             return True
-        if not (tok in lang.openers or lang.is_modifier(tok, by_suffix=True)):
+        if not (tok in lang.openers or tok in lang.promise_fillers or lang.is_modifier(tok, by_suffix=True)):
             return False
     return False
 
@@ -627,7 +756,8 @@ def _could_become_claim(unit_so_far: str) -> bool:
     if len(toks) < LEAD_TOKENS or _TAIL_PUNCT_RE.search(unit_so_far):
         return True
     head = toks[:LEAD_TOKENS]
-    return any(t in lang.verbs or t in (lang.promise_verbs or {}) for lang in _langs() for t in head)
+    return any(t in lang.verbs or t in (lang.promise_verbs or {}) or t in lang.phrase_firsts
+               for lang in _langs() for t in head)
 
 
 # ── the guard ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -640,17 +770,61 @@ def _replacement(sentence: str, claim: Claim) -> str:
     return lead + claim.honest + trail
 
 
+_QUIET_KINDS = frozenset({"memory", "note"})
+
+
+def _emotional(user_text: str) -> bool:
+    """The user's turn carries feeling (``memory_gate.is_emotional_turn``, the same cue data the brain's tool disclosure reads)."""
+    try:
+        from memory_gate import is_emotional_turn
+
+        return is_emotional_turn(user_text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _drops_quietly(claim: Claim, emotional: bool) -> bool:
+    """On an emotional turn a false "I'll remember that" is DROPPED, not replaced: "I didn't manage to add that; want me to try
+    again?" in the middle of someone telling Zoe about a hard week is worse than the lie it corrects (QA round 3b). Only a claim
+    of memory / note kinds: a list or calendar claim keeps its honest line on any turn."""
+    return emotional and bool(claim.kinds) and set(claim.kinds) <= _QUIET_KINDS
+
+
+def _quiet_line(claim: Claim) -> str:
+    """What is said when the dropped claim was ALL of the reply (``emotional_quiet``)."""
+    for lang in _langs():
+        if lang.code == claim.lang and lang.emotional_quiet:
+            return lang.emotional_quiet
+    return ""
+
+
+def _note_correction(session_id: str, claim: Claim) -> None:
+    """A claim was REPLACED: the brain's own session history still holds the claim it made, so its next turn is told the truth
+    (``claim_correction``, ``ZOE_WRITE_CLAIM_CORRECTION``). Never raises."""
+    if not session_id:
+        return
+    try:
+        import claim_correction
+
+        claim_correction.note(session_id, claim.lang, claim.kinds)
+    except Exception:  # noqa: BLE001 - bookkeeping must never break a turn
+        logger.debug("write_claim_guard: correction note failed", exc_info=True)
+
+
 def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text: str = "", lane: str = "brain",
-               implied_kind: Optional[str] = None) -> str:
+               implied_kind: Optional[str] = None, session_id: str = "") -> str:
     """The reply with every unsupported write claim replaced by the honest line (once). Unchanged when off / no claims. The
-    reply is whole, so the turn is over: an in-progress claim is judged like any other."""
+    reply is whole, so the turn is over: an in-progress claim is judged like any other. ``session_id``: the brain session whose
+    next turn is told about a replaced claim (``claim_correction``)."""
     m = mode()
     if m == "off" or not (reply or "").strip():
         return reply
     try:
-        out, replaced = [], False
+        out, replaced, quiet = [], False, None
+        standing = standing_allowed(user_text)
+        emotional = _emotional(user_text)
         for sentence in split_sentences(reply):
-            claim = find_claim(sentence, implied_kind=implied_kind)
+            claim = find_claim(sentence, implied_kind=implied_kind, standing=standing)
             if claim is None or supported(claim, user_id, started, user_text=user_text):
                 out.append(sentence)
                 continue
@@ -659,7 +833,14 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
                 out.append(sentence)
             elif not replaced and claim.honest:
                 replaced = True
-                out.append(_replacement(sentence, claim))
+                _note_correction(session_id, claim)
+                if _drops_quietly(claim, emotional):
+                    quiet = claim
+                else:
+                    out.append(_replacement(sentence, claim))
+        if quiet is not None:
+            text = "".join(out).strip()
+            return text if any(c.isalnum() for c in text) else _quiet_line(quiet)
         return "".join(out) if out else reply
     except Exception as exc:  # noqa: BLE001 - never break a turn over bookkeeping
         logger.warning("write_claim_guard.guard_text failed (reply passed through): %s", exc)
@@ -667,7 +848,7 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
 
 
 async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], started: float, *, user_text: str = "",
-                       lane: str = "brain", implied_kind: Optional[str] = None) -> AsyncIterator[str]:
+                       lane: str = "brain", implied_kind: Optional[str] = None, session_id: str = "") -> AsyncIterator[str]:
     """Pass ``inner`` through, replacing an unsupported write-claim sentence. Sentinels pass untouched; text is held back only
     while a unit could still become a claim (``_could_become_claim``). The output equals ``guard_text`` of the whole reply however
     the deltas are cut.
@@ -687,17 +868,31 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
     cleared = 0         # leading characters of ``held`` already judged clean (released once a whole piece is clean)
     pending = None      # (claim, end): an unsupported in-progress claim unit ending at ``held`` offset ``end``, awaiting a receipt
     finishing = False   # the turn is over: nothing is pending any more
+    standing = standing_allowed(user_text)
+    emotional = _emotional(user_text)
+    quiet = None        # the claim dropped silently on an emotional turn (guard_text does the same)
+    spoke = False       # any word of the reply has gone out
 
     def block(sentence: str, claim: Claim) -> Optional[str]:
         """An unsupported claim: None = release the sentence untouched (shadow); else the text to release instead."""
-        nonlocal replaced
+        nonlocal replaced, quiet
         _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
         if m == "shadow":
             return None
         if replaced or not claim.honest:
             return ""                      # a second claim in the same reply is dropped (guard_text does the same)
         replaced = True
+        _note_correction(session_id, claim)
+        if _drops_quietly(claim, emotional):
+            quiet = claim
+            return ""
         return _replacement(sentence, claim)
+
+    def said(pieces: list) -> list:
+        nonlocal spoke
+        if not spoke and any(any(c.isalnum() for c in p) for p in pieces):
+            spoke = True
+        return pieces
 
     def judge(sentence: str):
         """None = release the sentence untouched; a string = release that instead (may be empty); a Claim = an in-progress
@@ -706,7 +901,7 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
         whole = head + sentence
         head = ""
         unit_clear = False
-        claim = find_claim(whole, implied_kind=implied_kind)
+        claim = find_claim(whole, implied_kind=implied_kind, standing=standing)
         if claim is None or supported(claim, user_id, started, user_text=user_text):
             return None
         if claim.in_progress and not finishing:
@@ -794,14 +989,18 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
             if delta.startswith(_SENTINEL_PREFIXES):
                 yield delta
                 if pending is not None:         # a tool may just have landed the write the held claim promised
-                    for piece in advance():
+                    for piece in said(advance()):
                         yield piece
                 continue
             held.append(delta)
-            for piece in advance():
+            for piece in said(advance()):
                 yield piece
-        for piece in flush():
+        for piece in said(flush()):
             yield piece
+        if quiet is not None and not spoke:
+            line = _quiet_line(quiet)      # the dropped claim was the whole reply: never leave the person with silence
+            if line:
+                yield line
     except Exception:
         # The lane failed mid-stream (a failover / transport error): what was held back is real, already-generated text -
         # release it (judged like the end of a stream) before the error propagates, as the unguarded stream would have.

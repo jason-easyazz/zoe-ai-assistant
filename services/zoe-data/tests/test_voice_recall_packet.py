@@ -80,9 +80,9 @@ def test_falls_back_to_dump_when_search_empty(monkeypatch):
     import zoe_agent
 
     async def _dump(user_id, limit=20):
-        return "## What I know about you:\n- My dad's name is Neil"
+        return [_Ref("My dad's name is Neil")]
 
-    monkeypatch.setattr(zoe_agent, "_mempalace_load_user_facts", _dump)
+    monkeypatch.setattr(zoe_agent, "_mempalace_user_fact_refs", _dump)
     block = _run(v._voice_recall_packet("how's the weather", "jason"))
     assert block and "Neil" in block  # fallback dump used, recall preserved
 
@@ -99,9 +99,9 @@ def test_falls_back_when_search_raises(monkeypatch):
     monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda u: False)
 
     async def _dump(user_id, limit=20):
-        return "## What I know about you:\n- My dad's name is Neil"
+        return [_Ref("My dad's name is Neil")]
 
-    monkeypatch.setattr(zoe_agent, "_mempalace_load_user_facts", _dump)
+    monkeypatch.setattr(zoe_agent, "_mempalace_user_fact_refs", _dump)
     block = _run(v._voice_recall_packet("anything", "jason"))
     assert block and "Neil" in block  # never raises; degrades to the dump
 
@@ -112,9 +112,9 @@ def test_no_text_uses_fallback_dump(monkeypatch):
     import zoe_agent
 
     async def _dump(user_id, limit=20):
-        return "## What I know about you:\n- prewarm fact"
+        return [_Ref("prewarm fact")]
 
-    monkeypatch.setattr(zoe_agent, "_mempalace_load_user_facts", _dump)
+    monkeypatch.setattr(zoe_agent, "_mempalace_user_fact_refs", _dump)
     block = _run(v._voice_recall_packet("", "jason"))
     assert block and "prewarm fact" in block
 

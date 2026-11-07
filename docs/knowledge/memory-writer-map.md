@@ -11,16 +11,16 @@ tags: [memory, writers, generated, audit]
 role lines live in [`memory-writer-notes.json`](memory-writer-notes.json) (one per writer module - a new writer
 module fails `tests/unit/test_memory_writer_map.py` until it has one).
 
-**74 write sites in 28 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
+**80 write sites in 29 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
 deep dive found at least 39). A *write site* is one (module, enclosing function) that calls a `MemoryService`
 write method or upserts a drawers collection directly.
 
-Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 6, `flag_challenged` 1, `forget_last` 1, `ingest` 25, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 24, `scrub_residue` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
+Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 7, `flag_challenged` 1, `ingest` 26, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 27, `scrub_residue` 1, `set_curated_standing` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
 
 ## What counts
 
 - `MemoryService` write methods: `ingest`, `record_candidate`, `supersede_by`, `restore_superseded`, `archive_duplicate`,
-  `archive_by_entity`, `sweep_soft_archive`, `forget_last`, `retire_with_quote`, `erase_rows`, `relink_entity`, `scrub_residue`,
+  `archive_by_entity`, `sweep_soft_archive`, `retire_with_quote`, `erase_rows`, `relink_entity`, `scrub_residue`,
   `compact_index`, `edit_outranked`, `tick_access`, `tick_consolidation` (any receiver) and `review`, `delete_user` (on a recognised
   `MemoryService` receiver).
 - `raw_upsert` / `raw_update` / `raw_delete` / `raw_add`: a direct write on a drawers collection handle. In `memory_service.py` these are the storage
@@ -41,8 +41,9 @@ the Flue/TS callers (`services/zoe-core/extensions/memory.ts`), which reach the 
 | `expert_dispatch.py` | Tier-1.5 domain experts: stores a voice_fact, retires the fact it replaces (review archive) and supersedes on a stated change. | `_ingest_or_supersede`: ingest, review, supersede_by |
 | `hindsight_retain_candidates.py` | Hindsight evaluation path: creates a PENDING row for later admission (ingest). Not on the live turn path. | `create_hindsight_retain_candidate`: ingest |
 | `hold_the_fact.py` | Hold the fact: restores the owner's stated value after a model pushback (review edit); ZOE_HOLD_THE_FACT. | `_apply_update`: review |
-| `intent_router.py` | Intent-first router: the 'remember that' / 'forget that' / 'forget the last thing' fast paths (ingest, forget_last, review reject/archive). | `execute_intent`: erase_rows, forget_last, ingest, review<br>`execute_intent._erase_named`: erase_rows |
+| `intent_router.py` | Intent-first router: the 'remember that' / 'forget that' / 'forget the last thing' fast paths (ingest, forget_last, review reject/archive). | `_execute_forget_last`: erase_rows<br>`_execute_forget_last._reject`: review<br>`execute_intent`: ingest, review<br>`execute_intent._erase_named`: erase_rows |
 | `mcp_server.py` | MCP tools for Hermes/Pi skills: memory_add (ingest, brain_tool/mcp source) and the forget/edit tools (review). | `_execute_tool`: ingest, review |
+| `memory_curation.py` | Caregiver curation (ZOE_MEMORIES_CURATORS): an adult admin's guardian-stated notes for a child (ingest as the curator writer, approved, authority user_stated), curator edit/forget (review edit/reject + erase_rows), held-note decisions; refuses anything forgotten (strict ledger). | `_add_locked`: ingest<br>`_forget_locked`: erase_rows, review<br>`decide_held`: review<br>`set_my_optin._restamp`: set_curated_standing |
 | `memory_digest.py` | The nightly digest and dreaming passes: ingests digest facts/candidates, edits/archives/merges rows (review, archive_duplicate, sweep_soft_archive) and runs raw upserts for neighbour metadata and synthesis rows. | `_deep_sleep_pass`: raw_upsert<br>`_emotional_memory_pass`: ingest<br>`_merge_near_duplicates`: archive_duplicate<br>`_rem_reinforce_pass`: raw_upsert, tick_access<br>`_resolve_contradictions`: review<br>`_resolve_pending_person_links`: relink_entity<br>`_synthesis_pass`: ingest, raw_upsert<br>`run_memory_digest`: ingest, review<br>`run_music_taste_digest`: ingest<br>`run_turn_digest`: ingest, review<br>`run_weekly_consolidation`: sweep_soft_archive |
 | `memory_disputes.py` | A held-back write becomes one question to the person: accepting approves the candidate, declining rejects it (review). | `expire_stale`: review<br>`resolve`: review |
 | `memory_extractor.py` | The per-turn extractor (regex + LLM, chat_regex/voice_regex): ingests new facts and edits a same-attribute row on a stated change (review edit). | `extract_and_ingest`: ingest, review |

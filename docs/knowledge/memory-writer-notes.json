@@ -6,6 +6,7 @@
   "services/zoe-data/hold_the_fact.py": "Hold the fact: restores the owner's stated value after a model pushback (review edit); ZOE_HOLD_THE_FACT.",
   "services/zoe-data/intent_router.py": "Intent-first router: the 'remember that' / 'forget that' / 'forget the last thing' fast paths (ingest, forget_last, review reject/archive).",
   "services/zoe-data/mcp_server.py": "MCP tools for Hermes/Pi skills: memory_add (ingest, brain_tool/mcp source) and the forget/edit tools (review).",
+  "services/zoe-data/memory_curation.py": "Caregiver curation (ZOE_MEMORIES_CURATORS): an adult admin's guardian-stated notes for a child (ingest as the curator writer, approved, authority user_stated), curator edit/forget (review edit/reject + erase_rows), held-note decisions; refuses anything forgotten (strict ledger).",
   "services/zoe-data/memory_digest.py": "The nightly digest and dreaming passes: ingests digest facts/candidates, edits/archives/merges rows (review, archive_duplicate, sweep_soft_archive) and runs raw upserts for neighbour metadata and synthesis rows.",
   "services/zoe-data/memory_disputes.py": "A held-back write becomes one question to the person: accepting approves the candidate, declining rejects it (review).",
   "services/zoe-data/memory_extractor.py": "The per-turn extractor (regex + LLM, chat_regex/voice_regex): ingests new facts and edits a same-attribute row on a stated change (review edit).",
