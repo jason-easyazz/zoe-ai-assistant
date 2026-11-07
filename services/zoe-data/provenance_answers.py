@@ -333,6 +333,12 @@ def sensitive_classes(text: str, meta: Optional[dict] = None) -> frozenset:
             out.add("mood")
     except Exception:  # noqa: BLE001
         pass
+    # a curated row filed under a sensitive category (memories-space P7, owner D10 / D11) is private whatever its words say
+    cat = str(meta.get("curated_category") or "").lower()
+    if cat in ("health", "medication"):
+        out.add("health")
+    elif cat == "money":
+        out.add("money")
     t = text or ""
     if _HEALTH_RE.search(t):
         out.add("health")
@@ -576,6 +582,7 @@ class Item:
     mtype: str = ""             # the row's memory_type (a derived person-projection row is "person")
     origin: str = ""            # the writer that stored it (``origin``, else ``source``): "omi_review" = approved from the day review
     cls: str = ""               # the authority class (``memory_authority.row_class``): user_stated / user_confirmed / ...
+    curated_by: str = ""        # a curated row (origin "curator", memories-space P7): the name of who added it
 
 
 @dataclass
@@ -665,8 +672,10 @@ async def gather(user_id: str, *, svc: Any = None) -> Known:
             continue
         classes = sensitive_classes(text, meta)
         primary = next((c for c in _CLASS_ORDER if c in classes), "")
+        origin = str(meta.get("origin") or meta.get("source") or "")
         it = Item(ref.id, text, _row_epoch(meta), group_of(text, meta), primary, inferred, classes,
-                  str(meta.get("memory_type") or "").lower(), str(meta.get("origin") or meta.get("source") or ""), cls)
+                  str(meta.get("memory_type") or "").lower(), origin, cls,
+                  str(meta.get("curated_by_name") or "")[:40] if origin == "curator" else "")
         known.total += 1
         if it.sensitive:
             known.private.setdefault(it.sensitive, []).append(it)
@@ -850,7 +859,32 @@ def _join_spoken(parts: list) -> str:
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
-def render_summary(known: Known, *, voice: bool, more: bool = False, now: Optional[float] = None) -> str:
+def _capture_lag_line(user_id: Optional[str]) -> str:
+    """One short honest line when a capture for ``user_id`` is still in flight (the list may be a moment behind), else "". Never raises."""
+    if not user_id:
+        return ""
+    try:
+        import memory_capture_stats as mcs
+        import voice_phrases
+
+        if int(mcs.snapshot(user_id).get("in_flight") or 0) > 0:
+            return voice_phrases.say("capture_lag", key=user_id)
+    except Exception:  # noqa: BLE001 - an honesty garnish never breaks the answer
+        pass
+    return ""
+
+
+def render_summary(known: Known, *, voice: bool, more: bool = False, now: Optional[float] = None,
+                   user_id: Optional[str] = None) -> str:
+    """``_render_summary_core`` plus, when ``user_id`` has a capture still in flight, one line saying so."""
+    out = _render_summary_core(known, voice=voice, more=more, now=now)
+    lag = _capture_lag_line(user_id)
+    if not lag:
+        return out
+    return f"{out} {lag}" if voice else f"{out}\n{lag}"
+
+
+def _render_summary_core(known: Known, *, voice: bool, more: bool = False, now: Optional[float] = None) -> str:
     """The grouped summary. Voice: about three sentences - how many people and the newest NAMED one, one recent example per standing
     group (a place, a routine, a preference), second person throughout, and a way to go on. Chat / Telegram: the longer list with
     dates. Private classes are counted, never read. A row nothing the owner said supports (``Known.unconfirmed``) is not listed.
@@ -921,7 +955,7 @@ def render_summary(known: Known, *, voice: bool, more: bool = False, now: Option
                 lines.append(f"- {trim(second_person(it.text), 140)} ({short_day(it.epoch, now)})")
         inferred = sum(1 for i in known.items if i.inferred)
         if inferred:
-            lines.append(f"{_plural(inferred, 'of these')} I worked out from our chats rather than hearing you say it.")
+            lines.append(f"{inferred} of these I worked out from our chats rather than hearing you say it.")
         if known.unconfirmed:
             lines.append(f"I'm also holding {_plural(known.unconfirmed, 'note')} I picked up but couldn't tie to anything you said, "
                          "so I haven't listed them.")
@@ -1658,7 +1692,7 @@ async def handle(text: str, user_id: str, session_id: str = "", *, channel: Opti
             return STORE_DOWN_REPLY
         if ask.kind == "know_topic":
             return render_topic(known, ask.topic, voice=voice, now=now)
-        return render_summary(known, voice=voice, more=ask.more, now=now)
+        return render_summary(known, voice=voice, more=ask.more, now=now, user_id=uid)
     except Exception as exc:  # noqa: BLE001 - a turn is never broken by this tier
         logger.warning("provenance_answers failed (non-fatal): %s", type(exc).__name__)
         return None

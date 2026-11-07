@@ -950,10 +950,26 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
         # The impl swallows extractor/digest exceptions (it must never crash the
         # turn) and reports them as False — a failed capture is COMPLETED but
         # FAILED, never a success, so a waiter (S7) cannot pass on it.
-        ok = bool(await _persist_memory_candidates_impl(
-            user_id, session_id, user_message, assistant_response))
+        # Every write this capture makes (and every task it spawns) carries THIS turn (turn_forget.capture_scope): a
+        # "forget that" on the next turn refuses whatever of it has not landed yet.
+        import turn_forget as _tf
+
+        with _tf.capture_scope(user_id, _capture_words(user_message)):
+            ok = bool(await _persist_memory_candidates_impl(
+                user_id, session_id, user_message, assistant_response))
     finally:
         memory_capture_stats.completed(user_id, ok=ok)
+
+
+def _capture_words(user_message: str) -> str:
+    """The user's own words of a turn (the voice-mode lane appends its spoken-reply instructions to the message)."""
+    words = user_message or ""
+    try:
+        from routers.voice_tts import _VOICE_SYSTEM_PROMPT_SUFFIX as _vsfx
+        words = words.split("\n" + _vsfx)[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return words
 
 
 async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_message: str,
@@ -995,6 +1011,18 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
         from intent_router import _FORGET_ENTITY_RE, _FORGET_LAST_RE
         t = (user_message or "").strip()
         if _FORGET_LAST_RE.match(t) or _FORGET_ENTITY_RE.match(t):
+            return True
+        # A short retraction of the PREVIOUS turn that another lane answered ("actually no, don't remember that, forget
+        # that please. its not a real plan" reached the brain, QA round 3b): the owner still asked, so that turn is
+        # retracted here - its rows and its capture still in flight - exactly as the forget intent does (idempotent: after
+        # the intent ran this finds the turn already forgotten). Nothing of this turn is mined either.
+        import memory_quality as _mq
+        import turn_forget as _tf
+
+        _own = _capture_words(t).strip()
+        if _tf.is_forget_turn(_own) and len(_own.split()) <= _mq.FORGET_MAX_WORDS:
+            from intent_router import _execute_forget_last
+            await _execute_forget_last(user_id)
             return True
     except Exception:
         pass  # never let the guard break extraction itself
@@ -1176,6 +1204,12 @@ async def _save_chat_message(
         if user_id and role == "user":
             if count_turn:   # the voice lane saves the same user turn twice (at its start and with the reply): count it once
                 _mp.note_user_turn(user_id, clean_content, session_id)
+                try:   # what "forget that" points at: the owner's previous TURN, never the newest memory write (turn_forget)
+                    import turn_forget as _tf
+
+                    _tf.note_user_turn(user_id, clean_content)
+                except Exception:  # noqa: BLE001
+                    pass
             if _mp.claim_turn(user_id, clean_content):
                 meta["off_record"] = True
         elif user_id and role == "assistant" and _mp.reply_is_off_record(user_id):
