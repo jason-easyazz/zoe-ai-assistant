@@ -4317,6 +4317,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             logger.warning("memory_forget_entity: night-mind erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the now card that names it (one row per member, rebuilt next night without the name): same rule, fail closed
+        try:
+            import now_card
+            await now_card.erase_entity(user_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: now-card erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the struggle detector's summaries of turns that named it (struggle_events): same rule, fail closed
         try:
             import struggle_detector
@@ -6325,7 +6333,7 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
     if (intent.slots or {}).get("action") == "delayed":
         return command_shapes.DELAYED_COMMAND_REPLY  # nothing runs now, nothing is queued
     try:
-        from smart_home_service import resolve_smart_home
+        from smart_home_service import record_device_receipt, resolve_smart_home
 
         slots = intent.slots or {}
         action = slots.get("action", "turn_off")
@@ -6347,6 +6355,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         i.duration_seconds = 25 if action == "dim" else (100 if action == "brighten" else 0)
 
         result = await resolve_smart_home(i)
+        # a brain home-tool call reaches here through /api/system/intent-dispatch: its receipt backs "I've turned it on"
+        record_device_receipt(user_id, result, "intent_router")
         # The resolver already phrases the outcome — including "which one?" when
         # a bare command is genuinely ambiguous. Speaking its summary is what
         # stops this path from inventing a success it did not verify.

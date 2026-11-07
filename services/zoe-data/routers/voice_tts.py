@@ -3476,6 +3476,16 @@ async def _run_voice_memory_passes(
                 return
         except Exception:
             pass
+        # A turn the caregiver-curation lane answered (memories_voice._curate: the write OR its refusal) is an instruction, not the
+        # curator's own words: no extractor / digest / person / suggestion pass may mine it into the curator's store.
+        try:
+            import memories_voice as _mv
+
+            if _mv.curation_handled(user_id, user_text):
+                logger.info("CURATION_TURN user=%s skipped=memory_passes lane=voice", user_id)
+                return
+        except Exception:  # noqa: BLE001
+            pass
         # BM5: an off-the-record spoken turn reaches no extractor, digest, person extractor or suggestion detector.
         try:
             import memory_provenance as _mp
@@ -4348,6 +4358,56 @@ async def voice_command(
                     _stt_snap.note_struggle(_snap, "acted", turn_text=text)
     except Exception as _snap_exc:
         logger.warning("voice/command stt snap failed (non-fatal): %s", _snap_exc)
+
+    # ── Device confirm guard (ZOE_DEVICE_CONFIRM_GUARD, default ON; device_confirm.py) ──
+    # A quiet "turn on the light" heard as a sound-alike ("shone the lots", "two of the one"): nothing claims it, and the brain
+    # answered a request nobody made (live 2026-11-06/07). At the PANEL, a short light-shaped transcript no matcher claims gets ONE
+    # question ("Light on?"); a plain yes runs the real command through the STT-snap pending confirmation above (its words become
+    # the command, so every gate below judges it and the resolver's receipt says it back). Never mid-conversation, never for a
+    # caller who may not drive the house.
+    try:
+        import device_confirm as _dc
+
+        if _dc.at_the_panel(caller) and _dc.enabled() and panel_id not in _PENDING_CONFIRMATIONS:
+            _dc_ask = _dc.decide(text, router_decision=_router_decision, panel_key=panel_id,
+                                 context=(_VOICE_SESSIONS.get(panel_id) or {}).get("skybridge_context") or None)
+            if _dc_ask is not None:
+                _dc_guest = effective_user in _GUEST_SENTINEL_USERS or _speaker_verified is False
+                from panel_principal import home_control_refused as _dc_refused
+
+                if _dc_refused("device_confirm"):
+                    _dc.log_line(_dc_ask, "refused_home", guest=_dc_guest)
+                else:
+                    if _speculation.bound_gate() is not None:
+                        await _speculation.await_commit("turn:device_confirm")
+                    _dc.log_line(_dc_ask, "asked", guest=_dc_guest)
+                    _PENDING_CONFIRMATIONS[panel_id] = {
+                        "intent_name": "stt_snap",
+                        "slots": {},
+                        "stt_snap_text": _dc_ask.command,
+                        "stt_snap_intent": _dc_ask.intent,
+                        "stt_snap_from": "device_confirm",
+                        "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
+                        "session_id": session_id,
+                        # a light at the panel needs the PANEL, not a member: an unverified ask is a guest's, so the same
+                        # unverified voice's "yes" may answer it (a member id from the recent-user fallback would hold it forever)
+                        "user_id": effective_user if _confirm_speaker else "voice-guest",
+                        "speaker": _confirm_speaker,
+                    }
+                    from types import SimpleNamespace as _DcNS
+
+                    try:
+                        _dc_out = await _answer_from_tier(
+                            _DcNS(reply=_dc_ask.question, ui=None, domain="device_confirm", intent="confirm"),
+                            intent="device_confirm")
+                    except BaseException:
+                        # the question was never heard: a later "yes" must not switch a light nobody was asked about
+                        _PENDING_CONFIRMATIONS.pop(panel_id, None)
+                        raise
+                    _dc_out["pending_confirmation"] = True
+                    return _dc_out
+    except Exception as _dc_exc:
+        logger.warning("voice/command device confirm failed (non-fatal): %s", _dc_exc)
 
     _voice_processing_ack_sent = False
     if not stream:

@@ -33,8 +33,9 @@ const { estimateTextTokens } = await import('../src/context-window.ts');
 
 // sha256 of ZOE_INSTRUCTIONS, the flag-off bytes (first pinned before the soul split; re-pinned 2026-11-05 when the alarms group
 // and the word "alarm" joined the activator doctrine, and 2026-11-06 when the warmth doctrine joined after voice delivery -
-// deliberate prompt changes, not drift).
-const GOLDEN_SHA256 = '6b53e21ee082bccbd1f845a31c20d060e01be4aabe471f3f510a7e5e7e885922';
+// 2026-11-07 when the unclear-words paragraph joined warmth and the identity doctrine lost its copyable "I'm Zoe." - deliberate prompt
+// changes, not drift).
+const GOLDEN_SHA256 = 'd6b13ab20523d55c5c550acfe5b5869f9d7a2ef38aef27fd0ab9671aa689b30a';
 
 const LEAD =
   'You are Zoe, genuinely present and not a task executor; you care about the people you talk with. ' +

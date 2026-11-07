@@ -40,8 +40,8 @@ const { applyPolicies, promptSections } = await import('../src/providers/capped-
 const { wrapMessageWithManner } = await import('../src/manner.ts');
 const { renderCompiledFiles, renderOverlay } = await import('../scripts/harness-overlay.ts');
 
-// sha256 of ZOE_INSTRUCTIONS, the flag-off bytes (test/persona_layer.test.ts; re-pinned 2026-11-05 for the alarms group, 2026-11-06 for the warmth doctrine, 2026-11-07 for the emotional-capture doctrine, again for the AI-honesty line in IDENTITY_DOCTRINE).
-const GOLDEN_SHA256 = '6b53e21ee082bccbd1f845a31c20d060e01be4aabe471f3f510a7e5e7e885922';
+// sha256 of ZOE_INSTRUCTIONS, the flag-off bytes (test/persona_layer.test.ts; re-pinned 2026-11-05 for the alarms group, 2026-11-06 for the warmth doctrine, 2026-11-07 for the emotional-capture doctrine and the unclear-words paragraph + the identity stock line removed, plus the AI-honesty line in IDENTITY_DOCTRINE).
+const GOLDEN_SHA256 = 'd6b13ab20523d55c5c550acfe5b5869f9d7a2ef38aef27fd0ab9671aa689b30a';
 const sha = (s: string | Uint8Array) => createHash('sha256').update(s).digest('hex');
 
 const scratch = mkdtempSync(join(tmpdir(), 'harness-overlay-test-'));
