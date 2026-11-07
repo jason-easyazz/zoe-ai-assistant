@@ -4,7 +4,8 @@
     capability_gap_backlog.py [--days 14] [--out PATH] [--public-out PATH] [--top 30]
 
 Reads LOGS ONLY - never the database: the service log (+ rotated segments), the router shadow log, ``intent-misses.jsonl``,
-and (to read hash-only log lines back into words, privately) the local STT transcript log. Writes:
+the nightly self-review's counts-only summaries (``~/.zoe/self-review/``, mode ``on`` nights only), and (to read hash-only log
+lines back into words, privately) the local STT transcript log. Writes:
 
   * the PRIVATE ranked report (examples and member ids; mode 0600) to ``--out``
     (default ``~/.zoe/capability-gap/backlog-<date>.md``) - never commit it;
@@ -35,6 +36,7 @@ DEFAULT_APP_LOG = HOME / ".zoe-logs" / "zoe-data.app.log"
 DEFAULT_SHADOW = REPO / "services" / "zoe-data" / "data" / "router_head_shadow.jsonl"
 DEFAULT_MISSES = HOME / "training" / "data" / "intent-misses.jsonl"
 DEFAULT_STT = HOME / ".zoe-voice" / "voice_stt.jsonl"
+DEFAULT_SELF_REVIEW = HOME / ".zoe" / "self-review"
 
 
 def _lines(path: str):
@@ -53,7 +55,7 @@ def _segments(base: Path) -> list:
     return out
 
 
-def collect(app_log: Path, shadow: Path, misses: Path, stt: Path) -> tuple:
+def collect(app_log: Path, shadow: Path, misses: Path, stt: Path, self_review: Path = DEFAULT_SELF_REVIEW) -> tuple:
     """(events, resolver, notes, readable). Missing sources are reported in notes, not fatal. ``readable`` counts sources
     actually OPENED and read - an existing but unreadable file is a failure note, not a source."""
     events, notes, readable = [], [], 0
@@ -94,6 +96,14 @@ def collect(app_log: Path, shadow: Path, misses: Path, stt: Path) -> tuple:
         if ev:
             events.append(ev)
     notes.append(f"intent-misses.jsonl: {len(events) - n0} events")
+    n0 = len(events)
+    for p in sorted(glob.glob(str(self_review / "*.self-review-summary.json"))):
+        lines = read(p, f"self-review {os.path.basename(p)}")
+        try:
+            events.extend(cg.parse_self_review_summary(json.loads("".join(lines))))
+        except ValueError:
+            notes.append(f"self-review {os.path.basename(p)}: not JSON - skipped")
+    notes.append(f"self-review summaries: {len(events) - n0} events")
     transcripts = []
     for line in (read(str(stt), "voice_stt.jsonl", counts=False) if stt.exists() else []):
         try:
@@ -117,9 +127,10 @@ def main(argv=None) -> int:
     ap.add_argument("--shadow-log", type=Path, default=DEFAULT_SHADOW)
     ap.add_argument("--misses", type=Path, default=DEFAULT_MISSES)
     ap.add_argument("--stt-log", type=Path, default=DEFAULT_STT)
+    ap.add_argument("--self-review-dir", type=Path, default=DEFAULT_SELF_REVIEW)
     a = ap.parse_args(argv)
 
-    events, resolver, notes, readable = collect(a.app_log, a.shadow_log, a.misses, a.stt_log)
+    events, resolver, notes, readable = collect(a.app_log, a.shadow_log, a.misses, a.stt_log, a.self_review_dir)
     if not readable:
         print("capability_gap_backlog: no source could be read", file=sys.stderr)
         return 2
