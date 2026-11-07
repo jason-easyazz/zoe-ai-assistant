@@ -43,11 +43,12 @@ class FakeGitHub:
         self.open.append({"number": n, "title": title, "body": body, "isDraft": draft,
                           "labels": [{"name": lb} for lb in labels], "url": f"https://github.com/o/r/pull/{n}"})
 
-    def merge(self, n: int, title: str, body: str = "", *, at: datetime, live: bool = True) -> None:
+    def merge(self, n: int, title: str, body: str = "", *, at: datetime, live: bool = True, base: str = "main") -> None:
         self.open = [p for p in self.open if p["number"] != n]
         sha = f"{n:040x}"
         self.merged.append({"number": n, "title": title, "body": body, "url": f"https://github.com/o/r/pull/{n}",
-                            "mergedAt": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "mergeCommit": {"oid": sha}})
+                            "mergedAt": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "mergeCommit": {"oid": sha},
+                            "baseRefName": base})
         if live:
             self.ancestors.add(sha)
 
@@ -504,6 +505,35 @@ async def test_merged_but_not_live_after_an_hour_is_one_broke_notice():
     t = bot.delivered[0]["text"]
     assert "Merged but not live after 60 min: #90, #91" in t and "failure" in t
     assert bot.delivered[0]["url"].endswith("/actions/runs/1")
+
+
+async def test_a_pr_merged_into_a_stacked_branch_is_never_stuck():
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    gh.merge(92, "perf: stacked", at=at("10:00"), live=False, base="feature/other")
+    await run(gh, bot, at("12:00"))
+    await run(gh, bot, at("12:20"))
+    assert bot.delivered == []
+    assert "92" not in cn.load_state()["pending_live"]
+
+
+async def test_control_a_main_merge_not_live_is_still_stuck():
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    gh.merge(93, "fix: on main", at=at("10:00"), live=False)
+    await run(gh, bot, at("12:00"))
+    assert len(bot.delivered) == 1
+
+
+async def test_a_legacy_pending_entry_not_on_main_is_dropped():
+    gh, bot = FakeGitHub(), FakeBot()
+    await booted(gh, bot)
+    st = cn.load_state()
+    st["pending_live"]["94"] = {"number": 94, "title": "perf: old", "sha": f"{94:040x}", "url": None,
+                                "merged_at": "2026-11-19T10:00:00Z", "summary": "s", "category": "fixed"}
+    cn.save_state(st)
+    await run(gh, bot, at("12:00"))
+    assert "94" not in cn.load_state()["pending_live"] and bot.delivered == []
 
 
 async def test_shadow_mode_logs_and_never_sends_and_on_does_not_replay():
