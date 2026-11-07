@@ -370,3 +370,43 @@ Rank is not enough. `may_override(power, target_class)` is `>=`, so one model ro
 `memory_authority.has_standing(power, basis)`: a write below the user classes whose basis is `unanchored` (the writer READ the owner's words and they do not support the fact) may not retire, archive or rewrite ANY approved row. It is checked beside `may_override` in `MemoryService.supersede_by`, `_authority_refuses` (the `review(edit)` path every per-turn writer uses) and `edit_outranked`. The refused row is still stored (approved, beside the old one: a harmless near-duplicate, never a lost fact), the log says `AUTHORITY_BLOCKED ... action=supersede`, and `expert_dispatch._ingest_or_supersede` logs `MEMORY_SUPERSEDE_REFUSED` instead of claiming a supersede. `no_user_evidence` (a caller that passed no words) is not covered: it says nothing about the fact. The "what do you know about me" summary also withholds `unanchored` rows (`provenance_answers.Known.unconfirmed`); the recall packet still serves them (open-problems ledger).
 
 Restoring a row this retired (operator, zoe-data stopped; `MemoryService.restore_superseded` is the audited path, the collateral audit script's `apply_restore` drives it): see the 2026-10-12 PR for the exact steps.
+
+## A member's own correction of a person fact sticks (`ZOE_EXPLICIT_CORRECTION`, 2026-11-05)
+
+Found in QA round 2: a member said a family member was 9, then corrected it three times ("actually <name>'s 10 now",
+"<name>'s 10 though, I told you earlier"). Every time the person extractor logged `entity supersede of <row> refused
+by authority`, both values stayed approved, and the brain answered 9. Three causes, all fixed:
+
+* **The correction had no standing.** `supports()` needs the fact's attribute cue in the speaker's sentence; "Ana: 10
+  years old" names an age, "Ana's 10 now" had no age word, so the model's correct paraphrase was `unanchored`
+  (`has_standing` false: it may retire nothing). `_THIRD_PERSON_AGE_RE` (a `_SHAPE_CUES` age shape) reads a subject +
+  copula + a number that ends the clause ("Ana's 10 now", "she is 10 though", "he's 9.") as an age; a number followed
+  by a unit ("10 minutes away"), "it's 10", and a relative's or pet's number ("Ana's mum is 40") stay unsupported.
+* **A paraphrase could not replace a direct statement.** `person_extractor_llm` (`CORRECTION_WRITERS`) writes facts
+  about OTHER people, so the self-assertion promotion above never applied. `correction_span(fact, turn)`: one verbatim
+  sentence that `supports()` the fact, carries a cue from the lexicon's `correction_cues` ("actually", "no,", "now",
+  "though", "I told you", "not 9" ...), no hedge, and no relayed claim (`report_cues`: "Carol told me",
+  "apparently", "according to" - the member's own "I said" / "I told you" are not reports). Then the write is `user_stated_derived` with basis
+  `explicit_correction` and **`user_stated` power and standing** (`PROMOTED_BASES`; `row_class` reads it back as
+  `user_stated`), so it replaces the value the member stated before. Unchanged: inference never supersedes (a fact
+  the turn does not support is still refused); an `operator` row still needs a confirming action (`may_override`);
+  a curated row (caregiver curation, #2158, rank 6) is above `user_stated` power; another member's correction lands
+  in THEIR memory (`list_by_entity` is per user), never on this member's row.
+* **Age had no kind.** The extractor model has no `age` fact type and filed it as `preference`. `apply_person_fact`
+  now keys any fact that states the named person's age (`person_extractor.person_age_claim`) as `age`, and a
+  MULTI-valued kind (`MULTI_VALUED_KINDS`: preference, meeting, gift_idea, gift_given, bucket) is never
+  entity-superseded by a different value - before this, "Ana loves chess" would retire "Ana hates mushrooms" and
+  archive the rest as "stale duplicates". Birthday, work, age and any other kind keep one current value.
+
+**Served: one current age per person.** Rows from other writers ("The user has a daughter named Ana who is 9 years
+old", from the digest) are not in the supersede chain. `person_extractor.stale_age_ids` drops, from the chat packet
+(`routers/memories._build_memory_prompt_packet`) and the voice recall packet (`routers/voice_tts._voice_recall_packet`),
+every row that gives a named person an age other than their CURRENT one: the newest row in the speaker's voice
+(rank >= `user_stated_derived`), after authority order - a row above the user classes (operator, curated) is
+never hidden by a newer member statement; a model inference wins only when no row in the speaker's voice gives an age.
+
+`ZOE_EXPLICIT_CORRECTION` (bool, default **on**; `0` restores the old behaviour of every part: the age shape, correction
+power, the `age` kind, the multi-valued guard and the packet filter). Tests:
+`services/zoe-data/tests/test_correction_sticks.py` (the resolver table with hedge / non-age / relative / question /
+inference controls, the whole write path over the real `MemoryService`, the other-member and preference controls, the
+packet, each with a flag-off break-the-fix control).
