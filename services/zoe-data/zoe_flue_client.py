@@ -576,6 +576,39 @@ def _wrap_message_with_manner(message: str, block: str) -> str:
     return f"{_MANNER_ENVELOPE_PREFIX}{json.dumps(block, ensure_ascii=True)}\n{message}"
 
 
+# Machine-readable MEMBER-REGISTER envelope (ZOE_MEMBER_REGISTER, member_register.py). MUST match the sidecar parser
+# (labs/flue-zoe-brain-2x src/register.ts REGISTER_ENVELOPE_PREFIX / _RE). One short line (how Zoe speaks with THIS person) that the
+# sidecar appends AFTER the doctrines, persona and manner block and BEFORE the user-model card: the stable cached prefix is untouched.
+#
+# WIRE ORDER: between the manner line and the identity line:
+#   " zoe-persona:<..>\n zoe-manner:<..>\n zoe-register:<JSON string>\n zoe-uid:<id>\n<blocks>\n<message>"
+# Flag off, a guest, an unknown account, a failed lookup or wire 1 = NO line = the bytes are exactly what they were.
+_REGISTER_ENVELOPE_PREFIX = " zoe-register:"
+_REGISTER_ENVELOPE_RE = re.compile(r"^ zoe-register:[^\n]*\n")
+
+
+async def _register_context_block(user_id: str) -> str:
+    """The register line for THIS member's turn, or "" (= no line). Never raises. A 1.x sidecar does not parse the line."""
+    try:
+        if _wire_version() < _WIRE_2:
+            return ""
+        import member_register
+
+        block = await member_register.line_for(user_id)
+        if block:
+            logger.info("MEMBER_REGISTER user=%s chars=%d", (user_id or "").strip(), len(block))
+        return block
+    except Exception:  # noqa: BLE001 - a register is optional; the turn is not
+        logger.warning("MEMBER_REGISTER failed; no line", exc_info=True)
+        return ""
+
+
+def _wrap_message_with_register(message: str, block: str) -> str:
+    """Prefix ``message`` with the register envelope, or return it unchanged (no block)."""
+    if not block:
+        return message
+    return f"{_REGISTER_ENVELOPE_PREFIX}{json.dumps(block, ensure_ascii=True)}\n{message}"
+
 # Machine-readable NOW-CARD envelope (ZOE_MEMORY_NOW_CARD, now_card.py). MUST match the sidecar parser
 # (labs/flue-zoe-brain-2x src/now-card.ts NOW_CARD_ENVELOPE_PREFIX / _RE). zoe-data owns the card (built at night, read by key) and
 # the per-turn decision (household, a CONFIRMED voice); the sidecar appends it to THAT turn's system prompt after the user-model card.
@@ -695,6 +728,8 @@ def _strip_replay_envelope(message: str) -> str:
         message = _PERSONA_ENVELOPE_RE.sub("", message)
         # ...and so is the manner block.
         message = _MANNER_ENVELOPE_RE.sub("", message)
+        # ...and so is the member register line.
+        message = _REGISTER_ENVELOPE_RE.sub("", message)
     return message
 
 
@@ -2173,7 +2208,7 @@ def _kv_warm_message() -> str:
     return f"{_IDENTITY_ENVELOPE_PREFIX}{_KV_WARM_IDENTITY}\n{_KV_WARM_MESSAGE}"
 
 
-_ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona|nowcard):([^\n]*)\n")
+_ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona|register|nowcard):([^\n]*)\n")
 
 
 def prefix_key(message: str, requested_card_version: str = "") -> str:
@@ -2202,6 +2237,8 @@ def prefix_key(message: str, requested_card_version: str = "") -> str:
     for name in ("uid", "manner", "persona"):
         h.update((seen.get(name) or ("guest" if name == "uid" else "")).encode("utf-8", "replace"))
         h.update(b"\x00")
+    if seen.get("register"):   # hashed only when present, so a build with the flag off keeps today's keys
+        h.update(b"register\x00" + seen["register"].encode("utf-8", "replace") + b"\x00")
     if seen.get("nowcard"):   # only when sent: a turn without a card keeps the key it always had
         h.update(b"nowcard\x00" + seen["nowcard"].encode("utf-8", "replace"))
     return h.hexdigest()[:10]
@@ -2313,9 +2350,12 @@ async def _kv_warm_outbound(member: str) -> "tuple[str, str]":
     else:
         manner_line = _wrap_message_with_manner("", await _manner_context_block(uid, _KV_WARM_MESSAGE))
         persona_line = _wrap_message_with_persona("", await _persona_context_block(uid))
+    # The register is NEVER replayed from the memo: it is the one block a member edits or forgets between turns, so the warm renders
+    # the CURRENT line (a forgotten entry must not reach even a throw-away warm, and flag off must leave no line).
+    register_line = _wrap_message_with_register("", await _register_context_block(uid))
     msg = _wrap_message_with_identity(_KV_WARM_MESSAGE, uid)
     msg = _wrap_message_with_now_card(msg, await _now_card_warm_block(uid))   # fresh, not memoised: it changes nightly
-    msg = persona_line + manner_line + msg
+    msg = persona_line + manner_line + register_line + msg
     msg = _wrap_message_with_replay(msg, True)
     return msg, prefix_key(msg, await _card_version(uid))
 
@@ -2921,6 +2961,7 @@ async def _run_flue_brain_streaming_turn(
     outbound_message = _wrap_message_with_now_card(
         outbound_message, await _now_card_context_block(uid, bool(kwargs.get("voice_mode"))))
     # Manner block (ZOE_MANNER_BLOCK, default OFF; adults only): rides between the persona line and the identity line. "" = unchanged bytes.
+    outbound_message = _wrap_message_with_register(outbound_message, await _register_context_block(uid))
     outbound_message = _wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
     # replay line and the identity line. "" (the default) = unchanged bytes.
