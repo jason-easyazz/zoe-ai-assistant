@@ -289,6 +289,15 @@ def _get_or_create_voice_session(panel_id: str) -> str:
     if entry and entry.get("context") and entry["context"].is_fresh():
         _next["context"] = entry["context"]
     _VOICE_SESSIONS[panel_id] = _next
+    if entry and entry.get("session_id"):
+        # ZOE_VOICE_SESSION_BRIDGE (default OFF): the new session remembers the one it replaced on THIS panel, so the
+        # same confirmed speaker's next brain turns carry "where we left off" (voice_session_bridge.py). Never raises.
+        try:
+            import voice_session_bridge
+
+            voice_session_bridge.note_rollover(entry["session_id"], session_id)
+        except Exception:  # noqa: BLE001 - a bridge must never cost a turn its session
+            pass
     return session_id
 
 
@@ -3340,6 +3349,14 @@ async def _schedule_voice_chat_save(
     if arrival is None or arrival.session_id != session_id or (user_text and arrival.text != user_text):
         arrival = None
     user_text = user_text or (arrival.text if arrival is not None else "")   # the row to recover when the arrival insert failed
+    # ZOE_VOICE_SESSION_BRIDGE (default OFF): hold a CONFIRMED speaker's exchange in memory for the bridge a session rollover
+    # carries (voice_session_bridge.py: verified-only, off-record / forget cues dropped). Never raises.
+    try:
+        import voice_session_bridge
+
+        voice_session_bridge.note_exchange(session_id, user_id, user_text, reply, speaker_verified)
+    except Exception:  # noqa: BLE001 - the save below must run whatever the bridge does
+        pass
     try:
         # lazy — avoids circular import (routers.chat lazily imports us back)
         from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
@@ -3390,6 +3407,11 @@ async def _run_voice_memory_passes(
 
     ``interrupted`` = the streamed reply ended early (barge-in / disconnect): only the struggle detector reads it.
     """
+    try:  # a person's turn just completed on this lane (fast paths never enter the brain slot): the post-turn passes below are fresh
+        import brain_slot_guard
+        brain_slot_guard.note_turn_completed()
+    except Exception:  # noqa: BLE001
+        pass
     try:  # the struggle detector (post-turn, already off the reply path; a bounded put_nowait that never raises)
         import struggle_detector
 

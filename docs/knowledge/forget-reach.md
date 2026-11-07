@@ -87,6 +87,23 @@ Add a `Store` to `forget_reach.py` (`TABLES` for a Postgres table, `OTHER` for a
 reason, or `gap` with the reason AND the key in the `forget-reach gaps:` line of [open-problems.md](open-problems.md). A table that holds **words** cannot be
 `out_of_scope`. Then regenerate the table below.
 
+## Forget completeness (what a layer SERVES after a forget, 2026-11-05)
+
+The inventory says which store the forget path erases; `services/zoe-data/tests/test_forget_completeness_probe.py` (`ci_safe`) says what each
+DERIVED layer still serves. Every layer in its `LAYERS` table is driven through its real serve function over in-process fakes in three arms:
+**forgotten** (ledger + the layer's own erase: the name is never served, a control name still is), **erase_missed** (ledger only - a failed or
+pending cascade step, a row derived later: a `serve_wall` layer still withholds it, an erase-only layer serves it, and the test asserts the recorded
+answer both ways), and **control** (the layer's hooks off: the name IS served, so the instrument is not blind).
+
+- Serve-walled (a strict ledger check at read time, fail closed on an outage): exact words, night mind (cold and cached), the digest transcript
+  loader, the what-do-you-know / Memories wall reads (`provenance_answers.gather`, also behind `memories_voice`), the recall-every-turn packet,
+  person profiles, the user-model card, contact offers (`pending_suggestions`), day-review candidates.
+- Erase-only (the cascade or the forget handler's sweep is the only wall): the palace reads, the portrait, the relationship graph, open loops,
+  proactive candidates. Ledgered in [open-problems.md](open-problems.md) (`forget-completeness erase-only layers`), as are the layers the probe
+  cannot reach in-process (the Flue sidecar's card cache and transcript store, the llama prefix/KV cache, the unmerged now card).
+- Adding a derived layer: a `Layer` row + a `Probe` class (seed / erase / served / disable). A new layer that is erase-only goes in the open-problems
+  line; one the probe cannot drive goes in `UNPROBED` and that line.
+
 ## The inventory
 
 Generated from `forget_reach.py`; do not edit by hand.
@@ -137,7 +154,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `chat_messages` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages. |
 | `chat_feedback` | pg_table | words | gap | - | Holds a corrected_response (words); neither path reaches it. |
 | `background_tasks` | pg_table | words | gap | - | Holds the task text and its result; neither path reaches it. |
-| `pending_suggestions` | pg_table | words | gap | - | Offer text naming people can outlive the forget (only person offers are withdrawn by name). |
+| `pending_suggestions` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Offer text naming people can outlive the forget (person offers are withdrawn by name; anticipation offers naming the entity are deleted by the cascade); delete_user does not reach the table. |
 | `notes` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `journal_entries` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `lists` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. List items name people and places. |

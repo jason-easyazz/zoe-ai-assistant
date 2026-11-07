@@ -162,8 +162,8 @@ async def test_good_evening_passes_context_and_fallback_to_composer(monkeypatch)
 
     calls = []
 
-    async def fake_compose(trigger_type, context, fallback):
-        calls.append((trigger_type, context, fallback))
+    async def fake_compose(trigger_type, context, fallback, **kw):
+        calls.append((trigger_type, context, fallback, kw))
         return "Composed evening check-in"
 
     monkeypatch.setattr(composer, "compose_message", fake_compose)
@@ -174,3 +174,4 @@ async def test_good_evening_passes_context_and_fallback_to_composer(monkeypatch)
     assert calls[0][0] == "good_evening"
     assert calls[0][1]["user_id"] == "u1"
     assert "Good evening" in calls[0][2]
+    assert calls[0][3] == {"in_turn": True}          # the person asked: a turn call for the daytime-4B choke point

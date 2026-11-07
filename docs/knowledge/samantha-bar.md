@@ -675,7 +675,8 @@ python3 scripts/perf/bar_reliability.py compare --control A --candidate B --admi
 Reliability baseline: `~/.cache/zoe/samantha_bar_reliability_baseline.json` (the aggregate JSON,
 schema `zoe.bar_reliability/1`). `run` writes `<out-dir>/<arm>/run-<i>.json` (each the bar's own
 results file), `<out-dir>/<arm>/trend.jsonl` (kept out of the weekly trend) and
-`<out-dir>/reliability.json` = `{"arms": {name: aggregate}, "compare": comparison | null}`.
+`<out-dir>/reliability.json` = `{"arms": {name: aggregate}, "compare": comparison | null,
+"declared_arm_env": {arm: overrides}}`.
 
 **The night command (prepared, not yet run).** `run` is a NIGHT job under the same rules as the bar
 (scripts/AGENTS.md: harness quiet hours, the measured night pause, no daytime 4B outside a person's
@@ -719,10 +720,42 @@ python3 scripts/perf/bar_reliability.py compare --admissible \
 `--dry-run` prints the six steps and which are still to run. `--harness day-sim` runs
 `samantha_day_sim.py` instead (its `asks` are read the same way).
 
-Limits: a flag-ON candidate cannot be expressed yet. The scratch stack copies the LIVE flags into
-every arm, so an arm differs only by its checkout (a prompt, overlay or code change: what the GEPA
-improver produces). A flag A/B needs a per-arm flag override in `harness_scratch.harness_env`, not
-built. k=3 bounds what a single scenario can show: a 3/3 control vs a 2/3 candidate blocks by
+**A flag A/B (`--arm-env`).** The scratch stack copies the LIVE flags into every arm, so without
+help an arm differs only by its checkout. `--arm-env ARM:ZOE_FLAG=value,ZOE_FLAG2=value` (repeatable)
+layers per-arm overrides ON TOP of the copied flags inside that arm's scratch zoe-data only (the
+night runner hands them to that arm's steps in `ZOE_HARNESS_ARM_ENV`, one JSON object, and drops any
+inherited one). Only `ZOE_*` names are accepted, never `ZOE_HARNESS*` (`ZOE_HARNESS_FORCE` /
+`_LANDING` / the isolation pins), a secret-looking name, a location (`_URL`, `_DIR`, `_PATH`, `_DB`...)
+or an endpoint the stack sets itself; values are short plain strings (no URL). Refused flags and
+values are never echoed (names only), and the dry-run shows only short plain values (anything else as
+its length). The stack records the overrides it applied in each run (`scratch.arm_env`), the
+aggregate carries `arm_env`, `reliability.json` carries `declared_arm_env` and the comparison
+`arm_env` / `arm_env_differs`. The arms may differ ONLY in the declared override + checkout: a run
+whose recorded override is not the declared one (the override never reached the stack, or another did)
+makes the arms not comparable (exit 2), runs of one arm that disagree are `error`, and a kept run is
+reused only for the same override (it is part of the arm identity). An overridden arm never records
+the reliability baseline. Control and candidate may point at the SAME checkout (the A/B is then the
+flag alone). The override applies to the zoe-data process, not the Flue sidecar.
+
+The recall-every-turn A/B ([recall-every-turn.md](recall-every-turn.md) step 2), PREPARED, NOT RUN. It
+runs the FULL bar (an `--axis` subset is `partial` and can never be admissible), so it replaces the
+off-vs-on `--axis d,e` pair there; `ZOE_RECALL_EVERY_TURN_HARNESS=1` is what admits the harness's
+`demo_*` ids:
+
+```bash
+cd ~/.worktrees/bar-control && ZOE_PERF=1 ZOE_NIGHT_BUSY=$HOME/assistant/scripts/landing/night_busy.sh \
+  nice -n 5 python3 scripts/perf/bar_reliability.py run \
+    --out-dir ~/.cache/zoe/bar_reliability/recall-every-turn \
+    --arm control=$HOME/.worktrees/bar-control --arm candidate=$HOME/.worktrees/bar-control \
+    --arm-env candidate:ZOE_RECALL_EVERY_TURN=on,ZOE_RECALL_EVERY_TURN_HARNESS=1 \
+    --k 3 --step-min 35 -- --samples 3
+# the same shape for the shadow flag: --arm-env candidate:ZOE_MEMORY_NOW_CARD=shadow
+```
+
+KEEP only if the morning `compare --admissible` is exit 0 AND the probe check in recall-every-turn.md
+holds (the bar scores replies, not the cached-prefix fraction).
+
+Limits: k=3 bounds what a single scenario can show: a 3/3 control vs a 2/3 candidate blocks by
 design (conservative), while `weakened` on an already-flaky scenario does not.
 
 ## Teardown (the demo-users-only guardrail)
@@ -1080,3 +1113,27 @@ session transcript and the sidecar's session; see `open-problems.md` (2026-10-09
 - **Nondeterministic brain.** Use `--samples 3` for a baseline you intend to gate on.
 - **Load.** One run is about 45 brain turns plus per-turn digests plus judge calls. That is
   roughly 15–30 minutes of brain slot, which is why it takes the harness lock.
+
+## Continuity cells, the full-bar baseline run and turn-taking counts (Initiative section 9, 2026-11-05)
+
+Three measurement instruments the Samantha Initiative record listed as missing. Nothing here touches the live brain until the launcher below is run by hand.
+
+- **Continuity cells** (`scripts/perf/continuity_cells.py`, tests `tests/unit/test_continuity_cells.py`). Lane C E3, built deterministic and offline: 12 neutral fictional
+  threads (4 live, 4 dormant whose fact changes on simulated day 2, 4 resolved on day 3), a simulated clock (plain day numbers), probes at 1 / 7 / 30 days, and scorers that match
+  needles and markers only (no judge, no network, no database). **C1 thread carry** per horizon with a Wilson interval (target >= 70% at 7 d); **C3 stale serve**
+  (old value served alone or without a superseding word, or a finished thread raised as still open; target < 2%); **C4 re-telling** (the reply asks for a slot already given;
+  a non-answer is NOT a re-tell; target < 10%). C5 forget-completeness already exists as S25 / axis F. Each cell has a control: `--selftest` runs a perfect, an amnesiac, a silent, a stale
+  and a decaying reference system and exits 1 unless each goes the declared way. **Not built:** a live adapter (chat API plus the bar's `Live.backdate`) - it needs the brain, so it is
+  queued behind the night window; until it exists these cells measure the INSTRUMENT, and the live carry / re-tell / stale numbers are still unmeasured.
+- **Baseline coverage: the "23 cells" figure is stale.** `SCENARIO_IDS` is 29 (S1-S8, S10-S16, S20-S33; S9 lives in the day-sim) and every one runs in a full `samantha_bar.py` run. The recorded baseline
+  (`~/.cache/zoe/samantha_bar_baseline.json`) still holds S1-S8 only; a full `--record-baseline` (inside `record_bench_baselines.sh`) writes all of them, and `--compare-baseline` already REFUSES
+  a baseline missing any scored cell. So the instrument is ready; what is missing is one clean, full, commit-bound run. `#2285` (`bar_reliability.py --arm-env`) was open when this was written
+  and is not used here: a baseline is a single unmodified arm.
+- **Launcher** `scripts/maintenance/bar_baseline_tonight.sh` (tests `tests/unit/test_bar_baseline_tonight.py`): refuses unless it is 22:00-01:05, `night_busy.sh voice` AND `night_busy.sh test` both exit
+  non-zero, no `land_voice_pr.sh` is alive, `/tmp/zoe-brain-window.lock` is free and the live checkout is clean; then `exec`s `record_bench_baselines.sh`. `--check` prints the verdict and runs nothing.
+  Nothing is scheduled. Exit 3 = not now, 4 = dirty live checkout.
+- **Turn-taking counts** (`scripts/perf/turn_taking_metrics.py`, tests `tests/unit/test_turn_taking_metrics.py`): cut-offs and over-waits per 100 turns from the panel daemon's `voice.log`, counts only.
+  Turns = `Recorded command:` / `Recorded follow-up:` lines minus the "too short" ones; cut-offs = `Continuation merged:` + `Recording ended on the hard cap mid-speech`; over-waits =
+  `No continuation - sending the held clip`. These are daemon-event PROXIES (target < 5 each per 100); a test pins the phrases to `zoe_voice_daemon.py` so a renamed log line cannot silently read as zero.
+  Run on the Pi's file copied or piped to the Jetson, e.g. `ssh zoe-pi 'cat ~/.zoe-voice/voice.log' | python3 scripts/perf/turn_taking_metrics.py - --since 2026-11-01`.
+

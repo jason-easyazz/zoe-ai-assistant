@@ -414,6 +414,15 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _is_forget_command(text: str) -> bool:
+    """memory_quality.is_forget_command, never raising (an unavailable gate leaves the anchored regex alone)."""
+    try:
+        from memory_quality import is_forget_command
+        return is_forget_command(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # "forget what I told you about X" / "forget everything about X" -- entity-scoped
 # forget (QA review F14). Deterministic, no LLM. The captured entity must pass
 # strict name validation (person_extractor._looks_like_person_name) before the
@@ -815,8 +824,10 @@ def detect_intent(
         return Intent("panel_list", {})
 
     # "forget that" — retract the most recent memory write for the caller.
-    # Matched very early so it never collides with other verbs.
-    if _FORGET_LAST_RE.match(t):
+    # Matched very early so it never collides with other verbs. memory_quality.is_forget_command adds the
+    # shapes the anchored regex missed live (QA 2026-11-05): a leading "no," / "oh" / "wait", two acts in a row
+    # ("no, don't remember that! forget that"), and "forget that I said ..." - short utterances only.
+    if _FORGET_LAST_RE.match(t) or _is_forget_command(t):
         return Intent("memory_forget_last", {})
 
     # "keep the contact" -- undo the contact removal the last forget cascade announced.
@@ -2186,7 +2197,13 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     ]
     if len(named) > 1:
         return None  # ambiguous — let the brain sort it out
-    offer = named[0] if named else offers[0]
+    # A bare reply binds to the offer most recently VOICED (cooldown rotation means
+    # that is not always the oldest surfaced row); no record -> the oldest.
+    import contact_offer_policy as _cop
+
+    _last = _cop.last_offered_id(user_id)
+    _voiced = next((o for o in offers if str(o.get("id")) == _last), None) if _last else None
+    offer = named[0] if named else (_voiced or offers[0])
     kind = _offer_reply_kind(text, offer.get("name") or "")
     if kind is None:
         return None
@@ -2318,6 +2335,15 @@ async def detect_and_extract_intent(
                           {"suggestion_id": _alias_reply[0], "forget_alias": True})
     except Exception as _alias_exc:  # never let the alias path break routing
         logger.debug("detect_and_extract_intent: forget-alias reply match failed: %s", _alias_exc)
+    try:
+        # a bare yes / no to the anticipation offer Zoe just made ("By the way - want a reminder to leave by 7:10?"); off = None, no I/O
+        import anticipation as _anticipation
+        _ant_reply = await _anticipation.match_reply(user_id, text, _previous_assistant_message)
+        if _ant_reply is not None:
+            return Intent("pending_offer_accept" if _ant_reply[1] else "pending_offer_dismiss",
+                          {"suggestion_id": _ant_reply[0], "anticipation": True})
+    except Exception as _ant_exc:  # never let the anticipation path break routing
+        logger.debug("detect_and_extract_intent: anticipation reply match failed: %s", type(_ant_exc).__name__)
     try:
         _offer_reply = await _match_pending_offer_reply(text, user_id)
     except Exception as _offer_exc:  # never let the offer path break routing
@@ -3696,6 +3722,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     ),
                 },
                 fallback,
+                in_turn=True,
             )
         except (ImportError, RuntimeError, TypeError, ValueError) as _e:
             logger.warning("good_evening composer failed: %s", _e)
@@ -3741,6 +3768,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # card's accept route); refusal dismisses so the offer stops re-surfacing.
     if intent.name == "people_same_person_reply":
         return await _execute_same_person_reply(intent, user_id)
+
+    if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("anticipation"):
+        import anticipation
+        return await anticipation.answer(
+            user_id, str(intent.slots.get("suggestion_id") or ""), intent.name == "pending_offer_accept")
 
     if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("forget_alias"):
         import memory_forget_alias
@@ -4645,7 +4677,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "portrait_refresh":
         try:
             from user_portrait import run_portrait_synthesis  # type: ignore[import]
-            result = await run_portrait_synthesis(user_id)
+            import brain_scheduler
+            with brain_scheduler.declare("turn:portrait_refresh"):   # the person asked for it: a turn call
+                result = await run_portrait_synthesis(user_id)
             status = result.get("status", "unknown")
             if status == "ok":
                 chars = result.get("chars", 0)

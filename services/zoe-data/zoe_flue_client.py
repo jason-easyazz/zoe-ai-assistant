@@ -89,6 +89,7 @@ and never changes what is yielded or retried.
 from __future__ import annotations
 
 import asyncio
+import brain_scheduler
 import brain_slot_guard
 import contextvars
 import errno
@@ -949,7 +950,7 @@ def _offer_inject_enabled() -> bool:
     }
 
 
-async def _pending_offer_block(user_id: str) -> str:
+async def _pending_offer_block(user_id: str, message: str = "") -> str:
     """Pending contact-offer directive for ANY turn (QA F5 follow-up).
 
     The offer previously reached the brain only when the memory packet was
@@ -969,10 +970,21 @@ async def _pending_offer_block(user_id: str) -> str:
         )
         if not person_suggestions_enabled():
             return ""
+        import contact_offer_policy as _cop
         import contacts_conversation as _cc
+        # Same policy as the for-prompt fold: every turn counts toward the cooldown,
+        # none on forget/correction/decline turns, one offer, no repeat.
+        _cop.tick(user_id, message)
+        if _cop.no_offer_turn(message):
+            return ""
         batch = _cc.offer_batch_enabled()
-        offers = await surface_pending_contacts_for_prompt(
-            user_id, limit=_cc.OFFER_BATCH_MAX if batch else 2)
+        surfaced = await surface_pending_contacts_for_prompt(
+            user_id, limit=_cc.OFFER_BATCH_MAX if batch else 3)
+        offers = _cop.eligible(user_id, message, surfaced)
+        if not batch:
+            offers = offers[:1]
+        _cop.note_offered(user_id, offers)
+        await _cop.unmark_unoffered(user_id, surfaced, offers)
     except Exception as exc:  # noqa: BLE001 — the offer nudge must never break a turn
         logger.debug("seam offer inject: fetch failed, continuing without it: %s", exc)
         return ""
@@ -2402,6 +2414,7 @@ async def warm_kv_prefix(member: str = "", *, yield_to_helpers: bool = False) ->
         # Preparation that swallowed its cancellation and returned late must not go on to take the guard and submit.
         if asyncio.get_running_loop().time() - t0 >= _KV_WARM_MAX_S:
             return "failed:timeout", -1, -1
+        brain_scheduler.note("prefix_keeper" if yield_to_helpers else "wake_prewarm")   # declared exceptions: one log line + count
         brain_slot_guard.turn_started(keeper=yield_to_helpers)
         acquired = True
         starts_after_mine = brain_slot_guard.starts()   # any later start is a REAL turn, even one already finished
@@ -2757,7 +2770,7 @@ async def _run_flue_brain_streaming_turn(
         if _offer_inject_enabled():
             logger.info("SEAM_OFFER user=%s deferred=1 reason=raise", uid)
     elif "[pending-contact]" not in recall_block and not verify_block:
-        offer_block = await _pending_offer_block(uid)
+        offer_block = await _pending_offer_block(uid, message)
     # Risk cue (ZOE_RISK_CUES, default OFF): the problem in an adult's announced plan, named by code (risk_cues.py). Exclusive with every
     # other block that asks the 4B for one job - one block per turn - and "" (no work at all) with the flag off.
     risk_block = ""
@@ -2783,9 +2796,16 @@ async def _run_flue_brain_streaming_turn(
     import flue_fastpath_context
 
     fastpath_block = await flue_fastpath_context.block_for(uid, session_id, message)
+    # Where we left off (ZOE_VOICE_SESSION_BRIDGE, default OFF; voice_session_bridge.py): a panel voice session that rolled after
+    # the idle TTL starts with history=0 in the sidecar, so its first few brain turns carry the SAME confirmed speaker's last
+    # exchanges from the session it replaced - in memory, forget-ledger checked (strict), token-capped. Ahead of the fast-path
+    # block (it is older), inside the latest user message: the cached prefix is untouched. Off => "" before any work.
+    import voice_session_bridge
+
+    bridge_block = await voice_session_bridge.block_for(uid, session_id)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
-    # order is fixed: identity → recall → offer → the user's words. "" when the flag is
+    # order is fixed: identity → bridge → fast-path → recall → offer → the user's words. "" when the flag is
     # off or the id is not a registered account → the bytes are exactly what they were.
     identity_block = await _identity_context_block(uid)
     # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): label the stored-context blocks this turn carries that do not come through /for-prompt,
@@ -2799,7 +2819,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
-    _blocks = "\n".join(b for b in (identity_block, fastpath_block, recall_block, offer_block,
+    _blocks = "\n".join(b for b in (identity_block, bridge_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable
