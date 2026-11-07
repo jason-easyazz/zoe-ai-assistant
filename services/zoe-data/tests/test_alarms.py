@@ -478,6 +478,11 @@ def test_member_crud(box):
     assert c.get("/api/alarms").json()["alarms"] == []
 
 
+def test_the_list_carries_the_household_zone_for_the_panel_dates(box, monkeypatch):
+    monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
+    assert box["client"].get("/api/alarms").json()["tz"] == "Australia/Perth"
+
+
 def test_bad_input_is_a_400_with_a_speakable_reason(box):
     c = box["client"]
     for body in ({"time": "25:00"}, {"time": "07:00", "repeat": "hourly"}, {"time": "07:00", "sound_id": "zzz"},

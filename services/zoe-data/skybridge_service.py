@@ -794,6 +794,15 @@ def _calendar_weekend_range(text: str, today: date) -> tuple[str, date, date] | 
     return "this weekend", sat, sat + timedelta(days=1)
 
 
+def _calendar_this_week_range(text: str, today: date) -> tuple[str, date, date] | None:
+    """"this week" / "my week" for a calendar READ: Monday to Sunday of the current week - the scope intent_router's calendar_show
+    gives the same question (``_calendar_show_scope``), not today + 7 days."""
+    if re.search(r"\bnext\s+week\b", text) or not re.search(r"\b(?:this|my|our|the)\s+week\b", text):
+        return None
+    monday = today - timedelta(days=today.weekday())
+    return "this week", monday, monday + timedelta(days=6)
+
+
 def _calendar_month_range(text: str, today: date) -> tuple[str, date, date] | None:
     """"this month" for a calendar READ: the whole of the current month (the same scope intent_router's calendar_show gives it)."""
     if not re.search(r"\bthis\s+month\b", text):
@@ -2220,6 +2229,7 @@ def classify_skybridge_intent(
             and not command_shapes.calendar_not_a_read(raw_message)):
         today = _today()
         parsed_range = (_calendar_weekend_range(text, today) or _calendar_month_range(text, today)
+                        or (_calendar_this_week_range(text, today) if (_cal_read and not _CALENDAR_KEYWORD_RE.search(text)) else None)
                         or _calendar_date_from_text(text, today))
         if parsed_range is not None:
             label, start, end = parsed_range

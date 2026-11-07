@@ -348,3 +348,27 @@ def test_relative_periods_the_qualifier_cannot_carry_are_declined():
     for phrase in ("do I have any appointments next month", "what am I doing next weekend", "what are my plans in 2 weeks"):
         assert command_shapes.calendar_read_ask(phrase) is None, phrase
     assert command_shapes.calendar_read_ask("do I have any appointments today") == "today"            # control
+
+
+def test_a_plural_new_device_class_sweeps_every_device_carrying_the_noun(monkeypatch, home):
+    two = [{"entity_id": "switch.hall_heater", "name": "Hall Heater", "domain": "switch", "on": True, "available": True, "dimmable": False},
+           {"entity_id": "switch.den_heater", "name": "Den Heater", "domain": "switch", "on": True, "available": True, "dimmable": False},
+           {"entity_id": "light.den_lamp", "name": "Den Lamp", "domain": "light", "on": True, "available": True, "dimmable": True}]
+
+    async def _devices():
+        return [dict(d) for d in two]
+
+    monkeypatch.setattr(shs, "list_devices", _devices)
+    out = _run(shs.resolve_smart_home(_I("turn_off", "all heaters", False)))
+    assert out["handled"] is True and sorted(e for e, _ in home) == ["switch.den_heater", "switch.hall_heater"]
+
+
+def test_noun_free_week_reads_use_the_shared_monday_to_sunday_scope(monkeypatch):
+    import skybridge_service as sb
+    from datetime import date
+
+    monkeypatch.setattr(sb, "_today", lambda: date(2026, 11, 5))        # a Thursday
+    for phrase in ("am I free this week", "what's my week look like"):
+        intent = sb.classify_skybridge_intent(phrase)
+        assert intent.domain == "calendar" and intent.range_label == "this week", phrase
+        assert (intent.start_date, intent.end_date) == (date(2026, 11, 2), date(2026, 11, 8)), phrase

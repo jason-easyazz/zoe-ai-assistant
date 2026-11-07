@@ -748,6 +748,13 @@ async def resolve_smart_home(
             targets, ambiguous = devices_by_word, len(devices_by_word) > 1
         else:
             targets, ambiguous = _select_targets(devices, query, action, room_eids)
+            # A PLURAL of a recently learned device class ("turn all heaters off") sweeps every device carrying that noun: the
+            # generic target selection only knows the light / switch classes and would search for the literal plural.
+            plural_need = {_noun_stem(w) for w in _tokens(query) if _noun_stem(w) in _STRICT_NOUNS and w != _noun_stem(w)}
+            if plural_need:
+                targets = [d for d in devices
+                           if plural_need <= {_noun_stem(w) for w in _tokens(f"{d.get('name', '')} {d.get('entity_id', '')}")}]
+                ambiguous = False
             # A device noun Zoe only recently learned (heater, kettle, aircon ...) must be MET by the target: "the bedroom heater" is
             # not satisfied by a room-only token match on "Bedroom Lamp" - that is the documented "couldn't find", not a lamp switched on.
             need = {_noun_stem(w) for w in _tokens(query) if _noun_stem(w) in _STRICT_NOUNS}
