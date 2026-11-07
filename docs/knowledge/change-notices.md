@@ -111,10 +111,18 @@ the poll runs every 10 minutes.
    (`systemctl --user restart zoe-data`), and poll `/health`. Read what it would have sent with
    `grep shadow_send ~/.zoe/change-notices/audit.jsonl`.
 4. Turn it on: set `ZOE_CHANGE_NOTICES=on` and restart.
-5. Optionally, change preferences with `PUT /api/change-notices/preferences`, for example
+5. Owner env default, a message for every landing (Telegram delivery is the bot's job; notices queue while it is
+   down). Append `ZOE_CHANGE_NOTICES_OWNER_PRESET=everything` and `ZOE_CHANGE_NOTICES_INSTANT_CAP=50` to
+   `services/zoe-data/.env` and restart zoe-data. They are the DEFAULT only for an owner who has not saved
+   preferences (any saved document wins, even an empty one); the security and decision floors still apply, and an
+   env-defaulted owner skips the 30-minute same-kind spacing (the cap still holds). Each "went live" message is a
+   title line plus 2-4 dot points (the `For-The-Household:` trailer, else the summary section's bullets, else the
+   first paragraph's sentences), at most 1000 characters, no model. Quiet hours (22:00-07:00) still hold
+   everything overnight by design, so nobody is woken; held notices go out when the window ends.
+6. Optionally, change preferences with `PUT /api/change-notices/preferences`, for example
    `{"preset": "important_only"}`, `{"raised": "list"}`, `{"digest": {"daily_at": "18:00"}}` or
    `{"categories": {"fixed": {"cadence": "instant"}}}`.
-6. Roll back with `POST /api/change-notices/kill {"on": true}` (immediate), or set `ZOE_CHANGE_NOTICES=off` and
+7. Roll back with `POST /api/change-notices/kill {"on": true}` (immediate), or set `ZOE_CHANGE_NOTICES=off` and
    restart.
 
 Tests: `services/zoe-data/tests/test_change_notices.py` (ci_safe). They use a fake GitHub and a fake `/internal/notify`,
