@@ -150,6 +150,7 @@ TABLES: tuple[Store, ...] = (
     _t("face_profiles", BIOMETRIC, OUT_OF_SCOPE, "Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member "
        "un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days)."),
     _t("enrollment_offers", METADATA, OUT_OF_SCOPE, _NOWORDS),
+    _t("member_register", WORDS, REACHED, member="member_register.forget_user"),   # liked topics are the member's words
     _t("alarms", WORDS, REACHED, member="alarms.forget_user"),                 # the label is the member's words
     _t("phone_devices", METADATA, OUT_OF_SCOPE, "A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and "
        "public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens."),
