@@ -11204,6 +11204,30 @@
         },
         "typed_env": false
       },
+      "ZOE_PANEL_SPEAKER_ALARM_MIN": {
+        "defaults": [
+          "'10'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_speaker_health.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
+      "ZOE_PANEL_SPEAKER_HEALTH_PATH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_speaker_health.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
       "ZOE_PANEL_TOKEN_VIA_CF": {
         "defaults": [
           "'guest'"
@@ -17759,6 +17783,7 @@
     "services/zoe-data/omnigent_issue_executor.py": 7,
     "services/zoe-data/panel_kiosk_credential.py": 5,
     "services/zoe-data/panel_principal.py": 5,
+    "services/zoe-data/panel_speaker_health.py": 2,
     "services/zoe-data/pending_suggestions.py": 1,
     "services/zoe-data/person_extractor.py": 2,
     "services/zoe-data/person_extractor_llm.py": 3,
