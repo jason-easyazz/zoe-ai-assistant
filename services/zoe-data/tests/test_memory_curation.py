@@ -777,3 +777,96 @@ def test_no_affect_off_rule_for_a_child_own_feelings(env):
     assert curate(env, "Juno feels sad about the move", "other").status_code == 422
     ref = run(env.svc.ingest("User feels sad about the move.", user_id=KID, source="chat_regex", status="approved"))
     assert ref is not None and ref.metadata["status"] == "approved"
+
+
+def test_an_opt_out_cannot_interleave_with_a_curators_in_flight_add(env):
+    """Codex #2158: the curator's permission check and its ingest are one step against the adult's opt-out (restamp + revoke). The add
+    is paused right before its ingest and the opt-out runs 'at the same time': the note must not end up ``curated`` in a category
+    that is now OFF (the curator cannot reach it, the adult's own controls refuse it)."""
+    async def scenario():
+        curator = await mc.account(env.db, PARENT)
+        await mc.set_my_optin(env.db, ADULT, "routines", True, svc=env.svc)
+        gate, entered = asyncio.Event(), asyncio.Event()
+        real = env.svc.ingest
+
+        async def paused(*a, **k):
+            entered.set()
+            await gate.wait()
+            return await real(*a, **k)
+
+        env.svc.ingest = paused
+        adding = asyncio.create_task(mc.add(env.db, curator, ADULT, "Wren's bins go out on Monday night", "routines", svc=env.svc))
+        await entered.wait()
+        opting_out = asyncio.create_task(mc.set_my_optin(env.db, ADULT, "routines", False, svc=env.svc))
+        await asyncio.sleep(0.05)                       # the opt-out runs now unless the add holds the member's lock
+        gate.set()
+        await asyncio.gather(adding, opting_out)
+
+    run(scenario())
+    for row in rows_of(env, ADULT):
+        assert row.metadata["authority_class"] != ma.CURATED, "a curated note survived the opt-out"
+    assert run(mc.live_optins(env.db, ADULT)) == {} or "routines" not in run(mc.live_optins(env.db, ADULT))
+
+
+def test_a_child_cannot_edit_a_pending_row_into_a_contradiction_of_a_curated_row(env, monkeypatch):
+    """Codex #2158 P1 (round 3): the non-approved early return let a pending unrelated row be edited into a second approved row that
+    disagrees with the curated note, with no held note."""
+    rid = _curated_teacher(env)
+    pending = run(env.svc.ingest("User likes dinosaurs.", user_id=KID, source="chat_regex", status="pending"))
+    assert pending.metadata["status"] == "pending"
+    run(env.svc.review(pending.id, decision="edit", edits="User's teacher is Mr Brown.", actor=KID))
+    assert env.col.rows[rid][1]["status"] == "approved"
+    assert env.col.rows[pending.id][1]["status"] != "approved", "the contradicting text was published as approved"
+    assert "Brown" not in " ".join(r.text for r in rows_of(env, KID))
+    # control: a pending edit that contradicts nothing still publishes
+    other = run(env.svc.ingest("User likes trains.", user_id=KID, source="chat_regex", status="pending"))
+    assert run(env.svc.review(other.id, decision="edit", edits="User likes drawing.", actor=KID)) is not None
+    assert any("drawing" in r.text for r in rows_of(env, KID))              # the edit publishes (the old row is superseded)
+
+
+def test_a_curators_forget_cannot_be_overtaken_by_a_concurrent_edit(env):
+    """Codex #2158 P2: forget read the approved row, an edit superseded it, then the reject hit the superseded original and the
+    approved successor survived behind a 'forgotten' answer. The member lock makes the pair one step each way."""
+    async def scenario():
+        curator = await mc.account(env.db, PARENT)
+        added = await mc.add(env.db, curator, KID, "Juno's teacher is Ms Lee", "school", svc=env.svc)
+        rid = added["id"]
+        gate, entered = asyncio.Event(), asyncio.Event()
+        real = env.svc.review
+
+        async def paused(mem_id, **kw):
+            if kw.get("decision") == "reject":
+                entered.set()
+                await gate.wait()
+            return await real(mem_id, **kw)
+
+        env.svc.review = paused
+        forgetting = asyncio.create_task(mc.forget(env.db, curator, KID, rid, svc=env.svc))
+        await entered.wait()
+        editing = asyncio.create_task(mc.edit(env.db, curator, KID, rid, "Juno's teacher is Mr Ray", svc=env.svc))
+        await asyncio.sleep(0.05)
+        gate.set()
+        await forgetting
+        env.svc.review = real
+        try:
+            await editing
+        except mc.CurationRefused:
+            pass
+
+    run(scenario())
+    assert not [r for r in rows_of(env, KID) if "teacher" in r.text], "an approved teacher note survived the forget"
+
+
+def test_approving_a_pending_row_that_predates_a_curated_note_cannot_publish_a_contradiction(env):
+    """Codex #2158 (round 4): the pending row has no contradicts_id (it existed before the curator's note), so approval skipped the
+    protected-conflict scan and left two approved teachers."""
+    pending = run(env.svc.ingest("User's teacher is Mr Brown.", user_id=KID, source="chat_regex", status="pending"))
+    assert pending.metadata["status"] == "pending"
+    rid = _curated_teacher(env)                                    # the curator adds "User's teacher is Ms Lee" AFTER
+    run(env.svc.review(pending.id, decision="approve", actor=KID))
+    assert env.col.rows[pending.id][1]["status"] != "approved", "the contradicting row was approved"
+    assert env.col.rows[rid][1]["status"] == "approved"
+    assert "Brown" not in " ".join(r.text for r in rows_of(env, KID))
+    ok = run(env.svc.ingest("User likes trains.", user_id=KID, source="chat_regex", status="pending"))
+    run(env.svc.review(ok.id, decision="approve", actor=KID))      # control: a non-contradicting pending row is approved as before
+    assert env.col.rows[ok.id][1]["status"] == "approved"

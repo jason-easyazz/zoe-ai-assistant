@@ -2065,6 +2065,13 @@ class MemoryService:
                 await restraint.erase_user(user_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_service: restraint rows not erased for a deleted user (%s)", type(exc).__name__)
+            # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
+            # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
+            try:
+                import forget_redact
+                forget_redact.clear_turn_caches(user_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
             # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
             try:
                 import warm_speaker
@@ -2869,9 +2876,9 @@ class MemoryService:
         (docs/governance/emotional-safety-note.md section 6). Modes (``memory_authority.affect_gate_mode``):
 
         * ``household`` (DEFAULT): every household member incl. children, no stored consent row.
-          Guests are refused - a guest is the sentinel principal in ``user_filters.GUEST_USERS``
-          (``guest`` / ``anonymous`` / ``voice-guest`` / ``voice-daemon`` / empty), the same set
-          the batch memory passes and ``auth`` use. A person with no ``member_modes`` row is a
+          Guests are refused - a guest is ``user_filters.is_unidentified``: the sentinels
+          (``guest`` / ``anonymous`` / ``voice-guest`` / ``voice-daemon`` / empty) and any
+          ``guest-<id>`` principal, case and whitespace ignored. A person with no ``member_modes`` row is a
           member. A failed member lookup refuses (closed).
         * ``members``: as above but a member flagged a minor is refused; a failed lookup fails
           OPEN with a warning (the minor flag lives in Postgres; a DB blip must not silence it).
@@ -2881,14 +2888,11 @@ class MemoryService:
         if mode == "off":
             return True
         uid = (user_id or "").strip()
-        try:
-            from user_filters import GUEST_USERS
-
-            if uid.lower() in GUEST_USERS:
-                return False
-        except Exception:  # noqa: BLE001
-            if not uid or uid.lower() in {"guest", "anonymous", "voice-guest", "voice-daemon"}:
-                return False
+        # ONE guest predicate (``user_filters.is_unidentified``): the sentinels AND the per-session ``guest-<id>``
+        # principal. This gate knew only the sentinels, so ``guest-<id>`` passed it as a "member" under ``household``
+        # (measured by the minor-affect cell, 2026-11-05); ingest's identity wall stopped it first, this is the backstop.
+        if _is_unidentified(uid):
+            return False
         try:
             from persona_layer import UNSET_MODE, load_member_mode
 
@@ -3001,10 +3005,46 @@ class MemoryService:
             # a candidate raised AGAINST a row is that row's owner's to approve
             if not (status in ("pending", "disputed") and meta.get("contradicts_id")
                     and _auth.writer_is_inferred(actor, user_id=user_id)):
+                if status == "pending" and not meta.get("contradicts_id"):
+                    # a pending row that PRE-DATES a curator's note has no conflict link: approving it would publish text that
+                    # disagrees with a protected row. Run the same scan ingest / edit run, against the rows protected NOW.
+                    res0 = _auth.resolve_write(actor, current.text.strip(), claimed=authority, user_id=user_id,
+                                               prompt_text=prompt_text, speaker_verified=speaker_verified)
+                    if res0.power < _auth.RANK[_auth.OPERATOR]:
+                        clash0 = await self._protected_conflict(user_id, current.text.strip(), res0.power)
+                        if clash0 is not None and clash0[0].id != current.id:
+                            _auth.log_blocked(actor, clash0[1], user_id=user_id, action="approve")
+                            if not _auth.enabled():
+                                return False
+                            await self._write_candidate(
+                                current.text.strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
+                                kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                                entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
+                                basis=res0.basis)
+                            return True
                 return False
             kind = _auth.kind_of(current.text)
         else:
             if status != "approved":
+                if decision == "edit" and status == "pending":
+                    # an edit PUBLISHES the replacement text as approved: an unrelated pending row must not become a second approved
+                    # row that contradicts a protected (curated) note - the same scan the approved-row edit and ``ingest`` run
+                    res0 = _auth.resolve_write(
+                        actor, (edits or current.text).strip(), anchor_text=anchor_text,
+                        claimed=authority, user_id=user_id, prompt_text=prompt_text,
+                        speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings)
+                    if res0.power < _auth.RANK[_auth.OPERATOR]:
+                        clash0 = await self._protected_conflict(user_id, (edits or current.text).strip(), res0.power)
+                        if clash0 is not None and clash0[0].id != current.id:
+                            _auth.log_blocked(actor, clash0[1], user_id=user_id, action="edit")
+                            if not _auth.enabled():
+                                return False
+                            await self._write_candidate(
+                                (edits or current.text).strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
+                                kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                                entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
+                                basis=res0.basis)
+                            return True
                 return False
             if decision == "edit":
                 res = _auth.resolve_write(

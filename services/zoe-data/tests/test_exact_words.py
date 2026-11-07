@@ -263,6 +263,23 @@ async def test_memory_service_delete_user_also_removes_the_owners_verbatim_turns
     assert [r["user_id"] for r in index.rows.values()] == [OTHER]
 
 
+@pytest.mark.asyncio
+async def test_member_wide_forget_also_drops_the_voice_session_bridge_exchanges(svc, index, monkeypatch):
+    """The bridge holds verbatim exchanges in process: a member-wide forget must clear them, or the next rolled session gets them."""
+    import voice_session_bridge as vsb
+
+    monkeypatch.setattr(svc, "_list_ids_for_user", lambda uid: [])
+    monkeypatch.setattr(svc, "_delete_audit_for_user_sync", lambda uid: 0)
+    monkeypatch.setattr(vsb, "_by_user", {})
+    monkeypatch.setenv(vsb._ENV, "1")
+    vsb.note_exchange("voice-panel-p-0000aaaa", USER, "roast pumpkin ideas", "Feta works well.", True, now=1000.0)
+    vsb.note_exchange("voice-panel-p-0000aaaa", OTHER, "roast pumpkin ideas", "Feta works well.", True, now=1000.0)
+    before = set(vsb._by_user)
+    assert USER in before
+    await svc.delete_user(USER, actor="admin", reason="rtbf")
+    assert USER not in vsb._by_user and OTHER in vsb._by_user
+
+
 # ── the packet ───────────────────────────────────────────────────────────────
 
 def test_the_block_quotes_the_words_and_the_day_and_nothing_instruction_shaped():

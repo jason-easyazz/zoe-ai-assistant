@@ -157,9 +157,10 @@ async def sweep_transcripts(user_id: str, *, hours: int = 72, db=None, apply: bo
 
 def clear_turn_caches(user_id: str) -> int:
     """Drop the per-turn text other modules keep in process for this user (the exact-words turn mark, the retirement turn / offer /
-    decision notes): they hold the last message verbatim and would hand it to the next read. Returns how many entries went."""
+    decision notes, the voice-session bridge's held exchanges): they hold the last message verbatim and would hand it to the next read. Returns how many entries went."""
     n = 0
-    for mod, attrs in (("exact_words", ("_marks",)), ("memory_retire", ("_turns", "_offers", "_decided"))):
+    for mod, attrs in (("exact_words", ("_marks",)), ("memory_retire", ("_turns", "_offers", "_decided")),
+                       ("voice_session_bridge", ("_by_user",))):
         try:
             m = __import__(mod)
             for a in attrs:
