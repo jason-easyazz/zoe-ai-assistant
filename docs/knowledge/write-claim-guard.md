@@ -155,6 +155,27 @@ of it lexicon data (`write_claims.json`), no word list in code:
   able to forget that yet, so it's still saved.", a removal "I didn't manage to remove that, so it's still there." - "want me
   to try again?" is not offered where no tool could do it.
 
+## Device switches (2026-11-07) - receipt kind `device`
+
+The owner's panel, a misheard quiet "turn on the light": the router guessed music, the brain had no tools offered, and it said
+"I'll turn the lights on for you." - no tool call, the light stayed off. A switch was not a kind this guard owned ("lights" sat in
+`other_targets`), so nothing stopped it.
+
+* **Claims** (en data): `turned` / `switched` / `flicked` / `flipped` + an on/off particle, the progressive `turning` /
+  `switching` / `flicking`, the promise `turn` / `switch` / `flick` / `flip` after "I'll" / "let me", and `claim_phrases` "done,
+  the light's on" (and its off / plural forms). These verbs KEEP their own kind (the nouns around them never re-file it) and claim
+  only with a device object in their clause (`kind_objects.device`: light, lamp, fan, heater, tv, it, them ...): "I turned it over
+  in my mind" and "It turned out fine" are not claims; a state read-back ("The light's on.") is not either.
+* **Receipts**: `smart_home_service.record_device_receipt` records one `device` receipt per entity the hub CONFIRMED
+  (`controlled_entities`) - called from the Skybridge smart-home branch (voice fast path, panel taps) and from
+  `intent_router._execute_smart_home_intent` (the brain's `home` tool through `/api/system/intent-dispatch`). A refused,
+  offline or ambiguous switch records nothing. A device receipt never backs a WRITE claim, untargeted ones included
+  (`write_receipts.NOT_A_WRITE`), and no write receipt backs a switch.
+* **Honest line**: "I didn't manage to switch that, so nothing's changed. Want me to try again?"; `correction_kinds.device`
+  feeds the session correction note. `authority_table.json` proves `smart_home` with the same receipt (`problem_loop`).
+* Spanish has no device claim words yet (no native review). Pinned by `tests/test_garbled_light_first_turn.py` (`ci_safe`, the
+  every-cut stream equality included).
+
 ## Session poisoning (2026-11-05) - `claim_correction.py`, `ZOE_WRITE_CLAIM_CORRECTION`
 
 A replaced claim poisoned the rest of its session: after one timer request was answered with a claim and no tool call, every

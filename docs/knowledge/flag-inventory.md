@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 843 prod flags; 259 read through `typed_env`.
+- 845 prod flags; 261 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-843 flags; 792 not documented in `.env.example`.
+845 flags; 794 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -200,6 +200,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_DEFAULT_MEDIA_PLAYER` | str | `'media_player.all'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'media_player.all'` | no | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_DELIVERY_LEDGER` | str | `'shadow'` | `off`, `shadow`, `on` | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | yes | NO | `services/zoe-data/proactive/lines.py` |
 | `ZOE_DEPLOY_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_DEVICE_CONFIRM_GUARD` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `True` | yes | NO | `services/zoe-data/device_confirm.py` |
 | `ZOE_DEVICE_ID` | str | `''` | - | - | `(required)` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `ZOE_DEVICE_TOKEN` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | str | `''` | - | `docs/architecture/panel-anywhere.md` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
@@ -752,6 +753,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SMART_TURN_MODEL` | str | `'/home/zoe/models/smart-turn-v3.2-cpu.onnx'` | - | `docs/knowledge/voice-pipeline.md` | `'/home/zoe/models/smart-turn-v3.2-cpu.onnx'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THREADS` | int | `1` | - | `docs/research/incomplete-turn-marker-2026-10-04.md` | `'1'` | no | NO | `services/zoe-data/voice_turn.py` |
 | `ZOE_SMART_TURN_THRESHOLD` | float | `0.5` | - | `docs/knowledge/voice-pipeline.md` | `'0.5'` | no | NO | `services/zoe-data/routers/voice_livekit.py` |
+| `ZOE_SPACER_REQUIRE_CLAIM` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `True` | yes | NO | `services/zoe-data/voice_spacer.py` |
 | `ZOE_SPEAKABLE_PROVENANCE` | bool | `False` | - | `docs/knowledge/memory-views.md` | `False` | yes | NO | `services/zoe-data/provenance_speech.py` |
 | `ZOE_SPEAKER_ADAPT` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/speaker-resnet34-switch.md` | `'off'` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
 | `ZOE_SPEAKER_ADAPT_ALPHA` | float | `0.05` | - | - | `0.05` | yes | NO | `services/zoe-data/speaker_adaptation.py` |
