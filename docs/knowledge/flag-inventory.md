@@ -906,7 +906,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-40 flags; 38 not documented in `.env.example`.
+41 flags; 39 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|

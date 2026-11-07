@@ -112,6 +112,18 @@ async def guard_stream(inner: AsyncIterator[str]) -> AsyncIterator[str]:
             if out != text:
                 _log(text, out)
             yield out
+    except Exception:
+        # The brain failed MID-stream: what the guard still holds is text the person was owed before the error (the failover /
+        # error handling above decides what happens next, not this filter). A lead not (yet) proven to be a call is released as
+        # it came; a proven call is cleaned like any end of stream. Then the error goes on, unchanged.
+        if held:
+            if mode == "call":
+                yield clean_reply("".join(held))
+            else:
+                for d in held:
+                    yield d
+            held.clear()
+        raise
     finally:
         aclose = getattr(inner, "aclose", None)
         if aclose is not None:

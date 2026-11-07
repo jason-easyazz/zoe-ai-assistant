@@ -127,3 +127,26 @@ def test_negative_control_brain_dispatch_leaves_prose_and_the_replay_harness_alo
     # the replay harness is never guarded (same exemption as the write-claim guard)
     assert _dispatch_stream(CALLS[0], {"replay_isolation": True}) == CALLS[0]
     assert brain_dispatch._claim_guarded_text(CALLS[0], "x", "u", 0.0, {"replay_isolation": True}) == CALLS[0]
+
+
+def test_a_mid_stream_error_releases_the_held_lead_before_it_propagates():
+    """The guard holds an identifier-only lead ('partial') until it knows it is not a call; if the brain dies there, the held text is
+    delivered first and the error goes on - the failover contract (text already produced is never swallowed)."""
+    import asyncio
+
+    import tool_text_guard as g
+
+    async def dies():
+        yield "partial"
+        raise RuntimeError("model exploded")
+
+    async def run():
+        seen = []
+        try:
+            async for d in g.guard_stream(dies()):
+                seen.append(d)
+        except RuntimeError as exc:
+            return seen, str(exc)
+        return seen, ""
+
+    assert asyncio.run(run()) == (["partial"], "model exploded")
