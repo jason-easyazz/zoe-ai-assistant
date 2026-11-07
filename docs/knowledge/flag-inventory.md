@@ -139,7 +139,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CAP_WEB_BROWSE` | int | `6000` | - | - | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CAP_WEB_RESEARCH` | int | `6000` | - | - | `6000` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CHANGE_NOTICES` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/change-notices.md` | `'off'` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_CHANGE_NOTICES_INSTANT_CAP` | str | `''` | - | `docs/knowledge/change-notices.md` | `''` | yes | NO | `services/zoe-data/comm_prefs.py` |
 | `ZOE_CHANGE_NOTICES_INTERVAL_S` | int | `600` | - | `docs/knowledge/change-notices.md` | `600` | yes | NO | `services/zoe-data/change_notices.py` |
+| `ZOE_CHANGE_NOTICES_OWNER_PRESET` | str | `''` | - | `docs/knowledge/change-notices.md` | `''` | yes | NO | `services/zoe-data/comm_prefs.py` |
 | `ZOE_CHANGE_NOTICES_STALE_MIN` | int | `60` | - | `docs/knowledge/change-notices.md` | `60` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHANGE_NOTICES_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHAT_CONTEXT_MAX_SESSIONS` | int | `2000` | - | - | `'2000'` | no | NO | `services/zoe-data/routers/chat.py` |

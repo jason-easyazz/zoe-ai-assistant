@@ -184,6 +184,8 @@ _ENTRIES = (
     _f('ZOE_CHANGE_NOTICES', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/change-notices.md'),
     _f('ZOE_CHANGE_NOTICES_INTERVAL_S', 'int', 600, doc='docs/knowledge/change-notices.md'),
     _f('ZOE_CHANGE_NOTICES_STALE_MIN', 'int', 60, doc='docs/knowledge/change-notices.md'),
+    _f('ZOE_CHANGE_NOTICES_OWNER_PRESET', 'str', '', doc='docs/knowledge/change-notices.md'),
+    _f('ZOE_CHANGE_NOTICES_INSTANT_CAP', 'str', '', doc='docs/knowledge/change-notices.md'),
     _f('ZOE_CHANGE_NOTICES_STATE_DIR', 'str', ''),
     _f('ZOE_CHAT_CONTEXT_MAX_SESSIONS', 'int', 2000),
     _f('ZOE_CHAT_INJECT_DB_MEMORY', 'bool', False),

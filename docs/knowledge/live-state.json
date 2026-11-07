@@ -544,11 +544,25 @@
    "kind": "str",
    "readers": 1
   },
+  "ZOE_CHANGE_NOTICES_INSTANT_CAP": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
   "ZOE_CHANGE_NOTICES_INTERVAL_S": {
    "defaults": [
     "600"
    ],
    "kind": "number",
+   "readers": 1
+  },
+  "ZOE_CHANGE_NOTICES_OWNER_PRESET": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
    "readers": 1
   },
   "ZOE_CHANGE_NOTICES_STALE_MIN": {
