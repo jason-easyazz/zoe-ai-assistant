@@ -37,7 +37,9 @@ sys.path.insert(0, str(REPO / "services" / "zoe-data"))
 LIVE_4B_PORT = 11434
 DEFAULT_APP_LOG = Path.home() / ".zoe-logs" / "zoe-data.app.log"
 DEFAULT_STT = Path.home() / ".zoe-voice" / "voice_stt.jsonl"
-DEFAULT_FLUE_DB = Path(os.environ.get("ZOE_SELF_REVIEW_FLUE_DB", "") or REPO / "labs" / "flue-zoe-brain-2x" / "data" / "zoe-brain.db")
+from typed_env import env_str  # noqa: E402 - services/zoe-data is on sys.path just above
+
+DEFAULT_FLUE_DB = Path(env_str("ZOE_SELF_REVIEW_FLUE_DB", "") or REPO / "labs" / "flue-zoe-brain-2x" / "data" / "zoe-brain.db")
 
 
 def check_model_url(url: str) -> str:

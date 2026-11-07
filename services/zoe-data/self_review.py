@@ -99,32 +99,37 @@ def mode() -> str:
     return m if m in MODES else "off"
 
 
-def _env_int(key: str, default: int) -> int:
+def _flag_int(name: str, default: int) -> int:
+    """A registered int flag read through ``typed_env.flag`` (type and default live in the registry); ``default`` on any fault."""
     try:
-        from typed_env import env_int
+        from typed_env import flag
 
-        return env_int(key, default)
+        return int(flag(name))
     except Exception:  # noqa: BLE001
         return default
 
 
 def state_dir() -> Path:
-    raw = os.environ.get("ZOE_SELF_REVIEW_DIR", "").strip()
+    from typed_env import env_str   # registered flag, read through typed_env
+
+    raw = (env_str("ZOE_SELF_REVIEW_DIR", "") or "").strip()
     return Path(raw).expanduser() if raw else Path.home() / ".zoe" / "self-review"
 
 
 def improver_dir() -> Path:
-    raw = os.environ.get("ZOE_SELF_REVIEW_IMPROVER_DIR", "").strip()
+    from typed_env import env_str
+
+    raw = (env_str("ZOE_SELF_REVIEW_IMPROVER_DIR", "") or "").strip()
     return Path(raw).expanduser() if raw else Path.home() / ".zoe" / "self-improver"
 
 
 def max_calls() -> int:
-    return max(0, _env_int("ZOE_SELF_REVIEW_MAX_CALLS", 20))
+    return max(0, _flag_int("ZOE_SELF_REVIEW_MAX_CALLS", 20))
 
 
 def max_tokens() -> int:
     """The night's OUTPUT token cap across every review and paraphrase call (each call is charged its full allowance up front)."""
-    return max(0, _env_int("ZOE_SELF_REVIEW_MAX_TOKENS", 4000))
+    return max(0, _flag_int("ZOE_SELF_REVIEW_MAX_TOKENS", 4000))
 
 
 def _tz():

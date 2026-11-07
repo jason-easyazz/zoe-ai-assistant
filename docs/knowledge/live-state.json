@@ -2614,6 +2614,20 @@
    "kind": "unknown",
    "readers": 1
   },
+  "ZOE_MEMBER_REGISTER": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
+  "ZOE_MEMBER_REGISTER_KIDS": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
   "ZOE_MEMORIES_CURATORS": {
    "defaults": [
     "off"
@@ -4779,35 +4793,21 @@
    "defaults": [
     "unset"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_SELF_REVIEW_FLUE_DB": {
    "defaults": [
     "dynamic"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_SELF_REVIEW_IMPROVER_DIR": {
    "defaults": [
     "unset"
    ],
-   "kind": "unknown",
-   "readers": 1
-  },
-  "ZOE_SELF_REVIEW_MAX_CALLS": {
-   "defaults": [
-    "20"
-   ],
-   "kind": "number",
-   "readers": 1
-  },
-  "ZOE_SELF_REVIEW_MAX_TOKENS": {
-   "defaults": [
-    "4000"
-   ],
-   "kind": "number",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_SELF_URL": {
