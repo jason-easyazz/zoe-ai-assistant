@@ -8275,6 +8275,25 @@
         },
         "typed_env": false
       },
+      "ZOE_MEMORIES_CURATORS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_curation.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-curation.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMORIES_VOICE": {
         "defaults": [
           "False"
