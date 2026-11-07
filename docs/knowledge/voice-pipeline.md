@@ -1971,6 +1971,18 @@ the corpus gate with a planted-greedy negative control, the vocabulary drift pin
 **Replay gate.** In `shadow` (the default) the lane's behaviour is byte-identical — the step only logs. The replay harness mirrors
 `fast_tiers.resolve`, not `voice_command`, so it cannot see the snap either way; the lane-parity rig test is what covers it.
 
+### Two-word light mishear + lists-route device guard (`ZOE_DEVICE_MISHEAR_GUARD`, default off, 2026-11-06)
+
+The snap repairs ONE word. A short "turn on the light" was heard with BOTH command words gone: the verb and its particle fused
+into one word ("shown"/"shone" for "turn on") and the noun heard as "lot". Nothing claimed it, the router head said `lists`
+@ 0.98, the lane spoke the lists tool-ack and the brain answered a request nobody made. With the flag on
+(`skybridge_service`): "lot"/"lots" join the misheard light nouns of `_repair_light_mishear` in a switch frame; the WHOLE
+utterance `<fused on-verb> the <light noun>` (only polite filler around it) reads as "turn on the light"; and
+`skybridge_router_gate` allows a smart-home on/off parse through a `lists` verdict (`reason=device_command_not_list`) when the
+words hold no list noun, list verb or item word and open with a switch verb + on/off. Off is byte-identical. Pinned by
+`tests/test_device_mishear_guard.py`; neutral router rows in both `misses.jsonl` files (source `stt_mishear_2026-11-06`) teach
+the head the same class at its next retrain.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 **Not in the panel daemon (offline verdict 2026-11-04):** on 979 corpus turns every Smart Turn policy that cuts
