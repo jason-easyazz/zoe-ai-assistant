@@ -289,6 +289,30 @@ def _names_another_domain(domain: str, text: str) -> bool:
     return bool(named) and not (named & family)
 
 
+# The list a READ names ("what's on my to do list now" -> "to do"): the words between my/the/our and "list".
+_LIST_REF_RE = re.compile(r"\b(?:my|the|our)\s+((?:[\w'-]+\s+){0,4}?)lists?\b", re.IGNORECASE)
+
+
+def _list_show_slots(text: str) -> dict:
+    """Slots for a list READ the regex fast path missed (a filler word: "whats on my to do list now"). The named list resolves
+    exactly as an add does (``intent_router._list_slots``): my to-do -> the member's own list, an unknown name -> that named
+    list (the executor says it doesn't exist and asks which), a bare "the list" -> the household shopping list (fridge rule).
+    A type word with no "list" ("what's on my to dos") still names its type. Never empty slots for a named list - the
+    executor's empty default is the household SHOPPING list (QA round 3b, 2026-11-07). Pure."""
+    from intent_router import _LIST_TYPE_WORDS, _list_slots
+
+    low = " ".join(str(text or "").lower().replace("-", " ").split())
+    m = _LIST_REF_RE.search(low)
+    if m:
+        return _list_slots(m.group(1))
+    found = {lt for lt, rx in _LIST_TYPE_WORDS if rx.search(low)}
+    if found and found <= {"personal", "tasks"}:
+        return {"list_type": "tasks" if found == {"tasks"} else "personal"}
+    if len(found) == 1:
+        return {"list_type": found.pop()}
+    return {}
+
+
 def _calendar_qualifier(text: str) -> str:
     """Parse a date scope from a calendar query so 'tomorrow'/'this week' aren't
     lost when the show-intent comes through without slots (→ defaulted to today)."""
@@ -381,7 +405,12 @@ def _plan(domain: str, text: str):
         create_intent, show_intent = table[domain]
         # Explicit show cue → read; explicit create cue → write.
         if _SHOW_RE.search(text):
-            slots = {"qualifier": _calendar_qualifier(text)} if show_intent == "calendar_show" else {}
+            if show_intent == "calendar_show":
+                slots = {"qualifier": _calendar_qualifier(text)}
+            elif show_intent == "list_show":
+                slots = _list_show_slots(text)
+            else:
+                slots = {}
             return (show_intent, slots, "read")
         if _CREATE_RE.search(text):
             return (create_intent, {}, "write")

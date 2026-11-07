@@ -18,6 +18,9 @@ An offline instrument (nothing live calls it) and a library a persona-drift batt
                     turn AND they are at least ``PARROT_MIN_SHARE`` of its own content words ("So you've got Sam, Theo, and
                     Biscuit with you now."). On ANY turn, FAIL on a stock line from ``STOCK_LINES`` ("Thanks for sharing that
                     with me", "Welcome to your new place!").
+* ``no_ctx_ack``  - a reply never acknowledges the background context zoe-data adds to a turn as if the user had said it ("I've
+                    noted all those details about the household context", "I'll make sure to use metric and Australian English
+                    from now on" - QA round 3b). ``na`` when the user's own words are about units, spelling or the language.
 
 The CLI reads a JSONL transcript (``{"in": ..., "out": ...}`` or ``{"user": ..., "reply": ...}`` rows) and prints COUNTS only - no
 text, no ids - so it can be run on a private transcript: ``python warmth_probes.py transcript.jsonl --country AU [--after-guard]``.
@@ -32,7 +35,22 @@ import sys
 from collections import Counter
 from typing import Iterable
 
-PROBES = ("follow_up", "no_extras", "locale", "no_parrot")
+PROBES = ("follow_up", "no_extras", "locale", "no_parrot", "no_ctx_ack")
+
+# Acknowledging the background context (the household-locale line, the [Today ...] block) as if the user had said it.
+_CTX_ACK_RE = re.compile(
+    r"\b(?:australian|british|american|new zealand|canadian)\s+english\b|\bhousehold context\b"
+    r"|\b(?:noted|got|taken note of)\s+(?:all\s+)?(?:of\s+)?(?:those|these|the)\s+(?:details|conventions|preferences)\b"
+    r"|\b(?:use|using|stick (?:to|with))\s+(?:the\s+)?metric\b|\bmetric\b[^.?!]{0,40}\bfrom now on\b",
+    re.IGNORECASE)
+# The user's own words are about the conventions: naming them back is right.
+_CTX_ASK_RE = re.compile(r"\b(?:metric|imperial|celsius|fahrenheit|spell\w*|english|units?|conventions?|locale)\b", re.IGNORECASE)
+
+
+def no_ctx_ack(message: str, reply: str) -> str:
+    if _CTX_ASK_RE.search(message or ""):
+        return "na"
+    return "fail" if _CTX_ACK_RE.search(reply or "") else "pass"
 
 #: a first sentence sharing at least this many content words with the user's turn, making up at least this share of its own
 PARROT_MIN_SHARED = 3
@@ -186,6 +204,7 @@ def score(message: str, reply: str, country: str = "") -> dict[str, str]:
         "no_extras": no_extras(message, reply),
         "locale": locale(message, reply, country) if country else "na",
         "no_parrot": no_parrot(message, reply),
+        "no_ctx_ack": no_ctx_ack(message, reply),
     }
 
 

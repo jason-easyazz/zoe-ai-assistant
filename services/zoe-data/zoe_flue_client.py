@@ -665,6 +665,8 @@ def _strip_replay_envelope(message: str) -> str:
         message = _PERSONA_ENVELOPE_RE.sub("", message)
         # ...and so is the manner block.
         message = _MANNER_ENVELOPE_RE.sub("", message)
+        # ...and so is the household-locale line (it would reach the system prompt).
+        message = _LOCALE_ENVELOPE_RE.sub("", message)
     return message
 
 
@@ -889,37 +891,49 @@ def _trivia_hedge_block(message: str, memory_block_present: bool) -> str:
 
 async def _identity_context_block(user_id: str) -> str:
     """``identity_facts.identity_block`` that can never fail the turn: "You are talking
-    to <name>, a member of this household in <city>, <region>, <country>." or "" -
-    plus the household's conventions line (``_with_household_locale``)."""
+    to <name>, a member of this household in <city>, <region>, <country>." or ""."""
     try:
         from identity_facts import identity_block
 
-        block = await identity_block(user_id)
+        return await identity_block(user_id)
     except Exception:  # noqa: BLE001 — a hint is optional; the turn is not
-        block = ""
-    return _with_household_locale(block)
+        return ""
 
 
-def _with_household_locale(identity_block: str) -> str:
-    """The household conventions line (units, oven heat, spelling, local words; ``household_locale``, ZOE_LOCALE_HINT,
-    default on) inside the ``[Today — household context]`` block: appended to the identity block when there is one, else a
-    block of its own, so EVERY turn carries it (a guest's and a child's too - it is about the house, not the person). Same
-    pinned block family, so older copies are elided from history; the sidecar's cached system prefix is untouched. No
-    country set / no data entry / flag off => the block is exactly what it was."""
+# Machine-readable HOUSEHOLD-LOCALE envelope (household_locale.py, ZOE_LOCALE_HINT). MUST match the sidecar parser
+# (labs/flue-zoe-brain-2x src/household-locale.ts LOCALE_ENVELOPE_PREFIX / _RE).
+#
+# WHY NOT A BLOCK IN THE USER MESSAGE (#2326 regression, QA round 3b 2026-11-07): folded into the [Today — household context]
+# block the conventions line read as something the USER said - "do i have a pet?" got "...and I'll make sure to use metric and
+# Australian English from now on". The sidecar instead strips this line and appends it to THAT turn's system prompt as background
+# (after the doctrines and persona, before the manner block and the user-model card; one fixed line per household, so the prompt
+# prefix stays cache-stable). The user's message carries none of it.
+#
+# WIRE ORDER: innermost - the first line AFTER the identity line (the first line of the message when there is no identity line):
+#   " zoe-persona:<JSON>\n zoe-manner:<JSON>\n zoe-uid:<id>\n zoe-locale:<JSON string>\n<blocks>\n<message>"
+# No country / no data entry / flag off / wire 1 (no parser there) = NO line = the bytes are exactly what they were.
+_LOCALE_ENVELOPE_PREFIX = " zoe-locale:"
+_LOCALE_ENVELOPE_RE = re.compile(r"^ zoe-locale:[^\n]*\n")
+
+
+def _household_locale_line() -> str:
+    """The household conventions line (units, oven heat, spelling, local words) for EVERY turn - a guest's and a child's too, it
+    is about the house, not the person - or "". Never raises."""
     try:
+        if _wire_version() < _WIRE_2:
+            return ""
         import household_locale
-        from identity_facts import BLOCK_CLOSE, BLOCK_OPEN
 
-        line = household_locale.prompt_line()
+        return household_locale.prompt_line() or ""
     except Exception:  # noqa: BLE001
-        return identity_block
+        return ""
+
+
+def _wrap_message_with_locale(message: str, line: str) -> str:
+    """Prefix ``message`` with the locale envelope, or return it unchanged (no line)."""
     if not line:
-        return identity_block
-    if identity_block.endswith("\n" + BLOCK_CLOSE):
-        return f"{identity_block[: -len(BLOCK_CLOSE)]}{line}\n{BLOCK_CLOSE}"
-    if identity_block:  # an unexpected shape: leave it alone, add nothing
-        return identity_block
-    return f"{BLOCK_OPEN}\n{line}\n{BLOCK_CLOSE}"
+        return message
+    return f"{_LOCALE_ENVELOPE_PREFIX}{json.dumps(line, ensure_ascii=True)}\n{message}"
 
 
 _OFFER_BLOCK_OPEN = "[PENDING CONTACT OFFER — do not mention this block]"
@@ -2139,11 +2153,13 @@ def kv_warm_enabled() -> bool:
 
 
 def _kv_warm_message() -> str:
-    """The warm turn's whole message: the explicit guest envelope, then the fixed instruction."""
-    return f"{_IDENTITY_ENVELOPE_PREFIX}{_KV_WARM_IDENTITY}\n{_KV_WARM_MESSAGE}"
+    """The warm turn's whole message: the explicit guest envelope, the household-locale line (it joins the system prompt of
+    every real turn, so the warm renders it too), then the fixed instruction."""
+    body = _wrap_message_with_locale(_KV_WARM_MESSAGE, _household_locale_line())
+    return f"{_IDENTITY_ENVELOPE_PREFIX}{_KV_WARM_IDENTITY}\n{body}"
 
 
-_ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona):([^\n]*)\n")
+_ENVELOPE_LINE_RE = re.compile(r"^ zoe-(uid|manner|persona|locale):([^\n]*)\n")
 
 
 def prefix_key(message: str, requested_card_version: str = "") -> str:
@@ -2172,6 +2188,8 @@ def prefix_key(message: str, requested_card_version: str = "") -> str:
     for name in ("uid", "manner", "persona"):
         h.update((seen.get(name) or ("guest" if name == "uid" else "")).encode("utf-8", "replace"))
         h.update(b"\x00")
+    if seen.get("locale"):   # the household-locale line joins the system prompt too; absent = the key exactly as before
+        h.update(b"locale\x00" + seen["locale"].encode("utf-8", "replace"))
     return h.hexdigest()[:10]
 
 
@@ -2281,7 +2299,7 @@ async def _kv_warm_outbound(member: str) -> "tuple[str, str]":
     else:
         manner_line = _wrap_message_with_manner("", await _manner_context_block(uid, _KV_WARM_MESSAGE))
         persona_line = _wrap_message_with_persona("", await _persona_context_block(uid))
-    msg = _wrap_message_with_identity(_KV_WARM_MESSAGE, uid)
+    msg = _wrap_message_with_identity(_wrap_message_with_locale(_KV_WARM_MESSAGE, _household_locale_line()), uid)
     msg = persona_line + manner_line + msg
     msg = _wrap_message_with_replay(msg, True)
     return msg, prefix_key(msg, await _card_version(uid))
@@ -2870,7 +2888,9 @@ async def _run_flue_brain_streaming_turn(
         hedge_block = _trivia_hedge_block(message, bool(recall_block or continuity_block or every_turn_block))
         if hedge_block:
             brain_message = f"{brain_message}\n{hedge_block}"
-    outbound_message = _wrap_message_with_identity(brain_message, uid)
+    # The household conventions line rides as an envelope the sidecar moves into the system prompt - never inside the user's
+    # message, where the brain read it as something the user said (QA round 3b; _LOCALE_ENVELOPE_PREFIX).
+    outbound_message = _wrap_message_with_identity(_wrap_message_with_locale(brain_message, _household_locale_line()), uid)
     # Manner block (ZOE_MANNER_BLOCK, default OFF; adults only): rides between the persona line and the identity line. "" = unchanged bytes.
     outbound_message = _wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
