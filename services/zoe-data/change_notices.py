@@ -356,6 +356,7 @@ def bullets(title: str, body: str, *, limit: int = BULLET_MAX) -> list[str]:
     lines = text.splitlines()
     found: list[str] = []
     in_summary = False
+    break_first = False
     first_list: list[str] = []
     for ln in lines:
         s = ln.strip()
@@ -366,6 +367,10 @@ def bullets(title: str, body: str, *, limit: int = BULLET_MAX) -> list[str]:
             continue
         m = _BULLET.match(ln)
         if not m or _TRAILER.match(m.group(1)) or s.startswith("🤖"):
+            if not s and first_list and not in_summary and not found:
+                break_first = True  # the first plain list ended; later lists are not part of it
+            continue
+        if break_first and not in_summary:
             continue
         (found if in_summary else first_list).append(m.group(1))
     picked = [b for b in (_bullet(x) for x in (found or first_list)) if b][:limit]
@@ -463,8 +468,9 @@ def render_instant(items: list[dict], detail: str, repo_name: str) -> Message:
         lines = [head]
         for i in items:
             blk = _live_block(i, detail, nb)
-            lines.append(f"• {blk[0]}" if len(blk) == 1 or nb == 0 or i.get("kind") != "live" else f"• {blk[0]}")
-            lines.extend(f"   {x}" for x in blk[1:] if i.get("kind") == "live" and nb)
+            lines.append(f"• {blk[0]}")
+            if i.get("kind") == "live" and nb:
+                lines.extend(f"   {x}" for x in blk[1:])
         text = "\n".join(lines)
         if len(text) <= CHUNK_CHARS:
             break

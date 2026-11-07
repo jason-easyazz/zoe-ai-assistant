@@ -722,6 +722,7 @@ def test_bullets_from_each_source_in_order():
     assert cn.bullets("fix: x", "## Notes\n- a list only\n- two") == ["A list only", "Two"]
     para = cn.bullets("fix: x", "Alarms ring again. They had stopped after the update. Third one here. Fourth. Fifth.")
     assert para[:2] == ["Alarms ring again.", "They had stopped after the update."] and len(para) == 4
+    assert cn.bullets("fix: x", "- one\n- two\n\nTest plan:\n\n- ran tests\n- ran lint") == ["One", "Two"]
     assert cn.bullets("fix: x", "") == []  # negative control: nothing invented
     assert cn.bullets("fix: x", "For-The-Household: nothing visible\n\n- real point") == ["Real point"]
     assert all(len(b) <= cn.BULLET_CHARS for b in cn.bullets("fix: x", "- " + "word " * 100))
