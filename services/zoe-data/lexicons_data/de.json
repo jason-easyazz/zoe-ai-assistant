@@ -341,6 +341,7 @@
   "kin_canon": {"mutter": "mutter", "mama": "mutter", "mutti": "mutter", "vater": "vater", "papa": "vater", "vati": "vater", "frau": "frau", "ehefrau": "frau", "mann": "mann", "ehemann": "mann", "sohn": "sohn", "tochter": "tochter", "bruder": "bruder", "schwester": "schwester", "oma": "oma", "großmutter": "oma", "opa": "opa", "großvater": "opa", "tante": "tante", "onkel": "onkel", "kinder": "kinder", "kind": "kinder"},
   "pull_leads": ["hallo", "hi", "hey", "guten", "morgen", "tag", "abend", "also", "na", "ok", "okay", "zoe"],
   "pull_tail": ["zoe", "dann", "heute", "bitte", "mal"],
+  "recall_leads": ["was habe ich", "was hab ich", "was hatte ich", "was sagte ich", "was wollte ich", "wann habe ich", "wie habe ich mich", "weißt du noch", "erinnerst du dich", "erinnere mich", "was hast du"],
   "pull_phrases": ["bring mich auf den neuesten stand", "gibt es etwas das ich wissen sollte", "was gibt es neues", "was gibts neues", "was ist los", "was weißt du von mir", "was weißt du über mich", "wie geht es so", "wie läuft es", "wie läufts"],
   "obj_drop": ["wieder", "mehr", "nie", "niemals", "nicht", "das", "dies", "es", "der", "die", "das", "den", "dem", "über", "von", "zu", "mit", "mein", "meine", "meinen", "sein", "ihr", "thema", "bitte", "mir", "mich", "dich", "dir", "und", "oder", "aber", "noch", "mal", "kein", "keine"],
   "person_obj": ["mich", "mir", "uns", "dich", "dir"],

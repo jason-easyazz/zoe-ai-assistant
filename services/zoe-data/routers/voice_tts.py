@@ -15,6 +15,7 @@ import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from types import SimpleNamespace
 from urllib.parse import quote_plus
 
 import httpx
@@ -346,12 +347,19 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
     truncated to a few hundred chars of only the facts relevant to what was asked.
     Falls back to the full for-prompt dump when search returns nothing (e.g. a
     chit-chat turn with no recall intent, or an embedder hiccup) so recall never
-    silently degrades. Best-effort: guest-safe and never raises."""
+    silently degrades. Best-effort: guest-safe and never raises.
+
+    PRIVACY WALL (person-centred memory D6, ``restraint.VOICE_SURFACE``): every row -
+    the searched facts, the relational lines and the fallback dump - passes the SAME
+    ``restraint.apply_to_packet`` the chat packet uses, on the voice surface: a private
+    class (health, money, grief, family trouble, feelings; a curated health / medication
+    / money note) reaches the brain only when the speaker gate verified THIS voice and the
+    words name it. It bites in every ``ZOE_RESTRAINT`` mode and fails closed."""
     query = (text or "").strip()
     if not query:
         # No turn text (e.g. prewarm) — warm/return the fallback dump instead so
         # the underlying facts cache stays primed.
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
     try:
         from memory_service import get_memory_service, is_guest_memory_user
         if is_guest_memory_user(user_id):
@@ -376,7 +384,8 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
     if not refs and not relational_lines:
         # Search found nothing relevant — fall back to the for-prompt dump so a
         # recall question still has facts to draw on.
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
+    refs, relational_lines = await _voice_private_wall(user_id, query, list(refs or []), relational_lines)
 
     seen: set[str] = set()
     lines: list[str] = []
@@ -404,8 +413,24 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
         seen.add(key)
         lines.append("- " + line)
     if not lines:
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
     return "[What you remember]\n" + "\n".join(lines)
+
+
+async def _voice_private_wall(user_id: str, query: str, refs: list, relational_lines: list[str]) -> tuple[list, list[str]]:
+    """``(refs, relational_lines)`` with what the voice privacy wall withholds removed: one
+    ``restraint.apply_to_packet`` call on ``restraint.VOICE_SURFACE`` (the relational lines ride
+    as id-less rows, judged by their text). Fails closed (nothing)."""
+    try:
+        import restraint
+
+        rel_rows = [SimpleNamespace(id="", text=line, metadata={}) for line in relational_lines]
+        kept_rel, kept_refs, _ = await restraint.apply_to_packet(
+            user_id, query, rel_rows, refs, surface=restraint.VOICE_SURFACE)
+        return list(kept_refs), [r.text for r in kept_rel]
+    except Exception as exc:  # noqa: BLE001 - the wall cannot judge: nothing private may pass, so nothing passes
+        logger.warning("voice recall privacy wall failed (no recall this turn): %r", exc)
+        return [], []
 
 
 async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
@@ -453,13 +478,19 @@ async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
     return out
 
 
-async def _voice_recall_fallback(user_id: str) -> Optional[str]:
-    """Full for-prompt metadata dump (the previous behaviour). Used when the
-    query-relevant search yields nothing, and to warm the facts cache on prewarm.
-    Best-effort / never raises."""
+async def _voice_recall_fallback(user_id: str, query: str = "") -> Optional[str]:
+    """Full for-prompt metadata dump (the previous behaviour), built from the
+    ROWS (``zoe_agent._mempalace_user_fact_refs``, the same cached read) so each
+    passes the voice privacy wall (``_voice_private_wall``) before it is formatted.
+    Used when the query-relevant search yields nothing, and to warm the facts cache
+    on prewarm (no ``query``: nothing private is pulled). Best-effort / never raises."""
     try:
-        from zoe_agent import _mempalace_load_user_facts
-        return (await _mempalace_load_user_facts(user_id)) or None
+        from zoe_agent import _format_user_facts, _mempalace_user_fact_refs
+        refs = await _mempalace_user_fact_refs(user_id)
+        if not refs:
+            return None
+        kept, _ = await _voice_private_wall(user_id, query, refs, [])
+        return (_format_user_facts(kept) if kept else "") or None
     except Exception as exc:
         logger.debug("voice recall fallback load failed (non-fatal): %s", exc)
         return None
@@ -3028,7 +3059,10 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
 
         d = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
         os.makedirs(d, exist_ok=True)
-        dst = os.path.join(d, f"{_t.strftime('%H%M%S')}_{int(_t.time()*1000)%1000:03d}.wav")
+        # YYYYmmdd-HHMMSS_mmm.wav: the date is in the name (2026-11-06) - an HHMMSS-only name repeats every day, so
+        # a clip could only be dated by its mtime. Readers accept both forms (scripts/lib/panel_voice_log.clip_time).
+        _now = _t.time()
+        dst = os.path.join(d, f"{_t.strftime('%Y%m%d-%H%M%S', _t.localtime(_now))}_{int(_now*1000)%1000:03d}.wav")
         # Copy synchronously (fast) before the caller unlinks the original.
         shutil.copyfile(wav_path, dst)
     except Exception as exc:
@@ -5792,12 +5826,14 @@ async def voice_command(
     }
 
 
-async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str) -> Optional[dict]:
+async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str,
+                               side_effects: bool = True) -> Optional[dict]:
     """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member, else None.
 
     ONE rule for both /turn and /turn_stream: the daemon's streaming request falls back to the blocking /turn when it dies before a
     response, and a /turn that skipped this check let a background clip clear only the wake bar. Side effects of a drop (crowd note,
     voice-session close) live here so the two paths cannot drift. An ERROR while judging a window turn FAILS CLOSED (dropped).
+    ``side_effects=False`` only asks (a speculative window turn: it is cancelled and the normal turn re-runs this with them).
     """
     if (payload or {}).get("window") not in _utterance_shape.WINDOWS:
         return None
@@ -5815,7 +5851,7 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     except Exception as _win_exc:
         logger.warning("voice/%s window speaker frame failed (dropping the window turn): %s", route, _win_exc)
         _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
-    if _gate is not None:
+    if _gate is not None and side_effects:
         # The rejected voice is still SOMEONE in the room: record it in the crowd log (no session, no brain, no memory write), so the
         # day-review summary is not spoken aloud on the strength of a crowd that only ever spoke into skipped follow-ups.
         try:
@@ -6135,6 +6171,31 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # listens a short extra window and re-sends ONE merged clip. ``skipped``: a follow-up
     # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
     # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
+    if _spec_gate is not None and (payload or {}).get("window") in _utterance_shape.WINDOWS:
+        # A speculative FOLLOW-UP / CONVERSATION turn (B1.1 in no-wake-word windows): the pre-brain gates below never run on a
+        # speculative turn, so ask them here WITHOUT side effects. One that would drop the turn (an unconfirmed voice, side
+        # speech) cancels the speculation instead: nothing ran, so the daemon runs the FULL recording as a normal window turn,
+        # which meets the same gates with their side effects. Fail-closed: an error cancels too.
+        try:
+            _would_drop = await _window_speaker_drop(payload, caller, transcript, panel_id, route="turn_stream",
+                                                     side_effects=False)
+            if _would_drop is None:
+                _would_drop = _utterance_shape.gate_frame(payload, transcript)
+        except Exception as _spec_win_exc:
+            logger.warning("voice/turn_stream speculative window gate failed (cancelling): %s", _spec_win_exc)
+            _would_drop = {"error": True}
+        if _would_drop is not None:
+            _speculation.close_gate(_spec_gate)
+            _speculation.record_outcome("window_gate")
+            _gate_for_window = _spec_gate
+
+            async def _window_cancelled():
+                yield _speculation.ack_frame(_gate_for_window)
+                yield _speculation.cancelled_frame(_gate_for_window, reason="window_gate")
+            return StreamingResponse(
+                _window_cancelled(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+            )
+
     _gate = None
     # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate RAN on and did not confirm is
     # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
@@ -7099,7 +7160,7 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     if threshold is not None and score >= threshold:
         return user
     logger.info(
-        "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold or 0.0
+        "voice claim rejected: user=%s score=%.4f < threshold=%.3f", user, score, threshold or 0.0
     )
     return None
 

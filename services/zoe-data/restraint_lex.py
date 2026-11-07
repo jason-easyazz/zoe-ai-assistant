@@ -60,6 +60,7 @@ class Pack:
     pull_leads: frozenset = frozenset()
     pull_phrases: frozenset = frozenset()
     pull_tail: frozenset = frozenset()
+    recall_leads: tuple = ()                         # how a question about the past starts ("what did i", "remind me")
     obj_drop: frozenset = frozenset()
     person_obj: frozenset = frozenset()
     mute: dict = field(default_factory=dict)         # name -> compiled pattern
@@ -139,6 +140,7 @@ def pack(lang: str) -> Pack:
         pull_leads=frozenset(r.get("pull_leads") or ()),
         pull_phrases=frozenset(r.get("pull_phrases") or ()),
         pull_tail=frozenset(r.get("pull_tail") or ()),
+        recall_leads=tuple(str(x) for x in (r.get("recall_leads") or ())),
         obj_drop=frozenset(r.get("obj_drop") or ()),
         person_obj=frozenset(r.get("person_obj") or ()),
         mute=mute,

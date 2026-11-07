@@ -364,6 +364,7 @@
   "kin_canon": {"madre": "madre", "mamá": "madre", "mama": "madre", "mami": "madre", "padre": "padre", "papá": "padre", "papa": "padre", "esposa": "esposa", "esposo": "esposo", "marido": "esposo", "hijo": "hijo", "hija": "hija", "hermano": "hermano", "hermana": "hermana", "abuela": "abuela", "abuelo": "abuelo", "tía": "tía", "tío": "tío", "primo": "primo", "prima": "prima", "pareja": "pareja", "hijos": "hijos"},
   "pull_leads": ["hola", "hey", "buenas", "buenos", "días", "dias", "tardes", "noches", "vale", "bueno", "oye", "zoe"],
   "pull_tail": ["zoe", "entonces", "hoy", "porfa", "por", "favor", "ahora"],
+  "recall_leads": ["qué te dije", "qué te he dicho", "qué te conté", "qué te comenté", "qué dije", "qué decía", "cuándo te dije", "cómo me sentía", "te acuerdas", "recuerdas", "recuérdame", "qué dijiste", "qué te dije yo"],
   "pull_phrases": ["algo que deba saber", "cómo va todo", "cómo van las cosas", "hay algo que deba saber", "ponme al día", "qué hay", "qué hay de nuevo", "qué pasa", "qué recuerdas de mí", "qué sabes de mí", "qué tal"],
   "obj_drop": ["otra", "vez", "nunca", "jamás", "jamas", "más", "mas", "ya", "eso", "esto", "ello", "el", "la", "los", "las", "de", "del", "sobre", "por", "con", "en", "a", "mi", "mis", "su", "sus", "tema", "favor", "porfa", "me", "te", "se", "lo", "que", "y", "o", "pero", "nuevo", "volver", "seguir"],
   "person_obj": ["me", "te", "nos", "conmigo", "contigo"],
