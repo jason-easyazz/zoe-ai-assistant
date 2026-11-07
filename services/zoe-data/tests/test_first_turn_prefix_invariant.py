@@ -24,7 +24,7 @@ SPANISH = "¿Cómo estás esta noche? Estoy muy cansado después de trabajar tod
 ENGLISH = "How are you going tonight?"
 
 # Envelope lines the sidecar folds into the SYSTEM PROMPT (they decide the cached prefix): warm must equal turn.
-SYSTEM_PROMPT_LINES = {"uid", "manner", "persona", "register"}
+SYSTEM_PROMPT_LINES = {"uid", "manner", "persona", "register", "nowcard"}
 # Lines the sidecar strips without touching the prompt text (transport / harness markers).
 TRANSPORT_ONLY_LINES = {"replay", "spec"}
 
@@ -132,6 +132,39 @@ def test_warm_and_first_turn_share_the_system_prompt_prefix(prod, name, uid, pre
     assert zfc.prefix_key(warm, "cardv1") == zfc.prefix_key(turn, "cardv1")
 
 
+@pytest.fixture
+def now_card_on(monkeypatch):
+    """ZOE_MEMORY_NOW_CARD=on with a stored card for the member (now_card.card_for stubbed: the store is now_card's own tests')."""
+    import now_card
+
+    async def card(uid, **_k):
+        return ("Now card (Wed 4 Nov).\n- Speaking with: Zed", ["user"], "") if uid == "zed_uid" else ("", [], "no_card")
+
+    monkeypatch.setattr(now_card, "card_for", card)
+    monkeypatch.setenv("ZOE_MEMORY_NOW_CARD", "on")
+    return now_card
+
+
+def test_warm_and_first_turn_share_the_now_card(prod, now_card_on):
+    warm = _warm("zed_uid")
+    turn = prod(ENGLISH, "zed_uid")
+    assert "nowcard" in {n for n, _ in _prompt_prefix(turn)}, "fixture must exercise the now card"
+    assert_prefix_identical(warm, turn)
+    assert zfc.prefix_key(warm, "cardv1") == zfc.prefix_key(turn, "cardv1")
+    assert_prefix_identical(_warm("guest"), prod(ENGLISH, "guest"))          # a guest: no card on either side
+
+
+def test_negative_control_a_warm_without_the_now_card_goes_red(prod, now_card_on, monkeypatch):
+    turn = prod(ENGLISH, "zed_uid")
+
+    async def none(_uid):
+        return ""
+
+    monkeypatch.setattr(now_card_on, "warm_block", none)
+    with pytest.raises(AssertionError):
+        assert_prefix_identical(_warm("zed_uid"), turn)
+
+
 def _manner_of(wire: str) -> str:
     return next((ln for n, ln in _leading(wire) if n == "manner"), "")
 
@@ -183,7 +216,7 @@ def _applypolicies_inputs_ok(ts: str) -> bool:
     params = [p.split(":")[0].split("=")[0].strip().rstrip("?") for p in m.group(1).split(",") if p.strip()]
     body = ts[m.end():ts.index("\n}\n", m.end())]
     return (params == ["context", "userModelSuffix", "turnHarness"]
-            and sorted(set(re.findall(r"\bwith(\w+Block)\(", body))) == ["MannerBlock", "PersonaBlock", "RegisterBlock", "UserModelBlock"])
+            and sorted(set(re.findall(r"\bwith(\w+Block)\(", body))) == ["MannerBlock", "NowCardBlock", "PersonaBlock", "RegisterBlock", "UserModelBlock"])
 
 
 def test_sidecar_prompt_construction_seam_is_pinned():
@@ -197,7 +230,7 @@ def test_sidecar_prompt_construction_seam_is_pinned():
 def test_generic_every_wrap_provider_is_known():
     """Every ``_wrap_message_with_*`` provider in the client is a classified one."""
     wrappers = {k[len("_wrap_message_with_"):] for k in vars(zfc) if k.startswith("_wrap_message_with_")}
-    assert wrappers == {"identity", "persona", "manner", "register", "replay", "speculative_turn"}, (
+    assert wrappers == {"identity", "persona", "manner", "register", "now_card", "replay", "speculative_turn"}, (
         f"new message wrapper(s) {wrappers}: make _kv_warm_outbound render it, then extend this set")
 
 

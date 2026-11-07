@@ -59,6 +59,7 @@ KEEP_SEEN = timedelta(days=30)
 SEND_GAP_S = 1.1  # Telegram: about one message a second per chat
 AUDIT_MAX_BYTES = 5 * 1024 * 1024
 NEEDS_OWNER_LABEL = "needs-owner"
+DEPLOY_BRANCH = "main"  # only a merge INTO this branch is ever deployed; a stacked PR merged into a feature branch is not
 
 FINAL = frozenset({"sent", "shadow", "refused", "failed", "superseded", "skipped", "no_channel", "uncertain_reported"})
 
@@ -230,7 +231,7 @@ class GhCli:
     async def merged_prs(self, since: str) -> list[dict]:
         return await self._json(["pr", "list", "--repo", self.repo, "--state", "merged", "--limit", "100",
                                  "--search", f"merged:>={since}",
-                                 "--json", "number,title,body,url,mergedAt,mergeCommit,labels"]) or []
+                                 "--json", "number,title,body,url,mergedAt,mergeCommit,labels,baseRefName"]) or []
 
     async def contains(self, deployed: str, sha: str) -> Optional[bool]:
         """Is ``sha`` an ancestor of (or equal to) ``deployed``? ``None`` = unknown (try again next tick)."""
@@ -329,6 +330,76 @@ def summarise(title: str, body: str, *, cap: int = 280) -> str:
     return (subject[:1].upper() + subject[1:]).rstrip(".") + "." if subject else ""
 
 
+BULLET_MAX = 4
+BULLET_CHARS = 140
+_SUMMARY_HEAD = re.compile(r"^#{1,4}\s*(?:summary|what|what changed|changes|achieved|why)\b", re.I)
+_BULLET = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+(.+)$")
+
+
+def _bullet(text: str) -> str:
+    t = _plain(text).rstrip()
+    if len(t) > BULLET_CHARS:
+        t = t[: BULLET_CHARS - 1].rsplit(" ", 1)[0].rstrip(",;:- ") + "…"
+    return (t[:1].upper() + t[1:]) if t else ""
+
+
+def bullets(title: str, body: str, *, limit: int = BULLET_MAX) -> list[str]:
+    """2-4 plain dot points about what the PR achieved, deterministic and drawn only from the PR text: the
+    ``For-The-Household:`` trailer's sentences first, else the bullet list under the summary section (else the first
+    bullet list in the body), else the first paragraph's sentences. May be shorter (or empty) for a bare PR."""
+    body = body or ""
+    hh = _HOUSEHOLD.search(body)
+    if hh and hh.group(1).strip().lower() not in ("nothing visible", "none", "n/a"):
+        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", _plain(hh.group(1)))
+        return [b for b in (_bullet(x) for x in parts) if b][:limit]
+    text = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    text = re.sub(r"```.*?```", "", text, flags=re.S)
+    lines = text.splitlines()
+    found: list[str] = []
+    in_summary = False
+    break_first = False
+    first_list: list[str] = []
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("#"):
+            in_summary = bool(_SUMMARY_HEAD.match(s))
+            if found:
+                break
+            continue
+        m = _BULLET.match(ln)
+        if not m or _TRAILER.match(m.group(1)) or s.startswith("🤖"):
+            if not s and first_list and not in_summary and not found:
+                break_first = True  # the first plain list ended; later lists are not part of it
+            continue
+        if break_first and not in_summary:
+            continue
+        (found if in_summary else first_list).append(m.group(1))
+    picked = [b for b in (_bullet(x) for x in (found or first_list)) if b][:limit]
+    if picked:
+        return picked
+    para = summarise_paragraph(text)
+    if para:
+        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])", para)
+        return [b for b in (_bullet(x) for x in parts) if b][:limit]
+    return []
+
+
+def summarise_paragraph(text: str) -> str:
+    para: list[str] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            if para:
+                break
+            continue
+        if s.startswith("#") or _TRAILER.match(s) or s.startswith("🤖") or s.startswith("|"):
+            if para:
+                break
+            continue
+        para.append(s)
+    return _plain(" ".join(para)) if para else ""
+
+
 def _ref(item: dict) -> str:
     return f"#{item['number']} {item['title']}" if item.get("number") else item.get("title", "")
 
@@ -372,6 +443,15 @@ class Message:
     label: Optional[str] = None
 
 
+def _live_block(item: dict, detail: str, nb: int) -> list[str]:
+    """A went-live notice as a title line plus up to ``nb`` dot points of what was achieved (none = the old prose)."""
+    pts = [f"• {b}" for b in (item.get("bullets") or [])[:nb]]
+    if item.get("kind") != "live" or not pts:
+        return _instant_line(item, detail).split("\n")
+    lead = "Reverted and live" if item["category"] == "broke" else _INSTANT_LEAD.get(item["category"], "Update")
+    return [f"{lead}: {_ref(item)}", *pts]
+
+
 def render_instant(items: list[dict], detail: str, repo_name: str) -> Message:
     keys = [i["key"] for i in items]
     if detail == "pointer":
@@ -379,9 +459,23 @@ def render_instant(items: list[dict], detail: str, repo_name: str) -> Message:
     if len(items) == 1:
         it = items[0]
         label = "Deploy runs" if it["kind"] == "stuck" else f"Open #{it['number']}" if it.get("number") else "Open"
-        return Message(_clip(_instant_line(it, detail)), keys, it.get("url"), label)
-    lines = [f"{len(items)} updates from Zoe:"] + [f"• {_instant_line(i, detail).splitlines()[0]}" for i in items]
-    return Message(_clip("\n".join(lines)), keys, f"https://github.com/{repo_name}/pulls", "Open on GitHub")
+        for nb in range(BULLET_MAX, -1, -1):  # fewer dot points until it fits the route's 1000 characters
+            text = "\n".join(_live_block(it, detail, nb)).rstrip()
+            if len(text) <= CHUNK_CHARS or nb == 0:
+                break
+        return Message(_clip(text), keys, it.get("url"), label)
+    head = f"{len(items)} updates from Zoe:"
+    for nb in range(BULLET_MAX, -1, -1):
+        lines = [head]
+        for i in items:
+            blk = _live_block(i, detail, nb)
+            lines.append(f"• {blk[0]}")
+            if i.get("kind") == "live" and nb:
+                lines.extend(f"   {x}" for x in blk[1:])
+        text = "\n".join(lines)
+        if len(text) <= CHUNK_CHARS:
+            break
+    return Message(_clip(text), keys, f"https://github.com/{repo_name}/pulls", "Open on GitHub")
 
 
 def _clip(text: str, limit: int = CHUNK_CHARS) -> str:
@@ -471,6 +565,7 @@ class Recipient:
     role: str
     telegram_id: str
     prefs: dict = field(default_factory=dict)
+    env_default: bool = False  # prefs came from the operator's env default, not the member's saved document
 
 
 async def load_recipients(db=None) -> list[Recipient]:
@@ -501,10 +596,11 @@ async def load_recipients(db=None) -> list[Recipient]:
             uid, role = str(row["id"]), str(row["role"])
             prefs = await read_prefs(conn, uid)
             tid = prefs.get("telegram_id")
-            doc = comm_prefs.normalise(prefs.get(comm_prefs.PREF_KEY), role)
+            raw, from_env = comm_prefs.with_env_default(prefs.get(comm_prefs.PREF_KEY))
+            doc = comm_prefs.normalise(raw, role)
             if doc is None or not (isinstance(tid, str) and tid.isdigit()):
                 continue
-            out.append(Recipient(uid, role, tid, doc))
+            out.append(Recipient(uid, role, tid, doc, env_default=from_env))
     return out
 
 
@@ -552,7 +648,8 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             n = int(pr["number"])
             labels = {str(lb.get("name", "")).lower() for lb in pr.get("labels") or [] if isinstance(lb, dict)}
             item = {"kind": "raised", "number": n, "title": pr.get("title", ""), "url": pr.get("url"),
-                    "summary": summarise(pr.get("title", ""), pr.get("body", "")), "draft": bool(pr.get("isDraft"))}
+                    "summary": summarise(pr.get("title", ""), pr.get("body", "")),
+                    "bullets": bullets(pr.get("title", ""), pr.get("body", "")), "draft": bool(pr.get("isDraft"))}
             if NEEDS_OWNER_LABEL in labels:  # waits on the owner: an instant-capable decision, not a digest line
                 c.st["seen"][f"pr:{n}:raised"] = _iso(c.now)
                 _new_notice(c, {**item, "key": f"pr:{n}:decision", "category": "decision"}, silent=silent)
@@ -570,12 +667,14 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             if seen:
                 continue
             sha = ((pr.get("mergeCommit") or {}).get("oid") or "").strip()
-            if silent or not sha:
-                continue
+            base = str(pr.get("baseRefName") or DEPLOY_BRANCH)
+            if silent or not sha or base != DEPLOY_BRANCH:
+                continue  # merged into a stacked/feature branch: it never deploys, so it can never be "stuck"
             title = pr.get("title", "")
             st["pending_live"][str(n)] = {"number": n, "title": title, "sha": sha, "url": pr.get("url"),
-                                          "merged_at": pr.get("mergedAt") or _iso(c.now),
+                                          "merged_at": pr.get("mergedAt") or _iso(c.now), "base": base,
                                           "summary": summarise(title, pr.get("body", "")),
+                                          "bullets": bullets(title, pr.get("body", "")),
                                           "category": category_for_title(title)}
             # A merge supersedes its raised / waiting-on-you notice wherever it is still unsent: a digest line, or an
             # instant one held by quiet hours or a retry backoff (design 5.4).
@@ -594,6 +693,17 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
             st["pending_live"].pop(n_s, None)
             audit("pending_expired", number=p["number"])
             continue
+        if "base" not in p:  # recorded before the base filter: drop one that was never merged into the deploy branch
+            try:
+                on_main = await gh.contains(DEPLOY_BRANCH, p["sha"])
+            except Exception:  # noqa: BLE001
+                on_main = None
+            if on_main is False:
+                st["pending_live"].pop(n_s, None)
+                audit("pending_dropped", number=p["number"], reason="not_on_deploy_branch")
+                continue
+            if on_main:
+                p["base"] = DEPLOY_BRANCH
         live: Optional[bool] = None
         if deployed and checks < LIVE_CHECKS_PER_TICK:
             checks += 1
@@ -604,7 +714,7 @@ async def _collect(c: Ctx, gh: GitHub, *, silent: bool) -> None:
         if live:
             st["pending_live"].pop(n_s, None)
             _new_notice(c, {"key": f"pr:{p['number']}:live", "kind": "live", "number": p["number"],
-                            "title": p["title"], "summary": p["summary"], "url": p.get("url"),
+                            "title": p["title"], "summary": p["summary"], "bullets": p.get("bullets") or [], "url": p.get("url"),
                             "category": p["category"]}, silent=silent)
         elif (live is False or not deployed) and c.now - merged_at > stale_after():
             stuck.append(p)  # definitely not in the deployed code (an unchecked or unknown one is not counted)
@@ -718,7 +828,8 @@ async def _deliver_instant(c: Ctx, r: Recipient) -> None:
     for key, d in ready:
         cat = st["notices"][key]["category"]
         last = _parse(st["last_instant"].get(f"{r.user_id}|{cat}"))
-        same_kind_recent = last is not None and c.now - last < SAME_KIND_SPACING
+        # An env-defaulted owner asked for "a message every time a PR lands": no 30-minute spacing (the cap still holds).
+        same_kind_recent = (not r.env_default) and last is not None and c.now - last < SAME_KIND_SPACING
         if len(sent_today) >= cap or same_kind_recent:
             d["lane"] = "digest"  # rolls into the next digest; nothing is dropped (design rule 9)
             audit("rolled_to_digest", member=r.user_id, key=key, reason="cap" if len(sent_today) >= cap else "spacing")
@@ -823,6 +934,8 @@ async def tick(*, gh: Optional[GitHub] = None, sender: Sender = telegram_sender,
         st["bootstrapped"] = True
         audit("bootstrapped", seen=len(st["seen"]))
     members = await (recipients or load_recipients)()
+    if not members and c.new_keys:  # new notices with nobody to send them to are otherwise lost without a trace
+        audit("no_recipients", new=len(c.new_keys))
     _fan_out(c, members)
     c.persist()
     if m == "on" and sender is telegram_sender and not telegram_notify.available():

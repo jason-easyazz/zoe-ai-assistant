@@ -68,6 +68,7 @@ TABLES: tuple[Store, ...] = (
     _t("night_observations", WORDS, REACHED, member="night_mind.delete_user", entity="night_mind.erase_entity"),
     _t("night_threads", WORDS, REACHED, member="night_mind.delete_user", entity="night_mind.erase_entity"),
     _t("night_runs", METADATA, REACHED, member="night_mind.delete_user"),
+    _t("now_cards", DERIVED, REACHED, member="now_card.forget_user", entity="now_card.erase_entity"),
     _t("struggle_events", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),
     _t("struggle_proposal_events", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),   # via struggle_proposals.forget_user / forget_events
     _t("turn_outcomes", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),   # failure capture (#2141): _delete_user_locked + _erase_outcomes, whatever the flag says

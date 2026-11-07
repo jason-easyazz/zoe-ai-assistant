@@ -90,6 +90,7 @@ import {
   stripMannerEnvelope,
   withMannerBlock,
 } from '../manner.ts';
+import { forwardedNowCardFromMessages, stripNowCardEnvelope, withNowCardBlock } from '../now-card.ts';
 import {
   forwardedRegisterFromMessages,
   stripRegisterEnvelope,
@@ -246,10 +247,13 @@ export function applyPolicies(context: Context, userModelSuffix = '', turnHarnes
   const afterPersona = stripPersonaEnvelope(unwrapped);
   // An overlay manner.md replaces only the English block zoe-data already chose to send.
   const manner = harnessManner(forwardedMannerFromMessages(afterPersona), harness);
-  // The member register line (src/register.ts) rides between the manner and identity lines; same read-then-strip.
+  // The member register line (src/register.ts) rides between the manner and identity lines, then the now card (src/now-card.ts);
+  // each is read off the newest message and stripped everywhere, in wire order.
   const afterManner = stripMannerEnvelope(afterPersona);
   const register = forwardedRegisterFromMessages(afterManner);
-  const clean = { ...context, messages: stripIdentityEnvelope(stripRegisterEnvelope(afterManner)) };
+  const afterRegister = stripRegisterEnvelope(afterManner);
+  const nowCard = forwardedNowCardFromMessages(afterRegister);
+  const clean = { ...context, messages: stripIdentityEnvelope(stripNowCardEnvelope(afterRegister)) };
   // ZOE_BRAIN_ELIDE_STALE_BLOCKS (src/context-blocks.ts): older user messages lose
   // their injected blocks before windowing. Disclosure below still reads `clean`,
   // so the session-sticky tool block never retracts when a block is elided.
@@ -260,7 +264,8 @@ export function applyPolicies(context: Context, userModelSuffix = '', turnHarnes
   // The persona swap and the manner block happen BEFORE windowing too, so the history budget is charged for them.
   // The manner block goes ahead of the user-model card: the bytes up to the card are the same for every member.
   // The register line goes after the manner block and before the card: the stable prefix (doctrines, persona, manner) is untouched.
-  const prepared = withUserModelBlock(withRegisterBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), register), userModelSuffix);
+  // The now card goes AFTER the user-model card: the bytes up to the end of the card are today's, and the card changes nightly.
+  const prepared = withNowCardBlock(withUserModelBlock(withRegisterBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), register), userModelSuffix), nowCard);
   // Overlay tool guidance replaces DESCRIPTIONS only (never schemas, groups or permissions), before
   // disclosure and windowing so the budget is charged for the text actually sent.
   const safe = withToolGuidance(stripCodingBuiltins(prepared), harness);
@@ -293,14 +298,14 @@ export interface PromptSections {
  */
 export function promptSections(context: Context): PromptSections {
   const unwrapped = stripReplayEnvelope(stripSpeculativeEnvelope(context.messages));
-  const uid = forwardedIdentityFromMessages(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped)))) || (process.env.ZOE_BRAIN_USER_ID ?? '');
+  const uid = forwardedIdentityFromMessages(stripNowCardEnvelope(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped))))) || (process.env.ZOE_BRAIN_USER_ID ?? '');
   // Bound to the harness the prompt was RENDERED from (the render marker), as the provider does: a SIGHUP between render and
   // turn_request must not mix the newly active manner / tool guidance into this turn's accounting.
   const sent = applyPolicies(context, cachedUserModelSuffix(uid.trim()), harnessRenderedInto(context.systemPrompt) ?? undefined);
   const tokens = (ms: Message[]) => ms.reduce((n, m) => n + estimateMessageTokens(m), 0);
   let last = sent.messages.length;
   while (last > 0 && sent.messages[last - 1].role !== 'user') last -= 1;
-  const stored = stripIdentityEnvelope(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped))));
+  const stored = stripIdentityEnvelope(stripNowCardEnvelope(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped)))));
   return {
     system: estimateTextTokens(sent.systemPrompt ?? ''),
     tools: estimateToolTokens(sent.tools),
@@ -339,7 +344,7 @@ export function bindIdentityForRound(context: Context, signal?: AbortSignal): vo
   bindTurnSpeculativeId(signal, forwardedSpeculativeTurnFromMessages(context.messages));
   const specStripped = stripSpeculativeEnvelope(context.messages);
   bindTurnReplayMode(signal, forwardedReplayFromMessages(specStripped));
-  bindTurnUserId(signal, forwardedIdentityFromMessages(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(stripReplayEnvelope(specStripped))))));
+  bindTurnUserId(signal, forwardedIdentityFromMessages(stripNowCardEnvelope(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(stripReplayEnvelope(specStripped)))))));
   // Quoted third-party text (a forwarded Telegram message, a pendant transcript) fenced
   // by its producer taints the turn from its FIRST round, before any tool can run:
   // writes and web_search refuse exactly as after a web result (src/untrusted-content.ts).
