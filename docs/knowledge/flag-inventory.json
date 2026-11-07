@@ -8678,6 +8678,48 @@
         },
         "typed_env": false
       },
+      "ZOE_MEMORY_NOW_CARD": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/now_card.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "live: unset (code default in force)",
+          "owner_doc": "docs/knowledge/now-card.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMORY_NOW_CARD_HARNESS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/now_card.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "measured bar runs only",
+          "owner_doc": "docs/knowledge/now-card.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMORY_PHYSICAL_ERASE": {
         "defaults": [
           "'1'"

@@ -500,6 +500,8 @@ _ENTRIES = (
     _f('ZOE_MEMORY_LINT_STALE_DAYS', 'int', 365),
     _f('ZOE_MEMORY_LOOP_LOG_PATH', 'str', '~/.zoe/zoe-data-memory-loops.log', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS', 'str', '', doc='docs/knowledge/incident-runbook.md'),
+    _f('ZOE_MEMORY_NOW_CARD', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/now-card.md', note='live: unset (code default in force)'),
+    _f('ZOE_MEMORY_NOW_CARD_HARNESS', 'bool', False, doc='docs/knowledge/now-card.md', note='measured bar runs only'),
     _f('ZOE_MEMORY_PHYSICAL_ERASE', 'bool', True, doc='docs/knowledge/forgotten-text-physical-erase.md'),
     _f('ZOE_MEMORY_PROVENANCE_ANSWERS', 'bool', True, doc='docs/knowledge/samantha-bar.md'),
     _f('ZOE_MEMORY_REJECT_LEDGER', 'str', '', doc='services/zoe-data/AGENTS.md'),

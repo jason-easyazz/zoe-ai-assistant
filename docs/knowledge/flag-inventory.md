@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 840 prod flags; 256 read through `typed_env`.
+- 842 prod flags; 258 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-840 flags; 789 not documented in `.env.example`.
+842 flags; 791 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -449,6 +449,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MEMORY_LINT_STALE_DAYS` | int | `365` | - | - | `'365'` | no | NO | `services/zoe-data/memory_lint.py` |
 | `ZOE_MEMORY_LOOP_LOG_PATH` | str | `'~/.zoe/zoe-data-memory-loops.log'` | - | `services/zoe-data/AGENTS.md` | `'~/.zoe/zoe-data-memory-loops.log'` | no | NO | `services/zoe-data/routers/system.py` |
 | `ZOE_MEMORY_LOOP_ZERO_EFFECT_RUNS` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `-` | no | NO | `services/zoe-data/memory_metrics.py` |
+| `ZOE_MEMORY_NOW_CARD` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/now-card.md` | `'off'` | yes | NO | `services/zoe-data/now_card.py` |
+| `ZOE_MEMORY_NOW_CARD_HARNESS` | bool | `False` | - | `docs/knowledge/now-card.md` | `False` | yes | NO | `services/zoe-data/now_card.py` |
 | `ZOE_MEMORY_PHYSICAL_ERASE` | bool | `True` | - | `docs/knowledge/forgotten-text-physical-erase.md` | `'1'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_MEMORY_PROVENANCE_ANSWERS` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/memory_provenance.py` |
 | `ZOE_MEMORY_REJECT_LEDGER` | str | `''` | - | `services/zoe-data/AGENTS.md` | `-` | no | NO | `services/zoe-data/memory_reject_ledger.py` |
