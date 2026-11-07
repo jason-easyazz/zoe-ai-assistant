@@ -6060,6 +6060,142 @@
         },
         "typed_env": false
       },
+      "ZOE_IMPROVER_ANTHROPIC_KEY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_BRAIN_BUDGET_S": {
+        "defaults": [
+          "1500.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 1500.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_CELLS": {
+        "defaults": [
+          "('flaw', 'good')"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": [
+            "flaw",
+            "good"
+          ],
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "list"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_DEADLINE": {
+        "defaults": [
+          "'04:25'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "04:25",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_MAX_TOKENS_NIGHT": {
+        "defaults": [
+          "40000"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 40000,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_MAX_USD_NIGHT": {
+        "defaults": [
+          "0.4"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.4,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_IMPROVER_MODEL": {
+        "defaults": [
+          "'claude-sonnet-5-5'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/perf/self_improver.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "claude-sonnet-5-5",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-improver.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_INTENT_DISPATCH_REQUIRE_TOKEN": {
         "defaults": [
           "''"
@@ -9404,7 +9540,8 @@
         ],
         "in_env_example": false,
         "readers": [
-          "scripts/maintenance/harness_quiet.py"
+          "scripts/maintenance/harness_quiet.py",
+          "scripts/perf/self_improver.py"
         ],
         "registered": true,
         "spec": {
@@ -9415,7 +9552,7 @@
           "owner_doc": "",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_NIGHT_MIND": {
         "defaults": [
