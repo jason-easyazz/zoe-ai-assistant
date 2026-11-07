@@ -263,9 +263,16 @@ _FORGET_ACT = (
 _FORGET_TAIL = r"(?:[\s,]+(?:please|zoe|thanks|thank\s+you))?[\s,.!?;:–—-]*"
 # shape A: the WHOLE utterance is one or more retraction acts, each behind optional openers ("no, don't remember that!
 # forget that"). Trailing content ("oh forget that, what's the weather") is not a retraction.
+# A short closing REASON that it should not be kept ("... forget that please. its not a real plan", QA round 3b) is still
+# the retraction: only "it's / that's ... not real / nothing / a joke / private" shapes, never a question or a new request.
+_FORGET_REASON = (
+    r"(?:(?:it'?s|its|it\s+is|it\s+was|that'?s|thats|that\s+was)\s+(?:just\s+|only\s+|really\s+)?"
+    r"(?:not\s+(?:a\s+|an\s+)?(?:real|serious|true|important|happening|thing\b|big\s+deal)|nothing\b|a\s+joke|"
+    r"(?:a\s+)?silly|private|personal|nobody'?s\s+business)[^?]{0,30}?[\s.!]*)?"
+)
 _FORGET_WHOLE_RE = re.compile(
     r"^[\s,.!?;:-]*" + _FORGET_OPENER + _FORGET_ACT + _FORGET_TAIL
-    + r"(?:" + _FORGET_OPENER + _FORGET_ACT + _FORGET_TAIL + r")*$",
+    + r"(?:" + _FORGET_OPENER + _FORGET_ACT + _FORGET_TAIL + r")*" + _FORGET_REASON + r"$",
     re.IGNORECASE,
 )
 # shape B: "forget (that) I said ..." - the owner retracting their OWN last words. Not "... about X": that names a

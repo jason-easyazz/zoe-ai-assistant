@@ -907,7 +907,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-39 flags; 37 not documented in `.env.example`.
+40 flags; 38 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -932,6 +932,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_URL` | str | `''` | - | - | `'http://127.0.0.1:3579'`, `'http://127.0.0.1:8000'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
 | `ZOE_BRAIN_USER_ID` | str | `''` | - | `docs/knowledge/user-model-ab.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts`<br>`labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts` |
 | `ZOE_DATA_URL` | str | `'http://127.0.0.1:8000'` | - | `docs/research/telegram-calls-voice-photos-2026-10-04.md` | `'http://127.0.0.1:8000'`, `-` | no | NO | `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts`<br>`labs/flue-zoe-brain-2x/src/user-model.ts`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |
+| `ZOE_EMOTIONAL_CUES_PATH` | str | `''` | - | `docs/knowledge/write-claim-guard.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/tools/emotional-cues.ts` |
 | `ZOE_ENV_FILE` | str | `'/home/zoe/assistant/services/zoe-data/.env'` | - | - | `dynamic` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_DISPATCH` | str | `'dry'` | - | `docs/architecture/multica-executor-migration.md` | `'dry'` | no | NO | `labs/flue-executor/src/config.ts` |
 | `ZOE_EXECUTOR_MODE` | str | `'lab'` | - | `docs/architecture/multica-executor-migration.md` | `'lab'` | no | NO | `labs/flue-executor/src/config.ts` |
