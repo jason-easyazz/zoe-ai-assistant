@@ -2609,6 +2609,25 @@
         },
         "typed_env": true
       },
+      "ZOE_CHANGE_NOTICES_INSTANT_CAP": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/comm_prefs.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/change-notices.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_CHANGE_NOTICES_INTERVAL_S": {
         "defaults": [
           "600"
@@ -2625,6 +2644,25 @@
           "note": "",
           "owner_doc": "docs/knowledge/change-notices.md",
           "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_OWNER_PRESET": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/comm_prefs.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/change-notices.md",
+          "type": "str"
         },
         "typed_env": true
       },
@@ -8274,6 +8312,25 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_MEMORIES_CURATORS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_curation.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/memory-curation.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_MEMORIES_VOICE": {
         "defaults": [
