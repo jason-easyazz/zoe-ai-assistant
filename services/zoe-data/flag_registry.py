@@ -484,6 +484,8 @@ _ENTRIES = (
     _f('ZOE_MCP_STRICT_USER_ID', 'bool', True, doc='docs/research/zoe-abilities-connectors-2026-10.md'),
     _f('ZOE_MCP_USER_ID', 'str', ''),
     _f('ZOE_MCP_USER_ROLE', 'str', ''),
+    _f('ZOE_MEMBER_REGISTER', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/member-register.md'),
+    _f('ZOE_MEMBER_REGISTER_KIDS', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/member-register.md'),
     _f('ZOE_MEMORIES_VOICE', 'bool', False, doc='docs/knowledge/memories-voice.md'),
     _f('ZOE_MEMORIES_CURATORS', 'bool', False, doc='docs/knowledge/memory-curation.md'),
     _f('ZOE_MEMORY_AUDIT_COLLECTION', 'str', 'mempalace_audit'),
