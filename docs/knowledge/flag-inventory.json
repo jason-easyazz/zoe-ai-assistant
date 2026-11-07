@@ -20247,5 +20247,9 @@
       "typed_env": false
     }
   },
-  "registry_unread": []
+  "registry_unread": [
+    "ZOE_SELF_REVIEW",
+    "ZOE_SELF_REVIEW_MAX_CALLS",
+    "ZOE_SELF_REVIEW_MAX_TOKENS"
+  ]
 }

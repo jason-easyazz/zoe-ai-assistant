@@ -21,6 +21,8 @@ stored anywhere new):
                               owner decision 2026-10-14) is DELETED (``contacts_store.forget_voiceprints``)
   * ``text_logs``           - the local JSONL logs that keep utterance text (``local_text_logs``: the router shadow log, the intent-miss
                               log): a record whose text names the entity is DROPPED, hash included
+  * ``self_review``         - the nightly self-review's private records (``~/.zoe/self-review/``, ``self_review.erase_entity``): a
+                              record of the member whose words or review name the entity is dropped and that night's report re-rendered
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
                               or whose name / email names the entity, loses the link AND the name and email (the row
                               stays, anonymous, so the event keeps its shape); the desktop calendar's legacy
@@ -68,7 +70,8 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
                       "calendar_attendees", "anticipation_offers"))
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
-              "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs")
+              "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs",
+              "self_review")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -205,6 +208,12 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         # the local JSONL logs that keep utterance text (router shadow log, intent misses): a record naming the entity is dropped
         return await asyncio.to_thread(local_text_logs.erase_entity, rx)
 
+    async def self_review_() -> int:
+        import self_review
+
+        # the nightly self-review's private records (~/.zoe/self-review/): a record of the member naming the entity is dropped
+        return await self_review.erase_entity(user_id, rx, strict=True)
+
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)
     if want("commitments"):
@@ -215,6 +224,8 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         await _step("omi_day_review", omi_review, res)
     if want("text_logs"):
         await _step("text_logs", text_logs, res)
+    if want("self_review"):
+        await _step("self_review", self_review_, res)
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
