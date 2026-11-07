@@ -293,6 +293,7 @@ _ENTRIES = (
     _f('ZOE_ESPEAK_VOLUME', 'str', ''),
     _f('ZOE_EXACT_WORDS', 'bool', True, doc='docs/knowledge/zoe-memory-bench.md'),
     _f('ZOE_EXACT_WORDS_BACKFILL_HOURS', 'int', 36, doc='services/zoe-data/AGENTS.md'),
+    _f('ZOE_EXPLICIT_CORRECTION', 'bool', True, doc='docs/knowledge/memory-authority.md'),
     _f('ZOE_EXECUTOR_DISPATCH', 'str', 'dry', doc='docs/architecture/multica-executor-migration.md'),
     _f('ZOE_EXECUTOR_MODE', 'str', 'lab', doc='docs/architecture/multica-executor-migration.md'),
     _f('ZOE_EXECUTOR_RUNTIME_NAME', 'str', ''),
