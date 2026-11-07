@@ -638,11 +638,18 @@ def _build_memory_prompt_packet(
     refs: list[dict[str, Any]] = []
     quote_by_id: dict[str, str] = {}
     dated = 0
+    # One current age per person (QA round 2, 2026-11-05; ``person_extractor.stale_age_ids``): the rows giving a
+    # person an age they no longer have are never served, so the brain cannot pick the old value.
+    from person_extractor import stale_age_ids
+
+    stale_ages = stale_age_ids([*(recent or ()), *hits, *facts])
 
     def _consider(ref: MemoryRef, *, from_search: bool, is_recent: bool = False) -> None:
         nonlocal dated
         if len(lines) >= max_facts:
             return
+        if str(ref.id) in stale_ages:
+            return   # an age this person no longer has (one current age per person, above)
         meta = ref.metadata or {}
         status = str(meta.get("status") or "active").lower()
         # Drop-set mirrors memory_service._BLOCKED_READ_STATUSES *except* "disputed",
