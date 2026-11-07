@@ -5917,13 +5917,15 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
         _win_verdict = False
     if _win_verdict is None and side_effects:
         # No verdict at all on a no-wake-word turn: the gate is off / in shadow mode, or the panel could not score (its speaker model
-        # is refused / loading - 2026-11-07, ~8 h). The turn still passes - it is answered in GUEST scope, never with an identity,
-        # because no claim was accepted - but say so loudly: a follow-up chain with no verdict is exactly what a TV can keep alive.
+        # is refused / loading - 2026-11-07, ~8 h). The turn still passes, but the VOICE gives it no identity: no claim was accepted,
+        # so voice_command scopes it to a guest unless a FRESH panel PIN sign-in backs a member (voice_session: a PIN is its own
+        # password, and the only way in while the speaker model is down). Say so loudly: a follow-up chain with no verdict is
+        # exactly what a TV can keep alive.
         _sms = (payload or {}).get("speaker_model_state")
         _sms_state = str(_sms.get("state") or "?") if isinstance(_sms, dict) else "unreported"
         if _sms_state not in ("ready", "off"):
-            logger.warning("voice/%s window turn passes with NO speaker verdict (panel speaker model %s): guest scope, identity "
-                           "not escalated", route, _sms_state)
+            logger.warning("voice/%s window turn passes with NO speaker verdict (panel speaker model %s): guest scope, no identity "
+                           "from the voice (a fresh PIN sign-in only)", route, _sms_state)
     try:
         _gate = _utterance_shape.window_speaker_frame(
             payload, transcript, _win_verdict,
