@@ -1983,6 +1983,49 @@ words hold no list noun, list verb or item word and open with a switch verb + on
 `tests/test_device_mishear_guard.py`; neutral router rows in both `misses.jsonl` files (source `stt_mishear_2026-11-06`) teach
 the head the same class at its next retrain.
 
+## Device confirm guard — a garbled short light command gets ONE question (`ZOE_DEVICE_CONFIRM_GUARD`, default ON, 2026-11-07)
+
+**The failure (the owner's first turns, 2026-11-06/07).** Every panel sitting opened with the same quiet request — the bedroom
+light on or off — and every first attempt failed. Said softly, the words reached Zoe as sound-alikes with BOTH command words gone:
+the verb and its particle fused into one word, the noun heard as a "lot" / "lines" / "one" / "1". No matcher claimed them, the
+router guessed lists / memory / music / chat, a domain acknowledgement played ("Let me check your lists.", "On it."), and the brain
+answered "I'm Zoe.", read a feeling into the words, or promised to switch the light with no tool call. The louder retry worked each
+time. The STT snap cannot help: it repairs ONE word.
+
+**What it does** (`services/zoe-data/device_confirm.py`, called from `routers/voice_tts.voice_command` right after the STT snap,
+before the Skybridge cards). A transcript qualifies when, after wake / politeness words: it is 2-6 words and not a question; its
+LAST content word is a light-like noun after a determiner ("the lot", "a lot", "the one"); a command-like verb comes before it; and
+nothing follows it but an on/off particle — the words are lexicon DATA (`lexicons_data/en.json` "device_confirm"). Zoe asks ONE
+short question ("Light on?" / "Turn the light off?"; "of" reads as off, a fused on-verb or no particle as on). The ask is the STT
+snap's pending confirmation, so a plain "yes" turns that turn's words INTO "turn on the light" and every gate below — PIN, guest
+policy, home control, Skybridge's router veto — judges it like a spoken command; the resolver's receipt says it back ("Turned
+Bedroom Light on."). "No" cancels; anything else is a new request.
+
+**Never** (each a veto): a turn any matcher claims (Skybridge or `intent_router`: it just runs); a member's own session (desktop,
+phone — panel only, `at_the_panel`); a router verdict that confidently says smart_home (not gated, `head_conf >= 0.8`: the brain's
+home tool owns it); the middle of a conversation about something else (the panel's previous turn was under 90 s ago and not about a
+device); "you" / "me" / "this" in the words ("do you like this one"); a caller who may not drive the house
+(`panel_principal.home_control_refused` — logged `outcome=refused_home`, the turn goes on as today). Negative controls pinned:
+"I've had a lot on", "what's on the TV", "a lot of patience", "show me the one" never ask.
+
+**Metric line** `DEVICE_CONFIRM to=device_confirm/turn_on outcome=asked` (a member's line also carries the heard words, a guest's
+never). Kill switch: `ZOE_DEVICE_CONFIRM_GUARD=0`. Pinned by `tests/test_garbled_light_first_turn.py` (`ci_safe`) and
+`tests/test_device_confirm_voice_lane.py` (the real `voice_command` through the lane-parity rig: ask, yes switches, no does nothing).
+
+**What else changed with it (same incident).** (1) `voice_spacer` (`ZOE_SPACER_REQUIRE_CLAIM`, default on): a domain's own
+acknowledgement ("Let me check your lists.", "On it.") is spoken only when the WORDS name that domain (`command_shapes.named_domains`
+or the lexicon's `spacer.domain_words`); a router guess gets the neutral generic line. (2) The write-claim guard knows a DEVICE
+switch: "I'll turn the lights on for you" / "Turning it off now" need a `device` receipt, which the Skybridge resolver and the
+brain's home-tool path record only for a switch the hub confirmed (`smart_home_service.record_device_receipt`;
+[write-claim-guard.md](write-claim-guard.md)). (3) The brain's warmth doctrine opens with *unclear words*: speech-to-text mishears,
+so ask briefly and offer the likely reading, never read a feeling into an unclear or very short message, never answer with just a
+name; the identity doctrine lost its copyable "I'm Zoe." line. (4) Neutral paraphrases of the class joined the router miss sets
+(`labs/setfit-router/data/misses.jsonl`, `labs/functiongemma-finetune/data/train_misses.jsonl`, source `garbled_light_2026-11-07`).
+
+**Replay gate.** The replay harness mirrors `fast_tiers.resolve`, not `voice_command`, so it cannot see the guard; the lane-parity
+rig test covers it. The spacer, claim-guard and doctrine changes do reach replayed brain turns: the lander runs the voice
+regression probe before deploy.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
 
 **Not in the panel daemon (offline verdict 2026-11-04):** on 979 corpus turns every Smart Turn policy that cuts

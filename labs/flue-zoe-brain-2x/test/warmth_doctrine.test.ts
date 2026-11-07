@@ -70,6 +70,26 @@ test('an overlay slot: second in order, and the compiled text when no overlay re
   assert.ok(!swapped.includes(WARMTH_DOCTRINE));
 });
 
-test('it stays small: the cached prefix grows by at most ~210 tokens (chars/4)', () => {
-  assert.ok(WARMTH_DOCTRINE.length <= 840, `warmth doctrine is ${WARMTH_DOCTRINE.length} chars`);
+test('it stays small: the cached prefix grows by at most ~310 tokens (chars/4) with the unclear-words paragraph', () => {
+  assert.ok(WARMTH_DOCTRINE.length <= 1240, `warmth doctrine is ${WARMTH_DOCTRINE.length} chars`);
+});
+
+// ── unclear words (2026-11-07): a misheard short command is asked about, never answered with a feeling or a bare name ──
+const { IDENTITY_DOCTRINE } = await import('../src/doctrines.ts');
+
+test('unclear words: speech-to-text may mishear; ask briefly, offer the likely reading, no feeling inferred, no bare name', () => {
+  assert.match(WARMTH_DOCTRINE, /speech-to-text, which can mishear/);
+  assert.match(WARMTH_DOCTRINE, /If a message doesn't make sense, ask briefly what they meant and offer your best guess as a short question/);
+  assert.match(WARMTH_DOCTRINE, /Never read a feeling into an unclear or very short message/);
+  assert.match(WARMTH_DOCTRINE, /never reply with just your name/);
+  // the example is SCOPED to its case, so a small model does not copy it onto every unclear turn
+  assert.match(WARMTH_DOCTRINE, /for a garbled light command, something like "Did you want the light on\?"/);
+  // the unclear-words rule comes BEFORE "Feelings:", so an unclear turn is never read as a disclosure first
+  assert.ok(WARMTH_DOCTRINE.indexOf('Unclear words:') < WARMTH_DOCTRINE.indexOf('Feelings:'));
+});
+
+test('no copyable stock reply survives: no "I\'m Zoe." identity line, no "Ugh, rough." anywhere in the instructions', () => {
+  assert.doesNotMatch(IDENTITY_DOCTRINE, /"I'm Zoe\."/);
+  assert.match(IDENTITY_DOCTRINE, /never answer anything else with just your name/);
+  assert.doesNotMatch(ZOE_INSTRUCTIONS, /Ugh, rough/);
 });
