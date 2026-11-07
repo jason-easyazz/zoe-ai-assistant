@@ -1,0 +1,14 @@
+# Nightly 04:00 local: the self-evolution Phase 1 improver (manner.md, shadow-apply only), after the 12B night window
+# (~02:50-03:10) and finished by 04:25, before the 04:30 nightly voice regression.
+# TEMPLATE, NOT INSTALLED (owner opt-in) - see zoe-self-improver.service and docs/knowledge/self-improver.md.
+# Persistent=false on purpose: a catch-up run at boot lands outside the slot and would only be refused.
+[Unit]
+Description=Zoe self-improver timer (04:00, shadow-only manner.md improver)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

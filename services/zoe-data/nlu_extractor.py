@@ -11,6 +11,7 @@ so callers fall through to the Zoe Agent.
 import datetime
 import json
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -257,10 +258,20 @@ async def _extract_list_add(text: str) -> Optional[dict]:
     args = await _call_with_tool(text, _LIST_ADD_SCHEMA)
     if not args:
         return None
-    return {
+    slots = {
         "item": (args.get("item") or "").strip(),
         "list_type": args.get("list_type") or "shopping",
     }
+    # The model picks from an enum, so "my pharmacy list" comes back as SOME type (often shopping). A list the user named
+    # in the words decides instead - the same resolver as the fast path: a type, or a named list the executor finds or
+    # asks about, never a guessed household list (QA 2026-11-06).
+    named = re.search(r"\b(?:to|on|onto|into)\s+(?:the\s+|my\s+|our\s+)?([^\W_][\w' -]{0,60}?)\s*list\b", (text or "").lower())
+    if named:
+        from intent_router import _list_slots
+
+        slots.pop("list_type", None)
+        slots.update(_list_slots(named.group(1)))
+    return slots
 
 
 async def _extract_note(text: str) -> Optional[dict]:
