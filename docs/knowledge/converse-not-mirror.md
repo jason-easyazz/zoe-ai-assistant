@@ -49,6 +49,8 @@ last answer; if they ask for more, add something new" and the A/B scores it.
    a related thought, a next step); care is one short clause, not a paraphrase; at most one question and only if the answer changes what you say
    next, otherwise end on a statement; criticism of you is feedback about you (name the exact thing, say what you will do); never repeat your last
    answer; never flatter. It comes after the soul in the system prompt, so it overrides "acknowledge first" by being the later, more specific rule.
+   **2026-11-06:** "care is one short clause ... otherwise end on a statement" became "react to one specific detail, then ONE gentle open
+   question" for a feeling or a self-disclosure (QA: bland acknowledgements, no question back) - [samantha-warmth.md](samantha-warmth.md).
    The old plan-flaw / goodnight lines are gone from it: the flaw is found by code (`risk_cues.py`) and the goodbye is cleaned by code (`clean_goodbye.py`).
 2. **The mirror guard** (`mirror_guard.py`, `ZOE_MIRROR_GUARD=off|shadow|on`, default `shadow`). A stream filter after the narration strip, before
    the clean-goodbye filter. If the reply's FIRST sentence opens with a mirror formula (after a filler like "oh" / "wow") and SOMETHING OF SUBSTANCE
