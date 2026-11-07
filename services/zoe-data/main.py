@@ -2382,6 +2382,10 @@ _telegram_media.register(app)
 from routers import persona as _persona_router  # noqa: E402
 _persona_router.register(app)
 
+# Member register (flag-dark): GET/PUT/DELETE /api/member-register/... Mounted ONLY when ZOE_MEMBER_REGISTER is on.
+from routers import member_register as _member_register_router  # noqa: E402
+_member_register_router.register(app)
+
 # Omi pendant recordings (flag-dark): the Pi sync service's upload endpoint + the owner's list/get/patch/delete. Mounted ONLY
 # when ZOE_OMI_SYNC_ENABLED is on — flag off = 404. Calls the existing Moonshine helper; the voice path is untouched.
 from routers import omi_recordings as _omi_router  # noqa: E402
