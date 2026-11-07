@@ -697,6 +697,19 @@
  "spacer": {
   "_note": "voice_spacer.py: lineas cortas que llenan una espera; ver en.json. Escrito por el autor del cambio, sin revision nativa.",
   "reviewed": false,
+  "domain_words": {
+   "_note": "ver en.json spacer.domain_words: la linea de un dominio solo cuando las PALABRAS nombran ese dominio.",
+   "smart_home": ["luz", "luces", "lampara", "lámpara", "ventilador", "calefactor", "enchufe", "tele", "television", "televisión"],
+   "music": ["musica", "música", "cancion", "canción", "canciones", "pon", "reproduce", "pausa", "volumen", "radio", "album", "álbum"],
+   "weather": ["tiempo", "lluvia", "llover", "llueve", "pronostico", "pronóstico", "temperatura", "calor", "frio", "frío", "viento", "paraguas", "grados"],
+   "time": ["hora", "fecha", "dia", "día", "hoy"],
+   "calendar": ["calendario", "agenda", "reunion", "reunión", "cita", "citas", "evento", "eventos", "mañana", "manana", "hoy", "semana", "lunes", "martes", "miercoles", "miércoles", "jueves", "viernes", "sabado", "sábado", "domingo"],
+   "lists": ["lista", "listas", "compra", "compras"],
+   "reminders": ["recordatorio", "recordatorios", "recuerdame", "recuérdame"],
+   "timers": ["temporizador", "temporizadores", "alarma", "alarmas"],
+   "notes": ["nota", "notas"],
+   "journal": ["diario"]
+  },
   "families": {
    "lookup": ["Déjame ver.", "Voy a mirarlo.", "Lo compruebo.", "Déjame comprobarlo.", "Un momento, lo miro."],
    "recall": ["Déjame pensar.", "Déjame recordar.", "A ver si me acuerdo.", "Déjame pensarlo un momento."],

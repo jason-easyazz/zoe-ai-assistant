@@ -1226,9 +1226,37 @@
    "\\bi\\s+(?:already\\s+)?(?:said|mentioned)\\s+(?:it|that|this)\\s+(?:to\\s+you\\s+)?(?:before|earlier|already|today)\\b"
   ]
  },
+ "device_confirm": {
+  "_note": "device_confirm.py (ZOE_DEVICE_CONFIRM_GUARD): a SHORT transcript nothing claims, whose last content word is a light-like noun after a determiner, with a command-like verb before it and nothing after it but an on/off particle, gets ONE short question; a plain yes runs 'command'. Light-like nouns include the sound-alikes the panel's STT has produced for 'light' ('lot', 'lines', 'one', '1'); verbs include the fused forms of 'turn on' ('shown', 'shone') and the near-misses heard for 'turn' / 'switch' ('sound', 'do', '2'). 'of' is an off particle ('two of the one'). A fused on-verb or no particle at all offers the light ON.",
+  "reviewed": true,
+  "max_words": 6,
+  "nouns": ["light", "lights", "lamp", "lamps", "lot", "lots", "line", "lines", "one", "1"],
+  "determiners": ["the", "a"],
+  "verbs": ["turn", "turned", "turns", "switch", "switched", "flip", "flick", "shown", "shone", "show", "sound", "do", "2", "two"],
+  "on_words": ["on"],
+  "off_words": ["off", "of"],
+  "tail_ok": ["on", "off", "of", "please", "now"],
+  "question_openers": ["what", "what's", "whats", "where", "when", "who", "why", "how", "which", "is", "are", "does", "did", "have", "has"],
+  "blockers": ["you", "your", "you're", "you've", "me", "us", "this", "that", "these", "those", "my", "every", "each"],
+  "question": {"on": "Light on?", "off": "Turn the light off?"},
+  "command": {"on": "turn on the light", "off": "turn off the light"}
+ },
  "spacer": {
   "_note": "voice_spacer.py: the short spoken lines that fill a wait. 'families' are the pools by what the turn is doing (lookup = a read of stored data, recall = remembering, action = doing something, generic = nothing known); 'tool_ack' is the domain-specific pool for the dispatch-time acknowledgement. A line never claims a result. Wide on purpose: the same three lines on every turn read as a tic.",
   "reviewed": true,
+  "domain_words": {
+   "_note": "voice_spacer.SpacerTurn.corroborated (ZOE_SPACER_REQUIRE_CLAIM): a domain's own acknowledgement ('Let me check your lists.', 'On it.') is spoken at brain dispatch only when the WORDS name that domain - these words, or a domain noun command_shapes.named_domains finds. A router guess the words do not back gets the generic family (a neutral 'One moment.').",
+   "smart_home": ["light", "lights", "lamp", "lamps", "fan", "fans", "heater", "aircon", "switch", "plug", "tv", "television", "blind", "blinds"],
+   "music": ["music", "song", "songs", "play", "playing", "pause", "playlist", "album", "track", "volume", "radio", "spotify", "artist"],
+   "weather": ["weather", "rain", "raining", "forecast", "temperature", "hot", "cold", "sunny", "wind", "windy", "umbrella", "degrees"],
+   "time": ["time", "clock", "date", "day", "today"],
+   "calendar": ["calendar", "diary", "agenda", "schedule", "meeting", "meetings", "appointment", "appointments", "event", "events", "busy", "free", "today", "tomorrow", "tonight", "weekend", "week", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+   "lists": ["list", "lists", "shopping", "groceries", "grocery"],
+   "reminders": ["reminder", "reminders", "remind", "remember"],
+   "timers": ["timer", "timers", "alarm", "alarms"],
+   "notes": ["note", "notes"],
+   "journal": ["journal", "diary"]
+  },
   "families": {
    "lookup": ["Let me check.", "Let me look.", "Let me have a look.", "Checking that now.", "Let me see.", "Looking that up."],
    "recall": ["Let me think.", "Let me think back.", "Hmm, let me remember.", "Let me see what I remember."],

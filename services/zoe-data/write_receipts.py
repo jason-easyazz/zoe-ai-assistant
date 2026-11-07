@@ -34,9 +34,13 @@ from typing import Deque, Dict, Iterable, Optional
 # "note" and "memory" ("I've made a note of that" after a memory write) and the two time-anchored removals; every other kind stands
 # alone. "any" is a claim that names no target ("I've added it"). A REMOVAL has its own kind (QA 2026-11-05: "I've taken that off
 # your calendar" with no delete): "list_removed" / "calendar_removed" / "reminder_removed" / "timer_removed", and "forget" for a
-# memory that was forgotten or retired - a write of the same target never vouches for its removal.
+# memory that was forgotten or retired - a write of the same target never vouches for its removal. "device" is a smart-home switch
+# the resolver really made (``smart_home_service.record_device_receipt``, 2026-11-07: "I'll turn the lights on for you." with no
+# tool call): a write receipt never vouches for it, nor it for a write.
 KINDS = ("list", "calendar", "reminder", "note", "timer", "memory", "forget",
-         "list_removed", "calendar_removed", "reminder_removed", "timer_removed")
+         "list_removed", "calendar_removed", "reminder_removed", "timer_removed", "device")
+#: kinds that are an ACTION, not a stored write: they back only a claim of their own kind
+NOT_A_WRITE = frozenset({"device"})
 _COMPATIBLE = {"calendar": {"calendar", "reminder"}, "reminder": {"calendar", "reminder"},
                "note": {"note", "memory"}, "memory": {"note", "memory"},
                "calendar_removed": {"calendar_removed", "reminder_removed"},
@@ -148,9 +152,10 @@ def since(user_id: Optional[str], started: float, kinds: Optional[Iterable[str]]
 
 
 def has(user_id: Optional[str], started: float, kind: Optional[str] = None, *, turn: Optional[str] = None) -> bool:
-    """True when a write of ``kind`` (any kind when None / "any") landed for the user since ``started`` (see ``since`` for ``turn``)."""
+    """True when a write of ``kind`` (any kind when None / "any") landed for the user since ``started`` (see ``since`` for ``turn``).
+    An untargeted claim ("I've added it") is a claim of a WRITE: a device switch (``NOT_A_WRITE``) never backs it."""
     if not kind or kind == "any":
-        return bool(since(user_id, started, turn=turn))
+        return any(r.kind not in NOT_A_WRITE for r in since(user_id, started, turn=turn))
     return bool(since(user_id, started, (kind,), turn=turn))
 
 

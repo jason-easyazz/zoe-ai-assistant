@@ -106,8 +106,16 @@ def test_receipt_from_another_turn_does_not_count():
 
 
 def test_write_with_no_receipt_kind_is_a_claim_not_proof():
-    out, _ = run([Step("smart_home", {"action": "on", "room": "kitchen"})])
+    out, _ = run([Step("music_play", {"query": "something calm"})])
     assert out.steps[0].status == "unverified" and out.card.reason == "unverified"
+
+
+def test_a_light_switch_is_proved_by_its_device_receipt():
+    """Since 2026-11-07 a switch the hub confirmed records a ``device`` receipt (smart_home_service.record_device_receipt)."""
+    out, _ = run([Step("smart_home", {"action": "on", "room": "kitchen"})])
+    assert out.steps[0].status == "done" and out.steps[0].proof == "receipt:device"
+    out, _ = run([Step("smart_home", {"action": "on", "room": "kitchen"})], ex=Exec(receipts=False))
+    assert out.steps[0].status == "unverified"
 
 
 def test_read_ok_is_done_and_read_failure_is_failed():
