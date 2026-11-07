@@ -426,6 +426,10 @@ def _shows_form(intent_name: str, slots: dict) -> bool:
     executor's reply states the schedule, or why nothing was set."""
     if intent_name == "reminder_create" and (slots.get("recurrence") or slots.get("unsupported_recurrence")):
         return False
+    if intent_name == "list_add" and (not str(slots.get("list_type") or "").strip() or slots.get("list_phrase")):
+        # A list the user NAMED ("my pharmacy list", "the christmas shopping list"): the direct executor adds to that list
+        # or ASKS which list - a form defaulting to the type's list must never stand in for it (QA 2026-11-06).
+        return False
     return intent_name in _FORM_INTENTS
 
 

@@ -1365,7 +1365,7 @@ def detect_intent(
     for pattern in [
         r"^add (.+?) to (?:the |my )?(.+?) ?list$",
         r"^put (.+?) on (?:the |my )?(.+?) ?list$",
-        r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket)$",
+        r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks)$",
         r"^(?:(?:can|could) you |please )?(?:add|put) (.+?) (?:to|on) (?:the |my )?(.+?) ?list$",
     ]:
         m = re.match(pattern, t)
@@ -1373,8 +1373,7 @@ def detect_intent(
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
                 continue            # a sentence, not an item: never stored, never claimed
-            list_type = _normalize_list(lst)
-            return Intent("list_add", {"item": item, "list_type": list_type})
+            return Intent("list_add", {"item": item, **_list_slots(lst)})
 
     # --- LIST ADD (STT-garbled leading "add") ---
     # Moonshine renders a leading "Add" as near-homophones: "Add council to my
@@ -1450,8 +1449,7 @@ def detect_intent(
             lst = m.group(1).strip() if m.lastindex else "shopping"
             if lst in ("my list", "the list", "list", "my"):
                 lst = "shopping"
-            list_type = _normalize_list(lst)
-            return Intent("list_show", {"list_type": list_type})
+            return Intent("list_show", _list_slots(lst))
 
     # --- LIST REMOVE ---
     for pattern in [
@@ -1467,7 +1465,7 @@ def detect_intent(
             if not command_shapes.plain_list_item(item):
                 break  # "remove all but the milk", "the second item", "everything": never a guessed delete
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
-            return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
+            return Intent("list_remove", {"item": item, **_list_slots(lst)})
 
     # --- LIST RENAME ("change noodles to rice noodles [on the shopping list]") ---
     # ONE parser, shared with Skybridge (questions about changing, and "change the timer to ..." are not list writes there).
@@ -2493,14 +2491,53 @@ def _extract_simple_calendar_slots(text: str) -> Optional[dict]:
 _EXPLICIT_LIST_CMD_RE = re.compile(r"^(?:(?:can|could) you |please )?(?:add|put)\b")
 
 
+# Words that NAME a list type, matched as whole words inside a spoken list name ("my personal to-do" -> personal).
+_LIST_TYPE_WORDS = (
+    ("shopping", re.compile(r"\b(?:shopping|grocery|groceries)\b")),
+    ("personal", re.compile(r"\b(?:to ?dos?|personal|private|own)\b")),
+    ("tasks", re.compile(r"\btasks?\b")),
+    ("work", re.compile(r"\bwork\b")),
+    ("bucket", re.compile(r"\bbucket\b")),
+)
+_LIST_NAME_LEAD_RE = re.compile(r"^(?:(?:the|my|our)(?:\s+|$))+")
+# A spoken name that IS a type word ("shopping", "to do") - anything longer may also be the exact name of an existing list.
+_BARE_TYPE_NAMES = frozenset({"shopping", "grocery", "groceries", "todo", "todos", "to do", "to dos", "personal", "tasks",
+                              "task", "work", "bucket"})
+
+
+def _list_target(raw: str) -> tuple[str, str]:
+    """``(list_type, list_name)`` for a spoken list name - exactly one is set. A name that clearly names ONE type ("shopping",
+    "personal to-do", "my tasks") gives that type; anything else ("pharmacy", "work shopping", "christmas") is a NAMED list
+    the executor must find among the member's own / household lists by name - never a silent default to the household
+    shopping list (QA 2026-11-06: "my personal to-do list" landed on the shared shopping list)."""
+    name = " ".join(str(raw or "").lower().replace("-", " ").split())
+    name = _LIST_NAME_LEAD_RE.sub("", name).strip()
+    if name.endswith(" list"):
+        name = name[: -len(" list")].strip()
+    if not name:
+        return "shopping", ""        # a bare "the list" / "my list": the household list, as before
+    found = {lt for lt, rx in _LIST_TYPE_WORDS if rx.search(name)}
+    if found and found <= {"personal", "tasks"}:
+        return ("tasks" if found == {"tasks"} else "personal"), ""
+    if len(found) == 1:
+        return found.pop(), ""
+    return "", name
+
+
 def _normalize_list(raw: str) -> str:
-    mapping = {
-        "shopping": "shopping", "grocery": "shopping", "groceries": "shopping",
-        "todo": "personal", "to do": "personal", "to-do": "personal",
-        "personal": "personal", "work": "work", "tasks": "tasks",
-        "bucket": "bucket",
-    }
-    return mapping.get(raw, "shopping")
+    """The list TYPE a spoken name means, or "" when it names no single type (a named list - see :func:`_list_target`)."""
+    return _list_target(raw)[0]
+
+
+def _list_slots(raw: str) -> dict:
+    """Intent slots for a spoken list name. ``list_phrase`` carries a typed name that is more than a type word ("christmas
+    shopping", "personal to do") so the executor can prefer an existing list of exactly that name first."""
+    lt, name = _list_target(raw)
+    if not lt:
+        return {"list_type": "", "list_name": name}
+    phrase = _LIST_NAME_LEAD_RE.sub("", " ".join(str(raw or "").lower().replace("-", " ").split())).strip()
+    phrase = phrase[: -len(" list")].strip() if phrase.endswith(" list") else phrase
+    return {"list_type": lt, "list_phrase": phrase} if phrase and phrase not in _BARE_TYPE_NAMES else {"list_type": lt}
 
 
 _TASK_KEYWORDS = {
@@ -2662,14 +2699,26 @@ def _escape_like_pattern(value: str) -> str:
 
 async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
     slots = intent.slots or {}
-    list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
     list_name = str(slots.get("list_name") or "").strip()
+    list_type = str(slots.get("list_type") or "").strip() or ("" if list_name else "shopping")
     if _is_guest_identity(user_id):
         user_id = panel_principal.HOUSEHOLD_VIEWER  # a guest owns no list: household (family-visible) lists only
     try:
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
+            if not list_type:
+                # A list the user NAMED that is no type ("my pharmacy list"): that list, never the shopping list instead.
+                found = await _named_list(db, user_id, list_name)
+                if found is None:
+                    return f"You don't have a {list_name} list."
+                _, list_type, list_name = found
+                intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
+            elif not list_name:
+                found = await _phrase_list(db, user_id, slots, list_type)      # "the christmas shopping list", if it exists
+                if found is not None:
+                    _, list_type, list_name = found
+                    intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
             if list_name:
                 cursor = await db.execute(
                     "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
@@ -2726,6 +2775,42 @@ async def _notify_lists_ui(event_type: str, data: dict) -> None:
         logger.debug("lists UI notify skipped: %s", exc)
 
 
+async def _named_list(db, user_id: str, name: str, *, own_only: bool = False) -> Optional[tuple[str, str, str]]:
+    """``(list_id, list_type, list_name)`` of the list the user NAMED - their own first, then a household one with exactly that
+    name (``list_service.find_named_list_id``; a guest sees household lists only). ``own_only``: the member's own list or
+    nothing (a personal "my to-do" name never lands on someone else's shared list). None when there is no such list."""
+    from list_service import find_named_list_id
+
+    if not name:
+        return None
+    list_id = await find_named_list_id(db, user_id=user_id, name=name)
+    if list_id is None:
+        return None
+    cursor = await db.execute("SELECT list_type, name, user_id FROM lists WHERE id=?", (list_id,))
+    row = await cursor.fetchone()
+    if row is None or (own_only and str(row["user_id"] or "") != str(user_id)):
+        return None
+    return list_id, str(row["list_type"] or ""), str(row["name"] or name)
+
+
+async def _phrase_list(db, user_id: str, slots: dict, list_type: str) -> Optional[tuple[str, str, str]]:
+    """An existing list whose exact name the user said ("christmas shopping") before the TYPE's default list. A personal type
+    only ever matches the member's own list."""
+    from list_service import PERSONAL_LIST_TYPES
+
+    phrase = str(slots.get("list_phrase") or "").strip()
+    if not phrase:
+        return None
+    return await _named_list(db, user_id, phrase, own_only=list_type in PERSONAL_LIST_TYPES)
+
+
+def _no_such_list_reply(name: str, item: str = "") -> str:
+    """The ASK for a list the user named that does not exist: nothing is written, and no shared list is guessed."""
+    what = f" {item}" if item else " that"
+    return (f"You don't have a {name} list, so I haven't put{what} anywhere. "
+            "Which list should it go on - your to-do list or the shopping list?")
+
+
 async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Add an item to the user's list straight through the DB, mirroring
     mcp_server's list_add_item tool (same list resolution, family/personal
@@ -2735,19 +2820,33 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     item = str(slots.get("item") or "").strip()
     if not item:
         return None
-    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
-    ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    named = str(slots.get("list_name") or "").strip()
+    lt = str(slots.get("list_type") or "").strip() or ("" if named else "shopping")
+    ln = named or lt.capitalize()
     actor = panel_principal.household_actor({"user_id": user_id})  # the member, or "panel" for an unidentified guest
     try:
         from database import get_db_ctx
         from list_service import add_items_to_list, add_reply, default_visibility
 
         async with get_db_ctx() as db:
+            target_id = None
+            if not lt:
+                # A list the user NAMED that is no list type ("my pharmacy list"): that list or nothing - never the
+                # household shopping list by default (QA 2026-11-06). Nothing is written when it does not exist.
+                found = await _named_list(db, user_id, named)
+                if found is None:
+                    return _no_such_list_reply(named, item)
+                target_id, lt, ln = found
+            else:
+                found = await _phrase_list(db, user_id, slots, lt)
+                if found is not None:
+                    target_id, lt, ln = found
             outcome = await add_items_to_list(
                 db,
                 user_id=user_id,
                 list_type=lt,
                 list_name=ln,
+                list_id=target_id,
                 text=item,
                 quantity=slots.get("quantity"),
                 category=slots.get("category"),
@@ -2770,7 +2869,10 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 "list_updated",
                 {"action": "item_added", "list_id": list_id, "item": {"id": one["item_id"], "text": one["_text"]}, "actor": actor},
             )
-        friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
+        if target_id is not None:
+            friendly = f"{ln} list" if not ln.lower().endswith(" list") else ln
+        else:
+            friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         return _format_response(
             intent,
             json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item,
@@ -2794,7 +2896,8 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     item = str(slots.get("item") or "").strip()
     if not item:
         return None
-    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    named = str(slots.get("list_name") or "").strip()
+    lt = str(slots.get("list_type") or "").strip() or ("" if named else "shopping")
     actor = panel_principal.household_actor({"user_id": user_id})  # BEFORE the viewer swap: the sentinel would read as a member
     if _is_guest_identity(user_id):
         user_id = panel_principal.HOUSEHOLD_VIEWER  # household (family-visible) lists only
@@ -2802,19 +2905,37 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
+            # Which lists the item may come off: the lists of the TYPE, or - for a list the user NAMED that is no type
+            # ("my pharmacy list") - that one list, never the household shopping list by default (QA 2026-11-06).
+            scope_sql, scope_arg = "l.list_type=?", lt
+            if not lt:
+                found = await _named_list(db, user_id, named)
+                if found is None:
+                    return f"You don't have a {named} list, so nothing came off any list."
+                scope_sql, scope_arg = "l.id=?", found[0]
+                lt = found[1]
+            else:
+                found = await _phrase_list(db, user_id, slots, lt)
+                if found is not None:
+                    scope_sql, scope_arg, named = "l.id=?", found[0], found[2]
+            # "my to-do" is the member's OWN list: never tick off an item on another member's shared to-do list.
+            from list_service import PERSONAL_LIST_TYPES
+
+            who_sql = ("l.user_id=?" if lt in PERSONAL_LIST_TYPES and not named and not _is_guest_identity(user_id)
+                       and user_id != panel_principal.HOUSEHOLD_VIEWER else "(l.user_id=? OR l.visibility='family')")
             cursor = await db.execute(
                 "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
-                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
+                " WHERE " + who_sql + " AND " + scope_sql + " AND LOWER(li.text)=LOWER(?)"
                 " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
-                (user_id, lt, item),
+                (user_id, scope_arg, item),
             )
             row = await cursor.fetchone()
             if not row:
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
-                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
+                    " WHERE " + who_sql + " AND " + scope_sql + " AND li.text LIKE ? ESCAPE '\\'"
                     " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
-                    (user_id, lt, f"%{_escape_like_pattern(item)}%"),
+                    (user_id, scope_arg, f"%{_escape_like_pattern(item)}%"),
                 )
                 row = await cursor.fetchone()
             if not row:
@@ -2823,10 +2944,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
 
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id, li.text FROM list_items li JOIN lists l ON li.list_id = l.id"
-                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " WHERE " + who_sql + " AND " + scope_sql +
                     " AND li.deleted=0 AND l.deleted=0 AND (li.completed IS NULL OR li.completed=0)"
                     " ORDER BY l.created_at ASC, li.id ASC",
-                    (user_id, lt),
+                    (user_id, scope_arg),
                 )
                 row = find_matching_item(await cursor.fetchall(), item)
             if not row:
