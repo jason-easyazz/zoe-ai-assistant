@@ -21,10 +21,14 @@ process.env.ZOE_BRAIN_USER_ID = 'jason';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { toJsonSchema } from '@valibot/to-json-schema';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const { activeToolNames, CORE_TOOL_NAMES, GROUP_NAMES, GROUP_SUMMARY } = await import(
   '../src/tools/tool-groups.ts'
 );
+const { cuesPath, hasEmotionalWeight, resetEmotionalCuesCache } = await import('../src/tools/emotional-cues.ts');
 const { zoeTools } = await import('../src/tools/zoe-tools.ts');
 const {
   ACTIVATOR_DOCTRINE,
@@ -175,7 +179,12 @@ test('emotional-capture doctrine: durable fact, sparse, silent — present and l
   // Calls the right tool, on genuine durable weight only, as an imperative ACTION.
   assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /remember_emotional_moment/);
   assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /GENUINE, durable emotional weight/);
-  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /MUST actually CALL the remember_emotional_moment tool/);
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /AND remember_emotional_moment is among your tools, CALL it/);
+  // QA round 3b: the doctrine must never force a call to a tool the turn was not given (she then SAID she'd remember),
+  // and must forbid the spoken promise without a write.
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /If that tool is NOT among your tools this turn, do not call or mention it/);
+  assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /Never SAY you will remember/);
+  assert.doesNotMatch(EMOTIONAL_CAPTURE_DOCTRINE, /you MUST actually CALL/);
   // Store the durable fact, not the transcript line.
   assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /DURABLE FACT in your own words/);
   assert.match(EMOTIONAL_CAPTURE_DOCTRINE, /NOT their raw line/);
@@ -209,6 +218,39 @@ test('the memory group discloses remember_emotional_moment on clear emotional tu
       `emotional prompt should pre-disclose remember_emotional_moment: "${prompt}"`,
     );
   }
+});
+
+test('QA round 3b: everyday feeling phrasing discloses remember_emotional_moment (zoe-data cue data), small talk does not', () => {
+  for (const prompt of [
+    'my uncle back home had a fall last week. he says he is fine but i just keep worrying',
+    'just the embarrassment i guess. everyone looked at me',
+    'i feel guilty being so far away',
+    'my boss embarrassing me at work',
+  ]) {
+    assert.ok(hasEmotionalWeight(prompt), `zoe-data's cues should call this emotional: "${prompt}"`);
+    assert.ok(activeToolNames([userMsg(prompt)]).has('remember_emotional_moment'), `should disclose: "${prompt}"`);
+  }
+  for (const prompt of ['what time is it', 'add milk to the shopping list', "i'm feeling like pizza tonight"]) {
+    assert.ok(!activeToolNames([userMsg(prompt)]).has('remember_emotional_moment'), `small talk must not disclose: "${prompt}"`);
+  }
+});
+
+test('the emotional cues are READ from zoe-data, not a copy: a cue file without "guilty" stops disclosing it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'zoe-cues-'));
+  const path = join(dir, 'emotional_cues.json');
+  writeFileSync(path, JSON.stringify({ en: { recall_cues: ['stressed'], weight_cues: [] } }));
+  const prev = process.env.ZOE_EMOTIONAL_CUES_PATH;
+  process.env.ZOE_EMOTIONAL_CUES_PATH = path;
+  resetEmotionalCuesCache();
+  try {
+    assert.equal(hasEmotionalWeight('i feel guilty being so far away'), false);
+    assert.equal(hasEmotionalWeight("I'm so stressed"), true);
+  } finally {
+    if (prev === undefined) delete process.env.ZOE_EMOTIONAL_CUES_PATH;
+    else process.env.ZOE_EMOTIONAL_CUES_PATH = prev;
+    resetEmotionalCuesCache();
+  }
+  assert.ok(cuesPath().endsWith(join('services', 'zoe-data', 'lexicons_data', 'emotional_cues.json')), cuesPath());
 });
 
 test('remember_emotional_moment is a registered Zoe tool in the memory group', () => {

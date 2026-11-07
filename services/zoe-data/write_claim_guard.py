@@ -126,6 +126,7 @@ class _Lang:
     progressive_subjects: frozenset = frozenset()
     promise_verbs: dict = None                # base form -> (kind, needs_target)
     promise_subjects: frozenset = frozenset()
+    promise_fillers: frozenset = frozenset()  # words a promise subject may stand behind ("I'll MAKE SURE I remember")
     immediacy: tuple = ()
     implied_cues: tuple = ()                  # "now" / "for you": an untargeted in-progress claim stands for a DEFERRED write's kind
     progressive_aux: frozenset = frozenset()  # "am" / "are" between a subject and a progressive verb ("I am adding")
@@ -148,6 +149,7 @@ class _Lang:
     # A REMOVAL verb ("removed", "taken … off") claims the removal kind of its target ("list" -> "list_removed").
     removal_kinds: dict = None
     honest_by_kind: dict = None               # receipt kind -> the honest line for a claim of that kind
+    emotional_quiet: str = ""                 # said on an emotional turn when dropping a memory claim left nothing else
 
     def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
         if tok in self.adverbs or tok in self.modifiers:
@@ -218,7 +220,8 @@ def _langs() -> tuple:
             temporal_clause_starts=tuple(sorted((tuple(p.split()) for p in phrases("temporal_clause_starts")), key=len, reverse=True)),
             discourse=words("discourse_openers"),
             progressive_subjects=words("progressive_subjects"), promise_verbs=promise_verbs,
-            promise_subjects=words("promise_subjects"), immediacy=phrases("immediacy"),
+            promise_subjects=words("promise_subjects"), promise_fillers=words("promise_fillers"),
+            immediacy=phrases("immediacy"),
             implied_cues=phrases("implied_cues"), progressive_aux=words("progressive_aux"),
             promise_blockers=words("promise_blockers"),
             assurance_subjects=words("assurance_subjects"), assurance_words=phrases("assurance_words"),
@@ -227,6 +230,7 @@ def _langs() -> tuple:
             claim_phrases=claim_phrases, phrase_firsts=frozenset(p[0] for p, _ in claim_phrases),
             removal_kinds={str(k): str(v) for k, v in (lex.get("removal_kinds") or {}).items()},
             honest_by_kind={str(k): str(v).strip() for k, v in (lex.get("honest_by_kind") or {}).items() if str(v).strip()},
+            emotional_quiet=str(lex.get("emotional_quiet") or "").strip(),
         ))
     return tuple(out)
 
@@ -497,9 +501,10 @@ def _promise_led(toks: list, i: int, lang: "_Lang") -> bool:
         return False
     for j in range(i - 1, max(-1, i - 1 - _SUBJECT_REACH), -1):
         tok = toks[j]
-        if tok in lang.promise_subjects or (j > 0 and f"{toks[j - 1]} {tok}" in lang.promise_subjects):
+        # a subject of up to three words ending here: "I'll", "I will", "I'm going to"
+        if any(" ".join(toks[j - n:j + 1]) in lang.promise_subjects for n in range(0, min(3, j + 1))):
             return True
-        if not (tok in lang.openers or lang.is_modifier(tok, by_suffix=True)):
+        if not (tok in lang.openers or tok in lang.promise_fillers or lang.is_modifier(tok, by_suffix=True)):
             return False
     return False
 
@@ -765,6 +770,34 @@ def _replacement(sentence: str, claim: Claim) -> str:
     return lead + claim.honest + trail
 
 
+_QUIET_KINDS = frozenset({"memory", "note"})
+
+
+def _emotional(user_text: str) -> bool:
+    """The user's turn carries feeling (``memory_gate.is_emotional_turn``, the same cue data the brain's tool disclosure reads)."""
+    try:
+        from memory_gate import is_emotional_turn
+
+        return is_emotional_turn(user_text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _drops_quietly(claim: Claim, emotional: bool) -> bool:
+    """On an emotional turn a false "I'll remember that" is DROPPED, not replaced: "I didn't manage to add that; want me to try
+    again?" in the middle of someone telling Zoe about a hard week is worse than the lie it corrects (QA round 3b). Only a claim
+    of memory / note kinds: a list or calendar claim keeps its honest line on any turn."""
+    return emotional and bool(claim.kinds) and set(claim.kinds) <= _QUIET_KINDS
+
+
+def _quiet_line(claim: Claim) -> str:
+    """What is said when the dropped claim was ALL of the reply (``emotional_quiet``)."""
+    for lang in _langs():
+        if lang.code == claim.lang and lang.emotional_quiet:
+            return lang.emotional_quiet
+    return ""
+
+
 def _note_correction(session_id: str, claim: Claim) -> None:
     """A claim was REPLACED: the brain's own session history still holds the claim it made, so its next turn is told the truth
     (``claim_correction``, ``ZOE_WRITE_CLAIM_CORRECTION``). Never raises."""
@@ -787,8 +820,9 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
     if m == "off" or not (reply or "").strip():
         return reply
     try:
-        out, replaced = [], False
+        out, replaced, quiet = [], False, None
         standing = standing_allowed(user_text)
+        emotional = _emotional(user_text)
         for sentence in split_sentences(reply):
             claim = find_claim(sentence, implied_kind=implied_kind, standing=standing)
             if claim is None or supported(claim, user_id, started, user_text=user_text):
@@ -800,7 +834,13 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
             elif not replaced and claim.honest:
                 replaced = True
                 _note_correction(session_id, claim)
-                out.append(_replacement(sentence, claim))
+                if _drops_quietly(claim, emotional):
+                    quiet = claim
+                else:
+                    out.append(_replacement(sentence, claim))
+        if quiet is not None:
+            text = "".join(out).strip()
+            return text if any(c.isalnum() for c in text) else _quiet_line(quiet)
         return "".join(out) if out else reply
     except Exception as exc:  # noqa: BLE001 - never break a turn over bookkeeping
         logger.warning("write_claim_guard.guard_text failed (reply passed through): %s", exc)
@@ -829,10 +869,13 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
     pending = None      # (claim, end): an unsupported in-progress claim unit ending at ``held`` offset ``end``, awaiting a receipt
     finishing = False   # the turn is over: nothing is pending any more
     standing = standing_allowed(user_text)
+    emotional = _emotional(user_text)
+    quiet = None        # the claim dropped silently on an emotional turn (guard_text does the same)
+    spoke = False       # any word of the reply has gone out
 
     def block(sentence: str, claim: Claim) -> Optional[str]:
         """An unsupported claim: None = release the sentence untouched (shadow); else the text to release instead."""
-        nonlocal replaced
+        nonlocal replaced, quiet
         _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
         if m == "shadow":
             return None
@@ -840,7 +883,16 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
             return ""                      # a second claim in the same reply is dropped (guard_text does the same)
         replaced = True
         _note_correction(session_id, claim)
+        if _drops_quietly(claim, emotional):
+            quiet = claim
+            return ""
         return _replacement(sentence, claim)
+
+    def said(pieces: list) -> list:
+        nonlocal spoke
+        if not spoke and any(any(c.isalnum() for c in p) for p in pieces):
+            spoke = True
+        return pieces
 
     def judge(sentence: str):
         """None = release the sentence untouched; a string = release that instead (may be empty); a Claim = an in-progress
@@ -937,14 +989,18 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
             if delta.startswith(_SENTINEL_PREFIXES):
                 yield delta
                 if pending is not None:         # a tool may just have landed the write the held claim promised
-                    for piece in advance():
+                    for piece in said(advance()):
                         yield piece
                 continue
             held.append(delta)
-            for piece in advance():
+            for piece in said(advance()):
                 yield piece
-        for piece in flush():
+        for piece in said(flush()):
             yield piece
+        if quiet is not None and not spoke:
+            line = _quiet_line(quiet)      # the dropped claim was the whole reply: never leave the person with silence
+            if line:
+                yield line
     except Exception:
         # The lane failed mid-stream (a failover / transport error): what was held back is real, already-generated text -
         # release it (judged like the end of a stream) before the error propagates, as the unguarded stream would have.
