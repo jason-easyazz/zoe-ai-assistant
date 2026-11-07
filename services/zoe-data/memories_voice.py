@@ -18,6 +18,8 @@ tap-to-"that" bridge. No SQL on a memory table, no delete of its own.
     "what do you remember about Sam?" (Sam is in MY people)          Sam's facts (at most two spoken) + Sam's card
     "what do you know about my health?" (on the wall)                never said aloud on the panel: "ask me on your phone"
     "forget that I like jazz"                                        forgets the ONE row that says it (voice and chat)
+    "remember that Juno's swimming is on Tuesdays" (a curator)      a curated note for that child (P7, ZOE_MEMORIES_CURATORS;
+                                                                     ``memory_curation.by_voice``; anyone else falls through)
     tap "That's wrong", then say "it's on Saturday" / "forget it"    corrects / forgets THAT row (the next turn, same member,
                                                                      same panel, within ``TAP_TTL_S``)
 
@@ -794,14 +796,74 @@ async def answer(text: str, user_id: str, session_id: str = "", *, channel: str,
     return spoken_me(wall, on_screen=shown)
 
 
+# A turn this module's curation lane ANSWERED (a successful add, or a refusal - e.g. Health is off for that child) is the curator's
+# instruction to Zoe, not something the curator said about themselves: the post-turn memory passes must not mine it into the curator's
+# own store ("User asked me to remember: Juno is allergic to peanuts" as an approved row would bypass the sensitive-category opt-in
+# and double every successful add). Keyed by (user, words), short-lived, bounded; read by ``routers/voice_tts._run_voice_memory_passes``.
+_CURATION_TURNS: dict = {}
+_CURATION_TTL_S = 180.0
+_CURATION_MAX = 256
+
+
+def _turn_key(user_id: str, text: str) -> str:
+    return f"{(user_id or '').strip()}\x00{_norm(text)}"
+
+
+def note_curation_handled(user_id: str, text: str, now: Optional[float] = None) -> None:
+    t = time.monotonic() if now is None else now
+    if len(_CURATION_TURNS) >= _CURATION_MAX:
+        for k in [k for k, v in _CURATION_TURNS.items() if t - v > _CURATION_TTL_S] or list(_CURATION_TURNS)[:_CURATION_MAX // 2]:
+            _CURATION_TURNS.pop(k, None)
+    _CURATION_TURNS[_turn_key(user_id, text)] = t
+
+
+def curation_handled(user_id: str, text: str, now: Optional[float] = None) -> bool:
+    """True when this exact turn was answered by the curation lane a moment ago. Never raises."""
+    try:
+        t = time.monotonic() if now is None else now
+        seen = _CURATION_TURNS.get(_turn_key(user_id, text))
+        return seen is not None and t - seen <= _CURATION_TTL_S
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _curate(text: str, user_id: str, extra_ctx: Optional[dict], allow_writes: bool) -> Optional[str]:
+    """Caregiver curation by voice (memories-space P7, ``ZOE_MEMORIES_CURATORS``): "remember that Juno's swimming is on Tuesdays" from
+    a curator in THEIR OWN panel identity (``scope_user``: a verified voice session or a fresh PIN; never the panel binding, never a
+    speaker the gate rejected). A guest, a child or any other member falls through untouched (their own teach path)."""
+    import memory_curation as mc
+
+    ctx = extra_ctx or dict()
+    if not allow_writes or not mc.enabled() or not ctx.get("panel_id") or "scope_user" not in ctx:
+        return None
+    if ctx.get("speaker_verified") is False:
+        return None
+    if mc.parse_voice(text) is None:                 # the one anchored regex first: a turn of any other shape costs nothing more
+        return None
+    member = prc._member(user_id, "voice", ctx)
+    if member is None:
+        return None
+    reply = await mc.by_voice(text, member)
+    if reply:
+        logger.info("MEMORIES_VOICE curate user=%s", member)
+        note_curation_handled(user_id, text)          # answered (a write OR a refusal): never mined as the curator's own words
+        if member != user_id:
+            note_curation_handled(member, text)
+    return reply
+
+
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
                extra_ctx: Optional[dict[str, Any]] = None, allow_writes: bool = True):
     """The fast-tier hook (voice and chat): a ``DispatchResult`` or None. Off = None before any work. NEVER raises."""
     try:
         ch = (channel or "").strip().lower()
-        if ch not in ("voice", "chat") or not enabled():
+        if ch not in ("voice", "chat"):
             return None
-        reply = await answer(text, user_id, session_id, channel=ch, extra_ctx=extra_ctx, allow_writes=allow_writes)
+        reply = await _curate(text, user_id, extra_ctx, allow_writes) if ch == "voice" else None
+        if not reply:
+            if not enabled():
+                return None
+            reply = await answer(text, user_id, session_id, channel=ch, extra_ctx=extra_ctx, allow_writes=allow_writes)
         if not reply:
             return None
         import expert_dispatch as _xd
