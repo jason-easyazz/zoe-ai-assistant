@@ -7,7 +7,7 @@ written, so this tool derives it: every call site in ``services/zoe-data`` (non-
 drawers, as (module, enclosing function, kind):
 
 - ``MemoryService`` write methods - ``ingest``, ``record_candidate``, ``supersede_by``, ``restore_superseded``,
-  ``archive_duplicate``, ``archive_by_entity``, ``sweep_soft_archive``, ``forget_last`` (the method names are
+  ``archive_duplicate``, ``archive_by_entity``, ``sweep_soft_archive`` (the method names are
   unique to MemoryService, so ANY receiver counts - an alias cannot hide a writer) and ``review`` /
   ``delete_user`` (generic names: only on a recognised MemoryService receiver such as ``svc`` or
   ``get_memory_service()``).
@@ -42,7 +42,7 @@ FUNNEL = f"{SERVICE_DIR}/memory_service.py"
 # Names no other class in zoe-data defines: any receiver is a MemoryService write.
 UNIQUE_METHODS = frozenset({
     "ingest", "record_candidate", "supersede_by", "restore_superseded", "archive_duplicate",
-    "archive_by_entity", "sweep_soft_archive", "forget_last",
+    "archive_by_entity", "sweep_soft_archive",
     "retire_with_quote", "erase_rows", "relink_entity", "scrub_residue", "compact_index", "edit_outranked",
     "tick_access", "tick_consolidation", "flag_challenged", "set_curated_standing",
 })
@@ -184,7 +184,7 @@ def render(writers: dict, notes: dict[str, str]) -> str:
         "## What counts",
         "",
         "- `MemoryService` write methods: `ingest`, `record_candidate`, `supersede_by`, `restore_superseded`, `archive_duplicate`,",
-        "  `archive_by_entity`, `sweep_soft_archive`, `forget_last`, `retire_with_quote`, `erase_rows`, `relink_entity`, `scrub_residue`,",
+        "  `archive_by_entity`, `sweep_soft_archive`, `retire_with_quote`, `erase_rows`, `relink_entity`, `scrub_residue`,",
         "  `compact_index`, `edit_outranked`, `tick_access`, `tick_consolidation` (any receiver) and `review`, `delete_user` (on a recognised",
         "  `MemoryService` receiver).",
         "- `raw_upsert` / `raw_update` / `raw_delete` / `raw_add`: a direct write on a drawers collection handle. In `memory_service.py` these are the storage",
