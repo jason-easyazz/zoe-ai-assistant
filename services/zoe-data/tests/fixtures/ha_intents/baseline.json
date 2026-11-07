@@ -1,6 +1,6 @@
 {
   "cascade": {
-    "total": {"correct": 1685, "forbidden": 2, "miss": 1542, "n": 3279, "wrong": 52, "wrong_write": 13},
+    "total": {"correct": 1693, "forbidden": 2, "miss": 1534, "n": 3279, "wrong": 52, "wrong_write": 13},
     "labels": {
       "HassBroadcast": {"correct": 0, "forbidden": 0, "miss": 1, "n": 1, "wrong": 0, "wrong_write": 0},
       "HassCancelAllTimers": {"correct": 34, "forbidden": 0, "miss": 0, "n": 34, "wrong": 0, "wrong_write": 0},
@@ -39,8 +39,8 @@
       "HassStartTimer": {"correct": 115, "forbidden": 0, "miss": 0, "n": 115, "wrong": 0, "wrong_write": 0},
       "HassStartTimer.delayed_command": {"correct": 14, "forbidden": 0, "miss": 0, "n": 14, "wrong": 0, "wrong_write": 0},
       "HassTimerStatus": {"correct": 57, "forbidden": 0, "miss": 0, "n": 57, "wrong": 0, "wrong_write": 0},
-      "HassTurnOff": {"correct": 82, "forbidden": 0, "miss": 75, "n": 158, "wrong": 1, "wrong_write": 0},
-      "HassTurnOn": {"correct": 85, "forbidden": 0, "miss": 84, "n": 169, "wrong": 0, "wrong_write": 0},
+      "HassTurnOff": {"correct": 86, "forbidden": 0, "miss": 71, "n": 158, "wrong": 1, "wrong_write": 0},
+      "HassTurnOn": {"correct": 89, "forbidden": 0, "miss": 80, "n": 169, "wrong": 0, "wrong_write": 0},
       "HassUnpauseTimer": {"correct": 43, "forbidden": 0, "miss": 0, "n": 43, "wrong": 0, "wrong_write": 0},
       "HassVacuumCleanArea": {"correct": 0, "forbidden": 0, "miss": 36, "n": 37, "wrong": 1, "wrong_write": 0},
       "HassVacuumReturnToBase": {"correct": 0, "forbidden": 0, "miss": 29, "n": 31, "wrong": 2, "wrong_write": 0},
@@ -56,7 +56,7 @@
     }
   },
   "intent_router": {
-    "total": {"correct": 423, "forbidden": 0, "miss": 2845, "n": 3279, "wrong": 11, "wrong_write": 3},
+    "total": {"correct": 482, "forbidden": 0, "miss": 2786, "n": 3279, "wrong": 11, "wrong_write": 3},
     "labels": {
       "HassBroadcast": {"correct": 0, "forbidden": 0, "miss": 1, "n": 1, "wrong": 0, "wrong_write": 0},
       "HassCancelAllTimers": {"correct": 0, "forbidden": 0, "miss": 34, "n": 34, "wrong": 0, "wrong_write": 0},
@@ -95,8 +95,8 @@
       "HassStartTimer": {"correct": 8, "forbidden": 0, "miss": 107, "n": 115, "wrong": 0, "wrong_write": 0},
       "HassStartTimer.delayed_command": {"correct": 14, "forbidden": 0, "miss": 0, "n": 14, "wrong": 0, "wrong_write": 0},
       "HassTimerStatus": {"correct": 0, "forbidden": 0, "miss": 57, "n": 57, "wrong": 0, "wrong_write": 0},
-      "HassTurnOff": {"correct": 50, "forbidden": 0, "miss": 108, "n": 158, "wrong": 0, "wrong_write": 0},
-      "HassTurnOn": {"correct": 44, "forbidden": 0, "miss": 125, "n": 169, "wrong": 0, "wrong_write": 0},
+      "HassTurnOff": {"correct": 78, "forbidden": 0, "miss": 80, "n": 158, "wrong": 0, "wrong_write": 0},
+      "HassTurnOn": {"correct": 75, "forbidden": 0, "miss": 94, "n": 169, "wrong": 0, "wrong_write": 0},
       "HassUnpauseTimer": {"correct": 0, "forbidden": 0, "miss": 43, "n": 43, "wrong": 0, "wrong_write": 0},
       "HassVacuumCleanArea": {"correct": 0, "forbidden": 0, "miss": 37, "n": 37, "wrong": 0, "wrong_write": 0},
       "HassVacuumReturnToBase": {"correct": 0, "forbidden": 0, "miss": 31, "n": 31, "wrong": 0, "wrong_write": 0},

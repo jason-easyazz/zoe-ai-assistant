@@ -1196,6 +1196,14 @@ def _stamp_claim(md: dict[str, Any], claim: Any) -> None:
         pass
 
 
+#: the provenance a CURATED row carries (``memory_curation``), first-class on rows written by the curator writer only
+CURATED_KEYS = ("curated_by", "curated_by_name", "curated_at", "curated_via", "curated_category", "curated_sensitive")
+#: of those, the WHO / WHEN / HOW stamps: they belong to the writer of a row, so an edit never inherits them. The category and its
+#: sensitivity are the note's PRIVACY (``provenance_answers.sensitive_classes``), not its attribution: they ride an edit by anyone,
+#: or a released medication note edited by its adult would become public text.
+CURATED_ATTRIBUTION_KEYS = ("curated_by", "curated_by_name", "curated_at", "curated_via")
+
+
 def _promote_event_metadata(md: dict[str, Any], extra: dict[str, Any]) -> None:
     for key in ("event_id", "evidence_refs", "relationships", "supersedes", "retention_policy"):
         value = extra.get(key)
@@ -2156,6 +2164,15 @@ class MemoryService:
             return []
         return rows[offset: offset + limit]
 
+    async def list_all_by_status_strict(self, *, user_id: str, status: str) -> list[MemoryRef]:
+        """Every row of ``user_id`` in ``status`` (no page limit); a storage failure RAISES ``MemoryServiceError`` instead of
+        reading as an empty list (``list_by_status`` swallows it). For callers that must not act on a partial or empty answer."""
+        self._require(user_id, "user_id is required")
+        try:
+            return list(await self._run_sync(self._list_by_status_sync, user_id, status))
+        except Exception as exc:
+            raise MemoryServiceError(f"list_all_by_status_strict failed: {exc}") from exc
+
     async def forget_last(
         self,
         *,
@@ -2559,6 +2576,9 @@ class MemoryService:
                 # edit from a high-stakes fact to ordinary text would keep a stale
                 # 0.9 boost.
                 "importance",
+                # the curated attribution belongs to the writer of the NEW row (a curator edit stamps its own); the category
+                # and sensitivity are carried (privacy, not authorship)
+                *CURATED_ATTRIBUTION_KEYS,
             } | _auth.PROVENANCE_KEYS
             for key, value in current.metadata.items():
                 if key in _EDIT_CARRY_FORWARD_SKIP or key in new_meta:
@@ -2978,14 +2998,58 @@ class MemoryService:
         meta = current.metadata or {}
         status = str(meta.get("status") or "")
         kind, action, candidate = "", decision, False
+        if decision in ("approve", "edit") and (
+                status in ("pending", "disputed") and meta.get("contradicts_id")
+                and not _auth.may_override(_auth.RANK[_auth.writer_class(actor, user_id=user_id)], _auth.CURATED)
+                and await self._target_class(meta) == _auth.CURATED):
+            # a note HELD against a curated row (owner D9) is the curator to decide, never the member: approving OR editing it
+            # (an edit publishes the held text as approved) would leave two approved rows that disagree
+            _auth.log_blocked(actor, _auth.kind_of(current.text), user_id=user_id, action=decision)
+            return _auth.enabled()
         if decision == "approve":
             # a candidate raised AGAINST a row is that row's owner's to approve
             if not (status in ("pending", "disputed") and meta.get("contradicts_id")
                     and _auth.writer_is_inferred(actor, user_id=user_id)):
+                if status == "pending" and not meta.get("contradicts_id"):
+                    # a pending row that PRE-DATES a curator's note has no conflict link: approving it would publish text that
+                    # disagrees with a protected row. Run the same scan ingest / edit run, against the rows protected NOW.
+                    res0 = _auth.resolve_write(actor, current.text.strip(), claimed=authority, user_id=user_id,
+                                               prompt_text=prompt_text, speaker_verified=speaker_verified)
+                    if res0.power < _auth.RANK[_auth.OPERATOR]:
+                        clash0 = await self._protected_conflict(user_id, current.text.strip(), res0.power)
+                        if clash0 is not None and clash0[0].id != current.id:
+                            _auth.log_blocked(actor, clash0[1], user_id=user_id, action="approve")
+                            if not _auth.enabled():
+                                return False
+                            await self._write_candidate(
+                                current.text.strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
+                                kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                                entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
+                                basis=res0.basis)
+                            return True
                 return False
             kind = _auth.kind_of(current.text)
         else:
             if status != "approved":
+                if decision == "edit" and status == "pending":
+                    # an edit PUBLISHES the replacement text as approved: an unrelated pending row must not become a second approved
+                    # row that contradicts a protected (curated) note - the same scan the approved-row edit and ``ingest`` run
+                    res0 = _auth.resolve_write(
+                        actor, (edits or current.text).strip(), anchor_text=anchor_text,
+                        claimed=authority, user_id=user_id, prompt_text=prompt_text,
+                        speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings)
+                    if res0.power < _auth.RANK[_auth.OPERATOR]:
+                        clash0 = await self._protected_conflict(user_id, (edits or current.text).strip(), res0.power)
+                        if clash0 is not None and clash0[0].id != current.id:
+                            _auth.log_blocked(actor, clash0[1], user_id=user_id, action="edit")
+                            if not _auth.enabled():
+                                return False
+                            await self._write_candidate(
+                                (edits or current.text).strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
+                                kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                                entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
+                                basis=res0.basis)
+                            return True
                 return False
             if decision == "edit":
                 res = _auth.resolve_write(
@@ -2996,7 +3060,21 @@ class MemoryService:
                 res = _auth.Resolved(_auth.writer_class(actor, user_id=user_id), "action")
             if _auth.may_override(res.power, _auth.row_class(meta, current.text)) and (
                     decision != "edit" or _auth.has_standing(res.power, res.basis)):
-                return False
+                if decision != "edit" or res.power >= _auth.RANK[_auth.OPERATOR]:
+                    return False
+                # an edit to an UNRELATED row must not publish text that contradicts a row that outranks the writer (a curated
+                # note): the same protected-conflict scan ``ingest`` runs. The edited row itself is not a clash.
+                clash = await self._protected_conflict(user_id, (edits or current.text).strip(), res.power)
+                if clash is None or clash[0].id == current.id:
+                    return False
+                _auth.log_blocked(actor, clash[1], user_id=user_id, action="edit")
+                if not _auth.enabled():
+                    return False
+                await self._write_candidate(
+                    (edits or current.text).strip(), user_id=user_id, writer=actor, contradicts=clash[0].id, kind=clash[1],
+                    session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
+                    entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res.cls, basis=res.basis)
+                return True
             if decision == "edit":
                 new_text = (edits or current.text).strip()
                 kind = _auth.conflict_kind(new_text, current.text) or ""
@@ -3015,6 +3093,47 @@ class MemoryService:
                 cls=res.cls, basis=res.basis,
             )
         return True
+
+    async def _target_class(self, meta: Mapping[str, Any]) -> str:
+        """The class of the row a candidate disputes (``contradicts_id``); "" for an edge, a missing row or a read error."""
+        ref = str(meta.get("contradicts_id") or "")
+        if not ref or ref.startswith(_EDGE_REF):
+            return ""
+        try:
+            target = await self.get(ref)
+        except Exception:  # noqa: BLE001
+            return ""
+        return _auth.row_class(target.metadata or {}, target.text) if target is not None else ""
+
+    async def set_curated_standing(self, user_id: str, mem_ids: Iterable[str], *, protect: bool, actor: str) -> int:
+        """Restamp curated rows (``origin="curator"``) of ``user_id``: ``protect`` -> the ``curated`` class (only a curator changes
+        them), else ``user_stated`` (the member own word wins again; ``authority_basis="curated_released"``, origin kept). The
+        adult opt-out / opt-in of a category (``memory_curation``). Only approved curated rows the member owns are touched; each is
+        audited. Returns how many changed."""
+        want = [str(i) for i in mem_ids if i]
+        if not user_id or not want:
+            return 0
+        cls = _auth.CURATED if protect else _auth.USER_STATED
+        basis = "curator" if protect else "curated_released"
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        changed: list[str] = []
+        async with lock:
+            for mem_id in want:
+                ref = await self._run_sync(self._get_sync, mem_id)
+                md = dict((ref.metadata or {}) if ref is not None else {})
+                if (ref is None or str(md.get("user_id") or md.get("wing") or "") != user_id
+                        or str(md.get("origin") or "") != "curator" or str(md.get("status") or "") != "approved"
+                        or md.get("authority_class") == cls):
+                    continue
+                md.update(authority_class=cls, authority=_auth.authority_of(cls), authority_basis=basis)
+                await self._run_sync(self._update_meta_sync, mem_id, md)
+                changed.append(mem_id)
+        for mem_id in changed:
+            await self._append_audit(mem_id=mem_id, user_id=user_id, actor=actor, action="curated_standing",
+                                     before=None, after={"authority_class": cls}, reason=basis)
+        if changed:
+            _invalidate_agent_user_facts_cache(user_id)
+        return len(changed)
 
     async def archive_duplicate(self, mem_id: str, keeper_id: str, *, actor: str,
                                 note: str = "identical duplicate") -> bool:
@@ -3518,6 +3637,11 @@ class MemoryService:
         if event_scope:
             md["scope"] = str(event_scope)
         _promote_event_metadata(md, extra)
+        if source == "curator":
+            # the curated stamps (``memory_curation``): who added it, when, how, its category - first-class, never candidate_*
+            for key in CURATED_KEYS:
+                if extra.get(key) is not None:
+                    md[key] = _metadata_value(extra.pop(key))
         for key, value in extra.items():
             target_key = f"candidate_{key}"
             if target_key in md or value is None:
@@ -4021,13 +4145,17 @@ class MemoryService:
         rows.sort(key=lambda r: r.metadata.get("added_at", ""), reverse=True)
         return rows
 
+    def _update_meta_sync(self, mem_id: str, md: dict[str, Any]) -> None:
+        self._collection().update(ids=[mem_id], metadatas=[md])
+
     def _operator_rows_sync(self, user_id: str) -> list[MemoryRef]:
         col = self._collection()
         result = col.get(
             where={"$and": [
                 {"$or": [{"user_id": user_id}, {"wing": user_id}]},
                 {"status": "approved"},
-                {"authority_class": _auth.OPERATOR},
+                # the rows a direct user write answers to: an operator cleanup, and a CURATED row (owner D9)
+                {"$or": [{"authority_class": _auth.OPERATOR}, {"authority_class": _auth.CURATED}]},
             ]},
             include=["documents", "metadatas"],
         )
@@ -4035,7 +4163,7 @@ class MemoryService:
             MemoryRef(id=rid, text=doc or "", metadata=dict(meta) if isinstance(meta, dict) else {})
             for rid, doc, meta in zip(result.get("ids") or [], result.get("documents") or [],
                                       result.get("metadatas") or [])
-            if isinstance(meta, dict) and meta.get("authority_class") == _auth.OPERATOR
+            if isinstance(meta, dict) and meta.get("authority_class") in (_auth.OPERATOR, _auth.CURATED)
         ]
 
     def _get_sync(self, mem_id: str) -> Optional[MemoryRef]:

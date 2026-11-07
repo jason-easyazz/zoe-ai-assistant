@@ -53,6 +53,7 @@ def _clean(monkeypatch):
               "ZOE_FLUE_STREAM_ENABLED", "ZOE_STRIP_NARRATION", "ZOE_SEAM_RECALL_INJECT", "ZOE_VERIFY_ON_CHALLENGE", "ZOE_TRIVIA_HEDGE"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("ZOE_SEAM_CONTINUITY_INJECT", "0")
+    monkeypatch.setenv("ZOE_LOCALE_HINT", "0")      # the household-locale line is another section's bytes: these pins are about the register
     monkeypatch.setenv("ZOE_IDENTITY_BLOCK", "0")
     monkeypatch.setenv("ZOE_TIMEZONE", "Australia/Perth")
     # the day line is the default for every wire test; the night line has its own tests
