@@ -188,6 +188,10 @@ def _infer_event_category(text: str) -> str:
     return "general"
 
 
+#: a courtesy tail on a list command ("..., please", "thanks", "for me"); the list-add patterns read the text without it
+_LIST_TRAILING_COURTESY_RE = re.compile(r"(?:,?\s+(?:please|thanks|thank you|cheers|for me))+$")
+
+
 def _normalize_chat_intent_text(raw: str) -> str:
     """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
@@ -1395,6 +1399,12 @@ def detect_intent(
         return Intent("music_setup", {})
 
     # === LIST PATTERNS (checked after domain-specific) ===
+    # A trailing courtesy ("... to my personal list please") is not part of the item or the list name: with it, the
+    # "$"-anchored target patterns missed and the implicit "add (.+)" stored "sultanas to my personal list please" on the
+    # SHOPPING list (a private item on the shared list; rollout QA 2026-11-07).
+    lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
+    if len(lt.split()) < 2:
+        lt = t          # the courtesy word WAS the whole object ("add cheers"): keep it as before
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [
@@ -1403,7 +1413,7 @@ def detect_intent(
         r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks)$",
         r"^(?:(?:can|could) you |please )?(?:add|put) (.+?) (?:to|on) (?:the |my )?(.+?) ?list$",
     ]:
-        m = re.match(pattern, t)
+        m = re.match(pattern, lt)
         if m:
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
@@ -1424,7 +1434,7 @@ def detect_intent(
         r"^(?:i'?d|id|and|at|it|hey|a)?\s*(?:go to |goto )?(.+?) "
         r"to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)"
         r" list[.!?]?$",
-        t,
+        lt,
     )
     if m:
         item = _sanitize_list_item(m.group(1))
@@ -1450,7 +1460,7 @@ def detect_intent(
             r"^(?:(?:can|could) you |please )?add (.+)$",
             r"^(?:(?:can|could) you |please )?put (.+)$",
         ]:
-            m = re.match(pattern, t)
+            m = re.match(pattern, lt)
             if m:
                 item = _sanitize_list_item(m.group(1))
                 if not _list_item_ok(item):
@@ -1460,7 +1470,7 @@ def detect_intent(
 
     # --- LIST ADD (natural language shopping) ---
     m = re.match(
-        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", t
+        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", lt
     )
     if m:
         item = _sanitize_list_item(m.group(1))
@@ -1469,8 +1479,9 @@ def detect_intent(
 
     # --- LIST SHOW ---
     for pattern in [
-        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list$",
-        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list$",
+        # a trailing filler word ("... list now") is still the read - missing it fell to a default-shopping read (QA 3b)
+        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
+        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
         r"^what do i need to (?:buy|get)$",
         r"^what'?s on my list$",
         r"^show my list$",
@@ -2881,7 +2892,24 @@ def _escape_like_pattern(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+_LIST_TYPES = frozenset({"shopping", "personal", "tasks", "work", "bucket"})
+
+
+def _canonical_list_slots(intent: Intent) -> Intent:
+    """The intent with a ``list_type`` that is NOT a list type resolved like a spoken list name (:func:`_list_slots`). The
+    brain's list tools pass the name the model used ("tasks/to-do", "pharmacy study list" - QA round 3b, 2026-11-07): a to-do
+    name is the member's own list, an unknown name is a named list (asked about, never written), and nothing silently lands on
+    the household shopping list. A real type, an empty one or an explicit ``list_name`` is left exactly as it was. Pure."""
+    slots = intent.slots or {}
+    lt = str(slots.get("list_type") or "").strip()
+    if not lt or lt.lower() in _LIST_TYPES or str(slots.get("list_name") or "").strip():
+        return intent
+    rest = {k: v for k, v in slots.items() if k not in ("list_type", "list_phrase")}
+    return Intent(intent.name, {**rest, **_list_slots(lt.replace("/", " "))}, intent.confidence)
+
+
 async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     list_name = str(slots.get("list_name") or "").strip()
     list_type = str(slots.get("list_type") or "").strip() or ("" if list_name else "shopping")
@@ -2895,7 +2923,7 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
                 # A list the user NAMED that is no type ("my pharmacy list"): that list, never the shopping list instead.
                 found = await _named_list(db, user_id, list_name)
                 if found is None:
-                    return f"You don't have a {list_name} list."
+                    return f"You don't have a {list_name} list. Which list did you mean?"
                 _, list_type, list_name = found
                 intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
             elif not list_name:
@@ -3000,6 +3028,7 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     mcp_server's list_add_item tool (same list resolution, family/personal
     visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:
@@ -3076,6 +3105,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     substring fallback). If the item isn't on the list that's a clean success
     message (ok:true, 'X wasn't on your list'), not a failure — so brain/tool
     consumers don't surface a false error. Returns None only on genuine failure."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:

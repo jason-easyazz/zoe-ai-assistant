@@ -644,6 +644,25 @@
         },
         "typed_env": false
       },
+      "ZOE_BRAIN_TEXT_TOOLCALL_RECOVERY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/src/text-tool-calls.ts"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
+          "type": "str"
+        },
+        "typed_env": false
+      },
       "ZOE_BRAIN_TOKEN": {
         "defaults": [
           "''",
@@ -8351,6 +8370,50 @@
         },
         "typed_env": false
       },
+      "ZOE_MEMBER_REGISTER": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/member_register.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/member-register.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMBER_REGISTER_KIDS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/member_register.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/member-register.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMORIES_CURATORS": {
         "defaults": [
           "False"
@@ -15845,6 +15908,25 @@
           },
           "note": "live .env: Australia/Perth",
           "owner_doc": "docs/knowledge/synthetic-users-and-proactive-recipients.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_TOOL_TEXT_GUARD": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/tool_text_guard.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
           "type": "str"
         },
         "typed_env": true

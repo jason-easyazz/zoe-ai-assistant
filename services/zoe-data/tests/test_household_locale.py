@@ -2,13 +2,12 @@
 
 Pinned: the country comes from ZOE_HOUSEHOLD_COUNTRY / ZOE_LOCATION_COUNTRY (code or name; UK -> GB), else an EXPLICIT
 ZOE_TIMEZONE (never the code default), else nothing; every shipped country renders, within budget, with no tool-group trigger word
-(the line rides in the user message) and no bracket (it sits inside a delimited block); the distress hand-off reads the same
-explicit country; the Flue seam puts the line in the "[Today — household context]" block on every turn and leaves the bytes alone
-when it is off or no country is set.
+and no bracket (a conservative bound kept from when it rode in the user message); the distress hand-off reads the same explicit
+country. The Flue seam (an envelope the sidecar moves into the system prompt, never the user's message) is pinned in
+test_household_locale_seam.py.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 
@@ -123,39 +122,3 @@ def test_distress_reads_the_same_explicit_country_and_never_the_timezone(monkeyp
     assert distress_handoff.config().country == "AU"
 
 
-# -- the seam ----------------------------------------------------------------------------------------------
-
-import zoe_flue_client as zc  # noqa: E402
-
-
-def test_seam_adds_the_line_to_the_identity_block(monkeypatch):
-    from identity_facts import BLOCK_CLOSE, BLOCK_OPEN
-
-    monkeypatch.setenv("ZOE_HOUSEHOLD_COUNTRY", "AU")
-    ident = f"{BLOCK_OPEN}\nYou are talking to Alex, a member of this household in Townsville.\n{BLOCK_CLOSE}"
-    out = zc._with_household_locale(ident)
-    assert out == f"{BLOCK_OPEN}\nYou are talking to Alex, a member of this household in Townsville.\n{hl.prompt_line()}\n{BLOCK_CLOSE}"
-    # no identity (a guest): the line gets a block of its own, same family (elided from history like the rest)
-    assert zc._with_household_locale("") == f"{BLOCK_OPEN}\n{hl.prompt_line()}\n{BLOCK_CLOSE}"
-
-
-def test_seam_bytes_unchanged_without_a_country_or_with_the_flag_off(monkeypatch):
-    from identity_facts import BLOCK_CLOSE, BLOCK_OPEN
-
-    ident = f"{BLOCK_OPEN}\nYou are talking to Alex.\n{BLOCK_CLOSE}"
-    assert zc._with_household_locale(ident) == ident and zc._with_household_locale("") == ""
-    monkeypatch.setenv("ZOE_HOUSEHOLD_COUNTRY", "AU")
-    monkeypatch.setenv("ZOE_LOCALE_HINT", "off")
-    assert zc._with_household_locale(ident) == ident and zc._with_household_locale("") == ""
-
-
-def test_identity_context_block_carries_the_line(monkeypatch):
-    import identity_facts
-
-    async def no_identity(uid):
-        return ""
-
-    monkeypatch.setattr(identity_facts, "identity_block", no_identity)
-    monkeypatch.setenv("ZOE_HOUSEHOLD_COUNTRY", "AU")
-    block = asyncio.run(zc._identity_context_block("guest"))
-    assert "Celsius" in block and block.startswith("[Today")

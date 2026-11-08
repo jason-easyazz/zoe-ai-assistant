@@ -375,6 +375,42 @@ def test_break_the_fix_lead_in_defeats_the_anchor_without_the_strip(monkeypatch)
     assert intent_router.detect_intent("can you remind me to call the plumber tomorrow", log_miss=False) is None
 
 
+@pytest.mark.parametrize("text, item, list_type", [
+    ("Add sultanas to my personal list please.", "sultanas", "personal"),
+    ("add sultanas to my shopping list, thanks", "sultanas", "shopping"),
+    ("put eggs on my work list for me please", "eggs", "work"),
+    ("Add sultanas to my personal list.", "sultanas", "personal"),          # control: no courtesy, unchanged
+])
+def test_a_courtesy_tail_never_swallows_the_list_target(text, item, list_type):
+    """Rollout QA 2026-11-07: "... to my personal list please" stored "sultanas to my personal list please" on the SHOPPING
+    list (the implicit "add (.+)" took the whole tail) - a private item on the shared list."""
+    hit = intent_router.detect_intent(text, log_miss=False)
+    assert hit is not None and hit.name == "list_add"
+    assert (hit.slots.get("item"), hit.slots.get("list_type")) == (item, list_type)
+
+
+@pytest.mark.parametrize("text", ["add cheers", "add thanks", "buy cheers"])
+def test_a_lone_courtesy_object_is_still_the_item(text):
+    """Cross-review #2334: the strip must never eat the WHOLE object - it behaves exactly as without the strip."""
+    import re
+
+    hit = intent_router.detect_intent(text, log_miss=False)
+    old = intent_router._LIST_TRAILING_COURTESY_RE
+    try:
+        intent_router._LIST_TRAILING_COURTESY_RE = re.compile(r"(?!x)x")
+        assert hit == intent_router.detect_intent(text, log_miss=False)
+    finally:
+        intent_router._LIST_TRAILING_COURTESY_RE = old
+
+
+def test_break_the_fix_courtesy_tail_lands_on_the_shared_list(monkeypatch):
+    import re
+
+    monkeypatch.setattr(intent_router, "_LIST_TRAILING_COURTESY_RE", re.compile(r"(?!x)x"))
+    hit = intent_router.detect_intent("Add sultanas to my personal list please.", log_miss=False)
+    assert hit is not None and hit.slots.get("list_type") != "personal"
+
+
 def test_a_phrase_that_already_matches_is_untouched():
     """The retry only ever ADDS a claim: every corpus-style phrase with a lead-in that matched before still does."""
     for text in ("please turn off the lights", "hey zoe what's the weather", "can you add milk to the shopping list"):

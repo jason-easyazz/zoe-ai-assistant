@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 846 prod flags; 262 read through `typed_env`.
+- 849 prod flags; 265 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-846 flags; 795 not documented in `.env.example`.
+849 flags; 798 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -432,6 +432,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MCP_STRICT_USER_ID` | bool | `True` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'true'` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ID` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ROLE` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
+| `ZOE_MEMBER_REGISTER` | str | `'off'` | `off`, `on` | `docs/knowledge/member-register.md` | `'off'` | yes | NO | `services/zoe-data/member_register.py` |
+| `ZOE_MEMBER_REGISTER_KIDS` | str | `'off'` | `off`, `on` | `docs/knowledge/member-register.md` | `'off'` | yes | NO | `services/zoe-data/member_register.py` |
 | `ZOE_MEMORIES_CURATORS` | bool | `False` | - | `docs/knowledge/memory-curation.md` | `False` | yes | NO | `services/zoe-data/memory_curation.py` |
 | `ZOE_MEMORIES_VOICE` | bool | `False` | - | `docs/knowledge/memories-voice.md` | `False` | yes | NO | `services/zoe-data/memories_voice.py` |
 | `ZOE_MEMORY_AUDIT_COLLECTION` | str | `'mempalace_audit'` | - | - | `'mempalace_audit'` | no | NO | `services/zoe-data/memory_service.py` |
@@ -817,6 +819,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_TEXT_LOG_RETENTION_DAYS` | str | `''` | - | `docs/knowledge/forget-reach.md` | `-` | no | NO | `services/zoe-data/local_text_logs.py` |
 | `ZOE_TIMER_STORE` | str | `''` | - | `services/zoe-data/AGENTS.md` | `''` | yes | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_TIMEZONE` | str | `'Australia/Perth'` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''`, `'Australia/Perth'` | yes | NO | `services/zoe-data/brain_scheduler.py`<br>`services/zoe-data/calendar_ical.py`<br>`services/zoe-data/household_locale.py`<br>`services/zoe-data/identity_facts.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/multica_autopilot_sync.py`<br>`services/zoe-data/proactive/arrival.py`<br>`services/zoe-data/proactive/engine.py`<br>`services/zoe-data/proactive/triggers/emotional_followup.py`<br>`services/zoe-data/proactive/triggers/evening_windown.py`<br>`services/zoe-data/proactive/triggers/evolution_weekly_digest.py`<br>`services/zoe-data/proactive/triggers/people_health.py`<br>`services/zoe-data/proactive/triggers/reminder_scan.py`<br>`services/zoe-data/routers/weather.py`<br>`services/zoe-data/time_utils.py`<br>`services/zoe-data/voice_greeting.py` |
+| `ZOE_TOOL_TEXT_GUARD` | str | `''` | - | `docs/knowledge/write-claim-guard.md` | `''` | yes | NO | `services/zoe-data/tool_text_guard.py` |
 | `ZOE_TOUCH_PANEL_OFFLINE_CACHE` | bool | `False` | - | `docs/knowledge/ui-deep-review-2026-10-04.md` | `'0'` | no | NO | `services/zoe-auth/touch_panel/quick_auth.py` |
 | `ZOE_TOUCH_PROBE_DEVICE_TOKEN` | str | `''` | - | - | `''` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
 | `ZOE_TOUCH_PROBE_PANEL_ID` | str | `'zoe-touch-pi'` | - | - | `'zoe-touch-pi'` | no | NO | `scripts/maintenance/pi_touch_hybrid_production_probe.py` |
@@ -911,7 +914,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Lab flags (`labs/` — not prod)
 
-40 flags; 38 not documented in `.env.example`.
+41 flags; 39 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -931,6 +934,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_BRAIN_STREAM` | str | `''` | - | - | `''` | no | NO | `labs/flue-zoe-brain-2x/src/streaming.ts` |
 | `ZOE_BRAIN_STREAM_TIMEOUT_S` | str | `''` | - | - | `-` | no | NO | `labs/flue-zoe-brain-2x/src/streaming.ts` |
 | `ZOE_BRAIN_TEMPERATURE` | str | `''` | - | `docs/research/inference-speech-stack-2026-10-03.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/providers/capped-completions.ts` |
+| `ZOE_BRAIN_TEXT_TOOLCALL_RECOVERY` | str | `''` | - | `docs/knowledge/write-claim-guard.md` | `''` | no | NO | `labs/flue-zoe-brain-2x/src/text-tool-calls.ts` |
 | `ZOE_BRAIN_TOKEN` | str | `''` | - | `docs/knowledge/self-model.md` | `''`, `-` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py`<br>`labs/flue-zoe-brain-2x/src/auth.ts` |
 | `ZOE_BRAIN_TOOL_TIMEOUT_MS` | str | `''` | - | - | `-` | no | NO | `labs/flue-zoe-brain-2x/src/tools/zoe-tools.ts` |
 | `ZOE_BRAIN_URL` | str | `''` | - | - | `'http://127.0.0.1:3579'`, `'http://127.0.0.1:8000'` | no | NO | `labs/flue-zoe-brain-2x/parity/flue_wire.py`<br>`labs/flue-zoe-telegram-2x/src/brain.ts` |

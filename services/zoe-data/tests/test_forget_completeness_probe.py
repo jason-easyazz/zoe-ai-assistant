@@ -102,6 +102,9 @@ UNPROBED: dict[str, str] = {
     "llama_prefix_kv": "the llama-server prompt/KV cache holds the same history and is never flushed on forget",
     "relationship_free_text": "people.notes / context, person_relationships.notes and person_activities of OTHER live people are "
                               "served by zoe_memory_compose._fetch_relational with no ledger check and are not erased by the cascade",
+    "member_register": "the per-member speaking register (alembic 0068): rows are enum-mapped settings (length / formality / humour / pace) and "
+                       "short sanitised liked-topic labels the member stated, rendered as one short line; delete_user erases every row "
+                       "(forget_reach REACHED) but an entity forget does not scrub a name out of a liked-topic label",
     "commitments_sweep": "commitments._names_forgotten fails OPEN on a ledger outage at sweep time (the cascade erase is the only wall then)",
 }
 

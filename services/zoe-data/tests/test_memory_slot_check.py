@@ -310,3 +310,78 @@ async def test_the_relevance_gate_rebuild_applies_the_slot_policy_to_the_expande
     assert "[mem:keep0001]" in on and "[mem:held0001]" not in on
     monkeypatch.delenv(sc.ENV)
     assert "[mem:held0001]" in await _packet()                   # control: off serves both
+
+
+# ── the CAPTURED shapes: rows as the post-turn extractor really writes them (first shadow run: keyed=0) ──────────
+
+def _captured(utterance: str) -> "list[str]":
+    """The row texts the chat capture (``memory_extractor.extract_candidates``) stores for one first-person utterance."""
+    import memory_extractor
+
+    return [c.text for c in memory_extractor.extract_candidates(utterance, "")]
+
+
+@pytest.mark.parametrize("utterance, slot, value", [
+    ("I work at Acme Robotics as a mechanical engineer.", "employer", "acme robotics"),
+    ("I work at Globex these days, in their design team.", "employer", "globex"),
+    ("I work for the council.", "employer", "council"),
+    ("I live in Dunedin.", "home_city", "dunedin"),
+    ("My wife is called Sarah.", "partner", "sarah"),
+    ("My partner's name is Sam.", "partner", "sam"),
+    ("My husband is Tom.", "partner", "tom"),
+])
+def test_captured_rows_key_to_the_owner(utterance, slot, value):
+    texts = _captured(utterance)
+    slots = [sc.slot_of(t) for t in texts]
+    keyed = [(s.name, s.value) for t, s in zip(texts, slots) if s and sc.key_of({"user_id": "member-a"}, t, s) == "self:member-a"]
+    assert keyed == [(slot, value)], (texts, slots)
+
+
+@pytest.mark.parametrize("text", [
+    "User works at/for: Globex",          # the agent path's template (zoe_agent)
+    "User works at/for Globex",
+])
+def test_slash_template_reads_as_the_preposition(text):
+    s = sc.slot_of(text)
+    assert s is not None and (s.name, s.value) == ("employer", "globex")
+    assert sc.key_of({"user_id": "member-a"}, text, s) == "self:member-a"
+
+
+@pytest.mark.parametrize("text", [
+    "User's job/role: mechanical engineer",       # a role, not an employer
+    "User no longer works at/for Acme",           # negated
+    "User's sister works at/for Acme",            # somebody else's job
+    "User said Ana works at/for Acme",            # a report
+    "User's wife is called",                      # a value-less capture: no name was said
+    "User is working on the garden",              # an activity, not an employer
+])
+def test_captured_shapes_negative_controls(text):
+    s = sc.slot_of(text)
+    assert s is None or not sc.key_of({"user_id": "member-a"}, text, s).startswith("self")
+
+
+def test_captured_employer_change_is_a_conflict_and_authority_rules_hold():
+    """The QA replay's pair, as captured: two stated employers -> ASK (nothing hidden); an inference against a stated one -> held."""
+    old_t, new_t = _captured("I work at Acme Robotics as a mechanical engineer.")[0], _captured("I work at Globex these days.")[0]
+    found = sc.conflicts([_ref("old1", old_t, STATED, 3), _ref("new1", new_t, STATED, 1)])
+    assert [(c.slot, c.older_id, c.newer_id, c.action) for c in found] == [("employer", "old1", "new1", sc.ASK)]
+    assert sc.hidden_ids(found) == frozenset()
+    held = sc.conflicts([_ref("old1", old_t, STATED, 3), _ref("new1", new_t, INFERRED, 1)])
+    assert [c.action for c in held] == [sc.HOLD_NEWER]      # an inference never supersedes the person's word
+    # negative control: the same employer said twice is not a conflict
+    assert sc.conflicts([_ref("a", old_t, STATED, 3), _ref("b", _captured("I work at Acme Robotics.")[0], STATED, 1)]) == []
+
+
+def test_extractor_never_stores_called_as_a_name():
+    assert _captured("My wife is called Sarah.") == ["User's wife is named Sarah"]
+    assert _captured("My wife is Sarah.") == ["User's wife is Sarah"]       # negative control: the bare form still captures
+
+
+def test_report_says_why_rows_are_unkeyed():
+    rows = [_ref("a", "User works at/for Acme", STATED, 3), _ref("b", "User's job/role: welder", STATED, 3),
+            _ref("c", "User likes tea", STATED, 3), _ref("d", "Ana works at Acme", STATED, 3),
+            _ref("e", "User works at/for Globex", {**STATED, "status": "pending"}, 1)]
+    rep = sc.report(rows, NOW)
+    assert rep["keyed"] == 1
+    assert rep["unkeyed"] == {"not_standing": 1, "no_slot": 2, "slot_no_person": 1, "hint_employer": 1}
+    assert "Acme" not in repr(rep) and "welder" not in repr(rep)
