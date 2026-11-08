@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-113 stores: 42 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+114 stores: 42 reached, 31 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -142,6 +142,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `person_contact_links` | pg_table | metadata | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
 | `learned_voiceprints` | pg_table | biometric | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_voiceprints` | - |
 | `learned_voiceprint_segments` | pg_table | biometric | reached | member: `omi_recordings.forget_user` / entity: `contacts_store.forget_voiceprints` | - |
+| `learned_voiceprints_0071` | pg_table | metadata | out_of_scope | - | Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the same migration; it never exists on the Postgres box the dumps read. |
 | `user_portraits` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes a portrait that names the entity; delete_user does not remove it. |
 | `user_model_cards` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes a card that names the entity; delete_user does not remove it. |
 | `open_loops` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Entity forget resolves a loop that names the entity; delete_user does not touch the rows. |
