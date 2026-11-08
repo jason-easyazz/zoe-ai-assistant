@@ -120,6 +120,7 @@ _WARM_PHRASES = [
     "Good morning.",
     "Good afternoon.",
     "Good evening.",
+    "Hi.",                   # the first-turn greeting from midnight to 05:00 (voice_greeting.greeting_for_hour)
     "What can I help you with?",
     "On it.",
     "All done.",
