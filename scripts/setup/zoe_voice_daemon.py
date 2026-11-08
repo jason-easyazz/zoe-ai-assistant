@@ -2813,6 +2813,7 @@ def _load_profile_cache_from_disk() -> None:
             with _profile_cache_lock:
                 # fetched_at stays 0 so the first sync still refreshes.
                 _profile_cache["profiles"] = data["profiles"]
+                _profile_cache["guests"] = data.get("guests") if isinstance(data.get("guests"), list) else []
             log.info("Speaker profiles loaded from disk: %d", len(data["profiles"]))
     except FileNotFoundError:
         pass
@@ -2850,14 +2851,18 @@ def _sync_speaker_profiles(force: bool = False) -> None:
         r.raise_for_status()
         data = r.json()
         profiles = data.get("profiles") or []
+        # NAMED GUESTS (server ZOE_NAMED_GUESTS; absent = none): scored beside the members, sent as a SEPARATE guest field -
+        # a guest is never a member claim (the server never gives a guest member scope).
+        guests = data.get("guests") if isinstance(data.get("guests"), list) else []
         with _profile_cache_lock:
             _profile_cache["fetched_at"] = time.time()
             _profile_cache["profiles"] = profiles
+            _profile_cache["guests"] = guests
         try:
             os.makedirs(os.path.dirname(_PROFILE_CACHE_PATH), mode=0o700, exist_ok=True)
             fd = os.open(_PROFILE_CACHE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"profiles": profiles}, f)
+                json.dump({"profiles": profiles, "guests": guests} if guests else {"profiles": profiles}, f)
         except Exception as exc:
             log.debug("speaker profile cache persist failed: %s", exc)
         log.info("Speaker profiles synced: %d", len(profiles))
@@ -3014,8 +3019,29 @@ def _identify_speaker_resnet34(wav_bytes: bytes):
     _claim_ctx.rn34 = dict((k, r[k]) for k in ("seconds", "group", "threshold", "accept", "ms") if k in r)
     if r.get("source") != "local":
         return None
+    claim = _Claim(r["user_id"], r["score"], r["model_id"], r["seconds"])
+    claim.guest = _match_guest_local(r["_vec"], r["model_id"])
+    if claim.guest is not None and claim.guest[1] > r["score"]:
+        # The voice is closer to a named guest than to the member: never offered to adapt the MEMBER's profile with it.
+        return claim
     _adapt_offer(r["user_id"], r["score"], r["_vec"], r["seconds"], model_id=r["model_id"])
-    return _Claim(r["user_id"], r["score"], r["model_id"], r["seconds"])
+    return claim
+
+
+def _match_guest_local(vec, model_id: str):
+    """Best ``(guest_id, score)`` over the synced named-guest profiles of THIS model, or None (no guests / no match). Never raises."""
+    try:
+        with _profile_cache_lock:
+            guests = list(_profile_cache.get("guests") or [])
+        if not guests or _rn34 is None:
+            return None
+        rows = [dict(user_id=g.get("guest_id"), embedding_base64=g.get("embedding_base64"), model_id=g.get("model_id"))
+                for g in guests if isinstance(g, dict)]
+        gid, score, _n = _rn34.match_profiles(vec, rows, model_id)
+        return (str(gid), float(score)) if gid and score is not None and math.isfinite(float(score)) else None
+    except Exception as exc:  # noqa: BLE001 - a guest score must never cost the member claim
+        log.debug("guest scoring failed: %s", exc)
+        return None
 
 
 def _identify_speaker_from_wav(wav_bytes: bytes) -> tuple[str, float] | None:
@@ -3541,6 +3567,10 @@ def _speaker_field(claim: object) -> dict | None:
             speech_s = getattr(claim, "speech_s", None)
             if isinstance(speech_s, (int, float)) and math.isfinite(speech_s):
                 block["speech_s"] = round(float(speech_s), 2)
+            guest = getattr(claim, "guest", None)
+            if guest:
+                # A named guest candidate rides BESIDE the member candidate; the server judges both (a guest is never a member).
+                block["guest"], block["guest_score"] = str(guest[0]), round(float(guest[1]), 4)
         return block
     return None
 
@@ -4886,6 +4916,7 @@ def _purge_speaker_profile(user_id: str) -> bool:
         before = len(_profile_cache["profiles"])
         _profile_cache["profiles"] = [p for p in _profile_cache["profiles"] if str(p.get("user_id") or "") != uid]
         removed = before - len(_profile_cache["profiles"])
+        _profile_cache["guests"] = [g for g in (_profile_cache.get("guests") or []) if str(g.get("guest_id") or "") != uid]
     _persist_profile_cache()
     log.info("voice profile purge: removed %d cached profile(s)", removed)
     try:
