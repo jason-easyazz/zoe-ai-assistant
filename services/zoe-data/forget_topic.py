@@ -206,13 +206,6 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     if not groups:
         return res
     try:
-        # the words first, like every forget: from here on the in-flight capture of those turns cannot land
-        res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("forget_topic: words erase failed (%s)", type(exc).__name__)
-        res.store_down = True
-        return res
-    try:
         rows = await _owned_rows(svc, user_id, groups)
     except Exception as exc:  # noqa: BLE001
         logger.info("forget_topic: store unavailable (%s)", type(exc).__name__)
@@ -220,7 +213,14 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
         return res
     res.found = len(rows)
     if len(rows) > MAX_ROWS:
-        res.too_many = True            # nothing is touched: ask which part
+        res.too_many = True            # nothing is touched - rows AND words: ask which part
+        return res
+    try:
+        # the words before the rows, like every forget: the in-flight capture of those turns cannot land
+        res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_topic: words erase failed (%s)", type(exc).__name__)
+        res.store_down = True
         return res
     archived: list = []
     for r in rows:

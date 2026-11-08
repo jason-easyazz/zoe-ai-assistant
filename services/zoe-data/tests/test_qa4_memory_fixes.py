@@ -124,10 +124,17 @@ def test_topic_forget_with_no_match_changes_nothing_and_says_so(svc):
 
 def test_topic_forget_refuses_a_broad_sweep(svc, monkeypatch):
     _seed(svc)
+    import exact_words
+    import turn_forget
+
+    said = "my mum wren has an appointment on tuesday"
+    turn_forget.note_user_turn(UID, said)
+    run(exact_words.get_backend().add(UID, "t9", 1.0, said, "mum appointment", "chat"))
     monkeypatch.setattr(forget_topic, "MAX_ROWS", 1)
     reply = run(forget_topic.execute(UID, "my mum"))     # two rows hold "mum"
     assert "haven't forgotten any" in reply
     assert _live(svc) == sorted([HEART, APPT, TEA])
+    assert run(exact_words.get_backend().rows_matching(UID, "mum")) and not turn_forget.blocks_write(UID, said)   # words untouched too
 
 
 def test_topic_forget_failed_archive_is_reported_not_erased(svc, monkeypatch):
