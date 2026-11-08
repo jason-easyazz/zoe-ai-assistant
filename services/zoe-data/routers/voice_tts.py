@@ -5915,6 +5915,17 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     except Exception as _win_exc:
         logger.warning("voice/%s window speaker gate failed (dropping the window turn): %s", route, _win_exc)
         _win_verdict = False
+    if _win_verdict is None and side_effects:
+        # No verdict at all on a no-wake-word turn: the gate is off / in shadow mode, or the panel could not score (its speaker model
+        # is refused / loading - 2026-11-07, ~8 h). The turn still passes, but the VOICE gives it no identity: no claim was accepted,
+        # so voice_command scopes it to a guest unless a FRESH panel PIN sign-in backs a member (voice_session: a PIN is its own
+        # password, and the only way in while the speaker model is down). Say so loudly: a follow-up chain with no verdict is
+        # exactly what a TV can keep alive.
+        _sms = (payload or {}).get("speaker_model_state")
+        _sms_state = str(_sms.get("state") or "?") if isinstance(_sms, dict) else "unreported"
+        if _sms_state not in ("ready", "off"):
+            logger.warning("voice/%s window turn passes with NO speaker verdict (panel speaker model %s): guest scope, no identity "
+                           "from the voice (a fresh PIN sign-in only)", route, _sms_state)
     try:
         _gate = _utterance_shape.window_speaker_frame(
             payload, transcript, _win_verdict,
@@ -5958,6 +5969,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     panel_id = _lane_panel_id(payload, caller, "turn")
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
+    _note_panel_speaker_state(payload, caller, panel_id)
 
     t_turn_start = time.monotonic()
 
@@ -6120,6 +6132,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     panel_id = _lane_panel_id(payload, caller, "turn_stream")
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
+    _note_panel_speaker_state(payload, caller, panel_id)
 
     t_turn_start = time.monotonic()
     try:
@@ -7158,6 +7171,20 @@ def _claim_model(payload: dict) -> tuple:
     speech = block.get("speech_s", payload.get("voice_speech_s"))
     # an explicitly blank / non-string model id is MALFORMED (""), never the legacy model: the claim is then refused as unknown
     return (model_id if model_id is not None else ""), speech
+
+
+def _note_panel_speaker_state(payload: dict, caller: dict, panel_id: str) -> None:
+    """Track the panel's ``speaker_model_state`` (every audio turn carries it): a panel that cannot score voices at all raises an
+    owner ALARM after ``ZOE_PANEL_SPEAKER_ALARM_MIN`` (``panel_speaker_health``) instead of a silent all-guest night (2026-11-07).
+    Device callers only - a browser cannot report a panel's model. Never raises."""
+    if (caller or {}).get("source") != "device":
+        return
+    try:
+        import panel_speaker_health as _psh
+
+        _psh.note_turn(panel_id, (payload or {}).get("speaker_model_state"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("panel speaker health note failed (non-fatal): %s", exc)
 
 
 def _speaker_verdict(payload: dict, caller: dict, *, identified_by_claim: bool) -> Optional[bool]:

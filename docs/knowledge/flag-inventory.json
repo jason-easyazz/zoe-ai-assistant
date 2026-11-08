@@ -11242,6 +11242,44 @@
         },
         "typed_env": false
       },
+      "ZOE_PANEL_SPEAKER_ALARM_MIN": {
+        "defaults": [
+          "10.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_speaker_health.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 10.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_PANEL_SPEAKER_HEALTH_PATH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_speaker_health.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_PANEL_TOKEN_VIA_CF": {
         "defaults": [
           "'guest'"
@@ -18294,6 +18332,16 @@
       ],
       "typed_env": false
     },
+    "BAKEOFF_PANEL_UNREADABLE_WAIT_MIN": {
+      "defaults": [
+        "'10'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/zmb/bakeoff.py"
+      ],
+      "typed_env": false
+    },
     "BAKEOFF_QUIET_POLL_S": {
       "defaults": [
         "'60'"
@@ -18367,6 +18415,16 @@
     "BAKEOFF_SMOKE_CELLS": {
       "defaults": [
         "'0'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/zmb/bakeoff.py"
+      ],
+      "typed_env": false
+    },
+    "BAKEOFF_VOICE_AGE_URL": {
+      "defaults": [
+        "'http://127.0.0.1:8000/health'"
       ],
       "in_env_example": false,
       "readers": [
@@ -20092,6 +20150,26 @@
       "in_env_example": false,
       "readers": [
         "scripts/setup/zoe_speaker_resnet34.py"
+      ],
+      "typed_env": false
+    },
+    "SPEAKER_RESNET34_RETRY_S": {
+      "defaults": [
+        "'60,300,900,3600'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
+    "SPEAKER_RESNET34_SELFTEST_DELAY_S": {
+      "defaults": [
+        "'20'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
       ],
       "typed_env": false
     },

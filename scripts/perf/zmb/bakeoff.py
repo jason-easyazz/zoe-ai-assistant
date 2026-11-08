@@ -32,6 +32,7 @@ import dataclasses
 import datetime as dt
 import fcntl
 import json
+import math
 import os
 import re
 import shlex
@@ -107,6 +108,10 @@ class Cfg:
     health_wait_s: float = float(os.environ.get("BAKEOFF_HEALTH_WAIT_S", "180"))
     panel_host: str = os.environ.get("BAKEOFF_PANEL_HOST", "zoe-pi")
     panel_log: str = "/home/pi/.zoe-voice/voice.log"
+    #: the FIRST source of "seconds since the last household voice turn": zoe-data's own stamp (no ssh). The panel log over ssh answers when it is null / unreachable.
+    voice_age_url: str = os.environ.get("BAKEOFF_VOICE_AGE_URL", "http://127.0.0.1:8000/health")
+    #: neither source readable: treated as BUSY (fail closed) for at most this long, then the window proceeds and says so (an unreachable Pi must not cost every night).
+    panel_unreadable_wait_min: float = float(os.environ.get("BAKEOFF_PANEL_UNREADABLE_WAIT_MIN", "10"))
     seeds: tuple = ()
     #: priority order; MPA = MemPalace operated by the AGENT (the clone brain calls its tools), HMA = MPA as the episodic tier + Hindsight (concise + observations) as the reflective tier,
     #: ZMA = Zoe's live stack (Z0e: MemoryService over Chroma + MiniLM, the authority classes, the forget ledger, the nightly passes) with MemPalace integrated
@@ -172,7 +177,8 @@ class Cfg:
 @dataclasses.dataclass
 class Result:
     rc: int
-    out: str = ""
+    out: str = ""                  # stdout + stderr (what a failed command's message needs)
+    stdout: "Optional[str]" = None  # stdout alone when the host captured it separately (None = only ``out`` is known)
 
 
 class Host:
@@ -184,7 +190,7 @@ class Host:
     def run(self, argv: "list[str]", timeout: float = 60.0, mutating: bool = True, env: "Optional[dict]" = None) -> Result:
         try:
             p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
-            return Result(p.returncode, (p.stdout or "") + (p.stderr or ""))
+            return Result(p.returncode, (p.stdout or "") + (p.stderr or ""), p.stdout or "")
         except subprocess.TimeoutExpired:
             return Result(124, f"timeout after {timeout:.0f}s")
         except OSError as exc:                      # not found, not executable, ...: a failed command, never a crash of the window
@@ -394,14 +400,31 @@ def hindsight_env(example: str, cfg: Cfg, run_id: str) -> str:
 # ── preflight helpers ────────────────────────────────────────────────────────
 
 def parse_panel_age(out: str, now: float) -> "Optional[float]":
-    """Seconds since the panel's last wake/follow-up line (``land_voice_pr.sh`` convention); None = no line / unparsable."""
-    last = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else ""
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return now - dt.datetime.strptime(last[:19], fmt).timestamp()
-        except ValueError:
-            continue
+    """Seconds since the panel's last wake/follow-up line (``land_voice_pr.sh`` convention); None = no timestamp-shaped line.
+
+    The LAST timestamp-shaped line wins, not the last line: ssh to zoe-pi prints ``Warning: Permanently added ...`` on stderr on
+    every call (``UserKnownHostsFile /dev/null``), and reading the last line made every answer unparsable - the guard read "quiet"
+    for weeks (2026-11-08: a 283 s-old conversation, a 600 s bar, and the window did not wait)."""
+    for line in reversed((out or "").strip().splitlines()):
+        line = line.strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return now - dt.datetime.strptime(line[:19], fmt).timestamp()
+            except ValueError:
+                continue
     return None
+
+
+def parse_voice_turn_age(text: str) -> "Optional[float]":
+    """``last_voice_turn_age_s`` from zoe-data's ``/health`` JSON (household turns only; harness / probe traffic never stamps it).
+    None = not JSON, no field, or null (no household turn since zoe-data started: the panel log has to answer)."""
+    try:
+        v = json.loads(text or "").get("last_voice_turn_age_s")
+    except (ValueError, AttributeError):
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0:
+        return None
+    return float(v)
 
 
 # ── physical-memory fragmentation (the 2026-10-08 abort) ─────────────────────
@@ -688,9 +711,31 @@ class Window:
                 self.lock_fd = None
 
     def panel_age_s(self) -> "Optional[float]":
+        """Seconds since the last household voice turn: zoe-data's own stamp first, then the panel log over ssh; None = neither readable."""
+        if self.cfg.voice_age_url:
+            r = self.host.run(["curl", "-s", "--max-time", "3", self.cfg.voice_age_url], timeout=6, mutating=False)
+            age = parse_voice_turn_age(r.stdout if r.stdout is not None else r.out) if r.rc == 0 else None
+            if age is not None:
+                return age
         grep = f"grep -a 'Wake word detected\\|Follow-up speech detected' {self.cfg.panel_log} | tail -1 | cut -c1-19"
-        r = self.host.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", self.cfg.panel_host, grep], timeout=10, mutating=False)
-        return parse_panel_age(r.out, self.host.now()) if r.rc == 0 else None
+        r = self.host.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=6", "-o", "LogLevel=ERROR", self.cfg.panel_host, grep],
+                          timeout=10, mutating=False)
+        return parse_panel_age(r.stdout if r.stdout is not None else r.out, self.host.now()) if r.rc == 0 else None
+
+    def _panel_unreadable(self) -> str:
+        """FAIL CLOSED, bounded: an unreadable panel age is busy for ``panel_unreadable_wait_min``, then the window proceeds (logged once)."""
+        now = self.host.mono()
+        since = getattr(self, "_panel_unreadable_since", None)
+        if since is None:
+            since = self._panel_unreadable_since = now
+        bound = self.cfg.panel_unreadable_wait_min * 60.0
+        if now - since < bound:
+            return (f"the last voice turn is unreadable (zoe-data {self.cfg.voice_age_url} and ssh {self.cfg.panel_host} both failed): "
+                    f"treated as busy for up to {self.cfg.panel_unreadable_wait_min:.0f} min")
+        if not getattr(self, "_panel_unreadable_logged", False):
+            self._panel_unreadable_logged = True
+            self.log(f"the last voice turn has been unreadable for {(now - since) / 60.0:.0f} min: proceeding as quiet (check zoe-data /health and ssh {self.cfg.panel_host})")
+        return ""
 
     #: What counts as "the brain is busy with someone else's work". ANCHORED to the interpreter / shell that RUNS the script: an unanchored
     #: ``pgrep -f samantha_bar.py`` also matches an editor, a ``tail -f`` or the very shell that was asked (and misses ``samantha_bar_conv.py``,
@@ -727,8 +772,14 @@ class Window:
 
     def busy_reason(self) -> str:
         age = self.panel_age_s()
-        if age is not None and age < self.cfg.quiet_s:
-            return f"the panel had a voice turn {age:.0f}s ago (needs {self.cfg.quiet_s:.0f}s quiet)"
+        if age is None:
+            why = self._panel_unreadable()
+            if why:
+                return why
+        else:
+            self._panel_unreadable_since, self._panel_unreadable_logged = None, False
+            if age < self.cfg.quiet_s:
+                return f"the panel had a voice turn {age:.0f}s ago (needs {self.cfg.quiet_s:.0f}s quiet)"
         busy = self.landing_running()
         return f"{busy} is running" if busy else ""
 

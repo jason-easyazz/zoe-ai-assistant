@@ -294,7 +294,7 @@ class FakeHost(nw.NightHost):
         return bk.Result(rc, "")
 
 
-def make(tmp_path, *, cfg_kw=None, argv=(), **host_kw):
+def make(tmp_path, *, cfg_kw=None, argv=(), host_cls=None, **host_kw):
     args = nw.build_parser().parse_args(list(argv))
     cfg_kw = {"night_mind_script": tmp_path / "absent" / "zoe-night-mind.py", "omi_day_review_script": tmp_path / "absent" / "zoe-omi-day-review.py",
               "struggle_proposals_script": tmp_path / "absent" / "zoe-struggle-proposals.py",
@@ -305,7 +305,7 @@ def make(tmp_path, *, cfg_kw=None, argv=(), **host_kw):
                       test_lane_path=str(tmp_path / "test-lane.lock"), test_lane_wait_min=1.0, bakeoff_dir=tmp_path / "bakeoff", **cfg_kw)
     cfg = nw.configure(args, cfg)
     cfg.bakeoff_dir = tmp_path / "bakeoff"
-    host = FakeHost(tmp_path, **host_kw)
+    host = (host_cls or FakeHost)(tmp_path, **host_kw)
     host.files[cfg.deep_unit] = PARKED
     host.files[str(tmp_path / "meminfo")] = "MemTotal: 16000000 kB\n"
     if cfg.trial:
@@ -506,6 +506,56 @@ def test_a_running_nightly_timer_job_refuses_after_waiting_and_so_does_a_trainin
 
 def test_a_busy_panel_is_waited_out_then_refused(tmp_path):
     w, host, _ = make(tmp_path, panel_busy=True)
+    assert w.run() == nw.EXIT_REFUSED and "voice turn" in w.outcome and stopped_nothing(host)
+
+
+class ConversationHost(FakeHost):
+    """The household's last voice turn ended ``ended_ago`` s before the window started (it then ages with the fake clock). ``via="data"``: zoe-data's
+    /health reports it; ``via="ssh"``: zoe-data's stamp is null and the panel log answers, with the known-hosts warning zoe-pi's ssh really prints.
+    ``quiet_at_stop`` = how long the panel had been quiet when zoe-data was stopped."""
+
+    def __init__(self, tmp, *, ended_ago: float, via: str = "data", **kw):
+        super().__init__(tmp, **kw)
+        self.last_turn, self.via, self.quiet_at_stop = self.t - ended_ago, via, None
+
+    def run(self, argv, timeout=60.0, mutating=True, env=None):
+        if argv[0] == "curl" and argv[-1] == "http://127.0.0.1:8000/health" and self.active.get(nw.ZOE_DATA):
+            self.cmds.append((list(argv), mutating))
+            age = round(self.t - self.last_turn, 1) if self.via == "data" else None
+            return bk.Result(0, json.dumps({"status": "ok", "last_voice_turn_age_s": age}))
+        if argv[0] == "ssh":
+            self.cmds.append((list(argv), mutating))
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_turn))
+            return bk.Result(0, stamp + "\nWarning: Permanently added 'zoe-pi' (ED25519) to the list of known hosts.\n")
+        if argv[:4] == ["systemctl", "--user", "stop", nw.ZOE_DATA] and self.quiet_at_stop is None:
+            self.quiet_at_stop = self.t - self.last_turn
+        return super().run(argv, timeout, mutating, env)
+
+
+@pytest.mark.parametrize("via", ["data", "ssh"])
+def test_a_real_conversation_near_0250_makes_the_window_wait_until_600s_quiet_then_run(tmp_path, via):
+    """OWNER PIN 2026-11-08: the conversation ended 283 s before the 02:51 window and it did not wait (the guard was blind: ssh's warning was the
+    last line). The window now waits, bounded, until the panel has been quiet for the 600 s bar, and only then stops anything."""
+    w, host, cfg = make(tmp_path, host_cls=ConversationHost, ended_ago=283.0, via=via, start=at(2, 51))
+    cfg.quiet_wait_max_min = 30.0
+    assert cfg.quiet_s == 600.0
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert host.quiet_at_stop is not None and host.quiet_at_stop >= 600.0, host.quiet_at_stop
+    assert host.quiet_at_stop <= 600.0 + cfg.quiet_poll_s + 1                               # it waited for the bar, not longer
+    # negative control: a conversation that ended long ago does not delay the window at all
+    (tmp_path / "quiet").mkdir()
+    w2, host2, cfg2 = make(tmp_path / "quiet", host_cls=ConversationHost, ended_ago=5000.0, via=via, start=at(2, 51))
+    assert w2.run() == nw.EXIT_OK, w2.outcome
+    assert host2.quiet_at_stop is not None and host2.quiet_at_stop < 5000.0 + cfg2.quiet_poll_s
+
+
+def test_a_conversation_that_never_ends_is_waited_for_bounded_then_refused_with_nothing_stopped(tmp_path):
+    class Chatting(ConversationHost):
+        def sleep(self, s):
+            super().sleep(s)
+            self.last_turn = self.t - 30.0                                                  # still talking at every poll
+
+    w, host, _ = make(tmp_path, host_cls=Chatting, ended_ago=30.0, start=at(2, 51))
     assert w.run() == nw.EXIT_REFUSED and "voice turn" in w.outcome and stopped_nothing(host)
 
 

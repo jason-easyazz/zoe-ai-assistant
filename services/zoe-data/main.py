@@ -2487,6 +2487,13 @@ async def root_health():
         body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
     except Exception:  # noqa: BLE001
         body["last_voice_turn_age_s"] = None
+    # Panel speaker model (panel_speaker_health): alarm = a panel has reported it cannot score voices for longer than
+    # ZOE_PANEL_SPEAKER_ALARM_MIN. States + minutes only. Never fails /health (and never turns it 503: the API itself is fine).
+    try:
+        import panel_speaker_health as _psh
+        body["panel_speaker"] = _psh.snapshot()
+    except Exception:  # noqa: BLE001
+        body["panel_speaker"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body
