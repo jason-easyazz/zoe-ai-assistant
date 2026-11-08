@@ -528,7 +528,17 @@ async def _prepare(message: str, uid: str, sid: str, brief_active: bool) -> Rais
     # with an instruction not to say it.
     rturn = restraint.make_turn(message, verdict=restraint.current_verdict()) if restraint.mode() != "off" else None
     rctx: dict = {}   # mutes + stored classes, read once and only when a candidate actually matches this turn
-    for r in sorted(rows, key=lambda r: float(r[4] or 0), reverse=True):
+    ranks: dict = {}
+    try:   # equal salience: the first-presence re-score's own order (due time, ref), not row order (ZOE_OUTCOME_EDGES; {} when off)
+        from db_compat import get_compat_db
+        from proactive import outcome_edges
+
+        if outcome_edges.enabled():
+            async with get_compat_db() as _rdb:
+                ranks = await outcome_edges.todays_ranks(_rdb, uid, now_dt)
+    except Exception:  # noqa: BLE001
+        ranks = {}
+    for r in sorted(rows, key=lambda r: (-float(r[4] or 0), ranks.get(str(r[12]), 1_000_000))):
         if str(r[7]) <= now or (r[8] and str(r[8]) > now) or int(r[9] or 0) >= MAX_SURFACED:
             continue
         if (shape == "greeting" and int(r[5] or 0)) or (shape == "cue" and words & set(str(r[6]).split())):
@@ -581,6 +591,15 @@ async def prepare(message: str, user_id: str, session_id: str, *,
     if not selector_enabled() or not uid or not sid or not _eligible(uid):
         return None
     try:
+        # The member's first turn of the local day: re-score today's due items before the pick
+        # (ZOE_OUTCOME_EDGES, proactive/outcome_edges.py; no I/O when off, once a day, never raises).
+        from proactive import outcome_edges
+
+        if outcome_edges.enabled():
+            try:
+                await asyncio.wait_for(outcome_edges.on_presence(uid, _now()), timeout=_PREPARE_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - a slow re-score must not cost the turn its raise
+                logger.debug("proactive-selector: presence re-score skipped (non-fatal): %r", exc)
         return await asyncio.wait_for(_prepare(message or "", uid, sid, brief_active),
                                       timeout=_PREPARE_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 — a raise must never break a turn
@@ -624,6 +643,11 @@ async def _settle(raised: Raise, produced: bool) -> bool:
                     db, candidate_id=raised.candidate_id, user_id=raised.user_id,
                     session_id=raised.session_id, shape=raised.shape, now=now,
                     trigger=raised.trigger)
+                from proactive import outcome_edges  # flag-dark outcome edge (no I/O when off)
+
+                await outcome_edges.open_for_candidate(
+                    db, candidate_id=raised.candidate_id, user_id=raised.user_id,
+                    touch_point=outcome_edges.RAISE, now=now)
                 await lines.log_for_candidate(
                     db, line="raised", candidate_id=raised.candidate_id, user_id=raised.user_id,
                     reason="open_turn" if raised.shape == "greeting" else "cue",

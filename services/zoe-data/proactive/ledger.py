@@ -316,6 +316,9 @@ async def sweep(*, now: datetime | None = None) -> int:
                     "WHERE id = ? AND outcome IS NULL", (outcome, _iso(now), voiced, rid))
                 if (getattr(cur, "rowcount", 1) or 0) > 0:
                     closed += 1
+                    from proactive import outcome_edges  # flag-dark: carry the judgement to the item's edge
+
+                    await outcome_edges.on_ledger_close(db, rid, outcome, now)
                     logger.info("PROACTIVE_LEDGER_OUTCOME user=%s kind=%s outcome=%s voiced=%s",
                                 uid, kind, outcome, "?" if voiced is None else voiced)
         if rows:
