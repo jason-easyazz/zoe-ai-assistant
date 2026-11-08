@@ -163,3 +163,13 @@ def test_the_token_is_panel_bound_and_expires(clips):
     tok = ngc.issue_token(PANEL, wavp, ttl_s=-1)
     assert ngc.redeem(tok, PANEL) is None
     assert ngc.cut_wav("/nonexistent.wav") is None
+
+
+def test_every_naming_route_relabels_the_saved_clips_so_a_forget_erases_the_audio(clips):
+    # Codex on #2346: only the spoken-clip tier relabelled; a voice named any other way left its clips "unknown" after the cluster went
+    wavp = clip(clips.dir, "b", clips.cluster)
+    out = run(ngl.name_unknown(clips.cluster, "Quinn", OWNER))             # the shared path (what an answered ask / the API use)
+    assert out is not None
+    meta = vc.read(wavp)
+    assert meta["kind"] == "guest" and meta["id"] == out["guest_id"]
+    assert vc.erase_guests([out["guest_id"]], str(clips.dir)) == 1          # a forget now removes the audio
