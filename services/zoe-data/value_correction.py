@@ -134,8 +134,10 @@ def _subject_re(subject: str):
     """Whole-word match of the subject in a stored row: a name as is, "my <rel>" as the relation word ("User's dad ...")."""
     s = subject.strip()
     m = re.match(rf"(?i)(?:my|our)\s+({_REL})$", s)
-    word = m.group(1) if m else s
-    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(word)}(?![A-Za-z0-9])", re.IGNORECASE)
+    if m:
+        # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
+        return re.compile(rf"(?:^|\buser['’]s\s+|\b(?:my|our)\s+){re.escape(m.group(1))}(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 _AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})\b(?P<post>{_YEARS})"

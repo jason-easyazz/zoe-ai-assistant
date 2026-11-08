@@ -218,6 +218,10 @@ def test_extract_and_ingest_runs_the_value_correction(monkeypatch):
     ("User is allergic to nuts.", "allergic to nuts", "keep", None),
     ("User is allergic to nuts.", "I am allergic to nuts and arjun hates onion", "keep", None),
     ("User's dog is named Teddy.", "my dog is Teddy", "keep", None),
+    # a single clause that opens on the person it is about
+    ("The user hates onion.", "Arjun hates onion", "rewrite", "Arjun hates onion."),
+    ("The user hates onion.", "arjun hates onion", "rewrite", "Arjun hates onion."),
+    ("User is allergic to nuts.", "Allergic to nuts", "keep", None),
 ])
 def test_fact_subject(fact, message, verdict, out):
     v, text = fact_subject.attribute(fact, message)
@@ -302,3 +306,9 @@ def test_contact_delete_claim_is_replaced(reply):
 def test_other_replies_are_not_contact_claims(reply):
     claim = wcg.find_claim(reply)
     assert claim is None or "contact_removed" not in claim.kinds
+
+
+def test_relation_subject_never_rewrites_another_persons_relative():
+    c = vc.statement("my dad is 70 not 69")
+    assert vc.rewrite("Arjun's dad is sixty-nine years old.", c) is None
+    assert vc.rewrite("User's dad is 69 years old.", c) == "User's dad is 70 years old."

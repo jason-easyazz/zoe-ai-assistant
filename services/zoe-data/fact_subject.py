@@ -63,6 +63,27 @@ def _names(message: str) -> set:
     return out
 
 
+_NOT_A_SUBJECT = frozenset({"no", "yes", "yeah", "nope", "ok", "okay", "also", "and", "but", "so", "well", "just", "still", "really",
+                            "actually", "never", "always", "sometimes", "maybe", "oh", "um", "uh", "hey", "zoe", "not", "very", "too",
+                            "he", "she", "they", "it", "that", "this", "there"})
+
+
+def _leading_subject(rest: str, message: str, clauses: list) -> str:
+    """The turn's ONE clause opens on a word the fact does not hold, followed by words it does ("Arjun hates onion" -> the fact
+    "hates onion"): that first word is the subject. "" when the turn is not that shape."""
+    if len(clauses) != 1:
+        return ""
+    words = re.findall(r"[A-Za-z][A-Za-z'’-]*", clauses[0])
+    if len(words) < 3:
+        return ""
+    first = words[0]
+    low = first.lower()
+    if low in _NOT_A_SUBJECT or low.endswith("ly") or _FIRST_PERSON_RE.fullmatch(low) or _stem(low) in _tokens(rest):
+        return ""
+    tail = _tokens(" ".join(words[1:]))
+    return first if tail and tail <= (_tokens(rest) | _STOP) else ""
+
+
 def attribute(fact: str, user_message: str) -> tuple:
     """``("keep", fact)`` | ``("rewrite", new_fact)`` | ``("drop", reason)`` for one digest fact against the turn it came from."""
     m = _USER_SUBJECT_RE.match(fact or "")
@@ -82,6 +103,9 @@ def attribute(fact: str, user_message: str) -> tuple:
     if len(rels) == 1 and not names and rest:
         rel = next(iter(rels))
         return "rewrite", f"User's {rel} {rest}"
+    lead = _leading_subject(rest, user_message, clauses)
+    if lead:
+        return "rewrite", f"{lead[:1].upper()}{lead[1:]} {rest}"
     if rels or names or len(clauses) >= 2:
         return "drop", "other_subject"
     return "keep", fact
