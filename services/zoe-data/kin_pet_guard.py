@@ -70,7 +70,8 @@ def repair(fact: str, fact_type: str, user_message: str) -> Optional[tuple]:
     """``(fact, type)`` re-typed when the turn's own words say the fact's named subject is a child filed as a pet (or a pet filed
     as a child); None when nothing needs changing."""
     kids, pets = child_names(user_message), pet_names(user_message)
-    kids -= pets            # one word cannot be both: leave the ambiguous alone
+    both = kids & pets      # one word cannot be both: leave the ambiguous alone, in either direction
+    kids, pets = kids - both, pets - both
     if not kids and not pets:
         return None
     as_kid, as_pet = _mentions(fact, kids), _mentions(fact, pets)

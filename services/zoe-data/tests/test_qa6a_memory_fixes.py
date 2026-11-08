@@ -58,6 +58,7 @@ def test_ambiguous_or_unrelated_facts_are_left_alone():
     assert kp.repair("User's pet Ava and Mo play", "pet", KIDS_AND_CAT) is None                             # names both kinds
     # a name that is BOTH a child and a pet in one message is not guessed
     assert kp.repair("User's pet Sam", "pet", "kids Sam and Lee, and a dog called Sam") is None
+    assert kp.repair("User's child Sam is happy", "relationship", "kids Sam and Lee, and a dog called Sam") is None
 
 
 def test_the_digest_applies_the_guard_to_every_fact():
@@ -145,3 +146,11 @@ def test_the_recall_block_carries_the_when_rule(monkeypatch):
     assert zc._WHEN_RULE in block
     assert block.rstrip().endswith(zc._RECALL_BLOCK_CLOSE)
     assert "unless the note shows it" in zc._WHEN_RULE
+
+
+def test_the_one_shot_lane_records_the_pending_capture_too():
+    import brain_dispatch as bd
+
+    started = wr.begin()
+    assert bd._claim_guarded_text(CLAIM, FIRST_INTRO, "member_a", started, {}) == CLAIM
+    assert "didn't manage" in bd._claim_guarded_text(CLAIM, FIRST_INTRO, "guest", wr.begin(), {})
