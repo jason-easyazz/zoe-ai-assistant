@@ -752,6 +752,10 @@ def note_pending_capture(user_id: Optional[str], user_text: str) -> bool:
 
         if memory_provenance.is_off_record(user_id or "", user_text) or turn_forget.is_forget_turn(user_text):
             return False
+        import forget_topic
+
+        if forget_topic.parse(user_text):
+            return False        # a TOPIC forget ("forget what I said about X") queues no capture either
         import user_prefs
 
         opted_out = user_prefs.cached_memory_opt_out(user_id or "")

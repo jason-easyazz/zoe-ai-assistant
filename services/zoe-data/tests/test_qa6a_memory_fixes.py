@@ -210,3 +210,13 @@ def test_a_gender_word_describing_a_pet_is_not_a_child_cue():
     assert "mo" not in k.child_names("My cat is a girl called Mo.")
     # negative control: a real child list is still read
     assert k.child_names("kids Ava (8) and Ben (4), and a fat cat called Mo") == {"ava", "ben"}
+
+
+def test_a_later_name_with_its_own_predicate_is_not_another_child():
+    import kin_pet_guard as k
+
+    msg = "My kids are Ava and Ben, and Mo is our cat."
+    assert k.child_names(msg) == {"ava", "ben"}
+    assert k.repair("User's pet Mo likes fish", "pet", msg) is None
+    # negative control: the first child may carry a predicate ("daughter Ava is 8") and the list still reads
+    assert k.child_names("my daughter Ava is 8 and my son Ben is 4") >= {"ava", "ben"}

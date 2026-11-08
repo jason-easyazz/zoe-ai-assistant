@@ -30,6 +30,7 @@ _SEP_RE = re.compile(r"\s*(?:,\s*(?:and\s+)?|&\s*|\band\s+)", re.IGNORECASE)
 _PET_NAME_RE = (re.compile(rf"\b(?:{_PET_ALT}|pet)s?\s+(?:called|named)\s+([A-Za-z][A-Za-z'’-]{{1,24}})", re.IGNORECASE)
                 if _PET_ALT else None)
 _PET_IS_A_RE = (re.compile(rf"\b(?:{_PET_ALT}|pet)s?\s+(?:is|was|are)\s+(?:a|an|the)?\s*$", re.IGNORECASE) if _PET_ALT else None)
+_NEW_CLAUSE_RE = re.compile(r"\s+(?:is|was|are|has|had)\b|['\u2019]s\b", re.IGNORECASE)
 _PET_FACT_RE = re.compile(r"\bpets?\b", re.IGNORECASE)
 _CHILD_FACT_RE = re.compile(rf"\b(?:{_CHILD_ALT})\b", re.IGNORECASE) if _CHILD_ALT else None
 
@@ -44,10 +45,12 @@ def child_names(message: str) -> set:
         if _PET_IS_A_RE and _PET_IS_A_RE.search(text[:cue.start()]):
             continue         # "my cat is a girl called Mo": the gender word describes the ANIMAL, not a child
         pos = cue.end()
-        for _ in range(_MAX_NAMES):
+        for idx in range(_MAX_NAMES):
             m = _ITEM_RE.match(text, pos)
             if not m or m.group(1).lower() in _STOP:
                 break
+            if idx > 0 and _NEW_CLAUSE_RE.match(text, m.end()):
+                break            # ", and Mo is our cat": a later name with its own predicate starts a new clause, it is not another child
             out.add(m.group(1).lower())
             sep = _SEP_RE.match(text, m.end())
             if not sep:
