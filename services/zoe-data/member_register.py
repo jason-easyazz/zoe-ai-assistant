@@ -280,6 +280,60 @@ async def forget_user(user_id: str, db=None) -> int:
         raise
 
 
+async def erase_entity(user_id: str, name: str, db=None) -> int:
+    """Scrub a forgotten entity out of a member's register (``memory_forget_entity``): every ``topic`` row (active OR tombstone - the
+    tombstone's slot still spells the label) whose label or slot names ``name`` as a whole word is DELETED, not blanked. The enum
+    settings carry no names. Fail closed: a store error raises so the forget is not confirmed; a missing table is nothing to erase."""
+    uid = (user_id or "").strip()
+    if not uid or not (name or "").strip():
+        return 0
+    from memory_forgotten import name_pattern
+
+    pat = name_pattern(name)
+    try:
+        async with _db(db) as conn:
+            rows = await (await conn.execute(
+                "SELECT slot, value FROM member_register WHERE user_id = ? AND key = 'topic'", (uid,))).fetchall()
+            hit = [r[0] for r in rows if pat.search(str(r[0] or "")) or pat.search(str(r[1] or ""))]
+            for slot in hit:
+                await conn.execute("DELETE FROM member_register WHERE user_id = ? AND slot = ?", (uid, slot))
+            if hit:
+                await conn.commit()
+            return len(hit)
+    except Exception as exc:  # noqa: BLE001
+        text = str(exc).lower()
+        if "no such table" in text or "does not exist" in text:
+            return 0
+        if "not initialised" in text:
+            from db_pool import pool_ever_initialised
+
+            if not pool_ever_initialised():
+                return 0
+        raise
+
+
+async def live_entries(user_id: str, db=None) -> list[Entry]:
+    """The member's active entries that may be SERVED: a topic naming a forgotten entity is withheld (the serve-time wall behind
+    ``erase_entity``). Strict: a ledger outage drops every topic this turn - never "nothing is forgotten"."""
+    entries = await list_entries(user_id, db=db)
+    topics = [e for e in entries if e.key == "topic"]
+    if not topics:
+        return entries
+    try:
+        import memory_forgotten
+        from memory_tombstones import matching_tombstone
+
+        uid = (user_id or "").strip()
+        bad = set()
+        for e in topics:
+            if matching_tombstone(uid, e.value) or await memory_forgotten.matches(uid, e.value, strict=True):
+                bad.add(e.slot)
+    except Exception:  # noqa: BLE001 - fail closed
+        logger.info("MEMBER_REGISTER forgotten-ledger unreadable; no topics served")
+        bad = {e.slot for e in topics}
+    return [e for e in entries if e.slot not in bad]
+
+
 # ── who gets what ─────────────────────────────────────────────────────────────────────────────
 async def audience(user_id: str, db=None) -> str:
     """adult | child | default. Guests, unknown accounts, anything unproven and every failed lookup are DEFAULT. The id string is never read."""
@@ -327,7 +381,7 @@ async def line_for(user_id: str, now: Optional[datetime] = None, db=None) -> str
 
         # The register read has the same short budget as the audience lookups: a slow store means "no line" this turn, never
         # a pool-acquisition / 30 s command wait that silences a voice turn.
-        entries = await asyncio.wait_for(list_entries((user_id or "").strip(), db=db), timeout=manner_block.LOOKUP_BUDGET_S)
+        entries = await asyncio.wait_for(live_entries((user_id or "").strip(), db=db), timeout=manner_block.LOOKUP_BUDGET_S)
         return render(entries, now=now)
     except Exception:  # noqa: BLE001 - a register is optional; the turn is not
         logger.warning("MEMBER_REGISTER failed; no line", exc_info=True)
