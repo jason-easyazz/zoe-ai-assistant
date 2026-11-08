@@ -11050,6 +11050,18 @@
         },
         "typed_env": false
       },
+      "ZOE_ORT_CPU_ARENA": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ort_arena.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
       "ZOE_OTEL_ENABLED": {
         "defaults": [
           "''"
@@ -18053,6 +18065,7 @@
     "services/zoe-data/night_mind.py": 10,
     "services/zoe-data/omi_day_review.py": 7,
     "services/zoe-data/omnigent_issue_executor.py": 7,
+    "services/zoe-data/ort_arena.py": 1,
     "services/zoe-data/panel_kiosk_credential.py": 5,
     "services/zoe-data/panel_principal.py": 5,
     "services/zoe-data/pending_suggestions.py": 1,
