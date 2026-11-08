@@ -674,6 +674,7 @@ async def lifespan(app: FastAPI):
         raise
     yield
     logger.info("Kokoro sidecar shutting down.")
+    _cancel_idle_trim()
     stop_flush.set()
     # Stop the background precache (it does no disk I/O, so cancel is safe) and
     # DRAIN the periodic flush (await, never cancel) so any in-flight
@@ -804,13 +805,27 @@ async def _idle_trim() -> None:
         await loop.run_in_executor(None, _trim_cuda_cache)
 
 
+def _fire_idle_trim() -> None:
+    """Timer callback: drop the spent handle first (nothing retains a fired timer)."""
+    global _idle_trim_handle
+    _idle_trim_handle = None
+    asyncio.ensure_future(_idle_trim())
+
+
+def _cancel_idle_trim() -> None:
+    """Cancel a pending trim and forget it (called on shutdown and before re-arming)."""
+    global _idle_trim_handle
+    if _idle_trim_handle is not None:
+        _idle_trim_handle.cancel()
+        _idle_trim_handle = None
+
+
 def _schedule_idle_trim(loop) -> None:
     global _idle_trim_handle
     if _IDLE_TRIM_S <= 0 or _device != "cuda":
         return
-    if _idle_trim_handle is not None:
-        _idle_trim_handle.cancel()
-    _idle_trim_handle = loop.call_later(_IDLE_TRIM_S, lambda: asyncio.ensure_future(_idle_trim()))
+    _cancel_idle_trim()
+    _idle_trim_handle = loop.call_later(_IDLE_TRIM_S, _fire_idle_trim)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────

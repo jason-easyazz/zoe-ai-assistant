@@ -19,12 +19,14 @@ import argparse
 import fcntl
 import json
 import os
+import shutil
 import signal
 import statistics
 import subprocess
 import tempfile
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +37,24 @@ TEXTS = [". ".join(BASE[: 1 + i % 11]).strip() + "." for i in range(36)] + [
 
 
 LOCK = open("/tmp/zoe-voice-harness.lock", "w")
+
+
+LIVE_PORT = 10201
+
+
+def _answers(port: int) -> bool:
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1).read()
+        return True
+    except Exception:
+        return False
+
+
+def in_night_window(now: datetime | None = None) -> bool:
+    """01:50-04:55 local: the 12B night window; nothing of ours may run then."""
+    now = now or datetime.now()
+    t = now.hour * 60 + now.minute
+    return 110 <= t < 295
 
 
 def avail_gb() -> float:
@@ -60,6 +80,8 @@ def post(port: int, text: str) -> float:
 
 
 def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait: float) -> dict:
+    if port == LIVE_PORT:
+        raise SystemExit("refusing the live sidecar port")
     # Poll for headroom WITHOUT holding the voice-harness lock (holding it while waiting would
     # stall every landing); take it only once the gate is met, and re-check after taking it.
     deadline = time.time() + wait_s
@@ -72,9 +94,13 @@ def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait:
                 fcntl.flock(LOCK, fcntl.LOCK_UN)
             except OSError:
                 pass
+        if in_night_window():
+            raise SystemExit("inside the 01:50-04:55 night window; not starting")
         if time.time() >= deadline:
             raise SystemExit(f"gate not met (MemAvailable {avail_gb():.2f} GB, need {gate}) or lock busy; not starting")
         time.sleep(3)
+    if port == LIVE_PORT or _answers(port):
+        raise SystemExit(f"port {port} is the live sidecar or already answering; refusing (pick a free spare port)")
     tmp = tempfile.mkdtemp(prefix="kokoro_ab_")
     env = dict(os.environ, KOKORO_SIDECAR_PORT=str(port), ZOE_KOKORO_CACHE_DIR=tmp, ZOE_KOKORO_CACHE_PERSIST="0",
                ZOE_KOKORO_BACKEND="pytorch", MALLOC_ARENA_MAX="2", MALLOC_TRIM_THRESHOLD_="131072",
@@ -85,13 +111,14 @@ def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait:
     try:
         t0 = time.time()
         while time.time() - t0 < 300:
+            if p.poll() is not None:  # never accept a /health answer from anything but our own child
+                raise SystemExit(f"sidecar exited rc={p.returncode}; /tmp/kokoro_ab_{trim_s}.log")
             try:
                 body = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2))
-                if body.get("pipeline_loaded"):
+                if body.get("pipeline_loaded") and p.poll() is None:
                     break
             except Exception:
-                if p.poll() is not None:
-                    raise SystemExit(f"sidecar exited rc={p.returncode}; /tmp/kokoro_ab_{trim_s}.log")
+                pass
             time.sleep(1)
         time.sleep(20)  # let the background phrase pre-cache finish
         rss_warm = rss_mb(p.pid)
@@ -112,6 +139,7 @@ def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait:
         except subprocess.TimeoutExpired:
             p.kill()
         fcntl.flock(LOCK, fcntl.LOCK_UN)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> int:
@@ -123,8 +151,12 @@ def main() -> int:
     ap.add_argument("--idle-wait", type=float, default=12.0)
     ap.add_argument("--out", default="/tmp/kokoro_trim_ab.json")
     a = ap.parse_args()
+    if a.port == LIVE_PORT:
+        raise SystemExit("refusing the live sidecar port")
     runs = []
     for tr in a.trims.split(","):
+        if in_night_window():
+            raise SystemExit("inside the 01:50-04:55 night window; not starting")
         r = run_variant(float(tr), a.port, a.min_avail_gb, a.wait_s, a.idle_wait)
         runs.append(r)
         print(json.dumps(r), flush=True)
