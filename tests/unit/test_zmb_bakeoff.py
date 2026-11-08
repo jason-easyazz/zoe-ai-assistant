@@ -2953,3 +2953,84 @@ def test_an_arm_that_starts_with_queued_hindsight_work_is_flagged(box, tmp_path,
     ctx = measure.Ctx(w, None)
     assert measure.check_hindsight_idle(ctx, "H2") == 2 and any("H2 started with 2 operation(s)" in n for n in ctx.notes)
     assert measure.check_hindsight_idle(ctx, "Z0") is None and measure.check_hindsight_idle(ctx, "MPA") is None      # arms that do not use the server are not asked
+
+
+# ── the panel-quiet guard reads the truth (2026-11-08: it had never once fired) ──────────────────────────────────────────
+
+SSH_WARNING = "Warning: Permanently added 'zoe-pi' (ED25519) to the list of known hosts.\n"
+
+
+def test_parse_panel_age_survives_the_ssh_known_hosts_warning_on_stderr():
+    """``UserKnownHostsFile /dev/null`` for zoe-pi: ssh prints the warning on EVERY call, joined after stdout. Reading the LAST line made every
+    answer unparsable -> None -> "quiet": a 283 s-old conversation against a 600 s bar was never waited for."""
+    now = time.mktime((2026, 11, 8, 2, 51, 32, 0, 0, -1))
+    stamp = "2026-11-08 02:46:49\n"
+    assert bakeoff.parse_panel_age(stamp + SSH_WARNING, now) == pytest.approx(283, abs=1)
+    assert bakeoff.parse_panel_age(SSH_WARNING + stamp, now) == pytest.approx(283, abs=1)
+    # negative control: the warning alone (what the old last-line read saw) carries no time, and garbage stays None
+    assert bakeoff.parse_panel_age(SSH_WARNING, now) is None and bakeoff.parse_panel_age("garbage\nmore garbage", now) is None
+
+
+def test_the_real_host_keeps_stdout_apart_from_stderr():
+    r = bakeoff.Host(lambda _m: None).run(["bash", "-c", "echo 2026-11-08 02:46:49; echo 'Warning: Permanently added' >&2"], mutating=False)
+    assert r.rc == 0 and r.stdout.strip() == "2026-11-08 02:46:49" and "Warning" in r.out          # out still carries stderr for error messages
+
+
+def test_parse_voice_turn_age_reads_zoe_datas_household_stamp():
+    assert bakeoff.parse_voice_turn_age('{"status":"ok","last_voice_turn_age_s":283.4}') == pytest.approx(283.4)
+    for bad in ('{"status":"ok"}', '{"last_voice_turn_age_s":null}', "ok", "", '{"last_voice_turn_age_s":-1}', '{"last_voice_turn_age_s":true}', "[]"):
+        assert bakeoff.parse_voice_turn_age(bad) is None, bad
+
+
+class ZoeDataAgeHost(FakeHost):
+    """zoe-data's /health answers ``last_voice_turn_age_s`` (``data_age`` = a callable of the host clock, None = the field is null);
+    ``ssh_out`` / ``ssh_rc`` replace the panel ssh answer (unset = the FakeHost's own)."""
+
+    def __init__(self, tmp, *, data_age=None, ssh_out=None, ssh_rc=0, data_rc=0, **kw):
+        super().__init__(tmp, **kw)
+        self.data_age, self.ssh_out, self.ssh_rc, self.data_rc = data_age, ssh_out, ssh_rc, data_rc
+
+    def run(self, argv, timeout=60.0, mutating=True, env=None):
+        if argv[0] == "curl" and argv[-1].endswith(":8000/health"):
+            self.cmds.append((list(argv), mutating))
+            if self.data_rc:
+                return bakeoff.Result(self.data_rc, "curl: (7) Failed to connect")
+            age = None if self.data_age is None else self.data_age(self.t)
+            return bakeoff.Result(0, json.dumps({"status": "ok", "last_voice_turn_age_s": age}))
+        if argv[0] == "ssh" and (self.ssh_out is not None or self.ssh_rc):
+            self.cmds.append((list(argv), mutating))
+            return bakeoff.Result(self.ssh_rc, self.ssh_out or "")
+        return super().run(argv, timeout, mutating, env)
+
+
+def test_zoe_datas_own_stamp_is_preferred_and_ssh_is_not_needed(box):
+    host = ZoeDataAgeHost(box, data_age=lambda t: 283.0)
+    w = make_window(box, host)
+    assert "voice turn 283s ago" in w.busy_reason()
+    assert not any(a[0] == "ssh" for a, _m in host.cmds)
+    # negative control: a null stamp (no household turn since zoe-data started) falls back to the panel log, which says quiet
+    host2 = ZoeDataAgeHost(box, data_age=None)
+    w2 = make_window(box, host2)
+    assert w2.busy_reason() == "" and any(a[0] == "ssh" for a, _m in host2.cmds)
+    ssh = next(a for a, _m in host2.cmds if a[0] == "ssh")
+    assert "LogLevel=ERROR" in ssh                                                      # the warning is not even printed
+
+
+def test_the_ssh_fallback_with_the_warning_still_sees_a_recent_turn(box):
+    host = ZoeDataAgeHost(box, data_rc=7)
+    host.ssh_out = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(host.t - 120)) + "\n" + SSH_WARNING
+    assert "voice turn 120s ago" in make_window(box, host).busy_reason()
+
+
+def test_an_unreadable_age_fails_closed_for_a_bounded_wait_then_proceeds(box):
+    host = ZoeDataAgeHost(box, data_rc=7, ssh_rc=255)
+    w = make_window(box, host, quiet_wait_max_min=60.0, panel_unreadable_wait_min=10.0)
+    assert "unreadable" in w.busy_reason()                                              # fail CLOSED: not "quiet"
+    t0 = host.t
+    assert w.wait_until_quiet() == ""                                                   # ...but bounded: it proceeds after 10 min, not never
+    assert 540 <= host.t - t0 <= 600 + 60 and any("proceeding as quiet" in l for l in w.logs)
+    # negative control: once readable again the bound resets - a later unreadable spell waits again
+    host.data_rc, host.data_age = 0, (lambda t: 5000.0)
+    assert w.busy_reason() == ""
+    host.data_rc = 7
+    assert "unreadable" in w.busy_reason()

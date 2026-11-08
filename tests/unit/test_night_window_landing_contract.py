@@ -19,6 +19,7 @@ import inspect
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -79,7 +80,7 @@ def test_negative_control_the_old_anchored_pattern_missed_a_direct_execution():
 
 
 class _Host:
-    """Answers only what busy_reason / wait_until_quiet ask: pgrep (a lander is, or is not, alive) and the panel ssh."""
+    """Answers only what busy_reason / wait_until_quiet ask: pgrep (a lander is, or is not, alive), zoe-data's /health and the panel ssh."""
 
     def __init__(self, lander_alive: bool):
         self.t = 1_800_000_000.0
@@ -100,7 +101,9 @@ class _Host:
             self.pgreps.append(argv[-1])
             alive = self.lander_alive and "land_voice_pr" in argv[-1]
             return bk.Result(0 if alive else 1, "")
-        return bk.Result(1, "")                              # ssh to the panel: unreachable = says nothing
+        if argv[0] == "ssh":                                 # the panel: quiet for a day (an UNREADABLE panel is busy, bounded - test_zmb_bakeoff)
+            return bk.Result(0, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.t - 86400)) + "\n")
+        return bk.Result(1, "")                              # zoe-data /health: unreachable, so the panel log answers
 
 
 def _window(tmp_path, monkeypatch, lander_alive: bool):
