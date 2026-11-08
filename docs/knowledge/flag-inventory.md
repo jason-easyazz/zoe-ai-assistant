@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 848 prod flags; 264 read through `typed_env`.
+- 852 prod flags; 268 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 245 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 0 registered flags with no reader in the scanned sources.
+- 2 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-848 flags; 797 not documented in `.env.example`.
+852 flags; 801 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -742,6 +742,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_SEARCH_HOTNESS_WEIGHT` | float | `0.05` | - | - | `'0.05'` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_SEARCH_PROVIDER` | str | `'auto'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'auto'` | yes | yes | `services/zoe-data/web_search_provider.py` |
 | `ZOE_SELF_MODEL` | str | `'shadow'` | `off`, `shadow`, `enforce` | `docs/knowledge/self-model.md` | `'shadow'` | yes | NO | `services/zoe-data/self_model.py` |
+| `ZOE_SELF_REVIEW` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/self-review.md` | `'off'` | yes | NO | `services/zoe-data/self_review.py` |
+| `ZOE_SELF_REVIEW_DIR` | str | `''` | - | `docs/knowledge/self-review.md` | `''` | yes | NO | `services/zoe-data/self_review.py` |
+| `ZOE_SELF_REVIEW_FLUE_DB` | str | `''` | - | `docs/knowledge/self-review.md` | `dynamic` | yes | NO | `scripts/maintenance/zoe-self-review.py` |
+| `ZOE_SELF_REVIEW_IMPROVER_DIR` | str | `''` | - | `docs/knowledge/self-review.md` | `''` | yes | NO | `services/zoe-data/self_review.py` |
 | `ZOE_SELF_URL` | str | `'http://127.0.0.1:8000'` | - | `docs/knowledge/harness-scratch-db.md` | `'http://127.0.0.1:8000'`, `'http://localhost:8000'` | yes | NO | `services/zoe-data/intent_router.py`<br>`services/zoe-data/mcp_server.py` |
 | `ZOE_SESSION_LOCK_TIMEOUT_S` | int | `5` | - | `docs/knowledge/identity-and-session-continuity.md` | `'5'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_SETUP_QR_HANDLE_TTL_S` | int | `120` | - | - | `'120'` | no | NO | `services/zoe-data/setup_qr.py` |
@@ -1210,3 +1214,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZMB_ORT_THREADS` | `'2'` | no | NO | `scripts/perf/zmb/embed_shim.py` |
 | `ZMB_PROBE_NEEDLE` | `''` | no | NO | `scripts/perf/zmb/arms/mempalace_verbatim.py` |
 | `ZMB_REAL_HOME` | `dynamic` | no | NO | `scripts/perf/zmb/arms/mpa_palace.py` |
+
+## Registered but not read by any scanned source
+
+Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
+
+`ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`
