@@ -101,6 +101,11 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
   from it.
 - **Never authentication.** An allow-list test pins the only modules that may name the tables. `auth`, the voice session,
   `/api/voice/identify` and the profile sync, adaptation and enrolment are not among them.
+- **One registry, two microphones (0071).** `learned_voiceprints` is shared with the panel's named guests
+  ([named-guests.md](named-guests.md)): `channel` is part of the key, every pendant read and write here filters
+  `channel='pendant'`, and a `channel='panel'` print is matched by `named_guests.py` for a GUEST turn only (never auth, never
+  member scope). The pendant never reads a panel print until the cross-device match is measured (Calibration, above).
+  "Forget <name>" erases both channels and the guest's kept panel conversations.
 - **Suggestions are not tags.** The day review reads `omi_voices.review_segments` only: confirmed tags, with no suggestions and
   no not-a-person lines.
 - **Erasure.**

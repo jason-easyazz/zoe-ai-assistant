@@ -9791,6 +9791,29 @@
         },
         "typed_env": false
       },
+      "ZOE_NAMED_GUESTS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guests.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_NIGHT_BUSY": {
         "defaults": [
           "'~/.zoe/agent-tools/night_busy.sh'"

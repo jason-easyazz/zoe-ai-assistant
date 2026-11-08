@@ -2948,6 +2948,12 @@ async def _run_flue_brain_streaming_turn(
     # order is fixed: identity → bridge → fast-path → recall → offer → the user's words. "" when the flag is
     # off or the id is not a registered account → the bytes are exactly what they were.
     identity_block = await _identity_context_block(uid)
+    if not identity_block:
+        # A NAMED GUEST (ZOE_NAMED_GUESTS, named_guests.py): who Zoe is talking with + their OWN past exchanges, in the same slot.
+        # "" for a member and for any other unidentified voice (the bytes are unchanged).
+        import named_guests
+
+        identity_block = await named_guests.brain_block(uid)
     # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): label the stored-context blocks this turn carries that do not come through /for-prompt,
     # so "why did you say that?" does not call a reply that offered to add a contact memory-free. Labels only; the message is
     # not touched (the sidecar prefix and the prompt cache are unaffected).
