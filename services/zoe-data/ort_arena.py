@@ -16,13 +16,14 @@ sessions exactly as built.
 """
 from __future__ import annotations
 
-import os
 from typing import Any
+
+import typed_env
 
 
 def arena_enabled() -> bool:
     """True only when ``ZOE_ORT_CPU_ARENA`` is explicitly on (the revert switch)."""
-    return os.environ.get("ZOE_ORT_CPU_ARENA", "0").strip().lower() in ("1", "true", "yes", "on")
+    return bool(typed_env.flag("ZOE_ORT_CPU_ARENA"))
 
 
 def fastembed_kwargs() -> dict[str, Any]:

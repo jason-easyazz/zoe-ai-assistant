@@ -26,11 +26,11 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 861 prod flags; 276 read through `typed_env`.
-- 758 legacy direct read sites in prod code across 226 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
+- 861 prod flags; 277 read through `typed_env`.
+- 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 249 non-`ZOE_` env names read by prod code (table below).
-- 1 flags read but not registered (CI fails on any).
+- 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 4 registered flags with no reader in the scanned sources.
 
@@ -570,7 +570,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OMNIGENT_CONTAINER` | str | `'zoe-omnigent'` | - | - | `'zoe-omnigent'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S` | int | `1800` | - | - | `'1800'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
 | `ZOE_OMNIGENT_URL` | str | `'http://127.0.0.1:6767'` | - | `docs/guides/MODULE_SYSTEM.md` | `'http://127.0.0.1:6767'` | no | NO | `services/zoe-data/omnigent_issue_executor.py` |
-| `ZOE_ORT_CPU_ARENA` | **UNREGISTERED** | - | - | - | `'0'` | no | NO | `services/zoe-data/ort_arena.py` |
+| `ZOE_ORT_CPU_ARENA` | bool | `False` | - | `docs/knowledge/ram-audit-nonvoice-2026-11.md` | `False` | yes | NO | `services/zoe-data/ort_arena.py` |
 | `ZOE_OTEL_ENABLED` | str | `''` | - | - | `''` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_OUTCOME_EDGES` | str | `'off'` | `off`, `on` | `docs/research/samantha-initiative-2026-11-03/lane-D-cognitive-architecture.md` | `''` | yes | NO | `services/zoe-data/proactive/outcome_edges.py` |
 | `ZOE_OWN_FACT_PRECEDENCE` | str | `''` | - | `docs/knowledge/conversation-quality-classes.md` | `-` | no | NO | `services/zoe-data/semantic_router.py`<br>`services/zoe-data/zoe_flue_client.py` |
