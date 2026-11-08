@@ -11050,6 +11050,25 @@
         },
         "typed_env": false
       },
+      "ZOE_ORT_CPU_ARENA": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ort_arena.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/ram-audit-nonvoice-2026-11.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_OTEL_ENABLED": {
         "defaults": [
           "''"
