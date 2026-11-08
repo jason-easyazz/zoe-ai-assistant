@@ -1,23 +1,48 @@
 ---
-type: Runbook
+type: spec
 title: Named guests - Zoe knows a non-member by voice, greets them by name and remembers them (ZOE_NAMED_GUESTS, flag-dark)
-description: A friend who is not a member is enrolled at the panel by a verified member, recognised by voice, addressed by name with guest permissions only, and remembered in their own conversation space. Where the profile, scope and memory live, the guarantees, the flags, the rollout and what is not built yet.
-tags: [voice, speaker-id, guests, biometrics, panel, memory, forget, flags, runbook]
+description: Acceptance spec + design record. A friend who is not a member is recognised by voice at the panel, addressed by name with guest permissions only, and remembered in their own conversation space; enrolled by a verified member or learned from repeated conversation. Acceptance checks, where the profile, scope and memory live, the guarantees, flags, rollout and what is not built yet.
+tags: [voice, speaker-id, guests, biometrics, panel, memory, forget, flags, spec]
 timestamp: 2026-11-08T00:00:00Z
 ---
 
 # Named guests
 
-**Status: built, FLAG-DARK, landing as three stacked PRs:** (1) the registry (0071), the panel feed, the verdict and guest
-scope; (2) enrolment (`named_guest_enrol.py`); (3) the guest's own memory and forget (`named_guest_memory.py`, 0072). This page
-describes all three; a section about (2) or (3) is not live until that PR lands. Owner request 2026-11-08: a friend talked to Zoe on the panel and she did not know who it was. The
-friend "doesn't need an account, just be identified, so when I'm talking I can do stuff but if she talks she just gets treated
-like a guest", and Zoe "will remember the conversations she has had with that person".
+## Acceptance — true when done
 
-Code: `services/zoe-data/named_guests.py` (who, the claim, enrolment, the spoken tier), `named_guest_memory.py` (what is kept,
-erasing), migration `0071`, the daemon's guest scoring in `scripts/setup/zoe_voice_daemon.py`. Pinned by
-`services/zoe-data/tests/test_named_guests.py` and `tests/unit/test_named_guests_daemon.py`; the forget probe row is
-`named_guest_turns` in `tests/test_forget_completeness_probe.py`.
+Synthetic names: Quinn and Rowan are guests, Avery is the owner. Each line is checkable by a QA chat or a panel test; a line
+marked **(not yet)** is a known gap with a follow-up, not a pass.
+
+1. When Quinn, a named guest, speaks on the panel, Zoe knows it is Quinn and addresses them by name.
+2. Quinn is always treated as a guest: no member's lists, calendar, reminders or memory, even while Avery's PIN session is open
+   on the panel, and Quinn's voice never unlocks a member.
+3. When Avery speaks, nothing changes: Avery can still do everything, and the flags off leave Zoe exactly as before.
+4. Zoe remembers her own past conversations with Quinn and picks them up again with Quinn, and only with Quinn - never with
+   Rowan, an unknown voice, or Avery.
+5. Zoe learns a voice from enough real conversation and then asks "I don't think we've met. What's your name?"; she also learns
+   it at once when a verified member says "learn Quinn's voice" with Quinn at the panel.
+6. A verified member can name an unknown voice Zoe has heard ("that was Quinn this morning", through the unknown-voices API);
+   no guest can. **(not yet:)** naming a saved panel clip, and hearing a clip before naming it.
+7. Saying "I'm Quinn" can never take over an existing guest or a member: an unverified voice can only create a new guest from
+   its own voice.
+8. "Forget Quinn" (or "forget Quinn's voice") erases Quinn's voice and every remembered conversation for good, and says so
+   honestly if it could not.
+9. **(not yet:)** guest clips are labelled in the replay corpus and kept out of owner-voice metrics (open-problems.md, "Guest
+   clips in the owner corpus").
+
+## Status
+
+Built, FLAG-DARK, landing as four stacked PRs: (1) the registry (0071), the panel feed, the verdict and guest scope;
+(2) enrolment (`named_guest_enrol.py`); (3) the guest's own memory and forget (`named_guest_memory.py`, 0072); (4) passive
+learning (`named_guest_learning.py`, 0073). A section about (2)-(4) is not live until that PR lands. Owner request 2026-11-08: a
+friend talked to Zoe on the panel and she did not know who it was. The friend "doesn't need an account, just be identified, so
+when I'm talking I can do stuff but if she talks she just gets treated like a guest", and Zoe "will remember the conversations
+she has had with that person".
+
+Code: `services/zoe-data/named_guests.py` (who, the claim, the panel feed, the brain block), `named_guest_enrol.py`,
+`named_guest_memory.py`, `named_guest_learning.py`, migrations `0071`-`0073`, the daemon's guest scoring in
+`scripts/setup/zoe_voice_daemon.py`. Pinned by `services/zoe-data/tests/test_named_guest*.py` and
+`tests/unit/test_named_guests_daemon.py`; the forget probe row is `named_guest_turns` in `tests/test_forget_completeness_probe.py`.
 
 ## Where things live
 

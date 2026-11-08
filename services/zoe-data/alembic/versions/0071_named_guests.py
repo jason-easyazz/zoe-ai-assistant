@@ -102,3 +102,6 @@ def downgrade() -> None:
     if op.get_bind().dialect.name == "postgresql":
         op.execute("ALTER TABLE learned_voiceprints ADD CONSTRAINT learned_voiceprints_owner_user_id_people_id_model_id_key "
                    "UNIQUE (owner_user_id, people_id, model_id)")
+    else:   # SQLite cannot add a table constraint: the same key as a unique index
+        op.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_learned_voiceprints_0053_key "
+                   "ON learned_voiceprints (owner_user_id, people_id, model_id)")

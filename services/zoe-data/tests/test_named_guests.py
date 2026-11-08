@@ -134,3 +134,28 @@ def test_a_forgotten_name_is_never_matched_or_fed_and_an_outage_feeds_nobody(env
     assert run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False)) is None
     with pytest.raises(Exception):
         run(ng.sync_entries({MID}))                                 # the route turns this into an empty feed
+
+
+def test_omis_own_api_never_lists_toggles_or_forgets_a_panel_print(env):
+    gid = enrol(env)
+    vp = env.q("SELECT id FROM learned_voiceprints WHERE channel = 'panel'")[0][0]
+    assert run(ov.list_learned(env, OWNER)) == []
+    assert run(ov.set_voice_learning(env, OWNER, vp, False)) is False
+    assert run(ov.forget_voice(env, OWNER, vp)) is False
+    assert env.q("SELECT learning_enabled FROM learned_voiceprints WHERE id = ?", (vp,)) == [(1,)]
+    assert gid
+
+
+def test_a_matched_guest_never_inherits_the_panels_member_session():
+    """Static pin on voice_command (review #2339): once a named guest is bound, the scope and the attribution are the guest's,
+    whatever fresh PIN session or binding the panel holds - and the override sits AFTER every place they are assigned."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "routers" / "voice_tts.py").read_text()
+    body = src[src.index("async def voice_command("):]
+    body = body[:body.index("\n@router.")]
+    guard = body.index("if _named_guests.current() is not None:\n")
+    assert '_scope_identity_user, _has_scope_identity, effective_user = None, False, "guest"' in body[guard:guard + 400]
+    for assign in ("_has_scope_identity = bool(_scope_identity_user)", "effective_user = _panel_bound_user"):
+        assert body.index(assign) < guard, assign
+

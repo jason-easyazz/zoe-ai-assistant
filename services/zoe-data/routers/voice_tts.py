@@ -3866,6 +3866,10 @@ async def voice_command(
             )
             effective_user = _panel_bound_user
 
+    if _named_guests.current() is not None:
+        # A voice the server matched to a NAMED GUEST is that guest, whatever member session the panel holds (a fresh PIN, a
+        # binding): never member scope, member data or a member's attribution for their turn (review #2339).
+        _scope_identity_user, _has_scope_identity, effective_user = None, False, "guest"
     # Home control: a turn whose member the server verified is a member's turn whatever the caller verdict said (a relayed panel).
     if _scope_identity_user and panel_principal.home_control_verdict() is False:
         panel_principal.record_home_control(True)
