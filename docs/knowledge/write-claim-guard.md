@@ -254,3 +254,15 @@ The list tools also stopped mapping an unrecognised `list_type` to `shopping` (t
 study list"; either would have landed on the HOUSEHOLD list): the sidecar passes the name through and zoe-data resolves it like
 a spoken name (`intent_router._canonical_list_slots`): a to-do name is the member's own list, an unknown name is asked about.
 
+## Contact delete (QA round 5, 2026-11-08) - receipt kind `contact_removed`
+
+The brain said "I've deleted Tom from your contacts" after a `people` SEARCH call; the contact was still there. No tool can
+delete a contact (contacts are soft-deleted only from the People page), so the claim can never have a receipt. `contact` is an
+`other_targets` word (a contact ADD is another writer's claim and stays untracked), so the delete verb fell through the target
+check. `write_claims.json` now has `removal_only_targets` (`contact` / `contacts`; es `contacto(s)`): a REMOVAL verb with one of
+them claims `contact_removed`, which nothing records, so the claim is always replaced with the `honest_by_kind` line ("I can't
+delete a contact yet, so they are still in your contacts. You can remove them from the People page."). An add, an offer
+("want me to delete...") and a refusal are not claims. If a real contact-delete tool is ever added it must call
+`write_receipts.record(user_id, "contact_removed", ...)` after the row is soft-deleted, and this line can go. Pinned by
+`tests/test_qa5_memory_fixes.py`.
+

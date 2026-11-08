@@ -153,6 +153,9 @@ class _Lang:
     # nouns around it never re-file it) and claims only with one of the kind's objects in its clause ("the light", "it").
     kind_objects: dict = None                 # kind -> frozenset of object phrases
     emotional_quiet: str = ""                 # said on an emotional turn when dropping a memory claim left nothing else
+    # Targets that only a REMOVAL verb claims ("deleted Tom from your contacts", QA round 5). A contact ADD stays an untracked
+    # ``other_targets`` mention; a contact DELETE has no tool at all, so its claim can never have a receipt and is always replaced.
+    removal_only_targets: dict = None         # kind -> phrases
 
     def is_modifier(self, tok: str, *, by_suffix: bool = False) -> bool:
         if tok in self.adverbs or tok in self.modifiers:
@@ -236,6 +239,8 @@ def _langs() -> tuple:
             kind_objects={str(k): frozenset(p for p in (_phrase(x) for x in (v or [])) if p)
                           for k, v in (lex.get("kind_objects") or {}).items() if not str(k).startswith("_")},
             emotional_quiet=str(lex.get("emotional_quiet") or "").strip(),
+            removal_only_targets={str(k): tuple(p for p in (_phrase(x) for x in (v or [])) if p)
+                                  for k, v in (lex.get("removal_only_targets") or {}).items() if not str(k).startswith("_")},
         ))
     return tuple(out)
 
@@ -425,6 +430,8 @@ def find_claim(sentence: str, *, implied_kind: Optional[str] = None, standing: b
                 implied = bool(progressive and implied_kind and cued)
                 if not pre and not _completion_ellipsis(toks[i + 1:], bool(kinds) or implied, lang):
                     continue
+                if not kinds and removal:
+                    kinds = tuple(k for k, ps in (lang.removal_only_targets or {}).items() if any(_has_phrase(padded, p) for p in ps))
                 if not kinds:
                     if any(_has_phrase(padded, o) for o in lang.other_targets):
                         continue
