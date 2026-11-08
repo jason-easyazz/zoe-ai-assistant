@@ -69,7 +69,24 @@ _WRITE_VERB_RX = re.compile(r"\b(?:" + _WRITE_VERBS + r")\b", re.IGNORECASE)
 #: a word before the verb that makes it a NOUN ("my schedule", "the book", "a put")
 _DETERMINERS = frozenset({"my", "the", "our", "your", "his", "her", "their", "this", "that", "a", "an", "its", "whose", "no", "any"})
 #: "schedule" followed by one of these is the noun again ("the schedule is crazy", "schedule for next week")
-_NOUN_FOLLOWERS = frozenset({"for", "is", "are", "was", "looks", "has", "of", "this", "next"})
+_NOUN_FOLLOWERS = frozenset({"for", "is", "are", "was", "looks", "has", "of"})
+#: "schedule this week / next month" is the noun again, but "schedule this appointment for Friday" is the verb: after this/next, only a
+#: period word makes it a noun
+_PERIOD_WORDS = frozenset({"week", "weeks", "month", "months", "weekend", "year", "fortnight", "morning", "afternoon", "evening",
+                           "arvo", "time", "term", "season", "quarter", "semester"})
+#: common English function words: a turn of three or more words holding none of them is not English (a Spanish "Añade una cita
+#: al calendario mañana a las tres"), and the gate - English-only by design - lets it through rather than read its silence as "no ask"
+_EN_WORDS = frozenset(
+    "the an to of and in on at for with my i you we it is are was be do does did can could would should will shall please this that "
+    "these those your our their his her what when where who how why not no yes ok okay just so if or but about from by up out into then "
+    "also some any all there here have has had need want let lets give get make think going tomorrow today tonight next week".split())
+
+
+def _probably_english(text: str) -> bool:
+    words = re.findall(r"[^\W\d_]+", (text or "").lower())
+    if len(words) < 3:
+        return True
+    return any(w in _EN_WORDS for w in words)
 _AFFIRM_RX = re.compile(
     r"^\W*(?:(?:ok|okay|and|so|well)[\s,]+)*(?:yes|yeah|yep|yup|sure|please|do\s+it|go\s+ahead|go\s+for\s+it|go\s+on|"
     r"sounds\s+good|that'?s\s+(?:right|good|fine|perfect)|perfect|great|correct|absolutely|definitely|of\s+course|"
@@ -88,6 +105,11 @@ def _verb_hit(text: str) -> bool:
         after = (text[m.end():].split() or [""])[0].strip(",.;:!?'\"").lower()
         if word == "schedule" and (not after or after in _NOUN_FOLLOWERS):
             continue
+        if word == "schedule" and after in ("this", "next"):
+            rest = text[m.end():].split()
+            nxt = (rest[1] if len(rest) > 1 else "").strip(",.;:!?'\"").lower()
+            if not nxt or nxt in _PERIOD_WORDS:
+                continue
         return True
     return False
 
@@ -207,8 +229,8 @@ def check(user_id: str, intent: str, slots: dict) -> Optional[str]:
             return None
         uid = (user_id or "").strip()
         text = _noted(uid)
-        if text is None:
-            return None
+        if text is None or not _probably_english(text):
+            return None            # nothing noted, or a turn in a language this gate cannot read: never refused on its silence
         reason: Optional[str] = None
         if intent == "calendar_create":
             if not _calendar_asked(uid, text):

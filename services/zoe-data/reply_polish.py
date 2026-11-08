@@ -110,10 +110,20 @@ def closer_lexicon_for(message: str):
     return _LEX_CACHE[lang]
 
 
+#: a question that names a thing, a day or a number is a contextual follow-up, never a generic closer
+#: ("How are you feeling about surgery?", "Does that work for you on Friday?")
+_SPECIFIC_RX = re.compile(
+    r"\d|\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|"
+    r"october|november|december)\b|\b(?:about|on|for|with|at|over|regarding|around)\s+(?!it\b|that\b|this\b|all\b|things\b|everything\b|"
+    r"now\b|today\b|tonight\b|you\b|me\b|us\b|the\s+(?:moment|day|rest)\b)\w", re.IGNORECASE)
+
+
 def is_closing_question(sentence: str, lex) -> bool:
     import mirror_guard
 
-    return lex is not None and mirror_guard.is_generic_closer(sentence, lex)
+    if lex is None or not mirror_guard.is_generic_closer(sentence, lex):
+        return False
+    return not (getattr(lex, "lang", "en") == "en" and _SPECIFIC_RX.search(sentence or ""))
 
 
 #: (user id, session id) -> did the last reply end on a question? A bounded LRU; a dict write, never I/O.
@@ -230,9 +240,12 @@ async def filter_stream(deltas: AsyncIterator[str], message: str, user_id: str =
         except Exception:  # noqa: BLE001 - a polish is optional; the turn is not
             logger.warning("REPLY_POLISH setup failed; passing through", exc_info=True)
     emitted = False
+    off_text: list = []
     try:
         async for delta in deltas:
             if stream is None or delta.startswith(_SENTINELS):
+                if m == "off" and not delta.startswith(_SENTINELS):
+                    off_text.append(delta)
                 yield delta
                 continue
             try:
@@ -266,6 +279,15 @@ async def filter_stream(deltas: AsyncIterator[str], message: str, user_id: str =
                 pass
             if stream.scrubbed or stream.dropped:
                 logger.info("REPLY_POLISH mode=%s scrubbed=%d dropped_closer=%d chars=%d", m, stream.scrubbed, stream.dropped, len(final))
+        if m == "off":
+            # polishing is off, but the write gate still needs to know whether Zoe's reply OFFERED a calendar write ("want me to add
+            # those?") so a bare "yes please" is an ask - recorded here, independent of the optional transformation
+            try:
+                import write_intent_gate
+
+                write_intent_gate.note_reply(user_id, "".join(off_text))
+            except Exception:  # noqa: BLE001
+                pass
     finally:
         aclose = getattr(deltas, "aclose", None)
         if aclose is not None:

@@ -126,7 +126,7 @@ def test_seam_wraps_the_stream_and_off_does_not(monkeypatch):
     import zoe_flue_client as zc
 
     src = inspect.getsource(zc.run_flue_brain_streaming)
-    assert "reply_polish.filter_stream(turn, _spoken, user_id, session_id)" in src and 'reply_polish.mode() != "off"' in src
+    assert "reply_polish.filter_stream(turn, _spoken, user_id, session_id)" in src and "reply_polish.mode()" not in src  # always wrapped: off passes through but still notes the reply
 
 
 # -- the clock is not the person's life ---------------------------------------------------------------------
@@ -208,3 +208,34 @@ async def test_filter_stream_cancel_closes_the_inner_stream_promptly(monkeypatch
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 5)
     assert closed == [True]
+
+
+def test_a_specific_followup_is_not_a_generic_closer():
+    # Codex on #2347: contextual questions must survive the cap even when the last reply ended on a question
+    lex = rp.closer_lexicon_for("hello")
+    assert not rp.is_closing_question("How are you feeling about surgery?", lex)
+    assert not rp.is_closing_question("Does that work for you on Friday?", lex)
+    assert "surgery" in rp.polish("Your mum has had a difficult week. How are you feeling about surgery?", "hello", True)
+    # negative control: a real generic closer is still dropped
+    assert not rp.polish("That sounds hard. How are you holding up?", "hello", True).endswith("?")
+
+
+@pytest.mark.asyncio
+async def test_off_mode_still_records_a_calendar_offer_for_the_write_gate(monkeypatch):
+    """With ZOE_REPLY_POLISH=off the stream passes through untouched, but the reply is still noted so "yes please" to
+    "Want me to add those to your calendar?" counts as an ask."""
+    import write_intent_gate as wig
+
+    monkeypatch.setenv("ZOE_REPLY_POLISH", "off")
+    monkeypatch.delenv("ZOE_WRITE_INTENT_GATE", raising=False)
+    wig.reset_state()
+
+    async def inner():
+        yield "That is a lot to fit in. "
+        yield "Want me to add those to your calendar?"
+
+    chunks = [c async for c in rp.filter_stream(inner(), "help me plan", "jason", "s1")]
+    assert chunks == ["That is a lot to fit in. ", "Want me to add those to your calendar?"]
+    wig.note_turn("jason", "yes please")
+    assert wig.check("jason", "calendar_create", {"title": "x"}) is None
+    wig.reset_state()

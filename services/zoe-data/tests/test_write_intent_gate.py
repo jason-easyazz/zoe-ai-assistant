@@ -164,3 +164,33 @@ def test_dispatch_endpoint_refuses_with_a_422_and_never_executes(monkeypatch):
     wig.note_turn("u1", "add dinner friday 7pm")
     out = asyncio.run(system.intent_dispatch(system._IntentDispatchBody(user_id="u1", intent="calendar_create", slots={"title": "dinner"}), None))
     assert out["ok"] is True and ran == ["calendar_create"]
+
+
+# -- review round (Codex on #2347) ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text,want", [
+    ("Schedule this appointment for Friday at 3pm", True),             # the verb: this/next + a thing, not a period
+    ("schedule next week's meeting for Friday at 3pm", True),
+    ("my schedule this week is crazy", False),                         # determiner before it: the noun
+    ("what does the schedule look like", False),
+    ("schedule this week", False),                                     # the noun phrase "this week"
+])
+def test_schedule_this_or_next_is_a_verb_unless_a_period_follows(text, want):
+    assert wig.asks_to_write_calendar(text) is want
+
+
+def test_a_turn_in_a_language_the_gate_cannot_read_is_never_refused():
+    wig.note_turn("jason", "Añade una cita al calendario mañana a las tres")
+    assert wig.check("jason", "calendar_create", {"title": "cita"}) is None
+    # negative control: the same shape in English planning talk IS refused
+    wig.note_turn("jason", PLANNING)
+    assert wig.check("jason", "calendar_create", {"title": "x"}) is not None
+
+
+def test_router_list_choice_follows_the_gate_mode(monkeypatch):
+    import intent_router
+
+    assert intent_router._needs_list_choice("bolts") is True
+    for mode in ("off", "shadow"):
+        monkeypatch.setenv("ZOE_WRITE_INTENT_GATE", mode)
+        assert intent_router._needs_list_choice("bolts") is False, mode

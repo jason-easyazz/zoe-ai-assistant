@@ -2698,8 +2698,7 @@ async def run_flue_brain_streaming(
     # reply already ended on one (reply_polish, ZOE_REPLY_POLISH=off|shadow|on, default on). off: nothing wraps the stream.
     import reply_polish
 
-    if reply_polish.mode() != "off":
-        turn = reply_polish.filter_stream(turn, _spoken, user_id, session_id)
+    turn = reply_polish.filter_stream(turn, _spoken, user_id, session_id)   # off: passes through untouched, still notes the reply for the write gate
     # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
     # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
     # byte-identical. Outermost, so it cleans the text the owner would actually hear.

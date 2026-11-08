@@ -2610,6 +2610,8 @@ def _needs_list_choice(item: str) -> bool:
     the wrong default (owner's fridge rule: household items go on household lists), so Zoe asks which list. Milk goes straight on."""
     import write_intent_gate
 
+    if write_intent_gate.mode() != "on":
+        return False            # off / shadow: the add goes straight to the shopping list, exactly as before the gate existed
     return write_intent_gate.looks_non_grocery(item)
 
 
