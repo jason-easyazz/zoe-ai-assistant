@@ -294,17 +294,18 @@ class FakeHost(nw.NightHost):
         return bk.Result(rc, "")
 
 
-def make(tmp_path, *, cfg_kw=None, argv=(), **host_kw):
+def make(tmp_path, *, cfg_kw=None, argv=(), host_cls=None, **host_kw):
     args = nw.build_parser().parse_args(list(argv))
     cfg_kw = {"night_mind_script": tmp_path / "absent" / "zoe-night-mind.py", "omi_day_review_script": tmp_path / "absent" / "zoe-omi-day-review.py",
               "struggle_proposals_script": tmp_path / "absent" / "zoe-struggle-proposals.py",
+              "self_review_script": tmp_path / "absent" / "zoe-self-review.py",
               **(cfg_kw or {})}      # the optional entry points are absent unless a test brings its own (a plain skip, never a failed night)      # the real entry point lives on another branch: tests never depend on whether it is merged
     cfg = nw.NightCfg(lock_path=str(tmp_path / "brain.lock"), night_dir=tmp_path / "night", report_dir=tmp_path / "reports", buddyinfo=str(tmp_path / "buddyinfo"), meminfo=str(tmp_path / "meminfo"),
                       blackouts=((250, 292),), contig_min_blocks=64, health_wait_s=20.0, quiet_wait_max_min=2.0, quiet_poll_s=10.0, busy_wait_max_min=2.0, busy_poll_s=10.0,
                       test_lane_path=str(tmp_path / "test-lane.lock"), test_lane_wait_min=1.0, bakeoff_dir=tmp_path / "bakeoff", **cfg_kw)
     cfg = nw.configure(args, cfg)
     cfg.bakeoff_dir = tmp_path / "bakeoff"
-    host = FakeHost(tmp_path, **host_kw)
+    host = (host_cls or FakeHost)(tmp_path, **host_kw)
     host.files[cfg.deep_unit] = PARKED
     host.files[str(tmp_path / "meminfo")] = "MemTotal: 16000000 kB\n"
     if cfg.trial:
@@ -508,6 +509,56 @@ def test_a_busy_panel_is_waited_out_then_refused(tmp_path):
     assert w.run() == nw.EXIT_REFUSED and "voice turn" in w.outcome and stopped_nothing(host)
 
 
+class ConversationHost(FakeHost):
+    """The household's last voice turn ended ``ended_ago`` s before the window started (it then ages with the fake clock). ``via="data"``: zoe-data's
+    /health reports it; ``via="ssh"``: zoe-data's stamp is null and the panel log answers, with the known-hosts warning zoe-pi's ssh really prints.
+    ``quiet_at_stop`` = how long the panel had been quiet when zoe-data was stopped."""
+
+    def __init__(self, tmp, *, ended_ago: float, via: str = "data", **kw):
+        super().__init__(tmp, **kw)
+        self.last_turn, self.via, self.quiet_at_stop = self.t - ended_ago, via, None
+
+    def run(self, argv, timeout=60.0, mutating=True, env=None):
+        if argv[0] == "curl" and argv[-1] == "http://127.0.0.1:8000/health" and self.active.get(nw.ZOE_DATA):
+            self.cmds.append((list(argv), mutating))
+            age = round(self.t - self.last_turn, 1) if self.via == "data" else None
+            return bk.Result(0, json.dumps({"status": "ok", "last_voice_turn_age_s": age}))
+        if argv[0] == "ssh":
+            self.cmds.append((list(argv), mutating))
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.last_turn))
+            return bk.Result(0, stamp + "\nWarning: Permanently added 'zoe-pi' (ED25519) to the list of known hosts.\n")
+        if argv[:4] == ["systemctl", "--user", "stop", nw.ZOE_DATA] and self.quiet_at_stop is None:
+            self.quiet_at_stop = self.t - self.last_turn
+        return super().run(argv, timeout, mutating, env)
+
+
+@pytest.mark.parametrize("via", ["data", "ssh"])
+def test_a_real_conversation_near_0250_makes_the_window_wait_until_600s_quiet_then_run(tmp_path, via):
+    """OWNER PIN 2026-11-08: the conversation ended 283 s before the 02:51 window and it did not wait (the guard was blind: ssh's warning was the
+    last line). The window now waits, bounded, until the panel has been quiet for the 600 s bar, and only then stops anything."""
+    w, host, cfg = make(tmp_path, host_cls=ConversationHost, ended_ago=283.0, via=via, start=at(2, 51))
+    cfg.quiet_wait_max_min = 30.0
+    assert cfg.quiet_s == 600.0
+    assert w.run() == nw.EXIT_OK, w.outcome
+    assert host.quiet_at_stop is not None and host.quiet_at_stop >= 600.0, host.quiet_at_stop
+    assert host.quiet_at_stop <= 600.0 + cfg.quiet_poll_s + 1                               # it waited for the bar, not longer
+    # negative control: a conversation that ended long ago does not delay the window at all
+    (tmp_path / "quiet").mkdir()
+    w2, host2, cfg2 = make(tmp_path / "quiet", host_cls=ConversationHost, ended_ago=5000.0, via=via, start=at(2, 51))
+    assert w2.run() == nw.EXIT_OK, w2.outcome
+    assert host2.quiet_at_stop is not None and host2.quiet_at_stop < 5000.0 + cfg2.quiet_poll_s
+
+
+def test_a_conversation_that_never_ends_is_waited_for_bounded_then_refused_with_nothing_stopped(tmp_path):
+    class Chatting(ConversationHost):
+        def sleep(self, s):
+            super().sleep(s)
+            self.last_turn = self.t - 30.0                                                  # still talking at every poll
+
+    w, host, _ = make(tmp_path, host_cls=Chatting, ended_ago=30.0, start=at(2, 51))
+    assert w.run() == nw.EXIT_REFUSED and "voice turn" in w.outcome and stopped_nothing(host)
+
+
 def test_fragmented_ram_without_sudo_is_refused_before_anything_stops_and_with_sudo_is_compacted(tmp_path):
     w, host, cfg = make(tmp_path, sudo=False)
     host.buddy = FRAGMENTED_BUDDY
@@ -521,7 +572,7 @@ def test_fragmented_ram_without_sudo_is_refused_before_anything_stops_and_with_s
 def test_a_12b_needs_free_pages_not_just_available_ones_so_compaction_is_retried_then_refused(tmp_path):
     w, host, _ = make(tmp_path, free_gap=5000.0, gap_heal=1000.0)          # 'available' fits but only 6.2 GB is FREE; each compaction frees another GB
     assert w.run() == nw.EXIT_OK, w.outcome
-    assert host.count("compact_memory") == 3 and w.rec["arith"]["free_measured_mib"] >= 7426 and any("compacting again" in e["msg"] for e in w.rec["events"])
+    assert host.count("compact_memory") == 4 and w.rec["arith"]["free_measured_mib"] >= 7426 and any("compacting again" in e["msg"] for e in w.rec["events"])
     w2, host2, _ = make(tmp_path, free_gap=6000.0, gap_heal=0.0)           # compaction cannot make them free: the June 2026 failure (9.2 GB free, cudaMalloc failed)
     assert w2.run() == nw.EXIT_REFUSED and "MemFree" in w2.outcome
     assert not any(c.startswith("systemd-run") for c in host2.joined()) and wake_order(host2) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
@@ -1242,6 +1293,22 @@ def test_the_day_review_is_handed_the_time_the_window_leaves_it_as_its_budget(tm
     assert others and not any("--budget-s" in j["argv"] for j in others)                     # control: only the budgeted job gets one
 
 
+def test_the_self_review_runs_before_the_day_review_with_its_own_budget_and_no_4b_fallback(tmp_path):
+    """The self-review (services/zoe-data/self_review.py) is bounded (600 s), budgeted like the day review, and never re-run on the live 4B."""
+    spec = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "self_review")
+    assert spec.best_effort and not spec.fallback_4b and spec.budget_flag == "--budget-s" and spec.timeout_s == 600.0
+    assert spec.argv[2:] == ["--model-url", "http://127.0.0.1:11500/v1", "--ctx-tokens", "8192", "--decode-tok-s", "6.20", "--prefill-tok-s", "150.0"]
+    script, odr = tmp_path / "zoe-self-review.py", tmp_path / "zoe-omi-day-review.py"
+    script.write_text("# stand-in")
+    odr.write_text("# stand-in")
+    w, host, _ = make(tmp_path, cfg_kw={"self_review_script": script, "omi_day_review_script": odr})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    ran = [j["name"] for j in host.jobs_run]
+    assert ran.index("zoe-self-review.py") < ran.index("zoe-omi-day-review.py")
+    sr = [j for j in host.jobs_run if j["name"] == "zoe-self-review.py"]
+    assert len(sr) == 1 and "--budget-s" in sr[0]["argv"] and sr[0]["env"]["GEMMA_SERVER_URL"].endswith(":11500/v1")
+
+
 def test_the_struggle_proposals_job_runs_after_the_night_mind_before_the_day_review_and_never_fails_the_night_for_time(tmp_path):
     spec = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "struggle_proposals")
     assert spec.best_effort and not spec.fallback_4b and not spec.skip_reason and spec.timeout_s == 480.0
@@ -1729,7 +1796,7 @@ def test_the_real_night_command_in_the_unit_carries_every_lever_and_equals_the_c
     args = _exec_start_args()
     parsed = nw.build_parser().parse_args(args)                                   # every flag in the unit is a flag the script accepts
     cfg = nw.configure(parsed)
-    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,struggle_proposals,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "struggle_proposals", "omi_day_review")
+    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_day_review")
     assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice) == (34, 8192, "q8_0") and "--ngl" in args and "--ctx" in args and "--kv" in args
     assert args[args.index("--end-by") + 1] == "03:55" and cfg.end_by == 3 * 60 + 55
     defaults = nw.configure(nw.build_parser().parse_args([]))                     # written-out levers == the code's defaults: a changed default cannot silently change the night
@@ -1784,7 +1851,7 @@ def test_the_installer_adds_two_units_absorbs_dreaming_and_the_uninstaller_undoe
     assert dry.returncode == 0 and "DRY-RUN: systemctl --user disable --now zoe-dreaming.timer" in dry.stdout and not (tmp_path / "units").exists() and not (tmp_path / "nd" / "INSTALLED").exists()
     inst = subprocess.run(["bash", script], capture_output=True, text=True, env=env, timeout=60)
     assert inst.returncode == 0, inst.stderr
-    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-window.service", "zoe-night-window.timer"]
+    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-window-restore-retry.service", "zoe-night-window-restore-retry.timer", "zoe-night-window.service", "zoe-night-window.timer"]
     calls = (tmp_path / "calls").read_text()
     assert "disable --now zoe-dreaming.timer" in calls and "enable --now zoe-night-window.timer" in calls and calls.index("daemon-reload") < calls.index("enable --now zoe-night-window")
     assert "dreaming_timer_was=enabled" in (tmp_path / "nd" / "INSTALLED").read_text()
@@ -2645,3 +2712,83 @@ def test_last_resort_ngl_never_exceeds_the_configured_count(tmp_path):
     except Exception:
         pass
     assert w.rec["arith"]["ngl_used"] == 8
+
+
+# ── 2026-11-06: the router (CPU-only, but it still asks CUDA for memory info) died on NvMap error 12 in every restore try ──
+
+class RouterNvmapHost(FakeHost):
+    """The router answers /health only once ``heal_after`` compactions have run before its start (a fragmented NvMap that only a compaction cures)."""
+    def __init__(self, *a, heal_after=1, **kw):
+        super().__init__(*a, **kw)
+        self.heal_after, self.compactions = heal_after, 0
+
+    def run(self, argv, timeout=60.0, mutating=True, env=None):
+        if argv[:1] == ["sudo"] and "compact_memory" in " ".join(argv):
+            self.compactions += 1
+        if argv[:3] in (["systemctl", "--user", "start"], ["systemctl", "--user", "restart"]) and argv[-1] == nw.ROUTER:
+            if self.compactions >= self.heal_after:
+                self.unhealthy.discard(nw.ROUTER)
+            else:
+                self.unhealthy.add(nw.ROUTER)
+        return super().run(argv, timeout, mutating, env)
+
+
+def _router_make(tmp_path, heal_after):
+    w, _host, cfg = make(tmp_path)
+    host = RouterNvmapHost(tmp_path, heal_after=heal_after)
+    host.files = _host.files
+    host.dry = False
+    host.log = w.log
+    w.host = host
+    return w, host, cfg
+
+
+def test_the_router_gets_a_compaction_before_every_try_and_comes_up_on_a_later_one(tmp_path):
+    w, host, cfg = _router_make(tmp_path, heal_after=5)
+    assert w.run() == nw.EXIT_OK, w.outcome
+    info = w.rec["restore"][nw.ROUTER]
+    assert info["ok"] is True and info["attempts"] >= 2                           # the old 2-try limit would have reported it dead
+    assert host.count(f"--user reset-failed {nw.ROUTER}") == info["attempts"] - 1  # a start-limit-hit must not block the next try
+    assert not cfg.marker.exists()
+
+
+def test_a_router_that_never_recovers_is_still_reported_after_the_bounded_tries_negative_control(tmp_path):
+    w, host, cfg = _router_make(tmp_path, heal_after=10 ** 6)
+    assert w.run() == nw.EXIT_RESTORE_FAILED
+    spec = nw.HEALTH[nw.ROUTER]
+    assert 2 <= w.rec["restore"][nw.ROUTER]["attempts"] <= spec.attempts == 4
+    assert host.count(f"--user restart {nw.ROUTER}") == w.rec["restore"][nw.ROUTER]["attempts"] - 1
+    assert cfg.marker.exists() and wake_order(host)[-1] == nw.ZOE_DATA            # zoe-data was still woken; the marker keeps the router for --restore-only
+    assert spec.budget_s + spec.wait_s < 12 * 60                                  # the budget (plus one last wait) sits inside the 12 min restore reserve
+
+
+def test_the_router_budget_is_enforced_on_the_clock_not_just_in_the_config(tmp_path):
+    """Review (pi, #2318): the tries must stop when the budget is spent, measured on the host clock (every health poll advances it)."""
+    w, host, cfg = _router_make(tmp_path, heal_after=10 ** 6)
+    spec = nw.HEALTH[nw.ROUTER]
+    t0 = host.mono()
+    info = w.bring_back(nw.ROUTER)
+    spent = host.mono() - t0
+    assert info["ok"] is False and spent <= spec.budget_s + 5
+    nw.HEALTH[nw.ROUTER] = tight = nw.dataclasses.replace(spec, budget_s=100.0)          # negative control: a tighter budget stops sooner, with fewer tries
+    try:
+        w2, host2, _ = _router_make(tmp_path / "b", heal_after=10 ** 6) if (tmp_path / "b").mkdir() is None else (None, None, None)
+        t1 = host2.mono()
+        info2 = w2.bring_back(nw.ROUTER)
+        assert host2.mono() - t1 <= tight.budget_s + 5 and info2["attempts"] < info["attempts"]
+    finally:
+        nw.HEALTH[nw.ROUTER] = spec
+
+
+def test_only_the_router_gets_the_longer_retry_the_others_keep_one_retry():
+    assert nw.HEALTH[nw.ROUTER].compact and nw.HEALTH[nw.ROUTER].attempts > 2
+    assert all(nw.HEALTH[u].attempts == 2 and not nw.HEALTH[u].compact for u in (nw.BRAIN, nw.KOKORO, nw.ZOE_DATA))
+
+
+def test_the_restore_retry_timer_is_tracked_and_installed_and_runs_only_for_a_stuck_marker():
+    d = REPO / "scripts/night/systemd"
+    svc = (d / "zoe-night-window-restore-retry.service").read_text()
+    assert "ConditionPathExists=%h/.zoe/night-window/WINDOW_OPEN" in svc and "night_window.sh --restore-only" in svc and "ExecCondition=" in svc
+    assert "OnUnitInactiveSec=" in (d / "zoe-night-window-restore-retry.timer").read_text()
+    inst = (REPO / "scripts/night/install_night_window.sh").read_text()
+    assert "zoe-night-window-restore-retry.timer" in inst and "zoe-night-window-restore-retry.service" in inst

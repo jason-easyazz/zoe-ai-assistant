@@ -15,6 +15,7 @@ import wave
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from types import SimpleNamespace
 from urllib.parse import quote_plus
 
 import httpx
@@ -289,6 +290,15 @@ def _get_or_create_voice_session(panel_id: str) -> str:
     if entry and entry.get("context") and entry["context"].is_fresh():
         _next["context"] = entry["context"]
     _VOICE_SESSIONS[panel_id] = _next
+    if entry and entry.get("session_id"):
+        # ZOE_VOICE_SESSION_BRIDGE (default OFF): the new session remembers the one it replaced on THIS panel, so the
+        # same confirmed speaker's next brain turns carry "where we left off" (voice_session_bridge.py). Never raises.
+        try:
+            import voice_session_bridge
+
+            voice_session_bridge.note_rollover(entry["session_id"], session_id)
+        except Exception:  # noqa: BLE001 - a bridge must never cost a turn its session
+            pass
     return session_id
 
 
@@ -337,12 +347,19 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
     truncated to a few hundred chars of only the facts relevant to what was asked.
     Falls back to the full for-prompt dump when search returns nothing (e.g. a
     chit-chat turn with no recall intent, or an embedder hiccup) so recall never
-    silently degrades. Best-effort: guest-safe and never raises."""
+    silently degrades. Best-effort: guest-safe and never raises.
+
+    PRIVACY WALL (person-centred memory D6, ``restraint.VOICE_SURFACE``): every row -
+    the searched facts, the relational lines and the fallback dump - passes the SAME
+    ``restraint.apply_to_packet`` the chat packet uses, on the voice surface: a private
+    class (health, money, grief, family trouble, feelings; a curated health / medication
+    / money note) reaches the brain only when the speaker gate verified THIS voice and the
+    words name it. It bites in every ``ZOE_RESTRAINT`` mode and fails closed."""
     query = (text or "").strip()
     if not query:
         # No turn text (e.g. prewarm) — warm/return the fallback dump instead so
         # the underlying facts cache stays primed.
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
     try:
         from memory_service import get_memory_service, is_guest_memory_user
         if is_guest_memory_user(user_id):
@@ -367,11 +384,20 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
     if not refs and not relational_lines:
         # Search found nothing relevant — fall back to the for-prompt dump so a
         # recall question still has facts to draw on.
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
+    refs, relational_lines = await _voice_private_wall(user_id, query, list(refs or []), relational_lines)
 
     seen: set[str] = set()
     lines: list[str] = []
+    try:   # one current age per person, as chat's packet (person_extractor.stale_age_ids)
+        from person_extractor import stale_age_ids
+
+        stale_ages = stale_age_ids(refs or [])
+    except Exception:  # noqa: BLE001
+        stale_ages = set()
     for ref in refs or []:
+        if str(getattr(ref, "id", "")) in stale_ages:
+            continue
         fact = (getattr(ref, "text", "") or "").strip()
         if not fact:
             continue
@@ -395,8 +421,24 @@ async def _voice_recall_packet(text: str, user_id: str) -> Optional[str]:
         seen.add(key)
         lines.append("- " + line)
     if not lines:
-        return await _voice_recall_fallback(user_id)
+        return await _voice_recall_fallback(user_id, query)
     return "[What you remember]\n" + "\n".join(lines)
+
+
+async def _voice_private_wall(user_id: str, query: str, refs: list, relational_lines: list[str]) -> tuple[list, list[str]]:
+    """``(refs, relational_lines)`` with what the voice privacy wall withholds removed: one
+    ``restraint.apply_to_packet`` call on ``restraint.VOICE_SURFACE`` (the relational lines ride
+    as id-less rows, judged by their text). Fails closed (nothing)."""
+    try:
+        import restraint
+
+        rel_rows = [SimpleNamespace(id="", text=line, metadata={}) for line in relational_lines]
+        kept_rel, kept_refs, _ = await restraint.apply_to_packet(
+            user_id, query, rel_rows, refs, surface=restraint.VOICE_SURFACE)
+        return list(kept_refs), [r.text for r in kept_rel]
+    except Exception as exc:  # noqa: BLE001 - the wall cannot judge: nothing private may pass, so nothing passes
+        logger.warning("voice recall privacy wall failed (no recall this turn): %r", exc)
+        return [], []
 
 
 async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
@@ -444,13 +486,19 @@ async def _voice_relational_lines(query: str, user_id: str) -> list[str]:
     return out
 
 
-async def _voice_recall_fallback(user_id: str) -> Optional[str]:
-    """Full for-prompt metadata dump (the previous behaviour). Used when the
-    query-relevant search yields nothing, and to warm the facts cache on prewarm.
-    Best-effort / never raises."""
+async def _voice_recall_fallback(user_id: str, query: str = "") -> Optional[str]:
+    """Full for-prompt metadata dump (the previous behaviour), built from the
+    ROWS (``zoe_agent._mempalace_user_fact_refs``, the same cached read) so each
+    passes the voice privacy wall (``_voice_private_wall``) before it is formatted.
+    Used when the query-relevant search yields nothing, and to warm the facts cache
+    on prewarm (no ``query``: nothing private is pulled). Best-effort / never raises."""
     try:
-        from zoe_agent import _mempalace_load_user_facts
-        return (await _mempalace_load_user_facts(user_id)) or None
+        from zoe_agent import _format_user_facts, _mempalace_user_fact_refs
+        refs = await _mempalace_user_fact_refs(user_id)
+        if not refs:
+            return None
+        kept, _ = await _voice_private_wall(user_id, query, refs, [])
+        return (_format_user_facts(kept) if kept else "") or None
     except Exception as exc:
         logger.debug("voice recall fallback load failed (non-fatal): %s", exc)
         return None
@@ -3019,7 +3067,10 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
 
         d = os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
         os.makedirs(d, exist_ok=True)
-        dst = os.path.join(d, f"{_t.strftime('%H%M%S')}_{int(_t.time()*1000)%1000:03d}.wav")
+        # YYYYmmdd-HHMMSS_mmm.wav: the date is in the name (2026-11-06) - an HHMMSS-only name repeats every day, so
+        # a clip could only be dated by its mtime. Readers accept both forms (scripts/lib/panel_voice_log.clip_time).
+        _now = _t.time()
+        dst = os.path.join(d, f"{_t.strftime('%Y%m%d-%H%M%S', _t.localtime(_now))}_{int(_now*1000)%1000:03d}.wav")
         # Copy synchronously (fast) before the caller unlinks the original.
         shutil.copyfile(wav_path, dst)
     except Exception as exc:
@@ -3340,6 +3391,14 @@ async def _schedule_voice_chat_save(
     if arrival is None or arrival.session_id != session_id or (user_text and arrival.text != user_text):
         arrival = None
     user_text = user_text or (arrival.text if arrival is not None else "")   # the row to recover when the arrival insert failed
+    # ZOE_VOICE_SESSION_BRIDGE (default OFF): hold a CONFIRMED speaker's exchange in memory for the bridge a session rollover
+    # carries (voice_session_bridge.py: verified-only, off-record / forget cues dropped). Never raises.
+    try:
+        import voice_session_bridge
+
+        voice_session_bridge.note_exchange(session_id, user_id, user_text, reply, speaker_verified)
+    except Exception:  # noqa: BLE001 - the save below must run whatever the bridge does
+        pass
     try:
         # lazy — avoids circular import (routers.chat lazily imports us back)
         from routers.chat import _ensure_user_and_chat_session, _save_chat_message as _svc
@@ -3390,6 +3449,11 @@ async def _run_voice_memory_passes(
 
     ``interrupted`` = the streamed reply ended early (barge-in / disconnect): only the struggle detector reads it.
     """
+    try:  # a person's turn just completed on this lane (fast paths never enter the brain slot): the post-turn passes below are fresh
+        import brain_slot_guard
+        brain_slot_guard.note_turn_completed()
+    except Exception:  # noqa: BLE001
+        pass
     try:  # the struggle detector (post-turn, already off the reply path; a bounded put_nowait that never raises)
         import struggle_detector
 
@@ -3411,6 +3475,16 @@ async def _run_voice_memory_passes(
             if _htf_own_reply(reply):
                 return
         except Exception:
+            pass
+        # A turn the caregiver-curation lane answered (memories_voice._curate: the write OR its refusal) is an instruction, not the
+        # curator's own words: no extractor / digest / person / suggestion pass may mine it into the curator's store.
+        try:
+            import memories_voice as _mv
+
+            if _mv.curation_handled(user_id, user_text):
+                logger.info("CURATION_TURN user=%s skipped=memory_passes lane=voice", user_id)
+                return
+        except Exception:  # noqa: BLE001
             pass
         # BM5: an off-the-record spoken turn reaches no extractor, digest, person extractor or suggestion detector.
         try:
@@ -4285,6 +4359,56 @@ async def voice_command(
     except Exception as _snap_exc:
         logger.warning("voice/command stt snap failed (non-fatal): %s", _snap_exc)
 
+    # ── Device confirm guard (ZOE_DEVICE_CONFIRM_GUARD, default ON; device_confirm.py) ──
+    # A quiet "turn on the light" heard as a sound-alike ("shone the lots", "two of the one"): nothing claims it, and the brain
+    # answered a request nobody made (live 2026-11-06/07). At the PANEL, a short light-shaped transcript no matcher claims gets ONE
+    # question ("Light on?"); a plain yes runs the real command through the STT-snap pending confirmation above (its words become
+    # the command, so every gate below judges it and the resolver's receipt says it back). Never mid-conversation, never for a
+    # caller who may not drive the house.
+    try:
+        import device_confirm as _dc
+
+        if _dc.at_the_panel(caller) and _dc.enabled() and panel_id not in _PENDING_CONFIRMATIONS:
+            _dc_ask = _dc.decide(text, router_decision=_router_decision, panel_key=panel_id,
+                                 context=(_VOICE_SESSIONS.get(panel_id) or {}).get("skybridge_context") or None)
+            if _dc_ask is not None:
+                _dc_guest = effective_user in _GUEST_SENTINEL_USERS or _speaker_verified is False
+                from panel_principal import home_control_refused as _dc_refused
+
+                if _dc_refused("device_confirm"):
+                    _dc.log_line(_dc_ask, "refused_home", guest=_dc_guest)
+                else:
+                    if _speculation.bound_gate() is not None:
+                        await _speculation.await_commit("turn:device_confirm")
+                    _dc.log_line(_dc_ask, "asked", guest=_dc_guest)
+                    _PENDING_CONFIRMATIONS[panel_id] = {
+                        "intent_name": "stt_snap",
+                        "slots": {},
+                        "stt_snap_text": _dc_ask.command,
+                        "stt_snap_intent": _dc_ask.intent,
+                        "stt_snap_from": "device_confirm",
+                        "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
+                        "session_id": session_id,
+                        # a light at the panel needs the PANEL, not a member: an unverified ask is a guest's, so the same
+                        # unverified voice's "yes" may answer it (a member id from the recent-user fallback would hold it forever)
+                        "user_id": effective_user if _confirm_speaker else "voice-guest",
+                        "speaker": _confirm_speaker,
+                    }
+                    from types import SimpleNamespace as _DcNS
+
+                    try:
+                        _dc_out = await _answer_from_tier(
+                            _DcNS(reply=_dc_ask.question, ui=None, domain="device_confirm", intent="confirm"),
+                            intent="device_confirm")
+                    except BaseException:
+                        # the question was never heard: a later "yes" must not switch a light nobody was asked about
+                        _PENDING_CONFIRMATIONS.pop(panel_id, None)
+                        raise
+                    _dc_out["pending_confirmation"] = True
+                    return _dc_out
+    except Exception as _dc_exc:
+        logger.warning("voice/command device confirm failed (non-fatal): %s", _dc_exc)
+
     _voice_processing_ack_sent = False
     if not stream:
         try:
@@ -4643,9 +4767,12 @@ async def voice_command(
                     _list_type = str(slots.get("list_type", "shopping"))
                     _list_title = "Shopping List" if _list_type == "shopping" else f"{_list_type.title()} List"
 
-                    if _item_text and not _panel_is_live(panel_id):
+                    if _item_text and (not _panel_is_live(panel_id) or not str(slots.get("list_type") or "").strip()
+                                       or slots.get("list_phrase")):
                         # Nobody can tap Done on a panel that is not rendering: do the add NOW and say what really
                         # happened ("Added …", or that it did not work) - never "check the panel".
+                        # A list the user NAMED ("my pharmacy list", "the christmas shopping list") goes straight to the executor:
+                        # it adds to that list or ASKS - the shopping-list form must never stand in for it (QA 2026-11-06).
                         from intent_router import execute_intent as _exec_list_direct
 
                         reply_text = (await _exec_list_direct(_quick_intent, effective_user)) or (
@@ -5790,12 +5917,14 @@ async def _media_playing() -> bool:
     return any(r is True for r in results)
 
 
-async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str) -> Optional[dict]:
+async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str,
+                               side_effects: bool = True) -> Optional[dict]:
     """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member, else None.
 
     ONE rule for both /turn and /turn_stream: the daemon's streaming request falls back to the blocking /turn when it dies before a
     response, and a /turn that skipped this check let a background clip clear only the wake bar. Side effects of a drop (crowd note,
     voice-session close) live here so the two paths cannot drift. An ERROR while judging a window turn FAILS CLOSED (dropped).
+    ``side_effects=False`` only asks (a speculative window turn: it is cancelled and the normal turn re-runs this with them).
     """
     if (payload or {}).get("window") not in _utterance_shape.WINDOWS:
         return None
@@ -5819,6 +5948,17 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     except Exception as _win_exc:
         logger.warning("voice/%s window speaker gate failed (dropping the window turn): %s", route, _win_exc)
         _win_verdict = False
+    if _win_verdict is None and side_effects:
+        # No verdict at all on a no-wake-word turn: the gate is off / in shadow mode, or the panel could not score (its speaker model
+        # is refused / loading - 2026-11-07, ~8 h). The turn still passes, but the VOICE gives it no identity: no claim was accepted,
+        # so voice_command scopes it to a guest unless a FRESH panel PIN sign-in backs a member (voice_session: a PIN is its own
+        # password, and the only way in while the speaker model is down). Say so loudly: a follow-up chain with no verdict is
+        # exactly what a TV can keep alive.
+        _sms = (payload or {}).get("speaker_model_state")
+        _sms_state = str(_sms.get("state") or "?") if isinstance(_sms, dict) else "unreported"
+        if _sms_state not in ("ready", "off"):
+            logger.warning("voice/%s window turn passes with NO speaker verdict (panel speaker model %s): guest scope, no identity "
+                           "from the voice (a fresh PIN sign-in only)", route, _sms_state)
     try:
         _gate = _utterance_shape.window_speaker_frame(
             payload, transcript, _win_verdict,
@@ -5826,7 +5966,7 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     except Exception as _win_exc:
         logger.warning("voice/%s window speaker frame failed (dropping the window turn): %s", route, _win_exc)
         _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
-    if _gate is not None:
+    if _gate is not None and side_effects:
         # The rejected voice is still SOMEONE in the room: record it in the crowd log (no session, no brain, no memory write), so the
         # day-review summary is not spoken aloud on the strength of a crowd that only ever spoke into skipped follow-ups.
         try:
@@ -5862,6 +6002,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
     panel_id = _lane_panel_id(payload, caller, "turn")
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
+    _note_panel_speaker_state(payload, caller, panel_id)
 
     t_turn_start = time.monotonic()
 
@@ -6024,6 +6165,7 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     panel_id = _lane_panel_id(payload, caller, "turn_stream")
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
+    _note_panel_speaker_state(payload, caller, panel_id)
 
     t_turn_start = time.monotonic()
     try:
@@ -6146,6 +6288,31 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
     # listens a short extra window and re-sends ONE merged clip. ``skipped``: a follow-up
     # window utterance that names someone else (ZOE_FOLLOWUP_ADDRESSED, default off).
     # Never on a speculative turn (its own verdict protocol owns it). Fail-open.
+    if _spec_gate is not None and (payload or {}).get("window") in _utterance_shape.WINDOWS:
+        # A speculative FOLLOW-UP / CONVERSATION turn (B1.1 in no-wake-word windows): the pre-brain gates below never run on a
+        # speculative turn, so ask them here WITHOUT side effects. One that would drop the turn (an unconfirmed voice, side
+        # speech) cancels the speculation instead: nothing ran, so the daemon runs the FULL recording as a normal window turn,
+        # which meets the same gates with their side effects. Fail-closed: an error cancels too.
+        try:
+            _would_drop = await _window_speaker_drop(payload, caller, transcript, panel_id, route="turn_stream",
+                                                     side_effects=False)
+            if _would_drop is None:
+                _would_drop = _utterance_shape.gate_frame(payload, transcript)
+        except Exception as _spec_win_exc:
+            logger.warning("voice/turn_stream speculative window gate failed (cancelling): %s", _spec_win_exc)
+            _would_drop = {"error": True}
+        if _would_drop is not None:
+            _speculation.close_gate(_spec_gate)
+            _speculation.record_outcome("window_gate")
+            _gate_for_window = _spec_gate
+
+            async def _window_cancelled():
+                yield _speculation.ack_frame(_gate_for_window)
+                yield _speculation.cancelled_frame(_gate_for_window, reason="window_gate")
+            return StreamingResponse(
+                _window_cancelled(), media_type="application/x-zoe-audio-stream", headers={"Cache-Control": "no-cache"}
+            )
+
     _gate = None
     # A no-wake-word window turn must carry its OWN matching voice: one the speaker gate RAN on and did not confirm is
     # not for Zoe (a television, another person) - dropped here, before any brain / memory / identity work, which ends the
@@ -7039,6 +7206,20 @@ def _claim_model(payload: dict) -> tuple:
     return (model_id if model_id is not None else ""), speech
 
 
+def _note_panel_speaker_state(payload: dict, caller: dict, panel_id: str) -> None:
+    """Track the panel's ``speaker_model_state`` (every audio turn carries it): a panel that cannot score voices at all raises an
+    owner ALARM after ``ZOE_PANEL_SPEAKER_ALARM_MIN`` (``panel_speaker_health``) instead of a silent all-guest night (2026-11-07).
+    Device callers only - a browser cannot report a panel's model. Never raises."""
+    if (caller or {}).get("source") != "device":
+        return
+    try:
+        import panel_speaker_health as _psh
+
+        _psh.note_turn(panel_id, (payload or {}).get("speaker_model_state"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("panel speaker health note failed (non-fatal): %s", exc)
+
+
 def _speaker_verdict(payload: dict, caller: dict, *, identified_by_claim: bool) -> Optional[bool]:
     """What the speaker gate said about this turn, as the memory layer needs it
     (``MemoryService.ingest(speaker_verified=...)``; docs/knowledge/memory-authority.md).
@@ -7110,7 +7291,7 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     if threshold is not None and score >= threshold:
         return user
     logger.info(
-        "voice claim rejected: user=%s score=%.4f < threshold=%.2f", user, score, threshold or 0.0
+        "voice claim rejected: user=%s score=%.4f < threshold=%.3f", user, score, threshold or 0.0
     )
     return None
 

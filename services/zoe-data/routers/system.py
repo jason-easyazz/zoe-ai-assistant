@@ -2443,6 +2443,23 @@ def _log_dispatch(intent_name: str, status: int, ok: bool, reason: str, started:
         intent_name, status, int(ok), reason or "-", (time.monotonic() - started) * 1000.0)
 
 
+_AUTHORITY_SHADOW_TASKS: set = set()
+
+
+def _authority_shadow(intent_name: str, slots: dict, user_id: str) -> None:
+    """Schedule the log-only authority check (household_authority.shadow_check). Never raises; off = nothing scheduled."""
+    try:
+        import household_authority
+
+        if not household_authority.shadow_enabled():
+            return
+        task = asyncio.get_running_loop().create_task(household_authority.shadow_check(intent_name, slots, user_id))
+        _AUTHORITY_SHADOW_TASKS.add(task)
+        task.add_done_callback(_AUTHORITY_SHADOW_TASKS.discard)
+    except Exception:  # noqa: BLE001 - evidence gathering must never touch the dispatch
+        return
+
+
 class _IntentDispatchBody(BaseModel):
     user_id: str
     intent: str
@@ -2464,6 +2481,15 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     started = time.monotonic()
     intent_name = (body.intent or "").strip()
     user_id = (body.user_id or "").strip()
+    try:
+        # The brain's sidecar calls here with the token and no traffic header, so a harness id's tool call was classed
+        # household: its INTENT_DISPATCH / AUTHORITY_SHADOW lines then counted as the household's. The acting id decides
+        # (only ever AWAY from household, like auth's refine).
+        import traffic_class as _tc
+
+        _tc.refine_for_user(user_id)
+    except Exception:  # noqa: BLE001 - instrumentation never touches the dispatch
+        pass
     if not user_id:
         _log_dispatch("-", 400, False, "no_user", started)
         raise HTTPException(status_code=400, detail="user_id required")
@@ -2475,6 +2501,9 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     import panel_principal as _pp
 
     _pp.record_home_control(not (_pp.is_guest_id(user_id) or user_id.lower() in ("anonymous", "voice-daemon")))
+    # Household authority table (flag-dark ZOE_PROBLEM_LOOP=shadow|on): LOG-ONLY evidence of what the table would say about
+    # this call (AUTHORITY_SHADOW ... would=allow|ask|refuse). Fire-and-forget: it never delays, changes or refuses the dispatch.
+    _authority_shadow(intent_name, dict(body.slots or {}), user_id)
     # B1.1 phase 2: a brain tool write made BY a speculative voice turn (the
     # sidecar echoes its turn id) waits for that turn's verdict and is refused —
     # never run — when the verdict drops it. Any other caller (no id: another

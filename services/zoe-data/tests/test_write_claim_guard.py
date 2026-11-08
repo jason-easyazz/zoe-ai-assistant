@@ -81,13 +81,13 @@ NOT_CLAIMS_EN = [
     "I couldn't add that to your list.",
     "I didn't manage to add that; want me to try again?",
     "Do you want me to add oat milk to your shopping list?",
-    "I'll add it to your list.",
+    "I'll add it to your list later.",          # a bare "I'll add it to your list." is a STANDING promise (claim) since QA 2026-11-05
     "Would you like me to schedule the physio?",
     "You added oat milk earlier.",
     "Your dentist appointment is scheduled for Friday.",       # describes the calendar, claims no write
     "Sure thing. What should I call the meeting?",
     "I've added Marcus to your contacts.",                      # not a kind this guard owns
-    "I've turned the lights on.",
+    # "I've turned the lights on." is a DEVICE claim since 2026-11-07 (it needs a device receipt: test_garbled_light_first_turn.py)
     "I've set the lights to blue.",
     "Did I add it to your list?",
     # review (#2004, P1) - the same passive, said honestly: a read of what is ALREADY there, or a denial
@@ -108,7 +108,7 @@ NOT_CLAIMS_EN = [
     "I've definitely not added milk to your shopping list.",
     "I've really been meaning to add milk to your shopping list.",
     "Have I definitely added milk to your shopping list?",
-    "I will definitely add milk to your shopping list.",
+    "I could definitely add milk to your shopping list.",
 ]
 
 CLAIMS_ES = [

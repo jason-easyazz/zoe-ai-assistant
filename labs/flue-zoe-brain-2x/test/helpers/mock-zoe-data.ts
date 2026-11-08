@@ -23,6 +23,8 @@ export interface CapturedCall {
   userId: string;
   /** Intent name for POST /api/system/intent-dispatch, else ''. */
   intent: string;
+  /** Slots for POST /api/system/intent-dispatch, else {}. */
+  slots: Record<string, unknown>;
   at: number;
 }
 
@@ -50,16 +52,18 @@ export async function startMockZoeData(options: MockZoeDataOptions = {}): Promis
 
       let userId = url.searchParams.get('user_id') ?? '';
       let intent = '';
+      let slots: Record<string, unknown> = {};
       if (raw) {
         try {
-          const body = JSON.parse(raw) as { user_id?: string; intent?: string };
+          const body = JSON.parse(raw) as { user_id?: string; intent?: string; slots?: Record<string, unknown> };
           userId = body.user_id ?? userId;
           intent = body.intent ?? '';
+          slots = body.slots ?? {};
         } catch {
           /* not JSON — leave the query-string reading in place */
         }
       }
-      calls.push({ path: url.pathname, userId, intent, at: Date.now() });
+      calls.push({ path: url.pathname, userId, intent, slots, at: Date.now() });
 
       if (options.stallMs) await new Promise((r) => setTimeout(r, options.stallMs));
 

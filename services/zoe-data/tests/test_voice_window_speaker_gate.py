@@ -38,7 +38,7 @@ def _block(score, speech_s=3.0, member=MEMBER, verified=None):
     return {"verified": verified, "member": member, "score": score, "model_id": RESNET, "speech_s": speech_s}
 
 
-def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardiologist", raw=None):
+def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardiologist", raw=None, extra=None):
     import routers.voice_tts as vt
 
     real_claim = vt._accepted_voice_claim
@@ -61,6 +61,7 @@ def _run(monkeypatch, *, window="", speaker=None, text="tell me about the cardio
         payload["window"] = window
     if speaker is not None:
         payload["speaker"] = speaker
+    payload.update(extra or {})
     with TestClient(app) as client:
         r = client.post("/api/voice/turn_stream", json=payload)
         assert r.status_code == 200, r.text
@@ -138,6 +139,27 @@ def test_followup_with_no_verdict_at_all_is_unchanged(monkeypatch):
     """Gate off / shadow mode: nothing to judge, today's behaviour (the turn is not the member either way - it is per utterance)."""
     turns, frames = _run(monkeypatch, window="followup", speaker=None)
     assert len(turns) == 1 and turns[0]["verdict"] is None and not _skipped(frames), (turns, frames)
+
+
+def test_a_followup_with_no_verdict_because_the_panel_cannot_score_passes_as_a_guest_and_says_so(monkeypatch, caplog, tmp_path):
+    """2026-11-07: the panel's speaker model was refused at boot, every turn went up with no claim, and every follow-up passed in silence.
+    Decision (voice is a password): it still passes - in GUEST scope, no claim was accepted so no identity - but it is logged loudly."""
+    import logging
+
+    import panel_speaker_health
+
+    monkeypatch.setenv("ZOE_PANEL_SPEAKER_HEALTH_PATH", str(tmp_path / "psh.json"))       # the health bookkeeping never writes to ~/.zoe in a test
+    panel_speaker_health._reset_for_tests()
+    caplog.set_level(logging.WARNING, logger="routers.voice_tts")
+    refused = {"model": RESNET, "state": "refused", "reason": "too slow", "down_s": 120}
+    turns, frames = _run(monkeypatch, window="followup", speaker=None, extra={"speaker_model_state": refused})
+    assert len(turns) == 1 and turns[0]["verdict"] is None and not _skipped(frames), (turns, frames)
+    assert any("NO speaker verdict" in r.getMessage() and "refused" in r.getMessage() for r in caplog.records)
+    # negative control: a ready model with no verdict (shadow mode) is today's behaviour, without the warning
+    caplog.clear()
+    turns, frames = _run(monkeypatch, window="followup", speaker=None, extra={"speaker_model_state": {"model": RESNET, "state": "ready"}})
+    assert len(turns) == 1 and not _skipped(frames)
+    assert not any("NO speaker verdict" in r.getMessage() for r in caplog.records)
 
 
 def test_a_window_utterance_that_names_zoe_is_answered_as_a_guest_never_the_member(monkeypatch):
@@ -306,3 +328,47 @@ def test_negative_control_without_the_blocking_check_the_low_clip_runs_the_brain
     monkeypatch.setattr(shape, "window_speaker_frame", lambda *_a, **_k: None)
     turns, body = _run_turn(monkeypatch, window="followup", speaker=_block(0.30))
     assert len(turns) == 1 and "skipped" not in body, (turns, body)
+
+
+# -- a SPECULATIVE window turn (daemon ZOE_SPECULATIVE_TURN=windows, 2026-11-06) ----------------------------------
+# The pre-brain gates never ran on a speculative turn. A follow-up turn may now be speculative, so the window speaker gate
+# is ASKED (no side effects) and a would-be drop cancels the speculation: the daemon then runs the full recording as the
+# normal window turn, which meets the gate with its side effects (one crowd note, not two).
+
+def _cancel_reason(frames):
+    import json as _json
+
+    done = [_json.loads(f) for f in frames if b'"done"' in f]
+    return done[-1].get("reason") if done and done[-1].get("cancelled") else None
+
+
+def test_speculative_window_turn_the_gate_would_drop_is_cancelled_without_side_effects(monkeypatch):
+    import day_review_raise
+
+    monkeypatch.setenv("ZOE_SPECULATIVE_TURN", "1")
+    notes = []
+    monkeypatch.setattr(day_review_raise, "note_voice_turn", lambda *a, **k: notes.append((a, k)))
+    turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.30),
+                         extra={"speculative": True, "turn_id": "specwin-drop"})
+    assert turns == [], "the brain ran for a speculative window utterance that did not match the member"
+    assert _cancel_reason(frames) == "window_gate", frames
+    assert notes == [], "the speculative ask must not write the crowd note (the normal re-run does)"
+
+
+def test_speculative_window_turn_with_a_matching_voice_is_not_cancelled_by_the_gate(monkeypatch):
+    monkeypatch.setenv("ZOE_SPECULATIVE_TURN", "1")
+    # Nobody sends a verdict here, so the turn waits (Phase 2 holds it) and the hold valve ends it: reaching
+    # ``hold_timeout`` proves the window gate let it through to the ordinary speculative path.
+    monkeypatch.setenv("ZOE_SPECULATIVE_MAX_HOLD_MS", "100")
+    _turns, frames = _run(monkeypatch, window="followup", speaker=_block(0.55),
+                          extra={"speculative": True, "turn_id": "specwin-ok"})
+    assert _cancel_reason(frames) == "hold_timeout", frames
+
+
+def test_negative_control_a_speculative_wake_turn_never_meets_the_window_gate(monkeypatch):
+    """The same low score that cancels a speculative WINDOW turn leaves a speculative wake turn alone."""
+    monkeypatch.setenv("ZOE_SPECULATIVE_TURN", "1")
+    monkeypatch.setenv("ZOE_SPECULATIVE_MAX_HOLD_MS", "100")
+    _turns, frames = _run(monkeypatch, window="", speaker=_block(0.30),
+                          extra={"speculative": True, "turn_id": "specwake"})
+    assert _cancel_reason(frames) == "hold_timeout", frames

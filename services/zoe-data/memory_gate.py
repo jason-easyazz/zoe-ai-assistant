@@ -36,27 +36,31 @@ MEMORY_TRIGGER_WORDS = frozenset({
 # one ("I've been so stressed", "feeling overwhelmed") — both are cues to pull
 # past emotional continuity. Both valences on purpose (the 4B brain under-captures
 # joy, so we must not also under-recall it).
-EMOTIONAL_TRIGGER_WORDS = frozenset({
-    # "how have I been" style state-of-being recall. NOTE: bare "feeling" and bare
-    # "how am i" are deliberately NOT here — they over-fire ("feeling like pizza",
-    # "how am I supposed to configure this"); anchor to the emotional phrasings.
-    "how i feel", "how i'm feeling", "how i've been feeling", "how i've been",
-    "how have i been", "how i been", "been feeling", "how are you feeling",
-    "feeling down", "feeling low", "feeling anxious", "feeling overwhelmed",
-    "feeling stressed", "feeling sad", "feeling lonely", "feeling numb",
-    "how am i doing", "how am i feeling", "how am i holding up",
-    "how are things", "how's things",
-    "stressed", "stressing", "stress about", "anxious", "anxiety",
-    "worried", "worrying", "overwhelmed", "depressed", "burnt out", "burned out",
-    "lonely", "grieving", "grief", "heartbroken", "upset", "struggling",
-    "coping", "mental health", "my mood", "been down",
-    # "going through" anchored so it doesn't fire on "going through my email".
-    "going through a lot", "going through a hard", "going through a rough",
-    "going through a tough",
-    # positive-valence emotional recall (symmetry with joy capture)
-    "excited about", "so happy", "happy about", "made me happy", "makes me happy",
-    "made me smile", "proud of", "thrilled", "over the moon",
-})
+def _emotional_cues() -> dict:
+    """``lexicons_data/emotional_cues.json`` (en): the ONE list of emotional-weight words, read here AND by the Flue brain
+    sidecar (labs/flue-zoe-brain-2x/src/tools/tool-groups.ts), so the turns Zoe treats as emotional are the turns the brain
+    is handed remember_emotional_moment on. A missing / broken file leaves both sets empty (logged): nothing crashes."""
+    import json
+    from pathlib import Path
+
+    try:
+        raw = json.loads((Path(__file__).resolve().parent / "lexicons_data" / "emotional_cues.json").read_text("utf-8"))
+        return raw.get("en") or {}
+    except Exception as exc:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).warning("memory_gate: emotional_cues.json unreadable (%s)", type(exc).__name__)
+        return {}
+
+
+_CUES = _emotional_cues()
+# "how have I been" style state-of-being recall plus a shared feeling ("I've been so stressed"), both valences. Bare
+# "feeling" / "how am i" are deliberately NOT cues ("feeling like pizza", "how am I supposed to configure this");
+# "going through" is anchored ("going through a lot", never "going through my email").
+EMOTIONAL_TRIGGER_WORDS = frozenset(str(w).lower() for w in _CUES.get("recall_cues") or ())
+# Everyday feeling and hard-event phrasing ("had a fall", "the embarrassment", "I feel guilty"; QA round 3b): what makes a
+# turn EMOTIONAL for the write-claim guard and the brain's tool disclosure, beyond the recall cues.
+EMOTIONAL_WEIGHT_WORDS = frozenset(str(w).lower() for w in _CUES.get("weight_cues") or ())
 
 
 # A possessive self-reference ("my dad", "our house") — a strong recall signal.
@@ -655,20 +659,38 @@ def message_needs_emotional_recall(message: str) -> bool:
 # First-person only: "my sister is anxious" is not the user's feeling. Each
 # label maps the surface forms that express it; the label is what is rendered
 # ("felt anxious").
+#
+# Three idioms are NOT a feeling and were measured as false positives by the minor-affect cell
+# (scripts/perf/minor_affect_fp.py, fixture tests/fixtures/minor_affect_utterances.json, 2026-11-05):
+#   * "I'm afraid <clause>" - polite regret about something settled ("I'm afraid we're out of milk", "I'm afraid I
+#     forgot"); a present-tense clause about the speaker or their family ("I'm afraid I'm being followed", "I'm afraid
+#     my dad is angry with me") is a feeling and stays one; a clause about what MAY happen ("I'm afraid I'll fail", "afraid my dad will die") and "afraid of / to /
+#     that / ." stay a feeling;
+#   * "I'm happy to <do something>" - willingness ("happy to drive"); "happy to be / see / hear ..." stays a feeling;
+#   * "down" as a place ("I was down the shops", "I got down from the tree"); "down the last / past / whole week"
+#     stays a feeling.
+_AFFECT_AFRAID = (r"afraid(?!\s+(?:so|not)\b)"
+                  r"(?!\s+(?:(?:we|you|it|he|she|the|they|there|this|these|those)\b"
+                  r"|i\s+(?:forgot|didn['’]?t|don['’]?t|can['’]?t|cannot|couldn['’]?t|haven['’]?t|have\s+to|must|think|missed|broke|lost"
+                  r"|made|did|won['’]?t)\b)"
+                  r"(?![^.!?,;]*(?:\b(?:will|might|may|could|would|going\s+to|gonna|won['’]?t)\b|['’]ll\b)))")
+_AFFECT_HAPPY = r"happy(?!\s+to\s+(?!(?:be|see|hear|have|know|get|finally|meet|say)\b))"
+_AFFECT_DOWN = (r"down(?!\s+(?:for|to|with|here|there|at|in|on|by|from|into|onto|off|under|below|stairs|"
+                r"the\s+(?!(?:last|past|whole|entire)\b))\b)")
 _AFFECT_LABELS: tuple[tuple[str, str], ...] = (
     ("anxious", r"anxious|anxiety|nervous|on\s+edge|uneasy"),
     ("worried", r"worried|worrying|dreading"),
     ("stressed", r"stressed(?:\s+out)?|stressing|under\s+(?:a\s+lot\s+of\s+)?pressure"),
-    ("scared", r"scared|afraid|terrified|frightened"),
+    ("scared", r"scared|" + _AFFECT_AFRAID + r"|terrified|frightened"),
     ("overwhelmed", r"overwhelmed|swamped"),
-    ("sad", r"sad|down(?!\s+(?:for|to|with|here|there|at|in|on|by)\b)|low(?!\s+on\b)|"
+    ("sad", r"sad|" + _AFFECT_DOWN + r"|low(?!\s+on\b)|"
             r"miserable|heartbroken|gutted"),
     ("upset", r"upset"),
     ("lonely", r"lonely"),
     ("frustrated", r"frustrated|annoyed|fed\s+up"),
     ("exhausted", r"exhausted|drained|burnt\s+out|burned\s+out|worn\s+out"),
     ("excited", r"excited|thrilled|pumped"),
-    ("happy", r"happy|delighted|over\s+the\s+moon"),
+    ("happy", _AFFECT_HAPPY + r"|delighted|over\s+the\s+moon"),
     ("proud", r"proud"),
     ("relieved", r"relieved"),
 )
@@ -736,3 +758,14 @@ def extract_affect(message: str) -> tuple[str, str]:
         if best is not None:
             return best[1], sentence.strip()
     return "", ""
+
+
+def is_emotional_turn(message: str) -> bool:
+    """Does the user's turn carry feeling - a first-person feeling (``extract_affect``) or any cue of
+    ``lexicons_data/emotional_cues.json`` (the same data the brain sidecar discloses remember_emotional_moment on)? Pure."""
+    if not (message or "").strip():
+        return False
+    if extract_affect(message)[0]:
+        return True
+    low = (message or "").replace("’", "'").replace("‘", "'").lower()
+    return any(cue in low for cue in EMOTIONAL_TRIGGER_WORDS) or any(cue in low for cue in EMOTIONAL_WEIGHT_WORDS)

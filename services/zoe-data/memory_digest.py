@@ -1597,6 +1597,10 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
     """
     from memory_service import MemoryServiceError  # type: ignore[import]
 
+    own = without_rejected_speakers(chat_text)
+    if own is not chat_text and not str(own).strip():
+        return 0                      # every turn was a voice the speaker gate rejected: nothing of the member's to read
+    chat_text = own
     if not digest_pack.enabled():
         cov = _pass_cov("emotional", chat_text, chunked=False)
         if cov is not None:
@@ -1672,12 +1676,31 @@ class Transcript(str):
     #: ``times[i]`` = when ``turns[i]`` was said (the stored ISO timestamp as text; ``()`` when the loader has none): the night mind's
     #: "since when / last mentioned"
     times: tuple = ()
+    #: message ids of the kept turns the voice speaker gate REJECTED (``chat_messages.metadata.speaker_verified is false``: someone
+    #: at a panel bound to this member who is not them - a guest, a sibling). The emotional pass leaves them out
+    #: (``without_rejected_speakers``): a stranger's feeling is never filed as the member's own.
+    unverified: frozenset = frozenset()
 
-    def __new__(cls, text: str = "", turns=(), times=()):
+    def __new__(cls, text: str = "", turns=(), times=(), unverified=()):
         obj = super().__new__(cls, text)
         obj.turns = tuple(turns)
         obj.times = tuple(times)
+        obj.unverified = frozenset(unverified)
         return obj
+
+
+def without_rejected_speakers(chat_text: str) -> str:
+    """``chat_text`` without the turns the speaker gate rejected (``Transcript.unverified``). A plain ``str`` (no per-turn
+    ids) is returned unchanged. The minor-affect safety cell (b): a feeling voiced at a child's panel by someone the gate did
+    not confirm is never retained as the child's emotional moment (docs/governance/emotional-safety-note.md section 4)."""
+    unverified = getattr(chat_text, "unverified", frozenset())
+    turns = getattr(chat_text, "turns", ())
+    if not unverified or not turns:
+        return chat_text
+    kept = [(mid, line) for mid, line in turns if mid not in unverified]
+    times = getattr(chat_text, "times", ())
+    kept_times = [t for (mid, _l), t in zip(turns, times) if mid not in unverified] if len(times) == len(turns) else ()
+    return Transcript("\n".join(line for _m, line in kept), kept, kept_times)
 
 
 class TranscriptLoadError(RuntimeError):
@@ -1710,7 +1733,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
     await _redact_forgotten_transcript(user_id, db)
     owner_expr = _message_owner_expr()
     sql = """
-            SELECT cm.content, cm.id, cm.created_at
+            SELECT cm.content, cm.id, cm.created_at, cm.metadata
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
@@ -1752,9 +1775,13 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
 async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
     """``(content, id, created_at)`` chat rows -> the day's ``Transcript`` of the OWNER's own words: pasted / third-person text is cut away (``own_words``),
     turns naming a forgotten entity are skipped, each kept turn keeps its message id and time."""
+    from exact_words import speaker_rejected
+
     pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""),
               (str(row[2]) if len(row) > 2 and row[2] is not None else ""))
              for row in rows if row[0] and not distress_handoff.guarded_text(str(row[0]))]
+    rejected = {str(row[1]) for row in rows
+                if len(row) > 3 and row[1] is not None and speaker_rejected(row[3])}
     # pasted / third-person text is not the owner's (ZMB I1/I2): each turn is cut to the owner's own words
     # (or dropped) BEFORE the forgotten-turn skip, keeping the message id beside what is left of it
     owned = []
@@ -1773,7 +1800,7 @@ async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
             turns.append((pairs[i][1], line))
             times.append(pairs[i][2])
             i += 1
-    return Transcript("\n".join(lines), turns, times)
+    return Transcript("\n".join(lines), turns, times, unverified=rejected & {mid for mid, _l in turns if mid})
 
 
 def _as_instant(value):
@@ -1792,7 +1819,7 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
     nightly loader (``_message_owner_expr`` ownership, own words, forgotten turns skipped); the turn cap is the night mind's. ``""`` = no turns; a failed READ raises ``TranscriptLoadError``."""
     owner_expr = _message_owner_expr()
     sql = """
-            SELECT cm.content, cm.id, cm.created_at
+            SELECT cm.content, cm.id, cm.created_at, cm.metadata
             FROM chat_messages cm
             JOIN chat_sessions cs ON cm.session_id = cs.id
             WHERE """ + owner_expr + """ = ?
@@ -3281,6 +3308,17 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
     except Exception as exc:
         logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, exc)
 
+    # Phase 1.65: anticipation offers from the member's calendar (ZOE_ANTICIPATION, default
+    # off — a no-op without I/O when off). Code only: no model call, no network.
+    try:
+        from anticipation import generate_for_user
+
+        anticipated = await generate_for_user(user_id)
+        if anticipated is not None:
+            result["anticipation"] = anticipated
+    except Exception as exc:
+        logger.warning("dreaming: anticipation failed user=%s: %s", user_id, exc)
+
     # Phase 1.7: implicit-conflict pass (ZOE_MEMORY_IMPLICIT_SUPERSEDE, default OFF — a
     # no-op without I/O when off). Before the Sunday portrait and the
     # card rebuild, so both see its result.
@@ -3325,6 +3363,17 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         from user_model_card import rebuild_user_model_card  # type: ignore[import]
 
         result["user_model_card"] = await rebuild_user_model_card(user_id, db=db)
+
+    # Nightly: the now card (now_card.py; deterministic, no LLM; a no-op while ZOE_MEMORY_NOW_CARD is off). The night-mind CLI rebuilds it
+    # again after tonight's pass, so tonight's threads reach tomorrow's card; this one covers a night the window does not run.
+    try:
+        import now_card
+
+        built = await now_card.rebuild(user_id)
+        if built.get("status") != "off":
+            result["now_card"] = built
+    except Exception as exc:
+        logger.warning("dreaming: now card failed user=%s: %s", user_id, type(exc).__name__)
 
     # Opt-in, report-only Lint pass (default OFF via ZOE_MEMORY_LINT_IN_DREAMING).
     # Lint never mutates stored memory; it only emits a structured report of

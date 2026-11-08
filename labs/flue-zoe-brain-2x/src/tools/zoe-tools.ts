@@ -387,6 +387,7 @@ const recallMemory = defineTool({
     try {
       const url = new URL('/api/memories/for-prompt', zoeDataUrl());
       url.searchParams.set('user_id', userId);
+      url.searchParams.set('tool_call', '1'); // the query is the model's, not the user's turn: no offer-cooldown tick
       const query = String(data?.query ?? '').trim();
       // The packet size and query ceiling are the harness overlay's recall shape (src/harness.ts
       // recall-shape.json; compiled-in 24 / 500, byte-identical with ZOE_BRAIN_HARNESS_DIR unset),
@@ -454,13 +455,24 @@ const shoppingListAdd = defineTool({
 // Canonical lists the prod abilities accept (services/zoe-core/abilities/lists.ts).
 const LIST_ALIASES: Record<string, string> = {
   grocery: 'shopping', groceries: 'shopping',
-  'to do': 'tasks', 'to-do': 'tasks', todo: 'tasks', todos: 'tasks', task: 'tasks',
+  // "to-do" is the member's PERSONAL list, as zoe-data's fast path reads it (intent_router _LIST_TYPE_WORDS): an add through
+  // the brain and a read through the fast path must land on the same list.
+  'to do': 'personal', 'to-do': 'personal', todo: 'personal', todos: 'personal', 'to-dos': 'personal', task: 'tasks',
 };
 const CANONICAL_LISTS = new Set(['shopping', 'personal', 'work', 'bucket', 'tasks']);
-function normalizeListType(raw: unknown): string {
+/**
+ * The list the model named: a canonical type, 'shopping' when it named none (the household list - the fridge rule), or else the
+ * NAME it sent, unchanged, for zoe-data to resolve exactly as it resolves a spoken name (intent_router `_list_target`: a to-do
+ * name -> the member's own list, an unknown name -> "which list?", nothing written). Never a silent 'shopping' for a name it
+ * did not recognise: QA round 3b (2026-11-07) saw the model send `list_type="tasks/to-do"` and "pharmacy study list", and the old
+ * fallback would have put both on the HOUSEHOLD shopping list.
+ */
+export function normalizeListType(raw: unknown): string {
   const s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return 'shopping';
   if (LIST_ALIASES[s]) return LIST_ALIASES[s];
-  return CANONICAL_LISTS.has(s) ? s : 'shopping';
+  if (CANONICAL_LISTS.has(s)) return s;
+  return s.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 60).trim();
 }
 
 /**
@@ -528,8 +540,8 @@ const showCalendar = defineTool({
 const showList = defineTool({
   name: 'show_list',
   description:
-    "Show what's on one of the user's lists (shopping, tasks/to-do, personal, work, " +
-    'bucket). Use when they ask what is on a list.',
+    "Show what's on one of the user's lists. list_type: shopping, personal (their own to-do list), tasks, work, " +
+    'bucket, or the name of another list exactly as they said it. Use when they ask what is on a list.',
   input: v.object({
     list_type: v.optional(v.string()),
   }),
@@ -727,8 +739,8 @@ const createNote = defineTool({
 const addToList = defineTool({
   name: 'add_to_list',
   description:
-    "Add an item to one of the user's lists: shopping, tasks/to-do, personal, work, " +
-    'or bucket. Use when they ask to add or put something on a specific list ' +
+    "Add an item to one of the user's lists. list_type: shopping, personal (their own to-do list), tasks, work, " +
+    'bucket, or the name of another list exactly as they said it. Use when they ask to add or put something on a specific list ' +
     '("add gym to my tasks list", "put Japan on my bucket list").',
   input: v.object({
     item: v.pipe(v.string(), v.trim(), v.minLength(1)),
@@ -756,8 +768,9 @@ const addToList = defineTool({
 const listRemove = defineTool({
   name: 'list_remove',
   description:
-    "Remove an item from one of the user's lists (shopping, tasks/to-do, personal, " +
-    'work, bucket). Use when they ask to remove, delete, or cross something off a list.',
+    "Remove an item from one of the user's lists. list_type: shopping, personal (their own to-do list), tasks, " +
+    'work, bucket, or the name of another list exactly as they said it. Use when they ask to remove, delete, or cross ' +
+    'something off a list.',
   input: v.object({
     item: v.pipe(v.string(), v.trim(), v.minLength(1)),
     list_type: v.optional(v.string()),

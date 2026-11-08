@@ -1166,9 +1166,15 @@ _USER_FACTS_CACHE: dict[tuple[str, int], tuple[float, str]] = {}
 _USER_FACTS_TTL_S: float = float(os.environ.get("PI_USER_FACTS_CACHE_TTL_S", "120.0"))
 
 
+# The same read's ROWS (for a caller that must judge each row before formatting: the voice recall packet's privacy wall,
+# ``routers/voice_tts._voice_recall_fallback``). Same TTL, same invalidation.
+_USER_FACT_REFS_CACHE: dict[tuple[str, int], tuple[float, list]] = {}
+
+
 def _invalidate_user_facts_cache(user_id: str) -> None:
-    for key in [key for key in _USER_FACTS_CACHE if key[0] == user_id]:
-        _USER_FACTS_CACHE.pop(key, None)
+    for cache in (_USER_FACTS_CACHE, _USER_FACT_REFS_CACHE):
+        for key in [key for key in cache if key[0] == user_id]:
+            cache.pop(key, None)
 
 
 async def _mempalace_search(
@@ -1232,8 +1238,10 @@ async def _mempalace_add(
         from memory_quality import is_storable_fact
         storable, reason = is_storable_fact(summary)
         if not storable:
-            logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
-                        added_by or "zoe_agent", reason, summary[:120])
+            from log_redaction import utterance_tag   # the log is outside the forget cascade: tag, never the words
+
+            logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s %s",
+                        added_by or "zoe_agent", reason, utterance_tag(summary))
             try:
                 from memory_reject_ledger import record_reject
                 record_reject(added_by or "zoe_agent", reason)
@@ -1293,72 +1301,8 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
         from memory_service import get_memory_service
         svc = get_memory_service()
         refs = await svc.load_for_prompt(user_id, limit=limit + 10)
-        if not refs:
-            formatted = ""
-        else:
-            # Separate emotional moments from regular facts
-            fact_refs = []
-            emotional_refs = []
-            for ref in refs:
-                mt = (ref.metadata or {}).get("memory_type", "") or "" if hasattr(ref, "metadata") else getattr(ref, "memory_type", "") or ""
-                tags_raw = (ref.metadata or {}).get("tags", "") or "" if hasattr(ref, "metadata") else getattr(ref, "tags", "") or ""
-                tags = tags_raw if isinstance(tags_raw, list) else tags_raw.split(",")
-                if mt == "emotional_moment" or "emotional" in tags:
-                    emotional_refs.append(ref)
-                else:
-                    fact_refs.append(ref)
-
-            sections = []
-
-            # Facts block
-            fact_lines = ["## What I know about you:"]
-            from own_words import prompt_text as _prompt_text   # pasted / instruction-shaped rows: quoted, not obeyed
-            for ref in fact_refs[:limit]:
-                text = _prompt_text(ref.text or "", getattr(ref, "metadata", None), 200) if (ref.text or "") else ""
-                if text:
-                    fact_lines.append(f"- {text}")
-            if len(fact_lines) > 1:
-                sections.append("\n".join(fact_lines))
-
-            # Emotional moments block — most recent 5, helps Zoe follow up naturally
-            if emotional_refs:
-                import datetime as _dt
-                now_dt = _dt.datetime.now(_dt.timezone.utc)
-                emo_lines = ["## Recent emotional moments:"]
-                for ref in emotional_refs[:5]:
-                    text = (ref.text or "")[:180]
-                    if not text:
-                        continue
-                    # Approximate age from added_at metadata if available
-                    added_at = ((ref.metadata or {}).get("added_at", "") or "") if hasattr(ref, "metadata") else (getattr(ref, "added_at", "") or "")
-                    age_str = ""
-                    if added_at:
-                        try:
-                            added_dt = _dt.datetime.fromisoformat(added_at.replace("Z", "+00:00"))
-                            if added_dt.tzinfo is None:
-                                added_dt = added_dt.replace(tzinfo=_dt.timezone.utc)
-                            else:
-                                added_dt = added_dt.astimezone(_dt.timezone.utc)
-                            delta = now_dt - added_dt
-                            if delta.days == 0:
-                                age_str = "today"
-                            elif delta.days == 1:
-                                age_str = "yesterday"
-                            elif delta.days < 7:
-                                age_str = f"{delta.days} days ago"
-                            elif delta.days < 30:
-                                age_str = f"{delta.days // 7} week{'s' if delta.days >= 14 else ''} ago"
-                            else:
-                                age_str = f"{delta.days // 30} month{'s' if delta.days >= 60 else ''} ago"
-                        except Exception:
-                            pass
-                    prefix = f"[{age_str}] " if age_str else ""
-                    emo_lines.append(f"- {prefix}{text}")
-                if len(emo_lines) > 1:
-                    sections.append("\n".join(emo_lines))
-
-            formatted = "\n\n".join(sections)
-
+        _USER_FACT_REFS_CACHE[cache_key] = (now + _USER_FACTS_TTL_S, list(refs or []))
+        formatted = _format_user_facts(refs, limit) if refs else ""
         _USER_FACTS_CACHE[cache_key] = (now + _USER_FACTS_TTL_S, formatted)
         return formatted
     except ImportError:
@@ -1367,6 +1311,93 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
     except Exception as exc:
         logger.debug("_mempalace_load_user_facts failed (non-fatal): %s", exc)
         return ""
+
+
+async def _mempalace_user_fact_refs(user_id: str, limit: int = 20) -> list:
+    """The ROWS behind `_mempalace_load_user_facts` (same read, same cache TTL, same invalidation), for a caller that judges
+    each row before it is formatted (`_format_user_facts`). [] for a guest or a failed read (never cached). Never raises."""
+    now = time.monotonic()
+    try:
+        from memory_service import get_memory_service, is_guest_memory_user
+        if is_guest_memory_user(user_id):
+            return []
+        cache_key = (user_id, limit)
+        cached = _USER_FACT_REFS_CACHE.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return list(cached[1])
+        refs = list(await get_memory_service().load_for_prompt(user_id, limit=limit + 10) or [])
+        _USER_FACT_REFS_CACHE[cache_key] = (now + _USER_FACTS_TTL_S, refs)
+        return list(refs)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_mempalace_user_fact_refs failed (non-fatal): %s", exc)
+        return []
+
+
+def _format_user_facts(refs: list, limit: int = 20) -> str:
+    """The for-prompt facts dump of `refs`: "## What I know about you:" (up to `limit` facts) and
+    "## Recent emotional moments:" (the newest 5). "" when nothing is left to say."""
+    # Separate emotional moments from regular facts
+    fact_refs = []
+    emotional_refs = []
+    for ref in refs:
+        mt = (ref.metadata or {}).get("memory_type", "") or "" if hasattr(ref, "metadata") else getattr(ref, "memory_type", "") or ""
+        tags_raw = (ref.metadata or {}).get("tags", "") or "" if hasattr(ref, "metadata") else getattr(ref, "tags", "") or ""
+        tags = tags_raw if isinstance(tags_raw, list) else tags_raw.split(",")
+        if mt == "emotional_moment" or "emotional" in tags:
+            emotional_refs.append(ref)
+        else:
+            fact_refs.append(ref)
+
+    sections = []
+
+    # Facts block
+    fact_lines = ["## What I know about you:"]
+    from own_words import prompt_text as _prompt_text   # pasted / instruction-shaped rows: quoted, not obeyed
+    for ref in fact_refs[:limit]:
+        text = _prompt_text(ref.text or "", getattr(ref, "metadata", None), 200) if (ref.text or "") else ""
+        if text:
+            fact_lines.append(f"- {text}")
+    if len(fact_lines) > 1:
+        sections.append("\n".join(fact_lines))
+
+    # Emotional moments block — most recent 5, helps Zoe follow up naturally
+    if emotional_refs:
+        import datetime as _dt
+        now_dt = _dt.datetime.now(_dt.timezone.utc)
+        emo_lines = ["## Recent emotional moments:"]
+        for ref in emotional_refs[:5]:
+            text = (ref.text or "")[:180]
+            if not text:
+                continue
+            # Approximate age from added_at metadata if available
+            added_at = ((ref.metadata or {}).get("added_at", "") or "") if hasattr(ref, "metadata") else (getattr(ref, "added_at", "") or "")
+            age_str = ""
+            if added_at:
+                try:
+                    added_dt = _dt.datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+                    if added_dt.tzinfo is None:
+                        added_dt = added_dt.replace(tzinfo=_dt.timezone.utc)
+                    else:
+                        added_dt = added_dt.astimezone(_dt.timezone.utc)
+                    delta = now_dt - added_dt
+                    if delta.days == 0:
+                        age_str = "today"
+                    elif delta.days == 1:
+                        age_str = "yesterday"
+                    elif delta.days < 7:
+                        age_str = f"{delta.days} days ago"
+                    elif delta.days < 30:
+                        age_str = f"{delta.days // 7} week{'s' if delta.days >= 14 else ''} ago"
+                    else:
+                        age_str = f"{delta.days // 30} month{'s' if delta.days >= 60 else ''} ago"
+                except Exception:
+                    pass
+            prefix = f"[{age_str}] " if age_str else ""
+            emo_lines.append(f"- {prefix}{text}")
+        if len(emo_lines) > 1:
+            sections.append("\n".join(emo_lines))
+
+    return "\n\n".join(sections)
 
 
 # Keywords that suggest the message benefits from memory context retrieval.

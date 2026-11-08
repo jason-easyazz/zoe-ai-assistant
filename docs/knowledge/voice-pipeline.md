@@ -1563,8 +1563,9 @@ Clean-tail cut risk was checked the same way on the newest 400 corpus clips, 246
 had speech after the wake pre-roll. The probabilities came from the v6.0 ONNX Silero on the
 Jetson, not the Pi's torch-hub copy, so read chunk counts as ±1.
 
-- **The endpoint is already ~0.7–0.9 s, not 1.5 s.** `silence_timeout=1.50s` in the
-  `Recorded …` line is the amplitude timeout used before any speech. After speech, the live
+- **The endpoint is already ~0.7–0.9 s, not 1.5 s.** The old `silence_timeout=1.50s` field of the
+  `Recorded …` line was the amplitude timeout used before any speech (since 2026-11-06 the line logs
+  `close=<rule>=<ms>`, the rule that really closed it). After speech, the live
   close is 640 ms of deep quiet (or 800 ms of any quiet). Silero decays through the ambiguous
   band for 1–2 chunks before the deep count starts, so the measured gap from speech end to
   close is **720–880 ms**.
@@ -1743,6 +1744,49 @@ new fields, and an old server ignores them, so the order is only a convenience.
   `cp -p /home/pi/.zoe-voice/zoe_voice_daemon.py.bak-<ts> /home/pi/.zoe-voice/zoe_voice_daemon.py`
   (same for `zoe_voice_announce.py`) and `systemctl --user restart zoe-voice`. A server rollback needs
   nothing on the Pi: an old server ignores the new fields.
+
+## Panel cut-offs — the pause after the chime, and the continuation (2026-11-06)
+
+Two cut-offs from the owner's first evening session (2026-11-05; evidence is private, not in the repo).
+
+**1. A pause after "Hey Zoe" closed the recording on the wake word (fixed, ON by default).** The wake
+recording's no-speech limit was `SILENCE_TIMEOUT_S` (1.5 s, 18 chunks) counted from recording START. That span
+holds the chime (~0.27 s) and the speakerphone's echo suppression after it (~0.9 s of near-zero samples), so a
+~1.5 s pause left almost no time; the transcript was only the wake word and the server's greeting ("Good evening.
+What can I do for you?") then played over the command.
+- `POST_WAKE_NO_SPEECH_S` (default **3.0**; 0 = the old rule AND the wake-only greeting back - the rollback of both halves;
+  unprefixed like its neighbour `SILENCE_TIMEOUT_S`): the wake recording's own no-speech window,
+  counted from listen start — the chime thread has finished (`_wake_chime_done`, waited on at most 1.5 s) AND the
+  muted run after it is over (chunks with mean |amplitude| < 6, a fixed constant; room noise is
+  ~8-18, echo suppression 0-5; skipped for at most 1200 ms). Follow-up windows and
+  the barge seed are unchanged (they start on detected speech). Worst case a wake with no command now records
+  ~0.3 + 1.2 + 3.0 s instead of 1.44 s.
+- **Wake-only listen** (on whenever the window above is): a WAKE turn whose transcript is only the wake word is dropped
+  before any audio plays (the transcript frame leads the stream; closing it cancels the server's work, as for
+  junk); the daemon plays the short follow-up cue and listens once (≥ 3 s, no wake word), running what it hears as
+  a wake turn. Daemon-only: the server is unchanged. Not applied on a speculative stream.
+- The `Recorded command|follow-up` line now logs `close=<rule>=<ms>` (e.g. `close=deep=640ms`,
+  `close=no_speech=3040ms+listen@1120ms`) instead of the misleading `silence_timeout=1.50s`.
+
+**2. A continuation after a complete sentence was never heard (flag-dark).** A follow-up turn paused 1.19 s between
+two sentences; the recorder closed at 0.8 s any-quiet and the mic stayed closed until Zoe spoke. A plain longer
+tail costs ~0.6 s on every turn, and listening between the close and Zoe's reply cannot safely merge a turn whose
+writes may already have run. So B1.1 speculation now covers follow-up and conversation windows
+(`ZOE_SPECULATIVE_TURN=windows` on the Pi, default off) — see
+[b1-speculative-turn-start.md](../architecture/b1-speculative-turn-start.md) → *Follow-up and conversation windows*
+for the protocol and the recommended values (speculate at 640 ms, close at ~1.4 s, re-answer a continuation).
+
+**Small fixes in the same change.** zoe-data's `voice claim rejected` line logs the threshold to 3 decimals (a
+0.3506 vs 0.351 rejection printed as `< 0.35`). Corpus captures are named `YYYYmmdd-HHMMSS_mmm.wav`;
+`scripts/lib/panel_voice_log.clip_time` reads the date from the name, and `replay_samples.py --since` compares a
+dated name on its time-of-day part as before. Old `HHMMSS_mmm.wav` names are still read.
+
+**Operator deploy.** Server first (blessed voice-path deploy, poll `/health`), then the Pi daemon from a clean
+worktree at the merged commit with `scripts/setup/deploy-pi-voice.sh` (`DRY_RUN=1` first) — the recipe under
+*Long speech is one turn → Operator deploy* above. No `.env.voice` change is needed for fix 1. Fix 2 is the owner's
+step after the replay gate + a lab check. Rollback for fix 1: `POST_WAKE_NO_SPEECH_S=0` in `/home/pi/.zoe-voice/.env.voice`, then `systemctl --user restart zoe-voice`.
+Pinned by `tests/unit/test_voice_daemon_panel_cutoffs.py` (negative controls: the old window closes before the
+command; the live 640/800 values close before the continuation; a follow-up wake-word-only line still plays).
 
 ## STT accuracy score — a local, weakly-labelled word-error proxy + the keyterm A/B (2026-10-14)
 
@@ -1927,7 +1971,66 @@ the corpus gate with a planted-greedy negative control, the vocabulary drift pin
 **Replay gate.** In `shadow` (the default) the lane's behaviour is byte-identical — the step only logs. The replay harness mirrors
 `fast_tiers.resolve`, not `voice_command`, so it cannot see the snap either way; the lane-parity rig test is what covers it.
 
+### Two-word light mishear + lists-route device guard (`ZOE_DEVICE_MISHEAR_GUARD`, default off, 2026-11-06)
+
+The snap repairs ONE word. A short "turn on the light" was heard with BOTH command words gone: the verb and its particle fused
+into one word ("shown"/"shone" for "turn on") and the noun heard as "lot". Nothing claimed it, the router head said `lists`
+@ 0.98, the lane spoke the lists tool-ack and the brain answered a request nobody made. With the flag on
+(`skybridge_service`): "lot"/"lots" join the misheard light nouns of `_repair_light_mishear` in a switch frame; the WHOLE
+utterance `<fused on-verb> the <light noun>` (only polite filler around it) reads as "turn on the light"; and
+`skybridge_router_gate` allows a smart-home on/off parse through a `lists` verdict (`reason=device_command_not_list`) when the
+words hold no list noun, list verb or item word and open with a switch verb + on/off. Off is byte-identical. Pinned by
+`tests/test_device_mishear_guard.py`; neutral router rows in both `misses.jsonl` files (source `stt_mishear_2026-11-06`) teach
+the head the same class at its next retrain.
+
+## Device confirm guard — a garbled short light command gets ONE question (`ZOE_DEVICE_CONFIRM_GUARD`, default ON, 2026-11-07)
+
+**The failure (the owner's first turns, 2026-11-06/07).** Every panel sitting opened with the same quiet request — the bedroom
+light on or off — and every first attempt failed. Said softly, the words reached Zoe as sound-alikes with BOTH command words gone:
+the verb and its particle fused into one word, the noun heard as a "lot" / "lines" / "one" / "1". No matcher claimed them, the
+router guessed lists / memory / music / chat, a domain acknowledgement played ("Let me check your lists.", "On it."), and the brain
+answered "I'm Zoe.", read a feeling into the words, or promised to switch the light with no tool call. The louder retry worked each
+time. The STT snap cannot help: it repairs ONE word.
+
+**What it does** (`services/zoe-data/device_confirm.py`, called from `routers/voice_tts.voice_command` right after the STT snap,
+before the Skybridge cards). A transcript qualifies when, after wake / politeness words: it is 2-6 words and not a question; its
+LAST content word is a light-like noun after a determiner ("the lot", "a lot", "the one"); a command-like verb comes before it; and
+nothing follows it but an on/off particle — the words are lexicon DATA (`lexicons_data/en.json` "device_confirm"). Zoe asks ONE
+short question ("Light on?" / "Turn the light off?"; "of" reads as off, a fused on-verb or no particle as on). The ask is the STT
+snap's pending confirmation, so a plain "yes" turns that turn's words INTO "turn on the light" and every gate below — PIN, guest
+policy, home control, Skybridge's router veto — judges it like a spoken command; the resolver's receipt says it back ("Turned
+Bedroom Light on."). "No" cancels; anything else is a new request.
+
+**Never** (each a veto): a turn any matcher claims (Skybridge or `intent_router`: it just runs); a member's own session (desktop,
+phone — panel only, `at_the_panel`); a router verdict that confidently says smart_home (not gated, `head_conf >= 0.8`: the brain's
+home tool owns it); the middle of a conversation about something else (the panel's previous turn was under 90 s ago and not about a
+device); "you" / "me" / "this" in the words ("do you like this one"); a caller who may not drive the house
+(`panel_principal.home_control_refused` — logged `outcome=refused_home`, the turn goes on as today). Negative controls pinned:
+"I've had a lot on", "what's on the TV", "a lot of patience", "show me the one" never ask.
+
+**Metric line** `DEVICE_CONFIRM to=device_confirm/turn_on outcome=asked` (a member's line also carries the heard words, a guest's
+never). Kill switch: `ZOE_DEVICE_CONFIRM_GUARD=0`. Pinned by `tests/test_garbled_light_first_turn.py` (`ci_safe`) and
+`tests/test_device_confirm_voice_lane.py` (the real `voice_command` through the lane-parity rig: ask, yes switches, no does nothing).
+
+**What else changed with it (same incident).** (1) `voice_spacer` (`ZOE_SPACER_REQUIRE_CLAIM`, default on): a domain's own
+acknowledgement ("Let me check your lists.", "On it.") is spoken only when the WORDS name that domain (`command_shapes.named_domains`
+or the lexicon's `spacer.domain_words`); a router guess gets the neutral generic line. (2) The write-claim guard knows a DEVICE
+switch: "I'll turn the lights on for you" / "Turning it off now" need a `device` receipt, which the Skybridge resolver and the
+brain's home-tool path record only for a switch the hub confirmed (`smart_home_service.record_device_receipt`;
+[write-claim-guard.md](write-claim-guard.md)). (3) The brain's warmth doctrine opens with *unclear words*: speech-to-text mishears,
+so ask briefly and offer the likely reading, never read a feeling into an unclear or very short message, never answer with just a
+name; the identity doctrine lost its copyable "I'm Zoe." line. (4) Neutral paraphrases of the class joined the router miss sets
+(`labs/setfit-router/data/misses.jsonl`, `labs/functiongemma-finetune/data/train_misses.jsonl`, source `garbled_light_2026-11-07`).
+
+**Replay gate.** The replay harness mirrors `fast_tiers.resolve`, not `voice_command`, so it cannot see the guard; the lane-parity
+rig test covers it. The spacer, claim-guard and doctrine changes do reach replayed brain turns: the lander runs the voice
+regression probe before deploy.
+
 ## Smart Turn v3 end-of-turn scorer (LiveKit lane)
+
+**Not in the panel daemon (offline verdict 2026-11-04):** on 979 corpus turns every Smart Turn policy that cuts
+≥300 ms of lag cuts the speaker off 1.3-3x as often as the live 640deep/800 tail —
+[smart-turn-offline-eval-2026-11-04.md](smart-turn-offline-eval-2026-11-04.md) (`scripts/perf/smart_turn_offline_eval.py`).
 
 `services/zoe-data/voice_turn.py` wraps pipecat's `smart-turn-v3.2-cpu.onnx`
 (`/home/zoe/models/`, override `ZOE_SMART_TURN_MODEL`): input `input_features` float32

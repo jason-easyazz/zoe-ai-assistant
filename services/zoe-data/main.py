@@ -1120,6 +1120,15 @@ async def lifespan(app: FastAPI):
 
     configure_logging()
 
+    # Reasoning scheduler (ZOE_BRAIN_SCHEDULER, default log-only): one httpx choke point that counts/refuses a daytime 4B call
+    # made outside a person's turn. Installed first, right after logging, before any background loop can reach the brain.
+    try:
+        import brain_scheduler
+
+        brain_scheduler.install()
+    except Exception as _bs_exc:
+        logger.warning("Brain scheduler not installed (non-fatal): %s", _bs_exc)
+
     try:
         from runtime_env import bootstrap_runtime_env  # type: ignore[import]
 
@@ -2373,6 +2382,10 @@ _telegram_media.register(app)
 from routers import persona as _persona_router  # noqa: E402
 _persona_router.register(app)
 
+# Member register (flag-dark): GET/PUT/DELETE /api/member-register/... Mounted ONLY when ZOE_MEMBER_REGISTER is on.
+from routers import member_register as _member_register_router  # noqa: E402
+_member_register_router.register(app)
+
 # Omi pendant recordings (flag-dark): the Pi sync service's upload endpoint + the owner's list/get/patch/delete. Mounted ONLY
 # when ZOE_OMI_SYNC_ENABLED is on — flag off = 404. Calls the existing Moonshine helper; the voice path is untouched.
 from routers import omi_recordings as _omi_router  # noqa: E402
@@ -2387,6 +2400,10 @@ _panel_cards_router.register(app)
 # Where's this from). Mounted ONLY when ZOE_MEMORIES_VOICE is on - flag off = 404. The voice side is memories_voice.tier.
 from routers import memories_card as _memories_card_router  # noqa: E402
 _memories_card_router.register(app)
+# Caregiver curation (flag-dark, memories-space P7): an adult admin adds memories for a child (and for an adult who opted a category
+# in). Always mounted; every route answers 404 while ZOE_MEMORIES_CURATORS is off (read per request).
+from routers.memories_curation import router as _memories_curation_router  # noqa: E402
+app.include_router(_memories_curation_router)
 
 # Contact cards (flag-dark): the member's own multi-value contact fields with provenance, vCard export/import and the merge-review
 # queue (migration 0053, contacts_store.py). Mounted ONLY when ZOE_CONTACTS_API is on — flag off = 404. No sync engine.
@@ -2470,6 +2487,13 @@ async def root_health():
         body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
     except Exception:  # noqa: BLE001
         body["last_voice_turn_age_s"] = None
+    # Panel speaker model (panel_speaker_health): alarm = a panel has reported it cannot score voices for longer than
+    # ZOE_PANEL_SPEAKER_ALARM_MIN. States + minutes only. Never fails /health (and never turns it 503: the API itself is fine).
+    try:
+        import panel_speaker_health as _psh
+        body["panel_speaker"] = _psh.snapshot()
+    except Exception:  # noqa: BLE001
+        body["panel_speaker"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body

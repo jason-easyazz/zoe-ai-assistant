@@ -207,11 +207,37 @@ def merge(stored: Any, patch: Any) -> dict:
     return out
 
 
+def env_owner_default() -> dict:
+    """The operator's env default for owners with NO saved preferences: ``ZOE_CHANGE_NOTICES_OWNER_PRESET`` (one of the
+    named presets, not ``custom``) and ``ZOE_CHANGE_NOTICES_INSTANT_CAP`` (0..50). Unset or invalid = no override.
+    It is only ever a patch over the role default; the floors still run in ``normalise``."""
+    from typed_env import env_str
+
+    out: dict = {}
+    preset = env_str("ZOE_CHANGE_NOTICES_OWNER_PRESET", "").strip().lower()
+    if preset in PRESETS and preset != "custom":
+        out["preset"] = preset
+    cap = env_str("ZOE_CHANGE_NOTICES_INSTANT_CAP", "").strip()
+    if cap.isdigit() and 0 <= int(cap) <= 50:
+        out["daily_instant_cap"] = int(cap)
+    return out
+
+
+def with_env_default(raw: Any) -> tuple[Any, bool]:
+    """``(raw, False)`` when the member has saved preferences (they always win), else the env default and whether one
+    applied. A saved document is any stored dict, even an empty one."""
+    if isinstance(raw, dict):
+        return raw, False
+    env = env_owner_default()
+    return (env, True) if env else (raw, False)
+
+
 async def load(user_id: str, role: str, *, db=None) -> Optional[dict]:
     """The member's validated preferences (``None`` = receives nothing)."""
     from user_prefs import get_pref
 
-    return normalise(await get_pref(user_id, PREF_KEY, None, db=db), role)
+    raw, _ = with_env_default(await get_pref(user_id, PREF_KEY, None, db=db))
+    return normalise(raw, role)
 
 
 async def save(user_id: str, role: str, raw: Any, *, db=None) -> Optional[dict]:

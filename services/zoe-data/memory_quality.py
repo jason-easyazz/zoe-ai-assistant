@@ -153,10 +153,11 @@ _RECALL_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 # An imperative memory command ("remember that …", "note that …"). The
-# lookbehinds stop "you/ya/i remember…" (a recall) from reading as a command.
+# lookbehinds stop "you/ya/i remember…" (a recall) and "don't remember…" (the
+# opposite of a teach) from reading as a command.
 _MEMORY_COMMAND_RE = re.compile(
     r"\b(?:don'?t\s+forget|note\s+that|make\s+a\s+note|keep\s+in\s+mind)\b"
-    r"|(?<!you )(?<!ya )(?<!i )\bremember\b",
+    r"|(?<!you )(?<!ya )(?<!i )(?<!don't )(?<!dont )(?<!do not )(?<!never )\bremember\b",
     re.IGNORECASE,
 )
 # A wh-word / whether / if directly after "remember": "remember who my dentist is" is a
@@ -238,6 +239,156 @@ _EXTRACTED_PREFIX_RE = re.compile(
     r"important\s+note\b)",
     re.IGNORECASE,
 )
+
+
+# ── forget commands and conversation talk are never facts (QA 2026-11-05) ─────────────────────────────────────
+#
+# Live, a synthetic demo user said "no, don't remember that! forget that": the anchored forget intent missed the
+# leading "no,", the post-turn extractor read "remember" and stored "User asked me to remember: that! forget that",
+# and "please forget that I said ..." was echoed back as "Got it - I'll remember please forget that you said ...".
+# The forget never happened. "um I literally just asked what you know about me" (talk about the conversation) was
+# stored as a fact about the person. Forgotten means forever, and junk is never a fact.
+_FORGET_OPENER = (r"(?:(?:no+|nope|nah|oh+|please|actually|wait|um+|uh+|hmm+|sorry|hey|ok|okay|zoe|so|and|just)"
+                  r"\b[\s,.!?;:–—-]*)*")
+# The retraction acts: intent_router._FORGET_LAST_RE's set plus "do not / don't save|store that".
+# "forget it" / "forget this" stay OUT: "oh forget it" dismisses a question and must never erase a memory.
+_FORGET_ACT = (
+    r"(?:forget\s+(?:that(?:\s+memory|\s+one)?|what\s+i\s+(?:just\s+)?said|what\s+i\s+(?:just\s+)?told\s+you"
+    r"|the\s+last\s+thing(?:\s+i\s+(?:just\s+)?said)?)"
+    r"|(?:don'?t|do\s+not)\s+(?:remember|save|store)\s+that"
+    r"|scrap\s+(?:that|what\s+i\s+(?:just\s+)?said)"
+    r"|delete\s+that(?:\s+memory)?"
+    r"|never\s*mind\s+(?:what\s+i\s+(?:just\s+)?said|that))"
+)
+_FORGET_TAIL = r"(?:[\s,]+(?:please|zoe|thanks|thank\s+you))?[\s,.!?;:–—-]*"
+# shape A: the WHOLE utterance is one or more retraction acts, each behind optional openers ("no, don't remember that!
+# forget that"). Trailing content ("oh forget that, what's the weather") is not a retraction.
+# A short closing REASON that it should not be kept ("... forget that please. its not a real plan", QA round 3b) is still
+# the retraction: only "it's / that's ... not real / nothing / a joke / private" shapes, never a question or a new request.
+_FORGET_REASON = (
+    r"(?:(?:it'?s|its|it\s+is|it\s+was|that'?s|thats|that\s+was)\s+(?:just\s+|only\s+|really\s+)?"
+    r"(?:not\s+(?:a\s+|an\s+)?(?:real|serious|true|important|happening|thing\b|big\s+deal)|nothing\b|a\s+joke|"
+    r"(?:a\s+)?silly|private|personal|nobody'?s\s+business)[^?]{0,30}?[\s.!]*)?"
+)
+_FORGET_WHOLE_RE = re.compile(
+    r"^[\s,.!?;:-]*" + _FORGET_OPENER + _FORGET_ACT + _FORGET_TAIL
+    + r"(?:" + _FORGET_OPENER + _FORGET_ACT + _FORGET_TAIL + r")*" + _FORGET_REASON + r"$",
+    re.IGNORECASE,
+)
+# shape B: "forget (that) I said ..." - the owner retracting their OWN last words. Not "... about X": that names a
+# subject, which is the entity forget's job (intent_router._FORGET_ENTITY_RE), not "the last thing".
+_FORGET_I_SAID_RE = re.compile(
+    r"^[\s,.!?;:-]*" + _FORGET_OPENER
+    + r"(?:forget|scrap|ignore|disregard)\s+(?:that\s+)?i\s+(?:just\s+|ever\s+|even\s+)?(?:said|told\s+you|mentioned|asked)\b"
+    r"(?!\s+(?:you\s+)?about\b)",
+    re.IGNORECASE,
+)
+#: a forget command is SHORT: a story that merely mentions forgetting is never hijacked into a retraction
+FORGET_MAX_WORDS = 20
+# Retraction wording at a clause start, or "don't remember|save|store that|this|it" anywhere. Never "don't forget
+# that ..." (a teach). A candidate holding one is the command's own words, never a fact.
+_FORGET_CLAUSE_RE = re.compile(
+    r"(?:^|[.!?;,:]\s*|\b(?:no|oh|please|actually|wait|zoe|hey)\s+)"
+    r"(?:forget\s+(?:that|what\s+i\s+(?:just\s+)?(?:said|told\s+you))\b|forget\s+(?:that\s+)?i\s+(?:just\s+)?said\b"
+    # a COMMAND addressed to Zoe (clause-initial / after an opener), never the speaker's own "I don't remember that accident"
+    r"|(?:don'?t|do\s+not)\s+(?:remember|save|store)\s+(?:that|this|it)\b)",
+    re.IGNORECASE,
+)
+
+
+def _straight(text: str) -> str:
+    """Curly apostrophes as straight ones: speech-to-text and phone keyboards type "don’t"."""
+    return (text or "").replace("’", "'").replace("‘", "'").strip()
+
+
+def is_forget_command(text: str) -> bool:
+    """True when ``text`` asks Zoe to retract what was just said / stored ("forget that", "no, don't remember that!
+    forget that", "please forget that I said ..."). Short utterances only (``FORGET_MAX_WORDS``)."""
+    raw = _straight(text)
+    if not raw or len(raw.split()) > FORGET_MAX_WORDS:
+        return False
+    return bool(_FORGET_WHOLE_RE.match(raw) or _FORGET_I_SAID_RE.match(raw))
+
+
+def has_forget_wording(text: str) -> bool:
+    """True when ``text`` carries retraction wording ("... ! forget that", "don't remember that"); never for the
+    teach "don't forget that ...". Keeps a forget command's own words out of the store."""
+    return bool(_FORGET_CLAUSE_RE.search(_straight(text)))
+
+
+# Talk ABOUT the conversation or about Zoe herself: a pointer at what was just asked, what Zoe knows, a complaint.
+# Never a fact about the person, even with an "I" in it ("um I literally just asked what you know about me").
+_CONVERSATION_META_RE = re.compile(
+    r"\bi\s+(?:literally\s+|only\s+|really\s+)*(?:just|already)\s+(?:asked|said|told\s+you|mentioned|meant)\b"
+    r"|\bwhat\s+(?:do\s+)?you\s+(?:know|remember|have)\s+(?:about|on)\s+me\b"
+    r"|\byou\s+(?:just\s+|already\s+)?(?:said|asked|told\s+me)\b"
+    r"|\b(?:you(?:'re|\s+are)|zoe(?:'s|\s+is))\s+(?:not\s+)?(?:listening|wrong|confused|broken|useless|stupid|annoying|"
+    r"repeating)\b"
+    r"|\byou\s+(?:don'?t|didn'?t|never|can'?t|do\s+not)\s+(?:listen|understand|get\s+it|hear)\b"
+    r"|\byou\s+keep\s+(?:saying|asking|doing|getting)\b"
+    r"|\bthat'?s\s+not\s+what\s+i\s+(?:said|asked|meant)\b"
+    r"|\bi\s+(?:didn'?t|did\s+not|never)\s+(?:say|ask|mean)\s+(?:that|this|it)\b"
+    r"|\bwhy\s+(?:did|do|would)\s+you\b",
+    re.IGNORECASE,
+)
+
+
+def is_conversation_meta(text: str) -> bool:
+    """True when ``text`` talks about the conversation or about Zoe rather than stating a fact about the person."""
+    return bool(_CONVERSATION_META_RE.search(_straight(text)))
+
+
+# The VERBATIM teach lane (expert_dispatch.store_fact) keeps the owner's words exactly as said, so it needs a
+# positive signal, not merely "has an I in it": an explicit teach cue, or a first-person fact SHAPE.
+_TEACH_CUE_RE = re.compile(
+    r"\b(?:note\s+that|keep\s+in\s+mind|make\s+a\s+note|(?:don'?t|do\s+not)\s+forget)\b"
+    r"|(?<!you )(?<!ya )(?<!i )(?<!don't )(?<!dont )(?<!do not )(?<!never )\bremember\b",
+    re.IGNORECASE,
+)
+_LEAD_FILLER = (r"(?:(?:um+|uh+|oh+|so|and|also|well|actually|ok|okay|yeah|hey|zoe|by\s+the\s+way|btw|fyi"
+                r"|just\s+so\s+you\s+know)\b[\s,.!:;-]*)*")
+_FIRST_PERSON_FACT_RE = re.compile(
+    r"^\W*" + _LEAD_FILLER + r"(?:"
+    r"(?:my|our)\s+[\w'’-]+(?:\s+[\w'’-]+){0,4}?(?:['’]s|\s+(?:is|are|was|were|has|have|had|lives?|"
+    r"works?|likes?|loves?|hates?|prefers?|goes|went|gets|got|turns?|turned|called|named|needs?|takes?|drives?|"
+    r"plays?|can'?t|doesn'?t|don'?t|isn'?t|aren'?t|won'?t|will))\b"
+    r"|i(?:'m|\s+am|'ve|\s+have|\s+had|\s+was|\s+work|\s+worked|\s+live|\s+lived|\s+like|\s+love|\s+hate|\s+prefer"
+    r"|\s+own|\s+drive|\s+play|\s+speak|\s+eat|\s+drink|\s+study|\s+teach|\s+grew\s+up|\s+go\s+by|\s+support|\s+use"
+    r"|\s+can'?t|\s+cannot|\s+don'?t\s+(?:like|eat|drink|have)|\s+got|\s+need|\s+take|\s+get)\b"
+    r"|we(?:'re|\s+are|'ve|\s+have|\s+had|\s+live|\s+own|\s+were|\s+got|\s+go)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+# a fact about a NAMED person ("Caitlin is allergic to nuts", "Sam's birthday is in June"): the person-link extractor
+# normally takes these, and when it cannot the owner's statement is still a fact. Case-sensitive on the name; never
+# Zoe herself or a pronoun.
+_NAMED_FACT_RE = re.compile(
+    r"^\W*(?i:" + _LEAD_FILLER + r")(?!(?:Zoe|You|I|It|That|This|There|What|Why|How|Who)\b)"
+    r"[A-Z][a-z'\-]+(?:\s+[A-Z][a-z'\-]+)?(?:['’]s(?:\s+[a-z][\w'\-]*){1,3})?"
+    r"\s+(?i:is|are|was|were|has|had|lives|works|likes|loves|hates|prefers|turns|turned|can'?t|doesn'?t|isn'?t|"
+    r"goes|plays|drives|studies|teaches)\b",
+)
+
+
+def has_teach_cue(text: str) -> bool:
+    """An explicit request to keep something: "remember (that)", "note that", "keep in mind", "don't forget"."""
+    return bool(_TEACH_CUE_RE.search(_straight(text)))
+
+
+def verbatim_storable(text: str) -> tuple[bool, str]:
+    """May the verbatim teach lane store ``text`` word for word? Needs a teach cue or a first-person fact shape;
+    never a forget command, never talk about the conversation / Zoe. ``(ok, reason)``; reason is "" when ok."""
+    raw = _straight(text)
+    if is_forget_command(raw) or has_forget_wording(raw):
+        return False, "forget_command"
+    if is_conversation_meta(raw):
+        # even behind a teach cue ("remember that I just asked what you know about me"): never a fact about the person
+        return False, "conversation_meta"
+    if has_teach_cue(raw) or _FIRST_PERSON_FACT_RE.match(raw) or _NAMED_FACT_RE.match(raw):
+        return True, ""
+    return False, "no_teach_cue_or_fact_shape"
 
 
 def is_pasted_content(text: str) -> bool:
@@ -323,6 +474,11 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
     if _own_words.instruction_shaped(raw):
         return False, "instruction_shaped"
 
+    # A forget command, or a candidate built from one ("User asked me to remember: that! forget that"), is the
+    # owner RETRACTING, never teaching: storing it is the opposite of what was asked (QA 2026-11-05).
+    if is_forget_command(raw) or has_forget_wording(raw):
+        return False, "forget_command"
+
     # A memory command ("remember that my mum likes NCIS") is always a fact,
     # even though it can superficially look like other shapes — accept early.
     # But "do you remember…?" is a recall question, not a command.
@@ -363,6 +519,11 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
     # nothing scheduled…") — a speaker-attributed turn, never a stored fact.
     if _SPEAKER_ECHO_RE.match(raw) or _TRANSCRIPT_ECHO_RE.match(raw):
         return False, "transcript_echo"
+
+    # Talk about the conversation or about Zoe ("I literally just asked what you know about me") is not a fact
+    # about the person, whatever pronoun it carries - even behind a teach cue ("remember that I just asked ...").
+    if is_conversation_meta(raw):
+        return False, "conversation_meta"
 
     if has_memory_command:
         return True, ""

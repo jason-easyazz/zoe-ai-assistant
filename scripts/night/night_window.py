@@ -107,6 +107,16 @@ class UnitSpec:
     ok: Callable[[str], bool]
     wait_s: float
     what: str
+    #: how many start tries before the unit is reported NOT HEALTHY (the first is ``start``, the rest ``restart``)
+    attempts: int = 2
+    #: seconds to wait before try 2, 3, ... (the last value repeats); lets freed GPU/NvMap memory settle
+    backoff_s: "tuple[float, ...]" = ()
+    #: compact RAM (page cache + ``compact_memory``) before EVERY try. The router is CPU-only (``--n-gpu-layers 0``) yet still calls
+    #: ``cudaMemGetInfo``, which needs one NvMap handle: on fragmented RAM that dies "NvMapMemAllocInternalTagged error 12" -> CUDA OOM -> SEGV/ABRT
+    #: in about 1 s (2026-11-06: three restores x 2 tries, 40 min, all the same crash; the cold start of a router that CAN start is seconds).
+    compact: bool = False
+    #: total seconds this unit's tries may spend (0 = no budget): no new try starts once it is spent, so a stuck unit cannot eat the restore reserve the units behind it need
+    budget_s: float = 0.0
 
 
 def _status_ok(text: str) -> bool:
@@ -121,7 +131,7 @@ def _kokoro_ok(text: str) -> bool:
 HEALTH = {
     BRAIN: UnitSpec(BRAIN, "http://127.0.0.1:11434/health", _status_ok, 240.0, "the 4B brain"),
     KOKORO: UnitSpec(KOKORO, "http://127.0.0.1:10201/health", _kokoro_ok, 240.0, "Kokoro (pipeline_loaded, device cuda)"),
-    ROUTER: UnitSpec(ROUTER, "http://127.0.0.1:11436/health", _status_ok, 120.0, "the FunctionGemma router"),
+    ROUTER: UnitSpec(ROUTER, "http://127.0.0.1:11436/health", _status_ok, 90.0, "the FunctionGemma router", attempts=4, backoff_s=(10.0, 20.0, 40.0), compact=True, budget_s=420.0),
     ZOE_DATA: UnitSpec(ZOE_DATA, "http://127.0.0.1:8000/health", _status_ok, 240.0, "zoe-data"),
 }
 
@@ -242,7 +252,7 @@ def parse_metrics(text: str) -> "dict[str, float]":
 
 #: the jobs that exist to call the model. A clean exit with ZERO generated tokens from one of these is either "there was nothing to do" or "it silently did nothing": the window must
 #: tell them apart, because both exit 0 in ~5 s (2026-10-25 and 10-27: four jobs "ok, 5.0 s, 0 tokens" - true, the household had no input, but indistinguishable from four broken jobs).
-MODEL_JOBS = ("digest", "dreaming", "night_mind", "omi_day_review")
+MODEL_JOBS = ("digest", "dreaming", "night_mind", "omi_day_review", "self_review")
 #: a job status that is a success: ``ok`` (it worked) or ``idle`` (it positively reported there was no input - zero model calls is then the correct answer)
 OK_JOB_STATUSES = ("ok", "idle")
 
@@ -266,6 +276,8 @@ def job_idle_evidence(name: str, text: str) -> str:
     * digest: its ``NIGHT_JOB digest {json}`` verdict is ``idle`` (no owned turn in the lookback) or ``all_skipped_insufficient_activity``;
     * night_mind: its summary JSON has members and EVERY one is ``skipped`` for ``quiet_day`` / ``opted_out`` (a ``load_error`` / ``error`` member is never idle), or ``nothing_to_do``;
     * omi_day_review: ``NIGHT_JOB omi_day_review status=nothing_to_do``;
+    * self_review: ``NIGHT_JOB self_review status=nothing_to_do|flag_off``, or ``status=ok ... calls=0`` (nothing flagged, or only turns
+      that are counted and never sent to the model);
     * dreaming: it finished (``Dreaming cycle complete``) and every ``OPEN_LOOPS`` line says ``status=no_messages``."""
     text = text or ""
     if name == "digest":
@@ -292,6 +304,13 @@ def job_idle_evidence(name: str, text: str) -> str:
         m = re.search(r"^NIGHT_JOB omi_day_review status=(nothing_to_do|flag_off|lane_day_only)\b", text, re.M)
         if m:         # flag_off (ZOE_OMI_DAY_REVIEW off - the default) and lane_day_only are the job's explicit opt-outs: a successful skip
             return {"nothing_to_do": "no pendant day to review", "flag_off": "flag_off: the day review is switched off", "lane_day_only": "lane_day_only: the review runs on the day lane"}[m.group(1)]
+    elif name == "self_review":
+        m = re.search(r"^NIGHT_JOB self_review status=(nothing_to_do|flag_off)\b", text, re.M)
+        if m:
+            return {"nothing_to_do": "no household turn to review", "flag_off": "flag_off: the self-review is switched off"}[m.group(1)]
+        d = re.search(r"^NIGHT_JOB self_review status=ok household=(\d+) flagged=(\d+) reviewed=0 no_time=(\d+) calls=0\s*$", text, re.M)
+        if d:
+            return f"{d.group(1)} household turn(s), {d.group(2)} flagged, no model call due ({d.group(3)} deferred for budget)"
     elif name == "dreaming":
         loops = re.findall(r"^OPEN_LOOPS .*?\bstatus=(\S+)", text, re.M)
         if loops and "Dreaming cycle complete" in text and "Dreaming cycle failed" not in text and all(st == "no_messages" for st in loops):
@@ -446,7 +465,7 @@ class NightCfg(bk.Cfg):
     test_lane_path: str = os.environ.get("NIGHT_TEST_LANE_LOCK", "/tmp/zoe-test-lane.lock")
     test_lane_wait_min: float = float(os.environ.get("NIGHT_TEST_LANE_WAIT_MIN", "10"))
     busy_poll_s: float = 30.0
-    jobs: tuple = ("digest", "dreaming", "night_mind", "struggle_proposals", "omi_day_review")
+    jobs: tuple = ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_day_review")
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
     night_mind_script: Path = REPO / "scripts" / "maintenance" / "zoe-night-mind.py"
@@ -454,6 +473,8 @@ class NightCfg(bk.Cfg):
     omi_day_review_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-day-review.py"
     #: the struggle-proposals pass (services/zoe-data/struggle_proposals.py): clusters the week's struggle_events into proposals, the 12B rewords the counts
     struggle_proposals_script: Path = REPO / "scripts" / "maintenance" / "zoe-struggle-proposals.py"
+    #: Zoe's review of her own real conversations (services/zoe-data/self_review.py): bounded, best effort, before the day review
+    self_review_script: Path = REPO / "scripts" / "maintenance" / "zoe-self-review.py"
     fallback_4b: bool = True
     #: ``--mode`` handed to zoe-night-mind.py. Its CLI default is enforce (the night has run in enforce since the window was installed); passing it explicitly means a changed CLI default can never silently change the night
     night_mind_mode: str = "enforce"
@@ -462,7 +483,7 @@ class NightCfg(bk.Cfg):
     decode_history_nights: int = 7
     py: str = sys.executable
     trial: bool = False
-    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "struggle_proposals": 480.0, "omi_day_review": 2400.0, "compaction": 900.0})
+    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "struggle_proposals": 480.0, "self_review": 600.0, "omi_day_review": 2400.0, "compaction": 900.0})
     metrics_poll_s: float = 5.0
     live_health_port: int = 11434
 
@@ -719,6 +740,12 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
     spr = [cfg.py, str(cfg.struggle_proposals_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens)] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
     jobs["struggle_proposals"] = JobSpec("struggle_proposals", spr if cfg.struggle_proposals_script.exists() else [], t.get("struggle_proposals", 480.0), best_effort=True,
                                          skip_reason="" if cfg.struggle_proposals_script.exists() else f"{cfg.struggle_proposals_script.name} not found")
+    # The self-review (services/zoe-data/self_review.py): Zoe reads her own real turns, code flags the likely failures, the 12B writes a short
+    # review of each inside the time it is handed (--budget-s) and a token cap. Best-effort, no 4B fallback (owner policy: never the daytime
+    # 4B); a no-op while ZOE_SELF_REVIEW is off. Capped at 10 minutes so the day review behind it keeps its time.
+    srv = [cfg.py, str(cfg.self_review_script), "--model-url", base + "/v1", "--ctx-tokens", str(ctx_tokens)] + (["--decode-tok-s", tps] if decode_tps else []) + (["--prefill-tok-s", pps] if prefill_tps else [])
+    jobs["self_review"] = JobSpec("self_review", srv if cfg.self_review_script.exists() else [], t.get("self_review", 600.0), best_effort=True, budget_flag="--budget-s",
+                                  skip_reason="" if cfg.self_review_script.exists() else f"{cfg.self_review_script.name} not found")
     # The pendant day review (services/zoe-data/omi_day_review.py; owner 2026-10-18: the 12B overnight, not the 4B): LAST, with the time
     # the night has left (exec_job clips its timeout to the window, skips it under 2 min and hands it that time as --budget-s, so a day
     # that would not finish is not started: status no_time, logged). A no-op while ZOE_OMI_DAY_REVIEW is off; no 4B fallback - the
@@ -2141,17 +2168,28 @@ class NightWindow(bk.Window):
             self.log(f"RESTORE: cold-start helper errored ({type(exc).__name__}: {exc}); starting the brain without it")
 
     def bring_back(self, unit: str) -> "dict[str, Any]":
-        """Start ``unit`` and require its OWN health answer. One retry (a restart, with a fresh compaction for the brain); then the failure is reported, not hidden."""
+        """Start ``unit`` and require its OWN health answer. ``spec.attempts`` tries (a start, then restarts after ``spec.backoff_s``; a fresh compaction before each try for the brain's retry and for every try of a ``spec.compact`` unit); then the failure is reported, not hidden."""
         spec = HEALTH[unit]
         info: "dict[str, Any]" = {"ok": False, "attempts": 0, "what": spec.what}
-        for attempt, verb in ((1, "start"), (2, "restart")):
+        t0 = self.host.mono()
+        for attempt in range(1, max(1, spec.attempts) + 1):
+            verb = "start" if attempt == 1 else "restart"
+            pause = spec.backoff_s[min(attempt - 2, len(spec.backoff_s) - 1)] if (attempt >= 2 and spec.backoff_s) else 0.0
+            if attempt >= 2 and spec.budget_s and self.host.mono() - t0 + pause + spec.wait_s > spec.budget_s:
+                self.event(f"RESTORE: {unit} out of time ({spec.budget_s:.0f}s budget) after {attempt - 1} try(s): the units behind it must still be woken")
+                break
             info["attempts"] = attempt
-            if attempt == 2:
-                self.event(f"RESTORE: {unit} not healthy after {spec.wait_s:.0f}s - retrying with a restart")
-                if unit == BRAIN:
-                    self.compact_before_brain()
+            if attempt >= 2:
+                self.event(f"RESTORE: {unit} not healthy after {spec.wait_s:.0f}s - retrying with a restart (try {attempt}/{spec.attempts})")
+                if pause:
+                    self.host.sleep(pause)
+                self.host.run(["systemctl", "--user", "reset-failed", unit], timeout=30)     # a start-limit-hit would refuse the next start outright
             if unit == BRAIN:
+                if attempt >= 2:
+                    self.compact_before_brain()
                 self.cold_start_guard()
+            elif spec.compact:
+                self.compact_memory(f"before {unit} try {attempt}")
             self.host.run(["systemctl", "--user", verb, unit], timeout=spec.wait_s + 60)
             if self.poll_health(spec.url, spec.ok, spec.wait_s, unit=unit, guard=False):
                 info["ok"] = True
@@ -2670,7 +2708,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--kv", choices=KV_OPTIONS, default=None, help="pin the KV cache type (default: q8_0, the measured winner: q4_0 OOMs at -ngl 38; NIGHT_KV)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 65; never past --end-by)")
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
-    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,struggle_proposals,omi_day_review)")
+    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
     ap.add_argument("--night-mind-mode", choices=("shadow", "enforce"), default=None, help="--mode handed to zoe-night-mind.py (default enforce: what the night has always run; shadow = calls and checks, nothing written)")
     ap.add_argument("--no-fallback", action="store_true", help="do not run a job on the live 4B after the restore when it did not finish on the 12B")
@@ -2752,9 +2790,9 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
         cfg.report_dir = args.report_dir
     if args.night_dir:
         cfg.night_dir = args.night_dir
-    unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind", "struggle_proposals", "omi_day_review")]
+    unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_day_review")]
     if unknown:
-        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, struggle_proposals, omi_day_review)")
+        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, struggle_proposals, self_review, omi_day_review)")
     return cfg
 
 

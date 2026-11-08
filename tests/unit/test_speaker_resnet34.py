@@ -146,8 +146,9 @@ def test_wav_decoding_scales_to_unit_range_averages_channels_resamples_and_rejec
 
 def test_selftest_passes_when_the_embedder_reproduces_the_reference():
     emb, _ = make_embedder()
-    report = rn.selftest(emb, clock=iter([0.0, 0.05]).__next__)
+    report = rn.selftest(emb, clock=_clock(0.05, 0.05, 0.05))
     assert report["cosine"] == pytest.approx(1.0, abs=1e-6) and report["ms"] == pytest.approx(50.0)
+    assert report["runs_ms"] == [50.0, 50.0, 50.0]
 
 
 @pytest.mark.parametrize("drift", [0.02, 0.1, 0.3])
@@ -157,14 +158,37 @@ def test_selftest_refuses_on_embedding_drift(drift):
         rn.selftest(drifted)
     # negative control: the same reference with a drift-free session passes
     clean, _ = make_embedder()
-    assert rn.selftest(clean, clock=iter([0.0, 0.05]).__next__)["cosine"] >= rn.SELFTEST_MIN_COSINE      # fake clock: a loaded CI box must not flake this
+    assert rn.selftest(clean, clock=_clock(0.05, 0.05, 0.05))["cosine"] >= rn.SELFTEST_MIN_COSINE      # fake clock: a loaded CI box must not flake this
+
+
+def _clock(*durations_s):
+    """A fake perf_counter for ``selftest``: each timed run takes the next duration (start, end pairs)."""
+    ticks, t = [], 0.0
+    for d in durations_s:
+        ticks += [t, t + d]
+        t += d + 1.0
+    return iter(ticks).__next__
 
 
 def test_selftest_refuses_a_gross_slowdown_and_accepts_the_same_embedder_when_fast_enough():
     emb, _ = make_embedder()
     with pytest.raises(rn.SelfTestFailed, match="too slow"):
-        rn.selftest(emb, clock=iter([0.0, 0.5]).__next__)        # 500 ms against an expected 100 ms x 3
-    assert rn.selftest(emb, clock=iter([0.0, 0.25]).__next__)["ms"] == pytest.approx(250.0)
+        rn.selftest(emb, clock=_clock(0.5, 0.5, 0.5))           # 500 ms against an expected 100 ms x 3
+    assert rn.selftest(emb, clock=_clock(0.25, 0.25, 0.25))["ms"] == pytest.approx(250.0)
+
+
+def test_selftest_judges_the_median_so_one_boot_time_spike_does_not_refuse_a_healthy_model():
+    """2026-11-07 19:03: ONE 357 ms call against a 330 ms limit (wake model / VAD / profile sync still loading) refused the panel's
+    speaker model for 8 h. One spike among three is the median's to ignore; a model that is slow on most runs still refuses."""
+    emb, _ = make_embedder()
+    report = rn.selftest(emb, clock=_clock(0.357, 0.12, 0.11))
+    assert report["ms"] == pytest.approx(120.0) and len(report["runs_ms"]) == rn.SELFTEST_TIMED_RUNS == 3
+    # negative control: two of three slow is a slow model, refused as before
+    with pytest.raises(rn.SelfTestFailed, match="too slow: median 357 ms of 3 runs"):
+        rn.selftest(emb, clock=_clock(0.357, 0.36, 0.11))
+    # negative control: the single-run form (timed_runs=1) still refuses the spike, so the median is what changed the verdict
+    with pytest.raises(rn.SelfTestFailed, match="too slow"):
+        rn.selftest(emb, clock=_clock(0.357), timed_runs=1)
 
 
 def test_selftest_refuses_without_a_reference():
@@ -611,7 +635,105 @@ def test_a_refused_embedder_scores_nothing_and_says_why(daemon, monkeypatch):
     assert daemon._rn34_status().startswith("refused: embedding drift")
     out = daemon._score_resnet34(b"wav")
     assert out["source"] == "encoder_unavailable" and out["score"] is None
-    assert daemon._get_rn34() is None                                          # refused once: not re-loaded on every turn
+    assert daemon._get_rn34() is None                                          # a turn never re-pays the load: the retry thread owns it
+
+
+def _refusing_then(daemon, monkeypatch, outcomes):
+    """``Resnet34Embedder.load`` answers from ``outcomes`` (an exception instance = refused, anything else = the embedder)."""
+    monkeypatch.setattr(daemon, "_rn34", rn)
+    for name, val in (("_rn34_embedder", None), ("_rn34_error", ""), ("_rn34_refusals", 0), ("_rn34_retry_at", 0.0),
+                      ("_rn34_down_since", 0.0)):
+        monkeypatch.setattr(daemon, name, val)
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    calls = []
+
+    def load(cls, *a, **k):
+        calls.append(1)
+        nxt = outcomes.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    monkeypatch.setattr(rn.Resnet34Embedder, "load", classmethod(load))
+    return calls
+
+
+def test_a_refused_embedder_is_retried_on_a_bounded_backoff_until_it_loads(daemon, monkeypatch):
+    """2026-11-07 19:03: one boot-time refusal was cached forever and the owner was a guest for ~8 h. Now a refusal is retried
+    (1, 5, 15 min, then hourly) by the warm-up thread, and the first pass restores speaker ID."""
+    emb, _ = make_embedder()
+    slow = rn.SelfTestFailed("too slow: median 357 ms of 3 runs for the self-test clip (limit 330 ms)")
+    calls = _refusing_then(daemon, monkeypatch, [slow, slow, slow, emb])
+    monkeypatch.delenv("SPEAKER_RESNET34_RETRY_S", raising=False)
+    waits = []
+    t = [1000.0]
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: t[0])
+
+    def sleep(s):
+        waits.append(round(s))
+        t[0] += s
+
+    assert daemon._get_rn34() is None and daemon._rn34_refusals == 1
+    st = daemon._speaker_model_state()
+    assert st["state"] == "refused" and st["attempts"] == 1 and st["retry_in_s"] == 60 and "too slow" in st["reason"]
+    assert daemon._get_rn34() is None and len(calls) == 1                     # a turn before the retry is due: no load
+    daemon._rn34_retry_loop(sleep=sleep, max_attempts=10)
+    assert waits == [60, 300, 900] and len(calls) == 4                        # the backoff schedule, then the pass
+    assert daemon._get_rn34() is emb and daemon._rn34_error == "" and daemon._rn34_refusals == 0
+    assert daemon._speaker_model_state() == dict(model=rn.MODEL_ID, state="ready")
+    assert daemon._rn34_status() == "ready"
+
+
+def test_the_backoff_caps_at_the_last_step_and_the_negative_control_old_cache_never_retried(daemon, monkeypatch):
+    slow = rn.SelfTestFailed("too slow")
+    calls = _refusing_then(daemon, monkeypatch, [slow] * 7)
+    monkeypatch.delenv("SPEAKER_RESNET34_RETRY_S", raising=False)
+    t, waits = [0.0], []
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: t[0])
+
+    def sleep(s):
+        waits.append(round(s))
+        t[0] += s
+
+    daemon._get_rn34()
+    daemon._rn34_retry_loop(sleep=sleep, max_attempts=6)
+    assert waits == [60, 300, 900, 3600, 3600, 3600] and len(calls) == 7    # hourly forever after the third retry, never a tight loop
+    # negative control: without the retry thread (the old "refused once" behaviour) turns alone never reload it
+    before = len(calls)
+    for _ in range(5):
+        assert daemon._get_rn34() is None
+    assert len(calls) == before
+
+
+def test_every_turn_payload_carries_the_speaker_model_state(daemon, monkeypatch):
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", False)
+    assert daemon._speaker_model_state()["state"] == "off"
+    monkeypatch.setattr(daemon, "SPEAKER_ID_ENABLED", True)
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
+    monkeypatch.setattr(daemon, "_rn34", None)
+    assert daemon._speaker_model_state()["state"] == "missing"
+    monkeypatch.setattr(daemon, "_rn34", rn)
+    monkeypatch.setattr(daemon, "_rn34_embedder", None)
+    monkeypatch.setattr(daemon, "_rn34_error", "")
+    assert daemon._speaker_model_state()["state"] == "loading"
+    src = (SETUP / "zoe_voice_daemon.py").read_text()
+    # both turn payloads (the streamed /turn_stream and the blocking /turn fallback) send it
+    assert src.count('["speaker_model_state"] = _speaker_model_state()') == 2
+
+
+def test_the_warmup_waits_for_boot_loads_to_settle_before_timing_the_self_test(daemon, monkeypatch):
+    order = []
+    monkeypatch.setenv("SPEAKER_RESNET34_SELFTEST_DELAY_S", "20")
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: order.append(("sleep", s)))
+    monkeypatch.setattr(daemon, "_get_rn34", lambda **k: order.append(("load",)) or None)
+    monkeypatch.setattr(daemon, "_rn34_error", "")
+    daemon._rn34_warmup()
+    assert order == [("sleep", 20.0), ("load",)]
+    order.clear()
+    monkeypatch.setenv("SPEAKER_RESNET34_SELFTEST_DELAY_S", "0")              # negative control: 0 = load at once (as before)
+    daemon._rn34_warmup()
+    assert order == [("load",)]
 
 
 def test_enrolment_wiring_default_none_unavailable_and_dual_degrade(daemon, monkeypatch):

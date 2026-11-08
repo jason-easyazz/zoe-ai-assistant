@@ -527,7 +527,8 @@
   .whours .hh .lab{font-size:19px;color:rgba(255,255,255,.78)}
   .whours .hh .ic svg{width:36px;height:36px;display:block;filter:drop-shadow(0 2px 8px rgba(0,0,0,.35))}
   .whours .hh .d{font-size:25px;font-weight:500;font-variant-numeric:tabular-nums}
-  /* sunny/day sky → dark, legible text (icons keep their own colour) */
+  /* sunny/day sky → dark, legible text (icons keep their own colour, except on the overcast-day sky where the pale cloud glyph is darkened) */
+  #stage.wxlight.wxovc .whours .hh .ic{color:#44546c!important}
   #stage.wxlight .wloc{color:rgba(20,30,50,.72);text-shadow:none}
   #stage.wxlight .wbig .t{color:#1b2740}
   #stage.wxlight .wbig .c{color:rgba(27,39,64,.92)}
@@ -763,28 +764,34 @@
   .altabs{position:absolute;top:38px;right:122px;height:48px;display:flex;gap:8px;z-index:30}
   .altab{font-size:22px;font-weight:500;color:rgba(255,255,255,.5);padding:0 24px;min-height:48px;border-radius:999px;border:0;background:none;cursor:pointer}
   .altab.on{background:rgba(255,255,255,.12);color:#fff;font-weight:600}
-  .alfull{position:absolute;left:60px;right:60px;top:110px;bottom:60px;display:flex;flex-direction:column;gap:18px}
+  /* bottom:130px keeps the list clear of the dock (top edge y605) and the orb (y608) */
+  .alfull{position:absolute;left:60px;right:60px;top:110px;bottom:130px;display:flex;flex-direction:column;gap:18px}
   .alhead{display:flex;align-items:center;justify-content:space-between;gap:20px}
   .alhelp{font-size:20px;color:var(--ink-soft)}
-  .allist{display:flex;flex-direction:column;gap:12px;overflow:auto}
+  .allist{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none}
+  .allist::-webkit-scrollbar{display:none}
+  .alrowitem{flex:none}
   .alempty{font-size:24px;color:var(--ink-faint);text-align:center;margin-top:60px}
   .alrowitem{display:flex;align-items:center;gap:26px;padding:16px 28px;border-radius:24px;background:rgba(255,255,255,.06);border:1px solid var(--line);cursor:pointer;min-height:84px}
   .alrowitem.off{opacity:.55}
+  .alov{display:inline-flex;align-items:center;min-height:48px;margin-top:6px;margin-right:10px;padding:0 18px;border-radius:999px;border:1px solid rgba(255,191,94,.45);background:rgba(255,191,94,.10);color:var(--alr);font-size:18px;cursor:pointer}
+  div.alov{cursor:default}
   .altime{font-size:54px;font-weight:300;font-variant-numeric:tabular-nums;min-width:200px}
   .altime .alm{font-size:24px;margin-left:8px;color:var(--ink-soft)}
-  .alinfo{flex:1}
-  .alname{font-size:26px;font-weight:600}
-  .alsub{font-size:19px;color:var(--ink-soft);margin-top:4px}
+  .alinfo{flex:1;min-width:0}
+  .alname{font-size:26px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .alsub{font-size:19px;color:var(--ink-soft);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .alsw{width:92px;height:52px;border-radius:999px;border:0;background:rgba(255,255,255,.18);position:relative;cursor:pointer;flex:none}
   .alsw.on{background:var(--alr)}
   .alknob{position:absolute;top:5px;left:5px;width:42px;height:42px;border-radius:50%;background:#fff;transition:.2s}
   .alsw.on .alknob{left:45px}
-  .alchip{font-size:22px;min-height:56px;padding:0 26px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;cursor:pointer}
+  .alchip{flex:none;white-space:nowrap;font-size:22px;min-height:56px;padding:0 26px;border-radius:999px;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;cursor:pointer}
   .alchip.on{background:var(--alr);color:#2a1d06;border-color:transparent;font-weight:600}
   .alchip.day{min-width:56px;padding:0}
   .alchip.danger{color:var(--cat-health)}
-  .aled{position:absolute;inset:0;z-index:40;background:rgba(5,8,18,.94);display:flex;align-items:center;justify-content:center}
-  .aledbox{display:flex;gap:40px;align-items:center}
+  /* The editor is a full-stage sheet on #stage (above the dock z46 and the orb z50), sized to the 1280x720 panel: no part of it may leave the screen. */
+  .aled{position:absolute;inset:0;z-index:60;background:#05080f;display:flex;align-items:center;justify-content:center;padding:28px 48px}
+  .aledbox{display:flex;gap:48px;align-items:center;max-height:100%}
   .alwheels{display:flex;align-items:center;gap:6px}
   .alwheel{width:110px;height:192px;overflow-y:auto;scroll-snap-type:y mandatory;scrollbar-width:none;border-radius:20px;background:rgba(255,255,255,.05)}
   .alwheel::-webkit-scrollbar{display:none}
@@ -792,16 +799,40 @@
   .alitem{height:64px;display:grid;place-items:center;font-size:40px;font-weight:300;color:var(--ink-faint);scroll-snap-align:center;cursor:pointer}
   .alitem.sel{color:#fff;font-weight:600}
   .alcolon{font-size:44px;font-weight:300}
-  .alside{display:flex;flex-direction:column;gap:18px;max-width:560px}
+  .alside{display:flex;flex-direction:column;gap:14px;width:720px;max-height:664px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none}
+  .alside::-webkit-scrollbar,.alscroll::-webkit-scrollbar{display:none}
   .alk{font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:8px}
   .alchips{display:flex;flex-wrap:wrap;gap:10px}
+  /* playlists: ONE swipeable row, faded at the right edge, never a wall of wrapped chips */
+  .alchips.alscroll{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior:contain;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent);padding-right:48px}
   .aldays{display:flex;gap:8px;width:100%}
-  .alacts{display:flex;gap:12px;margin-top:6px}
+  .alacts{display:flex;gap:12px;margin-top:4px;position:sticky;bottom:0;background:#05080f}
   .alerr{font-size:18px;color:var(--cat-health);min-height:24px}
+  /* simpler editor (owner 2026-11-06 "it's very busy"): time + repeat (+ the day for a once-off) + Save; the rest behind More options */
+  .alside .alrow[hidden],.aldays[hidden],.almorebox[hidden]{display:none!important}
+  .alside{gap:22px}
+  .aldays{margin-top:10px}
+  .almore{align-self:flex-start;min-height:56px;padding:0 24px;border-radius:16px;border:1px dashed rgba(255,255,255,.22);background:none;color:var(--ink-soft);font-size:20px;cursor:pointer;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .almorebox{display:flex;flex-direction:column;gap:22px}
+  .alchips.aldayline{flex-wrap:nowrap;align-items:center}
+  .aldayline .alscroll{flex:1;min-width:0}
+  .aldp{position:absolute;inset:0;z-index:5;background:#05080f;display:flex;align-items:center;justify-content:center}
+  .aldpbox{display:flex;flex-direction:column;align-items:center;gap:12px}
+  .aldphead{display:flex;align-items:center;justify-content:space-between;width:476px}
+  .aldpttl{font-size:28px;font-weight:600}
+  .alnav{width:56px;height:56px;border-radius:50%;border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.07);color:#fff;font-size:30px;cursor:pointer}
+  .alnav:disabled{opacity:.25}
+  .aldpgrid{display:grid;grid-template-columns:repeat(7,64px);gap:6px 4px}
+  .aldpwk{height:28px;display:grid;place-items:center;font-size:15px;letter-spacing:.1em;color:var(--ink-faint)}
+  .aldpday,.aldpblank{width:64px;height:56px;border-radius:16px}
+  .aldpday{border:0;background:rgba(255,255,255,.06);color:#fff;font-size:22px;cursor:pointer}
+  .aldpday.today{box-shadow:inset 0 0 0 1px rgba(255,255,255,.35)}
+  .aldpday.on{background:var(--alr);color:#2a1d06;font-weight:600}
+  .aldpday:disabled{background:none;color:rgba(255,255,255,.22);cursor:default}
   .alring{position:absolute;inset:0;z-index:95;display:none;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(120% 90% at 50% 46%,#1a1230,#05030c 75%);cursor:pointer;overflow:hidden}
   .alring.on{display:flex}
   .alclock{font-size:260px;font-weight:200;line-height:1;letter-spacing:-.04em;font-variant-numeric:tabular-nums;color:#fff;animation:alshake 1.2s ease-in-out infinite;z-index:1}
-  .allabel{font-size:44px;font-weight:600;color:var(--alr);min-height:56px;margin-top:6px;z-index:1}
+  .allabel{font-size:44px;font-weight:600;color:var(--alr);min-height:56px;margin-top:6px;z-index:1;max-width:1160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .alhint{font-size:28px;color:var(--ink-soft);margin-top:14px;z-index:1}
   .alpulse{position:absolute;left:50%;top:44%;width:300px;height:300px;margin:-150px 0 0 -150px;border-radius:50%;border:3px solid rgba(255,191,94,.55);animation:alripple 3s ease-out infinite;pointer-events:none}
   .alpulse.p1{animation-delay:1s}.alpulse.p2{animation-delay:2s}
@@ -1196,7 +1227,7 @@
 <!-- before the estate script: a ?domain=memories arrival calls into it during boot -->
 <script src="/js/touch-memories-space.js?v=mem-1"></script>
 <script src="/js/touch-alarm-sound.js?v=as-1"></script>
-<script src="/js/touch-alarms.js?v=al-2"></script>
+<script src="/js/touch-alarms.js?v=al-4"></script>
 <script>
 (function(){
   var stage=document.getElementById('stage');
@@ -1292,7 +1323,7 @@
         +'<div class="brf"><div class="mqtabs"><button class="on" data-qt="recent">Recent</button><button data-qt="playlists">Playlists</button><button data-qt="sources">Sources</button></div>'
         +'<div id="mQList" class="mqlist"></div></div>'},
     timer:{home:true, bg:'radial-gradient(120% 100% at 50% 44%,#122447,#080b12 62%)', canvas:false, glow:'radial-gradient(closest-side at 50% 44%,rgba(123,150,255,.35),transparent 70%)',
-      html:'<div class="chttl">Timers</div><div class="altabs" id="alTabs" hidden></div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div><div class="alfull" id="alFull" hidden></div>'},
+      html:'<div class="chttl">Timers/Alarms</div><div class="altabs" id="alTabs" hidden></div><div class="tfull"><div class="trings" id="tmRings"></div><div class="tmore" id="tmMore"></div></div><div class="alfull" id="alFull" hidden></div>'},
     list:{home:true, bg:GROUND, canvas:false,
       html:'<div class="lhdr"><div class="lcount" id="lstCount"></div><div class="ltabs" id="lstTabs"></div></div><div class="lstf2"><div class="lcols" id="lstItems"></div></div>'},
     calendar:{home:true, bg:GROUND, canvas:false,
@@ -1323,11 +1354,29 @@
   // (the weather-star canvas twinkle and the Cover Flow spring). Live-tracked.
   var RM=false;try{var _rmq=window.matchMedia('(prefers-reduced-motion: reduce)');RM=!!_rmq.matches;if(_rmq.addEventListener)_rmq.addEventListener('change',function(e){RM=!!e.matches;});}catch(e){}
   var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
-  var stars=[],drops=[],wxOn=false,wxGlow=true; // wxGlow: warm dusk glow, off for clear night
-  (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});})();
+  var stars=[],drops=[],wxOn=false,wxGlow=true,starA=1,rainOn=false,sunOn=false,moonOn=false,cloudN=0; // wxGlow: warm dusk glow, off for clear night; starA: star brightness 0..1 (0 = no stars, daytime); rainOn: draw rain streaks
+  (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});for(var j=0;j<70;j++)drops.push({x:Math.random()*W,y:Math.random()*H,l:10+Math.random()*14,v:.5+Math.random()*.5});})();
+  // Sun/moon/cloud sprites are drawn ONCE to offscreen canvases (no per-frame gradients: the Pi is CPU-poor).
+  var SKY_CLOUDS=[{x:700,y:196,s:1,ph:0},{x:830,y:128,s:.8,ph:2.1},{x:570,y:236,s:.7,ph:4.2}],_skySpr=null;
+  function skySprites(){if(_skySpr)return _skySpr;
+    function mk(w,h,fn){var c=document.createElement('canvas');c.width=w;c.height=h;fn(c.getContext('2d'));return c;}
+    function puffs(rgb){return function(x){x.shadowColor='rgba('+rgb+',.9)';x.shadowBlur=16;x.fillStyle='rgba('+rgb+',.96)';
+      [[80,72,36],[138,54,46],[204,66,40],[252,80,26],[50,82,22]].forEach(function(q){x.beginPath();x.arc(q[0],q[1],q[2],0,6.29);x.fill();});x.fillRect(50,76,206,24);};}
+    _skySpr={
+      sun:mk(360,360,function(x){var g=x.createRadialGradient(180,180,0,180,180,180);g.addColorStop(0,'rgba(255,246,208,1)');g.addColorStop(.25,'rgba(255,240,190,1)');g.addColorStop(.29,'rgba(255,214,120,.55)');g.addColorStop(.6,'rgba(255,200,110,.16)');g.addColorStop(1,'rgba(255,200,110,0)');x.fillStyle=g;x.fillRect(0,0,360,360);}),
+      moon:mk(240,240,function(x){var g=x.createRadialGradient(120,120,0,120,120,120);g.addColorStop(0,'rgba(210,222,255,.4)');g.addColorStop(.3,'rgba(190,205,255,.2)');g.addColorStop(1,'rgba(190,205,255,0)');x.fillStyle=g;x.fillRect(0,0,240,240);
+        x.fillStyle='#eaf0ff';x.beginPath();x.arc(120,120,34,0,6.29);x.fill();x.fillStyle='rgba(120,134,176,.22)';[[108,112,7],[132,128,9],[124,104,4]].forEach(function(q){x.beginPath();x.arc(q[0],q[1],q[2],0,6.29);x.fill();});}),
+      cloudD:mk(300,110,puffs('255,255,255')),
+      cloudN:mk(300,110,puffs('58,68,92'))};
+    return _skySpr;}
   function frame(t){ if(wxOn){ctx.clearRect(0,0,W,H);
       if(wxGlow){var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();}
-      ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=RM?.72:(.5+.5*Math.sin(t/700+st.tw))*.9;ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;
+      if(starA>0){ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=starA*(RM?.72:(.5+.5*Math.sin(t/700+st.tw))*.9);ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;}
+      if(sunOn||moonOn){var sp=skySprites(),bx=700,by=170,nt=!sunOn;
+        ctx.drawImage(nt?sp.moon:sp.sun,bx-(nt?120:180),by-(nt?120:180));
+        for(var ci=0;ci<cloudN;ci++){var cc=SKY_CLOUDS[ci];ctx.globalAlpha=nt?.8:.92;ctx.drawImage(nt?sp.cloudN:sp.cloudD,cc.x-150*cc.s+wxDrift(t,cc.ph,RM),cc.y-55*cc.s,300*cc.s,110*cc.s);}
+        ctx.globalAlpha=1;}
+      if(rainOn){ctx.strokeStyle='rgba(200,215,235,.45)';ctx.lineWidth=1.4;ctx.beginPath();drops.forEach(function(d){var y=RM?d.y:(d.y+t*d.v*.9)%H;ctx.moveTo(d.x,y);ctx.lineTo(d.x-d.l*.25,y+d.l);});ctx.stroke();}
     } if(RM){setTimeout(function(){requestAnimationFrame(frame);},1000);}else{requestAnimationFrame(frame);} }   // reduced motion: a still sky, repainted once a second
   requestAnimationFrame(frame);
 
@@ -1494,11 +1543,11 @@
     _cur=id; clearScreenTimers(); armIdleSleep();
     var _orb=document.getElementById('orb');if(_orb)_orb.classList.toggle('hide',id==='sleep');  // the orb is distracting on the sleep clock
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
-    stage.classList.remove('wxlight');
+    stage.classList.remove('wxlight');stage.classList.remove('wxovc');
     [].forEach.call(pick.querySelectorAll('button'),function(b){b.classList.toggle('sel',b.dataset.id===id);});
     if(f){
       cardwrap.classList.remove('on'); full.classList.add('on');
-      stage.style.background=f.bg; wxOn=!!f.canvas; cv.classList.toggle('on',!!f.canvas);
+      stage.style.background=f.bg; wxOn=!!f.canvas; starA=1; rainOn=false; sunOn=false; moonOn=false; cloudN=0; cv.classList.toggle('on',!!f.canvas);
       glow.style.background=f.glow||'none'; glow.classList.toggle('on',!!f.glow);
       home.classList.toggle('hide',f.home===false);
       full.innerHTML=f.html;
@@ -1920,7 +1969,7 @@
     {id:'rooms',n:'Rooms',ic:'rooms',c:'linear-gradient(150deg,#63b8ff,#3f7bd8)'},
     {id:'reminder',n:'Reminders',ic:'reminders',c:'linear-gradient(150deg,#ff9e6a,#f0742e)'},
     {id:'person',n:'Contacts',ic:'people',c:'linear-gradient(150deg,#ff7a90,#e85a78)'},
-    {id:'timer',n:'Timers',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
+    {id:'timer',n:'Timers/Alarms',ic:'timer',c:'linear-gradient(150deg,#ffbf5e,#f0961e)'},
     {id:'sleep',n:'Sleep',ic:'sleep',c:'linear-gradient(150deg,#5b6bb0,#3a4788)'},
     {id:'memories',n:'Memories',ic:'memories',c:'linear-gradient(150deg,#9a8cff,#6a53e8)'},
     {id:'settings',n:'Settings',ic:'settings',c:'linear-gradient(150deg,#9aa6bd,#6f7c96)'}
@@ -2024,8 +2073,7 @@
     // The home scene matches the sky (design intent): same scene mapping as
     // the weather surface — clear day, clear night, cloud, rain — with the
     // dusk gradient kept for golden-hour codes and as the pre-fetch default.
-    var scene=wxScene(w.icon);
-    if(_cur==='home'){stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');wxOn=(scene!=='day');wxGlow=(scene==='dusk');cv.classList.toggle('on',wxOn);}
+    if(_cur==='home')wxApplySky(wxSky(w.icon));
   }).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
@@ -2039,9 +2087,26 @@
 
   // ---- weather screen (real current + hourly forecast, condition-adaptive) ----
   var OWM_ICON={'01':'sun','02':'cloud','03':'cloud','04':'cloud','09':'rain','10':'rain','11':'rain','13':'cloud','50':'cloud'};
-  var WXBG={day:'linear-gradient(180deg,#3f7bd8,#6ea6ec 42%,#a9cef4 80%,#d8ebfb)',night:'linear-gradient(180deg,#05060f,#0b1030 45%,#141a44)',cloud:'linear-gradient(180deg,#2a3138,#39434c 45%,#4b555e)',rain:'linear-gradient(180deg,#242c3a,#333d52 45%,#414d63)',dusk:DUSK};
+  // WXSKY-BEGIN (pure: the vm test extracts this block)
+  // Day vs night comes from the icon suffix (...d / ...n) for EVERY scene, never from the scene alone:
+  // a partly-cloudy 7am ('02d') must not paint a starfield on a near-black cloud sky.
+  var WXBG={day:'linear-gradient(180deg,#3f7bd8,#6ea6ec 42%,#a9cef4 80%,#d8ebfb)',night:'linear-gradient(180deg,#05060f,#0b1030 45%,#141a44)',cloud:'linear-gradient(180deg,#2a3138,#39434c 45%,#4b555e)',rain:'linear-gradient(180deg,#242c3a,#333d52 45%,#414d63)',cloudDay:'linear-gradient(180deg,#8395aa,#a4b4c5 45%,#c4d0dc 85%,#d8e1ea)',rainDay:'linear-gradient(180deg,#7889a0,#97a8bb 45%,#b3c0ce 85%,#c6d1dc)',dusk:DUSK};
   function owmIcon(code){var base=(code||'').slice(0,2),m=OWM_ICON[base]||'cloud';return (m==='sun'&&/n$/.test(code||''))?'moon':m;}
   function wxScene(code){var base=(code||'').slice(0,2);if(base==='01')return /n$/.test(code||'')?'night':'day';if(base==='09'||base==='10'||base==='11'||base==='13')return 'rain';if(base==='02'||base==='03'||base==='04'||base==='50')return 'cloud';return 'dusk';}
+  function wxSky(code){var scene=wxScene(code),night=/n$/.test(code||'');
+    var k=scene;if(scene==='cloud'||scene==='rain')k=night?scene:scene+'Day';
+    var stars=0;if(scene==='night'||scene==='dusk')stars=1;else if(scene==='cloud'&&night)stars=.35;
+    var base=(code||'').slice(0,2),sun=false,moon=false,clouds=0;
+    if(scene==='day'){sun=true;}                                                  // 01d: the sun, no cloud
+    else if(!night&&(base==='02'||base==='03')){sun=true;clouds=base==='02'?2:3;}  // 02d/03d: sun partly behind drifting cloud
+    else if(night&&(base==='02'||base==='03')){moon=true;clouds=base==='02'?2:3;}  // 02n/03n: moon partly behind cloud (+ dim stars)
+    // 04 (overcast) and 50 (fog) stay sun-less.
+    var rain=(scene==='rain');
+    return {scene:scene,key:k,bg:WXBG[k]||DUSK,light:(k==='day'||k==='cloudDay'||k==='rainDay'),overcast:(k==='cloudDay'||k==='rainDay'),stars:stars,rain:rain,glow:(scene==='dusk'),sun:sun,moon:moon,clouds:clouds,canvas:(rain||stars>0||sun||moon||scene==='dusk')};}
+  function wxDrift(t,ph,rm){return rm?0:Math.sin(t/9000+ph)*45;}   // slow cloud drift (px); reduced motion = a static frame
+  // WXSKY-END
+  function wxApplySky(sky){stage.style.background=sky.bg;stage.classList.toggle('wxlight',sky.light);stage.classList.toggle('wxovc',sky.overcast);
+    wxGlow=sky.glow;starA=sky.stars;rainOn=sky.rain;sunOn=sky.sun;moonOn=sky.moon;cloudN=sky.clouds;wxOn=sky.canvas;cv.classList.toggle('on',sky.canvas);}
   function fmtHour(iso){var m=/T(\d{2}):/.exec(iso||'');if(!m)return '';var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+' '+ap;}
   function loadWxScreen(){
     apiGet('/api/weather/current').then(function(w){if(_cur!=='weather'||!w)return;  // ignore if the user navigated away
@@ -2049,7 +2114,7 @@
       var t=document.getElementById('wxTemp');if(t&&w.temp!=null)t.textContent=Math.round(w.temp)+'°';
       var cond=(w.description||'');cond=cond?cond.charAt(0).toUpperCase()+cond.slice(1):'';
       var cd=document.getElementById('wxCond');if(cd)cd.innerHTML=esc(cond)+(w.feels_like!=null?' &nbsp;<small>feels like '+Math.round(w.feels_like)+'°</small>':'');
-      var scene=wxScene(w.icon);stage.style.background=WXBG[scene]||DUSK;stage.classList.toggle('wxlight',scene==='day');wxGlow=(scene==='dusk');
+      wxApplySky(wxSky(w.icon));
     }).catch(function(){});
     apiGet('/api/weather/forecast').then(function(f){if(_cur!=='weather'||!f||!f.hourly)return;
       var host=document.getElementById('wxHours');if(!host)return;
@@ -4411,7 +4476,7 @@
     // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
 
-  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['memories','Memories'],['weather','Weather'],['music','Music'],['timer','Timer'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings']];
+  var ORDER=[['home','Home'],['rooms','Rooms'],['sleep','Sleep'],['ask','Ask Zoe'],['memories','Memories'],['weather','Weather'],['music','Music'],['timer','Timers/Alarms'],['SEP'],['day','Day'],['list','List'],['reminder','Reminder'],['person','Person'],['confirm','Confirm'],['settings','Settings']];
   ORDER.forEach(function(o){ if(o[0]==='SEP'){var s=document.createElement('div');s.className='sep';pick.appendChild(s);return;} var b=document.createElement('button');b.dataset.id=o[0];b.textContent=o[1];b.onclick=function(){show(o[0]);};pick.appendChild(b);});
   home.onclick=function(){lclose();show('home');};
   setInterval(refreshHA,30000);   // keep dock HA state fresh + recover from a failed load

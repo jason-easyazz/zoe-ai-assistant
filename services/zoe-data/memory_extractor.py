@@ -30,8 +30,8 @@ def _record_quality_reject(source: str, reason: str, text: str) -> None:
         # + zoe_memory_quality_reject_count (do not .inc() it again here)
     except Exception:
         pass
-    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
-                source, reason, (text or "")[:120])
+    from log_redaction import utterance_tag  # the log is outside the forget cascade: tag, never the words
+    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s %s", source, reason, utterance_tag(text or ""))
 
 
 @dataclass(frozen=True)
@@ -142,7 +142,9 @@ _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
     # "my wife is [name]" (without "named/called" — lower confidence, name heuristic)
     (
         r"my\s+(wife|husband|partner|girlfriend|boyfriend|son|daughter|brother|sister|dad|mom|father|mother)\s+is\s+"
-        r"([A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
+        # "my wife is called Sarah" is the named/called template's: "called" / "named" is never the name (it stored a second,
+        # value-less "User's wife is called" row that contradicted the real one)
+        r"(?!(?:called|named)\b)([A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
         "User's {0} is {1}", 0.78,
     ),
 
@@ -195,6 +197,12 @@ def _person_name_from_fragment(fragment: str) -> str:
 def _should_skip(user_message: str) -> bool:
     msg = _clean(user_message).lower()
     if not msg:
+        return True
+    from memory_quality import is_forget_command
+
+    if is_forget_command(msg):
+        # a retraction ("please forget that I said I live in <town>") is never mined: storing anything from it
+        # keeps exactly what the owner asked Zoe to forget (QA 2026-11-05)
         return True
     if msg.startswith("remember "):
         return False
@@ -304,7 +312,7 @@ _PERSON_INTRO_RES = (
     # flag too: "My wife is Emma" must still anchor).
     re.compile(
         rf"my\s+(?P<rel>{_RELATION_WORDS})\s+is\s+"
-        r"(?P<name>[A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
+        r"(?!(?:called|named)\b)(?P<name>[A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
         re.IGNORECASE,
     ),
     # "I have a friend Caitlin Farrell" / "my friend Caitlin" / "my coworker named
@@ -701,6 +709,16 @@ def _remember_is_a_question(text: str, m: "re.Match[str]") -> bool:
     return bool(_ADDRESSED_TO_YOU_RE.search(text[:rpos]))
 
 
+_NEGATED_BEFORE_RE = re.compile(r"\b(?:don'?t|do\s+not|never|not)\s*$", re.IGNORECASE)
+
+
+def _remember_is_negated(text: str, m: "re.Match[str]") -> bool:
+    """True when the "remember" the template matched is NEGATED: "no, don't remember that! forget that" asks Zoe NOT
+    to keep something, and was stored as "User asked me to remember: that! forget that" (QA 2026-11-05)."""
+    rpos = text.lower().find("remember", m.start())
+    return rpos >= 0 and bool(_NEGATED_BEFORE_RE.search(text[:rpos]))
+
+
 #: the templates whose single capture is a PLACE (home, workplace, origin): ``memory_quality.clean_place_value`` decides what is left of it
 _PLACE_TEMPLATES = frozenset({"User lives in {0}", "User works at/for {0}", "User is from {0}"})
 _AUX_BEFORE_SUBJECT_RE = re.compile(
@@ -763,7 +781,8 @@ def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[Memo
         m = re.search(pattern, text, flags=re.IGNORECASE)
         if not m:
             continue
-        if template.startswith("User asked me to remember") and _remember_is_a_question(text, m):
+        if template.startswith("User asked me to remember") and (
+                _remember_is_a_question(text, m) or _remember_is_negated(text, m)):
             continue
         if _asked_not_said(text, m, template):
             continue

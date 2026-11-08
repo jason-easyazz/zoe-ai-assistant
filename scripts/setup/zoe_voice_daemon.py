@@ -243,8 +243,59 @@ ZOE_VAD_HESITATION_TAIL_MS = _int_env("ZOE_VAD_HESITATION_TAIL_MS", 0)
 # default) the endpointer never fires and the payload never carries the
 # fields — byte-identical to today. Design + protocol:
 # docs/architecture/b1-speculative-turn-start.md
-ZOE_SPECULATIVE_TURN = os.environ.get("ZOE_SPECULATIVE_TURN", "false").lower() in ("1", "true", "yes", "on")
+# ``windows`` (Pi only; the server reads the same flag as a plain bool and needs ``1``) also
+# speculates in the follow-up / conversation windows - see ZOE_SPECULATIVE_WINDOWS below.
+_SPECULATIVE_TURN_RAW = os.environ.get("ZOE_SPECULATIVE_TURN", "false").strip().lower()
+ZOE_SPECULATIVE_TURN = _SPECULATIVE_TURN_RAW in ("1", "true", "yes", "on", "windows")
 ZOE_SPECULATIVE_TAIL_MS = _int_env("ZOE_SPECULATIVE_TAIL_MS", 320)
+# ── Post-wake no-speech window (2026-11-06, cut-off fix, ON by default) ──
+# The wake recording used to give up after SILENCE_TIMEOUT_S (1.5 s) of no speech
+# counted from RECORDING START, and that span includes the wake chime (~0.27 s) and
+# the speakerphone's echo suppression after it (~0.9 s of near-zero samples). A
+# natural ~1.5 s pause after the chime closed the recording on the wake word alone
+# and Zoe then greeted the user over the command they had started. Now the
+# no-speech window (POST_WAKE_NO_SPEECH_S - an endpoint knob beside SILENCE_TIMEOUT_S,
+# unprefixed like it) only starts counting once the chime has finished AND the muted
+# run after it is over: chunks whose mean |amplitude| is below _POST_WAKE_MUTED_AMP
+# (room noise is ~8-18, echo suppression 0-5), skipped for at most
+# _POST_WAKE_ECHO_MAX_MS so a dead-quiet room still closes. Wake recording only
+# (record_command); follow-up windows keep FOLLOW_UP_LISTEN_S / SILENCE_TIMEOUT_S.
+# 0 = rollback of the whole cut-off fix: the old rule (SILENCE_TIMEOUT_S from start)
+# AND the wake-only greeting plays again (WAKE_ONLY_LISTEN below).
+POST_WAKE_NO_SPEECH_S = max(0.0, _float_env("POST_WAKE_NO_SPEECH_S", 3.0))
+_POST_WAKE_MUTED_AMP = 6.0
+_POST_WAKE_ECHO_MAX_MS = 1200
+# Never wait longer than this for the chime thread to report it finished (a hung
+# aplay must not hold the window open): past it the window counts as if it had.
+_POST_WAKE_CHIME_WAIT_MAX_S = 1.5
+# Set while no wake chime is playing. on_wake() clears it before starting the chime
+# thread; play_wake_beep() sets it when the chime is over (or never played).
+_wake_chime_done = threading.Event()
+_wake_chime_done.set()
+# ── Wake-only transcript -> listen, don't greet (2026-11-06, ON by default) ──
+# A wake recording whose transcript is ONLY the wake word ("Hey Zoe.") usually
+# means the user paused before the command. The server answers it as a greeting
+# ("Good evening. What can I do for you?") which then plays over the command. With
+# this on, the daemon drops that reply before any audio plays (the transcript frame
+# leads the stream; closing the stream cancels the server's work, as for junk),
+# plays the short follow-up cue and opens one follow-up listen instead. Rolled back
+# with the window above (POST_WAKE_NO_SPEECH_S=0): the two halves of one fix.
+WAKE_ONLY_LISTEN = POST_WAKE_NO_SPEECH_S > 0
+_WAKE_ONLY_RE = re.compile(
+    r"^\s*(?:(?:a|ah|uh|um+|hey|hi|hello|ok|okay|oi)[\s,.!]+)?(?:zoe|zoey|zoie|zowie|zoë)[\s,.!?…:;-]*$",
+    re.IGNORECASE)
+# B1.1 in the no-wake-word windows (follow-up / conversation), flag-dark: the
+# owner's 2026-11-05 cut-off was a follow-up turn that paused 1.19 s between two
+# sentences, and the recorder closed (0.8 s any-quiet) before the second one.
+# With ZOE_SPECULATIVE_TURN=windows on the Pi, a window recording fires its turn at the
+# first verdict too and keeps recording, so the real close can be long
+# (recommended: ZOE_SPECULATIVE_TAIL_MS=640, ZOE_VAD_TAIL_MS=1400,
+# VAD_ENDPOINT_SILENCE_S=1.5) without adding that wait to the answer: a
+# continuation inside it is recorded, the verdict becomes ``resolve`` and the
+# merged recording is answered instead. NEEDS the zoe-data side of the same PR
+# (it applies the window speaker gate to speculative window turns); an older
+# server would skip that gate. Off: windows never speculate (unchanged).
+ZOE_SPECULATIVE_WINDOWS = _SPECULATIVE_TURN_RAW == "windows"
 # Process-wide fail-closed latch: set the moment a speculative stream proves
 # the server is NOT gating (audio arrived before this daemon sent its verdict —
 # daemon flag on, server flag off, e.g. a server rollback). No further turn
@@ -855,6 +906,35 @@ if SPEAKER_MODEL != "resemblyzer":
 _rn34_embedder = None
 _rn34_error = ""
 _rn34_lock = threading.Lock()
+# A refusal is RETRIED, never cached forever (2026-11-07 19:03: the boot-time self-test ran while the wake model, VAD and profile
+# sync were still loading, one call took 357 ms against a 330 ms limit, and the "refused once: do not retry" cache left the
+# panel with no speaker ID for ~8 h - the owner was a guest all night). Bounded backoff: the schedule's last step repeats.
+_rn34_refusals = 0                   # consecutive refused loads (0 once one passes)
+_rn34_retry_at = 0.0                 # time.monotonic() before which a refused load is not retried
+_rn34_down_since = 0.0               # time.time() of the FIRST refusal of the current outage (0 = not down)
+
+
+def _rn34_retry_schedule() -> list:
+    """Seconds to wait before retry 1, 2, 3, ... (the last step repeats). ``SPEAKER_RESNET34_RETRY_S`` = comma list."""
+    raw = os.environ.get("SPEAKER_RESNET34_RETRY_S", "60,300,900,3600")
+    out = []
+    for part in raw.split(","):
+        try:
+            v = float(part.strip())
+        except ValueError:
+            continue
+        if math.isfinite(v) and v > 0:
+            out.append(v)
+    return out or [60.0, 300.0, 900.0, 3600.0]
+
+
+def _rn34_settle_s() -> float:
+    """Seconds the start-up self-test waits for the boot loads (wake model, VAD, profile sync) to settle before it times anything."""
+    try:
+        v = float(os.environ.get("SPEAKER_RESNET34_SELFTEST_DELAY_S", "20"))
+    except ValueError:
+        return 20.0
+    return v if math.isfinite(v) and v >= 0 else 20.0
 
 
 class _Claim(tuple):
@@ -872,9 +952,12 @@ def _acting_model_id() -> str:
     return _rn34.MODEL_ID if (SPEAKER_MODEL == "resnet34" and _rn34 is not None) else LEGACY_SPEAKER_MODEL_ID
 
 
-def _get_rn34():
-    """The pinned, self-tested ResNet34 embedder, loaded once; None (reason in ``_rn34_error``) when it cannot be trusted."""
-    global _rn34_embedder, _rn34_error
+def _get_rn34(*, retry_due: bool = False):
+    """The pinned, self-tested ResNet34 embedder; None (reason in ``_rn34_error``) when it cannot be trusted.
+
+    A refusal is not retried on the turn path (a turn must not pay a model load): ``retry_due=True`` is the background retry
+    (``_rn34_retry_loop``) asking to try again once the backoff in ``_rn34_retry_at`` has passed."""
+    global _rn34_embedder, _rn34_error, _rn34_refusals, _rn34_retry_at, _rn34_down_since
     if _rn34 is None:
         return None
     if _rn34_embedder is not None:
@@ -882,19 +965,41 @@ def _get_rn34():
     with _rn34_lock:
         if _rn34_embedder is not None:
             return _rn34_embedder
-        if _rn34_error:
-            return None                      # refused once: do not retry (and re-pay the load) on every turn
+        if _rn34_error and not (retry_due and time.monotonic() >= _rn34_retry_at):
+            return None                      # refused: the background retry owns the next attempt, never a turn
         try:
-            log.info("Loading ResNet34 speaker embedder (INT8 QDQ, %s)...", _rn34.MODEL_ID)
+            log.info("Loading ResNet34 speaker embedder (INT8 QDQ, %s)%s...", _rn34.MODEL_ID,
+                     " - retry %d after a refusal" % _rn34_refusals if _rn34_refusals else "")
             _rn34_embedder = _rn34.Resnet34Embedder.load()
-            log.info("ResNet34 speaker embedder ready (self-test passed).")
-        except _rn34.Unavailable as exc:
-            _rn34_error = str(exc)[:300]
-            log.error("ResNet34 speaker embedder REFUSED - ResNet34 scores nothing: %s", _rn34_error)
+            if _rn34_refusals:
+                log.warning("ResNet34 speaker embedder ready after %d refused attempt(s) (down %.0f min): speaker ID is back.",
+                            _rn34_refusals, (time.time() - _rn34_down_since) / 60.0 if _rn34_down_since else 0.0)
+            else:
+                log.info("ResNet34 speaker embedder ready (self-test passed).")
+            _rn34_error, _rn34_refusals, _rn34_down_since = "", 0, 0.0
         except Exception as exc:  # noqa: BLE001 - never takes the daemon down
-            _rn34_error = type(exc).__name__ + ": " + str(exc)[:200]
-            log.error("ResNet34 speaker embedder failed to load: %s", _rn34_error)
+            if isinstance(exc, _rn34.Unavailable):
+                _rn34_error = str(exc)[:300]
+            else:
+                _rn34_error = type(exc).__name__ + ": " + str(exc)[:200]
+            sched = _rn34_retry_schedule()
+            wait_s = sched[min(_rn34_refusals, len(sched) - 1)]
+            _rn34_refusals += 1
+            _rn34_retry_at = time.monotonic() + wait_s
+            if not _rn34_down_since:
+                _rn34_down_since = time.time()
+            log.error("ResNet34 speaker embedder REFUSED (attempt %d) - every turn goes up with NO speaker claim until it loads; "
+                      "retrying in %.0f s: %s", _rn34_refusals, wait_s, _rn34_error)
     return _rn34_embedder
+
+
+def _rn34_retry_loop(sleep=time.sleep, max_attempts: "int | None" = None) -> None:
+    """Retry a refused load on the backoff schedule until one passes. Runs in the start-up warm-up thread (never on a turn)."""
+    tries = 0
+    while _rn34_embedder is None and _rn34_error and (max_attempts is None or tries < max_attempts):
+        sleep(max(1.0, _rn34_retry_at - time.monotonic()))
+        _get_rn34(retry_due=True)
+        tries += 1
 
 
 def _rn34_status() -> str:
@@ -905,9 +1010,41 @@ def _rn34_status() -> str:
     return ("refused: " + _rn34_error) if _rn34_error else ("not loaded" if _rn34 is not None else "module missing")
 
 
+def _speaker_model_state() -> dict:
+    """The ACTING speaker model's state, sent with EVERY turn (``speaker_model_state``) so the server can tell "nobody matched"
+    from "the panel could not score at all" and raise an owner alarm on a long outage (``panel_speaker_health``).
+
+        {"model": "<id>", "state": "ready" | "loading" | "refused" | "missing" | "off", ...}
+        refused adds "down_s" (seconds since the first refusal of this outage), "attempts", "retry_in_s" and a short "reason".
+    No household data: a model id, a state and the refusal's own text."""
+    if not SPEAKER_ID_ENABLED:
+        return dict(model=_acting_model_id(), state="off")
+    if SPEAKER_MODEL != "resnet34":
+        if _voice_encoder is not None:
+            return dict(model=LEGACY_SPEAKER_MODEL_ID, state="ready")
+        return dict(model=LEGACY_SPEAKER_MODEL_ID, state="loading")
+    if _rn34 is None:
+        return dict(model="wespeaker_resnet34", state="missing", reason="zoe_speaker_resnet34.py is not deployed")
+    if _rn34_embedder is not None:
+        return dict(model=_rn34.MODEL_ID, state="ready")
+    if not _rn34_error:
+        return dict(model=_rn34.MODEL_ID, state="loading")
+    return dict(model=_rn34.MODEL_ID, state="refused", reason=_rn34_error[:160], attempts=_rn34_refusals,
+                down_s=int(max(0.0, time.time() - _rn34_down_since)) if _rn34_down_since else 0,
+                retry_in_s=int(max(0.0, _rn34_retry_at - time.monotonic())))
+
+
 def _rn34_warmup() -> None:
-    """Load + self-test the embedder in the background at start-up so the first turn does not pay for it."""
+    """Load + self-test the embedder in the background at start-up so the first turn does not pay for it. It first waits
+    ``SPEAKER_RESNET34_SELFTEST_DELAY_S`` for the boot loads to settle: the self-test TIMES a call, and timed while the wake
+    model, VAD and profile sync are loading it measures a starved CPU, not the model (2026-11-07)."""
+    settle = _rn34_settle_s()
+    if settle > 0:
+        time.sleep(settle)
     emb = _get_rn34()
+    if emb is None and _rn34_error:
+        _rn34_retry_loop()                   # bounded backoff (1, 5, 15 min, then hourly) until the model passes its self-test
+        emb = _rn34_embedder
     if emb is None:
         return
     try:
@@ -1060,6 +1197,70 @@ def _vad_prob(vad, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float:
         return -1.0
 
 
+class _PostWakeGate:
+    """When does listening START after a wake word? (``_Endpointer`` ``listen_gate``.)
+
+    Called once per pre-speech quiet chunk of the wake recording; returns True from the
+    first chunk that is past (1) the wake chime (``_wake_chime_done``, waited on for at
+    most _POST_WAKE_CHIME_WAIT_MAX_S of audio) and (2) the speakerphone's echo-suppressed
+    run after it - chunks quieter than _POST_WAKE_MUTED_AMP, skipped for at most
+    _POST_WAKE_ECHO_MAX_MS. Latches open. ``opened_ms`` (audio before listening
+    started) is logged with a no_speech close."""
+
+    def __init__(self, chime_done: "threading.Event | None" = None):
+        self._chime_done = chime_done if chime_done is not None else _wake_chime_done
+        per_s = SAMPLE_RATE / float(CHUNK_SIZE)
+        self._chime_wait_max = int(math.ceil(_POST_WAKE_CHIME_WAIT_MAX_S * per_s))
+        self._echo_max = -(-_POST_WAKE_ECHO_MAX_MS * SAMPLE_RATE // (1000 * CHUNK_SIZE))
+        self._seen = 0
+        self._muted = 0
+        self.opened_ms: "int | None" = None
+
+    def __call__(self, data: bytes) -> bool:
+        if self.opened_ms is not None:
+            return True
+        self._seen += 1
+        if not self._chime_done.is_set() and self._seen <= self._chime_wait_max:
+            return False
+        if self._muted < self._echo_max:
+            amp = float(np.abs(np.frombuffer(data, dtype=np.int16)).mean()) if data else 0.0
+            if amp < _POST_WAKE_MUTED_AMP:
+                self._muted += 1
+                return False
+        self.opened_ms = int(round((self._seen - 1) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE))
+        return True
+
+
+def _is_wake_only_transcript(text: str) -> bool:
+    """The transcript is the wake word and nothing else ("Hey Zoe!", "Zoe.")."""
+    return bool(text) and bool(_WAKE_ONLY_RE.match(text))
+
+
+def _wake_only_listen(transcript: str, *, wake_turn: bool, played_any: bool, speculative: bool) -> bool:
+    """True (and ``_last_turn_flags["wake_only"]`` set) when this wake turn's reply must be
+    dropped because the user said only the wake word (WAKE_ONLY_LISTEN). Never once
+    audio played, never on a speculative stream (its own verdict protocol owns it)."""
+    if not (WAKE_ONLY_LISTEN and wake_turn and not played_any and not speculative):
+        return False
+    if not _is_wake_only_transcript(transcript):
+        return False
+    _last_turn_flags["wake_only"] = True
+    log.info("Wake word only (%s) - no greeting over a possible command; listening instead",
+             utterance_tag(transcript))
+    return True
+
+
+def _listen_after_wake_only(pa: "pyaudio.PyAudio", turn_fn) -> "tuple[bool, bytes | None]":
+    """The wake turn was only the wake word: play the short listening cue, listen once
+    (no wake word needed) and run what is heard as an ordinary WAKE turn (window "", the
+    user just addressed Zoe). Nothing heard -> back to wake mode, silently."""
+    follow = _follow_up_source(pa, None, window_s=max(FOLLOW_UP_LISTEN_S, 3.0))
+    if follow is None:
+        log.info("Wake word only, then no command - returning to wake mode.")
+        return False, None
+    return _turn_with_monitor(pa, follow, turn_fn)
+
+
 class _Endpointer:
     """Decides when a command recording is finished.
 
@@ -1071,7 +1272,8 @@ class _Endpointer:
     cut off. Falls back to amplitude mode when Silero is unavailable.
     """
 
-    def __init__(self, spoke: bool = False, vad: "_VadStream | None" = None):
+    def __init__(self, spoke: bool = False, vad: "_VadStream | None" = None, *,
+                 no_speech_s: "float | None" = None, listen_gate=None):
         self.mode = "amplitude"
         self._model = None
         if VAD_ENDPOINT_ENABLED:
@@ -1088,6 +1290,16 @@ class _Endpointer:
         # recorder's VAD trigger) so the fast tail applies from the first pause.
         self._spoke = spoke
         self._amp_max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
+        # Post-wake no-speech window (POST_WAKE_NO_SPEECH_S): None = the legacy rule
+        # (SILENCE_TIMEOUT_S of quiet from the first chunk). Otherwise the pre-speech quiet
+        # only counts once ``listen_gate(chunk)`` has said listening started (the chime and
+        # the echo-suppressed run after it are over); ceil, never earlier than configured.
+        self._pre_max_silent = (
+            max(1, int(math.ceil(no_speech_s * SAMPLE_RATE / CHUNK_SIZE - 1e-9)))
+            if no_speech_s is not None and no_speech_s > 0 else None
+        )
+        self._listen_gate = listen_gate
+        self._pre_quiet = 0
         self._vad_max_silent = max(1, int(VAD_ENDPOINT_SILENCE_S * SAMPLE_RATE / CHUNK_SIZE))
         # Deep-quiet fast tail (see ZOE_VAD_TAIL_MS above): None = disabled,
         # i.e. exactly the pre-flag behaviour.
@@ -1139,11 +1351,35 @@ class _Endpointer:
         self._fall = 0            # ambiguous decay chunks leading the current quiet run
         self._hesitating = False  # the current quiet run went deep, then ambiguous again
         self.tail_rule = ""       # which rule closed the recording (logged)
+        self.close_ms = 0         # the limit of that rule, in ms (logged: the REAL close rule)
         # Last _STILL_WINDOW chunks, 1 = speech / 0 = quiet: lets the recorders tell a
         # speaker still mid-flow from room noise when a recording reaches its soft cap.
         self._recent: list = []
 
     _STILL_WINDOW = 25  # chunks (~2 s at the default 80 ms)
+
+    def _close(self, rule: str, chunks: int) -> bool:
+        self.tail_rule = rule
+        self.close_ms = int(round(chunks * CHUNK_SIZE * 1000.0 / SAMPLE_RATE))
+        return True
+
+    def _no_speech_due(self, data: bytes) -> bool:
+        """Pre-speech quiet chunk under the post-wake window: True when the window is spent."""
+        gate = self._listen_gate
+        if gate is None or gate(data):
+            self._pre_quiet += 1
+        return self._pre_quiet >= self._pre_max_silent
+
+    def close_rule(self) -> str:
+        """The rule that actually closed the recording, for the ``Recorded ...`` line:
+        ``deep=640ms``, ``quiet=800ms``, ``no_speech=3000ms+listen@1040ms``, or ``-``."""
+        if not self.tail_rule:
+            return "-"
+        out = f"{self.tail_rule}={self.close_ms}ms"
+        opened = getattr(self._listen_gate, "opened_ms", None)
+        if self.tail_rule == "no_speech" and opened is not None:
+            out += f"+listen@{opened}ms"
+        return out
 
     def _note(self, speech: bool) -> None:
         self._recent.append(1 if speech else 0)
@@ -1212,6 +1448,12 @@ class _Endpointer:
                 # compares transcripts and still releases when it was noise —
                 # never a blind commit that skips transcribing it.
                 self.resumed_after_speculation = True
+            if not self._spoke and self._pre_max_silent is not None:
+                # Post-wake window: counted from listen start, never from recording start.
+                due = self._no_speech_due(data)
+                if due and n_frames > self._min_frames:
+                    return self._close("no_speech", self._pre_max_silent)
+                return False
             if n_frames <= self._min_frames:
                 return False
             if (self._spoke and self._clean_max_silent is not None
@@ -1219,29 +1461,39 @@ class _Endpointer:
                     and self._fall <= ZOE_VAD_CLEAN_FALL_CHUNKS
                     and self._speech_chunks >= self._clean_min_speech
                     and self._quiet >= self._clean_max_silent):
-                self.tail_rule = "clean"
-                return True
+                return self._close("clean", self._clean_max_silent)
             if (self._spoke and self._deep_max_silent is not None
                     and self._deep_quiet >= self._deep_max_silent):
-                self.tail_rule = "deep"
-                return True
+                return self._close("deep", self._deep_max_silent)
             limit = self._vad_max_silent if self._spoke else self._amp_max_silent
             if self._spoke and self._hesitating and self._hes_max_silent is not None:
                 limit = max(limit, self._hes_max_silent)
             if self._quiet >= limit:
-                self.tail_rule = "hesitation" if limit != self._vad_max_silent and self._spoke else (
-                    "quiet" if self._spoke else "no_speech")
-                return True
+                return self._close("hesitation" if limit != self._vad_max_silent and self._spoke else (
+                    "quiet" if self._spoke else "no_speech"), limit)
             return False
         amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
         if amplitude >= RECORD_SILENCE_AMPLITUDE:
+            if not self._spoke and self._pre_max_silent is not None and self._listen_gate is not None:
+                # Post-wake window, amplitude mode: a LOUD chunk before the listen gate has opened is the wake chime (or its echo), not
+                # the person - it must not count as speech, or the no-speech window is unreachable and the recording closes in the
+                # pause after the chime. The gate is advanced by this chunk too (it counts time); the chunk is neither speech nor
+                # quiet toward the window.
+                if not self._listen_gate(data):
+                    return False
             self._quiet = 0
             self._spoke = True
             self._note(True)
             return False
         self._quiet += 1
         self._note(False)
-        return self._quiet >= self._amp_max_silent and n_frames > self._min_frames
+        if not self._spoke and self._pre_max_silent is not None:
+            if self._no_speech_due(data) and n_frames > self._min_frames:
+                return self._close("no_speech", self._pre_max_silent)
+            return False
+        if self._quiet >= self._amp_max_silent and n_frames > self._min_frames:
+            return self._close("quiet" if self._spoke else "no_speech", self._amp_max_silent)
+        return False
 
 
 # ── Keep-alive to zoe-data (deep dive 2 V-3, 2026-10-19) ─────────────────────
@@ -2209,7 +2461,14 @@ def on_wake():
     deleting the words the user is saying. Set WAKE_BEEP_ENABLED=false to drop it.
     """
     log.info("Wake word detected! Notifying Jetson and waking screen...")
-    threading.Thread(target=play_wake_beep, daemon=True, name="wake-beep").start()
+    _wake_chime_done.clear()  # set again the moment the chime is over (post-wake window)
+
+    def _chime() -> None:
+        try:
+            play_wake_beep()
+        finally:
+            _wake_chime_done.set()
+    threading.Thread(target=_chime, daemon=True, name="wake-beep").start()
     threading.Thread(target=_wake_panel_agent, daemon=True, name="wake-screen").start()
     threading.Thread(target=_notify_wake_background, daemon=True, name="wake-notify").start()
 
@@ -2440,7 +2699,12 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
                 time.sleep(wait_s)
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
     uploader = _start_stt_stream(frames)
-    endpointer = _Endpointer()
+    # The wake recording's no-speech window starts when the chime + echo suppression
+    # end (POST_WAKE_NO_SPEECH_S); 0 keeps the legacy SILENCE_TIMEOUT_S-from-start.
+    if POST_WAKE_NO_SPEECH_S > 0:
+        endpointer = _Endpointer(no_speech_s=POST_WAKE_NO_SPEECH_S, listen_gate=_PostWakeGate())
+    else:
+        endpointer = _Endpointer()
     stop_reason = "max_duration"
     caps = _record_caps()
     n_read = 0
@@ -2465,9 +2729,9 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
         speculation.recording_closed(resumed=endpointer.resumed_after_speculation)
     duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
     log.info(
-        "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s silence_timeout=%.2fs",
+        "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s close=%s",
         duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
-        SILENCE_TIMEOUT_S,
+        endpointer.close_rule(),
     )
     too_short = len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE)
     _finish_stt_stream(uploader, keep=not too_short)
@@ -3407,8 +3671,12 @@ class _SpeculativeTurn:
     turn on the full recording (with the claim scored here, never re-scored).
     """
 
-    def __init__(self, pa: pyaudio.PyAudio):
+    def __init__(self, pa: pyaudio.PyAudio, *, window: str = "", conversation: bool = False):
         self.pa = pa
+        # A follow-up / conversation window turn (ZOE_SPECULATIVE_TURN=windows): carried on the
+        # speculative request so the server applies the window speaker gate to it.
+        self.window = window
+        self.conversation = conversation
         self.turn_id = uuid.uuid4().hex
         self.fired = False
         self.resumed = False
@@ -3431,8 +3699,13 @@ class _SpeculativeTurn:
 
         def _run() -> None:
             try:
+                kw: dict = {}
+                if self.window:
+                    kw["window"] = self.window
+                if self.conversation:
+                    kw["conversation"] = True
                 self._played = _do_single_turn_stream(
-                    self.pa, wav, prompt_on_empty=False, speculation=self)
+                    self.pa, wav, prompt_on_empty=False, speculation=self, **kw)
             except Exception as exc:
                 log.warning("speculation: stream thread failed (%s) — treating as cancelled", exc)
                 self.cancelled = True
@@ -3447,6 +3720,20 @@ class _SpeculativeTurn:
         if self._t_fire is not None:
             self.wait_delta_ms = (time.monotonic() - self._t_fire) * 1000.0
 
+    def abandon(self) -> None:
+        """The recording that fired this speculation was dropped (too short, mic error): tell
+        the server to drop the prefix (``cancel``) and wait for the stream to end. Nothing plays."""
+        if not self.fired:
+            return
+        self.cancelled = True
+        if not self.ungated:
+            resp = _api_post("/api/voice/turn_stream/speculation",
+                             {"turn_id": self.turn_id, "action": "cancel"}, timeout=15, retries=0)
+            log.info("speculation: cancel turn_id=%s (recording dropped) verdict=%s",
+                     self.turn_id, resp.get("verdict", resp.get("error", "?")))
+        if self._thread is not None:
+            self._thread.join(timeout=90)
+
     def finish(self, final_wav: bytes) -> bool:
         """Send the verdict and wait for the speculative stream. Returns played."""
         if self._thread is not None and self.ungated:
@@ -3456,9 +3743,11 @@ class _SpeculativeTurn:
             # there is no gate to post to (409) and nothing may be played or
             # re-POSTed — the prefix WAS processed. Silent turn; latched off.
             return False
-        action = "resolve" if self.resumed else "commit"
+        # A speculation this daemon already dropped (junk on a window stream) must never be
+        # committed: a commit could release deferred writes the caller's re-run repeats.
+        action = "cancel" if self.cancelled else ("resolve" if self.resumed else "commit")
         body: dict = {"turn_id": self.turn_id, "action": action}
-        if self.resumed:
+        if action == "resolve":
             body["audio_base64"] = base64.b64encode(final_wav).decode()
         resp = _api_post("/api/voice/turn_stream/speculation", body, timeout=15, retries=0)
         if resp.get("error") == "HTTP 409":
@@ -3488,7 +3777,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                            conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
                            speculation: "_SpeculativeTurn | None" = None,
                            window: str = "", can_continue: bool = False,
-                           continued: bool = False) -> bool:
+                           continued: bool = False, wake_turn: bool = False) -> bool:
     """Streaming turn: POST audio to /api/voice/turn_stream and play each TTS
     sentence chunk as it arrives (no buffer phrase — first audio ~1.3s). Falls
     back to the blocking _do_single_turn on any error.
@@ -3531,7 +3820,9 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     if speculation is not None:
         payload["speculative"] = True
         payload["turn_id"] = speculation.turn_id
-    elif window in ("followup", "conversation"):
+    if window in ("followup", "conversation"):
+        # A speculative window turn (ZOE_SPECULATIVE_TURN=windows) carries it too: the server applies the window
+        # speaker gate to it. A wake turn's speculation has no window, so its payload is unchanged.
         payload["window"] = window
         if _prev_reply_asked:
             payload["prev_reply_question"] = True
@@ -3554,6 +3845,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     _speaker = _speaker_field(_scored_claim)
     if _speaker is not None:
         payload["speaker"] = _speaker
+    payload["speaker_model_state"] = _speaker_model_state()
 
     url = f"{ZOE_URL}/api/voice/turn_stream"
     _barge_in_requested.clear()
@@ -3644,12 +3936,25 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
                 break
             if "transcript" in obj and "chunk" not in obj:
                 transcript = obj.get("transcript", "") or transcript
+                # Wake word only ("Hey Zoe."): the user is most likely pausing before the command. The server would
+                # greet ("Good evening. What can I do for you?") over it - drop that before any audio plays; the
+                # caller plays the listening cue and opens a follow-up listen (WAKE_ONLY_LISTEN).
+                if _wake_only_listen(transcript, wake_turn=wake_turn, played_any=played_any,
+                                     speculative=speculation is not None):
+                    break
                 # The server leads with the transcript, BEFORE any audio: wake-time junk is dropped HERE, so nothing is
                 # played. Closing the stream (below) makes the server cancel the brain task it started for it. (STT runs
                 # on the server, so this is the earliest the daemon can know.) A speculative stream keeps its own protocol.
                 if speculation is None and not played_any and transcript \
                         and _is_junk_transcript(transcript, answering=answering):
                     log.info("Ignoring junk/hallucination transcript before playback: %s", utterance_tag(transcript))
+                    break
+                if speculation is not None and window and not played_any and transcript \
+                        and _is_junk_transcript(transcript, answering=answering):
+                    # A speculative WINDOW turn on junk: drop the prefix (closing the stream cancels it server-side);
+                    # the caller runs the full recording as a normal window turn, which meets the junk filter there.
+                    log.info("speculation: junk transcript on a window turn - cancelled %s", utterance_tag(transcript))
+                    speculation.cancelled = True
                     break
                 continue
             if "chunk" in obj:
@@ -3717,7 +4022,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
         # Pass the claim we already scored: re-scoring here would append a
         # second shadow row + journal line for this one spoken turn.
         return _do_single_turn(pa, wav, prompt_on_empty=prompt_on_empty,
-                               voice_claim=voice_claim, window=window)
+                               voice_claim=voice_claim, window=window, wake_turn=wake_turn)
 
     # The server answered WITHOUT running the brain (pre-brain utterance gate):
     #  * incomplete - the transcript ends mid-clause; _turn_with_monitor listens a
@@ -3725,6 +4030,8 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     #  * skipped - a follow-up window caught speech not meant for Zoe. Silence, no chime;
     #    returning False closes the 5 s follow-up loop (back to wake mode), while an open
     #    conversation keeps going.
+    if _last_turn_flags.get("wake_only"):
+        return False
     if _last_turn_flags.get("incomplete"):
         log.info("turn_stream: held by the server (transcript ends mid-clause) - not played")
         return False
@@ -3821,8 +4128,12 @@ def _post_turn_riding_restart(turn_payload: dict, on_restart=None, path: str = "
 
 def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True,
                     conversation: bool = False, voice_claim: object = _CLAIM_UNSET,
-                    window: str = "", text: "str | None" = None) -> bool:
+                    window: str = "", text: "str | None" = None, wake_turn: bool = False) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
+
+    ``wake_turn``: a wake-word turn whose transcript is only the wake word plays no reply
+    (WAKE_ONLY_LISTEN; the caller listens instead). On this blocking path a slow turn's
+    thinking phrase may already have played; the greeting itself never does.
 
     Returns True if audio was played (eligible for follow-up listening).
     Uses a single HTTP round-trip instead of separate transcribe + command calls.
@@ -3842,6 +4153,7 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     the reply is played exactly as a spoken turn's is. No claim = no verdict, the same as any
     unidentified turn, so a tap never proves a voice.
     """
+    _last_turn_flags.pop("wake_only", None)  # never a previous turn's, whatever path returns below
     import time as _time
     _t_pi_start = _time.monotonic()
 
@@ -3868,6 +4180,8 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     _speaker = None if text else _speaker_field(voice_claim)
     if _speaker is not None:
         turn_payload["speaker"] = _speaker
+    if not text:
+        turn_payload["speaker_model_state"] = _speaker_model_state()
     if window in ("followup", "conversation"):
         turn_payload["window"] = window
 
@@ -3950,6 +4264,8 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
         return False
 
     transcript = resp.get("text", "")
+    if transcript and _wake_only_listen(transcript, wake_turn=wake_turn, played_any=False, speculative=False):
+        return False  # the greeting is synthesised but never played
     if transcript:
         # The blocking turn's reply is already synthesised but NOT yet played: wake-time junk is dropped before playback.
         if _is_junk_transcript(transcript, answering=_answering_window(window)):
@@ -3980,7 +4296,8 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
 
 
 def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
-                      hard_cap_s: float | None = None, stream_upload: bool = False) -> bytes | None:
+                      hard_cap_s: float | None = None, stream_upload: bool = False,
+                      speculation: "_SpeculativeTurn | None" = None) -> bytes | None:
     """Listen for speech without wake word for `window_s` (default
     FOLLOW_UP_LISTEN_S) seconds.
 
@@ -3992,6 +4309,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
     ``record_command`` does - set ONLY for a recording that becomes a turn of its own (follow-up / conversation
     window). The continuation listens (hard-cap merge, held-turn resume) leave it off: their audio is merged into an
     earlier clip, so a stream for it could never match the merged WAV and would clobber the earlier clip's id.
+    ``speculation`` (ZOE_SPECULATIVE_TURN=windows) fires at the endpointer's first verdict exactly as in ``record_command``;
+    a caller whose recording came back None must ``abandon()`` a fired one.
     """
     global _last_record_capped
     _last_record_capped = False
@@ -4076,16 +4395,20 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
             if endpointer.push(data, len(frames)):
                 stop_reason = "silence"
                 break
+            if speculation is not None and endpointer.speculative_ready(len(frames)):
+                speculation.fire(_frames_to_wav(pa, frames))
             if _record_cap_stop(n_read, caps, endpointer):
                 break
         _note_capture_end(stop_reason, n_read, caps, endpointer)
         stream.stop_stream()
         stream.close()
+        if speculation is not None:
+            speculation.recording_closed(resumed=endpointer.resumed_after_speculation)
         duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
         log.info(
-            "Recorded follow-up: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s silence_timeout=%.2fs",
+            "Recorded follow-up: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s close=%s",
             duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
-            SILENCE_TIMEOUT_S,
+            endpointer.close_rule(),
         )
 
         too_short = len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE)
@@ -4116,7 +4439,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
 
 def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool = True,
                       window_s: float | None = None,
-                      hard_cap_s: float | None = None) -> "bytes | None":
+                      hard_cap_s: float | None = None,
+                      speculation: "_SpeculativeTurn | None" = None) -> "bytes | None":
     """The next follow-up recording: a committed barge-in's seed (the words the
     user said over Zoe — no beep, no fresh listen), else beep + listen."""
     if seed is not None:
@@ -4129,9 +4453,44 @@ def _follow_up_source(pa: pyaudio.PyAudio, seed: "bytes | None", *, beep: bool =
         play_follow_up_beep()
     _recording_active.set()
     # This recording is a turn of its own (follow-up / conversation window): it streams to the STT lane like a wake turn.
-    if hard_cap_s is None:
-        return _follow_up_listen(pa, window_s=window_s, stream_upload=True)
-    return _follow_up_listen(pa, window_s=window_s, hard_cap_s=hard_cap_s, stream_upload=True)
+    kw: dict = {}
+    if hard_cap_s is not None:
+        kw["hard_cap_s"] = hard_cap_s
+    if speculation is not None:
+        kw["speculation"] = speculation
+    return _follow_up_listen(pa, window_s=window_s, stream_upload=True, **kw)
+
+
+def _window_speculation(pa: "pyaudio.PyAudio", seed: "bytes | None", window: str,
+                        conversation: bool = False) -> "_SpeculativeTurn | None":
+    """A speculation for the next follow-up / conversation recording (ZOE_SPECULATIVE_TURN=windows
+    + ZOE_SPECULATIVE_TURN), or None. Never for a barge seed: that audio is already recorded."""
+    if seed is not None or not window or not ZOE_SPECULATIVE_WINDOWS or not _speculation_available():
+        return None
+    return _SpeculativeTurn(pa, window=window, conversation=conversation)
+
+
+def _window_turn(pa: "pyaudio.PyAudio", wav: "bytes | None", turn_fn, spec: "_SpeculativeTurn | None", *,
+                 window: str = "", **kw) -> "tuple[bool, bytes | None]":
+    """Run a follow-up / conversation turn -> (played_audio, barge_seed). Without a fired
+    speculation it is exactly ``_turn_with_monitor``. With one, the verdict is sent
+    (``commit`` / ``resolve`` with the full recording, under a barge monitor); a cancelled
+    speculation (the user went on speaking, a window gate, junk) runs the FULL recording as
+    the normal window turn, reusing the claim scored for the prefix."""
+    if spec is None or not spec.fired:
+        return _turn_with_monitor(pa, wav, turn_fn, window=window, **kw)
+    _monitor = _BargeMonitor(pa)
+    _monitor.start()
+    try:
+        played = spec.finish(wav)
+    finally:
+        _monitor.stop()
+    seed = _monitor.take_seed()
+    if spec.cancelled and not spec.ungated:
+        log.info("speculation: window turn re-run on the full recording (%.1fs)",
+                 (len(wav) - 44) / (2.0 * SAMPLE_RATE))
+        return _turn_with_monitor(pa, wav, turn_fn, window=window, voice_claim=spec.voice_claim, **kw)
+    return played, seed
 
 
 def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
@@ -4160,6 +4519,8 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                 except Exception as exc:
                     log.debug("wake stream close failed (non-fatal): %s", exc)
         if not wav:
+            if _spec is not None:
+                _spec.abandon()  # fired, then the recording was dropped: never leave the prefix held
             return
 
         _turn_fn = _do_single_turn_stream if VOICE_STREAM_ENABLED else _do_single_turn
@@ -4182,7 +4543,9 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
         else:
             # Under a barge monitor, with the long-speech / trailing-conjunction
             # guards (_turn_with_monitor): one spoken thought is one turn.
-            played_audio, seed_wav = _turn_with_monitor(pa, wav, _turn_fn)
+            played_audio, seed_wav = _turn_with_monitor(pa, wav, _turn_fn, wake_turn=True)
+            if _last_turn_flags.get("wake_only"):
+                played_audio, seed_wav = _listen_after_wake_only(pa, _turn_fn)
 
         # ── Conversation mode ("hey zoe, let's talk") ──
         # The server's opener fast-path marks the done frame with
@@ -4202,18 +4565,22 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
                 # A barge-in seed is deliberate speech TO Zoe: no window hint, so the
                 # server never judges it as side speech.
                 conv_window = "" if seed_wav is not None else "conversation"
+                conv_spec = _window_speculation(pa, seed_wav, conv_window, conversation=True)
+                src_kw: dict = {"speculation": conv_spec} if conv_spec is not None else {}
                 conv_wav = _follow_up_source(pa, seed_wav, beep=conv_beep, window_s=CONV_WINDOW_S,
-                                             hard_cap_s=CONV_RECORD_SECONDS_HARD)
+                                             hard_cap_s=CONV_RECORD_SECONDS_HARD, **src_kw)
                 conv_beeped = conv_beeped or (conv_beep and seed_wav is None)
                 seed_wav = None
                 if conv_wav is None:
+                    if conv_spec is not None:
+                        conv_spec.abandon()
                     silent_windows += 1
                     log.info("Conversation: silent window %d/%d",
                              silent_windows, CONV_SILENT_WINDOWS)
                     continue
                 silent_windows = 0
-                _, seed_wav = _turn_with_monitor(pa, conv_wav, _turn_fn, window=conv_window,
-                                                 prompt_on_empty=False, conversation=True)
+                _, seed_wav = _window_turn(pa, conv_wav, _turn_fn, conv_spec, window=conv_window,
+                                           prompt_on_empty=False, conversation=True)
                 conv_turns += 1
                 if _last_turn_flags.get("conversation_end"):
                     log.info("Conversation CLOSED by ender after %d turns", conv_turns)
@@ -4231,15 +4598,19 @@ def voice_command(pa: pyaudio.PyAudio, oww, wake_stream=None) -> None:
             # Re-arm the UI orb to "listening" right before follow-up capture opens.
             log.info("Follow-up listening (turn %d/%d, %.1fs window)...", follow_ups_done + 1, FOLLOW_UP_MAX_TURNS, FOLLOW_UP_LISTEN_S)
             follow_window = "" if seed_wav is not None else "followup"  # a barge seed is for Zoe
-            follow_wav = _follow_up_source(pa, seed_wav)
+            follow_spec = _window_speculation(pa, seed_wav, follow_window)
+            follow_wav = (_follow_up_source(pa, seed_wav, speculation=follow_spec) if follow_spec is not None
+                          else _follow_up_source(pa, seed_wav))
             seed_wav = None
             if follow_wav is None:
+                if follow_spec is not None:
+                    follow_spec.abandon()
                 log.info("No follow-up speech detected, returning to wake mode.")
                 break
             # Follow-up misses should fall back silently to wake mode, not speak a
             # robotic retry prompt after a successful prior answer.
-            played_audio, seed_wav = _turn_with_monitor(pa, follow_wav, _turn_fn,
-                                                        window=follow_window, prompt_on_empty=False)
+            played_audio, seed_wav = _window_turn(pa, follow_wav, _turn_fn, follow_spec,
+                                                  window=follow_window, prompt_on_empty=False)
             follow_ups_done += 1
 
         if POST_PLAY_TAIL_S > 0:

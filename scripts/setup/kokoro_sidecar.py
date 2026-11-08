@@ -120,6 +120,7 @@ _WARM_PHRASES = [
     "Good morning.",
     "Good afternoon.",
     "Good evening.",
+    "Hi.",                   # the first-turn greeting from midnight to 05:00 (voice_greeting.greeting_for_hour)
     "What can I help you with?",
     "On it.",
     "All done.",
@@ -580,6 +581,14 @@ async def _flush_cache_async(loop, force: bool = False) -> None:
         _cache_dirty = True
 
 
+def start_line(device: str, degraded_reason: "str | None", load_s: float, pid: int) -> str:
+    """The ONE per-start journal line: ``journalctl -u kokoro-tts | grep -c KOKORO_START`` is starts/day, ``degraded=1`` is the
+    degraded starts (the CUDA->CPU fallback ``platform_health_check.sh check_tts_not_degraded`` only sees while it is up)."""
+    reason = "_".join(str(degraded_reason).split())[:160] if degraded_reason else "-"
+    return "KOKORO_START device=%s degraded=%d reason=%s load_s=%.1f pid=%d" % (
+        device, 1 if degraded_reason else 0, reason, load_s, pid)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _pipeline
@@ -588,7 +597,10 @@ async def lifespan(app: FastAPI):
     precache_task: asyncio.Task | None = None
     stop_flush = asyncio.Event()
     try:
+        _t_load = time.monotonic()
         _pipeline = await loop.run_in_executor(None, _load_pipeline)
+        (logger.warning if _degraded_reason else logger.info)(
+            start_line(_device, _degraded_reason, time.monotonic() - _t_load, os.getpid()))
         # One warmup synthesis primes the engine so the first real request is fast.
         logger.info("Warming up Kokoro…")
         await _run_synthesis("Zoe is ready.", _VOICE, speed=1.0)

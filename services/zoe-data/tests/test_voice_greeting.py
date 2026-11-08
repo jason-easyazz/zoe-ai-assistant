@@ -24,7 +24,19 @@ def test_time_of_day_phrasing(vg):
     assert vg.greeting_for_hour(7) == "Good morning"
     assert vg.greeting_for_hour(13) == "Good afternoon"
     assert vg.greeting_for_hour(20) == "Good evening"
-    assert vg.greeting_for_hour(2) == "Good evening"  # pre-dawn → evening bucket
+    assert vg.greeting_for_hour(23) == "Good evening"
+
+
+@pytest.mark.parametrize("hour", [0, 1, 2, 3, 4])
+def test_the_small_hours_get_a_plain_hi_not_good_evening(vg, hour):
+    """2026-11-08 02:44: the first turn of the day opened with "Good evening". Midnight to 05:00 is a plain "Hi"."""
+    assert vg.greeting_for_hour(hour) == "Hi"
+
+
+def test_the_hi_bucket_ends_at_five_and_starts_at_midnight(vg):
+    # negative controls on both edges: 05:00 is morning, 23:59 is still evening
+    assert vg.greeting_for_hour(5) == "Good morning" and vg.greeting_for_hour(23) == "Good evening"
+    assert vg.greeting_prefix("panel-a", now=datetime.datetime(2026, 7, 10, 2, 44, 0)) == "Hi"
 
 
 def test_first_turn_greets_then_silent_same_day(vg):

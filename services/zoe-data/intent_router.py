@@ -188,6 +188,10 @@ def _infer_event_category(text: str) -> str:
     return "general"
 
 
+#: a courtesy tail on a list command ("..., please", "thanks", "for me"); the list-add patterns read the text without it
+_LIST_TRAILING_COURTESY_RE = re.compile(r"(?:,?\s+(?:please|thanks|thank you|cheers|for me))+$")
+
+
 def _normalize_chat_intent_text(raw: str) -> str:
     """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
@@ -414,6 +418,15 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _is_forget_command(text: str) -> bool:
+    """memory_quality.is_forget_command, never raising (an unavailable gate leaves the anchored regex alone)."""
+    try:
+        from memory_quality import is_forget_command
+        return is_forget_command(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # "forget what I told you about X" / "forget everything about X" -- entity-scoped
 # forget (QA review F14). Deterministic, no LLM. The captured entity must pass
 # strict name validation (person_extractor._looks_like_person_name) before the
@@ -444,13 +457,20 @@ _KEEP_CONTACT_RE = re.compile(
 # "how well do you know me" / "what do you understand about me" → reveal portrait
 _PORTRAIT_REVEAL_RE = re.compile(
     r"(?:how\s+well\s+do\s+you\s+know\s+me"
-    r"|what\s+do\s+you\s+(?:really\s+)?(?:know|understand|think)\s+about\s+me"
+    r"|what\s+do\s+you\s+(?:really\s+)?(?:understand|think)\s+about\s+me"
     r"|what'?s?\s+your\s+understanding\s+of\s+me"
-    r"|describe\s+(?:me|who\s+i\s+am)\s+(?:to\s+me|back\s+to\s+me)?"
+    r"|describe\s+(?:me|who\s+i\s+am)\b(?:\s+(?:to\s+me|back\s+to\s+me))?"
+    r"|how\s+would\s+you\s+describe\s+me\b"
+    r"|what\s+am\s+i\s+like\b"
+    r"|(?:your|the)\s+(?:picture|portrait|impression)\s+of\s+me"
     r"|how\s+well\s+(?:do\s+you\s+)?understand\s+me"
     r"|what\s+do\s+you\s+see\s+when\s+you\s+think\s+of\s+me)",
     re.IGNORECASE,
 )
+
+# Plain "what do you know about me" (any lead-in, "now", "so far") asks for the FACTS, not the portrait: it routes to the same
+# provenance summary as the bare ask, so a lead-in ("sorry, got distracted. what do you know about me now?") is not a different answer.
+_KNOW_ABOUT_ME_RE = re.compile(r"what\s+do\s+you\s+(?:really\s+)?know\s+about\s+me", re.IGNORECASE)
 
 # "update your understanding" / "rebuild your portrait of me" → regenerate portrait now
 _PORTRAIT_REFRESH_RE = re.compile(
@@ -815,8 +835,10 @@ def detect_intent(
         return Intent("panel_list", {})
 
     # "forget that" — retract the most recent memory write for the caller.
-    # Matched very early so it never collides with other verbs.
-    if _FORGET_LAST_RE.match(t):
+    # Matched very early so it never collides with other verbs. memory_quality.is_forget_command adds the
+    # shapes the anchored regex missed live (QA 2026-11-05): a leading "no," / "oh" / "wait", two acts in a row
+    # ("no, don't remember that! forget that"), and "forget that I said ..." - short utterances only.
+    if _FORGET_LAST_RE.match(t) or _is_forget_command(t):
         return Intent("memory_forget_last", {})
 
     # "keep the contact" -- undo the contact removal the last forget cascade announced.
@@ -849,10 +871,13 @@ def detect_intent(
             return Intent("memory_forget_entity", {"name": _entity})
 
     # Portrait intents — how well Zoe knows the user, and rebuilding understanding.
-    if _PORTRAIT_REVEAL_RE.search(t):
-        return Intent("portrait_reveal", {})
+    # Refresh first: "update/rebuild your portrait of me" also contains "your portrait of me".
     if _PORTRAIT_REFRESH_RE.search(t):
         return Intent("portrait_refresh", {})
+    if _PORTRAIT_REVEAL_RE.search(t):
+        return Intent("portrait_reveal", {})
+    if _KNOW_ABOUT_ME_RE.search(t):
+        return Intent("portrait_reveal", {"facts": True})
 
     # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
     # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
@@ -988,7 +1013,14 @@ def detect_intent(
         m = re.match(pattern, t)
         if m:
             qualifier = (m.group(1) if m.lastindex else "").strip()
+            # "for tomorrow" / "for friday" / "this weekend": the trailing words carry the date (they used to fall to "the next 7 days")
+            qualifier = command_shapes.calendar_qualifier(qualifier) or qualifier
             return Intent("calendar_show", {"qualifier": qualifier})
+    # The class those patterns are samples of (command_shapes.calendar_read_ask): "do I have anything on my calendar", "am I free
+    # this weekend", "what am I doing friday", "can you see my calendar". A complaint or a TV question is not one.
+    _cal_ask = command_shapes.calendar_read_ask(text)
+    if _cal_ask is not None:
+        return Intent("calendar_show", {"qualifier": _cal_ask})
 
     # --- REMINDERS CREATE (keyword classifier → LLM fills slots via detect_and_extract_intent) ---
     # Pattern 1: "remind me to/at/in/on/about X", "set a reminder to/for/at/in/on X",
@@ -1296,6 +1328,24 @@ def detect_intent(
         )
         room = _room_m.group(1).replace(" ", "_") if _room_m else None
         return Intent("smart_home", {"action": action, "entity": "light", "room": room})
+    # Every other household device the Skybridge parser knows how to switch ("turn the heater on", "switch off the lamp"): the lights
+    # pattern above is one sample of it. Same parser, so the two matchers cannot disagree; a device whose noun Zoe has no word for
+    # (device_unverified) is Skybridge's, which can check the house's own device list.
+    # (only a command that OPENS with a switch verb: "make fan mode here to off" and "put the thermostat fan on auto" are not
+    # on/off commands - the phrasing corpus caught both)
+    if not _SMART_HOME_QUESTION_RE.match(t) and re.match(r"^(?:(?:please|zoe|hey|can you|could you|would you|will you)\s+)*(?:turn|switch|flip)\b", t) \
+            and not re.search(r"\b(?:mode|speed|setting|temperature|temp)\b|\bto\s+(?:on|off)\b", t):
+        try:
+            import skybridge_service as _sky_home
+
+            _bare = re.sub(r"[.!?,;:]+$", "", (text or "").strip().lower())
+            _home = _sky_home._classify_home(text or "", f" {_bare} ")
+        except Exception:  # noqa: BLE001 - never break intent detection over a device parse
+            _home = None
+        if (_home is not None and _home.domain == "smart_home" and _home.action in ("turn_on", "turn_off")
+                and not _home.device_unverified and not _home.entity_id and _home.query):
+            _act = "delayed" if command_shapes.delayed_command(t) else _home.action
+            return Intent("smart_home", {"action": _act, "entity": "device", "room": None, "query": _home.query})
 
     # A change to a RUNNING timer ("add 5 minutes to the timer", "take a minute off the pizza timer", "pause the
     # timer") has no executor in this module; the Skybridge timer store owns it. The list-add/remove patterns below
@@ -1349,21 +1399,26 @@ def detect_intent(
         return Intent("music_setup", {})
 
     # === LIST PATTERNS (checked after domain-specific) ===
+    # A trailing courtesy ("... to my personal list please") is not part of the item or the list name: with it, the
+    # "$"-anchored target patterns missed and the implicit "add (.+)" stored "sultanas to my personal list please" on the
+    # SHOPPING list (a private item on the shared list; rollout QA 2026-11-07).
+    lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
+    if len(lt.split()) < 2:
+        lt = t          # the courtesy word WAS the whole object ("add cheers"): keep it as before
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [
         r"^add (.+?) to (?:the |my )?(.+?) ?list$",
         r"^put (.+?) on (?:the |my )?(.+?) ?list$",
-        r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket)$",
+        r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks)$",
         r"^(?:(?:can|could) you |please )?(?:add|put) (.+?) (?:to|on) (?:the |my )?(.+?) ?list$",
     ]:
-        m = re.match(pattern, t)
+        m = re.match(pattern, lt)
         if m:
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
                 continue            # a sentence, not an item: never stored, never claimed
-            list_type = _normalize_list(lst)
-            return Intent("list_add", {"item": item, "list_type": list_type})
+            return Intent("list_add", {"item": item, **_list_slots(lst)})
 
     # --- LIST ADD (STT-garbled leading "add") ---
     # Moonshine renders a leading "Add" as near-homophones: "Add council to my
@@ -1379,7 +1434,7 @@ def detect_intent(
         r"^(?:i'?d|id|and|at|it|hey|a)?\s*(?:go to |goto )?(.+?) "
         r"to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)"
         r" list[.!?]?$",
-        t,
+        lt,
     )
     if m:
         item = _sanitize_list_item(m.group(1))
@@ -1405,7 +1460,7 @@ def detect_intent(
             r"^(?:(?:can|could) you |please )?add (.+)$",
             r"^(?:(?:can|could) you |please )?put (.+)$",
         ]:
-            m = re.match(pattern, t)
+            m = re.match(pattern, lt)
             if m:
                 item = _sanitize_list_item(m.group(1))
                 if not _list_item_ok(item):
@@ -1415,7 +1470,7 @@ def detect_intent(
 
     # --- LIST ADD (natural language shopping) ---
     m = re.match(
-        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", t
+        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", lt
     )
     if m:
         item = _sanitize_list_item(m.group(1))
@@ -1424,8 +1479,9 @@ def detect_intent(
 
     # --- LIST SHOW ---
     for pattern in [
-        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list$",
-        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list$",
+        # a trailing filler word ("... list now") is still the read - missing it fell to a default-shopping read (QA 3b)
+        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
+        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
         r"^what do i need to (?:buy|get)$",
         r"^what'?s on my list$",
         r"^show my list$",
@@ -1439,8 +1495,7 @@ def detect_intent(
             lst = m.group(1).strip() if m.lastindex else "shopping"
             if lst in ("my list", "the list", "list", "my"):
                 lst = "shopping"
-            list_type = _normalize_list(lst)
-            return Intent("list_show", {"list_type": list_type})
+            return Intent("list_show", _list_slots(lst))
 
     # --- LIST REMOVE ---
     for pattern in [
@@ -1456,7 +1511,7 @@ def detect_intent(
             if not command_shapes.plain_list_item(item):
                 break  # "remove all but the milk", "the second item", "everything": never a guessed delete
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
-            return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
+            return Intent("list_remove", {"item": item, **_list_slots(lst)})
 
     # --- LIST RENAME ("change noodles to rice noodles [on the shopping list]") ---
     # ONE parser, shared with Skybridge (questions about changing, and "change the timer to ..." are not list writes there).
@@ -2186,7 +2241,13 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     ]
     if len(named) > 1:
         return None  # ambiguous — let the brain sort it out
-    offer = named[0] if named else offers[0]
+    # A bare reply binds to the offer most recently VOICED (cooldown rotation means
+    # that is not always the oldest surfaced row); no record -> the oldest.
+    import contact_offer_policy as _cop
+
+    _last = _cop.last_offered_id(user_id)
+    _voiced = next((o for o in offers if str(o.get("id")) == _last), None) if _last else None
+    offer = named[0] if named else (_voiced or offers[0])
     kind = _offer_reply_kind(text, offer.get("name") or "")
     if kind is None:
         return None
@@ -2318,6 +2379,15 @@ async def detect_and_extract_intent(
                           {"suggestion_id": _alias_reply[0], "forget_alias": True})
     except Exception as _alias_exc:  # never let the alias path break routing
         logger.debug("detect_and_extract_intent: forget-alias reply match failed: %s", _alias_exc)
+    try:
+        # a bare yes / no to the anticipation offer Zoe just made ("By the way - want a reminder to leave by 7:10?"); off = None, no I/O
+        import anticipation as _anticipation
+        _ant_reply = await _anticipation.match_reply(user_id, text, _previous_assistant_message)
+        if _ant_reply is not None:
+            return Intent("pending_offer_accept" if _ant_reply[1] else "pending_offer_dismiss",
+                          {"suggestion_id": _ant_reply[0], "anticipation": True})
+    except Exception as _ant_exc:  # never let the anticipation path break routing
+        logger.debug("detect_and_extract_intent: anticipation reply match failed: %s", type(_ant_exc).__name__)
     try:
         _offer_reply = await _match_pending_offer_reply(text, user_id)
     except Exception as _offer_exc:  # never let the offer path break routing
@@ -2467,14 +2537,53 @@ def _extract_simple_calendar_slots(text: str) -> Optional[dict]:
 _EXPLICIT_LIST_CMD_RE = re.compile(r"^(?:(?:can|could) you |please )?(?:add|put)\b")
 
 
+# Words that NAME a list type, matched as whole words inside a spoken list name ("my personal to-do" -> personal).
+_LIST_TYPE_WORDS = (
+    ("shopping", re.compile(r"\b(?:shopping|grocery|groceries)\b")),
+    ("personal", re.compile(r"\b(?:to ?dos?|personal|private|own)\b")),
+    ("tasks", re.compile(r"\btasks?\b")),
+    ("work", re.compile(r"\bwork\b")),
+    ("bucket", re.compile(r"\bbucket\b")),
+)
+_LIST_NAME_LEAD_RE = re.compile(r"^(?:(?:the|my|our)(?:\s+|$))+")
+# A spoken name that IS a type word ("shopping", "to do") - anything longer may also be the exact name of an existing list.
+_BARE_TYPE_NAMES = frozenset({"shopping", "grocery", "groceries", "todo", "todos", "to do", "to dos", "personal", "tasks",
+                              "task", "work", "bucket"})
+
+
+def _list_target(raw: str) -> tuple[str, str]:
+    """``(list_type, list_name)`` for a spoken list name - exactly one is set. A name that clearly names ONE type ("shopping",
+    "personal to-do", "my tasks") gives that type; anything else ("pharmacy", "work shopping", "christmas") is a NAMED list
+    the executor must find among the member's own / household lists by name - never a silent default to the household
+    shopping list (QA 2026-11-06: "my personal to-do list" landed on the shared shopping list)."""
+    name = " ".join(str(raw or "").lower().replace("-", " ").split())
+    name = _LIST_NAME_LEAD_RE.sub("", name).strip()
+    if name.endswith(" list"):
+        name = name[: -len(" list")].strip()
+    if not name:
+        return "shopping", ""        # a bare "the list" / "my list": the household list, as before
+    found = {lt for lt, rx in _LIST_TYPE_WORDS if rx.search(name)}
+    if found and found <= {"personal", "tasks"}:
+        return ("tasks" if found == {"tasks"} else "personal"), ""
+    if len(found) == 1:
+        return found.pop(), ""
+    return "", name
+
+
 def _normalize_list(raw: str) -> str:
-    mapping = {
-        "shopping": "shopping", "grocery": "shopping", "groceries": "shopping",
-        "todo": "personal", "to do": "personal", "to-do": "personal",
-        "personal": "personal", "work": "work", "tasks": "tasks",
-        "bucket": "bucket",
-    }
-    return mapping.get(raw, "shopping")
+    """The list TYPE a spoken name means, or "" when it names no single type (a named list - see :func:`_list_target`)."""
+    return _list_target(raw)[0]
+
+
+def _list_slots(raw: str) -> dict:
+    """Intent slots for a spoken list name. ``list_phrase`` carries a typed name that is more than a type word ("christmas
+    shopping", "personal to do") so the executor can prefer an existing list of exactly that name first."""
+    lt, name = _list_target(raw)
+    if not lt:
+        return {"list_type": "", "list_name": name}
+    phrase = _LIST_NAME_LEAD_RE.sub("", " ".join(str(raw or "").lower().replace("-", " ").split())).strip()
+    phrase = phrase[: -len(" list")].strip() if phrase.endswith(" list") else phrase
+    return {"list_type": lt, "list_phrase": phrase} if phrase and phrase not in _BARE_TYPE_NAMES else {"list_type": lt}
 
 
 _TASK_KEYWORDS = {
@@ -2634,16 +2743,45 @@ def _escape_like_pattern(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+_LIST_TYPES = frozenset({"shopping", "personal", "tasks", "work", "bucket"})
+
+
+def _canonical_list_slots(intent: Intent) -> Intent:
+    """The intent with a ``list_type`` that is NOT a list type resolved like a spoken list name (:func:`_list_slots`). The
+    brain's list tools pass the name the model used ("tasks/to-do", "pharmacy study list" - QA round 3b, 2026-11-07): a to-do
+    name is the member's own list, an unknown name is a named list (asked about, never written), and nothing silently lands on
+    the household shopping list. A real type, an empty one or an explicit ``list_name`` is left exactly as it was. Pure."""
     slots = intent.slots or {}
-    list_type = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    lt = str(slots.get("list_type") or "").strip()
+    if not lt or lt.lower() in _LIST_TYPES or str(slots.get("list_name") or "").strip():
+        return intent
+    rest = {k: v for k, v in slots.items() if k not in ("list_type", "list_phrase")}
+    return Intent(intent.name, {**rest, **_list_slots(lt.replace("/", " "))}, intent.confidence)
+
+
+async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    intent = _canonical_list_slots(intent)
+    slots = intent.slots or {}
     list_name = str(slots.get("list_name") or "").strip()
+    list_type = str(slots.get("list_type") or "").strip() or ("" if list_name else "shopping")
     if _is_guest_identity(user_id):
         user_id = panel_principal.HOUSEHOLD_VIEWER  # a guest owns no list: household (family-visible) lists only
     try:
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
+            if not list_type:
+                # A list the user NAMED that is no type ("my pharmacy list"): that list, never the shopping list instead.
+                found = await _named_list(db, user_id, list_name)
+                if found is None:
+                    return f"You don't have a {list_name} list. Which list did you mean?"
+                _, list_type, list_name = found
+                intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
+            elif not list_name:
+                found = await _phrase_list(db, user_id, slots, list_type)      # "the christmas shopping list", if it exists
+                if found is not None:
+                    _, list_type, list_name = found
+                    intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
             if list_name:
                 cursor = await db.execute(
                     "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
@@ -2700,28 +2838,79 @@ async def _notify_lists_ui(event_type: str, data: dict) -> None:
         logger.debug("lists UI notify skipped: %s", exc)
 
 
+async def _named_list(db, user_id: str, name: str, *, own_only: bool = False) -> Optional[tuple[str, str, str]]:
+    """``(list_id, list_type, list_name)`` of the list the user NAMED - their own first, then a household one with exactly that
+    name (``list_service.find_named_list_id``; a guest sees household lists only). ``own_only``: the member's own list or
+    nothing (a personal "my to-do" name never lands on someone else's shared list). None when there is no such list."""
+    from list_service import find_named_list_id
+
+    if not name:
+        return None
+    list_id = await find_named_list_id(db, user_id=user_id, name=name)
+    if list_id is None:
+        return None
+    cursor = await db.execute("SELECT list_type, name, user_id FROM lists WHERE id=?", (list_id,))
+    row = await cursor.fetchone()
+    if row is None or (own_only and str(row["user_id"] or "") != str(user_id)):
+        return None
+    return list_id, str(row["list_type"] or ""), str(row["name"] or name)
+
+
+async def _phrase_list(db, user_id: str, slots: dict, list_type: str) -> Optional[tuple[str, str, str]]:
+    """An existing list whose exact name the user said ("christmas shopping") before the TYPE's default list. A personal type
+    only ever matches the member's own list."""
+    from list_service import PERSONAL_LIST_TYPES
+
+    phrase = str(slots.get("list_phrase") or "").strip()
+    if not phrase:
+        return None
+    return await _named_list(db, user_id, phrase, own_only=list_type in PERSONAL_LIST_TYPES)
+
+
+def _no_such_list_reply(name: str, item: str = "") -> str:
+    """The ASK for a list the user named that does not exist: nothing is written, and no shared list is guessed."""
+    what = f" {item}" if item else " that"
+    return (f"You don't have a {name} list, so I haven't put{what} anywhere. "
+            "Which list should it go on - your to-do list or the shopping list?")
+
+
 async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Add an item to the user's list straight through the DB, mirroring
     mcp_server's list_add_item tool (same list resolution, family/personal
     visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:
         return None
-    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
-    ln = str(slots.get("list_name") or "").strip() or lt.capitalize()
+    named = str(slots.get("list_name") or "").strip()
+    lt = str(slots.get("list_type") or "").strip() or ("" if named else "shopping")
+    ln = named or lt.capitalize()
     actor = panel_principal.household_actor({"user_id": user_id})  # the member, or "panel" for an unidentified guest
     try:
         from database import get_db_ctx
         from list_service import add_items_to_list, add_reply, default_visibility
 
         async with get_db_ctx() as db:
+            target_id = None
+            if not lt:
+                # A list the user NAMED that is no list type ("my pharmacy list"): that list or nothing - never the
+                # household shopping list by default (QA 2026-11-06). Nothing is written when it does not exist.
+                found = await _named_list(db, user_id, named)
+                if found is None:
+                    return _no_such_list_reply(named, item)
+                target_id, lt, ln = found
+            else:
+                found = await _phrase_list(db, user_id, slots, lt)
+                if found is not None:
+                    target_id, lt, ln = found
             outcome = await add_items_to_list(
                 db,
                 user_id=user_id,
                 list_type=lt,
                 list_name=ln,
+                list_id=target_id,
                 text=item,
                 quantity=slots.get("quantity"),
                 category=slots.get("category"),
@@ -2744,7 +2933,10 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
                 "list_updated",
                 {"action": "item_added", "list_id": list_id, "item": {"id": one["item_id"], "text": one["_text"]}, "actor": actor},
             )
-        friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
+        if target_id is not None:
+            friendly = f"{ln} list" if not ln.lower().endswith(" list") else ln
+        else:
+            friendly = "shopping list" if lt == "shopping" else f"{lt.replace('_', ' ')} list"
         return _format_response(
             intent,
             json.dumps({"item_id": item_id, "list": ln, "list_id": list_id, "text": item,
@@ -2764,11 +2956,13 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     substring fallback). If the item isn't on the list that's a clean success
     message (ok:true, 'X wasn't on your list'), not a failure — so brain/tool
     consumers don't surface a false error. Returns None only on genuine failure."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:
         return None
-    lt = str(slots.get("list_type") or "shopping").strip() or "shopping"
+    named = str(slots.get("list_name") or "").strip()
+    lt = str(slots.get("list_type") or "").strip() or ("" if named else "shopping")
     actor = panel_principal.household_actor({"user_id": user_id})  # BEFORE the viewer swap: the sentinel would read as a member
     if _is_guest_identity(user_id):
         user_id = panel_principal.HOUSEHOLD_VIEWER  # household (family-visible) lists only
@@ -2776,19 +2970,37 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
         from database import get_db_ctx
 
         async with get_db_ctx() as db:
+            # Which lists the item may come off: the lists of the TYPE, or - for a list the user NAMED that is no type
+            # ("my pharmacy list") - that one list, never the household shopping list by default (QA 2026-11-06).
+            scope_sql, scope_arg = "l.list_type=?", lt
+            if not lt:
+                found = await _named_list(db, user_id, named)
+                if found is None:
+                    return f"You don't have a {named} list, so nothing came off any list."
+                scope_sql, scope_arg = "l.id=?", found[0]
+                lt = found[1]
+            else:
+                found = await _phrase_list(db, user_id, slots, lt)
+                if found is not None:
+                    scope_sql, scope_arg, named = "l.id=?", found[0], found[2]
+            # "my to-do" is the member's OWN list: never tick off an item on another member's shared to-do list.
+            from list_service import PERSONAL_LIST_TYPES
+
+            who_sql = ("l.user_id=?" if lt in PERSONAL_LIST_TYPES and not named and not _is_guest_identity(user_id)
+                       and user_id != panel_principal.HOUSEHOLD_VIEWER else "(l.user_id=? OR l.visibility='family')")
             cursor = await db.execute(
                 "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
-                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND LOWER(li.text)=LOWER(?)"
+                " WHERE " + who_sql + " AND " + scope_sql + " AND LOWER(li.text)=LOWER(?)"
                 " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
-                (user_id, lt, item),
+                (user_id, scope_arg, item),
             )
             row = await cursor.fetchone()
             if not row:
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
-                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? ESCAPE '\\'"
+                    " WHERE " + who_sql + " AND " + scope_sql + " AND li.text LIKE ? ESCAPE '\\'"
                     " AND li.deleted=0 AND l.deleted=0 ORDER BY l.created_at ASC, li.id ASC LIMIT 1",
-                    (user_id, lt, f"%{_escape_like_pattern(item)}%"),
+                    (user_id, scope_arg, f"%{_escape_like_pattern(item)}%"),
                 )
                 row = await cursor.fetchone()
             if not row:
@@ -2797,10 +3009,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
 
                 cursor = await db.execute(
                     "SELECT li.id, li.list_id, li.text FROM list_items li JOIN lists l ON li.list_id = l.id"
-                    " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=?"
+                    " WHERE " + who_sql + " AND " + scope_sql +
                     " AND li.deleted=0 AND l.deleted=0 AND (li.completed IS NULL OR li.completed=0)"
                     " ORDER BY l.created_at ASC, li.id ASC",
-                    (user_id, lt),
+                    (user_id, scope_arg),
                 )
                 row = find_matching_item(await cursor.fetchall(), item)
             if not row:
@@ -2813,6 +3025,10 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
                 "UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,)
             )
         logger.info("list_item_audit op=remove actor=%s list=%s item=%s", actor, list_id, item_id)
+        import write_receipts
+
+        write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list_removed", item_id,
+                              "list_remove_direct")
         await _notify_lists_ui(
             "list_updated",
             {"action": "item_completed", "list_id": list_id, "item_id": item_id, "actor": actor},
@@ -2877,31 +3093,45 @@ def _say_clock(hhmm: str) -> str:
         return ""
 
 
+def _calendar_show_scope(qualifier: str, today_d):
+    """(start, end, spoken scope) for a calendar_show qualifier: today (none) / tomorrow / this week / next week / this weekend /
+    this month / a weekday name (its next occurrence, never today) / otherwise the next 7 days."""
+    from datetime import timedelta
+    q = (qualifier or "").strip().lower()
+    q = re.sub(r"^(?:on|this|next|for)\s+(?=(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)$)", "", q)
+    if q in ("today", "today's", "tonight", ""):
+        return today_d, today_d, "today"
+    if q == "tomorrow":
+        d = today_d + timedelta(days=1)
+        return d, d, "tomorrow"
+    if q in ("this week", "this week's"):
+        return today_d - timedelta(days=today_d.weekday()), today_d + timedelta(days=6 - today_d.weekday()), "this week"
+    if q == "next week":
+        start = today_d + timedelta(days=7 - today_d.weekday())
+        return start, start + timedelta(days=6), "next week"
+    if q == "this weekend":
+        sat = today_d + timedelta(days=(5 - today_d.weekday()) % 7)
+        if today_d.weekday() == 6:      # Sunday: what is left of it
+            return today_d, today_d, "today"
+        return sat, sat + timedelta(days=1), "this weekend"
+    if q in ("this month", "this month's"):
+        import calendar as cal_mod
+        _, last = cal_mod.monthrange(today_d.year, today_d.month)
+        return today_d.replace(day=1), today_d.replace(day=last), "this month"
+    days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+    if q in days:
+        d = today_d + timedelta(days=((days.index(q) - today_d.weekday()) % 7) or 7)
+        return d, d, q
+    return today_d, today_d + timedelta(days=7), "in the next week"
+
+
 async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optional[str]:
     """Read the calendar straight from the events table for the acting user
     (qualifier → date range: today (no qualifier) / tomorrow / this week / this month / otherwise the next 7 days)."""
-    from datetime import timedelta
     slots = intent.slots or {}
     qualifier = str(slots.get("qualifier", "")).strip().lower()
     today_d = today_for_zoe_tz()
-    if qualifier in ("today", "today's", ""):
-        start = end = today_d
-        scope = "today"
-    elif qualifier == "tomorrow":
-        start = end = today_d + timedelta(days=1)
-        scope = "tomorrow"
-    elif qualifier in ("this week", "this week's"):
-        start = today_d - timedelta(days=today_d.weekday())
-        end = today_d + timedelta(days=6 - today_d.weekday())
-        scope = "this week"
-    elif qualifier in ("this month", "this month's"):
-        import calendar as cal_mod
-        _, last = cal_mod.monthrange(today_d.year, today_d.month)
-        start = today_d.replace(day=1); end = today_d.replace(day=last)
-        scope = "this month"
-    else:
-        start = today_d; end = today_d + timedelta(days=7)
-        scope = "in the next week"
+    start, end, scope = _calendar_show_scope(qualifier, today_d)
     try:
         from database import get_db_ctx
         async with get_db_ctx() as db:
@@ -3640,6 +3870,103 @@ async def _forget_alias_note(user_id: str, name: str, svc: Any) -> str:
         return ""
 
 
+FORGET_WHICH_REPLY = "Which thing should I forget? Tell me what it was and I'll forget it."
+FORGET_ALREADY_REPLY = "That's already forgotten."
+FORGET_STORE_DOWN_REPLY = ("I couldn't reach the memory store just now, so I can't be sure it's gone. "
+                           "I won't save anything new from it - say \"forget that\" again in a minute and I'll finish.")
+FORGET_PARTIAL_REPLY = ("I forgot part of it, but I couldn't remove all of it just now, so some is still saved. "
+                        "Say \"forget that\" again in a minute and I'll finish.")
+
+
+def _forget_preview(text: str) -> str:
+    preview = " ".join((text or "").split())
+    return preview if len(preview) <= 80 else preview[:77].rstrip() + "…"
+
+
+async def _execute_forget_last(user_id: str) -> str:
+    """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - the rows written from it, its in-flight capture
+    (refused from now on), its exact-words index entry and its transcript row (flagged off the record for the nightly
+    readers). Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. Never raises."""
+    import turn_forget
+
+    turn = turn_forget.previous_turn(user_id)
+    if turn is None:
+        logger.info("memory_forget_last: user=%s no previous turn - asking", user_id)
+        return FORGET_WHICH_REPLY
+    if not turn.text:
+        return FORGET_ALREADY_REPLY
+    text, ts = turn.text, turn.ts
+    # FIRST: from here on nothing this turn's capture writes can land (the digest may still be minutes away)
+    turn_forget.retract(user_id, turn)
+    try:
+        from memory_service import get_memory_service
+        svc = get_memory_service()
+        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
+        return FORGET_STORE_DOWN_REPLY
+    gone: list = []
+    failed = 0
+
+    async def _reject(row) -> bool:
+        try:
+            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
+            return False
+
+    for r in rows:
+        if await _reject(r):
+            gone.append(r)
+        else:
+            failed += 1
+    # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too
+    try:
+        import ask_to_remember as _atr_f
+
+        ids = {r.id for r in gone}
+        for r in list(gone):
+            for _sib in await _atr_f.siblings_of(svc, user_id, r):
+                if _sib.id in ids:
+                    continue
+                ids.add(_sib.id)
+                if await _reject(_sib):
+                    gone.append(_sib)
+                else:
+                    failed += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
+    # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
+    # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
+    if gone and hasattr(svc, "erase_rows"):
+        try:
+            from memory_service import physical_erase_enabled
+            if physical_erase_enabled():
+                await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
+    try:
+        import exact_words
+        await exact_words.erase_text(user_id, text)
+        await exact_words.forget_transcript(user_id, text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
+    if failed:
+        # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
+        return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
+    if gone:
+        # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
+        # found the target stays - a store that answered nothing may simply have been down, so a retry must still work.
+        turn_forget.mark_forgotten(user_id, turn)
+        more = len(gone) - 1
+        tail = f" (and {more} more from what you said there)" if more > 0 else ""
+        return f"Done — I forgot: \"{_forget_preview(gone[0].text)}\"{tail}."
+    if text.rstrip().endswith("?"):
+        return FORGET_WHICH_REPLY       # a question keeps nothing to forget: they mean something else
+    return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -3696,6 +4023,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                     ),
                 },
                 fallback,
+                in_turn=True,
             )
         except (ImportError, RuntimeError, TypeError, ValueError) as _e:
             logger.warning("good_evening composer failed: %s", _e)
@@ -3742,6 +4070,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "people_same_person_reply":
         return await _execute_same_person_reply(intent, user_id)
 
+    if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("anticipation"):
+        import anticipation
+        return await anticipation.answer(
+            user_id, str(intent.slots.get("suggestion_id") or ""), intent.name == "pending_offer_accept")
+
     if intent.name in ("pending_offer_accept", "pending_offer_dismiss") and intent.slots.get("forget_alias"):
         import memory_forget_alias
         return await memory_forget_alias.answer(
@@ -3778,46 +4111,12 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             "if I ask again, another no will clear it."
         )
 
-    # "forget that" / "never mind what I said" — retract the last MemPalace write.
-    # Scoped to the caller's user_id and to writes within the last 10 minutes so
-    # a stale retraction can't wipe anything older. Short window keeps the
-    # semantics predictable across voice + SSE clients.
+    # "forget that" / "never mind what I said" — retract what the owner's PREVIOUS TURN said (turn_forget): the rows
+    # written from that turn, and its capture still in flight (which then never lands). NEVER "the newest write":
+    # capture runs minutes behind a chat, so the newest write is usually another turn's (QA round 3b, 2026-11-07: a
+    # "forget that" after a remark about the kitchen erased an unrelated, important row). No turn to bind to -> ask.
     if intent.name == "memory_forget_last":
-        try:
-            from memory_service import get_memory_service
-            svc = get_memory_service()
-            ref = await svc.forget_last(user_id=user_id)
-        except Exception as exc:
-            logger.info("memory_forget_last: service unavailable: %s", exc)
-            return "I couldn't reach the memory store right now, so nothing was changed."
-        if ref is None:
-            return "There's nothing recent I can forget — no new memories in the last few minutes."
-        preview = (ref.text or "").strip()
-        if len(preview) > 80:
-            preview = preview[:77] + "…"
-        # "remember that X" leaves the owner's verbatim row AND a near-identical row the post-turn capture derived
-        # from the same turn: "forget that" retracts both, or the fact would come straight back (ask_to_remember)
-        _also = []
-        try:
-            import ask_to_remember as _atr_f
-
-            for _sib in await _atr_f.siblings_of(svc, user_id, ref):
-                if await svc.review(_sib.id, decision="reject", actor=user_id, note="forget_last") is not None:
-                    _also.append(_sib)
-        except Exception as exc:  # noqa: BLE001 - the primary retraction already happened
-            logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
-        # "forget that" is a forget like any other: the rejected row still holds the text. Erase it for real
-        # (see memory_forget_entity below); the reject already hid it, so a failed erase changes nothing visible.
-        if hasattr(svc, "erase_rows"):
-            try:
-                from memory_service import physical_erase_enabled
-                if physical_erase_enabled():
-                    await svc.erase_rows(user_id, [ref.id] + [r.id for r in _also], actor=user_id,
-                                         reason="forgotten by request (last)")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_forget_last: physical erase failed (%s) - row stays rejected",
-                               type(exc).__name__)
-        return f"Done — I forgot: \"{preview}\"."
+        return await _execute_forget_last(user_id)
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
         # "keep the contact": put back the contact(s) + edges the last forget cascade removed.
@@ -3897,6 +4196,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
                 logger.info("memory_forget_entity: erased %d night-mind row(s)", _nm)
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_entity: night-mind erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the now card that names it (one row per member, rebuilt next night without the name): same rule, fail closed
+        try:
+            import now_card
+            await now_card.erase_entity(user_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: now-card erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the struggle detector's summaries of turns that named it (struggle_events): same rule, fail closed
@@ -4206,6 +4513,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             _tomb_clear(user_id, text)
         except Exception:
             pass
+        import write_receipts
+
+        write_receipts.record(user_id, "memory", getattr(ref, "id", "") or user_turn_id, "memory_store")
         return "Got it — I'll remember that."
 
     # ── A2A Federation Status ──────────────────────────────────────────────────
@@ -4628,24 +4938,34 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         return _random.choice(_acks)
 
     if intent.name == "portrait_reveal":
+        portrait = ""
+        if not intent.slots.get("facts"):
+            try:
+                from user_portrait import load_portrait  # type: ignore[import]
+                portrait = await load_portrait(user_id)
+            except Exception as exc:
+                logger.debug("portrait_reveal: load failed: %s", exc)
+        if portrait:
+            return f"Here's how I understand you:\n\n{portrait}"
+        # No portrait asked for or built yet: answer with the FACTS (the same summary as the bare "what do you know about me"),
+        # never a refusal that tells the user to ask what they just asked.
         try:
-            from user_portrait import load_portrait  # type: ignore[import]
-            portrait = await load_portrait(user_id)
+            import provenance_answers as _pa  # type: ignore[import]
+            facts = await _pa.handle("what do you know about me", user_id, allow_writes=False)
         except Exception as exc:
-            logger.debug("portrait_reveal: load failed: %s", exc)
-            portrait = ""
-        if not portrait:
-            return (
-                "I don't have a deep portrait of you yet — that takes a few weeks of "
-                "conversations for me to put together. The more we talk, the better I'll understand you. "
-                "I do have some facts stored — try asking what I know about you."
-            )
-        return f"Here's how I understand you:\n\n{portrait}"
+            logger.debug("portrait_reveal: facts summary failed: %s", exc)
+            facts = None
+        return facts or (
+            "I don't have a deep portrait of you yet; that takes a few weeks of conversations. "
+            "The more we talk, the better I'll understand you."
+        )
 
     if intent.name == "portrait_refresh":
         try:
             from user_portrait import run_portrait_synthesis  # type: ignore[import]
-            result = await run_portrait_synthesis(user_id)
+            import brain_scheduler
+            with brain_scheduler.declare("turn:portrait_refresh"):   # the person asked for it: a turn call
+                result = await run_portrait_synthesis(user_id)
             status = result.get("status", "unknown")
             if status == "ok":
                 chars = result.get("chars", 0)
@@ -5894,7 +6214,7 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
     if (intent.slots or {}).get("action") == "delayed":
         return command_shapes.DELAYED_COMMAND_REPLY  # nothing runs now, nothing is queued
     try:
-        from smart_home_service import resolve_smart_home
+        from smart_home_service import record_device_receipt, resolve_smart_home
 
         slots = intent.slots or {}
         action = slots.get("action", "turn_off")
@@ -5903,6 +6223,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         # The resolver matches on words, not ids: hand it the room the pattern
         # found (if any) plus the device class, and let it find what exists.
         query = f"{room.replace('_', ' ')} light" if room else "light"
+        if slots.get("query"):
+            query = str(slots["query"])       # a device the Skybridge parser named ("heater"): the resolver matches it on the house's own list
 
         class _I:
             domain = "smart_home"
@@ -5914,6 +6236,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         i.duration_seconds = 25 if action == "dim" else (100 if action == "brighten" else 0)
 
         result = await resolve_smart_home(i)
+        # a brain home-tool call reaches here through /api/system/intent-dispatch: its receipt backs "I've turned it on"
+        record_device_receipt(user_id, result, "intent_router")
         # The resolver already phrases the outcome — including "which one?" when
         # a bare command is genuinely ambiguous. Speaking its summary is what
         # stops this path from inventing a success it did not verify.

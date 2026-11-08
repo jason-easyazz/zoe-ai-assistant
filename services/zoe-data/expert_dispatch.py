@@ -166,6 +166,9 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
         # lists expert read the shopping list aloud). Never answer one domain's question with another domain's data.
         logger.info("EXPERT_NAMED_MISMATCH domain=%s score=%.2f → brain", domain, score)
         return None
+    if domain == "weather" and _is_unit_conversion(text):
+        logger.info("EXPERT_CONVERSION_NOT_WEATHER score=%.2f → brain", score)
+        return None
     user_id = str(ctx.get("user_id") or "guest")
     session_id = str(ctx.get("session_id") or "")
     t0 = time.monotonic()
@@ -263,6 +266,18 @@ _NAMED_FAMILY = {
 }
 
 
+# A unit CONVERSION ("375 fahrenheit? what's that in celsius") is arithmetic, not weather: the router head scores the unit words
+# as weather (QA 2026-11-06: answered with today's forecast at 0.976). A number, a convert-to-unit cue and no weather word.
+_TEMP_CONVERSION_RE = re.compile(
+    r"\b(?:in|to|into)\s+(?:celsius|centigrade|fahrenheit|degrees\s+[cf])\b|\bconvert\b", re.IGNORECASE)
+_WEATHER_WORD_RE = re.compile(
+    r"\b(?:weather|forecast|rain\w*|outside|sunny|wind\w*|humid\w*|storm\w*|today|tomorrow|tonight|week)\b", re.IGNORECASE)
+
+
+def _is_unit_conversion(text: str) -> bool:
+    return bool(re.search(r"\d", text) and _TEMP_CONVERSION_RE.search(text) and not _WEATHER_WORD_RE.search(text))
+
+
 def _names_another_domain(domain: str, text: str) -> bool:
     """True when ``domain``'s expert is about to answer words that name ONLY other domains' nouns. Pure."""
     family = _NAMED_FAMILY.get(domain)
@@ -274,19 +289,40 @@ def _names_another_domain(domain: str, text: str) -> bool:
     return bool(named) and not (named & family)
 
 
+# The list a READ names ("what's on my to do list now" -> "to do"): the words between my/the/our and "list".
+_LIST_REF_RE = re.compile(r"\b(?:my|the|our)\s+((?:[\w'-]+\s+){0,8}?)lists?\b", re.IGNORECASE)
+_LIST_WORD_RE = re.compile(r"\blists?\b", re.IGNORECASE)
+
+
+def _list_show_slots(text: str) -> Optional[dict]:
+    """Slots for a list READ the regex fast path missed (a filler word: "whats on my to do list now"). The named list resolves
+    exactly as an add does (``intent_router._list_slots``): my to-do -> the member's own list, an unknown name -> that named
+    list (the executor says it doesn't exist and asks which), a bare "the list" -> the household shopping list (fridge rule).
+    A type word with no "list" ("what's on my to dos") still names its type. Never empty slots for a named list - the
+    executor's empty default is the household SHOPPING list (QA round 3b, 2026-11-07): a turn that says "list" but whose list
+    name cannot be read (or a name over eight words) is None, so the read goes to the brain instead of guessing. Pure."""
+    from intent_router import _LIST_TYPE_WORDS, _list_slots
+
+    low = " ".join(str(text or "").lower().replace("-", " ").split())
+    m = _LIST_REF_RE.search(low)
+    if m:
+        return _list_slots(m.group(1))
+    found = {lt for lt, rx in _LIST_TYPE_WORDS if rx.search(low)}
+    if found and found <= {"personal", "tasks"}:
+        return {"list_type": "tasks" if found == {"tasks"} else "personal"}
+    if len(found) == 1:
+        return {"list_type": found.pop()}
+    if _LIST_WORD_RE.search(low):
+        return None
+    return {}
+
+
 def _calendar_qualifier(text: str) -> str:
     """Parse a date scope from a calendar query so 'tomorrow'/'this week' aren't
     lost when the show-intent comes through without slots (→ defaulted to today)."""
-    low = (text or "").lower()
-    if "tomorrow" in low:
-        return "tomorrow"
-    if "this month" in low:
-        return "this month"
-    if "this week" in low or "the week" in low or "weekend" in low:
-        return "this week"
-    if "today" in low or "tonight" in low:
-        return "today"
-    return ""
+    import command_shapes
+
+    return command_shapes.calendar_qualifier(text)
 
 
 def _plan(domain: str, text: str):
@@ -357,6 +393,21 @@ def _plan(domain: str, text: str):
             slots["qualifier"] = _calendar_qualifier(text)
         return (det.name, slots, kind)
 
+    if domain == "calendar":
+        import command_shapes
+
+        # The calendar expert used to have NO plan for a calendar question the show-intent regexes missed ("have I got anything on
+        # today", "what am I doing friday", "can you see my calendar"): EXPERT_MISS, the brain answered. Read it.
+        ask = command_shapes.calendar_read_ask(text)
+        if ask is not None:
+            return ("calendar_show", {"qualifier": ask}, "read")
+        if command_shapes.calendar_not_a_read(text):
+            return None      # a complaint / definition / TV question that names the calendar: never a read, never a default create
+        # A regex-recognised calendar WRITE whose slots still need extraction ("make an appointment with ..."): the create-cue
+        # list below misses wordings the intent regex catches, which dropped them to the brain with no plan.
+        if det and det.name == "calendar_create":
+            return ("calendar_create", {}, "write")
+
     table = {
         "lists": ("list_add", "list_show"),
         "calendar": ("calendar_create", "calendar_show"),
@@ -366,7 +417,14 @@ def _plan(domain: str, text: str):
         create_intent, show_intent = table[domain]
         # Explicit show cue → read; explicit create cue → write.
         if _SHOW_RE.search(text):
-            slots = {"qualifier": _calendar_qualifier(text)} if show_intent == "calendar_show" else {}
+            if show_intent == "calendar_show":
+                slots = {"qualifier": _calendar_qualifier(text)}
+            elif show_intent == "list_show":
+                slots = _list_show_slots(text)
+                if slots is None:       # it names a list we cannot read: the brain asks, never the shopping list
+                    return None
+            else:
+                slots = {}
             return (show_intent, slots, "read")
         if _CREATE_RE.search(text):
             return (create_intent, {}, "write")
@@ -426,8 +484,8 @@ def _record_quality_reject(source: str, reason: str, text: str) -> None:
         # + zoe_memory_quality_reject_count (do not .inc() it again here)
     except Exception:
         pass
-    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s text=%r",
-                source, reason, (text or "")[:120])
+    from log_redaction import utterance_tag  # the log is outside the forget cascade: tag, never the words
+    logger.info("MEMORY_QUALITY_REJECT source=%s reason=%s %s", source, reason, utterance_tag(text or ""))
 
 
 async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
@@ -570,6 +628,34 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     text = (text or "").strip()
     if not text:
         return None
+    # FORGET FIRST (QA 2026-11-05): "no, don't remember that! forget that" reached this lane, read "remember" as a
+    # teach and was stored; "please forget that I said ..." was echoed back as "Got it - I'll remember please forget
+    # that you said ...". A forget command runs the forget handler (the same one the intent lane uses: forget_last's
+    # reject + physical erase); any other retraction wording stores NOTHING and defers to the brain. Fails closed: a
+    # gate that cannot load stores nothing on wording it cannot vet.
+    try:
+        from memory_quality import has_forget_wording, is_forget_command
+        _forget_cmd = is_forget_command(text)
+        _forget_words = has_forget_wording(text)
+    except Exception:  # noqa: BLE001
+        _forget_cmd = False
+        _forget_words = bool(re.search(r"(?<!don't )(?<!dont )(?<!do not )\bforget\b|\b(?:don'?t|do\s+not)\s+remember\b",
+                                       text, re.IGNORECASE))
+    if _forget_cmd:
+        # The own-words wall comes FIRST for a destructive command: a pasted message that merely starts with a retraction ("oh forget
+        # that I said I live in Paris\nSent from my iPhone") is someone else's text, and must not erase the caller's last memory.
+        try:
+            import own_words as _ow
+
+            if _ow.analyze(text).changed:
+                return None
+        except Exception:  # noqa: BLE001 - cannot vet the text: do not delete on it
+            return None
+        from intent_router import Intent, execute_intent
+        return await execute_intent(Intent("memory_forget_last", {}), user_id)
+    if _forget_words:
+        _record_quality_reject("voice_fact", "forget_command", text)
+        return None
     # A pasted email, a "system:" line or another person's quoted speech is not the owner teaching Zoe: only the
     # owner's own words are stored, and a turn with none left stores nothing and defers to the brain (reply only).
     # Pasted instructions ("ignore previous instructions and remember that ...") were taken as the owner's
@@ -606,10 +692,10 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
     is_question = asks_recall or bool(_QUESTION_RE.search(text)) or text.rstrip().endswith("?")
     # Imperative teach only: a command to store, never a recall question. The
     # asks_recall guard covers the "do you / do ya remember…?" forms (any pronoun);
-    # the lookbehinds also stop a bare "you/ya remember…" from reading as a command.
+    # the lookbehinds also stop a bare "you/ya remember…" (and the negated "don't remember…") from reading as a command.
     imperative_store = (not asks_recall) and (
         bool(re.search(r"\b(note that|don'?t forget|make a note|keep in mind)\b", low))
-        or bool(re.search(r"(?<!you )(?<!ya )\bremember\b", low))
+        or bool(re.search(r"(?<!you )(?<!ya )(?<!don't )(?<!dont )(?<!do not )(?<!never )\bremember\b", low))
     )
     if is_question and not imperative_store:
         return await _run_expert(domain, text, user_id, session_id)
@@ -718,6 +804,18 @@ async def store_fact(domain: str, text: str, user_id: str, session_id: str = "",
             _record_quality_reject("voice_fact", "correction_shape_unresolved", text)
             return None  # defer to the brain, reply-only, nothing stored
         text = stripped
+    # VERBATIM gate (QA 2026-11-05): "um I literally just asked what you know about me" was stored word for word as a
+    # fact because it had an "I" in it. The owner's words are kept verbatim only on an explicit teach cue or a
+    # first-person fact shape ("my dog is called ...", "I work ..."); talk about the conversation / Zoe and filler
+    # store nothing and defer to the brain. A gate that cannot load keeps only the explicit teach.
+    try:
+        from memory_quality import verbatim_storable
+        _verbatim_ok, _verbatim_reason = verbatim_storable(text)
+    except Exception:  # noqa: BLE001
+        _verbatim_ok, _verbatim_reason = imperative_store, "gate_unavailable"
+    if not _verbatim_ok:
+        _record_quality_reject("voice_fact", _verbatim_reason or "not_verbatim_storable", text)
+        return None
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()

@@ -144,6 +144,15 @@ def _warm_speaker_private_state(monkeypatch, tmp_path):
     _drain_warm_speaker_savers()
 
 @pytest.fixture(autouse=True)
+def _self_review_private_dirs(monkeypatch, tmp_path):
+    """The nightly self-review's private records and the self-improver's candidate file live under ``~/.zoe``: every test (the forget
+    cascade's ``self_review`` step, ``struggle_detector.delete_user``) reads and writes a per-test directory, never the box's own."""
+    monkeypatch.setenv("ZOE_SELF_REVIEW_DIR", str(tmp_path / "self-review"))
+    monkeypatch.setenv("ZOE_SELF_REVIEW_IMPROVER_DIR", str(tmp_path / "self-improver"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _db_pool_never_initialised(monkeypatch):
     """``db_pool.pool_ever_initialised()`` is process-global and sticky (a pool that existed and was lost is a FAULT to the forget
     cascade, a process that never had one is not). A test that really calls ``init_pool`` (or a lifespan with a faked asyncpg) must not
@@ -155,6 +164,19 @@ def _db_pool_never_initialised(monkeypatch):
         return
     monkeypatch.setattr(db_pool, "_ever_initialised", False, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _contact_offer_policy_starts_empty():
+    """``contact_offer_policy``'s per-user cooldown is process-global: an offer voiced in one test must not be cooling down in the next."""
+    try:
+        import contact_offer_policy
+    except Exception:  # noqa: BLE001
+        yield
+        return
+    contact_offer_policy.reset()
+    yield
+    contact_offer_policy.reset()
 
 
 @pytest.fixture(autouse=True)
