@@ -8,6 +8,8 @@
   GET    /api/alarms/ringing      what is ringing now, for the panel's ring screen (a personal alarm's label and music source are blanked for the panel)
   POST   /api/alarms/{id}/snooze  ringing -> snoozed (tap anywhere on the ring screen)
   POST   /api/alarms/{id}/dismiss ringing|snoozed -> off for this occurrence (the deliberate Turn off control)
+  POST   /api/alarms/{id}/overrides             one day of a repeating alarm: {"date": "YYYY-MM-DD", "time_hhmm": "05:30"} or {"date", "skip": true}
+  DELETE /api/alarms/{id}/overrides/{date}      that day back to the alarm's own time
 
 Auth: ``require_member_or_panel`` for all; ownership is then decided by ``alarms.can_*`` (a member never touches another member's
 personal alarm; the panel may silence any ringing alarm but edits only household ones).
@@ -129,3 +131,25 @@ async def dismiss_alarm(alarm_id: str, request: Request, user: dict = Depends(re
     v = viewer_of(user)
     a = await _load(db, alarm_id, v, alarms.can_silence)
     return {"alarm": alarms.present(await alarms.dismiss(db, a), v)}
+
+
+@router.post("/{alarm_id}/overrides")
+async def set_override(alarm_id: str, payload: dict, request: Request, user: dict = Depends(require_member_or_panel), db=Depends(get_db)):
+    v, p = viewer_of(user), payload or {}
+    a = await _load(db, alarm_id, v, alarms.can_edit)
+    try:
+        a = await alarms.set_override(db, a, p.get("date"), time_hhmm=p.get("time_hhmm"), skip=bool(p.get("skip")))
+    except alarms.AlarmError as e:
+        raise _err(e) from None
+    return {"alarm": alarms.present(a, v)}
+
+
+@router.delete("/{alarm_id}/overrides/{on_date}")
+async def clear_override(alarm_id: str, on_date: str, request: Request, user: dict = Depends(require_member_or_panel),
+                         db=Depends(get_db)):
+    v = viewer_of(user)
+    a = await _load(db, alarm_id, v, alarms.can_edit)
+    b = await alarms.clear_override(db, a, on_date)
+    if b is None:
+        raise HTTPException(status_code=404, detail="That day has no change to undo")
+    return {"alarm": alarms.present(b, v)}

@@ -4206,6 +4206,14 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             logger.warning("memory_forget_entity: now-card erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and a liked-topic label in the speaking register that names it (member_register): same rule, fail closed
+        try:
+            import member_register
+            await member_register.erase_entity(user_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: register erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish clearing my notes about how you like to talk just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the struggle detector's summaries of turns that named it (struggle_events): same rule, fail closed
         try:
             import struggle_detector
