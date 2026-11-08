@@ -14403,6 +14403,86 @@
         },
         "typed_env": true
       },
+      "ZOE_SELF_REVIEW": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_FLUE_DB": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe-self-review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_IMPROVER_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_SELF_URL": {
         "defaults": [
           "'http://127.0.0.1:8000'",
@@ -20523,5 +20603,8 @@
       "typed_env": false
     }
   },
-  "registry_unread": []
+  "registry_unread": [
+    "ZOE_SELF_REVIEW_MAX_CALLS",
+    "ZOE_SELF_REVIEW_MAX_TOKENS"
+  ]
 }
