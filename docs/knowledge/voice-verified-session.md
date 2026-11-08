@@ -160,6 +160,13 @@ The panel keeps listening for a few seconds after a reply with no wake word (`wi
   Saying "Zoe ..." in the window keeps the turn answerable, as a guest (never the member).
 - No verdict at all (gate off / shadow) is unchanged. `voice_command` receives `window` so its claim gate applies the same bar.
 - Cost: a member's very short or soft follow-up that scores under the window bar is ignored; say the wake word again.
+- **Tunable bar (2026-11-06).** `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG` / `_SHORT` set the window bar numerically (unset = the table:
+  0.351 / 0.309; never below the wake bar). Evidence: a television cleared 0.351 at 0.356 while the owner's lowest real follow-up
+  score was 0.425. Proposed (NOT applied): `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG=0.39` (midway, still 0.035 under the owner's lowest),
+  short left on the table until a short-clip sample exists; replay the owner's follow-up corpus before flipping.
+- **Media skip (2026-11-06, flag-dark).** `ZOE_FOLLOWUP_SKIP_WHILE_MEDIA=1` drops a no-wake-word window turn (done frame
+  `skipped: not_addressed, reason: media_playing`, no crowd note, no session close) while Music Assistant or a Home Assistant
+  `media_player` reports `playing` (`voice_tts._media_playing`, bounded 2 s, fail-open). A turn naming Zoe stays answerable. Default off.
 
 ## 4. Limits (honest)
 

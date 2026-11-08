@@ -5922,6 +5922,26 @@ async def voice_command(
     }
 
 
+async def _media_playing() -> bool:
+    """True when Music Assistant or a Home Assistant media_player reports PLAYING (bounded; any failure = False, fail-open)."""
+    async def _ma() -> bool:
+        import music_service
+        snap = await music_service.now_playing()
+        return bool(snap) and str(snap.get("state") or "").lower() == "playing"
+
+    async def _ha() -> bool:
+        import smart_home_service
+        data = await smart_home_service._ha_get("/entities?domain=media_player")
+        rows = (data or {}).get("entities", []) if isinstance(data, dict) else []
+        return any(str(r.get("state") or "").lower() == "playing" for r in rows if isinstance(r, dict))
+
+    try:
+        results = await asyncio.wait_for(asyncio.gather(_ma(), _ha(), return_exceptions=True), 2.0)
+    except Exception:
+        return False
+    return any(r is True for r in results)
+
+
 async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str,
                                side_effects: bool = True) -> Optional[dict]:
     """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member, else None.
@@ -5933,6 +5953,19 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     """
     if (payload or {}).get("window") not in _utterance_shape.WINDOWS:
         return None
+    if _utterance_shape.skip_while_media_enabled():
+        # ZOE_FOLLOWUP_SKIP_WHILE_MEDIA (default off): a television / music is the likeliest "speaker" of an open window. Not a voice
+        # mismatch, so no crowd note and no session close; the chain just ends.
+        try:
+            _media_frame = _utterance_shape.media_playing_frame(
+                payload, transcript, await _media_playing(),
+                named_zoe=_utterance_shape.names_zoe(((_stt_raw_var.get() or {}).get("raw")) or ""))
+        except Exception as _m_exc:
+            logger.debug("voice/%s media-playing window check failed (fail-open): %s", route, _m_exc)
+            _media_frame = None
+        if _media_frame is not None:
+            logger.info("voice/%s window turn dropped: media is playing", route)
+            return _media_frame
     _gate = None
     try:
         _win_verdict = _speaker_verdict(

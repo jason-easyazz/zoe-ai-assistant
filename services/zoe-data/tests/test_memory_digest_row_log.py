@@ -85,7 +85,7 @@ def test_a_parked_row_is_logged_as_parked(monkeypatch, caplog):
         await svc.ingest("User lives in Perth", user_id=UID, source="voice_fact", memory_type="profile",
                          confidence=0.9, status="approved")
         _patch_llm(monkeypatch, [{"type": "profile", "fact": "User lives in Hobart"}])
-        return await memory_digest.run_turn_digest(UID, "The weather in Hobart looks lovely today, apparently.",
+        return await memory_digest.run_turn_digest(UID, "I think the weather in Hobart looks lovely today, apparently.",
                                                    session_id="s-1")
 
     asyncio.run(go())
