@@ -538,6 +538,13 @@ async def _voice_brain_memory(
     if identity:
         line = f"You are speaking with {identity} (the signed-in user)."
         portrait = f"{line}\n{portrait}" if portrait else line
+    else:
+        # A named guest (ZOE_NAMED_GUESTS): who they are + their OWN past exchanges; "" for any other unidentified voice.
+        import named_guests as _ng_brain
+
+        guest_block = await _ng_brain.brain_block(user_id)
+        if guest_block:
+            portrait = guest_block
     return db_memory, portrait
 
 
@@ -3621,6 +3628,12 @@ async def voice_command(
         _speaker_verified = _speaker_verdict(payload, caller, identified_by_claim=_by_claim)
         if _speaker_verified is not None:
             logger.info("voice speaker verdict panel=%s verified=%s", panel_id[:40], _speaker_verified)
+    # ZOE_NAMED_GUESTS (flag-dark, named_guests.py): a voice the server matched to a NAMED GUEST - a person in a member's own layer,
+    # never an account. It changes nothing about scope (the turn stays a guest turn below); it only lets the brain greet them by
+    # name and their own conversation space be read and kept. Bound for every turn (None resets it), never from the payload alone.
+    import named_guests as _named_guests
+
+    _named_guests.bind_turn(await _named_guests.accept(payload, caller, member_identified=bool(identified_user_id)))
     # ZOE_RESTRAINT: a voice the gate did NOT confirm (False) may be a guest in the room; the brief, the raise and
     # the recall packet withhold sensitive classes for this turn whatever it asks (restraint.decide, "guest").
     from restraint import bind_verdict as _restraint_bind_verdict
@@ -3853,6 +3866,10 @@ async def voice_command(
             )
             effective_user = _panel_bound_user
 
+    if _named_guests.current() is not None:
+        # A voice the server matched to a NAMED GUEST is that guest, whatever member session the panel holds (a fresh PIN, a
+        # binding): never member scope, member data or a member's attribution for their turn (review #2339).
+        _scope_identity_user, _has_scope_identity, effective_user = None, False, "guest"
     # Home control: a turn whose member the server verified is a member's turn whatever the caller verdict said (a relayed panel).
     if _scope_identity_user and panel_principal.home_control_verdict() is False:
         panel_principal.record_home_control(True)
@@ -5897,6 +5914,26 @@ async def voice_command(
     }
 
 
+async def _media_playing() -> bool:
+    """True when Music Assistant or a Home Assistant media_player reports PLAYING (bounded; any failure = False, fail-open)."""
+    async def _ma() -> bool:
+        import music_service
+        snap = await music_service.now_playing()
+        return bool(snap) and str(snap.get("state") or "").lower() == "playing"
+
+    async def _ha() -> bool:
+        import smart_home_service
+        data = await smart_home_service._ha_get("/entities?domain=media_player")
+        rows = (data or {}).get("entities", []) if isinstance(data, dict) else []
+        return any(str(r.get("state") or "").lower() == "playing" for r in rows if isinstance(r, dict))
+
+    try:
+        results = await asyncio.wait_for(asyncio.gather(_ma(), _ha(), return_exceptions=True), 2.0)
+    except Exception:
+        return False
+    return any(r is True for r in results)
+
+
 async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, panel_id: str, *, route: str,
                                side_effects: bool = True) -> Optional[dict]:
     """The ``skipped`` done frame for a no-wake-word window turn whose speaker gate RAN and did not confirm a member, else None.
@@ -5908,6 +5945,19 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     """
     if (payload or {}).get("window") not in _utterance_shape.WINDOWS:
         return None
+    if _utterance_shape.skip_while_media_enabled():
+        # ZOE_FOLLOWUP_SKIP_WHILE_MEDIA (default off): a television / music is the likeliest "speaker" of an open window. Not a voice
+        # mismatch, so no crowd note and no session close; the chain just ends.
+        try:
+            _media_frame = _utterance_shape.media_playing_frame(
+                payload, transcript, await _media_playing(),
+                named_zoe=_utterance_shape.names_zoe(((_stt_raw_var.get() or {}).get("raw")) or ""))
+        except Exception as _m_exc:
+            logger.debug("voice/%s media-playing window check failed (fail-open): %s", route, _m_exc)
+            _media_frame = None
+        if _media_frame is not None:
+            logger.info("voice/%s window turn dropped: media is playing", route)
+            return _media_frame
     _gate = None
     try:
         _win_verdict = _speaker_verdict(
@@ -5915,6 +5965,17 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
     except Exception as _win_exc:
         logger.warning("voice/%s window speaker gate failed (dropping the window turn): %s", route, _win_exc)
         _win_verdict = False
+    if _win_verdict is False:
+        # A follow-up whose voice the server matched to a NAMED GUEST (at the window's stricter bar) is that guest still talking:
+        # it passes as a GUEST turn (no member identity is created here), so a conversation with them does not need the wake
+        # word every time. Off / shadow / no match: unchanged.
+        try:
+            import named_guests as _ng_win
+
+            if await _ng_win.accept(payload, caller, member_identified=False) is not None:
+                _win_verdict = None
+        except Exception:  # noqa: BLE001 - the drop stands
+            pass
     if _win_verdict is None and side_effects:
         # No verdict at all on a no-wake-word turn: the gate is off / in shadow mode, or the panel could not score (its speaker model
         # is refused / loading - 2026-11-07, ~8 h). The turn still passes, but the VOICE gives it no identity: no claim was accepted,
@@ -7256,6 +7317,12 @@ def _accept_panel_voice_claim(payload: dict, caller: dict) -> Optional[str]:
     # whatever the room is playing (a television) is also a candidate speaker (2026-11-01).
     threshold = speaker_models.claim_threshold(model_id, speech_s, str(payload.get("window") or ""))
     if threshold is not None and score >= threshold:
+        import named_guests as _ng_claim
+
+        if _ng_claim.member_claim_beaten(payload):
+            # The same voice scored closer to a NAMED GUEST than to this member (ZOE_NAMED_GUESTS=on): it is not the member.
+            logger.info("voice claim rejected: a named guest outscored the member claim")
+            return None
         return user
     logger.info(
         "voice claim rejected: user=%s score=%.4f < threshold=%.3f", user, score, threshold or 0.0
@@ -7542,7 +7609,16 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
     rows = [r for r in rows if speaker_models.row_model_id(r, 4) in served]
     rows = await speaker_adaptation.serve_adapted_profiles(rows, user_idx=0, blob_idx=2, model_idx=4)  # ZOE_SPEAKER_ADAPT=on only
 
+    import named_guests as _ng_sync
+
+    try:
+        guests = await _ng_sync.sync_entries(served)    # [] with ZOE_NAMED_GUESTS off: the feed is byte-identical
+    except Exception as exc:  # noqa: BLE001 - a guest feed failure never costs the members' feed
+        logger.warning("voice/profiles/sync: guest feed failed: %s", type(exc).__name__)
+        guests = []
+    extra = dict(guests=guests) if guests else dict()
     return dict(
+        **extra,
         ok=True,
         threshold=_speaker_id_threshold(),
         mode=speaker_models.speaker_mode(),
