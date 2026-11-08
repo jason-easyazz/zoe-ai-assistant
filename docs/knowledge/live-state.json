@@ -3648,7 +3648,7 @@
   },
   "ZOE_PANEL_SPEAKER_ALARM_MIN": {
    "defaults": [
-    "10"
+    "10.0"
    ],
    "kind": "number",
    "readers": 1
@@ -3657,7 +3657,7 @@
    "defaults": [
     "dynamic"
    ],
-   "kind": "unknown",
+   "kind": "str",
    "readers": 1
   },
   "ZOE_PANEL_TOKEN_VIA_CF": {

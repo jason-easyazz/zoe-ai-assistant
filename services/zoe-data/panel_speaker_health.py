@@ -26,6 +26,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+
+from typed_env import env_float, env_str
 import threading
 import time
 from typing import Any, Mapping, Optional
@@ -45,15 +47,12 @@ _LOADED = False
 
 
 def alarm_after_s() -> float:
-    try:
-        v = float(os.environ.get("ZOE_PANEL_SPEAKER_ALARM_MIN", "10"))
-    except ValueError:
-        v = 10.0
+    v = env_float("ZOE_PANEL_SPEAKER_ALARM_MIN", 10.0)
     return max(0.0, v) * 60.0
 
 
 def _store_path() -> str:
-    return os.environ.get("ZOE_PANEL_SPEAKER_HEALTH_PATH", os.path.expanduser("~/.zoe/panel_speaker_health.json"))
+    return env_str("ZOE_PANEL_SPEAKER_HEALTH_PATH", "") or os.path.expanduser("~/.zoe/panel_speaker_health.json")
 
 
 def _load() -> None:
