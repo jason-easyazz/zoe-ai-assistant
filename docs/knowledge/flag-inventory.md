@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 856 prod flags; 272 read through `typed_env`.
+- 857 prod flags; 273 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 249 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 3 registered flags with no reader in the scanned sources.
+- 2 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-856 flags; 805 not documented in `.env.example`.
+857 flags; 806 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -164,6 +164,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CONTACT_OFFER_BATCH` | str | `''` | - | `docs/knowledge/contacts-conversation.md` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTEXT_TOKEN_BUDGET` | int | `5500` | - | - | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CONTINUE_WINDOW_S` | float | `2.0` | - | `docs/knowledge/voice-pipeline.md` | `2.0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_CONTRACTION_REPAIR` | bool | `True` | - | `services/zoe-data/AGENTS.md` | `True` | yes | NO | `services/zoe-data/contraction_repair.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | str | `"Okay — I'm here when you need me.\|No worries. Talk soon.\|Okay."` | - | - | `"Okay — I'm here when you need me.\|No worries. Talk soon.\|Okay."` | no | NO | `services/zoe-data/conversation_opener.py` |
 | `ZOE_CONVERSATION_FEEDBACK` | bool | `True` | - | `docs/knowledge/voice-lane-parity.md` | `True` | yes | NO | `services/zoe-data/conversation_feedback.py` |
 | `ZOE_CORE_ALLOW_WRITES` | bool | `False` | - | - | `'false'` | no | NO | `services/zoe-core/extensions/abilities.ts` |
@@ -1227,4 +1228,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_CONTRACTION_REPAIR`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`
+`ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`
