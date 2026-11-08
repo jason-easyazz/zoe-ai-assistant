@@ -40,6 +40,7 @@ LOCK = open("/tmp/zoe-voice-harness.lock", "w")
 
 
 LIVE_PORT = 10201
+MIN_GATE_GB = 3.0  # floor: --min-avail-gb may raise the gate, never lower it
 
 
 def _answers(port: int) -> bool:
@@ -82,6 +83,7 @@ def post(port: int, text: str) -> float:
 def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait: float) -> dict:
     if port == LIVE_PORT:
         raise SystemExit("refusing the live sidecar port")
+    gate = max(gate, MIN_GATE_GB)
     # Poll for headroom WITHOUT holding the voice-harness lock (holding it while waiting would
     # stall every landing); take it only once the gate is met, and re-check after taking it.
     deadline = time.time() + wait_s
