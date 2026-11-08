@@ -916,6 +916,7 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
     implied = _take_deferred_write()     # taken (cleared) on EVERY turn, replay included, so it never outlives its turn
     if kwargs.get("replay_isolation"):
         return inner
+    inner = _tool_text_guarded(inner)    # call SYNTAX is never shown or spoken (tool_text_guard)
     try:
         import write_claim_guard
         import write_receipts
@@ -927,6 +928,26 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
     except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn
         logger.warning("write-claim guard unavailable - reply not checked", exc_info=True)
         return inner
+
+
+def _tool_text_guarded(inner: AsyncIterator[str]) -> AsyncIterator[str]:
+    """``tool_text_guard.guard_stream``: a reply that is tool-call syntax is never shown or spoken. Fail-open."""
+    try:
+        import tool_text_guard
+
+        return tool_text_guard.guard_stream(inner)
+    except Exception:  # noqa: BLE001 - a guard must never stop a turn
+        logger.warning("tool-text guard unavailable - reply not checked", exc_info=True)
+        return inner
+
+
+def _tool_text_guarded_text(reply: str) -> str:
+    try:
+        import tool_text_guard
+
+        return tool_text_guard.guard_text(reply)
+    except Exception:  # noqa: BLE001
+        return reply
 
 
 def _receipts_begin() -> float:
@@ -953,6 +974,7 @@ def _claim_guarded_text(reply: str, message: str, user_id: str, started: float, 
     """The one-shot form of ``_claim_guarded`` (same rule, same replay exemption)."""
     if kwargs.get("replay_isolation") or not reply:
         return reply
+    reply = _tool_text_guarded_text(reply)
     try:
         import write_claim_guard
 

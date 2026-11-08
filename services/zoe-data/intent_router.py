@@ -1479,8 +1479,9 @@ def detect_intent(
 
     # --- LIST SHOW ---
     for pattern in [
-        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list$",
-        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list$",
+        # a trailing filler word ("... list now") is still the read - missing it fell to a default-shopping read (QA 3b)
+        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
+        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
         r"^what do i need to (?:buy|get)$",
         r"^what'?s on my list$",
         r"^show my list$",
@@ -2742,7 +2743,24 @@ def _escape_like_pattern(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+_LIST_TYPES = frozenset({"shopping", "personal", "tasks", "work", "bucket"})
+
+
+def _canonical_list_slots(intent: Intent) -> Intent:
+    """The intent with a ``list_type`` that is NOT a list type resolved like a spoken list name (:func:`_list_slots`). The
+    brain's list tools pass the name the model used ("tasks/to-do", "pharmacy study list" - QA round 3b, 2026-11-07): a to-do
+    name is the member's own list, an unknown name is a named list (asked about, never written), and nothing silently lands on
+    the household shopping list. A real type, an empty one or an explicit ``list_name`` is left exactly as it was. Pure."""
+    slots = intent.slots or {}
+    lt = str(slots.get("list_type") or "").strip()
+    if not lt or lt.lower() in _LIST_TYPES or str(slots.get("list_name") or "").strip():
+        return intent
+    rest = {k: v for k, v in slots.items() if k not in ("list_type", "list_phrase")}
+    return Intent(intent.name, {**rest, **_list_slots(lt.replace("/", " "))}, intent.confidence)
+
+
 async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     list_name = str(slots.get("list_name") or "").strip()
     list_type = str(slots.get("list_type") or "").strip() or ("" if list_name else "shopping")
@@ -2756,7 +2774,7 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
                 # A list the user NAMED that is no type ("my pharmacy list"): that list, never the shopping list instead.
                 found = await _named_list(db, user_id, list_name)
                 if found is None:
-                    return f"You don't have a {list_name} list."
+                    return f"You don't have a {list_name} list. Which list did you mean?"
                 _, list_type, list_name = found
                 intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
             elif not list_name:
@@ -2861,6 +2879,7 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     mcp_server's list_add_item tool (same list resolution, family/personal
     visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:
@@ -2937,6 +2956,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     substring fallback). If the item isn't on the list that's a clean success
     message (ok:true, 'X wasn't on your list'), not a failure — so brain/tool
     consumers don't surface a false error. Returns None only on genuine failure."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:
