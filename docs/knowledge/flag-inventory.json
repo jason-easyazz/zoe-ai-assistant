@@ -7162,6 +7162,25 @@
         },
         "typed_env": false
       },
+      "ZOE_KOKORO_IDLE_TRIM_S": {
+        "defaults": [
+          "0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/ram-audit-voice-2026-11.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
       "ZOE_KOKORO_IMPORT_BLOCK": {
         "defaults": [
           "'1'"
