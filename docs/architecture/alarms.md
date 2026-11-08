@@ -101,11 +101,23 @@ asked to sign in. Recommendation (decision 3): keep it this way; personal-alarm 
 | "cancel my 7 am alarm" / "delete the gym alarm" / "cancel all my alarms" | delete; several matches ask "Which one?" |
 | "turn off the alarm" | stops a ringing alarm; otherwise switches the matching one off ("turn my 7 am alarm back on" re-enables) |
 | "snooze" / "snooze for ten minutes" / "five more minutes" | snooze what is ringing |
+| "... on Friday" / "next Monday" / "on the 15th" / "November 20" / "the 20th of December" / "the day after tomorrow" | one-off on that day (`date_spec` + `resolve_date`: never a day whose time has gone - "on Friday" said on a Friday after the time is next Friday, "next Friday" is never today); confirmed with the date ("on Friday the 20th of November"); "next week" / "February 30" / "today" at a gone time ask "Which day?"; "every Friday" / "on Fridays" stay repeats |
+| "get me up an hour earlier next Friday" / "wake me 30 minutes early on the 15th" / "push my alarm back half an hour tomorrow" / "I need to be up at 5 on Friday" | ONE day's change to the speaker's alarm that rings that day (an `alarm_overrides` row; a one-off on that day is moved itself); none -> "What time do you usually get up that day?" (an absolute time with none sets a one-off), several -> "Which one?"; confirmed with both times ("I'll wake you at 5:30 am on Friday the 6th instead of 6:30 am"); a reason word ("flight") gets an OFFER to add it to the calendar, never a write; "every Friday an hour earlier" changes the rule, so it is asked about, never written as one day |
+| "never mind about Friday" / "put Friday's alarm back to normal" | that day's change is undone |
 
 No am/pm: the next such time on the clock; a "wake me" request always means the morning. Narrow on purpose, like the timer grammar:
 questions and statements about alarms ("should I set an alarm", "the smoke alarm is beeping", "alarm code") are never writes and a
 phrase with "timer" is left to the timer grammar. The Skybridge domain `alarm` has no router class, so the router veto never
 applies; the write is held while a speculative voice turn is pending (not a speculation-safe domain).
+
+## One day's change (alembic `0070_alarm_overrides`)
+
+`alarm_overrides(alarm_id, on_date, action shift|skip, time_hhmm)` - one row per alarm and local date. `next_occurrence` honours them
+(a shifted day rings at its time, a skipped day is passed over; every other day keeps the rule), `tick` prunes a row once its day has
+rung, a changed repeat rule drops them, and `delete_alarm` / `forget_user` remove them. Only a repeating, enabled alarm on a day it
+rings, within a year, before that day's ring and at a time still ahead (`set_override`). Routes: `POST /api/alarms/{id}/overrides`
+`{date, time_hhmm}` or `{date, skip: true}`, `DELETE /api/alarms/{id}/overrides/{date}`; the list carries each alarm's future
+`overrides` and the panel row shows them with a tap-to-undo.
 
 ## Sounds and the clock radio (P3)
 
