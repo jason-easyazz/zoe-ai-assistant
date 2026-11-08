@@ -174,6 +174,19 @@ def previous_turn(user_id: Optional[str], *, now: Optional[float] = None) -> Opt
     return None
 
 
+def turns_matching(user_id: Optional[str], predicate, *, now: Optional[float] = None) -> list:
+    """The owner's noted turns (within ``TURN_TTL_S``, not forget commands themselves) whose words satisfy ``predicate`` - the
+    turns a TOPIC forget retracts. Copies; never raises."""
+    try:
+        t = _now(now)
+        with _LOCK:
+            turns = list(_turns.get(user_id or "") or ())
+        return [Turn(x.text, x.ts, x.h, x.tid) for x in turns
+                if x.text and t - x.ts <= TURN_TTL_S and not is_forget_turn(x.text) and predicate(x.text)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _newest_tid(user_id: str, h: str) -> int:
     with _LOCK:
         for turn in reversed(list(_turns.get(user_id) or ())):

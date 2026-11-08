@@ -330,6 +330,9 @@ _REMOVERS = {
     ("exact_words.py", "erase_entity"),
     # "forget it" after "why did you say that?" deletes the owner's quoted turn from the same index (BM5, provenance_answers.forget_it)
     ("exact_words.py", "erase_text"), ("exact_words.py", "erase_turn"),
+    # topic forget ("forget everything about X"): the same exact_turns index (Postgres, never palace rows) through its backend -
+    # the owner's own words about the topic. The palace rows go through MemoryService.review (archive) / erase_rows, not here.
+    ("forget_topic.py", "_erase_words"),
 }
 
 

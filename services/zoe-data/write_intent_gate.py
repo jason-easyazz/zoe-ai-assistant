@@ -45,6 +45,7 @@ _asked: "dict[str, float]" = {}
 #: user id -> when Zoe's own last reply offered to put something on the calendar ("Want me to add those?")
 _offered: "dict[str, float]" = {}
 _CALENDAR_WORD_RX = re.compile(r"\b(?:calendar|diary|agenda|schedule|appointments?|events?|diarise|diarize|reminders?)\b", re.IGNORECASE)
+_OTHER_TARGET_RX = re.compile(r"\b(?:lists?|shopping|groceries|grocery|to-?dos?|notes?|timers?|alarms?|playlist|queue)\b", re.IGNORECASE)
 _OFFER_RX = re.compile(
     r"\b(?:want|like)\s+me\s+to\s+(?:add|put|book|schedule|pencil)\b|\b(?:shall|should|can|could)\s+i\s+(?:add|put|book|schedule)\b|"
     r"\bi\s+(?:can|could)\s+(?:add|put|book|schedule)\s+(?:it|that|those|them|these)\b", re.IGNORECASE)
@@ -207,7 +208,12 @@ def note_reply(user_id: str, reply: str) -> None:
             return
         _offered.pop(uid, None)
         text = str(reply or "")
-        if _OFFER_RX.search(text) and _CALENDAR_WORD_RX.search(text):
+        ctx = _turns.get(uid)
+        # "Want me to add it?" after the person talked about their CALENDAR: the calendar context is the user's turn, not this reply
+        # (never when the reply itself names a list or another capability)
+        ctx_calendar = bool(ctx and time.monotonic() - ctx[1] <= _TURN_TTL_S and _CALENDAR_WORD_RX.search(ctx[0])
+                            and not _OTHER_TARGET_RX.search(text))
+        if _OFFER_RX.search(text) and (_CALENDAR_WORD_RX.search(text) or ctx_calendar):
             _offered[uid] = time.monotonic()      # an offer to add something to a LIST (or anything else) authorises no calendar write
     except Exception:  # noqa: BLE001
         return

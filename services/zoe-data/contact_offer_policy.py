@@ -4,7 +4,9 @@ yes/no binder (intent_router), so they cannot drift:
 
 - at most ONE offer per turn (non-batch);
 - none on forget / correction / decline / "not now" turns (deferred, not lost);
-- a voiced offer is not repeated for ``COOLDOWN_TURNS`` distinct user turns.
+- a voiced offer is not repeated for ``COOLDOWN_TURNS`` distinct user turns;
+- an offer is voiced only on a turn ABOUT that person or about contacts (``related``);
+- a STANDING no ("no contacts please", ``is_standing_decline``) is durable per user (``pending_suggestions.decline_contact_offers``).
 
 Deterministic, in-process per-user state (zoe-data is one worker). A restart
 forgets it, which fails towards asking once more, never towards nagging.
@@ -34,14 +36,78 @@ _NO_OFFER_TURN_RE = re.compile(
     r"maybe\s+later|i'?d\s+rather\s+not|skip\s+(?:it|that)|leave\s+(?:it|that)|"
     r"that'?s\s+(?:not\s+(?:right|true|correct)|wrong)|i\s+(?:didn'?t|did\s+not)\s+(?:say|mean)|"
     r"you\s+(?:misheard|misunderstood)|actually\s*,|i\s+meant|just\s+checking|"
-    r"don'?t\s+(?:ask|add)|stop\s+(?:asking|that))",
+    r"don'?t\s+(?:ask|add)|stop\s+(?:asking|that)|"
+    # distress: never carry an offer (QA round 5)
+    r"stay\s+with\s+me|(?:can'?t|cannot)\s+(?:keep\s+doing|do)\s+this|don'?t\s+know\s+if\s+i\s+can|want\s+to\s+(?:die|disappear)|"
+    r"(?:so\s+)?(?:scared|terrified|hopeless|alone)\b)",
     re.IGNORECASE,
 )
 
 
+# "no contacts please" / "don't add anyone" / "stop asking about contacts": a STANDING no, not an answer to one voiced offer.
+# (A bare "no thanks" is not: it answers whatever was just asked.) Whole-message shapes; short utterances only.
+_STANDING_DECLINE_RE = re.compile(
+    r"\bno\s+(?:more\s+)?contacts?\b"
+    r"|\bno\s+(?:more\s+)?contact\s+(?:offers?|suggestions?)\b"
+    r"|\bdo\s*n['\u2019]?t\s+(?:ever\s+)?(?:add|save|put)\s+(?:anyone|anybody|people|them|any\s+(?:one|body))\b"
+    r"|\b(?:stop|quit)\s+(?:asking|offering|suggesting)\b[^.?!]{0,40}\bcontacts?\b"
+    r"|\bdo\s*n['\u2019]?t\s+(?:ask|offer|suggest)\b[^.?!]{0,40}\bcontacts?\b"
+    r"|\bno\s+more\s+(?:asking|offers?)\b[^.?!]{0,30}\bcontacts?\b",
+    re.IGNORECASE,
+)
+# the way back: "you can offer contacts again"
+_STANDING_ACCEPT_RE = re.compile(
+    r"\byou\s+can\s+(?:offer|suggest|ask\s+about|add)\b[^.?!]{0,30}\bcontacts?\b[^.?!]{0,20}\bagain\b"
+    r"|\b(?:offer|suggest)\s+(?:me\s+)?contacts?\s+again\b",
+    re.IGNORECASE,
+)
+STANDING_MAX_WORDS = 14
+
+
+def is_standing_decline(message: str) -> bool:
+    """The owner said no to contact offers in general ("no contacts please"). Short messages only, never a question."""
+    t = (message or "").replace("\u2019", "'").strip()
+    return bool(t) and len(t.split()) <= STANDING_MAX_WORDS and not t.endswith("?") and bool(_STANDING_DECLINE_RE.search(t))
+
+
+def is_standing_accept(message: str) -> bool:
+    t = (message or "").replace("\u2019", "'").strip()
+    return bool(t) and len(t.split()) <= STANDING_MAX_WORDS and bool(_STANDING_ACCEPT_RE.search(t))
+
+
+_CONTACT_TOPIC_RE = re.compile(r"\b(?:contacts?|people|phonebook|address\s*book)\b", re.IGNORECASE)
+
+
+def related(message: str, offer: dict) -> bool:
+    """Is this turn about the offered person (their name, or their relationship word) or about contacts at all? An offer is
+    voiced only then: "Would you like me to add Mia as a contact?" tacked on to a goodnight, a food question and a question about
+    someone else was the nag (QA round 4). Deferred, not lost: the offer waits for a turn that is about them."""
+    text = (message or "").lower()
+    if not text.strip():
+        return False
+    if _CONTACT_TOPIC_RE.search(text):
+        return True
+    words = set(re.findall(r"[a-z][a-z'\u2019-]*", text.replace("\u2019", "'")))
+    for part in str(offer.get("name") or "").lower().split():
+        if len(part) > 1 and part in words:
+            return True
+    rel = str(offer.get("relationship") or "").lower().strip()
+    return bool(rel) and (rel in words or rel + "s" in words)
+
+
+def _distress(message: str) -> bool:
+    """The turn carries feeling (memory_gate.is_emotional_turn): a contact offer on someone's worst moment is the worst nag."""
+    try:
+        from memory_gate import is_emotional_turn
+
+        return bool(is_emotional_turn(message or ""))
+    except Exception:  # noqa: BLE001 - unknown tone: the other gates still apply
+        return False
+
+
 def no_offer_turn(message: str) -> bool:
-    """Forget / correction / decline / "not now" turns never carry an offer."""
-    return bool(_NO_OFFER_TURN_RE.search(message or ""))
+    """Forget / correction / decline / "not now" / feeling turns never carry an offer."""
+    return bool(_NO_OFFER_TURN_RE.search(message or "")) or _distress(message)
 
 
 def offer_key(p: dict) -> str:
@@ -75,8 +141,9 @@ def eligible(user_id: str, message: str, pend: list[dict]) -> list[dict]:
     st = _STATE.get(user_id) or tick(user_id, message)
     turn = st["turn"]
     return [p for p in pend
-            if (at := st["offered"].get(offer_key(p))) is None
-            or at == turn or turn - at > COOLDOWN_TURNS]
+            if related(message, p)
+            and ((at := st["offered"].get(offer_key(p))) is None
+                 or at == turn or turn - at > COOLDOWN_TURNS)]
 
 
 def note_offered(user_id: str, offers: list[dict]) -> None:

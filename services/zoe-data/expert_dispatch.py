@@ -169,6 +169,10 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     if domain == "weather" and _is_unit_conversion(text):
         logger.info("EXPERT_CONVERSION_NOT_WEATHER score=%.2f → brain", score)
         return None
+    if domain == "weather" and is_food_temperature(text):
+        # A cooking temperature ("safe internal temp", a bare "and what temp") is the brain's, never today's forecast.
+        logger.info("EXPERT_FOOD_TEMP_NOT_WEATHER score=%.2f → brain", score)
+        return None
     user_id = str(ctx.get("user_id") or "guest")
     session_id = str(ctx.get("session_id") or "")
     t0 = time.monotonic()
@@ -227,6 +231,15 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
                 ex = await extract_slots_for_intent(intent_name, text)
                 if not ex:
                     return None
+                if intent_name == "list_add":
+                    # the router's "which list?" decision (write_intent_gate) is never in the extractor's slots: re-apply the same rule
+                    # here or the expert lane would write "bolts" to the shopping list unasked
+                    import intent_router as _ir
+                    import write_intent_gate as _wig
+
+                    if (str(ex.get("list_type") or "").strip().lower() in ("", "shopping") and not _wig.names_a_list(text)
+                            and _ir._needs_list_choice(str(ex.get("item") or ""))):
+                        ex = dict(ex, ask_list=True, list_type="")
                 slots = ex
             elif kind == "direct":
                 # Regex slots are complete: nothing to extract. Run as the REAL
@@ -272,6 +285,9 @@ _TEMP_CONVERSION_RE = re.compile(
     r"\b(?:in|to|into)\s+(?:celsius|centigrade|fahrenheit|degrees\s+[cf])\b|\bconvert\b", re.IGNORECASE)
 _WEATHER_WORD_RE = re.compile(
     r"\b(?:weather|forecast|rain\w*|outside|sunny|wind\w*|humid\w*|storm\w*|today|tomorrow|tonight|week)\b", re.IGNORECASE)
+
+
+from weather_speech import is_food_temperature, weather_place  # noqa: E402  (pure helpers, no import cycle)
 
 
 def _is_unit_conversion(text: str) -> bool:
@@ -337,25 +353,27 @@ def _plan(domain: str, text: str):
 
     if domain == "weather":
         low = text.lower()
+        place = weather_place(low)      # a place the user NAMED beats the household default
+        loc = {"location": place} if place else {}
         # Advice questions get a DIRECT yes/no answer, not a forecast dump.
         if re.search(r"\bumbrella\b|\brain(coat)?\b|will\s+it\s+rain|going\s+to\s+rain", low):
-            return ("weather", {"advice": "rain"}, "read")
+            return ("weather", {"advice": "rain", **loc}, "read")
         if re.search(r"\bjacket\b|\bcoat\b|\bjumper\b|what\s+should\s+i\s+wear|do\s+i\s+need\s+a", low):
-            return ("weather", {"advice": "warmth"}, "read")
+            return ("weather", {"advice": "warmth", **loc}, "read")
         # "how hot is it going to get today" / "what's the high" / "how cold tonight":
         # lead with the asked-for number, short (voice). Checked BEFORE the bare
         # warm/cold advice below, which would answer a jacket yes/no to "how cold".
         from weather_speech import classify_weather_ask
         ask = classify_weather_ask(low)
         if ask is not None and (ask.focus in ("high", "low", "outlook") or ask.day):
-            return ("weather", {"focus": ask.focus, "day": ask.day, "forecast": ask.action == "forecast"}, "read")
+            return ("weather", {"focus": ask.focus, "day": ask.day, "forecast": ask.action == "forecast", **loc}, "read")
         if re.search(r"\bwarm(ly)?\b|\bcold\b", low):
-            return ("weather", {"advice": "warmth"}, "read")
+            return ("weather", {"advice": "warmth", **loc}, "read")
         # Otherwise: forecast for time-shifted questions, current for "right now".
         fc = bool(re.search(
             r"\b(later|tonight|tomorrow|this\s+week|weekend|forecast|will\s+it|"
             r"going\s+to|gonna|sunny)\b", low))
-        return ("weather", {"forecast": fc}, "read")
+        return ("weather", {"forecast": fc, **loc}, "read")
     if domain == "time":
         # A when / what-time question about the person's OWN life is never the clock: "what time do I usually get up?" answered
         # "It's 2:10 PM." (QA 2026-11-08) because the head claims `time` on the words alone and the precedence flags can be dark.

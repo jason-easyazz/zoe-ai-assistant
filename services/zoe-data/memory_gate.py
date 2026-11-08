@@ -488,6 +488,12 @@ def person_question_sentences(message: str) -> list[str]:
     return [s for s in event_sentences(message) if is_person_question_sentence(s)]
 
 
+def _lazy_possessive_of(token: str, head: str) -> bool:
+    """``theos`` is Theo's typed without the apostrophe (QA 2026-11-08: "whats theos deal" was answered as the word "theos").
+    Only a name of 3+ letters, and only the plain ``+s`` form; a name that already ends in s is left to the exact match."""
+    return len(head) >= 3 and not head.endswith("s") and token == head + "s"
+
+
 def person_names_in_question(message: str, known_names) -> list[str]:
     """The ``known_names`` (one user's own contact / person-entity names) that
     ``message`` names, in order of first mention, at most ``PERSON_FLOOR_MAX_NAMED``.
@@ -522,7 +528,7 @@ def person_names_in_question(message: str, known_names) -> list[str]:
                     or (len(toks) >= 2 and len(first_owner.get(head, ())) != 1)):
                 continue
             for i, (t, cap) in enumerate(msg_tokens):
-                if t == head and (cap or caseless):
+                if (t == head or _lazy_possessive_of(t, head)) and (cap or caseless):
                     pos = i
                     break
         if pos >= 0:

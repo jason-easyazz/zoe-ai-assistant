@@ -236,3 +236,62 @@ def test_an_offer_to_add_to_a_list_is_not_a_calendar_offer():
     wig.note_reply("jason", "Want me to add those to your calendar?")
     wig.note_turn("jason", "yes please")
     assert wig.check("jason", "calendar_create", {"title": "x"}) is None
+
+
+def test_an_abbreviated_offer_resolves_against_the_calendar_context_of_the_turn():
+    # Codex on #2347: the calendar is named in the PERSON'S turn, Zoe's offer is just "Want me to add it?"
+    wig.note_turn("jason", "My calendar is missing Friday's dentist appointment")
+    wig.note_reply("jason", "Want me to add it?")
+    wig.note_turn("jason", "yes please")
+    assert wig.check("jason", "calendar_create", {"title": "dentist"}) is None
+    # negative controls: no calendar context, or an offer that names a list, authorises nothing
+    wig.reset_state()
+    wig.note_turn("jason", "I forgot the milk again")
+    wig.note_reply("jason", "Want me to add it?")
+    wig.note_turn("jason", "yes please")
+    assert wig.check("jason", "calendar_create", {"title": "x"}) is not None
+    wig.reset_state()
+    wig.note_turn("jason", "My calendar is a mess and I need milk")
+    wig.note_reply("jason", "Want me to add it to your shopping list?")
+    wig.note_turn("jason", "yes please")
+    assert wig.check("jason", "calendar_create", {"title": "x"}) is not None
+
+
+# -- the expert lane honours the unnamed-list contract (Codex on #2347) ---------------------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,item,expect_ask", [
+    ("add bolts to the list", "bolts", True),
+    ("add milk to the list", "milk", False),                 # negative control: a grocery goes straight on
+    ("add bolts to my work list", "bolts", False),           # negative control: a named list is never asked about
+])
+async def test_expert_list_add_asks_which_list_for_a_non_grocery(monkeypatch, text, item, expect_ask):
+    import sys
+    import types
+
+    import expert_dispatch as xd
+    import intent_router
+
+    monkeypatch.setenv("ZOE_EXPERT_MODE", "active")
+    monkeypatch.setenv("ZOE_EXPERT_ALLOW_WRITES", "1")
+    monkeypatch.setenv("ZOE_EXPERT_ACTIVE_DOMAINS", "lists")
+    monkeypatch.setenv("ZOE_EXPERT_THRESHOLD", "0")
+    monkeypatch.delenv("ZOE_WRITE_INTENT_GATE", raising=False)
+    monkeypatch.setattr(xd, "_plan", lambda domain, t: ("list_add", None, "write"))
+    monkeypatch.setattr(xd, "_names_another_domain", lambda domain, t: False)
+
+    async def extract(_name, _raw):
+        return {"item": item, "list_type": "shopping"}
+
+    mod = types.ModuleType("nlu_extractor")
+    mod.extract_slots_for_intent = extract
+    monkeypatch.setitem(sys.modules, "nlu_extractor", mod)
+    seen = {}
+
+    async def fake_execute(intent, user_id="guest"):
+        seen["slots"] = dict(intent.slots)
+        return "ok"
+
+    monkeypatch.setattr(intent_router, "execute_intent", fake_execute)
+    await xd.dispatch("lists", text, {"user_id": "jason", "session_id": "s1", "score": 0.99})
+    assert bool(seen.get("slots", {}).get("ask_list")) is expect_ask, seen
