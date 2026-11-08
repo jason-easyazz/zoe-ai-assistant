@@ -117,7 +117,7 @@ Owner, 2026-11-08: "Can't Zoe learn a person's voice with enough conversation?"
   scores only, never a vector or a word).
 - **The ask:** that turn's brain block says to ask once, kindly: "I don't think we've met. What's your name?" (at most once a
   day). An answer from the same voice within 10 minutes ("I'm Quinn", "it's Quinn", "Quinn") creates a NEW named guest from that
-  voice under the household's first admin, with the name's provenance `introduction`. A name already held by any named guest, or a
+  voice under the household's first admin (the people row only: the name is the guest's own introduction, not a member's word). A name already held by any named guest, or a
   household member's name, is refused: an unverified voice can only create, never claim.
 - **Expiry:** a voice with no new turn for `ZOE_GUEST_LEARN_EXPIRE_DAYS` (14) is dropped with its samples.
 - **The owner:** `GET /api/voice/unknown-voices` (admin; counts and dates only), `POST /api/voice/unknown-voices/{id}/name`

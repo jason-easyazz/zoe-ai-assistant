@@ -5,7 +5,8 @@
                                name) and an ``expires_at`` (dropped when never confirmed).
   * ``panel_voice_samples``  - the speaker EMBEDDINGS behind it (at most 30 per voice, never audio).
 
-Household-level (no member owns an unknown voice; the owner lists and erases them). BIOMETRIC: the nightly backup carries no row
+Held for the household owner (``user_id`` = the first admin, who would own the guest an answered ask creates); the owner lists
+and erases them. BIOMETRIC: the nightly backup carries no row
 data of either table (``postgres-nightly-backup.sh`` BIOMETRIC_TABLES). Runbook ``docs/knowledge/named-guests.md``. Idempotent; the
 downgrade drops both tables (lossy by design: unknown voices are re-heard).
 
@@ -27,6 +28,7 @@ def statements(dialect: str) -> list[str]:
     return [
         f"""CREATE TABLE IF NOT EXISTS panel_voice_clusters (
                id TEXT PRIMARY KEY,
+               user_id TEXT NOT NULL,
                model_id TEXT NOT NULL,
                centroid {blob} NOT NULL,
                n_turns INTEGER NOT NULL DEFAULT 0,

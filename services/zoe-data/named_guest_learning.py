@@ -184,10 +184,14 @@ async def observe(payload: dict, caller: dict, *, session_id: str, wake: bool, t
                     logger.info("GUEST_LEARN mode=on action=%s", "named" if guest else "name_refused")
                     return {"action": "named", "guest": guest} if guest else {"action": "name_refused"}
             if best is None or score < t["join"]:
+                holder = await _household_owner(db)
+                if not holder:                       # nobody to hold an unknown voice for: nothing is kept
+                    await db.commit()
+                    return {"action": "skip"}
                 cid = str(uuid.uuid4())
-                await db.execute("INSERT INTO panel_voice_clusters (id, model_id, centroid, n_turns, n_wake, sessions, days, tightness, "
-                                 "status, first_at, last_at, expires_at) VALUES (?, ?, ?, 0, 0, '[]', '[]', 0, 'open', ?, ?, ?)",
-                                 (cid, model_id, vec.astype("<f4").tobytes(), _iso(now), _iso(now), _iso(now)))
+                await db.execute("INSERT INTO panel_voice_clusters (id, user_id, model_id, centroid, n_turns, n_wake, sessions, days, "
+                                 "tightness, status, first_at, last_at, expires_at) VALUES (?, ?, ?, ?, 0, 0, '[]', '[]', 0, 'open', ?, ?, ?)",
+                                 (cid, holder, model_id, vec.astype("<f4").tobytes(), _iso(now), _iso(now), _iso(now)))
                 best = dict(id=cid, centroid=vec, n_turns=0, n_wake=0, sessions=[], days=[], tightness=0.0, status="open",
                             asked_at=None, last_at=_iso(now))
             await db.execute("INSERT INTO panel_voice_samples (id, cluster_id, embedding, session_id, day, created_at) "
@@ -241,7 +245,8 @@ async def _name_cluster(db, cluster_id: str, name: str, *, owner: Optional[str])
     import named_guests as ng
     import omi_voices
 
-    rows = await _rows(db, "SELECT centroid, model_id, n_turns FROM panel_voice_clusters WHERE id = ?", (cluster_id,))
+    rows = await _rows(db, "SELECT centroid, model_id, n_turns, user_id FROM panel_voice_clusters WHERE id = ? AND expires_at >= ?",
+                       (cluster_id, _iso(_now())))          # an expired voice is gone, never promoted
     if not rows or await nge._is_member_name(db, name):
         return None
     key = cs.fold(name)
@@ -249,20 +254,31 @@ async def _name_cluster(db, cluster_id: str, name: str, *, owner: Optional[str])
                                     "WHERE v.channel = 'panel' AND (p.deleted = 0 OR p.deleted IS NULL)"):
         if cs.fold(other or "") == key:
             return None
-    owner = owner or await _household_owner(db)
+    owner = owner or str(rows[0][3] or "") or await _household_owner(db)
     if not owner:
         return None
+    import memory_forgotten as mf
+
+    if await mf.matches(owner, name, strict=True):          # forgotten for good: a returning voice cannot bring the name back
+        return None
     pid = await cs._create_person(db, owner, name, now=cs.now_iso())      # always a NEW person: never linked to an existing one
-    await cs.add_field(db, owner, pid, kind="name", value=name, provenance="entered_by_member" if by_member else "introduction",
-                       provenance_ref="named_guest_learned")
+    if by_member:   # a member's naming is their own word; an answered ask is the guest's own introduction (the people row only)
+        await cs.add_field(db, owner, pid, kind="name", value=name, provenance="entered_by_member", provenance_ref="named_guest_learned")
     now = cs.now_iso()
     await db.execute(
         "INSERT INTO learned_voiceprints (id, owner_user_id, people_id, model_id, channel, embedding, n_segments, n_recordings, status, "
         "learning_enabled, created_at, updated_at, last_confirmed_at, expires_at) VALUES (?, ?, ?, ?, 'panel', ?, ?, 0, 'confirmed', 1, "
         "?, ?, ?, ?)", (str(uuid.uuid4()), owner, pid, rows[0][1], bytes(rows[0][0]), int(rows[0][2]), now, now, now,
                         omi_voices.KEEP_UNTIL_FORGOTTEN))
-    await db.execute("DELETE FROM panel_voice_samples WHERE cluster_id = ?", (cluster_id,))
-    await db.execute("DELETE FROM panel_voice_clusters WHERE id = ?", (cluster_id,))
+    # The named voice AND every other unknown voice near it go: one person can form two clusters, and a leftover copy of their
+    # embeddings must not outlive them as an "unknown" (or recreate them after a forget). Review #2343.
+    centre = _unit(_vec(rows[0][0]))
+    guard = speaker_models.RESNET34_THRESHOLDS["far1"]["long"]
+    doomed = [cluster_id] + [r[0] for r in await _rows(db, "SELECT id, centroid FROM panel_voice_clusters WHERE model_id = ? AND id <> ?",
+                                                       (rows[0][1], cluster_id)) if float(_unit(_vec(r[1])) @ centre) >= guard]
+    for cid in doomed:
+        await db.execute("DELETE FROM panel_voice_samples WHERE cluster_id = ?", (cid,))
+        await db.execute("DELETE FROM panel_voice_clusters WHERE id = ?", (cid,))
     return ng.Guest(person_id=pid, name=name, owner_user_id=owner)
 
 
@@ -292,6 +308,7 @@ async def name_unknown(cluster_id: str, name: str, owner: str) -> Optional[dict]
     if not clean:
         return None
     async with get_compat_db() as db:
+        await sweep(db)
         guest = await _name_cluster(db, cluster_id, clean, owner=owner)
         await db.commit()
     return dict(guest_id=guest.person_id, name=guest.name) if guest else None

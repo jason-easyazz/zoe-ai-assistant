@@ -160,3 +160,41 @@ def test_the_owner_names_lists_and_erases_unknown_voices(learn):
     assert run(ngl.name_unknown(b, "Rowan", OWNER)) is None                    # a name is never claimed twice
     assert run(ngl.erase_unknown(b)) == 1
     assert learn.q("SELECT COUNT(*) FROM panel_voice_samples") == [(0,)]
+
+
+def test_naming_a_voice_takes_its_twin_clusters_with_it_and_an_expired_voice_is_never_named(learn):
+    v = unit(46)
+    a = run(ngl.observe(turn(v), DEVICE, session_id="s", wake=True, now=T0))["cluster_id"]
+    twin = near(v, 0.40, 9)                                   # the same person, a second acoustic cluster (below JOIN)
+    b = run(ngl.observe(turn(twin), DEVICE, session_id="s", wake=True, now=T0))["cluster_id"]
+    other = run(ngl.observe(turn(unit(47)), DEVICE, session_id="s", wake=True, now=T0))["cluster_id"]
+    assert len({a, b, other}) == 3
+    assert run(ngl.name_unknown(a, "Quinn", OWNER))
+    left = {r[0] for r in learn.q("SELECT id FROM panel_voice_clusters")}
+    assert left == {other}                                    # the twin went with it; a stranger's voice stays
+    learn.conn.execute("UPDATE panel_voice_clusters SET expires_at = '2000-01-01T00:00:00Z'")
+    learn.conn.commit()
+    assert run(ngl.name_unknown(other, "Rowan", OWNER)) is None
+    assert learn.q("SELECT COUNT(*) FROM panel_voice_clusters") == [(0,)]
+
+
+def test_a_forgotten_name_is_never_brought_back_by_a_returning_voice(learn, monkeypatch):
+    import memory_forgotten as mf
+
+    async def forgotten(uid, text, **_k):
+        return text == "Quinn"
+    monkeypatch.setattr(mf, "matches", forgotten)
+    cid = say(unit(48), 2)["cluster_id"]
+    assert run(ngl.name_unknown(cid, "Quinn", OWNER)) is None
+    assert learn.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+
+
+def test_the_hourly_retention_sweep_expires_unknown_voices(learn):
+    import omi_recordings
+
+    say(unit(49), 2)
+    learn.conn.execute("UPDATE panel_voice_clusters SET expires_at = '2000-01-01T00:00:00Z'")
+    learn.conn.commit()
+    run(omi_recordings._sweep_voices())
+    assert learn.q("SELECT COUNT(*) FROM panel_voice_clusters") == [(0,)] and learn.q("SELECT COUNT(*) FROM panel_voice_samples") == [(0,)]
+
