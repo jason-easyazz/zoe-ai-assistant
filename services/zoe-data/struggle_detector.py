@@ -955,6 +955,9 @@ async def _delete_user_locked(user_id: str) -> int:
         import self_review
 
         await self_review.delete_user(user_id)                  # the nightly self-review's private records of the member (files)
+        import night_extract
+
+        await night_extract.delete_user(user_id)                # the shadow night pre-pass's proposed facts of the member (files)
         n = int(await get_backend().delete_user(user_id) or 0)
     except Exception as exc:
         if not _nothing_stored(exc):

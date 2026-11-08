@@ -313,7 +313,7 @@ def test_the_reader_withholds_a_forgotten_name_even_when_the_erase_did_not_land(
 def test_the_cascade_and_the_member_erase_are_wired():
     cascade = (REPO / "services" / "zoe-data" / "memory_forget_cascade.py").read_text()
     assert "night_extract.erase_entity" in cascade and '"night_extract"' in cascade
-    assert "night_extract.delete_user" in (REPO / "services" / "zoe-data" / "memory_service.py").read_text()
+    assert "night_extract.delete_user" in (REPO / "services" / "zoe-data" / "struggle_detector.py").read_text()      # MemoryService.delete_user -> struggle_detector.delete_user
 
 
 # ── the real model: skipped cleanly where the venv / weights are absent (CI) ──────────────────────────────────────────────────────────────
