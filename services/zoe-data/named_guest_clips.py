@@ -1,18 +1,14 @@
 """Hearing a saved unknown-voice clip and naming it (named guests, spec item 6; flag ``ZOE_NAMED_GUEST_CLIPS``, off).
 
-"Who was that this morning?" - a VERIFIED ADULT member at the panel asks, Zoe plays a few seconds of the newest saved clip filed under
-an unknown voice (#2343's ``panel_voice_clusters``, through the existing announcement lane) and asks "Who's this?"; the member's
-answer ("that's Quinn") NAMES THAT CLUSTER through ``named_guest_learning.name_unknown`` - the same registry, the same refusals (a
-member's name, a name a guest already holds), the same child handling (a child guest is recognised, marked child-safe at match time).
-Nothing here is a second registry: a clip is only a pointer (its sidecar's ``cluster``) to a cluster that must still exist.
+"Who was that this morning?": a VERIFIED ADULT member at the panel asks, Zoe plays a few seconds of the newest saved clip filed under an
+unknown voice (#2343's ``panel_voice_clusters``) through the announcement lane and asks "Who's this?"; "that's Quinn" names THAT cluster via
+``named_guest_learning.name_unknown`` (same registry, same refusals, a child guest is marked child-safe). A clip is only a pointer to a
+cluster that must still exist: no second registry.
 
-WHO MAY HEAR A CLIP  only a member the server has POSITIVELY verified at this panel (an accepted voice or a fresh PIN) and who is
-positively an adult. Never a guest (named or not), an unverified voice, a child member or a typed channel; and only clips of
-UNKNOWN voices are ever offered - a member's own clips (verdict ``member``) are never played to anyone through this path. A child
-GUEST's clip may be played to such a member (owner 2026-11-08: voice works the same for adults and children).
-HOW IT PLAYS  the audio never rides the announcement row: the row (``voice_clip_play``, panel-scoped, 3 minutes) carries a single-use,
-panel-bound token, and the panel's daemon redeems it at ``POST /api/voice/clip-playback`` for the few seconds (``MAX_PLAY_S``), then
-asks the question. The token dies on use or expiry.
+WHO HEARS A CLIP  a member the server verified at this panel (accepted voice or fresh PIN) who is positively an adult. Never a guest, an
+unverified voice, a child member or a typed channel; only UNKNOWN voices' clips are offered, never a member's. A child GUEST's clip may be
+played to such a member (owner 2026-11-08). The audio never rides the announcement row: it carries a single-use, panel-bound token that the
+daemon redeems at ``POST /api/voice/clip-playback``.
 """
 from __future__ import annotations
 

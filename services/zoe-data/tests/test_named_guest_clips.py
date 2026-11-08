@@ -21,7 +21,6 @@ from named_guest_support import DEVICE, MID, OWNER, PANEL, env, run, unit  # noq
 pytestmark = pytest.mark.ci_safe
 T0 = datetime(2026, 11, 8, 9, 0, tzinfo=timezone.utc)
 
-
 def clip(d, name, cluster, seconds=8):
     p = d / f"{name}.wav"
     with wave.open(str(p), "wb") as w:
@@ -31,7 +30,6 @@ def clip(d, name, cluster, seconds=8):
         w.writeframes(b"\x01\x00" * int(16000 * seconds))
     (d / f"{name}.verdict.json").write_text(json.dumps(dict(v=1, kind="unknown", id="", cluster=cluster, ts=int(time.time()))))
     return str(p)
-
 
 @pytest.fixture
 def clips(env, monkeypatch, tmp_path):
@@ -51,7 +49,6 @@ def clips(env, monkeypatch, tmp_path):
     yield env
     ngc.reset()
 
-
 def _cluster(db):
     vec = unit(44)
     for i in range(3):
@@ -62,10 +59,8 @@ def _cluster(db):
         out = run(ngl.observe(body, DEVICE, session_id="s1", wake=True, text="hi", now=T0 + timedelta(minutes=i)))
     return out["cluster_id"]
 
-
 def ask(text, uid=OWNER, verified=True, channel="voice", panel=PANEL):
     return run(ngc.tier(text, uid, "s", channel=channel, speaker_verified=verified, panel_id=panel))
-
 
 def test_classify_is_pure_and_the_name_needs_a_pending_clip():
     assert ngc.classify("Hey Zoe, who was that this morning?", pending=False) == ("play", "")
@@ -78,7 +73,6 @@ def test_classify_is_pure_and_the_name_needs_a_pending_clip():
     assert ngc.classify("what's the weather", pending=True) is None                          # a command is never taken for a name
     assert ngc.classify("that's my", pending=True) is None
 
-
 def test_off_by_default_and_needs_named_guests_on(clips, monkeypatch):
     clip(clips.dir, "a", clips.cluster)
     monkeypatch.delenv("ZOE_NAMED_GUEST_CLIPS")
@@ -86,7 +80,6 @@ def test_off_by_default_and_needs_named_guests_on(clips, monkeypatch):
     monkeypatch.setenv("ZOE_NAMED_GUEST_CLIPS", "1")
     monkeypatch.setenv("ZOE_NAMED_GUESTS", "shadow")
     assert ask("who was that this morning") is None and clips.queued == []
-
 
 def test_a_verified_member_hears_a_few_seconds_then_names_the_voice(clips):
     wavp = clip(clips.dir, "a", clips.cluster)
@@ -108,7 +101,6 @@ def test_a_verified_member_hears_a_few_seconds_then_names_the_voice(clips):
     assert clips.q("SELECT COUNT(*) FROM panel_voice_clusters") == [(0,)]
     assert ask("that's Rowan") is None                                                       # nothing pending any more
 
-
 def test_a_guest_an_unverified_voice_a_child_or_a_typed_channel_hears_nothing(clips):
     clip(clips.dir, "a", clips.cluster)
     assert ask("who was that this morning", uid="guest") is None                             # a guest
@@ -118,7 +110,6 @@ def test_a_guest_an_unverified_voice_a_child_or_a_typed_channel_hears_nothing(cl
     assert ask("who was that this morning", channel="chat") is None                          # typed
     assert ask("who was that this morning", verified=None) is None                           # no verdict and no fresh PIN
     assert clips.queued == [] and ngc._TOKENS == {}
-
 
 def test_a_clip_is_only_named_by_the_member_it_was_played_to_at_that_panel(clips):
     clip(clips.dir, "a", clips.cluster)
@@ -130,7 +121,6 @@ def test_a_clip_is_only_named_by_the_member_it_was_played_to_at_that_panel(clips
     assert clips.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
     assert ask("that's Quinn").intent == "named_guest_clip_name"                             # control: the right member, panel, verdict
 
-
 def test_only_unknown_voices_that_still_exist_are_played_and_a_members_clip_never(clips):
     member = clips.dir / "m.wav"
     clip(clips.dir, "m", clips.cluster)
@@ -140,14 +130,12 @@ def test_only_unknown_voices_that_still_exist_are_played_and_a_members_clip_neve
     assert "haven't got" in ask("who was that this morning").reply and clips.queued == []
     assert member.exists()
 
-
 def test_a_name_that_is_a_members_is_refused_and_the_clip_stays_unknown(clips):
     wavp = clip(clips.dir, "a", clips.cluster)
     ask("who was that this morning")
     assert "can't give that voice" in ask("that's Blake").reply
     assert vc.read(wavp)["kind"] == "unknown"
     assert clips.q("SELECT COUNT(*) FROM panel_voice_clusters") == [(1,)]
-
 
 def test_a_child_voice_is_played_and_named_like_any_other(clips):
     """Owner 2026-11-08: voice works the same for adults and children - the member hears and names a child's clip too."""
@@ -161,14 +149,12 @@ def test_a_child_voice_is_played_and_named_like_any_other(clips):
     g = run(ng._lookup(gid, MID, 0.6))
     assert g is not None and g.child is True and "child-safe" in ng.guest_line(g)
 
-
 def test_the_clip_command_rides_the_announcement_lane_panel_scoped_and_without_audio():
     import voice_announce as va
 
     assert "voice_clip_play" in va.COMMAND_TRIGGERS and "voice_clip_play" in va.PANEL_SCOPED_TRIGGERS
     src = open(ngc.__file__).read()
     assert "audio_base64" not in src.split("async def _queue")[1].split("async def tier")[0]       # the row holds a token, never audio
-
 
 def test_the_token_is_panel_bound_and_expires(clips):
     wavp = clip(clips.dir, "a", clips.cluster)

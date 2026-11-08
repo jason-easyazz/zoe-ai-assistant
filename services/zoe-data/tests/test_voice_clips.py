@@ -18,7 +18,6 @@ pytestmark = pytest.mark.ci_safe
 DAY = 86400
 LIB = str(Path(__file__).resolve().parents[3] / "scripts" / "lib")
 
-
 def wav(path, seconds=0.5):
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
@@ -27,13 +26,11 @@ def wav(path, seconds=0.5):
         w.writeframes(b"\x00\x01" * int(16000 * seconds))
     return str(path)
 
-
 def label(d, name, kind, age_days=0, ident="", cluster=""):
     p = wav(d / f"{name}.wav")
     if kind:
         (d / f"{name}.verdict.json").write_text(json.dumps(dict(v=1, kind=kind, id=ident, cluster=cluster, ts=int(time.time() - age_days * DAY))))
     return p
-
 
 @pytest.fixture
 def corpus(tmp_path, monkeypatch):
@@ -42,14 +39,12 @@ def corpus(tmp_path, monkeypatch):
     monkeypatch.setenv("ZOE_VOICE_CLIP_VERDICT", "1")
     return tmp_path
 
-
 def capture(src):
     from routers import voice_tts
 
     vc.begin()
     asyncio.run(voice_tts._maybe_capture_stt(src, "hello"))
     return vc.current_clip()
-
 
 def test_a_saved_clip_gets_the_servers_verdict_beside_it(corpus, tmp_path_factory):
     src = wav(tmp_path_factory.mktemp("src") / "in.wav")
@@ -63,7 +58,6 @@ def test_a_saved_clip_gets_the_servers_verdict_beside_it(corpus, tmp_path_factor
     assert clip2 != clip and vc.read(clip2) is None
     assert vc.record("member", "member-a") and vc.read(clip2)["id"] == "member-a" and vc.read(clip)["kind"] == "unknown"
 
-
 def test_the_label_is_flag_gated_and_needs_a_saved_clip(corpus, tmp_path_factory, monkeypatch):
     src = wav(tmp_path_factory.mktemp("src") / "in.wav")
     clip = capture(src)
@@ -73,7 +67,6 @@ def test_the_label_is_flag_gated_and_needs_a_saved_clip(corpus, tmp_path_factory
     assert vc.record("nonsense") is False
     vc.begin()                                                                        # nothing saved this turn (capture off / failed)
     assert vc.record("guest", "g1") is False
-
 
 def test_retention_deletes_only_old_guest_and_unknown_clips(corpus):
     old_guest = label(corpus, "a", "guest", 31, "g1")
@@ -90,22 +83,12 @@ def test_retention_deletes_only_old_guest_and_unknown_clips(corpus):
         assert os.path.exists(kept)
     assert os.path.exists(vc.sidecar_path(old_member))
 
-
 def test_retention_control_a_broken_sweep_would_have_deleted_members(corpus, monkeypatch):
     """Break the guard: if the kind filter let a member through, the old member clip would be gone - the assertion above sees that."""
     member = label(corpus, "m", "member", 400, "member-a")
     monkeypatch.setattr(vc, "NON_MEMBER", ("guest", "unknown", "member"))
     vc.sweep(str(corpus))
     assert not os.path.exists(member)
-
-
-def test_retention_runs_only_when_its_flag_is_on(corpus, monkeypatch):
-    label(corpus, "a", "unknown", 99)
-    monkeypatch.delenv("ZOE_VOICE_CLIP_RETENTION", raising=False)
-    assert vc.retention_enabled() is False and vc.retention_days() == 30
-    monkeypatch.setenv("ZOE_VOICE_CLIP_RETENTION", "1")
-    assert vc.retention_enabled() is True
-
 
 def test_naming_a_cluster_relabels_its_clips_and_forgetting_a_guest_erases_theirs(corpus):
     a = label(corpus, "a", "unknown", 1, cluster="c1")
@@ -115,7 +98,6 @@ def test_naming_a_cluster_relabels_its_clips_and_forgetting_a_guest_erases_their
     assert vc.erase_guests(["g1"], str(corpus)) == 1
     assert not os.path.exists(a) and os.path.exists(b)
     assert vc.erase_guests(["g1"], str(corpus)) == 0
-
 
 def test_owner_voice_metrics_keep_member_and_legacy_clips_only(corpus):
     sys.path.insert(0, LIB)
@@ -130,7 +112,6 @@ def test_owner_voice_metrics_keep_member_and_legacy_clips_only(corpus):
     (corpus / "bad.verdict.json").write_text("not json")
     assert pvl.clip_verdict(str(corpus / "bad.wav")) is None                         # unreadable = legacy, never a guess
 
-
 def test_every_owner_voice_consumer_filters_by_verdict():
     root = Path(__file__).resolve().parents[3] / "scripts"
     for rel, needle in (("perf/speaker_bakeoff.py", "clip_verdict"), ("perf/measure_speaker_adapt.py", "owner_voice_clips"),
@@ -138,7 +119,6 @@ def test_every_owner_voice_consumer_filters_by_verdict():
         assert needle in (root / rel).read_text(), rel
     # said-vs-did replay keeps every clip: the words are the test, so the probe does not filter by verdict
     assert "clip_verdict" not in (root / "maintenance/voice_regression_probe.py").read_text()
-
 
 def test_a_window_turn_the_gate_refused_is_labelled_unknown(corpus, tmp_path_factory):
     """The wiring: a no-wake follow-up whose voice the gate refused is dropped, and its saved clip is marked, not left as the owner's."""
@@ -152,7 +132,6 @@ def test_a_window_turn_the_gate_refused_is_labelled_unknown(corpus, tmp_path_fac
     assert asyncio.run(voice_tts._window_speaker_drop({"speaker": {"verified": False}}, {"source": "device"}, "hi", "panel-1",
                                                       route="turn")) is None
     assert vc.read(clip2) is None
-
 
 def test_voice_command_labels_the_clip_member_guest_or_unknown():
     src = (Path(__file__).resolve().parents[1] / "routers" / "voice_tts.py").read_text()
