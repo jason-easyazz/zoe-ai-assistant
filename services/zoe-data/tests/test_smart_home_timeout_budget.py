@@ -88,3 +88,51 @@ def test_timeouts_are_env_tunable_and_clamped(monkeypatch):
     assert shs._call_timeout_s() == 4.0
     monkeypatch.setenv("ZOE_HA_TURN_BUDGET_S", "0")
     assert shs.turn_budget_s() == 1.0
+
+
+def _install_two_lights_and_scene(monkeypatch, *, control):
+    async def _get(path):
+        if path == "/lights":
+            return {"lights": [
+                {"entity_id": "light.den", "state": "on", "attributes": {"friendly_name": "Den Light"}},
+                {"entity_id": "light.hall", "state": "on", "attributes": {"friendly_name": "Hall Light"}}]}
+        if path == "/scenes":
+            return {"scenes": [{"entity_id": "scene.movie", "attributes": {"friendly_name": "Movie"}}]}
+        if path in ("/switches",) or path.startswith("/entities"):
+            return {"switches": [], "entities": []}
+        return None
+
+    async def _post(path, payload):
+        return control(path, payload)
+
+    monkeypatch.setattr(shs, "_ha_get", _get)
+    monkeypatch.setattr(shs, "_ha_post", _post)
+
+
+@pytest.mark.asyncio
+async def test_partial_multi_device_timeout_is_not_reported_as_all_done(monkeypatch):
+    def control(path, payload):
+        if "hall" in str(payload):
+            shs._TIMED_OUT.get().append(path)  # the second device timed out
+            return None
+        return {"message": "Successfully executed turn_off", "result": []}
+
+    _install_two_lights_and_scene(monkeypatch, control=control)
+    out = await shs.resolve_smart_home(_Intent("turn_off", query="lights"))
+    spoken = out["spoken_summary"]
+    assert "taking longer than usual" in spoken and "1 of 2" in spoken
+    assert spoken != "Turned 2 devices off."
+
+
+@pytest.mark.asyncio
+async def test_scene_timeout_is_spoken_honestly_and_plain_failure_is_not(monkeypatch):
+    def timed_out(path, payload):
+        shs._TIMED_OUT.get().append(path)
+        return None
+
+    _install_two_lights_and_scene(monkeypatch, control=timed_out)
+    out = await shs.resolve_smart_home(_Intent("activate_scene", query="movie"))
+    assert "taking longer than usual" in out["spoken_summary"]
+    _install_two_lights_and_scene(monkeypatch, control=lambda p, pl: None)
+    out = await shs.resolve_smart_home(_Intent("activate_scene", query="movie"))
+    assert "couldn't activate" in out["spoken_summary"]

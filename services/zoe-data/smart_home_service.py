@@ -756,9 +756,16 @@ async def resolve_smart_home(
                 _home_card(devices, scenes, status="Home", summary="Pick a scene."),
                 "activate_scene",
             )
+        scene_timed_out: list = []
+        _TIMED_OUT.set(scene_timed_out)
         ok = await activate_scene(str(scene.get("scene_id")))
         name = scene.get("name") or "that scene"
-        spoken = f"Activated {name}." if ok else f"I couldn't activate {name}."
+        if ok:
+            spoken = f"Activated {name}."
+        elif scene_timed_out:
+            spoken = f"That's taking longer than usual, so I can't tell yet whether {name} activated."
+        else:
+            spoken = f"I couldn't activate {name}."
         refreshed = await list_devices() or devices
         return _result(spoken, _home_card(refreshed, scenes, status="Scene", summary=spoken), "activate_scene")
 
@@ -851,7 +858,10 @@ async def resolve_smart_home(
             else:
                 spoken = f"I couldn't reach {nm}."
         else:
-            if ok_any:
+            if ok_any and timed_out:
+                spoken = (f"Turned {len(controlled)} of {len(targets)} devices {label}; the rest are taking longer than usual, "
+                          "so I can't confirm them.")
+            elif ok_any:
                 spoken = f"Turned {len(targets)} devices {label}."
             elif timed_out:
                 spoken = "That's taking longer than usual, so I can't tell yet whether those changed."
