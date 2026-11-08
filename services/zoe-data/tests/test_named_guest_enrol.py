@@ -74,7 +74,18 @@ def test_the_spoken_tier_needs_a_verified_adult_member(env, monkeypatch):
     assert "not sure who's asking" in say(OWNER, False).reply
     assert queued == []
     assert say(OWNER, True).intent == "named_guest_learn" and queued == [(OWNER, "Quinn", PANEL)]
-    assert say(OWNER, None).intent == "named_guest_learn"           # a fresh PIN: the member, no voice verdict
+    import biometric_scope
+
+    async def no_pin(panel):
+        return None
+    monkeypatch.setattr(biometric_scope, "_fresh_panel_member", no_pin)
+    assert "not sure who's asking" in say(OWNER, None).reply and len(queued) == 1      # no verdict and no PIN: refused
+
+    async def pin(panel):
+        return OWNER if panel == PANEL else None
+    monkeypatch.setattr(biometric_scope, "_fresh_panel_member", pin)
+    assert say(OWNER, None).intent == "named_guest_learn" and len(queued) == 2        # this member's fresh PIN here
+    assert "not sure who's asking" in say(OTHER, None).reply and len(queued) == 2     # someone else's PIN is not theirs
     assert "their own account" in say(OWNER, True, "learn blake's voice").reply
     assert say(OWNER, True, "what's the weather") is None
     monkeypatch.setenv("ZOE_NAMED_GUESTS", "shadow")
@@ -97,4 +108,30 @@ def test_a_profile_that_sounds_like_a_member_is_refused(env):
         enrol(env, vec=member)
     assert e.value.status == 409 and env.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
     assert enrol(env, vec=unit(71))                                  # another voice is fine
+
+
+def test_a_forget_during_a_live_enrolment_is_never_undone(env, monkeypatch):
+    """Review #2341: start "learn Quinn's voice", forget Quinn while the ticket lives - the pending upload is refused and the
+    forget stands. A ticket issued for an ALREADY-forgotten name is an explicit re-teach and releases it."""
+    import memory_forgotten as mf
+
+    forgotten = {"now": False}
+    released = []
+
+    async def matches(uid, text, **_k):
+        return forgotten["now"]
+
+    async def release(uid, text):
+        released.append(text)
+        return 1
+    monkeypatch.setattr(mf, "matches", matches)
+    monkeypatch.setattr(mf, "release", release)
+    t = nge.issue_ticket(OWNER, PANEL, "Quinn", forgotten_at_issue=False)
+    forgotten["now"] = True
+    body = {"ticket": t, "model_id": MID, "embedding_base64": base64.b64encode(unit(5).tobytes()).decode()}
+    with pytest.raises(nge.GuestError) as e:
+        run(nge.store_profile(body, DEVICE))
+    assert e.value.status == 409 and released == [] and env.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+    t = nge.issue_ticket(OWNER, PANEL, "Quinn", forgotten_at_issue=True)
+    assert run(nge.store_profile({**body, "ticket": t}, DEVICE))["ok"] and released == ["Quinn"]
 
