@@ -88,6 +88,53 @@ _NOT_WEATHER_RE = re.compile(
 )
 _WIDE_TERMS = ("forecast", "week", "next few days")
 
+# A COOKING / food temperature is never the weather (QA 2026-11-08: "what's the safe internal temp" for chicken and the
+# follow-up "and what temp" for lamb both got today's forecast). An outdoor word always wins, so "what's the temp outside"
+# and "temperature today" stay weather.
+_OUTDOOR_WORD_RE = re.compile(r"\b(?:weather|forecast|outside|outdoors?|out\s+there|today|tomorrow|tonight|this\s+week|right\s+now)\b")
+_FOOD_TEMP_RE = re.compile(
+    r"\b(?:internal|core|safe|safely|cooking|roasting|baking|oven|grill|bbq|barbecue|reheat\w*|doneness|done)\s+temp(?:erature)?s?\b"
+    r"|\btemp(?:erature)?s?\s+(?:for|to)\s+(?:cook\w*|bak\w*|roast\w*|grill\w*|reheat\w*|serv\w*|stor\w*|keep\w*|"
+    r"(?:the\s+)?(?:chicken|lamb|beef|pork|steak|fish|turkey|mince|sausages?|burgers?|eggs?|rice|salmon|ham|roast|leftovers?))\b"
+    r"|\bwhat\s+temp(?:erature)?s?\s+(?:do|should|would|can|could|to)\b"
+    # a bare follow-up ("and what temp") carries no weather scope at all: it continues the cooking turn before it
+    r"|^\W*(?:(?:and|so|ok|okay|but|then)\s+)*(?:what|which)(?:\s+about)?\s+temp(?:erature)?s?\W*$"
+)
+
+
+def is_food_temperature(text: str) -> bool:
+    """True when ``text`` asks a cooking / food-safety temperature, not the weather. Pure."""
+    low = (text or "").lower().strip()
+    return bool(_FOOD_TEMP_RE.search(low)) and not _OUTDOOR_WORD_RE.search(low)
+
+
+# "weather in Perth" / "what's the forecast for Broome tomorrow": the place the user NAMED (never the household default).
+_PLACE_TAIL = r"(?:\s+(?:today|tomorrow|tonight|right\s+now|now|this\s+(?:week|weekend|morning|afternoon|evening)|please|at\s+the\s+moment))*"
+_PLACE_RE = re.compile(
+    rf"\b(?:weather|forecast|temp(?:erature)?|raining|rain|hot|cold|warm|windy)\b.*?\b(?:in|for|at)\s+"
+    rf"(?P<place>[a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){{0,2}}?){_PLACE_TAIL}\s*[?.!]*$"
+)
+_NOT_A_PLACE = frozenset({
+    "the", "a", "an", "my", "our", "your", "this", "that", "it", "here", "there", "town", "area", "home", "house", "inside",
+    "outside", "indoors", "outdoors", "the area", "case", "general", "morning", "afternoon", "evening", "oven", "fridge",
+    "freezer", "room", "kitchen", "garden", "yard", "car", "pool", "sun", "shade",
+})
+
+
+def weather_place(text: str) -> str:
+    """The place a weather question names ("weather in perth" -> "perth"), or "" for the household default. Pure."""
+    low = re.sub(r"\s+", " ", (text or "").lower().strip())
+    if is_food_temperature(low):
+        return ""
+    m = _PLACE_RE.search(low)
+    if not m:
+        return ""
+    place = m.group("place").strip(" .'-")
+    first = place.split()[0] if place else ""
+    if not place or place in _NOT_A_PLACE or first in _NOT_A_PLACE:
+        return ""
+    return place.title()
+
 
 @dataclass(frozen=True)
 class WeatherAsk:
@@ -173,7 +220,7 @@ def classify_weather_ask(message: str) -> Optional[WeatherAsk]:
     # The keyword gate, now carrying what was asked. Whole words only, and never a keyword that is about something
     # else: an indoor / thermostat / colour temperature, "if it rains", "wind down" (HA corpus 2026-10-14: indoor
     # temperature and "set the lamp colour temperature to 2700 K" got the outdoor weather).
-    if _KEYWORD_RE.search(text) and not _NOT_WEATHER_RE.search(text):
+    if _KEYWORD_RE.search(text) and not _NOT_WEATHER_RE.search(text) and not is_food_temperature(low):
         day = _day_of(low)
         wide = any(term in low for term in _WIDE_TERMS)
         if _RE_RAIN.search(low):

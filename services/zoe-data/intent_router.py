@@ -519,10 +519,15 @@ _THANKS_RE = re.compile(
 )
 _ACK_RE = re.compile(
     r"^(?:got\s+it|gotcha|understood|makes\s+sense|good\s+to\s+know|noted|fair\s+enough)\s*[!.,]*$"
-    r"|^(?:ok|okay|okey|k|alright|cool|nice|great|perfect|awesome|lovely|sweet|sounds\s+good)\s*[!.,]*$"
+    r"|^(?:ok|okay|okey|k|alright|cool|nice|great|perfect|awesome|lovely|sweet|sounds\s+good|yep|yup|yeah\s+ok(?:ay)?|sure(?:\s+thing)?)\s*[!.,]*$"
     r"|^(?:no\s+(?:problem|worries)|all\s+good)\s*[!.,]*$",
     re.IGNORECASE,
 )
+# A bare decline ("nah", "nope") is a social close, never a mood: with nothing of Zoe's outstanding it gets a light "no worries"
+# (QA 2026-11-08: "nah" was answered "You seem a bit down"). It is an ``ack`` (slot ``decline``) so every lane that already
+# treats an ack identically - incl. "it answers Zoe's offer/question, so the brain reads it" - treats it the same.
+_DECLINE_RE = re.compile(r"^(?:nah|nope|nay|naw|no\s+thanks?|no\s+ta|nah\s+thanks?|nope\s+thanks?)\s*[!.,]*$", re.IGNORECASE)
+DECLINE_REPLIES = ("No worries.", "All good.", "Righto.", "No problem.")
 # Spoken replies to a bare thanks / acknowledgement: short, casual, varied, never a self-introduction.
 THANKS_REPLIES = ("You're welcome!", "Anytime.", "Happy to help.", "No worries.", "No dramas.", "Not a problem.", "Any time!",
                   "You got it.", "Pleasure.")
@@ -931,6 +936,8 @@ def detect_intent(
         return Intent("acknowledgement", {"kind": "thanks"})
     if _ACK_RE.match(t):
         return Intent("acknowledgement", {"kind": "ack"})
+    if _DECLINE_RE.match(t):
+        return Intent("acknowledgement", {"kind": "ack", "decline": True})
     if _STATUS_CHECK_RE.match(t):
         return Intent("status_check", {})
 
@@ -1144,7 +1151,9 @@ def detect_intent(
     m = re.match(r"^who is (.+)$", t)
     _raw_who = _WHO_IS_RAW_RE.search(text or "") if m else None
     if m and _is_name_shaped(m.group(1), _raw_who.group(1) if _raw_who else None):
-        return Intent("people_search", {"query": m.group(1).strip()})
+        # via=who_is: an identity question, not a contacts search - a name with no contact row is answered from memory + the people
+        # graph by the brain (_execute_people_search_direct declines), never "not in your contacts" (QA 2026-11-08).
+        return Intent("people_search", {"query": m.group(1).strip(), "via": "who_is"})
 
 
     # --- NOTES CREATE ---
@@ -1215,7 +1224,12 @@ def detect_intent(
                 any(kw in qualifier for kw in ("tomorrow", "week", "forecast"))
                 or any(kw in t for kw in ("tomorrow", "this week", "forecast"))
             )
-            return Intent("weather", {"qualifier": qualifier, "forecast": is_forecast})
+            slots = {"qualifier": qualifier, "forecast": is_forecast}
+            from weather_speech import weather_place   # a place the user named beats the household default
+            place = weather_place(t)
+            if place:
+                slots["location"] = place
+            return Intent("weather", slots)
 
     # --- JOURNAL ---
     # Explicit "<verb> a journal entry[: <content>]" — the deterministic, DB-verified
@@ -2163,7 +2177,9 @@ async def ack_answers_offer(intent: "Intent", user_id: str, previous: Optional[s
     try:
         from conversation_cues import ends_with_offer
 
-        return ends_with_offer(previous if previous is not None else (await _previous_assistant_message(user_id) or ""))
+        prev = previous if previous is not None else (await _previous_assistant_message(user_id) or "")
+        # An offer, or any QUESTION of hers still hanging ("k" / "nah" answer it): the brain reads the short reply against it.
+        return ends_with_offer(prev) or prev.rstrip().endswith("?")
     except Exception as exc:  # noqa: BLE001 - never let the offer check break routing
         logger.debug("ack_answers_offer: check failed: %s", type(exc).__name__)
         return False
@@ -3723,6 +3739,8 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
                     (user_id,),
                 )
             rows = [dict(r) for r in await cursor.fetchall()]
+        if not rows and kind == "name" and slots.get("via") == "who_is":
+            return None     # not a contact: memory / the people graph / a pet may know them, so the brain answers with the packet
         if slots.get("mode") == "count":
             # "how many contacts do I have": the number, short (TTS reads this out).
             n = len(_cc.collapse_duplicates(rows)) if conversational else len(rows)
@@ -4052,6 +4070,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         import random
         if intent.slots.get("kind") == "thanks":
             return random.choice(THANKS_REPLIES)
+        if intent.slots.get("decline"):
+            return random.choice(DECLINE_REPLIES)
         return random.choice(ACK_REPLIES)
 
     if intent.name == "status_check":
