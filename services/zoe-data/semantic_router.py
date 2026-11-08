@@ -28,6 +28,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import contextvars
 import threading
 import time
@@ -758,6 +759,47 @@ def own_fact_target(text: str, domain: Optional[str]) -> Optional[str]:
     return "memory"
 
 
+# ── Clock-time statement precedence (owner session 2026-11-05, flag-dark
+# ZOE_ROUTER_CLOCK_STATEMENT_PRECEDENCE): a remark that STATES a clock time
+# ("uh, what is it now, 8:43, so probably soon" — answering Zoe's own question)
+# was head-routed to weather ("Let me look at the weather."). The speaker
+# already has the time; no world-lookup tool (weather / clock) can add to it.
+# A weather-domain claim without any weather word, or a time-domain claim that
+# is not itself asking for the time, on an utterance carrying a clock time is
+# re-pointed to chat (the brain). Timers / alarms / reminders / calendar keep
+# their claim (they legitimately carry clock times).
+CLOCK_STATEMENT_REASON = "clock_time_statement"
+_CLOCK_TIME_RE = re.compile(r"(?<![\d:.])(?:[01]?\d|2[0-3]):[0-5]\d(?![\d:])")
+_WEATHER_WORD_RE = re.compile(
+    r"\b(weather|forecast|rain\w*|temperature|degrees|sunny|cloudy|storm\w*|"
+    r"wind\w*|humid\w*|umbrella|jacket|hot|cold|warm|cool|snow\w*|uv)\b", re.I)
+_TIME_ASK_RE = re.compile(
+    r"\b(what(?:'s|s| is)?\s+(?:the\s+)?time\b|what\s+time\s+is\s+it|time\s+in\b|"
+    r"current\s+time|tell\s+me\s+the\s+time|got\s+the\s+time|have\s+the\s+time)", re.I)
+_CLOCK_STATEMENT_DOMAINS = frozenset({"weather", "time"})
+
+
+def clock_statement_precedence_enabled() -> bool:
+    """ZOE_ROUTER_CLOCK_STATEMENT_PRECEDENCE — default OFF (voice path; the
+    operator flips it after the replay gate). Per-call env read."""
+    from typed_env import flag
+
+    return str(flag("ZOE_ROUTER_CLOCK_STATEMENT_PRECEDENCE")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def clock_statement_target(text: str, domain: Optional[str]) -> Optional[str]:
+    """"chat" when a weather/time claim sits on an utterance that STATES a clock
+    time (and the flag is on), else None. Pure but for the flag."""
+    if domain not in _CLOCK_STATEMENT_DOMAINS or not clock_statement_precedence_enabled():
+        return None
+    msg = text or ""
+    if not _CLOCK_TIME_RE.search(msg):
+        return None
+    if domain == "weather":
+        return None if _WEATHER_WORD_RE.search(msg) else "chat"
+    return None if _TIME_ASK_RE.search(msg) else "chat"
+
+
 def question_precedence(text: str, domain: Optional[str]) -> Optional[tuple[str, str]]:
     """(target, reason) when a question-shape rule overrides `domain`, else
     None. Evidence first (a "when did I…" is evidence, not an event time); then
@@ -770,7 +812,10 @@ def question_precedence(text: str, domain: Optional[str]) -> Optional[tuple[str,
     if target:
         return target, EVENT_TIME_REASON
     target = own_fact_target(text, domain)
-    return (target, OWN_FACT_REASON) if target else None
+    if target:
+        return target, OWN_FACT_REASON
+    target = clock_statement_target(text, domain)
+    return (target, CLOCK_STATEMENT_REASON) if target else None
 
 
 def _evidence_decision(decision: dict, target: str, reason: str = EVIDENCE_REASON) -> dict:

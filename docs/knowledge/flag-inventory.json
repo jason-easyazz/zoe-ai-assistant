@@ -5345,6 +5345,25 @@
         },
         "typed_env": false
       },
+      "ZOE_FOLLOWUP_SKIP_WHILE_MEDIA": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_utterance_shape.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-verified-session.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_FORGET_ALIAS_SWEEP": {
         "defaults": [
           "-"
@@ -5685,6 +5704,25 @@
         },
         "typed_env": true
       },
+      "ZOE_HA_CALL_TIMEOUT_S": {
+        "defaults": [
+          "4.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/smart_home_service.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 4.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_HA_CONTROL_SCOPE": {
         "defaults": [
           "'panel'"
@@ -5744,6 +5782,25 @@
           "note": "",
           "owner_doc": "services/zoe-data/AGENTS.md",
           "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_HA_TURN_BUDGET_S": {
+        "defaults": [
+          "9.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/smart_home_service.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 9.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "float"
         },
         "typed_env": true
       },
@@ -13638,6 +13695,25 @@
         },
         "typed_env": false
       },
+      "ZOE_ROUTER_CLOCK_STATEMENT_PRECEDENCE": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/semantic_router.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_ROUTER_ENABLED": {
         "defaults": [
           "'1'",
@@ -20709,6 +20785,8 @@
   },
   "registry_unread": [
     "ZOE_SELF_REVIEW_MAX_CALLS",
-    "ZOE_SELF_REVIEW_MAX_TOKENS"
+    "ZOE_SELF_REVIEW_MAX_TOKENS",
+    "ZOE_SPEAKER_WINDOW_THRESHOLD_LONG",
+    "ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT"
   ]
 }
