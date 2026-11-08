@@ -11,11 +11,11 @@ tags: [memory, writers, generated, audit]
 role lines live in [`memory-writer-notes.json`](memory-writer-notes.json) (one per writer module - a new writer
 module fails `tests/unit/test_memory_writer_map.py` until it has one).
 
-**81 write sites in 30 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
+**82 write sites in 31 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
 deep dive found at least 39). A *write site* is one (module, enclosing function) that calls a `MemoryService`
 write method or upserts a drawers collection directly.
 
-Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 8, `flag_challenged` 1, `ingest` 26, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 28, `scrub_residue` 1, `set_curated_standing` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
+Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 8, `flag_challenged` 1, `ingest` 26, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 29, `scrub_residue` 1, `set_curated_standing` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
 
 ## What counts
 
@@ -64,5 +64,6 @@ the Flue/TS callers (`services/zoe-core/extensions/memory.ts`), which reach the 
 | `routers/user_profile.py` | User profile API: profile facts are mirrored into memory (ingest). | `analyze_profile`: ingest |
 | `skybridge_service.py` | Skybridge card actions: a fact the member confirms on a card is stored (ingest, source skybridge_action). | `_store_skybridge_memory_fact`: ingest |
 | `trait_challenge.py` | The owner hedges or denies a trait Zoe holds about them: parks the matching approved row as pending (flag_challenged); text and provenance untouched, an approve restores it. | `apply_challenge`: flag_challenged |
+| `value_correction.py` | A user-stated spoken value correction ("Oliver is 25, not 24") supersedes the member's stored rows about that subject (review edit under conversation_correction); always on, evidence-only. | `apply`: review |
 | `zoe_agent.py` | The agent loop's memory tool (ingest, brain_tool/zoe_agent source) and a one-time startup migration of legacy palace rows (a RAW upsert that bypasses the funnel). | `_background_memory_save`: ingest<br>`_mempalace_add`: ingest<br>`migrate_mempalace_legacy_records`: raw_upsert |
 | `zoe_memory_prompt_packet_measure.py` | Measurement helper: ingests fixtures to time the prompt packet. Bench use; never real members. | `seed_prompt_packet_measure_memories`: ingest |

@@ -45,6 +45,8 @@ REVIEWED_MUSIC_STATE_ROUTERS = {
     "music_ma_ui.py",   # the gate in front of Music Assistant's own web UI (ma_ui_gate.py); serves no MA state itself
     "handoff.py",       # /api/handoff/*: token/nonce-bound app-connection handoffs
     "panel_config.py",  # /api/panels/*: member-or-panel (#2099); music_service only validates/gets the default speaker
+    "voice_tts.py",     # _media_playing (ZOE_FOLLOWUP_SKIP_WHILE_MEDIA): an internal "is anything playing" boolean that only ends a
+                        # no-wake-word window turn; no MA state is returned to any caller, and the voice turn routes carry their own gate
 }
 
 
