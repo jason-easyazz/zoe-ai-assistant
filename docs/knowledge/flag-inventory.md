@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 853 prod flags; 269 read through `typed_env`.
+- 854 prod flags; 270 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 249 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-853 flags; 802 not documented in `.env.example`.
+854 flags; 803 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -202,6 +202,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_DEPLOY_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_DEVICE_CONFIRM_GUARD` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `True` | yes | NO | `services/zoe-data/device_confirm.py` |
 | `ZOE_DEVICE_ID` | str | `''` | - | - | `(required)` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
+| `ZOE_DEVICE_MISHEAR_GUARD` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `False` | yes | NO | `services/zoe-data/skybridge_service.py` |
 | `ZOE_DEVICE_TOKEN` | str | `''` | - | `docs/knowledge/incident-runbook.md` | `dynamic` | no | NO | `scripts/maintenance/zoe_latency_probe.py` |
 | `ZOE_DEVICE_TOKEN_BINDS_MEMBER` | str | `''` | - | `docs/architecture/panel-anywhere.md` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
 | `ZOE_DEVICE_TOKEN_TTL_DAYS` | str | `''` | - | `docs/guides/OPERATOR_RUNBOOK.md` | `''` | no | NO | `services/zoe-data/routers/panel_auth.py` |
