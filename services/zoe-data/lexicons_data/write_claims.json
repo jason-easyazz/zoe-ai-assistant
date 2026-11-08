@@ -142,7 +142,7 @@
     "honest_by_kind": {
       "note": "I didn't manage to save that; want me to try again?",
       "memory": "I didn't manage to save that; want me to try again?",
-      "forget": "I haven't been able to forget that yet, so it's still saved.",
+      "forget": "I haven't forgotten anything yet. Tell me what to forget, like \"forget what I said about the holiday\", and I'll do it.",
       "contact_removed": "I can't delete a contact yet, so they are still in your contacts. You can remove them from the People page.",
       "list_removed": "I didn't manage to remove that, so it's still there.",
       "calendar_removed": "I didn't manage to remove that, so it's still there.",

@@ -418,6 +418,20 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _is_entity_forget_shape(text: str) -> bool:
+    """True when ``text`` is the NAME shape of an entity forget ("forget everything about Dana"): that intent owns it."""
+    m = _FORGET_ENTITY_RE.match((text or "").strip())
+    if not m:
+        return False
+    ent = (m.group("entity") or "").strip().rstrip(".!?")
+    try:
+        from person_extractor import _looks_like_person_name
+        return _looks_like_person_name(ent) and ent.lower() not in {
+            "everything", "anything", "something", "nothing", "all", "stuff", "things", "life", "today", "tomorrow"}
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _is_forget_command(text: str) -> bool:
     """memory_quality.is_forget_command, never raising (an unavailable gate leaves the anchored regex alone)."""
     try:
@@ -843,6 +857,16 @@ def detect_intent(
     # Matched very early so it never collides with other verbs. memory_quality.is_forget_command adds the
     # shapes the anchored regex missed live (QA 2026-11-05): a leading "no," / "oh" / "wait", two acts in a row
     # ("no, don't remember that! forget that"), and "forget that I said ..." - short utterances only.
+    # "forget what I told you about my mum's heart" - a TOPIC, not a name and not the previous turn (forget_topic).
+    # Before the last-turn shapes so "forget that, don't keep what I said about X" never binds to the wrong turn.
+    try:
+        import forget_topic as _ft
+        _topic = _ft.parse(text or "")
+    except Exception:  # noqa: BLE001
+        _topic = None
+    if _topic and not _is_entity_forget_shape(text or ""):
+        return Intent("memory_forget_entity", {"topic": _topic})
+
     if _FORGET_LAST_RE.match(t) or _is_forget_command(t):
         return Intent("memory_forget_last", {})
 
@@ -2266,6 +2290,11 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     offer = named[0] if named else (_voiced or offers[0])
     kind = _offer_reply_kind(text, offer.get("name") or "")
     if kind is None:
+        return None
+    # A bare "ok" is an answer only to a question just asked: Zoe's previous reply must be the offer for THIS person (QA round 5:
+    # an "ok" to something unrelated created a contact, five turns after "no contacts pls"). Unknown previous reply = no bind.
+    _prev = (await _previous_assistant_message(user_id) or "").lower()
+    if "contact" not in _prev or not any(p in _prev for p in str(offer.get("name") or "").lower().split() if len(p) > 1):
         return None
     return Intent(
         "pending_offer_accept" if kind == "accept" else "pending_offer_dismiss",
@@ -4137,6 +4166,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # "forget that" after a remark about the kitchen erased an unrelated, important row). No turn to bind to -> ask.
     if intent.name == "memory_forget_last":
         return await _execute_forget_last(user_id)
+
+    if intent.name == "memory_forget_entity" and intent.slots.get("topic"):
+        # "forget what I told you about my mum's heart": rows holding the whole topic, never a fuzzy sweep (forget_topic)
+        import forget_topic
+        return await forget_topic.execute(user_id, str(intent.slots.get("topic") or ""))
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
         # "keep the contact": put back the contact(s) + edges the last forget cascade removed.
