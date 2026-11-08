@@ -110,6 +110,8 @@ def _flags_off(monkeypatch):
         monkeypatch.delenv(f, raising=False)
     cc._ASKED.clear()
     cc._SAME_PENDING.clear()
+    import contact_offer_policy as _cop
+    monkeypatch.setattr(_cop, "related", lambda message, offer: True)     # relatedness has its own tests
 
     # No live memory store in these tests: nothing is linked, the mirror refresh is a no-op.
     async def no_links(_uid, ids, timeout=1.5):

@@ -369,6 +369,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_KOKORO_CACHE_PERSIST` | bool | `True` | - | `scripts/AGENTS.md` | `True` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_CUDA_ATTEMPTS` | int | `3` | - | - | `'3'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_CUDA_RETRY_DELAY_S` | int | `6` | - | - | `'6'` | no | NO | `scripts/setup/kokoro_sidecar.py` |
+| `ZOE_KOKORO_IDLE_TRIM_S` | int | `0` | - | `docs/knowledge/ram-audit-voice-2026-11.md` | `0` | yes | NO | `scripts/setup/kokoro_sidecar.py` |
 | `ZOE_KOKORO_IMPORT_BLOCK` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `'1'` | no | NO | `scripts/setup/kokoro_import_block.py` |
 | `ZOE_KOKORO_SIDECAR_URL` | str | `'http://127.0.0.1:10201'` | - | `docs/knowledge/kokoro-onnx-migration.md` | `'http://127.0.0.1:10201'` | yes | NO | `scripts/perf/measure_tts.py`<br>`services/zoe-data/main.py`<br>`services/zoe-data/system_stats.py`<br>`services/zoe-data/tts_waterfall.py` |
 | `ZOE_KOKORO_VOICE` | str | `'af_sky'` | - | `docs/knowledge/voice-pipeline.md` | `'af_sky'`, `dynamic` | no | yes | `scripts/perf/measure_tts.py`<br>`services/zoe-data/voice_settings.py` |

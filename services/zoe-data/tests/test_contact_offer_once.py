@@ -11,7 +11,10 @@ import routers.memories as mem
 
 
 @pytest.fixture(autouse=True)
-def _clear_offer_state():
+def _clear_offer_state(monkeypatch):
+    # cadence / one-per-turn / cooldown are tested here with arbitrary messages; relatedness has its own file
+    # (test_contact_offer_standing_decline.py)
+    monkeypatch.setattr(cop, "related", lambda message, offer: True)
     cop._STATE.clear()
     yield
     cop._STATE.clear()
@@ -126,6 +129,17 @@ async def test_flue_fallback_follows_the_same_policy(monkeypatch):
     assert "Alder" not in b2 and "Birch" in b2               # no repeat
     assert await zf._pending_offer_block("u1", "turn three") == ""  # both cooling down
     assert await zf._pending_offer_block("u1", "forget that") == ""  # decline turn
+
+
+@pytest.fixture(autouse=True)
+def _previous_reply_made_the_offer(monkeypatch):
+    # a bare yes/ok binds only when Zoe's previous reply was the offer (QA round 5); these tests are about WHICH offer
+    import intent_router
+
+    async def prev(_uid):
+        return "Would you like me to add Alder Birch Caitlin Marcus Rodrigo as a contact?"
+
+    monkeypatch.setattr(intent_router, "_previous_assistant_message", prev)
 
 
 @pytest.mark.asyncio

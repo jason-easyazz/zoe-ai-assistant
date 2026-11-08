@@ -420,6 +420,7 @@ _ENTRIES = (
     _f('ZOE_KOKORO_CACHE_PERSIST', 'bool', True, doc='scripts/AGENTS.md'),
     _f('ZOE_KOKORO_CUDA_ATTEMPTS', 'int', 3),
     _f('ZOE_KOKORO_CUDA_RETRY_DELAY_S', 'int', 6),
+    _f('ZOE_KOKORO_IDLE_TRIM_S', 'int', 0, doc='docs/knowledge/ram-audit-voice-2026-11.md'),
     _f('ZOE_KOKORO_IMPORT_BLOCK', 'bool', True, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_KOKORO_SIDECAR_URL', 'str', 'http://127.0.0.1:10201', doc='docs/knowledge/kokoro-onnx-migration.md'),
     _f('ZOE_KOKORO_VOICE', 'str', 'af_sky', doc='docs/knowledge/voice-pipeline.md'),
