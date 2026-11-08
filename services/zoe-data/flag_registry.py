@@ -619,6 +619,7 @@ _ENTRIES = (
     _f('ZOE_OMNIGENT_IMPLEMENT_TIMEOUT_S', 'int', 1800),
     _f('ZOE_OMNIGENT_URL', 'str', 'http://127.0.0.1:6767', doc='docs/guides/MODULE_SYSTEM.md'),
     _f('ZOE_OTEL_ENABLED', 'str', ''),
+    _f('ZOE_OUTCOME_EDGES', 'str', 'off', allowed=('off', 'on'), doc='docs/research/samantha-initiative-2026-11-03/lane-D-cognitive-architecture.md', note='flag-dark: unset = off'),
     _f('ZOE_OWN_FACT_PRECEDENCE', 'str', '', doc='docs/knowledge/conversation-quality-classes.md'),
     _f('ZOE_PANEL_AGENT_PORT', 'int', 8765),
     _f('ZOE_PANEL_ALLOWED_HOSTS', 'str', ''),

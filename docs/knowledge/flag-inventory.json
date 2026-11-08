@@ -10989,6 +10989,28 @@
         },
         "typed_env": false
       },
+      "ZOE_OUTCOME_EDGES": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/outcome_edges.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "flag-dark: unset = off",
+          "owner_doc": "docs/research/samantha-initiative-2026-11-03/lane-D-cognitive-architecture.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_OWN_FACT_PRECEDENCE": {
         "defaults": [
           "-"
