@@ -431,7 +431,10 @@ def _ensure_loaded():
             return
         from fastembed import TextEmbedding
 
-        model = TextEmbedding(model_name=_MODEL_NAME)
+        import ort_arena
+
+        # No ORT CPU arena (ort_arena.py, -111 MB measured); ZOE_ORT_CPU_ARENA=1 reverts.
+        model = TextEmbedding(model_name=_MODEL_NAME, **ort_arena.fastembed_kwargs())
         labels, examples = [], []
         for dom, utts in ROUTES.items():
             for u in utts:
