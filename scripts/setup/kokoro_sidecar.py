@@ -777,7 +777,40 @@ async def _run_synthesis(text: str, voice: str, speed: float = 1.0) -> bytes:
     """Async wrapper: runs blocking inference in thread pool under the lock."""
     loop = asyncio.get_event_loop()
     async with _pipeline_lock:
-        return await loop.run_in_executor(None, _blocking_synthesize, text, voice, speed)
+        out = await loop.run_in_executor(None, _blocking_synthesize, text, voice, speed)
+    _schedule_idle_trim(loop)
+    return out
+
+
+# Idle trim (ZOE_KOKORO_IDLE_TRIM_S, default 0 = off): _blocking_synthesize trims the CUDA
+# pool BEFORE each synth, so the last synth's activation blocks stay resident until the next
+# request. With this on, the pool is trimmed once the sidecar has been idle for N seconds,
+# off the hot path (the next synth's own pre-trim then finds nothing to do). Measurement:
+# docs/knowledge/ram-audit-voice-2026-11.md; harness scripts/perf/measure_kokoro_idle_trim_ab.py.
+_IDLE_TRIM_S = float(os.environ.get("ZOE_KOKORO_IDLE_TRIM_S", "0") or 0)
+_idle_trim_handle: "asyncio.TimerHandle | None" = None
+
+
+def _trim_cuda_cache() -> None:
+    import torch
+    torch.cuda.empty_cache()
+
+
+async def _idle_trim() -> None:
+    if _pipeline_lock.locked():  # a synth is running or queued; it reschedules on completion
+        return
+    loop = asyncio.get_event_loop()
+    async with _pipeline_lock:
+        await loop.run_in_executor(None, _trim_cuda_cache)
+
+
+def _schedule_idle_trim(loop) -> None:
+    global _idle_trim_handle
+    if _IDLE_TRIM_S <= 0 or _device != "cuda":
+        return
+    if _idle_trim_handle is not None:
+        _idle_trim_handle.cancel()
+    _idle_trim_handle = loop.call_later(_IDLE_TRIM_S, lambda: asyncio.ensure_future(_idle_trim()))
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────

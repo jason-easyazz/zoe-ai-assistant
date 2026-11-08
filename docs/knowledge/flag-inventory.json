@@ -7086,6 +7086,18 @@
         },
         "typed_env": false
       },
+      "ZOE_KOKORO_IDLE_TRIM_S": {
+        "defaults": [
+          "'0'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "registered": false,
+        "spec": null,
+        "typed_env": false
+      },
       "ZOE_KOKORO_IMPORT_BLOCK": {
         "defaults": [
           "'1'"
@@ -17895,7 +17907,7 @@
     "scripts/perf/zmb/arms/zma.py": 1,
     "scripts/perf/zmb/lab_driver.py": 1,
     "scripts/setup/kokoro_import_block.py": 1,
-    "scripts/setup/kokoro_sidecar.py": 10,
+    "scripts/setup/kokoro_sidecar.py": 11,
     "scripts/setup/mac_panel/preflight.py": 2,
     "scripts/setup/touchscreen/zoe-kiosk-gate.py": 1,
     "scripts/setup/touchscreen/zoe-panel-agent.py": 2,
