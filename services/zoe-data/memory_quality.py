@@ -104,6 +104,7 @@ _META_OPENER_RE = re.compile(
     r"it\s+(?:seems|appears|looks\s+like)\b|"
     r"here\s+(?:is|are)\s+(?:a\s+)?(?:summary|some|the)\b|"
     r"as\s+an\s+ai\b|"
+    r"(?:the\s+)?user\s+(?:corrected|clarified|misspoke|amended|revised)\b|"
     r"i\s+(?:cannot|can'?t|don'?t\s+have)\b"
     r")",
     re.IGNORECASE,
