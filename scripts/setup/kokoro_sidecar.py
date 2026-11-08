@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import struct
+import sys
 import threading
 import time
 import wave
@@ -788,7 +789,22 @@ async def _run_synthesis(text: str, voice: str, speed: float = 1.0) -> bytes:
 # request. With this on, the pool is trimmed once the sidecar has been idle for N seconds,
 # off the hot path (the next synth's own pre-trim then finds nothing to do). Measurement:
 # docs/knowledge/ram-audit-voice-2026-11.md; harness scripts/perf/measure_kokoro_idle_trim_ab.py.
-_IDLE_TRIM_S = float(os.environ.get("ZOE_KOKORO_IDLE_TRIM_S", "0") or 0)
+def _idle_trim_seconds() -> float:
+    """ZOE_KOKORO_IDLE_TRIM_S through the flag registry (typed_env); ANY failure means OFF.
+
+    The sidecar must never fail to start over an optional trim, so a missing/odd
+    services/zoe-data tree degrades to 0 instead of raising."""
+    try:
+        zoe_data = str(Path(__file__).resolve().parents[2] / "services" / "zoe-data")
+        if zoe_data not in sys.path:
+            sys.path.append(zoe_data)  # append: never shadow the sidecar's own imports
+        import typed_env
+        return max(0.0, float(typed_env.flag("ZOE_KOKORO_IDLE_TRIM_S")))
+    except Exception:
+        return 0.0
+
+
+_IDLE_TRIM_S = _idle_trim_seconds()
 _idle_trim_handle: "asyncio.TimerHandle | None" = None
 
 

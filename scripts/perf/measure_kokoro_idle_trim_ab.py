@@ -43,6 +43,15 @@ LIVE_PORT = 10201
 MIN_GATE_GB = 3.0  # floor: --min-avail-gb may raise the gate, never lower it
 
 
+MAX_IDLE_WAIT_S = 300.0
+
+
+def _guard() -> None:
+    """Abort (the finally block kills our child and releases the lock) if the night window opens mid-run."""
+    if in_night_window():
+        raise SystemExit("night window (01:50-04:55) reached mid-run; aborting")
+
+
 def _answers(port: int) -> bool:
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1).read()
@@ -88,6 +97,8 @@ def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait:
     # stall every landing); take it only once the gate is met, and re-check after taking it.
     deadline = time.time() + wait_s
     while True:
+        if in_night_window():
+            raise SystemExit("inside the 01:50-04:55 night window; not starting")
         if avail_gb() >= gate:
             try:
                 fcntl.flock(LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -96,8 +107,6 @@ def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait:
                 fcntl.flock(LOCK, fcntl.LOCK_UN)
             except OSError:
                 pass
-        if in_night_window():
-            raise SystemExit("inside the 01:50-04:55 night window; not starting")
         if time.time() >= deadline:
             raise SystemExit(f"gate not met (MemAvailable {avail_gb():.2f} GB, need {gate}) or lock busy; not starting")
         time.sleep(3)
@@ -106,11 +115,12 @@ def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait:
     tmp = tempfile.mkdtemp(prefix="kokoro_ab_")
     env = dict(os.environ, KOKORO_SIDECAR_PORT=str(port), ZOE_KOKORO_CACHE_DIR=tmp, ZOE_KOKORO_CACHE_PERSIST="0",
                ZOE_KOKORO_BACKEND="pytorch", MALLOC_ARENA_MAX="2", MALLOC_TRIM_THRESHOLD_="131072",
-               ZOE_KOKORO_IDLE_TRIM_S=str(trim_s), PYTHONPATH=os.path.expanduser("~/.local/lib/python3.10/site-packages"),
+               ZOE_KOKORO_IDLE_TRIM_S=str(int(trim_s)), PYTHONPATH=os.path.expanduser("~/.local/lib/python3.10/site-packages"),
                LD_LIBRARY_PATH=os.path.expanduser("~/.local/lib") + ":/usr/local/cuda-12.6/lib64:/usr/lib/aarch64-linux-gnu")
     p = subprocess.Popen([PY, str(ROOT / "scripts" / "setup" / "kokoro_sidecar.py")], env=env,
                          stdout=subprocess.DEVNULL, stderr=open(f"/tmp/kokoro_ab_{trim_s}.log", "w"))
     try:
+        device = None
         t0 = time.time()
         while time.time() - t0 < 300:
             if p.poll() is not None:  # never accept a /health answer from anything but our own child
@@ -118,19 +128,29 @@ def run_variant(trim_s: float, port: int, gate: float, wait_s: float, idle_wait:
             try:
                 body = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2))
                 if body.get("pipeline_loaded") and p.poll() is None:
+                    device = body.get("device")
+                    if device != "cuda":  # CPU fallback would test an unexercised treatment
+                        raise SystemExit(f"throwaway sidecar loaded on {device!r}, not cuda; discarding this run")
                     break
             except Exception:
                 pass
             time.sleep(1)
+        if device is None:
+            raise SystemExit("throwaway sidecar never became healthy within 300 s")
+        _guard()
         time.sleep(20)  # let the background phrase pre-cache finish
         rss_warm = rss_mb(p.pid)
         lat = [post(port, t) for t in TEXTS]
+        _guard()
         rss_burst = rss_mb(p.pid)
-        time.sleep(idle_wait)
+        time.sleep(min(idle_wait, MAX_IDLE_WAIT_S))
+        _guard()
         rss_idle = rss_mb(p.pid)
-        late = [post(port, t) for t in TEXTS[:6]]
+        # Unique suffix per request: the runtime phrase cache is NOT disabled by CACHE_PERSIST=0, so
+        # replaying burst texts would return X-Cache hits and never touch the GPU.
+        late = [post(port, f"{t.rstrip('.')} again number {i}.") for i, t in enumerate(TEXTS[:6])]
         lat.sort()
-        return {"idle_trim_s": trim_s, "rss_warm_mb": rss_warm, "rss_after_burst_mb": rss_burst,
+        return {"device": device, "idle_trim_s": trim_s, "rss_warm_mb": rss_warm, "rss_after_burst_mb": rss_burst,
                 "rss_after_idle_mb": rss_idle, "synth_ms_p50": round(statistics.median(lat)),
                 "synth_ms_p95": round(lat[int(.95 * len(lat))]),
                 "first_after_idle_ms": [round(x) for x in late]}
