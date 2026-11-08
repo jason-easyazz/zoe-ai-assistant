@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from typed_env import env_bool, env_int
+from typed_env import env_bool, env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def retention_days() -> int:
 
 
 def sample_dir() -> str:
-    return os.environ.get("ZOE_VOICE_SAMPLE_DIR") or "/home/zoe/.zoe-voice-samples"
+    return env_str("ZOE_VOICE_SAMPLE_DIR", "/home/zoe/.zoe-voice-samples") or "/home/zoe/.zoe-voice-samples"
 
 
 def sidecar_path(wav: str) -> str:

@@ -2058,3 +2058,15 @@ longer loaded; feature extraction ~7–14 ms.
   transformers' own torch and numpy paths — it is not introduced by the port.
 - `tests/test_voice_turn_no_torch.py` (`ci_safe`) pins that `voice_turn` imports no
   torch/transformers (AST check + a fresh-interpreter run of the real scoring path).
+
+## Owner-session small fixes (2026-11-06)
+
+- **Clock-time statements are not weather.** A remark that states a clock time ("... it's 9:15, so probably soon") was head-routed to
+  weather ("Let me look at the weather."). `ZOE_ROUTER_CLOCK_STATEMENT_PRECEDENCE=1` (default off) re-points a weather-domain claim
+  with no weather word, or a time-domain claim that is not asking for the time, on an utterance carrying `h:mm` to chat, on both head
+  surfaces (`semantic_router.clock_statement_target`, wired into `question_precedence`). Timers, reminders and calendar keep their claim.
+- **Smart-home turn is bounded.** `smart_home_service` reads the three device lists and scenes concurrently, bounds the post-command
+  card refresh to 2 s, takes a per-call timeout `ZOE_HA_CALL_TIMEOUT_S` (default 4 s, was 6 s) and runs the whole turn under
+  `ZOE_HA_TURN_BUDGET_S` (default 9 s, `resolve_smart_home_bounded`). A timed-out command is spoken as "taking longer than usual, so I
+  can't tell yet whether it changed" - never "done", never a proven failure. The success check is unchanged (the bridge acknowledges).
+- **Window bar + media skip:** see `voice-verified-session.md` section 3b.
