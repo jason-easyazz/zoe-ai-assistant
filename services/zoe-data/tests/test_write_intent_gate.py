@@ -224,3 +224,15 @@ def test_a_list_type_inside_the_item_is_not_a_destination(text, want):
 def test_dispatch_asks_which_list_for_work_boots():
     wig.note_turn("jason", "add work boots to the list")
     assert wig.check("jason", "list_add", {"item": "work boots", "list_type": "shopping"}) is not None
+
+
+def test_an_offer_to_add_to_a_list_is_not_a_calendar_offer():
+    # Codex on #2347: consent to a LIST update must not authorise a calendar write
+    wig.note_reply("jason", "That is a lot of items. Want me to add those to your shopping list?")
+    wig.note_turn("jason", "yes please")
+    assert wig.check("jason", "calendar_create", {"title": "x"}) is not None
+    # negative control: an offer that names the calendar still counts
+    wig.reset_state()
+    wig.note_reply("jason", "Want me to add those to your calendar?")
+    wig.note_turn("jason", "yes please")
+    assert wig.check("jason", "calendar_create", {"title": "x"}) is None

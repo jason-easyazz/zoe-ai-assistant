@@ -44,6 +44,7 @@ _turns: "dict[str, tuple[str, float]]" = {}
 _asked: "dict[str, float]" = {}
 #: user id -> when Zoe's own last reply offered to put something on the calendar ("Want me to add those?")
 _offered: "dict[str, float]" = {}
+_CALENDAR_WORD_RX = re.compile(r"\b(?:calendar|diary|agenda|schedule|appointments?|events?|diarise|diarize|reminders?)\b", re.IGNORECASE)
 _OFFER_RX = re.compile(
     r"\b(?:want|like)\s+me\s+to\s+(?:add|put|book|schedule|pencil)\b|\b(?:shall|should|can|could)\s+i\s+(?:add|put|book|schedule)\b|"
     r"\bi\s+(?:can|could)\s+(?:add|put|book|schedule)\s+(?:it|that|those|them|these)\b", re.IGNORECASE)
@@ -205,8 +206,9 @@ def note_reply(user_id: str, reply: str) -> None:
         if not uid or mode() == "off":
             return
         _offered.pop(uid, None)
-        if _OFFER_RX.search(str(reply or "")):
-            _offered[uid] = time.monotonic()
+        text = str(reply or "")
+        if _OFFER_RX.search(text) and _CALENDAR_WORD_RX.search(text):
+            _offered[uid] = time.monotonic()      # an offer to add something to a LIST (or anything else) authorises no calendar write
     except Exception:  # noqa: BLE001
         return
 
