@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 858 prod flags; 274 read through `typed_env`.
+- 865 prod flags; 281 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 249 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-858 flags; 807 not documented in `.env.example`.
+865 flags; 814 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -287,6 +287,13 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_GITHUB_REPO` | str | `'jason-easyazz/zoe-ai-assistant'` | - | - | `'jason-easyazz/zoe-ai-assistant'` | yes | NO | `services/zoe-data/change_notices.py`<br>`services/zoe-data/greploop_guard.py`<br>`services/zoe-data/greptile_client.py` |
 | `ZOE_GRAPH_RECALL_BOOST` | str | `''` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `''` | no | NO | `services/zoe-data/memory_service.py` |
 | `ZOE_GRAPH_RECALL_WEIGHT` | float | `0.3` | - | `services/zoe-data/AGENTS.md` | `0.3` | no | NO | `services/zoe-data/memory_service.py` |
+| `ZOE_GUEST_LEARN_EXPIRE_DAYS` | int | `14` | - | `docs/knowledge/named-guests.md` | `14` | yes | NO | `services/zoe-data/named_guest_learning.py` |
+| `ZOE_GUEST_LEARN_JOIN` | float | `0.45` | - | `docs/knowledge/named-guests.md` | `0.45` | yes | NO | `services/zoe-data/named_guest_learning.py` |
+| `ZOE_GUEST_LEARN_MIN_SESSIONS` | int | `2` | - | `docs/knowledge/named-guests.md` | `2` | yes | NO | `services/zoe-data/named_guest_learning.py` |
+| `ZOE_GUEST_LEARN_MIN_TURNS` | int | `8` | - | `docs/knowledge/named-guests.md` | `8` | yes | NO | `services/zoe-data/named_guest_learning.py` |
+| `ZOE_GUEST_LEARN_MIN_WAKE` | int | `2` | - | `docs/knowledge/named-guests.md` | `2` | yes | NO | `services/zoe-data/named_guest_learning.py` |
+| `ZOE_GUEST_LEARN_TIGHT` | float | `0.5` | - | `docs/knowledge/named-guests.md` | `0.5` | yes | NO | `services/zoe-data/named_guest_learning.py` |
+| `ZOE_GUEST_VOICE_LEARN` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/named-guests.md` | `'off'` | yes | NO | `services/zoe-data/named_guest_learning.py` |
 | `ZOE_HARNESS` | str | `''` | - | `docs/knowledge/memory-loss-audit-2026-10-05.md` | `-`, `dynamic` | no | NO | `scripts/perf/zmb/lab_driver.py`<br>`services/zoe-data/live_store_guard.py` |
 | `ZOE_HARNESS_FORCE` | str | `''` | - | `docs/knowledge/samantha-bar.md` | `-` | no | NO | `scripts/maintenance/harness_quiet.py` |
 | `ZOE_HARNESS_LANDING` | str | `''` | - | `docs/knowledge/voice-pipeline.md` | `-` | no | NO | `scripts/maintenance/harness_quiet.py` |
