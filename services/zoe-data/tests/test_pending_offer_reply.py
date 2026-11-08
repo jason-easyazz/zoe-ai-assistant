@@ -91,6 +91,17 @@ async def test_match_requires_surfaced_offer(monkeypatch):
     assert await _match_pending_offer_reply("yes", USER) is None
 
 
+@pytest.fixture(autouse=True)
+def _previous_reply_made_the_offer(monkeypatch):
+    # a bare yes/ok binds only when Zoe's previous reply was the offer (QA round 5); these tests are about WHICH offer
+    import intent_router
+
+    async def prev(_uid):
+        return "Would you like me to add Alder Birch Caitlin Marcus Rodrigo as a contact?"
+
+    monkeypatch.setattr(intent_router, "_previous_assistant_message", prev)
+
+
 @pytest.mark.asyncio
 async def test_match_binds_offer(monkeypatch):
     monkeypatch.setenv("ZOE_PERSON_SUGGEST_ENABLED", "1")

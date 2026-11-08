@@ -289,7 +289,7 @@ FORGET_MAX_WORDS = 20
 # that ..." (a teach). A candidate holding one is the command's own words, never a fact.
 _FORGET_CLAUSE_RE = re.compile(
     r"(?:^|[.!?;,:]\s*|\b(?:no|oh|please|actually|wait|zoe|hey)\s+)"
-    r"(?:forget\s+(?:that|what\s+i\s+(?:just\s+)?(?:said|told\s+you))\b|forget\s+(?:that\s+)?i\s+(?:just\s+)?said\b"
+    r"(?:forget\s+(?:that\b|what\s+i\s+(?:just\s+)?(?:said|told\s+you)\b(?!\s+(?:you\s+)?about\b))|forget\s+(?:that\s+)?i\s+(?:just\s+)?said\b"
     # a COMMAND addressed to Zoe (clause-initial / after an opener), never the speaker's own "I don't remember that accident"
     r"|(?:don'?t|do\s+not)\s+(?:remember|save|store)\s+(?:that|this|it)\b)",
     re.IGNORECASE,
@@ -446,6 +446,23 @@ def place_fragment(text: str) -> bool:
     return bool(m) and not clean_place_value(m.group("v"))
 
 
+_KIN_SUBJECT = (r"(?:(?:the\s+)?user['\u2019]?s?\s+|(?:my|our|the)\s+)?"
+                r"(?:kids?|children|child|son|sons|daughter|daughters|boys?|girls?|baby|babies|family)")
+_NEGATED_DESCRIPTOR_RE = re.compile(
+    r"^\s*" + _KIN_SUBJECT + r"\s+(?:(?:is|are|was|were)\s+(?:not|no\s+longer)|(?:isn|aren|wasn|weren)['\u2019]?t)\s+"
+    r"(?:very\s+|that\s+|so\s+|really\s+)?"
+    r"(?:little|young|small|tiny|babies|baby|toddlers?|infants?|kids?|children|a\s+kid|a\s+baby|a\s+child)"
+    r"\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def negated_descriptor_only(text: str) -> bool:
+    """True for a fact that ONLY negates an age / size word about the user's children ("User's kids are not little",
+    "the kids aren't young"). Pure."""
+    return bool(_NEGATED_DESCRIPTOR_RE.match((text or "").replace("\u2019", "'")))
+
+
 def is_storable_fact(text: str) -> tuple[bool, str]:
     """Return ``(storable, reason)`` for a conversational memory candidate.
 
@@ -510,6 +527,12 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
     # A place fact whose value is only a discourse tail ("User lives in these days") is a fragment of a sentence, not a fact.
     if place_fragment(raw):
         return False, "place_fragment"
+
+    # A bare negation of an age / size word about family ("User's kids are not little") is a CORRECTION of the assistant's
+    # assumption, not a fact about the person: it says nothing true that is worth keeping and, kept, it is recalled as "the
+    # user told me their kids aren't little". The owner's real statement ("two teenagers, 16 and 14") is a positive fact.
+    if negated_descriptor_only(raw):
+        return False, "negated_descriptor"
 
     # LLM meta-rambling — never a personal fact.
     if _META_OPENER_RE.match(raw):

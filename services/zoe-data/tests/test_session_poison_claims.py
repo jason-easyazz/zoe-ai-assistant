@@ -35,6 +35,7 @@ import write_receipts as wr
 import zoe_flue_client as zfc
 
 HONEST = "I didn't manage to add that; want me to try again?"
+FORGET_HONEST = "I haven't forgotten anything yet. Tell me what to forget, like \"forget what I said about the holiday\", and I'll do it."
 UID = "test-member-poison"
 SID = "test-session-poison"
 
@@ -173,7 +174,7 @@ def test_forget_claim_needs_a_forget_receipt_and_says_so_honestly():
     reply = "I've removed the note about you being a teacher."
     started = wr.begin()
     wr.record(UID, "memory", "m1", "test")
-    assert g.guard_text(reply, UID, started) == "I haven't been able to forget that yet, so it's still saved."
+    assert g.guard_text(reply, UID, started) == FORGET_HONEST
     wr.record(UID, "forget", "f1", "test")
     assert g.guard_text(reply, UID, started) == reply
 
@@ -292,7 +293,7 @@ def test_history_safe_swaps_the_replacement_line_for_a_neutral_marker(monkeypatc
     _on(monkeypatch)
     out = cc.history_safe(text)
     assert HONEST not in out and "(nothing was saved in that reply)" in out
-    assert cc.history_safe("I haven't been able to forget that yet, so it's still saved.") == "(nothing was saved in that reply)"
+    assert cc.history_safe(FORGET_HONEST) == "(nothing was saved in that reply)"
 
 
 def test_fastpath_block_never_shows_the_brain_the_replacement_line(monkeypatch):
