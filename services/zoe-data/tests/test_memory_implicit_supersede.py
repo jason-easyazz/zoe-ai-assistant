@@ -108,6 +108,7 @@ async def _seed(svc, col, text, *, days_ago=3, memory_type="event", user=UID):
     when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days_ago)
     doc, meta = col.rows[ref.id]
     meta.update(added_at=when.isoformat().replace("+00:00", "Z"), added_ts=when.timestamp())
+    svc._recent_auto.pop(user, None)    # the row is back-dated days: it is outside the 10-minute paraphrase window the store keeps
     return ref.id
 
 

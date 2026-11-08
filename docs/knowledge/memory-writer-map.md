@@ -11,11 +11,11 @@ tags: [memory, writers, generated, audit]
 role lines live in [`memory-writer-notes.json`](memory-writer-notes.json) (one per writer module - a new writer
 module fails `tests/unit/test_memory_writer_map.py` until it has one).
 
-**80 write sites in 29 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
+**81 write sites in 30 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
 deep dive found at least 39). A *write site* is one (module, enclosing function) that calls a `MemoryService`
 write method or upserts a drawers collection directly.
 
-Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 7, `flag_challenged` 1, `ingest` 26, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 27, `scrub_residue` 1, `set_curated_standing` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
+Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 8, `flag_challenged` 1, `ingest` 26, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 28, `scrub_residue` 1, `set_curated_standing` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
 
 ## What counts
 
@@ -39,6 +39,7 @@ the Flue/TS callers (`services/zoe-core/extensions/memory.ts`), which reach the 
 | `contacts_conversation.py` | Conversational contacts (people_* intents): archives a contact's memory rows when the contact is renamed (review archive). | `refresh_person_mirror`: review |
 | `correction_apply.py` | A spoken correction ("X is their dog", a day-first date) rewrites the stored fact (review edit) and ingests the corrected one; ZOE_CORRECTION_APPLY. | `apply_date_correction`: review<br>`apply_pet_correction`: ingest, review<br>`apply_row_correction`: review |
 | `expert_dispatch.py` | Tier-1.5 domain experts: stores a voice_fact, retires the fact it replaces (review archive) and supersedes on a stated change. | `_ingest_or_supersede`: ingest, review, supersede_by |
+| `forget_topic.py` | Topic forget ("forget everything about X"): archives the owner's matching memory rows (review archive, optional physical erase_rows) and erases the owner's own words about the topic from the recent turns and the exact-words index; refuses a broad topic touching neither rows nor words. | `forget`: erase_rows, review |
 | `hindsight_retain_candidates.py` | Hindsight evaluation path: creates a PENDING row for later admission (ingest). Not on the live turn path. | `create_hindsight_retain_candidate`: ingest |
 | `hold_the_fact.py` | Hold the fact: restores the owner's stated value after a model pushback (review edit); ZOE_HOLD_THE_FACT. | `_apply_update`: review |
 | `intent_router.py` | Intent-first router: the 'remember that' / 'forget that' / 'forget the last thing' fast paths (ingest, forget_last, review reject/archive). | `_execute_forget_last`: erase_rows<br>`_execute_forget_last._reject`: review<br>`execute_intent`: ingest, review<br>`execute_intent._erase_named`: erase_rows |
