@@ -32,6 +32,9 @@ Words are enum-mapped or a sanitised topic (`[a-z0-9 -]`, 24 chars): a stored va
 A lower rank never overwrites a higher one; inference never overrides what the member stated. **Forget** writes a tombstone
 (`status='forgotten'`, value blanked): inference and confirmation cannot re-add it, only the member stating it again. `forget_user`
 (`MemoryService.delete_user`, fail closed) erases every row; the table is a `reached` store in `forget_reach.py`.
+An **entity forget** ("forget Dana") runs `member_register.erase_entity`, which deletes every topic row whose label or slot names the
+person (tombstones too: the slot spells the label; fail closed), and `live_entries` re-checks the forgotten ledger at serve time
+(strict: an outage withholds all topics). Probed in `tests/test_forget_completeness_probe.py`.
 
 No producer of `inferred` rows ships here: the routes (below) are the editor, and the proposer (a night-mind or struggle-detector
 hook that calls `set_entry(..., "inferred")` and asks the member to confirm) is a follow-up. A member's utterance such as "keep it
