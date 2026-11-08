@@ -95,12 +95,25 @@ _AFFIRM_RX = re.compile(
 )
 
 
+_NEGATORS = frozenset({"dont", "don't", "not", "never", "no", "without", "stop", "wont", "won't", "cant", "can't", "cannot",
+                      "shouldnt", "shouldn't", "mustnt", "mustn't", "neednt", "needn't", "avoid", "skip"})
+
+
+def _negated_before(text: str, pos: int) -> bool:
+    """A negator within the three words before the verb, in the same clause ("don't add", "no need to put", "please do not book")."""
+    clause = re.split(r"[.;!?]|,\s|\b(?:but|and|then)\b", text[:pos])[-1]
+    words = [w.strip(",.;:!?'\"").lower() for w in clause.split()][-3:]
+    return any(w in _NEGATORS for w in words)
+
+
 def _verb_hit(text: str) -> bool:
     """An imperative-ish use of a write verb: not preceded by a determiner, and ``schedule`` not followed by a noun-ish word."""
     for m in _WRITE_VERB_RX.finditer(text or ""):
         before = (text[: m.start()].split() or [""])[-1].strip(",.;:!?'\"").lower()
         if before in _DETERMINERS:
             continue
+        if _negated_before(text, m.start()):
+            continue               # "don't add the appointment to my calendar" is an instruction NOT to write
         word = m.group(0).lower()
         after = (text[m.end():].split() or [""])[0].strip(",.;:!?'\"").lower()
         if word == "schedule" and (not after or after in _NOUN_FOLLOWERS):
@@ -141,10 +154,18 @@ _LIST_REF_RX = re.compile(r"\b(\w+)\s+list\b", re.IGNORECASE)
 _LIST_ASK_RX = re.compile(r"\b(?:add|put)\b|\blist\b", re.IGNORECASE)
 
 
+_LIST_TYPES = r"(?:shopping|grocery|groceries|to-?do|to\s+do|personal|work|bucket|tasks?|chores?)"
+#: a list TYPE counts only as the destination: "to (the) work", "on my chores", "work list" - never a word inside the item ("work boots")
+_LIST_DEST_RX = re.compile(
+    r"\b(?:to|on|onto|in|into)\s+(?:(?:the|my|our|your)\s+)?" + _LIST_TYPES + r"\b(?!\s+(?:boots?|shoes?|shirts?|gear|clothes|trousers|pants|"
+    r"jacket|gloves?|uniform|laptop|bag|bags)\b)|\b" + _LIST_TYPES + r"\s+(?:list|tasks?)\b", re.IGNORECASE)
+
+
 def names_a_list(text: str) -> bool:
-    """Does the turn name WHICH list ("my work list", "the shopping list", "to personal")? "the list" / "my list" do not. Pure."""
+    """Does the turn name WHICH list ("my work list", "the shopping list", "to personal")? "the list" / "my list" do not, and a
+    list-type word inside the ITEM ("add work boots to the list") is not a destination. Pure."""
     t = text or ""
-    if _LIST_TYPE_RX.search(t):
+    if _LIST_DEST_RX.search(t):
         return True
     return any(m.group(1).lower() not in _GENERIC_LIST_WORDS for m in _LIST_REF_RX.finditer(t))
 

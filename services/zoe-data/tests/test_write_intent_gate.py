@@ -194,3 +194,33 @@ def test_router_list_choice_follows_the_gate_mode(monkeypatch):
     for mode in ("off", "shadow"):
         monkeypatch.setenv("ZOE_WRITE_INTENT_GATE", mode)
         assert intent_router._needs_list_choice("bolts") is False, mode
+
+
+@pytest.mark.parametrize("text,want", [
+    ("Don't add the appointment to my calendar", False),
+    ("please do not book the plumber for monday", False),
+    ("no need to put it on the calendar", False),
+    ("never schedule anything on sundays", False),
+    ("add the appointment to my calendar", True),                       # negative controls: the same verbs without a negator
+    ("please book the plumber for monday", True),
+    ("don't worry about the rest, add dinner friday 7pm", True),        # a negator in an earlier clause does not cancel a later ask
+])
+def test_a_negated_write_verb_is_not_an_ask(text, want):
+    assert wig.asks_to_write_calendar(text) is want
+
+
+@pytest.mark.parametrize("text,want", [
+    ("add work boots to the list", False),                              # "work" is part of the item, not a destination
+    ("add bolts to the list", False),
+    ("add bolts to my work list", True),
+    ("put it on the personal list", True),
+    ("add the invoice to personal", True),
+    ("add milk to the shopping list", True),
+])
+def test_a_list_type_inside_the_item_is_not_a_destination(text, want):
+    assert wig.names_a_list(text) is want
+
+
+def test_dispatch_asks_which_list_for_work_boots():
+    wig.note_turn("jason", "add work boots to the list")
+    assert wig.check("jason", "list_add", {"item": "work boots", "list_type": "shopping"}) is not None
