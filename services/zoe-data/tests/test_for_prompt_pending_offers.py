@@ -13,7 +13,10 @@ import routers.memories as mem
 
 
 @pytest.fixture(autouse=True)
-def _clear_offer_state():
+def _clear_offer_state(monkeypatch):
+    # cadence / one-per-turn / cooldown are tested here with arbitrary messages; relatedness has its own file
+    # (test_contact_offer_standing_decline.py)
+    monkeypatch.setattr(cop, "related", lambda message, offer: True)
     cop._STATE.clear()
     yield
     cop._STATE.clear()

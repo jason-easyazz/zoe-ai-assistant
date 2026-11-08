@@ -203,8 +203,15 @@ async def test_no_duplicate_offer_for_same_name(monkeypatch):
         ) == 0
         rows = await _offer_rows(db)
         assert len(rows) == 1
-        # A RESOLVED offer no longer blocks a fresh proposal.
+        # A RESOLVED offer (declined / expired / answered) blocks a re-proposal of the same name for REOFFER_BLOCK_DAYS (QA round 4:
+        # the detector re-proposed the same person once the first offer aged out) ...
         await db.execute("UPDATE pending_suggestions SET resolved=1")
+        await db.commit()
+        assert await ps.store_suggestions(USER, SESSION, [_person("Caitlin", "friend")]) == 0
+        # ... and no longer once that window has passed.
+        from datetime import datetime, timedelta, timezone
+        old = (datetime.now(timezone.utc) - timedelta(days=ps.REOFFER_BLOCK_DAYS + 1)).isoformat()
+        await db.execute("UPDATE pending_suggestions SET created_at=?", (old,))
         await db.commit()
         assert await ps.store_suggestions(USER, SESSION, [_person("Caitlin", "friend")]) == 1
     finally:

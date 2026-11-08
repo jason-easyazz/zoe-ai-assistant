@@ -1012,6 +1012,9 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
         t = (user_message or "").strip()
         if _FORGET_LAST_RE.match(t) or _FORGET_ENTITY_RE.match(t):
             return True
+        import forget_topic as _ft_cap
+        if _ft_cap.parse(_capture_words(t).strip()) is not None:
+            return True          # a topic forget is an instruction, never a fact, and never "forget the previous turn"
         # A short retraction of the PREVIOUS turn that another lane answered ("actually no, don't remember that, forget
         # that please. its not a real plan" reached the brain, QA round 3b): the owner still asked, so that turn is
         # retracted here - its rows and its capture still in flight - exactly as the forget intent does (idempotent: after

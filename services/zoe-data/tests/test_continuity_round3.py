@@ -169,7 +169,7 @@ async def test_relevance_packet_still_folds_the_offer(monkeypatch):
     non-emotional turn folds."""
     surfaced: list = []
     res = await _compose(monkeypatch, [HOME, WORRY], mode="relevance", suggest=True,
-                         surfaced=surfaced, message="What's on my calendar this week?")
+                         surfaced=surfaced, message="What's on my calendar this week, and is Marisol coming?")
     assert "[pending-contact]" in res["packet"] and "Marisol" in res["packet"]
     assert surfaced == ["demo-a"]
 
@@ -350,7 +350,7 @@ async def test_offer_survives_a_run_of_continuity_turns(monkeypatch):
     monkeypatch.setattr(zc, "_pending_offer_block", _REAL_OFFER_BLOCK)
     store = _OfferStore(expire=2)
     wires = await _run_turns(monkeypatch, store, [ASK_WORRY, "I'm so stressed", "Today was rough",
-                                                  "Can you add milk to the shopping list?"])
+                                                  "Can you add milk to the shopping list for Marisol?"])
     assert all("Marisol" not in w for w in wires[:3])  # deferred on every emotional turn
     # never aged on the three emotional turns — only the neutral turn's own tick
     assert not store.resolved and store.turns == 2
@@ -442,7 +442,7 @@ async def test_core_path_emotional_turn_hides_the_offer_and_does_not_age_it(monk
 @pytest.mark.asyncio
 async def test_core_path_neutral_turn_shows_the_offer_and_ages_it(monkeypatch):
     lid, aged = _real_surface_fake_db(monkeypatch)
-    msg = "What's on my calendar this week?"
+    msg = "What's on my calendar this week, and is Marisol coming?"
     packet = await _core_packet(monkeypatch, msg)
     assert "Marisol" in packet and "[pending-contact]" in packet
     await lid.detect_and_store(msg, user_id="demo-a", session_id="s1")
