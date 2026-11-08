@@ -2211,10 +2211,10 @@ def _offer_followup_ttl_s() -> float:
 
 def _reminder_offer_title(previous: str) -> tuple[str, str]:
     """(connector, title) read from Zoe's offer text; falls back to a neutral 'about that'."""
-    m = re.search(r"\bremind\s+you\s+(to|about|of)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
+    m = re.search(r"\bremind\s+you\s+(to|about|of)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?!]|\.(?=\s|$)|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
     if m:   # "Want me to remind you to call the dentist?" -> the task is "call the dentist"
         return ("to" if m.group(1).lower() == "to" else "about"), m.group(2).strip()
-    m = re.search(r"reminder\s+(for|to|about)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?.!]|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
+    m = re.search(r"reminder\s+(for|to|about)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?!]|\.(?=\s|$)|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
     if m:
         conn = "to" if m.group(1).lower() == "to" else "about"
         return conn, m.group(2).strip()

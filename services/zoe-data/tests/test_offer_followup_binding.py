@@ -289,3 +289,14 @@ def test_an_offer_to_change_a_reminder_is_not_bound_as_a_new_one(offer):
 def test_an_offer_to_create_a_reminder_still_binds():
     assert bind_reminder_offer_reply("sure, 3pm", "Want me to set a reminder for the pickup?", FRESH) is not None
     assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to collect the parcel?", FRESH) is not None
+
+
+def test_a_period_inside_the_offered_task_is_kept():
+    # Codex on #2309: only a period followed by whitespace / the end closes the sentence
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to email support@example.com?", FRESH) == \
+        "remind me to email support@example.com at 3 pm"
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to buy 1.5 litres of milk?", FRESH) == \
+        "remind me to buy 1.5 litres of milk at 3 pm"
+    # negative control: an ordinary sentence end still closes the title
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to call the dentist.", FRESH) == \
+        "remind me to call the dentist at 3 pm"
