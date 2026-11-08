@@ -199,34 +199,38 @@ def _lex() -> tuple:
     import lexicons
 
     pets = sorted({w for w in lexicons.words("en", "pet_words") if w != "pet"}, key=len, reverse=True) + ["pet"]
-    kin_words = sorted((w for w, _c in lexicons.kin_index().items() if w.isalpha() and w not in ("friend", "mate", "buddy", "bestie", "colleague", "coworker", "boss", "neighbour", "neighbor")), key=len, reverse=True)
+    ix = dict(lexicons.kin_index())
+    ix.update({"bf": "boyfriend", "gf": "girlfriend", "sis": "sister", "bro": "brother", "hubby": "husband"})
+    kin_words = sorted((w for w in ix if w.isalpha() and w not in ("friend", "mate", "buddy", "bestie", "colleague", "coworker", "neighbour", "neighbor")), key=len, reverse=True)
     pet_alt, kin_alt = "|".join(re.escape(p) for p in pets), "|".join(re.escape(k) for k in kin_words)
     poss = r"(?:my|our)"
     pet_res = (re.compile(rf"\b(?:{poss}|a|the)\s+(?:\w+\s+)?({pet_alt})\s+(?:is\s+)?(?:called|named)\s+{_NAME}", re.I),
-               re.compile(rf"\b{poss}\s+(?:\w+\s+)?({pet_alt}),?\s+(?!is\b|was\b|has\b|had\b)([A-Z][a-z'\-]{{1,24}})\b"),
+               re.compile(rf"\b{poss}\s+(?:\w+\s+)?({pet_alt}),?\s+(?!is\b|was\b|has\b|had\b)([A-Za-z][a-z'\-]{{1,24}})\b", re.I),
                re.compile(rf"\b{_NAME}\s+is\s+(?:my|our)\s+(?:\w+\s+)?({pet_alt})\b", re.I),
                re.compile(rf"\b{poss}\s+({pet_alt})\s+is\s+(?:called\s+|named\s+)?([A-Z][a-z'\-]{{1,24}})\b"))
     kin_res = (re.compile(rf"\b{poss}\s+({kin_alt})\s*(?P<sep>is\s+|was\s+|called\s+|named\s+|,\s*)?{_NAME}", re.I),
                re.compile(rf"\b{_NAME}\s+is\s+{poss}\s+({kin_alt})\b", re.I),
                re.compile(rf"\b{_NAME}\s*,\s*{poss}\s+({kin_alt})\b", re.I))
-    return pet_res, kin_res, set(pets), dict(lexicons.kin_index())
+    mention_alt = "|".join(re.escape(w) for w in kin_words)
+    mention = re.compile(rf"\b(?:(?P<own>my|our|your)|(?P<who>[A-Za-z]+)'s)\s+(?P<w>{mention_alt})s?\b", re.I)
+    return pet_res, kin_res, set(pets), ix, mention
 
 
 def lexicon_facts(text: str) -> list[dict]:
     """``pet`` (subject = the pet's name, value = its kind) and ``kin`` (subject = the person's name, value = their relation to the speaker, ``word`` =
     the surface word) facts by deterministic rules over the ORIGINAL text. Names that are common words are refused; a pet or a person is only
     named by an explicit "called/named", "<Name> is my <word>", "my <word> <Name>" or "my <word> is <Name>" shape."""
-    pet_res, kin_res, _pets, kin_ix = _lex()
+    pet_res, kin_res, _pets, kin_ix, mention = _lex()
     out: list[dict] = []
     seen: set = set()
 
-    def add(kind: str, name: str, value: str, word: str, after: str, explicit: bool = False) -> None:
+    def add(kind: str, name: str, value: str, word: str, after: str, explicit: bool = False, via_is: bool = False) -> None:
         n = name.lower().strip("-'")
         if n in _NOT_NAMES or n in STOP or len(n) < 2 or (kind, n, value) in seen:
             return
         if not (explicit or name[0].isupper()):          # a lowercase "name" must look like one: not a word that ends in -ing/-ed/-ly, and the clause must end or go on with and/is/was
             nxt = re.match(r"\s*([A-Za-z']*)", after).group(1).lower()
-            if n.endswith(("ing", "ed", "ly")) or n in _NOT_NAMES_LOWER or nxt not in ("", "is", "was", "has", "and", "who", "turns", "turned", "lives"):
+            if n.endswith(("ing", "ed", "ly")) or n in _NOT_NAMES_LOWER or nxt not in (("",) if via_is else ("", "is", "was", "has", "and", "who", "turns", "turned", "lives")):
                 return
         seen.add((kind, n, value))
         out.append({"kind": kind, "subject": n, "value": value, "word": word, "src": "rule", "score": 1.0})
@@ -241,7 +245,16 @@ def lexicon_facts(text: str) -> list[dict]:
             if word.lower() in _pets:
                 continue
             sep = (m.group("sep") or "").strip().lower() if i == 0 else ""
-            add("kin", name, kin_ix.get(word.lower(), word.lower()), word.lower(), text[m.end():], explicit=sep in ("called", "named"))
+            add("kin", name, kin_ix.get(word.lower(), word.lower()), word.lower(), text[m.end():], explicit=sep in ("called", "named"), via_is=sep in ("is", "was"))
+    for m in mention.finditer(text or ""):                  # an UNNAMED relative ("my sister", "Tom's mum"): the subject is empty, ``of`` says whose
+        w = m.group("w").lower()
+        if w in _pets:
+            continue
+        of = "@speaker" if m.group("own") else m.group("who").lower()
+        if of in _NOT_NAMES or of in STOP or ("kin", "", w, of) in seen or any(f["word"] == w for f in out if f["kind"] == "kin" and f["subject"]):
+            continue                                        # (a relative already named in this turn is not also listed unnamed)
+        seen.add(("kin", "", w, of))
+        out.append({"kind": "kin", "subject": "", "value": kin_ix.get(w, w), "word": w, "of": of, "src": "rule", "score": 1.0})
     return out
 
 
@@ -294,7 +307,7 @@ def compare(facts: list[dict], stored: Iterable[str]) -> dict:
             elif any(val in w for _t, w in named):
                 cmp = "agree"
         elif kind == "kin":
-            if any(f.get("word", "") in w for _t, w in named):
+            if any(f.get("word", "") in w for _t, w in (named if subj else texts)):
                 cmp = "agree"
         f["cmp"], f["reason"] = cmp, reason
         counts[cmp] += 1
@@ -355,7 +368,7 @@ def _read(p: Path) -> list[dict]:
 
 def fact_text(r: dict) -> str:
     """The words a proposed fact carries (what a forget must be able to match)."""
-    return " ".join(str(r.get(k) or "") for k in ("subject", "value", "word"))
+    return " ".join(str(r.get(k) or "") for k in ("subject", "value", "word", "of"))
 
 
 def _rewrite(d: Path, keep: Callable[[dict], bool]) -> int:

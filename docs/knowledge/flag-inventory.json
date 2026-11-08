@@ -9872,6 +9872,29 @@
         },
         "typed_env": true
       },
+      "ZOE_NIGHT_EXTRACT": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/night_extract.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "phase 1: shadow only; on is not built",
+          "owner_doc": "docs/knowledge/night-extract.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_NIGHT_MIND": {
         "defaults": [
           "''",
@@ -19124,6 +19147,16 @@
       ],
       "typed_env": false
     },
+    "HF_HUB_CACHE": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/jobs/glinerel_worker.py"
+      ],
+      "typed_env": false
+    },
     "HF_HUB_OFFLINE": {
       "defaults": [
         "dynamic"
@@ -19908,6 +19941,16 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/reap_stale_omnigent_runners.py"
+      ],
+      "typed_env": false
+    },
+    "OMP_NUM_THREADS": {
+      "defaults": [
+        "'4'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/jobs/glinerel_worker.py"
       ],
       "typed_env": false
     },
@@ -20803,7 +20846,6 @@
     }
   },
   "registry_unread": [
-    "ZOE_NIGHT_EXTRACT",
     "ZOE_NIGHT_EXTRACT_BATCH",
     "ZOE_NIGHT_EXTRACT_DIR",
     "ZOE_NIGHT_EXTRACT_MEM_MAX",

@@ -32,6 +32,13 @@ WINDOW_H = 24
 MIN_BUDGET_S = 120.0                    # under this the model load + a day does not fit: not started ("no_time")
 
 
+def _epoch(iso: str) -> float:
+    try:
+        return dt.datetime.fromisoformat(str(iso).strip().replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
 def _jsonl_turns(path: Path) -> list:
     out = []
     for i, ln in enumerate(path.read_text(encoding="utf-8").splitlines()):
@@ -111,8 +118,9 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
 
         async def load_turns(uid: str) -> list:
             tr = await md.load_day_messages(uid, start.isoformat(), end.isoformat())       # own words, off-record + forgotten turns out (strict ledger)
-            ids_ = [mid for mid, _line in getattr(tr, "turns", ())]
-            return [(mid, line, 0.0) for mid, line in zip(ids_, [ln for _m, ln in getattr(tr, "turns", ())])]
+            turns, times = list(getattr(tr, "turns", ())), list(getattr(tr, "times", ()))
+            times += [""] * (len(turns) - len(times))
+            return [(mid, line, _epoch(at)) for (mid, line), at in zip(turns, times)]
 
         async def load_stored(uid: str) -> list:
             refs = await get_memory_service().load_recent_for_prompt(uid, window_s=WINDOW_H * 3600, limit=300)

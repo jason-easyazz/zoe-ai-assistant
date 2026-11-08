@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 861 prod flags; 277 read through `typed_env`.
+- 862 prod flags; 278 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 249 non-`ZOE_` env names read by prod code (table below).
+- 251 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 10 registered flags with no reader in the scanned sources.
+- 9 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-861 flags; 810 not documented in `.env.example`.
+862 flags; 811 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -509,6 +509,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MUSIC_SETUP_TTL_S` | int | `900` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NAMED_GUESTS` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/named-guests.md` | `'off'` | yes | NO | `services/zoe-data/named_guests.py` |
 | `ZOE_NIGHT_BUSY` | str | `'~/.zoe/agent-tools/night_busy.sh'` | - | - | `'~/.zoe/agent-tools/night_busy.sh'` | yes | NO | `scripts/maintenance/harness_quiet.py`<br>`scripts/perf/self_improver.py` |
+| `ZOE_NIGHT_EXTRACT` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/night-extract.md` | `'off'` | yes | NO | `services/zoe-data/night_extract.py` |
 | `ZOE_NIGHT_MIND` | str | `'off'` | `off`, `shadow`, `enforce`, `serve` | `docs/knowledge/night-mind.md` | `''`, `-` | no | NO | `scripts/maintenance/zoe-night-mind.py`<br>`scripts/perf/zmb/arms/z0.py`<br>`services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CHUNK_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |
 | `ZOE_NIGHT_MIND_CTX_TOKENS` | int | `0` | - | - | `0` | no | NO | `services/zoe-data/night_mind.py` |
@@ -974,7 +975,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-249 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+251 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1071,6 +1072,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `HERMES_HOME` | `'~/.hermes'` | no | NO | `services/zoe-data/kanban_phase_budget.py` |
 | `HERMES_KANBAN_DB` | `dynamic` | no | NO | `scripts/maintenance/reset_engineering_boards.py` |
 | `HERMES_MULTICA_AGENT_ID` | `''` | no | NO | `services/zoe-data/multica_client.py` |
+| `HF_HUB_CACHE` | `dynamic` | no | NO | `scripts/night/jobs/glinerel_worker.py` |
 | `HF_HUB_OFFLINE` | `dynamic` | no | NO | `scripts/perf/zmb/embed_shim.py`<br>`scripts/perf/zmb/lab_driver.py`<br>`scripts/perf/zmb/pilot/embed_quality_probe.py` |
 | `HOME` | `''`, `'/'`, `'/home/zoe'`, `'~'`, `dynamic` | no | NO | `scripts/maintenance/cleanup_dead_units.py`<br>`scripts/maintenance/fix_secret_perms.py`<br>`scripts/maintenance/migrate_hermes_env.py`<br>`scripts/maintenance/reap_env_copies.py`<br>`scripts/maintenance/zoe_health.py`<br>`scripts/maintenance/zoe_offbox.py`<br>`scripts/night/night_window.py`<br>`scripts/perf/manner_block_ab.py`<br>`scripts/perf/zmb/arms/mpa_palace.py`<br>`scripts/perf/zmb/bakeoff.py`<br>`scripts/perf/zmb/bakeoff_measure.py`<br>`scripts/perf/zmb/embed_shim.py` |
 | `JETSON_AGENT_MODE` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
@@ -1141,6 +1143,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `OMNIGENT_OIDC_CLIENT_ID` | `'omnigent'` | no | NO | `services/zoe-auth/oidc/startup.py` |
 | `OMNIGENT_OIDC_CLIENT_SECRET` | `''` | no | NO | `services/zoe-auth/oidc/startup.py` |
 | `OMNIGENT_SERVER` | `'http://127.0.0.1:6767'` | no | NO | `scripts/maintenance/reap_stale_omnigent_runners.py` |
+| `OMP_NUM_THREADS` | `'4'` | no | NO | `scripts/night/jobs/glinerel_worker.py` |
 | `OPENROUTER_API_KEY` | `-` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py` |
 | `OPENWEATHERMAP_API_KEY` | `''` | no | yes | `services/zoe-data/mcp_server.py`<br>`services/zoe-data/routers/weather.py` |
 | `ORT_DISABLE_GPU` | `dynamic` | no | NO | `services/zoe-data/zoe_agent.py` |
@@ -1232,4 +1235,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_NIGHT_EXTRACT`, `ZOE_NIGHT_EXTRACT_BATCH`, `ZOE_NIGHT_EXTRACT_DIR`, `ZOE_NIGHT_EXTRACT_MEM_MAX`, `ZOE_NIGHT_EXTRACT_THREADS`, `ZOE_NIGHT_EXTRACT_VENV`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_NIGHT_EXTRACT_BATCH`, `ZOE_NIGHT_EXTRACT_DIR`, `ZOE_NIGHT_EXTRACT_MEM_MAX`, `ZOE_NIGHT_EXTRACT_THREADS`, `ZOE_NIGHT_EXTRACT_VENV`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`

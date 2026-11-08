@@ -131,8 +131,10 @@ def test_lexicon_rules_find_pets_and_relation_words_the_model_cannot():
 
 def test_lexicon_rules_refuse_what_is_not_a_name_or_not_a_pet():
     for t in ("the dog needs a walk", "my dog is sick", "my son is tall", "my mum is coming", "I like my cat", "the cat sat on the mat"):
-        assert ne.lexicon_facts(t) == [], t
-    assert [f for f in ne.lexicon_facts("my cat Lola is 3") if f["kind"] == "kin"] == []                      # a pet word is never a kin word
+        assert [f for f in ne.lexicon_facts(t) if f["kind"] == "pet" or f["subject"]] == [], t          # (an unnamed "my son" mention is a fact; a NAME is not invented)
+    assert [f for f in ne.lexicon_facts("my cat Lola is 3") if f["kind"] == "kin"] == []
+    mention = {(f["value"], f["of"]) for f in ne.lexicon_facts("my sis is preggo and tom's mum is called sandra and my boss wants it") if f["kind"] == "kin" and not f["subject"]}
+    assert mention == {("sister", "@speaker"), ("mother", "tom"), ("boss", "@speaker")}          # an unnamed relative: subject empty, `of` says whose                      # a pet word is never a kin word
 
 
 # ── the comparison with the 4B ───────────────────────────────────────────────────────────────────────────────────────────────────────────
