@@ -1,6 +1,6 @@
 """A named guest's own memory, and erasing a guest (``named_guests.py`` owns who they are; this module owns what Zoe keeps).
 
-``named_guest_turns`` (migration 0071) holds what Zoe and ONE named guest said to each other at the panel, keyed by the member layer
+``named_guest_turns`` (migration 0072) holds what Zoe and ONE named guest said to each other at the panel, keyed by the member layer
 the guest lives in (user_id, people_id). Read ONLY for a turn the server matched to that guest by VOICE (``named_guests.accept``
 -> ``named_guests.current()``); never served to any other speaker, the member who enrolled them included (default: never - no owner
 rule says otherwise). A guest cannot reach it by saying a name.
@@ -82,7 +82,7 @@ async def recall_lines(guest: Guest) -> list[str]:
 
 async def erase_people(db, owner_user_id: str, person_ids: Iterable[str]) -> int:
     """Every remembered turn of these guests in this member's layer (the forget path). RAISES on a failure, except a missing
-    table (before 0071 there is nothing to erase)."""
+    table (before 0072 there is nothing to erase)."""
     ids = sorted(set(person_ids))
     if not ids:
         return 0

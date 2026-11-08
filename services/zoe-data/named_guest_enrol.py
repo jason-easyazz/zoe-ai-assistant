@@ -303,6 +303,8 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
                 return None                    # "forget <word>" that names none of my guests is not this tier's
             if gid is None:
                 reply = _say("forget_none", name=name)
+            elif (channel or "") in ("voice", "livekit") and not await _verified_here(uid, speaker_verified, (panel_id or "").strip()):
+                reply = _say("unverified")            # at the panel, erasing a guest needs the same positive proof as learning one
             else:
                 try:
                     import named_guest_memory
