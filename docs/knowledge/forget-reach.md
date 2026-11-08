@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-108 stores: 37 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+113 stores: 42 reached, 30 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -118,6 +118,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `night_observations` | pg_table | words | reached | member: `night_mind.delete_user` / entity: `night_mind.erase_entity` | - |
 | `night_threads` | pg_table | words | reached | member: `night_mind.delete_user` / entity: `night_mind.erase_entity` | - |
 | `night_runs` | pg_table | metadata | reached | member: `night_mind.delete_user` | - |
+| `now_cards` | pg_table | derived | reached | member: `now_card.forget_user` / entity: `now_card.erase_entity` | - |
 | `struggle_events` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
 | `struggle_proposal_events` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
 | `turn_outcomes` | pg_table | derived | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | - |
@@ -173,6 +174,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `notifications` | pg_table | words | gap | - | Delivered notification titles/messages; neither path reaches them. |
 | `music_listening_events` | pg_table | metadata | out_of_scope | - | Listening history: titles/artists, no household words; the music journal has its own controls. |
 | `proactive_deliveries` | pg_table | derived | gap | - | Delivery ledger rows keyed by candidate; text is in the candidate, not here. |
+| `proactive_outcome_edges` | pg_table | derived | reached | member: `outcome_edges.erase_user` | - |
 | `proactive_ledger_lines` | pg_table | words | gap | - | Holds the spoken line (words); neither path reaches it. |
 | `proactive_pending` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |
 | `proactive_scheduled` | pg_table | words | gap | - | Holds the message text; neither path reaches it. |
@@ -181,6 +183,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `speaker_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `face_profiles` | pg_table | biometric | out_of_scope | - | Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days). |
 | `enrollment_offers` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
+| `member_register` | pg_table | words | reached | member: `member_register.forget_user` | - |
 | `alarms` | pg_table | words | reached | member: `alarms.forget_user` | - |
 | `phone_devices` | pg_table | metadata | out_of_scope | - | A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens. |
 | `user_preferences` | pg_table | config | out_of_scope | - | Preference flags; no household words. |
@@ -211,6 +214,8 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. |
 | `router_retrain_texts` | file | words | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files (router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only. |
+| `self_review_records` | file | words | reached | member: `struggle_detector.delete_user` / entity: `self_review.erase_entity` | ~/.zoe/self-review/: the nightly self-review (self_review.py, ZOE_SELF_REVIEW). <night>.self-review.jsonl + <night>.md hold the OWNER's flagged turns verbatim (0600, never off-box; other members are ids and classes only); the summary is counts, ids and utterance hashes. An entity forget drops the member's records naming it (cascade step self_review); a member erase drops all of the member's records and summary events; load_reviews re-checks the ledger. |
+| `self_improver_candidates` | file | derived | reached | entity: `self_review.erase_entity` | ~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate. |
 | `warm_speaker_memo` | file | metadata | reached | member: `warm_speaker.forget_user` | ~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker (a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member. |
 | `omi_audio_files` | file | biometric | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files). |
 | `device_audit_logs` | file | metadata | out_of_scope | - | Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words. |

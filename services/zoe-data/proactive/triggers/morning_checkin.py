@@ -195,6 +195,24 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
                 ctx["struggle_proposals_line"] = pline
         except Exception as exc:
             log.debug("morning_checkin: struggle proposals line failed (non-fatal): %s", exc)
+        # The panel's speaker model was (or is) unable to score voices: everyone at the panel was a guest meanwhile (panel_speaker_health).
+        try:
+            import panel_speaker_health
+
+            sline = panel_speaker_health.brief_line()
+            if sline:
+                ctx["panel_speaker_line"] = sline
+        except Exception as exc:  # noqa: BLE001
+            log.debug("morning_checkin: panel speaker line failed (non-fatal): %s", exc)
+        # The nightly SELF-REVIEW line (ZOE_SELF_REVIEW=on only; counts by failure class, no words, no member).
+        try:
+            import self_review
+
+            sline = await self_review.brief_line(user_id)
+            if sline:
+                ctx["self_review_line"] = sline
+        except Exception as exc:
+            log.debug("morning_checkin: self-review line failed (non-fatal): %s", exc)
         # The failed-turn LABEL line (ZOE_STRUGGLE_OUTCOMES=on only; a count of the owner's own failed turns waiting for an OK, no words).
         try:
             import turn_outcomes
@@ -258,6 +276,10 @@ def _compose_morning_message(ctx: dict, user_name: str, day_str: str) -> str:
         parts.append(ctx["struggle_proposals_line"])
     if ctx.get("struggle_labels_line"):
         parts.append(ctx["struggle_labels_line"])
+    if ctx.get("panel_speaker_line"):
+        parts.append(ctx["panel_speaker_line"])
+    if ctx.get("self_review_line"):
+        parts.append(ctx["self_review_line"])
 
     # Portrait-informed personal note (fallback generic)
     portrait = ctx.get("portrait_snippet", "")

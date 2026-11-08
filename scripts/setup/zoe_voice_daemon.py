@@ -906,6 +906,35 @@ if SPEAKER_MODEL != "resemblyzer":
 _rn34_embedder = None
 _rn34_error = ""
 _rn34_lock = threading.Lock()
+# A refusal is RETRIED, never cached forever (2026-11-07 19:03: the boot-time self-test ran while the wake model, VAD and profile
+# sync were still loading, one call took 357 ms against a 330 ms limit, and the "refused once: do not retry" cache left the
+# panel with no speaker ID for ~8 h - the owner was a guest all night). Bounded backoff: the schedule's last step repeats.
+_rn34_refusals = 0                   # consecutive refused loads (0 once one passes)
+_rn34_retry_at = 0.0                 # time.monotonic() before which a refused load is not retried
+_rn34_down_since = 0.0               # time.time() of the FIRST refusal of the current outage (0 = not down)
+
+
+def _rn34_retry_schedule() -> list:
+    """Seconds to wait before retry 1, 2, 3, ... (the last step repeats). ``SPEAKER_RESNET34_RETRY_S`` = comma list."""
+    raw = os.environ.get("SPEAKER_RESNET34_RETRY_S", "60,300,900,3600")
+    out = []
+    for part in raw.split(","):
+        try:
+            v = float(part.strip())
+        except ValueError:
+            continue
+        if math.isfinite(v) and v > 0:
+            out.append(v)
+    return out or [60.0, 300.0, 900.0, 3600.0]
+
+
+def _rn34_settle_s() -> float:
+    """Seconds the start-up self-test waits for the boot loads (wake model, VAD, profile sync) to settle before it times anything."""
+    try:
+        v = float(os.environ.get("SPEAKER_RESNET34_SELFTEST_DELAY_S", "20"))
+    except ValueError:
+        return 20.0
+    return v if math.isfinite(v) and v >= 0 else 20.0
 
 
 class _Claim(tuple):
@@ -923,9 +952,12 @@ def _acting_model_id() -> str:
     return _rn34.MODEL_ID if (SPEAKER_MODEL == "resnet34" and _rn34 is not None) else LEGACY_SPEAKER_MODEL_ID
 
 
-def _get_rn34():
-    """The pinned, self-tested ResNet34 embedder, loaded once; None (reason in ``_rn34_error``) when it cannot be trusted."""
-    global _rn34_embedder, _rn34_error
+def _get_rn34(*, retry_due: bool = False):
+    """The pinned, self-tested ResNet34 embedder; None (reason in ``_rn34_error``) when it cannot be trusted.
+
+    A refusal is not retried on the turn path (a turn must not pay a model load): ``retry_due=True`` is the background retry
+    (``_rn34_retry_loop``) asking to try again once the backoff in ``_rn34_retry_at`` has passed."""
+    global _rn34_embedder, _rn34_error, _rn34_refusals, _rn34_retry_at, _rn34_down_since
     if _rn34 is None:
         return None
     if _rn34_embedder is not None:
@@ -933,19 +965,41 @@ def _get_rn34():
     with _rn34_lock:
         if _rn34_embedder is not None:
             return _rn34_embedder
-        if _rn34_error:
-            return None                      # refused once: do not retry (and re-pay the load) on every turn
+        if _rn34_error and not (retry_due and time.monotonic() >= _rn34_retry_at):
+            return None                      # refused: the background retry owns the next attempt, never a turn
         try:
-            log.info("Loading ResNet34 speaker embedder (INT8 QDQ, %s)...", _rn34.MODEL_ID)
+            log.info("Loading ResNet34 speaker embedder (INT8 QDQ, %s)%s...", _rn34.MODEL_ID,
+                     " - retry %d after a refusal" % _rn34_refusals if _rn34_refusals else "")
             _rn34_embedder = _rn34.Resnet34Embedder.load()
-            log.info("ResNet34 speaker embedder ready (self-test passed).")
-        except _rn34.Unavailable as exc:
-            _rn34_error = str(exc)[:300]
-            log.error("ResNet34 speaker embedder REFUSED - ResNet34 scores nothing: %s", _rn34_error)
+            if _rn34_refusals:
+                log.warning("ResNet34 speaker embedder ready after %d refused attempt(s) (down %.0f min): speaker ID is back.",
+                            _rn34_refusals, (time.time() - _rn34_down_since) / 60.0 if _rn34_down_since else 0.0)
+            else:
+                log.info("ResNet34 speaker embedder ready (self-test passed).")
+            _rn34_error, _rn34_refusals, _rn34_down_since = "", 0, 0.0
         except Exception as exc:  # noqa: BLE001 - never takes the daemon down
-            _rn34_error = type(exc).__name__ + ": " + str(exc)[:200]
-            log.error("ResNet34 speaker embedder failed to load: %s", _rn34_error)
+            if isinstance(exc, _rn34.Unavailable):
+                _rn34_error = str(exc)[:300]
+            else:
+                _rn34_error = type(exc).__name__ + ": " + str(exc)[:200]
+            sched = _rn34_retry_schedule()
+            wait_s = sched[min(_rn34_refusals, len(sched) - 1)]
+            _rn34_refusals += 1
+            _rn34_retry_at = time.monotonic() + wait_s
+            if not _rn34_down_since:
+                _rn34_down_since = time.time()
+            log.error("ResNet34 speaker embedder REFUSED (attempt %d) - every turn goes up with NO speaker claim until it loads; "
+                      "retrying in %.0f s: %s", _rn34_refusals, wait_s, _rn34_error)
     return _rn34_embedder
+
+
+def _rn34_retry_loop(sleep=time.sleep, max_attempts: "int | None" = None) -> None:
+    """Retry a refused load on the backoff schedule until one passes. Runs in the start-up warm-up thread (never on a turn)."""
+    tries = 0
+    while _rn34_embedder is None and _rn34_error and (max_attempts is None or tries < max_attempts):
+        sleep(max(1.0, _rn34_retry_at - time.monotonic()))
+        _get_rn34(retry_due=True)
+        tries += 1
 
 
 def _rn34_status() -> str:
@@ -956,9 +1010,41 @@ def _rn34_status() -> str:
     return ("refused: " + _rn34_error) if _rn34_error else ("not loaded" if _rn34 is not None else "module missing")
 
 
+def _speaker_model_state() -> dict:
+    """The ACTING speaker model's state, sent with EVERY turn (``speaker_model_state``) so the server can tell "nobody matched"
+    from "the panel could not score at all" and raise an owner alarm on a long outage (``panel_speaker_health``).
+
+        {"model": "<id>", "state": "ready" | "loading" | "refused" | "missing" | "off", ...}
+        refused adds "down_s" (seconds since the first refusal of this outage), "attempts", "retry_in_s" and a short "reason".
+    No household data: a model id, a state and the refusal's own text."""
+    if not SPEAKER_ID_ENABLED:
+        return dict(model=_acting_model_id(), state="off")
+    if SPEAKER_MODEL != "resnet34":
+        if _voice_encoder is not None:
+            return dict(model=LEGACY_SPEAKER_MODEL_ID, state="ready")
+        return dict(model=LEGACY_SPEAKER_MODEL_ID, state="loading")
+    if _rn34 is None:
+        return dict(model="wespeaker_resnet34", state="missing", reason="zoe_speaker_resnet34.py is not deployed")
+    if _rn34_embedder is not None:
+        return dict(model=_rn34.MODEL_ID, state="ready")
+    if not _rn34_error:
+        return dict(model=_rn34.MODEL_ID, state="loading")
+    return dict(model=_rn34.MODEL_ID, state="refused", reason=_rn34_error[:160], attempts=_rn34_refusals,
+                down_s=int(max(0.0, time.time() - _rn34_down_since)) if _rn34_down_since else 0,
+                retry_in_s=int(max(0.0, _rn34_retry_at - time.monotonic())))
+
+
 def _rn34_warmup() -> None:
-    """Load + self-test the embedder in the background at start-up so the first turn does not pay for it."""
+    """Load + self-test the embedder in the background at start-up so the first turn does not pay for it. It first waits
+    ``SPEAKER_RESNET34_SELFTEST_DELAY_S`` for the boot loads to settle: the self-test TIMES a call, and timed while the wake
+    model, VAD and profile sync are loading it measures a starved CPU, not the model (2026-11-07)."""
+    settle = _rn34_settle_s()
+    if settle > 0:
+        time.sleep(settle)
     emb = _get_rn34()
+    if emb is None and _rn34_error:
+        _rn34_retry_loop()                   # bounded backoff (1, 5, 15 min, then hourly) until the model passes its self-test
+        emb = _rn34_embedder
     if emb is None:
         return
     try:
@@ -3759,6 +3845,7 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
     _speaker = _speaker_field(_scored_claim)
     if _speaker is not None:
         payload["speaker"] = _speaker
+    payload["speaker_model_state"] = _speaker_model_state()
 
     url = f"{ZOE_URL}/api/voice/turn_stream"
     _barge_in_requested.clear()
@@ -4093,6 +4180,8 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
     _speaker = None if text else _speaker_field(voice_claim)
     if _speaker is not None:
         turn_payload["speaker"] = _speaker
+    if not text:
+        turn_payload["speaker_model_state"] = _speaker_model_state()
     if window in ("followup", "conversation"):
         turn_payload["window"] = window
 

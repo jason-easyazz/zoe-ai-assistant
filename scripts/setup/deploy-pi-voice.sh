@@ -49,7 +49,7 @@ PI_USER="${PI_USER:-pi}"
 PI_DAEMON_DIR="${PI_DAEMON_DIR:-/home/pi/.zoe-voice}"
 PI_VENV="${PI_VENV:-/home/pi/.zoe-voice/venv}"
 VERIFY_TIMEOUT_S="${VERIFY_TIMEOUT_S:-20}"
-RESNET34_READY_TIMEOUT_S="${RESNET34_READY_TIMEOUT_S:-45}"
+RESNET34_READY_TIMEOUT_S="${RESNET34_READY_TIMEOUT_S:-120}"   # the daemon waits ~20 s for boot loads to settle, and retries a refusal after 60 s
 HEALTH_PORT="${HEALTH_PORT:-7777}"
 DRY_RUN="${DRY_RUN:-0}"
 

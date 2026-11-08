@@ -188,6 +188,10 @@ def _infer_event_category(text: str) -> str:
     return "general"
 
 
+#: a courtesy tail on a list command ("..., please", "thanks", "for me"); the list-add patterns read the text without it
+_LIST_TRAILING_COURTESY_RE = re.compile(r"(?:,?\s+(?:please|thanks|thank you|cheers|for me))+$")
+
+
 def _normalize_chat_intent_text(raw: str) -> str:
     """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
@@ -453,13 +457,20 @@ _KEEP_CONTACT_RE = re.compile(
 # "how well do you know me" / "what do you understand about me" → reveal portrait
 _PORTRAIT_REVEAL_RE = re.compile(
     r"(?:how\s+well\s+do\s+you\s+know\s+me"
-    r"|what\s+do\s+you\s+(?:really\s+)?(?:know|understand|think)\s+about\s+me"
+    r"|what\s+do\s+you\s+(?:really\s+)?(?:understand|think)\s+about\s+me"
     r"|what'?s?\s+your\s+understanding\s+of\s+me"
-    r"|describe\s+(?:me|who\s+i\s+am)\s+(?:to\s+me|back\s+to\s+me)?"
+    r"|describe\s+(?:me|who\s+i\s+am)\b(?:\s+(?:to\s+me|back\s+to\s+me))?"
+    r"|how\s+would\s+you\s+describe\s+me\b"
+    r"|what\s+am\s+i\s+like\b"
+    r"|(?:your|the)\s+(?:picture|portrait|impression)\s+of\s+me"
     r"|how\s+well\s+(?:do\s+you\s+)?understand\s+me"
     r"|what\s+do\s+you\s+see\s+when\s+you\s+think\s+of\s+me)",
     re.IGNORECASE,
 )
+
+# Plain "what do you know about me" (any lead-in, "now", "so far") asks for the FACTS, not the portrait: it routes to the same
+# provenance summary as the bare ask, so a lead-in ("sorry, got distracted. what do you know about me now?") is not a different answer.
+_KNOW_ABOUT_ME_RE = re.compile(r"what\s+do\s+you\s+(?:really\s+)?know\s+about\s+me", re.IGNORECASE)
 
 # "update your understanding" / "rebuild your portrait of me" → regenerate portrait now
 _PORTRAIT_REFRESH_RE = re.compile(
@@ -860,10 +871,13 @@ def detect_intent(
             return Intent("memory_forget_entity", {"name": _entity})
 
     # Portrait intents — how well Zoe knows the user, and rebuilding understanding.
-    if _PORTRAIT_REVEAL_RE.search(t):
-        return Intent("portrait_reveal", {})
+    # Refresh first: "update/rebuild your portrait of me" also contains "your portrait of me".
     if _PORTRAIT_REFRESH_RE.search(t):
         return Intent("portrait_refresh", {})
+    if _PORTRAIT_REVEAL_RE.search(t):
+        return Intent("portrait_reveal", {})
+    if _KNOW_ABOUT_ME_RE.search(t):
+        return Intent("portrait_reveal", {"facts": True})
 
     # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
     # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
@@ -1385,6 +1399,12 @@ def detect_intent(
         return Intent("music_setup", {})
 
     # === LIST PATTERNS (checked after domain-specific) ===
+    # A trailing courtesy ("... to my personal list please") is not part of the item or the list name: with it, the
+    # "$"-anchored target patterns missed and the implicit "add (.+)" stored "sultanas to my personal list please" on the
+    # SHOPPING list (a private item on the shared list; rollout QA 2026-11-07).
+    lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
+    if len(lt.split()) < 2:
+        lt = t          # the courtesy word WAS the whole object ("add cheers"): keep it as before
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [
@@ -1393,7 +1413,7 @@ def detect_intent(
         r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks)$",
         r"^(?:(?:can|could) you |please )?(?:add|put) (.+?) (?:to|on) (?:the |my )?(.+?) ?list$",
     ]:
-        m = re.match(pattern, t)
+        m = re.match(pattern, lt)
         if m:
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
@@ -1414,7 +1434,7 @@ def detect_intent(
         r"^(?:i'?d|id|and|at|it|hey|a)?\s*(?:go to |goto )?(.+?) "
         r"to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket|tasks?)"
         r" list[.!?]?$",
-        t,
+        lt,
     )
     if m:
         item = _sanitize_list_item(m.group(1))
@@ -1440,7 +1460,7 @@ def detect_intent(
             r"^(?:(?:can|could) you |please )?add (.+)$",
             r"^(?:(?:can|could) you |please )?put (.+)$",
         ]:
-            m = re.match(pattern, t)
+            m = re.match(pattern, lt)
             if m:
                 item = _sanitize_list_item(m.group(1))
                 if not _list_item_ok(item):
@@ -1450,7 +1470,7 @@ def detect_intent(
 
     # --- LIST ADD (natural language shopping) ---
     m = re.match(
-        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", t
+        r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", lt
     )
     if m:
         item = _sanitize_list_item(m.group(1))
@@ -1459,8 +1479,9 @@ def detect_intent(
 
     # --- LIST SHOW ---
     for pattern in [
-        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list$",
-        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list$",
+        # a trailing filler word ("... list now") is still the read - missing it fell to a default-shopping read (QA 3b)
+        r"^(?:show|read|check) (?:me )?(?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
+        r"^what(?:'?s| is) on (?:the |my )?(.+?) ?list(?: (?:now|please|again|today|atm|right now))?$",
         r"^what do i need to (?:buy|get)$",
         r"^what'?s on my list$",
         r"^show my list$",
@@ -2722,7 +2743,24 @@ def _escape_like_pattern(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+_LIST_TYPES = frozenset({"shopping", "personal", "tasks", "work", "bucket"})
+
+
+def _canonical_list_slots(intent: Intent) -> Intent:
+    """The intent with a ``list_type`` that is NOT a list type resolved like a spoken list name (:func:`_list_slots`). The
+    brain's list tools pass the name the model used ("tasks/to-do", "pharmacy study list" - QA round 3b, 2026-11-07): a to-do
+    name is the member's own list, an unknown name is a named list (asked about, never written), and nothing silently lands on
+    the household shopping list. A real type, an empty one or an explicit ``list_name`` is left exactly as it was. Pure."""
+    slots = intent.slots or {}
+    lt = str(slots.get("list_type") or "").strip()
+    if not lt or lt.lower() in _LIST_TYPES or str(slots.get("list_name") or "").strip():
+        return intent
+    rest = {k: v for k, v in slots.items() if k not in ("list_type", "list_phrase")}
+    return Intent(intent.name, {**rest, **_list_slots(lt.replace("/", " "))}, intent.confidence)
+
+
 async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[str]:
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     list_name = str(slots.get("list_name") or "").strip()
     list_type = str(slots.get("list_type") or "").strip() or ("" if list_name else "shopping")
@@ -2736,7 +2774,7 @@ async def _execute_list_show_direct(intent: Intent, user_id: str) -> Optional[st
                 # A list the user NAMED that is no type ("my pharmacy list"): that list, never the shopping list instead.
                 found = await _named_list(db, user_id, list_name)
                 if found is None:
-                    return f"You don't have a {list_name} list."
+                    return f"You don't have a {list_name} list. Which list did you mean?"
                 _, list_type, list_name = found
                 intent = Intent(intent.name, {**slots, "list_type": list_type, "list_name": list_name}, intent.confidence)
             elif not list_name:
@@ -2841,6 +2879,7 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     mcp_server's list_add_item tool (same list resolution, family/personal
     visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:
@@ -2917,6 +2956,7 @@ async def _execute_list_remove_direct(intent: Intent, user_id: str) -> Optional[
     substring fallback). If the item isn't on the list that's a clean success
     message (ok:true, 'X wasn't on your list'), not a failure — so brain/tool
     consumers don't surface a false error. Returns None only on genuine failure."""
+    intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
     if not item:
@@ -3830,6 +3870,103 @@ async def _forget_alias_note(user_id: str, name: str, svc: Any) -> str:
         return ""
 
 
+FORGET_WHICH_REPLY = "Which thing should I forget? Tell me what it was and I'll forget it."
+FORGET_ALREADY_REPLY = "That's already forgotten."
+FORGET_STORE_DOWN_REPLY = ("I couldn't reach the memory store just now, so I can't be sure it's gone. "
+                           "I won't save anything new from it - say \"forget that\" again in a minute and I'll finish.")
+FORGET_PARTIAL_REPLY = ("I forgot part of it, but I couldn't remove all of it just now, so some is still saved. "
+                        "Say \"forget that\" again in a minute and I'll finish.")
+
+
+def _forget_preview(text: str) -> str:
+    preview = " ".join((text or "").split())
+    return preview if len(preview) <= 80 else preview[:77].rstrip() + "…"
+
+
+async def _execute_forget_last(user_id: str) -> str:
+    """ "forget that": retract the owner's PREVIOUS TURN (turn_forget) - the rows written from it, its in-flight capture
+    (refused from now on), its exact-words index entry and its transcript row (flagged off the record for the nightly
+    readers). Rows from any OTHER turn are never touched; with no turn to bind to, ask which thing. Never raises."""
+    import turn_forget
+
+    turn = turn_forget.previous_turn(user_id)
+    if turn is None:
+        logger.info("memory_forget_last: user=%s no previous turn - asking", user_id)
+        return FORGET_WHICH_REPLY
+    if not turn.text:
+        return FORGET_ALREADY_REPLY
+    text, ts = turn.text, turn.ts
+    # FIRST: from here on nothing this turn's capture writes can land (the digest may still be minutes away)
+    turn_forget.retract(user_id, turn)
+    try:
+        from memory_service import get_memory_service
+        svc = get_memory_service()
+        rows = await turn_forget.rows_from_turn(svc, user_id, text, ts)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_forget_last: store unavailable (%s)", type(exc).__name__)
+        return FORGET_STORE_DOWN_REPLY
+    gone: list = []
+    failed = 0
+
+    async def _reject(row) -> bool:
+        try:
+            return await svc.review(row.id, decision="reject", actor=user_id, note="forget_last") is not None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_last: reject failed (%s)", type(exc).__name__)
+            return False
+
+    for r in rows:
+        if await _reject(r):
+            gone.append(r)
+        else:
+            failed += 1
+    # "remember that X": the capture's near-identical twin of the owner's verbatim row (same turn) goes too
+    try:
+        import ask_to_remember as _atr_f
+
+        ids = {r.id for r in gone}
+        for r in list(gone):
+            for _sib in await _atr_f.siblings_of(svc, user_id, r):
+                if _sib.id in ids:
+                    continue
+                ids.add(_sib.id)
+                if await _reject(_sib):
+                    gone.append(_sib)
+                else:
+                    failed += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
+    # A forget like any other: the rejected rows still hold the text, so erase them for real; the owner's words leave the
+    # exact-words index, and the saved transcript turn is flagged off the record so the nightly readers never re-mine it.
+    if gone and hasattr(svc, "erase_rows"):
+        try:
+            from memory_service import physical_erase_enabled
+            if physical_erase_enabled():
+                await svc.erase_rows(user_id, [r.id for r in gone], actor=user_id, reason="forgotten by request (last)")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_last: physical erase failed (%s) - rows stay rejected", type(exc).__name__)
+    try:
+        import exact_words
+        await exact_words.erase_text(user_id, text)
+        await exact_words.forget_transcript(user_id, text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
+    if failed:
+        # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
+        return FORGET_PARTIAL_REPLY if gone else FORGET_STORE_DOWN_REPLY
+    if gone:
+        # every row is gone: the turn's words leave the notes (a further "forget that" is "already forgotten"). With no row
+        # found the target stays - a store that answered nothing may simply have been down, so a retry must still work.
+        turn_forget.mark_forgotten(user_id, turn)
+        more = len(gone) - 1
+        tail = f" (and {more} more from what you said there)" if more > 0 else ""
+        return f"Done — I forgot: \"{_forget_preview(gone[0].text)}\"{tail}."
+    if text.rstrip().endswith("?"):
+        return FORGET_WHICH_REPLY       # a question keeps nothing to forget: they mean something else
+    return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -3974,46 +4111,12 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             "if I ask again, another no will clear it."
         )
 
-    # "forget that" / "never mind what I said" — retract the last MemPalace write.
-    # Scoped to the caller's user_id and to writes within the last 10 minutes so
-    # a stale retraction can't wipe anything older. Short window keeps the
-    # semantics predictable across voice + SSE clients.
+    # "forget that" / "never mind what I said" — retract what the owner's PREVIOUS TURN said (turn_forget): the rows
+    # written from that turn, and its capture still in flight (which then never lands). NEVER "the newest write":
+    # capture runs minutes behind a chat, so the newest write is usually another turn's (QA round 3b, 2026-11-07: a
+    # "forget that" after a remark about the kitchen erased an unrelated, important row). No turn to bind to -> ask.
     if intent.name == "memory_forget_last":
-        try:
-            from memory_service import get_memory_service
-            svc = get_memory_service()
-            ref = await svc.forget_last(user_id=user_id)
-        except Exception as exc:
-            logger.info("memory_forget_last: service unavailable: %s", exc)
-            return "I couldn't reach the memory store right now, so nothing was changed."
-        if ref is None:
-            return "There's nothing recent I can forget — no new memories in the last few minutes."
-        preview = (ref.text or "").strip()
-        if len(preview) > 80:
-            preview = preview[:77] + "…"
-        # "remember that X" leaves the owner's verbatim row AND a near-identical row the post-turn capture derived
-        # from the same turn: "forget that" retracts both, or the fact would come straight back (ask_to_remember)
-        _also = []
-        try:
-            import ask_to_remember as _atr_f
-
-            for _sib in await _atr_f.siblings_of(svc, user_id, ref):
-                if await svc.review(_sib.id, decision="reject", actor=user_id, note="forget_last") is not None:
-                    _also.append(_sib)
-        except Exception as exc:  # noqa: BLE001 - the primary retraction already happened
-            logger.info("memory_forget_last: sibling retraction skipped (%s)", type(exc).__name__)
-        # "forget that" is a forget like any other: the rejected row still holds the text. Erase it for real
-        # (see memory_forget_entity below); the reject already hid it, so a failed erase changes nothing visible.
-        if hasattr(svc, "erase_rows"):
-            try:
-                from memory_service import physical_erase_enabled
-                if physical_erase_enabled():
-                    await svc.erase_rows(user_id, [ref.id] + [r.id for r in _also], actor=user_id,
-                                         reason="forgotten by request (last)")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("memory_forget_last: physical erase failed (%s) - row stays rejected",
-                               type(exc).__name__)
-        return f"Done — I forgot: \"{preview}\"."
+        return await _execute_forget_last(user_id)
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
         # "keep the contact": put back the contact(s) + edges the last forget cascade removed.
@@ -4094,6 +4197,22 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_entity: night-mind erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the now card that names it (one row per member, rebuilt next night without the name): same rule, fail closed
+        try:
+            import now_card
+            await now_card.erase_entity(user_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: now-card erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish erasing what I'd noticed about that just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and a liked-topic label in the speaking register that names it (member_register): same rule, fail closed
+        try:
+            import member_register
+            await member_register.erase_entity(user_id, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: register erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish clearing my notes about how you like to talk just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the struggle detector's summaries of turns that named it (struggle_events): same rule, fail closed
         try:
@@ -4827,19 +4946,27 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         return _random.choice(_acks)
 
     if intent.name == "portrait_reveal":
+        portrait = ""
+        if not intent.slots.get("facts"):
+            try:
+                from user_portrait import load_portrait  # type: ignore[import]
+                portrait = await load_portrait(user_id)
+            except Exception as exc:
+                logger.debug("portrait_reveal: load failed: %s", exc)
+        if portrait:
+            return f"Here's how I understand you:\n\n{portrait}"
+        # No portrait asked for or built yet: answer with the FACTS (the same summary as the bare "what do you know about me"),
+        # never a refusal that tells the user to ask what they just asked.
         try:
-            from user_portrait import load_portrait  # type: ignore[import]
-            portrait = await load_portrait(user_id)
+            import provenance_answers as _pa  # type: ignore[import]
+            facts = await _pa.handle("what do you know about me", user_id, allow_writes=False)
         except Exception as exc:
-            logger.debug("portrait_reveal: load failed: %s", exc)
-            portrait = ""
-        if not portrait:
-            return (
-                "I don't have a deep portrait of you yet — that takes a few weeks of "
-                "conversations for me to put together. The more we talk, the better I'll understand you. "
-                "I do have some facts stored — try asking what I know about you."
-            )
-        return f"Here's how I understand you:\n\n{portrait}"
+            logger.debug("portrait_reveal: facts summary failed: %s", exc)
+            facts = None
+        return facts or (
+            "I don't have a deep portrait of you yet; that takes a few weeks of conversations. "
+            "The more we talk, the better I'll understand you."
+        )
 
     if intent.name == "portrait_refresh":
         try:
@@ -6095,7 +6222,7 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
     if (intent.slots or {}).get("action") == "delayed":
         return command_shapes.DELAYED_COMMAND_REPLY  # nothing runs now, nothing is queued
     try:
-        from smart_home_service import resolve_smart_home
+        from smart_home_service import record_device_receipt, resolve_smart_home
 
         slots = intent.slots or {}
         action = slots.get("action", "turn_off")
@@ -6117,6 +6244,8 @@ async def _execute_smart_home_intent(intent: Intent, user_id: str) -> Optional[s
         i.duration_seconds = 25 if action == "dim" else (100 if action == "brighten" else 0)
 
         result = await resolve_smart_home(i)
+        # a brain home-tool call reaches here through /api/system/intent-dispatch: its receipt backs "I've turned it on"
+        record_device_receipt(user_id, result, "intent_router")
         # The resolver already phrases the outcome — including "which one?" when
         # a bare command is genuinely ambiguous. Speaking its summary is what
         # stops this path from inventing a success it did not verify.

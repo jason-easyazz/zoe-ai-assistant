@@ -2382,6 +2382,10 @@ _telegram_media.register(app)
 from routers import persona as _persona_router  # noqa: E402
 _persona_router.register(app)
 
+# Member register (flag-dark): GET/PUT/DELETE /api/member-register/... Mounted ONLY when ZOE_MEMBER_REGISTER is on.
+from routers import member_register as _member_register_router  # noqa: E402
+_member_register_router.register(app)
+
 # Omi pendant recordings (flag-dark): the Pi sync service's upload endpoint + the owner's list/get/patch/delete. Mounted ONLY
 # when ZOE_OMI_SYNC_ENABLED is on — flag off = 404. Calls the existing Moonshine helper; the voice path is untouched.
 from routers import omi_recordings as _omi_router  # noqa: E402
@@ -2483,6 +2487,13 @@ async def root_health():
         body["last_voice_turn_age_s"] = None if _age is None else round(max(0.0, _age), 1)
     except Exception:  # noqa: BLE001
         body["last_voice_turn_age_s"] = None
+    # Panel speaker model (panel_speaker_health): alarm = a panel has reported it cannot score voices for longer than
+    # ZOE_PANEL_SPEAKER_ALARM_MIN. States + minutes only. Never fails /health (and never turns it 503: the API itself is fine).
+    try:
+        import panel_speaker_health as _psh
+        body["panel_speaker"] = _psh.snapshot()
+    except Exception:  # noqa: BLE001
+        body["panel_speaker"] = None
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body

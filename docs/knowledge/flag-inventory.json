@@ -644,6 +644,25 @@
         },
         "typed_env": false
       },
+      "ZOE_BRAIN_TEXT_TOOLCALL_RECOVERY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/src/text-tool-calls.ts"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
+          "type": "str"
+        },
+        "typed_env": false
+      },
       "ZOE_BRAIN_TOKEN": {
         "defaults": [
           "''",
@@ -745,6 +764,25 @@
           },
           "note": "live: unset (code default in force)",
           "owner_doc": "docs/research/telegram-calls-voice-photos-2026-10-04.md",
+          "type": "str"
+        },
+        "typed_env": false
+      },
+      "ZOE_EMOTIONAL_CUES_PATH": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/src/tools/emotional-cues.ts"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
           "type": "str"
         },
         "typed_env": false
@@ -2609,6 +2647,25 @@
         },
         "typed_env": true
       },
+      "ZOE_CHANGE_NOTICES_INSTANT_CAP": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/comm_prefs.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/change-notices.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_CHANGE_NOTICES_INTERVAL_S": {
         "defaults": [
           "600"
@@ -2625,6 +2682,25 @@
           "note": "",
           "owner_doc": "docs/knowledge/change-notices.md",
           "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_CHANGE_NOTICES_OWNER_PRESET": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/comm_prefs.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/change-notices.md",
+          "type": "str"
         },
         "typed_env": true
       },
@@ -3761,6 +3837,25 @@
         },
         "typed_env": true
       },
+      "ZOE_DEVICE_CONFIRM_GUARD": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/device_confirm.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "2026-11-07: confirm-then-act for a garbled short light command at the panel; kill switch",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_DEVICE_ID": {
         "defaults": [
           "(required)"
@@ -3779,6 +3874,25 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_DEVICE_MISHEAR_GUARD": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/skybridge_service.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "flag-dark 2026-11-06: fused on-verb + \"lot\" light mishear repair; lists-route device guard",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_DEVICE_TOKEN": {
         "defaults": [
@@ -8275,6 +8389,50 @@
         },
         "typed_env": false
       },
+      "ZOE_MEMBER_REGISTER": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/member_register.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/member-register.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMBER_REGISTER_KIDS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/member_register.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/member-register.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMORIES_CURATORS": {
         "defaults": [
           "False"
@@ -8620,6 +8778,48 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_MEMORY_NOW_CARD": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/now_card.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "live: unset (code default in force)",
+          "owner_doc": "docs/knowledge/now-card.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_MEMORY_NOW_CARD_HARNESS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/now_card.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "measured bar runs only",
+          "owner_doc": "docs/knowledge/now-card.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_MEMORY_PHYSICAL_ERASE": {
         "defaults": [
@@ -10789,6 +10989,28 @@
         },
         "typed_env": false
       },
+      "ZOE_OUTCOME_EDGES": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/proactive/outcome_edges.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "flag-dark: unset = off",
+          "owner_doc": "docs/research/samantha-initiative-2026-11-03/lane-D-cognitive-architecture.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_OWN_FACT_PRECEDENCE": {
         "defaults": [
           "-"
@@ -11041,6 +11263,44 @@
           "type": "int"
         },
         "typed_env": false
+      },
+      "ZOE_PANEL_SPEAKER_ALARM_MIN": {
+        "defaults": [
+          "10.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_speaker_health.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 10.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_PANEL_SPEAKER_HEALTH_PATH": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/panel_speaker_health.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_PANEL_TOKEN_VIA_CF": {
         "defaults": [
@@ -14184,6 +14444,86 @@
         },
         "typed_env": true
       },
+      "ZOE_SELF_REVIEW": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_FLUE_DB": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe-self-review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_IMPROVER_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_SELF_URL": {
         "defaults": [
           "'http://127.0.0.1:8000'",
@@ -14455,6 +14795,25 @@
           "type": "float"
         },
         "typed_env": false
+      },
+      "ZOE_SPACER_REQUIRE_CLAIM": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_spacer.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "2026-11-07: a domain spacer needs the words to name the domain; kill switch",
+          "owner_doc": "docs/knowledge/voice-pipeline.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_SPEAKABLE_PROVENANCE": {
         "defaults": [
@@ -15670,6 +16029,25 @@
           },
           "note": "live .env: Australia/Perth",
           "owner_doc": "docs/knowledge/synthetic-users-and-proactive-recipients.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_TOOL_TEXT_GUARD": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/tool_text_guard.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
           "type": "str"
         },
         "typed_env": true
@@ -17976,6 +18354,16 @@
       ],
       "typed_env": false
     },
+    "BAKEOFF_PANEL_UNREADABLE_WAIT_MIN": {
+      "defaults": [
+        "'10'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/zmb/bakeoff.py"
+      ],
+      "typed_env": false
+    },
     "BAKEOFF_QUIET_POLL_S": {
       "defaults": [
         "'60'"
@@ -18049,6 +18437,16 @@
     "BAKEOFF_SMOKE_CELLS": {
       "defaults": [
         "'0'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/perf/zmb/bakeoff.py"
+      ],
+      "typed_env": false
+    },
+    "BAKEOFF_VOICE_AGE_URL": {
+      "defaults": [
+        "'http://127.0.0.1:8000/health'"
       ],
       "in_env_example": false,
       "readers": [
@@ -19777,6 +20175,26 @@
       ],
       "typed_env": false
     },
+    "SPEAKER_RESNET34_RETRY_S": {
+      "defaults": [
+        "'60,300,900,3600'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
+    "SPEAKER_RESNET34_SELFTEST_DELAY_S": {
+      "defaults": [
+        "'20'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
     "SPEAKER_SHADOW_BOOT": {
       "defaults": [
         "'300'"
@@ -20266,5 +20684,8 @@
       "typed_env": false
     }
   },
-  "registry_unread": []
+  "registry_unread": [
+    "ZOE_SELF_REVIEW_MAX_CALLS",
+    "ZOE_SELF_REVIEW_MAX_TOKENS"
+  ]
 }

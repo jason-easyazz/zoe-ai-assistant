@@ -68,6 +68,7 @@ TABLES: tuple[Store, ...] = (
     _t("night_observations", WORDS, REACHED, member="night_mind.delete_user", entity="night_mind.erase_entity"),
     _t("night_threads", WORDS, REACHED, member="night_mind.delete_user", entity="night_mind.erase_entity"),
     _t("night_runs", METADATA, REACHED, member="night_mind.delete_user"),
+    _t("now_cards", DERIVED, REACHED, member="now_card.forget_user", entity="now_card.erase_entity"),
     _t("struggle_events", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),
     _t("struggle_proposal_events", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),   # via struggle_proposals.forget_user / forget_events
     _t("turn_outcomes", DERIVED, REACHED, member="struggle_detector.delete_user", entity="struggle_detector.erase_entity"),   # failure capture (#2141): _delete_user_locked + _erase_outcomes, whatever the flag says
@@ -139,6 +140,7 @@ TABLES: tuple[Store, ...] = (
     _t("music_listening_events", METADATA, OUT_OF_SCOPE, "Listening history: titles/artists, no household words; the music journal has its own controls."),
     # --- proactive / voice delivery plumbing ---
     _t("proactive_deliveries", DERIVED, GAP, "Delivery ledger rows keyed by candidate; text is in the candidate, not here."),
+    _t("proactive_outcome_edges", DERIVED, REACHED, member="outcome_edges.erase_user"),   # opaque item ids + outcomes only: no word for an entity forget to erase
     _t("proactive_ledger_lines", WORDS, GAP, "Holds the spoken line (words); neither path reaches it."),
     _t("proactive_pending", WORDS, GAP, "Holds the message text; neither path reaches it."),
     _t("proactive_scheduled", WORDS, GAP, "Holds the message text; neither path reaches it."),
@@ -150,6 +152,7 @@ TABLES: tuple[Store, ...] = (
     _t("face_profiles", BIOMETRIC, OUT_OF_SCOPE, "Governed by docs/knowledge/biometric-retention-policy.md: embeddings only, kept until the member "
        "un-enrols (their own delete); MemoryService.delete_user does not remove it. Present in Postgres dumps (age out in <= 35 days)."),
     _t("enrollment_offers", METADATA, OUT_OF_SCOPE, _NOWORDS),
+    _t("member_register", WORDS, REACHED, member="member_register.forget_user"),   # liked topics are the member's words
     _t("alarms", WORDS, REACHED, member="alarms.forget_user"),                 # the label is the member's words
     _t("phone_devices", METADATA, OUT_OF_SCOPE, "A paired phone (phone_app.py): member id, a display name, the platform, a credential hash and "
        "public key - no household words. The member or an admin revokes it (phone_app.revoke_device), which deletes its push tokens."),
@@ -204,6 +207,17 @@ OTHER: tuple[Store, ...] = (
           "holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files "
           "(router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only.",
           member="struggle_detector.delete_user", entity="struggle_detector.erase_entity", markers=(".texts.jsonl",)),
+    Store("self_review_records", "file", WORDS, REACHED, "~/.zoe/self-review/: the nightly self-review (self_review.py, ZOE_SELF_REVIEW). "
+          "<night>.self-review.jsonl + <night>.md hold the OWNER's flagged turns verbatim (0600, never off-box; other members are ids and "
+          "classes only); the summary is counts, ids and utterance hashes. An entity forget drops the member's records naming it (cascade "
+          "step self_review); a member erase drops all of the member's records and summary events; load_reviews re-checks the ledger.",
+          member="struggle_detector.delete_user", entity="self_review.erase_entity",
+          markers=(".self-review.jsonl", ".self-review-summary.json")),
+    Store("self_improver_candidates", "file", DERIVED, REACHED, "~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B "
+          "invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, "
+          "a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming "
+          "the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate.",
+          entity="self_review.erase_entity", markers=("candidate-cells.jsonl",)),
     Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
           "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
           member="warm_speaker.forget_user", markers=("warm-speaker.json",)),

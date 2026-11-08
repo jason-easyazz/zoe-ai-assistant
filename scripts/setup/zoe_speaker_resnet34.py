@@ -24,6 +24,7 @@ import io
 import json
 import math
 import os
+import statistics
 import threading
 import time
 import wave
@@ -61,6 +62,7 @@ ORT_LEVELS_ALLOWED = ("ORT_ENABLE_EXTENDED", "ORT_ENABLE_ALL")
 ORT_THREADS = 2
 SELFTEST_MIN_COSINE = 0.9999
 SELFTEST_MAX_FACTOR = 3.0
+SELFTEST_TIMED_RUNS = 3                 # the speed check is the MEDIAN of this many warm calls (one noisy call must not refuse)
 
 # -- thresholds (MIRROR of services/zoe-data/speaker_models.py; drift-pinned) -----------------------------------------
 SHORT_MAX_S = 2.0
@@ -461,13 +463,15 @@ class Resnet34Embedder:
 
 def selftest(embedder: Any, *, reference: Optional[Sequence[float]] = None, max_factor: float = SELFTEST_MAX_FACTOR,
              min_cosine: float = SELFTEST_MIN_COSINE, expected_ms: Optional[float] = None,
-             clock: Callable[[], float] = time.perf_counter) -> dict:
+             clock: Callable[[], float] = time.perf_counter, timed_runs: int = SELFTEST_TIMED_RUNS) -> dict:
     """Embed the bundled PUBLIC synthetic signal and refuse on drift. Raises ``SelfTestFailed``; returns a small report.
 
     (a) cosine of the RAW embedding to the stored reference >= ``min_cosine`` - this is what an ORT upgrade, a wrong graph
         level (unfused graph: cosine 0.92-0.97) or a swapped file changes;
-    (b) one warm call within ``max_factor`` x the expected latency - a gross slowdown (it is NOT sensitive enough to see
-        the unfused graph on its own; the cosine is).
+    (b) the MEDIAN of ``timed_runs`` warm calls within ``max_factor`` x the expected latency - a gross slowdown (it is NOT
+        sensitive enough to see the unfused graph on its own; the cosine is). A median, not one call: at the panel's boot
+        (2026-11-07) one call landed at 357 ms against a 330 ms limit while the wake model, VAD and profile sync were still
+        loading, and a single noisy sample refused a healthy model.
     """
     st = (getattr(embedder, "artifacts", None) or {}).get("selftest") or {}
     ref = np.asarray(reference if reference is not None else st.get("reference", []), dtype=np.float64)
@@ -476,18 +480,24 @@ def selftest(embedder: Any, *, reference: Optional[Sequence[float]] = None, max_
     exp_ms = float(expected_ms if expected_ms is not None else st.get("expected_ms", 110.0))
     clip = synthetic_clip(float(st.get("seconds", 3.0)))
     embedder.embed_raw(clip)                       # warm-up (first call pays one-off allocator work)
-    t0 = clock()
-    got = embedder.embed_raw(clip)
-    ms = (clock() - t0) * 1e3
+    timings, got = [], None
+    for _ in range(max(1, int(timed_runs))):
+        t0 = clock()
+        got = embedder.embed_raw(clip)
+        timings.append((clock() - t0) * 1e3)
+        if got is None:
+            break
+    ms = statistics.median(timings)
     if got is None:
         raise SelfTestFailed("self-test clip produced no embedding")
     cos = cosine(got, ref)
-    report = dict(cosine=round(cos, 6), ms=round(ms, 1), expected_ms=exp_ms, factor=max_factor)
+    report = dict(cosine=round(cos, 6), ms=round(ms, 1), expected_ms=exp_ms, factor=max_factor,
+                  runs_ms=[round(t, 1) for t in timings])
     if not math.isfinite(cos) or cos < min_cosine:
         raise SelfTestFailed("embedding drift: cosine " + format(cos, ".5f") + " to the reference (need >= "
                              + format(min_cosine, ".4f") + ")")
     if ms > max_factor * exp_ms:
-        raise SelfTestFailed("too slow: " + format(ms, ".0f") + " ms for the self-test clip (limit "
+        raise SelfTestFailed("too slow: median " + format(ms, ".0f") + " ms of " + str(len(timings)) + " runs for the self-test clip (limit "
                              + format(max_factor * exp_ms, ".0f") + " ms) - wrong graph level or a starved CPU")
     return report
 

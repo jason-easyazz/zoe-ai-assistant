@@ -2,7 +2,7 @@
 
 When enabled (``ZOE_VOICE_GREETING_ENABLED``), the first voice turn on a given
 local day yields a short time-of-day greeting phrase ("Good morning" /
-"Good afternoon" / "Good evening") via :func:`greeting_prefix`. The turn_stream
+"Good afternoon" / "Good evening", a plain "Hi" from midnight to 05:00) via :func:`greeting_prefix`. The turn_stream
 handler emits it as its own leading, pre-warmed (therefore ~instant) audio chunk
 ahead of the real answer, keyed by panel/speaker so it fires once per local day.
 
@@ -54,7 +54,10 @@ def _now_local(now: Optional[datetime.datetime] = None) -> datetime.datetime:
 
 
 def greeting_for_hour(hour: int) -> str:
-    """Time-of-day greeting phrase (no trailing punctuation)."""
+    """Time-of-day greeting phrase (no trailing punctuation). 00:00-04:59 is a plain "Hi": "Good evening" at 02:44 was wrong
+    (2026-11-08) and "Good morning" in the middle of the night is no better."""
+    if 0 <= hour < 5:
+        return "Hi"
     if 5 <= hour < 12:
         return "Good morning"
     if 12 <= hour < 18:

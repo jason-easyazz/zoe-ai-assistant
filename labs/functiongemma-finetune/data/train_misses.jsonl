@@ -19,6 +19,14 @@
 {"text": "when is our anniversary", "tool": "recall_memory", "args": {"query": "our anniversary"}, "source": "own_fact_miss_2026-10-04"}
 {"text": "what's my date of birth", "tool": "recall_memory", "args": {"query": "my date of birth"}, "source": "own_fact_miss_2026-10-04"}
 {"text": "what do I do for work", "tool": "recall_memory", "args": {"query": "what I do for work"}, "source": "own_fact_miss_2026-10-04"}
+{"text": "shone the lots", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
+{"text": "I've shone a lot", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
+{"text": "sound the lamp", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
+{"text": "two of the one", "tool": "home", "args": {"action": "off"}, "source": "garbled_light_2026-11-07"}
+{"text": "do the one please", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
+{"text": "a little bit of the lot", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
+{"text": "turn on the line", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
+{"text": "I can't turn the lights off", "tool": "home", "args": {"action": "off"}, "source": "garbled_light_2026-11-07"}
 {"text": "turn the heater on", "tool": "home", "args": {"action": "on"}, "source": "capability_gap_2026-11-05"}
 {"text": "turn the heater off", "tool": "home", "args": {"action": "off"}, "source": "capability_gap_2026-11-05"}
 {"text": "switch the kettle on", "tool": "home", "args": {"action": "on"}, "source": "capability_gap_2026-11-05"}
@@ -45,3 +53,8 @@
 {"text": "anything on my schedule tomorrow", "tool": "show_calendar", "args": {"qualifier": "tomorrow"}, "source": "capability_gap_2026-11-05"}
 {"text": "are we busy on saturday", "tool": "show_calendar", "args": {"qualifier": "saturday"}, "source": "capability_gap_2026-11-05"}
 {"text": "what appointments do I have today", "tool": "show_calendar", "args": {"qualifier": "today"}, "source": "capability_gap_2026-11-05"}
+{"text": "shone the lots", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}
+{"text": "okay shown the light", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}
+{"text": "turn on the lot please", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}
+{"text": "switch the lots off", "tool": "home", "args": {"action": "off"}, "source": "stt_mishear_2026-11-06"}
+{"text": "turn on the lights in here", "tool": "home", "args": {"action": "on"}, "source": "stt_mishear_2026-11-06"}

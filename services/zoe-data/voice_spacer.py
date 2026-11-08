@@ -15,6 +15,9 @@ What this module decides, once, for all three:
 * NEVER the same line twice in a row on a panel (``pick`` keeps the last lines per panel, across mechanisms).
 * A WIDE pool in the lexicon (``lexicons_data/<lang>.json`` "spacer"), and a family that fits what the turn is doing: "let me check"
   only for a lookup; a recall turn says "let me think"; an action says "one sec".
+* A DOMAIN line only for a domain the words name (``SpacerTurn.corroborated``, ``ZOE_SPACER_REQUIRE_CLAIM``, default on): the router
+  head's guess alone ("lists" for a misheard "turn on the light") gets the neutral generic family, never "Let me check your lists."
+  or "On it." in front of a brain reply about something else (live 2026-11-06/07).
 * SILENCE when a spacer would be wrong: a router ``chat`` turn gets no TIMER filler (it is a conversation, not a lookup); a turn
   that discloses something emotional or personal gets none from any mechanism (the existing restraint classes + the continuity
   shape, no word list here); a recall/identity question the seam answers from the packet or the account gets no TOOL ACK; and no
@@ -28,6 +31,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional
@@ -93,6 +97,42 @@ def timer_pool(domain: str, lang: str = "en") -> list[str]:
     pool = list((sec.get("families") or {}).get(family_of(domain)) or [])
     pool += [p for p in (sec.get("tool_ack") or {}).get((domain or "").strip().lower()) or [] if p not in pool]
     return pool or list((sec.get("families") or {}).get("generic") or [])
+
+
+def generic_pool(lang: str = "en") -> list[str]:
+    """The neutral lines ("One moment.", "Just a moment."): what a turn gets when the router's domain is only a guess."""
+    return list((_section(lang).get("families") or {}).get("generic") or [])
+
+
+#: families whose lines promise nothing about a domain ("Let me think." is a thinking cue, not "Let me check your lists.")
+NEUTRAL_FAMILIES = frozenset({"recall", "generic"})
+_WORD_RE = re.compile(r"[\w']+")
+
+
+def require_claim() -> bool:
+    """``ZOE_SPACER_REQUIRE_CLAIM`` (default ON): a domain's own spacer needs the words to back the router's domain."""
+    try:
+        from typed_env import flag
+
+        return bool(flag("ZOE_SPACER_REQUIRE_CLAIM"))
+    except Exception:  # noqa: BLE001 - unreadable = the declared default
+        return True
+
+
+def words_name_domain(text: str, domain: str, lang: str = "en") -> bool:
+    """True when the WORDS of ``text`` name ``domain`` (a ``command_shapes.named_domains`` noun, or one of the lexicon's
+    ``spacer.domain_words`` for it): the deterministic evidence that a domain acknowledgement is about what was said."""
+    dom = (domain or "").strip().lower()
+    try:
+        import command_shapes
+
+        if dom in command_shapes.named_domains(text) or (dom == "timers" and "alarms" in command_shapes.named_domains(text)):
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("voice_spacer: named_domains unavailable: %s", type(exc).__name__)
+    words = (_section(lang).get("domain_words") or {}).get(dom) or []
+    toks = set(_WORD_RE.findall((text or "").lower().replace("’", "'")))
+    return any(str(w).lower() in toks for w in words)
 
 
 def tool_ack_pool(domain: str, lang: str = "en") -> list[str]:
@@ -224,6 +264,25 @@ class SpacerTurn:
         return self._disclosure
 
     @property
+    def corroborated(self) -> bool:
+        """May this turn's spacer speak for the router's DOMAIN? Live 2026-11-06/07: a misheard "turn on the light" routed to
+        lists / music by a guess got "Let me check your lists." / "On it." at brain dispatch, and the brain then answered
+        something else - the line promised a lookup or an action nobody had claimed. A domain line needs the words to name the
+        domain (``words_name_domain``); otherwise the turn gets a neutral line. A neutral family needs nothing."""
+        if family_of(self.domain) in NEUTRAL_FAMILIES or self.domain not in DOMAIN_FAMILY or not require_claim():
+            return True
+        try:
+            return words_name_domain(self.text, self.domain, self.lang)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _domain_pool(self, pool_fn) -> list[str]:
+        if self.corroborated:
+            return pool_fn(self.domain, self.lang)
+        logger.info("SPACER neutral reason=unclaimed_domain domain=%s", self.domain or "-")
+        return generic_pool(self.lang)
+
+    @property
     def lang(self) -> str:
         try:
             return lexicons.detect(self.text)
@@ -265,7 +324,7 @@ class SpacerTurn:
         if reason:
             logger.info("SPACER skip source=timer reason=%s domain=%s", reason, self.domain or "-")
             return None
-        return self._claim_and_pick("timer", lambda: timer_pool(self.domain, self.lang))
+        return self._claim_and_pick("timer", lambda: timer_pool(self.domain, self.lang) if _env_override() else self._domain_pool(timer_pool))
 
     def tool_ack_line(self) -> Optional[str]:
         """The dispatch-time acknowledgement for this turn, or ``None``. Claims the turn."""
@@ -274,7 +333,7 @@ class SpacerTurn:
             if self.domain in DOMAIN_FAMILY:
                 logger.info("SPACER skip source=tool_ack reason=%s domain=%s", reason, self.domain)
             return None
-        return self._claim_and_pick("tool_ack", lambda: tool_ack_pool(self.domain, self.lang))
+        return self._claim_and_pick("tool_ack", lambda: self._domain_pool(tool_ack_pool))
 
     def _claim_and_pick(self, source: str, pool) -> Optional[str]:
         # claim BEFORE picking: the claim is synchronous, so of two layers racing for the turn exactly one gets a line, and a

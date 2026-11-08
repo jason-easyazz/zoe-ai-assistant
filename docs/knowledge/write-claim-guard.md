@@ -155,6 +155,27 @@ of it lexicon data (`write_claims.json`), no word list in code:
   able to forget that yet, so it's still saved.", a removal "I didn't manage to remove that, so it's still there." - "want me
   to try again?" is not offered where no tool could do it.
 
+## Device switches (2026-11-07) - receipt kind `device`
+
+The owner's panel, a misheard quiet "turn on the light": the router guessed music, the brain had no tools offered, and it said
+"I'll turn the lights on for you." - no tool call, the light stayed off. A switch was not a kind this guard owned ("lights" sat in
+`other_targets`), so nothing stopped it.
+
+* **Claims** (en data): `turned` / `switched` / `flicked` / `flipped` + an on/off particle, the progressive `turning` /
+  `switching` / `flicking`, the promise `turn` / `switch` / `flick` / `flip` after "I'll" / "let me", and `claim_phrases` "done,
+  the light's on" (and its off / plural forms). These verbs KEEP their own kind (the nouns around them never re-file it) and claim
+  only with a device object in their clause (`kind_objects.device`: light, lamp, fan, heater, tv, it, them ...): "I turned it over
+  in my mind" and "It turned out fine" are not claims; a state read-back ("The light's on.") is not either.
+* **Receipts**: `smart_home_service.record_device_receipt` records one `device` receipt per entity the hub CONFIRMED
+  (`controlled_entities`) - called from the Skybridge smart-home branch (voice fast path, panel taps) and from
+  `intent_router._execute_smart_home_intent` (the brain's `home` tool through `/api/system/intent-dispatch`). A refused,
+  offline or ambiguous switch records nothing. A device receipt never backs a WRITE claim, untargeted ones included
+  (`write_receipts.NOT_A_WRITE`), and no write receipt backs a switch.
+* **Honest line**: "I didn't manage to switch that, so nothing's changed. Want me to try again?"; `correction_kinds.device`
+  feeds the session correction note. `authority_table.json` proves `smart_home` with the same receipt (`problem_loop`).
+* Spanish has no device claim words yet (no native review). Pinned by `tests/test_garbled_light_first_turn.py` (`ci_safe`, the
+  every-cut stream equality included).
+
 ## Session poisoning (2026-11-05) - `claim_correction.py`, `ZOE_WRITE_CLAIM_CORRECTION`
 
 A replaced claim poisoned the rest of its session: after one timer request was answered with a claim and no tool call, every
@@ -212,3 +233,24 @@ answered from its history ("still running for 12 minutes" - invented). Ledgered 
 The brain still sometimes skips an offered write tool - the guard makes that visible and honest, it does not make the model
 call the tool. On the chat lane every add is deferred to the brain (`allow_writes` False); letting chat's fast path write, as
 voice and Telegram do, is a separate decision. The change touches the voice path (`voice_tts.py`, `brain_dispatch.py`): it must be replay-gated before deploy.
+
+## A tool call printed as text (2026-11-07, QA round 3b) - `src/text-tool-calls.ts`, `tool_text_guard.py`
+
+The 4B brain sometimes PRINTS a call instead of making it: "chuck swim goggles on my to-do list" (a fresh session, the lists
+group disclosed) came back as the reply text `add_to_list(item="swim goggles", list_type="tasks/to-do")`. llama-server returned
+it as content, so there was no tool call, nothing was written and the user saw code. Two layers now:
+
+* **The sidecar runs it** (`labs/flue-zoe-brain-2x/src/text-tool-calls.ts`, `ZOE_BRAIN_TEXT_TOOLCALL_RECOVERY`, default on;
+  `off` restores the provider stream exactly). The provider stream holds the reply's lead only while it could still open
+  `name(` (prose is released at its first non-identifier character). A reply that is exactly ONE call of a tool DISCLOSED to
+  that round, with keyword (or one JSON object) literal arguments that fit the tool's schema, becomes a real tool call: the
+  agent loop runs it with every normal gate (writes switch, replay isolation, untrusted turn) and the model answers from the
+  result. Logged `TEXT_TOOLCALL_RECOVERED tool=<name>`. Anything else stays text.
+* **zoe-data never shows the rest** (`tool_text_guard.py`, `ZOE_TOOL_TEXT_GUARD`, default on), in `brain_dispatch` beside this
+  guard: a reply that opens with call syntax loses its call lines, and an empty remainder becomes "Sorry, that didn't go
+  through on my end. Could you ask me that again?". Logged `TOOL_TEXT_BLOCKED tool=<name> replaced=<bool>`.
+
+The list tools also stopped mapping an unrecognised `list_type` to `shopping` (the model sent "tasks/to-do" and "pharmacy
+study list"; either would have landed on the HOUSEHOLD list): the sidecar passes the name through and zoe-data resolves it like
+a spoken name (`intent_router._canonical_list_slots`): a to-do name is the member's own list, an unknown name is asked about.
+
