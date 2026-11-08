@@ -889,6 +889,19 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
             answered = None
         if answered is not None:
             return answered
+        # named_guests (ZOE_NAMED_GUESTS, default OFF = returns before any work): "learn Quinn's voice" / "forget Quinn's voice" from a
+        # verified adult member at the panel (a guest is a person in the member's own layer, never an account).
+        try:
+            import named_guest_enrol as _nge
+
+            _ctx = kwargs.get("extra_ctx") or {}
+            answered = await _nge.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      speaker_verified=_ctx.get("speaker_verified"), panel_id=_ctx.get("panel_id"),
+                                      allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
         # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
         try:

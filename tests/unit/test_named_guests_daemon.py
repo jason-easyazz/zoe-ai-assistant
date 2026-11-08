@@ -1,5 +1,5 @@
 """The panel daemon's half of named guests: guests are scored BESIDE the members and ride as a separate field, never as the member
-claim; a voice closer to a guest never adapts a member's profile.
+claim; a voice closer to a guest never adapts a member's profile; a guest enrolment uploads only under the server's ticket.
 Invented names only (the repo is public)."""
 from __future__ import annotations
 
@@ -102,3 +102,20 @@ def test_forget_command_drops_the_guest_from_the_cache(daemon, rig, monkeypatch)
     monkeypatch.setattr(daemon, "_sync_speaker_profiles", lambda force=False: None)
     assert daemon._purge_speaker_profile("g-quinn") is True
     assert daemon._profile_cache["guests"] == []
+
+
+def test_a_guest_enrolment_uploads_the_profile_under_the_ticket_only(daemon, monkeypatch):
+    posted = []
+    monkeypatch.setattr(daemon, "SPEAKER_MODEL", "resnet34")
+    monkeypatch.setattr(daemon, "_rn34", rn)
+    monkeypatch.setattr(daemon, "_get_rn34", lambda **k: types.SimpleNamespace(embed_wav=lambda w: (unit(3), 3.0)))
+    monkeypatch.setattr(daemon, "_api_post", lambda path, body, **k: posted.append((path, body)) or {"ok": True})
+    extra = daemon._enroll_speaker_kwargs({"guest": {"ticket": "T1"}}, "member-a", "Quinn")
+    assert extra["legacy_upload"] is False
+    assert extra["upload_profile"](unit(4), 5) is True
+    path, body = posted[0]
+    assert path == "/api/voice/guests/enroll" and body["ticket"] == "T1" and "user_id" not in body and "audio_base64" not in body
+    posted.clear()
+    member = daemon._enroll_speaker_kwargs({}, "member-a", "Avery")
+    member["upload_profile"](unit(4), 5)
+    assert posted[0][0] == "/api/voice/enroll"                     # the member path is unchanged
