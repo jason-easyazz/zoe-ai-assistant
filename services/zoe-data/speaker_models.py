@@ -218,6 +218,15 @@ def window_tier() -> str:
     return raw if raw in RESNET34_THRESHOLDS else "far01"
 
 
+def window_threshold(group: str) -> float:
+    """The no-wake-word window bar for a length group: ``ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`` / ``_LONG`` when set to a finite
+    number (the operator's measured bar between the owner's real follow-up scores and a television's), else the
+    ``ZOE_SPEAKER_WINDOW_TIER`` table value. Unset = the unchanged FAR 0.1 % table (0.309 / 0.351)."""
+    g = "short" if group == "short" else "long"
+    override = env_float(f"ZOE_SPEAKER_WINDOW_THRESHOLD_{g.upper()}", float("nan"))
+    return override if math.isfinite(override) else RESNET34_THRESHOLDS[window_tier()][g]
+
+
 def claim_threshold(model_id: str, speech_s: Any, window: Any = "") -> Optional[float]:
     """The acceptance bar for a panel's claim made in ``model_id``'s space, or None when the model is unknown (reject).
 
@@ -229,7 +238,7 @@ def claim_threshold(model_id: str, speech_s: Any, window: Any = "") -> Optional[
         if window in WINDOW_NAMES:
             # The window tier's TABLE value, not resnet34_threshold(group, tier): that returns the numeric override for every tier, so a
             # configured wake bar (e.g. _LONG=0.265) would also stand in for the stricter window bar and erase it.
-            bar = max(bar, RESNET34_THRESHOLDS[window_tier()]["short" if group == "short" else "long"])
+            bar = max(bar, window_threshold(group))
         return bar
     return None
 
