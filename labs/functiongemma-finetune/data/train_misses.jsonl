@@ -25,7 +25,6 @@
 {"text": "yeah it's 6:40 now, so a bit longer", "tool": null, "args": {}, "source": "clock_statement_miss_2026-11-05"}
 {"text": "oh it's 8:20, so probably tomorrow then", "tool": null, "args": {}, "source": "clock_statement_miss_2026-11-05"}
 {"text": "what's the weather like tonight", "tool": "get_weather", "args": {"forecast": false}, "source": "clock_statement_miss_2026-11-05"}
-{"text": "what time is it", "tool": "get_time", "args": {"query": "what time is it"}, "source": "clock_statement_miss_2026-11-05"}
 {"text": "shone the lots", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
 {"text": "I've shone a lot", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}
 {"text": "sound the lamp", "tool": "home", "args": {"action": "on"}, "source": "garbled_light_2026-11-07"}

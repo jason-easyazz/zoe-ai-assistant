@@ -30,7 +30,6 @@
 {"text": "yeah it's 6:40 now, so a bit longer", "label": "chat", "source": "clock_statement_miss_2026-11-05"}
 {"text": "oh it's 8:20, so probably tomorrow then", "label": "chat", "source": "clock_statement_miss_2026-11-05"}
 {"text": "what's the weather like tonight", "label": "weather", "source": "clock_statement_miss_2026-11-05"}
-{"text": "what time is it", "label": "time", "source": "clock_statement_miss_2026-11-05"}
 {"text": "shone the lots", "label": "smart_home", "source": "garbled_light_2026-11-07"}
 {"text": "I've shone a lot", "label": "smart_home", "source": "garbled_light_2026-11-07"}
 {"text": "sound the lamp", "label": "smart_home", "source": "garbled_light_2026-11-07"}
