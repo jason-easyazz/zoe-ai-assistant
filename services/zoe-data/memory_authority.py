@@ -843,6 +843,7 @@ _QUESTION_START_RE = re.compile(r"^\s*(?:" + _alt(_EN["question_aux"]) + r")\s+"
 _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:" + _alt(_EN["interjections"]) + r")[,.!\s]+)+", re.IGNORECASE)
 
 
+# "jonah is 16 not young": a contrast right after a number needs no comma (typed chat drops it).
 # "my mum lives in Bendigo, NOT BALLARAT" - a CONTRAST names the value being corrected away; it is
 # not a denial of the fact beside it. Counting that "not" as a polarity mismatch made the owner's own
 # explicit correction unsupported (class model_from_turn), so the stale row it corrects OUTRANKED it:
@@ -856,7 +857,7 @@ _LEAD_INTERJECTION_RE = re.compile(r"^\s*(?:(?:" + _alt(_EN["interjections"]) + 
 # not Ballarat", "a nurse and not a doctor").
 _CONTRAST_RE = re.compile(
     r"(?:(?:,|;|\s*[-\u2013\u2014]+)\s*(?:" + _alt(x + r"\s+" for x in _EN["contrast_connectors"]) + r")?|\s+(?:"
-    + _alt(_EN["contrast_connectors"]) + r")\s+)" + _alt(_EN["contrast_negator"]) + r"\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)",
+    + _alt(_EN["contrast_connectors"]) + r")\s+|(?<=\d)\s+)" + _alt(_EN["contrast_negator"]) + r"\s+(?P<neg>[^,;.!?]{1,40}?)\s*(?=[,;.!?]|$)",
     re.IGNORECASE)
 _NOT_A_CONTRAST = frozenset(_EN["contrast_exempt"])
 

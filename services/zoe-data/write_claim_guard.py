@@ -873,6 +873,30 @@ def _quiet_line(claim: Claim) -> str:
     return ""
 
 
+_FORGET_CLAIM_KINDS = frozenset({"memory", "note", "forget"})
+
+
+def _as_forget_claim(claim: Claim, user_text: str) -> Claim:
+    """The user ASKED to forget something and the reply claimed a memory write ("Done, I've noted that"): the honest line is the FORGET
+    one ("I haven't forgotten anything yet"), never "I didn't manage to save that" - which describes a save nobody asked for and
+    contradicts the next turn (QA round 4). Only a claim of memory / note / forget kinds, only on a forget request."""
+    try:
+        if not claim.kinds or not set(claim.kinds) <= _FORGET_CLAIM_KINDS or claim.kinds == ("forget",):
+            return claim
+        import forget_topic
+        import memory_quality
+
+        t = user_text or ""
+        if not (forget_topic.parse(t) is not None or memory_quality.has_forget_wording(t) or memory_quality.is_forget_command(t)):
+            return claim
+        for lang in _langs():
+            if lang.code == claim.lang and (lang.honest_by_kind or {}).get("forget"):
+                return Claim(kinds=("forget",), lang=claim.lang, honest=lang.honest_by_kind["forget"], in_progress=claim.in_progress)
+    except Exception:  # noqa: BLE001 - never break a turn over wording
+        pass
+    return claim
+
+
 def _note_correction(session_id: str, claim: Claim) -> None:
     """A claim was REPLACED: the brain's own session history still holds the claim it made, so its next turn is told the truth
     (``claim_correction``, ``ZOE_WRITE_CLAIM_CORRECTION``). Never raises."""
@@ -903,6 +927,7 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
             if claim is None or supported(claim, user_id, started, user_text=user_text):
                 out.append(sentence)
                 continue
+            claim = _as_forget_claim(claim, user_text)
             _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
             if m == "shadow":
                 out.append(sentence)
@@ -951,6 +976,7 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
     def block(sentence: str, claim: Claim) -> Optional[str]:
         """An unsupported claim: None = release the sentence untouched (shadow); else the text to release instead."""
         nonlocal replaced, quiet
+        claim = _as_forget_claim(claim, user_text)
         _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
         if m == "shadow":
             return None

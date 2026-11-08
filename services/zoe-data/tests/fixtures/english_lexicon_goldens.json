@@ -30,7 +30,7 @@
    "to"
   ],
   "_CONTRAST_RE": [
-   "(?:(?:,|;|\\s*[-\\u2013\\u2014]+)\\s*(?:and\\s+|but\\s+)?|\\s+(?:and|but)\\s+)not\\s+(?P<neg>[^,;.!?]{1,40}?)\\s*(?=[,;.!?]|$)",
+   "(?:(?:,|;|\\s*[-\\u2013\\u2014]+)\\s*(?:and\\s+|but\\s+)?|\\s+(?:and|but)\\s+|(?<=\\d)\\s+)not\\s+(?P<neg>[^,;.!?]{1,40}?)\\s*(?=[,;.!?]|$)",
    34
   ],
   "_ENDED_BASE": "\\b(?:did|do|does|will|would|can|could)(?:\\s+not|n['\\u2019]t)\\s+(?:drop|quit|stop|cancel|give\\s+up|leave)\\b",

@@ -169,6 +169,10 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
     if domain == "weather" and _is_unit_conversion(text):
         logger.info("EXPERT_CONVERSION_NOT_WEATHER score=%.2f → brain", score)
         return None
+    if domain == "weather" and is_food_temperature(text):
+        # A cooking temperature ("safe internal temp", a bare "and what temp") is the brain's, never today's forecast.
+        logger.info("EXPERT_FOOD_TEMP_NOT_WEATHER score=%.2f → brain", score)
+        return None
     user_id = str(ctx.get("user_id") or "guest")
     session_id = str(ctx.get("session_id") or "")
     t0 = time.monotonic()
@@ -274,6 +278,9 @@ _WEATHER_WORD_RE = re.compile(
     r"\b(?:weather|forecast|rain\w*|outside|sunny|wind\w*|humid\w*|storm\w*|today|tomorrow|tonight|week)\b", re.IGNORECASE)
 
 
+from weather_speech import is_food_temperature, weather_place  # noqa: E402  (pure helpers, no import cycle)
+
+
 def _is_unit_conversion(text: str) -> bool:
     return bool(re.search(r"\d", text) and _TEMP_CONVERSION_RE.search(text) and not _WEATHER_WORD_RE.search(text))
 
@@ -337,25 +344,27 @@ def _plan(domain: str, text: str):
 
     if domain == "weather":
         low = text.lower()
+        place = weather_place(low)      # a place the user NAMED beats the household default
+        loc = {"location": place} if place else {}
         # Advice questions get a DIRECT yes/no answer, not a forecast dump.
         if re.search(r"\bumbrella\b|\brain(coat)?\b|will\s+it\s+rain|going\s+to\s+rain", low):
-            return ("weather", {"advice": "rain"}, "read")
+            return ("weather", {"advice": "rain", **loc}, "read")
         if re.search(r"\bjacket\b|\bcoat\b|\bjumper\b|what\s+should\s+i\s+wear|do\s+i\s+need\s+a", low):
-            return ("weather", {"advice": "warmth"}, "read")
+            return ("weather", {"advice": "warmth", **loc}, "read")
         # "how hot is it going to get today" / "what's the high" / "how cold tonight":
         # lead with the asked-for number, short (voice). Checked BEFORE the bare
         # warm/cold advice below, which would answer a jacket yes/no to "how cold".
         from weather_speech import classify_weather_ask
         ask = classify_weather_ask(low)
         if ask is not None and (ask.focus in ("high", "low", "outlook") or ask.day):
-            return ("weather", {"focus": ask.focus, "day": ask.day, "forecast": ask.action == "forecast"}, "read")
+            return ("weather", {"focus": ask.focus, "day": ask.day, "forecast": ask.action == "forecast", **loc}, "read")
         if re.search(r"\bwarm(ly)?\b|\bcold\b", low):
-            return ("weather", {"advice": "warmth"}, "read")
+            return ("weather", {"advice": "warmth", **loc}, "read")
         # Otherwise: forecast for time-shifted questions, current for "right now".
         fc = bool(re.search(
             r"\b(later|tonight|tomorrow|this\s+week|weekend|forecast|will\s+it|"
             r"going\s+to|gonna|sunny)\b", low))
-        return ("weather", {"forecast": fc}, "read")
+        return ("weather", {"forecast": fc, **loc}, "read")
     if domain == "time":
         det = detect_intent(text, log_miss=False)
         name = det.name if det and det.name in ("time_query", "date_query") else "time_query"
