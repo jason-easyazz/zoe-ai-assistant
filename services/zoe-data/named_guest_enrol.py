@@ -54,6 +54,7 @@ class _Ticket:
     panel_id: str
     name: str
     expires: float
+    forgotten_at_issue: bool = False     # the member asked to learn a name they had forgotten: an explicit re-teach
 
 
 _TICKETS: dict[str, _Ticket] = {}
@@ -63,11 +64,12 @@ def reset() -> None:
     _TICKETS.clear()
 
 
-def issue_ticket(owner_user_id: str, panel_id: str, name: str, *, ttl_s: float = TICKET_TTL_S) -> str:
+def issue_ticket(owner_user_id: str, panel_id: str, name: str, *, ttl_s: float = TICKET_TTL_S,
+                 forgotten_at_issue: bool = False) -> str:
     for k in [k for k, t in _TICKETS.items() if t.expires <= time.monotonic() or t.panel_id == panel_id]:
         _TICKETS.pop(k, None)                       # one live ticket per panel; expired ones go
     tid = secrets.token_urlsafe(18)
-    _TICKETS[tid] = _Ticket(owner_user_id, panel_id, name, time.monotonic() + ttl_s)
+    _TICKETS[tid] = _Ticket(owner_user_id, panel_id, name, time.monotonic() + ttl_s, forgotten_at_issue)
     return tid
 
 
@@ -135,6 +137,15 @@ async def store_profile(payload: dict, caller: dict) -> dict:
         vec = None
     if vec is None:
         raise GuestError("invalid embedding for this model")
+    import memory_forgotten as mf
+
+    try:
+        forgotten_now = await mf.matches(t.owner_user_id, t.name, strict=True)
+    except Exception as exc:  # noqa: BLE001 - the ledger cannot answer: nothing is stored
+        raise GuestError("the forget ledger is unavailable; nothing was stored", 503) from exc
+    if forgotten_now and not t.forgotten_at_issue:
+        # The member forgot this name AFTER the enrolment began (review #2341): the pending upload must not undo that forget.
+        raise GuestError("that name was forgotten after the enrolment began; nothing was stored", 409)
     import contacts_store as cs
     import omi_voices
     from db_compat import get_compat_db
@@ -163,13 +174,12 @@ async def store_profile(payload: dict, caller: dict) -> dict:
             (str(uuid.uuid4()), t.owner_user_id, person["id"], model_id, CHANNEL, blob,
              max(1, min(int(payload.get("sample_count") or 1), 16)), now, now, now, omi_voices.KEEP_UNTIL_FORGOTTEN))
         await db.commit()
-    try:
-        # The member's explicit re-teach: a name they once forgot is theirs to bring back (AFTER the store succeeded, as the ledger asks).
-        import memory_forgotten as mf
-
-        await mf.release(t.owner_user_id, person["name"])
-    except Exception as exc:  # noqa: BLE001 - the shield stays; the guest is then simply not matched
-        logger.warning("named_guests: forget-ledger release failed: %s", type(exc).__name__)
+    if t.forgotten_at_issue:
+        try:
+            # The member's explicit re-teach: they asked to learn a name they had forgotten (AFTER the store, as the ledger asks).
+            await mf.release(t.owner_user_id, person["name"])
+        except Exception as exc:  # noqa: BLE001 - the shield stays; the guest is then simply not matched
+            logger.warning("named_guests: forget-ledger release failed: %s", type(exc).__name__)
     logger.info("NAMED_GUEST enrolled=1 linked_existing=%d", 0 if person.get("created") else 1)
     return dict(ok=True, guest_id=person["id"], display_name=person["name"], model_id=model_id)
 
@@ -235,10 +245,13 @@ async def start_enrolment(owner: str, name: str, panel_id: str) -> bool:
         clips = speaker_models.clips_needed()
         script = ve.script_for("en", name, clips)
         script.update((k, v.replace("{name}", name)) for k, v in (lex("en").get("script") or {}).items())
+        import memory_forgotten as mf
+
+        forgotten = await mf.matches(owner, name, strict=True)      # a ledger outage raises: nothing is queued
         async with get_compat_db() as db:
             if panel_id not in await ve._device_panels(db):
                 return False
-            ticket = issue_ticket(owner, panel_id, name)
+            ticket = issue_ticket(owner, panel_id, name, forgotten_at_issue=forgotten)
             await voice_announce.enqueue_command(
                 db, user_id=owner, panel_id=panel_id, trigger_type="voice_enroll",
                 command=dict(name=name, lang="en", script=script, clips=clips, speaker_model=speaker_models.speaker_mode(),
@@ -246,6 +259,19 @@ async def start_enrolment(owner: str, name: str, panel_id: str) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("named_guests: enrolment not queued: %s", type(exc).__name__)
+        return False
+
+
+async def _verified_here(uid: str, speaker_verified: Optional[bool], panel_id: str) -> bool:
+    """POSITIVE proof the asker is this member at this panel: a voice the server accepted, or this member's FRESH PIN sign-in on
+    this panel (review #2341: "no verdict" alone is never authorisation). Fails closed."""
+    if speaker_verified is True:
+        return True
+    try:
+        import biometric_scope
+
+        return bool(uid) and await biometric_scope._fresh_panel_member(panel_id) == uid
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -277,6 +303,8 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
                 return None                    # "forget <word>" that names none of my guests is not this tier's
             if gid is None:
                 reply = _say("forget_none", name=name)
+            elif (channel or "") in ("voice", "livekit") and not await _verified_here(uid, speaker_verified, (panel_id or "").strip()):
+                reply = _say("unverified")            # at the panel, erasing a guest needs the same positive proof as learning one
             else:
                 try:
                     import named_guest_memory
@@ -288,6 +316,8 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
                     reply = _say("forget_fail", name=name)
         elif (channel or "") not in ("voice", "livekit") or not (panel_id or "").strip():
             reply = _say("no_panel")
+        elif not await _verified_here(uid, speaker_verified, (panel_id or "").strip()):
+            reply = _say("unverified")
         else:
             from db_compat import get_compat_db
 
