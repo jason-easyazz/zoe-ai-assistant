@@ -266,3 +266,15 @@ delete a contact yet, so they are still in your contacts. You can remove them fr
 `write_receipts.record(user_id, "contact_removed", ...)` after the row is soft-deleted, and this line can go. Pinned by
 `tests/test_qa5_memory_fixes.py`.
 
+
+## A queued capture is an honest memory claim (QA round 6a, 2026-11-08)
+
+The first self-introduction ("Will you remember me?", a family intro) was answered "I didn't manage to save that" while the rows
+landed ~70 s later: the brain's "I'll remember that" had no `memory` receipt because the save is the POST-turn capture (regex
+extractor, turn digest, person extractors), which runs after the reply. `write_claim_guard.note_pending_capture(user_id, text)` is
+called where the turn begins (`brain_dispatch._claim_guarded` / `_claim_guarded_text`) and records a `memory` receipt with source
+`pending_capture`, so a memory or note claim on a turn the capture will read is honest. Nothing is recorded for a guest or
+unrecognised voice (no durable memory pass runs), an off-the-record turn, a forget turn (it gets the forget line), a recap question
+("did you save ...", which asks about earlier writes) or words shorter than the digest reads (4). It never vouches for a list,
+calendar, reminder or forget claim. If the capture then fails it is counted and logged (`memory pass ... FAILED`), as before.
+Pinned by `tests/test_qa6a_memory_fixes.py`.

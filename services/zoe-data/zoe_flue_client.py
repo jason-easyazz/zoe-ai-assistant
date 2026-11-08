@@ -1220,6 +1220,13 @@ _CHALLENGE_RULE = (
     "If none does, say plainly that you don't have that noted and ask them to tell you again. Never describe something they said, "
     "or a past conversation, that these notes do not contain."
 )
+# QA round 6a: "what did I say I'd be doing today" got "You mentioned this morning that you're the head chef" - a time and an occasion
+# attached to a fact whose row carries neither. A bullet shows when it was said only if it carries a bracketed date (recall_evidence);
+# the rule rides INSIDE the block, so it holds on every recall turn without touching the pinned persona text.
+_WHEN_RULE = (
+    "A note says when it was told only if a date is shown on it. Never say when the user said or did something (\"this morning\", "
+    "\"yesterday\", \"last week\") unless the note shows it; otherwise say what is noted without a time."
+)
 _CHALLENGE_EMPTY = "(Nothing stored matches what the user is asking about.)"
 
 
@@ -1326,7 +1333,7 @@ async def _recall_context_block(message: str, user_id: str) -> str:
         except Exception as exc:  # noqa: BLE001 - the guard must never break a turn
             logger.debug("role guess guard setup failed (non-fatal): %s", type(exc).__name__)
     body = f"{packet}\n{rule}" if rule else packet
-    return f"{_recall_block_open()}\n{body}\n{_RECALL_BLOCK_CLOSE}"
+    return f"{_recall_block_open()}\n{body}\n{_WHEN_RULE}\n{_RECALL_BLOCK_CLOSE}"
 
 
 # ── Personalisation hop (ZOE_PERSONALISATION_HOP, default ON) ───────────────

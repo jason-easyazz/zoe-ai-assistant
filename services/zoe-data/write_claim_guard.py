@@ -721,6 +721,35 @@ def supported(claim: Claim, user_id: Optional[str], started: float, *, user_text
     return all(write_receipts.has(user_id, since, kind, turn=turn) for kind in claim.kinds)
 
 
+PENDING_CAPTURE_MIN_WORDS = 4      # the turn digest reads nothing shorter (memory_digest.run_turn_digest)
+
+
+def note_pending_capture(user_id: Optional[str], user_text: str) -> bool:
+    """A turn the post-turn memory capture (regex extractor, turn digest, person extractors) WILL read is, for the guard, a turn
+    that has a memory write queued: "I'll remember that" on it is a promise the capture keeps seconds later, not a lie (QA round
+    6a: the first self-introduction and "will you remember me?" were answered "I didn't manage to save that" while the rows
+    landed ~70 s on). Records a ``memory`` receipt (source ``pending_capture``) for the current turn. Nothing is recorded for a
+    guest / unrecognised voice (no durable memory pass runs), an off-the-record turn, a forget turn, or words too short to digest.
+    The receipt backs the memory and note kinds only - a list, calendar or forget claim still needs its own writer's receipt.
+    Never raises; True when a receipt was recorded."""
+    try:
+        if mode() == "off" or len((user_text or "").split()) < PENDING_CAPTURE_MIN_WORDS or is_recap_question(user_text):
+            return False        # (a recap question asks about EARLIER writes: this turn's queued capture vouches for none)
+        from user_filters import is_unidentified
+
+        if is_unidentified(user_id):
+            return False
+        import memory_provenance
+        import turn_forget
+
+        if memory_provenance.is_off_record(user_id or "", user_text) or turn_forget.is_forget_turn(user_text):
+            return False
+        write_receipts.record(user_id, "memory", "", "pending_capture")
+        return True
+    except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn
+        return False
+
+
 def _log_blocked(claim: Claim, user_id: Optional[str], lane: str, action: str) -> None:
     # Counts and kinds only: the sentence is household conversation and stays out of the log.
     logger.warning("WRITE_CLAIM_BLOCKED action=%s lane=%s user=%s lang=%s kinds=%s reason=no_receipt",
