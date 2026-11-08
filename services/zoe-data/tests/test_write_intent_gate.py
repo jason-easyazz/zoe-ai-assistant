@@ -57,15 +57,22 @@ def test_planning_talk_never_writes_but_an_explicit_add_still_does():
     assert wig.check("u1", "calendar_create", {"title": "dinner", "date": "friday", "time": "7pm"}) is None
 
 
-def test_affirmation_and_follow_up_are_allowed_but_only_after_an_ask():
+def test_affirmation_needs_zoes_own_offer_and_follow_up_needs_a_recent_ask():
     wig.note_turn("u1", PLANNING)
-    assert wig.check("u1", "calendar_create", {"title": "x"})                      # blocked
-    wig.note_turn("u1", "yes please")                                                # Zoe offered; the person agrees
+    wig.note_reply("u1", "That is a lot to fit in. Want me to add those to your calendar?")
+    wig.note_turn("u1", "yes please")                                                # agreeing to Zoe's own offer
     assert wig.check("u1", "calendar_create", {"title": "x"}) is None
+    wig.reset_state()
+    wig.note_turn("u1", PLANNING)
+    wig.note_turn("u1", "yes")                                                       # nothing was offered: a stray "yes" is no ask
+    assert wig.check("u1", "calendar_create", {"title": "x"})
     wig.reset_state()
     wig.note_turn("u2", "add dinner on friday")
     wig.note_turn("u2", "7pm")                                                       # the answer to "what time?"
     assert wig.check("u2", "calendar_create", {"title": "dinner"}) is None
+    wig.note_turn("u2", "honestly the whole week is a mess and i do not know where to start with any of it")   # another topic
+    wig.note_turn("u2", "7pm")
+    assert wig.check("u2", "calendar_create", {"title": "dinner"})                  # the write conversation is over
     wig.reset_state()
     wig.note_turn("u3", "thursday at 7pm")                                           # a short line with NO earlier ask
     assert wig.check("u3", "calendar_create", {"title": "dinner"})

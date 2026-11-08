@@ -35,13 +35,18 @@ logger = logging.getLogger(__name__)
 
 FLAG = "ZOE_WRITE_INTENT_GATE"
 _TURN_TTL_S = 300.0
-_FOLLOWUP_TTL_S = 600.0
+_FOLLOWUP_TTL_S = 180.0
 _FOLLOWUP_MAX_WORDS = 8
 _MAX = 256
 #: user id -> (message, noted at)
 _turns: "dict[str, tuple[str, float]]" = {}
 #: user id -> when a turn last asked for a calendar write (a short answer to Zoe's follow-up question rides on it)
 _asked: "dict[str, float]" = {}
+#: user id -> when Zoe's own last reply offered to put something on the calendar ("Want me to add those?")
+_offered: "dict[str, float]" = {}
+_OFFER_RX = re.compile(
+    r"\b(?:want|like)\s+me\s+to\s+(?:add|put|book|schedule|pencil)\b|\b(?:shall|should|can|could)\s+i\s+(?:add|put|book|schedule)\b|"
+    r"\bi\s+(?:can|could)\s+(?:add|put|book|schedule)\s+(?:it|that|those|them|these)\b", re.IGNORECASE)
 
 
 def mode() -> str:
@@ -141,9 +146,24 @@ def note_turn(user_id: str, message: str) -> None:
         if asks_to_write_calendar(text):
             _asked.pop(uid, None)
             _asked[uid] = now
-        for d in (_turns, _asked):
+        elif len(text.split()) > _FOLLOWUP_MAX_WORDS:
+            _asked.pop(uid, None)        # a long turn with no write verb is another topic: the write conversation is over
+        for d in (_turns, _asked, _offered):
             while len(d) > _MAX:
                 d.pop(next(iter(d)))
+    except Exception:  # noqa: BLE001
+        return
+
+
+def note_reply(user_id: str, reply: str) -> None:
+    """Record whether Zoe's reply OFFERED a calendar write, so a bare "yes" to it is an ask. Called by ``reply_polish``. Never raises."""
+    try:
+        uid = (user_id or "").strip()
+        if not uid or mode() == "off":
+            return
+        _offered.pop(uid, None)
+        if _OFFER_RX.search(str(reply or "")):
+            _offered[uid] = time.monotonic()
     except Exception:  # noqa: BLE001
         return
 
@@ -158,16 +178,20 @@ def _noted(user_id: str) -> Optional[str]:
 def reset_state() -> None:
     _turns.clear()
     _asked.clear()
+    _offered.clear()
 
 
 def _calendar_asked(uid: str, text: str) -> bool:
     if asks_to_write_calendar(text):
         return True
     words = text.split()
-    if len(words) <= _FOLLOWUP_MAX_WORDS and _AFFIRM_RX.match(text):
-        return True
-    asked_at = _asked.get(uid)
-    return bool(asked_at is not None and len(words) <= _FOLLOWUP_MAX_WORDS and time.monotonic() - asked_at <= _FOLLOWUP_TTL_S)
+    if len(words) > _FOLLOWUP_MAX_WORDS:
+        return False
+    now = time.monotonic()
+    offered_at, asked_at = _offered.get(uid), _asked.get(uid)
+    if _AFFIRM_RX.match(text) and offered_at is not None and now - offered_at <= _FOLLOWUP_TTL_S:
+        return True                  # "yes please" to Zoe's own offer
+    return bool(asked_at is not None and now - asked_at <= _FOLLOWUP_TTL_S)   # a short answer inside a write conversation
 
 
 def which_list_question(item: str) -> str:
@@ -202,4 +226,5 @@ def check(user_id: str, intent: str, slots: dict) -> Optional[str]:
         logger.info("WRITE_INTENT_GATE mode=%s intent=%s would_refuse=1", m, intent)
         return reason if m == "on" else None
     except Exception:  # noqa: BLE001 - a gate is optional; the write path is not
+        logger.warning("WRITE_INTENT_GATE check failed; allowing", exc_info=True)
         return None

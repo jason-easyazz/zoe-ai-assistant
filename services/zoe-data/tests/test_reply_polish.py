@@ -42,6 +42,10 @@ def _run(coro):
     ("I'll use the add_calendar_event tool to do that. Done.", "I'll do that. Done."),
     ("I'd unlock the calendar ability and then show your week.", "I'd show your week."),
     ("I can check show_calendar for Thursday.", "I can check show calendar for Thursday."),
+    # a reply that is ONLY plumbing is dropped, never passed through (cross-review #2347)
+    ("I'll use the home tool.", ""),
+    ("I'll use the home tool. Done.", "Done."),
+    ("Activate the calendar ability. Your event is saved.", "Your event is saved."),
     # negative controls: ordinary words are untouched
     ("The home stretch is the hard part and the tool kit is in the shed.", "The home stretch is the hard part and the tool kit is in the shed."),
     ("I'd turn on the kitchen light.", "I'd turn on the kitchen light."),
@@ -134,6 +138,8 @@ def test_seam_wraps_the_stream_and_off_does_not(monkeypatch):
     ("when is mums appointment", "their_event"),
     ("what time is my dentist appointment", "my_event"),
     # negative controls: the clock, a world event, a plain activity
+    ("when is chris' exam", "their_event"),
+    ("when is christmas dinner", ""), ("when is physics exam", ""),
     ("what time is it", ""), ("what time does the game start", ""), ("what time does tennis practice start", ""), ("when is the next flight", ""),
 ])
 def test_event_time_shapes(text, kind):
@@ -147,3 +153,29 @@ def test_time_expert_hands_a_personal_question_to_the_brain_but_answers_the_cloc
     assert ed._plan("time", "when is jonahs learner test?") is None
     plan = ed._plan("time", "what time is it")
     assert plan is not None and plan[0] == "time_query" and plan[2] == "read"
+
+
+def test_a_failing_sentence_is_passed_through_not_duplicated(monkeypatch):
+    real = rp.scrub
+
+    def flaky(sentence):
+        if "boom" in sentence:
+            raise RuntimeError("injected")
+        return real(sentence)
+
+    monkeypatch.setattr(rp, "scrub", flaky)
+    got = "".join(_collect(["First one. The boom sentence. ", "Last one."]))
+    assert got == "First one. The boom sentence. Last one."
+
+
+def test_stream_equals_batch_for_arbitrary_cuts():
+    import random
+
+    reply = "I'd activate the home ability and then use the home tool to turn it on. Fine. Is there anything else? Does that make sense?"
+    want = rp.polish(reply, "hi", True)
+    rnd = random.Random(7)
+    for _ in range(60):
+        cuts = sorted(rnd.sample(range(1, len(reply)), rnd.randint(1, 12)))
+        parts = [reply[a:b] for a, b in zip([0] + cuts, cuts + [len(reply)])]
+        p = rp.PolishStream(rp.closer_lexicon_for("hi"), True)
+        assert "".join(p.feed(x) for x in parts) + p.finish() == want

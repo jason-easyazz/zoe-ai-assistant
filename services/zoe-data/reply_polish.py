@@ -4,7 +4,7 @@
    the home ability and then use the home tool to turn on the kitchen light." The doctrine (labs/flue-zoe-brain-2x src/doctrines.ts) now
    says never to name tools, abilities or groups; this is the deterministic backstop. ``scrub`` removes "activate the <group> ability",
    "use the <group|tool> tool" and humanises a raw tool identifier (``show_calendar`` -> "show calendar"). A sentence the scrub empties is
-   dropped; a reply is never emptied (the original is kept when everything would go).
+   dropped.
 2. **Not every reply ends on a question.** "Nearly every reply ends on a question" (QA round 4: about 80 percent of the feelings turns).
    When the PREVIOUS reply of this conversation already ended on a question, a generic closing question ("How are you feeling?", "Is there
    anything else?", "Does that make sense?", from ``lexicons_data/<lang>.json`` "mirror" generic_closers + "question_cap" closers) at the end of
@@ -61,10 +61,10 @@ TOOL_NAMES = (
 )
 _G = r"(?:" + "|".join(GROUPS) + r")"
 _ACTIVATE_RX = re.compile(
-    r"\b(?:activate|activating|unlock|unlocking|enable|enabling)\s+(?:the\s+)?" + _G + r"\s+(?:abilit(?:y|ies)|group|tools?)\b"
+    r"\b(?:activate|activating|unlock|unlocking|enable|enabling|access|accessing|open|opening|load|loading|start|starting|invoke|invoking)\s+(?:the\s+)?" + _G + r"\s+(?:abilit(?:y|ies)|group|tools?)\b"
     r"(?:\s*,)?(?:\s+and)?(?:\s+then)?\s*", re.IGNORECASE)
 _USE_RX = re.compile(
-    r"\b(?:use|using|call|calling|run|running|trigger|triggering)\s+(?:the\s+)?(?:" + _G + r"|"
+    r"\b(?:use|using|call|calling|run|running|trigger|triggering|invoke|invoking|access|accessing|need|needs)\s+(?:the\s+)?(?:" + _G + r"|"
     + "|".join(n.replace("_", r"[\s_]") for n in TOOL_NAMES if "_" in n) + r")\s+(?:tool|function|abilit(?:y|ies))\b(?:\s+to\b)?\s*",
     re.IGNORECASE)
 _IDENT_RX = re.compile(r"\b(" + "|".join(n for n in TOOL_NAMES if "_" in n) + r")\b")
@@ -128,6 +128,9 @@ def note_reply(user_id: str, session_id: str, text: str) -> None:
     key = ((user_id or "").strip(), session_id or "")
     _ended_q.pop(key, None)
     _ended_q[key] = (text or "").rstrip().endswith("?")
+    import write_intent_gate
+
+    write_intent_gate.note_reply(user_id, text)
     while len(_ended_q) > _MAX_SESSIONS:
         _ended_q.popitem(last=False)
 
@@ -151,6 +154,8 @@ class PolishStream:
         self.dropped = 0
 
     def _release(self, text: str) -> str:
+        if not self._out:
+            text = text.lstrip()      # a dropped first sentence must not leave the next one's leading space
         if text:
             self._out.append(text)
         return text
@@ -168,11 +173,9 @@ class PolishStream:
             clean = scrub(body)
             if clean != body:
                 self.scrubbed += 1
-                if clean:
-                    text = lead + clean + tail
-                elif self._out:
-                    return out        # only plumbing, and something was already said: dropped
-                # else: it would leave the reply empty - the original stays
+                if not clean:
+                    return out        # only plumbing: dropped (a plumbing name never reaches the person)
+                text = lead + clean + tail
         if self.cap and self._substance and text.rstrip().endswith("?") and is_closing_question(text, self.lex):
             self._held = text
             return out
@@ -188,7 +191,12 @@ class PolishStream:
             if end < 0:
                 return out
             sent, self._buf = self._buf[:end], self._buf[end:]
-            out += self._sentence(sent)
+            try:
+                out += self._sentence(sent)
+            except Exception:  # noqa: BLE001 - a bad sentence goes out as it came; the rest of the reply is unaffected
+                logger.warning("REPLY_POLISH sentence failed; passed through", exc_info=True)
+                out += self._release(self._held + sent)
+                self._held = ""
 
     def finish(self) -> str:
         out = ""
@@ -207,8 +215,7 @@ class PolishStream:
 def polish(text: str, message: str = "", previous_ended_on_question: bool = False) -> str:
     """The whole reply, polished. Pure; the batch form of :class:`PolishStream`."""
     p = PolishStream(closer_lexicon_for(message), previous_ended_on_question)
-    out = p.feed(text) + p.finish()
-    return out if out.strip() else (text or "")
+    return p.feed(text) + p.finish()
 
 
 async def filter_stream(deltas: AsyncIterator[str], message: str, user_id: str = "", session_id: str = "") -> AsyncIterator[str]:
@@ -232,7 +239,7 @@ async def filter_stream(deltas: AsyncIterator[str], message: str, user_id: str =
                 out = stream.feed(delta)
             except Exception:  # noqa: BLE001
                 logger.warning("REPLY_POLISH failed; passing through", exc_info=True)
-                out, stream = (stream._buf + stream._held + delta), None
+                out, stream = (stream._held + stream._buf), None
             if m == "shadow":
                 shadow_text.append(delta)
                 yield delta

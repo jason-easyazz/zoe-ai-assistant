@@ -13319,6 +13319,29 @@
         },
         "typed_env": false
       },
+      "ZOE_REPLY_POLISH": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/reply_polish.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "on",
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_REPO_ROOT": {
         "defaults": [
           "''",
@@ -17677,6 +17700,29 @@
         },
         "typed_env": false
       },
+      "ZOE_WRITE_INTENT_GATE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/write_intent_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "on",
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_WS_IDLE_TIMEOUT_SECONDS": {
         "defaults": [
           "120.0"
@@ -20685,9 +20731,7 @@
     }
   },
   "registry_unread": [
-    "ZOE_REPLY_POLISH",
     "ZOE_SELF_REVIEW_MAX_CALLS",
-    "ZOE_SELF_REVIEW_MAX_TOKENS",
-    "ZOE_WRITE_INTENT_GATE"
+    "ZOE_SELF_REVIEW_MAX_TOKENS"
   ]
 }
