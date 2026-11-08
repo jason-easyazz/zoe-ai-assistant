@@ -2167,8 +2167,8 @@ async def _previous_assistant_message(user_id: str) -> Optional[str]:
 
 
 async def ack_answers_offer(intent: "Intent", user_id: str, previous: Optional[str] = None) -> bool:
-    """True when ``intent`` is the canned "ok / sounds good" acknowledgement AND Zoe's previous reply ENDED in an offer
-    (``conversation_cues.ends_with_offer``, lexicon data). Only the ``ack`` kind: "thanks" after an offer is a polite no.
+    """True when ``intent`` is the canned "ok / sounds good" acknowledgement (or a bare "nah") AND Zoe's previous reply ENDED
+    in an offer (``conversation_cues.ends_with_offer``, lexicon data) or any question (a trailing "?"). Only the ``ack`` kind: "thanks" after an offer is a polite no.
     The cheap checks come first, so every other turn pays nothing; an unknown previous reply never binds (fail closed).
     ``previous`` is the caller's own copy of Zoe's last reply (a lane that does not persist its turns, like the voice
     WebSocket); without it the stored transcript is read."""

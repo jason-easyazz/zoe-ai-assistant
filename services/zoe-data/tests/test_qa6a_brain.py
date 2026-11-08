@@ -23,7 +23,8 @@ pytestmark = pytest.mark.ci_safe
 @pytest.mark.parametrize("text", [
     "and chicken, whats the safe internal temp", "and what temp", "what temp do i cook lamb at", "oven temp for a roast",
     "what temperature should the beef reach", "whats the core temp for pork", "what temp for the salmon",
-    "what's the internal temperature of cooked steak",
+    "what's the internal temperature of cooked steak", "what temp does chicken need to reach", "temperature of the roast",
+    "what is the roast temperature", "what temperature should i cook chicken tonight",
 ])
 def test_cooking_temperature_is_not_weather(text):
     assert is_food_temperature(text) is True
@@ -33,6 +34,7 @@ def test_cooking_temperature_is_not_weather(text):
 @pytest.mark.parametrize("text", [
     "what's the temp outside", "temperature today", "what's the temperature", "how hot is it going to get today",
     "what's the weather", "what's the temperature outside for the roast tonight", "is it cold outside",
+    "what temp will it be today", "what's the temperature tonight",
 ])
 def test_negative_control_real_weather_still_weather(text):
     assert is_food_temperature(text) is False
@@ -43,8 +45,25 @@ def test_negative_control_real_weather_still_weather(text):
 async def test_expert_dispatch_sends_food_temp_to_the_brain(monkeypatch, text):
     monkeypatch.setenv("ZOE_EXPERT_ENABLED", "1")
     monkeypatch.setenv("ZOE_EXPERT_MODE", "active")
-    # the router head scored it as weather at 0.87, exactly as live: the guard must still decline
-    assert await expert_dispatch.dispatch("weather", text, {"score": 0.87, "user_id": "demo_user"}) is None
+    planned = []
+    monkeypatch.setattr(expert_dispatch, "_plan", lambda d, t: planned.append(t) or None)
+    ctx = {"score": 0.87, "user_id": "demo_user"}      # the router head scored it as weather at 0.87, exactly as live
+    assert await expert_dispatch.dispatch("weather", text, ctx) is None
+    assert planned == []                               # the GUARD declined: the weather plan was never even reached
+    # control: with the guard disabled the same text DOES reach the weather plan (so the assertion above can fail)
+    monkeypatch.setattr(expert_dispatch, "is_food_temperature", lambda _t: False)
+    await expert_dispatch.dispatch("weather", text, ctx)
+    assert planned == [text]
+
+
+@pytest.mark.asyncio
+async def test_negative_control_real_weather_reaches_the_plan(monkeypatch):
+    monkeypatch.setenv("ZOE_EXPERT_ENABLED", "1")
+    monkeypatch.setenv("ZOE_EXPERT_MODE", "active")
+    planned = []
+    monkeypatch.setattr(expert_dispatch, "_plan", lambda d, t: planned.append(t) or None)
+    await expert_dispatch.dispatch("weather", "what's the temp outside", {"score": 0.87, "user_id": "demo_user"})
+    assert planned == ["what's the temp outside"]
 
 
 def test_expert_plan_still_plans_real_weather():
@@ -57,6 +76,7 @@ def test_expert_plan_still_plans_real_weather():
 @pytest.mark.parametrize("text,place", [
     ("weather in perth", "Perth"), ("what's the weather in Port Hedland tomorrow", "Port Hedland"),
     ("whats the forecast for broome", "Broome"), ("is it going to rain in albany today", "Albany"),
+    ("weather in perth for tomorrow", "Perth"), ("weather in mount isa this week", "Mount Isa"),
 ])
 def test_weather_place_is_the_named_place(text, place):
     assert weather_place(text) == place
@@ -64,7 +84,8 @@ def test_weather_place_is_the_named_place(text, place):
 
 @pytest.mark.parametrize("text", [
     "what's the weather", "weather today", "how's the weather in the kitchen", "temperature in the house",
-    "is it cold in here", "oven temp for roast",
+    "is it cold in here", "oven temp for roast", "weather for roast", "weather in early morning", "weather for work tomorrow",
+    "weather in living room", "weather in front yard", "weather in summer tomorrow",
 ])
 def test_weather_place_negative_controls(text):
     assert weather_place(text) == ""

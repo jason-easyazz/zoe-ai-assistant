@@ -89,14 +89,17 @@ _NOT_WEATHER_RE = re.compile(
 _WIDE_TERMS = ("forecast", "week", "next few days")
 
 # A COOKING / food temperature is never the weather (QA 2026-11-08: "what's the safe internal temp" for chicken and the
-# follow-up "and what temp" for lamb both got today's forecast). An outdoor word always wins, so "what's the temp outside"
-# and "temperature today" stay weather.
-_OUTDOOR_WORD_RE = re.compile(r"\b(?:weather|forecast|outside|outdoors?|out\s+there|today|tomorrow|tonight|this\s+week|right\s+now)\b")
+# follow-up "and what temp" for lamb both got today's forecast). A real weather word (outside, weather, forecast) wins, so
+# "what's the temp outside" stays weather; a bare day word does not ("what temp should I cook chicken tonight" is cooking).
+_OUTDOOR_WORD_RE = re.compile(r"\b(?:weather|forecast|outside|outdoors?|out\s+there|this\s+week)\b")
+_FOOD = (r"chicken|lamb|beef|pork|steak|fish|turkey|mince|sausages?|burgers?|eggs?|rice|salmon|ham|roast|leftovers?|meat|"
+         r"casserole|bread|cake|pie|duck|prawns?|bacon|kebabs?|curry|soup|stew")
 _FOOD_TEMP_RE = re.compile(
     r"\b(?:internal|core|safe|safely|cooking|roasting|baking|oven|grill|bbq|barbecue|reheat\w*|doneness|done)\s+temp(?:erature)?s?\b"
-    r"|\btemp(?:erature)?s?\s+(?:for|to)\s+(?:cook\w*|bak\w*|roast\w*|grill\w*|reheat\w*|serv\w*|stor\w*|keep\w*|"
-    r"(?:the\s+)?(?:chicken|lamb|beef|pork|steak|fish|turkey|mince|sausages?|burgers?|eggs?|rice|salmon|ham|roast|leftovers?))\b"
+    r"|\btemp(?:erature)?s?\s+(?:for|to)\s+(?:cook\w*|bak\w*|roast\w*|grill\w*|reheat\w*|serv\w*|stor\w*|keep\w*)\b"
+    rf"|\b(?:{_FOOD})\b.*\btemp(?:erature)?s?\b|\btemp(?:erature)?s?\b.*\b(?:{_FOOD})\b"
     r"|\bwhat\s+temp(?:erature)?s?\s+(?:do|should|would|can|could|to)\b"
+    r"|\btemp(?:erature)?s?\b.*\b(?:need|needs|should|must)\s+to\s+(?:reach|hit|get\s+to|be\s+(?:cooked|at|heated))\b"
     # a bare follow-up ("and what temp") carries no weather scope at all: it continues the cooking turn before it
     r"|^\W*(?:(?:and|so|ok|okay|but|then)\s+)*(?:what|which)(?:\s+about)?\s+temp(?:erature)?s?\W*$"
 )
@@ -109,16 +112,19 @@ def is_food_temperature(text: str) -> bool:
 
 
 # "weather in Perth" / "what's the forecast for Broome tomorrow": the place the user NAMED (never the household default).
-_PLACE_TAIL = r"(?:\s+(?:today|tomorrow|tonight|right\s+now|now|this\s+(?:week|weekend|morning|afternoon|evening)|please|at\s+the\s+moment))*"
+_PLACE_TAIL = (r"(?:\s+(?:for\s+(?:the\s+)?)?(?:today|tomorrow|tonight|right\s+now|now|the\s+(?:week|weekend)|"
+               r"this\s+(?:week|weekend|morning|afternoon|evening)|please|at\s+the\s+moment))*")
 _PLACE_RE = re.compile(
     rf"\b(?:weather|forecast|temp(?:erature)?|raining|rain|hot|cold|warm|windy)\b.*?\b(?:in|for|at)\s+"
     rf"(?P<place>[a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){{0,2}}?){_PLACE_TAIL}\s*[?.!]*$"
 )
-_NOT_A_PLACE = frozenset({
-    "the", "a", "an", "my", "our", "your", "this", "that", "it", "here", "there", "town", "area", "home", "house", "inside",
-    "outside", "indoors", "outdoors", "the area", "case", "general", "morning", "afternoon", "evening", "oven", "fridge",
-    "freezer", "room", "kitchen", "garden", "yard", "car", "pool", "sun", "shade",
-})
+_NOT_A_PLACE = frozenset((
+    "the a an my our your this that it here there town area home house inside outside indoors outdoors case general morning "
+    "afternoon evening night day today tomorrow tonight week weekend early late summer winter spring autumn oven fridge freezer "
+    "room kitchen garden yard car pool sun shade living front back work school office garage dining laundry balcony patio shed "
+    "hall hallway attic basement cellar bedroom bathroom lounge roast bbq dinner lunch breakfast trip holiday picnic walk run "
+    "game party wedding event me us you them"
+).split())
 
 
 def weather_place(text: str) -> str:
@@ -130,9 +136,8 @@ def weather_place(text: str) -> str:
     if not m:
         return ""
     place = m.group("place").strip(" .'-")
-    first = place.split()[0] if place else ""
-    if not place or place in _NOT_A_PLACE or first in _NOT_A_PLACE:
-        return ""
+    if not place or any(tok in _NOT_A_PLACE or tok == "for" for tok in place.split()):
+        return ""      # ANY token of a room / time / purpose word means it is not a town ("living room", "early morning", "work")
     return place.title()
 
 
