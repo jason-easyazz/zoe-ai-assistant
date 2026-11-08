@@ -665,3 +665,44 @@ def test_forget_user_with_a_never_initialised_pool_is_nothing_to_erase_but_a_los
     monkeypatch.setattr(db_pool, "_ever_initialised", True)         # negative control: a LOST pool is not "nothing to erase"
     with pytest.raises(RuntimeError):
         run(mr.forget_user("ada_uid"))
+
+
+# ── entity forget: a liked-topic label that names a forgotten person ─────────────────────────────
+def test_erase_entity_deletes_topic_rows_naming_the_person_and_only_them(rdb):
+    put("ada_uid", "topic", "quinn s football")
+    put("ada_uid", "topic", "gardening")
+    put("ada_uid", "humour", "light")
+    put("bo_uid", "topic", "quinn s football")                 # another member's row is not this member's to scrub
+    run(mr.forget("ada_uid", "topic", "quinn s football"))     # a tombstone's slot still spells the label
+    put("ada_uid", "topic", "quinn s tennis")
+    assert run(mr.erase_entity("ada_uid", "Quinn")) == 2
+    left = {(e.slot, e.status) for e in run(mr.list_entries("ada_uid", include_forgotten=True))}
+    assert left == {("topic:gardening", "active"), ("humour", "active")}
+    assert len(run(mr.list_entries("bo_uid"))) == 1
+    assert run(mr.erase_entity("ada_uid", "")) == 0
+
+
+def test_erase_entity_fails_closed_on_a_store_error(rdb, monkeypatch):
+    @asynccontextmanager
+    async def boom(db=None):
+        raise RuntimeError("store down")
+        yield
+    monkeypatch.setattr(pl, "_db", boom)
+    with pytest.raises(RuntimeError):
+        run(mr.erase_entity("ada_uid", "Quinn"))
+
+
+def test_live_entries_withholds_a_forgotten_topic_and_all_topics_on_a_ledger_outage(rdb, monkeypatch):
+    import memory_forgotten as mf
+    put("ada_uid", "topic", "quinn s football")
+    put("ada_uid", "topic", "gardening")
+
+    async def names_quinn(uid, text, **_k):
+        return "quinn" in text
+    monkeypatch.setattr(mf, "matches", names_quinn)
+    assert [e.value for e in run(mr.live_entries("ada_uid"))] == ["gardening"]
+
+    async def outage(uid, text, **_k):
+        raise RuntimeError("ledger unavailable")
+    monkeypatch.setattr(mf, "matches", outage)
+    assert run(mr.live_entries("ada_uid")) == []
