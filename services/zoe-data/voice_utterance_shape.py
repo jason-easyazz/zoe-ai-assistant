@@ -412,6 +412,26 @@ def window_speaker_frame(payload: Mapping[str, Any] | None, transcript: str, ver
             "conversation_end": True}
 
 
+def skip_while_media_enabled() -> bool:
+    """``ZOE_FOLLOWUP_SKIP_WHILE_MEDIA`` (default OFF), read per call: drop no-wake-word window turns while media is playing."""
+    from typed_env import flag
+
+    return str(flag("ZOE_FOLLOWUP_SKIP_WHILE_MEDIA")).strip().lower() in ("1", "true", "yes", "on")
+
+
+def media_playing_frame(payload: Mapping[str, Any] | None, transcript: str, media_playing: bool, *,
+                        named_zoe: bool = False) -> dict | None:
+    """The ``skipped`` done frame for a no-wake-word window turn heard while media is playing (a television or music is the
+    likeliest source of "speech" then), else None. A turn that names Zoe stays answerable, like ``window_speaker_frame``."""
+    p = payload or {}
+    if not media_playing or p.get("window") not in WINDOWS:
+        return None
+    if named_zoe or _ZOE_NAME.search(transcript or ""):
+        return None
+    return {"done": True, "reply": "", "skipped": "not_addressed", "reason": "media_playing",
+            "conversation_end": True}
+
+
 def gate_frame(payload: Mapping[str, Any] | None, transcript: str, *,
                speculative: bool = False) -> dict | None:
     """The done frame that answers this turn WITHOUT running the brain, or None to proceed.

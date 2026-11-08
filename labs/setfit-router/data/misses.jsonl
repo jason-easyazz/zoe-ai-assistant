@@ -24,6 +24,12 @@
 {"text": "how old is my mum", "label": "people", "source": "own_fact_miss_2026-10-04"}
 {"text": "what's my sister's phone number", "label": "people", "source": "own_fact_miss_2026-10-04"}
 {"text": "when is my partner's birthday", "label": "people", "source": "own_fact_miss_2026-10-04"}
+{"text": "um, it's about 9:15, so probably soon", "label": "chat", "source": "clock_statement_miss_2026-11-05"}
+{"text": "uh, let me check, 7:05, so not long", "label": "chat", "source": "clock_statement_miss_2026-11-05"}
+{"text": "it's 10:30 already, I think we're nearly done", "label": "chat", "source": "clock_statement_miss_2026-11-05"}
+{"text": "yeah it's 6:40 now, so a bit longer", "label": "chat", "source": "clock_statement_miss_2026-11-05"}
+{"text": "oh it's 8:20, so probably tomorrow then", "label": "chat", "source": "clock_statement_miss_2026-11-05"}
+{"text": "what's the weather like tonight", "label": "weather", "source": "clock_statement_miss_2026-11-05"}
 {"text": "shone the lots", "label": "smart_home", "source": "garbled_light_2026-11-07"}
 {"text": "I've shone a lot", "label": "smart_home", "source": "garbled_light_2026-11-07"}
 {"text": "sound the lamp", "label": "smart_home", "source": "garbled_light_2026-11-07"}
