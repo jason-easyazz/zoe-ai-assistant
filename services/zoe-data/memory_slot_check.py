@@ -85,8 +85,10 @@ _DIETS = r"(?P<v>vegan|vegetarian|pescatarian|pescetarian|flexitarian|carnivore|
 #: the possessor before it ("User's wife is ...").
 _SLOT_RES: "dict[str, tuple[tuple[str, re.Pattern[str]], ...]]" = {
     "employer": (
+        # "works at/for X" / "works at/for: X" is the capture extractors' OWN template (memory_extractor, zoe_agent): the slash
+        # reads as the preposition, or every captured employer row is unkeyed (first shadow run, 2026-11-07: keyed=0)
         ("verb", re.compile(r"\b(?:works|work|is working|am working|are working|now works|still works|has started working|started working|has a job|got a job|"
-                            r"has a new job|started a new job|started a job)\s+(?:at|for|with)\s+" + _VALUE + _END)),
+                            r"has a new job|started a new job|started a job)\s+(?:at|for|with)(?:/(?:at|for))?:?\s+" + _VALUE + _END)),
         ("noun", re.compile(r"\b(?:job|work|workplace|employer) is (?:at |with )?" + _VALUE + _END)),
         ("verb", re.compile(r"\bis employed (?:by|at)\s+" + _VALUE + _END)),
     ),
@@ -147,7 +149,9 @@ _REPORTING = frozenset({"said", "says", "told", "tells", "thinks", "thought", "h
 _NOT_VALUES = frozenset({"home", "night", "nights", "weekends", "weekend", "it", "that", "this", "times", "fear", "hope", "peace",
                          "denial", "comfort", "luxury", "poverty", "harmony", "moment", "past", "present", "future",
                          "flat", "house", "apartment", "unit", "caravan", "tent", "share house", "town", "city", "country",
-                         "suburbs", "bubble", "hiding", "limbo", "pain", "silence"})
+                         "suburbs", "bubble", "hiding", "limbo", "pain", "silence",
+                         # a value-less capture ("User's wife is called"): the name was never said
+                         "called", "named"})
 
 
 def _subject(low: str, start: int, form: str) -> Optional[str]:
@@ -435,17 +439,45 @@ def apply_to_packet(user_id: str, facts: Sequence[Any], hits: Sequence[Any], rec
         return facts, hits, recent
 
 
+#: a slot WORD in a row ``slot_of`` did not read (counts only, in ``report``): "the row talks about work but no value parsed"
+_SLOT_HINT_RES = (
+    ("employer", re.compile(r"\b(?:works?|working|job|employer|employed)\b", re.I)),
+    ("home_city", re.compile(r"\b(?:lives?|living|moved|relocated|hometown)\b", re.I)),
+    ("partner", re.compile(r"\b" + _PARTNER_NOUN + r"|\bmarried\b", re.I)),
+    ("diet", re.compile(r"\b(?:vegan|vegetarian|pescatarian|pescetarian|flexitarian|keto|paleo|diet)\b", re.I)),
+)
+
+
 def report(rows: Iterable[Any], now: float) -> "dict[str, Any]":
     """The whole-store view for ONE member's rows: counts, the conflicts (ids + slot + action), the held / hidden ids, the rows a
     "still true?" check is due on, and at most ``QUESTION_CAP`` question ids (newest conflict first). Ids only, no text. Pure."""
     rows = [r for r in rows if _rid(r)]
     found = conflicts(rows)
-    keyed = sum(1 for r in rows if standing(_meta(r)) and key_of(_meta(r), _text(r)))
+    keyed = 0
+    #: why a row is not keyed (counts only): shadow evidence that tells "nothing slot-shaped was said" from "a slot was stated but
+    #: tied to nobody" (a capture shape the subject rules do not read) - the gap that left the first shadow run at keyed=0
+    unkeyed = {"not_standing": 0, "no_slot": 0, "slot_no_person": 0}
+    for r in rows:
+        meta, text = _meta(r), _text(r)
+        if not standing(meta):
+            unkeyed["not_standing"] += 1
+            continue
+        s = slot_of(text)
+        if s is None:
+            unkeyed["no_slot"] += 1
+            hint = next((n for n, rx in _SLOT_HINT_RES if rx.search(text or "")), "")
+            if hint:
+                unkeyed[f"hint_{hint}"] = unkeyed.get(f"hint_{hint}", 0) + 1
+        elif key_of(meta, text, s):
+            keyed += 1
+        else:
+            unkeyed["slot_no_person"] += 1
     due = [_rid(r) for r in rows if standing(_meta(r)) and age(_meta(r), _text(r), now).state == "due"]
     ranked = sorted(found, key=lambda c: next((captured(_meta(r)) for r in rows if _rid(r) == c.newer_id), 0.0), reverse=True)
     return {
         "rows": len(rows),
         "keyed": keyed,
+        "unkeyed": unkeyed,
         "conflicts": [{"person": c.person, "slot": c.slot, "older": c.older_id, "newer": c.newer_id, "action": c.action} for c in found],
         "held": sorted(c.newer_id for c in found if c.action == HOLD_NEWER),
         "hidden_older": sorted(c.older_id for c in found if c.action == HIDE_OLDER),

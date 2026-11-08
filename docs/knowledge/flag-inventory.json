@@ -644,6 +644,25 @@
         },
         "typed_env": false
       },
+      "ZOE_BRAIN_TEXT_TOOLCALL_RECOVERY": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "labs/flue-zoe-brain-2x/src/text-tool-calls.ts"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
+          "type": "str"
+        },
+        "typed_env": false
+      },
       "ZOE_BRAIN_TOKEN": {
         "defaults": [
           "''",
@@ -14346,6 +14365,86 @@
         },
         "typed_env": true
       },
+      "ZOE_SELF_REVIEW": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_FLUE_DB": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/maintenance/zoe-self-review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_SELF_REVIEW_IMPROVER_DIR": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/self_review.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/self-review.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_SELF_URL": {
         "defaults": [
           "'http://127.0.0.1:8000'",
@@ -15851,6 +15950,25 @@
           },
           "note": "live .env: Australia/Perth",
           "owner_doc": "docs/knowledge/synthetic-users-and-proactive-recipients.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_TOOL_TEXT_GUARD": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/tool_text_guard.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/write-claim-guard.md",
           "type": "str"
         },
         "typed_env": true
@@ -20447,5 +20565,8 @@
       "typed_env": false
     }
   },
-  "registry_unread": []
+  "registry_unread": [
+    "ZOE_SELF_REVIEW_MAX_CALLS",
+    "ZOE_SELF_REVIEW_MAX_TOKENS"
+  ]
 }

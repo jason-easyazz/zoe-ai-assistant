@@ -24,7 +24,7 @@ SPANISH = "¿Cómo estás esta noche? Estoy muy cansado después de trabajar tod
 ENGLISH = "How are you going tonight?"
 
 # Envelope lines the sidecar folds into the SYSTEM PROMPT (they decide the cached prefix): warm must equal turn.
-SYSTEM_PROMPT_LINES = {"uid", "manner", "persona", "register", "nowcard"}
+SYSTEM_PROMPT_LINES = {"uid", "manner", "persona", "register", "nowcard", "locale"}   # locale: the household conventions line - the wake warm renders it too
 # Lines the sidecar strips without touching the prompt text (transport / harness markers).
 TRANSPORT_ONLY_LINES = {"replay", "spec"}
 
@@ -216,11 +216,11 @@ def _applypolicies_inputs_ok(ts: str) -> bool:
     params = [p.split(":")[0].split("=")[0].strip().rstrip("?") for p in m.group(1).split(",") if p.strip()]
     body = ts[m.end():ts.index("\n}\n", m.end())]
     return (params == ["context", "userModelSuffix", "turnHarness"]
-            and sorted(set(re.findall(r"\bwith(\w+Block)\(", body))) == ["MannerBlock", "NowCardBlock", "PersonaBlock", "RegisterBlock", "UserModelBlock"])
+            and sorted(set(re.findall(r"\bwith(\w+Block)\(", body))) == ["LocaleBlock", "MannerBlock", "NowCardBlock", "PersonaBlock", "RegisterBlock", "UserModelBlock"])
 
 
 def test_sidecar_prompt_construction_seam_is_pinned():
-    """The per-member inputs of the sidecar's system prompt are exactly (persona, manner, register, user-model suffix); a NEW
+    """The inputs of the sidecar's system prompt are exactly (persona, manner, household locale, register, user-model suffix); a NEW
     per-member input to `applyPolicies` (a parameter or another with*Block) is not seen by the client-wire comparison,
     so it fails here until the warm provably reproduces it."""
     ts = (SIDECAR / "providers" / "capped-completions.ts").read_text(encoding="utf-8")
@@ -230,7 +230,7 @@ def test_sidecar_prompt_construction_seam_is_pinned():
 def test_generic_every_wrap_provider_is_known():
     """Every ``_wrap_message_with_*`` provider in the client is a classified one."""
     wrappers = {k[len("_wrap_message_with_"):] for k in vars(zfc) if k.startswith("_wrap_message_with_")}
-    assert wrappers == {"identity", "persona", "manner", "register", "now_card", "replay", "speculative_turn"}, (
+    assert wrappers == {"identity", "persona", "manner", "register", "locale", "now_card", "replay", "speculative_turn"}, (
         f"new message wrapper(s) {wrappers}: make _kv_warm_outbound render it, then extend this set")
 
 

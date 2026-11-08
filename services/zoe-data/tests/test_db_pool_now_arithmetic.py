@@ -131,6 +131,9 @@ class _FakeConn:
         self.sql.append(sql)
         if "FROM lists l WHERE l.list_type" in sql:
             return [{"id": "list-todo", "name": "To-do", "created_at": "2026-01-01T00:00:00Z", "n": 1}]
+        if "FROM lists WHERE list_type" in sql and "user_id" in sql:
+            # a to-do (personal type) is the MEMBER'S OWN list: the add resolves it by owner (the canonical-list-slots rule)
+            return [{"id": "list-todo"}]
         return []
 
     async def execute(self, sql, *args):
@@ -170,7 +173,7 @@ def brain_env(monkeypatch):
 
 def _dispatch_body():
     return system._IntentDispatchBody(user_id="demo-member", intent="list_add",
-                                      slots={"item": "packing tape", "list_type": "to_do"})
+                                      slots={"item": "packing tape", "list_type": "tasks"})
 
 
 @pytest.mark.asyncio
@@ -179,7 +182,7 @@ async def test_brain_list_add_writes_the_row_and_records_the_receipt(brain_env):
     out = await system.intent_dispatch(_dispatch_body(), None)
 
     assert out["ok"] is True, out
-    assert len(brain_env.inserted) == 1, "the item row must be written"
+    assert len(brain_env.inserted) == 1, f"the item row must be written: {brain_env.sql}"
     assert "packing tape" in brain_env.inserted[0]
     assert any("interval '10 seconds'" in s for s in brain_env.sql), "the 10 s dedup query must have run"
     receipts = write_receipts.since("demo-member", started, ["list"])

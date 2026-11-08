@@ -6,9 +6,10 @@ units and spelling: the identity line names a city, and a 4B model writes US con
 
 WHAT IT DOES. ``prompt_line()`` renders one sentence from ``locale_data/household_locale.json`` for the household country, e.g.
 "This household is in Australia: give measurements in metric (...), oven settings in Celsius, write in Australian English (...) and
-use local words (...)." The Flue seam (``zoe_flue_client``) puts it in the ``[Today — household context]`` block every turn
-carries (the identity block's family, so older copies are elided from history and the sidecar's cached system prefix is
-untouched). Every member gets it, children and guests included: it is a fact about the house, not about a person.
+use local words (...)." The Flue seam (``zoe_flue_client``) sends it on every turn as a ``zoe-locale:`` envelope line that the
+sidecar moves into that turn's SYSTEM prompt, labelled as background (``src/household-locale.ts``). It is never in the user's
+message: there the brain read it as something the user said ("I'll make sure to use metric from now on", QA round 3b). Every
+member gets it, children and guests included: it is a fact about the house, not about a person.
 
 WHERE THE COUNTRY COMES FROM (first hit wins; nothing is guessed):
   1. ``ZOE_HOUSEHOLD_COUNTRY`` (ISO code or a country name), else ``ZOE_LOCATION_COUNTRY`` - ``explicit_country()``, the SAME

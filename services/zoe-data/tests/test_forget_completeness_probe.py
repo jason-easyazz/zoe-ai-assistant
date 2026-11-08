@@ -90,6 +90,7 @@ LAYERS: dict[str, Layer] = {l.name: l for l in (
     Layer("contact_offers", True, "pending_suggestions.resolve_person_offers_by_name",
           "pending_suggestions load_for_prompt / surface / list_* / surfaced_person_offers"),
     Layer("day_review", True, "omi_day_review.erase_entity", "omi_day_review.list_candidates / get_candidate"),
+    Layer("self_review", True, "self_review.erase_entity (cascade step self_review)", "self_review.load_reviews (the owner's --show)"),
     Layer("now_card", True, "now_card.erase_entity (intent_router memory_forget_entity)", "now_card._live (card_for)"),
     Layer("member_register", True, "member_register.erase_entity (intent_router memory_forget_entity)",
           "member_register.live_entries + render (the speaking-register line)"),
@@ -625,6 +626,35 @@ class DayReview(Probe):
         monkeypatch.setattr(self.dr, "_forgotten", never)
 
 
+class SelfReview(Probe):
+    """The nightly self-review's private records (~/.zoe/self-review/<night>.self-review.jsonl): the owner's flagged turns verbatim."""
+
+    NIGHT = "2026-11-04"
+
+    async def setup(self, monkeypatch, request):
+        import self_review as sr
+        self.sr = sr
+        monkeypatch.setenv("ZOE_SELF_REVIEW_DIR", str(request.getfixturevalue("tmp_path") / "self-review"))
+
+    async def seed(self):
+        recs = [{"night": self.NIGHT, "turn_id": f"m{i}", "user_id": USER, "role": "owner", "policy": "full", "ts": 1.0e9 + i,
+                 "channel": "voice", "flags": ["rephrase_retry"], "text": f"did {who} call about the {what}", "reply": "I could not find that.",
+                 "review": {"cause": "the request was not understood", "fix": "router_training", "note": ""}}
+                for i, (who, what) in enumerate(((FRIEND, "dinner"), (KEEP, "garage door")))]
+        self.sr._write_private(self.sr.records_path(self.NIGHT), "".join(json.dumps(r) + "\n" for r in recs))
+
+    async def erase(self):
+        await self.sr.erase_entity(USER, mf.name_pattern(FRIEND), strict=True)
+
+    async def served(self):
+        return "\n".join(json.dumps(r) for r in await self.sr.load_reviews(self.NIGHT))
+
+    def disable(self, monkeypatch):
+        async def keep_all(_uid, rows, **_k):
+            return list(rows), 0
+        monkeypatch.setattr(mf, "keep_unforgotten", keep_all)
+
+
 class NowCard(Probe):
     """The nightly per-member now card (``now_card``): a stored card whose date lines name FRIEND and KEEP. The erase is the real
     ``now_card.erase_entity`` (the memory_forget_entity handler's step); the serve is ``now_card._live``, the check every served card
@@ -715,8 +745,8 @@ PROBES: dict[str, Callable[[], Probe]] = {
     "exact_words": ExactWords, "night_mind": NightMind, "digest_transcript": DigestTranscript, "memories_wall": MemoriesWall,
     "palace_reads": PalaceReads, "recall_packet": RecallPacket, "person_profile": PersonProfile,
     "relationship_graph": RelationshipGraph, "user_model_card": UserModelCard, "portrait": Portrait, "open_loops": OpenLoops,
-    "proactive_candidates": ProactiveCandidates, "contact_offers": ContactOffers, "day_review": DayReview, "now_card": NowCard,
-    "member_register": MemberRegister,
+    "proactive_candidates": ProactiveCandidates, "contact_offers": ContactOffers, "day_review": DayReview,
+    "self_review": SelfReview, "now_card": NowCard, "member_register": MemberRegister,
 }
 
 

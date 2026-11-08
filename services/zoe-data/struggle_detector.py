@@ -952,6 +952,9 @@ async def _delete_user_locked(user_id: str) -> int:
         import struggle_proposals
 
         await struggle_proposals.forget_user(user_id)          # Phase 2 evidence first; the rows below are still there for a retry
+        import self_review
+
+        await self_review.delete_user(user_id)                  # the nightly self-review's private records of the member (files)
         n = int(await get_backend().delete_user(user_id) or 0)
     except Exception as exc:
         if not _nothing_stored(exc):
