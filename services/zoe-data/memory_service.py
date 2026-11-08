@@ -197,10 +197,28 @@ def _drawers_embedding_function() -> Any:
             if _DRAWERS_EF is None:
                 from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
+                from functools import cached_property
+
+                import ort_arena
+
                 class _ZoeMiniLM(ONNXMiniLM_L6_V2):
                     @staticmethod
                     def name() -> str:
                         return "default"
+
+                    if not ort_arena.arena_enabled():
+                        # Chroma's own session recipe minus the ORT CPU arena (ort_arena.py,
+                        # -111 MB measured). ZOE_ORT_CPU_ARENA=1 restores chroma's model.
+                        @cached_property
+                        def model(self) -> Any:  # type: ignore[override]
+                            so = self.ort.SessionOptions()
+                            so.log_severity_level = 3
+                            so.graph_optimization_level = self.ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                            return ort_arena.build_session(
+                                self.ort,
+                                os.path.join(self.DOWNLOAD_PATH, self.EXTRACTED_FOLDER_NAME, "model.onnx"),
+                                so,
+                            )
 
                 _DRAWERS_EF = _ZoeMiniLM()
     return _DRAWERS_EF
