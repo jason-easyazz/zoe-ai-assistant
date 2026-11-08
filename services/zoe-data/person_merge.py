@@ -227,10 +227,10 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
                 db,
                 "UPDATE learned_voiceprints SET people_id=$1 WHERE people_id=$2 AND owner_user_id=$3 AND NOT EXISTS "
                 "(SELECT 1 FROM learned_voiceprints t WHERE t.owner_user_id=$4 AND t.people_id=$5 "
-                "AND t.model_id=learned_voiceprints.model_id)",
+                "AND t.model_id=learned_voiceprints.model_id AND t.channel=learned_voiceprints.channel)",
                 "UPDATE learned_voiceprints SET people_id=? WHERE people_id=? AND owner_user_id=? AND NOT EXISTS "
                 "(SELECT 1 FROM learned_voiceprints t WHERE t.owner_user_id=? AND t.people_id=? "
-                "AND t.model_id=learned_voiceprints.model_id)",
+                "AND t.model_id=learned_voiceprints.model_id AND t.channel=learned_voiceprints.channel)",
                 (target_id, source_id, user_id, user_id, target_id),
             )
             await _exec(
