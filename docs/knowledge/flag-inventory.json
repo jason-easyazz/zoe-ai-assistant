@@ -9795,6 +9795,44 @@
         },
         "typed_env": true
       },
+      "ZOE_NAMED_GUEST_MEMORY": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_memory.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_NAMED_GUEST_RECALL_TURNS": {
+        "defaults": [
+          "6"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_memory.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 6,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
       "ZOE_NIGHT_BUSY": {
         "defaults": [
           "'~/.zoe/agent-tools/night_busy.sh'"

@@ -83,7 +83,7 @@ def test_the_spoken_tier_needs_a_verified_adult_member(env, monkeypatch):
 def test_classify_reads_the_name_and_never_a_pronoun():
     assert nge.classify("Hey Zoe, learn Quinn's voice.") == ("learn", "Quinn")
     assert nge.classify("can you remember the voice of quinn") == ("learn", "Quinn")
-    assert nge.classify("forget Quinn's voice") is None                   # forgetting is the memory PR's
+    assert nge.classify("forget Quinn's voice") == ("forget", "Quinn")
     assert nge.classify("learn my voice") is None and nge.classify("forget her voice") is None
 
 
