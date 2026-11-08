@@ -223,6 +223,8 @@ def test_the_flag_registry_default_is_off_and_on_is_accepted_but_unbuilt(monkeyp
     assert ne.mode() == "off"
     monkeypatch.setenv("ZOE_NIGHT_EXTRACT", "shadow")
     assert ne.mode() == "shadow"
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT", "on")
+    assert ne.mode() == "on"                                                        # accepted, but phase 1 builds no write path: the run below is identical to shadow
     monkeypatch.setenv("ZOE_NIGHT_EXTRACT", "bogus")
     assert ne.mode() == "off"
 
@@ -275,6 +277,45 @@ def test_a_ledger_outage_withholds_the_whole_member(tmp_path, monkeypatch):
     monkeypatch.setattr(mf, "keep_unforgotten", down)
     s, _ = drive(tmp_path)
     assert s["status"] == "ok" and facts_on_disk(tmp_path) == []
+
+
+def test_a_missing_ledger_module_withholds_everything_not_passes_everything(tmp_path, monkeypatch):
+    """Cross-review 2352 #1: the writer's second wall used to return the rows UNFILTERED when memory_forgotten could not be imported."""
+    monkeypatch.setitem(sys.modules, "memory_forgotten", None)               # `import memory_forgotten` now raises ImportError
+    s, _ = drive(tmp_path)
+    assert s["status"] == "ok" and facts_on_disk(tmp_path) == []
+    monkeypatch.delitem(sys.modules, "memory_forgotten")
+
+
+def test_a_forget_landing_between_the_ledger_check_and_the_write_cannot_resurrect_a_fact(tmp_path, monkeypatch):
+    """Cross-review 2352 #2: the check ran before the output lock, so a forget (ledger first, then erase_entity) landing in between left the fact on disk.
+    The check is now inside the lock; erase_entity takes the same lock, so it waits and erases what was written. Here the forget lands right AFTER the
+    check passes, from inside it - the worst case."""
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "out"))
+    day = [("my friend Dana is 30", {"entities": [ent("person", FRIEND), ent("age", "30")], "relations": [rel("age", FRIEND, "30")]}),
+           ("my son Leo is 16", dict(DAY)["my son Leo is 16"])]
+    real, erased = mf.keep_unforgotten, []
+
+    async def check_then_forget(uid, rows, **kw):
+        res = await real(uid, rows, **kw)                                    # Dana is not forgotten yet: the rows pass
+        await mf.add(USER, FRIEND, actor=USER)                                # ... and now she is
+        erased.append(asyncio.ensure_future(ne.erase_entity(USER, mf.name_pattern(FRIEND), strict=True)))
+        await asyncio.sleep(0.2)                                              # the erase is blocked on the writer's lock, not finished
+        assert not erased[0].done()
+        return res
+
+    async def scenario():
+        monkeypatch.setattr(mf, "keep_unforgotten", check_then_forget)
+        await ne.run_night(night=NIGHT, members=[USER], load_turns=lambda u: _aw(turns_of(day)), load_stored=lambda u: _aw([]), extract=make_extract(day),
+                           d=tmp_path / "out", run_mode="shadow")
+        return await erased[0]
+    assert run(scenario()) >= 1
+    rows = facts_on_disk(tmp_path)
+    assert rows and not any("dana" in fact_words(r) for r in rows) and any("leo" in fact_words(r) for r in rows)
+
+
+async def _aw(v):
+    return v
 
 
 # ── forget ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -526,10 +526,14 @@ async def run_night(*, night: str, members: list[str], load_turns: Callable[[str
         c = compare(facts, stored)
         summary["members"][uid].update({"facts": len(facts), **c})
         rows.extend(facts)
-    rows = await _drop_forgotten(rows) if use_ledger else rows                      # the second wall: a fact naming a forgotten entity is not written
-    if not dry_run:
+    if dry_run:
+        rows = await _drop_forgotten(rows) if use_ledger else rows
+    else:
         dd = d or state_dir()
         with _locked(dd):
+            # the second wall, INSIDE the output lock: "forget X" writes the ledger first and ``erase_entity`` then takes this same lock, so a forget either lands before
+            # this check (the fact is not written) or waits for the lock and erases what was written - there is no check-then-write window
+            rows = await _drop_forgotten(rows) if use_ledger else rows
             keep_old = [r for r in _read(facts_path(night, dd)) if r.get("user_id") not in per_member]       # a re-run replaces the member's own rows
             _write_private(facts_path(night, dd), "".join(json.dumps(r, sort_keys=True) + "\n" for r in keep_old + rows))
             _write_private(summary_path(night, dd), json.dumps({**summary, "perf": {k: out.get(k) for k in ("load_s", "infer_s", "peak_rss_mb", "threads")}},
@@ -542,8 +546,8 @@ async def run_night(*, night: str, members: list[str], load_turns: Callable[[str
 async def _drop_forgotten(rows: list[dict]) -> list[dict]:
     try:
         import memory_forgotten as mf
-    except Exception:  # noqa: BLE001
-        return rows
+    except Exception:  # noqa: BLE001 - no ledger module = no way to show a fact is not forgotten: withhold everything (fail closed)
+        return []
     out: list[dict] = []
     by_user: dict[str, list[dict]] = {}
     for r in rows:
