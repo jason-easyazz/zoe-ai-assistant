@@ -58,3 +58,8 @@
 {"text": "anything on my schedule tomorrow", "label": "calendar", "source": "capability_gap_2026-11-05"}
 {"text": "are we busy on saturday", "label": "calendar", "source": "capability_gap_2026-11-05"}
 {"text": "what appointments do I have today", "label": "calendar", "source": "capability_gap_2026-11-05"}
+{"text": "shone the lots", "label": "smart_home", "source": "stt_mishear_2026-11-06"}
+{"text": "okay shown the light", "label": "smart_home", "source": "stt_mishear_2026-11-06"}
+{"text": "turn on the lot please", "label": "smart_home", "source": "stt_mishear_2026-11-06"}
+{"text": "switch the lots off", "label": "smart_home", "source": "stt_mishear_2026-11-06"}
+{"text": "turn on the lights in here", "label": "smart_home", "source": "stt_mishear_2026-11-06"}
