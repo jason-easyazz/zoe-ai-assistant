@@ -1125,6 +1125,14 @@ async def extract_and_ingest(
                 exact_words.index_turn(user_id, user_message, source=source, speaker_verified=speaker_verified), 3.0)
     except Exception as exc:  # noqa: BLE001 - the index is an extra: a turn's facts never wait on it
         logger.debug("memory_extractor: exact-words index skipped (%s)", type(exc).__name__)
+    # A spoken correction of a stored value ("Oliver is twenty-five, not twenty-four") supersedes the stored rows in ANY later
+    # session, not just this one (value_correction; QA round 5). Evidence only, user-stated, bounded, never raises.
+    try:
+        import value_correction
+
+        await value_correction.apply(user_message, user_id, session_id, speaker_verified=speaker_verified)
+    except Exception as exc:  # noqa: BLE001 - a correction never costs the turn its other facts
+        logger.debug("memory_extractor: value correction skipped (%s)", type(exc).__name__)
     try:
         candidates, guard_drops = _extract_with_drops(
             user_message, assistant_response, prev_user_message=prev_user_message
