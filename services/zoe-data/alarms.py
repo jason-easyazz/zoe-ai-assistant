@@ -132,21 +132,30 @@ def _at(d: date, hhmm: str) -> float:
     return datetime(d.year, d.month, d.day, h, m, tzinfo=zoe_timezone()).timestamp()
 
 
-def next_occurrence(hhmm: str, rule: str, once_date: Optional[str], after: float) -> Optional[float]:
-    """The first firing time strictly after ``after`` (epoch seconds), or None (a one-off already in the past)."""
+def next_occurrence(hhmm: str, rule: str, once_date: Optional[str], after: float,
+                    overrides: Optional[dict] = None) -> Optional[float]:
+    """The first firing time strictly after ``after`` (epoch seconds), or None (a one-off already in the past).
+
+    ``overrides`` (a repeating alarm's ``{"YYYY-MM-DD": (action, hhmm)}``, see ``alarm_overrides``): that day rings at the shifted
+    time (``shift``) or not at all (``skip``); every other day keeps the rule."""
     if rule == "once":
         if not once_date:
             return None
         t = _at(date.fromisoformat(once_date), hhmm)
         return t if t > after else None
     days = repeat_days(rule)
+    ovs = overrides or {}
     start = datetime.fromtimestamp(after, zoe_timezone()).date()
-    for i in range(9):  # a week plus the turn of the day always contains the next hit
+    for i in range(9 + 7 * len(ovs)):  # a week plus the turn of the day always contains the next hit; each skipped day may cost a week
         d = start + timedelta(days=i)
-        if d.isoweekday() in days:
-            t = _at(d, hhmm)
-            if t > after:
-                return t
+        if d.isoweekday() not in days:
+            continue
+        ov = ovs.get(d.isoformat())
+        if ov and ov[0] == "skip":
+            continue
+        t = _at(d, ov[1] if ov and ov[0] == "shift" and ov[1] else hhmm)
+        if t > after:
+            return t
     return None
 
 
@@ -228,6 +237,9 @@ def present(alarm: dict, v: Viewer, now: Optional[float] = None) -> dict:
     out["editable"] = can_edit(alarm, v)
     out["repeat_phrase"] = repeat_phrase(alarm["repeat_rule"])
     out["when"] = when_phrase(alarm["next_fire_at"], now) if alarm["next_fire_at"] and alarm["enabled"] else ""
+    today = datetime.fromtimestamp(time.time() if now is None else now, zoe_timezone()).date().isoformat()
+    out["overrides"] = [{"date": d, "action": a, "time_hhmm": h or ""} for d, (a, h) in sorted((alarm.get("overrides") or {}).items())
+                        if d >= today]
     if v.panel and alarm["user_id"] != HOUSEHOLD:
         out.update(label="", sound_kind="tone", sound_id="", sound_name="", masked=True)
     return out
@@ -264,14 +276,36 @@ async def get_alarm(db: Any, alarm_id: str) -> Optional[dict]:
     return _row(r) if r else None
 
 
+async def overrides_of(db: Any, alarm_ids: list[str]) -> dict[str, dict[str, tuple[str, Optional[str]]]]:
+    """``{alarm_id: {"YYYY-MM-DD": (action, hhmm)}}`` for the given alarms. A store without the table yet (migration 0070 not run)
+    has no overrides: every alarm keeps its plain rule."""
+    ids = [a for a in alarm_ids if a]
+    if not ids:
+        return {}
+    out: dict[str, dict[str, tuple[str, Optional[str]]]] = {}
+    try:
+        async with db.execute(f"SELECT alarm_id, on_date, action, time_hhmm FROM alarm_overrides WHERE alarm_id IN ({', '.join('?' * len(ids))})",
+                              tuple(ids)) as cur:
+            for r in await cur.fetchall():
+                out.setdefault(r[0], {})[r[1]] = (r[2], r[3])
+    except Exception as exc:  # noqa: BLE001
+        if any(m in str(exc) for m in ("does not exist", "no such table")):
+            return {}
+        raise
+    return out
+
+
 async def list_alarms(db: Any, v: Viewer) -> list[dict]:
     if v.panel:
         sql, args = f"{_SELECT} ORDER BY time_hhmm, created_at", ()
     else:
         sql, args = f"{_SELECT} WHERE user_id IN (?, ?) ORDER BY time_hhmm, created_at", (v.user_id, HOUSEHOLD)
     async with db.execute(sql, args) as cur:
-        rows = await cur.fetchall()
-    return [_row(r) for r in rows]
+        rows = [_row(r) for r in await cur.fetchall()]
+    ovs = await overrides_of(db, [a["id"] for a in rows if a["repeat_rule"] != "once"])
+    for a in rows:
+        a["overrides"] = ovs.get(a["id"], {})
+    return rows
 
 
 def _clean_label(value: Any) -> str:
@@ -305,7 +339,8 @@ def _clamp(value: Any, lo_hi: tuple[int, int], default: int, what: str) -> int:
     return n
 
 
-def _schedule(hhmm: str, rule: str, once_date: Optional[str], now: float) -> tuple[Optional[str], Optional[float]]:
+def _schedule(hhmm: str, rule: str, once_date: Optional[str], now: float,
+              overrides: Optional[dict] = None) -> tuple[Optional[str], Optional[float]]:
     """(once_date to store, next_fire_at). A one-off with no date takes the next occurrence of the time; a one-off in the past is refused."""
     if rule == "once":
         if once_date:
@@ -319,7 +354,7 @@ def _schedule(hhmm: str, rule: str, once_date: Optional[str], now: float) -> tup
         if nxt is None:
             raise AlarmError("That time has already passed.")
         return str(once_date), nxt
-    return None, next_occurrence(hhmm, rule, None, now)
+    return None, next_occurrence(hhmm, rule, None, now, overrides)
 
 
 async def create_alarm(db: Any, owner: str, *, time_hhmm: Any, repeat: Any = "once", once_date: Optional[str] = None, label: Any = "",
@@ -369,9 +404,14 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
     on = bool(ch["enabled"]) if "enabled" in ch else bool(alarm["enabled"])
     if on and rule == "once" and once_date and "once_date" not in ch and next_occurrence(hhmm, rule, once_date, now) is None:
         once_date = None  # a spent one-off turned back on rings at the NEXT such time, not on its (past) old date
+    # A day's exception belongs to the rule it was made for: a changed rule (or a one-off) drops them; otherwise they stay in force.
+    ovs = (await overrides_of(db, [alarm["id"]])).get(alarm["id"], {})
+    drop_overrides = bool(ovs) and (rule != alarm["repeat_rule"] or rule == "once")
+    if drop_overrides:
+        ovs = {}
     stored_date, nxt = (alarm["once_date"], None)
     if on:
-        stored_date, nxt = _schedule(hhmm, rule, once_date, now)
+        stored_date, nxt = _schedule(hhmm, rule, once_date, now, ovs)
     elif rule == "once" and "once_date" in ch:
         try:  # a disabled one-off still keeps an explicitly supplied date (validated here; checked against the clock when turned on)
             stored_date = date.fromisoformat(str(ch["once_date"])).isoformat()
@@ -386,6 +426,8 @@ async def update_alarm(db: Any, alarm: dict, changes: dict, *, now: Optional[flo
             " snooze_until = NULL, snooze_count = 0, updated_at = ? WHERE id = ? AND updated_at = ?",
             (label, hhmm, rule, stored_date, kind, sid, sname, snooze, ramp, 1 if on else 0, nxt, now, alarm["id"], alarm["updated_at"]))
         if won:
+            if drop_overrides:
+                await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ?", (alarm["id"],))
             await log_event(db, alarm["id"], "updated", "on" if on else "off", now=now)
     if not won:
         raise AlarmError("That alarm just changed. Try again.", 409)
@@ -399,6 +441,7 @@ async def delete_alarm(db: Any, alarm_id: str) -> bool:
         n = await _rowcount(db, "DELETE FROM alarms WHERE id = ?", (alarm_id,))
         if n:
             await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (alarm_id,))
+            await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ?", (alarm_id,))
     await db.commit()
     if n:
         await _emit("deleted", {"id": alarm_id})
@@ -420,6 +463,7 @@ async def forget_user(user_id: str) -> int:
                 ids = [r[0] for r in await cur.fetchall()]
             for aid in ids:
                 await db.execute("DELETE FROM alarm_events WHERE alarm_id = ?", (aid,))
+                await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ?", (aid,))  # a day's exception is the member's too
             await db.execute("DELETE FROM alarms WHERE user_id = ?", (uid,))
             await db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -433,6 +477,120 @@ async def forget_user(user_id: str) -> int:
     for aid in ids:
         await _emit("deleted", {"id": aid})  # music must not keep playing for an alarm that no longer exists
     return len(ids)
+
+
+# ── one day's exception to a repeating alarm ("an hour earlier next Friday") ────────────────────────────────────────────────────
+
+OVERRIDE_HORIZON_DAYS = 366
+
+
+def rings_on(alarm: dict, d: date) -> bool:
+    """Would this alarm ring on local date ``d`` by its rule (ignoring overrides)? A one-off: on its own date only."""
+    if alarm["repeat_rule"] == "once":
+        return alarm.get("once_date") == d.isoformat()
+    return d.isoweekday() in repeat_days(alarm["repeat_rule"])
+
+
+def day_time(alarm: dict, d: date) -> str:
+    """The HH:MM this alarm rings at on ``d``: an override's shifted time, else its own."""
+    ov = (alarm.get("overrides") or {}).get(d.isoformat())
+    return ov[1] if ov and ov[0] == "shift" and ov[1] else alarm["time_hhmm"]
+
+
+def fired_on(alarm: dict, d: date) -> bool:
+    """Has this alarm already rung on local date ``d`` (``last_fired_at`` falls on it)? A day rings at most once."""
+    lf = alarm.get("last_fired_at")
+    return bool(lf) and datetime.fromtimestamp(lf, zoe_timezone()).date() == d
+
+
+def effective_time(alarm: dict, d: date) -> Optional[str]:
+    """The HH:MM this alarm will actually ring at on ``d`` (rule + that day's override), or None: not a ring day, skipped, or already rung."""
+    if not rings_on(alarm, d) or fired_on(alarm, d):
+        return None
+    ov = (alarm.get("overrides") or {}).get(d.isoformat())
+    if ov and ov[0] == "skip":
+        return None
+    return day_time(alarm, d)
+
+
+def _not_before(alarm: dict, now: float) -> float:
+    """Reschedule from here: never back into a day that has already rung (a moved day must not ring twice)."""
+    lf = alarm.get("last_fired_at")
+    if not lf:
+        return now
+    fired_day = datetime.fromtimestamp(lf, zoe_timezone()).date()
+    return max(now, _at(fired_day, "23:59") + 59)
+
+
+async def _reschedule(db: Any, alarm: dict, ovs: dict, now: float, write) -> dict:
+    """Run ``write`` (the override row change) and move ``next_fire_at`` with it, in one transaction guarded by the alarm's version."""
+    nxt = (next_occurrence(alarm["time_hhmm"], alarm["repeat_rule"], None, _not_before(alarm, now), ovs) if alarm["enabled"]
+           else alarm["next_fire_at"])
+    async with _atomic(db):
+        won = await _rowcount(db, "UPDATE alarms SET next_fire_at = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
+                              (nxt, now, alarm["id"], alarm["updated_at"]))
+        if won:
+            await write()
+    if not won:
+        raise AlarmError("That alarm just changed. Try again.", 409)
+    await db.commit()
+    a = await get_alarm(db, alarm["id"]) or alarm
+    a["overrides"] = ovs
+    return a
+
+
+async def set_override(db: Any, alarm: dict, on_date: Any, *, time_hhmm: Any = None, skip: bool = False,
+                       now: Optional[float] = None) -> dict:
+    """Ring a repeating alarm at ``time_hhmm`` on ``on_date`` only (or not at all, ``skip``). Refused for a one-off (change the alarm
+    itself), an alarm that is off, a day it does not ring, a day more than a year out, or a time already gone."""
+    now = time.time() if now is None else now
+    if alarm["repeat_rule"] == "once":
+        raise AlarmError("That alarm only rings once. Change its time instead.")
+    if not alarm["enabled"]:
+        raise AlarmError("That alarm is off.")
+    try:
+        d = date.fromisoformat(str(on_date))
+    except ValueError:
+        raise AlarmError("That is not a date I can use.") from None
+    today = datetime.fromtimestamp(now, zoe_timezone()).date()
+    if not today <= d <= today + timedelta(days=OVERRIDE_HORIZON_DAYS):
+        raise AlarmError("That day is too far away." if d > today else "That day has already gone.")
+    if not rings_on(alarm, d):
+        raise AlarmError("That alarm doesn't ring on that day.")
+    ovs = dict((await overrides_of(db, [alarm["id"]])).get(alarm["id"], {}))
+    # That day's ring has already happened (it fired, or its EFFECTIVE time - an existing override's, else the rule's - has gone):
+    # there is nothing left to move, and moving it again could ring the day twice.
+    if fired_on(alarm, d) or _at(d, day_time({**alarm, "overrides": ovs}, d)) <= now:
+        raise AlarmError("That alarm has already gone off that day.")
+    hhmm = None if skip else normalise_time(time_hhmm)
+    if hhmm is not None and _at(d, hhmm) <= now:
+        raise AlarmError("That time has already passed.")
+    key = d.isoformat()
+    ovs[key] = ("skip", None) if skip else ("shift", hhmm)
+
+    async def write():
+        await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ? AND on_date = ?", (alarm["id"], key))
+        await db.execute("INSERT INTO alarm_overrides (alarm_id, on_date, action, time_hhmm, created_at) VALUES (?, ?, ?, ?, ?)",
+                         (alarm["id"], key, ovs[key][0], hhmm, now))
+        await log_event(db, alarm["id"], "override", f"{key} {'skip' if skip else hhmm}", now=now)
+
+    return await _reschedule(db, alarm, ovs, now, write)
+
+
+async def clear_override(db: Any, alarm: dict, on_date: Any, *, now: Optional[float] = None) -> Optional[dict]:
+    """Put ``on_date`` back to the alarm's own time. None when there was no override for that day."""
+    now = time.time() if now is None else now
+    key = str(on_date)
+    ovs = dict((await overrides_of(db, [alarm["id"]])).get(alarm["id"], {}))
+    if key not in ovs:
+        return None
+    del ovs[key]
+
+    async def write():
+        await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ? AND on_date = ?", (alarm["id"], key))
+        await log_event(db, alarm["id"], "override_cleared", key, now=now)
+
+    return await _reschedule(db, alarm, ovs, now, write)
 
 
 # ── ring lifecycle ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -521,24 +679,32 @@ async def tick(db: Any, now: Optional[float] = None) -> list[tuple[str, dict]]:
                 await log_event(db, a["id"], "rang", "after snooze", now=now)
         if won:
             out.append(("rang", {**a, "state": "ringing", "ring_started_at": now}))
-    for a in await fetch("enabled = 1 AND state = 'idle' AND next_fire_at <= ?", (now,)):
+    due_rows = await fetch("enabled = 1 AND state = 'idle' AND next_fire_at <= ?", (now,))
+    day_ovs = await overrides_of(db, [a["id"] for a in due_rows if a["repeat_rule"] != "once"]) if due_rows else {}
+    for a in due_rows:
         due = a["next_fire_at"]
+        ovs = day_ovs.get(a["id"], {})
+        spent = [d for d in ovs if d <= datetime.fromtimestamp(due, zoe_timezone()).date().isoformat()]  # the day ringing now, and older
         if due < now - MISSED_GRACE_S:  # found late (zoe-data was down): skip this occurrence, schedule the next from NOW
-            nxt = next_occurrence(a["time_hhmm"], a["repeat_rule"], a["once_date"], now)
+            nxt = next_occurrence(a["time_hhmm"], a["repeat_rule"], a["once_date"], now, ovs)
             async with _atomic(db):
                 won = await _rowcount(db, "UPDATE alarms SET next_fire_at = ?, enabled = ?, updated_at = ? WHERE id = ? AND state = 'idle'"
                                            " AND next_fire_at = ?", (nxt, 1 if nxt else 0, now, a["id"], due))
                 if won:
+                    for d in spent:
+                        await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ? AND on_date = ?", (a["id"], d))
                     await log_event(db, a["id"], "missed", f"due {int(now - due)}s ago, zoe-data was not running", now=now)
             if won:
                 out.append(("missed", a))
             continue
-        nxt = next_occurrence(a["time_hhmm"], a["repeat_rule"], a["once_date"], due)  # after the occurrence that is ringing now
+        nxt = next_occurrence(a["time_hhmm"], a["repeat_rule"], a["once_date"], due, ovs)  # after the occurrence that is ringing now
         async with _atomic(db):
             won = await _rowcount(db, "UPDATE alarms SET state = 'ringing', ring_started_at = ?, last_fired_at = ?, snooze_count = 0,"
                                        " next_fire_at = ?, enabled = ?, updated_at = ? WHERE id = ? AND state = 'idle' AND next_fire_at = ?",
                                   (now, now, nxt, 1 if nxt else 0, now, a["id"], due))
             if won:
+                for d in spent:
+                    await db.execute("DELETE FROM alarm_overrides WHERE alarm_id = ? AND on_date = ?", (a["id"], d))
                 await log_event(db, a["id"], "rang", "late" if now - due > 5 else "", now=now)
         if won:
             out.append(("rang", {**a, "state": "ringing", "ring_started_at": now, "next_fire_at": nxt, "enabled": 1 if nxt else 0}))
