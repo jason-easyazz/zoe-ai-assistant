@@ -74,7 +74,14 @@ def proc_mem(pid: int) -> dict:
     return out
 
 
+LIVE_PORTS = {11434, 11435, 11436, 8000, 10201, 3579, 3578}
+MIN_GATE_GB = 2.5  # floor: --min-avail-gb may raise the gate, never lower it
+
+
 def run_variant(name: str, port: int, probes: list[str], gate_gb: float) -> dict:
+    if port in LIVE_PORTS:
+        raise SystemExit(f"port {port} belongs to a live service; refusing")
+    gate_gb = max(gate_gb, MIN_GATE_GB)
     a = avail_gb()
     deadline = time.time() + WAIT_S
     while a < gate_gb and time.time() < deadline:

@@ -64,3 +64,18 @@ def test_persona_drift_passes_mode_to_fastembed(monkeypatch, flag, expected):
         monkeypatch.setenv("ZOE_ORT_CPU_ARENA", flag)
     persona_drift.load_bge_embedder()
     assert seen == [expected]
+
+
+@pytest.mark.parametrize("flag,overridden", [(None, True), ("1", False)])
+def test_chroma_ef_override_installed_only_while_arena_off(monkeypatch, flag, overridden):
+    pytest.importorskip("chromadb")
+    import memory_service
+
+    if flag is None:
+        monkeypatch.delenv("ZOE_ORT_CPU_ARENA", raising=False)
+    else:
+        monkeypatch.setenv("ZOE_ORT_CPU_ARENA", flag)
+    monkeypatch.setattr(memory_service, "_DRAWERS_EF", None)
+    ef = memory_service._drawers_embedding_function()
+    assert ef.name() == "default"
+    assert ("model" in type(ef).__dict__) is overridden

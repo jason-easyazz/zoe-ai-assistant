@@ -1,7 +1,7 @@
 ---
 type: reference
 title: RAM audit follow-up (non-voice) - router CUDA context (rejected), ORT CPU arena off for the embedders (adopted)
-description: Measured 2026-11-08 on the live Orin from the 2026-11-08 RAM audit. Hiding CUDA from the FunctionGemma router did NOT save RAM (it cost +155 MB RSS and changed one answer in 30), so it is not shipped. Turning the ORT CPU arena off for fastembed and Chroma's MiniLM saves ~111 MB RSS with identical vectors and latency within noise, and ships on by default.
+description: Measured 2026-11-08 on the live Orin from the 2026-11-08 RAM audit. Hiding CUDA from the FunctionGemma router did NOT save RAM (it cost +155 MB RSS and changed one answer in 30), so it is not shipped. Turning the ORT CPU arena off for fastembed and Chroma's MiniLM saves ~111 MB RSS with matching vector fingerprints and latency within noise, and ships on by default.
 ---
 
 # RAM audit follow-up, non-voice (2026-11-08)
@@ -16,7 +16,7 @@ edited.
 | item | audit estimate | measured | decision |
 |---|---|---|---|
 | Router: `CUDA_VISIBLE_DEVICES=` | -0.25..0.35 GB | **+155 MB RSS (+250 MB PSS)**, 1 of 30 answers changed | **rejected, not shipped** |
-| ORT CPU arena off (fastembed + Chroma MiniLM) | -0.1..0.3 GB | **-111 MB RSS** (-86..-95 MB HWM), vectors identical | **adopted, default on** (`ZOE_ORT_CPU_ARENA=1` reverts) |
+| ORT CPU arena off (fastembed + Chroma MiniLM) | -0.1..0.3 GB | **-111 MB RSS** (-86..-95 MB HWM), vector fingerprints matched | **adopted, default on** (`ZOE_ORT_CPU_ARENA=1` reverts) |
 
 ## 1. Router CUDA context - falsified
 
@@ -67,8 +67,8 @@ Where the sessions are made (all inside zoe-data):
 Harness: `scripts/perf/measure_ort_arena_ab.py`. Each variant is a FRESH child on the zoe-data
 venv (onnxruntime 1.23.2, fastembed 0.8.1, chromadb 1.5.9) with zoe-data's allocator env
 (`MALLOC_ARENA_MAX=2`, `MALLOC_TRIM_THRESHOLD_=131072`); it builds both sessions through the
-real code paths, embeds 32 mixed-length texts x 4 rounds each, and prints RSS, VmSwap, VmHWM,
-wall latency and a vector fingerprint. Arena on = the pre-change behaviour.
+real code paths, embeds 48 mixed-length texts x 4 rounds each, and prints RSS, VmSwap, VmHWM,
+wall latency and a vector fingerprint (pairs 1-2 below: a partial one, the sum of the first 8 dimensions per vector; the final run hashes the full 4-decimal-rounded vectors). Arena on = the pre-change behaviour.
 
 Two interleaved pairs, uncontended enough that VmSwap was 0 (an earlier pair ran at load 9 and
 swapped, so its RSS and latency are discarded):
@@ -81,8 +81,8 @@ swapped, so its RSS and latency are discarded):
 | arena OFF (pair 2) | **332 MB** | 376 | 20.6 ms | 63.0 ms | 02a9f4682606 |
 | ORT `arena_extend_strategy=kSameAsRequested` (kept arena) | 448 MB | 467 | 25.7 ms | 70.4 ms | 02a9f4682606 |
 
-- **Saving: -111 MB RSS in both pairs** (-86..-95 MB at the HWM). Embedding **vectors are
-  identical** (same fingerprint in every run). The audit's low end (0.1 GB) is what it is
+- **Saving: -111 MB RSS in both pairs** (-86..-95 MB at the HWM). The recorded
+  **vector fingerprints matched** in every run (partial in pairs 1-2, full-vector in the final run). The audit's low end (0.1 GB) is what it is
   worth; 0.3 GB was optimistic.
 - **Latency is within the box's noise**: fastembed moved -6.9 ms and +5.8 ms across the two
   pairs, Chroma +0.5 and +9.3 ms at load 4-8. That is an honest "no clear regression", not a
@@ -92,7 +92,7 @@ swapped, so its RSS and latency are discarded):
 - A kept-but-bounded arena (`kSameAsRequested`) saved nothing, so it is not offered.
 - Revert switch: `ZOE_ORT_CPU_ARENA=1` restores fastembed's and Chroma's own sessions.
 
-A final run of the harness on the shipped code (arena 1,0,1,0) is recorded in the PR body.
+A final run of the harness on the shipped code (arena 1,0,1,0, full-vector fingerprint) is recorded in the PR body.
 
 **Verify after deploy:** zoe-data RSS ~110 MB below its pre-deploy figure at the same age
 (`ps -o rss -p $(systemctl --user show -p MainPID --value zoe-data)`), `/readyz` green, a
@@ -103,6 +103,6 @@ recall question and a routed command behave as before. If recall latency visibly
 
 - `services/zoe-data`: `pytest tests/test_ort_arena.py tests/test_embed_thread_safety.py
   tests/test_router_two_stage.py tests/test_persona_drift.py tests/test_palace_drawers_opener.py`
-- Harnesses (both self-gate on MemAvailable >= 2.5 GB and only kill their own PIDs):
+- Harnesses (both self-gate on MemAvailable >= 2.5 GB (a floor `--min-avail-gb` cannot lower), refuse live service ports, and only kill their own PIDs):
   `python3 scripts/perf/measure_router_cuda_ab.py --order nocuda,cuda --wait-s 1800`,
   `python3 scripts/perf/measure_ort_arena_ab.py --wait-s 1800`

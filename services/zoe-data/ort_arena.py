@@ -6,7 +6,7 @@ and Chroma's MiniLM (the recall palace) - hold one session each for the life of 
 process, so whatever the arena grew to during warm-up stays resident.
 
 Measured A/B (docs/knowledge/ram-audit-nonvoice-2026-11.md, fresh process per run, same
-inputs, identical output fingerprint): ``enable_cpu_mem_arena=False`` took the two
+inputs, matching output fingerprints): ``enable_cpu_mem_arena=False`` took the two
 sessions from ~434-443 MB to ~322-332 MB RSS (-111 MB, HWM -86..-95 MB) with embed p50
 within noise (fastembed 15-25 ms, Chroma 54-65 ms). ``ZOE_ORT_CPU_ARENA=1`` restores
 ORT's arena (and Chroma's own session builder) if that ever regresses.

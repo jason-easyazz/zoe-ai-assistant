@@ -7,7 +7,7 @@ builds - fastembed bge-small (semantic router / persona drift) and Chroma's
 MiniLM (the recall palace EF, via memory_service) - using the real code paths
 under ZOE_ORT_CPU_ARENA=1 (arena on, the pre-change behaviour) or 0 (arena off, the shipped default), embeds a fixed mixed-length text set, and
 prints one JSON line: RSS after load / after embedding, VmHWM, latency p50/p95
-and a vector fingerprint so equal outputs can be proven.
+and a full-vector fingerprint (4-decimal rounded) so equal outputs can be proven.
 
 Throwaway: touches no live service and no live data. Gate: waits for
 MemAvailable >= --min-avail-gb (2.5) before each child.
@@ -57,10 +57,11 @@ for rnd in range(4):
         c = time.process_time(); t = time.perf_counter(); v2 = ef([x]); lat_ef.append((time.perf_counter() - t) * 1000); cpu_ef += time.process_time() - c
 out["cpu_ms_per_embed"] = {"fastembed": round(cpu_fe / len(lat_fe) * 1000, 1), "chroma": round(cpu_ef / len(lat_ef) * 1000, 1)}
 out["loadavg1"] = os.getloadavg()[0]
+import numpy as np
 fp = hashlib.sha1()
-for x in short + longer:
-    fp.update(("%.4f" % float(list(fe.embed([x]))[0][:8].sum())).encode())
-    fp.update(("%.4f" % float(sum(ef([x])[0][:8]))).encode())
+for x in short + longer:  # FULL vectors, rounded to 4 decimals (below fp32 noise between runs of one build)
+    fp.update(np.round(np.asarray(list(fe.embed([x]))[0], dtype=np.float64), 4).tobytes())
+    fp.update(np.round(np.asarray(ef([x])[0], dtype=np.float64), 4).tobytes())
 out["rss_after"] = rss()
 lat_fe.sort(); lat_ef.sort()
 out["fastembed_ms"] = {"p50": round(statistics.median(lat_fe), 1), "p95": round(lat_fe[int(.95 * len(lat_fe))], 1)}
@@ -77,7 +78,11 @@ def avail_gb() -> float:
     return 0.0
 
 
+MIN_GATE_GB = 2.5  # floor: --min-avail-gb may raise the gate, never lower it
+
+
 def run(mode: str, gate: float, wait_s: float) -> dict:
+    gate = max(gate, MIN_GATE_GB)
     deadline = time.time() + wait_s
     while avail_gb() < gate and time.time() < deadline:
         time.sleep(5)
