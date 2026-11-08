@@ -300,3 +300,11 @@ def test_a_period_inside_the_offered_task_is_kept():
     # negative control: an ordinary sentence end still closes the title
     assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to call the dentist.", FRESH) == \
         "remind me to call the dentist at 3 pm"
+
+
+@pytest.mark.parametrize("offer", [
+    "Want me to remind you to meet at 10 Downing Street?",      # Codex on #2309: a number after "at" is task content here
+    "Want me to remind you to look at 3 invoices?",
+])
+def test_a_number_after_at_in_the_offered_task_declines_binding(offer):
+    assert bind_reminder_offer_reply("sure, 3pm", offer, FRESH) is None

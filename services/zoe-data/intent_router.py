@@ -2304,6 +2304,9 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         # and a reminder (already done) but no pending reminder offer
         if not sentences or not (ends_with_offer(sentences[-1]) and _REMINDER_OFFER_RE.search(sentences[-1])):
             return None
+        if re.search(r"\bat\s+\d", sentences[-1], re.IGNORECASE):
+            return None  # "meet at 10 Downing Street" / "look at 3 invoices": a number after "at" cannot be told from a time, and a
+            #            title cut there would lose the place or the quantity - the brain, which has the conversation, handles it
         if _OFFER_NON_CREATE_RE.search(sentences[-1]) or not _OFFER_CREATE_RE.search(sentences[-1]):
             return None  # an offer to MOVE / cancel / change a reminder is not one to create it: the brain acts on what was accepted
         if _OFFER_SCHEDULE_QUAL_RE.search(sentences[-1]) or any(t.group(2) or t.group(3) for t in _OFFER_TIME_RE.finditer(sentences[-1])):
