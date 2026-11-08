@@ -12,6 +12,8 @@ The signals already exist in the service log and two JSONL logs (never the datab
 * ``intent_router: intent_miss: ...``      no intent matched (legacy lines hold the words; since 2026-11-03 only ``len= utt=<hash>``)
 * the router shadow log (``actual_routed=chat`` with a low-confidence reason) - hash-keyed, no words
 * ``intent-misses.jsonl`` (``{"text","ts"}``)
+* the nightly self-review's counts-only summaries (``~/.zoe/self-review/*.self-review-summary.json``, ``self_review.py``, mode ``on``):
+  one event per flagged turn and failure class, with the fixed area label and the utterance hash (never words)
 
 Clustering is deterministic: a fixed lexicon maps an utterance to a capability AREA and an ACTION (``classify``); events with no
 words (a struggle line carries only a domain) take the area from the domain. A cluster is ``(area, action)``. Leftover words that
@@ -50,11 +52,12 @@ SRC_EXPERT_DEFER = "expert_defer_write"
 SRC_NLU_NO_EXTRACTOR = "nlu_no_extractor"
 SRC_INTENT_MISS = "intent_miss"
 SRC_ROUTER_UNSURE = "router_unsure"
+SRC_SELF_REVIEW = "self_review"
 
 SOURCE_WEIGHTS = {
     SRC_STRUGGLE_CANT_DO: 1.0, SRC_WRITE_CLAIM: 0.9, SRC_STRUGGLE_FALLTHROUGH: 0.8, SRC_STRUGGLE_REPEAT: 0.8,
     SRC_NLU_NO_EXTRACTOR: 0.7, SRC_EXPERT_MISS: 0.5, SRC_EXPERT_DEFER: 0.4, SRC_STRUGGLE_QUALITY: 0.3,
-    SRC_INTENT_MISS: 0.3, SRC_ROUTER_UNSURE: 0.1,
+    SRC_INTENT_MISS: 0.3, SRC_ROUTER_UNSURE: 0.1, SRC_SELF_REVIEW: 0.6,
 }
 SOURCE_LABELS = {
     SRC_STRUGGLE_CANT_DO: "Zoe said she could not", SRC_WRITE_CLAIM: "claimed a write that did not happen",
@@ -62,6 +65,7 @@ SOURCE_LABELS = {
     SRC_NLU_NO_EXTRACTOR: "intent matched but nothing could fill it", SRC_EXPERT_MISS: "expert had no plan",
     SRC_EXPERT_DEFER: "write deferred to the brain", SRC_STRUGGLE_QUALITY: "answer judged wrong",
     SRC_INTENT_MISS: "no intent matched", SRC_ROUTER_UNSURE: "router unsure",
+    SRC_SELF_REVIEW: "my own nightly review flagged it",
 }
 #: open-ended chat reaching the brain is how it should work, not a gap: its events count for a fraction
 CONVERSATION_FACTOR = 0.3
@@ -267,6 +271,25 @@ def parse_miss_record(rec: dict) -> Optional[Event]:
     if _non_household(rec.get("traffic_class") or rec.get("traffic")):
         return None                                  # intent_router writes traffic_class into every miss record
     return Event(float(rec["ts"]), SRC_INTENT_MISS, None, text=rec["text"], utt=utterance_hash(rec["text"]), origin="jsonl")
+
+
+#: the self-review's capability classes (self_review.GAP_CLASSES; kept literal: this module is also run as a script)
+_SELF_REVIEW_CLASSES = frozenset(("misroute", "claim_no_tool", "ack_contradicted", "rephrase_retry", "cant_do", "empty_reply"))
+
+
+def parse_self_review_summary(rec: dict) -> list:
+    """One self-review summary (``self_review.build_summary``) -> its capability events. Only a mode ``on`` night counts; each event
+    carries the fixed area label and the utterance hash, so it de-duplicates against the log's own struggle line for the same turn."""
+    if not isinstance(rec, dict) or rec.get("mode") != "on":
+        return []
+    out = []
+    for e in rec.get("events") or []:
+        if not isinstance(e, dict) or e.get("cls") not in _SELF_REVIEW_CLASSES or not isinstance(e.get("ts"), (int, float)):
+            continue
+        utt = e.get("utt") if isinstance(e.get("utt"), str) and re.fullmatch(r"[0-9a-f]{12}", e.get("utt") or "") else None
+        out.append(Event(float(e["ts"]), SRC_SELF_REVIEW, str(e.get("member") or "") or None, utt=utt,
+                         area=str(e.get("area") or "uncategorised"), note=f"self_review/{e['cls']}"))
+    return out
 
 
 def build_resolver(transcripts: Iterable[str]) -> dict:
