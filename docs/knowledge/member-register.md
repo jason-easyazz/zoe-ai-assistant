@@ -37,8 +37,16 @@ person (tombstones too: the slot spells the label; fail closed), and `live_entri
 (strict: an outage withholds all topics). Probed in `tests/test_forget_completeness_probe.py`.
 
 No producer of `inferred` rows ships here: the routes (below) are the editor, and the proposer (a night-mind or struggle-detector
-hook that calls `set_entry(..., "inferred")` and asks the member to confirm) is a follow-up. A member's utterance such as "keep it
-short" needs a per-language lexicon (words are data, not Python) and is the other follow-up.
+hook that calls `set_entry(..., "inferred")` and asks the member to confirm) is still a follow-up. **The register does not learn a
+style by itself, overnight or otherwise**: with no stored row the line is empty, so a new member hears the neutral voice (QA round 5,
+2026-11-08: three adults, slangy, formal and terse, no visible adaptation, no `MEMBER_REGISTER` log line in 297 turns).
+
+**Explicit requests are stored (QA round 5).** `register_requests.py` reads a short imperative that opens the member's turn ("stop
+ending every reply with a question", "be more casual", "keep it short", "no more jokes", "longer answers") and writes it as a
+`stated` row before the line is rendered, so the same reply obeys it and every turn after. English patterns only; adults only
+(`audience`); the replay harness never writes. A story that merely contains the words ("my boss told me to keep it short") stores
+nothing. The `questions` key (`none` | `normal`) renders as "never end a reply with a question". Not in this change: a deterministic
+strip of a trailing question (`reply_polish` owns the question cap) and per-language request lexicons.
 
 ## Who gets what
 

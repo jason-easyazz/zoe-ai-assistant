@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 855 prod flags; 271 read through `typed_env`.
+- 856 prod flags; 272 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 249 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 2 registered flags with no reader in the scanned sources.
+- 3 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-855 flags; 804 not documented in `.env.example`.
+856 flags; 805 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -679,6 +679,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_RECALL_GATE_TRACE` | str | `''` | - | `docs/knowledge/recall-gate.md` | `''` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
 | `ZOE_RECALL_GATE_TRACE_DAYS` | int | `7` | - | `docs/knowledge/recall-gate.md` | `7` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
 | `ZOE_RECALL_GATE_TRACE_DIR` | str | `''` | - | `docs/knowledge/recall-gate.md` | `''` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
+| `ZOE_RECALL_HOUSEHOLD_QUESTIONS` | bool | `True` | - | `services/zoe-data/AGENTS.md` | `True` | yes | NO | `services/zoe-data/memory_gate.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
 | `ZOE_RELAY_HOSTNAME` | str | `''` | - | `docs/knowledge/panel-relay-r1-box.md` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |
@@ -1226,4 +1227,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`
+`ZOE_CONTRACTION_REPAIR`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`

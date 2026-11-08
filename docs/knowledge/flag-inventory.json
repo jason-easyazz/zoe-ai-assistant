@@ -13167,6 +13167,25 @@
         },
         "typed_env": true
       },
+      "ZOE_RECALL_HOUSEHOLD_QUESTIONS": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_RECALL_PRESENT_STATE_SHAPES": {
         "defaults": [
           "-"
@@ -20685,6 +20704,7 @@
     }
   },
   "registry_unread": [
+    "ZOE_CONTRACTION_REPAIR",
     "ZOE_SELF_REVIEW_MAX_CALLS",
     "ZOE_SELF_REVIEW_MAX_TOKENS"
   ]
