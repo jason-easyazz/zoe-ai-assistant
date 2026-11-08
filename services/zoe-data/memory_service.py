@@ -2080,6 +2080,12 @@ class MemoryService:
                 await now_card.forget_user(user_id)
             except Exception as exc:
                 raise MemoryServiceError(f"delete_user failed: now-card erasure failed ({type(exc).__name__})") from exc
+            # ... and the shadow night pre-pass's proposed facts (names / ages / places of the member's day) - same rule, fail closed
+            try:
+                import night_extract
+                await night_extract.delete_user(user_id)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: night-extract erasure failed ({type(exc).__name__})") from exc
             # ... and the struggle detector's rows (summaries of the same words) - same rule, fail closed
             try:
                 import struggle_detector
