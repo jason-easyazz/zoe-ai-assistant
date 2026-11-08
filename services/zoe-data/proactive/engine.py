@@ -445,6 +445,14 @@ async def _slow_loop() -> None:
             except Exception as exc:
                 log.warning("delivery-ledger sweep failed: %s", exc)
 
+            # Step 4b: outcome edges (ZOE_OUTCOME_EDGES, default OFF = immediate no-op): a raised loop the member
+            # resolved is `acted`; an edge nothing decided in 24 h is `unknown`. Writes a table only.
+            try:
+                from proactive.outcome_edges import sweep as outcome_edges_sweep
+                await outcome_edges_sweep()
+            except Exception as exc:
+                log.warning("outcome-edges sweep failed: %s", exc)
+
             # Step 5: Zoe's own promises (commitments.py, ZOE_COMMITMENTS = off | shadow | enforce, default shadow). Checks the
             # timed promises that are now due: kept, fulfilled through the reminder path, or queued to be owned up to in the pull.
             # Shadow logs and acts on nothing. Never speaks; never raises.
