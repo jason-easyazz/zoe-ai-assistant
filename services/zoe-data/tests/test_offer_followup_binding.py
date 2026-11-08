@@ -245,3 +245,32 @@ def test_standalone_commands_and_negated_times_are_not_bound(reply):
 def test_a_plain_acceptance_with_a_time_still_binds(reply):
     # negative control for the two guards above: they must not stop a real acceptance
     assert bind_reminder_offer_reply(reply, OFFER, FRESH) is not None
+
+
+def test_a_purpose_clause_never_hides_distress_from_the_binding():
+    # Codex P1 on #2309: "sure 3pm because ..." binds as a reminder and the crisis handling never runs
+    assert bind_reminder_offer_reply("sure 3pm because i want to kill myself", OFFER, FRESH) is None
+    # negative control: an ordinary purpose clause still binds
+    assert bind_reminder_offer_reply("sure 3pm because i keep forgetting", OFFER, FRESH) is not None
+
+
+@pytest.mark.asyncio
+async def test_the_chat_path_runs_the_distress_tier_before_deferring_an_offer_reply(monkeypatch):
+    import fast_tiers
+
+    order: list = []
+
+    async def distress(text, user_id, kwargs):
+        order.append("distress")
+        return "CRISIS"
+
+    async def deferred(text, user_id, session_id=None):
+        order.append("offer")
+        return "remind me about pickup at 3 pm"
+
+    monkeypatch.setattr(fast_tiers, "_distress_tier", distress)
+    import intent_router
+
+    monkeypatch.setattr(intent_router, "reminder_offer_reply_text", deferred)
+    out = await fast_tiers._resolve_tiers("sure 3pm", "jason", "s1")
+    assert out == "CRISIS" and order == ["distress"]

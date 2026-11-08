@@ -2213,6 +2213,13 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
     tokens = [t for t in (text or "").strip().lower().split() if t]
     if not tokens or len(tokens) > _OFFER_ACTION_MAX_TOKENS:
         return None
+    try:
+        import distress_handoff
+
+        if distress_handoff.detect(text).tier != "none":
+            return None   # a purpose clause must never hide a crisis: the distress tier owns the turn
+    except Exception:  # noqa: BLE001 - cannot rule distress out: do not bind
+        return None
     if _OFFER_REPLY_PUNCT_RE.sub("", tokens[0]) not in _OFFER_ACTION_FIRST:
         return None
     if any(_OFFER_REPLY_PUNCT_RE.sub("", t) in ("no", "nope", "dont", "don't") for t in tokens[1:]):
