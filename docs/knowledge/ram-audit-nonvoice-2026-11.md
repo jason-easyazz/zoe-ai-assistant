@@ -92,7 +92,17 @@ swapped, so its RSS and latency are discarded):
 - A kept-but-bounded arena (`kSameAsRequested`) saved nothing, so it is not offered.
 - Revert switch: `ZOE_ORT_CPU_ARENA=1` restores fastembed's and Chroma's own sessions.
 
-A final run of the harness on the shipped code (arena 1,0,1,0, full-vector fingerprint) is recorded in the PR body.
+Final run on the shipped code (arena on / OFF / on / OFF, **full-vector** fingerprint `9de27fc628a0` in all four, box at load 8-13, VmSwap 0):
+
+| run | RSS after | HWM | fastembed p50 | Chroma p50 |
+|---|---|---|---|---|
+| arena on | 421 MB | 468 | 46.2 ms | 148.5 ms |
+| arena OFF | **323 MB** | 375 | 41.4 ms | 129.1 ms |
+| arena on | 437 MB | 453 | 40.5 ms | 110.2 ms |
+| arena OFF | **327 MB** | 370 | 22.5 ms | 73.7 ms |
+
+-98 and -110 MB RSS, identical full vectors, and the arena-off runs were not slower even
+under heavy contention. Across all three pairs the saving is -98..-111 MB.
 
 **Verify after deploy:** zoe-data RSS ~110 MB below its pre-deploy figure at the same age
 (`ps -o rss -p $(systemctl --user show -p MainPID --value zoe-data)`), `/readyz` green, a
