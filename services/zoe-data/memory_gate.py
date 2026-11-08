@@ -307,6 +307,15 @@ EVENT_TIME_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
     for kind, rx in (
         ("my_event", r"\b" + _ET_WH + r"(?:['’]s|\s+(?:is|are|was|were|does|do|did|will))\s+"
                      r"(?:my|our)\s+(?:[\w'’-]+\s+){0,3}?" + _ET_NOUN + r"\b"),
+        # "when is jonahs learner test" (QA 2026-11-08): a named person's plan is the user's stored plan too, so it never reaches the
+        # clock and the recall floor consults memory beside the calendar. "jonahs"/"jonah's"/"mums": a possessive, never this/its.
+        ("their_event", r"\b" + _ET_WH + r"(?:['’]s|\s+(?:is|are|was|were|does|do|did|will))\s+"
+                        r"(?!(?:this|its|his|hers|ours)\b)[a-z][\w-]*?(?:['’]s|(?<![siu])s)\s+(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\b"),
+        # "what time do I usually get up?" (QA 2026-11-08: answered "It's 2:10 PM."): a habit of the user's own, stored as a routine.
+        ("my_habit", r"\b(?:when|what\s+time)\s+(?:do|did|would|will|am|are)\s+(?:i|we)\s+"
+                     r"(?:usually|normally|typically|generally|always|often|regularly|tend\s+to|(?:get|wake)\s+up|"
+                     r"go\s+to\s+(?:bed|sleep|work)|head\s+(?:off|out)|knock\s+off|clock\s+(?:on|off)|"
+                     r"have\s+(?:lunch|dinner|breakfast|a\s+break))\b"),
         ("have_event", r"\b" + _ET_WH + r"\s+(?:do|am|are|have)\s+(?:i|we)\s+(?:got\s+)?"
                        r"(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\b"),
         ("my_move", r"\b(?:when|what\s+time)\s+(?:do|am|are)\s+(?:i|we)\s+(?:seeing|meeting|"

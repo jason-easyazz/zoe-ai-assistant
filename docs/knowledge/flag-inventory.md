@@ -32,7 +32,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 249 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 2 registered flags with no reader in the scanned sources.
+- 4 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -1226,4 +1226,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`
+`ZOE_REPLY_POLISH`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_WRITE_INTENT_GATE`

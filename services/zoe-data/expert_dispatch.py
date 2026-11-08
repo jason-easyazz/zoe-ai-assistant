@@ -357,6 +357,13 @@ def _plan(domain: str, text: str):
             r"going\s+to|gonna|sunny)\b", low))
         return ("weather", {"forecast": fc}, "read")
     if domain == "time":
+        # A when / what-time question about the person's OWN life is never the clock: "what time do I usually get up?" answered
+        # "It's 2:10 PM." (QA 2026-11-08) because the head claims `time` on the words alone and the precedence flags can be dark.
+        # Unconditional: this only ever hands a clearly personal question to the brain (recall floor + calendar), never a clock ask.
+        from memory_gate import is_event_time_question, is_own_fact_question
+
+        if is_event_time_question(text) or is_own_fact_question(text):
+            return None
         det = detect_intent(text, log_miss=False)
         name = det.name if det and det.name in ("time_query", "date_query") else "time_query"
         return (name, {}, "read")

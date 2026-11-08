@@ -1418,6 +1418,8 @@ def detect_intent(
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
                 continue            # a sentence, not an item: never stored, never claimed
+            if _unnamed_list(lst) and _needs_list_choice(item):
+                return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
             return Intent("list_add", {"item": item, **_list_slots(lst)})
 
     # --- LIST ADD (STT-garbled leading "add") ---
@@ -1466,6 +1468,8 @@ def detect_intent(
                 if not _list_item_ok(item):
                     continue
                 list_type = _infer_list(item)
+                if list_type == "shopping" and _needs_list_choice(item):
+                    return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
                 return Intent("list_add", {"item": item, "list_type": list_type})
 
     # --- LIST ADD (natural language shopping) ---
@@ -2593,6 +2597,22 @@ _TASK_KEYWORDS = {
 }
 
 
+_GENERIC_LIST_NAMES = frozenset({"", "the", "my", "our", "a", "this", "that", "your"})
+
+
+def _unnamed_list(lst: str) -> bool:
+    """"add X to the list" / "to my list": the list is a pronoun-ish word, not a name or a type."""
+    return str(lst or "").strip().lower() in _GENERIC_LIST_NAMES
+
+
+def _needs_list_choice(item: str) -> bool:
+    """No list was named and the item is clearly not a grocery (bolts, steel cap boots, an invoice): the household shopping list is
+    the wrong default (owner's fridge rule: household items go on household lists), so Zoe asks which list. Milk goes straight on."""
+    import write_intent_gate
+
+    return write_intent_gate.looks_non_grocery(item)
+
+
 def _infer_list(item: str) -> str:
     lower = item.lower()
     if any(kw in lower for kw in _TASK_KEYWORDS):
@@ -2879,6 +2899,11 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     mcp_server's list_add_item tool (same list resolution, family/personal
     visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
+    if (intent.slots or {}).get("ask_list") and str((intent.slots or {}).get("item") or "").strip():
+        # No list named and not a grocery: ask which list instead of defaulting to the household shopping list.
+        import write_intent_gate
+
+        return write_intent_gate.which_list_question(str(intent.slots.get("item") or ""))
     intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()

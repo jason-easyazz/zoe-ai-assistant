@@ -194,6 +194,21 @@ def _voice_activity_stamp_starts_empty(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reply_polish_and_write_gate_state_is_per_test():
+    """``reply_polish`` remembers whether a session's last reply ended on a question, and ``write_intent_gate`` the last noted turn;
+    both are process-wide dicts keyed by (user, session), which tests reuse ("jason", "s1"). Clear them around every test."""
+    for name in ("reply_polish", "write_intent_gate"):
+        mod = sys.modules.get(name)
+        if mod is not None:
+            mod.reset_state()
+    yield
+    for name in ("reply_polish", "write_intent_gate"):
+        mod = sys.modules.get(name)
+        if mod is not None:
+            mod.reset_state()
+
+
+@pytest.fixture(autouse=True)
 def _restraint_head_worker_never_outlives_its_test():
     """``restraint_head.defer`` starts a daemon worker that embeds through the (native) tokenizer + ONNX session. Left running it
     races the NEXT test's model load / the interpreter's finalisation - the 2026-10-29 ``Fatal Python error: Segmentation fault`` in
