@@ -227,3 +227,21 @@ def test_an_offer_that_carries_its_own_day_or_time_is_not_rewritten():
 def test_competing_clock_times_in_the_reply_decline():
     assert bind_reminder_offer_reply("sure 3pm is too early, 4pm please", OFFER, FRESH) is None
     assert bind_reminder_offer_reply("sure, 4pm please", OFFER, FRESH) == "remind me about pickup at 4 pm"      # control: one slot
+
+
+@pytest.mark.parametrize("reply", [
+    "add a reminder to call the dentist at 3pm",     # Codex on #2309: a NEW command that opens with an affirmative word
+    "please add a reminder to call the dentist at 3pm",
+    "yes add a reminder to buy milk at 5pm",
+    "sure, not 3pm",                                 # the named time is the one being refused
+    "ok but not at 3pm",
+    "yes please, never before 9am",
+])
+def test_standalone_commands_and_negated_times_are_not_bound(reply):
+    assert bind_reminder_offer_reply(reply, OFFER, FRESH) is None
+
+
+@pytest.mark.parametrize("reply", ["yes please, 2:45 so i'm not late", "sure, at 3pm", "ok go ahead at 3pm thanks", "yes 3pm works"])
+def test_a_plain_acceptance_with_a_time_still_binds(reply):
+    # negative control for the two guards above: they must not stop a real acceptance
+    assert bind_reminder_offer_reply(reply, OFFER, FRESH) is not None

@@ -2166,6 +2166,15 @@ _OFFER_SCHEDULE_QUAL_RE = re.compile(
     r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|"
     r"dec(?:ember)?|in\s+\d+\s+(?:minutes?|mins?|hours?|days?|weeks?)|\d{1,2}(?:st|nd|rd|th)|\d{1,2}/\d{1,2})\b", re.IGNORECASE)
 _OFFER_ACTION_MAX_TOKENS = 12
+#: a negator right before a clock time ("not 3pm", "not at 3", "never before 9"): the time is the one being refused
+_OFFER_NEGATED_TIME_RE = re.compile(
+    r"\b(?:not|never|except|isn'?t|won'?t|can'?t|nothing)\s+(?:(?:at|around|by|for|before|after|until|till)\s+)?\d", re.IGNORECASE)
+_OFFER_PURPOSE_WORDS = frozenset({"so", "because", "cause", "cuz", "coz"})
+#: the words an acceptance may carry besides the clock time: anything else is a different request
+_OFFER_ACCEPT_FILLER = frozenset({
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "pls", "do", "it", "that", "go", "ahead", "at", "for", "around", "by",
+    "make", "set", "then", "thanks", "thank", "you", "and", "the", "a", "perfect", "great", "good", "fine", "works", "sounds",
+    "like", "lets", "let's", "sweet", "cool", "right", "exactly", "absolutely", "of", "course", "that's", "thats", "reminder"})
 _OFFER_QUESTION_WORDS = frozenset({"what", "what's", "whats", "when", "where", "who", "why", "how", "which"})
 
 
@@ -2208,6 +2217,8 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         return None
     if any(_OFFER_REPLY_PUNCT_RE.sub("", t) in ("no", "nope", "dont", "don't") for t in tokens[1:]):
         return None
+    if _OFFER_NEGATED_TIME_RE.search(" ".join(tokens[1:])):
+        return None  # "sure, not 3pm" rejects the very time it names: the brain, which has the conversation, handles it
     if "?" in text or any(_OFFER_REPLY_PUNCT_RE.sub("", t) in _OFFER_QUESTION_WORDS for t in tokens[1:]):
         return None  # "yes, what time is it at 2:45?" is a question, not a slot
     if _OFFER_SCHEDULE_QUAL_RE.search(" ".join(tokens[1:])):
@@ -2218,6 +2229,20 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
     m = reply_times[0] if reply_times else None
     if m is None:
         return None  # a bare number is not a clock time
+    # an ACCEPTANCE plus a time slot, nothing else: "add a reminder to call the dentist at 3pm" is a new command that merely opens
+    # with an affirmative word, and rewriting it onto the pending offer would replace the task the person asked for
+    _rest = " ".join(tokens[1:])
+    _rest = (_rest[:m.start()] + " " + _rest[m.end():]) if _rest else _rest
+    _words: list = []
+    for _t in _rest.split():
+        _w = _OFFER_REPLY_PUNCT_RE.sub("", _t)
+        if _w in _OFFER_PURPOSE_WORDS:
+            break            # "..., so i'm not late": the purpose clause says why, it is not another request
+        if _w:
+            _words.append(_w)
+    _leftover = [w for w in _words if w not in _OFFER_ACCEPT_FILLER]
+    if _leftover:
+        return None
     hour, minute, mer = int(m.group(1)), m.group(2), (m.group(3) or "").replace(".", "").lower()
     if hour > 12 or (minute and int(minute) > 59) or (hour == 0 and not mer):
         return None
