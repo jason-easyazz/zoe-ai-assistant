@@ -197,6 +197,8 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
             return None
         if kind == "skip":
             _PENDING.pop(panel, None)
+            for k in [k for k, t in _TOKENS.items() if t.panel_id == panel]:
+                _TOKENS.pop(k, None)           # a queued playback must not play the clip the member just cancelled
             reply = _say("skipped")
         elif kind == "name":
             reply = await _name(uid, panel, pend, name)

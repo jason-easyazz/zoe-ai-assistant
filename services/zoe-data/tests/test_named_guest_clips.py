@@ -173,3 +173,13 @@ def test_every_naming_route_relabels_the_saved_clips_so_a_forget_erases_the_audi
     meta = vc.read(wavp)
     assert meta["kind"] == "guest" and meta["id"] == out["guest_id"]
     assert vc.erase_guests([out["guest_id"]], str(clips.dir)) == 1          # a forget now removes the audio
+
+
+def test_cancelling_revokes_the_queued_playback(clips):
+    # Codex on #2346: "cancel" after asking for a clip but before the poller plays it must stop the playback
+    clip(clips.dir, "c", clips.cluster)
+    assert ask("who was that this morning").intent == "named_guest_clip_play"
+    tok = list(ngc._TOKENS)[0]
+    out = ask("cancel")
+    assert out is not None and out.intent == "named_guest_clip_skip"
+    assert ngc.redeem(tok, PANEL) is None
