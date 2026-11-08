@@ -73,7 +73,7 @@ def _attached(fact: str, names: set, word_re: str):
         return None
     alt = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
     before = re.compile(rf"\b(?P<w>{word_re})\b(?=\s+(?:(?:(?:is|was|are)\s+)?(?:named|called)\s+)?(?:{alt})\b)", re.IGNORECASE)
-    after = re.compile(rf"\b(?:{alt})\b(?:['’]s)?\s+(?:is|was|as|being)\s+(?:(?:a|an|the|their|his|her|our|my)\s+)?(?P<w>{word_re})\b",
+    after = re.compile(rf"\b(?:{alt})\b(?:['’]s)?\s+(?:is|was|as|being)\s+(?:(?:a|an|the|their|his|her|our|my)\s+)?(?P<w>{word_re})\b(?=\s*(?:[.,;:!?]|$|\band\b|\bbut\b|\bwho\b|\bthat\b|\bwhich\b))",
                        re.IGNORECASE)
     return before.search(fact or "") or after.search(fact or "")
 

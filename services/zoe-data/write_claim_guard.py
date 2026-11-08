@@ -716,6 +716,14 @@ def supported(claim: Claim, user_id: Optional[str], started: float, *, user_text
         turn = None
     else:
         since, turn = started, getattr(started, "turn", None)
+    if is_recap_question(user_text):
+        # a retrospective "did you save that?" asks about COMMITTED writes: a capture merely queued for a turn (pending_capture) is a
+        # promise about the future, never evidence of an earlier save
+        def _has(kind=None):
+            rs = write_receipts.since(user_id, since, [kind] if kind else None, turn=turn)
+            return any(r.source != "pending_capture" and (kind or r.kind not in write_receipts.NOT_A_WRITE) for r in rs)
+
+        return _has() if not claim.kinds else all(_has(kind) for kind in claim.kinds)
     if not claim.kinds:
         return write_receipts.has(user_id, since, turn=turn)
     return all(write_receipts.has(user_id, since, kind, turn=turn) for kind in claim.kinds)

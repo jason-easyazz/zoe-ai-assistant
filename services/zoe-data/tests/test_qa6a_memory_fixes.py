@@ -184,3 +184,20 @@ def test_kin_pet_repair_only_touches_the_noun_that_describes_the_named_subject()
     # the bleed it exists for is still repaired
     msg = "kids Ava (8) and Ben (4), and a fat cat called Mo"
     assert k.repair("User's pet Ava is obsessed with horses", "pet", msg) == ("User's child Ava is obsessed with horses", "relationship")
+
+
+def test_a_recap_question_is_not_answered_by_a_queued_capture():
+    # Codex on #2350: "did you save that?" asks about COMMITTED writes; a capture queued for an earlier turn is no evidence
+    wr.reset()
+    g.note_pending_capture("member_a", FIRST_INTRO)
+    started = wr.begin()
+    out = g.guard_text("Yes, I saved that note.", "member_a", started, user_text="did you save what I told you earlier?")
+    assert out != "Yes, I saved that note."
+    wr.record("member_a", "memory", "m1", "test")             # negative control: a committed write does back it
+    assert g.guard_text("Yes, I saved that note.", "member_a", started, user_text="did you save what I told you earlier?") == "Yes, I saved that note."
+
+
+def test_kin_pet_repair_leaves_a_pet_owner_alone():
+    import kin_pet_guard as k
+
+    assert k.repair("Ava is a pet owner", "pet", "My daughter Ava is a pet owner.") is None
