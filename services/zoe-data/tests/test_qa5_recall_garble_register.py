@@ -143,6 +143,10 @@ def test_touch_tokens_handle_lazy_possessives_and_function_words():
     assert mg.packet_touches_question("whats danas job", "- Dana works nights")
     assert not mg.packet_touches_question("what is the", "- The user is the one who is here")   # only function words
     assert not mg.packet_touches_question("how old is the universe", "- Mira is six")
+    # cross-review: a contraction's stem ("don", "won") is not a content word, so two sentences that only share "don't" do not touch
+    assert not mg.packet_touches_question("Why don't black holes emit light?", "- The user's parents don't eat meat")
+    assert not mg.packet_touches_question("why won't it rain", "- Theo won't eat onions")
+    assert mg.packet_touches_question("whats Dana's job", "- Dana's job is nursing")      # a possessive keeps its name
 
 
 # ── 2. the contraction splice ────────────────────────────────────────────────────────────────────────────────
@@ -245,6 +249,8 @@ def test_an_explicit_request_is_read(message, want):
     "im trying to relax",
     "relax",
     "he never ends with a question",
+    "\"be more casual\" is what my boss told me. What does that mean?",      # reported speech (cross-review): quoted, so not a request
+    "'keep it short' she said",
     "how do i stop ending sentences with a question mark in my essay and keep it short for the examiner on friday morning at nine "
     "o'clock sharp in the main hall of the school",     # over the length cap
     "",

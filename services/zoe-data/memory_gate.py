@@ -829,7 +829,9 @@ def _touch_tokens(text: str) -> set[str]:
     out: set[str] = set()
     for raw in _TOUCH_WORD_RE.findall(_BRACKET_TAG_RE.sub(" ", text or "").lower().replace("’", "'")):
         had_apostrophe = "'" in raw
-        word = raw.split("'")[0] if had_apostrophe else raw
+        word, _, tail = raw.partition("'")
+        if had_apostrophe and tail != "s":
+            continue        # don't / I'm / we'll: a contraction's stem ("don", "won") is not a content word; only a possessive 's keeps its name
         if len(word) < 3 or word in _TOUCH_STOP:
             continue
         out.add(word)

@@ -27,6 +27,7 @@ import re
 logger = logging.getLogger(__name__)
 
 MAX_CHARS = 140
+_QUOTES = frozenset('"\'\u201c\u2018\u00ab`')
 
 _LEAD = (r"^\W*(?:(?:ok(?:ay)?|hey|hi|zoe|please|pls|and|also|just|so|right|look|actually|can\s+you|could\s+you|would\s+you|will\s+you|"
          r"from\s+now\s+on|going\s+forward|in\s+future|next\s+time|i\s+(?:said|asked(?:\s+you)?|told\s+you|want\s+you|need\s+you|"
@@ -70,8 +71,8 @@ def parse(message: str) -> list[tuple[str, str]]:
     """The register settings an explicit request in ``message`` asks for, as ``[(key, value), ...]`` (one per key, in rule order).
     ``[]`` for anything that is not a short imperative aimed at Zoe. Pure."""
     msg = " ".join((message or "").split())
-    if not msg or len(msg) > MAX_CHARS:
-        return []
+    if not msg or len(msg) > MAX_CHARS or msg.lstrip()[:1] in _QUOTES:
+        return []           # a quoted phrase is somebody's words being reported, not a request to Zoe
     seen: dict[str, str] = {}
     for key, value, rx in RULES:
         if key not in seen and rx.match(msg):
