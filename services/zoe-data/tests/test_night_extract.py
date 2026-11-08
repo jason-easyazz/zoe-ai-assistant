@@ -404,3 +404,13 @@ def test_the_cli_never_fails_the_night(monkeypatch, capsys):
     monkeypatch.setattr(cli, "amain", boom)
     assert cli.main([]) == 0
     assert "status=error" in capsys.readouterr().err
+
+
+def test_non_ascii_names_keep_their_letters_so_forgetting_can_match():
+    # Codex on #2352 (P1): "José" became "jos", so "forget José" matched neither the person nor the age fact
+    import night_extract as ne
+
+    assert ne.norm("José") == "josé"
+    assert ne.norm("José's dog") == "josé dog"
+    assert ne.norm("Zoë") == "zoë"
+    assert ne.norm("Jose") == "jose"                      # negative control: ASCII names are unchanged

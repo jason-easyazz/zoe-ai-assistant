@@ -110,7 +110,7 @@ def prepare(text: str) -> Optional[str]:
 
 def norm(t: str) -> str:
     t = re.sub(r"'s\b", "", (t or "").lower())
-    w = [x for x in re.sub(r"[^a-z0-9\- ]", " ", t).split() if x]
+    w = [x for x in re.sub(r"[^\w\- ]|_", " ", t).split() if x]
     if w and " ".join(w) in _PRON:
         return "speaker"
     while len(w) > 1 and w[0] in _DROP:
@@ -179,7 +179,7 @@ def postprocess(res: dict) -> list[dict]:
 
 
 # ── pure: the lexicon rules (pets and relation words; the model is dead on both) ────────────────────────────────────────────────────────────
-_NAME = r"([A-Za-z][A-Za-z'\-]{1,24})"
+_NAME = r"([^\W\d_][\w'\-]{1,24})"
 _NOT_NAMES = frozenset({"a", "an", "the", "is", "was", "are", "and", "or", "but", "has", "had", "who", "that", "this", "it", "he", "she", "they", "my",
                         "our", "his", "her", "their", "very", "so", "too", "just", "not", "also", "still", "really", "now", "then", "there", "here",
                         "to", "of", "in", "on", "at", "for", "with", "from", "by", "as", "if", "when", "while", "named", "called", "name", "zoe",
@@ -265,7 +265,7 @@ _CHILD_WORD = re.compile(r"\b(?:son|daughter|child|kid|baby)\b", re.I)
 
 
 def _words(text: str) -> set:
-    return set(re.findall(r"[a-z0-9']+", (text or "").lower()))
+    return set(re.findall(r"[\w']+", (text or "").lower()))
 
 
 def _nums(text: str) -> set:
