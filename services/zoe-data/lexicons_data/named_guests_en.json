@@ -53,5 +53,37 @@
   "script": {
     "done": "Thanks, {name}. I'll know your voice now.",
     "partial": "Thanks, {name}. I only saved part of it, but I can already use it."
+  },
+  "clips": {
+    "_note": "Spoken naming of a SAVED unknown-voice clip (named_guest_clips.py). 'play' routes 'who was that this morning'; once a clip is playing, 'name' and 'skip' answer it. Whole-utterance regexes after the same normalisation as 'cues'.",
+    "play": [
+      "who (?:was|were) (?:that|those) (?:on the panel )?(?:earlier|today|this morning|this afternoon|yesterday|last night)",
+      "who (?:was|were) (?:talking|speaking)(?: on the panel)?(?: (?:earlier|today|this morning|this afternoon|yesterday|last night))?",
+      "who (?:was|were) (?:that|those) (?:people |person |voice |voices )?(?:you (?:didn't|did not|don't|do not) (?:know|recognis?z?e))(?: (?:earlier|today|this morning|this afternoon|yesterday|last night))?",
+      "play (?:me )?(?:the |that )?(?:unknown )?(?:voices?|clips?)(?: you (?:didn't|did not|don't|do not) (?:know|recognis?z?e))?",
+      "(?:play|let me hear) (?:me )?(?:the |a )?(?:voice|clip) (?:from )?(?:earlier|today|this morning|this afternoon|yesterday|last night)"
+    ],
+    "name": [
+      "(?:that(?:'s| is| was)|it(?:'s| is| was)|this is|they(?:'re| are| were)) (?P<name>[a-z][a-z' \\-]{0,40}?)(?: (?:earlier|today|this morning|this afternoon|yesterday|last night))?"
+    ],
+    "skip": [
+      "(?:i )?(?:don't|do not) know(?: who(?: (?:that|it) (?:is|was))?)?",
+      "no idea",
+      "not sure",
+      "skip(?: it)?",
+      "never ?mind",
+      "forget it",
+      "stop",
+      "cancel"
+    ],
+    "say": {
+      "play": "Okay, have a listen.",
+      "ask": "Who's this?",
+      "none": "I haven't got a voice I don't know to play you.",
+      "no_audio": "I couldn't play that one just now.",
+      "named": "Got it. That's {name}. I'll know them next time.",
+      "refused": "I can't give that voice that name. It's a household member's, or someone I already know.",
+      "skipped": "No problem. I'll keep it for now."
+    }
   }
 }

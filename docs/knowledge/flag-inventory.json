@@ -9932,6 +9932,25 @@
         },
         "typed_env": true
       },
+      "ZOE_NAMED_GUEST_CLIPS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "a verified adult member may hear a saved unknown-voice clip and name it",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_NAMED_GUEST_MEMORY": {
         "defaults": [
           "False"
@@ -16891,6 +16910,63 @@
         },
         "typed_env": false
       },
+      "ZOE_VOICE_CLIP_RETENTION": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "delete guest / unknown corpus clips past the retention",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_VOICE_CLIP_RETENTION_DAYS": {
+        "defaults": [
+          "30"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 30,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_VOICE_CLIP_VERDICT": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "label each saved corpus clip with the server speaker verdict",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_VOICE_CONTINUATION_HOLD": {
         "defaults": [
           "'on'"
@@ -17382,7 +17458,8 @@
           "scripts/maintenance/voice_corpus_strata.py",
           "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py",
-          "services/zoe-data/struggle_proposals.py"
+          "services/zoe-data/struggle_proposals.py",
+          "services/zoe-data/voice_clips.py"
         ],
         "registered": true,
         "spec": {
@@ -18220,6 +18297,7 @@
     "services/zoe-data/user_portrait.py": 1,
     "services/zoe-data/verify_on_challenge.py": 1,
     "services/zoe-data/voice_announce.py": 2,
+    "services/zoe-data/voice_clips.py": 1,
     "services/zoe-data/voice_greeting.py": 3,
     "services/zoe-data/voice_settings.py": 2,
     "services/zoe-data/voice_spacer.py": 1,

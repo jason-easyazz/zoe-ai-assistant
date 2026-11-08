@@ -69,12 +69,43 @@ def test_off_and_shadow_never_bind_a_guest(env, monkeypatch):
         monkeypatch.setenv("ZOE_NAMED_GUESTS", m)
         assert run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False)) is None
 
-def test_a_child_or_a_deleted_person_is_never_matched(env):
+def test_a_deleted_person_is_never_matched(env):
     gid = enrol(env)
-    env.conn.execute("UPDATE people SET relationship = 'son' WHERE id = ?", (gid,))
+    env.conn.execute("UPDATE people SET deleted = 1 WHERE id = ?", (gid,))
     assert run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False)) is None
-    env.conn.execute("UPDATE people SET relationship = NULL, deleted = 1 WHERE id = ?", (gid,))
-    assert run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False)) is None
+
+@pytest.mark.parametrize("word", ["son", "daughter", "niece", "nephew", "grandkid", "grandchild", "grandson", "granddaughter"])
+def test_a_child_is_recognised_like_anyone_and_marked_child_safe(env, word):
+    """Owner 2026-11-08: voice works the same for adults and children. A child word MARKS, never refuses."""
+    gid = enrol(env)
+    adult = run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False))
+    assert adult is not None and adult.child is False and "child-safe" not in ng.guest_line(adult)
+    env.conn.execute("UPDATE people SET relationship = ? WHERE id = ?", (word, gid))
+    kid = run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False))
+    assert kid is not None and kid.child is True and kid.name == "Quinn"
+    line = ng.guest_line(kid)
+    assert "child-safe" in line and "plain, short words" in line and "tell a grown-up" in line and "Quinn" in line
+    assert [g["guest_id"] for g in run(ng.sync_entries({MID}))] == [gid]       # served to the panel too
+    env.conn.execute("UPDATE people SET relationship = 'friend' WHERE id = ?", (gid,))
+    assert run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False)).child is False      # control: the mark follows the word
+
+def test_child_margins_are_logged_separately_in_shadow(env, monkeypatch, caplog):
+    import logging
+
+    gid = enrol(env)
+    env.conn.execute("UPDATE people SET relationship = 'niece' WHERE id = ?", (gid,))
+    monkeypatch.setenv("ZOE_NAMED_GUESTS", "shadow")
+    with caplog.at_level(logging.INFO):
+        assert run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False)) is None
+        assert run(ng.accept(claim(gid, 0.05), DEVICE, member_identified=False)) is None      # a near-miss is logged as well
+    lines = [r.getMessage() for r in caplog.records if "NAMED_GUEST_MARGIN" in r.getMessage()]
+    assert len(lines) == 2 and all("child=1" in l for l in lines)
+    assert "matched=1" in lines[0] and "matched=0" in lines[1] and "margin_bar=-" in lines[1]
+    env.conn.execute("UPDATE people SET relationship = NULL WHERE id = ?", (gid,))
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        run(ng.accept(claim(gid, 0.62), DEVICE, member_identified=False))
+    assert "child=0" in caplog.text
 
 def test_a_guest_id_sent_as_a_member_claim_gets_no_member_scope(env, monkeypatch):
     """The negative control the brief asks for: a guest's id in the MEMBER claim clears the threshold but has no consented

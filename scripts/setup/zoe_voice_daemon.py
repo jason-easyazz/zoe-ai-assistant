@@ -4874,11 +4874,38 @@ def _handle_server_command(ann: dict) -> bool:
             return _queue_enrollment(cmd)
         if kind == "voice_profile_forget":
             return _purge_speaker_profile(str(cmd.get("user_id") or ""))
+        if kind == "voice_clip_play":
+            return _play_clip_then_ask(cmd)
     except Exception as exc:  # noqa: BLE001
         log.warning("panel command %s failed: %s: %s", kind or "?", type(exc).__name__, exc)
         return False
     log.warning("panel command ignored (unknown kind %r)", kind)
     return False
+
+
+def _play_clip_then_ask(cmd: dict) -> bool:
+    """Play the few seconds the server holds behind a single-use token (named_guest_clips.py), then ask who it is and open a listening
+    window (no wake word) for the answer. The audio never rides the announcement row. True = played (the row is acknowledged)."""
+    global _ignore_wake_until
+    token = str(cmd.get("token") or "").strip()
+    if not token:
+        return False
+    resp = _api_post("/api/voice/clip-playback", {"token": token, "panel_id": PANEL_ID}, timeout=15, retries=0)
+    audio_b64 = resp.get("audio_base64")
+    if not audio_b64:
+        log.warning("clip playback: no audio (%s)", resp.get("error", "refused"))
+        return False
+    _recording_active.set()
+    _ignore_wake_until = time.monotonic() + _ANNOUNCE_WAKE_GUARD_MAX_S
+    try:
+        played = play_audio_b64(audio_b64, resp.get("content_type", "audio/wav"))
+    finally:
+        _recording_active.clear()
+        _ignore_wake_until = time.monotonic() + POST_PLAY_COOLDOWN_S
+    ask = str(cmd.get("ask") or "").strip()
+    if played and ask:
+        _speak_announcement_then_listen({"id": "clip-ask", "text": ask, "trigger_type": "voice_clip_play", "follow_up": True})
+    return played
 
 
 def _queue_enrollment(cmd: dict) -> bool:
