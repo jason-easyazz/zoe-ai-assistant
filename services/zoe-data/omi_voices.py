@@ -251,7 +251,7 @@ async def learn(db, user_id: str, ids: list[str], segs: list, *, model_id: str, 
 async def _voiceprints_for_suggest(db, user_id: str, model_id: str) -> list[dict]:
     rows = await _all(db, "SELECT v.people_id, v.embedding, v.rejections, p.relationship, p.birthday FROM learned_voiceprints v "
                           "JOIN people p ON p.id = v.people_id WHERE v.owner_user_id = ? AND v.model_id = ? AND v.learning_enabled = 1 "
-                          "AND p.user_id = ? AND (p.deleted = 0 OR p.deleted IS NULL)", (user_id, model_id, user_id))
+                          "AND v.channel = 'pendant' AND p.user_id = ? AND (p.deleted = 0 OR p.deleted IS NULL)", (user_id, model_id, user_id))
     # a contact edited into a child AFTER their voice was learned is never suggested (the label-only child rule holds after edits)
     return [dict(person=r[0], v=_unit(_vec(r[1])), rej=int(r[2] or 0)) for r in rows
             if not person_may_be_child({"relationship": r[3], "birthday": r[4]})]
@@ -555,7 +555,7 @@ async def answer_suggestion(db, user_id: str, segment_id: str, answer: str) -> d
         now = _now()
         for vp, n_seg, n_rec, expires in await _all(
                 db, "SELECT id, n_segments, n_recordings, expires_at FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? "
-                    "AND model_id = ? AND learning_enabled = 1", (user_id, pid, model_id)):      # a stopped print stays frozen
+                    "AND model_id = ? AND learning_enabled = 1 AND channel = 'pendant'", (user_id, pid, model_id)):      # a stopped print stays frozen
             ok = int(n_seg) >= 3 and int(n_rec) >= 2
             await _run(db, "UPDATE learned_voiceprints SET last_confirmed_at = ?, status = ?, expires_at = ? WHERE id = ?",
                        (_iso(now), "confirmed" if ok else "provisional",
@@ -565,7 +565,7 @@ async def answer_suggestion(db, user_id: str, segment_id: str, answer: str) -> d
     await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE id = ? AND user_id = ?",
                (segment_id, user_id))
     await _run(db, "UPDATE learned_voiceprints SET rejections = rejections + 1 WHERE owner_user_id = ? AND people_id = ? AND model_id = ? "
-                   "AND learning_enabled = 1", (user_id, pid, model_id))          # a stopped print stays frozen, a "no" included
+                   "AND learning_enabled = 1 AND channel = 'pendant'", (user_id, pid, model_id))          # a stopped print stays frozen, a "no" included
     await db.commit()
     return {"person_id": None, "segments": 1, "learning": "unchanged"}
 
@@ -609,7 +609,8 @@ async def mark_not_a_person(db, user_id: str, *, kind: str, cluster_id: Optional
 
 # --- voiceprints ---------------------------------------------------------------------------------------------------------
 async def _voiceprint(db, user_id: str, person_id: str, model_id: str, *, create: bool = False) -> Optional[dict]:
-    q = "SELECT id, learning_enabled FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? AND model_id = ?"
+    q = ("SELECT id, learning_enabled FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? AND model_id = ? "
+         "AND channel = 'pendant'")      # the pendant's own print: a panel guest print (named_guests.py) is another microphone
     rows = await _all(db, q, (user_id, person_id, model_id))
     if not rows and create:
         now = _now()
@@ -652,7 +653,8 @@ async def rebuild(db, vp_id: str) -> bool:
 async def list_learned(db, user_id: str) -> list[dict]:
     rows = await _all(db, "SELECT v.id, v.people_id, p.name, v.status, v.n_segments, v.n_recordings, v.learning_enabled, "
                           "v.last_confirmed_at, v.expires_at, v.created_at FROM learned_voiceprints v JOIN people p ON p.id = v.people_id "
-                          "WHERE v.owner_user_id = ? AND p.user_id = ? AND (p.deleted = 0 OR p.deleted IS NULL) ORDER BY p.name",
+                          "WHERE v.owner_user_id = ? AND v.channel = 'pendant' AND p.user_id = ? AND (p.deleted = 0 OR p.deleted IS NULL) "
+                          "ORDER BY p.name",
                       (user_id, user_id))
     keys = ("id", "person_id", "name", "status", "segments", "recordings", "learning_enabled", "last_confirmed_at", "expires_at",
             "created_at")
@@ -662,7 +664,8 @@ async def list_learned(db, user_id: str) -> list[dict]:
 
 
 async def set_voice_learning(db, user_id: str, vp_id: str, enabled: bool) -> bool:
-    n = await _run(db, "UPDATE learned_voiceprints SET learning_enabled = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?",
+    n = await _run(db, "UPDATE learned_voiceprints SET learning_enabled = ?, updated_at = ? WHERE id = ? AND owner_user_id = ? "
+                       "AND channel = 'pendant'",
                    (1 if enabled else 0, _iso(_now()), vp_id, user_id))
     if n and not enabled:             # a stopped voice makes no more suggestions, and the ones it already made are withdrawn
         for pid, model_id in await _all(db, "SELECT people_id, model_id FROM learned_voiceprints WHERE id = ? AND owner_user_id = ?",
@@ -681,15 +684,16 @@ async def _withdraw_orphaned_suggestions(db, user_id: str, person_id: str) -> in
     return await _run(db, "UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL WHERE user_id = ? "
                           "AND suggested_person_id = ? AND (model_id IS NULL OR NOT EXISTS (SELECT 1 FROM learned_voiceprints v "
                           "WHERE v.owner_user_id = omi_segments.user_id AND v.people_id = omi_segments.suggested_person_id "
-                          "AND v.model_id = omi_segments.model_id))", (user_id, person_id))
+                          "AND v.model_id = omi_segments.model_id AND v.channel = 'pendant'))", (user_id, person_id))
 
 
 async def forget_voice(db, user_id: str, vp_id: str) -> bool:
     """"Forget this voice": the voiceprint and every contribution go, and so do the suggestions it made; the person and the
     member's tags stay (that is "forget <name>")."""
-    rows = await _all(db, "SELECT people_id FROM learned_voiceprints WHERE id = ? AND owner_user_id = ?", (vp_id, user_id))
+    rows = await _all(db, "SELECT people_id FROM learned_voiceprints WHERE id = ? AND owner_user_id = ? AND channel = 'pendant'",
+                      (vp_id, user_id))
     if not rows:
-        return False
+        return False                 # a panel guest's print is erased through the guest API (named_guests), with its memory
     await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp_id,))
     await _run(db, "DELETE FROM learned_voiceprints WHERE id = ? AND owner_user_id = ?", (vp_id, user_id))
     await _withdraw_orphaned_suggestions(db, user_id, rows[0][0])

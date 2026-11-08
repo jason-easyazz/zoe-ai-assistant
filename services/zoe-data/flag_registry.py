@@ -558,6 +558,7 @@ _ENTRIES = (
     _f('ZOE_MUSIC_OBSERVE_DEDUP_H', 'int', 12),
     _f('ZOE_MUSIC_SETUP_SECRET', 'str', ''),
     _f('ZOE_MUSIC_SETUP_TTL_S', 'int', 900, doc='docs/research/zoe-abilities-connectors-2026-10.md'),
+    _f('ZOE_NAMED_GUESTS', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/named-guests.md'),
     _f('ZOE_NIGHT_BUSY', 'str', '~/.zoe/agent-tools/night_busy.sh'),
     _f('ZOE_NIGHT_MIND', 'str', 'off', allowed=('off', 'shadow', 'enforce', 'serve'), doc='docs/knowledge/night-mind.md', note='live: unset (code default in force)'),
     _f('ZOE_NIGHT_MIND_CHUNK_TOKENS', 'int', 0),
