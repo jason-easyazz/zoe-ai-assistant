@@ -274,3 +274,18 @@ async def test_the_chat_path_runs_the_distress_tier_before_deferring_an_offer_re
     monkeypatch.setattr(intent_router, "reminder_offer_reply_text", deferred)
     out = await fast_tiers._resolve_tiers("sure 3pm", "jason", "s1")
     assert out == "CRISIS" and order == ["distress"]
+
+
+@pytest.mark.parametrize("offer", [
+    "Want me to move the reminder for pickup?",          # Codex on #2309: not an offer to CREATE a reminder
+    "Shall I cancel the reminder for pickup?",
+    "Want me to reschedule the pickup reminder?",
+    "Should I delete that reminder?",
+])
+def test_an_offer_to_change_a_reminder_is_not_bound_as_a_new_one(offer):
+    assert bind_reminder_offer_reply("sure, 3pm", offer, FRESH) is None
+
+
+def test_an_offer_to_create_a_reminder_still_binds():
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to set a reminder for the pickup?", FRESH) is not None
+    assert bind_reminder_offer_reply("sure, 3pm", "Want me to remind you to collect the parcel?", FRESH) is not None

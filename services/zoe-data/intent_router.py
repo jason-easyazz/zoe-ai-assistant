@@ -2166,6 +2166,11 @@ _OFFER_SCHEDULE_QUAL_RE = re.compile(
     r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|"
     r"dec(?:ember)?|in\s+\d+\s+(?:minutes?|mins?|hours?|days?|weeks?)|\d{1,2}(?:st|nd|rd|th)|\d{1,2}/\d{1,2})\b", re.IGNORECASE)
 _OFFER_ACTION_MAX_TOKENS = 12
+#: the offered action must be CREATING a reminder ("set a reminder", "remind you to ..."), never changing one that exists
+_OFFER_CREATE_RE = re.compile(r"\b(?:set|create|add|make|put|schedule|remind\s+you)\b", re.IGNORECASE)
+_OFFER_NON_CREATE_RE = re.compile(
+    r"\b(?:move|change|cancel|delete|remove|update|reschedule|edit|snooze|push|postpone|clear|dismiss|turn\s+off|switch\s+off|"
+    r"stop|undo|rename|shift|bring\s+forward)\b", re.IGNORECASE)
 #: a negator right before a clock time ("not 3pm", "not at 3", "never before 9"): the time is the one being refused
 _OFFER_NEGATED_TIME_RE = re.compile(
     r"\b(?:not|never|except|isn'?t|won'?t|can'?t|nothing)\s+(?:(?:at|around|by|for|before|after|until|till)\s+)?\d", re.IGNORECASE)
@@ -2261,6 +2266,8 @@ def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optiona
         # and a reminder (already done) but no pending reminder offer
         if not sentences or not (ends_with_offer(sentences[-1]) and _REMINDER_OFFER_RE.search(sentences[-1])):
             return None
+        if _OFFER_NON_CREATE_RE.search(sentences[-1]) or not _OFFER_CREATE_RE.search(sentences[-1]):
+            return None  # an offer to MOVE / cancel / change a reminder is not one to create it: the brain acts on what was accepted
         if _OFFER_SCHEDULE_QUAL_RE.search(sentences[-1]) or any(t.group(2) or t.group(3) for t in _OFFER_TIME_RE.finditer(sentences[-1])):
             return None  # the offer itself carries a day / recurrence / clock time the rewrite would drop or contradict
     except Exception:  # noqa: BLE001
