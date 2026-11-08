@@ -2709,7 +2709,7 @@ async def resolve_skybridge_request(
         return _attach_skybridge_context(await _resolve_voice_settings(intent))
 
     if intent.domain == "smart_home":
-        from smart_home_service import record_device_receipt, resolve_smart_home
+        from smart_home_service import record_device_receipt, resolve_smart_home_bounded as resolve_smart_home
         # "the light" said on a panel means the light in THAT panel's room. The
         # panel already sends context.panel_id; resolve it to the room's device
         # ids so the resolver can break a tie it would otherwise have to ask
