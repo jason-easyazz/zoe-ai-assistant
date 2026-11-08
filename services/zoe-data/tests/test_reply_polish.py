@@ -239,3 +239,11 @@ async def test_off_mode_still_records_a_calendar_offer_for_the_write_gate(monkey
     wig.note_turn("jason", "yes please")
     assert wig.check("jason", "calendar_create", {"title": "x"}) is None
     wig.reset_state()
+
+
+@pytest.mark.parametrize("tail", ["", "\n", "  ", " \n\n"])
+def test_trailing_whitespace_does_not_release_a_held_closer(tail):
+    # Codex on #2347: the cap must not depend on incidental trailing whitespace
+    assert rp.polish("Fine. Does that make sense?" + tail, "hi", True) == "Fine."
+    # negative control: whitespace after text that is NOT a held closer is kept
+    assert rp.polish("Fine. Okay then." + tail, "hi", True) == "Fine. Okay then." + tail

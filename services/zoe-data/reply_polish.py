@@ -171,6 +171,8 @@ class PolishStream:
         return text
 
     def _sentence(self, sent: str) -> str:
+        if self._held and not sent.strip():
+            return ""               # trailing whitespace is not "text follows": a held closing question stays held (and is dropped)
         out = ""
         if self._held:                  # a question that is not the last sentence after all
             out += self._release(self._held)
