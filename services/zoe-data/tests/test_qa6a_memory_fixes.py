@@ -201,3 +201,12 @@ def test_kin_pet_repair_leaves_a_pet_owner_alone():
     import kin_pet_guard as k
 
     assert k.repair("Ava is a pet owner", "pet", "My daughter Ava is a pet owner.") is None
+
+
+def test_a_gender_word_describing_a_pet_is_not_a_child_cue():
+    import kin_pet_guard as k
+
+    assert k.repair("User's pet Mo is female", "pet", "My cat is a girl called Mo.") is None
+    assert "mo" not in k.child_names("My cat is a girl called Mo.")
+    # negative control: a real child list is still read
+    assert k.child_names("kids Ava (8) and Ben (4), and a fat cat called Mo") == {"ava", "ben"}
