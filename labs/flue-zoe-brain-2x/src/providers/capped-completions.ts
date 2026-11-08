@@ -117,6 +117,8 @@ import {
   windowContextToBudget,
 } from '../context-window.ts';
 import { elideStaleBlocks, elideStaleBlocksEnabled } from '../context-blocks.ts';
+import { recoverTextToolCalls } from '../text-tool-calls.ts';
+import { forwardedLocaleFromMessages, stripLocaleEnvelope, withLocaleBlock } from '../household-locale.ts';
 import { cachedUserModelSuffix, turnUserModelSuffix, withUserModelBlock } from '../user-model.ts';
 import { markTurnUntrusted, untrustedSourceInMessages } from '../untrusted-content.ts';
 import { activeHarness, harnessForTurn, harnessManner, harnessRenderedInto, stripRenderMark, withToolGuidance, withTurnInstructions, type Harness } from '../harness.ts';
@@ -248,12 +250,15 @@ export function applyPolicies(context: Context, userModelSuffix = '', turnHarnes
   // An overlay manner.md replaces only the English block zoe-data already chose to send.
   const manner = harnessManner(forwardedMannerFromMessages(afterPersona), harness);
   // The member register line (src/register.ts) rides between the manner and identity lines, then the now card (src/now-card.ts);
-  // each is read off the newest message and stripped everywhere, in wire order.
+  // the household-locale line (src/household-locale.ts) is the first line AFTER the identity line; each is read off the newest
+  // message and stripped everywhere, in wire order.
   const afterManner = stripMannerEnvelope(afterPersona);
   const register = forwardedRegisterFromMessages(afterManner);
   const afterRegister = stripRegisterEnvelope(afterManner);
   const nowCard = forwardedNowCardFromMessages(afterRegister);
-  const clean = { ...context, messages: stripIdentityEnvelope(stripNowCardEnvelope(afterRegister)) };
+  const afterIdentity = stripIdentityEnvelope(stripNowCardEnvelope(afterRegister));
+  const locale = forwardedLocaleFromMessages(afterIdentity);
+  const clean = { ...context, messages: stripLocaleEnvelope(afterIdentity) };
   // ZOE_BRAIN_ELIDE_STALE_BLOCKS (src/context-blocks.ts): older user messages lose
   // their injected blocks before windowing. Disclosure below still reads `clean`,
   // so the session-sticky tool block never retracts when a block is elided.
@@ -263,9 +268,13 @@ export function applyPolicies(context: Context, userModelSuffix = '', turnHarnes
   // windowing, so the history budget is charged for it. '' → unchanged.
   // The persona swap and the manner block happen BEFORE windowing too, so the history budget is charged for them.
   // The manner block goes ahead of the user-model card: the bytes up to the card are the same for every member.
+  // The locale line is the same for every member of the house, so it goes ahead of the manner block too.
   // The register line goes after the manner block and before the card: the stable prefix (doctrines, persona, manner) is untouched.
   // The now card goes AFTER the user-model card: the bytes up to the end of the card are today's, and the card changes nightly.
-  const prepared = withNowCardBlock(withUserModelBlock(withRegisterBlock(withMannerBlock(withPersonaBlock(sent, persona), manner), register), userModelSuffix), nowCard);
+  const prepared = withNowCardBlock(
+    withUserModelBlock(withRegisterBlock(withMannerBlock(withLocaleBlock(withPersonaBlock(sent, persona), locale), manner), register), userModelSuffix),
+    nowCard,
+  );
   // Overlay tool guidance replaces DESCRIPTIONS only (never schemas, groups or permissions), before
   // disclosure and windowing so the budget is charged for the text actually sent.
   const safe = withToolGuidance(stripCodingBuiltins(prepared), harness);
@@ -305,7 +314,7 @@ export function promptSections(context: Context): PromptSections {
   const tokens = (ms: Message[]) => ms.reduce((n, m) => n + estimateMessageTokens(m), 0);
   let last = sent.messages.length;
   while (last > 0 && sent.messages[last - 1].role !== 'user') last -= 1;
-  const stored = stripIdentityEnvelope(stripNowCardEnvelope(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped)))));
+  const stored = stripLocaleEnvelope(stripIdentityEnvelope(stripNowCardEnvelope(stripRegisterEnvelope(stripMannerEnvelope(stripPersonaEnvelope(unwrapped))))));
   return {
     system: estimateTextTokens(sent.systemPrompt ?? ''),
     tools: estimateToolTokens(sent.tools),
@@ -393,10 +402,11 @@ function cappedStream(
   options?: StreamOptions,
 ): AssistantMessageEventStream {
   bindIdentityForRound(context, options?.signal);
-  return streamOpenAICompletions(
-    model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
-    withBrainTemperature(options),
+  const sent = applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt));
+  // A call the model PRINTED as text becomes a real call of a tool disclosed to this round (src/text-tool-calls.ts).
+  return recoverTextToolCalls(
+    streamOpenAICompletions(model as Model<'openai-completions'>, sent, withBrainTemperature(options)),
+    sent.tools,
   );
 }
 
@@ -406,10 +416,10 @@ function cappedStreamSimple(
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
   bindIdentityForRound(context, options?.signal);
-  return streamSimpleOpenAICompletions(
-    model as Model<'openai-completions'>,
-    applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt)),
-    withBrainTemperature(options),
+  const sent = applyPolicies(context, turnUserModelSuffix(options?.signal), harnessForTurn(options?.signal, context.systemPrompt));
+  return recoverTextToolCalls(
+    streamSimpleOpenAICompletions(model as Model<'openai-completions'>, sent, withBrainTemperature(options)),
+    sent.tools,
   );
 }
 
