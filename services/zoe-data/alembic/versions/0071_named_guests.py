@@ -12,8 +12,7 @@ Postgres finds the old constraint by its COLUMNS (its generated name is not assu
 (it cannot drop a table constraint). Idempotent. The downgrade restores the old key after deleting the panel rows (lossy by design: a
 guest is re-enrolled).
 
-CHAIN: on 0069 (#2286, landed). 0070 (#2323) is in flight: whichever of the two lands second re-points its ``down_revision`` to
-the other before merge (the single-head test enforces it).
+CHAIN: on 0070 (#2323, landed after 0069 #2286).
 """
 
 from __future__ import annotations
@@ -21,7 +20,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0071"
-down_revision = "0069"
+down_revision = "0070"
 branch_labels = None
 depends_on = None
 

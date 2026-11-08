@@ -40,6 +40,7 @@ from panel_principal import require_member_or_panel  # noqa: E402
 pytestmark = pytest.mark.ci_safe
 
 MIG = ROOT / "alembic/versions/0063_alarms.py"
+MIG_OVERRIDES = ROOT / "alembic/versions/0070_alarm_overrides.py"
 PERTH = ZoneInfo("Australia/Perth")
 ANN, BOB = "ann-0001", "bob-0002"
 
@@ -52,17 +53,20 @@ NIGHT = ts(2026, 11, 2, 22, 0)  # Monday 22:00 Perth
 SEVEN = ts(2026, 11, 3, 7, 0)  # Tuesday 07:00 Perth
 
 
-def _mig():
-    spec = importlib.util.spec_from_file_location("mig_0063", MIG)
+def _mig(path=MIG):
+    spec = importlib.util.spec_from_file_location("mig_" + path.stem[:4], path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
 def _migrate(path: str, fn: str = "upgrade") -> None:
+    """The alarm schema = 0063 + 0070 (overrides); a downgrade undoes them newest first."""
     engine = sa.create_engine(f"sqlite:///{path}")
+    mods = [_mig(MIG), _mig(MIG_OVERRIDES)]
     with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
-        getattr(_mig(), fn)()
+        for mod in (mods if fn == "upgrade" else mods[::-1]):
+            getattr(mod, fn)()
     engine.dispose()
 
 
@@ -161,10 +165,12 @@ def test_migration_is_linear_rerunnable_and_reversible(tmp_path):
     cols = {r[1] for r in con.exec_driver_sql("PRAGMA table_info(alarms)")}
     assert set(alarms.COLS) == cols
     assert {r[1] for r in con.exec_driver_sql("PRAGMA table_info(alarm_events)")} == {"id", "alarm_id", "ts", "event", "detail"}
+    assert {r[1] for r in con.exec_driver_sql("PRAGMA table_info(alarm_overrides)")} == {"alarm_id", "on_date", "action", "time_hhmm", "created_at"}
+    assert _mig(MIG_OVERRIDES).revision == "0070" and _mig(MIG_OVERRIDES).down_revision == "0069"
     con.close()
     _migrate(p, "downgrade")
     con = sa.create_engine(f"sqlite:///{p}").connect()
-    assert not list(con.exec_driver_sql("SELECT name FROM sqlite_master WHERE name IN ('alarms','alarm_events')"))
+    assert not list(con.exec_driver_sql("SELECT name FROM sqlite_master WHERE name IN ('alarms','alarm_events','alarm_overrides')"))
     con.close()
 
 
@@ -1054,7 +1060,6 @@ def test_snooze_that_loses_the_race_raises_instead_of_returning_a_stale_row(dbfi
 @pytest.mark.parametrize("text", [
     "turn off all alarms except my gym alarm", "turn off every other alarm", "switch on all alarms but the gym one",
     "cancel every other alarm", "wake me at seven thirty five", "wake me at seven fifty nine",
-    "wake me at 7 next monday", "set an alarm for 7 am on friday", "set an alarm for 7 on the 5th",
 ])
 def test_voice_refuses_what_the_grammar_cannot_honour(text):
     assert alarm_voice.parse(text, NIGHT) is None
@@ -1141,3 +1146,361 @@ def test_brain_alarm_through_the_dispatch_endpoint(voice, monkeypatch):
     assert out["ok"] is True and out["result"].startswith("Alarm set for"), out
     out = run(system.intent_dispatch(system._IntentDispatchBody(user_id=ANN, intent="alarm_list"), None))
     assert out["ok"] is True and "one alarm" in out["result"]
+
+
+# ── one-off on a named day (voice) ───────────────────────────────────────────────────────────────────────────────────────────────
+# NIGHT is Monday 2 Nov 2026 22:00 Perth; FRI8 is Friday 6 Nov 08:00.
+FRI8 = ts(2026, 11, 6, 8, 0)
+
+
+@pytest.mark.parametrize("text,now,hhmm,day", [
+    ("wake me at 7 next monday", NIGHT, "07:00", "2026-11-09"),
+    ("set an alarm for 7 am on friday", NIGHT, "07:00", "2026-11-06"),
+    ("set an alarm for 7 am on friday", FRI8, "07:00", "2026-11-13"),  # Friday after 7: next Friday, never today in the past
+    ("wake me at 9 on friday", FRI8, "09:00", "2026-11-06"),  # Friday before 9: today
+    ("wake me at 7 next friday", FRI8, "07:00", "2026-11-13"),  # "next" is never today
+    ("set an alarm for 7 on the 5th", NIGHT, "07:00", "2026-11-05"),
+    ("set an alarm for 7 on the 5th", FRI8, "07:00", "2026-12-05"),  # the 5th has gone this month
+    ("wake me at 6 on the fifteenth", NIGHT, "06:00", "2026-11-15"),
+    ("set an alarm for 6:30 on november 20", NIGHT, "06:30", "2026-11-20"),
+    ("wake me at 5 on the 20th of december", NIGHT, "05:00", "2026-12-20"),
+    ("wake me at 7 on march 3rd", NIGHT, "07:00", "2027-03-03"),
+    ("wake me at 6 the day after tomorrow", NIGHT, "06:00", "2026-11-04"),
+])
+def test_voice_sets_a_one_off_on_a_named_day(text, now, hhmm, day):
+    cmd = alarm_voice.parse(text, now)
+    assert cmd is not None and cmd.action == "set" and cmd.repeat == "once", text
+    assert (cmd.time_hhmm, cmd.once_date.isoformat()) == (hhmm, day), text
+
+
+def test_voice_the_15th_is_a_day_never_a_15_00_alarm():
+    assert alarm_voice.parse("wake me at 6 on the 15th", NIGHT).time_hhmm == "06:00"
+
+
+@pytest.mark.parametrize("text,repeat", [
+    ("wake me at 7 every friday", "days:5"), ("set an alarm for 7 on fridays", "days:5"),
+    ("wake me at 6 on mondays and fridays", "days:1,5"), ("set an alarm for 8 every monday and wednesday", "days:1,3"),
+])
+def test_voice_every_friday_stays_a_repeat(text, repeat):
+    cmd = alarm_voice.parse(text, NIGHT)
+    assert cmd.repeat == repeat and cmd.once_date is None, text
+
+
+@pytest.mark.parametrize("text", ["wake me at 6 next week", "set an alarm for 7 on february 30", "wake me at 5 today"])
+def test_voice_asks_for_a_day_it_will_not_guess(text):
+    cmd = alarm_voice.parse(text, NIGHT)  # 22:00: 5 am today has gone
+    assert cmd is not None and cmd.action == "set" and cmd.needs_day and cmd.once_date is None, text
+
+
+def test_voice_named_day_end_to_end_confirms_the_date(voice):
+    r = say("set an alarm for 6:30 on november 20")
+    assert r["spoken_summary"] == "Alarm set for 6:30 am on Friday the 20th of November."
+    assert "Which day" in say("wake me at 6 next week")["spoken_summary"]
+    assert "one alarm" in say("what alarms do I have")["spoken_summary"]  # the vague one wrote nothing
+
+
+# ── one day's change to a repeating alarm (overrides) ──────────────────────────────────────────────────────────────────────────
+
+
+def test_next_occurrence_honours_a_shift_and_a_skip_and_nothing_else():
+    ov = {"2026-11-06": ("shift", "05:30")}
+    assert alarms.next_occurrence("06:30", "weekdays", None, ts(2026, 11, 5, 7, 0), ov) == ts(2026, 11, 6, 5, 30)
+    assert alarms.next_occurrence("06:30", "weekdays", None, ts(2026, 11, 6, 5, 30), ov) == ts(2026, 11, 9, 6, 30)
+    assert alarms.next_occurrence("06:30", "weekdays", None, ts(2026, 11, 3, 7, 0), ov) == ts(2026, 11, 4, 6, 30)  # other days unchanged
+    skip = {"2026-11-13": ("skip", None)}
+    assert alarms.next_occurrence("07:00", "days:5", None, FRI8, skip) == ts(2026, 11, 20, 7, 0)  # a weekly alarm's skip costs a week
+
+
+def test_override_rings_that_day_at_the_new_time_then_returns_to_normal(dbfile):
+    thu6 = ts(2026, 11, 5, 6, 0)
+    a = run(_mk(dbfile, time_hhmm="06:30", repeat="weekdays", now=thu6))
+
+    async def go():
+        db = await _open(dbfile)
+        try:
+            return await alarms.set_override(db, a, "2026-11-06", time_hhmm="05:30", now=thu6)
+        finally:
+            await db.close()
+
+    b = run(go())
+    assert b["next_fire_at"] == ts(2026, 11, 5, 6, 30)  # Thursday is untouched
+    assert run(_tick(dbfile, ts(2026, 11, 5, 6, 30)))  # Thursday rings normally
+    run(_dismiss(dbfile, a["id"], ts(2026, 11, 5, 6, 31)))
+    assert run(_get(dbfile, a["id"]))["next_fire_at"] == ts(2026, 11, 6, 5, 30)
+    assert not run(_tick(dbfile, ts(2026, 11, 6, 5, 29)))
+    assert [e for e, _ in run(_tick(dbfile, ts(2026, 11, 6, 5, 30)))] == ["rang"]
+    after = run(_get(dbfile, a["id"]))
+    assert after["next_fire_at"] == ts(2026, 11, 9, 6, 30)  # Monday back to normal; Friday's 6:30 does not ring as well
+    assert run(_overrides(dbfile, a["id"])) == {}  # the spent override is pruned
+
+
+@pytest.mark.parametrize("kw,reason", [
+    ({"on_date": "2026-11-07", "time_hhmm": "05:30"}, "doesn't ring"),  # Saturday: a weekday alarm does not ring
+    ({"on_date": "2026-11-02", "time_hhmm": "05:30"}, "gone"),  # today's 6:30 (Monday) has already rung at 22:00
+    ({"on_date": "2026-11-01", "time_hhmm": "05:30"}, "gone"),  # the past
+    ({"on_date": "2028-01-07", "time_hhmm": "05:30"}, "too far"),
+    ({"on_date": "nope", "time_hhmm": "05:30"}, "not a date"),
+])
+def test_override_refuses_what_it_cannot_honour(dbfile, kw, reason):
+    a = run(_mk(dbfile, time_hhmm="06:30", repeat="weekdays"))
+
+    async def go():
+        db = await _open(dbfile)
+        try:
+            return await alarms.set_override(db, a, kw["on_date"], time_hhmm=kw["time_hhmm"], now=NIGHT)
+        finally:
+            await db.close()
+
+    with pytest.raises(alarms.AlarmError) as e:
+        run(go())
+    assert reason in e.value.reason.lower()
+    assert run(_overrides(dbfile, a["id"])) == {}
+
+
+def test_override_is_refused_for_a_one_off_and_an_alarm_that_is_off(dbfile):
+    one = run(_mk(dbfile, time_hhmm="06:30"))
+    rep = run(_mk(dbfile, time_hhmm="06:30", repeat="weekdays"))
+
+    async def go(a):
+        db = await _open(dbfile)
+        try:
+            if a is rep:
+                a = await alarms.update_alarm(db, a, {"enabled": False}, now=NIGHT)
+            return await alarms.set_override(db, a, "2026-11-06", time_hhmm="05:30", now=NIGHT)
+        finally:
+            await db.close()
+
+    for a, why in ((one, "only rings once"), (rep, "is off")):
+        with pytest.raises(alarms.AlarmError) as e:
+            run(go(a))
+        assert why in e.value.reason
+
+
+def test_clearing_an_override_restores_the_day_and_a_rule_change_drops_them(dbfile):
+    a = run(_mk(dbfile, time_hhmm="06:30", repeat="weekdays"))
+
+    async def go():
+        db = await _open(dbfile)
+        try:
+            b = await alarms.set_override(db, a, "2026-11-03", time_hhmm="05:00", now=NIGHT)
+            assert b["next_fire_at"] == ts(2026, 11, 3, 5, 0)
+            c = await alarms.clear_override(db, b, "2026-11-03", now=NIGHT)
+            assert c["next_fire_at"] == ts(2026, 11, 3, 6, 30)
+            assert await alarms.clear_override(db, c, "2026-11-03", now=NIGHT) is None  # nothing left to undo
+            d = await alarms.set_override(db, c, "2026-11-04", time_hhmm="05:00", now=NIGHT)
+            e = await alarms.update_alarm(db, d, {"time_hhmm": "07:00"}, now=NIGHT)  # same rule: the day's change stays
+            assert (await alarms.overrides_of(db, [a["id"]]))[a["id"]] == {"2026-11-04": ("shift", "05:00")}
+            await alarms.update_alarm(db, e, {"repeat": "daily"}, now=NIGHT)  # a new rule: the old rule's exceptions go
+            assert await alarms.overrides_of(db, [a["id"]]) == {}
+        finally:
+            await db.close()
+
+    run(go())
+
+
+def test_deleting_an_alarm_or_forgetting_its_owner_removes_its_overrides(dbfile, monkeypatch):
+    import contextlib
+
+    import db_pool
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        db = await aiosqlite.connect(dbfile)
+        try:
+            yield db
+        finally:
+            await db.close()
+
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    a = run(_mk(dbfile, owner=ANN, time_hhmm="06:30", repeat="weekdays"))
+    b = run(_mk(dbfile, owner=BOB, time_hhmm="06:30", repeat="weekdays"))
+
+    async def setup():
+        db = await _open(dbfile)
+        try:
+            await alarms.set_override(db, a, "2026-11-06", time_hhmm="05:30", now=NIGHT)
+            await alarms.set_override(db, await alarms.get_alarm(db, b["id"]), "2026-11-06", time_hhmm="05:30", now=NIGHT)
+            await alarms.delete_alarm(db, b["id"])
+        finally:
+            await db.close()
+
+    run(setup())
+    assert run(_overrides(dbfile, b["id"])) == {}
+    assert run(_overrides(dbfile, a["id"])) != {}
+    run(alarms.forget_user(ANN))
+    assert run(_overrides(dbfile, a["id"])) == {}
+
+
+def test_override_routes(box):
+    c = box["client"]
+    a = c.post("/api/alarms", json={"time_hhmm": "06:30", "repeat": "weekdays"}).json()["alarm"]
+    r = c.post(f"/api/alarms/{a['id']}/overrides", json={"date": "2026-11-06", "time_hhmm": "05:30"})
+    assert r.status_code == 200 and r.json()["alarm"]["overrides"] == [{"date": "2026-11-06", "action": "shift", "time_hhmm": "05:30"}]
+    listed = c.get("/api/alarms").json()["alarms"][0]
+    assert listed["overrides"] == [{"date": "2026-11-06", "action": "shift", "time_hhmm": "05:30"}]
+    assert c.post(f"/api/alarms/{a['id']}/overrides", json={"date": "2026-11-07", "time_hhmm": "05:30"}).status_code == 400
+    assert c.delete(f"/api/alarms/{a['id']}/overrides/2026-11-06").status_code == 200
+    assert c.delete(f"/api/alarms/{a['id']}/overrides/2026-11-06").status_code == 404
+    assert c.get("/api/alarms").json()["alarms"][0]["overrides"] == []
+    as_member(box, BOB)  # another member cannot touch ANN's personal alarm
+    assert c.post(f"/api/alarms/{a['id']}/overrides", json={"date": "2026-11-06", "time_hhmm": "05:30"}).status_code == 404
+
+
+def test_voice_flight_next_friday_an_hour_earlier(voice, monkeypatch):
+    import calendar_service
+
+    wrote = []
+
+    async def spy(*a, **k):
+        wrote.append((a, k))
+
+    monkeypatch.setattr(calendar_service, "create_event_record", spy)  # the calendar is OFFERED, never written
+    say("set an alarm for 6:30 every weekday")
+    r = say("I have a flight next Friday, can you get me up an hour earlier?")
+    assert r["spoken_summary"] == ("I'll wake you at 5:30 am on Friday the 6th instead of 6:30 am. "
+                                   "Want me to put the flight in your calendar?")
+    db_alarms = run(_all(voice))
+    assert len(db_alarms) == 1 and db_alarms[0]["time_hhmm"] == "06:30" and db_alarms[0]["repeat_rule"] == "weekdays"
+    assert run(_overrides(voice, db_alarms[0]["id"])) == {"2026-11-06": ("shift", "05:30")}
+    assert wrote == []  # an OFFER only: the calendar write boundary was never reached
+    r = say("never mind about Friday")
+    assert r["spoken_summary"] == "Back to normal: 6:30 am on Friday the 6th."
+    assert run(_overrides(voice, db_alarms[0]["id"])) == {}
+    assert "no alarm change" in say("never mind about Friday")["spoken_summary"]
+
+
+@pytest.mark.parametrize("text,new", [
+    ("wake me 30 minutes early on thursday", "06:00"), ("push my alarm back half an hour tomorrow", "07:00"),
+    ("I need to be up at 5 on Friday", "05:00"), ("move my alarm forward 20 minutes on wednesday", "06:10"),
+])
+def test_voice_one_day_changes(voice, text, new):
+    say("set an alarm for 6:30 every weekday")
+    r = say(text)
+    assert f"wake you at {alarms.clock_phrase(new)}" in r["spoken_summary"] and "instead of 6:30 am" in r["spoken_summary"], r
+    a = run(_all(voice))[0]
+    ovs = run(_overrides(voice, a["id"]))
+    assert len(ovs) == 1 and list(ovs.values())[0] == ("shift", new) and a["time_hhmm"] == "06:30"
+
+
+def test_voice_one_day_change_with_no_alarm_asks_and_two_alarms_ask_which(voice):
+    r = say("get me up an hour earlier on friday")
+    assert "What time do you usually get up" in r["spoken_summary"] and run(_all(voice)) == []
+    say("set an alarm for 6:30 every weekday")
+    say("set an alarm for 7:15 every day")
+    r = say("get me up an hour earlier on friday")
+    assert "Which one" in r["spoken_summary"]
+    assert all(run(_overrides(voice, a["id"])) == {} for a in run(_all(voice)))
+
+
+def test_voice_absolute_time_with_no_alarm_that_day_sets_a_one_off(voice):
+    r = say("I need to be up at 5 on Friday")
+    assert r["spoken_summary"] == "Alarm set for 5:00 am on Friday the 6th."
+    (a,) = run(_all(voice))
+    assert (a["repeat_rule"], a["once_date"], a["time_hhmm"]) == ("once", "2026-11-06", "05:00")
+
+
+def test_voice_every_friday_earlier_is_a_rule_change_it_asks_about(voice):
+    say("set an alarm for 6:30 every weekday")
+    r = say("get me up an hour earlier every friday")
+    assert "changes the alarm itself" in r["spoken_summary"]
+    a = run(_all(voice))[0]
+    assert run(_overrides(voice, a["id"])) == {} and a["time_hhmm"] == "06:30"
+
+
+@pytest.mark.parametrize("text", [
+    "should I get up an hour earlier on friday", "don't get me up an hour earlier on friday", "I had to be up at 5 on friday",
+    "I already got up an hour earlier on friday", "never mind", "never mind about the meeting",
+])
+def test_voice_one_day_change_refuses_questions_and_talk(text):
+    cmd = alarm_voice.parse(text, NIGHT)
+    assert cmd is None or cmd.action not in ("shift", "unshift", "set"), (text, cmd)
+
+
+def test_voice_a_one_off_on_that_day_is_moved_itself(voice):
+    say("set an alarm for 6:30 on friday")
+    r = say("get me up an hour earlier on friday")
+    assert "wake you at 5:30 am on Friday the 6th instead of 6:30 am" in r["spoken_summary"]
+    (a,) = run(_all(voice))
+    assert (a["time_hhmm"], a["once_date"]) == ("05:30", "2026-11-06")
+
+
+async def _overrides_q(path, aid):
+    db = await _open(path)
+    try:
+        return (await alarms.overrides_of(db, [aid])).get(aid, {})
+    finally:
+        await db.close()
+
+
+def _overrides(path, aid):
+    return _overrides_q(path, aid)
+
+
+async def _all(path):
+    db = await _open(path)
+    try:
+        async with db.execute(f"{alarms._SELECT}") as cur:
+            return [alarms._row(r) for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+async def _events_named(path, name):
+    db = await _open(path)
+    try:
+        async with db.execute("SELECT event FROM alarm_events WHERE event LIKE ?", (f"%{name}%",)) as cur:
+            return [r[0] for r in await cur.fetchall()]
+    finally:
+        await db.close()
+
+
+async def _dismiss(path, aid, now):
+    db = await _open(path)
+    try:
+        return await alarms.dismiss(db, await alarms.get_alarm(db, aid), now=now)
+    finally:
+        await db.close()
+
+
+
+def test_a_day_that_has_rung_cannot_be_moved_again_or_rung_twice(dbfile):
+    fri5 = ts(2026, 11, 6, 5, 0)
+    a = run(_mk(dbfile, time_hhmm="06:30", repeat="weekdays", now=fri5))
+
+    async def ov(alarm, day, hhmm, now):
+        db = await _open(dbfile)
+        try:
+            return await alarms.set_override(db, await alarms.get_alarm(db, alarm["id"]), day, time_hhmm=hhmm, now=now)
+        finally:
+            await db.close()
+
+    run(ov(a, "2026-11-06", "05:30", fri5))
+    assert [e for e, _ in run(_tick(dbfile, ts(2026, 11, 6, 5, 30)))] == ["rang"]
+    run(_dismiss(dbfile, a["id"], ts(2026, 11, 6, 5, 31)))
+    with pytest.raises(alarms.AlarmError) as e:  # 06:00: the original 06:30 is still ahead, but Friday has ALREADY rung
+        run(ov(a, "2026-11-06", "06:15", ts(2026, 11, 6, 6, 0)))
+    assert "already gone off" in e.value.reason
+    run(ov(a, "2026-11-09", "05:00", ts(2026, 11, 6, 6, 0)))  # changing another day never re-schedules today's 06:30
+    assert run(_get(dbfile, a["id"]))["next_fire_at"] == ts(2026, 11, 9, 5, 0)
+    assert not run(_tick(dbfile, ts(2026, 11, 6, 6, 30)))
+
+
+def test_voice_targets_the_ring_that_will_actually_happen(voice):
+    say("set an alarm for 6:30 every weekday")
+    (a,) = run(_all(voice))
+
+    async def shift(day, hhmm):
+        db = await _open(voice)
+        try:
+            await alarms.set_override(db, await alarms.get_alarm(db, a["id"]), day, time_hhmm=hhmm, now=NIGHT)
+        finally:
+            await db.close()
+
+    run(shift("2026-11-06", "09:00"))  # Friday moved to 9:00
+    r = say("get me up an hour earlier on friday")  # an hour earlier than FRIDAY's ring (9:00), not the rule's 6:30
+    assert "wake you at 8:00 am on Friday the 6th instead of 9:00 am" in r["spoken_summary"], r
+
+
+@pytest.mark.parametrize("text", ["don't put friday's alarm back to normal", "do not undo the change for friday"])
+def test_voice_a_negated_undo_is_never_a_write(text):
+    assert alarm_voice.parse(text, NIGHT) is None, text
