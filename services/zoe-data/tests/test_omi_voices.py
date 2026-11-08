@@ -851,7 +851,10 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_recordings.py", "routers/omi_
            "forget_reach.py",
            # the panel day review card lists / tags unknown voices ONLY by calling the owner-checked ``routers/omi_voices`` handlers
            # in-process (no SQL on a voice table); a learned print never authenticates anyone through it
-           "panel_review_cards.py", "routers/panel_review_cards.py"}
+           "panel_review_cards.py", "routers/panel_review_cards.py",
+           # the ONE person-voice registry's panel half (channel='panel', 0071): a named guest's print is matched for a GUEST turn
+           # only - it never authenticates, never yields member scope (pinned by tests/test_named_guests.py)
+           "named_guests.py"}
 NEEDLES = ("learned_voiceprint", "omi_segment", "omi_voice_cluster", "omi_voice_settings", "omi_voices")
 
 
