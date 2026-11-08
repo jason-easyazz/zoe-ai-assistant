@@ -1081,6 +1081,25 @@ async def run_turn_digest(
                     claim_kw = _claim_kwargs(item_claims, idx)
                 result["corrected"] = result.get("corrected", 0) + 1
                 logger.info("CORRECTION_APPLIED kind=pending lane=%s user=%s", source, user_id)
+            # The extractor files "the user" by default: a fact the turn says about SOMEONE ELSE ("dad rang. sober for once", "priya no
+            # beef. arjun hates onion") is re-attached to that person or dropped, never kept as the user's own (fact_subject).
+            try:
+                import fact_subject
+
+                verdict_, fixed_fact = fact_subject.attribute(fact, user_message)
+                if verdict_ == "drop":
+                    result["skipped_low_quality"] += 1
+                    _count_drop("turn_digest", "other_subject")
+                    logger.info("run_turn_digest: dropped a fact about another person filed under the user: %r", fact[:50])
+                    continue
+                if verdict_ == "rewrite":
+                    logger.info("run_turn_digest: re-attached a fact to the person the turn is about")
+                    fact = fixed_fact
+                    if idx < len(item_claims) and item_claims[idx] is not None:
+                        item_claims[idx] = None         # its claim row still names the user: judged on the lexical floor instead
+                        claim_kw = _claim_kwargs(item_claims, idx)
+            except Exception:  # noqa: BLE001 - the guard must never take the digest down
+                pass
             fact_type = item.get("type", "fact")
             fact_tags = ["turn_digest", "auto_extract"] + (["corrected"] if fixed is not None else [])
             fact_changes = False
