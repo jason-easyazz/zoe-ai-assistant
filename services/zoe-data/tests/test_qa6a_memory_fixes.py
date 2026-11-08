@@ -154,3 +154,33 @@ def test_the_one_shot_lane_records_the_pending_capture_too():
     started = wr.begin()
     assert bd._claim_guarded_text(CLAIM, FIRST_INTRO, "member_a", started, {}) == CLAIM
     assert "didn't manage" in bd._claim_guarded_text(CLAIM, FIRST_INTRO, "guest", wr.begin(), {})
+
+
+# -- review round (Codex on #2350) ---------------------------------------------------------------------------
+
+def test_a_pending_capture_never_backs_an_untargeted_claim():
+    started = wr.begin()
+    g.note_pending_capture("member_a", "add oat milk to my shopping list please")
+    out = g.guard_text("I've added it.", "member_a", started, user_text="add oat milk to my shopping list please")
+    assert out != "I've added it."           # no list writer ran: the untargeted claim is replaced
+    # negative control: a memory claim on the same pending capture still passes
+    assert g.guard_text(CLAIM, "member_a", started, user_text=FIRST_INTRO) == CLAIM
+
+
+def test_an_opted_out_member_is_not_promised_a_capture(monkeypatch):
+    import user_prefs
+
+    monkeypatch.setattr(user_prefs, "cached_memory_opt_out", lambda uid: True)
+    assert g.note_pending_capture("member_a", FIRST_INTRO) is False
+    monkeypatch.setattr(user_prefs, "cached_memory_opt_out", lambda uid: False)
+    assert g.note_pending_capture("member_a", FIRST_INTRO) is True
+
+
+def test_kin_pet_repair_only_touches_the_noun_that_describes_the_named_subject():
+    import kin_pet_guard as k
+
+    # a child who HAS a pet is a correct statement
+    assert k.repair("Ava loves her pet hamster", "pet", "My daughter Ava loves her pet hamster.") is None
+    # the bleed it exists for is still repaired
+    msg = "kids Ava (8) and Ben (4), and a fat cat called Mo"
+    assert k.repair("User's pet Ava is obsessed with horses", "pet", msg) == ("User's child Ava is obsessed with horses", "relationship")

@@ -66,17 +66,36 @@ def _mentions(fact: str, names: set) -> set:
     return toks & names
 
 
+def _attached(fact: str, names: set, word_re: str):
+    """The match of ``word_re`` that describes one of ``names`` - right before it ("pet Ava", "pet named Ava") or predicated of it
+    ("Ava is a pet") - or None. A noun elsewhere in the fact ("Ava loves her pet hamster") is not about the name."""
+    if not names or not word_re:
+        return None
+    alt = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+    before = re.compile(rf"\b(?P<w>{word_re})\b(?=\s+(?:(?:(?:is|was|are)\s+)?(?:named|called)\s+)?(?:{alt})\b)", re.IGNORECASE)
+    after = re.compile(rf"\b(?:{alt})\b(?:['’]s)?\s+(?:is|was|as|being)\s+(?:(?:a|an|the|their|his|her|our|my)\s+)?(?P<w>{word_re})\b",
+                       re.IGNORECASE)
+    return before.search(fact or "") or after.search(fact or "")
+
+
 def repair(fact: str, fact_type: str, user_message: str) -> Optional[tuple]:
     """``(fact, type)`` re-typed when the turn's own words say the fact's named subject is a child filed as a pet (or a pet filed
-    as a child); None when nothing needs changing."""
+    as a child); None when nothing needs changing. The pet / child noun must describe the NAMED subject: "Ava loves her pet
+    hamster" (a child with a pet) is left alone."""
     kids, pets = child_names(user_message), pet_names(user_message)
     both = kids & pets      # one word cannot be both: leave the ambiguous alone, in either direction
     kids, pets = kids - both, pets - both
     if not kids and not pets:
         return None
     as_kid, as_pet = _mentions(fact, kids), _mentions(fact, pets)
-    if as_kid and not as_pet and (_PET_FACT_RE.search(fact) or fact_type == "pet"):
-        return _PET_FACT_RE.sub("child", fact, count=1), "relationship"
-    if as_pet and not as_kid and _CHILD_FACT_RE and _CHILD_FACT_RE.search(fact):
-        return _CHILD_FACT_RE.sub("pet", fact, count=1), "pet"
+    if as_kid and not as_pet:
+        m = _attached(fact, as_kid, r"pets?")
+        if m:
+            return fact[:m.start("w")] + "child" + fact[m.end("w"):], "relationship"
+        if fact_type == "pet" and not _PET_FACT_RE.search(fact):
+            return fact, "relationship"         # filed as a pet, names a child, no pet noun to fix: the type alone is wrong
+    if as_pet and not as_kid and _CHILD_ALT:
+        m = _attached(fact, as_pet, rf"(?:{_CHILD_ALT})")
+        if m:
+            return fact[:m.start("w")] + "pet" + fact[m.end("w"):], "pet"
     return None

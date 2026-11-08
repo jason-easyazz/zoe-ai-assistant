@@ -744,6 +744,18 @@ def note_pending_capture(user_id: Optional[str], user_text: str) -> bool:
 
         if memory_provenance.is_off_record(user_id or "", user_text) or turn_forget.is_forget_turn(user_text):
             return False
+        import user_prefs
+
+        opted_out = user_prefs.cached_memory_opt_out(user_id or "")
+        if opted_out:
+            return False        # the capture drops an opted-out member's candidates: nothing is queued, so nothing is promised
+        if opted_out is None:
+            try:               # unknown now: warm the cache so the NEXT turn is exact (the extractor reads it post-turn anyway)
+                import asyncio
+
+                asyncio.get_running_loop().create_task(user_prefs.is_memory_opted_out(user_id or ""))
+            except Exception:  # noqa: BLE001 - no running loop (a sync caller): the next turn's read warms it
+                pass
         write_receipts.record(user_id, "memory", "", "pending_capture")
         return True
     except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn

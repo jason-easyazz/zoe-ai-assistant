@@ -164,6 +164,15 @@ async def delete_pref(user_id: str, key: str, *, db=None, only_if: Any = _UNSET)
     clear_pref_cache(user_id)
 
 
+def cached_memory_opt_out(user_id: str) -> "bool | None":
+    """The member's memory opt-out from the TTL cache alone (no I/O): True / False when fresh, None when unknown. For synchronous
+    callers that must not await; they treat None as "not known to be opted out"."""
+    hit = _opt_out_cache.get(user_id)
+    if hit is not None and hit[1] > time.monotonic():
+        return hit[0]
+    return None
+
+
 async def is_memory_opted_out(user_id: str, *, db=None) -> bool:
     """True when ``user_id`` has opted out of automatic memory capture. Default False."""
     now = time.monotonic()
