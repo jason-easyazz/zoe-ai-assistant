@@ -179,3 +179,32 @@ def test_stream_equals_batch_for_arbitrary_cuts():
         parts = [reply[a:b] for a, b in zip([0] + cuts, cuts + [len(reply)])]
         p = rp.PolishStream(rp.closer_lexicon_for("hi"), True)
         assert "".join(p.feed(x) for x in parts) + p.finish() == want
+
+
+@pytest.mark.asyncio
+async def test_filter_stream_cancel_closes_the_inner_stream_promptly(monkeypatch):
+    """A barge-in cancels the consumer mid-stream: the wrapper must not swallow the cancel or leave the inner turn running."""
+    import asyncio
+
+    monkeypatch.setenv("ZOE_REPLY_POLISH", "on")
+    closed: list = []
+
+    async def inner():
+        try:
+            yield "Morning! "
+            await asyncio.sleep(30)
+        finally:
+            closed.append(True)
+
+    got = asyncio.Event()
+
+    async def consume():
+        async for _ in rp.filter_stream(inner(), "morning", "u", "s"):
+            got.set()
+
+    task = asyncio.ensure_future(consume())
+    await asyncio.wait_for(got.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)
+    assert closed == [True]
