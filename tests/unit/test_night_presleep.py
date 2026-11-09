@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "perf")
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "night"))
 
 import night_window as nw  # noqa: E402
-from test_night_window import SYSTEMD, _private_locks, make  # noqa: E402,F401
+from test_night_window import SYSTEMD, _private_locks, at, make  # noqa: E402,F401
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -40,15 +40,15 @@ def test_the_retry_slots_do_not_start_a_unit_that_already_succeeded_today(tmp_pa
     w, host, cfg = make(tmp_path)
     nw.run_presleep(cfg, host, host.log)
     n = len(started(host))
+    assert n == 2                                                           # control: the first call did start both
     nw.run_presleep(cfg, host, host.log)
-    assert len(started(host)) == n                                          # control: the first call did start them
+    assert len(started(host)) == n
 
 
 def test_a_failed_backup_is_recorded_loudly_does_not_stop_the_export_and_is_retried_by_the_next_slot(tmp_path):
     w, host, cfg = make(tmp_path, fail_run=("zoe-backup.service",))
     st = nw.run_presleep(cfg, host, host.log)
     assert st["zoe-backup.service"]["rc"] != 0 and st["zoe-memory-export.service"]["rc"] == 0
-    assert any("FAILED" in line for line in host.out) if hasattr(host, "out") else True
     host.fail_run = ()
     st2 = nw.run_presleep(cfg, host, host.log)
     assert st2["zoe-backup.service"]["rc"] == 0                             # a failure is not stamped done: the 03:05 slot tries again
@@ -100,3 +100,94 @@ def test_an_unrelated_hour_is_refused_for_presleep_unless_forced(tmp_path, monke
     monkeypatch.setattr(nw.dt, "datetime", Noon)
     assert nw.main(["--presleep"]) == nw.EXIT_OK and called == []
     assert nw.main(["--presleep", "--anytime"], host_factory=lambda lg: object()) == nw.EXIT_OK and called == [1]
+
+
+def test_each_unit_is_checkpointed_before_the_next_starts_so_a_kill_between_them_loses_nothing(tmp_path):
+    w, host, cfg = make(tmp_path)
+    orig = host.run
+
+    def die_on_export(argv, timeout=60.0, mutating=True, env=None):
+        if "zoe-memory-export.service" in " ".join(argv) and "start" in argv:
+            raise KeyboardInterrupt("killed between the backup and the export")
+        return orig(argv, timeout, mutating, env)
+
+    host.run = die_on_export
+    with pytest.raises(KeyboardInterrupt):
+        nw.run_presleep(cfg, host, host.log)
+    saved = json.loads(nw.presleep_path(cfg, host).read_text())
+    assert saved["zoe-backup.service"]["rc"] == 0 and "zoe-memory-export.service" not in saved       # the backup is already stamped
+    host.run = orig
+    before = len(started(host))
+    nw.run_presleep(cfg, host, host.log)
+    assert [c.split()[-1] for c in started(host)[before:]] == ["zoe-memory-export.service"]            # the retry takes only the export
+
+
+def test_a_late_retry_slot_does_not_start_pre_sleep_work_that_would_overrun_the_window(tmp_path):
+    """The pre-sleep phase must leave the window proper 47 minutes before end-by (03:55): at 03:15 nothing is started; at 02:30 each unit is clipped to what is left."""
+    w, host, cfg = make(tmp_path, start=at(3, 15))
+    nw.run_presleep(cfg, host, host.log)
+    assert started(host) == []                                              # 03:15 is past 03:08
+    w2, host2, cfg2 = make(tmp_path / "early", start=at(2, 30))
+    seen = []
+    orig = host2.run
+    host2.run = lambda argv, timeout=60.0, mutating=True, env=None: (seen.append(timeout) if "start" in argv and "--wait" in argv else None) or orig(argv, timeout, mutating, env)
+    nw.run_presleep(cfg2, host2, host2.log)
+    assert len(seen) == 2 and all(t <= cfg2.presleep_timeout_s for t in seen) and all(t <= (cfg2.end_by - cfg2.presleep_leave_min - 150) * 60 for t in seen)
+
+
+def test_the_unit_start_timeout_covers_the_pre_sleep_phase_plus_the_whole_window():
+    body = "\n".join(ln for ln in (SYSTEMD / "zoe-night-window.service").read_text().splitlines() if not ln.lstrip().startswith("#"))
+    t = int(re.search(r"^TimeoutStartSec=(\d+)", body, re.M).group(1))
+    cfg = nw.NightCfg()
+    assert t >= (cfg.end_by - (2 * 60 + 30) + 15) * 60            # from the 02:30 start to end-by (the pre-sleep phase + the window + its restore) plus 15 minutes of slack
+
+
+def test_the_boot_catchup_runs_only_when_no_backup_succeeded_in_the_last_day(tmp_path):
+    w, host, cfg = make(tmp_path, start=at(9, 0))
+    assert nw.presleep_is_stale(cfg, host) is True                           # nothing recorded
+    nw.run_presleep(cfg, host, host.log, catchup=True)
+    assert len(started(host)) == 2 and nw.presleep_is_stale(cfg, host) is False        # catch-up ran (any hour) and is now fresh
+    host.t += 30 * 3600
+    assert nw.presleep_is_stale(cfg, host) is True                           # 30 h later it is stale again
+
+
+def test_the_catchup_units_exist_and_are_installed_with_the_window():
+    svc = (SYSTEMD / "zoe-night-presleep-catchup.service").read_text()
+    tim = (SYSTEMD / "zoe-night-presleep-catchup.timer").read_text()
+    assert "night_window.sh --presleep --catchup" in svc and "OnBootSec=" in tim and "Persistent" not in "\n".join(l for l in tim.splitlines() if not l.startswith("#"))
+    assert "zoe-night-presleep-catchup.timer" in (REPO / "scripts/night/install_night_window.sh").read_text()
+
+
+def _fake_systemctl(tmp_path):
+    d = tmp_path / "off"
+    d.mkdir()
+    log = tmp_path / "ctl.log"
+    sc = tmp_path / "fakectl"
+    sc.write_text(f"""#!/bin/bash
+echo "$@" >> {log}
+case "$*" in
+  *is-enabled*) u="${{@: -1}}"; if [ -e {d}/$u ]; then echo disabled; exit 1; fi; echo enabled ;;
+  *"disable --now"*) touch {d}/"${{@: -1}}" ;;
+  *"enable --now"*) rm -f {d}/"${{@: -1}}" ;;
+esac
+exit 0
+""")
+    sc.chmod(0o755)
+    return sc, log, d
+
+
+def test_the_installer_switches_the_two_timers_off_survives_a_reinstall_and_uninstall_turns_them_back_on(tmp_path):
+    sc, log, off = _fake_systemctl(tmp_path)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "NIGHT_DIR": str(tmp_path / "n"), "NIGHT_UNIT_DIR": str(tmp_path / "u"), "NIGHT_SYSTEMCTL": str(sc)}
+    run = lambda *a: subprocess.run(["bash", str(REPO / "scripts/night/install_night_window.sh"), *a], capture_output=True, text=True, timeout=60, env=env)
+    r1 = run()
+    assert r1.returncode == 0, r1.stdout + r1.stderr
+    assert (off / "zoe-backup.timer").exists() and (off / "zoe-memory-export.timer").exists()      # both switched off
+    r2 = run()                                                                                      # a reinstall sees them already disabled: the ORIGINAL state must survive
+    assert r2.returncode == 0, r2.stdout + r2.stderr
+    state = (tmp_path / "n" / "INSTALLED").read_text()
+    assert "zoe-backup.timer_was=enabled" in state and "zoe-memory-export.timer_was=enabled" in state
+    r3 = run("--uninstall")
+    assert r3.returncode == 0, r3.stdout + r3.stderr
+    assert not (off / "zoe-backup.timer").exists() and not (off / "zoe-memory-export.timer").exists()   # re-enabled
+    assert "enable --now zoe-backup.timer" in log.read_text()

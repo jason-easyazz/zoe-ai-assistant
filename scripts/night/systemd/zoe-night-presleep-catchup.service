@@ -1,0 +1,16 @@
+# zoe-night-presleep-catchup.service - the boot catch-up for the backup + memory export that the night window now runs (docs/knowledge/night-window.md section 19).
+# The old zoe-backup.timer / zoe-memory-export.timer were Persistent=true (a night the box was down was made up at the next boot); the window's own timer is
+# Persistent=false ON PURPOSE (it must never put Zoe to sleep at boot). This unit keeps the backup half of that promise: --catchup runs the backup then the export ONLY
+# when no backup succeeded in the last 26 h (the pre-sleep records in ~/.zoe/night-window/presleep-<date>.json), at any hour, and never stops or starts anything else.
+[Unit]
+Description=Zoe backup + memory export catch-up after a boot (only when the last 26 h had no backup)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/assistant
+EnvironmentFile=%h/assistant/services/zoe-data/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=%h/assistant/scripts/night/night_window.sh --presleep --catchup
+TimeoutStartSec=3600
+StandardOutput=append:%h/.zoe-logs/night-window.log
+StandardError=append:%h/.zoe-logs/night-window.log

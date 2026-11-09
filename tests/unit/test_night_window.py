@@ -1852,7 +1852,7 @@ def test_the_installer_adds_two_units_absorbs_dreaming_and_the_uninstaller_undoe
     assert dry.returncode == 0 and "DRY-RUN: systemctl --user disable --now zoe-dreaming.timer" in dry.stdout and not (tmp_path / "units").exists() and not (tmp_path / "nd" / "INSTALLED").exists()
     inst = subprocess.run(["bash", script], capture_output=True, text=True, env=env, timeout=60)
     assert inst.returncode == 0, inst.stderr
-    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-window-restore-retry.service", "zoe-night-window-restore-retry.timer", "zoe-night-window.service", "zoe-night-window.timer"]
+    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-presleep-catchup.service", "zoe-night-presleep-catchup.timer", "zoe-night-window-restore-retry.service", "zoe-night-window-restore-retry.timer", "zoe-night-window.service", "zoe-night-window.timer"]
     calls = (tmp_path / "calls").read_text()
     assert "disable --now zoe-dreaming.timer" in calls and "enable --now zoe-night-window.timer" in calls and calls.index("daemon-reload") < calls.index("enable --now zoe-night-window")
     assert "dreaming_timer_was=enabled" in (tmp_path / "nd" / "INSTALLED").read_text()
