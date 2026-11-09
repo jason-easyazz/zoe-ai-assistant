@@ -31,10 +31,11 @@ PINS=(
   "parakeet-tdt-0.6b-v3|nvidia/parakeet-tdt-0.6b-v3|541d1f99c6b0c3cd0b11a95167540bb8edefd82b|model.safetensors|3a2026366188c8c68598edbbff92f8d11590a08e0ae2e6775544e7b07d6a5e11"
   "granite-speech-5.0-2b|ibm-granite/granite-speech-5.0-2b|ec49ca6b1a5e7e9176127e09cb303ab78cbacdf7|model.safetensors|4151269881d2dd825d45ca75d6552b2a20e6e39d0934ed84c4db826af8bf6d88"
 )
+# repo | revision | weights file | sha256 (the HF cache snapshots: the same pinned-revision + weights-hash rule as PINS)
 HF_PINS=(
-  "Systran/faster-whisper-large-v3 edaa852ec7e145841d8ffdb056a99866b5f0a478"
-  "Systran/faster-distil-whisper-large-v3 c3058b475261292e64a0412df1d2681c06260fab"
-  "speechbrain/spkrec-ecapa-voxceleb 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286"
+  "Systran/faster-whisper-large-v3|edaa852ec7e145841d8ffdb056a99866b5f0a478|model.bin|69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1"
+  "Systran/faster-distil-whisper-large-v3|c3058b475261292e64a0412df1d2681c06260fab|model.bin|b79368e19b6623813609431a6e5ee309a71506701ebc49fd7820e692dec7c5f5"
+  "speechbrain/spkrec-ecapa-voxceleb|0f99f2d0ebe89ac095bcc5903c4dd8f72b367286|embedding_model.ckpt|0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
 )
 MODE=install; SEED=""; ALLOW_CPU=0
 while [ $# -gt 0 ]; do
@@ -49,9 +50,13 @@ while [ $# -gt 0 ]; do
 done
 
 sha_ok() { [ -f "$1" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; }
+# the HF-cache snapshot directory of a pinned repo@revision (offline), or empty
+hf_snap() { HF_HUB_OFFLINE=1 "$VENV/bin/python" -c "
+from huggingface_hub import snapshot_download as s
+print(s('$1', revision='$2', local_files_only=True))" 2>/dev/null || true; }
 
 check() {
-  local rc=0 spec dir repo rev file sha
+  local rc=0 spec dir repo rev file sha snap
   if [ -x "$VENV/bin/python" ]; then echo "venv      ok  $VENV"; else echo "venv      MISSING  $VENV"; return 1; fi
   ZOE_CHECK_ALLOW_CPU="$ALLOW_CPU" "$VENV/bin/python" - <<'PY' || rc=1
 import importlib.metadata as m, os
@@ -90,10 +95,15 @@ PY
     fi
   done
   for spec in "${HF_PINS[@]}"; do
-    set -- $spec
-    HF_HUB_OFFLINE=1 "$VENV/bin/python" -c "
-from huggingface_hub import snapshot_download as s
-print('model     ok ', '$1', s('$1', revision='$2', local_files_only=True).rsplit('/', 1)[-1][:12])" 2>/dev/null || { echo "model     MISSING  $1@$2"; rc=1; }
+    IFS='|' read -r repo rev file sha <<< "$spec"
+    snap="$(hf_snap "$repo" "$rev")"
+    if [ -n "$snap" ] && sha_ok "$snap/$file" "$sha"; then
+      echo "model     ok  $repo $file sha256 = the pinned ${rev:0:12}'s"
+    elif [ -n "$snap" ] && [ -f "$snap/$file" ]; then
+      echo "model     MISMATCH  $repo $file is not the pinned ${rev:0:12} weights (sha256 differs)"; rc=1
+    else
+      echo "model     MISSING  $repo@${rev:0:12}"; rc=1
+    fi
   done
   return $rc
 }
@@ -132,7 +142,9 @@ snapshot_download(sys.argv[1], revision=sys.argv[2], local_dir=sys.argv[3], allo
   echo "$rev" > "$MODELS/$dir/.revision"
 done
 for spec in "${HF_PINS[@]}"; do
-  set -- $spec
-  "$VENV/bin/python" -c "from huggingface_hub import snapshot_download as s; s('$1', revision='$2')"
+  IFS='|' read -r repo rev file sha <<< "$spec"
+  "$VENV/bin/python" -c "from huggingface_hub import snapshot_download as s; s('$repo', revision='$rev')"
+  snap="$(hf_snap "$repo" "$rev")"
+  sha_ok "$snap/$file" "$sha" || { echo "REFUSED: $repo $file does not match the pinned sha256 after download" >&2; exit 1; }
 done
 check

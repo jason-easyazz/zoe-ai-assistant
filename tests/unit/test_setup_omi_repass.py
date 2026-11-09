@@ -40,7 +40,8 @@ def test_every_model_is_pinned_by_revision_and_weights_hash_and_the_worker_knows
     worker = (REPO / "scripts/night/jobs/omi_repass_worker.py").read_text()
     for d, *_ in pins:
         assert f'"{d}"' in worker, d
-    assert re.findall(r"Systran/[\w.-]+ [0-9a-f]{40}", text)                                          # the Whisper weights come from Systran only, pinned
+    hf = re.findall(r'^  "([\w./-]+)\|([0-9a-f]{40})\|(model\.bin|embedding_model\.ckpt)\|([0-9a-f]{64})"$', text, re.M)
+    assert {h[0] for h in hf} == {"Systran/faster-whisper-large-v3", "Systran/faster-distil-whisper-large-v3", "speechbrain/spkrec-ecapa-voxceleb"}      # EVERY runtime model has a pinned revision AND weights hash
     assert (REPO / "scripts/setup/omi_repass_constraints.txt").read_text().count("==") > 50 and "-c \"$CON\"" in text
 
 
