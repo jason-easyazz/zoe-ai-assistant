@@ -12,6 +12,7 @@
   "event": "collaps\\w*|faint\\w*|pass(?:es|ed)? out|unconscious|unresponsive|stops? breathing|stopped breathing|not breathing|chok\\w*|heart attack|stroke|seizure|fitting|overdos\\w*|bleeding|scalded|burned (?:himself|herself|myself|themselves|badly)|bad burn|severe burn|on fire|fire|drown\\w*|emergency|ambulance|accident|poison\\w*|swallow\\w*|eats? (?:something|a |some )|ate (?:something|a |some )|allergic reaction|anaphyla\\w*|falls? and|has fallen|hit their head",
   "poison_event": "poison\\w*|swallow\\w*|eats? |ate |overdos\\w*"
  },
+ "negation": "no|not|without|never|nothing|nor|dont have|doesnt have|didnt have|havent had|hasnt had|free of|denies|isnt|arent|wasnt|werent",
  "red_flags": [
   {"id": "heart", "tier": "call", "re": "chest (?:hurts?|is hurting|aches?|is aching)|chest (?:feels? |is |has |gets? )?(?:so |really |very |a bit |quite )?(?:tight|tightness|pain|painful|pressure|heavy|crushing|squeez\\w*)|(?:tightness|pain|pressure|heaviness|squeezing) (?:in|across|around|on) (?:my|his|her|their|the) chest|chest (?:and|with) (?:left )?arm|pain (?:down|in) (?:my|his|her) (?:left )?arm and (?:chest|jaw)"},
   {"id": "stroke", "tier": "call", "re": "face (?:is |has )?(?:droop\\w*|dropping|numb)|slurr\\w* (?:speech|words)|cant (?:speak|talk) properly|sudden(?:ly)? (?:numb\\w*|weak\\w*|confus\\w*|cant see)|one side of (?:my|his|her|their) (?:body|face)|cant (?:move|lift|feel) (?:my|his|her|their) (?:arm|leg|face)"},
@@ -25,7 +26,7 @@
   "term": "blood sugars?|blood glucose|glucose|bsl|bgl",
   "plain_term": "sugars?(?: level)?",
   "plain_link": "was|is|reads?|reading|level|came|ran|hit|at|showed|sitting|measured",
-  "not_glucose_after": "^\\s*(?:g|gram|grams|kg|kgs|cups?|tsp|tbsp|teaspoons?|tablespoons?|spoons?|spoonfuls?|cubes?|sachets?|packets?|ml|l|litres?|%|percent|minutes?|mins?|hours?|cal|calories|kj|dollars?|bucks)(?!\\w)",
+  "not_glucose_after": "^\\s*(?:g|gram|grams|kg|kgs|cups?|tsp|tbsp|teaspoons?|tablespoons?|spoons?|spoonfuls?|cubes?|sachets?|packets?|ml|l|litres?|%|percent|minutes?|mins?|hours?|cal|calories|kj|dollars?|bucks|am|pm|oclock|times|days|weeks|years)(?!\\w)",
   "not_glucose_context": "recipe|ingredients?|bake|baking|cake|cookies?|teaspoon|cup of"
  },
  "replies": {
@@ -44,11 +45,15 @@
   "worst_headache": "Ring {emergency} now. A sudden severe headache, or a headache with a stiff neck and fever, needs help straight away.",
   "vision": "Blurred or changed vision, especially with a headache that has lasted days, is not something to wait on. Please see a doctor today: your GP, or the emergency department if you cannot get in. Ring {emergency} straight away if it suddenly gets worse, or you feel confused, weak on one side, have trouble speaking, or keep vomiting.",
   "blood_out": "Blood where it should not be is worth getting checked today. Please see your GP, or the emergency department if you cannot get in. Ring {emergency} if there is a lot of it, or you feel faint or unwell.",
-  "glucose_low": "{value} {unit} is low. Have about 15 grams of fast sugar now, such as half a glass of juice or regular soft drink, then recheck in 15 minutes and repeat if it is still under 4. Ring {emergency} if the person is confused, cannot swallow safely, or will not wake. Check your diabetes plan or your GP about why it dropped.",
-  "glucose_ok": "{value} {unit} is in the usual range for someone with diabetes (about 4 to 7 before eating, up to about 10 after meals). Your own targets may differ, so check your plan or your GP.",
-  "glucose_up": "{value} {unit} is a little above the usual range for someone with diabetes (about 4 to 7 before eating, up to about 10 after meals). It is not an emergency on its own. Drink some water, recheck later, and mention it to your GP or diabetes team if it keeps running high. Check your own plan for your targets.",
+  "glucose_low": "{value} {unit} is low. Have about 15 grams of fast sugar now, such as half a glass of juice or regular soft drink, then recheck in 15 minutes and repeat if it is still under {low_line}. Ring {emergency} if the person is confused, cannot swallow safely, or will not wake. Check your diabetes plan or your GP about why it dropped.",
+  "glucose_ok": "{value} {unit} is in the usual range for someone with diabetes ({usual}). Your own targets may differ, so check your plan or your GP.",
+  "glucose_up": "{value} {unit} is a little above the usual range for someone with diabetes ({usual}). It is not an emergency on its own. Drink some water, recheck later, and mention it to your GP or diabetes team if it keeps running high. Check your own plan for your targets.",
   "glucose_high": "{value} {unit} is high. Drink water, take any medicine exactly as your plan says, and contact your GP or diabetes team today. Ring {emergency} if you are vomiting, breathing fast, very drowsy or confused.",
   "glucose_unit_mmol": "mmol/L",
+  "glucose_low_mmol": "4 mmol/L",
+  "glucose_low_mg": "72 mg/dL",
+  "glucose_usual_mmol": "about 4 to 7 mmol/L before eating, up to about 10 after meals",
+  "glucose_usual_mg": "about 72 to 126 mg/dL before eating, up to about 180 after meals",
   "glucose_unit_mg": "mg/dL",
   "poison_number_fallback": "your local poisons information line",
   "emergency_fallback": "your local emergency number"

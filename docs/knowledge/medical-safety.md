@@ -41,6 +41,8 @@ All five went to the 4B brain, which improvised from memory and the last thread.
 4. **Red flag, see a doctor today**: blurred or double vision, blood where it should not be.
 5. **Blood sugar**: a glucose term (or "sugar was/is") followed by a plausible reading, mmol/L or mg/dL (inferred from the size). Bands: under 4 low, up to 7 usual, up to 10 slightly above, above 10 high, with the action for each.
 
+Guards (from review): an animal counts only as the SUBJECT (before the verb), a bystander dog does not; a symptom denied in its own clause ("no chest pain") is skipped; a reading must be a whole number token with a plausible unit (a recipe quantity, a time or a price is not one); with several readings in one sentence the one marked now/currently/latest wins, else the most urgent band; thresholds are written in the reading's own unit.
+
 Numbers: `distress_data/crisis_lines.json` per country, `emergency` plus a `poison` entry (AU 13 11 26, US 1-800-222-1222, GB NHS 111). OPERATOR: verify each before relying on it; a country with no entry gets "your local ..." wording.
 
 Not marked off the record: unlike a distress turn, a symptom the member states stays recallable.

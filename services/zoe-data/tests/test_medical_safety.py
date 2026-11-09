@@ -173,3 +173,44 @@ def test_a_polite_lead_in_is_not_a_thread():
 
 def test_burns_that_matter_still_count():
     assert reply("what number do i ring if the baby is badly scalded").startswith("Ring 000.")
+
+
+# review round 2 (Codex bot, PR #2356) ---------------------------------------------------------------------------------
+def test_a_bystander_animal_does_not_turn_a_childs_poisoning_into_a_vet_answer():
+    out = reply("wren swallowed bleach while i was feeding the dog")
+    assert out.startswith("Ring the Poisons Information line")
+
+
+def test_negative_control_an_animal_subject_before_the_verb_is_still_a_vet_answer():
+    assert reply("the puppy swallowed a battery while i was cooking").startswith("Ring your vet")
+
+
+def test_an_oversized_number_is_not_truncated_into_a_reading():
+    assert reply("my blood sugar is 1000 mg/dL") is None
+
+
+def test_a_denied_symptom_does_not_call_an_ambulance_and_the_reading_still_answers():
+    out = reply("i have no chest pain, my blood sugar is 5.5")
+    assert out.startswith("5.5 mmol/L is in the usual range")
+
+
+def test_negative_control_a_denial_in_another_clause_does_not_hide_the_symptom():
+    assert reply("i have no cough but my chest feels tight").startswith("Ring 000 now")
+
+
+def test_mg_dl_readings_get_mg_dl_thresholds():
+    out = reply("my blood sugar is 60 mg/dL")
+    assert "under 72 mg/dL" in out and "under 4" not in out
+    assert "72 to 126 mg/dL" in reply("my blood sugar is 100 mg/dL")
+
+
+def test_the_current_reading_wins_over_an_earlier_one():
+    assert "2.8 mmol/L is low" in reply("my blood sugar was 5.5 earlier but is now 2.8")
+
+
+def test_without_a_now_marker_the_most_urgent_reading_wins():
+    assert "2.8 mmol/L is low" in reply("my blood sugar was 2.8 and then 5.5")
+
+
+def test_a_clock_time_is_not_a_second_reading():
+    assert "9.8 mmol/L" in reply("my blood sugar was 9.8 at 3 pm")
