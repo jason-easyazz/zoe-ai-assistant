@@ -251,7 +251,19 @@ def _subject_re(subject: str, lazy: bool = False):
     return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?:s(?=:))?(?![A-Za-z0-9])", re.IGNORECASE)   # "Kais: 21" is Kai's row
 
 
-_AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+|:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
+_AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
+# the compact "Name: 22" row: the colon must come right after the subject, and a number that is the hour of a time ("10:22") is no age
+_COMPACT_AGE = re.compile(rf"^(?P<pre>\s*:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?!:\d)(?P<post>{_YEARS})", re.IGNORECASE)
+
+
+def _age_matches(tail: str) -> list:
+    """The age numbers in the text after the subject: a compact ``: N`` straight after it, then every "is/aged/turned N"."""
+    out = []
+    cm = _COMPACT_AGE.match(tail)
+    if cm:
+        out.append(cm)
+    out.extend(re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE))
+    return out
 
 
 def _row_value(am) -> Optional[float]:
@@ -280,7 +292,7 @@ def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[s
         old_n, new_n = value_of(corr.old), value_of(corr.new)
         if old_n is not None and new_n is not None:
             # an AGE pair: the subject's number, whatever its spelling ("24" == "twenty-four", "3" -> "3 and a half")
-            for am in re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE):
+            for am in _age_matches(tail):
                 if _row_value(am) == old_n:
                     return (text[:sm.end()] + tail[:am.start("num")] + _render_value(new_n, am.group("num"))
                             + tail[(am.end("half") if am.group("half") else am.end("num")):])
@@ -296,7 +308,7 @@ def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[s
     new_n = value_of(corr.new)
     if new_n is None:
         return None
-    ages = list(re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE))
+    ages = _age_matches(tail)
     if not ages:
         return None
     am = ages[0]

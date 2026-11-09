@@ -142,6 +142,9 @@ def test_a_lazily_typed_name_and_two_numbers_is_an_age_correction():
     assert vc.rewrite("Kai: 22", c, lazy_s=True) == "Kai: 21"            # ... then Kai's row (the compact "Name: value" shape)
     assert vc.rewrite("User's boyfriend Kai is 22", c, lazy_s=True) == "User's boyfriend Kai is 21"
     assert vc.rewrite("Zara: 22", c, lazy_s=True) is None
+    assert vc.rewrite("Kai has a train at 10:22", c, lazy_s=True) is None             # a time is not an age
+    assert vc.rewrite("Kai: 10:22", c, lazy_s=True) is None
+    assert vc.rewrite("Kai: 22 years old", c, lazy_s=True) == "Kai: 21 years old"
     c2 = vc.statement("also kai's 21 not 22")
     assert c2 is not None and c2.subject == "kai"
     # a name that really ends in s is not shortened: it rewrites its own row, and no invented "Chri" row is touched
