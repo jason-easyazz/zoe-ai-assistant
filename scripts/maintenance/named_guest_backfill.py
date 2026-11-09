@@ -32,6 +32,14 @@ async def _main(args) -> int:
     import runtime_env
 
     runtime_env.bootstrap_runtime_env()
+    # The forget ledger's salt is not a bootstrap key: without it ``memory_forgotten.matches`` answers "not forgotten" and a
+    # forgotten guest would be backfilled over the shield. Load it the way the service gets it, and refuse a real run without it.
+    import memory_forgotten as mf
+
+    runtime_env.load_env_keys((mf.SALT_ENV,))
+    if not args.dry_run and not mf.configured():
+        print(json.dumps({"status": "error", "error": f"the forget ledger is not configured ({mf.SALT_ENV} missing or too short): nothing was stored"}))
+        return 3
     import named_guest_backfill as ngb
     import named_guest_enrol as nge
     import omi_diarize

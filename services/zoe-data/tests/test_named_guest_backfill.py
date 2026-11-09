@@ -127,3 +127,115 @@ def test_the_same_refusals_as_enrolment(env, clips, monkeypatch):
     assert e.value.status == 404
     assert run(ngb.run(OWNER, "Quinn", good, embedder=emb, dry_run=True))["enough"]     # a dry run works with the flag off
     assert env.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+
+
+# ── review #2357: the forget shield ───────────────────────────────────────────────────────────────────────────────────
+
+_REAL_CONFIGURED = __import__("memory_forgotten").configured
+
+
+@pytest.fixture(autouse=True)
+def ledger(monkeypatch):
+    """A configured forget ledger whose answer the test controls (``state['forgotten']``), and the release calls it saw."""
+    import memory_forgotten as mf
+
+    state = {"forgotten": False, "released": []}
+
+    async def matches(uid, text, **_k):
+        return state["forgotten"]
+
+    async def release(uid, text):
+        state["released"].append(text)
+        return 1
+    monkeypatch.setattr(mf, "configured", lambda: True)
+    monkeypatch.setattr(mf, "matches", matches)
+    monkeypatch.setattr(mf, "release", release)
+    return state
+
+
+def test_a_forget_made_mid_run_is_never_undone(env, clips, ledger):
+    """The forget state is read BEFORE the clips are embedded: a forget landing while they embed is "forgotten since", refused 409
+    - not read late and passed as an explicit re-teach that stores the print and releases the shield."""
+    paths, emb = clips
+
+    class ForgetsWhileEmbedding(StubEmbedder):
+        def embed_wav(self, wav_bytes):
+            ledger["forgotten"] = True
+            return super().embed_wav(wav_bytes)
+    with pytest.raises(nge.GuestError) as e:
+        run(ngb.run(OWNER, "Quinn", list(paths.values()), embedder=ForgetsWhileEmbedding(emb.table), dry_run=False))
+    assert e.value.status == 409 and ledger["released"] == []
+    assert env.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+
+
+def test_a_name_forgotten_before_the_run_is_an_explicit_reteach(env, clips, ledger):
+    paths, emb = clips
+    ledger["forgotten"] = True
+    assert run(ngb.run(OWNER, "Quinn", list(paths.values()), embedder=emb, dry_run=False))["stored"]
+    assert ledger["released"] == ["Quinn"]
+
+
+def test_an_unconfigured_ledger_stores_nothing(env, clips, monkeypatch):
+    """No salt = ``matches`` would answer "not forgotten" without looking: refuse rather than store over a shield."""
+    import memory_forgotten as mf
+
+    monkeypatch.setattr(mf, "configured", lambda: False)
+    paths, emb = clips
+    with pytest.raises(nge.GuestError) as e:
+        run(ngb.run(OWNER, "Quinn", list(paths.values()), embedder=emb, dry_run=False))
+    assert e.value.status == 503 and env.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+    assert run(ngb.run(OWNER, "Quinn", list(paths.values()), embedder=emb, dry_run=True))["enough"]      # a dry run writes nothing
+
+
+def test_runtime_env_loads_only_the_named_keys_and_the_real_env_wins(monkeypatch, tmp_path):
+    import os
+
+    import runtime_env
+
+    f = tmp_path / ".env"
+    f.write_text("ZOE_FORGET_LEDGER_SALT=synthetic-salt-value-0123456789\nOTHER_KEY=x\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(f),))
+    monkeypatch.setenv("ZOE_FORGET_LEDGER_SALT", "x")
+    monkeypatch.delenv("ZOE_FORGET_LEDGER_SALT")      # (setenv first: undo then restores "unset", whatever load_env_keys put there)
+    monkeypatch.delenv("OTHER_KEY", raising=False)
+    runtime_env.load_env_keys(("ZOE_FORGET_LEDGER_SALT",))
+    assert os.environ["ZOE_FORGET_LEDGER_SALT"] == "synthetic-salt-value-0123456789" and "OTHER_KEY" not in os.environ
+    monkeypatch.setenv("ZOE_FORGET_LEDGER_SALT", "real-env-wins-0123456789abcdef")
+    runtime_env.load_env_keys(("ZOE_FORGET_LEDGER_SALT",))
+    assert os.environ["ZOE_FORGET_LEDGER_SALT"] == "real-env-wins-0123456789abcdef"
+    monkeypatch.delenv("ZOE_FORGET_LEDGER_SALT")
+
+
+def test_the_cli_loads_the_salt_and_refuses_a_real_run_without_it(monkeypatch, tmp_path, capsys):
+    """Review #2357: the CLI must pick the salt up from the service .env; with none, a real run exits 3 (nothing stored). The output
+    names the variable, never a value."""
+    import argparse
+    import asyncio
+    import importlib.util
+    import pathlib
+
+    import memory_forgotten as mf
+    import runtime_env
+
+    monkeypatch.setattr(mf, "configured", _REAL_CONFIGURED)
+    spec = importlib.util.spec_from_file_location(
+        "ngb_cli", pathlib.Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "named_guest_backfill.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(tmp_path / "absent.env"),))
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
+    monkeypatch.setenv("ZOE_FORGET_LEDGER_SALT", "x")
+    monkeypatch.delenv("ZOE_FORGET_LEDGER_SALT")      # (setenv first: undo then restores "unset", whatever load_env_keys put there)
+    args = argparse.Namespace(owner=OWNER, name="Quinn", clips=["x.wav"], min_kept=3, dry_run=False)
+    assert asyncio.run(cli._main(args)) == 3
+    out = capsys.readouterr().out
+    assert "ZOE_FORGET_LEDGER_SALT" in out and "nothing was stored" in out
+    # with the salt in the service .env the CLI gets past the ledger check (it then stops at the model, not at the ledger)
+    f = tmp_path / "zoe-data.env"
+    f.write_text("ZOE_FORGET_LEDGER_SALT=synthetic-salt-value-0123456789\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_env, "_ENV_FILES", (str(f),))
+    monkeypatch.setattr(runtime_env, "_ENV_BOOTSTRAPPED", False)
+    import omi_diarize
+    monkeypatch.setattr(omi_diarize, "load_embedder", lambda: None)
+    assert asyncio.run(cli._main(args)) == 3
+    assert "speaker model" in capsys.readouterr().out
