@@ -308,3 +308,18 @@ def test_offer_ager_skips_an_emotional_turn_only_in_mode_on(monkeypatch):
 
     src = inspect.getsource(latent_intent_detector)
     assert "emotional_turn_guard.holds_extras(user_message, user_id, log=False)" in src
+
+
+@pytest.mark.parametrize("reply", [
+    "That is a lot to carry. **What feels hardest?** Would taking a break help?",
+    "That is a lot to carry. “What feels hardest?” Would taking a break help?",
+    "That is a lot to carry. (What feels hardest?) Would taking a break help?",
+])
+def test_wrapped_questions_still_count_as_two(reply):
+    # Codex on #2354: a question closed by markdown / quote marks hid the second one from the limit - through trim AND the stream
+    want = g.trim(reply, OVERWHELMED)
+    assert want.count("?") == 1, want
+    lex = g.lexicon("en")
+    for pieces in _cuts(reply):
+        s = g.GuardStream(lex, g.asked_kinds(OVERWHELMED, lex))
+        assert "".join(s.feed(p) for p in pieces) + s.finish() == want, pieces

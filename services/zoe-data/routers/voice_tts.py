@@ -5080,6 +5080,16 @@ async def voice_command(
     try:
         from intent_router import detect_intent as _detect_pub, execute_intent as _exec_pub
         _pub_intent = _detect_pub(text, log_miss=False)
+        if _pub_intent is not None and _pub_intent.name not in ("reminder_create", "acknowledgement"):
+            # "yes please, 2:45" answering Zoe's own reminder offer is NOT a time question: skip the fast tier so the
+            # brain (which has the conversation) acts on the offer. Flag-gated; unknown/expired offer never binds.
+            try:
+                from intent_router import reminder_offer_reply_text as _rem_offer_reply
+
+                if await _rem_offer_reply(text, effective_user, session_id=session_id):
+                    _pub_intent = None
+            except Exception:
+                pass
         # A bare "thank you" / "cheers" / "ok" is a social micro-reply: no data, no policy question, no brain round-trip (live
         # 2026-10-23: "Thank you" was classified `acknowledgement` here and still went to the brain, which answered "I'm Zoe.").
         # It is not in the capability matrix, so it skips the matrix lookup. An "ok" that ACCEPTS Zoe's last offer is not a bare
@@ -7495,6 +7505,24 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
 
         await _vs_revoke.revoke_member(user_id, "consent_revoked")
     return dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name, model_id=model_id)
+
+
+@router.post("/guests/enroll")
+async def voice_guest_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """A NAMED GUEST's finished panel profile (``named_guests.store_profile``): device token on the LAN only, and only under the
+    single-use ticket the server issued when a verified member asked "learn Quinn's voice" at THIS panel. A profile without a
+    ticket is refused: an unverified voice can never write or overwrite a guest (or a member)."""
+    import named_guest_enrol as _nge
+
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="device token required")
+    from biometric_scope import require_local_panel
+
+    require_local_panel(caller, "guest voice enrolment")
+    try:
+        return await _nge.store_profile(payload or {}, caller)
+    except _nge.GuestError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 @router.post("/identify")

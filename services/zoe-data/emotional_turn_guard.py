@@ -156,6 +156,19 @@ def asked_kinds(message: str, lex: Lexicon) -> frozenset:
     return frozenset(k for k, rx in lex.asks.items() if rx.search(low))
 
 
+_WRAPPED_END_RE = re.compile(r"[.!?\u2026]+[\"'\u201d\u2019)\]}*_]+(?=\s)")
+
+
+def _sentence_end(text: str) -> int:
+    """``_next_end`` that also sees a sentence ending inside markdown / quote wrappers ("**What feels hardest?** Would ..."): the shared
+    splitter wants whitespace straight after the terminator, so a wrapped question was counted together with the one after it."""
+    end = _next_end(text)
+    m = _WRAPPED_END_RE.search(text)
+    if m and (end < 0 or m.end() < end):
+        return m.end()
+    return end
+
+
 def _is_question(sentence: str) -> bool:
     """Ends in ``?``, closing quotes / brackets / markdown marks after it tolerated."""
     return (sentence or "").rstrip().rstrip("\"'”’)]}*_").endswith("?")
@@ -231,7 +244,7 @@ class GuardStream:
                     out.append(self._buf)
                     self._buf = ""
                 break
-            end = _next_end(stripped)
+            end = _sentence_end(stripped)
             if end < 0:
                 if final:
                     out.append(self._judge(self._buf))
@@ -252,7 +265,7 @@ class GuardStream:
             return self._drain(final=False)
         released = len(self._first)
         combined = self._first + delta
-        end = _next_end(combined)
+        end = _sentence_end(combined)
         if end < 0:
             self._first = combined
             return delta
