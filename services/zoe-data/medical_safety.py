@@ -106,7 +106,7 @@ def _rx() -> dict:
     ing, nq, gl = d["ingest"], d["number_question"], d["glucose"]
     return {
         "verb": w(ing["verb"]), "sub": w(ing["substance"]), "idiom": re.compile(ing["idioms"], re.I), "took": w(ing["took_verb"]), "took_risky": w(ing["took_risky"]),
-        "human": w(ing["human"]), "animal": w(ing["animal"]), "obj_urgent": w(ing["obj_urgent"]), "obj_minor": w(ing["obj_minor"]),
+        "human": w(ing["human"]), "animal": w(ing["animal"]), "obj_urgent": w(ing["obj_urgent"]), "obj_minor": w(ing["obj_minor"]), "obj_signs": w(ing["obj_signs"]),
         "pairs": [(p["id"], p["tier"], _pair_rx(p), re.compile(p["skip"], re.I) if p.get("skip") else None) for p in d.get("pairs", [])],
         "neg_adj": re.compile(rf"(?<!\w)(?:{d['negation']})(?:\s+\w+){{0,2}}\s*$", re.I), "unsure": re.compile(r"(?<!\w)(?:not sure|unsure|not certain|dont know|no idea)(?!\w)", re.I),
         "term_any": w(gl["term"] + "|" + gl["plain_term"]),
@@ -263,6 +263,11 @@ def detect(text: str) -> Verdict:
         c = _canon(s)
         ing = _ingestion(s, rx)
         call = _flag(s, rx, "call") or _pair(c, rx, "call")
+        if ing and ing.key == "object_minor" and not call:
+            # a coin AND a stated sign (drooling, pain, cant swallow): the number now, not "ring if there is..."
+            for m in rx["obj_signs"].finditer(s):
+                if not _negated(s, m.start(), rx):
+                    return Verdict("red_call", "object_signs")
         if ing and not (call and ing.key == "object_minor"):   # a coin AND choking: the ambulance answer is the better one
             return ing
         if call:

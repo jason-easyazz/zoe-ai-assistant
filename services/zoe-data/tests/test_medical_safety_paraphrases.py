@@ -15,6 +15,13 @@ import medical_safety as ms
 
 pytestmark = pytest.mark.ci_safe
 
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    for k in (ms.ENV, "ZOE_HOUSEHOLD_COUNTRY", "ZOE_LOCATION_COUNTRY", "ZOE_DISTRESS_LINES_FILE"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("ZOE_HOUSEHOLD_COUNTRY", "AU")
+
+
 # -- positives ---------------------------------------------------------------------------------------------------------------------
 PEOPLE = ["my son", "my daughter", "the baby", "my toddler", "wren", "max", "my little girl", "my nephew"]
 VERBS = ["just swallowed", "has swallowed", "swallowed", "just ate", "has eaten", "is chewing and swallowed"]
@@ -102,6 +109,8 @@ NEG += ["we ate dinner at six", "the kids drank their milk", "she took her morni
 NEG += ["the coin collection is on the shelf", "lego is all over the floor again", "tidy up the marbles", "a magnet on the fridge", "the battery is flat", "button up your coat",
         "put the needles away in the sewing box", "the nails need trimming", "screw the lid on tight"]
 NEG += ["the weight of the box is heavy", "heavy rain on the roof", "chest of tea from the shop", "my bag feels heavy", "pain in the neck neighbour", "pressure washing the deck"]
+NEG += ["there is a pain in the chest of drawers", "the pain in the chest of drawers is the broken runner", "the pressure washer hit my chest", "pressure washing the deck splashed my chest",
+        "the pressure cooker lid hit my chest"]
 NEG += ["i feel a bit tired", "my back is sore", "my knee hurts", "my tummy hurts a bit", "i have a sore throat", "my ear aches"]
 NEG += ["tell me a joke", "what is the weather like", "play some music", "add milk to the list"]
 
@@ -144,7 +153,8 @@ def test_generated_paraphrases_precision_and_recall(capsys):
             misses.append((cat, text, _verdict(text)))
     fp = [(t, _verdict(t)) for t in NEG if _verdict(t)]
     wrong_human = [(t, _verdict(t)) for t in PET_NEG_VET if (_verdict(t) or ("", ""))[0] != "ingest_animal"]
-    precision = tp / (tp + len(fp) + len(wrong_human)) if tp else 0.0
+    wrong_class = [m for m in misses if m[2] is not None]   # a positive answered with the WRONG class is also a false positive of that class
+    precision = tp / (tp + len(fp) + len(wrong_human) + len(wrong_class)) if tp else 0.0
     recall = tp / len(pos)
     held = [(t, _verdict(t), w) for t, w in HELD_OUT]
     with capsys.disabled():
@@ -172,6 +182,18 @@ def test_swallowed_objects_get_the_right_reply(monkeypatch):
         assert "13 11 26" in out and "000" in out and "choking" in out and "drooling" in out and "watch" in out
         assert not out.startswith("Ring 000 now.")      # not an unconditional ambulance: the number is for choking / pain / breathing
         assert "will pass" not in out and "harmless" not in out and "diagnos" not in out
+
+
+@pytest.mark.parametrize("text", ["my son swallowed a coin and is drooling", "my son swallowed a coin and has stomach pain", "zara swallowed a lego bit and cant swallow",
+                                  "max swallowed a bead and is gagging", "wren swallowed a coin and is vomiting"])
+def test_a_small_object_with_a_stated_sign_is_the_plain_ambulance_answer(text):
+    assert _verdict(text) == ("red_call", "object_signs")
+    assert ms.build_reply(ms.detect(text)).startswith("Ring 000 now.")
+
+
+@pytest.mark.parametrize("text", ["my son swallowed a coin, no pain", "my son swallowed a coin and is not drooling", "my dog swallowed a coin and is drooling"])
+def test_negative_control_denied_or_pet_signs_do_not_flip(text):
+    assert _verdict(text) in {("ingest_human", "object_minor"), ("ingest_animal", "poison_animal")}
 
 
 def test_a_coin_with_choking_is_the_ambulance_answer():
