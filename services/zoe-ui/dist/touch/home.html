@@ -860,7 +860,7 @@
      the band is clipped at the horizon line (the bottom edge) so it rises out of and sets into it, and it can never reach the number. */
   .hfull .hcel{position:relative;top:-8px;flex:none;width:72px;height:76px;margin-top:-18px;clip-path:inset(-30px -30px 0 -30px);pointer-events:none}
   .hfull .hcel::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;border-radius:1px;background:currentColor;opacity:.28}
-  .hfull .hcelI{position:absolute;left:0;top:0;width:32px;height:32px;transform:translate(var(--cx,0px),var(--cy,60px))}
+  .hfull .hcelI{position:absolute;left:0;top:0;width:32px;height:32px;transform:translate(0,60px)}
   .hfull .hcelI[data-mv]{transition:transform 150s linear,color 150s linear}   /* only after the first seating: a visit must not replay the sunrise */
   .hfull .hcelI svg{display:block;width:100%;height:100%;overflow:visible}
   .hfull .hcelI.sun svg{filter:drop-shadow(0 0 9px currentColor)}
@@ -2103,16 +2103,16 @@
   function sunColor(h){var t=Math.min(1,h*1.6);return 'rgb(255,'+Math.round(138+76*t)+','+Math.round(61+41*t)+')';}   // amber at the horizon -> pale gold high up
   // CEL-END
   var _cel={sr:0,ss:0,at:0,key:''};
-  function celApply(){var el=document.getElementById('hCelI');if(!el)return;var now=Date.now(),pos=celPos(now,_cel.sr,_cel.ss);_cel.at=now;
+  function celApply(){try{var el=document.getElementById('hCelI');if(!el)return;var now=Date.now(),pos=celPos(now,_cel.sr,_cel.ss);_cel.at=now;
     var ph=pos.kind==='moon'?Math.round(moonPhase(now)*60)/60:0,key=pos.kind+':'+ph;
     if(key!==_cel.key){_cel.key=key;el.className='hcelI '+pos.kind;el.innerHTML=pos.kind==='sun'?sunSvg():moonSvg(ph);}
     el.style.color=pos.kind==='sun'?sunColor(pos.h):'';
-    el.style.setProperty('--cx',(pos.p*40).toFixed(1)+'px');el.style.setProperty('--cy',(60-56*pos.h).toFixed(1)+'px');
-    if(!el.hasAttribute('data-mv'))setTimeout(function(){el.setAttribute('data-mv','1');},60);}
+    el.style.transform='translate('+(pos.p*40).toFixed(1)+'px,'+(60-56*pos.h).toFixed(1)+'px)';
+    if(!el.hasAttribute('data-mv'))setTimeout(function(){el.setAttribute('data-mv','1');},60);}catch(e){}}   // decoration only: never let it break the screen
   // Ink alignment: trim a text box's side bearing so the glyph edge (not the box) sits on the line. Canvas measureText is the ruler.
   var _inkCtx=null;
-  function inkTrim(el,side){if(!el||!el.textContent)return;var cs=getComputedStyle(el),key=el.textContent+'|'+cs.fontSize+cs.fontFamily;if(el._ink===key)return;
-    try{_inkCtx=_inkCtx||document.createElement('canvas').getContext('2d');var g=_inkCtx;g.font=cs.fontWeight+' '+cs.fontSize+' '+cs.fontFamily;g.letterSpacing=(cs.letterSpacing==='normal'?'0px':cs.letterSpacing);
+  function inkTrim(el,side){if(!el||!el.textContent)return;
+    try{var cs=getComputedStyle(el),key=el.textContent+'|'+cs.fontSize+cs.fontFamily;if(el._ink===key)return;_inkCtx=_inkCtx||document.createElement('canvas').getContext('2d');var g=_inkCtx;g.font=cs.fontWeight+' '+cs.fontSize+' '+cs.fontFamily;g.letterSpacing=(cs.letterSpacing==='normal'?'0px':cs.letterSpacing);
       var m=g.measureText(el.textContent);
       if(side==='l')el.style.marginLeft=m.actualBoundingBoxLeft.toFixed(2)+'px';else el.style.marginRight=(m.actualBoundingBoxRight-m.width).toFixed(2)+'px';
       el._ink=key;}catch(e){}}
