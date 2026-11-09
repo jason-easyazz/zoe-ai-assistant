@@ -25,6 +25,7 @@ Each box has a test (`services/zoe-data/tests/test_omi_repass.py`, `tests/unit/t
 Moonshine (the live STT rock) writes the FIRST transcript minutes after a sync. It is fast and sits between voice turns, but on pendant audio it garbles names and invents text on near-silence. The **night re-pass** is the SECOND transcript, offline, with the 4B brain, Kokoro, the router and zoe-data all stopped (the box has ~12.6 GB free then):
 
 1. **ASR**: **Qwen3-ASR-1.7B** (`Qwen/Qwen3-ASR-1.7B-hf`, transformers 5.17, bfloat16 on the GPU) over VAD chunks of at most 14 s. When the day's audio would overrun the budget the planner drops to **Parakeet-TDT-0.6B-v3** (`nvidia/parakeet-tdt-0.6b-v3`, about 5x faster). No candidate in the bake-off spelt a household name unbiased, and a keyword prompt made one engine invent a name on non-speech, so the engines are **not prompt-biased**: names are normalised afterwards from the lexicon (household first names + the owner's named guests, minus anything on the forget ledger), e.g. Billy -> Billie when that person exists. faster-whisper stays registered as a CPU last resort only.
+   (Production runs two more voters and ROVER fuses them; see below.)
 2. **Speakers**: ECAPA embeddings of 1.5 s windows (0.75 s hop) over the speech spans, matched against (a) the wearer's pendant-channel print, (b) Zoe's own TTS voice (kokoro cache; matched lines are marked `not_person='zoe'`), (c) voices the owner taught Zoe in this speaker space.
 3. **Store** (mode `on`): the clean transcript and new `omi_segments` replace the Moonshine ones, with provenance (`repass_model`, `repass_at`). Shadow stores nothing and logs counts.
 
@@ -36,6 +37,9 @@ The round-2 bake-off (2026-11-09, Sunday audio, this Jetson; lab record `~/.zoe/
 |---|---|---|---|---|---|---|
 | `qwen3-asr` | **default** | GPU | 0.42 | ~8.7 GB | ~4.0 GB | ~14 s |
 | `parakeet-tdt` | budget fallback | GPU | 0.08 | ~5.7 GB | ~2.5 GB | ~12 s |
+| `whisper-gpu:distil-large-v3` | **third ROVER voter** (production) | GPU (CUDA CTranslate2) | ~0.44 | declared 4.5 GB | - | - |
+| `whisper-gpu:large-v3` | evaluation contender | GPU (CUDA CTranslate2) | ~0.74 | declared 5.5 GB | - | - |
+| `granite-speech` | evaluation contender | GPU | ~0.47 | ~9.7 GB | ~4.5 GB | ~16 s |
 | `faster-whisper:large-v3` / `:distil-large-v3` | CPU last resort | CPU | 1.0 / 0.45 (bake-off round 1) | ~2.1 / 2.4 GB | - | - |
 
 GPU large-v3 reached RTF 0.74 and needs a hand-built CTranslate2, so Whisper is not the default; Gemma 12B's own audio was rejected (PR #2363 stays parked).
@@ -43,6 +47,20 @@ GPU large-v3 reached RTF 0.74 and needs a hand-built CTranslate2, so Whisper is 
 - **ASR**: `ZOE_OMI_NIGHT_ASR` (default `qwen3-asr`). Contract: `AsrBackend.transcribe(audio, hint, deadline) -> words [[word, t0, t1, confidence]...]` in `scripts/night/jobs/omi_repass_worker.py` (`ASR` registry). The transformers engines return text per VAD chunk; word times are spread evenly across the chunk with a flat 0.6 confidence, and speakers come from ECAPA windows (so a chunk with two voices is labelled at word granularity only roughly).
 - **Diarisation**: `ZOE_OMI_NIGHT_DIAR` (default `ecapa`). Contract: `windows(audio, speech) -> [(t0, t1, embedding, rms)]` (`DIAR` registry). A different embedder needs its own `MODEL_ID` (prints are per speaker space - never mixed).
 - **Budget per backend**: `omi_repass.BACKENDS` declares each engine's `rtf`, `gpu_rtf`, `peak_rss_mb`, `gpu_peak_mb`, `device` and `fallback`. The planner, the capped scope's `MemoryMax`, the pre-start RAM check (`need_mb` = peak + 0.7 GB speaker model + the 1.2 GB floor; a box that cannot hold it carries the recordings with status `low_mem`) read those; a night's measured RTF (`~/.zoe/omi-repass/state.json`) overrides the declared one.
+
+## Production voters, ROVER fusion and the contender ledger (owner policy 2026-11-09)
+
+"Run all the strong contenders for a while, until we can safely say one is not needed." So the re-pass is not one engine:
+
+- **Production, every night, on ALL the audio**: Qwen3-ASR (the pivot) -> Parakeet-TDT -> a **third voter**, then **ROVER** over their chunk texts. ROVER needs at least three voters to outvote the pivot (measured on Sunday's audio against a human reference of 56 chunks / 381 words: Qwen3 alone 7.3 % WER, ROVER over the voters 3.7-5.0 %; LLM free-generation fusion did worse, 7.1 %, and LLM slot arbitration only tied ROVER, so **there is no LLM stage**).
+- **ROVER rules** (`omi_repass_eval.rover`, adopted from the lab's `fusion/rover.py`): words are aligned to the Qwen3 pivot; majority vote; Qwen3 breaks ties (weight 1.01); an EMPTY hypothesis abstains; an inserted word needs a strict majority of the voters; Granite's "zoe" is ignored unless Qwen3 also says it; with fewer than three voters the pivot's text stands; if EVERY other engine is more than 50 % of words away from Qwen3 on a chunk the chunk is flagged `low_conf` and the Qwen3 text kept. Then the ECAPA labelling and the name normalisation run as before. Deterministic CPU work, a few seconds a day. `ZOE_OMI_REPASS_FUSION=rover|primary`.
+- **The third voter**, chosen by budget. Measured on the same hand reference (56 chunks / 381 words), ROVER with Qwen3 + Parakeet + X: **Whisper large-v3 4.5 %** (GPU RTF 0.74, ~44 min per speech hour), **distil-large-v3 3.9 %** (RTF ~0.43, ~26 min) - within noise of each other (one or two words), so large-v3, the measured best by the lab's own run, is used **when the night has room, else distil** (`ZOE_OMI_NIGHT_ASR_THIRD` is the preference list; the first that fits 85 % of the budget wins; none fits = two voters = the pivot's text). Adding **Granite as a fourth voter HURTS** (5.0 % keyword-prompted, 5.2 % plain, against 4.5 % without it), so Granite never votes in production: it stays on the evaluation sample. Both Whisper engines need the hand-built CUDA CTranslate2 (`ZOE_OMI_REPASS_CT2_DIR`, default `~/.zoe/ct2build`; see the operator steps): without it the third voter is skipped (`skipped: model_unavailable`) and the night votes with two, i.e. the pivot's text.
+- **Evaluation, every night, on a rotating SAMPLE** (never in the stored text): Granite 5.0 and whichever Whisper (large-v3 / distil) did not vote that night, on about 25 minutes of speech (`ZOE_OMI_REPASS_EVAL_MIN`) spread across the day, a different slice each night (a per-night offset). They run only when production finished for every recording with time to spare. Every engine's per-chunk hypothesis is kept in `~/.zoe/omi-repass/hyps/hyps-<night>.jsonl` (private, 0600, 7 days, forget-reached).
+- **Contender ledger** (`~/.zoe/omi-repass/ledger.jsonl`, counts only, one line per model per night): chunks run, speech seconds, agreement with the fused output, `sole` (final words whose only voter was this model - for an evaluation contender, the words the vote WOULD have taken from it had it been a voter), `invented` (words only this model produced that the fused text rejected), `changed` (how many words adding it would have changed), and `owner_hit` / `owner_miss`: when the day review lets the owner fix a line it calls `omi_repass_eval.note_owner_correction(home, user, rid, start_ms, end_ms, fixed_text)`, which scores every model's stored hypothesis for that span against the fix as GROUND TRUTH (the seam is built and tested; the day-review hook is the other helper's).
+- **Verdicts**: `zoe-omi-repass.py --contenders` prints one plain line per model; on Mondays the night job also emits it as `NIGHT_JOB omi_repass_contenders ...` into the morning report. A model is called a **candidate to drop only after >= 14 nights and >= 3 sampled hours**, when its sole rate is below 1 % AND it adds invented words (>= 1 % of its words); otherwise "not enough data yet", "harmless", or "earns its place: keep". Nothing ever prunes a model: the owner decides.
+- **The owner's morning transcript check**: contested ROVER slots (no strict majority) and low-confidence chunks are stored with every model's alternative, the ROVER pick and the vote counts. `omi_repass_eval.check_queue(home, user_id)` returns exactly that (`rid`, `i`, `t0`/`t1`, `hyps`, `rover`, `slots` [{pick, votes, who}], `low_conf`); `zoe-omi-repass.py --check-queue --user ID` prints the counts.
+
+**Budget** (GPU minutes per hour of SPEECH, measured: Qwen3 ~25, Parakeet ~5, distil-large-v3 ~26, Whisper large-v3 ~44, Granite ~28). Production = ~56 min per speech hour with distil as the third voter (~74 with large-v3); the pre-job's budget is about 25 minutes, i.e. ~27 minutes of speech with all three voters. The order when a night is over budget is fixed: **Qwen3 first on everything** (its deadline leaves Parakeet's estimated time and a model load), then **Parakeet on everything**, then **the third voter where time allows**, then the rest carries to tomorrow. If even Qwen3 + Parakeet do not fit the plan, Parakeet-only. The evaluation sample is the last thing to get time. Each GPU model loads ALONE in its own process after a drop-caches + compaction, the 12B loads only after the last one exits. **If real days exceed ~27 speech-minutes, the three-voter production does not fit in 25 minutes**: the shadow weeks measure it; the levers are lowering `NIGHT_PRE_KEEP_MIN` (the 12B stage used 7 of its 28 minutes on 2026-11-08), a longer window, or dropping the third voter - the ledger and the report show which.
 
 ## Where it runs in the window, and why (RAM / GPU arithmetic)
 
@@ -106,7 +124,9 @@ It refuses 01:50-04:55 and while `night_busy.sh voice` is busy; takes the brain-
 ## Operator steps (nothing here is done by the PR)
 
 ```bash
-# 1. the runtime (once; needs network; the models are ~6.3 GB; torch is the box's existing Jetson CUDA build)
+# 0. the CUDA CTranslate2 build (the third voter and the large-v3 contender): it is hand-built in the lab; give the re-pass a stable path to it (once)
+ln -s ~/.zoe/lab/omi-retranscribe-r2/ct2build ~/.zoe/ct2build      # or set ZOE_OMI_REPASS_CT2_DIR; without it those engines are skipped, loudly, and the night votes with fewer
+# 1. the runtime (once; needs network; the models are ~11 GB incl. Granite; torch is the box's existing Jetson CUDA build)
 scripts/setup/setup_omi_repass.sh --seed-from ~/.zoe/lab/omi-retranscribe-r2/models   # or without --seed-from to download the pinned revisions
 scripts/setup/setup_omi_repass.sh --check                  # must say: gpu ok, imports ok, both models ok
 # 2. the schema (the normal deploy runs alembic: migration 0072)
@@ -118,10 +138,11 @@ scripts/setup/setup_omi_repass.sh --check                  # must say: gpu ok, i
 journalctl --user -t zoe-night-window -n 3; grep -h omi_repass ~/.zoe/night-reports/$(date +%F).md
 tail -n 5 ~/.zoe/omi-repass/shadow.jsonl         # per recording: words, lines, speakers, agree (word agreement vs Moonshine), model
 # 7. confirm your wearer print (above), watch carried/audio_s/worker_rtf for ~a week, then flip: ZOE_OMI_NIGHT_REPASS=on
+# 8. the contender ledger: python3 scripts/maintenance/zoe-omi-repass.py --contenders        (the Monday morning report carries the same line)
 ```
 
 Rollback: set the flag `off` (held WAVs are released by the normal rules; replaced text stays - provenance is in `repass_model`). Remove nothing else.
 
 ## Files
 
-`services/zoe-data/omi_repass.py` (decisions, planner, DB), `scripts/night/jobs/omi_repass_worker.py` (the model process), `scripts/maintenance/zoe-omi-repass.py` (the job + owner CLI), `scripts/setup/setup_omi_repass.sh` + `omi_repass_requirements.lock.txt`, migration `0072_omi_night_repass.py`, `night_window.py` (`--pre-jobs`, `--rehearse-repass`, `build_pre_jobs`, `run_pre_jobs`, `resettle`). Private state: `~/.zoe/omi-repass/` (0600: `state.json` = measured RTF + the Zoe voice reference; `shadow.jsonl` = counts only).
+`services/zoe-data/omi_repass.py` (decisions, planner, DB), `scripts/night/jobs/omi_repass_worker.py` (the model process), `scripts/maintenance/zoe-omi-repass.py` (the job + owner CLI), `services/zoe-data/omi_repass_eval.py` (ROVER, the ledger, the verdicts, the hypothesis store, the check queue), `scripts/setup/setup_omi_repass.sh` + `omi_repass_requirements.lock.txt` + `omi_repass_constraints.txt`, migration `0072_omi_night_repass.py`, `night_window.py` (`--pre-jobs`, `--rehearse-repass`, `build_pre_jobs`, `run_pre_jobs`, `resettle`). Private state: `~/.zoe/omi-repass/` (0600: `state.json` = measured RTF + the Zoe voice reference; `shadow.jsonl` = counts only).

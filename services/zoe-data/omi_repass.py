@@ -65,6 +65,11 @@ MIN_WEARER_WINDOWS = 10                           # a wearer print needs this ma
 BACKENDS: dict = {
     "qwen3-asr": {"rtf": 0.42, "gpu_rtf": 0.42, "peak_rss_mb": 8700, "gpu_peak_mb": 4000, "fallback": "parakeet-tdt", "device": "gpu"},
     "parakeet-tdt": {"rtf": 0.08, "gpu_rtf": 0.08, "peak_rss_mb": 5700, "gpu_peak_mb": 2500, "fallback": None, "device": "gpu"},
+    #: the third ROVER voter (production) and the evaluation contenders. RTF per speech second = minutes per speech hour / 60 as measured in the round-2 bake-off: distil ~26, large-v3 ~44,
+    #: Granite ~28 min per hour. Peak RSS for the two Whisper rows is DECLARED (not yet measured on the CUDA CTranslate2 build): the daytime rehearsal reports the real one.
+    "whisper-gpu:distil-large-v3": {"rtf": 0.44, "gpu_rtf": 0.44, "peak_rss_mb": 4500, "fallback": None, "device": "gpu"},
+    "whisper-gpu:large-v3": {"rtf": 0.74, "gpu_rtf": 0.74, "peak_rss_mb": 5500, "fallback": None, "device": "gpu"},
+    "granite-speech": {"rtf": 0.47, "gpu_rtf": 0.47, "peak_rss_mb": 9700, "gpu_peak_mb": 4500, "fallback": None, "device": "gpu"},
     "faster-whisper:large-v3": {"rtf": 1.0, "gpu_rtf": None, "peak_rss_mb": 2100, "fallback": "faster-whisper:distil-large-v3", "device": "cpu"},
     "faster-whisper:distil-large-v3": {"rtf": 0.45, "gpu_rtf": None, "peak_rss_mb": 2400, "fallback": None, "device": "cpu"},
 }
@@ -97,17 +102,42 @@ def diar_backend() -> str:
     return env_str("ZOE_OMI_NIGHT_DIAR", "ecapa").strip() or "ecapa"
 
 
-def scope_mem_max(asr: str) -> str:
+def scope_mem_max(asr: str, diar: bool = True) -> str:
     """The capped scope's MemoryMax: ``ZOE_OMI_REPASS_MEM_MAX`` if set, else the declared peaks + 20 % headroom."""
     forced = env_str("ZOE_OMI_REPASS_MEM_MAX", "")
     if forced:
         return forced
-    return f"{int((BACKENDS[asr]['peak_rss_mb'] + DIAR_RSS_MB) * 1.2)}M"
+    return f"{int((BACKENDS[asr]['peak_rss_mb'] + (DIAR_RSS_MB if diar else 0)) * 1.2)}M"
 
 
-def need_mb(asr: str) -> int:
-    """MemAvailable the pass needs before it starts: the engine's declared peak + the speaker model + the floor."""
-    return int(BACKENDS[asr]["peak_rss_mb"] + DIAR_RSS_MB + FLOOR_MB)
+def need_mb(asr: str, diar: bool = True) -> int:
+    """MemAvailable the pass needs before it starts: the engine's declared peak + the speaker model (only the first pass loads it) + the floor."""
+    return int(BACKENDS[asr]["peak_rss_mb"] + (DIAR_RSS_MB if diar else 0) + FLOOR_MB)
+
+
+def _ids(name: str, default: str) -> list[str]:
+    return [x.strip() for x in env_str(name, default).split(",") if x.strip() and x.strip() in BACKENDS]
+
+
+def second_backend() -> str:
+    """The second production voter (``ZOE_OMI_NIGHT_ASR_SECOND``, default parakeet-tdt; empty = none)."""
+    return (_ids("ZOE_OMI_NIGHT_ASR_SECOND", "parakeet-tdt") or [""])[0]
+
+
+def third_choices() -> list[str]:
+    """The third production voter, in preference order (``ZOE_OMI_NIGHT_ASR_THIRD``): ROVER needs at least three voters to outvote the pivot. Whisper large-v3 (GPU) when the night
+    has room - the measured best third voter - else distil-large-v3 (about 40 % cheaper, within noise of it on the hand reference). The first that fits the budget is used."""
+    return _ids("ZOE_OMI_NIGHT_ASR_THIRD", "whisper-gpu:large-v3,whisper-gpu:distil-large-v3")
+
+
+def eval_backends() -> list[str]:
+    """The EVALUATION contenders (``ZOE_OMI_NIGHT_ASR_EVAL``): a rotating sample of the day's speech, never in the stored text. Whatever voted that night is left out; Granite is
+    evaluation-only because measured adding it as a fourth voter HURTS the vote (5.0-5.2 % WER against 4.5 % for Qwen3 + Parakeet + Whisper large-v3)."""
+    return _ids("ZOE_OMI_NIGHT_ASR_EVAL", "whisper-gpu:large-v3,whisper-gpu:distil-large-v3,granite-speech")
+
+
+def ct2_dir() -> str:
+    return env_str("ZOE_OMI_REPASS_CT2_DIR", "") or os.path.expanduser("~/.zoe/ct2build")
 
 
 def mem_available_mb() -> float:
@@ -764,9 +794,16 @@ def spawn_worker(manifest: Path, out: Path, timeout_s: float, *, mem_max: str, t
     """The default runner: the worker in its OWN capped scope (``MemoryMax`` + no swap, nice 10), killed at ``timeout_s``. rc 3 = a model is missing."""
     cmd = [venv_python(), str(worker_path()), "--manifest", str(manifest), "--out", str(out)]
     gpu_prep()          # a no-op on a CPU backend is harmless (it only frees page cache)
+    try:
+        ct2 = json.loads(Path(manifest).read_text()).get("ct2_dir") or ""
+    except (OSError, ValueError):
+        ct2 = ""
     scope = ["systemd-run", "--user", "--scope", "--quiet", "-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0", "nice", "-n", "10"]
     env = {**os.environ, "OMP_NUM_THREADS": str(threads), "MALLOC_ARENA_MAX": "2", "HF_HUB_OFFLINE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
     env.pop("PYTORCH_CUDA_ALLOC_CONF", None)         # the default torch allocator: it is what loaded the bake-off winners
+    if ct2:                                          # the hand-built CUDA CTranslate2 (whisper-gpu:*): its python package and libs must be on the path BEFORE the process starts
+        env["PYTHONPATH"] = f"{ct2}/pylib" + (":" + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env["LD_LIBRARY_PATH"] = f"{ct2}/install/lib" + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     try:
         return subprocess.run(scope + cmd, env=env, timeout=timeout_s, check=False, stdout=subprocess.DEVNULL).returncode
     except subprocess.TimeoutExpired:
@@ -829,11 +866,16 @@ async def preview_one(r: dict, res: dict, *, refs: Refs, names: list) -> dict:
 async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = None, now: Optional[datetime] = None, dry_run: bool = False,
                     clock: Callable[[], float] = time.time, rehearse: bool = False, recording_id: str = "",
                     mem_available: Callable[[], float] = mem_available_mb) -> dict:
-    """The night job. Reads the pending recordings, plans the model against ``budget_s``, runs the worker once, applies each finished recording. Returns a
-    counts-only summary (the CLI prints it). ``runner(manifest, out, timeout_s, mem_max=, threads=) -> rc`` is injectable (tests).
+    """The night job. Plans the engines against ``budget_s``, runs them as SEPARATE worker processes (each GPU model loads alone after a compaction), fuses their chunk texts with ROVER, applies
+    each finished recording, and updates the contender ledger. Returns a counts-only summary (the CLI prints it). ``runner(manifest, out, timeout_s, mem_max=, threads=) -> rc`` is injectable.
 
-    ``rehearse``: the daytime rehearsal (docs/knowledge/omi-night-repass.md): the REAL job path - the same plan, manifest, worker, GPU recipe and scope - on ONE recording, whatever the
-    flag says, writing NOTHING (no segments, no state, no release of audio, no ledger). It must pass before ZOE_OMI_NIGHT_REPASS goes to shadow."""
+    PRODUCTION every night: Qwen3-ASR (pivot, all audio) -> Parakeet (all audio) -> a third voter (distil-large-v3, where time allows); ROVER over the three. A night that is over budget
+    keeps that order and carries the rest. EVALUATION: only when production finished with time to spare - Whisper large-v3 and Granite on a rotating SAMPLE of the day's speech
+    (``ZOE_OMI_REPASS_EVAL_MIN`` minutes), their hypotheses stored and judged in the ledger, never in the stored text.
+
+    ``rehearse``: the daytime rehearsal: the REAL path (every engine, the fusion, a small evaluation sample) on ONE recording, whatever the flag says, writing NOTHING (no segments, state,
+    ledger, hypotheses, audio release). It must pass before ZOE_OMI_NIGHT_REPASS goes to shadow."""
+    import omi_repass_eval as eu
     from db_compat import get_compat_db
     m = "shadow" if rehearse else mode()
     res: dict = {"status": "ok", "mode": m, "rehearse": rehearse}
@@ -859,15 +901,22 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     if pref not in BACKENDS or diar_backend() not in DIAR_BACKENDS:
         return {**res, "status": "bad_backend", "asr": pref, "diar": diar_backend(), "known": sorted(BACKENDS)}
     plan = plan_model(audio_s, budget_s, st.get("rtf"), pref)
-    res.update(pending=len(rows), audio_s=round(audio_s), model=plan["model"], est_s=plan["est_s"], fits=plan["fits"], fallback_model=plan["fallback"])
+    primary = plan["model"]
+    rt = {**DEFAULT_RTF, **(st.get("rtf") or {})}
+    multi = primary == eu.PIVOT
+    second = second_backend() if multi else ""
+    third = ""
+    if second and audio_s * (rt[primary] + rt[second]) > budget_s * PLAN_MARGIN:      # production first: the pivot alone this night, the rest carries
+        second = ""
+    if second:                                                                       # the best third voter that the night has room for (large-v3 when it fits, else distil)
+        third = next((c for c in third_choices() if audio_s * (rt[primary] + rt[second] + rt.get(c, 1.0)) <= budget_s * PLAN_MARGIN), "")
+    evals = [e for e in eval_backends() if e not in (primary, second, third)] if multi and second else []
+    voters = [primary] + [x for x in (second, third) if x]
+    res.update(pending=len(rows), audio_s=round(audio_s), model=primary, est_s=plan["est_s"], fits=plan["fits"], fallback_model=plan["fallback"], engines=voters, eval_engines=evals,
+               est_voters_s=round(audio_s * sum(rt[v] for v in voters)))
     if dry_run:
         return {**res, "status": "dry_run"}
     threads = env_int("ZOE_OMI_REPASS_THREADS", 4)
-    mem_max = scope_mem_max(plan["model"])
-    if runner is None:                                 # the real worker: refuse to start what the box cannot hold above the floor (the recordings carry to the next night)
-        have, need = mem_available(), need_mb(plan["model"])
-        if have < need:
-            return {**res, "status": "low_mem", "have_mb": round(have), "need_mb": need}
     zoe_ref = st.get("zoe_ref")
     items, names_by_user = [], {}
     async with get_compat_db() as db:
@@ -878,44 +927,139 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     work = home_dir() / "work"
     work.mkdir(parents=True, exist_ok=True)
     os.chmod(work, 0o700)
-    stamp = uuid.uuid4().hex[:8]
-    man, out = work / f"{stamp}.manifest.json", work / f"{stamp}.out.jsonl"
     deadline = started + max(30.0, budget_s - 45.0)               # 45 s kept back for the DB writes and the release of audio
-    man.write_text(json.dumps({"asr": plan["model"], "diar": diar_backend(), "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "1") != "0", "models_dir": models_dir(),
-                               "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": deadline,
-                               "rtf": {**DEFAULT_RTF, **(st.get("rtf") or {})}.get(plan["model"], 1.0), "items": items,
-                               "zoe_clips": [] if zoe_ref else zoe_clips()}))
-    os.chmod(man, 0o600)
-    try:
-        rc = (runner or spawn_worker)(man, out, max(60.0, deadline - clock() + 30.0), mem_max=mem_max, threads=threads)
-        got, done, zref = read_results(out)
-    finally:
-        for p in (man, out):
-            try:
-                p.unlink()
-            except OSError:
-                pass
-    if zref and not zoe_ref:
-        st["zoe_ref"] = zref
-        zoe_ref = zref
-    if rc == 3 and not got:
-        return {**res, "status": "model_missing", "rc": rc}
-    model_label = f"{plan['model']}+{diar_backend()}"
+    skipped: dict = {}
+
+    async def one_pass(engine: str, its: list, *, diar: str, dl: float, clips: bool = False) -> dict:
+        """One worker process: ONE model alone (the GPU recipe runs in the default runner just before it starts). Returns {rc, got, done, zref} or {skipped: why}."""
+        if runner is None:
+            have, need = mem_available(), need_mb(engine, diar != "none")
+            if have < need:
+                skipped[engine] = f"low_mem {round(have)}<{need}"
+                return {"skipped": skipped[engine], "got": {}, "done": {}, "rc": None}
+        stamp = uuid.uuid4().hex[:8]
+        man, out = work / f"{stamp}.manifest.json", work / f"{stamp}.out.jsonl"
+        man.write_text(json.dumps({"asr": engine, "diar": diar, "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "1") != "0", "models_dir": models_dir(),
+                                   "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": dl, "ct2_dir": ct2_dir() if engine.startswith("whisper-gpu") else "",
+                                   "rtf": rt.get(engine, 1.0), "items": its, "zoe_clips": [] if (zoe_ref or not clips) else zoe_clips()}))
+        os.chmod(man, 0o600)
+        try:
+            rc = (runner or spawn_worker)(man, out, max(60.0, dl - clock() + 30.0), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
+            got, done, zref = read_results(out)
+        finally:
+            for p in (man, out):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+        if rc == 3 and not got:
+            skipped[engine] = "model_unavailable"
+        return {"rc": rc, "got": got, "done": done, "zref": zref}
+
+    # ── pass 1: the pivot, on all the audio, with the speaker windows ──
+    p1 = await one_pass(primary, items, diar=diar_backend(), dl=deadline - (_reserve_s(audio_s, rt, second, load_s=40.0) if second else 0.0), clips=True)
+    if p1.get("skipped"):
+        return {**res, "status": "low_mem" if p1["skipped"].startswith("low_mem") else "model_missing", "why": p1["skipped"], "have_mb": round(mem_available()), "need_mb": need_mb(primary)}
+    got1, done1, rc = p1["got"], p1["done"], p1["rc"]
+    if p1.get("zref") and not zoe_ref:
+        st["zoe_ref"] = zoe_ref = p1["zref"]
+    res["aborted"] = done1.get("aborted") or None
+    ok1 = [it for it in items if (got1.get(it["id"]) or {}).get("ok")]
+    chunked = [it for it in ok1 if isinstance(got1[it["id"]].get("chunks"), list)]
     by_id = {r["id"]: r for r in rows}
-    tally = {"replaced": 0, "shadow": 0, "erased": 0, "gone": 0, "failed": 0, "carried": 0, "agree_sum": 0.0, "me": 0, "named": 0, "zoe": 0, "proposed": 0}
+
+    async def voter_pass(engine: str) -> dict:
+        its = [{"id": it["id"], "path": it["path"], "chunks": [[c[0], c[1]] for c in got1[it["id"]]["chunks"]]} for it in chunked]
+        if not its or deadline - clock() < 60:
+            return {"got": {}, "done": {}, "rc": None}
+        return await one_pass(engine, its, diar="none", dl=deadline)
+
+    # ── passes 2 and 3: the other production voters (pivot's chunks), in value-per-minute order ──
+    vgot: dict = {}
+    for eng in [x for x in (second, third) if x]:
+        pv = await voter_pass(eng)
+        vgot[eng] = {k: v for k, v in pv["got"].items() if v.get("ok") and len(v.get("chunks") or []) == len(got1[k]["chunks"])}
+    complete = bool(chunked) and all(all(it["id"] in vgot.get(e, {}) for it in chunked) for e in vgot) and len(vgot) == len([x for x in (second, third) if x])
+
+    # ── fusion: ROVER per chunk over the voters that finished that recording ──
+    fusion = env_str("ZOE_OMI_REPASS_FUSION", "rover")
+    chunk_rows: dict = {}                   # rid -> [row dicts]
+    fused_res: dict = {}
+    for it in ok1:
+        rid, o = it["id"], got1[it["id"]]
+        names = names_by_user.get(by_id[rid]["user_id"], [])
+        if not isinstance(o.get("chunks"), list):
+            fused_res[rid] = o
+            continue
+        rws, words = [], []
+        for i, (t0, t1, text) in enumerate(o["chunks"]):
+            hy = {primary: text}
+            for eng, g in vgot.items():
+                if rid in g:
+                    hy[eng] = g[rid]["chunks"][i][2]
+            fz = eu.fuse(hy, primary, fusion, names)
+            rws.append({"u": by_id[rid]["user_id"], "rid": rid, "i": i, "t0": t0, "t1": t1, "hyps": hy, "rover": fz["text"], "slots": fz["slots"], "low_conf": fz["low_conf"], "voters": fz["voters"],
+                        "_fz": fz})
+            toks = fz["text"].split()
+            for k, w in enumerate(toks):
+                words.append([(" " if words else "") + w, round(t0 + (t1 - t0) * k / len(toks), 3), round(t0 + (t1 - t0) * (k + 1) / len(toks), 3), 0.6])
+        chunk_rows[rid] = rws
+        fused_res[rid] = {**o, "words": words}
+
+    # ── evaluation: a rotating sample of the day's speech, only with production done and time to spare ──
+    sample_s = 0.0
+    if evals and complete and chunk_rows:
+        flat = [(it["id"], r["i"], r["t0"], r["t1"]) for it in chunked for r in chunk_rows.get(it["id"], [])]
+        budget_speech = 60.0 if rehearse else env_float("ZOE_OMI_REPASS_EVAL_MIN", 25.0) * 60.0
+        pick = eu.pick_sample(flat, budget_speech, (now or _now()).date().toordinal())
+        for eng in evals:
+            need_s = sum(c[3] - c[2] for c in pick) * rt.get(eng, 1.0) + 40.0
+            if not pick or deadline - clock() < need_s + 30:
+                skipped[eng] = "no_time"
+                continue
+            grouped: dict = {}
+            for rid, i, t0, t1 in pick:
+                grouped.setdefault(rid, []).append((i, t0, t1))
+            its = [{"id": rid, "path": next(x["path"] for x in items if x["id"] == rid), "chunks": [[t0, t1] for _i, t0, t1 in g]} for rid, g in grouped.items()]
+            pe = await one_pass(eng, its, diar="none", dl=deadline)
+            for rid, g in grouped.items():
+                oo = (pe["got"].get(rid) or {})
+                if oo.get("ok") and len(oo.get("chunks") or []) == len(g):
+                    for (i, _t0, _t1), ch in zip(g, oo["chunks"]):
+                        chunk_rows[rid][i]["hyps"][eng] = ch[2]
+        sample_s = sum(c[3] - c[2] for c in pick)
+
+    # ── what each model contributed (counts only) ──
+    cl = []
+    for rws in chunk_rows.values():
+        for r in rws:
+            fz = r["_fz"]
+            withs = {}
+            for mm in (x for x in r["hyps"] if x in evals):
+                withs[mm] = eu.fuse({**{k: v for k, v in r["hyps"].items() if k not in evals}, mm: r["hyps"][mm]}, primary, fusion, [])
+            cl.append({"hyps": {k: v for k, v in r["hyps"].items() if v is not None}, "fused": r["rover"], "speech_s": r["t1"] - r["t0"], "sources": fz["sources"], "with": withs})
+    contrib = eu.contributions(cl, voters)
+    res.update(low_conf_chunks=sum(1 for rws in chunk_rows.values() for r in rws if r["low_conf"]), contested_slots=sum(len(r["slots"]) for rws in chunk_rows.values() for r in rws),
+               sample_speech_s=round(sample_s), chunks=sum(len(v) for v in chunk_rows.values()), skipped=skipped or None,
+               contributions={k: {"chunks": v["chunks"], "sole": v["sole"], "invented": v["invented"], "words": v["words"], "changed": v.get("changed", 0),
+                                  "agree": round(v["agree_sum"] / v["agree_n"], 3) if v["agree_n"] else None} for k, v in contrib.items()})
+    model_label = (f"{'+'.join(voters)}/{fusion}" if len(voters) > 1 else primary) + f"+{diar_backend()}"
     if rehearse:
-        o = got.get(rows[0]["id"])
-        if o is None or not o.get("ok"):
-            return {**res, "status": "rehearsal_failed", "why": (o or {}).get("why", "no result"), "model": plan["model"], "worker_rc": rc, "aborted": done.get("aborted") or None}
+        o = fused_res.get(rows[0]["id"])
+        if o is None or not (got1.get(rows[0]["id"]) or {}).get("ok"):
+            return {**res, "status": "rehearsal_failed", "why": ((got1.get(rows[0]["id"]) or {}).get("why", "no result")), "worker_rc": rc}
         async with get_compat_db() as db:
             refs = await load_refs(db, rows[0]["user_id"], zoe_ref)
         pv = await preview_one(rows[0], o, refs=refs, names=names_by_user.get(rows[0]["user_id"], []))
-        return {**res, "status": "rehearsal_ok", "model": plan["model"], "est_s": plan["est_s"], **pv, "worker_rc": rc, "device": done.get("device"), "worker_rtf": done.get("rtf"),
-                "peak_rss_mb": done.get("peak_rss_mb"), "gpu_peak_mb": done.get("gpu_peak_mb"), "load_s": done.get("load_s"), "wall_s": round(clock() - started)}
+        return {**res, "status": "rehearsal_ok", **pv, "worker_rc": rc, "device": done1.get("device"), "worker_rtf": done1.get("rtf"), "peak_rss_mb": done1.get("peak_rss_mb"),
+                "gpu_peak_mb": done1.get("gpu_peak_mb"), "load_s": done1.get("load_s"), "wall_s": round(clock() - started)}
+    tally = {"replaced": 0, "shadow": 0, "erased": 0, "gone": 0, "failed": 0, "carried": 0, "agree_sum": 0.0, "me": 0, "named": 0, "zoe": 0, "proposed": 0}
+    drop_rids: set = set()                  # recordings whose hypotheses are NOT kept: erased mid-job, deleted meanwhile, or never finished
     for rid, r in by_id.items():
-        o = got.get(rid)
-        if o is None or not o.get("ok"):
-            carry = (o is None and rc in (0, 124)) or (o is not None and o.get("why") == "deadline")
+        o = fused_res.get(rid)
+        raw = got1.get(rid)
+        if o is None:
+            carry = (raw is None and rc in (0, 124)) or (raw is not None and raw.get("why") in ("deadline", "backend_failed"))
             await note_failure(rid, carry=carry)
             tally["carried" if carry else "failed"] += 1
             continue
@@ -928,13 +1072,32 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             tally["agree_sum"] += float(c.get("agree") or 0.0)
             for k in ("me", "named", "zoe", "proposed"):
                 tally[k] += int(c.get(k) or 0)
+        else:
+            drop_rids.add(rid)
     done_n = tally["replaced"] + tally["shadow"]
-    if done.get("rtf"):
-        st.setdefault("rtf", {})[plan["model"]] = done["rtf"]
-    st["last"] = {"at": _iso(now or _now()), "model": plan["model"], "files": done_n, "device": done.get("device")}
+    night = (now or _now()).date().isoformat()
+    try:                                                         # the evaluation record: counts in the ledger, the hypotheses (words, private, 7 days) in the hyps store
+        home = home_dir()
+        stored = [{k: v for k, v in r.items() if k != "_fz"} for rid, rws in chunk_rows.items() if rid not in drop_rids for r in rws]
+        if cl:
+            eu.append_ledger(home, night, contrib, evals)
+            eu.store_hyps(home, night, stored)
+            eu.prune_hyps(home, (now or _now()).date())
+        if (now or _now()).weekday() == 0:                       # Monday: the weekly verdict line for the morning report
+            res["contenders"] = eu.contender_line(eu.read_ledger(home))
+    except OSError as exc:
+        logger.warning("OMI_REPASS_LEDGER_NOT_WRITTEN reason=%s", type(exc).__name__)
+    if done1.get("rtf"):
+        st.setdefault("rtf", {})[primary] = done1["rtf"]
+    st["last"] = {"at": _iso(now or _now()), "model": primary, "engines": voters, "files": done_n, "device": done1.get("device")}
     write_state(st)
     res.update(done=done_n, replaced=tally["replaced"], shadow=tally["shadow"], carried=tally["carried"], failed=tally["failed"], erased=tally["erased"],
                agree=round(tally["agree_sum"] / done_n, 3) if done_n else None, me_lines=tally["me"], named_lines=tally["named"], zoe_lines=tally["zoe"],
-               proposed=tally["proposed"], worker_rc=rc, device=done.get("device"), worker_rtf=done.get("rtf"), peak_rss_mb=done.get("peak_rss_mb"),
+               proposed=tally["proposed"], worker_rc=rc, device=done1.get("device"), worker_rtf=done1.get("rtf"), peak_rss_mb=done1.get("peak_rss_mb"),
                wall_s=round(clock() - started))
     return res
+
+
+def _reserve_s(audio_s: float, rt: dict, second: str, load_s: float = 40.0) -> float:
+    """Seconds the pivot pass leaves for the second production voter (Parakeet is ~20 % of Qwen3's cost): its estimate plus a model load. Production first: the pivot never eats the voter's time."""
+    return (audio_s * rt.get(second, 0.1) + load_s) if second else 0.0

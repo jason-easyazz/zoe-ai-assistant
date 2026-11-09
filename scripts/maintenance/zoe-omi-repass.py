@@ -38,6 +38,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--probe-gpu", action="store_true")
     ap.add_argument("--rehearse", action="store_true", help="the DAYTIME REHEARSAL: the real job path on ONE recording (the newest 20-180 s one, or --recording ID), whatever the flag says, writing nothing. "
                     "Run it through `night_window.sh --rehearse-repass` (the same stops, compaction and restore order as the night); it must pass before ZOE_OMI_NIGHT_REPASS goes to shadow")
+    ap.add_argument("--contenders", action="store_true", help="print the contender ledger's verdict line per model (counts only), then exit")
+    ap.add_argument("--check-queue", action="store_true", help="with --user: how many chunks the owner's morning transcript check has waiting (counts only)")
     ap.add_argument("--recording", default="", help="with --rehearse: the recording id to use")
     ap.add_argument("--requeue-failed", action="store_true", help="after a fix: put recordings the pass gave up on (WAV still held) back in the queue")
     ap.add_argument("--wearer-status", action="store_true")
@@ -49,6 +51,18 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     a = ap.parse_args(argv)
     import omi_repass as rp
 
+    if a.contenders:
+        import omi_repass_eval as eu
+        lines = eu.verdicts(eu.read_ledger(rp.home_dir()))
+        for ln in lines:
+            print(ln, file=sys.stderr)
+        return 0, {"status": "ok", "models": len(lines)}
+    if a.check_queue:
+        import omi_repass_eval as eu
+        if not a.user:
+            raise SystemExit("--check-queue needs --user ID")
+        q = eu.check_queue(rp.home_dir(), a.user)
+        return 0, {"status": "ok", "chunks": len(q), "low_confidence": sum(1 for x in q if x.get("low_conf")), "contested_slots": sum(len(x.get("slots") or []) for x in q)}
     if a.probe_gpu:
         t0 = time.time()
         p = subprocess.run([rp.venv_python(), str(rp.worker_path()), "--probe-gpu"], capture_output=True, text=True, timeout=120, check=False)
@@ -90,8 +104,10 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
 
 def main() -> int:
     rc, summary = asyncio.run(amain())
-    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device", "worker_rtf", "peak_rss_mb", "gpu_peak_mb")
+    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device", "worker_rtf", "peak_rss_mb", "gpu_peak_mb", "engines", "low_conf_chunks", "sample_speech_s")
     print("NIGHT_JOB omi_repass " + " ".join(f"{k}={summary[k]}" for k in keys if k in summary), file=sys.stderr)
+    if summary.get("contenders"):
+        print("NIGHT_JOB omi_repass_contenders " + str(summary["contenders"])[:260], file=sys.stderr)
     print(json.dumps(summary, sort_keys=True))
     if summary.get("status") == "model_missing":
         return 3

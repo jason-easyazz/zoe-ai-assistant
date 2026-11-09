@@ -37,7 +37,7 @@ MODELS = {
 }
 ECAPA = ("speechbrain/spkrec-ecapa-voxceleb", "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286")
 #: the round-2 bake-off winners (official repos; revisions pinned in scripts/setup/setup_omi_repass.sh): directory names under ``models_dir``
-TRANSFORMERS_DIRS = {"qwen3-asr": "Qwen3-ASR-1.7B-hf", "parakeet-tdt": "parakeet-tdt-0.6b-v3"}
+TRANSFORMERS_DIRS = {"qwen3-asr": "Qwen3-ASR-1.7B-hf", "parakeet-tdt": "parakeet-tdt-0.6b-v3", "granite-speech": "granite-speech-5.0-2b"}
 MODELS_DIR = os.path.expanduser("~/.zoe/models/omi-repass")
 CHUNK_MAX_S = 14.0         # the bake-off's VAD chunk length; the parent passes ``chunk_s`` (ZOE_OMI_REPASS_CHUNK_S); never above 30
 RATE = 16000
@@ -159,15 +159,26 @@ class ChunkedAsr(AsrBackend):
     def _device(self, torch) -> str:
         return "cuda" if self.gpu and torch.cuda.is_available() else "cpu"
 
+    last: "list | None" = None          # [[t0, t1, text]] of the last transcribe*: the per-chunk hypothesis (fusion / the contender ledger need it)
+
     def transcribe(self, x, hint: str, deadline):
+        return self.transcribe_chunks(x, vad_chunks(x), deadline)
+
+    def transcribe_chunks(self, x, chunks, deadline):
+        """Run THESE chunks (the parent hands a later engine the pivot's chunks, or a rotating sample of them), so every engine's hypothesis lines up chunk for chunk."""
         words: list = []
-        for s, e in vad_chunks(x):
+        rows: list = []
+        self.last = None
+        for s, e in chunks:
             if deadline and time.time() > deadline:
                 return [], True
-            toks = " ".join((self.run_chunk(x[int(s * RATE):int(e * RATE)]) or "").split()).split()
+            text = " ".join((self.run_chunk(x[int(s * RATE):int(e * RATE)]) or "").split())
+            rows.append([round(s, 3), round(e, 3), text])
+            toks = text.split()
             for i, w in enumerate(toks):
                 a, b = s + (e - s) * i / len(toks), s + (e - s) * (i + 1) / len(toks)
                 words.append([(" " if words else "") + w, round(a, 3), round(b, 3), 0.6])
+        self.last = rows
         return words, False
 
 
@@ -212,8 +223,55 @@ class ParakeetTdt(ChunkedAsr):
         return self.p.batch_decode(seq, skip_special_tokens=True)[0].strip()
 
 
+class WhisperGpu(ChunkedAsr):
+    """faster-whisper on the GPU through the hand-built CUDA CTranslate2 (``ZOE_OMI_REPASS_CT2_DIR``: the parent puts its pylib / lib on PYTHONPATH / LD_LIBRARY_PATH before this
+    process starts). Chunk by chunk, no VAD of its own, the pinned Systran snapshot. The third ROVER voter (distil-large-v3) and the large-v3 evaluation contender."""
+
+    def __init__(self, threads: int, gpu: bool, model: str):
+        super().__init__(threads, gpu)
+        self.model_name = model
+
+    def load(self) -> None:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() < 1:
+            raise RuntimeError("no CUDA CTranslate2 (set ZOE_OMI_REPASS_CT2_DIR to the CUDA build)")
+        from faster_whisper import WhisperModel
+        self.dev = "cuda"
+        self.m = WhisperModel(snapshot(*MODELS[self.model_name]), device="cuda", compute_type="float16")
+
+    def run_chunk(self, x) -> str:
+        segs, _ = self.m.transcribe(x, language="en", beam_size=5, condition_on_previous_text=False, vad_filter=False)
+        return " ".join(s.text.strip() for s in segs)
+
+
+class GraniteSpeech(ChunkedAsr):
+    """ibm-granite/granite-speech-5.0-2b via transformers (an evaluation contender). Prompted with the PLAIN transcription instruction: its keyword prompt invented a name on non-speech."""
+
+    def load(self) -> None:
+        import torch
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+        path = os.path.join(MODELS_DIR, TRANSFORMERS_DIRS["granite-speech"])
+        if not os.path.isdir(path):
+            raise FileNotFoundError("granite-speech weights missing")
+        self.torch, self.dev = torch, self._device(torch)
+        self.p = AutoProcessor.from_pretrained(path)
+        self.tok = self.p.tokenizer
+        self.m = AutoModelForSpeechSeq2Seq.from_pretrained(path, dtype=torch.bfloat16).to(self.dev).eval()
+
+    def run_chunk(self, x) -> str:
+        chat = [{"role": "user", "content": "<|audio|>transcribe the speech with proper punctuation and capitalization."}]
+        prompt = self.tok.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+        inp = self.p(prompt, self.torch.from_numpy(x)[None], device=self.dev, return_tensors="pt").to(self.dev)
+        with self.torch.inference_mode():
+            o = self.m.generate(**inp, max_new_tokens=300, do_sample=False, num_beams=1)
+        return self.tok.batch_decode(o[:, inp["input_ids"].shape[1]:], add_special_tokens=False, skip_special_tokens=True)[0].strip()
+
+
 #: ASR registry: backend id -> factory(threads, gpu). Ids are what ``ZOE_OMI_NIGHT_ASR`` / the manifest's ``asr`` name.
 ASR = {
+    "granite-speech": lambda t, g: GraniteSpeech(t, g),
+    "whisper-gpu:large-v3": lambda t, g: WhisperGpu(t, g, "large-v3"),
+    "whisper-gpu:distil-large-v3": lambda t, g: WhisperGpu(t, g, "distil-large-v3"),
     "qwen3-asr": lambda t, g: Qwen3Asr(t, g),
     "parakeet-tdt": lambda t, g: ParakeetTdt(t, g),
     "faster-whisper:large-v3": lambda t, g: FasterWhisper(t, g, "large-v3"),
@@ -289,8 +347,9 @@ def run(manifest: dict, out_path: str) -> int:
     global MODELS_DIR, CHUNK_MAX_S
     MODELS_DIR = manifest.get("models_dir") or MODELS_DIR
     CHUNK_MAX_S = max(2.0, min(30.0, float(manifest.get("chunk_s") or CHUNK_MAX_S)))
-    if name not in ASR or manifest.get("diar", "ecapa") not in DIAR:
-        print(f"unknown backend {name}/{manifest.get('diar')}", file=sys.stderr)
+    diar = manifest.get("diar", "ecapa")
+    if name not in ASR or (diar != "none" and diar not in DIAR):
+        print(f"unknown backend {name}/{diar}", file=sys.stderr)
         return 1
     threads = int(manifest.get("threads", 4))
     deadline = float(manifest.get("deadline_epoch") or 0) or None
@@ -299,7 +358,7 @@ def run(manifest: dict, out_path: str) -> int:
     try:
         asr = ASR[name](threads, bool(manifest.get("gpu")))
         asr.load()
-        emb = DIAR[manifest.get("diar", "ecapa")](threads)
+        emb = DIAR[diar](threads) if diar != "none" else None          # a later voter / contender needs the pivot's chunks only: no speaker windows (and no ECAPA in memory)
     except Exception as exc:  # noqa: BLE001 - a model that is not in the cache is a setup problem, not a data one
         print(f"model unavailable: {type(exc).__name__}", file=sys.stderr)
         return 3
@@ -308,7 +367,7 @@ def run(manifest: dict, out_path: str) -> int:
     audio_s = elapsed = 0.0
     with open(out_path, "a", encoding="utf-8") as out:
         os.chmod(out_path, 0o600)
-        if manifest.get("zoe_clips"):
+        if manifest.get("zoe_clips") and emb is not None:
             ref = zoe_reference(emb, manifest["zoe_clips"])
             if ref:
                 out.write(json.dumps({"zoe_ref": ref}) + "\n")
@@ -317,13 +376,18 @@ def run(manifest: dict, out_path: str) -> int:
             rid = item["id"]
             try:
                 x = read_audio(item["path"])
-                dur = len(x) / RATE
+                given = item.get("chunks")
+                dur = sum(float(c[1]) - float(c[0]) for c in given) if given is not None else len(x) / RATE
                 if deadline and time.time() + dur * rtf * 0.5 > deadline:      # not enough time left to be likely to finish it: carry it, start nothing new
                     carried += 1
                     out.write(json.dumps({"id": rid, "ok": False, "why": "deadline"}) + "\n")
                     continue
                 ta = time.time()
-                words, late = asr.transcribe(x, item.get("hint") or manifest.get("hint") or "", deadline)
+                asr.last = None
+                if given is not None and hasattr(asr, "transcribe_chunks"):
+                    words, late = asr.transcribe_chunks(x, [(float(c[0]), float(c[1])) for c in given], deadline)
+                else:
+                    words, late = asr.transcribe(x, item.get("hint") or manifest.get("hint") or "", deadline)
                 if late:
                     carried += 1
                     out.write(json.dumps({"id": rid, "ok": False, "why": "deadline"}) + "\n")
@@ -331,11 +395,15 @@ def run(manifest: dict, out_path: str) -> int:
                     continue
                 asr_s = time.time() - ta
                 te = time.time()
-                speech = get_speech_timestamps(x, VadOptions(min_silence_duration_ms=300))
-                wins = emb.windows(x, speech)
+                if emb is not None:
+                    speech = get_speech_timestamps(x, VadOptions(min_silence_duration_ms=300))
+                    wins = emb.windows(x, speech)
+                    speech_s = round(sum(s["end"] - s["start"] for s in speech) / RATE, 2)
+                else:
+                    wins, speech_s = [], round(dur, 2)
                 emb_s = time.time() - te
-                out.write(json.dumps({"id": rid, "ok": True, "dur_s": round(dur, 2), "speech_s": round(sum(s["end"] - s["start"] for s in speech) / RATE, 2),
-                                      "asr_s": round(asr_s, 2), "emb_s": round(emb_s, 2), "words": words,
+                out.write(json.dumps({"id": rid, "ok": True, "dur_s": round(len(x) / RATE, 2), "speech_s": speech_s,
+                                      "asr_s": round(asr_s, 2), "emb_s": round(emb_s, 2), "words": words, "chunks": getattr(asr, "last", None),
                                       "windows": [[round(a, 3), round(b, 3), [round(float(v), 4) for v in e], round(r, 5)] for a, b, e, r in wins]}) + "\n")
                 done += 1
                 audio_s += dur

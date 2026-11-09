@@ -803,6 +803,12 @@ async def forget_user(user_id: str) -> int:
         n = 0
         voice_failure: Optional[BaseException] = None
         health_failure: Optional[BaseException] = None
+        try:        # the night re-pass's per-chunk hypotheses (words, private files): a failure is logged, the rest of the erase still runs
+            import omi_repass
+            import omi_repass_eval
+            omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("OMI_REPASS_HYPS_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
         async with erase_gate.erasing(user_id):
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
@@ -853,6 +859,14 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
     try:
         from db_compat import get_compat_db
         n = 0
+        try:
+            import omi_repass
+            import omi_repass_eval
+            n += omi_repass_eval.erase_entity(omi_repass.home_dir(), user_id, rx, _FORGOTTEN_MARK)       # the re-pass's stored hypotheses naming it
+        except Exception as exc:  # noqa: BLE001
+            if strict:
+                raise
+            logger.warning("omi_recordings: re-pass hypotheses naming a forgotten entity NOT redacted (%s)", type(exc).__name__)
         async with erase_gate.erasing(user_id, bump=False):
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, transcript, audio_path FROM omi_recordings WHERE user_id = ? AND status = 'done'", (user_id,)):

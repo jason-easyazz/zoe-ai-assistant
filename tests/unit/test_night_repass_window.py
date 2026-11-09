@@ -33,6 +33,8 @@ def test_the_repass_runs_after_the_stops_and_before_the_12b_loads(tmp_path):
     ran = [j["name"] for j in host.jobs_run]
     assert ran[0] == "zoe-omi-repass.py" and ran.index("zoe-omi-repass.py") < ran.index("zoe-nightly-dreaming.py")
     assert host.idx("--user stop") < host.idx("zoe-omi-repass.py") < host.idx("--ctx-size")           # asleep first, the 12B only after
+    job_at = host.idx("zoe-omi-repass.py")
+    assert host.idx("compact_memory", job_at) < host.idx("--ctx-size")                                  # a compaction AFTER the worker exited and BEFORE the 12B loads (resettle)
     rec = next(j for j in w.jobs if j["name"] == "omi_repass")
     assert rec["backend"] == "pre" and rec["status"] == "ok" and rec["best_effort"]
 
