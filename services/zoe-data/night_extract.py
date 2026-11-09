@@ -208,7 +208,7 @@ def _lex() -> tuple:
                re.compile(rf"\b{poss}\s+(?:\w+\s+)?({pet_alt}),?\s+(?!is\b|was\b|has\b|had\b)([A-Za-z][a-z'\-]{{1,24}})\b", re.I),
                re.compile(rf"\b{_NAME}\s+is\s+(?:my|our)\s+(?:\w+\s+)?({pet_alt})\b", re.I),
                re.compile(rf"\b{poss}\s+({pet_alt})\s+is\s+(?:called\s+|named\s+)?([A-Z][a-z'\-]{{1,24}})\b"))
-    kin_res = (re.compile(rf"\b{poss}\s+({kin_alt})\s*(?P<sep>is\s+|was\s+|called\s+|named\s+|,\s*)?{_NAME}", re.I),
+    kin_res = (re.compile(rf"\b{poss}\s+({kin_alt})\b\s*(?P<sep>is\s+|was\s+|called\s+|named\s+|,\s*)?{_NAME}", re.I),
                re.compile(rf"\b{_NAME}\s+is\s+{poss}\s+({kin_alt})\b", re.I),
                re.compile(rf"\b{_NAME}\s*,\s*{poss}\s+({kin_alt})\b", re.I))
     mention_alt = "|".join(re.escape(w) for w in kin_words)

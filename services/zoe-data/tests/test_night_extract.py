@@ -476,3 +476,11 @@ def test_the_users_possessive_is_not_the_user_as_subject():
     g = [{"kind": "age", "subject": "@speaker", "value": 41}]
     ne.compare(g, ["The user is 42 years old"])
     assert (g[0]["cmp"], g[0].get("reason")) == ("contradicts", "different_value")
+
+
+def test_an_unnamed_relative_does_not_invent_a_person_from_a_kinship_alias():
+    # Codex on #2352: "my sister" backtracked to the alias "sis" and captured "ter" as a name
+    facts = ne.lexicon_facts("my sister")
+    assert not any(f.get("subject") == "ter" for f in facts), facts
+    assert any(f["kind"] == "kin" and f["subject"] == "" for f in facts)             # the unnamed-relative fact is still there
+    assert any(f["subject"] == "dana" for f in ne.lexicon_facts("my sister Dana"))   # negative control
