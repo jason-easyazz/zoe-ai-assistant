@@ -225,6 +225,11 @@ def lexicon_facts(text: str) -> list[dict]:
     seen: set = set()
 
     def add(kind: str, name: str, value: str, word: str, after: str, explicit: bool = False, via_is: bool = False) -> None:
+        if name[:1].isupper():
+            more = re.match(r"\s+([A-Z][\w'\-]{1,24})\b", after)
+            if more and more.group(1).lower() not in _NOT_NAMES and more.group(1).lower() not in STOP:
+                name = f"{name} {more.group(1)}"      # a full name stays whole so "forget Mary Jane" can match it
+                after = after[more.end():]
         n = name.lower().strip("-'")
         if n in _NOT_NAMES or n in STOP or len(n) < 2 or (kind, n, value) in seen:
             return
@@ -260,7 +265,7 @@ def lexicon_facts(text: str) -> list[dict]:
 
 # ── pure: the comparison with what the 4B stored ──────────────────────────────────────────────────────────────────────────────────────────
 _AGE_CUE = re.compile(r"\b(?:aged?|years?[ -]old|yo|turns?|turned|is\s+\d{1,3}|\d{1,3}\s*(?:years?|yrs?))\b", re.I)
-_USER_SUBJ = re.compile(r"^\s*(?:the\s+)?user\b", re.I)
+_USER_SUBJ = re.compile(r"^\s*(?:the\s+)?user\b(?!['\u2019]s\b)", re.I)
 _CHILD_WORD = re.compile(r"\b(?:son|daughter|child|kid|baby)\b", re.I)
 
 
@@ -297,7 +302,7 @@ def compare(facts: list[dict], stored: Iterable[str]) -> dict:
             pool = named if subj != "@speaker" else usered
             if any(n in _nums(t) and _AGE_CUE.search(t) for t, _w in pool):
                 cmp = "agree"
-            elif any(_AGE_CUE.search(t) and _nums(t) and n not in _nums(t) for t, _w in named):
+            elif any(_AGE_CUE.search(t) and _nums(t) and n not in _nums(t) for t, _w in pool):
                 cmp, reason = "contradicts", "different_value"
             elif subj != "@speaker" and any(n in _nums(t) and _AGE_CUE.search(t) and not _subj_in(subj, w) for t, w in usered):
                 cmp, reason = "contradicts", "wrong_person"

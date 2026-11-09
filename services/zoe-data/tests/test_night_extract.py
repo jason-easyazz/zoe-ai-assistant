@@ -459,3 +459,20 @@ def test_a_rerun_that_yields_no_facts_replaces_the_members_old_rows(tmp_path):
     s, _ = drive(tmp_path, day=quiet)
     assert s["status"] == "ok"
     assert not any(r.get("user_id") == USER for r in facts_on_disk(tmp_path))
+
+
+def test_a_full_name_in_a_lexicon_fact_stays_whole():
+    # Codex on #2352 (P1): "my sister Mary Jane is 30" published subject "mary", so forgetting "Mary Jane" could not match it
+    facts = ne.lexicon_facts("my sister Mary Jane is 30")
+    assert any(f["kind"] == "kin" and f["subject"] == "mary jane" for f in facts), facts
+    # negative control: a one-word name is unchanged, and a following lowercase word is not part of the name
+    assert any(f["subject"] == "dana" for f in ne.lexicon_facts("my sister Dana is 30"))
+
+
+def test_the_users_possessive_is_not_the_user_as_subject():
+    f = [{"kind": "age", "subject": "mia", "value": 16}]
+    ne.compare(f, ["The user's son Leo is 16 years old"])
+    assert f[0]["cmp"] != "contradicts" or f[0].get("reason") != "wrong_person"
+    g = [{"kind": "age", "subject": "@speaker", "value": 41}]
+    ne.compare(g, ["The user is 42 years old"])
+    assert (g[0]["cmp"], g[0].get("reason")) == ("contradicts", "different_value")
