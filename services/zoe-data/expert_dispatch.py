@@ -287,7 +287,7 @@ _WEATHER_WORD_RE = re.compile(
     r"\b(?:weather|forecast|rain\w*|outside|sunny|wind\w*|humid\w*|storm\w*|today|tomorrow|tonight|week)\b", re.IGNORECASE)
 
 
-from weather_speech import is_food_temperature, weather_place  # noqa: E402  (pure helpers, no import cycle)
+from weather_speech import is_food_temperature, weather_places  # noqa: E402  (pure helpers, no import cycle)
 
 
 def _is_unit_conversion(text: str) -> bool:
@@ -353,8 +353,8 @@ def _plan(domain: str, text: str):
 
     if domain == "weather":
         low = text.lower()
-        place = weather_place(low)      # a place the user NAMED beats the household default
-        loc = {"location": place} if place else {}
+        places = weather_places(low)      # the place(s) the user NAMED beat the household default
+        loc = {"location": places[0], **({"also_locations": places[1:]} if places[1:] else {})} if places else {}
         # Advice questions get a DIRECT yes/no answer, not a forecast dump.
         if re.search(r"\bumbrella\b|\brain(coat)?\b|will\s+it\s+rain|going\s+to\s+rain", low):
             return ("weather", {"advice": "rain", **loc}, "read")

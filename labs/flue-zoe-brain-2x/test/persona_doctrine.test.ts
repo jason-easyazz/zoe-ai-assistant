@@ -67,3 +67,13 @@ test('negative control: a hostile overlay cannot remove the persona', () => {
 test('token budget: the doctrine stays short', () => {
   assert.ok(PERSONA_DOCTRINE.length < 1200, `persona doctrine is ${PERSONA_DOCTRINE.length} chars`);
 });
+
+test('KITCHEN_DOCTRINE (QA 6b): Celsius figures, and a temperature question gets a temperature', async () => {
+  const { KITCHEN_DOCTRINE } = await import('../src/doctrines.ts');
+  assert.match(KITCHEN_DOCTRINE, /Celsius unless they ask for Fahrenheit/);
+  assert.match(KITCHEN_DOCTRINE, /pork[^.]*63C/);
+  assert.match(KITCHEN_DOCTRINE, /at or below 5C/);
+  assert.match(KITCHEN_DOCTRINE, /gets a temperature, not a time/);
+  assert.ok(!/\b145\b|Fahrenheit\s+\d/.test(KITCHEN_DOCTRINE.replace('unless they ask for Fahrenheit', '')), 'no US figure');
+  assert.ok(ZOE_INSTRUCTIONS.includes(KITCHEN_DOCTRINE), 'compiled into the instructions');
+});
