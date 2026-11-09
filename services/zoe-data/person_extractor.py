@@ -1416,8 +1416,12 @@ async def apply_person_fact(
     # back as the mother's (QA round 7). Filed as a user fact that names the speaker, with no person node.
     try:
         import own_name
+        from people_utils import _fold_name
 
-        if own_name.is_own(name, await own_name.names(user_id)):
+        # the name the speaker gave for THEMSELF in the very text this fact was mined from ("its priya, night shift nurse"): the
+        # account-name list alone is a suppression list, never identity - "my colleague Priya is a teacher" is a different Priya
+        _intro = own_name.introduced_name(source_excerpt or "")
+        if _intro and own_name.is_own(name, frozenset({_fold_name(_intro), _fold_name(_intro).split()[0]})):
             own_text = re.sub(rf"(?i)\b{re.escape(name)}\b", "User", value, count=1) if re.search(
                 rf"(?i)\b{re.escape(name)}\b", value) else f"User ({name}): {value}"
             mem_id = await _ingest_to_mempalace(

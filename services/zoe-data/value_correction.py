@@ -148,10 +148,16 @@ def owner_noun(subject: str):
     return word[:1].upper() + word[1:].lower(), m.group("n").lower()
 
 
-def _owner_re(owner: str):
-    """A row names the owner: the word as typed, or (a lazily typed possessive) without its final s; never a longer word."""
+def _may_be_lazy(word: str) -> bool:
+    """Could ``word`` be a name typed with a stray final s ("kais" for Kai)? A name that ends in s may also be exactly that name."""
+    return len(word) > 3 and word.lower().endswith("s") and not word.lower().endswith("ss")
+
+
+def _owner_re(owner: str, lazy: bool = False):
+    """A row names the owner: the word as typed; with ``lazy`` (nobody has a row under the exact word) also without its final s;
+    never a longer word."""
     alts = [owner]
-    if len(owner) > 3 and owner.lower().endswith("s") and not owner.lower().endswith("ss"):
+    if lazy and _may_be_lazy(owner):
         alts.append(owner[:-1])
     alt = "|".join(re.escape(a) for a in sorted(alts, key=len, reverse=True))
     return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]?s)?(?![A-Za-z0-9])", re.IGNORECASE)
@@ -220,7 +226,7 @@ def statement(text: str) -> Optional[Correction]:
     return None
 
 
-def _subject_re(subject: str):
+def _subject_re(subject: str, lazy: bool = False):
     """Whole-word match of the subject in a stored row: a name as is, "my <rel>" as the relation word ("User's dad ...")."""
     s = subject.strip()
     on = owner_noun(s)
@@ -238,7 +244,7 @@ def _subject_re(subject: str):
     m = re.match(r"(?i)the\s+(.+)$", s)
     if m:
         s = m.group(1)          # "the pitch" -> any row that names the pitch ("User has a board pitch on Thursday")
-    stem = s[:-1] if len(s) > 3 and s.lower().endswith("s") and not s.lower().endswith("ss") else None
+    stem = s[:-1] if lazy and _may_be_lazy(s) else None
     if stem:
         # a name typed with a stray s ("kais 21 not 22" for Kai): the word as typed, or without its s
         return re.compile(rf"(?<![A-Za-z0-9'’])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9])", re.IGNORECASE)
@@ -259,18 +265,18 @@ def _render_value(v: float, like: str) -> str:
     return number_like(whole, like) + (" and a half" if v - whole else "")
 
 
-def rewrite(row_text: str, corr: Correction) -> Optional[str]:
+def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
     """``row_text`` with the corrected value, or None when the row is not the fact being corrected. Pure.
 
     The row must name the subject; a value pair needs the old value as a whole word AFTER the subject's first mention (the
     value is the subject's, not an earlier name's) and not already hold the new one; an age restatement rewrites the one age
     number that follows the subject ("Anaya is six", "Oliver, aged 24"). A row that mentions another number first is left alone."""
     text = row_text or ""
-    sm = _subject_re(corr.subject).search(text)
+    sm = _subject_re(corr.subject, lazy_s).search(text)
     if not sm:
         return None
     on = owner_noun(corr.subject)
-    if on and not _owner_re(on[0]).search(text):
+    if on and not _owner_re(on[0], lazy_s).search(text):
         return None             # "Asha's swimming": a row about the swimming of someone else (or of the user) is not the one corrected
     tail = text[sm.end():]
     if corr.old is not None:
@@ -366,6 +372,16 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
+        if not hits and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
+            # nobody has a row under the name exactly as typed: "kais 21 not 22" is Kai's (the apostrophe was not typed). Never the
+            # other way round - "Carlos" does not rewrite Carlo's row while a Carlos row exists, nor when Carlos is the typed name.
+            for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
+                meta = r.metadata or {}
+                if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
+                    continue
+                new_text = rewrite(r.text or "", corr, lazy_s=True)
+                if new_text and new_text != r.text:
+                    hits.append((r, new_text))
         if corr.old is not None and session_id and not _is_unidentified(user_id):
             # the misheard / misspoken fact may not be stored yet (the post-turn digest of an earlier turn lands minutes later):
             # that digest rewrites the old value before it writes (correction_apply.correct_fact)

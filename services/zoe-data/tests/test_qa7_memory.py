@@ -138,14 +138,16 @@ def test_a_typod_cue_and_an_on_day_apply():
 def test_a_lazily_typed_name_and_two_numbers_is_an_age_correction():
     c = vc.statement("also kais 21 not 22")
     assert c is not None and c.subject == "kais" and (c.new, c.old) == ("21", "22")      # kept as typed: the row decides
-    assert vc.rewrite("Kai: 22", c) == "Kai: 21"                         # the compact "Name: value" row
-    assert vc.rewrite("User's boyfriend Kai is 22", c) == "User's boyfriend Kai is 21"
-    assert vc.rewrite("Zara: 22", c) is None
+    assert vc.rewrite("Kai: 22", c) is None                              # the exact typed name first: nobody called "Kais" -> no rewrite yet
+    assert vc.rewrite("Kai: 22", c, lazy_s=True) == "Kai: 21"            # ... then Kai's row (the compact "Name: value" shape)
+    assert vc.rewrite("User's boyfriend Kai is 22", c, lazy_s=True) == "User's boyfriend Kai is 21"
+    assert vc.rewrite("Zara: 22", c, lazy_s=True) is None
     c2 = vc.statement("also kai's 21 not 22")
     assert c2 is not None and c2.subject == "kai"
     # a name that really ends in s is not shortened: it rewrites its own row, and no invented "Chri" row is touched
     c3 = vc.statement("also chris 21 not 22")
     assert vc.rewrite("Chris: 22", c3) == "Chris: 21"
+    assert vc.rewrite("Chri: 22", c3, lazy_s=True) == "Chri: 21"          # only when nobody is called Chris (apply() decides)
 
 
 @pytest.mark.parametrize("text", ["page 4 not 5", "price 20 not 25", "friday 5 not 6", "tea not coffee", "thats 21 not 22 degrees"])
@@ -156,13 +158,59 @@ def test_negative_controls_a_bare_pair_with_no_name_is_no_correction(text):
 def test_a_possessive_subject_keeps_its_owner():
     c = vc.statement("actually ashas swimming is on wednesday not thursday")
     assert c is not None and vc.owner_noun(c.subject) == ("Ashas", "swimming")      # as typed; the row decides Asha or Ashas
-    assert vc.rewrite("Asha's swimming is on Thursday", c) == "Asha's swimming is on Wednesday"
-    assert vc.rewrite("Ashanti's swimming is on Thursday", c) is None                 # a longer name is not Asha
+    assert vc.rewrite("Asha's swimming is on Thursday", c) is None                    # exact word first ("Ashas" has no row) ...
+    assert vc.rewrite("Asha's swimming is on Thursday", c, lazy_s=True) == "Asha's swimming is on Wednesday"   # ... then the lazy possessive
+    assert vc.rewrite("Ashanti's swimming is on Thursday", c, lazy_s=True) is None    # a longer name is not Asha
     c2 = vc.statement("actually chris swimming is on wednesday not thursday")
     assert vc.rewrite("Chris swimming is on Thursday", c2) == "Chris swimming is on Wednesday"
     assert vc.owner_noun(vc.statement("actually asha's swimming is on wednesday not thursday").subject) == ("Asha", "swimming")
-    assert vc.rewrite("User's swimming is on Thursday", c) is None                      # someone else's swimming is not Asha's
-    assert vc.rewrite("Asha's dance is on Thursday", c) is None
+    assert vc.rewrite("User's swimming is on Thursday", c, lazy_s=True) is None         # someone else's swimming is not Asha's
+    assert vc.rewrite("Asha's dance is on Thursday", c, lazy_s=True) is None
+
+
+class _Row:
+    def __init__(self, i, text):
+        self.id, self.text, self.metadata = i, text, {"user_id": UID}
+
+
+class _Svc:
+    def __init__(self, *texts):
+        self.rows = [_Row(f"r{i}", t) for i, t in enumerate(texts)]
+        self.edits = []
+
+    async def list_by_status(self, **_k):
+        return [r for r in self.rows]
+
+    async def review(self, rid, decision=None, edits=None, **_k):
+        self.edits.append((rid, edits))
+        return object()
+
+
+def _apply(svc, text, monkeypatch):
+    import correction_apply
+
+    async def opted_in(_u):
+        return False
+
+    import user_prefs
+
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    monkeypatch.setattr(correction_apply, "_is_unidentified", lambda _u: False)
+    return run(vc.apply(text, UID, None, svc=svc))
+
+
+def test_apply_prefers_the_exact_name_and_only_then_the_lazy_one(monkeypatch):
+    # Carlo AND Carlos are known people: "carlos 21 not 22" is Carlos, never Carlo
+    svc = _Svc("Carlo is 22", "Carlos is 22")
+    assert _apply(svc, "also carlos 21 not 22", monkeypatch) == 1
+    assert svc.edits == [("r1", "Carlos is 21")]
+    # only Kai exists: "kais 21 not 22" is Kai's (the apostrophe was not typed)
+    svc = _Svc("Kai is 22", "Zara is 22")
+    assert _apply(svc, "also kais 21 not 22", monkeypatch) == 1
+    assert svc.edits == [("r0", "Kai is 21")]
+    # nobody matches either way: nothing changes
+    svc = _Svc("Zara is 22")
+    assert _apply(svc, "also kais 21 not 22", monkeypatch) == 0 and svc.edits == []
 
 
 def test_the_digest_row_that_lost_its_possessor_gets_it_back():
@@ -242,10 +290,18 @@ def test_the_speakers_own_facts_are_the_users_not_a_contact(monkeypatch):
         return frozenset({"priya"})
 
     monkeypatch.setattr(own_name, "names", mine)
-    assert run(pe.apply_person_fact("Priya", "fact", "36", user_id=UID, source="conversation"))
-    assert run(pe.apply_person_fact("Priya", "fact", "Priya is a night shift nurse", user_id=UID, source="conversation"))
+    intro = "hi zoe, im priya. night shift nurse, running on fumes"
+    assert run(pe.apply_person_fact("Priya", "fact", "36", user_id=UID, source="conversation", source_excerpt=intro))
+    assert run(pe.apply_person_fact("Priya", "fact", "Priya is a night shift nurse", user_id=UID, source="conversation",
+                                    source_excerpt=intro))
     assert [c[1] for c in calls] == ["User (Priya): 36", "User is a night shift nurse"]
     assert all(c[2] is None for c in calls)                       # no person node
+    calls.clear()
+    # negative controls: the name list alone is not identity - a colleague with the speaker's first name, or no introduction in the text
+    run(pe.apply_person_fact("Priya", "fact", "Priya is a teacher", user_id=UID, source="conversation",
+                             source_excerpt="my colleague Priya is a teacher"))
+    run(pe.apply_person_fact("Priya", "fact", "36", user_id=UID, source="conversation"))
+    assert [c[1] for c in calls] == ["Priya is a teacher", "Priya: 36"] and all(c[0] == "Priya" for c in calls)
     calls.clear()
     assert run(pe.apply_person_fact("Asha", "fact", "5", user_id=UID, source="conversation"))
     assert calls == [("Asha", "Asha: 5", None)]                   # negative control: another person is still "Name: value"
