@@ -7,6 +7,14 @@ import pytest
 
 pytestmark = pytest.mark.ci_safe
 
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(REPO / "scripts" / "perf"))
+sys.path.insert(0, str(REPO / "scripts" / "night"))
+
 import night_window as nw  # noqa: E402
 from test_night_window import _private_locks, at, make, wake_order  # noqa: E402,F401 - the window's own doubles and autouse lock fixture
 
@@ -71,7 +79,7 @@ def test_a_killed_window_during_the_repass_still_restores(tmp_path):
     host.run_watched = boom
     assert w.run() == nw.EXIT_ABORTED
     assert wake_order(host) == list(nw.RESTORE_ORDER)
-    assert not any(j["name"] == "zoe-nightly-dreaming.py" for j in host.jobs_run)
+    assert not any(j["backend"] == "12B" for j in w.jobs)             # the 12B stage never ran (a 4B fallback after the restore is the window's normal recovery)
 
 
 def test_the_box_is_compacted_and_measured_again_after_a_long_repass(tmp_path):

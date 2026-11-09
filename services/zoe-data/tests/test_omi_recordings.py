@@ -1073,7 +1073,9 @@ def test_nothing_else_reads_pendant_transcripts():
                # and day, its router reuses the owner rule. ``omi_voices.review_segments`` is the ONE seam the day review reads.
                "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py",
                # the forget-reach inventory (A6) only NAMES the table as a store key; it opens nothing
-               "forget_reach.py"}
+               "forget_reach.py",
+               # the night re-pass (0072): the SECOND, offline transcript of the same audio; it replaces a transcript the same way the first pass writes it
+               "omi_repass.py"}
     hits = set()
     for p in SVC.rglob("*.py"):
         rel = str(p.relative_to(SVC))
