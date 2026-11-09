@@ -211,6 +211,7 @@ _ENTRIES = (
     _f('ZOE_CONTEXT_TOKEN_BUDGET', 'int', 5500),
     _f('ZOE_CONTINUE_WINDOW_S', 'float', 2.0, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_CONVERSATION_ENDER_ACKS', 'str', "Okay — I'm here when you need me.|No worries. Talk soon.|Okay."),
+    _f('ZOE_CONVERSATION_NOTES', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/conversation-notes.md'),
     _f('ZOE_CONVERSATION_FEEDBACK', 'bool', True, doc='docs/knowledge/voice-lane-parity.md'),
     _f('ZOE_CORE_ALLOW_WRITES', 'bool', False),
     _f('ZOE_CORE_DATA_URL', 'str', ''),

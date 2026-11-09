@@ -2101,6 +2101,12 @@ class MemoryService:
             await omi_day_review.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: day-review erasure failed ({type(exc).__name__})") from exc
+        # Conversation notes (migration 0074): summaries of what the member (and the guests they enrolled) talked about. Fail closed.
+        try:
+            import conversation_notes
+            await conversation_notes.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: conversation-notes erasure failed ({type(exc).__name__})") from exc
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.

@@ -4189,6 +4189,11 @@ async def _execute_forget_last(user_id: str) -> str:
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
+        import conversation_notes
+        await conversation_notes.erase_for_text(user_id, text)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
     logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
     if failed:
         # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn

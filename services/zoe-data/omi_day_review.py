@@ -92,11 +92,15 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_OMI_DAY_REVIEW"
 MODES = ("off", "shadow", "on")
 LANES = ("night", "day", "both")
-KINDS = ("calendar_event", "list_item", "reminder", "follow_up", "person", "owner_fact", "person_fact", "person_relation")
+KINDS = ("calendar_event", "list_item", "reminder", "follow_up", "person", "owner_fact", "person_fact", "person_relation",
+         "conversation_note")
 #: what the model may propose; ``person_relation`` is decided by CODE from a person / person_fact item, never asked for
 MODEL_KINDS = tuple(k for k in KINDS if k != "person_relation")
 #: the kinds that are about one of the member's own PEOPLE (payload ``person_id``): forgetting that person erases them
 PERSON_KINDS = frozenset({"person_fact", "person_relation"})
+#: the kinds whose approval wrote something a forget must un-write: a person's fact / relationship, and a ``conversation_note`` (a
+#: short note about a conversation, written to ``conversation_notes`` only on approval; asked for only while ZOE_CONVERSATION_NOTES is on)
+UNWRITE_KINDS = PERSON_KINDS | {"conversation_note"}
 #: who said a fact about a person (owner 2026-10-18): the person themself on a voice the member tagged, or the member. Never merged:
 #: neither silently overwrites the other (``omi_review_apply`` holds a contradiction for the owner to settle).
 STATED_BY_SUBJECT = "stated_by_subject"
@@ -607,8 +611,16 @@ PERSON_RULE = ('- A line with a name after the time ([r1.2 09:14 Sam]) was said 
                'say about themself is a person_fact with their name, never an owner_fact.')
 
 
+#: added to a chunk's prompt ONLY while ``ZOE_CONVERSATION_NOTES`` is shadow / on: the day review proposes a short NOTE about a real
+#: conversation the wearer had, for the owner to approve (approve-before-write; nothing is stored until then)
+NOTE_KIND = ('- conversation_note: a real back-and-forth conversation the wearer had with another person (not TV, not a command to Zoe), '
+             'worth picking up again next time: what it was about, how they seemed, what was left open. Cite 2 or 3 lines of it. '
+             'fields: {"summary" (one or two plain sentences), "with" (their name if it was said, else ""), "topics" (up to 4 short), '
+             '"mood" (how the other person or the wearer seemed, a few words, or ""), "open" (up to 2 things left open)}')
+
+
 def prompt_sha() -> str:
-    return hashlib.sha256((SYSTEM + USER + PERSON_KIND + PERSON_RULE).encode()).hexdigest()[:12]
+    return hashlib.sha256((SYSTEM + USER + PERSON_KIND + PERSON_RULE + NOTE_KIND).encode()).hexdigest()[:12]
 
 
 def _after_line(text: str, prefix: str, add: str) -> str:
@@ -620,6 +632,15 @@ def _after_line(text: str, prefix: str, add: str) -> str:
     return text if j < 0 else text[:j] + "\n" + add + text[j:]
 
 
+def _notes_on() -> bool:
+    try:
+        import conversation_notes
+
+        return conversation_notes.enabled()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def wants_people(chunk: Sequence[Line]) -> bool:
     """Does this chunk carry a member-confirmed speaker (a tagged person, or a line the wearer is known to have said)?"""
     return any(ln.person_id or ln.speaker == "you" for ln in chunk)
@@ -627,6 +648,8 @@ def wants_people(chunk: Sequence[Line]) -> bool:
 
 def messages_for(chunk: Sequence[Line]) -> list[dict]:
     text = USER.format(max_items=MAX_ITEMS_PER_CHUNK, lines="\n".join(render(x) for x in chunk))
+    if _notes_on():
+        text = _after_line(text, "- owner_fact:", NOTE_KIND)
     if wants_people(chunk):
         text = _after_line(text, "- owner_fact:", PERSON_KIND)
         text = _after_line(text, "- Something another person says about themself", PERSON_RULE)
@@ -881,7 +904,7 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
     kind = str(item.get("kind") or "").strip()
     fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
     ids = [str(i).strip() for i in (item.get("ids") or []) if str(i).strip()][:3]
-    if kind not in MODEL_KINDS:
+    if kind not in MODEL_KINDS or (kind == "conversation_note" and not _notes_on()):
         drop("bad_kind")
         return None
     cited = [by_id[i] for i in ids if i in by_id]
@@ -911,6 +934,8 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
         drop("no_intent")                        # "I'm not going off the rails" is a line, not something to do
         return None
     anchor = said_at(line)
+    if kind == "conversation_note":
+        return verify_conversation_note(fields, item, cited, line, span, speaker, by_id, counts)
     if kind == "person_fact":
         return verify_person_fact(fields, about, cited, line, span, speaker, hedged, counts, people or {})
     if kind == "owner_fact":
@@ -1000,6 +1025,38 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
     main = payload.get("item") or payload.get("title") or payload.get("name") or payload.get("fact") or ""
     key = f"{kind}|{_norm(main)}" + (f"|{payload.get('date')}" if kind == "calendar_event" else "")
     return _candidate(kind, payload, key, cited, line, span, conf, speaker)
+
+
+def verify_conversation_note(fields: dict, item: dict, cited: Sequence[Line], line: Line, span: str, speaker: str, by_id: dict,
+                             counts: dict) -> Optional[Candidate]:
+    """A proposed note about a real conversation. Never repaired: a drop is counted by reason. It needs a conversation (not media, not
+    unsure), at least two cited lines, a summary that rests on the chunk's own words, and no health / money / grief / family-conflict /
+    distress content (the same floor as every other pendant proposal; the owner approves before anything is stored)."""
+    def drop(reason: str) -> None:
+        counts[f"drop_{reason}"] = counts.get(f"drop_{reason}", 0) + 1
+
+    import conversation_notes as cn
+
+    if str(item.get("heard_from") or "").strip().lower() != "conversation" or len({ln.id for ln in cited}) < 2:
+        drop("not_conversation")
+        return None
+    summary = cn.clean(fields.get("summary"), cn.SUMMARY_CHARS)
+    seen = cn._tokens(" ".join(ln.text for ln in by_id.values()))
+    if len(summary) < 12 or not cn._grounded(summary, seen, 0.45):
+        drop("ungrounded")
+        return None
+    topics = [t for t in (cn.clean(x, 40) for x in (fields.get("topics") if isinstance(fields.get("topics"), list) else [])[:4])
+              if t and cn._grounded(t, seen, 0.5)]
+    open_ = [t for t in (cn.clean(x, cn.ITEM_CHARS) for x in (fields.get("open") if isinstance(fields.get("open"), list) else [])[:2])
+             if len(t) >= 6 and cn._grounded(t, seen, 0.4)]
+    mood = cn.clean(fields.get("mood"), cn.MOOD_CHARS)
+    text = " ".join([summary, *topics, *open_, mood])
+    if _distress(text) or _restraint(text) & _SENSITIVE_ALL or _IDENTITY.search(summary):
+        drop("sensitive")
+        return None
+    payload = {"summary": summary, "with": cn.clean(fields.get("with"), 60), "topics": topics, "mood": mood, "open": open_}
+    key = f"conversation_note|{_norm(summary)}"
+    return _candidate("conversation_note", payload, key, cited, line, span, 0.5, speaker)
 
 
 def _evidence(line: Line, span: str) -> dict:
@@ -1765,10 +1822,10 @@ async def forget_recording(user_id: str, rid: str) -> int:
                 except ValueError:
                     pass
                 mine.append(r)
-            await _unwrite(user_id, [r for r in mine if r["kind"] in PERSON_KINDS])
+            await _unwrite(user_id, [r for r in mine if r["kind"] in UNWRITE_KINDS])
             n = 0
             for r in mine:
-                if r["status"] in ("approved", "approving") and r["kind"] not in PERSON_KINDS:
+                if r["status"] in ("approved", "approving") and r["kind"] not in UNWRITE_KINDS:
                     await db.execute("UPDATE omi_day_candidates SET evidence = '[]', payload = '{}' WHERE id = ?", (r["id"],))
                 else:
                     await db.execute("DELETE FROM omi_day_candidates WHERE id = ?", (r["id"],))
@@ -1794,7 +1851,7 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
                 hits = [r for r in await _fetch(db, "SELECT id, kind, status, payload, evidence, written_ref FROM omi_day_candidates "
                                                     "WHERE user_id = ?", (user_id,))
                         if rx.search(str(r["payload"] or "")) or rx.search(str(r["evidence"] or ""))]
-                await _unwrite(user_id, [r for r in hits if r["kind"] in PERSON_KINDS])
+                await _unwrite(user_id, [r for r in hits if r["kind"] in UNWRITE_KINDS])
                 for r in hits:
                     await db.execute("DELETE FROM omi_day_candidates WHERE id = ?", (r["id"],))
                     n += 1

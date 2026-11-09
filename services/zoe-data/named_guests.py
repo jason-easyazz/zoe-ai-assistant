@@ -271,6 +271,12 @@ async def brain_block(user_id: str) -> str:
         if past:
             lines.append(f"Earlier conversations with {guest.name} (theirs only):")
             lines.extend(past)
+        import conversation_notes     # notes about their earlier conversations (ZOE_CONVERSATION_NOTES): THEIR layer, theirs only
+
+        notes = await conversation_notes.guest_lines(guest)
+        if notes:
+            lines.append(f"Notes from earlier conversations with {guest.name} (theirs only, not a member's):")
+            lines.extend(notes)
         return f"{BLOCK_OPEN}\n" + "\n".join(lines) + f"\n{BLOCK_CLOSE}"
     except Exception as exc:  # noqa: BLE001
         logger.debug("named_guests: brain block skipped: %s", type(exc).__name__)
