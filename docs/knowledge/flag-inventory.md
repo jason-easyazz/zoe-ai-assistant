@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 882 prod flags; 298 read through `typed_env`.
+- 887 prod flags; 303 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 251 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 12 registered flags with no reader in the scanned sources.
+- 7 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-882 flags; 831 not documented in `.env.example`.
+887 flags; 836 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -563,11 +563,16 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OMI_REPASS_EVAL_MIN` | float | `25.0` | - | `docs/knowledge/omi-night-repass.md` | `25.0` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_FUSION` | str | `'rover'` | - | `docs/knowledge/omi-night-repass.md` | `'rover'` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_GPU` | str | `'1'` | - | `docs/knowledge/omi-night-repass.md` | `'1'` | yes | NO | `services/zoe-data/omi_repass.py` |
+| `ZOE_OMI_REPASS_LEAN` | float | `0.05` | - | `docs/knowledge/omi-night-repass.md` | `0.05` | yes | NO | `services/zoe-data/omi_repass_who.py` |
+| `ZOE_OMI_REPASS_MARGIN` | float | `0.1` | - | `docs/knowledge/omi-night-repass.md` | `0.1` | yes | NO | `services/zoe-data/omi_repass_who.py` |
+| `ZOE_OMI_REPASS_MARGIN_SHORT` | float | `0.2` | - | `docs/knowledge/omi-night-repass.md` | `0.2` | yes | NO | `services/zoe-data/omi_repass_who.py` |
 | `ZOE_OMI_REPASS_MEM_MAX` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `''` | yes | NO | `services/zoe-data/omi_repass.py` |
+| `ZOE_OMI_REPASS_MIN_SCORE` | float | `0.25` | - | `docs/knowledge/omi-night-repass.md` | `0.25` | yes | NO | `services/zoe-data/omi_repass_who.py` |
 | `ZOE_OMI_REPASS_MODELS` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_THREADS` | int | `4` | - | `docs/knowledge/omi-night-repass.md` | `4` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_VENV` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_ZOE_CLIPS` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
+| `ZOE_OMI_REPASS_ZOE_MIN` | float | `0.55` | - | `docs/knowledge/omi-night-repass.md` | `0.55` | yes | NO | `services/zoe-data/omi_repass_who.py` |
 | `ZOE_OMI_REVIEW_TELEGRAM` | str | `''` | - | `docs/knowledge/omi-day-review.md` | `-` | yes | NO | `services/zoe-data/omi_review_digest.py` |
 | `ZOE_OMI_REVIEW_TELEGRAM_HOUR` | int | `8` | - | `docs/knowledge/omi-day-review.md` | `8` | yes | NO | `services/zoe-data/omi_review_digest.py` |
 | `ZOE_OMI_SEGMENT_EMBED_TTL_DAYS` | int | `14` | - | `docs/knowledge/omi-voice-tagging.md` | `14` | yes | NO | `services/zoe-data/omi_voices.py` |
@@ -1255,4 +1260,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_OMI_REPASS_LEAN`, `ZOE_OMI_REPASS_MARGIN`, `ZOE_OMI_REPASS_MARGIN_SHORT`, `ZOE_OMI_REPASS_MIN_SCORE`, `ZOE_OMI_REPASS_ZOE_MIN`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`

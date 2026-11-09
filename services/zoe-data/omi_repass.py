@@ -499,13 +499,13 @@ async def wearer_print(db, user_id: str) -> Optional[np.ndarray]:
     return vec
 
 
-async def load_refs(db, user_id: str, zoe: Optional[Any], mu: Optional[Any] = None, loud_cut: Optional[float] = None) -> Refs:
+async def load_refs(db, user_id: str, zoe: Optional[Any], mu: Optional[Any] = None, loud_cut: Optional[float] = None, persist: bool = False) -> Refs:
     """Everything a turn is matched against, in the right channel. ``mu`` = the pendant session (or stored per-device) mean. The wearer prior is the device owner's print, mean-removed: the
     CONFIRMED pendant print if there is one, else the owner's consented PANEL profile (mean-removed with the registry's panel mean), which can only make a turn "you?" (leaning)."""
     import omi_voices
     people, panel_mu = [], None
     try:
-        people, panel_mu = await who.load_people(db, user_id, MODEL_ID, mu)
+        people, panel_mu = await who.load_people(db, user_id, MODEL_ID, mu, persist=persist)
     except Exception as exc:  # noqa: BLE001
         if not omi_voices._missing(exc):
             raise
@@ -990,31 +990,32 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     mu_by: dict = {}
     loud_by: dict = {}
     user_rids: dict = {}
-    for it in ok1:
-        user_rids.setdefault(by_id[it["id"]]["user_id"], []).append(it["id"])
-    for uid_, rids_ in user_rids.items():
+    for it in ok1:        # one channel mean per (member, DEVICE): two pendants are two channels and never share an offset
+        user_rids.setdefault((by_id[it["id"]]["user_id"], by_id[it["id"]].get("device_id") or ""), []).append(it["id"])
+    for key_, rids_ in user_rids.items():
+        uid_, dev_ = key_
         wins_ = [w for rid_ in rids_ for w in (got1[rid_].get("windows") or [])]
         speech_ = sum(float(got1[rid_].get("speech_s") or 0.0) for rid_ in rids_)
-        loud_by[uid_] = float(np.percentile([float(w[3]) for w in wins_ if len(w) > 3], 75)) if any(len(w) > 3 for w in wins_) else None
-        dev_ = (by_id[rids_[0]].get("device_id") or "")
+        loud_by[key_] = float(np.percentile([float(w[3]) for w in wins_ if len(w) > 3], 75)) if any(len(w) > 3 for w in wins_) else None
         async with get_compat_db() as db:
             if wins_ and speech_ >= who.SESSION_MIN_S:
-                mu_by[uid_] = who.session_mean([w[2] for w in wins_])
+                mu_by[key_] = who.session_mean([w[2] for w in wins_])
                 if not rehearse:
                     try:
-                        await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[uid_], len(wins_), speech_, now)
+                        await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[key_], len(wins_), speech_, now)
                         await db.commit()
                     except Exception as exc:  # noqa: BLE001 - pre-0073
                         logger.warning("OMI_REPASS_MEAN_NOT_STORED reason=%s", type(exc).__name__)
             else:
-                mu_by[uid_] = await who.load_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_)
+                mu_by[key_] = await who.load_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_)
     refs_cache: dict = {}
 
-    async def refs_for(uid_: str) -> Refs:
-        if uid_ not in refs_cache:
+    async def refs_for(uid_: str, dev_: str = "") -> Refs:
+        key_ = (uid_, dev_ or "")
+        if key_ not in refs_cache:
             async with get_compat_db() as db:
-                refs_cache[uid_] = await load_refs(db, uid_, zoe_ref, mu_by.get(uid_), loud_by.get(uid_))
-        return refs_cache[uid_]
+                refs_cache[key_] = await load_refs(db, uid_, zoe_ref, mu_by.get(key_), loud_by.get(key_), persist=not rehearse)
+        return refs_cache[key_]
     chunked = [it for it in ok1 if isinstance(got1[it["id"]].get("chunks"), list)]
 
     async def voter_pass(engine: str) -> dict:
@@ -1097,7 +1098,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         o = fused_res.get(rows[0]["id"])
         if o is None or not (got1.get(rows[0]["id"]) or {}).get("ok"):
             return {**res, "status": "rehearsal_failed", "why": ((got1.get(rows[0]["id"]) or {}).get("why", "no result")), "worker_rc": rc}
-        refs = await refs_for(rows[0]["user_id"])
+        refs = await refs_for(rows[0]["user_id"], rows[0].get("device_id") or "")
         pv = await preview_one(rows[0], o, refs=refs, names=names_by_user.get(rows[0]["user_id"], []))
         return {**res, "status": "rehearsal_ok", **pv, "worker_rc": rc, "device": done1.get("device"), "worker_rtf": done1.get("rtf"), "peak_rss_mb": done1.get("peak_rss_mb"),
                 "gpu_peak_mb": done1.get("gpu_peak_mb"), "load_s": done1.get("load_s"), "wall_s": round(clock() - started)}
@@ -1112,7 +1113,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             await note_failure(rid, carry=carry)
             tally["carried" if carry else "failed"] += 1
             continue
-        refs = await refs_for(r["user_id"])
+        refs = await refs_for(r["user_id"], r.get("device_id") or "")
         c = await finish_one(r, o, refs=refs, names=names_by_user.get(r["user_id"], []), model_label=model_label, seen=seen, m=m, now=now)
         s = c["status"]
         tally[s] = tally.get(s, 0) + 1
