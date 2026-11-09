@@ -400,14 +400,35 @@ async def erase_entity(user_id: str, rx, *, strict: bool = False) -> int:
         return 0
 
 
+_ERASED_FILE = ".erased.json"
+
+
+def _erased_at(d: Path) -> dict:
+    try:
+        raw = json.loads((d / _ERASED_FILE).read_text(encoding="utf-8"))
+        return {str(k): float(v) for k, v in raw.items()}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _note_erased(d: Path, user_id: str) -> None:
+    """Record WHEN the member was erased (caller holds the output lock). Wall-clock seconds, per member, bounded."""
+    m = _erased_at(d)
+    m[user_id] = time.time()
+    if len(m) > 256:
+        m = dict(sorted(m.items(), key=lambda kv: kv[1])[-256:])
+    _write_private(d / _ERASED_FILE, json.dumps(m, sort_keys=True))
+
+
 async def delete_user(user_id: str) -> int:
     """Every proposed fact of the member and their line in each summary (``MemoryService.delete_user``). RAISES on a failure (fail closed)."""
     d = state_dir()
-    if not (user_id or "").strip() or not d.exists():
+    if not (user_id or "").strip():
         return 0
 
     def run() -> int:
         with _locked(d):
+            _note_erased(d, user_id)         # an in-flight run that loaded this member's turns BEFORE now must not publish them after
             n = _rewrite(d, lambda r: r.get("user_id") != user_id)
             for p in d.glob(f"*{SUMMARY_SUFFIX}"):
                 try:
@@ -491,6 +512,7 @@ async def run_night(*, night: str, members: list[str], load_turns: Callable[[str
     if m == "off":
         return {"status": "flag_off", "mode": m}
     started = time.monotonic()
+    wall_start = time.time()
     work: list[tuple[str, Turn, str]] = []                  # (member, turn, prepared text)
     summary: dict[str, Any] = {"night": night, "mode": m, "members": {}, "skipped_forget_turns": 0, "withheld_members": 0}
     for uid in members:
@@ -534,6 +556,8 @@ async def run_night(*, night: str, members: list[str], load_turns: Callable[[str
             # the second wall, INSIDE the output lock: "forget X" writes the ledger first and ``erase_entity`` then takes this same lock, so a forget either lands before
             # this check (the fact is not written) or waits for the lock and erases what was written - there is no check-then-write window
             rows = await _drop_forgotten(rows) if use_ledger else rows
+            erased = _erased_at(dd)           # a member erased since this run loaded their day: their snapshot is never published
+            rows = [r for r in rows if erased.get(str(r.get("user_id")), 0.0) < wall_start]
             keep_old = [r for r in _read(facts_path(night, dd)) if r.get("user_id") not in per_member]       # a re-run replaces the member's own rows
             _write_private(facts_path(night, dd), "".join(json.dumps(r, sort_keys=True) + "\n" for r in keep_old + rows))
             _write_private(summary_path(night, dd), json.dumps({**summary, "perf": {k: out.get(k) for k in ("load_s", "infer_s", "peak_rss_mb", "threads")}},

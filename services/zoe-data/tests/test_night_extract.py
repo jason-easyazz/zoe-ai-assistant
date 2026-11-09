@@ -414,3 +414,22 @@ def test_non_ascii_names_keep_their_letters_so_forgetting_can_match():
     assert ne.norm("José's dog") == "josé dog"
     assert ne.norm("Zoë") == "zoë"
     assert ne.norm("Jose") == "jose"                      # negative control: ASCII names are unchanged
+
+
+def test_a_member_erased_while_a_run_is_in_flight_is_not_republished(tmp_path, monkeypatch):
+    # Codex on #2352: delete_user finishing after the day was loaded but before the write must not be undone by that write
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "out"))
+
+    async def erase_mid_run(_uid):
+        await ne.delete_user(USER)                  # the erase lands after the turns were read, before the publish
+        return []
+
+    async def scenario():
+        return await ne.run_night(night=NIGHT, members=[USER], load_turns=lambda u: _aw(turns_of(DAY)), load_stored=erase_mid_run,
+                                  extract=make_extract(DAY), d=tmp_path / "out", run_mode="shadow")
+
+    assert run(scenario())["status"] == "ok"
+    assert not any(r.get("user_id") == USER for r in facts_on_disk(tmp_path))
+    # negative control: without the mid-run erase the same run publishes the member's facts
+    drive(tmp_path / "again")
+    assert any(r.get("user_id") == USER for r in [json.loads(ln) for ln in ne.facts_path(NIGHT, tmp_path / "again" / "out").read_text().splitlines()])
