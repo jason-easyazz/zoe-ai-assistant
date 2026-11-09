@@ -1,7 +1,8 @@
 """0074 - ``conversation_notes``: short notes about past conversations (``conversation_notes.py``; flag-dark).
 
 One row per conversation (an episode of one person's turns): who it was with, what they talked about, how they seemed, what is left
-open. ``user_id`` is the member layer the note lives in; ``people_id`` is NULL for the member's own conversations and the guest's
+open, and the POINTERS (``turn_ids``: chat message ids for a member, ``named_guest_turns`` ids for a guest - ids only, never text) to the
+turns it was made from, so a forget that names something only a source turn said still reaches the note. ``user_id`` is the member layer the note lives in; ``people_id`` is NULL for the member's own conversations and the guest's
 person id for a named guest's (guest scope only: read solely on a turn matched to THAT guest by voice). ``status`` is ``active``
 (served), ``shadow`` (written by the shadow mode, never served) or ``pending`` (a pendant conversation the owner has not approved:
 it lives in ``omi_day_candidates`` until then, so this table never holds one). Erased by the member erase, "forget <name>", "forget
@@ -31,6 +32,7 @@ NOTES = """CREATE TABLE IF NOT EXISTS conversation_notes (
                started_at TEXT NOT NULL,
                ended_at TEXT NOT NULL,
                turn_count INTEGER NOT NULL DEFAULT 0,
+               turn_ids TEXT NOT NULL DEFAULT '[]',
                summary TEXT NOT NULL,
                topics TEXT NOT NULL DEFAULT '[]',
                mood TEXT NOT NULL DEFAULT '',

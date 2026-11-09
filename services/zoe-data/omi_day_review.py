@@ -616,7 +616,7 @@ PERSON_RULE = ('- A line with a name after the time ([r1.2 09:14 Sam]) was said 
 NOTE_KIND = ('- conversation_note: a real back-and-forth conversation the wearer had with another person (not TV, not a command to Zoe), '
              'worth picking up again next time: what it was about, how they seemed, what was left open. Cite 2 or 3 lines of it. '
              'fields: {"summary" (one or two plain sentences), "with" (their name if it was said, else ""), "topics" (up to 4 short), '
-             '"mood" (how the other person or the wearer seemed, a few words, or ""), "open" (up to 2 things left open)}')
+             '"open" (up to 2 things left open)}')
 
 
 def prompt_sha() -> str:
@@ -1049,12 +1049,11 @@ def verify_conversation_note(fields: dict, item: dict, cited: Sequence[Line], li
               if t and cn._grounded(t, seen, 0.5)]
     open_ = [t for t in (cn.clean(x, cn.ITEM_CHARS) for x in (fields.get("open") if isinstance(fields.get("open"), list) else [])[:2])
              if len(t) >= 6 and cn._grounded(t, seen, 0.4)]
-    mood = cn.clean(fields.get("mood"), cn.MOOD_CHARS)
-    text = " ".join([summary, *topics, *open_, mood])
+    text = " ".join([summary, *topics, *open_])
     if _distress(text) or _restraint(text) & _SENSITIVE_ALL or _IDENTITY.search(summary):
         drop("sensitive")
         return None
-    payload = {"summary": summary, "with": cn.clean(fields.get("with"), 60), "topics": topics, "mood": mood, "open": open_}
+    payload = {"summary": summary, "with": cn.clean(fields.get("with"), 60), "topics": topics, "open": open_}
     key = f"conversation_note|{_norm(summary)}"
     return _candidate("conversation_note", payload, key, cited, line, span, 0.5, speaker)
 

@@ -78,6 +78,7 @@ _YOUNG_TURNS = 2              # brain turns of a session that carry the block (t
 _MAX_SESSIONS = 256
 _LEDGER_BUDGET_S = 0.6
 _NOTE_MAX_TOKENS = 380
+MAX_SOURCE_IDS = 60
 SUMMARY_CHARS = 320
 ITEM_CHARS = 120
 MOOD_CHARS = 60
@@ -118,6 +119,7 @@ class Convo:
     turns: int = 0
     with_name: str = ""
     minor: bool = False
+    turn_ids: list = field(default_factory=list)      # the source turns (ids only), for the forget reach
 
 
 @dataclass
@@ -328,10 +330,10 @@ async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: 
                     return None
             await db.execute(
                 "INSERT INTO conversation_notes (id, user_id, people_id, episode_key, source, status, with_name, started_at, ended_at, "
-                "turn_count, summary, topics, mood, open_threads, follow_up, sensitive, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "turn_count, turn_ids, summary, topics, mood, open_threads, follow_up, sensitive, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (nid, owner, people_id, convo.key, source, status, clean(convo.with_name, 60), _iso(convo.started), _iso(convo.ended),
-                 int(convo.turns), note.summary, json.dumps(note.topics), note.mood, json.dumps(note.open_threads), note.follow_up,
+                 int(convo.turns), json.dumps([str(i) for i in convo.turn_ids][:MAX_SOURCE_IDS]), note.summary, json.dumps(note.topics), note.mood, json.dumps(note.open_threads), note.follow_up,
                  1 if note.sensitive else 0, _iso(_now())))
             await db.commit()
         return nid
@@ -352,7 +354,8 @@ async def known_keys(owner: str, people_id: str) -> set:
         return set()
 
 
-_COLS = ("id, with_name, started_at, ended_at, summary, topics, mood, open_threads, follow_up, sensitive, served_count, source")
+_COLS = ("id, with_name, started_at, ended_at, summary, topics, mood, open_threads, follow_up, sensitive, served_count, source, "
+         "turn_ids, people_id")
 
 
 @dataclass
@@ -369,6 +372,8 @@ class Stored:
     sensitive: bool
     served_count: int
     source: str
+    turn_ids: list = field(default_factory=list)
+    people_id: str = ""
 
     @property
     def text(self) -> str:
@@ -385,7 +390,8 @@ def _list(raw: Any) -> list:
 
 def _stored(r) -> Stored:
     return Stored(str(r[0]), str(r[1] or ""), str(r[2] or ""), str(r[3] or ""), str(r[4] or ""), _list(r[5]), str(r[6] or ""),
-                  _list(r[7]), str(r[8] or ""), bool(r[9]), int(r[10] or 0), str(r[11] or ""))
+                  _list(r[7]), str(r[8] or ""), bool(r[9]), int(r[10] or 0), str(r[11] or ""),
+                  _list(r[12]) if len(r) > 12 else [], str(r[13] or "") if len(r) > 13 else "")
 
 
 async def load_active(owner: str, people_id: str, *, limit: int = 6, now: Optional[float] = None) -> list:
@@ -468,7 +474,8 @@ def _convos(owner: str, people_id: str, rows: Sequence[tuple], *, with_name: str
                 lines.append(("them", u))
             if r:
                 lines.append(("zoe", r))
-        out.append(Convo(episode_key(owner, people_id, ep.turn_ids[0]), ep.started_at, ep.ended_at, lines, ep.n_turns, with_name, minor))
+        out.append(Convo(episode_key(owner, people_id, ep.turn_ids[0]), ep.started_at, ep.ended_at, lines, ep.n_turns, with_name, minor,
+                         list(ep.turn_ids)))
     return out
 
 
@@ -771,9 +778,10 @@ async def write_approved(user_id: str, payload: dict, *, candidate_id: str, day:
     """The owner approved a pendant ``conversation_note`` candidate: store it in THEIR layer (``status='active'``, source
     ``pendant``). Idempotent on the candidate. Returns ``conversation_notes:<id>``; RAISES when it could not be stored."""
     convo = Convo(episode_key(user_id, "pendant", candidate_id), at_epoch, at_epoch, [], 0, clean(payload.get("with"), 60))
+    # no mood: a pendant conversation is with someone Zoe cannot tell is a child, and the child rule is "no mood" (the owner can still
+    # read the feeling in the summary they approve)
     note = Note(clean(payload.get("summary"), SUMMARY_CHARS), [clean(t, 40) for t in _list(json.dumps(payload.get("topics") or []))][:5],
-                clean(payload.get("mood"), MOOD_CHARS), [clean(t, ITEM_CHARS) for t in (payload.get("open") or [])][:3],
-                clean(payload.get("follow_up"), ITEM_CHARS))
+                "", [clean(t, ITEM_CHARS) for t in (payload.get("open") or [])][:3], clean(payload.get("follow_up"), ITEM_CHARS))
     note.sensitive = _is_private(" ".join([note.summary, *note.topics, *note.open_threads]))
     if len(note.summary) < 8:
         raise ValueError("empty note")
@@ -835,8 +843,32 @@ async def promote_shadow(owner: str) -> int:
 
 
 # --- forget -----------------------------------------------------------------------------------------------------------------
-async def _delete_where(user_id: str, keep: Callable[[Stored], bool], *, people_id: Optional[str] = None, strict: bool = True) -> int:
-    """Delete this layer's notes for which ``keep`` is False... i.e. the ones ``keep`` rejects. Reads every row of the layer (a handful)."""
+async def _source_text(db, owner: str, s: "Stored") -> str:
+    """The words of the turns a note was made from, by id (member: ``chat_messages``; guest: ``named_guest_turns``). A table that is not
+    there is no text (the note's own words still count). RAISES on any other failure, so a strict forget is retried."""
+    ids = [str(i) for i in s.turn_ids if i][:MAX_SOURCE_IDS]
+    if not ids:
+        return ""
+    marks = ", ".join("?" * len(ids))
+    try:
+        if s.people_id:
+            sql, params = (f"SELECT user_text, reply FROM named_guest_turns WHERE user_id = ? AND people_id = ? AND id IN ({marks})",
+                           (owner, s.people_id, *ids))
+        else:
+            sql, params = f"SELECT content FROM chat_messages WHERE id IN ({marks})", tuple(ids)
+        async with db.execute(sql, params) as cur:
+            return " ".join(" ".join(str(c or "") for c in r) for r in await cur.fetchall())
+    except Exception as exc:  # noqa: BLE001
+        t = str(exc)
+        if "no such table" in t or "does not exist" in t:
+            return ""
+        raise
+
+
+async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *, people_id: Optional[str] = None,
+                        strict: bool = True) -> int:
+    """Delete the layer's notes for which ``doomed(note, text)`` is true; ``text`` = the note's words plus its source turns' words (a
+    note that paraphrases a forgotten name still rests on the turn that said it). Reads the layer's rows (a handful)."""
     try:
         async with _db() as db:
             sql = f"SELECT {_COLS} FROM conversation_notes WHERE user_id = ?"
@@ -848,7 +880,7 @@ async def _delete_where(user_id: str, keep: Callable[[Stored], bool], *, people_
                 rows = [_stored(r) for r in await cur.fetchall()]
             n = 0
             for s in rows:
-                if not keep(s):
+                if doomed(s, f"{s.text} {await _source_text(db, user_id, s)}"):
                     await db.execute("DELETE FROM conversation_notes WHERE id = ?", (s.id,))
                     n += 1
             await db.commit()
@@ -877,22 +909,30 @@ async def forget_user(user_id: str) -> int:
 
 
 async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = False) -> int:
-    """Forget a name: every note of the member's layer (guests' included) whose text names it is deleted."""
-    return await _delete_where(user_id, lambda s: not rx.search(s.text), strict=strict)
+    """Forget a name: every note of the member's layer (guests' included) whose words OR whose source turns' words name it."""
+    return await _delete_where(user_id, lambda _s, text: bool(rx.search(text)), strict=strict)
 
 
 async def erase_topic(user_id: str, matches: Callable[[str], bool]) -> int:
-    """"Forget what I told you about <topic>": the member's OWN notes (not their guests') that match the topic are deleted."""
-    return await _delete_where(user_id, lambda s: not matches(s.text), people_id="", strict=True)
+    """"Forget what I told you about <topic>": the member's OWN notes (not their guests') about the topic, by their words or their sources'."""
+    return await _delete_where(user_id, lambda _s, text: bool(matches(text)), people_id="", strict=True)
 
 
-async def erase_for_text(user_id: str, text: str) -> int:
-    """"Forget that": the member's own notes that share >= 2 content words with the turn being forgotten are deleted (over-forgetting
-    is the safe error). Fail-open to a log line: the turn itself is already retracted."""
+async def erase_for_text(user_id: str, text: str, *, at: Optional[float] = None) -> int:
+    """"Forget that": the member's own notes made from the turn being forgotten. A note rests on that turn when it lists it as a source
+    (by word), when its conversation's time span covers ``at`` (the turn's time, with the episode gap either side - this catches a
+    PARAPHRASED note, e.g. "dismissed" -> "lost their job"), or when it shares >= 2 content words with it. Over-forgetting is the safe error."""
     mine = _tokens(text)
-    if len(mine) < 2:
-        return 0
-    return await _delete_where(user_id, lambda s: len(_tokens(s.text) & mine) < 2, people_id="", strict=False)
+    pad = 2700.0     # the episode gap: a turn that close to a conversation could have been part of it
+
+    def doomed(s: "Stored", all_text: str) -> bool:
+        if at is not None:
+            a, b = _epoch_of(s.started_at), _epoch_of(s.ended_at)
+            if a is not None and b is not None and a - pad <= at <= b + pad:
+                return True
+        return len(mine) >= 2 and len(_tokens(all_text) & mine) >= 2
+
+    return await _delete_where(user_id, doomed, people_id="", strict=False)
 
 
 async def erase_people(db, owner: str, person_ids: Iterable[str]) -> int:

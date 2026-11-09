@@ -57,7 +57,8 @@ filters already applied), model call pattern, forget ledger, voice-bridge placem
 
 * **Store** - `conversation_notes` (migration 0074): one row per conversation: `user_id` (the member layer), `people_id` (`''` = the
   member's own; the guest's person id for a named guest), `episode_key` (idempotence), `source` (`chat` | `panel_guest` | `pendant` |
-  `backfill`), `status` (`active` | `shadow`), summary, topics, mood, open threads, one follow-up, `sensitive`, `served_count`.
+  `backfill`), `status` (`active` | `shadow`), summary, topics, mood, open threads, one follow-up, `sensitive`, `served_count`, and `turn_ids` (pointers to the
+  source turns - chat message ids, or `named_guest_turns` ids - never text), so a forget that names something only a source turn said still reaches a note that paraphrased it.
 * **Write** (`conversation_notes.py`) - the nightly dreaming pass (`memory_digest`, right after the open loops) reads the member's last 48 h
   of own-words turns, cuts them into conversations (45-minute gaps), leaves the one still going, skips non-conversations (< 3 turns or
   < 30 words) and makes ONE local-brain call per conversation. The model only summarises: code parses the JSON, checks every field is
@@ -69,11 +70,12 @@ filters already applied), model call pattern, forget ledger, voice-bridge placem
   `named_guests.brain_block`, theirs only. The block tells the brain: sparingly, naturally, never recite, never mention notes, what the person
   said or confirmed wins, drop it if they want to move on.
 * **Pendant** - `omi_day_review` proposes a `conversation_note` candidate (asked for only while the flag is on; needs a real conversation,
-  2+ cited lines, a grounded summary, none of the health / money / grief / family-conflict / distress classes). `omi_review_apply.write_conversation_note`
+  2+ cited lines, a grounded summary, no mood field - Zoe cannot tell whether the other person is a child - and none of the health / money / grief / family-conflict / distress classes). `omi_review_apply.write_conversation_note`
   is the ONLY writer (a test pins that nothing else imports it) and stores it in the owner's layer. Forgetting the recording or the name un-writes it.
 * **Backfill** - `scripts/maintenance/conversation_notes_backfill.py` (below).
-* **Forget** - `forget_user` (member erase, fail closed), `erase_entity` (a cascade step, `conversation_notes`), `erase_topic` ("forget what I
-  told you about ..."), `erase_for_text` ("forget that": over-forgets on purpose), `erase_people` (a guest's erase), the strict serve-time
+* **Forget** - `forget_user` (member erase, fail closed), `erase_entity` (a cascade step, `conversation_notes`: matches the note's words OR the words of
+  its source turns), `erase_topic` ("forget what I told you about ...", same reach), `erase_for_text` ("forget that": the note lists the turn as a
+  source by word, its conversation's time span covers the turn, or they share two content words - it over-forgets on purpose), `erase_people` (a guest's erase), the strict serve-time
   ledger filter, and the `forget_reach.py` inventory row.
 
 ## Flags
@@ -124,7 +126,8 @@ arrives through the day review as a proposal you approve (flag on); it is stored
   the first two hours when its flag is on).
 * A note is an LLM summary of the owner's own words; its quality depends on the digest model. Every field is grounded against the transcript
   by word overlap, which stops invention but not a bad paraphrase. The shadow period is for reading real notes.
-* "Forget that" removes notes that share two content words with the forgotten turn (it over-forgets). A guest cannot forget a note (guests have no forget).
+* "Forget that" binds to the previous turn, which cannot yet be in a nightly note; the time-span rule covers the rare overlap and a paraphrase. A guest cannot forget a note (guests have no forget; the owner's "forget Quinn" erases them all).
+* Source-turn matching needs the source rows to still hold the name when the forget runs (the entity forget runs at once; the nightly transcript redaction comes later). A backfilled note's `turn_ids` are Flue submission ids, which no table resolves: it is matched by its own words only.
 * The legacy `zoe_agent` lane does not serve notes; the live lane is Flue.
 * The forget-completeness probe covers `conversation_notes` as a layer; the Flue sidecar's own transcript store (the source the backfill reads) is
   the existing `flue_conversation_store` gap in `open-problems.md`.

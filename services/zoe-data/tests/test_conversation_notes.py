@@ -208,7 +208,8 @@ def test_a_note_is_never_a_memory_row(member, monkeypatch):
 
 # --- the forget law ------------------------------------------------------------------------------------------------------
 def test_a_forgotten_name_never_reaches_the_model_nor_a_note(member, monkeypatch):
-    """Forgotten means forever, with its control: the same day without the forget DOES put the name in the note."""
+    """Forgotten means forever, through the REAL transcript loader (``memory_digest._transcript_from_rows``: the forgotten-turn skip), with
+    its control: before the forget the name goes to the model and into the note; after it, neither."""
     import memory_digest as md
 
     monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
@@ -220,20 +221,70 @@ def test_a_forgotten_name_never_reaches_the_model_nor_a_note(member, monkeypatch
                            "topics": ["half marathon"], "mood": "", "open": [], "follow_up": ""})
     cn.set_llm(llm)
     texts = [u for u, _r in CHAT]
-    texts[1] = "My friend Dana says the sore knee will pass, I am worried about the race"
+    texts[1] = "My friend Dana says the pacing will sort itself out, I am worried about the race"
     rows = _member_rows(NOW - 20 * 3600, texts)
+
+    async def load(user_id, start, end, db=None):      # the digest's own row -> Transcript step; only the SQL read is stubbed
+        return await md._transcript_from_rows(user_id, [(t, mid, cn._iso(at), None) for mid, at, t in rows])
+    monkeypatch.setattr(md, "load_day_messages", load)
+    run(cn.run_member(OWNER, now=NOW))
+    assert "Dana" in seen[0] and member.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]       # control: carried through
+    member.conn.execute("DELETE FROM conversation_notes")
+    member.conn.commit()
+    seen.clear()
+    run(memory_forgotten.add(OWNER, "Dana"))
+    run(cn.run_member(OWNER, now=NOW))
+    assert not any("Dana" in x for x in seen)                                                 # the forgotten turn never reaches the model
+    assert not any("dana" in str(r).lower() for r in member.q("SELECT summary, topics, open_threads FROM conversation_notes"))
+
+
+def test_a_paraphrased_note_still_goes_when_its_source_turn_named_the_forgotten_entity(env, monkeypatch):
+    """The note never spells the name, but it was made from a turn that did: forgetting the name reaches it through ``turn_ids``."""
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    q = add_guest(env)
+    lines = [(CHAT[0][0], CHAT[0][1]), ("My friend Dana says my pacing will sort itself out, I am worried about the race", "I hope so."),
+             CHAT[2], CHAT[3]]
+    _said(q, lines, db=env)
+    cn.set_llm(_llm())                                                                          # a summary that does not name Dana
+    run(cn.run_guests(OWNER, now=NOW))
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
+    assert "Dana" not in env.q("SELECT summary, topics, open_threads, follow_up FROM conversation_notes")[0].__str__()
+    assert json.loads(env.q("SELECT turn_ids FROM conversation_notes")[0][0])                    # ids only
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Leo"), strict=True)) == 0     # control: another name, kept
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+
+
+def test_a_member_note_resolves_its_source_turns_the_same_way(member, monkeypatch):
+    member.conn.execute("CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)")
+    texts = [u for u, _r in CHAT]
+    texts[1] = "My friend Dana says the pacing will sort itself out, I am worried about the race"
+    rows = _member_rows(NOW - 20 * 3600, texts)
+    for mid, at, t in rows:
+        member.conn.execute("INSERT INTO chat_messages VALUES (?, 's', 'user', ?, ?)", (mid, t, cn._iso(at)))
+    member.conn.commit()
+    import memory_digest as md
 
     async def load(user_id, start, end, db=None):
         return _transcript(rows)
     monkeypatch.setattr(md, "load_day_messages", load)
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    cn.set_llm(_llm())
     run(cn.run_member(OWNER, now=NOW))
-    assert "Dana" in seen[0]                                                                  # control arm: the pass does carry names through
-    member.conn.execute("DELETE FROM conversation_notes")
-    member.conn.commit()
-    # the arm under test: the real loader drops a forgotten turn before it reaches us. Model that with the digest's own filter.
-    run(memory_forgotten.add(OWNER, "Dana"))
-    kept, dropped = run(memory_forgotten.keep_unforgotten(OWNER, rows, text_of=lambda r: r[2], strict=True))
-    assert dropped == 1 and not any("Dana" in r[2] for r in kept)
+    assert member.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
+    assert run(cn.erase_topic(OWNER, lambda text: "dana" in text.lower())) == 1                  # by the topic, through the source turn
+
+
+def test_forget_that_reaches_a_paraphrased_note_by_the_time_of_the_turn(member, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    cn.set_llm(_llm({"skip": False, "summary": "They talked about the half marathon and their pacing.", "topics": [], "mood": "", "open": [],
+                     "follow_up": ""}))
+    run(cn.run_member(OWNER, now=NOW))
+    started = NOW - 20 * 3600
+    assert run(cn.erase_for_text(OWNER, "I got dismissed today", at=started - 3 * 3600)) == 0        # control: a turn hours away, kept
+    assert member.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
+    assert run(cn.erase_for_text(OWNER, "I got dismissed today", at=started + 100)) == 1             # no shared words, but inside the chat
 
 
 def test_a_stored_note_that_names_a_forgotten_entity_is_never_served(member, monkeypatch):
@@ -476,8 +527,7 @@ def test_the_proposal_floors(monkeypatch):
 def test_approval_writes_into_the_owners_layer_and_a_forget_unwrites_it(env, monkeypatch):
     import omi_review_apply as oa
 
-    payload = {"summary": "They talked about how the interview went and the cycling trip.", "with": "", "topics": ["interview"], "mood": "pleased",
-               "open": []}
+    payload = {"summary": "They talked about how the interview went and the cycling trip.", "with": "", "topics": ["interview"], "open": []}
     ref = run(cn.write_approved(OWNER, payload, candidate_id="cand-1", day="2026-11-08", at_epoch=NOW))
     assert ref.startswith("conversation_notes:")
     assert run(cn.write_approved(OWNER, payload, candidate_id="cand-1", day="2026-11-08", at_epoch=NOW)) == ref            # idempotent
