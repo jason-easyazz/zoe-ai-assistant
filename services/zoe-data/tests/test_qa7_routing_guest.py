@@ -108,7 +108,8 @@ def test_explicit_place_weather_text():
               "what time is it in albany", "weather",
               "remember that the weather in perth was awful", "add weather stripping in perth", "please remind me about the forecast in perth",
               "set a reminder to check the weather in broome",
-              "what exactly did i say about weather in perth", "do you remember what i said about the weather in perth"):
+              "what exactly did i say about weather in perth", "do you remember what i said about the weather in perth",
+              "what does weather mean in french", "how do you say weather in spanish"):
         assert wf.explicit_text(t) is None, t
 
 
@@ -369,3 +370,16 @@ def test_the_inherited_day_survives_a_bare_place_follow_up(monkeypatch):
     asyncio.run(fast_tiers._weather_place_tier("and albany", "u", "s", {}))
     asyncio.run(fast_tiers._weather_place_tier("and broome", "u", "s", {}))
     assert seen == ["what's the weather in albany tomorrow", "what's the weather in broome tomorrow"]
+
+
+def test_a_held_question_stays_held_when_the_next_sentence_is_a_dropped_stock_line():
+    out = rp.polish("That sounds heavy. What feels worst? I'm here to listen.", "x", True, strict_cap=True, stock=True)
+    assert out == "That sounds heavy."
+    # negative control: a next sentence that SURVIVES releases the held question as before
+    keep = "That sounds heavy. What feels worst? I'm glad you said it."
+    assert rp.polish(keep, "x", True, strict_cap=True, stock=True) == keep
+    # and the stream form agrees for every cut
+    text = "That sounds heavy. What feels worst? I'm here to listen."
+    for step in (1, 2, 3, 5, 8):
+        ps = rp.PolishStream(rp.closer_lexicon_for("x"), True, strict_cap=True, stock=True)
+        assert "".join(ps.feed(text[i:i + step]) for i in range(0, len(text), step)) + ps.finish() == "That sounds heavy.", step

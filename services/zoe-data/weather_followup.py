@@ -38,6 +38,10 @@ _COMMAND_WORD_RE = re.compile(r"^(?:" + _IMPERATIVE + r"|get|do|is|are|was|were|
                               r"please|thanks|thank|yes|yeah|yep|no|nope|nah|sure|okay|ok|great|good|cool|nice|lovely|perfect|wow|oh|um|uh)\b")
 #: a message that OPENS with a command ("remember that the weather in perth was awful", "add weather stripping in perth") is that command's, not a weather ask
 _COMMAND_LEAD_RE = re.compile(r"^(?:(?:please|hey|ok|okay|zoe|and|also|just|can you|could you|would you|will you)\s+)*(?:" + _IMPERATIVE + r")\b")
+#: "what does weather mean in french", "how do you say weather in spanish": a word / translation question, and a language is not a town
+_META_RE = re.compile(r"\b(?:mean|means|meaning|say|spell|spelled|spelt|translate|translation|translated|pronounce|pronunciation|definition|define|synonym|word|phrase)\b")
+_LANGUAGES = frozenset(("french spanish english german italian chinese mandarin cantonese japanese korean russian arabic hindi portuguese dutch "
+                        "greek latin swedish norwegian danish polish turkish thai vietnamese indonesian maori welsh irish").split())
 _SCOPE_RE = re.compile(r"\b(today|tonight|tomorrow|this\s+weekend|this\s+week|later)\b")
 
 #: (user id, session id) -> (monotonic time, scope word of the last weather ask)
@@ -86,7 +90,12 @@ def explicit_text(text: str) -> Optional[str]:
 
     if is_evidence_question(low) or is_memory_challenge(low) or is_own_fact_question(low) or is_event_time_question(low):
         return None
-    return text if ws.weather_places(low) else None
+    if _META_RE.search(low):
+        return None
+    places = ws.weather_places(low)
+    if not places or any(p.lower() in _LANGUAGES for p in places):
+        return None
+    return text
 
 
 def followup_text(text: str, scope: str) -> Optional[str]:

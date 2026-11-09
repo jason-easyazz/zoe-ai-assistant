@@ -236,13 +236,9 @@ class PolishStream:
     def _sentence(self, sent: str) -> str:
         if self._held and not sent.strip():
             return ""               # trailing whitespace is not "text follows": a held closing question stays held (and is dropped)
-        out = ""
         if self._held and self.strict_cap and sent.rstrip().endswith("?"):
             self._held += sent          # a run of trailing questions stays held TOGETHER: all dropped at the end, none released one by one
             return ""
-        if self._held:                  # a question that is not the last sentence after all
-            out += self._release(self._held)
-            self._held = ""
         text = sent
         if self.scrub_names:
             body = sent.strip()
@@ -252,11 +248,15 @@ class PolishStream:
             if clean != body:
                 self.scrubbed += 1
                 if not clean:
-                    return out        # only plumbing: dropped (a plumbing name never reaches the person)
+                    return ""         # only plumbing: dropped (a plumbing name never reaches the person); a held question stays held
                 text = lead + clean + tail
         if self.stock and is_stock_line(text):
             self._stock_held = True          # never released: dropped when anything else is said, else replaced at finish
-            return out
+            return ""                        # ... and it is not "text that follows": a held question stays held, so the reply still ends on a statement
+        out = ""
+        if self._held:                  # a question that is not the last sentence after all: a sentence that SURVIVES follows it
+            out += self._release(self._held)
+            self._held = ""
         is_q = text.rstrip().endswith("?")
         cap_q = is_closing_question(text, self.lex) or (self.strict_cap and is_q)
         if self.cap and self._substance and is_q and cap_q:
