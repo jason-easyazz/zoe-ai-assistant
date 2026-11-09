@@ -32,20 +32,64 @@ SHORT_WORDS = 6
 MAX_DROP_FRAC = 0.15
 MAX_DROP_RUN = 4
 ALERT_RATE = 0.20
-FILLERS = frozenset({"um", "umm", "uh", "uhh", "ah", "er", "erm", "hmm", "hm", "mm", "mmm"})
-MAX_TOKENS_FACTOR = 2
+FILLERS = frozenset({"um", "umm", "uh", "uhh", "uhm", "ah", "er", "erm", "hmm", "hm", "mm", "mmm", "mhm", "mmhm"})
 
-SYSTEM = ("You tidy a spoken transcript for reading. Remove filler sounds (um, uh, er), false starts and stuttered repeats, and fix capitals and punctuation. "
-          "Do NOT add words, change words, reorder, paraphrase, summarise or answer. Keep every other word exactly as spoken, in the same order. "
-          "Reply with the tidied text only.")
+SYSTEM = ("You tidy a speech-to-text transcript turn into readable written text. You may ONLY: add punctuation and sentence breaks, fix capitalisation, "
+          "delete fillers (um, uh, ah, like used as a filler, you know), delete stutters, immediately repeated words and abandoned false starts, and write numbers/times "
+          "consistently (e.g. 'nine twenty five a m' -> '9:25 a.m.', 'twenty eight' -> '28'). "
+          "You must NOT change, add, replace or reorder any other word, and must not summarise, correct grammar, censor, or improve the meaning. Keep swearing exactly. "
+          "Keep contractions as spoken. Keep it one speaker's turn. Output ONLY the cleaned text, no quotes, no comments.\n\n"
+          "Example in: well i uh i think its like fine you know and then and then we went to to the shops it was nine fifteen\n"
+          "Example out: Well, I think it's fine, and then we went to the shops. It was 9:15.")
 
-_APOS = re.compile(r"['’]")
-_PUNCT = re.compile(r"[^a-z0-9 ]")
+
+
+_NUM = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split())}
+_TENS = {w: 10 * (i + 2) for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split())}
+_FILL_KEYS = {"um", "uh", "uhm", "er", "erm", "ah", "hmm", "mm", "mhm", "mmhm", "like"}
 
 
 def keys(text: str) -> list:
-    """Comparable word keys: lowercase, apostrophes and punctuation removed, spoken numbers as digits."""
-    return pa.words_of(_APOS.sub("", (text or "").lower().replace("-", " ")))
+    """Comparable word keys (the lab's measured normalisation): lowercase, apostrophes / punctuation out, times and spoken numbers as digits ("nine twenty five a m"
+    and "9:25 a.m." are the same keys), filler words and "you know" / "I mean" dropped, immediate 1-3 word repeats collapsed - on BOTH sides, so a model that removes
+    a filler or a stutter is not charged for it."""
+    t = (text or "").lower().replace("'", "").replace("\u2019", "")
+    t = re.sub(r"(\d)[:.](\d)", r"\1\2", t)
+    t = re.sub(r"\ba\.?\s?m\b\.?", "am", t)
+    t = re.sub(r"\bp\.?\s?m\b\.?", "pm", t)
+    w = re.sub(r"[^a-z0-9]+", " ", t).split()
+    out, i = [], 0
+    while i < len(w):
+        x = w[i]
+        if x in _TENS or x in _NUM:
+            v = _TENS.get(x, _NUM.get(x))
+            i += 1
+            if x in _TENS and i < len(w) and w[i] in _NUM and 1 <= _NUM[w[i]] <= 9:
+                v += _NUM[w[i]]
+                i += 1
+            if out and re.fullmatch(r"\d+", out[-1]):
+                out[-1] += str(v)
+            else:
+                out.append(str(v))
+            continue
+        out.append(x)
+        i += 1
+    w = [x for x in re.sub(r"\byou know\b|\bi mean\b", " ", " ".join(out)).split() if x not in _FILL_KEYS]
+    changed = True
+    while changed:
+        changed = False
+        for n in (3, 2, 1):
+            j, res = 0, []
+            while j < len(w):
+                if j + 2 * n <= len(w) and w[j:j + n] == w[j + n:j + 2 * n]:
+                    res.extend(w[j:j + n])
+                    j += 2 * n
+                    changed = True
+                else:
+                    res.append(w[j])
+                    j += 1
+            w = res
+    return w
 
 
 # ── the guard ────────────────────────────────────────────────────────────────────────────────────
@@ -89,13 +133,13 @@ def guard(verbatim: str, clean: str, *, max_frac: float = MAX_DROP_FRAC, max_run
 # ── the deterministic cleaner ────────────────────────────────────────────────────────────────────
 
 def det_ok(verbatim: str, det: str) -> bool:
-    """The deterministic cleaner's output is trusted for WHAT it drops (fillers and stutters, by construction, however many), but it must still be an in-order
-    subsequence of the verbatim and not empty - the same invariant, without the model's drop limits."""
-    return guard(verbatim, det, max_frac=1.0, max_run=10 ** 6).ok
+    """The deterministic cleaner's output goes through the SAME guard as the model's (with the lab's both-sides normalisation a dropped filler or stutter is
+    free, so an honest cleaning passes); a result that is empty or breaks a limit falls through to the verbatim."""
+    return bool(det.strip()) and guard(verbatim, det).ok
 
 
 def _k(tok: str) -> str:
-    return "".join(keys(tok)) if tok.strip() else ""
+    return re.sub(r"[^a-z0-9]", "", tok.lower())
 
 
 def deterministic(text: str) -> str:
@@ -136,7 +180,7 @@ def deterministic(text: str) -> str:
 def request(text: str, model: str = "") -> dict:
     """The chat request for one turn: T=0, a token cap that fits the turn."""
     n = len(text.split())
-    return {"model": model, "temperature": 0, "max_tokens": MAX_TOKENS_FACTOR * n + 48, "stream": False,
+    return {"model": model, "temperature": 0, "max_tokens": int(n * 2.2) + 60, "stream": False, "chat_template_kwargs": {"enable_thinking": False},
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": text}]}
 
 
