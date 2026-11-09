@@ -1466,6 +1466,15 @@ async def _sweep_voices() -> None:
         import omi_voices
         if not omi_voices._missing(exc):                     # pre-0055: nothing to expire yet
             logger.warning("omi_voices: expiry sweep failed (%s)", type(exc).__name__)
+    try:   # the panel's unknown voices (named_guest_learning, 0073) expire hourly too, whatever ZOE_GUEST_VOICE_LEARN says
+        import named_guest_learning
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            await named_guest_learning.sweep(db)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        if "panel_voice_clusters" not in str(exc):         # pre-0073: nothing to expire yet
+            logger.warning("named_guest_learning: expiry sweep failed (%s)", type(exc).__name__)
 
 
 RETENTION_S = 3600.0
