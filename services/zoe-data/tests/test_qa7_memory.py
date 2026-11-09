@@ -166,6 +166,10 @@ def test_a_possessive_subject_keeps_its_owner():
     assert vc.owner_noun(vc.statement("actually asha's swimming is on wednesday not thursday").subject) == ("Asha", "swimming")
     assert vc.rewrite("User's swimming is on Thursday", c, lazy_s=True) is None         # someone else's swimming is not Asha's
     assert vc.rewrite("Asha's dance is on Thursday", c, lazy_s=True) is None
+    # the owner must HAVE the noun, not merely appear in the row
+    assert vc.rewrite("Dev's swimming with Asha is on Thursday", c, lazy_s=True) is None
+    assert vc.rewrite("Dev takes Asha to swimming on Thursday", c, lazy_s=True) is None
+    assert vc.rewrite("Asha swimming is on Thursday", c, lazy_s=True) == "Asha swimming is on Wednesday"
 
 
 class _Row:
@@ -225,6 +229,10 @@ def test_the_digest_row_that_lost_its_possessor_gets_it_back():
         == ("rewrite", "Chris's swimming is on Wednesday")
     assert fact_subject.attribute("User's swimming is on Wednesday", "chris swimming is on wednesday", known)[0] == "keep"
     assert fact_subject.attribute("User's swimming is on Wednesday", msg)[0] == "keep"
+    # Carlo AND Carlos are known: "carlos swimming" could be either, so it is never guessed
+    assert fact_subject.attribute("User's swimming is on Wednesday", "carlos swimming is on wednesday", frozenset({"carlo", "carlos"}))[0] == "keep"
+    assert fact_subject.attribute("User's swimming is on Wednesday", "carlos swimming is on wednesday", frozenset({"carlos"})) \
+        == ("rewrite", "Carlos's swimming is on Wednesday")
     # negative controls: the user's own, or a relation word, or a turn that names no owner
     assert fact_subject.attribute("User's swimming is on Wednesday", "my swimming is on wednesday")[0] == "keep"
     assert fact_subject.attribute("User's swimming is on Wednesday", "swimming is on wednesday")[0] == "keep"

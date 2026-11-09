@@ -107,12 +107,10 @@ def _possessive_owner(fact: str, user_message: str, known_names=frozenset()) -> 
     owner = stem
     if lazy:
         known = {str(k).lower() for k in (known_names or ())}
-        if stem.lower() in known:
-            owner = stem
-        elif (stem + "s").lower() in known:
-            owner = stem + "s"
-        else:
-            return None, True
+        in_stem, in_full = stem.lower() in known, (stem + "s").lower() in known
+        if in_stem == in_full:
+            return None, True          # nobody known, or BOTH Carlo and Carlos: "carlos swimming" could be either - never guessed
+        owner = stem if in_stem else stem + "s"
     if owner.lower() in _NOT_A_SUBJECT or owner.lower() in _NOT_AN_OWNER or len(owner) < 3:
         return None, False
     return f"{owner[:1].upper()}{owner[1:].lower()}'s {noun}{m.group('rest')}", lazy

@@ -153,14 +153,14 @@ def _may_be_lazy(word: str) -> bool:
     return len(word) > 3 and word.lower().endswith("s") and not word.lower().endswith("ss")
 
 
-def _owner_re(owner: str, lazy: bool = False):
-    """A row names the owner: the word as typed; with ``lazy`` (nobody has a row under the exact word) also without its final s;
-    never a longer word."""
+def _owner_noun_re(owner: str, noun: str, lazy: bool = False):
+    """The row says the OWNER has the NOUN: "<owner>('s) <noun>" side by side. The owner is the word as typed; with ``lazy`` (nobody has
+    a row under the exact word) also without its final s; never a longer word. "Dev's swimming with Asha" is not Asha's swimming."""
     alts = [owner]
     if lazy and _may_be_lazy(owner):
         alts.append(owner[:-1])
     alt = "|".join(re.escape(a) for a in sorted(alts, key=len, reverse=True))
-    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]?s)?(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]?s)?\s+{re.escape(noun)}(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 class Correction(NamedTuple):
@@ -231,7 +231,7 @@ def _subject_re(subject: str, lazy: bool = False):
     s = subject.strip()
     on = owner_noun(s)
     if on:
-        return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(on[1])}(?![A-Za-z0-9])", re.IGNORECASE)   # the owner is checked in rewrite()
+        return _owner_noun_re(on[0], on[1], lazy)
     m = re.match(rf"(?i)(?:my|our)\s+({_REL})$", s)
     if m:
         # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
@@ -275,9 +275,6 @@ def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[s
     sm = _subject_re(corr.subject, lazy_s).search(text)
     if not sm:
         return None
-    on = owner_noun(corr.subject)
-    if on and not _owner_re(on[0], lazy_s).search(text):
-        return None             # "Asha's swimming": a row about the swimming of someone else (or of the user) is not the one corrected
     tail = text[sm.end():]
     if corr.old is not None:
         old_n, new_n = value_of(corr.old), value_of(corr.new)
