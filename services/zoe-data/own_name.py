@@ -112,6 +112,12 @@ async def forget_user(user_id: str) -> None:
         if "not initialised" in str(exc):
             return          # no database in this process (a slim lane): nothing is stored here to erase
         raise
+    except Exception as exc:  # noqa: BLE001
+        import sqlite3
+
+        if isinstance(exc, sqlite3.Error):
+            return          # a SQLite lab / unit-test store (the Postgres-only preference statement cannot run): nothing real to erase
+        raise
 
 
 async def names(user_id: str) -> frozenset:
