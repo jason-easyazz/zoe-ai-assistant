@@ -4472,6 +4472,13 @@
    "kind": "number",
    "readers": 1
   },
+  "ZOE_REPLY_POLISH": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
+   "readers": 1
+  },
   "ZOE_REPO_ROOT": {
    "defaults": [
     "dynamic",
@@ -6048,6 +6055,13 @@
     "enforce"
    ],
    "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_WRITE_INTENT_GATE": {
+   "defaults": [
+    "unset"
+   ],
+   "kind": "str",
    "readers": 1
   },
   "ZOE_WS_IDLE_TIMEOUT_SECONDS": {
