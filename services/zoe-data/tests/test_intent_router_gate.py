@@ -252,7 +252,7 @@ def chat_lane(real_head, monkeypatch):
     async def _brain(msg, *a, **k):
         return "BRAIN"
 
-    async def _detect(text, user_id, context=None):
+    async def _detect(text, user_id, context=None, **_kw):
         # today's live claim: the keyword lane reads S1 as a contacts lookup
         return intent_router.Intent("people_search", {"query": "flying in on thursday, and where from"})
 
@@ -297,7 +297,7 @@ def test_chat_keyword_lane_gate_off_restores_the_live_miss(chat_lane, monkeypatc
 def test_chat_keyword_lane_real_name_still_answers(chat_lane, monkeypatch):
     chat_router, executed = chat_lane
 
-    async def _detect(text, user_id, context=None):
+    async def _detect(text, user_id, context=None, **_kw):
         return intent_router.detect_intent(text, log_miss=False)
 
     monkeypatch.setattr(chat_router, "detect_and_extract_intent", _detect)
