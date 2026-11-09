@@ -325,6 +325,31 @@ def job_idle_evidence(name: str, text: str) -> str:
     return ""
 
 
+def measured_keep_min(report_dir: Path, *, default: float = 12.0, floor: float = 10.0, ceiling: float = 28.0, nights: int = 7, load_min: float = 4.0, margin: float = 1.25,
+                      min_nights: int = 3) -> float:
+    """Minutes the 12B stage needs after the pre-jobs, from MEASURED history: the largest sum of the 12B jobs' wall times over the last ``nights`` real night reports, plus the load and
+    probe (``load_min``), times ``margin``, clamped to [``floor``, ``ceiling``]. Fewer than ``min_nights`` reports (or an unreadable directory) -> ``default``. Read-only."""
+    sums = []
+    try:
+        for f in sorted(Path(report_dir).glob("*.json"), reverse=True):
+            if len(sums) >= nights:
+                break
+            try:
+                d = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            if not isinstance(d, dict) or d.get("mode") != "night":
+                continue
+            wall = [float(j.get("wall_s") or 0) for j in (d.get("jobs") or []) if isinstance(j, dict) and j.get("backend") == "12B"]
+            if wall:
+                sums.append(sum(wall) / 60.0)
+    except OSError:
+        return default
+    if len(sums) < min_nights:
+        return default
+    return round(min(ceiling, max(floor, (max(sums) + load_min) * margin)), 1)
+
+
 def night_report_state(report_dir: Path, today: str) -> "tuple[str, str]":
     """('ran', file) when a REAL night window already RAN today (mode ``night``, any exit except a refusal), else ('refused', file) when one was REFUSED with NOTHING STOPPED (exit 2 and ``stack_stopped`` false: a lander held the box, the
     hour, RAM before the stops), else ('none', ''). A window that ran - even one whose jobs failed (5), aborted (3) or failed to restore (4) - is never repeated blindly: the failure
@@ -485,8 +510,9 @@ class NightCfg(bk.Cfg):
     #: the real ``omi_repass`` job on ONE recording writing nothing, then the restore. Refuses 01:50-04:55 and while ``night_busy.sh voice`` says voice work must pause.
     rehearse: bool = False
     night_busy_script: Path = REPO / "scripts" / "landing" / "night_busy.sh"
-    #: minutes the pre-jobs must leave for everything after them: the 12B load + speed probe (~3), the 12B jobs (7 measured on 2026-11-08, up to ~20 with a full day review) and a margin
-    pre_keep_min: float = float(os.environ.get("NIGHT_PRE_KEEP_MIN", "28"))
+    #: minutes the pre-jobs must leave for everything after them (the 12B load + probe, the 12B jobs, a margin). 12 by default - the 12B jobs used 7 of the 28 minutes once reserved on
+    #: 2026-11-08 - and ``configure`` replaces it with ``measured_keep_min`` (the last 7 nights' job wall times, floor 10) unless ``NIGHT_PRE_KEEP_MIN`` is a number.
+    pre_keep_min: float = 12.0
     omi_repass_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-repass.py"
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
@@ -2896,6 +2922,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> NightCfg:
     cfg = cfg or NightCfg()
+    raw_keep = os.environ.get("NIGHT_PRE_KEEP_MIN", "auto").strip().lower()
+    try:
+        cfg.pre_keep_min = float(raw_keep)
+    except ValueError:
+        cfg.pre_keep_min = measured_keep_min(cfg.report_dir)          # "auto" (the default): measured need plus a margin
     cfg.cells_only = bool(args.cells_only)
     cfg.cells_runs = max(1, int(args.cells_runs or 1))
     cfg.cells_pick = str(args.cells_pick or "")

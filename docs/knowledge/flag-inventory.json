@@ -5558,6 +5558,143 @@
         },
         "typed_env": false
       },
+      "ZOE_GUEST_LEARN_EXPIRE_DAYS": {
+        "defaults": [
+          "14"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 14,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_JOIN": {
+        "defaults": [
+          "0.45"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.45,
+          "divergent_ok": {},
+          "note": "the Omi calibration cut for the same model (omi-voice-tagging.md)",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_MIN_SESSIONS": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_MIN_TURNS": {
+        "defaults": [
+          "8"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 8,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_MIN_WAKE": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_TIGHT": {
+        "defaults": [
+          "0.5"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.5,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_VOICE_LEARN": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_HARNESS": {
         "defaults": [
           "-",
@@ -20434,7 +20571,7 @@
     },
     "NIGHT_PRE_KEEP_MIN": {
       "defaults": [
-        "'28'"
+        "'auto'"
       ],
       "in_env_example": false,
       "readers": [

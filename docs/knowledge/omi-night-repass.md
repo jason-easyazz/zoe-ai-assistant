@@ -16,6 +16,7 @@ In the owner's words (2026-11-09: "for omi to be useful you will have to have th
 - [ ] **"Every line says who said it - me, family, or a named guest."** Me comes from a print the owner confirmed, never a guess; family and guests are suggested from voices the owner has taught Zoe and become names when the owner agrees. Nothing is ever silently labelled.
 - [ ] **"The day review and Zoe's notes use the clean version."** The day review (and the VAGO extract after it) read the re-passed text, in the same window, after the re-pass.
 - [ ] **"It all happens in one night window and Zoe is back before morning."** The re-pass runs inside `zoe-night-window` before the 12B loads; the window still ends by 03:55, before the 04:10 voice gate; what does not fit carries to tomorrow.
+- [ ] **"Everything is transcribed; the important things get the best transcription."** Qwen3 reads every recording each night, important ones first; the extra voters go to names / numbers / times / commitments first; the morning line says how many minutes got three voters, how many Qwen3 only, and how many carried.
 - [ ] **Nothing that was forgotten comes back, and no audio is lost before it is read.** A forgotten name stays `[forgotten]`; an erased member gets nothing written; a recording's audio is kept until the pass has seen it (and never past the 7-day retention).
 
 Each box has a test (`services/zoe-data/tests/test_omi_repass.py`, `tests/unit/test_night_repass_window.py`) or a live check below. The shadow weeks decide `on`.
@@ -61,6 +62,17 @@ GPU large-v3 reached RTF 0.74 and needs a hand-built CTranslate2, so Whisper is 
 - **The owner's morning transcript check**: contested ROVER slots (no strict majority) and low-confidence chunks are stored with every model's alternative, the ROVER pick and the vote counts. `omi_repass_eval.check_queue(home, user_id)` returns exactly that (`rid`, `i`, `t0`/`t1`, `hyps`, `rover`, `slots` [{pick, votes, who}], `low_conf`); `zoe-omi-repass.py --check-queue --user ID` prints the counts.
 
 **Budget** (GPU minutes per hour of SPEECH, measured: Qwen3 ~25, Parakeet ~5, distil-large-v3 ~26, Whisper large-v3 ~44, Granite ~28). Production = ~56 min per speech hour with distil as the third voter (~74 with large-v3); the pre-job's budget is about 25 minutes, i.e. ~27 minutes of speech with all three voters. The order when a night is over budget is fixed: **Qwen3 first on everything** (its deadline leaves Parakeet's estimated time and a model load), then **Parakeet on everything**, then **the third voter where time allows**, then the rest carries to tomorrow. If even Qwen3 + Parakeet do not fit the plan, Parakeet-only. The evaluation sample is the last thing to get time. Each GPU model loads ALONE in its own process after a drop-caches + compaction, the 12B loads only after the last one exits. **If real days exceed ~27 speech-minutes, the three-voter production does not fit in 25 minutes**: the shadow weeks measure it; the levers are lowering `NIGHT_PRE_KEEP_MIN` (the 12B stage used 7 of its 28 minutes on 2026-11-08), a longer window, or dropping the third voter - the ledger and the report show which.
+
+## Capacity: Qwen3 on everything, the other voters on what matters (owner decision 2026-11-09)
+
+The owner's answer to "three-voter production covers ~27 min of speech in a ~25 min budget" was "go with your recommendation":
+1. **More of the night.** The 12B stage's reserve is measured, not 28 min (`night_window.measured_keep_min`, floor 10, default 12), so the pre-job gets ~40 min.
+2. **Everything gets transcribed.** Qwen3 (the pivot, ~7% WER) runs on ALL of the night's audio first, **important recordings first** (`rank_important`); nothing waits behind a voter. Parakeet and the third voter then run
+   on as many of the important recordings as the time left reaches (`plan_voters`: the longest prefix that fits all three voters, then Parakeet alone down the list, the rest keep Qwen3 only; a recording needs the best third
+   voter that covers everyone, else the one that covers most). **Important** = first-pass text with a household member's / named guest's name (+3), numbers (+2), times or dates (+2), commitment words (+2), or that feeds a pending
+   day-review candidate (+4). Only recordings the pivot cannot reach even once carry to the next night.
+3. **Measured.** Each night the summary (and the NIGHT_JOB line, so the morning report) carries `speech_min`, `fused3_min`, `fused2_min`, `qwen_only_min`, `carried` and `carried_min`; the same numbers are in `state.json` `last.capacity`.
+   That is the evidence for a separate pre-window slot later - not built; the owner's call.
 
 ## Where it runs in the window, and why (RAM / GPU arithmetic)
 
@@ -115,7 +127,7 @@ pass, a network call in the upload path, so not recommended).
 
 ## Clean read and the book format - `omi_repass_clean.py`, `omi_transcript_book.py`
 
-A DISPLAY layer (flag `ZOE_OMI_CLEAN_READ=off|on`, default off; migration 0073 adds `omi_segments.clean_text` / `clean_how`). Each turn gets a lightly cleaned twin beside the
+A DISPLAY layer (flag `ZOE_OMI_CLEAN_READ=off|on`, default off; migration 0074 adds `omi_segments.clean_text` / `clean_how`). Each turn gets a lightly cleaned twin beside the
 verbatim; **memory, extraction, the day review, search and the ledger read the verbatim only** (a test pins that none of those modules mentions `clean_text`). One T=0 request per turn on
 the 12B (the window job `omi_cleanread`, before the day review, best effort, capped 10 minutes; by hand `zoe-omi-cleanread.py --model-url <4B>` or `--fallback-url` when the 12B stage was
 skipped or fails). Turns under 6 words use the deterministic cleaner only (fillers um/uh/ah/er/hmm/mm out, immediate 1-3 word repeats collapsed, "like" out only when sentence-initial or before a comma).
@@ -181,7 +193,7 @@ ln -s ~/.zoe/lab/omi-retranscribe-r2/ct2build ~/.zoe/ct2build      # or set ZOE_
 # 1. the runtime (once; needs network; the models are ~11 GB incl. Granite; torch is the box's existing Jetson CUDA build)
 scripts/setup/setup_omi_repass.sh --seed-from ~/.zoe/lab/omi-retranscribe-r2/models   # or without --seed-from to download the pinned revisions
 scripts/setup/setup_omi_repass.sh --check                  # must say: gpu ok, imports ok, both models ok
-# 2. the schema (the normal deploy runs alembic: migration 0073)
+# 2. the schema (the normal deploy runs alembic: migration 0074)
 # 3. wire the pre-job into the window: the shipped unit passes --pre-jobs omi_repass (re-run scripts/night/install_night_window.sh; a no-op while the flag is off)
 # 4. THE DAYTIME REHEARSAL (above) - repeat until it passes
 # 5. go SHADOW (the first-pass WAVs are then held for the pass; zoe-data env, then restart zoe-data):
@@ -198,4 +210,4 @@ Rollback: set the flag `off` (held WAVs are released by the normal rules; replac
 
 ## Files
 
-`services/zoe-data/omi_repass.py` (decisions, planner, DB), `scripts/night/jobs/omi_repass_worker.py` (the model process), `scripts/maintenance/zoe-omi-repass.py` (the job + owner CLI), `services/zoe-data/omi_repass_eval.py` (ROVER, the ledger, the verdicts, the hypothesis store, the check queue), `scripts/setup/setup_omi_repass.sh` + `omi_repass_requirements.lock.txt` + `omi_repass_constraints.txt`, migration `0073_omi_night_repass.py`, `night_window.py` (`--pre-jobs`, `--rehearse-repass`, `build_pre_jobs`, `run_pre_jobs`, `resettle`). Private state: `~/.zoe/omi-repass/` (0600: `state.json` = measured RTF + the Zoe voice reference; `shadow.jsonl` = counts only).
+`services/zoe-data/omi_repass.py` (decisions, planner, DB), `scripts/night/jobs/omi_repass_worker.py` (the model process), `scripts/maintenance/zoe-omi-repass.py` (the job + owner CLI), `services/zoe-data/omi_repass_eval.py` (ROVER, the ledger, the verdicts, the hypothesis store, the check queue), `scripts/setup/setup_omi_repass.sh` + `omi_repass_requirements.lock.txt` + `omi_repass_constraints.txt`, migration `0074_omi_night_repass.py`, `night_window.py` (`--pre-jobs`, `--rehearse-repass`, `build_pre_jobs`, `run_pre_jobs`, `resettle`). Private state: `~/.zoe/omi-repass/` (0600: `state.json` = measured RTF + the Zoe voice reference; `shadow.jsonl` = counts only).

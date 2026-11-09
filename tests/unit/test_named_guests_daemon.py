@@ -119,3 +119,12 @@ def test_a_guest_enrolment_uploads_the_profile_under_the_ticket_only(daemon, mon
     member = daemon._enroll_speaker_kwargs({}, "member-a", "Avery")
     member["upload_profile"](unit(4), 5)
     assert posted[0][0] == "/api/voice/enroll"                     # the member path is unchanged
+
+
+def test_the_embedding_rides_only_when_the_server_asks_for_it(daemon, rig, monkeypatch):
+    monkeypatch.setitem(daemon._profile_cache, "learn_unknown", False)
+    assert "embedding" not in daemon._speaker_field(daemon._identify_speaker_resnet34(b"wav"))
+    monkeypatch.setitem(daemon._profile_cache, "learn_unknown", True)
+    block = daemon._speaker_field(daemon._identify_speaker_resnet34(b"wav"))
+    got = np.frombuffer(base64.b64decode(block["embedding"]), dtype=np.float32)
+    assert got.shape == (rn.EMBED_DIM,) and np.allclose(got, rig.vec)

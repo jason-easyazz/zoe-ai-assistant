@@ -170,7 +170,7 @@ def _iso(dt: datetime) -> str:
 async def load_mean(db, user_id: str, model_id: str, channel: str, scope: str) -> Optional[np.ndarray]:
     try:
         rows = await _all(db, "SELECT mean FROM omi_channel_means WHERE user_id = ? AND model_id = ? AND channel = ? AND scope = ?", (user_id, model_id, channel, scope))
-    except Exception as exc:  # noqa: BLE001 - pre-0073
+    except Exception as exc:  # noqa: BLE001 - pre-0074
         if type(exc).__name__ == "UndefinedTableError" or "no such table" in str(exc).lower():
             return None
         raise
@@ -207,7 +207,7 @@ async def load_people(db, user_id: str, model_id: str, mu: Optional[Any], persis
             try:
                 await store_mean(db, user_id, model_id, CHANNEL_PANEL, "registry", panel_mu, len(panels), 0.0)
                 await db.commit()
-            except Exception as exc:  # noqa: BLE001 - pre-0073: nothing to store into
+            except Exception as exc:  # noqa: BLE001 - pre-0074: nothing to store into
                 if type(exc).__name__ != "UndefinedTableError" and "no such table" not in str(exc).lower():
                     raise
     else:

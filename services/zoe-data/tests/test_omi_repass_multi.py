@@ -242,8 +242,16 @@ def test_an_over_budget_night_keeps_the_pivot_and_drops_the_other_voters_and_the
     renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 2600")
     renv.db.conn.commit()
     calls: list = []
-    out = run(rp.run_night(budget_s=1500, runner=multi_runner(TEXTS, calls)))                       # 2600 s x (0.42 + 0.08) = 1300 s > 85 % of 1500
-    assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == [] and out["model"] == PIV     # the pivot is never swapped out; the rest carries
+    t = [1000.0]
+    inner = multi_runner(TEXTS, calls)
+
+    def runner(*a, **k):
+        rc = inner(*a, **k)
+        t[0] += 1300.0                                                                               # the pivot's pass took its measured time (2600 s x 0.42 = 1092 s plus loads)
+        return rc
+    out = run(rp.run_night(budget_s=1500, runner=runner, clock=lambda: t[0]))
+    assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == [] and out["model"] == PIV     # the pivot is never swapped out; no time was left for a voter
+    assert out["qwen_only_min"] > 0 and out["fused3_min"] == 0 and out["carried_min"] == 0                # ... and the recording still got its Qwen3 text
     assert rows(renv)[0]["transcript"] == "the bat sat on the mat"                                    # the pivot alone
 
 
@@ -306,3 +314,89 @@ def test_the_weekly_contender_line_appears_on_mondays_only(renv, monkeypatch):
     renv.db.conn.commit()
     tuesday = monday + timedelta(days=1)
     assert "contenders" not in run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, calls), now=tuesday))
+
+
+# ── capacity: Qwen3 on ALL the audio, the other voters on the IMPORTANT recordings first (owner, 2026-11-09) ──────────────────────────────────
+
+def test_importance_scores_names_numbers_times_commitments_and_pending_candidates():
+    names = ["Sam", "Alex"]
+    plain = rp.importance("uh nothing much happening around here", names)
+    assert plain == 0
+    assert rp.importance("Sam is coming round", names) == 3                                       # a household name
+    assert rp.importance("we got 12 of them", names) == 2                                         # a number
+    assert rp.importance("remind me to call him tomorrow at 5:30", names) == 6                    # commitment + time + the digits as numbers
+    assert rp.importance("Sam said call me tomorrow, I owe him 40 dollars", names) == 3 + 2 + 2 + 2
+    assert rp.importance("nothing here", names, candidate=True) == 4                              # feeds a pending day-review candidate
+    assert rp.importance("Samantha is here", names) == 0                                          # whole words only
+
+
+def test_plan_voters_gives_the_important_recordings_all_three_voters_then_two_and_the_rest_keep_qwen3_only():
+    rt = {PIV: 0.42, PAR: 0.08, WH: 0.74, DIS: 0.44}
+    durs = [("a", 1000.0), ("b", 1000.0), ("c", 1000.0)]
+    full = rp.plan_voters(durs, 10000, rt, PAR, [WH, DIS])
+    assert full == {"second": ["a", "b", "c"], "third": ["a", "b", "c"], "third_engine": WH}               # room for everyone: the best third voter
+    tight = rp.plan_voters(durs, 1500, rt, PAR, [WH, DIS])
+    assert tight["third_engine"] == DIS and tight["third"] == ["a", "b"] and tight["second"] == ["a", "b", "c"]   # distil covers more recordings than large-v3 would
+    none = rp.plan_voters(durs, 300, rt, PAR, [WH, DIS])
+    assert none["third"] == [] and none["third_engine"] == "" and none["second"] == ["a", "b"]
+    nothing = rp.plan_voters(durs, 30, rt, PAR, [WH, DIS])
+    assert nothing == {"second": [], "third": [], "third_engine": ""}                                       # no time after the pivot: Qwen3 only
+    assert rp.plan_voters(durs, 10000, rt, "", [WH]) == {"second": [], "third": [], "third_engine": ""}
+
+
+def _two_recordings(renv, a_text, b_text, dur=1000):
+    from test_omi_recordings import make_wav, upload
+    upload(renv, make_wav(3.0, hz=220), key="r1.0-1", started="2026-10-10T01:00:00Z")
+    upload(renv, make_wav(3.0, hz=330), key="r1.0-2", started="2026-10-10T01:30:00Z")
+    ids = [r["id"] for r in rows(renv, "SELECT id FROM omi_recordings ORDER BY started_at")]
+    for rid, text in zip(ids, (a_text, b_text)):
+        renv.db.conn.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, repass_state = 'pending', duration_s = ? WHERE id = ?", (text, dur, rid))
+    renv.db.conn.commit()
+    return ids
+
+
+def test_the_pivot_reads_everything_important_first_and_the_voters_only_what_the_time_left_reaches(renv, monkeypatch):
+    on(monkeypatch, evals="none")
+    old_boring, new_important = _two_recordings(renv, "uh nothing much going on here", "remind me to call Sam tomorrow at 5:30")
+    monkeypatch.setattr(rp, "household_names", lambda db, uid: _async(["Sam"]))
+    calls: list = []
+    t = [1000.0]
+    inner = multi_runner(TEXTS, calls)
+
+    def runner(*a, **k):
+        rc = inner(*a, **k)
+        t[0] += 840.0 if len(calls) == 1 else 0.0                                                          # the pivot used 840 s of the 1100 s night
+        return rc
+    out = run(rp.run_night(budget_s=1100, runner=runner, clock=lambda: t[0]))
+    assert calls[0]["asr"] == PIV and calls[0]["ids"] == [new_important, old_boring]                      # Qwen3 reads ALL the audio, the important recording first
+    assert [c["asr"] for c in calls] == [PIV, PAR] and calls[1]["ids"] == [new_important]                 # the time left reaches Parakeet on ONE recording: the important one
+    assert out["done"] == 2 and out["carried"] == 0 and out["engines"] == [PIV, PAR]
+    assert out["fused2_min"] > 0 and out["qwen_only_min"] > 0 and out["fused3_min"] == 0 and out["carried_min"] == 0
+    assert abs(out["speech_min"] - (out["fused2_min"] + out["qwen_only_min"])) < 0.02
+    assert all(r["transcript"] for r in rows(renv))                                                        # nobody is left without Qwen3 text
+
+
+def test_a_recording_the_pivot_cannot_reach_carries_to_the_next_night_and_the_report_says_how_much(renv, monkeypatch):
+    on(monkeypatch, evals="none")
+    old_boring, new_important = _two_recordings(renv, "uh nothing much going on here", "remind me to call Sam tomorrow at 5:30")
+
+    def runner(manifest, out, timeout_s, mem_max="", threads=4):
+        man = json.loads(Path(manifest).read_text())
+        with open(out, "a") as fh:
+            for it in man["items"]:
+                if it["id"] == new_important:
+                    r = result_for(it["id"])
+                    r["chunks"] = [[0.0, 2.0, "call sam tomorrow"], [2.5, 4.5, "at five thirty"]]
+                    fh.write(json.dumps(r) + "\n")
+                else:
+                    fh.write(json.dumps({"id": it["id"], "ok": False, "why": "deadline"}) + "\n")      # the budget ran out before the boring one
+            fh.write(json.dumps({"done": True, "files": 1, "carried": 1, "failed": 0, "rtf": 0.4, "device": "cuda"}) + "\n")
+        return 0
+    out = run(rp.run_night(budget_s=1100, runner=runner))
+    assert out["carried"] == 1 and out["done"] == 1 and out["carried_min"] > 15.0                         # 1000 s = 16.7 min waiting for tomorrow
+    left = {r["id"]: r for r in rows(renv)}
+    assert left[old_boring]["repass_state"] == "pending" and left[new_important]["repass_state"] != "pending"       # the carried one is still owed (and its WAV is still held)
+
+
+async def _async(v):
+    return v

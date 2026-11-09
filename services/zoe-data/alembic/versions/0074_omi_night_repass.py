@@ -1,4 +1,4 @@
-"""0073 - the pendant NIGHT RE-PASS (``omi_repass.py``; flag ``ZOE_OMI_NIGHT_REPASS``, default off). Spec: ``docs/knowledge/omi-night-repass.md``.
+"""0074 - the pendant NIGHT RE-PASS (``omi_repass.py``; flag ``ZOE_OMI_NIGHT_REPASS``, default off). Spec: ``docs/knowledge/omi-night-repass.md``.
 
   * ``omi_recordings.repass_state``    - '' (never in scope) | 'pending' (its WAV is HELD until the night pass has run) | 'done' (the transcript
                                          and segments were replaced) | 'shadow' (compared only, text untouched) | 'failed' (gave up after
@@ -19,15 +19,15 @@
 Additive only: a deploy that has not run this yet degrades to "the re-pass is off" (every reader is fail-soft). ``IF NOT EXISTS`` / a column
 probe keep reruns safe on PostgreSQL and SQLite. The downgrade drops the table and the columns.
 
-CHAIN: on 0072 (named guest turns).
+CHAIN: on 0073 (panel voice clusters).
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0073"
-down_revision = "0072"
+revision = "0074"
+down_revision = "0073"
 branch_labels = None
 depends_on = None
 

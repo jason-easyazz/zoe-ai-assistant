@@ -93,7 +93,7 @@ def test_when_even_the_deterministic_twin_fails_the_guard_the_verbatim_is_shown_
 def test_the_request_is_one_deterministic_call_with_a_cap_that_fits_the_turn():
     req = oc.request(V, "m")
     assert req["temperature"] == 0 and req["messages"][-1]["content"] == V and req["max_tokens"] >= 2 * len(V.split())
-    assert "Do NOT add words" in req["messages"][0]["content"]
+    assert "must NOT change" in req["messages"][0]["content"]
 
 
 def test_the_alert_needs_both_a_rate_above_20_percent_and_enough_turns_to_mean_it():
@@ -243,3 +243,10 @@ def test_load_day_resolves_names_and_keeps_zoe_but_drops_media(renv, monkeypatch
     assert [(t["name"], t["is_zoe"], t["lean"]) for t in turns] == [("Alex", False, None), (None, True, None), (None, False, "Sam")]
     assert "tv noise" not in book.render(turns, tz=UTC)
     assert rid
+
+
+def test_guard_normalisation_matches_the_labs_measured_one_times_numbers_and_fillers_on_both_sides():
+    assert oc.guard("it was nine twenty five a m and we left", "It was 9:25 a.m., and we left.").ok          # times and spoken numbers
+    assert oc.guard("so you know we went to to the shops today after work", "So we went to the shops today after work.").ok   # "you know" and the stutter are free
+    assert oc.request("some words here", "m")["chat_template_kwargs"] == {"enable_thinking": False}          # the lab's request shape
+    assert oc.guard("we went to the shops", "we went to the shop").reason == "not_subsequence"             # a changed word is still refused
