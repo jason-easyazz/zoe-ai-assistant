@@ -1183,8 +1183,11 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                     except Exception:  # noqa: BLE001
                         pass
             # held for tagging: only while a line needs a name, never past audio_expires_at (release_tagged_audio / purge_expired_audio)
-            hold = keep or (keep_for_tagging() and bool(seg_ids) and spk_state == "tagged" and any(needs_name(x) for x in segs or []))
+            import omi_repass
+            repass = omi_repass.holds_audio()      # the night pass has not seen this audio yet: the WAV is HELD for it (bounded by audio_expires_at)
+            hold = keep or repass or (keep_for_tagging() and bool(seg_ids) and spk_state == "tagged" and any(needs_name(x) for x in segs or []))
             await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?, speaker_state = ?"
+                             + (", repass_state = 'pending'" if repass else "")
                              + ("" if hold else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
                              + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), spk_state, rid))
             await db.commit()
@@ -1365,6 +1368,9 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
         from db_compat import get_compat_db
         async with get_compat_db() as db:
             sql = "SELECT id, user_id, audio_path FROM omi_recordings WHERE status = 'done' AND keep_audio = 0 AND audio_path != ''"
+            import omi_repass
+            if omi_repass.holds_audio():          # a recording the night pass still owes a look is never released here (retention still bounds it)
+                sql += " AND repass_state != 'pending'"
             rows = await _fetch(db, sql + (" AND user_id = ?" if user_id else ""), (user_id,) if user_id else ())
             for r in rows:
                 if keep_for_tagging():

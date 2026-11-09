@@ -29,10 +29,10 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 864 prod flags; 280 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 249 non-`ZOE_` env names read by prod code (table below).
+- 250 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 4 registered flags with no reader in the scanned sources.
+- 17 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -977,7 +977,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-249 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+250 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1134,6 +1134,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `NIGHT_NGL` | `'34'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_NO_UNIFIED` | `-` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_PORT` | `'11500'` | no | NO | `scripts/night/night_window.py` |
+| `NIGHT_PRE_KEEP_MIN` | `'28'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_QUIET_WAIT_MIN` | `'30'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_REPORT_DIR` | `dynamic` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_TEST_LANE_LOCK` | `'/tmp/zoe-test-lane.lock'` | no | NO | `scripts/night/night_window.py` |
@@ -1235,4 +1236,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_OMI_NIGHT_ASR`, `ZOE_OMI_NIGHT_DIAR`, `ZOE_OMI_NIGHT_REPASS`, `ZOE_OMI_REPASS_DIR`, `ZOE_OMI_REPASS_GPU`, `ZOE_OMI_REPASS_MEM_MAX`, `ZOE_OMI_REPASS_NAME_MARGIN`, `ZOE_OMI_REPASS_NAME_MIN`, `ZOE_OMI_REPASS_THREADS`, `ZOE_OMI_REPASS_VENV`, `ZOE_OMI_REPASS_YOU_MIN`, `ZOE_OMI_REPASS_ZOE_CLIPS`, `ZOE_OMI_REPASS_ZOE_MIN`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`

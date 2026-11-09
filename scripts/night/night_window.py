@@ -466,6 +466,12 @@ class NightCfg(bk.Cfg):
     test_lane_wait_min: float = float(os.environ.get("NIGHT_TEST_LANE_WAIT_MIN", "10"))
     busy_poll_s: float = 30.0
     jobs: tuple = ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_day_review")
+    #: PRE-JOBS run after the stops and BEFORE the 12B loads, while the box is at its emptiest (the 4B, Kokoro, the router and zoe-data all stopped): CPU work in its own capped
+    #: scope that must not sit beside the 12B (MemAvailable floor). Default none; the unit passes ``--pre-jobs omi_repass`` (docs/knowledge/omi-night-repass.md).
+    pre_jobs: tuple = ()
+    #: minutes the pre-jobs must leave for everything after them: the 12B load + speed probe (~3), the 12B jobs (7 measured on 2026-11-08, up to ~20 with a full day review) and a margin
+    pre_keep_min: float = float(os.environ.get("NIGHT_PRE_KEEP_MIN", "28"))
+    omi_repass_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-repass.py"
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
     night_mind_script: Path = REPO / "scripts" / "maintenance" / "zoe-night-mind.py"
@@ -483,7 +489,7 @@ class NightCfg(bk.Cfg):
     decode_history_nights: int = 7
     py: str = sys.executable
     trial: bool = False
-    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "struggle_proposals": 480.0, "self_review": 600.0, "omi_day_review": 2400.0, "compaction": 900.0})
+    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "struggle_proposals": 480.0, "self_review": 600.0, "omi_day_review": 2400.0, "omi_repass": 2400.0, "compaction": 900.0})
     metrics_poll_s: float = 5.0
     live_health_port: int = 11434
 
@@ -711,6 +717,7 @@ class JobSpec:
     needs_loop_miss: bool = False     # the digest: only when zoe-data's own 03:00 loop will not run it tonight
     skip_reason: str = ""
     best_effort: bool = False         # the night is not failed when this job runs out of time ("no time" / "timeout"): the next night retries it
+    keep_s: float = 0.0               # a PRE-job: seconds of the window it must leave for the phases after it (exec_job clips its timeout by this)
     budget_flag: str = ""             # when set, exec_job appends ``<flag> <seconds>`` = the job's clipped timeout less BUDGET_MARGIN_S, so the job can plan inside it
 
 
@@ -756,6 +763,17 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
                                      best_effort=True, budget_flag="--budget-s",
                                      skip_reason="" if cfg.omi_day_review_script.exists() else f"{cfg.omi_day_review_script.name} not found")
     return [jobs[j] for j in cfg.jobs if j in jobs]
+
+
+def build_pre_jobs(cfg: NightCfg) -> "list[JobSpec]":
+    """The jobs that run BEFORE the 12B loads (``cfg.pre_jobs``). ``omi_repass``: the pendant night re-pass (``zoe-omi-repass.py``) - faster-whisper + ECAPA over the
+    recordings since the last pass, CPU, in its own capped scope. Best effort (unfinished recordings carry to the next night), budgeted (``--budget-s``: the pass plans
+    inside its own kill time) and clipped so the 12B stage keeps ``cfg.pre_keep_min``. A no-op while ``ZOE_OMI_NIGHT_REPASS`` is off."""
+    t = cfg.job_timeout_s
+    specs = {"omi_repass": JobSpec("omi_repass", [cfg.py, str(cfg.omi_repass_script)] if cfg.omi_repass_script.exists() else [], t.get("omi_repass", 2400.0), best_effort=True,
+                                   keep_s=cfg.pre_keep_min * 60.0, budget_flag="--budget-s",
+                                   skip_reason="" if cfg.omi_repass_script.exists() else f"{cfg.omi_repass_script.name} not found")}
+    return [specs[j] for j in cfg.pre_jobs if j in specs]
 
 
 def reflect_summary(res: dict) -> dict:
@@ -1738,7 +1756,8 @@ class NightWindow(bk.Window):
             rec.update(status="skipped", notes=[job.skip_reason])
             self.event(f"job {job.name}: skipped - {job.skip_reason}")
             return rec
-        left = self.time_left_s() if backend == "12B" else (self.cfg.blackout_list[0][0] - self.minutes_now()) * 60.0     # a 4B fallback must end before the voice gate
+        left = self.time_left_s() if backend in ("12B", "pre") else (self.cfg.blackout_list[0][0] - self.minutes_now()) * 60.0     # a 4B fallback must end before the voice gate
+        left -= job.keep_s                                                          # a pre-job leaves the 12B stage its share of the window
         if left < 120:
             rec.update(status="no time", notes=[f"no time left ({left:.0f}s before the restore reserve)"])      # NOT "skipped": a requested job that never ran is unfinished work (exit 5 unless the 4B covered it)
             self.event(f"job {job.name}: skipped - no time left")
@@ -1753,7 +1772,7 @@ class NightWindow(bk.Window):
 
         def tick() -> None:
             low[0] = min(low[0], self.mem())
-            if backend == "12B":
+            if backend in ("12B", "pre"):
                 self.guard()
 
         self.event(f"job {job.name} on the {backend}: {os.path.basename(job.argv[1]) if len(job.argv) > 1 else job.argv[0]} (timeout {timeout:.0f}s)")
@@ -1784,6 +1803,26 @@ class NightWindow(bk.Window):
         self.event(f"job {job.name} {rec['status']} on the {backend}: {rec['wall_s']}s, {rec['tokens_prompt']} prompt / {rec['tokens_predicted']} generated tokens, MemAvailable low {rec['mem_low_mib']} MiB"
                    + (f" ({why})" if why else ""))
         return rec
+
+    def run_pre_jobs(self) -> bool:
+        """The pre-jobs, after the stops and before the choice of levers. True when one did real work (> 20 s): the box is then re-settled (compaction + a fresh
+        MemAvailable / MemFree) before the 12B's arithmetic, because the levers are chosen on what is free NOW, not on what was free before the pass."""
+        worked = False
+        for job in build_pre_jobs(self.cfg):
+            self.guard()
+            rec = self.exec_job(job, "pre", 0, "", 1)
+            worked = worked or (rec.get("wall_s") or 0) > 20.0
+        return worked
+
+    def resettle(self) -> "tuple[float, float]":
+        """After a pre-job: give the fragmentation a chance to heal (a 2.5 GB process came and went) and measure again."""
+        self.event("pre-jobs done: compacting and measuring again before the 12B's lever choice")
+        if self.sudo_ok():
+            self.compact_memory("after the pre-jobs")
+        self.log_frag("after the pre-jobs")
+        first = self.mem()
+        self.host.sleep(2.0)
+        return min(first, self.mem()), self.mem_free()
 
     def run_jobs(self) -> None:
         model_name = os.path.basename(self.cfg.model_path(self.levers.model)) if self.levers else ""
@@ -2405,6 +2444,8 @@ class NightWindow(bk.Window):
             self.opened = True
             self.write_marker()
             avail, free = self.sleep_units()
+            if self.cfg.pre_jobs and not self.cfg.exploratory and self.run_pre_jobs():
+                avail, free = self.resettle()
             if self.cfg.sweep:
                 self.event(f"speed sweep: MemAvailable {avail:.0f} MiB, MemFree {free:.0f} MiB after the stops and the compaction")
                 self.run_sweep()
@@ -2673,6 +2714,9 @@ class NightWindow(bk.Window):
         elif cfg.trial:
             self.log("  trial (full): 12B K1-K5 (ZMA reflection pass, shim on :%d) + the night mind's cells, unload, 4B at --ctx-size 32768, same cells, restore" % cfg.shim_port)
         else:
+            for job in build_pre_jobs(cfg):
+                self.log(f"  pre-job {job.name} (BEFORE the 12B loads, 4B and Kokoro asleep): " + (shlex.join(job.argv) if job.argv else f"SKIPPED ({job.skip_reason})")
+                         + f" [timeout {job.timeout_s:.0f}s, leaves {job.keep_s / 60:.0f} min for the 12B stage]")
             for job in build_jobs(cfg, default_pick["levers"].ctx if default_pick else 16384):
                 self.log(f"  job {job.name}: " + (shlex.join(job.argv) if job.argv else f"SKIPPED ({job.skip_reason})") + f" [timeout {job.timeout_s:.0f}s; 4B fallback {'yes' if job.fallback_4b and cfg.fallback_4b else 'no'}]")
             self.log("  every job gets GEMMA_SERVER_URL=http://127.0.0.1:%d/v1, ZOE_DIGEST_LLM_TIMEOUT_SCALE=<from the measured decode speed>, MALLOC_ARENA_MAX=2 (nothing else is added; the environment is never printed)" % cfg.port)
@@ -2708,6 +2752,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--kv", choices=KV_OPTIONS, default=None, help="pin the KV cache type (default: q8_0, the measured winner: q4_0 OOMs at -ngl 38; NIGHT_KV)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 65; never past --end-by)")
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
+    ap.add_argument("--pre-jobs", default=None, help="comma list of jobs that run after the stops and BEFORE the 12B loads (omi_repass; default none)")
     ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
     ap.add_argument("--night-mind-mode", choices=("shadow", "enforce"), default=None, help="--mode handed to zoe-night-mind.py (default enforce: what the night has always run; shadow = calls and checks, nothing written)")
@@ -2767,6 +2812,11 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
         raise Refused(f"--end-by {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d} is inside the voice gate ({cfg.blackouts[0][0] // 60:02d}:{cfg.blackouts[0][0] % 60:02d}-)")
     if args.jobs is not None:
         cfg.jobs = tuple(j.strip() for j in args.jobs.split(",") if j.strip())
+    if args.pre_jobs is not None:
+        cfg.pre_jobs = tuple(j.strip() for j in args.pre_jobs.split(",") if j.strip())
+    bad_pre = [j for j in cfg.pre_jobs if j not in ("omi_repass",)]
+    if bad_pre:
+        raise Refused(f"unknown pre-job(s) {', '.join(bad_pre)} (omi_repass)")
     if cfg.exploratory:
         cfg.jobs = ()
     if args.night_mind_cmd is not None:

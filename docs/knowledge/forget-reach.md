@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-114 stores: 42 reached, 31 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+115 stores: 43 reached, 31 out of scope, 41 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -131,6 +131,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `omi_segment_embeddings` | pg_table | biometric | reached | member: `omi_recordings.forget_user` | - |
 | `omi_voice_clusters` | pg_table | biometric | reached | member: `omi_recordings.forget_user` | - |
 | `omi_voice_settings` | pg_table | config | reached | member: `omi_recordings.forget_user` | - |
+| `omi_wearer_samples` | pg_table | biometric | reached | member: `omi_recordings.forget_user` | - |
 | `omi_devices` | pg_table | metadata | reached | member: `omi_recordings.forget_user` | - |
 | `omi_device_health` | pg_table | metadata | reached | member: `omi_recordings.forget_user` | - |
 | `omi_day_reviews` | pg_table | words | reached | member: `omi_day_review.forget_user` / entity: `omi_day_review.erase_entity` | - |

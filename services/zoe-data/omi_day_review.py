@@ -607,6 +607,18 @@ PERSON_RULE = ('- A line with a name after the time ([r1.2 09:14 Sam]) was said 
                'say about themself is a person_fact with their name, never an owner_fact.')
 
 
+def _repass_defers() -> bool:
+    """The night re-pass (``ZOE_OMI_NIGHT_REPASS=on``) replaces a recording's text before the 12B loads; the review reads the CLEAN text, so a recording
+    still waiting for it is left for the next pass (bounded: once its WAV is gone it is no longer waiting). ``ZOE_OMI_NIGHT_REPASS`` off/shadow: unchanged."""
+    import omi_repass
+    return omi_repass.defers_review()
+
+
+def _repass_pending() -> str:
+    import omi_repass
+    return omi_repass.PENDING_SQL
+
+
 def prompt_sha() -> str:
     return hashlib.sha256((SYSTEM + USER + PERSON_KIND + PERSON_RULE).encode()).hexdigest()[:12]
 
@@ -1426,7 +1438,8 @@ async def review_day(user_id: str, day: str, cfg: Config, *, as_of: Optional[dat
         # a dry run re-reads the whole day and touches nothing (it also runs against a database without migration 0054)
         recs = [dict(r) for r in await _fetch(
             db, "SELECT id, started_at, transcript, speaker_state, time_quality FROM omi_recordings WHERE user_id = ? AND status = 'done' "
-                + ("" if dry_run else "AND day_review_id IS NULL ") + "AND started_at >= ? AND started_at < ? ORDER BY started_at",
+                + ("" if dry_run else "AND day_review_id IS NULL ")
+                + (f"AND NOT {_repass_pending()} " if _repass_defers() else "") + "AND started_at >= ? AND started_at < ? ORDER BY started_at",
             (user_id, lo, hi))]
         if not recs:
             res["status"] = "nothing_to_do"

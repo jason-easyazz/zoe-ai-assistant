@@ -751,6 +751,7 @@ async def drop_recording(db, rid: str) -> None:
                                                  "voice_cluster_id IS NOT NULL", (rid,))]
         await _run(db, "DELETE FROM omi_segment_embeddings WHERE segment_id IN (SELECT id FROM omi_segments WHERE recording_id = ?)", (rid,))
         await _run(db, "DELETE FROM omi_segments WHERE recording_id = ?", (rid,))
+        await _run(db, "DELETE FROM omi_wearer_samples WHERE recording_id = ?", (rid,))      # the night pass's wearer-print windows (0072) go with the audio they came from
         for cid in clusters:
             await rebuild_cluster(db, cid)
     except Exception as exc:  # noqa: BLE001
@@ -789,7 +790,7 @@ async def forget_user(db, user_id: str) -> int:
         for (vp,) in await _all(db, "SELECT id FROM learned_voiceprints WHERE owner_user_id = ?", (user_id,)):
             n += await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))
         n += await _run(db, "DELETE FROM learned_voiceprints WHERE owner_user_id = ?", (user_id,))
-        for table in ("omi_segment_embeddings", "omi_segments", "omi_voice_clusters", "omi_voice_settings"):
+        for table in ("omi_segment_embeddings", "omi_segments", "omi_voice_clusters", "omi_voice_settings", "omi_wearer_samples"):
             n += await _run(db, f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
     except Exception as exc:  # noqa: BLE001
         if not _missing(exc):

@@ -19868,6 +19868,16 @@
       ],
       "typed_env": false
     },
+    "NIGHT_PRE_KEEP_MIN": {
+      "defaults": [
+        "'28'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
+      ],
+      "typed_env": false
+    },
     "NIGHT_QUIET_WAIT_MIN": {
       "defaults": [
         "'30'"
@@ -20860,6 +20870,19 @@
     }
   },
   "registry_unread": [
+    "ZOE_OMI_NIGHT_ASR",
+    "ZOE_OMI_NIGHT_DIAR",
+    "ZOE_OMI_NIGHT_REPASS",
+    "ZOE_OMI_REPASS_DIR",
+    "ZOE_OMI_REPASS_GPU",
+    "ZOE_OMI_REPASS_MEM_MAX",
+    "ZOE_OMI_REPASS_NAME_MARGIN",
+    "ZOE_OMI_REPASS_NAME_MIN",
+    "ZOE_OMI_REPASS_THREADS",
+    "ZOE_OMI_REPASS_VENV",
+    "ZOE_OMI_REPASS_YOU_MIN",
+    "ZOE_OMI_REPASS_ZOE_CLIPS",
+    "ZOE_OMI_REPASS_ZOE_MIN",
     "ZOE_SELF_REVIEW_MAX_CALLS",
     "ZOE_SELF_REVIEW_MAX_TOKENS",
     "ZOE_SPEAKER_WINDOW_THRESHOLD_LONG",
