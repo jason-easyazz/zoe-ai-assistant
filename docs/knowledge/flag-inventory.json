@@ -20119,6 +20119,16 @@
       ],
       "typed_env": false
     },
+    "NIGHT_PRESLEEP_TIMEOUT_S": {
+      "defaults": [
+        "'1500'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
+      ],
+      "typed_env": false
+    },
     "NIGHT_PRE_KEEP_MIN": {
       "defaults": [
         "'28'"

@@ -29,7 +29,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 877 prod flags; 293 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 250 non-`ZOE_` env names read by prod code (table below).
+- 251 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 4 registered flags with no reader in the scanned sources.
@@ -990,7 +990,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-250 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+251 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1147,6 +1147,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `NIGHT_NGL` | `'34'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_NO_UNIFIED` | `-` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_PORT` | `'11500'` | no | NO | `scripts/night/night_window.py` |
+| `NIGHT_PRESLEEP_TIMEOUT_S` | `'1500'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_PRE_KEEP_MIN` | `'28'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_QUIET_WAIT_MIN` | `'30'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_REPORT_DIR` | `dynamic` | no | NO | `scripts/night/night_window.py` |

@@ -320,7 +320,7 @@ Tests: `test_a_short_first_probe_is_followed_by_a_steady_one_and_the_steady_figu
 **The command** (`scripts/night/systemd/zoe-night-window.service`, a test parses it and checks it against the code's defaults):
 
 ```
-TIMER_SLOT OnCalendar=*-*-* 02:50:00 RandomizedDelaySec=120 END_BY 03:55
+TIMER_SLOT OnCalendar=*-*-* 02:30:00 RandomizedDelaySec=120 END_BY 03:55
 ExecStart=%h/assistant/scripts/night/night_window.sh --jobs digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55
 ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only          # every way out
 ExecStopPost=-... night_window.sh --summary | systemd-cat -t zoe-night-window    # ONE journal line

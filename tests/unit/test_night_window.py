@@ -1814,11 +1814,12 @@ def test_the_timer_slot_is_the_documented_slot_and_the_window_fits_inside_it():
     assert end_by == _exec_start_args()[_exec_start_args().index("--end-by") + 1]
     h, m = (int(x) for x in on_calendar.split()[1].split(":")[:2])
     start, latest = h * 60 + m, h * 60 + m + delay // 60
-    assert start >= 2 * 60 + 41 + 5                                               # after the 02:41 memory export (+ its 5 min random delay): the export keeps its 'copy before the digest' promise
+    assert start >= 2 * 60 + 30                                                    # the window's own clock now: --presleep runs the backup, then the export (a copy before the digest), BEFORE it sleeps Zoe
     cfg = nw.NightCfg()
     assert cfg.night_hours[0] <= start <= cfg.night_hours[1]                       # inside the hours the script itself accepts without --anytime
     assert cfg.end_by - latest >= 35 + cfg.reserve_min                              # even the latest start leaves a usable window
-    assert cfg.end_by - start == cfg.cap_min                                       # the nominal start gets exactly the default 65-minute cap: nothing shrinks it
+    presleep_allowance = 20                                                        # backup (measured up to ~10 min) + export (~5) + margin, before the window proper starts
+    assert cfg.end_by - (start + presleep_allowance) >= cfg.cap_min                # the window proper (ExecStart) still gets the whole default 65-minute cap: nothing shrinks it
 
 
 def test_the_service_guards_memory_restores_on_every_exit_and_writes_one_journal_line():
