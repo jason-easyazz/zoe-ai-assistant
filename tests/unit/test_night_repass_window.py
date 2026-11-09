@@ -60,8 +60,6 @@ def test_a_missing_repass_runtime_is_loud_but_still_restores(tmp_path):
 
 
 def test_a_killed_window_during_the_repass_still_restores(tmp_path):
-    class Dies(nw.NightHost.__mro__[0]):          # placeholder so the class statement stays valid if the base changes
-        pass
     w, host, _ = make(tmp_path, argv=PRE, cfg_kw=stand_in(tmp_path))
     orig = host.run_watched
 
@@ -88,6 +86,8 @@ def test_an_unknown_pre_job_is_refused_at_configuration(tmp_path):
 
 
 def test_the_dry_run_names_the_prejob(tmp_path):
-    w, host, _ = make(tmp_path, argv=PRE + ["--dry-run"], cfg_kw=stand_in(tmp_path))
-    w.run()
-    assert any("pre-job omi_repass" in line for line in host.logs) if hasattr(host, "logs") else True
+    w, host, cfg = make(tmp_path, argv=PRE + ["--dry-run"], cfg_kw=stand_in(tmp_path))
+    lines: list = []
+    w.log = lines.append
+    w.dry_plan()
+    assert any("pre-job omi_repass" in line and "BEFORE the 12B loads" in line for line in lines)

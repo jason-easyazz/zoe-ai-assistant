@@ -161,10 +161,9 @@ class Embedder:
             t = a
             while t < b:
                 e = min(t + int(WIN_S * RATE), b)
-                if e - t < MIN_WIN_S * RATE and out:
+                if e - t < MIN_WIN_S * RATE:          # a span (or a trailing remainder) too short for a window: nothing to embed, on to the next span
                     break
-                if e - t >= MIN_WIN_S * RATE:
-                    seg = x[t:e]
+                seg = x[t:e]
                 out.append((t / RATE, e / RATE, self.one(seg), float((seg.astype("float64") ** 2).mean() ** 0.5)))
                 t += int(HOP_S * RATE)
         return out

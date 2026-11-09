@@ -543,16 +543,23 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
     segs = []
     for ln in lines:
         f = segment_fields(ln, refs)
-        f["text"] = await omi._redact_forgotten(uid, normalise_names(f["text"], names))
+        f["text"] = normalise_names(f["text"], names)
         segs.append(f)
-    text = " ".join(s["text"] for s in segs if s["text"].strip()).strip()
     old_text = r.get("transcript") or ""
     counts = {"words": len(res["words"]), "lines": len(segs), "speakers": len({ln["key"] for ln in lines}), "dur_s": res.get("dur_s"),
-              "speech_s": res.get("speech_s"), "agree": word_agreement(old_text, text), "model": model_label, "me": sum(ln["key"] == "you" for ln in lines),
+              "speech_s": res.get("speech_s"), "model": model_label, "me": sum(ln["key"] == "you" for ln in lines),
               "zoe": sum(ln["key"] == "zoe" for ln in lines), "named": sum(ln["key"].startswith("p:") for ln in lines)}
     stamp = _iso(now or _now())
+    text = ""
     async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
         async with get_compat_db() as db:
+            if live:
+                # REDACTION HAPPENS HERE, INSIDE THE GATE: an entity forget (``erasing(bump=False)``) does not move the generation, so it is only
+                # ordered against this write by the lock itself - redacting before we held it could store text the ledger forgot in between.
+                for sgm in segs:
+                    sgm["text"] = await omi._redact_forgotten(uid, sgm["text"])
+                text = " ".join(sgm["text"] for sgm in segs if sgm["text"].strip()).strip()
+                counts["agree"] = word_agreement(old_text, text)
             if not live:                              # the member was erased since this was read: nothing of it survives (the first pass's rule)
                 rows = await omi._fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE id = ?", (rid,))
                 if rows and rows[0]["status"] != "deleted":
@@ -624,9 +631,20 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
     return counts
 
 
+async def requeue_failed(user_id: Optional[str] = None) -> int:
+    """After a fix: put recordings the pass gave up on (and whose WAV is still held) back in the queue. Operator/CLI use."""
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        sql = "UPDATE omi_recordings SET repass_state = 'pending', repass_attempts = 0 WHERE repass_state = 'failed' AND audio_path != ''"
+        cur = await db.execute(sql + (" AND user_id = ?" if user_id else ""), (user_id,) if user_id else ())
+        await db.commit()
+        return int(getattr(cur, "rowcount", 0) or 0)
+
+
 async def note_failure(rid: str, *, carry: bool) -> None:
     """A recording the worker could not process. ``carry`` (the deadline): untouched, it waits for tomorrow. Otherwise one more attempt is counted and,
-    at ``MAX_PASS_ATTEMPTS``, the pass gives up (``failed``): the WAV is then released by the normal rules."""
+    at ``MAX_PASS_ATTEMPTS``, the pass gives up (``failed``): the Moonshine text stands and the WAV is STILL HELD until its retention expiry (a failure may be a bug that a
+    fix clears - ``requeue_failed`` puts them back - and the audio is the only copy of what was said), never released early."""
     if carry:
         return
     from db_compat import get_compat_db

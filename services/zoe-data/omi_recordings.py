@@ -772,8 +772,12 @@ async def update_recording(user_id: str, rid: str, *, keep_audio: Optional[bool]
         if not getattr(cur, "rowcount", 1):
             return None
         if keep_audio is False:       # un-keeping an already-transcribed (or empty-transcript) recording drops the WAV now - the owner's explicit call
-            rows = await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
-            if rows and rows[0]["status"] in ("done", "empty_transcript") and rows[0]["audio_path"]:
+            import omi_repass
+            held = omi_repass.holds_audio()
+            rows = await _fetch(db, "SELECT id, audio_path, status" + (", repass_state" if held else "") + " FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
+            if rows and held and rows[0]["repass_state"] in ("pending", "failed", ""):
+                pass          # the night pass has not read this audio yet (or failed on it): the WAV stays until it has (or until retention); the pass releases it after
+            elif rows and rows[0]["status"] in ("done", "empty_transcript") and rows[0]["audio_path"]:
                 _unlink(rows[0]["audio_path"])
                 await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL WHERE id = ?", (rid,))
                 await db.commit()
@@ -1370,7 +1374,7 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
             sql = "SELECT id, user_id, audio_path FROM omi_recordings WHERE status = 'done' AND keep_audio = 0 AND audio_path != ''"
             import omi_repass
             if omi_repass.holds_audio():          # a recording the night pass still owes a look is never released here (retention still bounds it)
-                sql += " AND repass_state != 'pending'"
+                sql += " AND repass_state NOT IN ('pending', 'failed')"      # 'failed' keeps the WAV to retention so a fixed pass can be re-run on it
             rows = await _fetch(db, sql + (" AND user_id = ?" if user_id else ""), (user_id,) if user_id else ())
             for r in rows:
                 if keep_for_tagging():

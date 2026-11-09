@@ -36,6 +36,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--budget-s", type=float, default=1500.0)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--probe-gpu", action="store_true")
+    ap.add_argument("--requeue-failed", action="store_true", help="after a fix: put recordings the pass gave up on (WAV still held) back in the queue")
     ap.add_argument("--wearer-status", action="store_true")
     ap.add_argument("--wearer-lines", action="store_true")
     ap.add_argument("--proposal", default="")
@@ -60,6 +61,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     except Exception as exc:  # noqa: BLE001
         return 1, {"status": "error", "setup_error": type(exc).__name__}
     try:
+        if a.requeue_failed:
+            return 0, {"status": "ok", "requeued": await rp.requeue_failed(a.user or None)}
         owner_cmds = a.wearer_status or a.wearer_lines or a.confirm_wearer or a.reject_wearer
         if owner_cmds:
             if not a.user:

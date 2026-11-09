@@ -292,15 +292,77 @@ def test_a_recording_the_budget_could_not_reach_carries_to_the_next_night_untouc
     assert out2["replaced"] == 1 and rows(renv)[0]["repass_state"] == "done"
 
 
-def test_a_crashing_worker_is_counted_and_gives_up_after_three_nights_releasing_the_wav(renv, monkeypatch):
-    transcribe(first_pass(renv) and renv, monkeypatch)
+def test_a_crashing_worker_is_counted_and_gives_up_after_three_nights_but_the_audio_is_kept_to_retention(renv, monkeypatch):
+    path = transcribe(first_pass(renv) and renv, monkeypatch)["audio_path"]
     rid = rows(renv)[0]["id"]
     bad = {rid: {"id": rid, "ok": False, "why": "error:ValueError"}}
     for _ in range(rp.MAX_PASS_ATTEMPTS):
         run(rp.run_night(budget_s=600, runner=fake_runner(bad)))
-    assert rows(renv)[0]["repass_state"] == "failed"
-    run(omi.release_tagged_audio(OWNER))                                                        # a failed pass no longer holds the audio
-    assert rows(renv)[0]["audio_path"] == ""
+    assert rows(renv)[0]["repass_state"] == "failed" and rows(renv)[0]["transcript"] == "first words"      # the Moonshine text stands
+    run(omi.release_tagged_audio(OWNER))                                                        # a failed pass is NOT a pass that read it: the WAV stays
+    assert Path(path).exists() and rows(renv)[0]["audio_path"]
+    assert run(rp.requeue_failed(OWNER)) == 1 and rows(renv)[0]["repass_state"] == "pending"      # after a fix it can be re-run on the same audio
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1          # and retention still bounds it
+    assert not Path(path).exists()
+
+
+def test_the_owner_clearing_keep_audio_cannot_drop_a_wav_the_pass_still_owes_a_look(renv, monkeypatch):
+    path = transcribe(first_pass(renv) and renv, monkeypatch)["audio_path"]
+    rid = rows(renv)[0]["id"]
+    assert renv.client.patch(f"/api/omi/recordings/{rid}", json={"keep_audio": False}).status_code == 200
+    assert Path(path).exists() and rows(renv)[0]["repass_state"] == "pending"                   # held for the pass
+    run(rp.run_night(budget_s=600, runner=fake_runner()))
+    assert rows(renv)[0]["audio_path"] == "" and not Path(path).exists()                        # and the pass released it afterwards
+
+
+def test_control_with_the_flag_off_clearing_keep_audio_still_drops_the_wav_at_once(renv, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "off")
+    monkeypatch.setenv("ZOE_OMI_KEEP_AUDIO", "1")
+    path = transcribe(first_pass(renv) and renv, monkeypatch)["audio_path"]
+    rid = rows(renv)[0]["id"]
+    monkeypatch.delenv("ZOE_OMI_KEEP_AUDIO")
+    assert renv.client.patch(f"/api/omi/recordings/{rid}", json={"keep_audio": False}).json()["has_audio"] is False
+    assert not Path(path).exists()
+
+
+def test_a_forget_that_lands_between_redaction_and_the_write_gate_still_redacts(renv, monkeypatch):
+    """An entity forget does not move the erase generation (``erasing(bump=False)``): only the lock orders it against our write. The redaction therefore runs
+    INSIDE the gate. Simulated: the ledger learns the name at the instant the gate is entered."""
+    transcribe(first_pass(renv) and renv, monkeypatch)
+    import contextlib
+    import memory_forgotten as mf
+    learned = {"on": False}
+
+    async def fake_spans(user_id, text, *, near=True):
+        i = text.find("Dana")
+        return [(i, i + 4)] if (learned["on"] and i >= 0) else []
+
+    real = erase_gate.writing
+
+    @contextlib.asynccontextmanager
+    async def late_forget(uid, gen):
+        learned["on"] = True                       # the forget lands just before we hold the lock
+        async with real(uid, gen) as live:
+            yield live
+
+    monkeypatch.setattr(mf, "spans", fake_spans)
+    monkeypatch.setattr(erase_gate, "writing", late_forget)
+    rid = rows(renv)[0]["id"]
+    run(rp.run_night(budget_s=600, runner=fake_runner({rid: result_for(rid, ("Dana", "called", "today"))})))
+    assert "Dana" not in rows(renv)[0]["transcript"]
+    assert all("Dana" not in (x["text"] or "") for x in renv.db.rows("SELECT text FROM omi_segments"))
+
+
+def test_a_speech_span_shorter_than_one_window_is_skipped_not_a_crash():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("omi_repass_worker", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    emb = w.Embedder.__new__(w.Embedder)
+    emb.one = lambda seg: np.zeros(4)
+    x = np.ones(16000 * 6, dtype="float32")
+    wins = emb.windows(x, [{"start": 0, "end": 8000}, {"start": 16000, "end": 16000 * 4}])      # a 0.5 s span first (the old code hit an unbound variable), then 3 s
+    assert wins and all(b - a >= 0.8 for a, b, _e, _r in wins) and wins[0][0] == 1.0
 
 
 def test_the_name_hint_reaches_the_worker_and_forgotten_names_do_not(renv, monkeypatch):
