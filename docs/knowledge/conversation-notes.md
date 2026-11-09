@@ -87,7 +87,7 @@ filters already applied), model call pattern, forget ledger, voice-bridge placem
 | `ZOE_CONVERSATION_NOTES` | `off` | `off` nothing runs. `shadow`: the nightly pass writes notes as `shadow` rows and `block_for` logs `CONVERSATION_NOTES_INJECT mode=shadow` with the note ids it WOULD serve, serving nothing. `on`: notes are `active` and served; the first `on` night promotes the shadow rows still inside the 21-day TTL |
 | guests | needs `ZOE_NAMED_GUESTS=on` and `ZOE_NAMED_GUEST_MEMORY=1` as well | a guest's notes are written and served only when the guest layer itself is on |
 | pendant | needs `ZOE_OMI_DAY_REVIEW` on/shadow as well | the proposal exists only while `ZOE_CONVERSATION_NOTES` is not `off`, and an approval after the flag went off is refused (`notes_off`); in shadow an approved note is stored as a `shadow` row |
-| backfill | refuses to store while the flag is `off` | `--dry-run` needs no flag; in `shadow` it stores `shadow` rows, in `on` `active` ones |
+| backfill | refuses to do anything while the flag is `off` (a dry run included) | in `shadow` it stores `shadow` rows (a dry run stores nothing), in `on` `active` ones |
 
 Logs carry counts and 8-character ids, never text. To read the shadow notes: `conversation_notes_backfill.py --show` (guest) or
 `SELECT ... FROM conversation_notes` as the DB owner.
@@ -107,6 +107,7 @@ ENROLLED as a named guest (`named-guests.md`: "learn Quinn's voice" at the panel
 
 ```
 cd ~/assistant
+# 0. (once) set ZOE_CONVERSATION_NOTES=shadow in zoe-data's .env: stored-but-never-served, zero risk to Zoe; the tool refuses while it is off
 # 1. find the window: household-local times of the chat (a few minutes either side); make the notes, store nothing
 python3 scripts/maintenance/conversation_notes_backfill.py --owner <your user id> --name Quinn \
     --since "2026-11-08 02:40" --until "2026-11-08 02:50" --dry-run
@@ -128,6 +129,9 @@ arrives through the day review as a proposal you approve (flag on); it is stored
 
 * Notes are made nightly, not the minute a conversation ends: a chat at 3 pm has no note until that night (the in-memory voice bridge covers
   the first two hours when its flag is on).
+* Precedence is recency: a stated or confirmed fact NEWER than a note and sharing two content words with it removes the whole note. An OLDER fact is
+  not checked against a later note - word overlap cannot tell a contradiction from agreement, and "training for a half marathon" overlaps nearly every
+  note about a marathon - so there the block's instruction ("what they said or confirmed wins") is the only guard. Reviewed and declined as a code rule.
 * A note is an LLM summary of the owner's own words; its quality depends on the digest model. Every field is grounded against the transcript
   by word overlap, which stops invention but not a bad paraphrase. The shadow period is for reading real notes.
 * "Forget that" binds to the previous turn, which cannot yet be in a nightly note; the time-span rule covers the rare overlap and a paraphrase. A guest cannot forget a note (guests have no forget; the owner's "forget Quinn" erases them all).

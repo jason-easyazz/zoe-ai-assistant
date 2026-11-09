@@ -9,7 +9,7 @@ blocks zoe-data folded into each message, and hands the conversation to the SAME
 (``conversation_notes.notes_for_convos``), stored in the guest's own layer (``people_id`` = their enrolled person).
 
 Nothing is copied out of the Flue file; only the note is stored, and only while ``ZOE_CONVERSATION_NOTES`` is shadow / on (shadow notes
-are promoted to servable by the first ``on`` night). A dry run needs no flag. A forgotten name, a distress hand-off and an off-the-record cue
+are promoted to servable by the first ``on`` night). While the flag is off the tool refuses to do anything, a dry run included. A forgotten name, a distress hand-off and an off-the-record cue
 keep a turn out, exactly as for the nightly pass. ``dry_run`` makes the model call and prints the notes it WOULD write; it stores nothing.
 Runbook: ``docs/knowledge/conversation-notes.md`` "Backfill a guest's earlier chat". CLI: ``scripts/maintenance/conversation_notes_backfill.py``.
 """
@@ -152,9 +152,10 @@ async def run(owner: str, name: str, db_path: str, since: float, until: float, *
     import named_guest_memory as ngm
 
     m = cn.mode()
-    if m == "off" and not dry_run:
-        return {"status": "refused", "error": ("ZOE_CONVERSATION_NOTES is off: nothing is stored while the feature is dark. Set it to shadow "
-                                               "(stored, not served) or on in this process's environment (zoe-data's .env), or use --dry-run")}
+    if m == "off":
+        return {"status": "refused", "error": ("ZOE_CONVERSATION_NOTES is off: the feature is dark, so this reads and makes nothing. Set it to "
+                                               "shadow (stored but never served - zero risk) or on in this process's environment "
+                                               "(zoe-data's .env) and run again")}
     guests = [g for g in await ngm.list_for(owner) if g["name"].strip().lower() == name.strip().lower()]
     if len(guests) != 1:
         return {"status": "refused", "error": ("no enrolled guest with that name in this member's layer (enrol them first: "

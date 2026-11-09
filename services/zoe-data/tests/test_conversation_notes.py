@@ -564,7 +564,10 @@ def test_only_the_approval_module_writes_a_pendant_note():
     for p in pathlib.Path(cn.__file__).parent.glob("*.py"):
         if p.name in ("conversation_notes.py", "omi_review_apply.py"):
             continue
-        assert "write_approved" not in p.read_text(), p.name
+        text = p.read_text()
+        assert "write_approved" not in text, p.name
+        if p.name != "conversation_notes_backfill.py":
+            assert "conversation_notes.save" not in text and "cn.save(" not in text, p.name         # no side door to a pendant-source row
 
 
 # --- the guest backfill ----------------------------------------------------------------------------------------------------------
@@ -631,9 +634,10 @@ def test_backfill_dry_run_then_store_into_the_guests_layer_only(env, tmp_path, m
     assert again["stored"] == 0 and again["already_noted"] == 1
 
 
-def test_backfill_refuses_an_unenrolled_or_ambiguous_name(env, tmp_path):
+def test_backfill_refuses_an_unenrolled_or_ambiguous_name(env, tmp_path, monkeypatch):
     db = str(tmp_path / "flue.db")
     _flue_db(db)
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
     assert run(bf.run(OWNER, "Nobody", db, NOW - 60, NOW + 600, dry_run=True))["status"] == "refused"
 
 
@@ -671,7 +675,8 @@ def test_every_entry_point_is_dark_with_the_flag_off(env, monkeypatch, tmp_path)
     _flue_db(db)
     rep = run(bf.run(OWNER, "Quinn", db, NOW - 60, NOW + 600, dry_run=False, now=NOW + DAY))
     assert rep["status"] == "refused" and "off" in rep["error"]                                      # the backfill stores nothing while dark
-    assert run(bf.run(OWNER, "Quinn", db, NOW - 60, NOW + 600, dry_run=True, now=NOW + DAY))["status"] == "ok"   # a dry run is harmless
+    assert run(bf.run(OWNER, "Quinn", db, NOW - 60, NOW + 600, dry_run=True, now=NOW + DAY))["status"] == "refused"   # nor does a dry run
+    assert not calls                                                                                  # and no model call was made
     payload = {"summary": "They talked about how the interview went and the cycling trip.", "open": []}
     with pytest.raises(PermissionError):
         run(cn.write_approved(OWNER, payload, candidate_id="c1", day="2026-11-08", at_epoch=NOW))      # a candidate approved after the flag went off
