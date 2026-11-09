@@ -286,3 +286,14 @@ def test_a_change_amount_is_not_a_glucose_reading(text):
 
 def test_an_absolute_reading_after_a_change_phrase_is_still_a_reading():
     assert ms.detect("my blood sugar is 18").cls == "glucose"
+
+
+@pytest.mark.parametrize("text,value", [("my blood sugar at 5:30 was 2.8", "2.8"), ("blood sugar this morning at 7:15am was 4.1", "4.1")])
+def test_a_clock_time_before_the_reading_is_not_the_reading(text, value):
+    # Codex on #2356 (P1): "5:30" was answered as a reading of 5
+    v = ms.detect(text)
+    assert (v.cls, v.value) == ("glucose", value)
+
+
+def test_a_clock_time_with_no_reading_falls_through():
+    assert ms.detect("my blood sugar check is at 5:30").cls != "glucose"

@@ -157,6 +157,7 @@ def _band(raw: str, unit: str) -> str:
 
 
 _CHANGE_BY = re.compile(r"(?:rose|risen|dropped|fell|fallen|went up|went down|up|down|increased|decreased|jumped|climbed|changed)\s+by\s+$", re.I)
+_AFTER_CLOCK = re.compile(rf"\W*(?:[a-z]+\W+){{0,4}}?{_GLUCOSE_NUM}", re.I)
 _SEVERITY = {"glucose_low": 3, "glucose_high": 2, "glucose_up": 1, "glucose_ok": 0}
 _NOW = re.compile(r"now|currently|latest")
 _SECOND = re.compile(rf"(?<!\w)(?P<lead>right now|is now|now|currently|latest|then|dropped to|fell to|down to|up to|rose to|went to|reads|reading|is|are)\s+{_GLUCOSE_NUM}", re.I)
@@ -179,11 +180,17 @@ def _glucose(s: str, rx: dict) -> Optional[Verdict]:
             continue
         if _CHANGE_BY.search(s[:m.start(1)]):
             continue             # "my blood sugar rose by 5 to 18": 5 is how much it moved, not the reading - leave it to the brain
-        first = _reading(m.group(1), m.group(2) or "", s[m.end(1):], rx)
+        num = m
+        if re.match(r":[0-5]\d(?!\d)", s[m.end(1):]):
+            # "my blood sugar at 5:30 was 2.8": the captured number is the hour of a clock time - the reading is the next number, if any
+            num = _AFTER_CLOCK.match(s, m.end(1) + 3)
+            if not num:
+                continue
+        first = _reading(num.group(1), num.group(2) or "", s[num.end(1):], rx)
         if not first:
             continue
         cands, current = [first], []
-        tail = re.split(r"[.!?;](?:\s|$)|\n", s[m.end():], 1)[0]   # a decimal point is not a sentence end
+        tail = re.split(r"[.!?;](?:\s|$)|\n", s[num.end():], 1)[0]   # a decimal point is not a sentence end
         for sm in _SECOND.finditer(tail):
             seg = tail[:sm.start()]
             if re.search(r"(?<!\w)(?:my|his|her|their|our|your|the)(?!\w)", seg) and not rx["term_any"].search(seg):
