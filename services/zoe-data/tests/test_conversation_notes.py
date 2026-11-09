@@ -707,19 +707,22 @@ def test_a_newer_stated_fact_beats_the_notes_open_thread(served, monkeypatch):
     _facts[:] = [Ref("I am waiting to hear about my race entry", NOW - 30 * DAY)]
     block = run(cn.block_for(OWNER, "sess-old", now=NOW))
     assert "Left open: waiting to hear about the race entry" in block and "Worth asking" in block
-    # arm under test: a NEWER stated fact drops the open parts, keeps the summary
+    # arm under test: a NEWER stated fact about the same thing means the note is not served at all (not a word of it)
     cn.reset_state()
     _facts[:] = [Ref("My race entry came through, I got into the half marathon", NOW - 3600)]
-    block = run(cn.block_for(OWNER, "sess-new", now=NOW))
-    assert "half marathon" in block and "Left open" not in block and "Worth asking" not in block
-    assert "Left open" not in run(cn.block_for(OWNER, "sess-new", now=NOW))                          # and the second young turn agrees
+    assert run(cn.block_for(OWNER, "sess-new", now=NOW)) == ""
+    assert run(cn.block_for(OWNER, "sess-new", now=NOW)) == ""                                       # and the second young turn agrees
+    # one shared word is not "the same thing"
+    cn.reset_state()
+    _facts[:] = [Ref("I run every morning before work", NOW - 3600)]
+    assert "half marathon" in run(cn.block_for(OWNER, "sess-one", now=NOW))
     # a newer fact about something else leaves the note whole
     cn.reset_state()
     _facts[:] = [Ref("I take the dog to the beach on Fridays", NOW - 1 * DAY)]
     assert "Left open:" in run(cn.block_for(OWNER, "sess-else", now=NOW))
     # an unreadable fact store: the quieter note
     cn.reset_state()
-    served.conn.execute("UPDATE conversation_notes SET served_count = 0")                              # three sessions already offered it
+    served.conn.execute("UPDATE conversation_notes SET served_count = 0")                              # sessions already offered it
     served.conn.commit()
     _facts[:] = ["boom"]
     out = run(cn.block_for(OWNER, "sess-boom", now=NOW))
@@ -754,3 +757,31 @@ def test_forget_that_fails_closed_and_says_so(member, monkeypatch):
     assert run(ir._execute_forget_last(OWNER)).startswith("Done")                                 # control: the notes erase works
     monkeypatch.setattr(cn, "_db", lambda: (_ for _ in ()).throw(RuntimeError("store down")))
     assert run(ir._execute_forget_last(OWNER)) == ir.FORGET_STORE_DOWN_REPLY                       # the arm under test: not erased -> not "done"
+
+
+def test_a_failed_age_lookup_is_a_child_for_a_member_too(monkeypatch):
+    import persona_layer
+
+    async def boom(uid):
+        raise RuntimeError("profile store down")
+    monkeypatch.setattr(persona_layer, "load_member_mode", boom)
+    assert run(cn._is_minor(OWNER)) is True                                                          # cannot tell -> no mood kept
+
+    class Mode:
+        minor = False
+
+    async def adult(uid):
+        return Mode()
+    monkeypatch.setattr(persona_layer, "load_member_mode", adult)
+    assert run(cn._is_minor(OWNER)) is False                                                         # control: a known adult
+
+
+def test_shadow_logs_what_it_would_serve_from_the_shadow_rows(member, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "shadow")
+    monkeypatch.setattr(cn, "_verdict", lambda: True)
+    cn.set_llm(_llm())
+    run(cn.run_member(OWNER, now=NOW))
+    with caplog.at_level("INFO"):
+        assert run(cn.block_for(OWNER, "sess-shadow", now=NOW)) == ""
+    assert "CONVERSATION_NOTES_INJECT user=member-a mode=shadow" in caplog.text and "notes=1" in caplog.text
+    assert "half marathon" not in caplog.text                                                         # ids and counts, never the words

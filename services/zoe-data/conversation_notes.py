@@ -394,14 +394,15 @@ def _stored(r) -> Stored:
                   _list(r[12]) if len(r) > 12 else [], str(r[13] or "") if len(r) > 13 else "")
 
 
-async def load_active(owner: str, people_id: str, *, limit: int = 6, now: Optional[float] = None) -> list:
-    """The layer's newest ``active`` notes younger than the TTL (shadow rows are never served). RAISES on a failed read: a serve path
-    that cannot read serves nothing."""
+async def load_active(owner: str, people_id: str, *, limit: int = 6, now: Optional[float] = None, include_shadow: bool = False) -> list:
+    """The layer's newest ``active`` notes younger than the TTL (shadow rows are never SERVED; ``include_shadow`` lets the shadow mode
+    log what it WOULD serve). RAISES on a failed read: a serve path that cannot read serves nothing."""
     horizon = _iso((_now() if now is None else now) - NOTE_TTL_DAYS * 86400)
+    shadow = ", 'shadow'" if include_shadow else ""
     try:
         async with _db() as db:
             async with db.execute(
-                    f"SELECT {_COLS} FROM conversation_notes WHERE user_id = ? AND people_id = ? AND status = 'active' "
+                    f"SELECT {_COLS} FROM conversation_notes WHERE user_id = ? AND people_id = ? AND status IN ('active'{shadow}) "
                     "AND ended_at >= ? ORDER BY ended_at DESC LIMIT ?", (owner, people_id, horizon, int(limit))) as cur:
                 return [_stored(r) for r in await cur.fetchall()]
     except Exception as exc:  # noqa: BLE001
@@ -480,12 +481,14 @@ def _convos(owner: str, people_id: str, rows: Sequence[tuple], *, with_name: str
 
 
 async def _is_minor(user_id: str) -> bool:
+    """Is this member a minor? No stored record = an adult (the persona layer's rule); a LOOKUP FAILURE = a child (no mood is kept
+    when we cannot tell - the same posture as the guest path)."""
     try:
-        import distress_handoff
+        import persona_layer
 
-        return bool(await distress_handoff._is_minor(user_id))
+        return bool((await persona_layer.load_member_mode(user_id)).minor)
     except Exception:  # noqa: BLE001
-        return False
+        return True
 
 
 async def run_member(user_id: str, *, now: Optional[float] = None) -> dict:
@@ -677,11 +680,12 @@ async def _unforgotten(owner: str, notes: list) -> list:
 
 async def _defer_to_facts(uid: str, notes: list) -> list:
     """Precedence in CODE (user-stated > confirmed > inferred): a note is inferred. When the member has a stated / confirmed durable fact
-    that is NEWER than the note and touches its open threads or follow-up (>= 2 content words in common), the note keeps only its
-    summary - "waiting to hear about the race entry" is not offered after they said they got in. A fact read that fails strips the
-    open parts of every note (fail to the safer, quieter note). Members only; a guest has no memory rows."""
-    if not any(n.open_threads or n.follow_up for n in notes):
-        return notes                                  # nothing open to go stale: no read at all
+    that is NEWER than the note and shares >= 2 content words with it, the note is NOT served at all - it must never sit beside, let
+    alone against, what they said later ("waiting to hear about the race entry" after they said they got in). The newer fact reaches the
+    brain through memory, as it should. A fact read that fails strips the open threads and follow-ups of every note (the quieter
+    note). Members only; a guest has no memory rows."""
+    if not notes:
+        return notes
     try:
         from memory_service import get_memory_service
 
@@ -693,10 +697,13 @@ async def _defer_to_facts(uid: str, notes: list) -> list:
         stamped = None
     out = []
     for n in notes:
+        if stamped is None:                           # facts unreadable: keep only what cannot go stale
+            out.append(replace(n, open_threads=[], follow_up="") if (n.open_threads or n.follow_up) else n)
+            continue
         ended = _epoch_of(n.ended_at) or 0.0
-        mine = _tokens(" ".join([*n.open_threads, n.follow_up]))
-        newer = stamped is None or any(at > ended and len(toks & mine) >= 2 for at, toks in stamped)
-        out.append(replace(n, open_threads=[], follow_up="") if newer and (n.open_threads or n.follow_up) else n)
+        mine = _tokens(" ".join([n.summary, *n.topics, *n.open_threads, n.follow_up]))
+        if not any(at > ended and len(toks & mine) >= 2 for at, toks in stamped):
+            out.append(n)
     return out
 
 
@@ -751,7 +758,7 @@ async def block_for(user_id: str, session_id: str, *, now: Optional[float] = Non
             return ""
         t = _now() if now is None else now
         if seen == 0:
-            pool = [n for n in await load_active(uid, "", now=t) if n.served_count < MAX_SERVED]
+            pool = [n for n in await load_active(uid, "", now=t, include_shadow=m == "shadow") if n.served_count < MAX_SERVED]
             mono = _mono()
             pool = [n for n in pool if mono - _SERVED_AT.get(f"{uid}|{n.id}", -1e9) >= COOLDOWN_S]
             picked = (await _unmuted(uid, await _unforgotten(uid, pool)))[:BLOCK_NOTES]
@@ -766,7 +773,7 @@ async def block_for(user_id: str, session_id: str, *, now: Optional[float] = Non
         else:
             if not chosen:
                 return ""
-            notes = [n for n in await load_active(uid, "", limit=12, now=t) if n.id in chosen]
+            notes = [n for n in await load_active(uid, "", limit=12, now=t, include_shadow=m == "shadow") if n.id in chosen]
             notes = await _unmuted(uid, await _unforgotten(uid, notes))
             notes = [replace(n, open_threads=[], follow_up="") if n.id in quiet else n for n in notes]   # the first turn's precedence decision stands
         if not notes:
@@ -805,7 +812,8 @@ async def guest_lines(guest: Any) -> list:
         _bounded(_VISITS, key, (mono, offered))
         if offered >= _YOUNG_TURNS:
             return []
-        pool = [n for n in await load_active(guest.owner_user_id, guest.person_id, limit=6, now=t) if n.served_count < MAX_SERVED]
+        pool = [n for n in await load_active(guest.owner_user_id, guest.person_id, limit=6, now=t, include_shadow=m == "shadow")
+                if n.served_count < MAX_SERVED]
         notes = (await _unforgotten(guest.owner_user_id, pool))[:BLOCK_NOTES]
         if not notes:
             return []

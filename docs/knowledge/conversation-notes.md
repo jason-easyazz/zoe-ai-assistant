@@ -22,7 +22,7 @@ previous conversations to continue these topics or have knowledge about the conv
    told you about X", "forget Quinn" and the member erase each remove the notes that rest on it.
 4. What a person said or confirmed always beats a note. A note is Zoe's impression; it is never filed as a memory, and the brain is told
    so every time it is served.
-5. A child's note has no mood and nothing frightening in it; health, money, grief and family-conflict subjects are never raised by
+5. A child's note has no mood (an age lookup that fails counts as a child) and nothing frightening in it; health, money, grief and family-conflict subjects are never raised by
    Zoe unless the person raises them first.
 6. The pendant stays approve-before-write: a conversation Avery had while wearing it is only ever PROPOSED as a "conversation note" in
    the day review, and nothing is stored until Avery approves it.
@@ -67,8 +67,8 @@ filters already applied), model call pattern, forget ledger, voice-bridge placem
 * **Serve** (flag `on`) - members: `block_for`, beside the voice bridge in `zoe_flue_client`: confirmed speaker only, the first 2 brain
   turns of a session, the newest 2 notes younger than 21 days, each offered at most 3 times with a 6-hour cool-down, strict forget-ledger
   and mute filters, `[MEMORY CONTEXT ...]` delimiters so the sidecar elides it from older turns. **Precedence in code**: a stated / confirmed durable
-  fact NEWER than the note that shares two content words with its open threads or follow-up removes those parts for the session ("waiting to hear
-  about the race entry" is not offered after they said they got in); an unreadable fact store drops them too. Guests: `guest_lines` inside
+  fact NEWER than the note that shares two content words with it means the note is not served at all ("waiting to hear about the race
+  entry" is never offered beside "I got in"; the newer fact reaches the brain through memory); an unreadable fact store drops the open threads of every note. Guests: `guest_lines` inside
   `named_guests.brain_block`, theirs only, on the first 2 matched turns of a VISIT (30 minutes of silence ends one), each note at most 3 visits. The block tells the brain: sparingly, naturally, never recite, never mention notes, what the person
   said or confirmed wins, drop it if they want to move on.
 * **Pendant** - `omi_day_review` proposes a `conversation_note` candidate (asked for only while the flag is on; needs a real conversation,
