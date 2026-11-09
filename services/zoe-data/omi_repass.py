@@ -702,18 +702,26 @@ def _shadow_log(rec: dict) -> None:
 
 
 async def _redact_row(uid: str, row: dict) -> dict:
-    """A hypothesis row about to be stored: every word-bearing field (each engine's text, the fused text, the contested slots' picks / vote keys / who keys) goes through the forget ledger first."""
-    import omi_recordings as omi
+    """A hypothesis row about to be stored: every word-bearing field (each engine's text, the fused text, the contested slots' picks / vote keys / who keys) goes through the forget ledger first.
+    FAIL CLOSED: a ledger that cannot be read raises (the caller stores nothing for that member this night) - unlike the transcript path, original words must never be written unredacted."""
+    import forget_match as fm
+    import memory_forgotten as mf
     if row.get("kind") == "who_said":
         return row
 
+    async def red(t: str) -> str:
+        if not t:
+            return t
+        spans = await mf.spans(uid, t, strict=True)
+        return fm.redact(t, spans)[0] if spans else t
+
     async def go(o: Any) -> Any:
         if isinstance(o, str):
-            return await omi._redact_forgotten(uid, o)
+            return await red(o)
         if isinstance(o, dict):
             out: dict = {}
             for k, v in o.items():
-                nk = await omi._redact_forgotten(uid, k) if isinstance(k, str) else k
+                nk = await red(k) if isinstance(k, str) else k
                 out[nk] = (out[nk] + v) if (nk in out and isinstance(v, (int, float)) and isinstance(out[nk], (int, float))) else await go(v)
             return out
         if isinstance(o, list):
@@ -1313,7 +1321,15 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                 async with erase_gate.writing(u, seen.get(u, 0)) as live:
                     if live:
                         g0 = erase_gate.generation(u)
-                        eu.store_hyps(home, night, [await _redact_row(u, row) for row in urows])
+                        try:
+                            rids_ = sorted({x["rid"] for x in urows})
+                            async with get_compat_db() as db_:        # a recording deleted since the job was read (delete_recording does not move the generation) keeps no hypotheses
+                                alive = {str(r_[0]) for r_ in await _all(db_, f"SELECT id FROM omi_recordings WHERE user_id = ? AND status != 'deleted' AND id IN ({','.join('?' * len(rids_))})", (u, *rids_))}
+                            keep = [await _redact_row(u, row) for row in urows if row["rid"] in alive]
+                        except Exception as exc:  # noqa: BLE001 - fail closed: nothing of this member's words is stored this night
+                            logger.warning("OMI_REPASS_HYPS_NOT_STORED reason=%s", type(exc).__name__)
+                            continue
+                        eu.store_hyps(home, night, keep)
                         if erase_gate.generation(u) != g0:
                             eu.forget_user(home, u)                 # an erase landed during the write: swept again
             eu.prune_hyps(home, (now or _now()).date())

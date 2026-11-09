@@ -18,6 +18,7 @@ import difflib
 import json
 import os
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -422,7 +423,7 @@ def forget_user(home: Path, user_id: str) -> int:
 def _scrub(obj: Any, rx: "re.Pattern[str]", mark: str) -> Any:
     """Redact DECODED strings and dict keys (never the JSON text: ``json.dumps`` escapes non-ASCII, so a name such as an accented one would not match)."""
     if isinstance(obj, str):
-        return rx.sub(mark, obj)
+        return rx.sub(mark, unicodedata.normalize("NFC", obj))       # composed and decomposed spellings of an accented name are the same name
     if isinstance(obj, dict):
         out: dict = {}
         for k, v in obj.items():
@@ -439,11 +440,13 @@ def _scrub(obj: Any, rx: "re.Pattern[str]", mark: str) -> Any:
 
 def erase_entity(home: Path, user_id: str, rx: "re.Pattern[str]", mark: str = "[forgotten]") -> int:
     """A forgotten name: it is replaced wherever a hypothesis of that member holds it (hypotheses, the ROVER pick AND the contested-slot picks / vote keys / who keys)."""
+    rxn = re.compile(unicodedata.normalize("NFC", rx.pattern), rx.flags) if isinstance(getattr(rx, "pattern", None), str) else rx
+
     def fn(r: dict) -> Optional[dict]:
         if r.get("u") != user_id:
             return r
         before = {k: r.get(k) for k in ("hyps", "rover", "slots")}
-        clean = _scrub(before, rx, mark)
+        clean = _scrub(before, rxn, mark)
         if clean == before:
             return r
         return {**r, **clean}

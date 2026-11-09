@@ -430,3 +430,11 @@ def test_a_merged_line_keeps_the_owners_decision_and_a_human_person_clears_the_m
     tv = [{"start_ms": 0, "end_ms": 10000, "owner_label": None, "tagged_person_id": None, "not_person": "tv"}]
     n2 = [{"start_ms": 0, "end_ms": 10000, "person": "p1"}]
     assert rp.carry_labels(n2, tv) == 1 and n2[0]["not_person"] == "tv" and "person" not in n2[0]
+
+
+def test_a_decomposed_spelling_of_an_accented_name_is_erased_too(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "José came"}, "rover": "José came", "slots": []}])
+    assert eu.erase_entity(home, "m1", re.compile("José", re.I), "[forgotten]") == 1
+    blob = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text(encoding="utf-8")
+    assert "came" in blob and "Jos" not in blob
