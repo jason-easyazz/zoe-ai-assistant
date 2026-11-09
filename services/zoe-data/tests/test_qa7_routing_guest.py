@@ -116,7 +116,8 @@ def test_place_follow_up_needs_a_recent_weather_answer():
 
 
 def test_negative_control_follow_up_shapes_that_are_not_places():
-    for t in ("and tomorrow", "and you", "and then", "ok and in the kitchen", "and thanks", "and what about the oven"):
+    for t in ("and tomorrow", "and you", "and then", "ok and in the kitchen", "and thanks", "and what about the oven",
+              "and add milk", "and cancel timer", "and set a timer", "and play some music", "and turn off the light", "and remind me at five"):
         assert wf.followup_text(t, "today") is None, t
 
 

@@ -30,6 +30,12 @@ _NOUN_RE = re.compile(r"\b(?:weather|forecast|temp(?:erature)?)\b")
 _FOLLOW_RE = re.compile(
     r"^\W*(?:(?:and|so|ok|okay|then|what\s+about|how\s+about|and\s+what\s+about|what\s+of)\s+)+(?:(?:in|for|at)\s+)?"
     r"(?P<place>[a-z][a-z'. -]{1,30}?)\s*[?.!]*\s*$")
+#: a bare "and <words>" that opens with a COMMAND verb is a command, never a place ("and add milk", "and cancel timer")
+_COMMAND_WORD_RE = re.compile(
+    r"^(?:add|put|cancel|set|start|stop|play|pause|resume|skip|turn|switch|toggle|dim|open|close|lock|unlock|call|text|send|message|email|"
+    r"remind|remember|forget|delete|remove|clear|show|read|tell|ask|find|search|look|check|get|buy|book|make|create|schedule|move|change|"
+    r"rename|save|note|write|list|order|order|bring|take|give|let|do|is|are|was|were|can|could|will|would|should|have|has|had|did|does|"
+    r"please|thanks|thank|yes|yeah|yep|no|nope|nah|sure|okay|ok|great|good|cool|nice|lovely|perfect|wow|oh|um|uh)\b")
 _SCOPE_RE = re.compile(r"\b(today|tonight|tomorrow|this\s+weekend|this\s+week|later)\b")
 
 #: (user id, session id) -> (monotonic time, scope word of the last weather ask)
@@ -84,6 +90,8 @@ def followup_text(text: str, scope: str) -> Optional[str]:
     if not m or len(low.split()) > 7:
         return None
     place = m.group("place").strip(" .'-")
+    if _COMMAND_WORD_RE.match(place):
+        return None      # "and add milk" / "and cancel timer": the real handlers' turn, never a weather place
     places = ws.weather_places(f"weather in {place}")
     if len(places) != 1 or places[0].lower() != place.lower():
         return None      # a time word, a pronoun, a room or a sentence tail - not a town
