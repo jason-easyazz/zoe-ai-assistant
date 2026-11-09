@@ -247,3 +247,11 @@ def test_inability_to_breathe_beats_a_glucose_reading(text):
 
 def test_a_plain_glucose_reading_is_still_answered_as_a_reading():
     assert ms.detect("my blood sugar is 5.5 and I breathe fine").cls == "glucose"      # negative control
+
+
+def test_a_later_routine_medication_does_not_hide_a_dangerous_ingestion():
+    # Codex on #2356 (P1): the idiom exclusion scanned the rest of the sentence and discarded the poisoning too
+    text = "my son swallowed bleach after he swallowed his morning tablets, his blood sugar is 5.5"
+    assert ms.detect(text).cls.startswith("ingest")
+    # negative control: the routine phrasing alone is still not a poisoning
+    assert not ms.detect("he swallowed his morning tablets").cls.startswith("ingest")

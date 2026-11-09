@@ -117,7 +117,12 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
         for v in rx["verb"].finditer(sentence):
             tail = sentence[v.start(): v.end() + 70]
             sub = rx["sub"].search(tail)
-            if not sub or rx["idiom"].search(sentence[max(0, v.start() - 8):]):
+            if not sub:
+                continue
+            lo = max(0, v.start() - 8)
+            routine = rx["idiom"].search(sentence[lo:])
+            # the routine-medication idiom must be THIS ingestion ("swallowed his morning tablets"), not a later one in the same sentence
+            if routine and routine.start() < (v.start() - lo) + (v.end() - v.start()):
                 continue
             human = bool(rx["human"].search(sentence) or _SELF_INGEST.search(sentence))
             animal = bool(rx["animal"].search(sentence[max(0, v.start() - 45):v.start()]))   # the animal must be the SUBJECT (before the verb), not a bystander
