@@ -450,13 +450,13 @@ async def pending_recordings(db, *, now: Optional[datetime] = None, limit: int =
     cannot all be re-read in one night, so the ones most likely to hold speech are done first and the rest carry): first-pass done (or empty) rows whose WAV is still on disk, inside retention, not yet
     passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
     stamp = _iso(now or _now())
-    rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts FROM omi_recordings "
+    rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts, audio_expires_at FROM omi_recordings "
                           f"WHERE status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < ? "
                           "AND (audio_expires_at IS NULL OR audio_expires_at > ?) ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at LIMIT ?",
                       (MAX_PASS_ATTEMPTS, stamp, limit))
     out = []
     for r in rows:
-        d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts")}
+        d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts", "audio_expires_at")}
         if d["audio_path"] and os.path.exists(d["audio_path"]):
             out.append(d)
     return out
@@ -663,6 +663,13 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         counts["proposed"] = len(pick)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("OMI_REPASS_PROPOSAL_FAILED reason=%s", type(exc).__name__)
+    if res.get("check_chunks") and counts.get("status") in ("replaced", "shadow"):
+        # the morning transcript check (ZOE_TRANSCRIPT_CHECK, default off = nothing): the fusion's contested slots / low-confidence chunks
+        # become ranked check items BEFORE the release below, so an open item keeps its snippet's WAV. Never fails the pass.
+        import transcript_check
+        if transcript_check.enabled():
+            cands = [c for ch in res["check_chunks"] for c in transcript_check.candidates_from_chunk(ch)]
+            counts["check"] = (await transcript_check.enqueue(uid, r, cands, names=names)).get("stored", 0)
     await omi.release_tagged_audio(uid)            # the pass has seen it: the WAV goes unless the owner keeps it or a line still needs a name
     return counts
 

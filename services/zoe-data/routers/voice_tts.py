@@ -3889,6 +3889,11 @@ async def voice_command(
 
     _day_review_raise.note_voice_turn(session_id, panel_id, scope_user=_scope_identity_user, verdict=_speaker_verified,
                                       claimed=identified_user_id if _by_claim else None)
+    # The morning transcript check (ZOE_TRANSCRIPT_CHECK, default OFF = returns at once): who this turn was VERIFIED as, so the one daily
+    # ask can ride the reply of a turn the owner started - never a guest's, an unverified voice's, or a typed one. In-memory; never raises.
+    import transcript_check as _transcript_check
+
+    _transcript_check.note_voice_turn(session_id, panel_id, scope_user=_scope_identity_user, verdict=_speaker_verified)
 
     if _vs_decision is not None and _vs_decision.lock:
         # "lock" / "sign me out": the session is already closed (published above); say so and stop - nothing to store.
@@ -4268,6 +4273,8 @@ async def voice_command(
     async def _answer_from_tier(_xresult, intent: Optional[str] = None) -> dict:
         """Speak, save and return a deterministic tier's reply (the shared core's `DispatchResult`)."""
         reply_text = _xresult.reply
+        if getattr(_xresult, "tier", "") != "transcript_check":     # the ask's own answer never carries a second ask
+            reply_text = await _transcript_check.append_to_reply(reply_text, text, effective_user, session_id)
         _ui = (_xresult.ui or {}).get("kind")
         try:
             if _ui == "weather":

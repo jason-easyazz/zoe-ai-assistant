@@ -185,6 +185,31 @@
   .membtn{min-width:200px;height:64px;border-radius:20px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:22px;padding:0 28px;cursor:pointer}
   .membtn.primary{background:var(--accent);border-color:transparent;color:#fff}
   .estmc .memconfirm{font-size:21px;line-height:1.4;color:var(--ink-soft);max-height:220px;overflow-y:auto;overflow-wrap:anywhere}
+  /* Transcript check - the words the night re-pass could not settle (js/touch-transcript-check.js). The sentence IS a live-caption line
+     (.cvf .cvl: same size, weight and ink); only the uncertain word is touchable. Chips and buttons are 64px+. No input field. */
+  .tcf{position:absolute;left:0;right:0;top:0;bottom:116px;padding:150px 110px 24px;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:none;overscroll-behavior:contain}
+  .tcf::-webkit-scrollbar{width:0}
+  .tcwrap{display:flex;flex-direction:column;gap:26px;max-width:1000px}
+  .tcwrap .cvf{gap:0}
+  .tcwrap .cvl .tcw{font:inherit;color:var(--ink);background:rgba(255,191,94,.2);border:0;border-bottom:3px solid var(--amber);border-radius:10px 10px 4px 4px;padding:0 10px;margin:0 2px;cursor:pointer}
+  .tcwrap .cvl .tcw.chosen{background:rgba(102,214,163,.22);border-bottom-color:var(--cat-personal)}
+  .tcwrap .cvl .tcw:active{background:rgba(255,191,94,.36)}
+  .tcchips,.tcacts,.tcsub{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+  .tcchip{min-width:150px;height:76px;border-radius:22px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:var(--ink);font:inherit;font-size:30px;font-weight:400;padding:0 30px;cursor:pointer}
+  .tcchip.pick{border-color:rgba(255,191,94,.7)}
+  .tcchip:active{background:var(--accent);border-color:transparent;color:#fff;transform:scale(.97)}
+  .tcbtn{min-width:150px;height:64px;border-radius:20px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:var(--ink-soft);font:inherit;font-size:21px;padding:0 26px;cursor:pointer}
+  .tcbtn.primary{background:var(--accent);border-color:transparent;color:#fff}
+  .tcnote{font-size:20px;color:var(--ink-soft);line-height:1.4;max-width:520px}
+  .tcqr{width:140px;height:140px;border-radius:14px;background:#fff;padding:6px}
+  .tcstate{margin:auto;max-width:720px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:18px}
+  .tcstate-t{font-size:32px;font-weight:600}
+  .tcstate-b{font-size:21px;color:var(--ink-faint);line-height:1.4}
+  /* the notification card on the home screen: quiet, owner-only (it exists only when the server gave THIS session a count) */
+  #tcNote{position:absolute;left:44px;bottom:132px;width:360px;z-index:45;display:none;flex-direction:column;gap:10px;padding:18px 22px;border-radius:22px;background:rgba(14,16,26,.72);border:1px solid rgba(255,191,94,.38);backdrop-filter:blur(16px);cursor:pointer}
+  #tcNote.on{display:flex}
+  #tcNote .tnt{font-size:22px;font-weight:600}
+  #tcNote .tnb{font-size:17px;color:var(--ink-soft);line-height:1.35}
   /* Contacts — full-screen tile grid + detail */
   .ctf{position:absolute;inset:0;padding:92px 40px 150px;display:flex;flex-direction:column}
   .ctwrap{flex:1;display:flex;gap:10px;min-height:0}
@@ -1226,6 +1251,7 @@
 
 <!-- before the estate script: a ?domain=memories arrival calls into it during boot -->
 <script src="/js/touch-memories-space.js?v=mem-1"></script>
+<script src="/js/touch-transcript-check.js?v=tc-1"></script>
 <script src="/js/touch-alarm-sound.js?v=as-1"></script>
 <script src="/js/touch-alarms.js?v=al-4"></script>
 <script>
@@ -1310,6 +1336,10 @@
     // guest); js/touch-memories-space.js renders what it is given and nothing else.
     memories:{home:true, bg:GROUND, canvas:false,
       html:'<div class="chttl">What Zoe knows about you</div><div class="chmeta" id="memMeta"></div><div class="memf" id="memBody"></div>'},
+    // The words last night's re-pass could not settle (ZOE_TRANSCRIPT_CHECK). js/touch-transcript-check.js renders what the server gives this
+    // session and nothing else; a guest gets the sign-in prompt and no sentence.
+    checks:{home:true, bg:GROUND, canvas:false,
+      html:'<div class="chttl">Transcript check</div><div class="chmeta" id="tcMeta"></div><div class="tcf" id="tcBody"></div>'},
     weather:{home:true, bg:DUSK, canvas:true,
       html:'<div class="wloc" id="wxLoc"></div><div class="wbig"><div class="t" id="wxTemp">—°</div><div class="c" id="wxCond"></div></div><div class="whours" id="wxHours"></div>'},
     music:{home:true, bg:'radial-gradient(120% 115% at 22% 14%,#4a4a93,#0b0e1c 60%)', canvas:false,
@@ -1540,6 +1570,8 @@
     cancelAutoHome();_voiceScreen=false;_userTookOver=false;
     // Leaving (or re-entering) Memories drops its privacy timer and any in-flight read: private rows never outlive the screen.
     if(window.ZoeMemoriesSpace)window.ZoeMemoriesSpace.unmount();
+    if(window.ZoeTranscriptCheck)window.ZoeTranscriptCheck.unmount();   // the sentences never outlive the screen
+    var _tn=document.getElementById('tcNote');if(_tn)_tn.classList.remove('on');
     _cur=id; clearScreenTimers(); armIdleSleep();
     var _orb=document.getElementById('orb');if(_orb)_orb.classList.toggle('hide',id==='sleep');  // the orb is distracting on the sleep clock
     var cb=document.getElementById('cmdbar');if(cb)cb.classList.remove('on');
@@ -1563,6 +1595,7 @@
       if(id==='calendar')wireCalendar();
       if(id==='person')wireContacts();
       if(id==='memories')wireMemories();
+      if(id==='checks')wireChecks();
       if(id==='settings')wireSettings();
       if(id==='work')wireWork();
       if(id==='reminder')wireReminder();
@@ -2082,8 +2115,8 @@
       if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55;grid-template-columns:1fr"><span class="tn">Nothing scheduled today</span></div>';return;}
       host.innerHTML=evs.slice(0,4).map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
     }).catch(function(){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn">Couldn’t load your day</span></div>';});}
-  function initHome(){tickClock();_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();
-    _wxTick=setInterval(function(){if(_cur==='home'){loadWeather();loadToday();}},600000);}
+  function initHome(){tickClock();_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();loadCheckCard();
+    _wxTick=setInterval(function(){if(_cur==='home'){loadWeather();loadToday();loadCheckCard();}},600000);}
 
   // ---- weather screen (real current + hourly forecast, condition-adaptive) ----
   var OWM_ICON={'01':'sun','02':'cloud','03':'cloud','04':'cloud','09':'rain','10':'rain','11':'rain','13':'cloud','50':'cloud'};
@@ -3682,6 +3715,43 @@
       }
     });
   }
+
+  // ---- Transcript check: the words the night re-pass could not settle ----
+  // All logic lives in js/touch-transcript-check.js (pinned by dist/test_touch_transcript_check.js). This hands it the estate's session
+  // (X-Session-ID) and, when a voice "yes" opened the screen, the card token minted for THIS panel's open voice session (X-Panel-Card);
+  // the server decides who may see anything. No keyboard: "say it" is voice, "fix on phone" is a QR.
+  var _tcToken='',_tcTokenAt=0;
+  function tcHeaders(json){var h={'X-Session-ID':sid()};if(_tcToken&&Date.now()-_tcTokenAt<590000)h['X-Panel-Card']=_tcToken;if(json)h['Content-Type']='application/json';return h;}
+  function tcPanelId(){return _panelDevId();}
+  function wireChecks(){
+    var host=document.getElementById('tcBody'),meta=document.getElementById('tcMeta');
+    if(!host||!window.ZoeTranscriptCheck)return;
+    window.ZoeTranscriptCheck.mount(host,{
+      request:function(method,path,body){return fetch(path,{method:method,headers:tcHeaders(!!body),credentials:'include',body:body?JSON.stringify(body):undefined,signal:reqSig(12000)})
+        .then(function(r){return r.json().then(function(j){return {status:r.status,json:j};},function(){return {status:r.status,json:null};});});},
+      blob:function(path){return fetch(path,{headers:tcHeaders(false),credentials:'include'}).then(function(r){return r.ok?r.blob():null;}).catch(function(){return null;});},
+      play:function(b){var u=URL.createObjectURL(b),a=new Audio(u);a.onended=function(){URL.revokeObjectURL(u);};a.play().catch(function(){});},
+      objectUrl:function(b){return URL.createObjectURL(b);},
+      setMeta:function(t){if(meta)meta.textContent=t||'';},
+      toast:toast,
+      signIn:function(){if(window.__showAuthCard)window.__showAuthCard();}
+    });
+  }
+  // The quiet notification card on the home screen. It appears ONLY when the server gives this session a non-zero count (a guest gets
+  // 401/403 and the card stays hidden); tapping it opens the screen.
+  function loadCheckCard(){
+    var c=document.getElementById('tcNote');
+    if(!c){c=document.createElement('div');c.id='tcNote';c.setAttribute('role','button');
+      c.innerHTML='<div class="tnt">Transcript check</div><div class="tnb">A few words from last night need you.</div>';
+      c.addEventListener('click',function(){show('checks');});
+      stage.appendChild(c);}
+    if(!sid()&&!_tcToken){c.classList.remove('on');return;}
+    fetch('/api/transcript-check/summary',{headers:tcHeaders(false),credentials:'include'}).then(function(r){return r.ok?r.json():null;})
+      .then(function(d){c.classList.toggle('on',!!(d&&d.open>0&&_cur==='home'));}).catch(function(){c.classList.remove('on');});
+  }
+  // A voice "yes" to Zoe's ask: the server pushes a private voice_card naming the screen and a token for this panel's open voice session.
+  window.addEventListener('zoe:voice-card',function(e){var d=e&&e.detail||{};
+    if(d.kind==='transcript_check'&&d.open==='checks'&&d.card_token){_tcToken=String(d.card_token);_tcTokenAt=Date.now();show('checks');}});
 
   // ---- Settings: full-screen expanding sections ----
   var _setPrefs=null,_setPrefT=null;

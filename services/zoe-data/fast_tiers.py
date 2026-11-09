@@ -952,6 +952,17 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
             answered = None
         if answered is not None:
             return answered
+        # the morning transcript check (ZOE_TRANSCRIPT_CHECK=on, default OFF = returns before any work): takes a turn ONLY when it answers
+        # the one ask Zoe just made ("yes" opens the panel screen, "later" leaves the notification) or fills a "say it" the owner started.
+        try:
+            import transcript_check as _tcheck
+
+            answered = await _tcheck.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                          extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # panel review cards (ZOE_PANEL_REVIEW_CARDS, default OFF = returns before any work): "what's on my plate?", "I've done the
         # plumber one", "review my day" - the member's own open loops / day review, read back + a private card on THIS panel only.
         try:

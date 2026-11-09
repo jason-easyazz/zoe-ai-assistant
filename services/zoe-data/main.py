@@ -2396,6 +2396,10 @@ _omi_dr_router.register(app)
 # ZOE_PANEL_REVIEW_CARDS is on - flag off = 404. The voice side is a fast tier (panel_review_cards.tier).
 from routers import panel_review_cards as _panel_cards_router  # noqa: E402
 _panel_cards_router.register(app)
+# Transcript check (flag-dark): the panel screen for the words the night re-pass could not settle. Mounted ONLY when
+# ZOE_TRANSCRIPT_CHECK=on - off/shadow = 404 (shadow shows nothing). The voice side is transcript_check.tier + the appended ask.
+from routers import transcript_check as _transcript_check_router  # noqa: E402
+_transcript_check_router.register(app)
 # Memories card (flag-dark): taps on the "what I know about you" card a voice turn pushes to its panel (That's wrong / Forget /
 # Where's this from). Mounted ONLY when ZOE_MEMORIES_VOICE is on - flag off = 404. The voice side is memories_voice.tier.
 from routers import memories_card as _memories_card_router  # noqa: E402

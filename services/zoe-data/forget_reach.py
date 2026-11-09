@@ -81,6 +81,9 @@ TABLES: tuple[Store, ...] = (
     _t("omi_segment_embeddings", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_clusters", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_settings", CONFIG, REACHED, member=_OMI_M),
+    _t("omi_check_items", WORDS, REACHED, member=_OMI_M, entity="omi_recordings.erase_entity"),   # the morning transcript check's queue (0073): omi_voices.forget_user + drop_recording + redact
+    _t("omi_check_asks", METADATA, REACHED, member=_OMI_M),            # the once-a-day ask lock (0073): a date + an outcome, no text
+    _t("asr_contender_ledger", METADATA, REACHED, member=_OMI_M),      # per-model agree/contradict counts from the owner's corrections (0073): counts only
     _t("omi_wearer_samples", BIOMETRIC, REACHED, member=_OMI_M),       # the night re-pass's wearer-print windows (0072): omi_voices.forget_user + drop_recording
     _t("omi_devices", METADATA, REACHED, member=_OMI_M),
     _t("omi_device_health", METADATA, REACHED, member=_OMI_M),         # omi_health.forget_user, called from omi_recordings.forget_user

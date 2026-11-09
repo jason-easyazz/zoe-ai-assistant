@@ -1075,7 +1075,9 @@ def test_nothing_else_reads_pendant_transcripts():
                # the forget-reach inventory (A6) only NAMES the table as a store key; it opens nothing
                "forget_reach.py",
                # the night re-pass (0072): the SECOND, offline transcript of the same audio; it replaces a transcript the same way the first pass writes it
-               "omi_repass.py"}
+               "omi_repass.py",
+               # the morning transcript check (0073): the OWNER corrects words of their own transcript (owner_corrected); owner-only routes, forgotten spans never shown
+               "transcript_check.py", "routers/transcript_check.py"}
     hits = set()
     for p in SVC.rglob("*.py"):
         rel = str(p.relative_to(SVC))
