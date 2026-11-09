@@ -400,3 +400,33 @@ def test_a_recording_the_pivot_cannot_reach_carries_to_the_next_night_and_the_re
 
 async def _async(v):
     return v
+
+
+# ── review round: unicode erase, large numbers, recording delete, human decisions ─────────────────────────────────
+
+def test_a_forgotten_accented_name_is_erased_from_every_word_field_and_a_year_survives_fusion(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "José came"}, "rover": "José came",
+                                        "slots": [{"pick": "josé", "votes": {"josé": 2}, "who": {"josé": [PIV]}}]}])
+    assert eu.erase_entity(home, "m1", re.compile(r"\bJosé\b", re.I), "[forgotten]") == 1
+    blob = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text(encoding="utf-8")
+    assert "José" not in blob and "josé" not in blob.lower() and "[forgotten]" in blob
+    assert eu.rover({PIV: "The year is 2026."})["text"] == "The year is 2026."
+
+
+def test_deleting_a_recording_removes_only_its_hypotheses(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "a"}}, {"u": "m1", "rid": "r2", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "b"}}])
+    assert eu.forget_recording(home, "m1", "r1") == 1
+    left = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text()
+    assert '"r2"' in left and '"r1"' not in left
+
+
+def test_a_merged_line_keeps_the_owners_decision_and_a_human_person_clears_the_models_not_person():
+    old = [{"start_ms": i * 10000, "end_ms": (i + 1) * 10000, "owner_label": "you", "tagged_person_id": None, "not_person": None} for i in range(3)]
+    new = [{"start_ms": 0, "end_ms": 30000, "not_person": "zoe", "person": "p1"}]
+    assert rp.carry_labels(new, old) == 1
+    assert new[0]["carry"]["owner_label"] == "you" and new[0]["not_person"] is None
+    tv = [{"start_ms": 0, "end_ms": 10000, "owner_label": None, "tagged_person_id": None, "not_person": "tv"}]
+    n2 = [{"start_ms": 0, "end_ms": 10000, "person": "p1"}]
+    assert rp.carry_labels(n2, tv) == 1 and n2[0]["not_person"] == "tv" and "person" not in n2[0]
