@@ -845,7 +845,6 @@ def _then_quote_retire(fn):
     return wrapper
 
 
-@_then_quote_retire
 async def _known_person_names(user_id: str) -> frozenset:
     """Lower-cased names of the people this member has told Zoe about (their ``people`` rows). Empty on any failure. Bounded."""
     try:
@@ -856,6 +855,7 @@ async def _known_person_names(user_id: str) -> frozenset:
         return frozenset()
 
 
+@_then_quote_retire
 async def run_turn_digest(
     user_id: str,
     user_message: str,
