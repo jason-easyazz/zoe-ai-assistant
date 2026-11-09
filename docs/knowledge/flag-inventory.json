@@ -10375,6 +10375,44 @@
         },
         "typed_env": true
       },
+      "ZOE_OMI_ANCHOR_PANEL_LOG": {
+        "defaults": [
+          "''"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_ANCHOR_PRIOR_S": {
+        "defaults": [
+          "88.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 88.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_OMI_AUDIO_DIR": {
         "defaults": [
           "''"
@@ -10779,6 +10817,29 @@
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/bluetooth-settings.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_PANEL_ANCHORS": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_voices.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "night",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
           "type": "str"
         },
         "typed_env": true
@@ -21331,6 +21392,16 @@
     }
   },
   "registry_unread": [
+    "ZOE_OMI_ANCHOR_FLUE_DB",
+    "ZOE_OMI_ANCHOR_JITTER_S",
+    "ZOE_OMI_ANCHOR_MAX_SPREAD_S",
+    "ZOE_OMI_ANCHOR_MIN_CLIPS",
+    "ZOE_OMI_ANCHOR_MIN_MATCH",
+    "ZOE_OMI_ANCHOR_MIN_WORDS",
+    "ZOE_OMI_ANCHOR_TTS_LAG_S",
+    "ZOE_OMI_ANCHOR_ZOE_MIN_COVER",
+    "ZOE_OMI_ANCHOR_ZOE_MIN_WORDS",
+    "ZOE_OMI_CLEAN_READ",
     "ZOE_OMI_NIGHT_ASR_EVAL",
     "ZOE_OMI_NIGHT_ASR_SECOND",
     "ZOE_OMI_NIGHT_ASR_THIRD",

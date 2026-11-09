@@ -6,6 +6,8 @@
   * ``omi_recordings.repass_attempts`` - how many nights tried it (a carry-over is not a failure; a crash is).
   * ``omi_recordings.repass_model``    - PROVENANCE: the ASR model + the speaker model that wrote the stored text, e.g. ``large-v3+ecapa``.
   * ``omi_recordings.repass_at``       - PROVENANCE: when the pass finished (UTC text, like every other stamp here).
+  * ``omi_segments.clean_text`` / ``clean_how`` - the CLEAN READ (``omi_repass_clean.py``): a lightly cleaned twin of each turn for DISPLAY only, beside the
+                                         verbatim ``text`` (which memory, extraction and the day review keep reading). ``clean_how`` '' = not cleaned yet.
   * ``omi_channel_means``              - the per-channel MEAN of unit speaker embeddings (model_id + channel + scope = the device), the offset the speaker step removes from pendant turns / prints;
                                          a short session falls back to the stored per-device mean. Biometric-derived: erased with the member (``omi_voices.forget_user``).
   * ``omi_wearer_samples``             - the WEARER's pendant-channel voice reference, as the speaker units (panel ResNet34 embeddings) it is made of: ``confirmed`` ones
@@ -37,12 +39,18 @@ COLUMNS = (
 )
 
 
+SEG_COLUMNS = (
+    ("clean_text", "TEXT NOT NULL DEFAULT ''"),
+    ("clean_how", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
 def _pg() -> bool:
     return op.get_bind().dialect.name == "postgresql"
 
 
-def _have() -> set:
-    return {r[1] for r in op.get_bind().exec_driver_sql("PRAGMA table_info(omi_recordings)").fetchall()}
+def _have(table: str = "omi_recordings") -> set:
+    return {r[1] for r in op.get_bind().exec_driver_sql(f"PRAGMA table_info({table})").fetchall()}
 
 
 def upgrade() -> None:
@@ -87,12 +95,28 @@ def upgrade() -> None:
             if name not in have:
                 op.execute(f"ALTER TABLE omi_recordings ADD COLUMN {name} {ddl}")
     op.execute("CREATE INDEX IF NOT EXISTS idx_omi_recordings_repass ON omi_recordings (repass_state, started_at)")
+    if _pg():
+        for name, ddl in SEG_COLUMNS:
+            op.execute(f"ALTER TABLE omi_segments ADD COLUMN IF NOT EXISTS {name} {ddl}")
+    else:
+        have = _have("omi_segments")
+        for name, ddl in SEG_COLUMNS:
+            if name not in have:
+                op.execute(f"ALTER TABLE omi_segments ADD COLUMN {name} {ddl}")
 
 
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS idx_omi_recordings_repass")
     op.execute("DROP TABLE IF EXISTS omi_wearer_samples")
     op.execute("DROP TABLE IF EXISTS omi_channel_means")
+    if _pg():
+        for name, _ in SEG_COLUMNS:
+            op.execute(f"ALTER TABLE omi_segments DROP COLUMN IF EXISTS {name}")
+    else:
+        have = _have("omi_segments")
+        for name, _ in SEG_COLUMNS:
+            if name in have:
+                op.execute(f"ALTER TABLE omi_segments DROP COLUMN {name}")
     if _pg():
         for name, _ in COLUMNS:
             op.execute(f"ALTER TABLE omi_recordings DROP COLUMN IF EXISTS {name}")

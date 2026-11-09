@@ -299,6 +299,7 @@ def make(tmp_path, *, cfg_kw=None, argv=(), host_cls=None, **host_kw):
     cfg_kw = {"night_mind_script": tmp_path / "absent" / "zoe-night-mind.py", "omi_day_review_script": tmp_path / "absent" / "zoe-omi-day-review.py",
               "struggle_proposals_script": tmp_path / "absent" / "zoe-struggle-proposals.py",
               "self_review_script": tmp_path / "absent" / "zoe-self-review.py",
+              "omi_cleanread_script": tmp_path / "absent" / "zoe-omi-cleanread.py",
               **(cfg_kw or {})}      # the optional entry points are absent unless a test brings its own (a plain skip, never a failed night)      # the real entry point lives on another branch: tests never depend on whether it is merged
     cfg = nw.NightCfg(lock_path=str(tmp_path / "brain.lock"), night_dir=tmp_path / "night", report_dir=tmp_path / "reports", buddyinfo=str(tmp_path / "buddyinfo"), meminfo=str(tmp_path / "meminfo"),
                       blackouts=((250, 292),), contig_min_blocks=64, health_wait_s=20.0, quiet_wait_max_min=2.0, quiet_poll_s=10.0, busy_wait_max_min=2.0, busy_poll_s=10.0,
@@ -1796,7 +1797,7 @@ def test_the_real_night_command_in_the_unit_carries_every_lever_and_equals_the_c
     args = _exec_start_args()
     parsed = nw.build_parser().parse_args(args)                                   # every flag in the unit is a flag the script accepts
     cfg = nw.configure(parsed)
-    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_day_review")
+    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_cleanread", "omi_day_review")
     assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice) == (34, 8192, "q8_0") and "--ngl" in args and "--ctx" in args and "--kv" in args
     assert args[args.index("--end-by") + 1] == "03:55" and cfg.end_by == 3 * 60 + 55
     defaults = nw.configure(nw.build_parser().parse_args([]))                     # written-out levers == the code's defaults: a changed default cannot silently change the night

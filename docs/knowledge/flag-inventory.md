@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 887 prod flags; 303 read through `typed_env`.
+- 890 prod flags; 306 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 251 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 7 registered flags with no reader in the scanned sources.
+- 17 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-887 flags; 836 not documented in `.env.example`.
+890 flags; 839 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -535,6 +535,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OFFBOX_STATE_DIR` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFER_FOLLOWUP_BINDING` | bool | `False` | - | `services/zoe-data/AGENTS.md` | `False` | yes | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_OFFER_FOLLOWUP_TTL_S` | float | `600.0` | - | `services/zoe-data/AGENTS.md` | `600.0` | yes | NO | `services/zoe-data/intent_router.py` |
+| `ZOE_OMI_ANCHOR_PANEL_LOG` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `''` | yes | NO | `services/zoe-data/omi_voices.py` |
+| `ZOE_OMI_ANCHOR_PRIOR_S` | float | `88.0` | - | `docs/knowledge/omi-night-repass.md` | `88.0` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_AUDIO_DIR` | str | `''` | - | `docs/architecture/omi-integration-plan.md` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIO_RETENTION_DAYS` | int | `7` | - | `docs/architecture/omi-integration-plan.md` | `7` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIT_PATH` | str | `''` | - | `docs/knowledge/bluetooth-settings.md` | `''` | yes | NO | `services/zoe-data/omi_devices.py` |
@@ -556,6 +558,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OMI_NIGHT_DIAR` | str | `'resnet34'` | - | `docs/knowledge/omi-night-repass.md` | `'resnet34'` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_NIGHT_REPASS` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/omi-night-repass.md` | `'off'` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_OWNER_USER_ID` | str | `''` | - | `docs/knowledge/bluetooth-settings.md` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_PANEL_ANCHORS` | str | `'off'` | `off`, `night`, `on` | `docs/knowledge/omi-night-repass.md` | `'off'` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_QUIET_SKIP` | bool | `True` | - | `docs/architecture/omi-integration-plan.md` | `True` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_REPASS_CHUNK_S` | float | `14.0` | - | `docs/knowledge/omi-night-repass.md` | `14.0` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_CT2_DIR` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
@@ -1260,4 +1263,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_OMI_ANCHOR_FLUE_DB`, `ZOE_OMI_ANCHOR_JITTER_S`, `ZOE_OMI_ANCHOR_MAX_SPREAD_S`, `ZOE_OMI_ANCHOR_MIN_CLIPS`, `ZOE_OMI_ANCHOR_MIN_MATCH`, `ZOE_OMI_ANCHOR_MIN_WORDS`, `ZOE_OMI_ANCHOR_TTS_LAG_S`, `ZOE_OMI_ANCHOR_ZOE_MIN_COVER`, `ZOE_OMI_ANCHOR_ZOE_MIN_WORDS`, `ZOE_OMI_CLEAN_READ`, `ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`

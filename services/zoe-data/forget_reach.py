@@ -209,6 +209,9 @@ OTHER: tuple[Store, ...] = (
     Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
           "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member.",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
+    Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "
+          "panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own.",
+          markers=("zoe-brain.db",)),
     Store("omi_repass_work", "file", WORDS, REACHED, "The pendant night re-pass's per-run work files (~/.zoe/omi-repass/work/<id>.manifest.json + <id>.out.jsonl, 0600) hold the audio PATHS and the "
           "recognised WORDS of the recordings in one night run; the run deletes them in a finally block as soon as the results are applied (minutes). A member erase "
           "mid-run is caught at the write (user_erase_gate.writing) and the recording tombstoned. state.json (measured speeds, Zoe's own voice reference) and "

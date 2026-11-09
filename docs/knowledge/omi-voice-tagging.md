@@ -43,8 +43,8 @@ Code: `services/zoe-data/omi_diarize.py`, `omi_voices.py`, `routers/omi_voices.p
    - A suggestion is never a tag until the member says yes.
 6. **Not a person.** The member can mark a voice or a line as Zoe, TV, radio or media. Its lines then leave suggestions and the
    day review, and a later line matching that voice is marked when it arrives.
-   - `omi_voices.zoe_spoken_spans` is the seam for marking lines that overlap Zoe's own spoken replies. It returns nothing today,
-     because no store logs TTS playback with wall-clock times.
+   - `omi_voices.zoe_spoken_spans` marks lines that match Zoe's own spoken replies (text + time, from the Flue session store and the panel log; flag `ZOE_OMI_PANEL_ANCHORS`,
+     default off; rule in `docs/knowledge/omi-night-repass.md` "Panel anchors").
 
 ## Why this and not an adopted diariser (evaluated 2026-10-17, sources read with opensrc)
 
@@ -152,7 +152,6 @@ thresholds are env-tunable (`ZOE_OMI_SUGGEST_MIN`, `ZOE_OMI_SUGGEST_MARGIN`); no
 ## Not built yet
 
 - A pendant enrolment (`pendant_speaker_profiles`, the section 3.4 flow).
-- The TTS-playback log behind `zoe_spoken_spans`.
 - Household-member detection for D12.
 - The panel "Who is this?" (touch).
 - A Pendant-page card for the day review (approve / skip). The API carries everything it needs (below); no UI reads it yet.

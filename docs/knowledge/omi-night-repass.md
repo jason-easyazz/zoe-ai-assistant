@@ -85,10 +85,50 @@ Measured in the people-tagging bake-off (`~/.zoe/lab/omi-people-tagging`, hand-c
 1. **Unit**: the ASR's VAD turns. A turn up to 8 s is ONE embedding; a longer turn gets 1.5 s windows (hop 0.75) that vote per word. Never 20 s slabs.
 2. **Mean removal, per channel**: pendant turns AND pendant prints minus the mean of the night's turn embeddings (a session with >= 10 min of speech); a short session uses the stored per-device mean (`omi_channel_means`, stored with `model_id` + channel + device). Panel prints minus the mean of the registry's panel prints (the panel clips themselves are not kept; with fewer than three prints a mean would zero the only reference, so the STORED registry panel mean is used). The pendant mean is per (member, DEVICE): two pendants never share an offset.
 3. **One person registry** shared with named guests: `learned_voiceprints` (a panel print and a pendant print per person, same model). A person's print is the panel print until the pendant print has >= 6 s of CONFIRMED speech (the owner's tags), then both fused; pendant prints keep the existing leave-one-out outlier rejection (cos < 0.3). Children stay label-only.
-4. **Zoe first**: a turn overlapping a Zoe reply in the panel log is Zoe (exact; the seam `omi_voices.zoe_spoken_spans`), the Zoe print is the fallback; removed before deciding between people. **Honest status: `zoe_spoken_spans` still returns `[]` (no store logs TTS playback with wall-clock times yet), so today the Zoe print is what decides; the exact path is wired and tested with injected spans and switches on the day that seam is filled.**
+4. **Zoe first**: a turn overlapping a Zoe reply in the panel log is Zoe (exact; the seam `omi_voices.zoe_spoken_spans`), the Zoe print is the fallback; removed before deciding between people. **The seam is filled (below, "Panel anchors"): with `ZOE_OMI_PANEL_ANCHORS=night` the panel's account decides who is Zoe and the print is only the fallback when that account is unavailable.**
 5. **Wearer**: the prior is the device owner's print, mean-removed - the CONFIRMED pendant print, else the owner's consented panel profile, which can only make a turn "you?" (leaning). Loudness is a +0.03 tie-breaker only (it measured weak, AUC ~0.75).
 6. **Abstain**: label only when the margin over the runner-up is >= 0.10 (>= 0.20 under 1.2 s); >= 0.05 is "X?" (leaning); otherwise "?"; and a winner must score >= 0.25 (a wearer turn is not "the closest registered person"). `ZOE_OMI_REPASS_MARGIN` / `_MARGIN_SHORT` / `_LEAN` / `_MIN_SCORE`.
 7. **"Who said this?"**: the "?" and "X?" turns are stored as `who_said` items in the check queue (`omi_repass_eval.check_queue(..., kind="who_said")`: `rid`, `seg_id`, `t0`/`t1`, `mark` lean | unknown, `cands` = [[person id | "you", score]] best first) and their embeddings are held (TTL as the first pass's) so the owner's tap works: `omi_repass.confirm_who(db, user, seg_id, person_id)` adds that turn to the person's PENDANT print through `omi_voices.tag` (the member's own person, the learning rules, never a child), or, for "you", records a confirmed wearer sample and labels the line "me". A recognised voice is only ever a SUGGESTION; a tap is the owner's word.
+
+## Panel anchors (who was Zoe, and who the panel already knew) - `omi_panel_anchor.py`
+
+The owner found a guest's line TO Zoe ("Well, Zoe, I've got some issues") labelled Zoe: the seam returned nothing and the Zoe voice print decided. The seam is now filled from
+the panel's own records, with the measured rule (validated on one real evening: 11 Zoe turns at overlap 0.94-1.00; every non-Zoe turn of more than 4 words scored below 0.6;
+two labels fixed). `ZOE_OMI_PANEL_ANCHORS=off|night|on` (default **off**; `night` = the re-pass only, one bounded ssh read of the Pi's `voice.log`; `on` also reads it in the first
+pass, a network call in the upload path, so not recommended).
+
+- **Sources.** Zoe's replies and the panel turns' STT text: the Flue session store (`labs/flue-zoe-brain-2x/data/zoe-brain.db`, read-only: `assistant_text_delta` joined per block,
+  `user_message`); each panel turn's **per-clip** speaker verdict: the Pi's `voice.log` speaker lines (`scripts/lib/panel_voice_log.py`) joined to the STT text by time - the
+  CLIP's verdict, never the session's (a guest's session can hold the owner's clip); the saved clip: `~/.zoe-voice-samples`. The logged `voice_greeting` prefix can be handed to
+  the first reply (`panel_evidence(greeting=...)`).
+- **The night clock offset** (panel time = pendant time + ~75-95 s, drifting) is measured per recording: log-mel pattern correlation of the panel clips against the pendant audio
+  (`correlate_shift`, +-60 s around `ZOE_OMI_ANCHOR_PRIOR_S`=88), robust median (`estimate_offset`, needs >= 2 agreeing clips within 12 s). No offset, no anchors: an unaligned clock never decides
+  who is Zoe. Only a `device` / `corrected` recording clock is aligned; an `estimated` one never is.
+- **The rule** (`AlignRule`, env `ZOE_OMI_ANCHOR_*`): candidates are pendant turns inside the panel event's window +-30 s after the offset. Normalise (lowercase, punctuation out, spoken numbers
+  to digits). A turn is **ZOE only** if a sentence of it has >= 6 words and >= 85% of its words appear in one Zoe reply; mixed turns are **split at sentence boundaries** and each sentence is
+  tested alone (time shared by word count). A turn that **names Zoe** is never Zoe. A turn that is not Zoe is never Zoe - the print no longer makes her once the panel log covers the recording
+  (`build_lines(zoe_by_log=True)`); the print stays the fallback only when the panel record is unavailable. Otherwise a turn matching a panel utterance at >= 0.6 similarity with >= 3 words takes
+  that panel speaker as a **strong anchor, above the voice match** (unless the panel verdict was unknown). Anything else keeps the voice-based label.
+- **Limits, stated plainly.** The panel `voice.log` carries the MEMBER claim only: a named guest anchors only through the `guest_verdict` hook (not wired to a store yet); another member without a
+  `people` row is not anchored (no key to give). The greeting prefix is a parameter, not yet read from a log. The correlation threshold (`z >= 15`) is checked on synthetic audio, not yet on a
+  real night. Flip `night` only after a shadow night shows the anchors agreeing with the owner's corrections.
+
+## Clean read and the book format - `omi_repass_clean.py`, `omi_transcript_book.py`
+
+A DISPLAY layer (flag `ZOE_OMI_CLEAN_READ=off|on`, default off; migration 0073 adds `omi_segments.clean_text` / `clean_how`). Each turn gets a lightly cleaned twin beside the
+verbatim; **memory, extraction, the day review, search and the ledger read the verbatim only** (a test pins that none of those modules mentions `clean_text`). One T=0 request per turn on
+the 12B (the window job `omi_cleanread`, before the day review, best effort, capped 10 minutes; by hand `zoe-omi-cleanread.py --model-url <4B>` or `--fallback-url` when the 12B stage was
+skipped or fails). Turns under 6 words use the deterministic cleaner only (fillers um/uh/ah/er/hmm/mm out, immediate 1-3 word repeats collapsed, "like" out only when sentence-initial or before a comma).
+
+**The code guard** (`guard`): the clean words must be an in-order subsequence of the verbatim (case, punctuation, apostrophes and number spelling ignored), at most 15% dropped, no dropped
+run longer than 4 words. A violation falls back to the deterministic cleaner, then to the verbatim shown as "(lightly cleaned)". The night's NIGHT_JOB line carries counts only and the violation rate;
+**above 20% (with at least 10 turns sent) the line ends `ALERT=...` and the morning report prints it at the top.** Unreachable-model turns are counted separately, never as violations.
+Forgotten names are redacted from the twin by the same ledger/erase gate as the verbatim. Seam for later: `Suggestion` / `suggest_hook` (a whole-conversation correction pass handing "did you
+mean ...?" items to the morning check) - nothing calls it; that pass is not built.
+
+**Book format** (`zoe-omi-transcript.py --user U --date D --out <dir outside the repo>`): speaker in bold then a paragraph, consecutive same-speaker turns merged, no inline timestamps, a scene
+break "- 2:41 am -" at each recording and at gaps over 60 s, uncertain turns in italics ("Someone (Name?)" leaning, "Someone" unknown), the verbatim with times as an appendix. The morning
+review reads `omi_transcript_book.render(await load_day(...))`; nothing in the PR yet calls it from the morning review itself.
 
 ## Wearer reference (the panel print does not match the pendant)
 
@@ -150,6 +190,7 @@ scripts/setup/setup_omi_repass.sh --check                  # must say: gpu ok, i
 journalctl --user -t zoe-night-window -n 3; grep -h omi_repass ~/.zoe/night-reports/$(date +%F).md
 tail -n 5 ~/.zoe/omi-repass/shadow.jsonl         # per recording: words, lines, speakers, agree (word agreement vs Moonshine), model
 # 7. confirm your wearer print (above), watch carried/audio_s/worker_rtf for ~a week, then flip: ZOE_OMI_NIGHT_REPASS=on
+# 8b. panel anchors (after a shadow night): ZOE_OMI_PANEL_ANCHORS=night; the clean read: ZOE_OMI_CLEAN_READ=on (re-run scripts/night/install_night_window.sh for the new job)
 # 8. the contender ledger: python3 scripts/maintenance/zoe-omi-repass.py --contenders        (the Monday morning report carries the same line)
 ```
 

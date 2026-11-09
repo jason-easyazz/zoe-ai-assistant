@@ -101,3 +101,26 @@ def test_the_dry_run_names_the_prejob(tmp_path):
     w.log = lines.append
     w.dry_plan()
     assert any("pre-job omi_repass" in line and "BEFORE the 12B loads" in line for line in lines)
+
+
+# ── the clean read job (docs/knowledge/omi-night-repass.md "Clean read") ──────────────────────────────────────────────────────────────────
+
+def test_the_cleanread_job_sits_between_the_self_review_and_the_day_review_best_effort_and_budgeted(tmp_path):
+    jobs = nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0)
+    names = [j.name for j in jobs]
+    assert names.index("self_review") < names.index("omi_cleanread") < names.index("omi_day_review")
+    spec = next(j for j in jobs if j.name == "omi_cleanread")
+    assert spec.best_effort and not spec.fallback_4b and spec.budget_flag == "--budget-s" and spec.timeout_s == 600.0
+    assert spec.argv[1].endswith("zoe-omi-cleanread.py") and spec.argv[2:] == ["--model-url", "http://127.0.0.1:11500/v1"]
+    assert next(j for j in nw.build_jobs(nw.NightCfg(omi_cleanread_script=tmp_path / "no.py")) if j.name == "omi_cleanread").skip_reason.startswith("no.py not found")
+
+
+def test_an_alert_in_a_jobs_own_line_is_printed_at_the_top_of_the_morning_report(tmp_path):
+    w, _, _ = make(tmp_path)
+    w.jobs = [{"name": "omi_cleanread", "backend": "12B", "status": "ok", "wall_s": 3.0, "tokens_prompt": 1, "tokens_predicted": 1, "mem_low_mib": 1, "best_effort": True,
+               "notes": ["NIGHT_JOB omi_cleanread status=ok turns=40 violation_rate=0.310 ALERT=guard_violation_rate_31pct_over_20pct_the_model_is_rewriting_turns"]}]
+    lines = w.report_lines(0)
+    top = [ln for ln in lines if ln.startswith("**ALERT")]
+    assert len(top) == 1 and "omi_cleanread" in top[0] and "31pct" in top[0]
+    w.jobs[0]["notes"] = ["NIGHT_JOB omi_cleanread status=ok turns=40 violation_rate=0.050"]                  # the control: a healthy night prints no alert
+    assert not [ln for ln in w.report_lines(0) if ln.startswith("**ALERT")]
