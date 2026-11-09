@@ -98,7 +98,7 @@ def test_names_numbers_and_commitments_rank_above_chat():
     assert tc.classify("that was a really", "nice", "film", alts) == "chat"
     s = {k: tc.score(k, alts, False) for k in ("name", "number", "commitment", "chat")}
     assert s["name"] > s["number"] > s["commitment"] > s["chat"]
-    assert tc.score("chat", alts, True) > tc.score("number", alts, False) or tc.FEEDS_BONUS < 50     # feeding a review lifts an item
+    assert tc.score("commitment", alts, True) > tc.score("name", alts, False)                 # feeding a pending review lifts an item above a bare name
 
 
 def test_the_day_keeps_only_the_best_ten_and_chunks_never_fill_it(tenv, monkeypatch):
@@ -773,3 +773,46 @@ def test_heard_name_takes_only_a_name():
     assert tc.heard_name("that's quinn") == "Quinn" and tc.heard_name("it's Quinn Hart.") == "Quinn Hart"
     assert tc.heard_name("this is a really long sentence about nothing") != "" and len(tc.heard_name("this is a really long sentence").split()) <= 2
     assert tc.heard_name("123 !!") == ""
+
+
+def test_a_one_sided_match_writes_nothing_and_refuses_the_answer(queued):
+    """The segment still has the span but the transcript has moved on (or the inverse): neither store is touched, nothing is scored, the item stops being asked."""
+    env, rid = queued
+    env.db.conn.execute("UPDATE omi_recordings SET transcript = 'something else entirely'")
+    env.db.conn.commit()
+    before = [r["text"] for r in env.db.rows("SELECT text FROM omi_segments")]
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, items(env)[0]["id"], alt=1))
+    assert e.value.code == "text_moved"
+    assert [r["text"] for r in env.db.rows("SELECT text FROM omi_segments")] == before and rows(env)[0]["transcript"] == "something else entirely"
+    assert tc.ledger() == {} and items(env)[0]["status"] == "expired"
+
+
+def test_the_other_one_sided_case_leaves_the_transcript_alone(queued):
+    env, rid = queued
+    env.db.conn.execute("UPDATE omi_segments SET text = 'something else entirely'")
+    env.db.conn.commit()
+    transcript = rows(env)[0]["transcript"]
+    with pytest.raises(tc.CheckError):
+        run(tc.answer(OWNER, items(env)[0]["id"], alt=1))
+    assert rows(env)[0]["transcript"] == transcript
+
+
+def test_a_ledger_failure_never_blocks_a_committed_correction(queued, monkeypatch):
+    env, rid = queued
+    import omi_repass_eval as eu
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(eu, "note_owner_correction", boom)
+    assert run(tc.answer(OWNER, items(env)[0]["id"], alt=1))["applied"] is True
+    assert items(env)[0]["status"] == "answered" and "eleven" in rows(env)[0]["transcript"]
+
+
+def test_a_stale_second_who_answer_is_refused(who):
+    env, rid, wid, calls = who
+    run(tc.answer(OWNER, wid, alt=0))
+    n = len(calls)
+    with pytest.raises(tc.CheckError):
+        run(tc.answer(OWNER, wid, alt=1))
+    assert len(calls) == n

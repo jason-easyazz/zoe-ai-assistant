@@ -486,35 +486,44 @@ def _swap(text: str, before: str, old: str, after: str, new: str) -> tuple[str, 
     return text, False
 
 
+def _plan(text: str, row: Any, variants: list, new: str) -> Optional[str]:
+    """The corrected ``text`` (the span swapped for ``new``), the text itself when ``new`` is already there (a retry), or None when the span is not found."""
+    for v in variants:
+        out, hit = _swap(text, row["before_text"], v, row["after_text"], new)
+        if hit:
+            return out
+    if new and _swap(text, row["before_text"], new, row["after_text"], new)[1]:
+        return text
+    return None
+
+
 async def _apply_text(db, row: Any, new: str) -> bool:
+    """Correct BOTH stores or neither. Every store that holds this stretch must contain the span: at least one overlapping ``omi_segments`` row, and the recording
+    transcript when it has words. The swaps are planned first and written only when the whole plan holds, so a one-sided match (a store that moved on) writes nothing
+    and the caller refuses the answer. A pre-segment recording (no rows) is corrected through its transcript alone."""
     old = row["span_text"]
     rid, uid = row["recording_id"], row["user_id"]
-    ok = False
+    variants = [old + LOW_CONFIDENCE_MARK, old] if row["kind"] == "chunk" else [old]
     segs = await _fetch(db, "SELECT id, text FROM omi_segments WHERE recording_id = ? AND user_id = ? AND start_ms <= ? AND end_ms >= ? ORDER BY seq",
                         (rid, uid, int(row["end_ms"]), int(row["start_ms"])))
-    variants = [old + LOW_CONFIDENCE_MARK, old] if row["kind"] == "chunk" else [old]
-    for s in segs:
-        for v in variants:
-            text, hit = _swap(s["text"], row["before_text"], v, row["after_text"], new)
-            if hit:
-                await db.execute("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected' WHERE id = ? AND user_id = ?", (text, s["id"], uid))
-                ok = True
-                break
-        else:                       # a retry after a failed answer: the word is already the owner's
-            if new and _swap(s["text"], row["before_text"], new, row["after_text"], new)[1]:
-                ok = True
+    writes = []
+    for sg in segs:
+        out = _plan(sg["text"], row, variants, new)
+        if out is not None:
+            writes.append(("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected' WHERE id = ? AND user_id = ?", (out, sg["id"], uid)))
+    if segs and not writes:
+        return False
     recs = await _fetch(db, "SELECT transcript FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, uid))
-    if recs:
-        for v in variants:
-            text, hit = _swap(recs[0]["transcript"] or "", row["before_text"], v, row["after_text"], new)
-            if hit:
-                await db.execute("UPDATE omi_recordings SET transcript = ? WHERE id = ? AND user_id = ?", (text, rid, uid))
-                ok = True
-                break
-        else:
-            if new and _swap(recs[0]["transcript"] or "", row["before_text"], new, row["after_text"], new)[1]:
-                ok = True
-    return ok
+    if recs and (recs[0]["transcript"] or "").strip():
+        out = _plan(recs[0]["transcript"], row, variants, new)
+        if out is None:
+            return False
+        writes.append(("UPDATE omi_recordings SET transcript = ? WHERE id = ? AND user_id = ?", (out, rid, uid)))
+    if not writes:
+        return False
+    for sql, params in writes:
+        await db.execute(sql, params)
+    return True
 
 
 def _score_owner(row: Any, chosen: str) -> dict:
@@ -587,6 +596,8 @@ async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word:
             await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status = 'open'",
                              (stored, via, stamp, row["id"]))
             await db.commit()
+    # The ledger is an append-only counts file outside the database (``ledger.jsonl``, #2358): it cannot join the transaction, so it is written only AFTER
+    # the commit and never blocks it - a missed line is a missed data point (logged), a double line on a retry cannot happen because a decided item is final.
     ledgered = len(_score_owner(row, chosen))
     await _after_decision(user_id)
     logger.info("TRANSCRIPT_CHECK_ANSWERED via=%s ledger=%d reopened=%d", via, ledgered, reopened)
@@ -628,6 +639,9 @@ async def _answer_who(user_id: str, row: Any, alts: list, *, alt, word, new, via
         if not ok:
             raise CheckError("erased", 410)
         async with _db() as db:
+            fresh = await _item(db, user_id, row["id"])            # claimed under the erase lock: a second, stale request for the same item is refused
+            if fresh is None or not (fresh["status"] == "open" or (fresh["status"] == "answered" and not fresh["answer"] and word is not None)):
+                raise CheckError("already_decided")
             seg = await _turn_segment(db, row)
             if not seg:
                 await db.execute("UPDATE omi_check_items SET status = 'expired' WHERE id = ? AND status = 'open'", (row["id"],))
