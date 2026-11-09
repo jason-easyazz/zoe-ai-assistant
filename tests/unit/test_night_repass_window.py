@@ -124,3 +124,44 @@ def test_an_alert_in_a_jobs_own_line_is_printed_at_the_top_of_the_morning_report
     assert len(top) == 1 and "omi_cleanread" in top[0] and "31pct" in top[0]
     w.jobs[0]["notes"] = ["NIGHT_JOB omi_cleanread status=ok turns=40 violation_rate=0.050"]                  # the control: a healthy night prints no alert
     assert not [ln for ln in w.report_lines(0) if ln.startswith("**ALERT")]
+
+
+# ── the 12B stage's reserve is measured, not guessed ────────────────────────────────────────────────────────────────────────────────────────
+
+def _report(d, name, walls, mode="night"):
+    import json
+    (d / f"{name}.json").write_text(json.dumps({"mode": mode, "jobs": [{"name": f"j{i}", "backend": "12B", "wall_s": w} for i, w in enumerate(walls)] + [{"name": "x", "backend": "4B", "wall_s": 999}]}))
+
+
+def test_the_reserve_is_the_largest_recent_twelve_b_stage_plus_load_with_a_margin_and_a_floor(tmp_path):
+    assert nw.NightCfg().pre_keep_min == 12.0                                                    # the owner-approved default (was 28)
+    assert nw.measured_keep_min(tmp_path) == 12.0                                               # no history: the default
+    for i, walls in enumerate(([200.0, 10.0, 5.0], [120.0, 60.0], [300.0, 100.0, 80.0])):
+        _report(tmp_path, f"2026-11-0{i + 1}", walls)
+    assert nw.measured_keep_min(tmp_path) == round((8.0 + 4.0) * 1.25, 1) == 15.0                # the worst night: 480 s = 8 min, + 4 min load, x 1.25 (the 4B job is not counted)
+    for i in range(4, 8):
+        _report(tmp_path, f"2026-11-0{i}", [10.0])
+    assert nw.measured_keep_min(tmp_path) == 15.0                                                # still the worst of the last seven
+    quiet = tmp_path / "q"
+    quiet.mkdir()
+    for i in range(4):
+        _report(quiet, f"2026-11-0{i + 1}", [30.0])
+    assert nw.measured_keep_min(quiet) == 10.0                                                  # never below the floor
+    _report(quiet, "2026-11-09", [3000.0])
+    assert nw.measured_keep_min(quiet) == 28.0                                                  # nor above the old reserve
+    trial = tmp_path / "t"
+    trial.mkdir()
+    for i in range(5):
+        _report(trial, f"2026-11-0{i + 1}", [2000.0], mode="trial")
+    assert nw.measured_keep_min(trial) == 12.0                                                  # trials are not nights
+
+
+def test_configure_uses_the_measured_reserve_unless_the_operator_pins_a_number(tmp_path, monkeypatch):
+    for i in range(3):
+        _report(tmp_path, f"2026-11-0{i + 1}", [600.0])
+    monkeypatch.setenv("NIGHT_REPORT_DIR", str(tmp_path))
+    cfg = nw.NightCfg(report_dir=tmp_path)
+    monkeypatch.delenv("NIGHT_PRE_KEEP_MIN", raising=False)
+    assert nw.configure(nw.build_parser().parse_args([]), cfg).pre_keep_min == round((10.0 + 4.0) * 1.25, 1)
+    monkeypatch.setenv("NIGHT_PRE_KEEP_MIN", "20")
+    assert nw.configure(nw.build_parser().parse_args([]), nw.NightCfg(report_dir=tmp_path)).pre_keep_min == 20.0

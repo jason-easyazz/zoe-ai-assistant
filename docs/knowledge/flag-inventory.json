@@ -20561,7 +20561,7 @@
     },
     "NIGHT_PRE_KEEP_MIN": {
       "defaults": [
-        "'28'"
+        "'auto'"
       ],
       "in_env_example": false,
       "readers": [

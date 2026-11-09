@@ -1169,7 +1169,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `NIGHT_NGL` | `'34'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_NO_UNIFIED` | `-` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_PORT` | `'11500'` | no | NO | `scripts/night/night_window.py` |
-| `NIGHT_PRE_KEEP_MIN` | `'28'` | no | NO | `scripts/night/night_window.py` |
+| `NIGHT_PRE_KEEP_MIN` | `'auto'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_QUIET_WAIT_MIN` | `'30'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_REPORT_DIR` | `dynamic` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_TEST_LANE_LOCK` | `'/tmp/zoe-test-lane.lock'` | no | NO | `scripts/night/night_window.py` |
