@@ -84,6 +84,8 @@ async def note_introduction(user_id: str, message: str) -> str:
             return ""
         import user_prefs
 
+        if await user_prefs.is_memory_opted_out(user_id):
+            return ""          # an opted-out member's words are not mined or stored, introductions included
         have = await user_prefs.get_pref(user_id, PREF_KEY, []) or []
         if not isinstance(have, list):
             have = []

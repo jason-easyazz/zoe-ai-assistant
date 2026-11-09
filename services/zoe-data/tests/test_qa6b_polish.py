@@ -76,7 +76,10 @@ async def test_note_introduction_persists_and_names_reads_it_back(monkeypatch):
     async def set_pref(user_id, key, value, *, db=None):
         store[(user_id, key)] = value
 
-    prefs.get_pref, prefs.set_pref = get_pref, set_pref
+    async def is_memory_opted_out(user_id, **_k):
+        return False
+
+    prefs.get_pref, prefs.set_pref, prefs.is_memory_opted_out = get_pref, set_pref, is_memory_opted_out
     monkeypatch.setitem(sys.modules, "user_prefs", prefs)
     ident = types.ModuleType("identity_facts")
 
@@ -445,3 +448,30 @@ def test_a_forgotten_introduced_name_stops_counting(monkeypatch):
     monkeypatch.setattr(memory_forgotten, "matches", matches)
     got = asyncio.run(own_name.names("member-a"))
     assert "walter" in got and "priyanka" not in got
+
+
+def test_an_opted_out_member_s_introduction_is_not_stored(monkeypatch):
+    # Codex on #2355 (P1): note_introduction persisted the spoken name whatever the member's memory opt-out said
+    import asyncio
+
+    import own_name
+    import user_prefs
+
+    saved = {}
+
+    async def get_pref(uid, key, default=None, **_k):
+        return default
+
+    async def set_pref(uid, key, value, **_k):
+        saved[key] = value
+
+    async def opted(flag):
+        return flag
+
+    monkeypatch.setattr(user_prefs, "get_pref", get_pref)
+    monkeypatch.setattr(user_prefs, "set_pref", set_pref)
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", lambda uid, **_k: opted(True))
+    assert asyncio.run(own_name.note_introduction("member-a", "my name is Priya")) == "" and not saved
+    # negative control: not opted out, the same words are stored
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", lambda uid, **_k: opted(False))
+    assert asyncio.run(own_name.note_introduction("member-a", "my name is Priya")) == "Priya" and saved
