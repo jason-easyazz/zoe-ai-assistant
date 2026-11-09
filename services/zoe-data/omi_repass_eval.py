@@ -63,7 +63,7 @@ def norm_keep(s: str) -> list[str]:
     """Normalised words that KEEP fillers (the voting and the fused text stay verbatim): lower case, numbers < 1000 spelt, punctuation removed."""
     s = (s or "").lower().replace("-", " ").replace("\u2014", " ").replace("\u2019", "'")
     s = re.sub(r"\b(\d+)\b", lambda m: _n2w(int(m.group(1))) if int(m.group(1)) < 1000 else m.group(1), s)
-    return re.sub(r"[^a-z' ]+", " ", s).split()
+    return re.sub(r"[^a-z0-9' ]+", " ", s).split()       # digits survive only for numbers >= 1000 (smaller ones were spelt above): a year or an amount is kept
 
 
 def _rtoks(text: str) -> list[tuple]:
@@ -419,17 +419,40 @@ def forget_user(home: Path, user_id: str) -> int:
     return _rewrite(home, lambda r: None if r.get("u") == user_id else r)
 
 
+def _scrub(obj: Any, rx: "re.Pattern[str]", mark: str) -> Any:
+    """Redact DECODED strings and dict keys (never the JSON text: ``json.dumps`` escapes non-ASCII, so a name such as an accented one would not match)."""
+    if isinstance(obj, str):
+        return rx.sub(mark, obj)
+    if isinstance(obj, dict):
+        out: dict = {}
+        for k, v in obj.items():
+            nk = rx.sub(mark, k) if isinstance(k, str) else k
+            if nk in out and isinstance(out[nk], (int, float)) and isinstance(v, (int, float)):
+                out[nk] += v                                   # two forgotten spellings collapse onto the mark: keep the vote count
+            else:
+                out[nk] = _scrub(v, rx, mark)
+        return out
+    if isinstance(obj, list):
+        return [_scrub(v, rx, mark) for v in obj]
+    return obj
+
+
 def erase_entity(home: Path, user_id: str, rx: "re.Pattern[str]", mark: str = "[forgotten]") -> int:
-    """A forgotten name: it is replaced wherever a hypothesis of that member holds it."""
+    """A forgotten name: it is replaced wherever a hypothesis of that member holds it (hypotheses, the ROVER pick AND the contested-slot picks / vote keys / who keys)."""
     def fn(r: dict) -> Optional[dict]:
         if r.get("u") != user_id:
             return r
-        blob = json.dumps({k: r.get(k) for k in ("hyps", "rover", "slots")})
-        if not rx.search(blob):
+        before = {k: r.get(k) for k in ("hyps", "rover", "slots")}
+        clean = _scrub(before, rx, mark)
+        if clean == before:
             return r
-        clean = json.loads(rx.sub(mark, blob))                      # hypotheses, the ROVER pick AND the contested-slot picks / vote keys / who keys
         return {**r, **clean}
     return _rewrite(home, fn)
+
+
+def forget_recording(home: Path, user_id: str, rid: str) -> int:
+    """A recording is deleted: every hypothesis / who-said line of THAT recording goes."""
+    return _rewrite(home, lambda r: None if (r.get("u") == user_id and r.get("rid") == rid) else r)
 
 
 def score_correction(fixed: str, hyps: dict, bar: float = 0.95) -> dict:

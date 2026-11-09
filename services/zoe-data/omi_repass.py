@@ -391,22 +391,35 @@ def word_agreement(a: str, b: str, cap: int = 2500) -> float:
 
 
 def carry_labels(new: list[dict], old: list[dict], min_share: float = 0.5) -> int:
-    """Copy the owner's DECISIONS from the first-pass segments onto the new segment that mostly overlaps them (a new line is covered >= ``min_share``
-    by one old line that has a decision). Decisions: owner_label, tagged_person_id (+ source / time), not_person. Returns how many new lines got one."""
+    """Copy the owner's DECISIONS from the first-pass segments onto the new segment they cover (>= ``min_share`` of it, counting every old line that carries the SAME decision together, so a
+    merged re-pass line covering three consecutive 10-second turns the owner labelled alike keeps the label). Decisions: owner_label, tagged_person_id (+ source / time), not_person.
+    The human decision is AUTHORITATIVE: a carried person / "me" decision clears the model's own not-person verdict on the new line, and a carried not-person mark replaces the person
+    suggestion. Returns how many new lines got one."""
     n = 0
     for s in new:
         dur = max(1, s["end_ms"] - s["start_ms"])
-        best, best_ov = None, 0
+        groups: dict = {}
         for o in old:
             if not (o.get("owner_label") or o.get("tagged_person_id") or o.get("not_person")):
                 continue
             ov = max(0, min(s["end_ms"], o["end_ms"]) - max(s["start_ms"], o["start_ms"]))
-            if ov > best_ov:
-                best, best_ov = o, ov
-        if best is not None and best_ov / dur >= min_share:
+            if ov <= 0:
+                continue
+            g = groups.setdefault((o.get("owner_label"), o.get("tagged_person_id"), o.get("not_person")), {"total": 0, "best": o, "best_ov": 0})
+            g["total"] += ov
+            if ov > g["best_ov"]:
+                g["best"], g["best_ov"] = o, ov
+        if not groups:
+            continue
+        g = max(groups.values(), key=lambda x: x["total"])
+        if g["total"] / dur >= min_share:
+            best = g["best"]
             s["carry"] = {k: best.get(k) for k in ("owner_label", "owner_labelled_at", "tagged_person_id", "tag_source", "tagged_at", "not_person")}
-            if best.get("not_person") and not s.get("not_person"):
+            if best.get("not_person"):
                 s["not_person"] = best["not_person"]
+                s.pop("person", None)
+            else:
+                s["not_person"] = None                    # the owner named / labelled this voice: the model's "Zoe / TV" guess does not hide it
             n += 1
     return n
 
@@ -688,6 +701,27 @@ def _shadow_log(rec: dict) -> None:
     os.chmod(p, 0o600)
 
 
+async def _redact_row(uid: str, row: dict) -> dict:
+    """A hypothesis row about to be stored: every word-bearing field (each engine's text, the fused text, the contested slots' picks / vote keys / who keys) goes through the forget ledger first."""
+    import omi_recordings as omi
+    if row.get("kind") == "who_said":
+        return row
+
+    async def go(o: Any) -> Any:
+        if isinstance(o, str):
+            return await omi._redact_forgotten(uid, o)
+        if isinstance(o, dict):
+            out: dict = {}
+            for k, v in o.items():
+                nk = await omi._redact_forgotten(uid, k) if isinstance(k, str) else k
+                out[nk] = (out[nk] + v) if (nk in out and isinstance(v, (int, float)) and isinstance(out[nk], (int, float))) else await go(v)
+            return out
+        if isinstance(o, list):
+            return [await go(v) for v in o]
+        return o
+    return {**row, **{k: await go(row[k]) for k in ("hyps", "rover", "slots") if k in row}}
+
+
 async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label: str, seen: dict, m: str, now: Optional[datetime] = None) -> dict:
     """Apply one worker result to one recording. ``m`` is the mode the job started in. Returns a counts-only summary dict (``status``: replaced |
     shadow | erased | gone | failed). Never raises for a data problem."""
@@ -708,6 +742,8 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
               "zoe": sum(ln["key"] == "zoe" for ln in lines), "named": sum(ln["key"].startswith("p:") for ln in lines)}
     stamp = _iso(now or _now())
     text = ""
+    import manner_block
+    adult = await manner_block.eligible(uid)       # D14, fail closed: a child's (or an unverifiable member's) pendant gets TEXT only - no voiceprint, wearer sample or held embedding is retained
     async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
         async with get_compat_db() as db:
             if live:
@@ -741,13 +777,16 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                 pending_wearer_labels = [o for o in old if o.get("owner_label") == "you"]
                 try:
                     omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs, night=True))
+                    # the first-pass lines are about to be replaced: what their tags taught the people's voiceprints is released first (the segment ids die with them, and a later
+                    # correction of the NEW line only knows the new id); the carried tags re-teach below under the new ids
+                    await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")])
                     ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=MODEL_ID, channel="pendant" if refs.you is not None else None)
                     for sid, s in zip(ids, segs):
                         sets, vals = [], []
-                        if s.get("not_person"):
-                            sets.append("not_person = ?")
-                            vals.append(s["not_person"])
                         c = s.get("carry")
+                        if c or s.get("not_person"):
+                            sets.append("not_person = ?")
+                            vals.append(s.get("not_person"))
                         if c:
                             for k in ("owner_label", "owner_labelled_at", "tagged_person_id", "tag_source", "tagged_at"):
                                 sets.append(f"{k} = ?")
@@ -758,20 +797,21 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         if sets:
                             await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
                     untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
-                    if untagged:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
+                    if untagged and adult:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
                         await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)
-                    await _learn_carried_tags(db, uid, ids, segs, rid)
+                    if adult:
+                        await _learn_carried_tags(db, uid, ids, segs, rid)
                     ttl = _iso((now or _now()) + timedelta(days=omi_voices.EMBED_TTL_DAYS))
                     who_items = []
                     for sid, sg in zip(ids, segs):             # the "who said this?" turns: the owner's tap adds THIS embedding to the person's pendant print (omi_voices.tag)
-                        if sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
+                        if adult and sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
                             await db.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, ?) "
                                              "ON CONFLICT (segment_id) DO NOTHING", (sid, uid, MODEL_ID, _blob(sg["embedding"]), ttl))
                             who_items.append({"seg_id": sid, "t0": round(sg["start_ms"] / 1000.0, 3), "t1": round(sg["end_ms"] / 1000.0, 3),
                                               "mark": "lean" if sg.get("lean") else "unknown",
                                               "cands": sg["cands"]})
                     counts["who_items"] = who_items
-                    if pending_wearer_labels:
+                    if pending_wearer_labels and adult:
                         spans = [(o["start_ms"], o["end_ms"]) for o in pending_wearer_labels]
                         counts["wearer_windows"] = await _add_wearer_samples(db, uid, rid, res["windows"], spans, source="owner_label", status="confirmed")
                     for cid in former:
@@ -785,7 +825,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                                  "repass_attempts = repass_attempts + 1 WHERE id = ? AND repass_state IN ('pending', '')", (text, state, model_label, stamp, rid))
                 await db.commit()
                 counts.update(status="replaced", carried=carried)
-            if (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then
+            if adult and (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then
                 try:
                     pick = propose_wearer(res["windows"])
                     if pick:
@@ -1107,8 +1147,11 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                 mu_by[key_] = who.session_mean([w[2] for w in wins_])
                 if not rehearse:
                     try:
-                        await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[key_], len(wins_), speech_, now)
-                        await db.commit()
+                        from manner_block import eligible as _elig
+                        async with erase_gate.writing(uid_, seen.get(uid_, 0)) as live_:        # a member erased while the worker ran keeps no channel mean (it is derived from their voice)
+                            if live_ and await _elig(uid_):
+                                await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[key_], len(wins_), speech_, now)
+                                await db.commit()
                     except Exception as exc:  # noqa: BLE001 - pre-0074
                         logger.warning("OMI_REPASS_MEAN_NOT_STORED reason=%s", type(exc).__name__)
             else:
@@ -1256,16 +1299,17 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         home = home_dir()
         stored = [{k: v for k, v in r.items() if k != "_fz"} for rid, rws in chunk_rows.items() if rid not in drop_rids for r in rws]
         stored += [w for w in who_rows if w["rid"] not in drop_rids]                  # the "who said this?" items ride in the same private store (ids and scores only, no words)
-        gen = {u: erase_gate.generation(u) for u in {r["u"] for r in stored}}
-        stored = [r for r in stored if gen[r["u"]] == seen.get(r["u"], 0)]            # a member erased since this job was read keeps no hypotheses
         if cl or who_rows:
             if cl:
                 eu.append_ledger(home, night, contrib, evals)
-            eu.store_hyps(home, night, stored)
+            by_user: dict[str, list] = {}
+            for row in stored:
+                by_user.setdefault(row["u"], []).append(row)
+            for u, urows in by_user.items():            # per member, INSIDE the erase gate the hypothesis sweep shares: an erase that completed since the job was read keeps nothing
+                async with erase_gate.writing(u, seen.get(u, 0)) as live:
+                    if live:
+                        eu.store_hyps(home, night, [await _redact_row(u, row) for row in urows])
             eu.prune_hyps(home, (now or _now()).date())
-            for u in gen:
-                if erase_gate.generation(u) != gen[u]:
-                    eu.forget_user(home, u)
         if (now or _now()).weekday() == 0:                       # Monday: the weekly verdict line for the morning report
             res["contenders"] = eu.contender_line(eu.read_ledger(home))
     except OSError as exc:

@@ -182,7 +182,7 @@ async def store_mean(db, user_id: str, model_id: str, channel: str, scope: str, 
     stamp = _iso(now or datetime.now(timezone.utc))
     await db.execute("DELETE FROM omi_channel_means WHERE user_id = ? AND model_id = ? AND channel = ? AND scope = ?", (user_id, model_id, channel, scope))
     await db.execute("INSERT INTO omi_channel_means (user_id, model_id, channel, scope, mean, n_units, speech_s, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                     (user_id, model_id, channel, scope, _blob(unit(mean)), int(n_units), float(speech_s), stamp))
+                     (user_id, model_id, channel, scope, _blob(mean), int(n_units), float(speech_s), stamp))
 
 
 async def load_people(db, user_id: str, model_id: str, mu: Optional[Any], persist: bool = False) -> tuple:

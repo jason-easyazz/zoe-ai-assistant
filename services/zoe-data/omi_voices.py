@@ -510,6 +510,23 @@ async def recordings_with_segments(db, user_id: str, recording_ids: list[str]) -
     return {str(r[0]) for r in rows}
 
 
+async def _withdraw_wearer_samples(db, user_id: str, seg_ids: list[str]) -> int:
+    """The owner corrected these lines AWAY from "me" (other / a named person / not a person): the wearer-print windows a first-pass "you" decision taught from inside them
+    (``omi_wearer_samples``, source owner_label, keyed by recording + time) are withdrawn, so ``wearer_print`` stops identifying that voice as the wearer. A window belongs to a line when
+    its midpoint lies inside it. A box without the table (0074 not applied) has nothing to withdraw."""
+    if not seg_ids:
+        return 0
+    n = 0
+    try:
+        for rid, a, b in await _all(db, f"SELECT recording_id, start_ms, end_ms FROM omi_segments WHERE user_id = ? AND id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids)):
+            n += await _run(db, "DELETE FROM omi_wearer_samples WHERE user_id = ? AND recording_id = ? AND source = 'owner_label' AND status = 'confirmed' "
+                                "AND (start_ms + end_ms) / 2 >= ? AND (start_ms + end_ms) / 2 < ?", (user_id, rid, int(a), int(b)))
+    except Exception as exc:  # noqa: BLE001
+        if not _missing(exc):
+            raise
+    return n
+
+
 async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str]) -> bool:
     if value not in (None, "you", "other"):
         raise VoiceError("owner_label is you, other or null")
@@ -517,6 +534,8 @@ async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str
                                            "AND voice_cluster_id IS NOT NULL", (segment_id, user_id))]
     n = await _run(db, "UPDATE omi_segments SET owner_label = ?, owner_labelled_at = ? WHERE id = ? AND user_id = ?",
                    (value, _iso(_now()) if value else None, segment_id, user_id))
+    if n and value != "you":
+        await _withdraw_wearer_samples(db, user_id, [segment_id])
     if n and value == "you":          # "that was me": the wearer's own voice is never held as a bystander's - the embedding goes too
         await _run(db, "DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (segment_id, user_id))
         await _release_contributions(db, user_id, [segment_id])       # tagged as a person before: that print un-learns the wearer's voice
@@ -643,6 +662,7 @@ async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Option
     now = _iso(_now())
     former = [r[0] for r in await _all(db, f"SELECT DISTINCT voice_cluster_id FROM omi_segments WHERE user_id = ? AND voice_cluster_id IS NOT NULL "
                                            f"AND id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids))]
+    await _withdraw_wearer_samples(db, user_id, seg_ids)                                         # a person is not the wearer: any "me" window taught from these lines goes
     moved = await _release_contributions(db, user_id, seg_ids, keep_person=person["id"])         # a RE-tag: the old person un-learns it
     await _run(db, f"UPDATE omi_segments SET tagged_person_id = ?, tag_source = ?, tagged_at = ?, suggested_person_id = NULL, "
                    f"suggested_score = NULL, voice_cluster_id = NULL WHERE user_id = ? AND id IN ({_qs(len(seg_ids))})",
@@ -733,6 +753,7 @@ async def mark_not_a_person(db, user_id: str, *, kind: str, cluster_id: Optional
     if kind is not None:                         # a tagged line the member now calls TV / Zoe / media: untag it and un-learn it
         tagged = [r[0] for r in await _all(db, f"SELECT id FROM omi_segments WHERE user_id = ? AND {where} AND tagged_person_id IS NOT NULL",
                                            (user_id, key))]
+        await _withdraw_wearer_samples(db, user_id, [r[0] for r in await _all(db, f"SELECT id FROM omi_segments WHERE user_id = ? AND {where}", (user_id, key))])
         if tagged:
             await _release_contributions(db, user_id, tagged)
         clear_tag = ", tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL" + (", voice_cluster_id = NULL" if segment_id else "")

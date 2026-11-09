@@ -748,6 +748,9 @@ async def delete_recording(user_id: str, rid: str) -> bool:
                 return False
             import omi_day_review          # FIRST: the day review's quotes of this recording go too (a failure keeps the recording for a retry)
             await omi_day_review.forget_recording(user_id, rid)
+            import omi_repass          # the night re-pass's stored hypotheses of THIS recording (its words, private files); a failure keeps the recording for a retry
+            import omi_repass_eval
+            omi_repass_eval.forget_recording(omi_repass.home_dir(), user_id, rid)
             await _tombstone(db, rows[0], _now())
             await db.commit()
     logger.info("OMI_DELETED id=%s", rid)
@@ -803,13 +806,15 @@ async def forget_user(user_id: str) -> int:
         n = 0
         voice_failure: Optional[BaseException] = None
         health_failure: Optional[BaseException] = None
-        try:        # the night re-pass's per-chunk hypotheses (words, private files): a failure is logged, the rest of the erase still runs
-            import omi_repass
-            import omi_repass_eval
-            omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("OMI_REPASS_HYPS_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+        hyps_failure: Optional[BaseException] = None
         async with erase_gate.erasing(user_id):
+            try:        # the night re-pass's per-chunk hypotheses (words, private files), swept INSIDE the gate the hypothesis writer also takes: a failure is LOUD, raised below after the rest has run
+                import omi_repass
+                import omi_repass_eval
+                omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("OMI_REPASS_HYPS_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+                hyps_failure = exc
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
                     await _tombstone(db, r, _now())
@@ -837,6 +842,8 @@ async def forget_user(user_id: str) -> int:
                 logger.warning("omi_devices: pendant registrations NOT unassigned for a forgotten user (%s)", type(exc).__name__)
         if voice_failure is not None:
             raise VoiceEraseIncomplete(type(voice_failure).__name__) from voice_failure
+        if hyps_failure is not None:
+            raise VoiceEraseIncomplete("hyps:" + type(hyps_failure).__name__) from hyps_failure
         if health_failure is not None:
             raise HealthEraseIncomplete(type(health_failure).__name__) from health_failure
         return n
@@ -1514,6 +1521,9 @@ async def run_retention_loop() -> None:
             await purge_expired_audio()
             await release_tagged_audio()
             await _sweep_voices()
+            import omi_repass          # the re-pass's private hypotheses expire on their date too, flag on or off, busy or idle
+            import omi_repass_eval
+            omi_repass_eval.prune_hyps(omi_repass.home_dir())
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
