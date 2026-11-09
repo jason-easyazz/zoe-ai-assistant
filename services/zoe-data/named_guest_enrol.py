@@ -197,7 +197,7 @@ def lex(lang: str = "en") -> dict:
 
 
 def classify(text: str) -> Optional[tuple[str, str]]:
-    """``(kind, name)`` for "learn Quinn's voice" (``learn``), else None. Pure."""
+    """``(kind, name)`` for "learn Quinn's voice" (``learn``) / "forget Quinn's voice" (``forget``), else None. Pure."""
     lx = lex("en")
     s = re.sub(r"[?!.,;:]+", " ", str(text or "").lower()).strip()
     s = re.sub(r"\s+", " ", s)
@@ -205,7 +205,7 @@ def classify(text: str) -> Optional[tuple[str, str]]:
         s = re.sub("^(?:" + rx + ")", "", s).strip()
     if not s or len(s) > 80:
         return None
-    for kind in ("learn",):
+    for kind in ("forget", "learn", "forget_bare"):
         for rx in (lx.get("cues") or {}).get(kind) or ():
             m = re.fullmatch(rx, s)
             if m:
@@ -221,6 +221,18 @@ def _say(key: str, **slots) -> str:
     for k, v in slots.items():
         text = text.replace("{" + k + "}", str(v))
     return text
+
+
+async def _own_guest(owner: str, name: str) -> Optional[str]:
+    import contacts_store as cs
+
+    key = cs.fold(name)
+    import named_guest_memory
+
+    for g in await named_guest_memory.list_for(owner):
+        if cs.fold(g["name"]) == key:
+            return g["guest_id"]
+    return None
 
 
 async def start_enrolment(owner: str, name: str, panel_id: str) -> bool:
@@ -265,7 +277,7 @@ async def _verified_here(uid: str, speaker_verified: Optional[bool], panel_id: s
 
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
                speaker_verified: Optional[bool] = None, panel_id: Optional[str] = None, allow_writes: bool = True):
-    """"Learn Quinn's voice" from a member at the panel: a ``DispatchResult`` or None. NEVER raises."""
+    """"Learn Quinn's voice" / "forget Quinn's voice" / "forget Quinn" (only when Quinn is one of my guests): a ``DispatchResult`` or None. NEVER raises."""
     try:
         if mode() != "on":
             return None
@@ -277,12 +289,31 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
 
         uid = (user_id or "").strip()
         audience = await es.audience_of(uid)
+        if kind == "forget_bare" and (audience != "adult" or await _own_guest(uid, name) is None):
+            return None                        # not a guest of this member: the turn goes on as it always did
         if audience != "adult":
             reply = _say("guest_cannot" if audience in ("guest", "synthetic", "unknown") else "minor_cannot")
         elif speaker_verified is False:
             reply = _say("unverified")
         elif allow_writes is False:
             return None
+        elif kind in ("forget", "forget_bare"):
+            gid = await _own_guest(uid, name)
+            if gid is None and kind == "forget_bare":
+                return None                    # "forget <word>" that names none of my guests is not this tier's
+            if gid is None:
+                reply = _say("forget_none", name=name)
+            elif (channel or "") in ("voice", "livekit") and not await _verified_here(uid, speaker_verified, (panel_id or "").strip()):
+                reply = _say("unverified")            # at the panel, erasing a guest needs the same positive proof as learning one
+            else:
+                try:
+                    import named_guest_memory
+
+                    await named_guest_memory.erase(uid, gid)
+                    reply = _say("forget_done", name=name)
+                except Exception as exc:  # noqa: BLE001 - fail closed: say so, keep nothing pretending
+                    logger.warning("named_guests: erase failed: %s", type(exc).__name__)
+                    reply = _say("forget_fail", name=name)
         elif (channel or "") not in ("voice", "livekit") or not (panel_id or "").strip():
             reply = _say("no_panel")
         elif not await _verified_here(uid, speaker_verified, (panel_id or "").strip()):

@@ -629,11 +629,37 @@ async def test_flue_seam_barge_in_cancel_after_text_claims(env, monkeypatch):
                 got_text.set()
 
     task = asyncio.ensure_future(consume())
-    await got_text.wait()
+    await asyncio.wait_for(got_text.wait(), 10)    # fail fast: a test that never sees the text must not run to the CI timeout
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
     assert claimed(env)
+
+
+async def test_flue_seam_barge_in_cancel_with_reply_polish_on(env, monkeypatch):
+    """The same barge-in with the PRODUCTION default (ZOE_REPLY_POLISH=on, which the suite turns off): the polish emits a sentence as
+    soon as it is complete ("Morning!" - its trailing space stays in the buffer), so the CHUNKS differ from the raw stream (which is
+    why the exact-chunk tests above run with polish off), but a cancel mid-stream still unwinds through it: the inner turn is closed
+    and the claim lands. The hang this guards against was a test waiting for the exact raw chunk, not a wrapper that swallowed a cancel."""
+    monkeypatch.setenv("ZOE_REPLY_POLISH", "on")
+    _flue_turn(monkeypatch, "hang")
+    got_text = asyncio.Event()
+    seen: list = []
+
+    async def consume():
+        async for delta in flue.run_flue_brain_streaming("morning", "s1", MEMBER):
+            seen.append(delta)
+            if delta.startswith("Morning!"):
+                got_text.set()
+
+    task = asyncio.ensure_future(consume())
+    await asyncio.wait_for(got_text.wait(), 10)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, 10)
+    assert task.cancelled() or task.done()
+    assert claimed(env)
+    assert "".join(d for d in seen if not d.startswith("__TOOL__")).strip() == "Morning!"
 
 
 async def test_flue_seam_abandoned_iterator_is_finalised_and_claims(env, monkeypatch):

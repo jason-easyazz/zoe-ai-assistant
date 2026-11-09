@@ -2701,6 +2701,11 @@ async def run_flue_brain_streaming(
     # aside) is dropped (emotional_turn_guard, default off). off: nothing wraps the stream; a non-emotional turn is never held.
     if emotional_turn_guard.mode() != "off":
         turn = emotional_turn_guard.filter_stream(turn, _spoken, user_id)
+    # Plumbing words never reach the person ("I'd activate the home ability..."), and a generic closing question is dropped when the last
+    # reply already ended on one (reply_polish, ZOE_REPLY_POLISH=off|shadow|on, default on). off: nothing wraps the stream.
+    import reply_polish
+
+    turn = reply_polish.filter_stream(turn, _spoken, user_id, session_id)   # off: passes through untouched, still notes the reply for the write gate
     # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
     # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
     # byte-identical. Outermost, so it cleans the text the owner would actually hear.
@@ -2807,6 +2812,11 @@ async def _run_flue_brain_streaming_turn(
     import memory_retire
 
     memory_retire.note_turn(uid, message, voice=bool(kwargs.get("voice_mode")))
+    # A write needs an ask (ZOE_WRITE_INTENT_GATE, default on): the turn's words, so `/api/system/intent-dispatch` can refuse a calendar
+    # write the person never asked for ("help me think through the logistics") and a hardware item on the shopping list.
+    import write_intent_gate
+
+    write_intent_gate.note_turn(uid, message)
 
     # the owner asked for their own words ("what exactly did I say about ..."): the recall_memory tool call made during this
     # turn carries only the model's query, so the turn's question is noted for /for-prompt's exact-words block (exact_words)

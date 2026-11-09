@@ -3473,6 +3473,14 @@ async def _run_voice_memory_passes(
     # proof. The turn's in-session context (the voice conversation history) is not touched here.
     if _is_unidentified(user_id):
         logger.info("GUEST_MEMORY_DISCARD lane=voice passes=all")
+        # A NAMED guest's exchange is kept in THEIR own space only (named_guest_memory; ZOE_NAMED_GUEST_MEMORY), never a member's.
+        try:
+            import named_guest_memory as _ngm
+            import named_guests as _ng_mem
+
+            await _ngm.remember(_ng_mem.current(), session_id, user_text, reply)
+        except Exception:  # noqa: BLE001
+            pass
         return
     try:
         # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
@@ -3634,6 +3642,19 @@ async def voice_command(
     import named_guests as _named_guests
 
     _named_guests.bind_turn(await _named_guests.accept(payload, caller, member_identified=bool(identified_user_id)))
+    # ZOE_GUEST_VOICE_LEARN (flag-dark, named_guest_learning.py): a scored voice no member and no named guest matched keeps its
+    # EMBEDDING (never audio) under an unknown voice; once Zoe is sure it is one person she asks its name, and the answer makes it a
+    # named guest. Off = no work at all.
+    import named_guest_learning as _ng_learn
+
+    _ng_learn.bind_ask(False)
+    if (_ng_learn.mode() != "off" and _named_guests.current() is None and not identified_user_id
+            and _speaker_verified is False):
+        _learned = await _ng_learn.observe(payload, caller, session_id=str((payload or {}).get("session_id") or panel_id),
+                                           wake=not (payload or {}).get("window"), text=text)
+        if _learned.get("action") == "named":
+            _named_guests.bind_turn(_learned["guest"])      # this turn answered "what's your name?": greet them by it
+        _ng_learn.bind_ask(_learned.get("action") == "ask")
     # ZOE_RESTRAINT: a voice the gate did NOT confirm (False) may be a guest in the room; the brief, the raise and
     # the recall packet withhold sensitive classes for this turn whatever it asks (restraint.decide, "guest").
     from restraint import bind_verdict as _restraint_bind_verdict
@@ -7525,6 +7546,77 @@ async def voice_guest_enroll(payload: dict, caller: dict = Depends(_require_voic
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@router.get("/guests")
+async def voice_guests(caller: dict = Depends(_require_voice_auth)):
+    """The signed-in member's named guests (an admin: the household's). Names and dates only, never a voice signature."""
+    import named_guest_memory as _ngm
+    from biometric_scope import require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
+    return dict(guests=await _ngm.list_for(caller_id, admin=is_admin))
+
+
+@router.delete("/guests/{guest_id}")
+async def voice_guest_forget(guest_id: str, owner_user_id: Optional[str] = None, caller: dict = Depends(_require_voice_auth)):
+    """Erase a named guest: their panel voice signature AND every conversation Zoe kept with them (the contact stays). A member
+    erases their own; an admin may name another member's guest with ``owner_user_id``. 404 when there was nothing to erase."""
+    import named_guest_memory as _ngm
+    from biometric_scope import require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
+    owner = owner_user_id if (is_admin and owner_user_id) else caller_id
+    try:
+        gone = await _ngm.erase(owner, guest_id)
+    except Exception as exc:  # noqa: BLE001 - fail closed: never report a forget that did not happen
+        logger.warning("voice/guests forget failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="could not forget that guest; nothing was reported as gone") from exc
+    if not gone:
+        raise HTTPException(status_code=404, detail="no such guest")
+    return dict(ok=True)
+
+
+@router.get("/unknown-voices")
+async def voice_unknown_voices(caller: dict = Depends(_require_voice_auth)):
+    """Unknown voices Zoe has heard addressing her at the panel (an admin's view): counts and dates only, never a voice."""
+    import named_guest_learning as _ngl
+    from biometric_scope import require_person_scope
+
+    _uid, is_admin = require_person_scope(caller)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="unknown voices are the household owner's to review")
+    return dict(voices=await _ngl.list_unknown())
+
+
+@router.post("/unknown-voices/{voice_id}/name")
+async def voice_unknown_name(voice_id: str, payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """"That was Quinn this morning": a member names an unknown voice; it becomes a named guest in THEIR layer. 409 when the name is
+    a member's or an existing guest's (a name is never claimed), 404 when the voice is gone."""
+    import named_guest_learning as _ngl
+    from biometric_scope import require_person_scope
+
+    uid, _admin = require_person_scope(caller)
+    out = await _ngl.name_unknown(voice_id, str((payload or {}).get("name") or ""), uid)
+    if out is None:
+        raise HTTPException(status_code=409, detail="that voice cannot take that name (gone, a member's name, or already a guest's)")
+    return dict(ok=True, **out)
+
+
+@router.delete("/unknown-voices/{voice_id}")
+async def voice_unknown_forget(voice_id: str, caller: dict = Depends(_require_voice_auth)):
+    """Erase one unknown voice (``all`` erases every one): its samples and its row. Admin only; fails closed."""
+    import named_guest_learning as _ngl
+    from biometric_scope import require_person_scope
+
+    _uid, is_admin = require_person_scope(caller)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="unknown voices are the household owner's to erase")
+    try:
+        n = await _ngl.erase_unknown(None if voice_id == "all" else voice_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail="could not erase; nothing was reported as gone") from exc
+    return dict(ok=True, erased=n)
+
+
 @router.post("/identify")
 async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Identify speaker by comparing to enrolled profiles.
@@ -7645,6 +7737,10 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
         logger.warning("voice/profiles/sync: guest feed failed: %s", type(exc).__name__)
         guests = []
     extra = dict(guests=guests) if guests else dict()
+    import named_guest_learning as _ngl_sync
+
+    if _ngl_sync.mode() != "off":
+        extra["learn_unknown"] = True      # the panel then attaches an unmatched turn's embedding (never audio) for learning
     return dict(
         **extra,
         ok=True,

@@ -29,6 +29,13 @@
       "(?:learn|remember|get to know|recognis?z?e) (?P<name>[a-z][a-z' \\-]{0,40}?)(?:'s|')? voice(?: please)?",
       "(?:learn|remember) the voice of (?P<name>[a-z][a-z' \\-]{0,40}?)(?: please)?",
       "this is (?P<name>[a-z][a-z' \\-]{0,40}?)(?:,| and)? (?:learn|remember) (?:their|her|his) voice"
+    ],
+    "forget": [
+      "(?:forget|delete|remove|erase) (?P<name>[a-z][a-z' \\-]{0,40}?)(?:'s|')? voice(?: please)?",
+      "(?:forget|delete|remove|erase) the voice of (?P<name>[a-z][a-z' \\-]{0,40}?)(?: please)?"
+    ],
+    "forget_bare": [
+      "(?:forget|delete|erase) (?P<name>[a-z][a-z' \\-]{0,40}?)"
     ]
   },
   "say": {
@@ -37,8 +44,11 @@
     "is_member": "{name} has their own account here, so they can say learn my voice themselves.",
     "no_panel": "I can only learn a voice at the panel, with them standing next to it.",
     "unverified": "I'm not sure who's asking, so I can't do that. Sign in with your PIN first and ask me again.",
-    "guest_cannot": "Only someone who lives here can ask me to learn a guest's voice.",
-    "minor_cannot": "That's one for a grown-up in the house to ask me."
+    "guest_cannot": "Only someone who lives here can ask me to learn or forget a guest's voice.",
+    "minor_cannot": "That's one for a grown-up in the house to ask me.",
+    "forget_done": "Done. I've forgotten {name}'s voice and our conversations.",
+    "forget_none": "I don't know a voice for {name}.",
+    "forget_fail": "Something went wrong and I couldn't forget {name}'s voice just now. Please ask me again."
   },
   "script": {
     "done": "Thanks, {name}. I'll know your voice now.",

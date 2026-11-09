@@ -5558,6 +5558,143 @@
         },
         "typed_env": false
       },
+      "ZOE_GUEST_LEARN_EXPIRE_DAYS": {
+        "defaults": [
+          "14"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 14,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_JOIN": {
+        "defaults": [
+          "0.45"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.45,
+          "divergent_ok": {},
+          "note": "the Omi calibration cut for the same model (omi-voice-tagging.md)",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_MIN_SESSIONS": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_MIN_TURNS": {
+        "defaults": [
+          "8"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 8,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_MIN_WAKE": {
+        "defaults": [
+          "2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 2,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_LEARN_TIGHT": {
+        "defaults": [
+          "0.5"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.5,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_GUEST_VOICE_LEARN": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_learning.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_HARNESS": {
         "defaults": [
           "-",
@@ -9871,6 +10008,44 @@
         },
         "typed_env": true
       },
+      "ZOE_NAMED_GUEST_MEMORY": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_memory.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_NAMED_GUEST_RECALL_TURNS": {
+        "defaults": [
+          "6"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_memory.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 6,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
       "ZOE_NIGHT_BUSY": {
         "defaults": [
           "'~/.zoe/agent-tools/night_busy.sh'"
@@ -13497,6 +13672,29 @@
           "type": "int"
         },
         "typed_env": false
+      },
+      "ZOE_REPLY_POLISH": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/reply_polish.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "on",
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_REPO_ROOT": {
         "defaults": [
@@ -17874,6 +18072,29 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_WRITE_INTENT_GATE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/write_intent_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "on",
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_WS_IDLE_TIMEOUT_SECONDS": {
         "defaults": [

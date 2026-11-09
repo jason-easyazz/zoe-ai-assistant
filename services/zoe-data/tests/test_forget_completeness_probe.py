@@ -95,6 +95,8 @@ LAYERS: dict[str, Layer] = {l.name: l for l in (
     Layer("now_card", True, "now_card.erase_entity (intent_router memory_forget_entity)", "now_card._live (card_for)"),
     Layer("member_register", True, "member_register.erase_entity (intent_router memory_forget_entity)",
           "member_register.live_entries + render (the speaking-register line)"),
+    Layer("named_guest_turns", True, "contacts_store.forget_voiceprints -> omi_voices.purge_people",
+          "named_guests.accept + brain_block (the guest's name and their own past exchanges) + sync_entries (the panel feed)"),
 )}
 
 #: Derived layers the probe cannot drive in-process. Each key must appear in the open-problems "forget-completeness" entry.
@@ -769,12 +771,90 @@ class MemberRegister(_CascadeBacked):
         monkeypatch.setattr(mf, "matches", never)
 
 
+class NamedGuests(Probe):
+    """Named guests (``named_guests`` / ``named_guest_memory``): FRIEND and KEEP are two guests USER enrolled at the panel, each with
+    one remembered exchange. Served = what a turn matched to each by VOICE gets (the brain block) plus the panel feed's names. The
+    erase is the entity forget's real step; the serve walls are the forget ledger in ``_lookup`` / ``sync_entries`` / recall."""
+
+    async def setup(self, monkeypatch, request):
+        import base64 as _b64
+        import contextlib as _cl
+        import sqlite3 as _sq
+
+        import numpy as np
+        import sqlalchemy as sa
+
+        import db_compat
+        import named_guest_enrol as nge
+        import named_guest_memory as ngm
+        import named_guests as ng
+        import speaker_models
+        from named_guest_support import BASE, _migrate, _Sqlite
+
+        self.ng, self.nge, self.ngm, self.np, self.b64, self.mid = ng, nge, ngm, np, _b64, speaker_models.acting_model()
+        path = str(request.getfixturevalue("tmp_path") / "guests.db")
+        self.db = _Sqlite(path)
+        self.db.conn.executescript(BASE)
+        engine = sa.create_engine(f"sqlite:///{path}")
+        for f in ("0053_contacts_data_model.py", "0055_omi_segments_voices.py", "0071_named_guests.py", "0072_named_guest_turns.py"):
+            _migrate(engine, f)
+
+        @_cl.asynccontextmanager
+        async def fake_db():
+            yield self.db
+        monkeypatch.setattr(db_compat, "get_compat_db", fake_db)
+        monkeypatch.setenv("ZOE_NAMED_GUESTS", "on")
+        monkeypatch.setenv("ZOE_NAMED_GUEST_MEMORY", "1")
+        nge.reset()
+        self.ids = {}
+        del _sq
+
+    async def seed(self):
+        dev = {"source": "device", "panel_id": "p1", "via_relay": False, "via_tunnel": False}
+        for i, (who, said) in enumerate(((FRIEND, "my new job starts on Monday"), (KEEP, "the garage door is fixed"))):
+            v = self.np.random.default_rng(40 + i).standard_normal(256).astype("float32")
+            t = self.nge.issue_ticket(USER, "p1", who)
+            out = await self.nge.store_profile({"ticket": t, "model_id": self.mid, "embedding_base64": self.b64.b64encode(
+                (v / self.np.linalg.norm(v)).astype("float32").tobytes()).decode()}, dev)
+            self.ids[who] = out["guest_id"]
+            await self.ngm.remember(self.ng.Guest(out["guest_id"], who, USER), "s", said, "noted")
+        self.dev = dev
+
+    async def erase(self):
+        import contacts_store
+        await contacts_store.forget_voiceprints(self.db, USER, mf.name_pattern(FRIEND))
+
+    async def served(self):
+        out = []
+        for who, gid in self.ids.items():
+            p = {"speaker": {"model_id": self.mid, "speech_s": 3.0, "guest": gid, "guest_score": 0.9}}
+            self.ng.bind_turn(await self.ng.accept(p, self.dev, member_identified=False))
+            out.append(await self.ng.brain_block("guest"))
+        self.ng.bind_turn(None)
+        out += [g["display_name"] for g in await self.ng.sync_entries({self.mid})]
+        return "\n".join(out)
+
+    def disable(self, monkeypatch):
+        async def keep_all(_uid, rows, **_k):
+            return list(rows), 0
+
+        async def never(*_a, **_k):
+            return False
+        monkeypatch.setattr(mf, "keep_unforgotten", keep_all)
+        monkeypatch.setattr(self.ng, "_forgotten", never)
+
+    async def teardown(self):
+        self.ng.bind_turn(None)
+        self.nge.reset()
+
+
 PROBES: dict[str, Callable[[], Probe]] = {
     "exact_words": ExactWords, "night_mind": NightMind, "digest_transcript": DigestTranscript, "memories_wall": MemoriesWall,
     "palace_reads": PalaceReads, "recall_packet": RecallPacket, "person_profile": PersonProfile,
     "relationship_graph": RelationshipGraph, "user_model_card": UserModelCard, "portrait": Portrait, "open_loops": OpenLoops,
     "proactive_candidates": ProactiveCandidates, "contact_offers": ContactOffers, "day_review": DayReview,
     "self_review": SelfReview, "night_extract": NightExtract, "now_card": NowCard, "member_register": MemberRegister,
+    "named_guest_turns": NamedGuests,
 }
 
 

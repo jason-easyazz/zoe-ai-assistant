@@ -9,7 +9,8 @@ WHERE THINGS LIVE
                name is linked, never duplicated (the people graph, ADR-relationship-memory).
   the voice    ONE person-voice registry shared with Omi: ``learned_voiceprints`` with ``channel='panel'`` (0071 put the channel in
                the key; the pendant's rows are ``'pendant'`` and are never served to the panel - microphone drift).
-  the memory   (the stacked memory PR) ``named_guest_turns``: read ONLY on a turn matched to that guest by voice.
+  the memory   ``named_guest_turns``: what Zoe and that guest said, keyed by (member layer, person). Read ONLY on a turn the server
+               matched to that guest; never served to any other speaker, the member who enrolled them included (default: never).
 
 THE GUARANTEES (each pinned by ``tests/test_named_guests.py``, with a break-the-fix control)
   1. A guest match NEVER yields member scope: the turn's user stays the guest sentinel, the claim is a separate field
@@ -19,12 +20,14 @@ THE GUARANTEES (each pinned by ``tests/test_named_guests.py``, with a break-the-
      guest than to a member is not that member.
   3. A person who is (or may be) a child, a soft-deleted person, or a name the member FORGOT (the forget ledger, strict: an outage
      means no guest) is never matched or served to a panel.
-  Enrolment (only a verified adult member, through a single-use ticket) and the guest's memory + forget land in the stacked PRs
-  (``named_guest_enrol.py``, ``named_guest_memory.py``).
+  Enrolment (only a verified adult member, through a single-use ticket) is ``named_guest_enrol.py``; what is kept and erasing is
+  ``named_guest_memory.py``.
 
 FLAGS (registered in ``flag_registry``)
   ``ZOE_NAMED_GUESTS``        off (DEFAULT) | shadow | on. off: the sync serves no guest, claims are ignored, the tier is inert.
                               shadow: guests are served and scored, the server LOGS who it would greet, nothing changes.
+  ``ZOE_NAMED_GUEST_MEMORY``  remember a guest's conversations (default off; only meaningful with ``ZOE_NAMED_GUESTS=on``).
+  ``ZOE_NAMED_GUEST_RECALL_TURNS`` how many past exchanges ride into a guest turn (default 6).
 """
 from __future__ import annotations
 
@@ -221,11 +224,23 @@ async def brain_block(user_id: str) -> str:
         guest = current()
         from user_filters import is_unidentified
 
-        if guest is None or not is_unidentified(user_id):
+        if not is_unidentified(user_id):
             return ""
         from identity_facts import BLOCK_CLOSE, BLOCK_OPEN
 
-        return f"{BLOCK_OPEN}\n{guest_line(guest)}\n{BLOCK_CLOSE}"
+        if guest is None:
+            import named_guest_learning     # an unknown voice Zoe is now sure of: ask its name (ZOE_GUEST_VOICE_LEARN=on)
+
+            return f"{BLOCK_OPEN}\n{named_guest_learning.ask_line()}\n{BLOCK_CLOSE}" if named_guest_learning.asking() else ""
+
+        lines = [guest_line(guest)]
+        import named_guest_memory
+
+        past = await named_guest_memory.recall_lines(guest)
+        if past:
+            lines.append(f"Earlier conversations with {guest.name} (theirs only):")
+            lines.extend(past)
+        return f"{BLOCK_OPEN}\n" + "\n".join(lines) + f"\n{BLOCK_CLOSE}"
     except Exception as exc:  # noqa: BLE001
         logger.debug("named_guests: brain block skipped: %s", type(exc).__name__)
         return ""
