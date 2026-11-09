@@ -158,6 +158,28 @@ def _pair(c: str, rx: dict, tier: str) -> Optional[Verdict]:
 _ACCIDENT = re.compile(r"(?<!\w)(?:accident\w*|by mistake|too many|too much|double(?: the| my| his| her)? dose|twice|overdos\w*|extra)(?!\w)", re.I)
 
 
+#: a sentence that ASKS about, or hypothesises, signs ("what signs of pain should i watch for") does not report them
+_HYPOTHETICAL = re.compile(r"(?<!\w)(?:what|which|how|should|signs?|symptoms?|watch|look(?:ing)? for|in case|whether|might|could|would|if|unless|until|any)(?!\w)")
+_CONTINUES = re.compile(r"\s*(?:he|she|they|hes|shes|theyre|its|now|and|then|but)(?!\w)")
+
+
+def _stated_sign(s: str, rx: dict) -> bool:
+    """A sign (drooling, pain, cant swallow ...) ASSERTED about the child who swallowed the object: in the sentence that names the object, or the next one when it
+    carries on about the same child ("... swallowed a coin. now he is drooling"). Questions, watch-for lists and denials do not count."""
+    parts = re.findall(r"[^.!?;\n]+[.!?;\n]?", s)
+    for i, seg in enumerate(parts):
+        if not (rx["obj_minor"].search(seg) or (i and _CONTINUES.match(seg) and rx["obj_minor"].search(parts[i - 1]))):
+            continue
+        if seg.rstrip().endswith("?") or _HYPOTHETICAL.search(seg):
+            continue
+        if i and not rx["obj_minor"].search(seg) and (rx["human"].search(seg) or re.search(r"(?<!\w)(?:i|im|ive|my)(?!\w)", seg)):
+            continue
+        for m in rx["obj_signs"].finditer(seg):
+            if not _negated(seg, m.start(), rx):
+                return True
+    return False
+
+
 def _target(tail: str, rx: dict) -> str:
     """What was swallowed: a battery / magnet / sharp object (urgent), a harmful substance, or a small harmless-looking object. '' = nothing the floor answers."""
     return "object_urgent" if rx["obj_urgent"].search(tail) else "poison_human" if rx["sub"].search(tail) else "object_minor" if rx["obj_minor"].search(tail) else ""
@@ -184,13 +206,14 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
         # "took" is ordinary ("took my tablets"): only a concerning amount or an accident makes it an ingestion ("accidentally took 20 paracetamol")
         for v in rx["took"].finditer(sentence):
             tail = sentence[v.start(): v.end() + 70]
-            if rx["sub"].search(tail) and rx["took_risky"].search(sentence) and (
+            key = "object_urgent" if rx["obj_urgent"].search(tail) else "poison_human" if rx["sub"].search(tail) else ""
+            if key and rx["took_risky"].search(sentence) and (
                     not rx["idiom"].search(sentence[max(0, v.start() - 8):]) or _ACCIDENT.search(sentence)):
                 human = bool(rx["human"].search(sentence) or _SELF_INGEST.search(sentence) or re.search(r"(?<!\w)(?:i|ive|i have)(?!\w)", sentence[:v.start()]))
                 animal = bool(rx["animal"].search(sentence[max(0, v.start() - 45):v.start()]))
                 if animal and not human:
                     return Verdict("ingest_animal", "poison_animal", lead=s[:v.start()])
-                return Verdict("ingest_human", "poison_human", lead=s[:v.start()])
+                return Verdict("ingest_human", key, lead=s[:v.start()])
     return None
 
 
@@ -265,9 +288,8 @@ def detect(text: str) -> Verdict:
         call = _flag(s, rx, "call") or _pair(c, rx, "call")
         if ing and ing.key == "object_minor" and not call:
             # a coin AND a stated sign (drooling, pain, cant swallow): the number now, not "ring if there is..."
-            for m in rx["obj_signs"].finditer(s):
-                if not _negated(s, m.start(), rx):
-                    return Verdict("red_call", "object_signs")
+            if _stated_sign(s, rx):
+                return Verdict("red_call", "object_signs")
         if ing and not (call and ing.key == "object_minor"):   # a coin AND choking: the ambulance answer is the better one
             return ing
         if call:

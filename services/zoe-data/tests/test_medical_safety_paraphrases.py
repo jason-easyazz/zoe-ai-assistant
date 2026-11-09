@@ -111,6 +111,7 @@ NEG += ["the coin collection is on the shelf", "lego is all over the floor again
 NEG += ["the weight of the box is heavy", "heavy rain on the roof", "chest of tea from the shop", "my bag feels heavy", "pain in the neck neighbour", "pressure washing the deck"]
 NEG += ["there is a pain in the chest of drawers", "the pain in the chest of drawers is the broken runner", "the pressure washer hit my chest", "pressure washing the deck splashed my chest",
         "the pressure cooker lid hit my chest"]
+NEG += ["i ate a little bit of toast", "my toddler ate a small piece of apple", "i ate onion rings for dinner", "the baby ate a small piece of cake", "i ate a tiny bit of chicken"]
 NEG += ["i feel a bit tired", "my back is sore", "my knee hurts", "my tummy hurts a bit", "i have a sore throat", "my ear aches"]
 NEG += ["tell me a joke", "what is the weather like", "play some music", "add milk to the list"]
 
@@ -194,6 +195,21 @@ def test_a_small_object_with_a_stated_sign_is_the_plain_ambulance_answer(text):
 @pytest.mark.parametrize("text", ["my son swallowed a coin, no pain", "my son swallowed a coin and is not drooling", "my dog swallowed a coin and is drooling"])
 def test_negative_control_denied_or_pet_signs_do_not_flip(text):
     assert _verdict(text) in {("ingest_human", "object_minor"), ("ingest_animal", "poison_animal")}
+
+
+@pytest.mark.parametrize("text", ["my son accidentally took a button battery", "my toddler has taken a battery by mistake", "she took a magnet by accident"])
+def test_took_by_accident_still_catches_a_battery_or_magnet(text):
+    assert _verdict(text) == ("ingest_human", "object_urgent")
+
+
+@pytest.mark.parametrize("text", ["my child swallowed a coin, what signs of pain or drooling should i watch for?", "my child swallowed a coin. my back has pain",
+                                  "wren swallowed a coin, should i worry if there is vomiting"])
+def test_negative_control_a_question_or_unrelated_symptom_is_not_a_stated_sign(text):
+    assert _verdict(text) == ("ingest_human", "object_minor")
+
+
+def test_a_sign_in_the_next_sentence_about_the_same_child_counts():
+    assert _verdict("my child swallowed a coin. now he is drooling") == ("red_call", "object_signs")
 
 
 def test_a_coin_with_choking_is_the_ambulance_answer():
