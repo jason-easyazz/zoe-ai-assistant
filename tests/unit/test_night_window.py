@@ -300,6 +300,7 @@ def make(tmp_path, *, cfg_kw=None, argv=(), host_cls=None, **host_kw):
               "struggle_proposals_script": tmp_path / "absent" / "zoe-struggle-proposals.py",
               "self_review_script": tmp_path / "absent" / "zoe-self-review.py",
               "omi_cleanread_script": tmp_path / "absent" / "zoe-omi-cleanread.py",
+              "night_extract_script": tmp_path / "absent" / "zoe-night-extract.py",
               **(cfg_kw or {})}      # the optional entry points are absent unless a test brings its own (a plain skip, never a failed night)      # the real entry point lives on another branch: tests never depend on whether it is merged
     cfg = nw.NightCfg(lock_path=str(tmp_path / "brain.lock"), night_dir=tmp_path / "night", report_dir=tmp_path / "reports", buddyinfo=str(tmp_path / "buddyinfo"), meminfo=str(tmp_path / "meminfo"),
                       blackouts=((250, 292),), contig_min_blocks=64, health_wait_s=20.0, quiet_wait_max_min=2.0, quiet_poll_s=10.0, busy_wait_max_min=2.0, busy_poll_s=10.0,
@@ -891,7 +892,7 @@ def test_the_hard_cap_keeps_a_late_job_from_starting_and_the_wake_still_happens(
     w, host, _ = make(tmp_path, job_s=52 * 60.0)
     w.run()
     assert wake_order(host) == [nw.BRAIN, nw.KOKORO, nw.ROUTER, nw.ZOE_DATA]
-    on12 = [j for j in w.jobs if j["backend"] == "12B"]
+    on12 = [j for j in w.jobs if j["backend"] == "12B" and j["status"] != "skipped"]      # (the absent optional scripts are plain skips)
     assert on12[0]["status"] == "ok" and on12[1]["status"] == "no time" and "no time left" in on12[1]["notes"][0]          # 52 min used: dreaming could not start inside the cap
     for j in host.jobs_run:                                                                                            # and every 4B fallback is bounded by the voice gate
         if j["env"]["GEMMA_SERVER_URL"].endswith(":11434/v1"):
@@ -902,7 +903,7 @@ def test_a_requested_job_that_never_ran_for_lack_of_time_is_not_a_success(tmp_pa
     """Greptile 1929: 'no time left' shared the status of the intentionally absent night-mind script, and the final check accepted both: --no-fallback + a slow digest exited 0 with dreaming unrun."""
     w, host, _ = make(tmp_path, argv=["--no-fallback"], job_s=52 * 60.0)
     assert w.run() == nw.EXIT_JOBS_FAILED
-    assert [j["status"] for j in w.jobs if j["backend"] == "12B"][:2] == ["ok", "no time"]
+    assert [j["status"] for j in w.jobs if j["backend"] == "12B" and j["status"] != "skipped"][:2] == ["ok", "no time"]
     w2, _, _ = make(tmp_path, job_s=60.0)
     assert w2.run() == nw.EXIT_OK and any(j["name"] == "night_mind" and j["status"] == "skipped" for j in w2.jobs)        # the absent optional script stays a plain skip
 
@@ -1308,6 +1309,27 @@ def test_the_self_review_runs_before_the_day_review_with_its_own_budget_and_no_4
     assert ran.index("zoe-self-review.py") < ran.index("zoe-omi-day-review.py")
     sr = [j for j in host.jobs_run if j["name"] == "zoe-self-review.py"]
     assert len(sr) == 1 and "--budget-s" in sr[0]["argv"] and sr[0]["env"]["GEMMA_SERVER_URL"].endswith(":11500/v1")
+
+
+def test_the_extract_prepass_runs_right_after_the_digest_best_effort_with_a_budget_and_no_4b_fallback(tmp_path):
+    """The shadow GLiNEREL pre-pass (services/zoe-data/night_extract.py): after the digest it is compared with, CPU only (no model-server flags), bounded at 420 s, never
+    re-run on the live 4B, and a missing script is a plain skip."""
+    spec = next(j for j in nw.build_jobs(nw.NightCfg(), 8192, 6.2, 150.0) if j.name == "extract_prepass")
+    assert spec.best_effort and not spec.fallback_4b and not spec.skip_reason and spec.timeout_s == 420.0 and spec.budget_flag == "--budget-s"
+    assert spec.argv[1].endswith("zoe-night-extract.py") and len(spec.argv) == 2
+    names = [j.name for j in nw.build_jobs(nw.NightCfg())]
+    assert names[:3] == ["digest", "extract_prepass", "dreaming"]
+    assert next(j for j in nw.build_jobs(nw.NightCfg(night_extract_script=tmp_path / "no.py")) if j.name == "extract_prepass").skip_reason.startswith("no.py not found")
+    script = tmp_path / "zoe-night-extract.py"
+    script.write_text("# stand-in")
+    w, host, _ = make(tmp_path, cfg_kw={"night_extract_script": script})
+    assert w.run() == nw.EXIT_OK, w.outcome
+    ran = [j["name"] for j in host.jobs_run]
+    assert ran.index("night_digest.py") < ran.index("zoe-night-extract.py") < ran.index("zoe-nightly-dreaming.py")
+    ex = [j for j in host.jobs_run if j["name"] == "zoe-night-extract.py"]
+    assert len(ex) == 1 and "--budget-s" in ex[0]["argv"]
+    w2, host2, _ = make(tmp_path, cfg_kw={"night_extract_script": script}, job_rc={"zoe-night-extract.py": 124})
+    assert w2.run() == nw.EXIT_OK and any(j["name"] == "extract_prepass" and j["status"] == "timeout" for j in w2.jobs)      # best-effort
 
 
 def test_the_struggle_proposals_job_runs_after_the_night_mind_before_the_day_review_and_never_fails_the_night_for_time(tmp_path):
@@ -1797,7 +1819,7 @@ def test_the_real_night_command_in_the_unit_carries_every_lever_and_equals_the_c
     args = _exec_start_args()
     parsed = nw.build_parser().parse_args(args)                                   # every flag in the unit is a flag the script accepts
     cfg = nw.configure(parsed)
-    assert args[args.index("--jobs") + 1] == "digest,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review" and cfg.jobs == ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_cleanread", "omi_day_review")
+    assert args[args.index("--jobs") + 1] == "digest,extract_prepass,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review" and cfg.jobs == ("digest", "extract_prepass", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_cleanread", "omi_day_review")
     assert (cfg.ngl, cfg.ctx_choice, cfg.kv_choice) == (34, 8192, "q8_0") and "--ngl" in args and "--ctx" in args and "--kv" in args
     assert args[args.index("--end-by") + 1] == "03:55" and cfg.end_by == 3 * 60 + 55
     defaults = nw.configure(nw.build_parser().parse_args([]))                     # written-out levers == the code's defaults: a changed default cannot silently change the night

@@ -8602,6 +8602,29 @@
         },
         "typed_env": false
       },
+      "ZOE_MEDICAL_SAFETY": {
+        "defaults": [
+          "'enforce'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/medical_safety.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "enforce"
+          ],
+          "default": "enforce",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/medical-safety.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMBER_REGISTER": {
         "defaults": [
           "'off'"
@@ -10062,6 +10085,29 @@
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_NIGHT_EXTRACT": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/night_extract.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "phase 1: shadow only; on is not built",
+          "owner_doc": "docs/knowledge/night-extract.md",
           "type": "str"
         },
         "typed_env": true
@@ -19871,6 +19917,16 @@
       ],
       "typed_env": false
     },
+    "HF_HUB_CACHE": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/jobs/glinerel_worker.py"
+      ],
+      "typed_env": false
+    },
     "HF_HUB_OFFLINE": {
       "defaults": [
         "dynamic"
@@ -20666,6 +20722,16 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/reap_stale_omnigent_runners.py"
+      ],
+      "typed_env": false
+    },
+    "OMP_NUM_THREADS": {
+      "defaults": [
+        "'4'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/jobs/glinerel_worker.py"
       ],
       "typed_env": false
     },
@@ -21572,6 +21638,11 @@
     }
   },
   "registry_unread": [
+    "ZOE_NIGHT_EXTRACT_BATCH",
+    "ZOE_NIGHT_EXTRACT_DIR",
+    "ZOE_NIGHT_EXTRACT_MEM_MAX",
+    "ZOE_NIGHT_EXTRACT_THREADS",
+    "ZOE_NIGHT_EXTRACT_VENV",
     "ZOE_OMI_ANCHOR_JITTER_S",
     "ZOE_OMI_ANCHOR_MAX_SPREAD_S",
     "ZOE_OMI_ANCHOR_MIN_CLIPS",

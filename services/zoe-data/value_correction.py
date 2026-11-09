@@ -53,6 +53,25 @@ def number_of(token: str) -> Optional[int]:
     return None
 
 
+_HALF_TAIL_RE = re.compile(r"(?:[\s-]+and[\s-]+a[\s-]+half|\.5)$", re.IGNORECASE)
+
+
+def half_of(token: str) -> Optional[int]:
+    """The whole part of "3 and a half" / "three and a half" / "3.5" (3), else None. Pure."""
+    t = (token or "").strip().lower()
+    m = _HALF_TAIL_RE.search(t)
+    return number_of(t[:m.start()]) if m else None
+
+
+def value_of(token: str) -> Optional[float]:
+    """An age as a number: 7, 3.5 ("three and a half"), or None. Pure."""
+    n = number_of(token)
+    if n is not None:
+        return float(n)
+    h = half_of(token)
+    return h + 0.5 if h is not None else None
+
+
 def number_like(n: int, like: str) -> str:
     """``n`` written the way ``like`` was ("24" -> digits, "twenty-four" -> hyphenated words, "twenty four" -> spaced words)."""
     if like.strip().isdigit():
@@ -69,18 +88,25 @@ def number_like(n: int, like: str) -> str:
 _NUM = (r"(?:\d{1,3}|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?"
         r"|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen"
         r"|nineteen|one hundred)")
+# "3 and a half" / "three and a half" / "3.5": an age with its half (QA 6b: "wren is 3 and a half, not 3" was never read as a
+# correction, so the stored "three" stayed)
+_HALF = r"(?:(?:\s+|-)and(?:\s+|-)a(?:\s+|-)half|\.5)"
+_NUMH = rf"{_NUM}{_HALF}"
 _YEARS = r"(?:\s+(?:years?[ -]old|yrs?\s+old|yo))?"
 _WORD = r"[A-Za-z][A-Za-z'’\-]{1,24}"
 _REL = (r"(?:sister|brother|mum|mom|mother|dad|father|wife|husband|partner|son|daughter|boyfriend|girlfriend|nan|nana|grandma|"
         r"grandmother|grandpa|grandfather|aunt|auntie|uncle|cousin|niece|nephew|friend|boss)")
-_SUBJ = rf"(?P<subj>(?:my|our)\s+{_REL}|{_WORD})"
+_SUBJ = rf"(?P<subj>(?:my|our)\s+{_REL}|(?:the|my|our)\s+{_WORD}(?:\s+{_WORD})?|{_WORD})"
 _CUE = (r"(?P<cue>(?:(?:a\s+(?:small|quick)\s+)?correction|actually|sorry|no|nope|wait|oh|hang\s+on|i\s+(?:misspoke|meant|said)|"
         r"(?:that(?:['’]s|\s+is|\s+was)\s+(?:wrong|incorrect|not\s+right)))[,.;:!\-\s]+)*")
 _LEAD = rf"^\W*(?:(?:good\s+)?(?:morning|evening|afternoon)[,.\s]+)?{_CUE}"
-_PAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are)\s+(?:actually\s+|really\s+)?(?P<n>{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}[,;]?\s+"
-                      rf"(?:and\s+)?not\s+(?P<o>{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}\W*(?:i\s+misspoke\W*)?$", re.IGNORECASE)
-_AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\s+(?:(?P<pre>actually|now)\s+)?(?P<n>{_NUM}){_YEARS}"
+_PAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are)\s+(?:actually\s+|really\s+)?(?P<n>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}[,;]?\s+"
+                      rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}\W*(?:i\s+misspoke\W*)?$", re.IGNORECASE)
+_AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\s+(?:(?P<pre>actually|now)\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}"
                          rf"(?:\s+(?P<post>now))?\W*$", re.IGNORECASE)
+# "its 76 for margaret, not 78": the value comes first, the subject after "for" (QA 6b)
+_FOR_RE = re.compile(_LEAD + rf"(?:it['’]?s|that['’]?s|thats|it\s+is)\s+(?:actually\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}\s+for\s+{_SUBJ}[,;]?\s+"
+                     rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_NUM}){_YEARS}\W*$", re.IGNORECASE)
 _NOT_SUBJECT = frozenset({"it", "this", "that", "there", "here", "he", "she", "they", "we", "i", "you", "what", "who", "which", "the",
                           "a", "an", "my", "our", "your", "his", "her", "their", "so", "its", "zoe", "today", "tomorrow", "yesterday",
                           "tonight", "everything", "nothing", "something", "someone", "everyone", "anything"})
@@ -113,10 +139,17 @@ def statement(text: str) -> Optional[Correction]:
             if new.lower() == old.lower():
                 continue
             cued = bool((m.group("cue") or "").strip()) or bool(re.search(r"\b(?:actually|really)\s+\S", sentence, re.IGNORECASE))
-            both_num = number_of(new) is not None and number_of(old) is not None
+            both_num = value_of(new) is not None and value_of(old) is not None
             if not both_num and (not cued or not same_shape(new, old)):
                 continue
             return Correction(subj, new, old, cued)
+        m = _FOR_RE.match(sentence)
+        if m:
+            subj = m.group("subj").strip()
+            new, old = m.group("n").strip(), m.group("o").strip()
+            if subj.lower() not in _NOT_SUBJECT and value_of(new) != value_of(old):
+                return Correction(subj, new, old, True)
+            continue
         m = _AGE_NOW_RE.match(sentence)
         if m:
             subj = m.group("subj").strip()
@@ -137,10 +170,29 @@ def _subject_re(subject: str):
     if m:
         # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
         return re.compile(rf"(?:^|\buser['’]s\s+|\b(?:my|our)\s+){re.escape(m.group(1))}(?![A-Za-z0-9])", re.IGNORECASE)
+    m = re.match(r"(?i)(my|our)\s+(.+)$", s)
+    if m:
+        # the USER's own <noun> ("my birthday"): "User's birthday ..." or an unpossessed mention, never "Oliver's birthday ..."
+        noun = re.escape(m.group(2))
+        return re.compile(rf"(?:\buser['’]s\s+{noun}|(?<!['’]s\s)(?<![A-Za-z0-9'’]){noun})(?![A-Za-z0-9])", re.IGNORECASE)
+    m = re.match(r"(?i)the\s+(.+)$", s)
+    if m:
+        s = m.group(1)          # "the pitch" -> any row that names the pitch ("User has a board pitch on Thursday")
     return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)
 
 
-_AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})\b(?P<post>{_YEARS})"
+_AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
+
+
+def _row_value(am) -> Optional[float]:
+    n = number_of(am.group("num"))
+    return None if n is None else n + (0.5 if am.group("half") else 0.0)
+
+
+def _render_value(v: float, like: str) -> str:
+    """``v`` (7 or 3.5) written the way the row's number was ("three" -> "three and a half")."""
+    whole = int(v)
+    return number_like(whole, like) + (" and a half" if v - whole else "")
 
 
 def rewrite(row_text: str, corr: Correction) -> Optional[str]:
@@ -155,12 +207,13 @@ def rewrite(row_text: str, corr: Correction) -> Optional[str]:
         return None
     tail = text[sm.end():]
     if corr.old is not None:
-        old_n, new_n = number_of(corr.old), number_of(corr.new)
+        old_n, new_n = value_of(corr.old), value_of(corr.new)
         if old_n is not None and new_n is not None:
-            # an AGE pair: the subject's number, whatever its spelling ("24" == "twenty-four")
+            # an AGE pair: the subject's number, whatever its spelling ("24" == "twenty-four", "3" -> "3 and a half")
             for am in re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE):
-                if number_of(am.group("num")) == old_n:
-                    return text[:sm.end()] + tail[:am.start("num")] + number_like(new_n, am.group("num")) + tail[am.end("num"):]
+                if _row_value(am) == old_n:
+                    return (text[:sm.end()] + tail[:am.start("num")] + _render_value(new_n, am.group("num"))
+                            + tail[(am.end("half") if am.group("half") else am.end("num")):])
             return None
         old_re = re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(corr.old)}(?![A-Za-z0-9'’])", re.IGNORECASE)
         if re.search(rf"(?<![A-Za-z0-9'’]){re.escape(corr.new)}(?![A-Za-z0-9'’])", tail, re.IGNORECASE):
@@ -170,17 +223,46 @@ def rewrite(row_text: str, corr: Correction) -> Optional[str]:
             return None
         new = corr.new[:1].upper() + corr.new[1:] if om.group(0)[:1].isupper() else corr.new
         return text[:sm.end()] + tail[:om.start()] + new + tail[om.end():]
-    new_n = number_of(corr.new)
+    new_n = value_of(corr.new)
     if new_n is None:
         return None
     ages = list(re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE))
     if not ages:
         return None
     am = ages[0]
-    old_n = number_of(am.group("num"))
+    old_n = _row_value(am)
     if old_n is None or old_n == new_n:
         return None
-    return text[:sm.end()] + tail[:am.start("num")] + number_like(new_n, am.group("num")) + tail[am.end("num"):]
+    return (text[:sm.end()] + tail[:am.start("num")] + _render_value(new_n, am.group("num"))
+            + tail[(am.end("half") if am.group("half") else am.end("num")):])
+
+
+_FILLER = frozenset({"the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "for", "in", "on", "at", "and", "or", "user", "users",
+                     "not", "it", "its", "that", "this", "has", "have", "had", "now", "year", "years", "old", "aged", "age", "yo",
+                     "corrected", "actually", "turned", "turns"})
+
+
+def invented_on_correction_turn(fact: str, user_message: str) -> bool:
+    """True for a digest fact the correction turn cannot have said: it holds the corrected (new or old) value but names a field
+    or word the turn never used. QA 6b: "actually its 76 for margaret, not 78" produced "User's blood pressure is 78" - the digest
+    attached the stray number to an invented attribute of the user. The correction itself is applied to the stored rows
+    (``apply``); the digest writes nothing new about a corrected value. Pure; False when the turn is not a correction."""
+    corr = statement(user_message)
+    if corr is None or not (fact or "").strip():
+        return False
+    values = [v for v in (corr.new, corr.old) if v]
+    low = (fact or "").lower()
+    subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower()
+    if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+        return False        # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction, not invented
+    if not any(re.search(rf"(?<![A-Za-z0-9]){re.escape(v.lower())}(?![A-Za-z0-9])", low) for v in values):
+        return False
+    said = {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", (user_message or "").lower().replace("'s", ""))}
+    for w in re.findall(r"[a-z0-9]+", low.replace("'s", "")):
+        if w in _FILLER or w.rstrip("s") in said:
+            continue
+        return True
+    return False
 
 
 async def apply(user_message: str, user_id: str, session_id: Optional[str], *, svc=None,

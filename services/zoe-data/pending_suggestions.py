@@ -11,6 +11,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from db_pool import get_db_ctx, get_pool
+import own_name
 from people_utils import name_covered_by_contacts
 
 from user_filters import is_unidentified
@@ -254,6 +255,7 @@ async def store_suggestions(
                 user_id,
                 "member",
             )
+            _own_for_store = None
             for s in suggestions[:3]:
                 sid = str(uuid.uuid4())
                 slots = s.get("pre_filled_slots") or {}
@@ -266,6 +268,11 @@ async def store_suggestions(
                 if s.get("action_type") == "person_create":
                     _pname = (slots.get("name") or "").strip()
                     if is_junk_contact_name(_pname):
+                        continue
+                    # The speaker's OWN name is not a contact to add ("add Walter (your customer)" to Walter; QA 6b, ~8% of replies).
+                    if _own_for_store is None:
+                        _own_for_store = await own_name.names(user_id)
+                    if own_name.is_own(_pname, _own_for_store):
                         continue
                     # A bare name the user already has a contact for ("Marisol" with a Marisol Okafor and a Marisol
                     # Vance on the list) is not a new person, whichever emitter produced it (person bench P7.b).
@@ -428,6 +435,7 @@ async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
                 limit,
             )
         out = []
+        own = await own_name.names(user_id) if rows else frozenset()
         for r in rows:
             if _offer_named(named, "person_create", r["offer_phrase"], r["pre_filled_slots"]):
                 continue
@@ -436,6 +444,8 @@ async def list_pending_contacts(user_id: str, *, limit: int = 50) -> list[dict]:
                 slots = json.loads(r["pre_filled_slots"] or "{}")
             except json.JSONDecodeError:
                 pass
+            if own_name.is_own(str(slots.get("name") or ""), own):
+                continue
             out.append({
                 "id": r["id"],
                 "name": slots.get("name"),
@@ -476,6 +486,7 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
                 limit,
             )
             contact_names = await _live_contact_names(db, user_id) if rows else []
+            own = await own_name.names(user_id) if rows else frozenset()
             for row in rows:
                 if _offer_named(named, "person_create", row["offer_phrase"], row["pre_filled_slots"]):
                     if named is not _withhold_all:
@@ -485,6 +496,11 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
                     _offered = json.loads(row["pre_filled_slots"] or "{}").get("name") or ""
                 except (json.JSONDecodeError, AttributeError):
                     _offered = ""
+                if _offered and own_name.is_own(str(_offered), own):
+                    # the member's OWN name: an offer made before the self-check existed (or by an emitter that missed it) closes here,
+                    # so "no" is never needed to clear it and it can never come back
+                    await db.execute("UPDATE pending_suggestions SET resolved = 1 WHERE id = $1", row["id"])
+                    continue
                 if _offered and name_covered_by_contacts(str(_offered), contact_names):
                     # The person is a contact by now (or a bare name the owner already has): the offer is stale. Close
                     # it instead of asking "add Marisol as a contact?" on the owner's next unrelated turn.
