@@ -11,6 +11,12 @@
    this one is dropped, provided a sentence of substance comes before it. A specific question ("Which list should I put bolts on?") is never
    a closer, and a reply that is only a closer is kept whole.
 
+3. **On a feeling's turn the breaker is strict, and a stock line is not an answer** (QA round 7, guest g1 / g4). When the previous reply ended
+   on a question and THIS turn is emotional (``emotional_turn_guard.is_emotional_turn``) and the person asked nothing, ANY trailing question
+   is dropped (not only a generic closer), provided a sentence of substance comes before it: a person who is struggling is never asked on
+   three turns running. A stock sentence ("I'm here to listen to whatever is on your mind", "feel free to share") is dropped when anything
+   else is said; when it is the whole reply it is replaced by one short, true statement.
+
 Streaming. Text is released a sentence at a time (the repo's one splitter, ``narration_filter._next_end``); only a completed question
 sentence that WOULD be dropped is held back, until the next sentence (release it) or the end of the reply (drop it). Tool / thinking
 sentinels pass untouched and at once. ``PolishStream.feed/finish`` equals ``polish`` of the whole reply for every way of cutting it
@@ -147,6 +153,71 @@ def note_reply(user_id: str, session_id: str, text: str) -> None:
 
 def reset_state() -> None:
     _ended_q.clear()
+    _feeling_thread.clear()
+
+
+# -- a feeling's turn: the strict breaker and the stock line -------------------------------------------------
+
+#: the sentence is a stock "I'm here to listen" line, not something said about what the person told Zoe
+_STOCK_RX = re.compile(
+    r"^\W*(?:i['\u2019]?m|i\s+am)\s+(?:always\s+|right\s+|just\s+)?(?:here|all\s+ears|listening)\b(?:\s+(?:to\s+listen|for\s+you|if\s+you|whenever|when\s+you|and\s+listening))?"
+    r"|^\W*(?:please\s+)?feel\s+free\s+to\s+(?:share|talk|tell|open\s+up)\b|^\W*i['\u2019]?m\s+here\s+to\s+(?:listen|hear)\b"
+    , re.IGNORECASE)
+#: said only when a stock line was the WHOLE reply: a statement, no question, nothing invented
+STOCK_REPLACEMENT = "That sounds like a lot to carry. You don't have to sort it all out at once."
+_ASKS_RX = re.compile(
+    r"\?|^\W*(?:(?:hey|ok|okay|so|and|um|zoe)\s+)*(?:what|why|how|who|where|when|which|can\s+you|could\s+you|do\s+you|are\s+you|is\s+it|"
+    r"should\s+i|would\s+you|will\s+you|any\s+ideas)\b", re.IGNORECASE)
+
+
+_FEEL_FREE_TAIL_RX = re.compile(
+    r"^(?:\s+(?:(?:to\s+)?(?:me|us)|with\s+(?:me|us)|more|anytime|any\s*time|whenever(?:\s+you(?:'re|\s+are)?\s+ready|\s+you\s+like)?|"
+    r"about\s+(?:it|that|anything|whatever|how\s+you\s+feel)(?:\s+(?:you\s+(?:like|want)|on\s+your\s+mind))?|"
+    r"if\s+you\s+(?:want|like|need)(?:\s+to)?|whatever(?:\s+is)?(?:\s+on\s+your\s+mind)?))*[\s.!]*$", re.IGNORECASE)
+
+
+def is_stock_line(sentence: str) -> bool:
+    """A sentence that is ONLY a stock listening line: one with a second clause ("I'm here to listen, and that sounds hard") says something."""
+    m = _STOCK_RX.match(sentence or "")
+    if not m or re.search(r"[,;]|\b(?:and|but|that|because)\b", (sentence or "")[m.end():], re.IGNORECASE):
+        return False
+    if re.match(r"^\W*(?:please\s+)?feel\s+free\b", sentence or "", re.IGNORECASE):
+        # an invitation to talk TO ZOE is stock; "feel free to tell your boss you need a day off" is advice and is kept
+        return bool(_FEEL_FREE_TAIL_RX.match((sentence or "")[m.end():]))
+    return True
+
+
+def person_asked(message: str) -> bool:
+    """The person's own turn asks Zoe something (a ``?`` or a question opener): she may answer with a question back."""
+    return bool(_ASKS_RX.search((message or "").strip()))
+
+
+#: (user id, session id) -> how many MORE turns still belong to a feeling just shared ("yeah" after "i snapped at my youngest and i feel
+#: horrible" is part of that moment, though its own words carry no feeling). A bounded LRU; a dict write, never I/O.
+_THREAD_TURNS = 2
+_feeling_thread: "OrderedDict[tuple, int]" = OrderedDict()
+
+
+def feeling_turn_policy(message: str, user_id: str, session_id: str) -> tuple:
+    """``(strict_cap, stock)`` for this turn: both False off a feeling's turn (an emotional turn, or the short turns right after one).
+    ``strict_cap`` also needs the last reply to have ended on a question and the person to have asked nothing. Never raises."""
+    try:
+        import emotional_turn_guard
+
+        key = ((user_id or "").strip(), session_id or "")
+        if emotional_turn_guard.is_emotional_turn(message):
+            _feeling_thread.pop(key, None)
+            _feeling_thread[key] = _THREAD_TURNS
+        elif _feeling_thread.get(key, 0) > 0 and len((message or "").split()) <= 8 and not person_asked(message):
+            _feeling_thread[key] -= 1
+        else:
+            _feeling_thread.pop(key, None)
+            return False, False
+        while len(_feeling_thread) > _MAX_SESSIONS:
+            _feeling_thread.popitem(last=False)
+        return bool(ended_on_question(user_id, session_id) and not person_asked(message)), True
+    except Exception:  # noqa: BLE001 - optional polish
+        return False, False
 
 
 # -- the stream --------------------------------------------------------------------------------------------
@@ -154,10 +225,13 @@ def reset_state() -> None:
 class PolishStream:
     """Incremental :func:`polish`. ``feed(delta)`` returns the text safe to emit now; ``finish()`` what is held."""
 
-    def __init__(self, lex, cap: bool, scrub_names: bool = True) -> None:
-        self.lex, self.cap, self.scrub_names = lex, bool(cap and lex is not None), scrub_names
+    def __init__(self, lex, cap: bool, scrub_names: bool = True, strict_cap: bool = False, stock: bool = False) -> None:
+        self.lex, self.scrub_names = lex, scrub_names
+        self.strict_cap, self.stock = bool(strict_cap), bool(stock)
+        self.cap = bool((cap and lex is not None) or strict_cap)
         self._buf = ""
         self._held = ""
+        self._stock_held = False       # a stock line was seen and not released (dropped, or replaced when it was the whole reply)
         self._substance = False        # a released sentence that is not a bare closer
         self._out: list = []           # everything released (the caller reads the tail for the next turn's cap)
         self.scrubbed = 0
@@ -173,10 +247,6 @@ class PolishStream:
     def _sentence(self, sent: str) -> str:
         if self._held and not sent.strip():
             return ""               # trailing whitespace is not "text follows": a held closing question stays held (and is dropped)
-        out = ""
-        if self._held:                  # a question that is not the last sentence after all
-            out += self._release(self._held)
-            self._held = ""
         text = sent
         if self.scrub_names:
             body = sent.strip()
@@ -186,12 +256,24 @@ class PolishStream:
             if clean != body:
                 self.scrubbed += 1
                 if not clean:
-                    return out        # only plumbing: dropped (a plumbing name never reaches the person)
+                    return ""         # only plumbing: dropped (a plumbing name never reaches the person); a held question stays held
                 text = lead + clean + tail
-        if self.cap and self._substance and text.rstrip().endswith("?") and is_closing_question(text, self.lex):
+        if self._held and self.strict_cap and text.rstrip().endswith("?"):
+            self._held += text          # a run of trailing questions stays held TOGETHER (scrubbed first): all dropped at the end, none released one by one
+            return ""
+        if self.stock and is_stock_line(text):
+            self._stock_held = True          # never released: dropped when anything else is said, else replaced at finish
+            return ""                        # ... and it is not "text that follows": a held question stays held, so the reply still ends on a statement
+        out = ""
+        if self._held:                  # a question that is not the last sentence after all: a sentence that SURVIVES follows it
+            out += self._release(self._held)
+            self._held = ""
+        is_q = text.rstrip().endswith("?")
+        cap_q = is_closing_question(text, self.lex) or (self.strict_cap and is_q)
+        if self.cap and self._substance and is_q and cap_q:
             self._held = text
             return out
-        if not is_closing_question(text, self.lex):
+        if not cap_q:
             self._substance = True
         return out + self._release(text)
 
@@ -218,15 +300,20 @@ class PolishStream:
         if self._held:
             self.dropped += 1
             self._held = ""
+        if self._stock_held:
+            self.dropped += 1
+            self._stock_held = False
+            if not self._out and not out:
+                out += self._release(STOCK_REPLACEMENT)     # the stock line was ALL there was: say one true thing instead
         return out
 
     def released(self) -> str:
         return "".join(self._out)
 
 
-def polish(text: str, message: str = "", previous_ended_on_question: bool = False) -> str:
+def polish(text: str, message: str = "", previous_ended_on_question: bool = False, *, strict_cap: bool = False, stock: bool = False) -> str:
     """The whole reply, polished. Pure; the batch form of :class:`PolishStream`."""
-    p = PolishStream(closer_lexicon_for(message), previous_ended_on_question)
+    p = PolishStream(closer_lexicon_for(message), previous_ended_on_question, strict_cap=strict_cap, stock=stock)
     return p.feed(text) + p.finish()
 
 
@@ -238,7 +325,8 @@ async def filter_stream(deltas: AsyncIterator[str], message: str, user_id: str =
     shadow_text: list = []
     if m != "off":
         try:
-            stream = PolishStream(closer_lexicon_for(message), ended_on_question(user_id, session_id))
+            strict, stock = feeling_turn_policy(message, user_id, session_id)
+            stream = PolishStream(closer_lexicon_for(message), ended_on_question(user_id, session_id), strict_cap=strict, stock=stock)
         except Exception:  # noqa: BLE001 - a polish is optional; the turn is not
             logger.warning("REPLY_POLISH setup failed; passing through", exc_info=True)
     emitted = False

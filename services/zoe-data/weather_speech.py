@@ -192,6 +192,35 @@ def weather_places(text: str) -> list[str]:
     return places
 
 
+# A weather question with a SECOND, different question riding on it ("whats the weather in bunbury and how hot for a pork roast", QA round 7):
+# the weather expert answered the first half and the second was dropped without a word. The brain holds both tools, so the whole turn is its.
+_SECOND_Q_RE = re.compile(
+    r"(?:\b(?:and|also|plus|then|oh\s+and)\s+|[.?!;,]\s+)(?P<rest>(?:what|whats|what's|how|when|where|who|why|which|should|can|could|do|does|is|are|will)\b.*)$")
+
+
+_JOINER_TAIL_RE = re.compile(r"(?:\b(?:and|also|plus|then|oh\s+and)\s+|[.?!;,]\s+)(?P<rest>.+)$")
+
+
+def has_other_question(text: str) -> bool:
+    """True when ``text`` carries a second question that is NOT about the weather (a cooking time, a place to eat). "and will it rain
+    tomorrow" / "and how hot tomorrow" are weather; "and what about albany" is a place (``weather_places``). Pure."""
+    low = re.sub(r"\s+", " ", (text or "").lower().replace("\u2019", "'").strip())
+    # a cooking clause with no question opener ("... and cooking temperature for pork roast", "... plus safe internal temp for chicken")
+    tail = _JOINER_TAIL_RE.search(low)
+    if tail and not _OUTDOOR_WORD_RE.search(tail.group("rest")) and (
+            is_food_temperature(tail.group("rest")) or re.search(rf"\b(?:{_FOOD}|cook\w*|roast\w*|bak\w*|grill\w*)\b", tail.group("rest"))):
+        return True
+    m = _SECOND_Q_RE.search(low)
+    if not m:
+        return False
+    rest = m.group("rest")
+    if is_food_temperature(rest) or (re.search(rf"\b(?:{_FOOD})\b", rest) and not _OUTDOOR_WORD_RE.search(rest)):
+        return True      # a cooking question, however it is phrased ("how hot for a pork roast")
+    if _KEYWORD_RE.search(rest) or _WEATHER_ANCHOR_RE.search(rest) or classify_weather_ask(rest) is not None:
+        return False
+    return not re.match(r"^(?:what|how)(?:'s|s)?\s+about\b", rest)
+
+
 def weather_place(text: str) -> str:
     """The first place a weather question names ("weather in perth" -> "Perth"), or "" for the household default. Pure."""
     p = weather_places(text)

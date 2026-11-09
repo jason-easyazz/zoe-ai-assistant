@@ -840,6 +840,13 @@ def _recall_question_shape(message: str) -> str:
         return "challenge"
     if _PERSONAL_QUESTION_RE.search(msg):
         return "personal"
+    # "which day is max at kindy" / "what exam do i have and when" (QA round 7): a stored routine or plan of the household's. These two
+    # event-time kinds are NOT behind ZOE_RECALL_PRESENT_STATE_SHAPES - the planners now hand them to the brain, so the recall floor must put the
+    # stored rows in front of it (the clock and today's agenda no longer answer them).
+    from memory_gate import event_time_question_kind
+
+    if event_time_question_kind(msg) in ("their_routine", "named_event"):
+        return "event_time"
 
     if _present_state_shapes_enabled():
         # "Am I still doing the half-marathon?", "How's my mum?" (day-sim 6/6n) and
