@@ -267,3 +267,22 @@ def test_accidentally_taking_too_many_tablets_is_an_ingestion_even_beside_a_gluc
                                   "he took the dog out after his tablets"])
 def test_negative_control_ordinary_took_is_not_an_ingestion(text):
     assert reply(text) is None
+
+
+def test_an_accident_overrides_routine_medication_wording():
+    # Codex on #2356 (P1): "took my usual tablets" exempted an accidental double dose
+    assert ms.detect("I accidentally took my usual tablets twice and my blood sugar is 5.5").cls.startswith("ingest")
+    assert ms.detect("I accidentally swallowed my usual tablets twice").cls.startswith("ingest")
+    # negative controls: genuinely routine use is still not a poisoning
+    assert not ms.detect("I took my usual tablets this morning").cls.startswith("ingest")
+    assert not ms.detect("he swallowed his morning tablets").cls.startswith("ingest")
+
+
+@pytest.mark.parametrize("text", ["my blood sugar rose by 5 to 18", "my blood sugar dropped by 2 to 5.5"])
+def test_a_change_amount_is_not_a_glucose_reading(text):
+    # Codex on #2356 (P1): the amount it moved by was answered as the reading
+    assert ms.detect(text).cls != "glucose"
+
+
+def test_an_absolute_reading_after_a_change_phrase_is_still_a_reading():
+    assert ms.detect("my blood sugar is 18").cls == "glucose"

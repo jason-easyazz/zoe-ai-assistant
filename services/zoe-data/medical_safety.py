@@ -111,6 +111,10 @@ def _flag(s: str, rx: dict, tier: str) -> Optional[Verdict]:
     return None
 
 
+#: wording that makes an ingestion a concern even when the medication itself is the member's usual one
+_ACCIDENT = re.compile(r"(?<!\w)(?:accident\w*|by mistake|too many|too much|double(?: the| my| his| her)? dose|twice|overdos\w*|extra)(?!\w)", re.I)
+
+
 def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
     """Verb + harmful substance within ~70 chars, same sentence. Human unless the words clearly say animal."""
     for sentence in re.split(r"[.!?;\n]", s):
@@ -122,8 +126,8 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
             lo = max(0, v.start() - 8)
             routine = rx["idiom"].search(sentence[lo:])
             # the routine-medication idiom must be THIS ingestion ("swallowed his morning tablets"), not a later one in the same sentence
-            if routine and routine.start() < (v.start() - lo) + (v.end() - v.start()):
-                continue
+            if routine and routine.start() < (v.start() - lo) + (v.end() - v.start()) and not _ACCIDENT.search(sentence):
+                continue         # (an accident / double dose is never "routine": "accidentally took my usual tablets twice")
             human = bool(rx["human"].search(sentence) or _SELF_INGEST.search(sentence))
             animal = bool(rx["animal"].search(sentence[max(0, v.start() - 45):v.start()]))   # the animal must be the SUBJECT (before the verb), not a bystander
             if animal and not human:
@@ -132,7 +136,8 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
         # "took" is ordinary ("took my tablets"): only a concerning amount or an accident makes it an ingestion ("accidentally took 20 paracetamol")
         for v in rx["took"].finditer(sentence):
             tail = sentence[v.start(): v.end() + 70]
-            if rx["sub"].search(tail) and rx["took_risky"].search(sentence) and not rx["idiom"].search(sentence[max(0, v.start() - 8):]):
+            if rx["sub"].search(tail) and rx["took_risky"].search(sentence) and (
+                    not rx["idiom"].search(sentence[max(0, v.start() - 8):]) or _ACCIDENT.search(sentence)):
                 human = bool(rx["human"].search(sentence) or _SELF_INGEST.search(sentence) or re.search(r"(?<!\w)(?:i|ive|i have)(?!\w)", sentence[:v.start()]))
                 animal = bool(rx["animal"].search(sentence[max(0, v.start() - 45):v.start()]))
                 if animal and not human:
@@ -151,6 +156,7 @@ def _band(raw: str, unit: str) -> str:
     return "glucose_low" if mmol < 4.0 else "glucose_ok" if mmol <= 7.0 else "glucose_up" if mmol <= 10.0 else "glucose_high"
 
 
+_CHANGE_BY = re.compile(r"(?:rose|risen|dropped|fell|fallen|went up|went down|up|down|increased|decreased|jumped|climbed|changed)\s+by\s+$", re.I)
 _SEVERITY = {"glucose_low": 3, "glucose_high": 2, "glucose_up": 1, "glucose_ok": 0}
 _NOW = re.compile(r"now|currently|latest")
 _SECOND = re.compile(rf"(?<!\w)(?P<lead>right now|is now|now|currently|latest|then|dropped to|fell to|down to|up to|rose to|went to|reads|reading|is|are)\s+{_GLUCOSE_NUM}", re.I)
@@ -171,6 +177,8 @@ def _glucose(s: str, rx: dict) -> Optional[Verdict]:
         m = rx[key].search(s)
         if not m or (key == "gl_plain" and rx["gl_ctx"].search(s)):
             continue
+        if _CHANGE_BY.search(s[:m.start(1)]):
+            continue             # "my blood sugar rose by 5 to 18": 5 is how much it moved, not the reading - leave it to the brain
         first = _reading(m.group(1), m.group(2) or "", s[m.end(1):], rx)
         if not first:
             continue
