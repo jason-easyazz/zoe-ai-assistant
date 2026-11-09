@@ -716,9 +716,62 @@ def supported(claim: Claim, user_id: Optional[str], started: float, *, user_text
         turn = None
     else:
         since, turn = started, getattr(started, "turn", None)
+    if is_recap_question(user_text):
+        # a retrospective "did you save that?" asks about COMMITTED writes: a capture merely queued for a turn (pending_capture) is a
+        # promise about the future, never evidence of an earlier save
+        def _has(kind=None):
+            rs = write_receipts.since(user_id, since, [kind] if kind else None, turn=turn)
+            return any(r.source != "pending_capture" and (kind or r.kind not in write_receipts.NOT_A_WRITE) for r in rs)
+
+        return _has() if not claim.kinds else all(_has(kind) for kind in claim.kinds)
     if not claim.kinds:
         return write_receipts.has(user_id, since, turn=turn)
     return all(write_receipts.has(user_id, since, kind, turn=turn) for kind in claim.kinds)
+
+
+PENDING_CAPTURE_MIN_WORDS = 4      # the turn digest reads nothing shorter (memory_digest.run_turn_digest)
+
+
+def note_pending_capture(user_id: Optional[str], user_text: str) -> bool:
+    """A turn the post-turn memory capture (regex extractor, turn digest, person extractors) WILL read is, for the guard, a turn
+    that has a memory write queued: "I'll remember that" on it is a promise the capture keeps seconds later, not a lie (QA round
+    6a: the first self-introduction and "will you remember me?" were answered "I didn't manage to save that" while the rows
+    landed ~70 s on). Records a ``memory`` receipt (source ``pending_capture``) for the current turn. Nothing is recorded for a
+    guest / unrecognised voice (no durable memory pass runs), an off-the-record turn, a forget turn, or words too short to digest.
+    The receipt backs the memory and note kinds only - a list, calendar or forget claim still needs its own writer's receipt.
+    Never raises; True when a receipt was recorded."""
+    try:
+        if mode() == "off" or len((user_text or "").split()) < PENDING_CAPTURE_MIN_WORDS or is_recap_question(user_text):
+            return False        # (a recap question asks about EARLIER writes: this turn's queued capture vouches for none)
+        from user_filters import is_unidentified
+
+        if is_unidentified(user_id):
+            return False
+        import memory_provenance
+        import turn_forget
+
+        if memory_provenance.is_off_record(user_id or "", user_text) or turn_forget.is_forget_turn(user_text):
+            return False
+        import forget_topic
+
+        if forget_topic.parse(user_text):
+            return False        # a TOPIC forget ("forget what I said about X") queues no capture either
+        import user_prefs
+
+        opted_out = user_prefs.cached_memory_opt_out(user_id or "")
+        if opted_out:
+            return False        # the capture drops an opted-out member's candidates: nothing is queued, so nothing is promised
+        if opted_out is None:
+            try:               # unknown now: warm the cache so the NEXT turn is exact (the extractor reads it post-turn anyway)
+                import asyncio
+
+                asyncio.get_running_loop().create_task(user_prefs.is_memory_opted_out(user_id or ""))
+            except Exception:  # noqa: BLE001 - no running loop (a sync caller): the next turn's read warms it
+                pass
+        write_receipts.record(user_id, "memory", "", "pending_capture")
+        return True
+    except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn
+        return False
 
 
 def _log_blocked(claim: Claim, user_id: Optional[str], lane: str, action: str) -> None:
@@ -824,6 +877,30 @@ def _quiet_line(claim: Claim) -> str:
     return ""
 
 
+_FORGET_CLAIM_KINDS = frozenset({"memory", "note", "forget"})
+
+
+def _as_forget_claim(claim: Claim, user_text: str) -> Claim:
+    """The user ASKED to forget something and the reply claimed a memory write ("Done, I've noted that"): the honest line is the FORGET
+    one ("I haven't forgotten anything yet"), never "I didn't manage to save that" - which describes a save nobody asked for and
+    contradicts the next turn (QA round 4). Only a claim of memory / note / forget kinds, only on a forget request."""
+    try:
+        if not claim.kinds or not set(claim.kinds) <= _FORGET_CLAIM_KINDS or claim.kinds == ("forget",):
+            return claim
+        import forget_topic
+        import memory_quality
+
+        t = user_text or ""
+        if not (forget_topic.parse(t) is not None or memory_quality.has_forget_wording(t) or memory_quality.is_forget_command(t)):
+            return claim
+        for lang in _langs():
+            if lang.code == claim.lang and (lang.honest_by_kind or {}).get("forget"):
+                return Claim(kinds=("forget",), lang=claim.lang, honest=lang.honest_by_kind["forget"], in_progress=claim.in_progress)
+    except Exception:  # noqa: BLE001 - never break a turn over wording
+        pass
+    return claim
+
+
 def _note_correction(session_id: str, claim: Claim) -> None:
     """A claim was REPLACED: the brain's own session history still holds the claim it made, so its next turn is told the truth
     (``claim_correction``, ``ZOE_WRITE_CLAIM_CORRECTION``). Never raises."""
@@ -854,6 +931,7 @@ def guard_text(reply: str, user_id: Optional[str], started: float, *, user_text:
             if claim is None or supported(claim, user_id, started, user_text=user_text):
                 out.append(sentence)
                 continue
+            claim = _as_forget_claim(claim, user_text)
             _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
             if m == "shadow":
                 out.append(sentence)
@@ -902,6 +980,7 @@ async def guard_stream(inner: AsyncIterator[str], user_id: Optional[str], starte
     def block(sentence: str, claim: Claim) -> Optional[str]:
         """An unsupported claim: None = release the sentence untouched (shadow); else the text to release instead."""
         nonlocal replaced, quiet
+        claim = _as_forget_claim(claim, user_text)
         _log_blocked(claim, user_id, lane, "shadow" if m == "shadow" else "replaced")
         if m == "shadow":
             return None

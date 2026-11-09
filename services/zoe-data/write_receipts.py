@@ -155,7 +155,7 @@ def has(user_id: Optional[str], started: float, kind: Optional[str] = None, *, t
     """True when a write of ``kind`` (any kind when None / "any") landed for the user since ``started`` (see ``since`` for ``turn``).
     An untargeted claim ("I've added it") is a claim of a WRITE: a device switch (``NOT_A_WRITE``) never backs it."""
     if not kind or kind == "any":
-        return any(r.kind not in NOT_A_WRITE for r in since(user_id, started, turn=turn))
+        return any(r.kind not in NOT_A_WRITE and r.source != "pending_capture" for r in since(user_id, started, turn=turn))
     return bool(since(user_id, started, (kind,), turn=turn))
 
 

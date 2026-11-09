@@ -418,6 +418,20 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+def _is_entity_forget_shape(text: str) -> bool:
+    """True when ``text`` is the NAME shape of an entity forget ("forget everything about Dana"): that intent owns it."""
+    m = _FORGET_ENTITY_RE.match((text or "").strip())
+    if not m:
+        return False
+    ent = (m.group("entity") or "").strip().rstrip(".!?")
+    try:
+        from person_extractor import _looks_like_person_name
+        return _looks_like_person_name(ent) and ent.lower() not in {
+            "everything", "anything", "something", "nothing", "all", "stuff", "things", "life", "today", "tomorrow"}
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _is_forget_command(text: str) -> bool:
     """memory_quality.is_forget_command, never raising (an unavailable gate leaves the anchored regex alone)."""
     try:
@@ -519,10 +533,15 @@ _THANKS_RE = re.compile(
 )
 _ACK_RE = re.compile(
     r"^(?:got\s+it|gotcha|understood|makes\s+sense|good\s+to\s+know|noted|fair\s+enough)\s*[!.,]*$"
-    r"|^(?:ok|okay|okey|k|alright|cool|nice|great|perfect|awesome|lovely|sweet|sounds\s+good)\s*[!.,]*$"
+    r"|^(?:ok|okay|okey|k|alright|cool|nice|great|perfect|awesome|lovely|sweet|sounds\s+good|yep|yup|yeah\s+ok(?:ay)?|sure(?:\s+thing)?)\s*[!.,]*$"
     r"|^(?:no\s+(?:problem|worries)|all\s+good)\s*[!.,]*$",
     re.IGNORECASE,
 )
+# A bare decline ("nah", "nope") is a social close, never a mood: with nothing of Zoe's outstanding it gets a light "no worries"
+# (QA 2026-11-08: "nah" was answered "You seem a bit down"). It is an ``ack`` (slot ``decline``) so every lane that already
+# treats an ack identically - incl. "it answers Zoe's offer/question, so the brain reads it" - treats it the same.
+_DECLINE_RE = re.compile(r"^(?:nah|nope|nay|naw|no\s+thanks?|no\s+ta|nah\s+thanks?|nope\s+thanks?)\s*[!.,]*$", re.IGNORECASE)
+DECLINE_REPLIES = ("No worries.", "All good.", "Righto.", "No problem.")
 # Spoken replies to a bare thanks / acknowledgement: short, casual, varied, never a self-introduction.
 THANKS_REPLIES = ("You're welcome!", "Anytime.", "Happy to help.", "No worries.", "No dramas.", "Not a problem.", "Any time!",
                   "You got it.", "Pleasure.")
@@ -838,6 +857,16 @@ def detect_intent(
     # Matched very early so it never collides with other verbs. memory_quality.is_forget_command adds the
     # shapes the anchored regex missed live (QA 2026-11-05): a leading "no," / "oh" / "wait", two acts in a row
     # ("no, don't remember that! forget that"), and "forget that I said ..." - short utterances only.
+    # "forget what I told you about my mum's heart" - a TOPIC, not a name and not the previous turn (forget_topic).
+    # Before the last-turn shapes so "forget that, don't keep what I said about X" never binds to the wrong turn.
+    try:
+        import forget_topic as _ft
+        _topic = _ft.parse(text or "")
+    except Exception:  # noqa: BLE001
+        _topic = None
+    if _topic and not _is_entity_forget_shape(text or ""):
+        return Intent("memory_forget_entity", {"topic": _topic})
+
     if _FORGET_LAST_RE.match(t) or _is_forget_command(t):
         return Intent("memory_forget_last", {})
 
@@ -931,6 +960,8 @@ def detect_intent(
         return Intent("acknowledgement", {"kind": "thanks"})
     if _ACK_RE.match(t):
         return Intent("acknowledgement", {"kind": "ack"})
+    if _DECLINE_RE.match(t):
+        return Intent("acknowledgement", {"kind": "ack", "decline": True})
     if _STATUS_CHECK_RE.match(t):
         return Intent("status_check", {})
 
@@ -1144,7 +1175,9 @@ def detect_intent(
     m = re.match(r"^who is (.+)$", t)
     _raw_who = _WHO_IS_RAW_RE.search(text or "") if m else None
     if m and _is_name_shaped(m.group(1), _raw_who.group(1) if _raw_who else None):
-        return Intent("people_search", {"query": m.group(1).strip()})
+        # via=who_is: an identity question, not a contacts search - a name with no contact row is answered from memory + the people
+        # graph by the brain (_execute_people_search_direct declines), never "not in your contacts" (QA 2026-11-08).
+        return Intent("people_search", {"query": m.group(1).strip(), "via": "who_is"})
 
 
     # --- NOTES CREATE ---
@@ -1215,7 +1248,12 @@ def detect_intent(
                 any(kw in qualifier for kw in ("tomorrow", "week", "forecast"))
                 or any(kw in t for kw in ("tomorrow", "this week", "forecast"))
             )
-            return Intent("weather", {"qualifier": qualifier, "forecast": is_forecast})
+            slots = {"qualifier": qualifier, "forecast": is_forecast}
+            from weather_speech import weather_place   # a place the user named beats the household default
+            place = weather_place(t)
+            if place:
+                slots["location"] = place
+            return Intent("weather", slots)
 
     # --- JOURNAL ---
     # Explicit "<verb> a journal entry[: <content>]" — the deterministic, DB-verified
@@ -1418,6 +1456,8 @@ def detect_intent(
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
                 continue            # a sentence, not an item: never stored, never claimed
+            if _unnamed_list(lst) and _needs_list_choice(item):
+                return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
             return Intent("list_add", {"item": item, **_list_slots(lst)})
 
     # --- LIST ADD (STT-garbled leading "add") ---
@@ -1466,6 +1506,8 @@ def detect_intent(
                 if not _list_item_ok(item):
                     continue
                 list_type = _infer_list(item)
+                if list_type == "shopping" and _needs_list_choice(item):
+                    return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
                 return Intent("list_add", {"item": item, "list_type": list_type})
 
     # --- LIST ADD (natural language shopping) ---
@@ -2152,9 +2194,190 @@ async def _previous_assistant_message(user_id: str) -> Optional[str]:
         return None
 
 
+# --- A reply to Zoe's own pending ACTION offer ("want me to set a reminder for the pickup?" -> "yes please, 2:45") ---
+# The reply alone reads as a time question to the fast tiers ("It's 8:54 AM"). Bound only when ALL hold: flag on, the reply is
+# a short affirmative carrying a clock time, and Zoe's previous reply (a) is recent (TTL) and (b) ENDED in a reminder offer.
+_REMINDER_OFFER_RE = re.compile(r"\b(?:remind\s+you|(?:a|the|that)\s+(?:[\w']+\s+){0,3}reminder|reminder)\b", re.IGNORECASE)
+_OFFER_TIME_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\w:])", re.IGNORECASE)
+_OFFER_ACTION_FIRST = _OFFER_AFFIRM_FIRST | {"please"}
+# A reply carrying scheduling information the rewrite cannot retain ("sure, tomorrow at 3pm", "every Monday at 9") is NOT bound: the
+# rewritten sentence would silently lose the day / recurrence and the reminder extractor would assign today's date.
+_OFFER_SCHEDULE_QUAL_RE = re.compile(
+    r"\b(?:tomorrow|tonight|today|yesterday|next|every|each|daily|weekly|monthly|yearly|weekdays?|weekends?|mornings?|evenings?|"
+    r"mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?|"
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?|in\s+\d+\s+(?:minutes?|mins?|hours?|days?|weeks?)|\d{1,2}(?:st|nd|rd|th)|\d{1,2}/\d{1,2})\b", re.IGNORECASE)
+_OFFER_ACTION_MAX_TOKENS = 12
+#: the offered action must be CREATING a reminder ("set a reminder", "remind you to ..."), never changing one that exists
+_OFFER_CREATE_RE = re.compile(r"\b(?:set|create|add|make|put|schedule|remind\s+you)\b", re.IGNORECASE)
+_OFFER_NON_CREATE_RE = re.compile(
+    r"\b(?:move|change|cancel|delete|remove|update|reschedule|edit|snooze|push|postpone|clear|dismiss|turn\s+off|switch\s+off|"
+    r"stop|undo|rename|shift|bring\s+forward)\b", re.IGNORECASE)
+#: a negator right before a clock time ("not 3pm", "not at 3", "never before 9"): the time is the one being refused
+_OFFER_NEGATED_TIME_RE = re.compile(
+    r"\b(?:not|never|except|isn'?t|won'?t|can'?t|nothing)\s+(?:(?:at|around|by|for|before|after|until|till)\s+)?\d", re.IGNORECASE)
+_OFFER_PURPOSE_WORDS = frozenset({"so", "because", "cause", "cuz", "coz"})
+#: the words an acceptance may carry besides the clock time: anything else is a different request
+_OFFER_ACCEPT_FILLER = frozenset({
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "pls", "do", "it", "that", "go", "ahead", "at", "for", "around", "by",
+    "make", "set", "then", "thanks", "thank", "you", "and", "the", "a", "perfect", "great", "good", "fine", "works", "sounds",
+    "like", "lets", "let's", "sweet", "cool", "right", "exactly", "absolutely", "of", "course", "that's", "thats", "reminder"})
+_OFFER_QUESTION_WORDS = frozenset({"what", "what's", "whats", "when", "where", "who", "why", "how", "which"})
+
+
+def offer_followup_binding_enabled() -> bool:
+    from typed_env import flag
+
+    return bool(flag("ZOE_OFFER_FOLLOWUP_BINDING"))
+
+
+def _offer_followup_ttl_s() -> float:
+    from typed_env import flag
+
+    return max(30.0, float(flag("ZOE_OFFER_FOLLOWUP_TTL_S")))
+
+
+def _reminder_offer_title(previous: str) -> tuple[str, str]:
+    """(connector, title) read from Zoe's offer text; falls back to a neutral 'about that'."""
+    m = re.search(r"\bremind\s+you\s+(to|about|of)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?!]|\.(?=\s|$)|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
+    if m:   # "Want me to remind you to call the dentist?" -> the task is "call the dentist"
+        return ("to" if m.group(1).lower() == "to" else "about"), m.group(2).strip()
+    m = re.search(r"reminder\s+(for|to|about)\s+(?:the\s+|your\s+)?(.+?)\s*(?:[?!]|\.(?=\s|$)|\bat\s+\d|\bso\b|$)", previous, re.IGNORECASE)
+    if m:
+        conn = "to" if m.group(1).lower() == "to" else "about"
+        return conn, m.group(2).strip()
+    m = re.search(r"\b(?:a|the)\s+([a-z' ]{2,30}?)\s+reminder\b", previous, re.IGNORECASE)
+    if m and m.group(1).strip().lower() not in {"quick", "simple", "gentle", "little"}:
+        return "about", m.group(1).strip()
+    return "about", "that"
+
+
+def bind_reminder_offer_reply(text: str, previous: Optional[str], age_s: Optional[float]) -> Optional[str]:
+    """Pure core: the rewritten 'remind me ...' sentence when ``text`` answers a pending reminder offer, else None.
+    ``previous`` is Zoe's last reply, ``age_s`` its age in seconds (unknown -> never binds)."""
+    if not previous or age_s is None or age_s > _offer_followup_ttl_s() or age_s < 0:
+        return None
+    tokens = [t for t in (text or "").strip().lower().split() if t]
+    if not tokens or len(tokens) > _OFFER_ACTION_MAX_TOKENS:
+        return None
+    try:
+        import distress_handoff
+
+        if distress_handoff.detect(text).tier != "none":
+            return None   # a purpose clause must never hide a crisis: the distress tier owns the turn
+    except Exception:  # noqa: BLE001 - cannot rule distress out: do not bind
+        return None
+    if _OFFER_REPLY_PUNCT_RE.sub("", tokens[0]) not in _OFFER_ACTION_FIRST:
+        return None
+    if any(_OFFER_REPLY_PUNCT_RE.sub("", t) in ("no", "nope", "dont", "don't") for t in tokens[1:]):
+        return None
+    if _OFFER_NEGATED_TIME_RE.search(" ".join(tokens[1:])):
+        return None  # "sure, not 3pm" rejects the very time it names: the brain, which has the conversation, handles it
+    if "?" in text or any(_OFFER_REPLY_PUNCT_RE.sub("", t) in _OFFER_QUESTION_WORDS for t in tokens[1:]):
+        return None  # "yes, what time is it at 2:45?" is a question, not a slot
+    if _OFFER_SCHEDULE_QUAL_RE.search(" ".join(tokens[1:])):
+        return None  # a day / recurrence the rewrite would drop: let the brain, which has the conversation, act on it
+    reply_times = [t for t in _OFFER_TIME_RE.finditer(" ".join(tokens[1:])) if t.group(2) or t.group(3)]
+    if len(reply_times) > 1:
+        return None  # "3pm is too early, 4pm please": competing clock times - a correction is the brain's, never the first match
+    m = reply_times[0] if reply_times else None
+    if m is None:
+        return None  # a bare number is not a clock time
+    # an ACCEPTANCE plus a time slot, nothing else: "add a reminder to call the dentist at 3pm" is a new command that merely opens
+    # with an affirmative word, and rewriting it onto the pending offer would replace the task the person asked for
+    _rest = " ".join(tokens[1:])
+    _rest = (_rest[:m.start()] + " " + _rest[m.end():]) if _rest else _rest
+    _words: list = []
+    for _t in _rest.split():
+        _w = _OFFER_REPLY_PUNCT_RE.sub("", _t)
+        if _w in _OFFER_PURPOSE_WORDS:
+            break            # "..., so i'm not late": the purpose clause says why, it is not another request
+        if _w:
+            _words.append(_w)
+    _leftover = [w for w in _words if w not in _OFFER_ACCEPT_FILLER]
+    if _leftover:
+        return None
+    hour, minute, mer = int(m.group(1)), m.group(2), (m.group(3) or "").replace(".", "").lower()
+    if hour > 12 or (minute and int(minute) > 59) or (hour == 0 and not mer):
+        return None
+    try:
+        from conversation_cues import ends_with_offer
+
+        sentences = [x for x in re.split(r"(?<=[.!?])\s+", previous.strip()) if x.strip()]
+        # BOTH cues are judged on the SAME final sentence: "Want me to play music? I set a reminder for pickup." has an offer (music)
+        # and a reminder (already done) but no pending reminder offer
+        if not sentences or not (ends_with_offer(sentences[-1]) and _REMINDER_OFFER_RE.search(sentences[-1])):
+            return None
+        if re.search(r"\bat\s+\d", sentences[-1], re.IGNORECASE):
+            return None  # "meet at 10 Downing Street" / "look at 3 invoices": a number after "at" cannot be told from a time, and a
+            #            title cut there would lose the place or the quantity - the brain, which has the conversation, handles it
+        if _OFFER_NON_CREATE_RE.search(sentences[-1]) or not _OFFER_CREATE_RE.search(sentences[-1]):
+            return None  # an offer to MOVE / cancel / change a reminder is not one to create it: the brain acts on what was accepted
+        if _OFFER_SCHEDULE_QUAL_RE.search(sentences[-1]) or any(t.group(2) or t.group(3) for t in _OFFER_TIME_RE.finditer(sentences[-1])):
+            return None  # the offer itself carries a day / recurrence / clock time the rewrite would drop or contradict
+    except Exception:  # noqa: BLE001
+        return None
+    if not mer and 1 <= hour <= 6:
+        mer = "pm"  # "2:45" to a pickup offer means the afternoon
+    when = f"{hour}:{minute}" if minute else str(hour)
+    conn, title = _reminder_offer_title(sentences[-1])     # the SAME final offer sentence that passed the checks above
+    if title == "that":
+        return None   # the accepted task cannot be recovered: never create a reminder without it; the brain, which has the talk, acts
+    return f"remind me {conn} {title} at {when}{(' ' + mer) if mer else ''}"
+
+
+async def _previous_assistant_turn(user_id: str, current_text: str = "",
+                                   session_id: Optional[str] = None) -> tuple[Optional[str], Optional[float]]:
+    """(content, age in seconds) of Zoe's reply ONLY when it is the message immediately before this turn; (None, None) when
+    unknown or when a user turn intervened (fail closed). The current turn may already be saved: it is skipped once."""
+    try:
+        from datetime import datetime, timezone
+
+        from database import get_db_ctx
+
+        async with get_db_ctx() as db:
+            # With a session id the lookup is THIS conversation's: a reply in one session never binds to an offer made in another, and
+            # activity elsewhere cannot hide the genuine pending offer.
+            cur = await db.execute(
+                "SELECT m.role, m.content, m.created_at FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id"
+                " WHERE s.user_id = ?" + (" AND m.session_id = ?" if session_id else "") + " ORDER BY m.created_at DESC LIMIT 2",
+                (user_id, session_id) if session_id else (user_id,),
+            )
+            rows = list(await cur.fetchall())
+        if rows and rows[0]["role"] == "user" and str(rows[0]["content"] or "").strip() == (current_text or "").strip():
+            rows = rows[1:]
+        if not rows or rows[0]["role"] != "assistant":
+            return None, None
+        ts = rows[0]["created_at"]
+        if not isinstance(ts, datetime):
+            raw_ts = re.sub(r"([+-]\d{2})$", r"\1:00", str(ts).strip().replace(" ", "T", 1))  # PG "+08" -> "+08:00" (py<3.11)
+            ts = datetime.fromisoformat(raw_ts)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return str(rows[0]["content"] or "") or None, (datetime.now(timezone.utc) - ts).total_seconds()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("_previous_assistant_turn: lookup failed: %s", type(exc).__name__)
+        return None, None
+
+
+async def reminder_offer_reply_text(text: str, user_id: str, previous: Optional[str] = None,
+                                    age_s: Optional[float] = None, session_id: Optional[str] = None) -> Optional[str]:
+    """Flag-gated, cheap-shape-first wrapper: the rewritten reminder sentence, or None. Callers that already hold Zoe's last
+    reply (the voice session) pass ``previous``/``age_s``; otherwise the stored transcript is read."""
+    if not offer_followup_binding_enabled():
+        return None
+    tokens = [t for t in (text or "").strip().lower().split() if t]
+    if not tokens or len(tokens) > _OFFER_ACTION_MAX_TOKENS or \
+            _OFFER_REPLY_PUNCT_RE.sub("", tokens[0]) not in _OFFER_ACTION_FIRST:
+        return None
+    if previous is None:
+        previous, age_s = await _previous_assistant_turn(user_id, text, session_id)
+    return bind_reminder_offer_reply(text, previous, age_s)
+
+
 async def ack_answers_offer(intent: "Intent", user_id: str, previous: Optional[str] = None) -> bool:
-    """True when ``intent`` is the canned "ok / sounds good" acknowledgement AND Zoe's previous reply ENDED in an offer
-    (``conversation_cues.ends_with_offer``, lexicon data). Only the ``ack`` kind: "thanks" after an offer is a polite no.
+    """True when ``intent`` is the canned "ok / sounds good" acknowledgement (or a bare "nah") AND Zoe's previous reply ENDED
+    in an offer (``conversation_cues.ends_with_offer``, lexicon data) or any question (a trailing "?"). Only the ``ack`` kind: "thanks" after an offer is a polite no.
     The cheap checks come first, so every other turn pays nothing; an unknown previous reply never binds (fail closed).
     ``previous`` is the caller's own copy of Zoe's last reply (a lane that does not persist its turns, like the voice
     WebSocket); without it the stored transcript is read."""
@@ -2163,7 +2386,9 @@ async def ack_answers_offer(intent: "Intent", user_id: str, previous: Optional[s
     try:
         from conversation_cues import ends_with_offer
 
-        return ends_with_offer(previous if previous is not None else (await _previous_assistant_message(user_id) or ""))
+        prev = previous if previous is not None else (await _previous_assistant_message(user_id) or "")
+        # An offer, or any QUESTION of hers still hanging ("k" / "nah" answer it): the brain reads the short reply against it.
+        return ends_with_offer(prev) or prev.rstrip().endswith("?")
     except Exception as exc:  # noqa: BLE001 - never let the offer check break routing
         logger.debug("ack_answers_offer: check failed: %s", type(exc).__name__)
         return False
@@ -2251,6 +2476,11 @@ async def _match_pending_offer_reply(text: str, user_id: str) -> Optional["Inten
     kind = _offer_reply_kind(text, offer.get("name") or "")
     if kind is None:
         return None
+    # A bare "ok" is an answer only to a question just asked: Zoe's previous reply must be the offer for THIS person (QA round 5:
+    # an "ok" to something unrelated created a contact, five turns after "no contacts pls"). Unknown previous reply = no bind.
+    _prev = (await _previous_assistant_message(user_id) or "").lower()
+    if "contact" not in _prev or not any(p in _prev for p in str(offer.get("name") or "").lower().split() if len(p) > 1):
+        return None
     return Intent(
         "pending_offer_accept" if kind == "accept" else "pending_offer_dismiss",
         {
@@ -2265,6 +2495,7 @@ async def detect_and_extract_intent(
     text: str,
     user_id: str = "guest",  # fail-open to least-privilege, not admin (#1021/#1032 posture)
     context: "Optional[ConversationContext]" = None,
+    session_id: Optional[str] = None,
 ) -> Optional["Intent"]:
     """
     Async wrapper around detect_intent that populates structured slots for create
@@ -2395,6 +2626,15 @@ async def detect_and_extract_intent(
         _offer_reply = None
     if _offer_reply is not None:
         return _offer_reply
+
+    try:
+        _rewritten = await reminder_offer_reply_text(text, user_id, session_id=session_id)
+    except Exception as _rem_exc:  # never let the offer path break routing
+        logger.debug("detect_and_extract_intent: reminder-offer binding failed: %s", _rem_exc)
+        _rewritten = None
+    if _rewritten:
+        logger.info("offer_followup: reply %s answers a pending reminder offer", _utt_tag(text or ""))
+        text = _rewritten
 
     started = time.perf_counter()
     intent = detect_intent(text, context=context, user_id=user_id)
@@ -2591,6 +2831,24 @@ _TASK_KEYWORDS = {
     "task", "todo", "work", "project", "report", "review", "fix",
     "appointment", "meeting", "dentist", "doctor",
 }
+
+
+_GENERIC_LIST_NAMES = frozenset({"", "the", "my", "our", "a", "this", "that", "your"})
+
+
+def _unnamed_list(lst: str) -> bool:
+    """"add X to the list" / "to my list": the list is a pronoun-ish word, not a name or a type."""
+    return str(lst or "").strip().lower() in _GENERIC_LIST_NAMES
+
+
+def _needs_list_choice(item: str) -> bool:
+    """No list was named and the item is clearly not a grocery (bolts, steel cap boots, an invoice): the household shopping list is
+    the wrong default (owner's fridge rule: household items go on household lists), so Zoe asks which list. Milk goes straight on."""
+    import write_intent_gate
+
+    if write_intent_gate.mode() != "on":
+        return False            # off / shadow: the add goes straight to the shopping list, exactly as before the gate existed
+    return write_intent_gate.looks_non_grocery(item)
 
 
 def _infer_list(item: str) -> str:
@@ -2879,6 +3137,11 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     mcp_server's list_add_item tool (same list resolution, family/personal
     visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
+    if (intent.slots or {}).get("ask_list") and str((intent.slots or {}).get("item") or "").strip():
+        # No list named and not a grocery: ask which list instead of defaulting to the household shopping list.
+        import write_intent_gate
+
+        return write_intent_gate.which_list_question(str(intent.slots.get("item") or ""))
     intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
@@ -3723,6 +3986,8 @@ async def _execute_people_search_direct(intent: Intent, user_id: str) -> Optiona
                     (user_id,),
                 )
             rows = [dict(r) for r in await cursor.fetchall()]
+        if not rows and kind == "name" and slots.get("via") == "who_is":
+            return None     # not a contact: memory / the people graph / a pet may know them, so the brain answers with the packet
         if slots.get("mode") == "count":
             # "how many contacts do I have": the number, short (TTS reads this out).
             n = len(_cc.collapse_duplicates(rows)) if conversational else len(rows)
@@ -4052,6 +4317,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         import random
         if intent.slots.get("kind") == "thanks":
             return random.choice(THANKS_REPLIES)
+        if intent.slots.get("decline"):
+            return random.choice(DECLINE_REPLIES)
         return random.choice(ACK_REPLIES)
 
     if intent.name == "status_check":
@@ -4117,6 +4384,11 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # "forget that" after a remark about the kitchen erased an unrelated, important row). No turn to bind to -> ask.
     if intent.name == "memory_forget_last":
         return await _execute_forget_last(user_id)
+
+    if intent.name == "memory_forget_entity" and intent.slots.get("topic"):
+        # "forget what I told you about my mum's heart": rows holding the whole topic, never a fuzzy sweep (forget_topic)
+        import forget_topic
+        return await forget_topic.execute(user_id, str(intent.slots.get("topic") or ""))
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
         # "keep the contact": put back the contact(s) + edges the last forget cascade removed.

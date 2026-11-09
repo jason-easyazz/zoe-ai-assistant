@@ -6,8 +6,9 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from db_pool import get_db_ctx, get_pool
 from people_utils import name_covered_by_contacts
@@ -48,8 +49,99 @@ def consume_offer_shown_mark(user_id: str) -> bool:
 
 
 def is_junk_contact_name(name: str) -> bool:
-    """True when `name` must never be proposed/saved as a contact."""
-    return (name or "").strip().lower() in _JUNK_CONTACT_NAMES
+    """True when `name` must never be proposed/saved as a contact: the literal "User"/"Zoe", or a noun phrase the model lifted
+    from a sentence ("the meaning") rather than a person's name."""
+    if (name or "").strip().lower() in _JUNK_CONTACT_NAMES:
+        return True
+    try:
+        from person_extractor import _looks_like_person_name, _plausible_name_shape
+
+        return bool((name or "").strip()) and not (_looks_like_person_name(name) and _plausible_name_shape(name))
+    except Exception:  # noqa: BLE001 - the extra gate is best-effort; the literal check above always runs
+        return False
+
+
+# ── the STANDING decline: "no contacts please" ────────────────────────────────────────────────────────────────────
+_DECLINE_KEY = "contact_offers_off"
+_DECLINE_TTL_S = 30.0
+_decline_cache: dict = {}          # user_id -> (monotonic ts, declined)
+#: a name whose offer was closed (declined, expired or answered) is not offered again for this long
+REOFFER_BLOCK_DAYS = 30
+
+
+async def contact_offers_declined(user_id: str) -> bool:
+    """Has this member said no to contact offers in general? Cached for ``_DECLINE_TTL_S``; a lookup failure reads as NOT declined
+    for the cache but is never cached (offers are a nicety; the member's no is also enforced where offers are stored)."""
+    if is_unidentified(user_id):
+        return False
+    hit = _decline_cache.get(user_id)
+    now = time.monotonic()
+    if hit and now - hit[0] <= _DECLINE_TTL_S:
+        return hit[1]
+    try:
+        import user_prefs
+
+        val = bool(await user_prefs.get_pref(user_id, _DECLINE_KEY, False))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("pending_suggestions: decline lookup failed: %s", type(exc).__name__)
+        return False
+    _decline_cache[user_id] = (now, val)
+    return val
+
+
+async def decline_contact_offers(user_id: str) -> int:
+    """Record the member's standing no and close every open contact offer. Returns the offers closed; -1 when the preference could
+    not be written (the caller then keeps the offers closed this once but tells nobody it is permanent)."""
+    closed = 0
+    try:
+        import user_prefs
+
+        await user_prefs.set_pref(user_id, _DECLINE_KEY, True)
+        _decline_cache[user_id] = (time.monotonic(), True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending_suggestions: could not store the contact-offer decline (%s)", type(exc).__name__)
+        closed = -1
+    try:
+        async with get_db_ctx() as db:
+            rows = await db.fetch(
+                "UPDATE pending_suggestions SET resolved = 1 WHERE user_id = $1 AND action_type = 'person_create' AND resolved = 0 "
+                "RETURNING id", user_id)
+        if closed != -1:
+            closed = len(rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending_suggestions: could not close open contact offers (%s)", type(exc).__name__)
+    return closed
+
+
+async def allow_contact_offers(user_id: str) -> None:
+    """The member said contact offers are welcome again."""
+    try:
+        import user_prefs
+
+        await user_prefs.delete_pref(user_id, _DECLINE_KEY)
+        _decline_cache.pop(user_id, None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending_suggestions: could not clear the contact-offer decline (%s)", type(exc).__name__)
+
+
+async def _recently_closed_names(db, user_id: str) -> set:
+    """Lower-cased names whose person_create offer was closed within ``REOFFER_BLOCK_DAYS`` (declined, expired or answered): the
+    detector would otherwise re-propose the same person on a later turn once the first offer aged out (QA round 4)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=REOFFER_BLOCK_DAYS)).isoformat()
+    try:
+        rows = await db.fetch(
+            "SELECT pre_filled_slots FROM pending_suggestions WHERE user_id = $1 AND action_type = 'person_create' "
+            "AND resolved = 1 AND created_at > $2", user_id, cutoff)
+    except Exception:  # noqa: BLE001
+        return set()
+    out = set()
+    for r in rows:
+        try:
+            out.add(" ".join(str(json.loads(r["pre_filled_slots"] or "{}").get("name") or "").split()).lower())
+        except (json.JSONDecodeError, AttributeError):
+            continue
+    out.discard("")
+    return out
 
 
 async def _live_contact_names(db, user_id: str) -> list:
@@ -134,6 +226,11 @@ async def store_suggestions(
 ) -> int:
     if not suggestions or is_unidentified(user_id):
         return 0
+    if await contact_offers_declined(user_id):
+        # the member said "no contacts": a person offer is never created for them (other suggestion kinds are unaffected)
+        suggestions = [s for s in suggestions if s.get("action_type") != "person_create"]
+        if not suggestions:
+            return 0
     named = await _filter_or_withhold(user_id, "store")
     suggestions = [s for s in suggestions if not _offer_named(
         named, s.get("action_type"), s.get("offer_phrase"), s.get("description"),
@@ -181,6 +278,8 @@ async def store_suggestions(
                         user_id,
                     )
                     _pkey = " ".join(_pname.split()).lower()
+                    if _pkey in await _recently_closed_names(db, user_id):
+                        continue        # offered, then declined / expired / answered: not asked again for a month
                     dup = False
                     for _er in existing:
                         try:
@@ -362,6 +461,8 @@ async def surface_pending_contacts_for_prompt(user_id: str, *, limit: int = 3) -
     """
     if user_id in ("guest", ""):
         return []
+    if await contact_offers_declined(user_id):
+        return []            # "no contacts please" holds on every surface
     out: list[dict] = []
     named = await _filter_or_withhold(user_id, "surface_pending_contacts_for_prompt")
     try:
@@ -460,7 +561,7 @@ async def surfaced_person_offers(user_id: str, *, limit: int = 5) -> list[dict]:
     router's off-panel accept path (QA review F5: on Telegram, "yes add her"
     previously did nothing).
     """
-    if user_id in ("guest", ""):
+    if user_id in ("guest", "") or await contact_offers_declined(user_id):
         return []
     out: list[dict] = []
     named = await _filter_or_withhold(user_id, "surfaced_person_offers")
