@@ -61,12 +61,14 @@ def introduced_name(message: str) -> str:
     text = " ".join((message or "").replace("’", "'").split())
     if not text or len(text) > 400:
         return ""
-    for rx in _SELF_INTRO_RES:
+    for i, rx in enumerate(_SELF_INTRO_RES):
         m = rx.search(text)
         if not m:
             continue
         name = m.group(1).strip("'-")
-        if len(name) >= 2 and name.lower() not in _NOT_NAMES and not name.lower().endswith(("ing", "ly")):
+        # the adverb / gerund heuristic ("im really", "its raining") guards the LOOSE shapes only; "my name is Emily" is explicit
+        loose = i != 2
+        if len(name) >= 2 and name.lower() not in _NOT_NAMES and not (loose and name.lower().endswith(("ing", "ly"))):
             return name[:1].upper() + name[1:]
     return ""
 

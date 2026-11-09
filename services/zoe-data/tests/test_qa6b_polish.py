@@ -475,3 +475,13 @@ def test_an_opted_out_member_s_introduction_is_not_stored(monkeypatch):
     # negative control: not opted out, the same words are stored
     monkeypatch.setattr(user_prefs, "is_memory_opted_out", lambda uid, **_k: opted(False))
     assert asyncio.run(own_name.note_introduction("member-a", "my name is Priya")) == "Priya" and saved
+
+
+@pytest.mark.parametrize("name", ["Emily", "Sally", "Molly"])
+def test_an_explicit_my_name_is_accepts_names_ending_in_ly(name):
+    # Codex on #2355: the adverb filter rejected real names even after "my name is"
+    import own_name
+
+    assert own_name.introduced_name(f"my name is {name}") == name
+    # negative control: the loose shape still refuses an adverb
+    assert own_name.introduced_name("im really") == ""
