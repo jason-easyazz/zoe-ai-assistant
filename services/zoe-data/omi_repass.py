@@ -4,7 +4,7 @@ Flag ``ZOE_OMI_NIGHT_REPASS`` = off | shadow | on (default OFF). Spec and owner 
 
 Moonshine (the live STT rock, in-process, 20 s chunks, between voice turns) writes the FIRST transcript within minutes of a sync. This module is
 the SECOND, offline pass the night window runs before the 12B loads, with the 4B brain and Kokoro stopped: faster-whisper large-v3 (distil-large-v3
-when the day's audio would overrun the budget) with VAD, word timestamps and a household name hint, plus ECAPA speaker windows matched against the
+when the day's audio would overrun the budget) with VAD, word timestamps and a household name hint, plus the panel ResNet34 speaker units matched against the
 wearer's pendant-channel print and the voices the owner has taught Zoe. The model work happens in ``scripts/night/jobs/omi_repass_worker.py`` (its
 own venv, its own capped process); everything that DECIDES - what to run, how to label, what to store, what to keep - is here, pure where it can be.
 
@@ -19,9 +19,9 @@ Invariants (each has a negative control in ``tests/test_omi_repass.py``):
     WAV goes whether or not the pass ran, exactly as any kept WAV does.
   * FORGOTTEN STAYS FORGOTTEN: every new line is redacted against the forget ledger (``_redact_forgotten``, as the first pass does) and the write
     goes through ``user_erase_gate.writing`` - a member erased since the job started has nothing written and the recording is tombstoned.
-  * NO SILENT SELF-LABELLING: a line is "me" only against a CONFIRMED wearer print (windows the owner labelled "me", or a heuristic proposal the owner
-    confirmed). Without one every line reads ``unverified``. A model label never overwrites a human one: tags, "me/other" labels and not-a-person
-    marks on the first-pass segments are carried onto the overlapping new segments.
+  * NO SILENT SELF-LABELLING: a line is "me" outright only against a CONFIRMED pendant wearer print (windows the owner labelled "me", or a heuristic proposal the owner confirmed); the owner's
+    consented PANEL profile can only make it "you?" (leaning). A turn is labelled only with a clear margin over the runner-up (>= 0.10; >= 0.20 under 1.2 s), leaned at >= 0.05, else "?" (see
+    ``omi_repass_who``). A model label never overwrites a human one: tags, "me/other" labels and not-a-person marks on the first-pass segments are carried onto the overlapping new segments.
   * A suggestion is never a tag: a recognised family member / guest voice becomes ``suggested_person_id`` (the owner confirms), as in omi_voices.
   * Unfinished work carries over: a recording the budget could not reach stays ``pending`` for the next night (it is not a failure).
 """
@@ -49,7 +49,10 @@ from typed_env import env_float, env_int, env_str
 logger = logging.getLogger(__name__)
 
 MODES = ("off", "shadow", "on")
-MODEL_ID = "ecapa-voxceleb-1.5s"                  # the speaker-space tag on every embedding / voiceprint this pass writes (never mixed with resnet34's)
+import speaker_models                              # noqa: E402 - the panel's own speaker model: ONE speaker space for the panel, named guests, the first pass and this pass
+import omi_repass_who as who                       # noqa: E402
+
+MODEL_ID = speaker_models.RESNET34_MODEL_ID        # the speaker-space tag on every embedding / voiceprint this pass writes: the SAME model as the panel (WeSpeaker R34 int8, c1)
 MAX_PASS_ATTEMPTS = 3
 MIN_WEARER_WINDOWS = 10                           # a wearer print needs this many confirmed 1.5 s windows before any line may read "me"
 #: THE BACKEND SEAM. Each ASR engine the worker can run (``omi_repass_worker.ASR``) is DECLARED here with its budget facts, so the window's RAM / time
@@ -75,8 +78,8 @@ BACKENDS: dict = {
 }
 DEFAULT_ASR = "qwen3-asr"
 FLOOR_MB = 1200                                    # the window's MemAvailable floor: a pass only starts if the box can hold the engine + the speaker model and still clear it
-DIAR_BACKENDS = ("ecapa",)                        # the speaker-window engines the worker has (``omi_repass_worker.DIAR``); MODEL_ID is tied to this one
-DIAR_RSS_MB = 700
+DIAR_BACKENDS = ("resnet34",)                        # the speaker-window engines the worker has (``omi_repass_worker.DIAR``); MODEL_ID is tied to this one
+DIAR_RSS_MB = 400                                  # the R34 int8 session + its fbank; no torch
 DEFAULT_RTF = {k: v["rtf"] for k, v in BACKENDS.items()}
 PLAN_MARGIN = 0.85                                # plan to use at most this much of the budget (the estimate is a mean over files of very different density)
 HINT_MAX_NAMES = 30
@@ -99,7 +102,7 @@ def asr_backend() -> str:
 
 
 def diar_backend() -> str:
-    return env_str("ZOE_OMI_NIGHT_DIAR", "ecapa").strip() or "ecapa"
+    return env_str("ZOE_OMI_NIGHT_DIAR", "resnet34").strip() or "resnet34"
 
 
 def scope_mem_max(asr: str, diar: bool = True) -> str:
@@ -199,22 +202,6 @@ def worker_path() -> Path:
     return Path(__file__).resolve().parents[2] / "scripts" / "night" / "jobs" / "omi_repass_worker.py"
 
 
-def you_min() -> float:
-    return env_float("ZOE_OMI_REPASS_YOU_MIN", 0.45)
-
-
-def name_min() -> float:
-    return env_float("ZOE_OMI_REPASS_NAME_MIN", 0.45)
-
-
-def name_margin() -> float:
-    return env_float("ZOE_OMI_REPASS_NAME_MARGIN", 0.08)
-
-
-def zoe_min() -> float:
-    return env_float("ZOE_OMI_REPASS_ZOE_MIN", 0.55)
-
-
 # ── names ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def clean_names(names: Iterable[Any]) -> list[str]:
@@ -286,66 +273,34 @@ def _unit(v: Any) -> np.ndarray:
     return a / n if n > 0 else a
 
 
-class Refs:
-    """The voices a window is matched against: the wearer (confirmed print only), Zoe's own TTS, and the owner's taught people (ECAPA space)."""
-
-    def __init__(self, you: Optional[Any] = None, zoe: Optional[Any] = None, people: Optional[list] = None):
-        self.you = None if you is None else _unit(you)
-        self.zoe = None if zoe is None else _unit(zoe)
-        self.people = [{"person": p["person"], "v": _unit(p["v"]), "rej": int(p.get("rej", 0))} for p in (people or [])]
+Refs = who.Refs
+label_window = who.label_window
+LEARN_YOU_MIN = 0.5                                # omi_voices.learn's "this unsure line is far enough from the wearer to learn as a bystander" bar
 
 
-def label_window(e: Any, refs: Refs) -> dict:
-    """One window's verdict: ``zoe`` | ``you`` | ``person`` (+ id) | ``other`` | ``unsure`` | ``unverified``, with the cosines that decided it.
-    ``unverified`` is what a window reads when there is no confirmed wearer print - Zoe's voice excepted - so nothing is ever "me" by default."""
-    e = _unit(e)
-    s_you = float(refs.you @ e) if refs.you is not None else None
-    s_zoe = float(refs.zoe @ e) if refs.zoe is not None else None
-    scored = sorted(((float(p["v"] @ e), p) for p in refs.people), key=lambda t: -t[0])
-    out = {"label": "unverified", "you": s_you, "zoe": s_zoe, "person": None, "person_score": None}
-    if s_zoe is not None and s_zoe >= zoe_min() and (s_you is None or s_zoe > s_you):
-        out["label"] = "zoe"
-        return out
-    if scored:
-        best_s, best = scored[0]
-        runner = max([scored[1][0]] if len(scored) > 1 else [-1.0])
-        if s_you is not None:
-            runner = max(runner, s_you)
-        margin = name_margin() + 0.02 * min(best["rej"], 5)
-        if best_s >= name_min() and best_s - runner >= margin:
-            out.update(label="person", person=best["person"], person_score=best_s)
-            return out
-    if s_you is None:
-        return out
-    if s_you >= you_min():
-        out["label"] = "you"
-    elif s_you >= you_min() - 0.12:
-        out["label"] = "unsure"
-    else:
-        out["label"] = "other"
-    return out
-
-
-def _key(v: dict) -> str:
-    return f"p:{v['person']}" if v["label"] == "person" else v["label"]
-
-
-def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, smooth: int = 3) -> list[dict]:
+def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, smooth: int = 3, zoe_spans: Iterable = ()) -> list[dict]:
     """Words (``[word, t0, t1, p]``) + windows (``[t0, t1, emb, rms]``) -> speaker lines: each word takes the label of the windows covering its
     midpoint (a vote, strong verdicts weigh double), labels are smoothed over +-``smooth`` words, and runs of one label join into a line unless a
     silence of ``gap_s`` separates them. A one-or-two-word run of an uncertain label between two lines is absorbed (label flicker)."""
     if not words:
         return []
     ws = [(float(w[1]), float(w[2])) for w in words]
-    verdicts = [(float(w[0]), float(w[1]), label_window(w[2], refs)) for w in windows]
+    spans = [(int(a), int(b)) for a, b in zoe_spans]
+
+    def zoe_hit(t0: float, t1: float) -> bool:       # the panel log's Zoe replies are exact: a unit mostly inside one IS Zoe
+        d = max(1.0, (t1 - t0) * 1000.0)
+        return any(max(0.0, min(t1 * 1000.0, b) - max(t0 * 1000.0, a)) / d >= 0.5 for a, b in spans)
+
+    verdicts = [(float(w[0]), float(w[1]), label_window(w[2], refs, dur_s=float(w[1]) - float(w[0]), rms=(float(w[3]) if len(w) > 3 else None), zoe_hit=zoe_hit(float(w[0]), float(w[1]))))
+                for w in windows]
     raw: list[str] = []
     for a, b in ws:
         mid = (a + b) / 2.0
         votes: dict[str, int] = {}
         for t0, t1, v in verdicts:
             if t0 - 0.1 <= mid <= t1 + 0.1:
-                votes[_key(v)] = votes.get(_key(v), 0) + (2 if v["label"] in ("zoe", "you", "person") else 1)
-        raw.append(max(votes.items(), key=lambda kv: kv[1])[0] if votes else "unverified" if refs.you is None else "unsure")
+                votes[v["key"]] = votes.get(v["key"], 0) + {"sure": 2.0, "lean": 1.5}.get(v["conf"], 1.0)
+        raw.append(max(votes.items(), key=lambda kv: kv[1])[0] if votes else "unverified" if not refs.has_prints() else "?")
     sm: list[str] = []
     for i in range(len(raw)):
         win = raw[max(0, i - smooth): i + smooth + 1]
@@ -362,7 +317,7 @@ def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, s
             lines.append({"key": lab, "start": a, "end": b, "text": str(w[0]), "ps": [float(w[3])]})
     merged: list[dict] = []
     for ln in lines:
-        if merged and ln["start"] - merged[-1]["end"] < gap_s and len(ln["text"].split()) <= 2 and ln["key"] in ("unsure", "unverified") \
+        if merged and ln["start"] - merged[-1]["end"] < gap_s and len(ln["text"].split()) <= 2 and ln["key"] in ("?", "unverified") \
                 and ln["key"] != merged[-1]["key"]:
             merged[-1]["text"] += ln["text"]
             merged[-1]["end"] = ln["end"]
@@ -380,26 +335,30 @@ def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, s
             continue
         cover = [w for w in windows if float(w[0]) < ln["end"] and float(w[1]) > ln["start"]]
         emb = _unit(np.mean([_unit(w[2]) for w in cover], axis=0)) if cover else None
-        out.append({"key": ln["key"], "start_ms": int(round(ln["start"] * 1000)), "end_ms": max(int(round(ln["end"] * 1000)), int(round(ln["start"] * 1000)) + 1),
+        out.append({"cands": who.candidates(emb, refs) if (emb is not None and ln["key"].endswith("?")) else [], "key": ln["key"], "start_ms": int(round(ln["start"] * 1000)), "end_ms": max(int(round(ln["end"] * 1000)), int(round(ln["start"] * 1000)) + 1),
                     "text": text, "windows": len(cover), "embedding": emb, "low_conf": sum(p < 0.4 for p in ln["ps"]) / max(1, len(ln["ps"])) > 0.3})
     return out
 
 
 def segment_fields(line: dict, refs: Refs) -> dict:
-    """A line as the ``omi_segments`` insert wants it (``omi_voices.store_segments``). ``person`` -> speaker ``other`` + a SUGGESTED person (set by the caller);
-    ``zoe`` -> ``other`` + ``not_person='zoe'`` (the pendant heard Zoe's own voice, not a person)."""
+    """A line as the ``omi_segments`` insert wants it (``omi_voices.store_segments``). 'p:ID' -> ``other`` + a SUGGESTED person (a suggestion is never a tag); 'X?' / '?' -> ``unsure`` (+ the
+    leaning person as a suggestion) and a ``who_said`` item for the owner; ``zoe`` -> ``other`` + ``not_person='zoe'`` (the pendant heard Zoe's own voice, not a person)."""
     key = line["key"]
+    kind, pid, leaning = who.key_parts(key)
     e = line.get("embedding")
     score = None
     if e is not None and refs.you is not None:
-        score = round(float(refs.you @ e), 4)
-    speaker = {"you": "you", "zoe": "other", "unsure": "unsure", "unverified": "unverified"}.get(key, "other")
+        score = round(float(refs.you @ who.remove_mean(e, refs.mu)), 4)
+    speaker = {"you": "you", "zoe": "other", "person": "other", "unknown": "unsure", "unverified": "unverified"}[kind]
+    if leaning:
+        speaker = "unsure"
     pscore = None
-    if key.startswith("p:") and e is not None:
-        mine = [p for p in refs.people if p["person"] == key[2:]]
-        pscore = round(float(mine[0]["v"] @ e), 4) if mine else None
+    if pid and e is not None:
+        mine = [p for p in refs.people if p["person"] == pid]
+        pscore = round(float(mine[0]["v"] @ who.remove_mean(e, refs.mu)), 4) if mine else None
     return {"start_ms": line["start_ms"], "end_ms": line["end_ms"], "speaker": speaker, "score": score, "windows": line["windows"], "embedding": e,
-            "text": line["text"], "not_person": "zoe" if key == "zoe" else None, "person": key[2:] if key.startswith("p:") else None, "person_score": pscore}
+            "text": line["text"], "not_person": "zoe" if kind == "zoe" else None, "person": pid, "person_score": pscore,
+            "mark": "?" if (key.endswith("?")) else "", "lean": bool(leaning), "cands": line.get("cands") or []}
 
 
 def word_agreement(a: str, b: str, cap: int = 2500) -> float:
@@ -488,13 +447,13 @@ async def pending_recordings(db, *, now: Optional[datetime] = None, limit: int =
     cannot all be re-read in one night, so the ones most likely to hold speech are done first and the rest carry): first-pass done (or empty) rows whose WAV is still on disk, inside retention, not yet
     passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
     stamp = _iso(now or _now())
-    rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts FROM omi_recordings "
+    rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts, device_id FROM omi_recordings "
                           f"WHERE status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < ? "
                           "AND (audio_expires_at IS NULL OR audio_expires_at > ?) ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at LIMIT ?",
                       (MAX_PASS_ATTEMPTS, stamp, limit))
     out = []
     for r in rows:
-        d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts")}
+        d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts", "device_id")}
         if d["audio_path"] and os.path.exists(d["audio_path"]):
             out.append(d)
     return out
@@ -540,16 +499,40 @@ async def wearer_print(db, user_id: str) -> Optional[np.ndarray]:
     return vec
 
 
-async def load_refs(db, user_id: str, zoe: Optional[Any]) -> Refs:
+async def load_refs(db, user_id: str, zoe: Optional[Any], mu: Optional[Any] = None, loud_cut: Optional[float] = None) -> Refs:
+    """Everything a turn is matched against, in the right channel. ``mu`` = the pendant session (or stored per-device) mean. The wearer prior is the device owner's print, mean-removed: the
+    CONFIRMED pendant print if there is one, else the owner's consented PANEL profile (mean-removed with the registry's panel mean), which can only make a turn "you?" (leaning)."""
     import omi_voices
-    people = []
+    people, panel_mu = [], None
     try:
-        people = await omi_voices._voiceprints_for_suggest(db, user_id, MODEL_ID)
-        people = [{"person": p["person"], "v": p["v"], "rej": p["rej"]} for p in people]
+        people, panel_mu = await who.load_people(db, user_id, MODEL_ID, mu)
     except Exception as exc:  # noqa: BLE001
         if not omi_voices._missing(exc):
             raise
-    return Refs(you=await wearer_print(db, user_id), zoe=zoe, people=people)
+    you, panel_only = await wearer_print(db, user_id), False
+    if you is not None:
+        you = who.remove_mean(you, mu)
+    else:
+        try:
+            prof = await omi_voices.wearer_profile(db, user_id, MODEL_ID)
+        except Exception as exc:  # noqa: BLE001
+            if not omi_voices._missing(exc):
+                raise
+            prof = None
+        if prof is not None:
+            you, panel_only = who.remove_mean(prof, panel_mu), True
+    return Refs(you=you, zoe=zoe, people=people, mu=mu, you_panel_only=panel_only, loud_cut=loud_cut)
+
+
+async def zoe_spans_for(uid: str, rid: str) -> list:
+    """Zoe's own replies in the panel log, in ms into the recording (exact; ``[]`` until a store logs TTS playback with wall-clock times)."""
+    import omi_voices
+    from db_compat import get_compat_db
+    try:
+        async with get_compat_db() as db:
+            return list(await omi_voices.zoe_spoken_spans(db, uid, rid))
+    except Exception:  # noqa: BLE001
+        return []
 
 
 async def _first_pass_segments(db, rid: str) -> list[dict]:
@@ -572,7 +555,7 @@ async def _add_wearer_samples(db, user_id: str, rid: str, windows: list, spans: 
 
 
 async def _learn_carried_tags(db, user_id: str, seg_ids: list[str], segs: list[dict], rid: str) -> int:
-    """The owner's earlier tags (first-pass segments) teach the ECAPA person prints: each carried ``tagged_person_id`` line's embedding joins that
+    """The owner's earlier tags (first-pass segments) teach the R34 person prints: each carried ``tagged_person_id`` line's embedding joins that
     person's pendant print in THIS model (the same rules as ``omi_voices.tag``: learning allowed, never a child)."""
     import omi_voices
     from person_age import person_may_be_child
@@ -613,7 +596,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
     import omi_voices
     from db_compat import get_compat_db
     rid, uid = r["id"], r["user_id"]
-    lines = build_lines(res["words"], res["windows"], refs)
+    lines = build_lines(res["words"], res["windows"], refs, zoe_spans=await zoe_spans_for(uid, rid))          # Zoe's replies first (exact), then the people
     segs = []
     for ln in lines:
         f = segment_fields(ln, refs)
@@ -675,9 +658,19 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         if sets:
                             await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
                     untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
-                    if untagged:      # bystander voices: clusters + suggestions in the ECAPA space, exactly the first pass's machinery
-                        await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=you_min())
+                    if untagged:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
+                        await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)
                     await _learn_carried_tags(db, uid, ids, segs, rid)
+                    ttl = _iso((now or _now()) + timedelta(days=omi_voices.EMBED_TTL_DAYS))
+                    who_items = []
+                    for sid, sg in zip(ids, segs):             # the "who said this?" turns: the owner's tap adds THIS embedding to the person's pendant print (omi_voices.tag)
+                        if sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
+                            await db.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, ?) "
+                                             "ON CONFLICT (segment_id) DO NOTHING", (sid, uid, MODEL_ID, _blob(sg["embedding"]), ttl))
+                            who_items.append({"seg_id": sid, "t0": round(sg["start_ms"] / 1000.0, 3), "t1": round(sg["end_ms"] / 1000.0, 3),
+                                              "mark": "lean" if sg.get("lean") else "unknown",
+                                              "cands": sg["cands"]})
+                    counts["who_items"] = who_items
                     if pending_wearer_labels:
                         spans = [(o["start_ms"], o["end_ms"]) for o in pending_wearer_labels]
                         counts["wearer_windows"] = await _add_wearer_samples(db, uid, rid, res["windows"], spans, source="owner_label", status="confirmed")
@@ -687,12 +680,12 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                     logger.warning("OMI_REPASS_SEGMENTS_NOT_STORED id=%s reason=%s", rid, type(exc).__name__)
                     await db.rollback()
                     return {"status": "failed", "why": "segments:" + type(exc).__name__, **counts}
-                state = "tagged" if refs.you is not None else "unverified"
+                state = "tagged" if (refs.you is not None and not refs.you_panel_only) else "unverified"
                 await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, speaker_state = ?, repass_state = 'done', repass_model = ?, repass_at = ?, "
                                  "repass_attempts = repass_attempts + 1 WHERE id = ? AND repass_state IN ('pending', '')", (text, state, model_label, stamp, rid))
                 await db.commit()
                 counts.update(status="replaced", carried=carried)
-            if refs.you is None and res["windows"]:           # a proposal for the owner to confirm; never used until then
+            if (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then
                 try:
                     pick = propose_wearer(res["windows"])
                     if pick:
@@ -703,6 +696,24 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                     logger.warning("OMI_REPASS_PROPOSAL_FAILED reason=%s", type(exc).__name__)
     await omi.release_tagged_audio(uid)            # the pass has seen it: the WAV goes unless the owner keeps it or a line still needs a name
     return counts
+
+
+async def confirm_who(db, user_id: str, segment_id: str, person_id: str) -> dict:
+    """The owner's tap on a ``who_said`` item ("Who said this?"): ``person_id`` is a person id or ``"you"``. The turn's stored embedding joins that person's PENDANT print through the existing
+    machinery (``omi_voices.tag`` - the member's own person, learning rules, never a child), or - for "you" - becomes a CONFIRMED wearer sample and the line is labelled "me". Idempotent."""
+    import omi_voices
+    if person_id == "you":
+        rows = await _all(db, "SELECT s.recording_id, s.start_ms, s.end_ms, e.embedding FROM omi_segments s JOIN omi_segment_embeddings e ON e.segment_id = s.id "
+                              "WHERE s.id = ? AND s.user_id = ?", (segment_id, user_id))
+        ok = await omi_voices.set_owner_label(db, user_id, segment_id, "you")
+        if rows:
+            rid, a, b, emb = rows[0]
+            await db.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
+                             "VALUES (?, ?, ?, ?, ?, ?, ?, 'owner_label', 'confirmed', NULL, ?) ON CONFLICT (recording_id, start_ms, end_ms, model_id) DO NOTHING",
+                             (str(uuid.uuid4()), user_id, rid, MODEL_ID, int(a), int(b), bytes(emb), _iso(_now())))
+            await db.commit()
+        return {"person": "you", "labelled": bool(ok)}
+    return {"person": person_id, **await omi_voices.tag(db, user_id, person_id=person_id, segment_id=segment_id, source="owner")}
 
 
 async def requeue_failed(user_id: Optional[str] = None) -> int:
@@ -947,7 +958,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                 return {"skipped": skipped[engine], "got": {}, "done": {}, "rc": None}
         stamp = uuid.uuid4().hex[:8]
         man, out = work / f"{stamp}.manifest.json", work / f"{stamp}.out.jsonl"
-        man.write_text(json.dumps({"asr": engine, "diar": diar, "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "1") != "0", "models_dir": models_dir(),
+        man.write_text(json.dumps({"asr": engine, "diar": diar, "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "1") != "0", "models_dir": models_dir(), "r34_dir": env_str("ZOE_OMI_TAG_MODEL_DIR", "").strip() or os.path.expanduser("~/.cache/zoe-speaker-resnet34"),
                                    "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": dl, "ct2_dir": ct2_dir() if engine.startswith("whisper-gpu") else "",
                                    "rtf": rt.get(engine, 1.0), "items": its, "zoe_clips": [] if (zoe_ref or not clips) else zoe_clips()}))
         os.chmod(man, 0o600)
@@ -973,8 +984,38 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         st["zoe_ref"] = zoe_ref = p1["zref"]
     res["aborted"] = done1.get("aborted") or None
     ok1 = [it for it in items if (got1.get(it["id"]) or {}).get("ok")]
-    chunked = [it for it in ok1 if isinstance(got1[it["id"]].get("chunks"), list)]
     by_id = {r["id"]: r for r in rows}
+
+    # ── the pendant channel mean per member: this session's turns (>= 10 min of speech), else the stored per-device mean; and the wearer's loud cut ──
+    mu_by: dict = {}
+    loud_by: dict = {}
+    user_rids: dict = {}
+    for it in ok1:
+        user_rids.setdefault(by_id[it["id"]]["user_id"], []).append(it["id"])
+    for uid_, rids_ in user_rids.items():
+        wins_ = [w for rid_ in rids_ for w in (got1[rid_].get("windows") or [])]
+        speech_ = sum(float(got1[rid_].get("speech_s") or 0.0) for rid_ in rids_)
+        loud_by[uid_] = float(np.percentile([float(w[3]) for w in wins_ if len(w) > 3], 75)) if any(len(w) > 3 for w in wins_) else None
+        dev_ = (by_id[rids_[0]].get("device_id") or "")
+        async with get_compat_db() as db:
+            if wins_ and speech_ >= who.SESSION_MIN_S:
+                mu_by[uid_] = who.session_mean([w[2] for w in wins_])
+                if not rehearse:
+                    try:
+                        await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[uid_], len(wins_), speech_, now)
+                        await db.commit()
+                    except Exception as exc:  # noqa: BLE001 - pre-0073
+                        logger.warning("OMI_REPASS_MEAN_NOT_STORED reason=%s", type(exc).__name__)
+            else:
+                mu_by[uid_] = await who.load_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_)
+    refs_cache: dict = {}
+
+    async def refs_for(uid_: str) -> Refs:
+        if uid_ not in refs_cache:
+            async with get_compat_db() as db:
+                refs_cache[uid_] = await load_refs(db, uid_, zoe_ref, mu_by.get(uid_), loud_by.get(uid_))
+        return refs_cache[uid_]
+    chunked = [it for it in ok1 if isinstance(got1[it["id"]].get("chunks"), list)]
 
     async def voter_pass(engine: str) -> dict:
         its = [{"id": it["id"], "path": it["path"], "chunks": [[c[0], c[1]] for c in got1[it["id"]]["chunks"]]} for it in chunked]
@@ -1056,12 +1097,12 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         o = fused_res.get(rows[0]["id"])
         if o is None or not (got1.get(rows[0]["id"]) or {}).get("ok"):
             return {**res, "status": "rehearsal_failed", "why": ((got1.get(rows[0]["id"]) or {}).get("why", "no result")), "worker_rc": rc}
-        async with get_compat_db() as db:
-            refs = await load_refs(db, rows[0]["user_id"], zoe_ref)
+        refs = await refs_for(rows[0]["user_id"])
         pv = await preview_one(rows[0], o, refs=refs, names=names_by_user.get(rows[0]["user_id"], []))
         return {**res, "status": "rehearsal_ok", **pv, "worker_rc": rc, "device": done1.get("device"), "worker_rtf": done1.get("rtf"), "peak_rss_mb": done1.get("peak_rss_mb"),
                 "gpu_peak_mb": done1.get("gpu_peak_mb"), "load_s": done1.get("load_s"), "wall_s": round(clock() - started)}
     tally = {"replaced": 0, "shadow": 0, "erased": 0, "gone": 0, "failed": 0, "carried": 0, "agree_sum": 0.0, "me": 0, "named": 0, "zoe": 0, "proposed": 0}
+    who_rows: list = []
     drop_rids: set = set()                  # recordings whose hypotheses are NOT kept: erased mid-job, deleted meanwhile, or never finished
     for rid, r in by_id.items():
         o = fused_res.get(rid)
@@ -1071,11 +1112,12 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             await note_failure(rid, carry=carry)
             tally["carried" if carry else "failed"] += 1
             continue
-        async with get_compat_db() as db:
-            refs = await load_refs(db, r["user_id"], zoe_ref)
+        refs = await refs_for(r["user_id"])
         c = await finish_one(r, o, refs=refs, names=names_by_user.get(r["user_id"], []), model_label=model_label, seen=seen, m=m, now=now)
         s = c["status"]
         tally[s] = tally.get(s, 0) + 1
+        for wi in c.get("who_items") or []:
+            who_rows.append({"kind": "who_said", "u": r["user_id"], "rid": rid, **wi})
         if s in ("replaced", "shadow"):
             tally["agree_sum"] += float(c.get("agree") or 0.0)
             for k in ("me", "named", "zoe", "proposed"):
@@ -1087,13 +1129,15 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     try:                                                         # the evaluation record: counts in the ledger, the hypotheses (words, private, 7 days) in the hyps store
         home = home_dir()
         stored = [{k: v for k, v in r.items() if k != "_fz"} for rid, rws in chunk_rows.items() if rid not in drop_rids for r in rws]
+        stored += [w for w in who_rows if w["rid"] not in drop_rids]                  # the "who said this?" items ride in the same private store (ids and scores only, no words)
         gen = {u: erase_gate.generation(u) for u in {r["u"] for r in stored}}
         stored = [r for r in stored if gen[r["u"]] == seen.get(r["u"], 0)]            # a member erased since this job was read keeps no hypotheses
-        if cl:
-            eu.append_ledger(home, night, contrib, evals)
+        if cl or who_rows:
+            if cl:
+                eu.append_ledger(home, night, contrib, evals)
             eu.store_hyps(home, night, stored)
             eu.prune_hyps(home, (now or _now()).date())
-            for u in gen:                                                              # an erase that landed DURING the write: sweep that member again (forget_user is idempotent)
+            for u in gen:
                 if erase_gate.generation(u) != gen[u]:
                     eu.forget_user(home, u)
         if (now or _now()).weekday() == 0:                       # Monday: the weekly verdict line for the morning report

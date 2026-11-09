@@ -1,47 +1,53 @@
 #!/usr/bin/env python3
 """The ASR + speaker-embedding half of the pendant night re-pass, as a STANDALONE process in its own venv (``~/.zoe/venvs/omi-repass``).
 
-It exists so torch, transformers, faster-whisper and speechbrain (and their GBs) never enter zoe-data or the night window: the job starts it under
+It exists so torch, transformers, faster-whisper and onnxruntime (and their GBs) never enter zoe-data or the night window: the job starts it under
 ``systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0 nice -n 10`` while Zoe sleeps, and reads a JSONL back. It knows nothing about
 the database, members, names or labels - the parent (``services/zoe-data/omi_repass.py``) owns every decision.
 
     omi_repass_worker.py --manifest M.json --out OUT.jsonl      transcribe + embed each item; one JSON line per finished item
     omi_repass_worker.py --probe-gpu                            print what the GPU path could do on this stack (one JSON line), change nothing
 
-Manifest: {"asr": "qwen3-asr"|"parakeet-tdt"|"faster-whisper:large-v3"|... (ASR registry), "diar": "ecapa" (DIAR registry), "threads": 4, "gpu": true, "models_dir": "...", "chunk_s": 14,
+Manifest: {"asr": "qwen3-asr"|"parakeet-tdt"|"faster-whisper:large-v3"|... (ASR registry), "diar": "resnet34"|"none" (DIAR registry), "threads": 4, "gpu": true, "models_dir": "...", "chunk_s": 14,
            "hint": "Names: ..." (only faster-whisper uses it: the transformers engines are NOT prompt-biased, the parent normalises names afterwards), "deadline_epoch": 1.7e9, "rtf": 1.0, "zoe_clips": [paths], "items": [{"id": "...", "path": "...", "hint": "(optional, per item)"}]}
 Output lines: {"zoe_ref": [...]} once (when zoe_clips were given), then per item {"id", "ok": true, "dur_s", "speech_s", "asr_s", "emb_s",
            "words": [[w, t0, t1, p]...], "windows": [[t0, t1, [192 floats], rms]...]} or {"id", "ok": false, "why"}, then {"done": true, ...}.
 An item is never half-written: if the deadline passes mid-file the item is reported ``why: "deadline"`` and the parent carries it to the next night.
 Offline by construction (HF_HUB_OFFLINE=1; the transformers engines load from ``models_dir`` = ~/.zoe/models/omi-repass, fetched at pinned revisions by setup_omi_repass.sh; faster-whisper /
-ECAPA from the pinned HF-cache snapshots). Audio and words are never logged.
+the speaker model is the panel's pinned ResNet34 artefact). Audio and words are never logged.
 Exit 0 ok, 3 a model/package is missing, 1 any other failure.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import resource
 import sys
 import time
+from pathlib import Path
 
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 #: PINNED snapshots (the revisions the bake-off scored). Systran is the only HF org the ASR weights may come from; the speaker model is
-#: speechbrain's own ECAPA (the bake-off's embedder; the weights are the same file the lab used).
 MODELS = {
     "large-v3": ("Systran/faster-whisper-large-v3", "edaa852ec7e145841d8ffdb056a99866b5f0a478"),
     "distil-large-v3": ("Systran/faster-distil-whisper-large-v3", "c3058b475261292e64a0412df1d2681c06260fab"),
 }
-ECAPA = ("speechbrain/spkrec-ecapa-voxceleb", "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286")
+#: the SPEAKER step is the panel's own WeSpeaker ResNet34 (int8, pinned artefact + self-test in scripts/setup/zoe_speaker_resnet34.py): one speaker space for the panel, named guests, the first pass
+#: and this pass. Measured on hand-checked turns: 97-100 % with per-channel mean removal (ECAPA 89-95 %, the shipped labels 60 %).
+R34_SCRIPT = Path(__file__).resolve().parents[2] / "setup" / "zoe_speaker_resnet34.py"
+R34_DIR = os.path.expanduser("~/.cache/zoe-speaker-resnet34")
+LONG_TURN_S = 8.0          # a turn up to this long is ONE embedding; a longer one gets 1.5 s windows (hop 0.75) that vote. Never 20 s slabs.
+MIN_UNIT_S = 0.5
 #: the round-2 bake-off winners (official repos; revisions pinned in scripts/setup/setup_omi_repass.sh): directory names under ``models_dir``
 TRANSFORMERS_DIRS = {"qwen3-asr": "Qwen3-ASR-1.7B-hf", "parakeet-tdt": "parakeet-tdt-0.6b-v3", "granite-speech": "granite-speech-5.0-2b"}
 MODELS_DIR = os.path.expanduser("~/.zoe/models/omi-repass")
 CHUNK_MAX_S = 14.0         # the bake-off's VAD chunk length; the parent passes ``chunk_s`` (ZOE_OMI_REPASS_CHUNK_S); never above 30
 RATE = 16000
-WIN_S, HOP_S, MIN_WIN_S = 1.5, 0.75, 0.8
+WIN_S, HOP_S = 1.5, 0.75
 
 
 def rss_mb() -> float:
@@ -146,7 +152,7 @@ def vad_chunks(x) -> list:
 
 class ChunkedAsr(AsrBackend):
     """An engine that returns TEXT per VAD chunk (no word times): the words of a chunk are spread evenly across it with a flat 0.6 confidence; who spoke still comes from the
-    ECAPA windows. No name hint is given to the engine (the bake-off: no candidate spells a household name unbiased, and a keyword prompt made one invent a name on non-speech) -
+    speaker units. No name hint is given to the engine (the bake-off: no candidate spells a household name unbiased, and a keyword prompt made one invent a name on non-speech) -
     the parent normalises names afterwards from the household / named-guest lexicon."""
     dev = "cpu"
 
@@ -279,7 +285,7 @@ ASR = {
 }
 #: diarisation / speaker-window registry (the seam: ``windows(x, speech) -> [(t0, t1, emb, rms)]``); the parent matches the embeddings, so a
 #: segmenting engine (pyannote, Sortformer) can slot in by returning windows of its own turns.
-DIAR = {"ecapa": lambda t: Embedder(t)}
+DIAR = {"resnet34": lambda t: ResNet34Units(t)}
 
 
 def read_audio(path: str):
@@ -293,35 +299,37 @@ def read_audio(path: str):
     return np.ascontiguousarray(x)
 
 
-class Embedder:
+class ResNet34Units:
+    """Speaker units from the ASR's VAD turns. The CAM++ seam is another entry in ``DIAR`` (the bake-off kept it optional)."""
+
     def __init__(self, threads: int):
-        import torch
-        torch.set_num_threads(max(1, min(2, threads)))
-        from speechbrain.inference.speaker import EncoderClassifier
-        src = snapshot(*ECAPA)
-        save = os.path.expanduser("~/.zoe/omi-repass/ecapa")
-        os.makedirs(save, exist_ok=True)
-        self.torch = torch
-        self.clf = EncoderClassifier.from_hparams(source=src, savedir=save, run_opts={"device": "cpu"})
+        spec = importlib.util.spec_from_file_location("zoe_speaker_resnet34_repass", R34_SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.emb = mod.Resnet34Embedder.load(R34_DIR, artifacts_path=str(R34_SCRIPT.parent / mod.ARTIFACTS_FILENAME), threads=1)
 
     def one(self, x):
-        with self.torch.no_grad():
-            e = self.clf.encode_batch(self.torch.from_numpy(x).float().unsqueeze(0))
-        return e.squeeze().numpy()
+        return self.emb.embed(x)          # the cohort-centred unit embedding the profiles live in, or None for a clip too short to embed
 
-    def windows(self, x, speech):
-        """1.5 s windows (0.75 s hop) over the speech spans; a trailing remainder under 0.8 s is dropped. Returns [(t0, t1, emb, rms)]."""
+    def units(self, x, chunks):
+        """[(t0, t1, emb, rms)]: one embedding per turn up to ``LONG_TURN_S``; a longer turn is cut into 1.5 s windows (hop 0.75) whose votes the parent combines."""
         out = []
-        for sp in speech:
-            a, b = int(sp["start"]), int(sp["end"])
-            t = a
-            while t < b:
-                e = min(t + int(WIN_S * RATE), b)
-                if e - t < MIN_WIN_S * RATE:          # a span (or a trailing remainder) too short for a window: nothing to embed, on to the next span
-                    break
-                seg = x[t:e]
-                out.append((t / RATE, e / RATE, self.one(seg), float((seg.astype("float64") ** 2).mean() ** 0.5)))
-                t += int(HOP_S * RATE)
+
+        def add(a_s, b_s):
+            seg = x[int(a_s * RATE):int(b_s * RATE)]
+            e = self.one(seg)
+            if e is not None:
+                out.append((a_s, b_s, e, float((seg.astype("float64") ** 2).mean() ** 0.5)))
+
+        for s_, e_ in chunks:
+            if e_ - s_ <= LONG_TURN_S:
+                if e_ - s_ >= MIN_UNIT_S:
+                    add(s_, e_)
+                continue
+            t = s_
+            while t + MIN_UNIT_S <= e_:
+                add(t, min(t + WIN_S, e_))
+                t += HOP_S
         return out
 
 
@@ -334,7 +342,9 @@ def zoe_reference(emb: Embedder, clips: list):
         except Exception:  # noqa: BLE001
             continue
         if len(x) > 2.5 * RATE:
-            es.append(emb.one(x[: 12 * RATE]))
+            e = emb.one(x[: 12 * RATE])
+            if e is not None:
+                es.append(e)
     if not es:
         return None
     m = np.stack([e / (np.linalg.norm(e) or 1.0) for e in es]).mean(0)
@@ -342,12 +352,12 @@ def zoe_reference(emb: Embedder, clips: list):
 
 
 def run(manifest: dict, out_path: str) -> int:
-    from faster_whisper.vad import VadOptions, get_speech_timestamps
     name = manifest.get("asr", "qwen3-asr")
-    global MODELS_DIR, CHUNK_MAX_S
+    global MODELS_DIR, CHUNK_MAX_S, R34_DIR
     MODELS_DIR = manifest.get("models_dir") or MODELS_DIR
+    R34_DIR = manifest.get("r34_dir") or R34_DIR
     CHUNK_MAX_S = max(2.0, min(30.0, float(manifest.get("chunk_s") or CHUNK_MAX_S)))
-    diar = manifest.get("diar", "ecapa")
+    diar = manifest.get("diar", "resnet34")
     if name not in ASR or (diar != "none" and diar not in DIAR):
         print(f"unknown backend {name}/{diar}", file=sys.stderr)
         return 1
@@ -358,7 +368,7 @@ def run(manifest: dict, out_path: str) -> int:
     try:
         asr = ASR[name](threads, bool(manifest.get("gpu")))
         asr.load()
-        emb = DIAR[diar](threads) if diar != "none" else None          # a later voter / contender needs the pivot's chunks only: no speaker windows (and no ECAPA in memory)
+        emb = DIAR[diar](threads) if diar != "none" else None          # a later voter / contender needs the pivot's chunks only: no speaker units (and no R34 session in memory)
     except Exception as exc:  # noqa: BLE001 - a model that is not in the cache is a setup problem, not a data one
         print(f"model unavailable: {type(exc).__name__}", file=sys.stderr)
         return 3
@@ -396,9 +406,9 @@ def run(manifest: dict, out_path: str) -> int:
                 asr_s = time.time() - ta
                 te = time.time()
                 if emb is not None:
-                    speech = get_speech_timestamps(x, VadOptions(min_silence_duration_ms=300))
-                    wins = emb.windows(x, speech)
-                    speech_s = round(sum(s["end"] - s["start"] for s in speech) / RATE, 2)
+                    turns = [(c[0], c[1]) for c in asr.last] if asr.last else vad_chunks(x)          # the ASR's own VAD turns: one segmentation for words and speakers
+                    wins = emb.units(x, turns)
+                    speech_s = round(sum(b - a for a, b in turns), 2)
                 else:
                     wins, speech_s = [], round(dur, 2)
                 emb_s = time.time() - te
@@ -412,7 +422,7 @@ def run(manifest: dict, out_path: str) -> int:
                 failed += 1
                 out.write(json.dumps({"id": rid, "ok": False, "why": f"error:{type(exc).__name__}"}) + "\n")
             out.flush()
-        out.write(json.dumps({"done": True, "asr": name, "diar": manifest.get("diar", "ecapa"), "device": asr.device(), "gpu_peak_mb": gpu_peak_mb(), "load_s": round(load_s, 1), "files": done,
+        out.write(json.dumps({"done": True, "asr": name, "diar": manifest.get("diar", "resnet34"), "device": asr.device(), "gpu_peak_mb": gpu_peak_mb(), "load_s": round(load_s, 1), "files": done,
                               "carried": carried, "failed": failed, "audio_s": round(audio_s, 1), "work_s": round(elapsed, 1),
                               "rtf": round(elapsed / audio_s, 3) if audio_s else None, "peak_rss_mb": round(rss_mb())}) + "\n")
     return 0

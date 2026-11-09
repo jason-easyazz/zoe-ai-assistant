@@ -203,14 +203,16 @@ LOW_CONF_TAG = "[low confidence]"
 
 
 def is_contested(row: dict) -> bool:
-    """A stored chunk row the owner's morning transcript check should look at: flagged low confidence, or any ROVER slot without a strict majority."""
-    return bool(row.get("low_conf") or row.get("slots"))
+    """A stored row the owner's morning transcript check should look at: a "who said this?" turn (``kind`` who_said), or a chunk flagged low confidence / with a ROVER slot without a strict majority."""
+    return row.get("kind") == "who_said" or bool(row.get("low_conf") or row.get("slots"))
 
 
-def check_queue(home: Path, user_id: str, rid: Optional[str] = None) -> list[dict]:
+def check_queue(home: Path, user_id: str, rid: Optional[str] = None, kind: Optional[str] = None) -> list[dict]:
     """THE INPUT for the owner's morning transcript-check feature (feature/transcript-check): per contested chunk of the member's recordings - ``rid``, ``i``, ``t0``/``t1``, each
     model's alternative (``hyps``), the ROVER pick (``rover``), the contested slots with their vote counts (``slots``: pick, votes {word: n}, who {word: [models]}) and ``low_conf``.
-    PRIVATE (it holds words): the caller is the member's own surface. Newest night first."""
+    A SECOND item kind, ``who_said``, carries the turns the speaker step would not decide (``mark`` = "lean" for "X?", "unknown" for "?"): ``rid``, ``seg_id`` (the stored segment: the owner's tap
+    calls ``omi_repass.confirm_who`` with the person, which adds that turn's embedding to the person's pendant print), ``t0``/``t1`` and ``cands`` = [[person id | "you", score]] best first.
+    ``kind`` filters ("transcript" | "who_said"). PRIVATE (it holds words and voice-match scores): the caller is the member's own surface. Newest night first."""
     d = hyps_dir(home)
     out: list[dict] = []
     for p in (sorted(d.glob("hyps-*.jsonl"), reverse=True) if d.exists() else []):
@@ -219,8 +221,9 @@ def check_queue(home: Path, user_id: str, rid: Optional[str] = None) -> list[dic
                 r = json.loads(line)
             except ValueError:
                 continue
-            if r.get("u") == user_id and (rid is None or r.get("rid") == rid) and is_contested(r):
-                out.append({k: r.get(k) for k in ("rid", "i", "t0", "t1", "hyps", "rover", "slots", "low_conf", "voters")})
+            k = r.get("kind") or "transcript"
+            if r.get("u") == user_id and (rid is None or r.get("rid") == rid) and (kind is None or k == kind) and is_contested(r):
+                out.append({"kind": k, **{x: r.get(x) for x in ("rid", "i", "t0", "t1", "hyps", "rover", "slots", "low_conf", "voters", "seg_id", "mark", "cands")}})
     return out
 
 

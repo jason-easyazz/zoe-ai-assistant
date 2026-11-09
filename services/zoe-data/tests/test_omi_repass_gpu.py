@@ -40,7 +40,7 @@ def test_the_default_is_qwen3_with_parakeet_as_the_budget_fallback_and_the_measu
 def test_the_ram_check_refuses_a_pass_the_box_cannot_hold_above_the_floor(renv, monkeypatch):
     transcribe(first_pass(renv) and renv, monkeypatch)
     out = run(rp.run_night(budget_s=600, mem_available=lambda: 3000.0))                          # the real worker would be spawned if it passed: it does not
-    assert out["status"] == "low_mem" and out["need_mb"] == rp.need_mb("qwen3-asr") == 8700 + 700 + 1200 and out["have_mb"] == 3000
+    assert out["status"] == "low_mem" and out["need_mb"] == rp.need_mb("qwen3-asr") == 8700 + 400 + 1200 and out["have_mb"] == 3000
     assert rows(renv)[0]["repass_state"] == "pending" and rows(renv)[0]["repass_attempts"] == 0   # carried untouched
     ok = run(rp.run_night(budget_s=600, runner=fake_runner(), mem_available=lambda: 3000.0))      # control: an injected runner skips the check; with RAM the real path proceeds
     assert ok["status"] == "ok"

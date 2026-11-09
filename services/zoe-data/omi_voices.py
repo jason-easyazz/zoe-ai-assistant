@@ -801,6 +801,7 @@ async def forget_user(db, user_id: str) -> int:
             n += await _run(db, f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         try:
             n += await _run(db, "DELETE FROM omi_wearer_samples WHERE user_id = ?", (user_id,))      # 0073; the other tables must still be erased on a box without it
+            n += await _run(db, "DELETE FROM omi_channel_means WHERE user_id = ?", (user_id,))
         except Exception as exc:  # noqa: BLE001
             if not _missing(exc):
                 raise

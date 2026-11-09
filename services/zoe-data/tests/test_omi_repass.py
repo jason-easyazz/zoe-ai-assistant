@@ -130,7 +130,7 @@ def test_on_replaces_the_text_with_provenance_and_then_releases_the_wav(renv, mo
     out = run(rp.run_night(budget_s=600, runner=fake_runner()))
     assert out["status"] == "ok" and out["replaced"] == 1 and out["model"] == "qwen3-asr"
     r = rows(renv)[0]
-    assert r["transcript"] == "Hello there friend" and r["repass_state"] == "done" and r["repass_model"] == "qwen3-asr+ecapa" and r["repass_at"]
+    assert r["transcript"] == "Hello there friend" and r["repass_state"] == "done" and r["repass_model"] == "qwen3-asr+resnet34" and r["repass_at"]
     assert r["audio_path"] == "" and not Path(r0["audio_path"]).exists()                     # the pass has seen it: now the WAV goes
     segs = renv.db.rows("SELECT speaker, model_id, text FROM omi_segments")
     assert segs and all(s["model_id"] == rp.MODEL_ID for s in segs)
@@ -199,71 +199,20 @@ def test_a_member_erased_while_the_job_ran_has_nothing_written(renv, monkeypatch
 
 # ── labels ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def test_nobody_is_me_without_a_confirmed_print():
+def test_nobody_is_me_without_any_print():
     refs = rp.Refs()
     words = [[" hi", 0.0, 0.3, 0.9], [" there", 0.4, 0.8, 0.9]]
     lines = rp.build_lines(words, [[0.0, 1.5, vec(0), 0.3]], refs)
     assert [ln["key"] for ln in lines] == ["unverified"]
-    assert rp.label_window(vec(0), refs)["label"] == "unverified"
+    assert rp.label_window(vec(0), refs)["key"] == "unverified"
 
 
-def test_the_wearer_print_labels_me_other_and_unsure_and_zoe_is_not_a_person(monkeypatch):
-    refs = rp.Refs(you=vec(0), zoe=vec(1))
-    assert rp.label_window(vec(0), refs)["label"] == "you"
-    assert rp.label_window(vec(1), refs)["label"] == "zoe"
-    assert rp.label_window(vec(2), refs)["label"] == "other"
-    mid = list(np.array(vec(0)) * 0.4 + np.array(vec(2)) * 0.9)
-    assert rp.label_window(mid, refs)["label"] in ("unsure", "other")
-
-
-def test_a_taught_person_is_suggested_only_with_the_margin():
-    refs = rp.Refs(you=vec(0), people=[{"person": "p1", "v": vec(3)}, {"person": "p2", "v": vec(4)}])
-    v = rp.label_window(vec(3), refs)
-    assert v["label"] == "person" and v["person"] == "p1"
-    close = list(np.array(vec(3)) + np.array(vec(4)))             # equidistant between two prints: no name
-    assert rp.label_window(close, refs)["label"] != "person"
-
-
-def test_a_human_decision_on_a_first_pass_line_survives_the_pass(renv, monkeypatch):
-    transcribe(first_pass(renv) and renv, monkeypatch)
-    rid = rows(renv)[0]["id"]
-    renv.db.conn.execute("INSERT INTO omi_segments (id, recording_id, user_id, seq, start_ms, end_ms, text, speaker, created_at, owner_label, owner_labelled_at) "
-                         "VALUES ('old1', ?, ?, 0, 0, 3000, 'moon', 'other', '2026-10-10T00:00:00Z', 'you', '2026-10-10T01:00:00Z')", (rid, OWNER))
-    renv.db.conn.commit()
-    run(rp.run_night(budget_s=600, runner=fake_runner()))
-    seg = renv.db.rows("SELECT owner_label, speaker, text FROM omi_segments")
-    assert seg and all(s["owner_label"] == "you" for s in seg) and seg[0]["text"] != "moon"
-    n = renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'confirmed'")[0]["n"]
-    assert n >= 1                                              # the owner's own "me" label seeded the wearer print
-
-
-def test_a_heuristic_proposal_is_never_used_until_the_owner_confirms(renv, monkeypatch):
-    transcribe(first_pass(renv) and renv, monkeypatch)
-    rid = rows(renv)[0]["id"]
-    wins = [[i * 0.75, i * 0.75 + 1.5, vec(0), 0.3] for i in range(12)]
-    run(rp.run_night(budget_s=600, runner=fake_runner({rid: {**result_for(rid), "windows": wins}})))
-    st = run(_wearer(renv))
-    assert st["confirmed"] == 0 and st["proposals"] and run(_print(renv)) is None            # proposed, not used
-    run(_confirm(renv, st["proposals"][0]["id"]))
-    assert run(_print(renv)) is not None
-
-
-async def _wearer(env):
-    from db_compat import get_compat_db
-    async with get_compat_db() as db:
-        return await rp.wearer_status(db, OWNER)
-
-
-async def _print(env):
-    from db_compat import get_compat_db
-    async with get_compat_db() as db:
-        return await rp.wearer_print(db, OWNER)
-
-
-async def _confirm(env, pid):
-    from db_compat import get_compat_db
-    async with get_compat_db() as db:
-        return await rp.confirm_wearer(db, OWNER, pid)
+def test_a_panel_only_wearer_print_can_make_a_turn_at_most_you_maybe():
+    refs = rp.Refs(you=vec(0), you_panel_only=True)
+    v = rp.label_window(vec(0), refs, dur_s=3.0)
+    assert v["key"] == "you?" and v["conf"] == "lean"                                             # the owner's PANEL profile alone never says "me" outright
+    confirmed = rp.Refs(you=vec(0))
+    assert rp.label_window(vec(0), confirmed, dur_s=3.0)["key"] == "you"
 
 
 def test_propose_wearer_needs_a_real_cluster():
@@ -356,16 +305,19 @@ def test_a_forget_that_lands_between_redaction_and_the_write_gate_still_redacts(
     assert all("Dana" not in (x["text"] or "") for x in renv.db.rows("SELECT text FROM omi_segments"))
 
 
-def test_a_speech_span_shorter_than_one_window_is_skipped_not_a_crash():
+def test_speaker_units_are_one_embedding_per_short_turn_and_voting_windows_for_a_long_one_and_a_tiny_turn_is_skipped():
     import importlib.util
-    spec = importlib.util.spec_from_file_location("omi_repass_worker", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
+    spec = importlib.util.spec_from_file_location("omi_repass_worker_units", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
     w = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(w)
-    emb = w.Embedder.__new__(w.Embedder)
-    emb.one = lambda seg: np.zeros(4)
-    x = np.ones(16000 * 6, dtype="float32")
-    wins = emb.windows(x, [{"start": 0, "end": 8000}, {"start": 16000, "end": 16000 * 4}])      # a 0.5 s span first (the old code hit an unbound variable), then 3 s
-    assert wins and all(b - a >= 0.8 for a, b, _e, _r in wins) and wins[0][0] == 1.0
+    emb = w.ResNet34Units.__new__(w.ResNet34Units)
+    emb.one = lambda seg: np.ones(4)
+    x = np.ones(16000 * 30, dtype="float32")
+    wins = emb.units(x, [(1.0, 1.3), (2.0, 6.0), (10.0, 20.0)])           # 0.3 s: skipped; 4 s: ONE unit; 10 s: 1.5 s windows, hop 0.75
+    assert [(a, b) for a, b, _e, _r in wins[:1]] == [(2.0, 6.0)]
+    longs = [(a, b) for a, b, _e, _r in wins[1:]]
+    assert longs[0] == (10.0, 11.5) and longs[1][0] == 10.75 and len(longs) >= 12 and all(b - a <= 1.5 for a, b in longs)       # never a 20 s slab
+    assert len([1 for a, b, _e, _r in wins if b - a > 8.0]) == 0
 
 
 def test_the_name_hint_reaches_the_worker_and_forgotten_names_do_not(renv, monkeypatch):

@@ -81,6 +81,7 @@ TABLES: tuple[Store, ...] = (
     _t("omi_segment_embeddings", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_clusters", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_settings", CONFIG, REACHED, member=_OMI_M),
+    _t("omi_channel_means", BIOMETRIC, REACHED, member=_OMI_M),        # the speaker step's per-channel mean offset (0073): omi_voices.forget_user
     _t("omi_wearer_samples", BIOMETRIC, REACHED, member=_OMI_M),       # the night re-pass's wearer-print windows (0073): omi_voices.forget_user + drop_recording
     _t("omi_devices", METADATA, REACHED, member=_OMI_M),
     _t("omi_device_health", METADATA, REACHED, member=_OMI_M),         # omi_health.forget_user, called from omi_recordings.forget_user

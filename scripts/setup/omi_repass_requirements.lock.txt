@@ -13,10 +13,8 @@ scipy==1.15.3
 soundfile==0.13.1
 librosa==0.11.0
 sentencepiece==0.2.1
-# VAD (silero, the bake-off's chunking) + the CPU last-resort ASR; the speaker windows (ECAPA):
+# VAD (silero, the bake-off's chunking) + the CPU last-resort ASR:
 faster-whisper==1.2.1
 ctranslate2==4.8.5
 onnxruntime==1.23.2
 av==17.1.0
-speechbrain==1.1.2
-hyperpyyaml==1.2.3
