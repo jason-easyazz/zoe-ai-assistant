@@ -359,3 +359,35 @@ def test_negative_control_other_replies_are_carried_unchanged():
     assert ffc.redact_forget_quote("Reminder set for 5pm.") == "Reminder set for 5pm."
     block = ffc.render([("user", "remind me to call dad"), ("assistant", 'Done — reminder: "call dad" at 5pm.')])
     assert 'reminder: "call dad"' in block
+
+
+# -- review round (Codex on #2355) ---------------------------------------------------------------------------
+
+def test_a_possessive_correction_never_rewrites_another_persons_attribute():
+    import value_correction as vc
+
+    corr = vc.statement("Actually my birthday is June not July")
+    assert vc.rewrite("Oliver's birthday is in July", corr) is None            # a contact's birthday is not the speaker's
+    assert vc.rewrite("User's birthday is in July", corr) == "User's birthday is in June"      # negative control
+
+
+def test_a_quoted_introduction_is_not_the_speakers_name():
+    import own_name
+
+    assert own_name.introduced_name("Dana says: my name is Priya.") == ""
+    assert own_name.introduced_name("my name is Priya") == "Priya"               # negative control: their own words still count
+
+
+@pytest.mark.parametrize("text,place", [("weather in St. Louis", "St Louis"), ("what is the weather in Mt. Barker today", "Mt Barker"),
+                                        ("weather in Perth. and tomorrow", "Perth")])
+def test_an_abbreviation_period_stays_in_the_place_name(text, place):
+    import weather_speech as ws
+
+    assert ws.weather_place(text) == place
+
+
+def test_the_forget_redaction_covers_a_row_that_holds_quotes():
+    import flue_fastpath_context as ffc
+
+    out = ffc.redact_forget_quote('Done — I forgot: "User called the incident a "meltdown" at the shops".')
+    assert "meltdown" not in out and out.startswith("Done — I forgot that")

@@ -52,6 +52,12 @@ _NOT_NAMES = frozenset((
 
 def introduced_name(message: str) -> str:
     """The name the speaker gave for THEMSELF in ``message`` ("its walter. what tablets..." -> "Walter"), or "". Pure."""
+    try:
+        import own_words
+
+        message = own_words.analyze(message).text      # quoted / attributed speech ("Dana says: my name is Priya") is not the speaker's
+    except Exception:  # noqa: BLE001 - cannot rule attribution out: mine nothing
+        return ""
     text = " ".join((message or "").replace("’", "'").split())
     if not text or len(text) > 400:
         return ""

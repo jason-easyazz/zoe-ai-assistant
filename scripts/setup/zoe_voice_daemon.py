@@ -582,6 +582,13 @@ WAKE_BEEP_ENABLED = os.environ.get("WAKE_BEEP_ENABLED", "true").lower() in ("1",
 WAKE_BEEP_FREQ_HZ = int(os.environ.get("WAKE_BEEP_FREQ_HZ", "1046"))  # C6
 WAKE_BEEP_DURATION_MS = int(os.environ.get("WAKE_BEEP_DURATION_MS", "120"))
 WAKE_BEEP_VOLUME = float(os.environ.get("WAKE_BEEP_VOLUME", "0.22"))  # 0..1
+# Whether the chime plays ON WAKE (2026-11-09, default OFF). The Jabra speakerphone mutes its own mic (digital
+# zeros, 0.25-0.8 s) whenever it plays anything, and the wake chime lands ~0.5 s after "Zoe" - exactly when
+# people start the command. Whatever is said under that mute is gone before STT ("turn on the lights" reached
+# the brain as "...the lights"; the brain then answered "I'm Zoe."). Only the first turn after a wake has a
+# chime, so only first turns lost words. WAKE_BEEP_ENABLED keeps governing the OTHER beeps (enrolment cue,
+# retry cue) unchanged. true = the old behaviour, no redeploy.
+WAKE_CHIME_ON_WAKE = os.environ.get("WAKE_CHIME_ON_WAKE", "false").lower() in ("1", "true", "yes")
 # Route playback explicitly (default to same ALSA device family as mic).
 AUDIO_OUTPUT_DEVICE = os.environ.get("AUDIO_OUTPUT_DEVICE", AUDIO_DEVICE).strip() or "default"
 
@@ -2458,17 +2465,19 @@ def on_wake():
     the still-open wake stream, so any blocking work (the chime spawns aplay and
     opens the ALSA device — hundreds of ms) would just delay capture. The chime now
     overlaps the start of the recording; a quiet ~260ms two-tone is far cheaper than
-    deleting the words the user is saying. Set WAKE_BEEP_ENABLED=false to drop it.
+    deleting the words the user is saying. The chime is OFF by default (WAKE_CHIME_ON_WAKE=true restores it;
+    WAKE_BEEP_ENABLED=false silences every beep).
     """
     log.info("Wake word detected! Notifying Jetson and waking screen...")
-    _wake_chime_done.clear()  # set again the moment the chime is over (post-wake window)
+    if WAKE_CHIME_ON_WAKE:   # play_wake_beep() itself still honours WAKE_BEEP_ENABLED=false (silent)
+        _wake_chime_done.clear()  # set again the moment the chime is over (post-wake window)
 
-    def _chime() -> None:
-        try:
-            play_wake_beep()
-        finally:
-            _wake_chime_done.set()
-    threading.Thread(target=_chime, daemon=True, name="wake-beep").start()
+        def _chime() -> None:
+            try:
+                play_wake_beep()
+            finally:
+                _wake_chime_done.set()
+        threading.Thread(target=_chime, daemon=True, name="wake-beep").start()
     threading.Thread(target=_wake_panel_agent, daemon=True, name="wake-screen").start()
     threading.Thread(target=_notify_wake_background, daemon=True, name="wake-notify").start()
 
@@ -2499,6 +2508,18 @@ def play_follow_up_beep() -> None:
         os.unlink(fpath)
     except Exception as exc:
         log.debug("Follow-up beep failed: %s", exc)
+
+
+def _muted_ms(frames: "list[bytes]", skip: int = 0) -> int:
+    """Milliseconds of digital silence in ``frames[skip:]``: chunks whose every sample is within +-1. Room noise is
+    ~8-18 and echo suppression 0-5 but never this flat unless the speakerphone muted its mic while it played
+    something - the signature of words lost to our own output. Whole chunks only (80 ms resolution). Logged on
+    every ``Recorded command`` line as ``muted=``."""
+    n = 0
+    for data in frames[skip:]:
+        if data and int(np.abs(np.frombuffer(data, dtype=np.int16).astype(np.int32)).max()) <= 1:
+            n += 1
+    return int(round(n * CHUNK_SIZE * 1000.0 / SAMPLE_RATE))
 
 
 def _frames_to_wav(pa: pyaudio.PyAudio, frames: list[bytes]) -> bytes:
@@ -2698,6 +2719,7 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
                 log.warning("Mic open failed (%s), retrying in %.2fs [%d/5]...", exc, wait_s, attempt)
                 time.sleep(wait_s)
     frames = list(_PREROLL)  # prepend pre-roll so the start of speech is kept
+    n_pre = len(frames)
     uploader = _start_stt_stream(frames)
     # The wake recording's no-speech window starts when the chime + echo suppression
     # end (POST_WAKE_NO_SPEECH_S); 0 keeps the legacy SILENCE_TIMEOUT_S-from-start.
@@ -2729,9 +2751,9 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
         speculation.recording_closed(resumed=endpointer.resumed_after_speculation)
     duration_s = len(frames) * CHUNK_SIZE / float(SAMPLE_RATE)
     log.info(
-        "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s close=%s",
+        "Recorded command: duration=%.2fs chunks=%d stop=%s endpoint=%s tail=%s close=%s muted=%dms",
         duration_s, len(frames), stop_reason, endpointer.mode, endpointer.tail_rule or "-",
-        endpointer.close_rule(),
+        endpointer.close_rule(), _muted_ms(frames, n_pre),
     )
     too_short = len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE)
     _finish_stt_stream(uploader, keep=not too_short)
@@ -5031,8 +5053,16 @@ def _enroll_speaker_kwargs(cmd: dict, uid: str, name: str):
         built = _rn34.build_profile(embs)
         return built.vector, list(built.dropped)
 
+    guest = cmd.get("guest") if isinstance(cmd.get("guest"), dict) else None
+
     def upload_profile(vec, n_clips: int) -> bool:
         import numpy as _np
+        if guest is not None:
+            # A NAMED GUEST: the server's single-use ticket names who; the profile never lands on a member.
+            resp = _api_post("/api/voice/guests/enroll", dict(
+                ticket=str(guest.get("ticket") or ""), model_id=_rn34.MODEL_ID, sample_count=int(n_clips),
+                embedding_base64=base64.b64encode(_np.asarray(vec, dtype=_np.float32).tobytes()).decode()), timeout=60)
+            return bool(resp.get("ok"))
         resp = _api_post("/api/voice/enroll", dict(
             embedding_base64=base64.b64encode(_np.asarray(vec, dtype=_np.float32).tobytes()).decode(),
             model_id=_rn34.MODEL_ID, sample_count=int(n_clips), user_id=uid, display_name=name or uid,
@@ -5041,7 +5071,7 @@ def _enroll_speaker_kwargs(cmd: dict, uid: str, name: str):
         return bool(resp.get("ok"))
 
     return dict(clips=max(int(cmd.get("clips") or 0), _rn34.ENROLL_CLIPS), embed=embed, build=build,
-                upload_profile=upload_profile, legacy_upload=(SPEAKER_MODEL == "dual"))
+                upload_profile=upload_profile, legacy_upload=(SPEAKER_MODEL == "dual" and guest is None))
 
 
 def _run_enrollment_mode(pa) -> None:
@@ -5069,6 +5099,13 @@ def _run_enrollment_mode(pa) -> None:
                   timeout=10, retries=1)
 
     extra = _enroll_speaker_kwargs(cmd, uid, name)
+    if isinstance(cmd.get("guest"), dict):
+        # A guest run: only a panel-built ResNet34 profile under the ticket (no audio upload), and no member enrolment result.
+        if not extra:
+            extra = None
+
+        def report(outcome: str, samples: int, reason: str = "") -> None:   # noqa: F811 - the member's enrolment state is not touched
+            log.info("guest enrolment %s samples=%d reason=%s", outcome, samples, reason or "-")
     if extra is None:
         # ResNet34 is the model this panel ACTS on and it will not load (file missing / drift refused): there is nothing it could
         # store, so say so now rather than recording five clips for nothing.

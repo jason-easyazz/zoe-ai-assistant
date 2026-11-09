@@ -170,7 +170,12 @@ def _subject_re(subject: str):
     if m:
         # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
         return re.compile(rf"(?:^|\buser['’]s\s+|\b(?:my|our)\s+){re.escape(m.group(1))}(?![A-Za-z0-9])", re.IGNORECASE)
-    m = re.match(r"(?i)(?:the|my|our)\s+(.+)$", s)
+    m = re.match(r"(?i)(my|our)\s+(.+)$", s)
+    if m:
+        # the USER's own <noun> ("my birthday"): "User's birthday ..." or an unpossessed mention, never "Oliver's birthday ..."
+        noun = re.escape(m.group(2))
+        return re.compile(rf"(?:\buser['’]s\s+{noun}|(?<!['’]s\s)(?<![A-Za-z0-9'’]){noun})(?![A-Za-z0-9])", re.IGNORECASE)
+    m = re.match(r"(?i)the\s+(.+)$", s)
     if m:
         s = m.group(1)          # "the pitch" -> any row that names the pitch ("User has a board pitch on Thursday")
     return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)

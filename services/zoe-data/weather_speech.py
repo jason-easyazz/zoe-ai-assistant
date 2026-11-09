@@ -132,9 +132,11 @@ _PLACE_STOP = _NOT_A_PLACE | frozenset((
 _WEATHER_ANCHOR_RE = re.compile(r"\b(?:weather|forecast|temp(?:erature)?|raining|rain|hot|cold|warm|windy|sunny|humid)\b")
 _TIME_LEAD_RE = re.compile(
     r"^(?:[\s,;?.!]*(?:for\s+)?(?:the\s+)?(?:today|tomorrow|tonight|now|please|right\s+now|this\s+(?:week|weekend|morning|afternoon|evening)))*")
-_PREP_PLACE_RE = re.compile(r"\b(?:in|for|at)\s+(?P<rest>[a-z][^?!.,;:]*)")
+# an abbreviation period belongs to the place ("St. Louis", "Mt. Barker"); any other period ends the clause
+_PLACE_CHARS = r"(?:[^?!.,;:]|(?:(?<=\bst)|(?<=\bmt)|(?<=\bft)|(?<=\bste)|(?<=\bpt))\.)*"
+_PREP_PLACE_RE = re.compile(r"\b(?:in|for|at)\s+(?P<rest>[a-z]" + _PLACE_CHARS + ")")
 _ALSO_RE = re.compile(
-    r"^[\s,;?.!]*(?:and|or|plus|then|also)\s+(?:(?:what|how)\s+about\s+)?(?:(?P<prep>in|for|at)\s+)?(?P<rest>[a-z][^?!.,;:]*)")
+    r"^[\s,;?.!]*(?:and|or|plus|then|also)\s+(?:(?:what|how)\s+about\s+)?(?:(?P<prep>in|for|at)\s+)?(?P<rest>[a-z]" + _PLACE_CHARS + ")")
 
 
 def _place_words(rest: str) -> tuple[str, str]:

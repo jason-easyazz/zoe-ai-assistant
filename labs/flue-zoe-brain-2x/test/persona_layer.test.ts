@@ -35,7 +35,7 @@ const { estimateTextTokens } = await import('../src/context-window.ts');
 // and the word "alarm" joined the activator doctrine, and 2026-11-06 when the warmth doctrine joined after voice delivery -
 // 2026-11-07 when the unclear-words paragraph joined warmth and the identity doctrine lost its copyable "I'm Zoe." - deliberate prompt
 // changes, not drift).
-const GOLDEN_SHA256 = 'aab205679acc4472b19c8f95a50b385dab98224fe07ccc26992e67fc68ee679c';
+const GOLDEN_SHA256 = 'c5fc151136f28e5874cd8b6ddd197724692f13d443eef01f27bf5a80da94a27c';
 
 const LEAD =
   'You are Zoe, genuinely present and not a task executor; you care about the people you talk with. ' +

@@ -158,7 +158,7 @@ def _history_safe(text: str) -> str:
 # "Done - I forgot: "User's pet Wren had a meltdown at the shops"." is the forget confirmation: it QUOTES the row it erased. Re-sent to the
 # brain as context it hands the forgotten item straight back ("what happened at the shops" -> the meltdown, right after "Done"; QA 6b
 # a15/b15: the item was gone from the store and still recalled in the SAME session). The brain gets the sentence without the quote.
-_FORGET_QUOTE_RE = re.compile(r"^(\s*Done\s*[-\u2013\u2014]+\s*I\s+forgot:\s*)[\"\u201c][^\"\u201d]*[\"\u201d]", re.IGNORECASE)
+_FORGET_QUOTE_RE = re.compile(r"^(\s*Done\s*[-\u2013\u2014]+\s*I\s+forgot:\s*)[\"\u201c].*[\"\u201d]", re.IGNORECASE | re.DOTALL)
 
 
 def redact_forget_quote(text: str) -> str:

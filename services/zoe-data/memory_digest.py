@@ -1111,6 +1111,15 @@ async def run_turn_digest(
             except Exception:  # noqa: BLE001 - the guard must never take the digest down
                 pass
             fact_type = item.get("type", "fact")
+            try:    # a child filed as a pet because a kids list ended beside an animal (kin_pet_guard; the owner's own words decide)
+                import kin_pet_guard
+
+                _retyped = kin_pet_guard.repair(fact, fact_type, user_message)
+                if _retyped is not None:
+                    fact, fact_type = _retyped
+                    logger.info("run_turn_digest: re-typed a fact between child and pet from the owner's own words")
+            except Exception:  # noqa: BLE001 - the guard must never take the digest down
+                pass
             fact_tags = ["turn_digest", "auto_extract"] + (["corrected"] if fixed is not None else [])
             fact_changes = False
             if change_cue:
