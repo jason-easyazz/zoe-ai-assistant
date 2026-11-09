@@ -132,8 +132,33 @@ Owner decisions 2026-11-08: a non-member's voice clip is kept 30 days then delet
   existing `name_unknown`: same registry, same refusals (a member's name, a held name, the forget ledger). The voice becomes a guest in that
   member's layer, its clips are relabelled `guest`, and the unknown voice and its samples go. A clip with no live unknown voice
   (learning off, expired, already named) is never offered.
-- **Not seeded from audio.** The server holds no speaker embedder (the panel computes them), so a guest is built from the unknown voice's
-  kept EMBEDDINGS (up to 30), never from re-reading audio.
+- **Not seeded from audio.** The live server path holds no speaker embedder (the panel computes them), so a guest named this way is built
+  from the unknown voice's kept EMBEDDINGS (up to 30), never from re-reading audio. Clips saved BEFORE the verdict sidecar existed are
+  the owner's backfill (next section).
+
+## Backfill from saved clips (owner/operator; `named_guest_backfill.py` + `scripts/maintenance/named_guest_backfill.py`)
+
+For a guest who talked to the panel before named guests were on, whose clips carry no verdict sidecar (so "who was that?" cannot reach
+them). The owner picks the clips; nothing is uploaded, copied or sent anywhere.
+
+```bash
+cd ~/assistant
+python3 scripts/maintenance/named_guest_backfill.py --owner <member user id> --name Quinn --dry-run ~/.zoe-voice-samples/<clip>.wav ...
+ZOE_NAMED_GUESTS=on python3 scripts/maintenance/named_guest_backfill.py --owner <member user id> --name Quinn ~/.zoe-voice-samples/<clip>.wav ...
+```
+
+- **Same model, same pipeline:** each clip is embedded WHOLE with the panel's pinned ResNet34 (`scripts/setup/zoe_speaker_resnet34.py`,
+  loaded by path as Omi does: sha256 pin, centring, self-test; model dir `~/.cache/zoe-speaker-resnet34`), exactly as the daemon embeds a
+  live turn, so the print lives in the space live claims are scored in. The clips were recorded by the same panel microphone.
+- **Per clip:** `kept`; `unreadable` (not 16-bit PCM WAV); `too_short` (under 1.2 s, the enrolment run's floor); `member` (within the
+  FAR-1 % bar for its length of ANY consented member profile: the owner's own voice never becomes the guest); `outlier` (dropped by the
+  enrolment recipe's leave-one-out rule, tau 0.30). Each kept clip also shows its leave-one-out score against the print of the OTHER kept
+  clips beside the live wake-turn bar for its length: a preview of whether a live turn like it clears the gate.
+- **The print** is the enrolment recipe's mean of the kept clips; fewer than `--min-kept` (default 3) stores nothing (exit 2).
+- **The write** is `named_guest_enrol.store_print`, the panel enrolment's own: the owner's own person (linked if one exists),
+  `channel='panel'`, guest scope only, and the same refusals (flag off, not an adult member, a member's name, a print within the FAR-1 %
+  bar of a member's, a ledger outage). Naming a name the owner had forgotten is an explicit re-teach and releases it.
+- **`--dry-run`** scores, reports and writes nothing (works with the flag off).
 
 ## Children (owner 2026-11-08)
 
