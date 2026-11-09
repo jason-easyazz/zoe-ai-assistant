@@ -507,3 +507,35 @@ Changes: (1) up to **3 start attempts** (`LOAD_MAX_ATTEMPTS`), the last with 6 f
 | `zoe-opensrc-refresh`, `zoe-backup-verify` (Sunday 05:30) | weekly, after the window and the gate, on a different cadence; nothing to sequence. |
 | `zoe-offbox-backup` | its own clock and its own failure domain (it exists so the on-box copy is not the only copy). |
 | zoe-data's own 03:00 digest loop | the fallback for a window that did not run; unchanged. |
+
+
+## 20. One dreaming session: the household's window, the planner, and what is NOT built yet (2026-11-09)
+
+Owner: "wouldn't it be smarter to make one night time window, with each tool calling the next, like a dreaming session?" and "not everyone will be the same" and "shouldn't we include the nightly
+self-training loop in the dream cycle?". The design below is the target; **this PR ships the household setting, the planner and the report; the chain rework is a follow-up** (it replaces the
+timer-driven start, `night_busy.sh` and the POST timers, and must not land half-done).
+
+**Target chain (each stage starts when the previous one finishes; no fixed reserves).** PRE (Zoe awake): backup, then memory export. SLEEP: zoe-data, the router, Kokoro, the 4B, then compact. LISTEN: the
+Omi re-pass (Qwen3 on all audio, then Parakeet and the third voter on the important recordings; each GPU model alone with a compact between; ROVER, speaker tagging with panel anchors, the check queue).
+THINK (12B loaded once): digest, the VAGO extract, dreaming, night mind, struggle proposals, self-review, conversation notes, the clean read, then the Omi day review LAST (it reads the clean outputs); **LEARN-LABEL**
+(mine the router's shadow-log misses, the 12B labels them as the independent oracle, two-source agreement only - `scripts/maintenance/router_selftrain.py`, `docs/knowledge/router-selftrain-loop.md`, flag
+`ZOE_ROUTER_SELFTRAIN`). LEARN-TRAIN: after the 12B unloads and a compact, before WAKE - GPU first (the compact is what got torch onto the Jetson GPU), CPU only if the remaining budget allows, else the labelled data
+carries; weekly or on >= N new labelled examples, never `runs/<gen>/merged` deleted, warm start from `ZOE_ROUTER_WARM_START`. WAKE: the safe order, health-checked. POST: the voice regression probe, the candidate
+router's replay check beside it, then the Serena restart; PROMOTE only through the existing ratchet (no accuracy regression back-to-back on the same rig, chat-FP == 0, p50 < 600 ms, frozen corpus intact AND the voice
+replay gate; no override; auto-rollback stays). A failed stage is logged, what depends on it is skipped, the chain continues; **restore always runs**; ONE morning report with failures first, and a LEARN line (mined /
+labelled, trained or why not, candidate vs incumbent, promoted or not). `--rehearse` runs the whole chain on a tiny input with dry-run jobs (LEARN included, dry-run promote) and must pass before the timer switches.
+
+**The household picks its own window (built).** `services/zoe-data/dream_window.py`: earliest start (default 00:30), latest start (02:30), awake-by (05:15), quiet minutes before starting (30). Stored in
+`system_preferences` key `dream_window` through `GET/PUT /api/settings/dream-window` (read: any signed-in member; write: `require_admin` only - never a guest or child), mirrored to `~/.zoe/dream-window.json`, which the
+night session reads EACH run (`night_window.load_dream_window`); the `ZOE_DREAM_*` env is only the fallback default when nothing valid is stored. Validation: times 21:00-08:00; earliest <= latest; awake-by - earliest
+>= 90 min; awake-by >= latest + 150 min (the chain); awake-by not inside the 04:10-04:52 voice-check slot; quiet 10-180 min. An invalid stored value falls back to the defaults and the morning report opens with
+`**ALERT (dreaming window):`. Spoken: `dream_window.apply_spoken` ("do your dreaming between 1 and 5" sets earliest 01:00 / awake-by 05:00 and trims the latest start to keep the chain; "when do you dream?"
+answers) - a change needs an adult admin with a VERIFIED voice and Zoe reads the new window back; anyone may ask. `start_gate` is the pure "may the session start now" rule (too early / too late / wait for quiet / go).
+
+**The planner (built, not yet driving the chain).** `scripts/night/night_plan.py`: from the seconds to awake-by and the rolling median (last 7 nights, x1.25) of each stage, it protects WAKE/POST/PRE/SLEEP and the
+essential THINK jobs (digest, self-review, day review), admits optional THINK jobs in priority order only while LISTEN keeps its 10-minute floor, gives LISTEN the rest, and returns what carries (reported).
+
+**Not built in this PR (follow-ups, in this order):** (1) the chain itself - one program, `night_busy.sh` and the voice-landing pause reading the window (today they still use the fixed 02:20 / 02:25 / 01:55 values; do
+NOT point them at the setting until the chain starts the session by quiet, or deploys would pause from 00:25 for no reason), the POST stage (probe + Serena) with the old timers kept as a fallback, and `--rehearse` for the
+whole chain; (2) LEARN (label in THINK, train after unload, promote through the ratchet, the LEARN report line); (3) the panel chooser (big time chips, read-only display + tap-to-change) and registering the spoken
+intent with the voice router (`apply_spoken` is ready and tested); (4) the desktop settings page control.

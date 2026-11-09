@@ -513,6 +513,11 @@ class NightCfg(bk.Cfg):
     #: minutes the pre-jobs must leave for everything after them (the 12B load + probe, the 12B jobs, a margin). 12 by default - the 12B jobs used 7 of the 28 minutes once reserved on
     #: 2026-11-08 - and ``configure`` replaces it with ``measured_keep_min`` (the last 7 nights' job wall times, floor 10) unless ``NIGHT_PRE_KEEP_MIN`` is a number.
     pre_keep_min: float = 12.0
+    #: the HOUSEHOLD's dreaming window (services/zoe-data/dream_window.py; the mirror file ~/.zoe/dream-window.json, written by the settings API / a verified adult's voice): read each
+    #: run by ``configure``, never from the env. ``dream_errors`` = why a stored value was rejected (the defaults are then in force); the morning report prints them at the top.
+    dream_window: "dict[str, Any]" = dataclasses.field(default_factory=dict)
+    dream_errors: "list[str]" = dataclasses.field(default_factory=list)
+    dream_source: str = "default"
     omi_repass_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-repass.py"
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
@@ -2666,6 +2671,11 @@ class NightWindow(bk.Window):
         r = self.rec
         L = [f"# Night window {self.started_iso[:10]} ({self.mode}{', ' + self.cfg.trial_mode if self.cfg.trial else ''})", "",
              f"**Outcome: {self.outcome}** · exit {rc} · started {self.started_iso[11:]} · {self.elapsed_min():.1f} min of a {self.cap_min:.0f}-minute cap · restore: {getattr(self, 'restore_status', 'not needed')}", ""]
+        for e in self.cfg.dream_errors:        # a rejected household setting is loud, and the defaults that replaced it are named
+            L += [f"**ALERT (dreaming window):** {e[:240]} (using the defaults)", ""]
+        if self.cfg.dream_window:
+            w = self.cfg.dream_window
+            L += [f"Dreaming window ({self.cfg.dream_source}): start {w.get('earliest')}-{w.get('latest')} once quiet {w.get('quiet_min')} min, awake by {w.get('awake_by')}.", ""]
         for j in self.jobs:                    # an ALERT in any job's own NIGHT_JOB line is surfaced at the top (the clean read's guard-violation rate)
             for n in j["notes"]:
                 if "ALERT" in n:
@@ -2920,8 +2930,19 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def load_dream_window(path: "Optional[Path]" = None) -> "tuple[dict, list, str]":
+    """(window, errors, source) from the household setting's mirror file (``dream_window.load_mirror``). Never raises: a missing module or file is the defaults."""
+    try:
+        sys.path.insert(0, str(REPO / "services" / "zoe-data"))
+        import dream_window as dw
+        return dw.load_mirror(path)
+    except Exception as exc:  # noqa: BLE001
+        return {"earliest": "00:30", "latest": "02:30", "awake_by": "05:15", "quiet_min": 30}, [f"the dreaming window could not be read ({type(exc).__name__}); using the defaults"], "default"
+
+
 def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> NightCfg:
     cfg = cfg or NightCfg()
+    cfg.dream_window, cfg.dream_errors, cfg.dream_source = load_dream_window()
     raw_keep = os.environ.get("NIGHT_PRE_KEEP_MIN", "auto").strip().lower()
     try:
         cfg.pre_keep_min = float(raw_keep)

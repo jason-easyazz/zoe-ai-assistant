@@ -32,7 +32,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 252 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 15 registered flags with no reader in the scanned sources.
+- 20 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -1273,4 +1273,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_OMI_ANCHOR_JITTER_S`, `ZOE_OMI_ANCHOR_MAX_SPREAD_S`, `ZOE_OMI_ANCHOR_MIN_CLIPS`, `ZOE_OMI_ANCHOR_MIN_MATCH`, `ZOE_OMI_ANCHOR_MIN_WORDS`, `ZOE_OMI_ANCHOR_TTS_LAG_S`, `ZOE_OMI_ANCHOR_ZOE_MIN_COVER`, `ZOE_OMI_ANCHOR_ZOE_MIN_WORDS`, `ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_DREAM_AWAKE_BY`, `ZOE_DREAM_EARLIEST`, `ZOE_DREAM_LATEST`, `ZOE_DREAM_QUIET_MIN`, `ZOE_DREAM_WINDOW_FILE`, `ZOE_OMI_ANCHOR_JITTER_S`, `ZOE_OMI_ANCHOR_MAX_SPREAD_S`, `ZOE_OMI_ANCHOR_MIN_CLIPS`, `ZOE_OMI_ANCHOR_MIN_MATCH`, `ZOE_OMI_ANCHOR_MIN_WORDS`, `ZOE_OMI_ANCHOR_TTS_LAG_S`, `ZOE_OMI_ANCHOR_ZOE_MIN_COVER`, `ZOE_OMI_ANCHOR_ZOE_MIN_WORDS`, `ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
