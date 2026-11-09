@@ -203,7 +203,11 @@
           });
         } else if (what === 'skip') {
           busy = true;
-          request('POST', BASE + '/' + encodeURIComponent(it.id) + '/skip').then(function (r) { if (r) next(); });
+          request('POST', BASE + '/' + encodeURIComponent(it.id) + '/skip').then(function (r) {
+            if (!r) return;
+            if (r.status === 200 || r.status === 409) { next(); return; }
+            busy = false; say('That didn’t save. Try again.');
+          });
         } else if (what === 'none') {
           clear(sub);
           var s = button('tcbtn primary', 'Say it');

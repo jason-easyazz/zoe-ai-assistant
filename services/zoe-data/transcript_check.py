@@ -459,6 +459,9 @@ async def _apply_text(db, row: Any, new: str) -> bool:
                 await db.execute("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected' WHERE id = ? AND user_id = ?", (text, s["id"], uid))
                 ok = True
                 break
+        else:                       # a retry after a failed answer: the word is already the owner's
+            if new and _swap(s["text"], row["before_text"], new, row["after_text"], new)[1]:
+                ok = True
     recs = await _fetch(db, "SELECT transcript FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, uid))
     if recs:
         for v in variants:
@@ -467,6 +470,9 @@ async def _apply_text(db, row: Any, new: str) -> bool:
                 await db.execute("UPDATE omi_recordings SET transcript = ? WHERE id = ? AND user_id = ?", (text, rid, uid))
                 ok = True
                 break
+        else:
+            if new and _swap(recs[0]["transcript"] or "", row["before_text"], new, row["after_text"], new)[1]:
+                ok = True
     return ok
 
 
@@ -529,19 +535,21 @@ async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word:
             if fresh is None or fresh["status"] != "open":
                 raise CheckError("already_decided")
             applied = await _apply_text(db, row, stored)
+            if not applied:           # the words it pointed at are gone (a later pass, an erase): nothing was corrected, so nothing is credited or closed as answered
+                await db.execute("UPDATE omi_check_items SET status = 'expired' WHERE id = ? AND status = 'open'", (row["id"],))
+                await db.commit()
+                raise CheckError("text_moved", 409)
+            # ONE transaction: the correction, the pending day-review candidates that rested on the old words, the ledger and the status either
+            # all land or none do (a failure here propagates; the answer can be retried, and _apply_text is idempotent)
+            import omi_day_review as dr
+            reopened = await dr.reopen_recording_in(db, user_id, row["recording_id"])
             ledgered = await _credit_ledger(db, user_id, alts, chosen)
-            await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = ? WHERE id = ? AND status = 'open'",
-                             (stored, via, stamp, int(applied), row["id"]))
+            await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status = 'open'",
+                             (stored, via, stamp, row["id"]))
             await db.commit()
-    reopened = 0
-    try:
-        import omi_day_review as dr
-        reopened = await dr.reopen_recording(user_id, row["recording_id"])
-    except Exception as exc:  # noqa: BLE001 - the correction stands even if the review could not be re-opened
-        logger.warning("TRANSCRIPT_CHECK_REVIEW_REOPEN_FAILED reason=%s", type(exc).__name__)
     await _after_decision(user_id)
-    logger.info("TRANSCRIPT_CHECK_ANSWERED via=%s applied=%d ledger=%d reopened=%d", via, int(applied), ledgered, reopened)
-    return {"ok": True, "applied": applied, "ledger": ledgered, "reopened": reopened}
+    logger.info("TRANSCRIPT_CHECK_ANSWERED via=%s ledger=%d reopened=%d", via, ledgered, reopened)
+    return {"ok": True, "applied": True, "ledger": ledgered, "reopened": reopened}
 
 
 async def skip(user_id: str, item_id: str) -> bool:

@@ -492,7 +492,7 @@ def test_an_answer_corrects_the_segment_and_transcript_and_teaches_the_ledger(qu
     assert "eleven" in rows(env)[0]["transcript"] and "seven" not in rows(env)[0]["transcript"]
     segs = env.db.rows("SELECT text, text_provenance FROM omi_segments WHERE text LIKE '%eleven%'")
     assert segs and segs[0]["text_provenance"] == "owner_corrected"
-    assert env.db.rows("SELECT text_provenance FROM omi_segments WHERE text NOT LIKE '%eleven%'") == [] or True
+    assert all(r["text_provenance"] == "owner_corrected" for r in env.db.rows("SELECT text_provenance FROM omi_segments WHERE text LIKE '%eleven%'"))
     led = {l["model"]: l for l in run(tc.ledger(OWNER))}
     assert led["whisper"]["agreed"] == 1 and led["whisper"]["contradicted"] == 0               # the owner agreed with whisper
     assert led["qwen3"]["contradicted"] == 1 and led["qwen3"]["agreed"] == 0                  # and against qwen3 / parakeet
@@ -574,3 +574,36 @@ def test_expired_items_are_swept_and_never_served(queued):
     env, rid = queued
     assert run(tc.sweep(now=datetime.now(UTC) + timedelta(days=9))) == 1
     assert run(tc.list_open(OWNER))["items"] == []
+
+
+def test_an_answer_that_corrected_nothing_is_refused_and_credits_nothing(queued):
+    """The words the item pointed at are gone (a later pass rewrote them): no ledger credit, no 'answered', and the item stops being asked."""
+    env, rid = queued
+    env.db.conn.execute("UPDATE omi_segments SET text = 'something else entirely'")
+    env.db.conn.execute("UPDATE omi_recordings SET transcript = 'something else entirely'")
+    env.db.conn.commit()
+    iid = items(env)[0]["id"]
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, iid, alt=1))
+    assert e.value.code == "text_moved"
+    assert env.db.rows("SELECT * FROM asr_contender_ledger") == []
+    assert items(env)[0]["status"] == "expired" and items(env)[0]["answer"] is None
+
+
+def test_a_failed_review_reopen_fails_the_answer_instead_of_being_swallowed(queued, monkeypatch):
+    """The correction, the day-review re-open, the ledger and the status are one unit: when the re-open fails the answer fails, the ledger is
+    untouched and the item is still open - and a retry after the fault clears succeeds (the text swap is idempotent)."""
+    env, rid = queued
+    import omi_day_review as dr
+    real = dr.reopen_recording_in
+
+    async def boom(db, uid, r):
+        raise RuntimeError("review store down")
+    monkeypatch.setattr(dr, "reopen_recording_in", boom)
+    iid = items(env)[0]["id"]
+    with pytest.raises(RuntimeError):
+        run(tc.answer(OWNER, iid, alt=1))
+    assert items(env)[0]["status"] == "open" and env.db.rows("SELECT * FROM asr_contender_ledger") == []
+    monkeypatch.setattr(dr, "reopen_recording_in", real)
+    assert run(tc.answer(OWNER, iid, alt=1))["applied"] is True
+    assert items(env)[0]["status"] == "answered" and "eleven" in rows(env)[0]["transcript"]
