@@ -779,7 +779,11 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                     omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs, night=True))
                     # the first-pass lines are about to be replaced: what their tags taught the people's voiceprints is released first (the segment ids die with them, and a later
                     # correction of the NEW line only knows the new id); the carried tags re-teach below under the new ids
-                    await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")])
+                    try:
+                        await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")])
+                    except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
+                        if not omi_voices._missing(exc):
+                            raise
                     ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=MODEL_ID, channel="pendant" if refs.you is not None else None)
                     for sid, s in zip(ids, segs):
                         sets, vals = [], []
@@ -1308,7 +1312,10 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             for u, urows in by_user.items():            # per member, INSIDE the erase gate the hypothesis sweep shares: an erase that completed since the job was read keeps nothing
                 async with erase_gate.writing(u, seen.get(u, 0)) as live:
                     if live:
+                        g0 = erase_gate.generation(u)
                         eu.store_hyps(home, night, [await _redact_row(u, row) for row in urows])
+                        if erase_gate.generation(u) != g0:
+                            eu.forget_user(home, u)                 # an erase landed during the write: swept again
             eu.prune_hyps(home, (now or _now()).date())
         if (now or _now()).weekday() == 0:                       # Monday: the weekly verdict line for the morning report
             res["contenders"] = eu.contender_line(eu.read_ledger(home))

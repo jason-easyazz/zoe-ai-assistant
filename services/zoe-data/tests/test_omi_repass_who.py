@@ -144,7 +144,7 @@ def test_the_channel_mean_is_stored_with_model_and_channel_and_replaced_not_dupl
     run(who.store_mean(renv.db, OWNER, rp.MODEL_ID, who.CHANNEL_PENDANT, "dev1", v(1, 1), 40, 900.0))
     run(who.store_mean(renv.db, OWNER, rp.MODEL_ID, who.CHANNEL_PENDANT, "dev1", v(2, 1), 50, 950.0))
     got = run(who.load_mean(renv.db, OWNER, rp.MODEL_ID, who.CHANNEL_PENDANT, "dev1"))
-    assert np.allclose(got, who.unit(v(2, 1)), atol=1e-6)
+    assert np.allclose(got, np.asarray(v(2, 1), dtype=float), atol=1e-6)      # stored as given (its magnitude is part of the centering)
     assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_channel_means")[0]["n"] == 1
     assert run(who.load_mean(renv.db, OWNER, rp.MODEL_ID, who.CHANNEL_PANEL, "dev1")) is None and run(who.load_mean(renv.db, OWNER, "other-model", who.CHANNEL_PENDANT, "dev1")) is None
 
@@ -174,7 +174,7 @@ def test_a_long_session_stores_its_mean_per_device_and_a_short_one_uses_the_stor
         renv.db.conn.execute("UPDATE omi_recordings SET repass_state = 'pending', status = 'done', device_id = ?, audio_path = ?", (dev, str(path)))
         renv.db.conn.commit()
         run(rp.run_night(budget_s=600, runner=_one_shot(short, rid, [])))
-    assert seen_mu[0] is not None and np.allclose(seen_mu[0], who.unit(who.session_mean([v(1, 1), v(1, 2), v(2, 1)])), atol=1e-6) and seen_mu[1] is None
+    assert seen_mu[0] is not None and np.allclose(seen_mu[0], who.session_mean([v(1, 1), v(1, 2), v(2, 1)]), atol=1e-6) and seen_mu[1] is None
 
 
 def test_two_devices_of_one_member_never_share_a_channel_mean(renv, monkeypatch):
@@ -213,7 +213,7 @@ def test_with_fewer_than_three_panel_prints_the_stored_registry_panel_mean_is_us
     c.execute("DELETE FROM learned_voiceprints WHERE people_id IN ('pb', 'pc')")
     c.commit()
     people, mu1 = run(who.load_people(renv.db, OWNER, rp.MODEL_ID, None))                            # one print left: its own "mean" would zero it, so the STORED mean stands
-    assert np.allclose(mu1, who.unit(mu3), atol=1e-5) and len(people) == 1
+    assert np.allclose(mu1, mu3, atol=1e-5) and len(people) == 1
 
 
 def _one_shot(res, rid, seen):
