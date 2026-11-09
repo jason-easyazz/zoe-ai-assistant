@@ -151,8 +151,9 @@ of it lexicon data (`write_claims.json`), no word list in code:
   entry) and `memory_retire` (a retired note) record `forget`; `_execute_list_remove_direct` (the brain's `list_remove`)
   records `list_removed`. The brain has NO calendar / reminder / alarm delete tool, so such a removal claim in a brain turn is
   always replaced - which is the truth.
-* **Honest lines per kind** (`honest_by_kind`): a memory claim gets "I didn't manage to save that…", a forget "I haven't been
-  able to forget that yet, so it's still saved.", a removal "I didn't manage to remove that, so it's still there." - "want me
+* **Honest lines per kind** (`honest_by_kind`): a memory claim gets "I didn't manage to save that…", a forget "I haven't forgotten
+  anything yet. Tell me what to forget, ..." (also what a blocked memory/note claim becomes on a turn that ASKED to forget -
+  never "I didn't manage to save that", QA round 4), a removal "I didn't manage to remove that, so it's still there." - "want me
   to try again?" is not offered where no tool could do it.
 
 ## Device switches (2026-11-07) - receipt kind `device`

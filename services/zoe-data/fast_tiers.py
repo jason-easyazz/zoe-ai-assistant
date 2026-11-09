@@ -274,6 +274,15 @@ def _explicit_forget(text: str) -> bool:
         return False
 
 
+def _topic_forget(text: str) -> bool:
+    """A whole-utterance topic forget ("forget what I told you about my mum's heart", forget_topic): as explicit as "forget that"."""
+    try:
+        import forget_topic
+        return forget_topic.parse(text or "") is not None
+    except Exception:  # noqa: BLE001 - the gate must never break a turn
+        return False
+
+
 def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     """True = the keyword intent may execute. Runs the head (numpy, no sidecar)
     only for an intent that has a router class; logs
@@ -281,6 +290,9 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     NEVER raises (a gate failure allows, i.e. today's behaviour)."""
     try:
         if not intent_gate_enabled() or intent_name not in _INTENT_ROUTER_DOMAINS:
+            return True
+        if intent_name == "memory_forget_entity" and _topic_forget(text):
+            logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_topic_forget", lane, intent_name)
             return True
         if intent_name == "memory_forget_last" and _explicit_forget(text):
             logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_forget_command", lane, intent_name)

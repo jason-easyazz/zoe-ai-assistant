@@ -197,10 +197,28 @@ def _drawers_embedding_function() -> Any:
             if _DRAWERS_EF is None:
                 from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 
+                from functools import cached_property
+
+                import ort_arena
+
                 class _ZoeMiniLM(ONNXMiniLM_L6_V2):
                     @staticmethod
                     def name() -> str:
                         return "default"
+
+                    if not ort_arena.arena_enabled():
+                        # Chroma's own session recipe minus the ORT CPU arena (ort_arena.py,
+                        # -111 MB measured). ZOE_ORT_CPU_ARENA=1 restores chroma's model.
+                        @cached_property
+                        def model(self) -> Any:  # type: ignore[override]
+                            so = self.ort.SessionOptions()
+                            so.log_severity_level = 3
+                            so.graph_optimization_level = self.ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                            return ort_arena.build_session(
+                                self.ort,
+                                os.path.join(self.DOWNLOAD_PATH, self.EXTRACTED_FOLDER_NAME, "model.onnx"),
+                                so,
+                            )
 
                 _DRAWERS_EF = _ZoeMiniLM()
     return _DRAWERS_EF
@@ -1403,6 +1421,34 @@ class IndexCompactionError(MemoryServiceError):
         self.report = dict(report, ok=False, error=message)
 
 
+#: A row an automatic writer stored is compared to the next automatic write for this long, and at most this many are kept per user.
+_RECENT_AUTO_TTL_S = 600.0
+_RECENT_AUTO_MAX = 48
+#: words that carry no fact in a paraphrase check ("User has a learner test for Jonah" ~ "Jonah's learner test is ...")
+_DUP_NOISE = frozenset(
+    "user users has have had having is are was were be been for with that this his her their its he she they it as by from "
+    "about also just very really named called".split())
+
+
+def _dup_tokens(text: str) -> frozenset:
+    import memory_overlap as _mo
+
+    return frozenset(t for t in _mo.tokens(text) if t not in _mo._FILLER and t not in _DUP_NOISE and len(t) > 1)
+
+
+def _is_paraphrase(candidate: str, stored: str) -> bool:
+    """Is ``candidate`` the same fact as ``stored`` in other words, adding nothing? At least three content words, 80 percent of the
+    smaller side shared, and no name / number / date in the candidate that the stored text lacks (that is new information, and a
+    richer restatement still lands). Pure."""
+    import memory_overlap as _mo
+
+    c, st = _dup_tokens(candidate), _dup_tokens(stored)
+    small = min(len(c), len(st))
+    if small < 3 or len(c & st) / small < 0.8:
+        return False
+    return not _mo.novel_markers(candidate, stored)
+
+
 class MemoryService:
     """The sole read/write surface for Zoe memory."""
 
@@ -1420,6 +1466,10 @@ class MemoryService:
         # here as it ages out, so total size is hard-capped at _SEEN_KEYS_MAX.
         self._seen_keys_by_user: dict[str, set[str]] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        # Rows the AUTOMATIC writers just stored, per user (memory_overlap tokens, in-process, short-lived): the post-turn passes
+        # run concurrently and each decides ADD before another's row has landed, so one disclosure became three paraphrases
+        # (QA round 4). Checked and updated under the per-user lock; dropped on any forget (erase_rows / delete_user).
+        self._recent_auto: dict[str, list] = {}
         # the last physical-erase report (counts only) of a hard delete / forget, for the operator endpoints
         self.last_erase_report: dict[str, Any] | None = None
 
@@ -1640,6 +1690,15 @@ class MemoryService:
                 self._bump("dedup", source)
                 return None
 
+            # Same fact, other words, from another post-turn pass a moment ago: not stored twice (automatic writers only; an
+            # explicit teach is the owner's and always lands).
+            if source in MEMORY_OPT_OUT_SOURCES and status == "approved" and await self._recent_paraphrase(user_id, scrubbed):
+                self._bump("dedup", source)
+                if _METRICS_OK:
+                    memory_dedup_skip_count.inc()
+                logger.info("memory_service: ingest skipped - paraphrase of a row just stored (user=%s source=%s)", user_id, source)
+                return None
+
             # Authority: who really wrote this, decided HERE from the writer + the user's
             # own turn text. An inferred fact that contradicts a protected row becomes a
             # pending candidate (the user's words stay approved; nothing is lost).
@@ -1744,6 +1803,8 @@ class MemoryService:
                 raise MemoryServiceError(f"write failed: {exc}") from exc
 
             self._remember_seen_key(user_id, idem_key)
+            if source in MEMORY_OPT_OUT_SOURCES and write_status == "approved":
+                self._note_recent_auto(user_id, mem_id, scrubbed)
             await self._append_audit(
                 mem_id=mem_id,
                 user_id=user_id,
@@ -2132,6 +2193,7 @@ class MemoryService:
             # Purge this user's idempotency-cache entries so re-teaching a
             # previously known fact after a forget isn't dropped as a
             # duplicate for the rest of the process lifetime.
+            self._recent_auto.pop(user_id, None)
             stale_keys = self._seen_keys_by_user.pop(user_id, None)
             if stale_keys:
                 for key in stale_keys:
@@ -3485,6 +3547,7 @@ class MemoryService:
                 raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
             # The erased rows' idempotency keys must not outlive them: left in the fast-path cache, an explicit
             # re-teach of the same words would be dropped as a duplicate of a row that no longer exists.
+            self._recent_auto.pop(user_id, None)
             for key in self._seen_keys_by_user.pop(user_id, None) or ():
                 self._seen_keys.discard(key)
             report = await self._physical_erase(needles)
@@ -3669,6 +3732,26 @@ class MemoryService:
 
         recall_gate.stamp(md, text)
         return md
+
+    def _note_recent_auto(self, user_id: str, mem_id: str, text: str) -> None:
+        now = time.monotonic()
+        rows = [r for r in self._recent_auto.get(user_id, ()) if now - r[0] <= _RECENT_AUTO_TTL_S]
+        rows.append((now, mem_id, text))
+        self._recent_auto[user_id] = rows[-_RECENT_AUTO_MAX:]
+
+    async def _recent_paraphrase(self, user_id: str, text: str) -> bool:
+        """True when a row an automatic writer stored within ``_RECENT_AUTO_TTL_S`` says the same thing (and is still approved)."""
+        now = time.monotonic()
+        for ts, mem_id, stored in reversed(self._recent_auto.get(user_id, ())):
+            if now - ts > _RECENT_AUTO_TTL_S or not _is_paraphrase(text, stored):
+                continue
+            try:
+                row = await self._run_sync(self._get_sync, mem_id)
+            except Exception:  # noqa: BLE001 - unreadable: store (duplicates over lost facts)
+                return False
+            if row is not None and str(row.metadata.get("status", "") or "").strip().lower() == "approved":
+                return True
+        return False
 
     def _remember_seen_key(self, user_id: str, idem_key: str) -> None:
         """Add an idempotency key to the fast-path cache, tracked by user_id
