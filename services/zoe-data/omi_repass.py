@@ -54,15 +54,22 @@ MAX_PASS_ATTEMPTS = 3
 MIN_WEARER_WINDOWS = 10                           # a wearer print needs this many confirmed 1.5 s windows before any line may read "me"
 #: THE BACKEND SEAM. Each ASR engine the worker can run (``omi_repass_worker.ASR``) is DECLARED here with its budget facts, so the window's RAM / time
 #: arithmetic is per backend and a new engine is one registry entry in the worker plus one row here (the bake-off owns installing models):
-#:   rtf          seconds of CPU work per second of audio on dense speech (4 threads) - the plan's default until a night measures its own (state.json)
+#:   rtf          seconds of work per second of speech on the device it runs on - the plan's default until a night measures its own (state.json)
 #:   gpu_rtf      the same on the GPU, or None = never measured here (the planner never assumes a GPU figure)
 #:   peak_rss_mb  the engine's declared peak resident size (+ the speaker model, ``DIAR_RSS_MB``): sets the capped scope's MemoryMax and the RAM check
 #:   fallback     the cheaper backend the planner drops to when the day's audio would overrun the budget (None = none)
+#:   device       "gpu" (needs the GPU recipe: drop caches + compact IMMEDIATELY before the load, one model alone) | "cpu"
+#: ROUND-2 BAKE-OFF (2026-11-09, Sunday audio, Jetson Orin): qwen3-asr is the default (GPU RTF 0.42 per speech second, ~4.0 GB GPU, ~8.7 GB process RSS, ~14 s load); parakeet-tdt the
+#: fallback for a day that would overrun it (GPU RTF 0.08, ~5.7 GB RSS). faster-whisper stays registered as a CPU last resort only: GPU large-v3 reached RTF 0.74 and needs a
+#: hand-built CTranslate2. Gemma 12B's own audio was rejected.
 BACKENDS: dict = {
-    "faster-whisper:large-v3": {"rtf": 1.0, "gpu_rtf": None, "peak_rss_mb": 2100, "fallback": "faster-whisper:distil-large-v3"},
-    "faster-whisper:distil-large-v3": {"rtf": 0.45, "gpu_rtf": None, "peak_rss_mb": 2400, "fallback": None},
+    "qwen3-asr": {"rtf": 0.42, "gpu_rtf": 0.42, "peak_rss_mb": 8700, "gpu_peak_mb": 4000, "fallback": "parakeet-tdt", "device": "gpu"},
+    "parakeet-tdt": {"rtf": 0.08, "gpu_rtf": 0.08, "peak_rss_mb": 5700, "gpu_peak_mb": 2500, "fallback": None, "device": "gpu"},
+    "faster-whisper:large-v3": {"rtf": 1.0, "gpu_rtf": None, "peak_rss_mb": 2100, "fallback": "faster-whisper:distil-large-v3", "device": "cpu"},
+    "faster-whisper:distil-large-v3": {"rtf": 0.45, "gpu_rtf": None, "peak_rss_mb": 2400, "fallback": None, "device": "cpu"},
 }
-DEFAULT_ASR = "faster-whisper:large-v3"
+DEFAULT_ASR = "qwen3-asr"
+FLOOR_MB = 1200                                    # the window's MemAvailable floor: a pass only starts if the box can hold the engine + the speaker model and still clear it
 DIAR_BACKENDS = ("ecapa",)                        # the speaker-window engines the worker has (``omi_repass_worker.DIAR``); MODEL_ID is tied to this one
 DIAR_RSS_MB = 700
 DEFAULT_RTF = {k: v["rtf"] for k, v in BACKENDS.items()}
@@ -91,11 +98,40 @@ def diar_backend() -> str:
 
 
 def scope_mem_max(asr: str) -> str:
-    """The capped scope's MemoryMax: ``ZOE_OMI_REPASS_MEM_MAX`` if set, else the declared peaks + 30 % headroom."""
+    """The capped scope's MemoryMax: ``ZOE_OMI_REPASS_MEM_MAX`` if set, else the declared peaks + 20 % headroom."""
     forced = env_str("ZOE_OMI_REPASS_MEM_MAX", "")
     if forced:
         return forced
-    return f"{int((BACKENDS[asr]['peak_rss_mb'] + DIAR_RSS_MB) * 1.3)}M"
+    return f"{int((BACKENDS[asr]['peak_rss_mb'] + DIAR_RSS_MB) * 1.2)}M"
+
+
+def need_mb(asr: str) -> int:
+    """MemAvailable the pass needs before it starts: the engine's declared peak + the speaker model + the floor."""
+    return int(BACKENDS[asr]["peak_rss_mb"] + DIAR_RSS_MB + FLOOR_MB)
+
+
+def mem_available_mb() -> float:
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable"):
+                return int(line.split()[1]) / 1024.0
+    except OSError:
+        pass
+    return 1e9            # unreadable: do not block on a guess
+
+
+def models_dir() -> str:
+    return env_str("ZOE_OMI_REPASS_MODELS", "") or os.path.expanduser("~/.zoe/models/omi-repass")
+
+
+def gpu_prep() -> None:
+    """THE GPU RECIPE (round-2 bake-off, after earlier NvMap error-12 failures): with the 4B, Kokoro, the router and zoe-data stopped, drop the page cache and compact physical
+    memory IMMEDIATELY before the model loads, and load ONE model alone (the worker loads nothing else on the GPU). Best effort: no passwordless sudo = the window's own compaction stands."""
+    try:
+        subprocess.run(["sudo", "-n", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory"], timeout=60, check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def holds_audio() -> bool:
@@ -727,8 +763,10 @@ def write_state(st: dict) -> None:
 def spawn_worker(manifest: Path, out: Path, timeout_s: float, *, mem_max: str, threads: int) -> int:
     """The default runner: the worker in its OWN capped scope (``MemoryMax`` + no swap, nice 10), killed at ``timeout_s``. rc 3 = a model is missing."""
     cmd = [venv_python(), str(worker_path()), "--manifest", str(manifest), "--out", str(out)]
+    gpu_prep()          # a no-op on a CPU backend is harmless (it only frees page cache)
     scope = ["systemd-run", "--user", "--scope", "--quiet", "-p", f"MemoryMax={mem_max}", "-p", "MemorySwapMax=0", "nice", "-n", "10"]
-    env = {**os.environ, "OMP_NUM_THREADS": str(threads), "MALLOC_ARENA_MAX": "2", "HF_HUB_OFFLINE": "1", "PYTHONDONTWRITEBYTECODE": "1", "CUDA_VISIBLE_DEVICES": ""}
+    env = {**os.environ, "OMP_NUM_THREADS": str(threads), "MALLOC_ARENA_MAX": "2", "HF_HUB_OFFLINE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    env.pop("PYTORCH_CUDA_ALLOC_CONF", None)         # the default torch allocator: it is what loaded the bake-off winners
     try:
         return subprocess.run(scope + cmd, env=env, timeout=timeout_s, check=False, stdout=subprocess.DEVNULL).returncode
     except subprocess.TimeoutExpired:
@@ -765,20 +803,49 @@ def zoe_clips() -> list[str]:
         return []
 
 
+def pick_rehearsal(rows: list, recording_id: str = "") -> list:
+    """ONE recording for the daytime rehearsal: the one named, else the newest 20-180 s one (long enough to be real, short enough to be a short run), else the newest."""
+    if recording_id:
+        return [r for r in rows if r["id"] == recording_id][:1]
+    ok = [r for r in rows if 20.0 <= float(r["duration_s"] or 0) <= 180.0]
+    pool = ok or rows
+    return sorted(pool, key=lambda r: str(r["started_at"]))[-1:]
+
+
+async def preview_one(r: dict, res: dict, *, refs: Refs, names: list) -> dict:
+    """The REHEARSAL's read-only twin of ``finish_one``: the same words -> lines -> speaker labels -> name normalisation -> forget-ledger redaction, and the counts the shadow log
+    would hold - but NOTHING is written and no audio is released. Counts only (never a word)."""
+    import omi_recordings as omi
+    lines = build_lines(res["words"], res["windows"], refs)
+    texts = []
+    for ln in lines:
+        texts.append(await omi._redact_forgotten(r["user_id"], normalise_names(segment_fields(ln, refs)["text"], names)))
+    text = " ".join(t for t in texts if t.strip()).strip()
+    return {"words": len(res["words"]), "lines": len(lines), "speakers": len({ln["key"] for ln in lines}), "dur_s": res.get("dur_s"), "speech_s": res.get("speech_s"),
+            "asr_s": res.get("asr_s"), "emb_s": res.get("emb_s"), "agree": word_agreement(r.get("transcript") or "", text), "chars": len(text),
+            "me": sum(ln["key"] == "you" for ln in lines), "zoe": sum(ln["key"] == "zoe" for ln in lines), "named": sum(ln["key"].startswith("p:") for ln in lines)}
+
+
 async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = None, now: Optional[datetime] = None, dry_run: bool = False,
-                    clock: Callable[[], float] = time.time) -> dict:
+                    clock: Callable[[], float] = time.time, rehearse: bool = False, recording_id: str = "",
+                    mem_available: Callable[[], float] = mem_available_mb) -> dict:
     """The night job. Reads the pending recordings, plans the model against ``budget_s``, runs the worker once, applies each finished recording. Returns a
-    counts-only summary (the CLI prints it). ``runner(manifest, out, timeout_s, mem_max=, threads=) -> rc`` is injectable (tests)."""
+    counts-only summary (the CLI prints it). ``runner(manifest, out, timeout_s, mem_max=, threads=) -> rc`` is injectable (tests).
+
+    ``rehearse``: the daytime rehearsal (docs/knowledge/omi-night-repass.md): the REAL job path - the same plan, manifest, worker, GPU recipe and scope - on ONE recording, whatever the
+    flag says, writing NOTHING (no segments, no state, no release of audio, no ledger). It must pass before ZOE_OMI_NIGHT_REPASS goes to shadow."""
     from db_compat import get_compat_db
-    m = mode()
-    res: dict = {"status": "ok", "mode": m}
+    m = "shadow" if rehearse else mode()
+    res: dict = {"status": "ok", "mode": m, "rehearse": rehearse}
     if m == "off":
         return {"status": "flag_off", "mode": m}
     started = clock()
     seen = erase_gate.snapshot()
     async with get_compat_db() as db:
         rows = await pending_recordings(db, now=now)
-        if not dry_run:
+        if rehearse:
+            rows = pick_rehearsal(rows, recording_id)
+        if not dry_run and not rehearse:
             try:
                 await drop_stale_proposals(db, now=now)
                 await db.commit()
@@ -797,6 +864,10 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         return {**res, "status": "dry_run"}
     threads = env_int("ZOE_OMI_REPASS_THREADS", 4)
     mem_max = scope_mem_max(plan["model"])
+    if runner is None:                                 # the real worker: refuse to start what the box cannot hold above the floor (the recordings carry to the next night)
+        have, need = mem_available(), need_mb(plan["model"])
+        if have < need:
+            return {**res, "status": "low_mem", "have_mb": round(have), "need_mb": need}
     zoe_ref = st.get("zoe_ref")
     items, names_by_user = [], {}
     async with get_compat_db() as db:
@@ -810,7 +881,8 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     stamp = uuid.uuid4().hex[:8]
     man, out = work / f"{stamp}.manifest.json", work / f"{stamp}.out.jsonl"
     deadline = started + max(30.0, budget_s - 45.0)               # 45 s kept back for the DB writes and the release of audio
-    man.write_text(json.dumps({"asr": plan["model"], "diar": diar_backend(), "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "0") == "1", "deadline_epoch": deadline,
+    man.write_text(json.dumps({"asr": plan["model"], "diar": diar_backend(), "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "1") != "0", "models_dir": models_dir(),
+                               "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": deadline,
                                "rtf": {**DEFAULT_RTF, **(st.get("rtf") or {})}.get(plan["model"], 1.0), "items": items,
                                "zoe_clips": [] if zoe_ref else zoe_clips()}))
     os.chmod(man, 0o600)
@@ -831,6 +903,15 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     model_label = f"{plan['model']}+{diar_backend()}"
     by_id = {r["id"]: r for r in rows}
     tally = {"replaced": 0, "shadow": 0, "erased": 0, "gone": 0, "failed": 0, "carried": 0, "agree_sum": 0.0, "me": 0, "named": 0, "zoe": 0, "proposed": 0}
+    if rehearse:
+        o = got.get(rows[0]["id"])
+        if o is None or not o.get("ok"):
+            return {**res, "status": "rehearsal_failed", "why": (o or {}).get("why", "no result"), "model": plan["model"], "worker_rc": rc, "aborted": done.get("aborted") or None}
+        async with get_compat_db() as db:
+            refs = await load_refs(db, rows[0]["user_id"], zoe_ref)
+        pv = await preview_one(rows[0], o, refs=refs, names=names_by_user.get(rows[0]["user_id"], []))
+        return {**res, "status": "rehearsal_ok", "model": plan["model"], "est_s": plan["est_s"], **pv, "worker_rc": rc, "device": done.get("device"), "worker_rtf": done.get("rtf"),
+                "peak_rss_mb": done.get("peak_rss_mb"), "gpu_peak_mb": done.get("gpu_peak_mb"), "load_s": done.get("load_s"), "wall_s": round(clock() - started)}
     for rid, r in by_id.items():
         o = got.get(rid)
         if o is None or not o.get("ok"):
