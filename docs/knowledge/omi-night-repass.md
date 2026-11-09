@@ -129,7 +129,7 @@ ln -s ~/.zoe/lab/omi-retranscribe-r2/ct2build ~/.zoe/ct2build      # or set ZOE_
 # 1. the runtime (once; needs network; the models are ~11 GB incl. Granite; torch is the box's existing Jetson CUDA build)
 scripts/setup/setup_omi_repass.sh --seed-from ~/.zoe/lab/omi-retranscribe-r2/models   # or without --seed-from to download the pinned revisions
 scripts/setup/setup_omi_repass.sh --check                  # must say: gpu ok, imports ok, both models ok
-# 2. the schema (the normal deploy runs alembic: migration 0072)
+# 2. the schema (the normal deploy runs alembic: migration 0073)
 # 3. wire the pre-job into the window: the shipped unit passes --pre-jobs omi_repass (re-run scripts/night/install_night_window.sh; a no-op while the flag is off)
 # 4. THE DAYTIME REHEARSAL (above) - repeat until it passes
 # 5. go SHADOW (the first-pass WAVs are then held for the pass; zoe-data env, then restart zoe-data):
@@ -145,4 +145,4 @@ Rollback: set the flag `off` (held WAVs are released by the normal rules; replac
 
 ## Files
 
-`services/zoe-data/omi_repass.py` (decisions, planner, DB), `scripts/night/jobs/omi_repass_worker.py` (the model process), `scripts/maintenance/zoe-omi-repass.py` (the job + owner CLI), `services/zoe-data/omi_repass_eval.py` (ROVER, the ledger, the verdicts, the hypothesis store, the check queue), `scripts/setup/setup_omi_repass.sh` + `omi_repass_requirements.lock.txt` + `omi_repass_constraints.txt`, migration `0072_omi_night_repass.py`, `night_window.py` (`--pre-jobs`, `--rehearse-repass`, `build_pre_jobs`, `run_pre_jobs`, `resettle`). Private state: `~/.zoe/omi-repass/` (0600: `state.json` = measured RTF + the Zoe voice reference; `shadow.jsonl` = counts only).
+`services/zoe-data/omi_repass.py` (decisions, planner, DB), `scripts/night/jobs/omi_repass_worker.py` (the model process), `scripts/maintenance/zoe-omi-repass.py` (the job + owner CLI), `services/zoe-data/omi_repass_eval.py` (ROVER, the ledger, the verdicts, the hypothesis store, the check queue), `scripts/setup/setup_omi_repass.sh` + `omi_repass_requirements.lock.txt` + `omi_repass_constraints.txt`, migration `0073_omi_night_repass.py`, `night_window.py` (`--pre-jobs`, `--rehearse-repass`, `build_pre_jobs`, `run_pre_jobs`, `resettle`). Private state: `~/.zoe/omi-repass/` (0600: `state.json` = measured RTF + the Zoe voice reference; `shadow.jsonl` = counts only).

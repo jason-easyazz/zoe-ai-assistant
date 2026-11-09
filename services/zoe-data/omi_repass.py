@@ -899,7 +899,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             try:
                 await drop_stale_proposals(db, now=now)
                 await db.commit()
-            except Exception:  # noqa: BLE001 - pre-0072
+            except Exception:  # noqa: BLE001 - pre-0073
                 pass
     if not rows:
         return {**res, "status": "idle", "pending": 0}

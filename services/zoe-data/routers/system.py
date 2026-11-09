@@ -2496,6 +2496,14 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
     if intent_name not in _DISPATCHABLE_INTENTS and intent_name not in _ALARM_DISPATCH_INTENTS:
         _log_dispatch("-", 400, False, "not_dispatchable", started)
         raise HTTPException(status_code=400, detail=f"intent not dispatchable: {intent_name}")
+    # A write needs an ask (write_intent_gate, ZOE_WRITE_INTENT_GATE): "help me think through the logistics" is not "add these to the
+    # calendar", and "add bolts to the list" does not name the shopping list. A 422 detail is what the brain's tool relays to the model.
+    import write_intent_gate as _wig
+
+    _not_asked = _wig.check(user_id, intent_name, dict(body.slots or {}))
+    if _not_asked:
+        _log_dispatch(intent_name, 422, False, "write_not_asked", started)
+        raise HTTPException(status_code=422, detail=_not_asked)
     # Home control (2026-10-18): this hop carries only the turn's acting id, so a guest id (incl. ``voice-guest``) may not drive
     # the house from here; a member id may.
     import panel_principal as _pp

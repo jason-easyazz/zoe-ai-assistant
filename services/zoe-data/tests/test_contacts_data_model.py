@@ -564,6 +564,14 @@ async def test_forget_user_erases_every_contact_row_of_the_member_only(db):
     await cs.import_vcf(db, A, VCF)
     await cs.import_vcf(db, B, VCF)
     _voiceprint(db, A, db.q("SELECT id FROM people WHERE user_id = ? LIMIT 1", (A,))[0][0])
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location("mig_0072", SVC / "alembic/versions/0072_named_guest_turns.py")
+    m72 = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(m72)
+    db.conn.execute(m72.TURNS)                        # a named guest's kept turns are the member's too (named_guest_memory)
+    for who in (A, B):
+        db.conn.execute("INSERT INTO named_guest_turns (id, user_id, people_id, user_text, created_at) VALUES (?, ?, 'g', 'hi', 'x')",
+                        (f"t-{who}", who))
     n = await cs.forget_user(A, db=db)
     assert n > 0
     for table, col in cs.FORGET_USER_TABLES:
