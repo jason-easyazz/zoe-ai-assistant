@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-08T00:00:00Z
+timestamp: 2026-11-09T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-08T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-08. The table body is deterministic (sorted, no
+Last generated: 2026-11-09. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -32,7 +32,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 249 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 4 registered flags with no reader in the scanned sources.
+- 5 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -1233,4 +1233,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_MEDICAL_SAFETY`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
