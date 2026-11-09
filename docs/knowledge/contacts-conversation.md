@@ -67,7 +67,14 @@ surfacing read marked but that did not enter the prompt are un-marked so they do
 - emits none on forget / correction / decline / "not now" turns (`_NO_OFFER_TURN_RE`); the offer is
   deferred, not lost (nothing is surfaced, so it does not age);
 - does not repeat an offer for `_OFFER_COOLDOWN_TURNS` (3) distinct user turns after it was voiced
-  (in-process per-user state; a rebuild of the packet for the same message is the same turn).
+  (in-process per-user state; a rebuild of the packet for the same message is the same turn);
+- (QA round 4) voices an offer ONLY on a turn about that person (their name or relationship word) or about contacts
+  (`contact_offer_policy.related`): a goodnight or a question about someone else carries no offer;
+- (QA round 4) a STANDING no ("no contacts please", "don't add anyone", "stop asking about contacts" -
+  `is_standing_decline`) is durable per member: `user_preferences.contact_offers_off`, set by
+  `latent_intent_detector.detect_and_store`, closes every open offer, stops new person offers being stored and the surfacing
+  read returning any. "You can offer contacts again" lifts it. A bare "no thanks" still answers only one offer. A name whose
+  offer was closed (declined, expired, answered) is not proposed again for 30 days (`REOFFER_BLOCK_DAYS`).
 
 `ZOE_CONTACT_OFFER_BATCH` default stays OFF: batch asks ONE enumerated question and a single yes accepts the
 whole set, a different accept contract, so it is an explicit opt-in rather than the fix for nagging.

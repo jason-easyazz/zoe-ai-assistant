@@ -274,6 +274,15 @@ def _explicit_forget(text: str) -> bool:
         return False
 
 
+def _topic_forget(text: str) -> bool:
+    """A whole-utterance topic forget ("forget what I told you about my mum's heart", forget_topic): as explicit as "forget that"."""
+    try:
+        import forget_topic
+        return forget_topic.parse(text or "") is not None
+    except Exception:  # noqa: BLE001 - the gate must never break a turn
+        return False
+
+
 def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     """True = the keyword intent may execute. Runs the head (numpy, no sidecar)
     only for an intent that has a router class; logs
@@ -281,6 +290,9 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     NEVER raises (a gate failure allows, i.e. today's behaviour)."""
     try:
         if not intent_gate_enabled() or intent_name not in _INTENT_ROUTER_DOMAINS:
+            return True
+        if intent_name == "memory_forget_entity" and _topic_forget(text):
+            logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_topic_forget", lane, intent_name)
             return True
         if intent_name == "memory_forget_last" and _explicit_forget(text):
             logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_forget_command", lane, intent_name)
@@ -862,12 +874,29 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
 
 
 async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
+    # A reply that ANSWERS Zoe's own pending reminder offer ("yes please, 2:45 so i'm not late") is not a time question: the domain
+    # tiers would hand the bare words to the time expert ("It's 8:54 AM"). Defer the whole turn (flag-gated ZOE_OFFER_FOLLOWUP_BINDING,
+    # default off, a cheap shape check first) so the caller's reminder / brain lane, which has the conversation, acts on the offer.
+    # The deferral comes AFTER the distress tier on the chat path (phase None): "sure 3pm because I want to hurt myself" must reach the
+    # crisis handling, never a reminder. phase="domain" means the conversation half (distress included) already ran.
+    async def _offer_reply_deferred() -> bool:
+        try:
+            from intent_router import reminder_offer_reply_text as _rem_offer
+
+            return bool(await _rem_offer(text, user_id, session_id=session_id))
+        except Exception:  # noqa: BLE001 - the binding never breaks a turn
+            return False
+
+    if kwargs.get("phase") == "domain" and await _offer_reply_deferred():
+        return None
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":
         answered = await _distress_tier(text, user_id, kwargs)
         if answered is not None:
             return answered
+        if kwargs.get("phase") != "conversation" and await _offer_reply_deferred():
+            return None
         # Feedback FIRST (after distress): a verdict is recorded even when a later stage answers it ("that's wrong, it's Thursday" after
         # an explained answer is the provenance fix's, and still leaves its `correction` row). The wrong verdicts only write and go on.
         answered = await _feedback_tier(text, user_id, session_id, kwargs)
