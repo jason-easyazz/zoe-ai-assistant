@@ -143,11 +143,11 @@ const TOP_FILES = new Set(['soul.md', 'manner.md', 'tool-guidance.md', 'recall-s
 const DOCTRINES_DIR = 'doctrines';
 const SLOT_FILES = new Map<string, OverlayDoctrineSlot>(OVERLAY_DOCTRINE_SLOTS.map((s) => [`${s}.md`, s]));
 
-// Caps. The compiled instructions are 9,326 chars; the cap allows ~670 tokens of growth (the 8k
+// Caps. The compiled instructions are ~11,000 chars (2026-11-08, with the persona doctrine); the cap allows ~600 tokens of growth (the 8k
 // llama slot is windowed, but a bigger prompt is slower to prefill on every cache miss).
 export const MAX_FILE_BYTES = 16 * 1024;
 export const MAX_TEXT_CHARS = 6000;
-export const MAX_INSTRUCTIONS_CHARS = 12_000;
+export const MAX_INSTRUCTIONS_CHARS = 13_500;
 export const MAX_TOOL_DESCRIPTION_CHARS = 1000;
 /** zoe-data's wire ceiling for a manner block (manner.ts MANNER_MAX_CHARS). */
 export const MAX_MANNER_CHARS = 800;

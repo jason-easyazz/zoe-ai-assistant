@@ -112,7 +112,15 @@ Environment=LD_LIBRARY_PATH=%h/llama.cpp-b11982/build-jetson/bin
 #    regression: brain 1586 ms / e2e 1775 ms (vs 1447 ms brain with mlock alone). Do NOT
 #    quote the E2B figure as a reason to drop it; do not raise --ctx-size without
 #    re-pricing the SWA cache (it scales with ctx under --swa-full).
-#  --cache-ram 1024  = the Oct-2025 host-memory prompt cache (PR #16391),
+#  --cache-ram 512 (2026-11-08, was 1024; evidence docs/knowledge/ram-audit-voice-2026-11.md):
+#    the 1024 cap first filled only after ~36 h of uptime, and the 10 evictions since were
+#    all small stale aux one-shots (6-59 MiB), so the second 512 MiB held entries older
+#    than ~18 h on average. Reuse baseline 85.3% (cached/(cached+processed) tokens),
+#    8.9% of tasks re-prefill >= 1000 tokens; scripts/maintenance/brain_cache_report.py
+#    reads both. Frees up to ~0.5 GB of brain RSS once the cache is full. A cold
+#    conversation whose entry aged out re-reads its prompt (~4 s, one turn). Revert to
+#    1024 if the >=1000-token re-prefill share rises materially over a 24 h read.
+#  (older text, still true of the mechanism:) the Oct-2025 host-memory prompt cache (PR #16391),
 #    similarity hot-swap of whole cached prompts; SWA-compatible. Default is
 #    8192 MiB — on this 15.6G UNIFIED-memory box that default is an OOM
 #    hazard, so it is capped. Never remove the cap. It is a CAP, not a
@@ -154,7 +162,7 @@ ExecStart=%h/llama.cpp-b11982/build-jetson/bin/llama-server \
   --parallel 1 \
   --cache-type-k q8_0 \
   --cache-type-v q8_0 \
-  --cache-ram 1024 \
+  --cache-ram 512 \
   --n-gpu-layers 99 \
   --cont-batching \
   --fit off \

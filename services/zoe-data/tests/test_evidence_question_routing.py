@@ -113,7 +113,10 @@ def test_keyword_gate(head, caplog, text, top, conf, intent, allowed):
     head(top, conf)
     with caplog.at_level(logging.INFO, logger="fast_tiers"):
         assert fast_tiers.intent_gate(intent, text, lane="chat") is allowed
-    if intent != "people_search" or not allowed:
+    if intent == "memory_forget_entity" and allowed:
+        # an explicit "forget what I said about X" is a topic forget (QA round 4): allowed before the head is consulted
+        assert "reason=explicit_topic_forget" in caplog.text
+    elif intent != "people_search" or not allowed:
         assert "head_reason=evidence_question" in caplog.text
 
 

@@ -101,7 +101,9 @@ def load_bge_embedder() -> Embedder:
     module — and its tests — need neither fastembed nor the model."""
     from fastembed import TextEmbedding  # type: ignore[import]
 
-    model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    import ort_arena
+
+    model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5", **ort_arena.fastembed_kwargs())
 
     def embed(text: str) -> list[float]:
         return _unit(list(next(iter(model.embed([text])))))

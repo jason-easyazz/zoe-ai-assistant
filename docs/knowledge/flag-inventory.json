@@ -7143,6 +7143,25 @@
         },
         "typed_env": false
       },
+      "ZOE_KOKORO_IDLE_TRIM_S": {
+        "defaults": [
+          "0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/setup/kokoro_sidecar.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/ram-audit-voice-2026-11.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
       "ZOE_KOKORO_IMPORT_BLOCK": {
         "defaults": [
           "'1'"
@@ -10318,6 +10337,44 @@
         },
         "typed_env": false
       },
+      "ZOE_OFFER_FOLLOWUP_BINDING": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_OFFER_FOLLOWUP_TTL_S": {
+        "defaults": [
+          "600.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/intent_router.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 600.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_OMI_AUDIO_DIR": {
         "defaults": [
           "''"
@@ -11087,6 +11144,25 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_ORT_CPU_ARENA": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/ort_arena.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/ram-audit-nonvoice-2026-11.md",
+          "type": "bool"
+        },
+        "typed_env": true
       },
       "ZOE_OTEL_ENABLED": {
         "defaults": [
@@ -20670,6 +20746,16 @@
     "WAKE_BEEP_VOLUME": {
       "defaults": [
         "'0.22'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
+    "WAKE_CHIME_ON_WAKE": {
+      "defaults": [
+        "'false'"
       ],
       "in_env_example": false,
       "readers": [

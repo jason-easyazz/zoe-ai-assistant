@@ -355,8 +355,9 @@ def test_a_dry_turn_never_forgets(seeded):
 
 
 def test_two_different_rows_ask_which(env):
-    put(env, "I like dark roast coffee in the morning.")
-    put(env, "I like dark roast coffee after dinner.")
+    # two different rows: they differ by a NUMBER, so the store's paraphrase dedup (QA round 4) keeps both
+    put(env, "I like dark roast coffee at 6am.")
+    put(env, "I like dark roast coffee at 3pm.")
     assert say("forget that I like dark roast coffee", ME) == mv.WHICH_REPLY
     assert len([t for t in approved(env) if "dark roast" in t]) == 2
 
