@@ -115,19 +115,27 @@ def need_mb(asr: str, diar: bool = True) -> int:
     return int(BACKENDS[asr]["peak_rss_mb"] + (DIAR_RSS_MB if diar else 0) + FLOOR_MB)
 
 
+#: engines that are EVALUATION-only, whatever the config says: adding Granite as a fourth voter measured WORSE (5.0-5.2 % WER against 4.5 %)
+NEVER_VOTE = ("granite-speech",)
+
+
 def _ids(name: str, default: str) -> list[str]:
     return [x.strip() for x in env_str(name, default).split(",") if x.strip() and x.strip() in BACKENDS]
 
 
+def _voters(name: str, default: str) -> list[str]:
+    return [x for x in _ids(name, default) if x not in NEVER_VOTE]
+
+
 def second_backend() -> str:
     """The second production voter (``ZOE_OMI_NIGHT_ASR_SECOND``, default parakeet-tdt; empty = none)."""
-    return (_ids("ZOE_OMI_NIGHT_ASR_SECOND", "parakeet-tdt") or [""])[0]
+    return (_voters("ZOE_OMI_NIGHT_ASR_SECOND", "parakeet-tdt") or [""])[0]
 
 
 def third_choices() -> list[str]:
     """The third production voter, in preference order (``ZOE_OMI_NIGHT_ASR_THIRD``): ROVER needs at least three voters to outvote the pivot. Whisper large-v3 (GPU) when the night
     has room - the measured best third voter - else distil-large-v3 (about 40 % cheaper, within noise of it on the hand reference). The first that fits the budget is used."""
-    return _ids("ZOE_OMI_NIGHT_ASR_THIRD", "whisper-gpu:large-v3,whisper-gpu:distil-large-v3")
+    return _voters("ZOE_OMI_NIGHT_ASR_THIRD", "whisper-gpu:large-v3,whisper-gpu:distil-large-v3")
 
 
 def eval_backends() -> list[str]:
@@ -901,7 +909,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     if pref not in BACKENDS or diar_backend() not in DIAR_BACKENDS:
         return {**res, "status": "bad_backend", "asr": pref, "diar": diar_backend(), "known": sorted(BACKENDS)}
     plan = plan_model(audio_s, budget_s, st.get("rtf"), pref)
-    primary = plan["model"]
+    primary = pref if pref == eu.PIVOT else plan["model"]       # the pivot is never swapped for the cheaper engine: an over-budget night runs it oldest-first and CARRIES the rest
     rt = {**DEFAULT_RTF, **(st.get("rtf") or {})}
     multi = primary == eu.PIVOT
     second = second_backend() if multi else ""
@@ -1079,10 +1087,15 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     try:                                                         # the evaluation record: counts in the ledger, the hypotheses (words, private, 7 days) in the hyps store
         home = home_dir()
         stored = [{k: v for k, v in r.items() if k != "_fz"} for rid, rws in chunk_rows.items() if rid not in drop_rids for r in rws]
+        gen = {u: erase_gate.generation(u) for u in {r["u"] for r in stored}}
+        stored = [r for r in stored if gen[r["u"]] == seen.get(r["u"], 0)]            # a member erased since this job was read keeps no hypotheses
         if cl:
             eu.append_ledger(home, night, contrib, evals)
             eu.store_hyps(home, night, stored)
             eu.prune_hyps(home, (now or _now()).date())
+            for u in gen:                                                              # an erase that landed DURING the write: sweep that member again (forget_user is idempotent)
+                if erase_gate.generation(u) != gen[u]:
+                    eu.forget_user(home, u)
         if (now or _now()).weekday() == 0:                       # Monday: the weekly verdict line for the morning report
             res["contenders"] = eu.contender_line(eu.read_ledger(home))
     except OSError as exc:

@@ -382,7 +382,7 @@ def prune_hyps(home: Path, today: Optional[date] = None, keep_days: int = HYPS_K
     d = hyps_dir(home)
     for p in (d.glob("hyps-*.jsonl") if d.exists() else []):
         try:
-            if date.fromisoformat(p.stem.removeprefix("hyps-")) < cut:
+            if date.fromisoformat(p.stem.removeprefix("hyps-")) <= cut:
                 p.unlink()
                 n += 1
         except ValueError:
@@ -419,9 +419,13 @@ def forget_user(home: Path, user_id: str) -> int:
 def erase_entity(home: Path, user_id: str, rx: "re.Pattern[str]", mark: str = "[forgotten]") -> int:
     """A forgotten name: it is replaced wherever a hypothesis of that member holds it."""
     def fn(r: dict) -> Optional[dict]:
-        if r.get("u") != user_id or not any(rx.search(t or "") for t in (r.get("hyps") or {}).values()):
+        if r.get("u") != user_id:
             return r
-        return {**r, "hyps": {m: rx.sub(mark, t or "") for m, t in r["hyps"].items()}}
+        blob = json.dumps({k: r.get(k) for k in ("hyps", "rover", "slots")})
+        if not rx.search(blob):
+            return r
+        clean = json.loads(rx.sub(mark, blob))                      # hypotheses, the ROVER pick AND the contested-slot picks / vote keys / who keys
+        return {**r, **clean}
     return _rewrite(home, fn)
 
 

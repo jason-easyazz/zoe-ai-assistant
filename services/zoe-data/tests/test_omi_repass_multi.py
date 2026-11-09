@@ -82,8 +82,10 @@ def test_an_evaluation_contender_is_judged_on_what_the_vote_would_have_done_with
     h = {PIV: "meet at five", PAR: "meet at five", DIS: "meet at fire", GR: "meet at five thirty", WH: "meat at five"}
     c = eu.contributions([_chunk(h, eval_models=(GR, WH))], [PIV, PAR, DIS])
     assert GR in c and WH in c and c[GR]["chunks"] == 1
-    assert c[GR]["invented"] == 1 or c[GR]["changed"] >= 0                                           # "thirty" is only Granite's and 1 of 4 voters did not make it in
-    assert c[WH]["invented"] == 1                                                                    # "meat" only Whisper's, rejected
+    assert c[GR]["invented"] == 1 and c[GR]["sole"] == 0 and c[GR]["changed"] == 0                  # "thirty" is only Granite's and 1 of 4 voters does not insert it: rejected, nothing changes
+    assert c[WH]["invented"] == 1 and c[WH]["sole"] == 0                                             # "meat" only Whisper's, outvoted
+    solo = eu.contributions([_chunk({PIV: "meet at", PAR: "meet at", DIS: "meet at", WH: "meet at five", GR: "meet at five"}, eval_models=(GR, WH))], [PIV, PAR, DIS])
+    assert solo[WH]["sole"] == 0 and solo[GR]["sole"] == 0                                           # "five" came from TWO contenders and still fails the strict majority (2 of 5): not sole, not chosen
 
 
 def test_the_verdict_needs_fourteen_nights_and_hours_and_never_acts():
@@ -114,15 +116,23 @@ def test_owner_corrections_are_scored_as_ground_truth_hits_and_misses(tmp_path):
 
 def test_hypotheses_are_private_pruned_and_forget_reached(tmp_path):
     home = tmp_path / "h"
-    eu.store_hyps(home, "2026-11-09", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 2, "hyps": {PIV: "call Dana now"}}, {"u": "m2", "rid": "r2", "i": 0, "t0": 0, "t1": 2, "hyps": {PIV: "call Dana"}}])
+    fz = eu.rover({PIV: "call Dana now", PAR: "call Dan now", DIS: "call Dana now"})
+    eu.store_hyps(home, "2026-11-09", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 2, "hyps": {PIV: "call Dana now"}, "rover": "call Dana now",
+                                        "slots": [{"pos": 1, "pick": "Dana", "votes": {"Dana": 1, "Dan": 1}, "who": {"Dana": [PIV], "Dan": [PAR]}, "n": 3}]},
+                                       {"u": "m2", "rid": "r2", "i": 0, "t0": 0, "t1": 2, "hyps": {PIV: "call Dana"}}])
     eu.store_hyps(home, "2026-10-01", [{"u": "m1", "rid": "r0", "i": 0, "t0": 0, "t1": 2, "hyps": {PIV: "old"}}])
+    eu.store_hyps(home, "2026-11-02", [{"u": "m1", "rid": "r0", "i": 0, "t0": 0, "t1": 2, "hyps": {PIV: "seven days old"}}])         # reached 7 days on the 9th: goes
+    eu.store_hyps(home, "2026-11-03", [{"u": "m1", "rid": "r0", "i": 0, "t0": 0, "t1": 2, "hyps": {PIV: "six days old"}}])           # kept
     f = next((home / "hyps").glob("hyps-2026-11-09.jsonl"))
     assert oct(f.stat().st_mode & 0o777) == "0o600" and oct((home / "hyps").stat().st_mode & 0o777) == "0o700"
-    assert eu.prune_hyps(home, date(2026, 11, 9)) == 1 and not (home / "hyps" / "hyps-2026-10-01.jsonl").exists()          # past 7 days
+    assert eu.prune_hyps(home, date(2026, 11, 9)) == 2 and not (home / "hyps" / "hyps-2026-10-01.jsonl").exists() and not (home / "hyps" / "hyps-2026-11-02.jsonl").exists()
+    assert (home / "hyps" / "hyps-2026-11-03.jsonl").exists()                                        # at most seven days of files remain
     assert eu.erase_entity(home, "m1", re.compile("Dana"), "[forgotten]") == 1
     text = f.read_text()
     assert "call [forgotten] now" in text and "call Dana" in text                                    # m2's line (another member) is untouched
-    assert eu.forget_user(home, "m1") == 1 and "m1" not in f.read_text() and "m2" in f.read_text()
+    m1 = [json.loads(x) for x in text.splitlines() if '"m1"' in x][0]
+    assert "Dana" not in json.dumps(m1) and m1["rover"] == "call [forgotten] now" and "[forgotten]" in m1["slots"][0]["votes"]       # the ROVER pick and the contested-slot picks / vote keys / who keys too
+    assert eu.forget_user(home, "m1") == 2 and "m1" not in f.read_text() and "m2" in f.read_text()
 
 
 def test_the_check_queue_lists_contested_and_low_confidence_chunks_with_alternatives_and_votes(tmp_path):
@@ -216,13 +226,14 @@ def test_the_third_voter_is_whisper_large_v3_when_the_night_has_room_else_distil
         assert out["engines"] == [PIV, PAR] + ([want] if want else []), (dur, budget, out["engines"])
 
 
-def test_granite_never_votes_in_production_even_when_asked(renv, monkeypatch):
-    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
-    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_THIRD", GR)                     # a mistaken config still puts it through the budget check, but the default never does
+def test_granite_never_votes_in_production_even_when_the_config_asks_for_it(renv, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_THIRD", GR)
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", GR)
     monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_EVAL")
-    assert GR in rp.eval_backends() and rp.third_choices() == [GR]                    # an explicit (mistaken) config is honoured but passes the same budget check
+    assert rp.third_choices() == [] and rp.second_backend() == "" and GR in rp.eval_backends()          # measured: a fourth voter Granite HURTS (5.0-5.2 % against 4.5 %)
     monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
-    assert GR not in rp.third_choices() and rp.third_choices() == [WH, DIS]
+    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_SECOND")
+    assert rp.third_choices() == [WH, DIS] and rp.second_backend() == PAR
 
 
 def test_an_over_budget_night_keeps_the_pivot_and_drops_the_other_voters_and_the_evaluation(renv, monkeypatch):
@@ -232,7 +243,7 @@ def test_an_over_budget_night_keeps_the_pivot_and_drops_the_other_voters_and_the
     renv.db.conn.commit()
     calls: list = []
     out = run(rp.run_night(budget_s=1500, runner=multi_runner(TEXTS, calls)))                       # 2600 s x (0.42 + 0.08) = 1300 s > 85 % of 1500
-    assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == []
+    assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == [] and out["model"] == PIV     # the pivot is never swapped out; the rest carries
     assert rows(renv)[0]["transcript"] == "the bat sat on the mat"                                    # the pivot alone
 
 
@@ -245,6 +256,21 @@ def test_a_missing_second_voter_means_no_vote_no_evaluation_and_the_pivot_text(r
     assert rows(renv)[0]["transcript"] == "the bat sat on the mat" and out["sample_speech_s"] == 0      # two voters (pivot + distil) cannot outvote the pivot
     led = [json.loads(x) for x in (tmp_path / "repass" / "ledger.jsonl").read_text().splitlines()]
     assert {x["model"] for x in led} == {PIV, DIS}
+
+
+def test_a_member_erased_after_the_recording_was_applied_still_leaves_no_hypotheses(renv, monkeypatch, tmp_path):
+    on(monkeypatch, evals="none")
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    real = eu.store_hyps
+
+    def late(home, night, rows_):                                           # the erase lands between the filter and the write
+        erase_gate._generation[OWNER] = erase_gate.generation(OWNER) + 1
+        real(home, night, rows_)
+
+    monkeypatch.setattr(eu, "store_hyps", late)
+    run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [])))
+    files = list((tmp_path / "repass" / "hyps").glob("hyps-*.jsonl"))
+    assert all(OWNER not in f.read_text() for f in files)                    # swept again after the write
 
 
 def test_an_erased_member_leaves_no_hypotheses_behind(renv, monkeypatch, tmp_path):
@@ -265,7 +291,7 @@ def test_the_rehearsal_runs_every_engine_on_one_recording_and_writes_nothing(ren
     calls: list = []
     out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, calls), rehearse=True))
     assert out["status"] == "rehearsal_ok" and [c["asr"] for c in calls] == [PIV, PAR, DIS, WH, GR] and out["engines"] == [PIV, PAR, DIS]
-    assert out["contested_slots"] >= 0 and set(out["contributions"]) == {PIV, PAR, DIS, WH, GR}
+    assert out["contested_slots"] == 0 and out["low_conf_chunks"] == 0 and set(out["contributions"]) == {PIV, PAR, DIS, WH, GR}       # the fixture's disagreements are all outvoted 2-to-1
     assert rows(renv)[0]["transcript"] == "moonshine" and rows(renv)[0]["repass_state"] == ""
     assert not (tmp_path / "repass" / "ledger.jsonl").exists() and not (tmp_path / "repass" / "hyps").exists() and not (tmp_path / "repass" / "state.json").exists()
 
