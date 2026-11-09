@@ -640,7 +640,10 @@ async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_p
 async def _drop_voiceprints(db, user_id: str, person_id: str) -> None:
     """Delete every learned voiceprint (and its contributions) of one person; their tags and labels stay. Used when a person turns out
     to be a child: the label-only rule must hold after the contact is edited, not only when the voice was first tagged."""
-    for (vp,) in await _all(db, "SELECT id FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ?", (user_id, person_id)):
+    # the PENDANT's prints only: a named guest's panel print (channel='panel') is the panel's own recognition, not an Omi voice - tagging
+    # a pendant line as a child must not silently erase it
+    for (vp,) in await _all(db, "SELECT id FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? AND (channel IS NULL OR channel <> 'panel')",
+                            (user_id, person_id)):
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))
         await _run(db, "DELETE FROM learned_voiceprints WHERE id = ?", (vp,))
 

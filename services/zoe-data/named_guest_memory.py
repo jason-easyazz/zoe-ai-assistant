@@ -86,6 +86,12 @@ async def erase_people(db, owner_user_id: str, person_ids: Iterable[str]) -> int
     ids = sorted(set(person_ids))
     if not ids:
         return 0
+    try:      # their saved corpus clips go with them (voice_clips; counts only, never raises, nothing when none were labelled)
+        import voice_clips
+
+        voice_clips.erase_guests(ids)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("named_guests: saved clips of a forgotten guest not removed (%s)", type(exc).__name__)
     try:
         cur = await db.execute(f"DELETE FROM named_guest_turns WHERE user_id = ? AND people_id IN ({', '.join('?' * len(ids))})",
                                (owner_user_id, *ids))

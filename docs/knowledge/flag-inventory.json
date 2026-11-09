@@ -10031,6 +10031,25 @@
         },
         "typed_env": true
       },
+      "ZOE_NAMED_GUEST_CLIPS": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/named_guest_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "a verified adult member may hear a saved unknown-voice clip and name it",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_NAMED_GUEST_MEMORY": {
         "defaults": [
           "False"
@@ -17580,6 +17599,63 @@
         },
         "typed_env": false
       },
+      "ZOE_VOICE_CLIP_RETENTION": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "delete guest / unknown corpus clips past the retention",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_VOICE_CLIP_RETENTION_DAYS": {
+        "defaults": [
+          "30"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 30,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "int"
+        },
+        "typed_env": true
+      },
+      "ZOE_VOICE_CLIP_VERDICT": {
+        "defaults": [
+          "False"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/voice_clips.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": false,
+          "divergent_ok": {},
+          "note": "label each saved corpus clip with the server speaker verdict",
+          "owner_doc": "docs/knowledge/named-guests.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_VOICE_CONTINUATION_HOLD": {
         "defaults": [
           "'on'"
@@ -18071,7 +18147,8 @@
           "scripts/maintenance/voice_corpus_strata.py",
           "scripts/maintenance/voice_regression_probe.py",
           "services/zoe-data/routers/voice_tts.py",
-          "services/zoe-data/struggle_proposals.py"
+          "services/zoe-data/struggle_proposals.py",
+          "services/zoe-data/voice_clips.py"
         ],
         "registered": true,
         "spec": {
@@ -18082,7 +18159,7 @@
           "owner_doc": "docs/research/arousal-detection-licence-scope-2026-10-04.md",
           "type": "str"
         },
-        "typed_env": false
+        "typed_env": true
       },
       "ZOE_VOICE_SAVE_AUDIO": {
         "defaults": [

@@ -213,7 +213,7 @@ OTHER: tuple[Store, ...] = (
     Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
           "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
     Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
-          "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member.",
+          "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py).",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
     Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "
           "panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own.",
