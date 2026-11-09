@@ -130,20 +130,31 @@ _NOT_SUBJECT = frozenset({"it", "this", "that", "there", "here", "he", "she", "t
                           "tonight", "everything", "nothing", "something", "someone", "everyone", "anything"})
 
 
-_OWNER_NOUN_RE = re.compile(r"^(?P<o>[A-Za-z][A-Za-z\-]{1,24})['’]?s\s+(?P<n>[A-Za-z][A-Za-z\-]{1,24})$")
+_OWNER_NOUN_RE = re.compile(r"^(?P<o>[A-Za-z][A-Za-z\-]{1,24}?)(?P<p>['’]s|s)\s+(?P<n>[A-Za-z][A-Za-z\-]{1,24})$")
 
 
 def owner_noun(subject: str):
-    """("Asha", "swimming") for the subject "ashas swimming" / "Asha's swimming", else None. A lazily typed possessive (no
-    apostrophe) loses its final s; the name is capitalised. Pure."""
+    """(owner, noun) for the subject "ashas swimming" / "Asha's swimming", else None. With an apostrophe the owner is exact ("asha");
+    without one the typed word is kept whole ("ashas": a lazily typed possessive OR a name that ends in s, so a row decides which -
+    see ``_owner_re``). The noun is lower-cased. Pure."""
     s = (subject or "").strip()
     if re.match(r"(?i)^(?:the|my|our|this|that|his|her|its|their|your)\s", s):
         return None
     m = _OWNER_NOUN_RE.match(s)
     if not m:
         return None
-    owner = m.group("o")
-    return owner[:1].upper() + owner[1:].lower(), m.group("n").lower()
+    lazy = not m.group("p").startswith(("'", "’"))
+    word = m.group("o") + ("s" if lazy else "")
+    return word[:1].upper() + word[1:].lower(), m.group("n").lower()
+
+
+def _owner_re(owner: str):
+    """A row names the owner: the word as typed, or (a lazily typed possessive) without its final s; never a longer word."""
+    alts = [owner]
+    if len(owner) > 3 and owner.lower().endswith("s") and not owner.lower().endswith("ss"):
+        alts.append(owner[:-1])
+    alt = "|".join(re.escape(a) for a in sorted(alts, key=len, reverse=True))
+    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]?s)?(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 class Correction(NamedTuple):
@@ -182,9 +193,9 @@ def statement(text: str) -> Optional[Correction]:
             subj = m.group("subj").strip()
             if subj.lower() in _NOT_SUBJECT or subj.lower() in _BARE_NOT_NAME:
                 continue
-            subj = re.sub(r"['’]s$", "", subj)
-            if len(subj) > 3 and subj.lower().endswith("s") and not subj.lower().endswith("ss"):
-                subj = subj[:-1]            # "kais 21" is Kai's: the apostrophe was not typed
+            subj = re.sub(r"['’]s$", "", subj)      # "kais" stays as typed: a lazy possessive OR a name ending in s - the row decides
+            if subj.lower() in _NOT_SUBJECT or subj.lower() in _BARE_NOT_NAME or subj.lower().rstrip("s") in _NOT_SUBJECT:
+                continue                    # "thats 21 not 22" is no name
             new, old = m.group("n").strip(), m.group("o").strip()
             if value_of(new) is not None and value_of(old) is not None and value_of(new) != value_of(old):
                 return Correction(subj, new, old, True)
@@ -227,6 +238,10 @@ def _subject_re(subject: str):
     m = re.match(r"(?i)the\s+(.+)$", s)
     if m:
         s = m.group(1)          # "the pitch" -> any row that names the pitch ("User has a board pitch on Thursday")
+    stem = s[:-1] if len(s) > 3 and s.lower().endswith("s") and not s.lower().endswith("ss") else None
+    if stem:
+        # a name typed with a stray s ("kais 21 not 22" for Kai): the word as typed, or without its s
+        return re.compile(rf"(?<![A-Za-z0-9'’])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9])", re.IGNORECASE)
     return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?:s(?=:))?(?![A-Za-z0-9])", re.IGNORECASE)   # "Kais: 21" is Kai's row
 
 
@@ -255,7 +270,7 @@ def rewrite(row_text: str, corr: Correction) -> Optional[str]:
     if not sm:
         return None
     on = owner_noun(corr.subject)
-    if on and not re.search(rf"(?<![A-Za-z0-9]){re.escape(on[0])}", text, re.IGNORECASE):
+    if on and not _owner_re(on[0]).search(text):
         return None             # "Asha's swimming": a row about the swimming of someone else (or of the user) is not the one corrected
     tail = text[sm.end():]
     if corr.old is not None:

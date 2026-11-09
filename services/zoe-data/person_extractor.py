@@ -1397,17 +1397,6 @@ async def apply_person_fact(
     value = (value or "").strip()
     if not name or not value:
         return False
-    # "also kais 21 not 22": the lazily typed possessive was read as a person called "Kais" (QA round 7: the row "Kais: 21", and
-    # Kai's age then unanswerable). A correction turn names its subject; a name that is that subject plus a stray s is the subject.
-    try:
-        if source_excerpt and name.lower().endswith("s") and len(name) > 3:
-            import value_correction
-
-            corr = value_correction.statement(source_excerpt)
-            if corr is not None and corr.subject.lower() == name[:-1].lower():
-                name = name[:-1]
-    except Exception:  # noqa: BLE001 - never stop a write over a name repair
-        pass
     # The LLM pass hands over whatever the 4B called a "name": "the meaning" (from a question about the meaning of life) became a
     # household contact that stayed in every recall packet. The regex path has always been gated by ``_looks_like_person_name``;
     # this is the same gate at the one entry the model reaches (QA round 4, open since round 1).
@@ -1462,6 +1451,22 @@ async def apply_person_fact(
         except Exception as exc:  # noqa: BLE001
             logger.debug("apply_person_fact: resolve failed for %r: %s", name, exc)
             res = None
+        # "also kais 21 not 22": a correction turn names its subject and the lazily typed possessive was read as a person called
+        # "Kais" (QA round 7: the row "Kais: 21", and Kai's age then unanswerable). When nobody is called Kais but the member's Kai
+        # exists, the fact is Kai's; with nobody known either way the name stands as typed (a real "Chris" is never shortened).
+        try:
+            if (res is None or not getattr(res, "person_id", None)) and source_excerpt and len(name) > 3 and name.lower().endswith("s") \
+                    and not name.lower().endswith("ss"):
+                import value_correction
+
+                corr = value_correction.statement(source_excerpt)
+                if corr is not None and corr.subject.lower() == name.lower():
+                    alt = await _resolve_person(name[:-1], user_id, _db)
+                    if alt is not None and getattr(alt, "person_id", None) and not alt.ambiguous:
+                        name, res = name[:-1], alt
+                        fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
+        except Exception:  # noqa: BLE001 - never stop a write over a name repair
+            pass
         if res is not None and res.ambiguous:
             # two people answer to this name: held as a pending candidate, never stored as an approved slug-keyed fact
             logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %r held, not guessed",

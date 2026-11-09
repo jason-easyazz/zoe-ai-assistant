@@ -88,28 +88,44 @@ _USER_POSS_RE = re.compile(r"^\s*(?:the\s+)?user['’]s\s+(?P<noun>[A-Za-z][A-Za
 _NOT_AN_OWNER = frozenset({"the", "his", "her", "hers", "its", "their", "your", "this", "that", "my", "our", "user", "thi", "hi", "it"})
 
 
-def _possessive_owner(fact: str, user_message: str) -> Optional[str]:
+def _possessive_owner(fact: str, user_message: str, known_names=frozenset()) -> tuple:
     """"User's swimming is on Wednesday" from "actually ashas swimming is on wednesday not thursday": the digest dropped the
-    possessor (QA round 7, "the row lost its subject"). When the turn says "<name>'s <that noun>" (the apostrophe may not have been
-    typed) and no first-person word, the row belongs to that name. The new fact, or None when the turn does not say so."""
+    possessor (QA round 7, "the row lost its subject"). When the turn says "<name>'s <that noun>" and no first-person word, the row
+    belongs to that name. ``(new_fact_or_None, lazy)``: ``lazy`` is True when the possessive had no apostrophe, so "ashas" could be
+    Asha's or a name ending in s ("Chris"): it is then read ONLY as a name the member already has (``known_names``, lower-case) -
+    never an invented "Chri"."""
     m = _USER_POSS_RE.match(fact or "")
     if not m:
-        return None
+        return None, False
     noun = m.group("noun")
     if noun.lower() in _RELATIONS or _FIRST_PERSON_RE.search(user_message or ""):
-        return None
-    pm = re.search(rf"\b(?P<o>[A-Za-z][A-Za-z\-]{{2,24}}?)['’]?s\s+{re.escape(noun)}\b", user_message or "", re.IGNORECASE)
+        return None, False
+    pm = re.search(rf"\b(?P<o>[A-Za-z][A-Za-z\-]{{1,24}}?)(?P<p>['’]s|s)\s+{re.escape(noun)}\b", user_message or "", re.IGNORECASE)
     if not pm:
-        return None
-    owner = pm.group("o")
-    if owner.lower() in _NOT_A_SUBJECT or owner.lower() in _NOT_AN_OWNER:
-        return None
-    return f"{owner[:1].upper()}{owner[1:].lower()}'s {noun}{m.group('rest')}"
+        return None, False
+    stem, lazy = pm.group("o"), not pm.group("p").startswith(("'", "’"))
+    owner = stem
+    if lazy:
+        known = {str(k).lower() for k in (known_names or ())}
+        if stem.lower() in known:
+            owner = stem
+        elif (stem + "s").lower() in known:
+            owner = stem + "s"
+        else:
+            return None, True
+    if owner.lower() in _NOT_A_SUBJECT or owner.lower() in _NOT_AN_OWNER or len(owner) < 3:
+        return None, False
+    return f"{owner[:1].upper()}{owner[1:].lower()}'s {noun}{m.group('rest')}", lazy
 
 
-def attribute(fact: str, user_message: str) -> tuple:
+def lazy_owner_candidate(fact: str, user_message: str) -> bool:
+    """Would ``attribute`` need the member's known names to decide (a lazily typed possessive)? Pure; lets the caller fetch them only then."""
+    return _possessive_owner(fact, user_message)[1]
+
+
+def attribute(fact: str, user_message: str, known_names=frozenset()) -> tuple:
     """``("keep", fact)`` | ``("rewrite", new_fact)`` | ``("drop", reason)`` for one digest fact against the turn it came from."""
-    owned = _possessive_owner(fact, user_message)
+    owned = _possessive_owner(fact, user_message, known_names)[0]
     if owned:
         return "rewrite", owned
     m = _USER_SUBJECT_RE.match(fact or "")

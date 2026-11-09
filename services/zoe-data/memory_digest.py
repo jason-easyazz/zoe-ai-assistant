@@ -846,6 +846,16 @@ def _then_quote_retire(fn):
 
 
 @_then_quote_retire
+async def _known_person_names(user_id: str) -> frozenset:
+    """Lower-cased names of the people this member has told Zoe about (their ``people`` rows). Empty on any failure. Bounded."""
+    try:
+        import person_recall_floor
+
+        return frozenset(n.lower() for _pid, n in await person_recall_floor._known_people(user_id))
+    except Exception:  # noqa: BLE001 - a read that failed means "nobody known": the lazy possessive is then left alone
+        return frozenset()
+
+
 async def run_turn_digest(
     user_id: str,
     user_message: str,
@@ -1098,7 +1108,10 @@ async def run_turn_digest(
             try:
                 import fact_subject
 
-                verdict_, fixed_fact = fact_subject.attribute(fact, user_message)
+                _known_names = frozenset()
+                if fact_subject.lazy_owner_candidate(fact, user_message):   # "ashas swimming": Asha's, or a name ending in s - the member's people decide
+                    _known_names = await _known_person_names(user_id)
+                verdict_, fixed_fact = fact_subject.attribute(fact, user_message, _known_names)
                 if verdict_ == "drop":
                     result["skipped_low_quality"] += 1
                     _count_drop("turn_digest", "other_subject")

@@ -10,18 +10,60 @@ anything, the member's sessions are addressed to the sidecar under a new alias (
 clean sidecar history. Nothing is lost that matters: the stored memory is read fresh every turn (the recall packet), and the
 fast-path exchanges of the conversation are carried by ``flue_fastpath_context`` (which redacts the forget confirmation).
 
-Process-local on purpose: a zoe-data restart inside the same conversation drops the alias (the sidecar's durable history would be
-addressed again); the packet and rows stay correct either way. Bounded; stdlib only; never raises.
+The epoch is DURABLE (a small private JSON file, written atomically): a zoe-data restart, or any cap, must never address the sidecar's
+old history again - that history is exactly what was forgotten. A member's epoch is never evicted; the file holds one short number per
+member who has ever forgotten something. Stdlib only; never raises (a write that fails leaves the in-memory epoch, which still holds
+until the next restart).
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
+import tempfile
 import time
-from collections import OrderedDict
+from pathlib import Path
 from typing import Optional
 
-_MAX_USERS = 256
-# user id -> epoch (ms) of that member's latest forget that changed something
-_EPOCH: "OrderedDict[str, int]" = OrderedDict()
+logger = logging.getLogger(__name__)
+
+_PATH = Path.home() / ".zoe" / "forget_session_epochs.json"
+# user id -> epoch (ms) of that member's latest forget that changed something; loaded once, written through
+_EPOCH: "dict[str, int]" = {}
+_LOADED = False
+
+
+def _load() -> None:
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    try:
+        raw = json.loads(_PATH.read_text())
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if isinstance(k, str) and isinstance(v, int) and v > _EPOCH.get(k, 0):
+                    _EPOCH[k] = v
+    except FileNotFoundError:
+        pass
+    except Exception as exc:  # noqa: BLE001 - an unreadable file means no alias; rows and packet stay correct
+        logger.warning("forget_session: epochs unreadable (%s)", type(exc).__name__)
+
+
+def _save() -> None:
+    try:
+        _PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(_PATH.parent), prefix=".forget_session.")
+        try:
+            with os.fdopen(fd, "w") as fh:
+                json.dump(_EPOCH, fh)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, _PATH)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_session: epochs not saved (%s) - the alias holds until restart", type(exc).__name__)
 
 
 def note_forget(user_id: Optional[str]) -> None:
@@ -30,11 +72,10 @@ def note_forget(user_id: Optional[str]) -> None:
         uid = (user_id or "").strip()
         if not uid:
             return
+        _load()
         epoch = int(time.time() * 1000)
-        prev = _EPOCH.pop(uid, 0)
-        _EPOCH[uid] = max(epoch, prev + 1)       # strictly increasing: two forgets in one millisecond still rotate
-        while len(_EPOCH) > _MAX_USERS:
-            _EPOCH.popitem(last=False)
+        _EPOCH[uid] = max(epoch, _EPOCH.get(uid, 0) + 1)       # strictly increasing: two forgets in one millisecond still rotate
+        _save()
     except Exception:  # noqa: BLE001
         pass
 
@@ -43,6 +84,7 @@ def sidecar_session(user_id: Optional[str], session_id: str) -> str:
     """The session id the sidecar is addressed with: the plain one until this member forgets something, then an alias with a fresh
     history. Unknown member or no forget -> ``session_id`` unchanged."""
     try:
+        _load()
         epoch = _EPOCH.get((user_id or "").strip())
         if not epoch or not session_id:
             return session_id

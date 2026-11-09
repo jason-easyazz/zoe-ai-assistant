@@ -4,6 +4,7 @@ not a memory. Synthetic names only (Asha, Kai, Dev, Priya, Max)."""
 import asyncio
 import os
 import sys
+import types
 
 import pytest
 
@@ -30,7 +31,9 @@ def run(coro):
 
 
 @pytest.fixture(autouse=True)
-def _clean_epochs():
+def _clean_epochs(tmp_path, monkeypatch):
+    monkeypatch.setattr(forget_session, "_PATH", tmp_path / "forget_session_epochs.json")
+    monkeypatch.setattr(forget_session, "_LOADED", False)
     forget_session._EPOCH.clear()
     yield
     forget_session._EPOCH.clear()
@@ -81,6 +84,23 @@ def test_negative_control_without_a_forget_the_session_is_unchanged():
     assert forget_session.sidecar_session(UID, "bar-a11") == "bar-a11"       # another member's forget never moves this one's
 
 
+def test_the_rotation_survives_a_restart_and_is_per_member(monkeypatch):
+    forget_session.note_forget(UID)
+    rotated = forget_session.sidecar_session(UID, "bar-a11")
+    assert rotated != "bar-a11"
+    # a zoe-data restart: the in-memory state is gone, the file is not - the old sidecar history is never addressed again
+    forget_session._EPOCH.clear()
+    monkeypatch.setattr(forget_session, "_LOADED", False)
+    assert forget_session.sidecar_session(UID, "bar-a11") == rotated
+    assert forget_session.sidecar_session("demo_other_00000002", "bar-a11") == "bar-a11"
+
+
+def test_many_members_never_evict_one_anothers_rotation():
+    for i in range(400):
+        forget_session.note_forget(f"demo_m_{i:08d}")
+    assert forget_session.sidecar_session("demo_m_00000000", "s") != "s"      # the oldest of 400 still rotated (no cap)
+
+
 def test_two_forgets_rotate_twice():
     forget_session.note_forget(UID)
     first = forget_session.sidecar_session(UID, "s")
@@ -117,12 +137,15 @@ def test_a_typod_cue_and_an_on_day_apply():
 
 def test_a_lazily_typed_name_and_two_numbers_is_an_age_correction():
     c = vc.statement("also kais 21 not 22")
-    assert c is not None and c.subject == "kai" and (c.new, c.old) == ("21", "22")
+    assert c is not None and c.subject == "kais" and (c.new, c.old) == ("21", "22")      # kept as typed: the row decides
     assert vc.rewrite("Kai: 22", c) == "Kai: 21"                         # the compact "Name: value" row
     assert vc.rewrite("User's boyfriend Kai is 22", c) == "User's boyfriend Kai is 21"
     assert vc.rewrite("Zara: 22", c) is None
     c2 = vc.statement("also kai's 21 not 22")
     assert c2 is not None and c2.subject == "kai"
+    # a name that really ends in s is not shortened: it rewrites its own row, and no invented "Chri" row is touched
+    c3 = vc.statement("also chris 21 not 22")
+    assert vc.rewrite("Chris: 22", c3) == "Chris: 21"
 
 
 @pytest.mark.parametrize("text", ["page 4 not 5", "price 20 not 25", "friday 5 not 6", "tea not coffee", "thats 21 not 22 degrees"])
@@ -132,29 +155,43 @@ def test_negative_controls_a_bare_pair_with_no_name_is_no_correction(text):
 
 def test_a_possessive_subject_keeps_its_owner():
     c = vc.statement("actually ashas swimming is on wednesday not thursday")
-    assert c is not None and vc.owner_noun(c.subject) == ("Asha", "swimming")
+    assert c is not None and vc.owner_noun(c.subject) == ("Ashas", "swimming")      # as typed; the row decides Asha or Ashas
     assert vc.rewrite("Asha's swimming is on Thursday", c) == "Asha's swimming is on Wednesday"
+    assert vc.rewrite("Ashanti's swimming is on Thursday", c) is None                 # a longer name is not Asha
+    c2 = vc.statement("actually chris swimming is on wednesday not thursday")
+    assert vc.rewrite("Chris swimming is on Thursday", c2) == "Chris swimming is on Wednesday"
+    assert vc.owner_noun(vc.statement("actually asha's swimming is on wednesday not thursday").subject) == ("Asha", "swimming")
     assert vc.rewrite("User's swimming is on Thursday", c) is None                      # someone else's swimming is not Asha's
     assert vc.rewrite("Asha's dance is on Thursday", c) is None
 
 
 def test_the_digest_row_that_lost_its_possessor_gets_it_back():
     msg = "actually ashas swimming is on wednesday not thursday"
-    assert fact_subject.attribute("User's swimming is on Wednesday", msg) == ("rewrite", "Asha's swimming is on Wednesday")
+    known = frozenset({"asha", "dev"})                       # the member's people
+    assert fact_subject.attribute("User's swimming is on Wednesday", msg, known) == ("rewrite", "Asha's swimming is on Wednesday")
+    assert fact_subject.attribute("User's swimming is on Wednesday", "actually asha's swimming is on wednesday")[1] \
+        == "Asha's swimming is on Wednesday"                  # an apostrophe needs no list of names
+    assert fact_subject.lazy_owner_candidate("User's swimming is on Wednesday", msg)
+    # a name that ends in s is that name, never a shortened invention; an unknown lazy owner leaves the fact alone
+    assert fact_subject.attribute("User's swimming is on Wednesday", "chris swimming is on wednesday", frozenset({"chris"})) \
+        == ("rewrite", "Chris's swimming is on Wednesday")
+    assert fact_subject.attribute("User's swimming is on Wednesday", "chris swimming is on wednesday", known)[0] == "keep"
+    assert fact_subject.attribute("User's swimming is on Wednesday", msg)[0] == "keep"
     # negative controls: the user's own, or a relation word, or a turn that names no owner
     assert fact_subject.attribute("User's swimming is on Wednesday", "my swimming is on wednesday")[0] == "keep"
     assert fact_subject.attribute("User's swimming is on Wednesday", "swimming is on wednesday")[0] == "keep"
 
 
-def _stub_person_writer(monkeypatch, calls):
+def _stub_person_writer(monkeypatch, calls, people=None):
+    people = people or {}
     async def no(*_a, **_k):
         return False
 
     async def ensure(_db=None):
         return object(), False
 
-    async def resolve(*_a, **_k):
-        return None
+    async def resolve(name, *_a, **_k):
+        return people.get(name.lower())
 
     async def ingest(text, user_id, person_name, entity_id, **_k):
         calls.append((person_name, text, entity_id))
@@ -176,12 +213,22 @@ def test_the_stray_s_of_a_correction_is_not_a_person(monkeypatch):
         return frozenset()
 
     monkeypatch.setattr(own_name, "names", nobody)
+    kai = types.SimpleNamespace(person_id="p-kai", ambiguous=False)
+    _stub_person_writer(monkeypatch, calls, {"kai": kai})
+    for fn in ("_write_activity", "_post_write_hooks"):
+        async def noop(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(pe, fn, noop)
     assert run(pe.apply_person_fact("Kais", "fact", "21", user_id=UID, source="conversation",
                                     source_excerpt="also kais 21 not 22"))
-    assert calls == [("Kai", "Kai: 21", None)]                  # the row is Kai's, not a person called Kais
+    assert calls == [("Kai", "Kai: 21", "p-kai")]               # the row is Kai's, not a person called Kais
     calls.clear()
     run(pe.apply_person_fact("Kais", "fact", "21", user_id=UID, source="conversation", source_excerpt="kais is my mate"))
     assert calls[0][0] == "Kais"                                  # negative control: no correction turn, the name stands
+    calls.clear()
+    run(pe.apply_person_fact("Chris", "fact", "21", user_id=UID, source="conversation", source_excerpt="also chris 21 not 22"))
+    assert calls[0][0] == "Chris"                                 # negative control: nobody called Chri exists, a real name is never shortened
 
 
 # ── 3. the speaker's own facts ───────────────────────────────────────────────────────────────────────────────────────
