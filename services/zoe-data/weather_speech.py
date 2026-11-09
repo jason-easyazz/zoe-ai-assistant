@@ -195,10 +195,10 @@ def weather_places(text: str) -> list[str]:
 # A weather question with a SECOND, different question riding on it ("whats the weather in bunbury and how hot for a pork roast", QA round 7):
 # the weather expert answered the first half and the second was dropped without a word. The brain holds both tools, so the whole turn is its.
 _SECOND_Q_RE = re.compile(
-    r"\b(?:and|also|plus|then|oh\s+and)\s+(?P<rest>(?:what|whats|what's|how|when|where|who|why|which|should|can|could|do|does|is|are|will)\b.*)$")
+    r"(?:\b(?:and|also|plus|then|oh\s+and)\s+|[.?!;,]\s+)(?P<rest>(?:what|whats|what's|how|when|where|who|why|which|should|can|could|do|does|is|are|will)\b.*)$")
 
 
-_JOINER_TAIL_RE = re.compile(r"\b(?:and|also|plus|then|oh\s+and)\s+(?P<rest>.+)$")
+_JOINER_TAIL_RE = re.compile(r"(?:\b(?:and|also|plus|then|oh\s+and)\s+|[.?!;,]\s+)(?P<rest>.+)$")
 
 
 def has_other_question(text: str) -> bool:

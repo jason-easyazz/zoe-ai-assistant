@@ -86,14 +86,16 @@ def test_compound_weather_plus_cooking_is_the_brains():
     for t in ("whats the weather in mandurah and whats the temp for roast potatoes",
               "whats the weather in bunbury and how hot for a pork roast",
               "weather in bunbury and cooking temperature for pork roast", "weather in bunbury plus cooking temp for chicken",
-              "weather in bunbury and safe internal temp for pork"):
+              "weather in bunbury and safe internal temp for pork", "weather in perth. how hot for a pork roast?",
+              "weather in perth, whats the temp for roast potatoes", "weather in perth; how long do i roast a chicken"):
         assert ws.has_other_question(t)
         assert xd._plan("weather", t) is None
 
 
 def test_negative_control_weather_only_compounds_are_still_answered():
     for t in ("weather in perth and will it rain tomorrow", "weather in fremantle today? and mandurah", "weather in perth and what about albany",
-              "weather in perth and how hot tomorrow", "weather in perth and outside temp"):
+              "weather in perth and how hot tomorrow", "weather in perth and outside temp", "weather in perth. how hot tomorrow?",
+              "weather in perth, will it rain", "weather in perth today? and mandurah"):
         assert not ws.has_other_question(t)
     assert xd._plan("weather", "weather in perth and will it rain tomorrow")[0] == "weather"
 
