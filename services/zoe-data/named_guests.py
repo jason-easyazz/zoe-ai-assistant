@@ -224,9 +224,14 @@ async def brain_block(user_id: str) -> str:
         guest = current()
         from user_filters import is_unidentified
 
-        if guest is None or not is_unidentified(user_id):
+        if not is_unidentified(user_id):
             return ""
         from identity_facts import BLOCK_CLOSE, BLOCK_OPEN
+
+        if guest is None:
+            import named_guest_learning     # an unknown voice Zoe is now sure of: ask its name (ZOE_GUEST_VOICE_LEARN=on)
+
+            return f"{BLOCK_OPEN}\n{named_guest_learning.ask_line()}\n{BLOCK_CLOSE}" if named_guest_learning.asking() else ""
 
         lines = [guest_line(guest)]
         import named_guest_memory
