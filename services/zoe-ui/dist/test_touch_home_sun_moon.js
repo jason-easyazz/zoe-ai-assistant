@@ -65,14 +65,27 @@ check('moon phase from the date alone: new 2026-11-09, full ~2026-11-24, ~29.5 d
   assert(circ(phase(at('2026-11-17T00:00:00Z')), 0.25) < 0.05, 'first quarter');
   for (let i = 0; i < 40; i++) { const f = phase(at('2026-01-01T00:00:00Z') + i * 86400000 * 7); assert(f >= 0 && f < 1); }
 });
-check('moon drawing: new = no lit area, full = whole disc, waxing lit LEFT (southern sky), waning lit RIGHT', () => {
-  const waxCrescent = svg(0.1), full = svg(0.5), waneCrescent = svg(0.9), newMoon = svg(0);
-  assert(/A10 10 0 0 0 12 22/.test(waxCrescent), 'waxing limb is the left half: ' + waxCrescent);
-  assert(/A10 10 0 0 1 12 22/.test(waneCrescent), 'waning limb is the right half: ' + waneCrescent);
-  assert(/A10\.00 10 0 0 1 12 2Z/.test(full) || /A10\.00 10/.test(full), 'full: terminator is a full-width half ellipse: ' + full);
-  assert(/A10\.00 10 0 0 \d 12 2Z/.test(newMoon), 'new: terminator hugs the limb (zero area): ' + newMoon);
-  const quarter = svg(0.25); assert(/A0\.00 10/.test(quarter), 'quarter: straight terminator: ' + quarter);
-  assert(svg(0.75) !== svg(0.25));
+// Rasterise the lit path the way SVG does (two half-arcs between (12,2) and (12,22)) and measure the REAL lit area and which side it is on.
+function litArea(d) {
+  const m = /^M12 2A10 10 0 0 ([01]) 12 22A([\d.]+) 10 0 0 ([01]) 12 2Z$/.exec(d);
+  assert(m, 'unexpected path shape: ' + d);
+  const sl = +m[1], rx = +m[2], st = +m[3], pts = [];
+  const side = (sweep, down) => (down ? (sweep ? 1 : -1) : (sweep ? -1 : 1));   // clockwise from the top is the right side; from the bottom, the left
+  for (let i = 0; i <= 200; i++) { const u = (Math.PI * i) / 200; pts.push([12 + side(sl, true) * 10 * Math.sin(u), 12 - 10 * Math.cos(u)]); }
+  for (let i = 0; i <= 200; i++) { const u = (Math.PI * i) / 200; pts.push([12 + side(st, false) * rx * Math.sin(u), 12 + 10 * Math.cos(u)]); }
+  let a = 0, cx = 0; for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; a += x1 * y2 - x2 * y1; cx += (x1 + x2) * (x1 * y2 - x2 * y1); }
+  a /= 2; return { area: Math.abs(a), cx: cx / (6 * a) };   // centroid x: < 12 means the lit part is on the LEFT
+}
+const pathOf = (f) => /d="([^"]+)"/.exec(svg(f))[1];
+check('moon drawing: the lit AREA is the real illuminated fraction (new ~0, quarter ~half, full ~whole disc), on the left while waxing, right while waning', () => {
+  const disc = Math.PI * 100;
+  [0, 0.05, 0.1, 0.2, 0.25, 0.35, 0.45, 0.5, 0.55, 0.65, 0.75, 0.85, 0.95].forEach((f) => {
+    const want = (1 - Math.cos(2 * Math.PI * f)) / 2, got = litArea(pathOf(f)).area / disc;
+    near(got, want, 0.01, 'lit fraction at phase ' + f);
+  });
+  assert(litArea(pathOf(0)).area < 1, 'new moon: nothing lit'); near(litArea(pathOf(0.5)).area / disc, 1, 0.005, 'full moon: whole disc');
+  [0.1, 0.25, 0.4].forEach((f) => assert(litArea(pathOf(f)).cx < 12, 'waxing lights the left at ' + f));
+  [0.6, 0.75, 0.9].forEach((f) => assert(litArea(pathOf(f)).cx > 12, 'waning lights the right at ' + f));
 });
 check('sun colour: amber at the horizon, pale gold when high', () => {
   const lo = vm.runInContext('sunColor(0)', box), hi = vm.runInContext('sunColor(1)', box);
