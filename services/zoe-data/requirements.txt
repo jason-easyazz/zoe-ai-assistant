@@ -32,7 +32,7 @@
 # reporting-only) — the only host where the answer means anything. Exact pins
 # below were reconciled to the live Orin on 2026-08-06.
 # ═══════════════════════════════════════════════════════════════════════════
-fastapi==0.143.0
+fastapi==0.162.0
 # 3.10 LANE HOLDS 0.49.0 — this file describes the hand-managed system Python 3.10
 # site-packages, which is now ROLLBACK-ONLY (zoe-data runs the 3.12 venv, B0.7), and
 # that env still has 0.49.0. The LIVE 3.12 lane moved to 0.53.0 on 2026-09-27
@@ -55,12 +55,12 @@ fastapi==0.143.0
 # change: `--ws websockets` on the ExecStart (or UVICORN_WS=websockets) — but it
 # warns that a future release repoints that name at sansio, so it is temporary.
 uvicorn[standard]==0.49.0
-pydantic==2.14.2
+pydantic==2.14.3
 aiosqlite==0.22.1
 asyncpg==0.32.0
 alembic==1.20.1
 psycopg2-binary==2.9.13
-python-multipart==0.0.32
+python-multipart==0.0.33
 httpx==0.28.1
 aiohttp==3.14.5
 # websockets 16.1.1 is the LAST RELEASE THAT INSTALLS ON PYTHON 3.10 — 17.0
@@ -84,7 +84,7 @@ PyJWT==2.15.1
 # such as `binary` retired; models regenerated from spec/1.0) — zoe-data only
 # EMITS the 14 event classes it imports, and every shape it emits encodes to
 # byte-identical SSE under 0.1.19 and 1.0.0 (pinned by test_ag_ui_chat_contract).
-ag-ui-protocol==0.1.19
+ag-ui-protocol==0.1.22
 python-json-logger>=4.1.0
 
 # ── Vector memory store: NOT in this manifest (B9, 2026-10-18) ──────────────
@@ -192,7 +192,7 @@ APScheduler==3.10.4
 # here and not only in the workflows. Box: 2.1.
 tzlocal>=2,<3
 # 2.0.54 on the box (2026-09-26); the range stays so a patch release is not drift.
-SQLAlchemy>=2.0,<3.0
+SQLAlchemy>=2.0.57,<3.0
 # Push notifications
 pywebpush==2.5.0
 py-vapid==1.9.6
@@ -207,7 +207,7 @@ prometheus-client==0.26.0
 # gone; not pinned exactly because pip also reports the leftover `livekit-agents`
 # 1.5.10 (unused by zoe-data) wanting `livekit==1.1.8` — an exact pin would turn
 # that stale package into a resolver fight on every install.
-livekit>=1.2.0
+livekit>=1.2.1
 # `livekit_aiortc.py` imports `livekit.protocol`, a SEPARATE distribution that
 # `livekit` does not pull in — it only ever arrived via the unused livekit-agents
 # (validate.yml already hand-installs it). Declared 2026-09-26 (B0.7 import scan).
@@ -220,7 +220,7 @@ livekit-protocol==1.1.8
 # was checked numerically rather than by changelog: resampling 48k stereo s16 ->
 # 16k mono s16 (the exact config that file uses) is BIT-IDENTICAL between 16.1.0
 # and 17.1.0, and deterministic across runs. Both ship cp310 aarch64 wheels.
-aiortc==1.15.0
+aiortc==1.16.0
 av==17.1.0
 # A2A federation + skill discovery + web search
 # ddgs floor raised to the version verified on the box 2026-09-26 (9.16.0); the
