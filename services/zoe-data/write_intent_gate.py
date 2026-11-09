@@ -103,7 +103,7 @@ _NEGATORS = frozenset({"dont", "don't", "not", "never", "no", "without", "stop",
 
 def _negated_before(text: str, pos: int) -> bool:
     """A negator within the three words before the verb, in the same clause ("don't add", "no need to put", "please do not book")."""
-    clause = re.split(r"[.;!?]|,\s|\b(?:but|and|then)\b", text[:pos])[-1]
+    clause = _DONT_FORGET_RX.sub("please remember", re.split(r"[.;!?]|,\s|\b(?:but|and|then)\b", text[:pos])[-1])
     words = [w.strip(",.;:!?'\"").lower() for w in clause.split()][-3:]
     return any(w in _NEGATORS for w in words)
 
@@ -136,8 +136,12 @@ _REFUSAL_RX = re.compile(
     r"not\s+now\b|don'?t\b|do\s+not\b)|\b(?:cancel|scrap)\s+(?:that|it|the)\b", re.IGNORECASE)
 
 
+_DONT_FORGET_RX = re.compile(r"\bdo(?:n'?t|\s+not)\s+forget\b", re.IGNORECASE)
+
+
 def is_refusal(text: str) -> bool:
-    return bool(_REFUSAL_RX.search(text or ""))
+    t = _DONT_FORGET_RX.sub("please remember", text or "")      # "don't forget to add the dentist" asks FOR the write
+    return bool(_REFUSAL_RX.search(t))
 
 
 def asks_to_write_calendar(text: str) -> bool:

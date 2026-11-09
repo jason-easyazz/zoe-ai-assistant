@@ -316,3 +316,13 @@ def test_a_list_directed_verb_is_not_a_calendar_ask():
     # negative controls: abbreviated calendar commands and a mixed turn still ask
     assert wig.asks_to_write_calendar("add dinner friday 7pm") is True
     assert wig.asks_to_write_calendar("book the plumber for monday and add bolts to the list") is True
+
+
+def test_dont_forget_to_add_is_a_request_not_a_refusal():
+    # Codex on #2347
+    text = "Don't forget to add the dentist appointment to my calendar"
+    assert wig.is_refusal(text) is False and wig.asks_to_write_calendar(text) is True
+    wig.note_turn("jason", text)
+    assert wig.check("jason", "calendar_create", {"title": "dentist"}) is None
+    # negative control: a real refusal is still one
+    assert wig.is_refusal("Don't add the dentist appointment to my calendar") is True
