@@ -1,4 +1,4 @@
-"""The pendant NIGHT RE-PASS (``omi_repass.py``, migration 0073, flag ``ZOE_OMI_NIGHT_REPASS``). Spec: docs/knowledge/omi-night-repass.md.
+"""The pendant NIGHT RE-PASS (``omi_repass.py``, migration 0074, flag ``ZOE_OMI_NIGHT_REPASS``). Spec: docs/knowledge/omi-night-repass.md.
 
 Groups (each invariant has its negative control next to it):
   hold        audio is never deleted before the pass has seen it (flag on/shadow), the flag-off control still deletes, retention still bounds the hold
@@ -8,7 +8,7 @@ Groups (each invariant has its negative control next to it):
   budget      the planner picks the cheaper backend / carries what does not fit; a carried recording is untouched
   seam        an unknown backend is refused loudly; the declared backends carry their budget facts
 
-Synthetic data only. The DB is the real migrations 0045 / 0055 / 0073 on SQLite; the worker is a fake runner that writes the JSONL a real one would.
+Synthetic data only. The DB is the real migrations 0045 / 0055 / 0074 on SQLite; the worker is a fake runner that writes the JSONL a real one would.
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def run(coro):
 @pytest.fixture
 def renv(env, monkeypatch, tmp_path):
     _migrate(env.engine, "0055_omi_segments_voices.py")
-    _migrate(env.engine, "0073_omi_night_repass.py")
+    _migrate(env.engine, "0074_omi_night_repass.py")
     monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "on")
     monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(tmp_path / "repass"))
     monkeypatch.setenv("ZOE_OMI_REPASS_ZOE_CLIPS", str(tmp_path / "no-clips"))

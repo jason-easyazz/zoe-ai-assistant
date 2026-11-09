@@ -931,7 +931,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             try:
                 await drop_stale_proposals(db, now=now)
                 await db.commit()
-            except Exception:  # noqa: BLE001 - pre-0073
+            except Exception:  # noqa: BLE001 - pre-0074
                 pass
     if not rows:
         return {**res, "status": "idle", "pending": 0}
@@ -1025,7 +1025,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                     try:
                         await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[key_], len(wins_), speech_, now)
                         await db.commit()
-                    except Exception as exc:  # noqa: BLE001 - pre-0073
+                    except Exception as exc:  # noqa: BLE001 - pre-0074
                         logger.warning("OMI_REPASS_MEAN_NOT_STORED reason=%s", type(exc).__name__)
             else:
                 mu_by[key_] = await who.load_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_)
