@@ -45,9 +45,69 @@ def test_a_self_introduction_names_the_speaker(text, name):
 @pytest.mark.parametrize("text", [
     "its cold today", "im tired", "this is great", "hi zoe, thanks.", "hey zoe, whats the time", "its here",
     "my neighbour darren is lending us a ladder", "im going to the shops",
+    # a PRESENTATION of somebody else is not the speaker's own name (cross-review: Margaret/Darren would have been hidden for good)
+    "this is Margaret, my wife", "it's Margaret, our neighbour", "this is Darren and he is lending us a ladder",
+    "its darren who lives next door", "this is Priya, a friend from work",
 ])
 def test_negative_control_not_every_its_is_a_name(text):
     assert own_name.introduced_name(text) == ""
+
+
+@pytest.mark.parametrize("uid,own", [
+    ("demo_bar_0a1b2c3d", set()),                     # a generated id is nobody's name: a contact called Bar stays offerable
+    ("jason", {"jason"}), ("jason_2", {"jason"}), ("jason.smith", {"jason", "smith"}),
+])
+@pytest.mark.asyncio
+async def test_account_id_tokens_only_for_handle_accounts(monkeypatch, uid, own):
+    _wire_identity(monkeypatch, [])
+    got = await own_name.names(uid)
+    assert {t for t in got if " " not in t} == own
+
+
+@pytest.mark.asyncio
+async def test_note_introduction_persists_and_names_reads_it_back(monkeypatch):
+    """detect_and_store -> note_introduction -> user_preferences -> names(): the persistence wiring, not an injected list."""
+    store = {}
+    prefs = types.ModuleType("user_prefs")
+
+    async def get_pref(user_id, key, default=None, *, db=None):
+        return store.get((user_id, key), default)
+
+    async def set_pref(user_id, key, value, *, db=None):
+        store[(user_id, key)] = value
+
+    prefs.get_pref, prefs.set_pref = get_pref, set_pref
+    monkeypatch.setitem(sys.modules, "user_prefs", prefs)
+    ident = types.ModuleType("identity_facts")
+
+    async def resolve_identity(*a, **k):
+        return None
+
+    ident.resolve_identity = resolve_identity
+    monkeypatch.setitem(sys.modules, "identity_facts", ident)
+    assert await own_name.note_introduction(USER, "its walter. what tablets do i take again") == "Walter"
+    assert await own_name.note_introduction(USER, "this is Margaret, my wife") == ""          # a third person is not noted
+    assert await own_name.note_introduction(USER, "its walter again") == "Walter"            # idempotent
+    assert store[(USER, own_name.PREF_KEY)] == ["Walter"]
+    got = await own_name.names(USER)
+    assert own_name.is_own("Walter", got) and not own_name.is_own("Margaret", got) and not own_name.is_own("Bar", got)
+
+
+def _wire_identity(monkeypatch, introduced):
+    prefs = types.ModuleType("user_prefs")
+
+    async def get_pref(user_id, key, default=None, *, db=None):
+        return list(introduced) if key == own_name.PREF_KEY else default
+
+    prefs.get_pref = get_pref
+    monkeypatch.setitem(sys.modules, "user_prefs", prefs)
+    ident = types.ModuleType("identity_facts")
+
+    async def resolve_identity(*a, **k):
+        return None
+
+    ident.resolve_identity = resolve_identity
+    monkeypatch.setitem(sys.modules, "identity_facts", ident)
 
 
 def test_own_matching_is_a_name_not_a_family():
@@ -257,6 +317,10 @@ def test_a_correction_turn_invents_no_field():
     assert vc.invented_on_correction_turn("User's blood pressure is 78", m) is True       # the live fault
     assert vc.invented_on_correction_turn("User is 78 years old", m) is False
     assert vc.invented_on_correction_turn("Margaret is 76", m) is False
+    # a fact that names the corrected subject is about the correction, however much context it carries (cross-review)
+    assert vc.invented_on_correction_turn("User's wife Margaret is 76", m) is False
+    assert vc.invented_on_correction_turn("User has a board pitch on Wednesday", "actually the pitch is wednesday not thursday") is False
+    assert vc.invented_on_correction_turn("User's blood pressure is 76", "actually the pitch is wednesday not 76") is True
     # not a correction turn: nothing is dropped, however odd the fact
     assert vc.invented_on_correction_turn("User's blood pressure is 78", "my blood pressure is high, 78 they said") is False
 

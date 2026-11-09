@@ -247,6 +247,9 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
         return False
     values = [v for v in (corr.new, corr.old) if v]
     low = (fact or "").lower()
+    subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower()
+    if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+        return False        # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction, not invented
     if not any(re.search(rf"(?<![A-Za-z0-9]){re.escape(v.lower())}(?![A-Za-z0-9])", low) for v in values):
         return False
     said = {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", (user_message or "").lower().replace("'s", ""))}

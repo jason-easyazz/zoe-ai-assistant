@@ -27,11 +27,14 @@ PREF_KEY = "introduced_names"
 MAX_NAMES = 5
 _NAME = r"([A-Za-z][A-Za-z'’\-]{1,23})"
 _LEAD = r"^\W*(?:(?:hey|hi|hello|hiya|morning|evening|g'?day|ok|okay|so|um|zoe)\b[\s,.!:;-]*)*"
-_END = r"(?=\s*(?:[,.!?;:]|$|\s+(?:here|speaking|again|and|but|so|i\b|im\b|i'm\b|just)\b))"
+# the name must END its clause, and must not be the start of a presentation of somebody else ("this is Margaret, my wife", "it's
+# Darren, our neighbour", "this is Darren and he is lending us a ladder"): a relation / "who" / "and he|she|they" after it is a third person
+_THIRD = r"(?![\s,]*(?:my|our|your|his|her|their|the|a|an|who|whose|and\s+(?:he|she|they|his|her|their))\b)"
+_END = _THIRD + r"(?=\s*(?:[,.!?;:]|$|\s+(?:here|speaking|again|(?:and|but|so)\s+(?:i|im|i'm|we)|i\b|im\b|i'm\b|just)\b))"
 # "its walter. ..." / "this is walter" / "nadia here" / "my name is anika" / "i'm walter" / "walter speaking" / "walter again"
 _SELF_INTRO_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
     _LEAD + r"(?:it'?s|its|it\s+is|this\s+is|that'?s\s+me,?)\s+" + _NAME + _END,
-    _LEAD + _NAME + r"\s+(?:here|speaking|again)\b",
+    _LEAD + _NAME + r"\s+(?:here|speaking|again)\b(?!\s+(?:is|are|was|were|has|had|does|did|can|will|would)\b)",
     r"\bmy\s+name(?:'s|\s+is)\s+(?:actually\s+)?" + _NAME,
     _LEAD + r"(?:i\s+am|i'?m|im)\s+" + _NAME + _END,
     # "hi zoe, anika. what happened with my team": a greeting to her, then the speaker's own name
@@ -109,9 +112,10 @@ async def names(user_id: str) -> frozenset:
             raw += [str(x) for x in intro] if isinstance(intro, list) else []
         except Exception:  # noqa: BLE001
             pass
-        # a handle account ("jason", "jason.smith"): its alphabetic tokens; a generated id ("demo_bar_4285830f") yields tokens that
-        # are not names, which only ever suppress an offer for somebody called "Bar"
-        raw += [t for t in re.split(r"[^a-z]+", str(user_id or "").lower()) if len(t) >= 3]
+        # a handle account ("jason", "jason_2", "jason.smith") is its owner's name; a GENERATED id (a hex suffix: "demo_bar_0a1b2c3d")
+        # is nobody's, and mining it would hide a real contact called Bar
+        if not re.search(r"[_-][0-9a-f]{6,}$", str(user_id or "").lower()):
+            raw += [t for t in re.split(r"[^a-z]+", str(user_id or "").lower()) if len(t) >= 3]
         for r in raw:
             f = _fold_name(str(r or ""))
             if not f:
