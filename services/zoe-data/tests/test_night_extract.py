@@ -433,3 +433,19 @@ def test_a_member_erased_while_a_run_is_in_flight_is_not_republished(tmp_path, m
     # negative control: without the mid-run erase the same run publishes the member's facts
     drive(tmp_path / "again")
     assert any(r.get("user_id") == USER for r in [json.loads(ln) for ln in ne.facts_path(NIGHT, tmp_path / "again" / "out").read_text().splitlines()])
+
+
+def test_a_real_alex_is_a_person_not_the_speaker_placeholder():
+    # Codex on #2352 (P1): the placeholder is the SPEAKER sentinel; "Alex" is an ordinary name
+    assert ne.norm("Alex") == "alex" and ne.norm("SPEAKER") == "speaker"
+
+
+def test_a_multi_word_subject_is_compared_token_by_token():
+    # Codex on #2352: "mary jane" never matched the stored tokens, so every full name read as extractor_only
+    base = {"kind": "age", "subject": "mary jane"}
+    agree = [dict(base, value=16)]
+    ne.compare(agree, ["Mary Jane is 16 years old"])
+    assert agree[0]["cmp"] == "agree"
+    differ = [dict(base, value=16)]
+    ne.compare(differ, ["Mary Jane is 17 years old"])
+    assert differ[0]["cmp"] == "contradicts" and differ[0]["reason"] == "different_value"

@@ -52,11 +52,11 @@ LOW_E, LOW_R = 0.15, 0.03                                    # what the model is
 SPEAKER = "SPEAKER"
 
 SKIP_RE = re.compile(r"\b(forget|forgot|dont keep|don'?t keep|dont remember|don'?t remember|never ?mind|scrap that|ignore (that|what))\b", re.I)
-STOP = frozenset({"zoe", "i", "so", "client", "apprentice", "technician", "canteen lady", "speaker", "alex", "me", "my", "you", "he", "she", "it",
+STOP = frozenset({"zoe", "i", "so", "client", "apprentice", "technician", "canteen lady", "speaker", "me", "my", "you", "he", "she", "it",
                   "they", "we", "us", "boss", "manager", "nurse", "doctor", "patient", "teacher", "driver", "electrician", "sparky", "sparkie",
                   "worker", "customer", "colleague", "mate", "lady", "man", "guy", "kid", "baby", "ai", "someone", "everyone", "nobody"})
-_PRON = frozenset({"i", "me", "my", "im", "i'm", "we", "us", "our", "mine", "myself", "ours", "speaker", "alex"})
-_DROP = frozenset({"my", "the", "a", "an", "his", "her", "our", "their", "speaker", "alex"})
+_PRON = frozenset({"i", "me", "my", "im", "i'm", "we", "us", "our", "mine", "myself", "ours", "speaker"})
+_DROP = frozenset({"my", "the", "a", "an", "his", "her", "our", "their", "speaker"})
 
 
 # ── settings ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -272,6 +272,12 @@ def _nums(text: str) -> set:
     return {int(x) for x in re.findall(r"\b\d{1,3}\b", text or "")}
 
 
+def _subj_in(subj: str, words: set) -> bool:
+    """Every token of the (possibly multi-word) normalised subject is among the text's tokens ("mary jane" in "Mary Jane is 16")."""
+    toks = subj.split()
+    return bool(toks) and all(t in words for t in toks)
+
+
 def compare(facts: list[dict], stored: Iterable[str]) -> dict:
     """Classify each proposed fact against the texts the 4B digest stored that day: ``agree`` (the 4B has it), ``extractor_only`` (the 4B missed it),
     ``contradicts`` (the 4B has the same thing about the wrong person or with another value; ``reason`` says which). Mutates ``facts`` (adds ``cmp`` /
@@ -281,7 +287,7 @@ def compare(facts: list[dict], stored: Iterable[str]) -> dict:
     for f in facts:
         subj, val, kind = f.get("subject") or "", str(f["value"]), f["kind"]
         cmp, reason = "extractor_only", ""
-        named = [(t, w) for t, w in texts if subj and subj != "@speaker" and subj in w]
+        named = [(t, w) for t, w in texts if subj and subj != "@speaker" and _subj_in(subj, w)]
         usered = [(t, w) for t, w in texts if _USER_SUBJ.match(t)]
         if kind in ("person", "place"):
             if any(all(p in w for p in val.split()) for _t, w in texts):
@@ -293,13 +299,13 @@ def compare(facts: list[dict], stored: Iterable[str]) -> dict:
                 cmp = "agree"
             elif any(_AGE_CUE.search(t) and _nums(t) and n not in _nums(t) for t, _w in named):
                 cmp, reason = "contradicts", "different_value"
-            elif subj != "@speaker" and any(n in _nums(t) and _AGE_CUE.search(t) and subj not in w for t, w in usered):
+            elif subj != "@speaker" and any(n in _nums(t) and _AGE_CUE.search(t) and not _subj_in(subj, w) for t, w in usered):
                 cmp, reason = "contradicts", "wrong_person"
         elif kind == "lives_in":
             pool = named if subj != "@speaker" else usered
             if any(all(p in w for p in val.split()) for _t, w in pool):
                 cmp = "agree"
-            elif subj != "@speaker" and any(all(p in w for p in val.split()) and any(x.startswith("live") for x in w) and subj not in w for t, w in usered):
+            elif subj != "@speaker" and any(all(p in w for p in val.split()) and any(x.startswith("live") for x in w) and not _subj_in(subj, w) for t, w in usered):
                 cmp, reason = "contradicts", "wrong_person"
         elif kind == "pet":
             if any(_CHILD_WORD.search(t) for t, _w in named):
