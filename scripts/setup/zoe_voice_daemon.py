@@ -2465,10 +2465,11 @@ def on_wake():
     the still-open wake stream, so any blocking work (the chime spawns aplay and
     opens the ALSA device — hundreds of ms) would just delay capture. The chime now
     overlaps the start of the recording; a quiet ~260ms two-tone is far cheaper than
-    deleting the words the user is saying. Set WAKE_BEEP_ENABLED=false to drop it.
+    deleting the words the user is saying. The chime is OFF by default (WAKE_CHIME_ON_WAKE=true restores it;
+    WAKE_BEEP_ENABLED=false silences every beep).
     """
     log.info("Wake word detected! Notifying Jetson and waking screen...")
-    if WAKE_CHIME_ON_WAKE and WAKE_BEEP_ENABLED:
+    if WAKE_CHIME_ON_WAKE:   # play_wake_beep() itself still honours WAKE_BEEP_ENABLED=false (silent)
         _wake_chime_done.clear()  # set again the moment the chime is over (post-wake window)
 
         def _chime() -> None:
@@ -2510,12 +2511,13 @@ def play_follow_up_beep() -> None:
 
 
 def _muted_ms(frames: "list[bytes]", skip: int = 0) -> int:
-    """Milliseconds of exact digital silence in ``frames[skip:]`` (a chunk whose mean |sample| < 1). Room noise is
-    ~8-18 and echo suppression 0-5 but never exactly 0 unless the speakerphone muted its mic while it played
-    something - the signature of words lost to our own output. Logged on every ``Recorded`` line as ``muted=``."""
+    """Milliseconds of digital silence in ``frames[skip:]``: chunks whose every sample is within +-1. Room noise is
+    ~8-18 and echo suppression 0-5 but never this flat unless the speakerphone muted its mic while it played
+    something - the signature of words lost to our own output. Whole chunks only (80 ms resolution). Logged on
+    every ``Recorded command`` line as ``muted=``."""
     n = 0
     for data in frames[skip:]:
-        if data and float(np.abs(np.frombuffer(data, dtype=np.int16)).mean()) < 1.0:
+        if data and int(np.abs(np.frombuffer(data, dtype=np.int16).astype(np.int32)).max()) <= 1:
             n += 1
     return int(round(n * CHUNK_SIZE * 1000.0 / SAMPLE_RATE))
 

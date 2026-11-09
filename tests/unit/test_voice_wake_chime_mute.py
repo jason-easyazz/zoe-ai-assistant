@@ -93,13 +93,17 @@ def test_negative_control_flag_on_is_the_old_chime(daemon, monkeypatch):
     assert played.wait(timeout=2.0), "WAKE_CHIME_ON_WAKE=true must restore the chime (rollback)"
 
 
-def test_beeps_disabled_wins_over_the_chime_flag(daemon, monkeypatch):
-    played = _quiet_wake(daemon, monkeypatch)
+def test_beeps_disabled_still_silences_the_chime_even_with_the_flag_on(daemon, monkeypatch):
+    """WAKE_BEEP_ENABLED=false stays the master mute: the real play_wake_beep writes nothing."""
+    calls = []
+    monkeypatch.setattr(daemon, "_wake_panel_agent", lambda: None)
+    monkeypatch.setattr(daemon, "_notify_wake_background", lambda: None)
+    monkeypatch.setattr(daemon._PLATFORM, "play_file_blocking", lambda *a, **k: calls.append(a), raising=False)
     monkeypatch.setattr(daemon, "WAKE_BEEP_ENABLED", False)
     monkeypatch.setattr(daemon, "WAKE_CHIME_ON_WAKE", True)
     daemon.on_wake()
-    assert not played.wait(timeout=0.3)
-    assert daemon._wake_chime_done.is_set()
+    assert daemon._wake_chime_done.wait(timeout=2.0)
+    assert not calls
 
 
 def test_other_beeps_still_obey_wake_beep_enabled_only(daemon, monkeypatch):
@@ -124,6 +128,13 @@ def test_negative_control_room_noise_and_echo_suppression_are_not_a_mute(daemon)
     echo = [_chunk(3)] * 5                                    # echo suppression 0-5, never exact zero
     assert daemon._muted_ms(noise + echo) == 0
     assert daemon._muted_ms([]) == 0
+
+
+def test_negative_control_a_sparse_nonzero_chunk_is_not_muted(daemon):
+    """Mostly zeros but with real samples in it: audio, not a mute (the mean-based test used to call this muted)."""
+    sparse = np.zeros(1280, dtype=np.int16)
+    sparse[::40] = 900
+    assert daemon._muted_ms([sparse.tobytes()]) == 0
 
 
 class _Stream:
