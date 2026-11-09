@@ -10,7 +10,7 @@ Flag ``ZOE_TRANSCRIPT_CHECK`` = off | shadow | on (default OFF). Spec and owner 
 
 Two halves with one table (``omi_check_items``, migration 0073) between them:
 
-  NIGHT   ``candidates_from_chunk`` turns the ROVER fusion's per-chunk output (contested slots, ``[low confidence]`` chunks) into
+  NIGHT   ``candidates_from_row`` turns the ROVER fusion's stored chunk rows (contested slots, low_conf chunks) into
           candidates; ``enqueue`` ranks them (names, numbers/times/dates, commitments, anything feeding a day-review candidate first;
           chit-chat last), keeps the top ``max_items()`` per day, and stores them in the owner's private layer.
   MORNING ``note_voice_turn`` / ``append_stream`` / ``tier`` carry the spoken ask; ``list_open`` / ``answer`` / ``skip`` serve the panel.
@@ -23,7 +23,8 @@ Invariants (each has a negative control in ``tests/test_transcript_check.py``):
   * OWNER ONLY: items are served to the member whose recording they came from, on a voice session that is still open for them or their
     own signed-in session. A guest panel gets 401/403 and no counts.
   * FORGOTTEN STAYS FORGOTTEN: a span that names a forgotten entity is deleted instead of shown; the answer is redacted too.
-  * An answer corrects the stored text with provenance ``owner_corrected``, is ground truth for the per-model contender ledger, and
+  * An answer corrects the stored text with provenance ``owner_corrected``, is ground truth for the night re-pass's contender ledger
+    (``omi_repass_eval.note_owner_correction``), and
     re-opens the day review of any recording whose pending candidates it may have fed.
 """
 from __future__ import annotations
@@ -62,7 +63,8 @@ LATER_REPLY = "No worries, I'll leave it in your notifications."
 HEARD_REPLY = "Got it."
 PRIVATE_REPLY = "That's private. Say it again so I know it's you, or unlock with your PIN."
 
-IMPORTANCE_SCORE = {"name": 100.0, "number": 90.0, "commitment": 70.0, "chat": 10.0}
+IMPORTANCE_SCORE = {"name": 100.0, "who_first": 95.0, "number": 90.0, "commitment": 70.0, "who": 60.0, "chat": 10.0}
+WHO_UNKNOWN = "(someone new)"
 FEEDS_BONUS = 40.0
 
 _UTC = timezone.utc
@@ -190,55 +192,71 @@ def score(importance: str, alts: list, feeds_review: bool) -> float:
 
 
 # --------------------------------------------------------------------------------------------------------------- night: input
-def _models_with(word: Optional[str], hyps: dict) -> list[str]:
-    """Which models' chunk text contains ``word`` (approximate attribution; an exact per-slot ``by_model`` from the fusion wins)."""
-    if word is None:
-        return []
-    w = _norm(word)
-    return sorted(m for m, t in (hyps or {}).items() if w and w in {_norm(x) for x in str(t or "").split()})
+def _surface(word: Optional[str]) -> str:
+    return NONE_WORD if not word else word
 
 
-def candidates_from_chunk(chunk: dict) -> list[dict]:
-    """ROVER's per-chunk output -> candidates. ``chunk``: ``t0_ms``/``t1_ms`` (chunk bounds in the recording), ``tokens`` (the fused
-    ``[(word, surface)]`` list ``rover()`` returns), ``slots`` (its contested slots ``{pos, best, cands: {word|None: votes}, surf, n}``,
-    optional per-slot ``by_model {model: word}``), ``hyps`` ``{model: text}``, ``mode`` ``rover`` | ``lowconf``. Pure; no I/O."""
-    t0, t1 = int(chunk.get("t0_ms") or 0), int(chunk.get("t1_ms") or 0)
-    hyps = chunk.get("hyps") or {}
+def candidates_from_row(row: dict) -> list[dict]:
+    """One stored ROVER chunk row (``omi_repass_eval.is_contested``; the shape ``check_queue`` returns: ``t0``/``t1`` seconds into the recording, ``hyps``
+    {model: text}, ``rover`` the fused text, ``slots`` [{pos, pick, votes {word: n}, who {word: [models]}, n}], ``low_conf``) -> candidates. Pure; no I/O.
+    A contested SLOT gives one candidate per slot (each word voted for, its vote count, who voted for it); a ``low_conf`` chunk gives ONE whole-chunk
+    candidate offering each model's text. Both carry the chunk's fused text as a template (``chunk_tpl``, the span replaced by ``\x01``) so an answer can be
+    scored against every model's whole-chunk hypothesis (``omi_repass_eval.note_owner_correction``)."""
+    t0, t1 = int(float(row.get("t0") or 0) * 1000), int(float(row.get("t1") or 0) * 1000)
+    hyps = {m: str(v) for m, v in (row.get("hyps") or {}).items() if v}
+    rover = str(row.get("rover") or "")
     out: list[dict] = []
-    if chunk.get("mode") == "lowconf":
-        base = str((hyps.get("qwen3") or chunk.get("text") or "")).replace(LOW_CONFIDENCE_MARK, "").strip()
+    if row.get("low_conf"):
+        base = rover.replace(LOW_CONFIDENCE_MARK, "").strip()
         if not base:
             return out
         alts: dict[str, list] = {}
-        for m, t in hyps.items():
-            t = str(t or "").strip()
-            if t:
-                alts.setdefault(t, []).append(m)
-        out.append({"kind": "chunk", "start_ms": t0, "end_ms": min(t1, t0 + SNIPPET_MAX_MS), "before": "", "span": base, "after": "",
-                    "pick": base, "alts": [{"word": t, "votes": len(ms), "models": sorted(ms)} for t, ms in alts.items()]})
+        for m, txt in hyps.items():
+            alts.setdefault(txt.strip(), []).append(m)
+        out.append({"kind": "chunk", "start_ms": t0, "end_ms": min(t1, t0 + SNIPPET_MAX_MS), "before": "", "span": base, "after": "", "pick": base,
+                    "alts": [{"word": txt, "votes": len(ms), "models": sorted(ms)} for txt, ms in alts.items()],
+                    "chunk_tpl": "\x01", "chunk_t0_ms": t0, "chunk_t1_ms": t1})
         return out
-    tokens = list(chunk.get("tokens") or [])
+    tokens = rover.split()
     n = max(1, len(tokens))
-    for slot in chunk.get("slots") or []:
-        pos = int(slot.get("pos") or 0)
-        surf = slot.get("surf") or {}
-        by_model = slot.get("by_model") or {}
+    for slot in row.get("slots") or []:
+        pos = max(0, min(int(slot.get("pos") or 0), len(tokens)))
+        votes, who = slot.get("votes") or {}, slot.get("who") or {}
+        pick_w = slot.get("pick")
+        pick_s = tokens[pos] if (pick_w and pos < len(tokens)) else ""
         alts = []
-        for cand, votes in (slot.get("cands") or {}).items():
-            label = NONE_WORD if cand is None or cand == "None" else str(surf.get(cand) or cand)
-            ms = sorted(m for m, w in by_model.items() if (w is None) == (cand is None) and _norm(str(w or "")) == _norm(str(cand or ""))) \
-                if by_model else _models_with(cand, hyps)
-            alts.append({"word": label, "votes": int(votes), "models": ms})
+        for word, v in votes.items():
+            label = pick_s if (word and word == pick_w and pick_s) else _surface(word)
+            alts.append({"word": label, "votes": int(v), "models": sorted(who.get(word) or [])})
         if len(alts) < 2:
             continue
-        best = slot.get("best")
-        pick = NONE_WORD if best is None else str(surf.get(best) or best)
-        before = " ".join(s for _, s in tokens[max(0, pos - CONTEXT_WORDS):pos])
-        after = " ".join(s for _, s in tokens[pos + (1 if best is not None else 0):pos + (1 if best is not None else 0) + CONTEXT_WORDS])
+        has = bool(pick_w) and pos < len(tokens)
+        before = " ".join(tokens[max(0, pos - CONTEXT_WORDS):pos])
+        after = " ".join(tokens[pos + (1 if has else 0):pos + (1 if has else 0) + CONTEXT_WORDS])
+        tpl = " ".join(tokens[:pos] + ["\x01"] + tokens[pos + (1 if has else 0):])
         mid = t0 + int((pos / n) * max(0, t1 - t0))
-        out.append({"kind": "slot", "start_ms": max(t0, mid - SNIPPET_PAD_MS), "end_ms": min(max(t1, t0 + 1), mid + SNIPPET_PAD_MS),
-                    "before": before, "span": "" if best is None else pick, "after": after, "pick": pick, "alts": alts})
+        out.append({"kind": "slot", "start_ms": max(t0, mid - SNIPPET_PAD_MS), "end_ms": min(max(t1, t0 + 1), mid + SNIPPET_PAD_MS), "before": before,
+                    "span": pick_s if has else "", "after": after, "pick": pick_s or NONE_WORD, "alts": alts,
+                    "chunk_tpl": tpl, "chunk_t0_ms": t0, "chunk_t1_ms": t1})
     return out
+
+
+def candidates_from_who(row: dict) -> list[dict]:
+    """A ``who_said`` row (the night re-pass's turns labelled "?" or "X?" - leaning) -> ONE candidate of kind ``who``. ``row``: ``t0``/``t1`` seconds into
+    the recording, ``text`` the turn as written, ``candidates`` [{person_id, name, score, cluster_id?}] best first (a candidate with a ``cluster_id`` and no
+    ``person_id`` is an UNNAMED voice the owner may merge this into), ``first`` True when answering would give a voice with no pendant print its first
+    confirmation (what it unlocks ranks it first), ``turns`` how many turns of that voice wait. Pure; no I/O."""
+    text = " ".join(str(row.get("text") or "").split())
+    alts = []
+    for c in row.get("candidates") or []:
+        name = " ".join(str(c.get("name") or "").split())
+        if name and (c.get("person_id") or c.get("cluster_id")):
+            alts.append({"word": name, "person_id": c.get("person_id") or "", "cluster_id": c.get("cluster_id") or "", "votes": int(round(float(c.get("score") or 0) * 100)), "models": []})
+    t0, t1 = int(float(row.get("t0") or 0) * 1000), int(float(row.get("t1") or 0) * 1000)
+    if not text:
+        return []
+    return [{"kind": "who", "start_ms": t0, "end_ms": min(max(t1, t0 + 1), t0 + SNIPPET_MAX_MS), "before": "", "span": text, "after": "", "alts": alts,
+             "pick": alts[0]["word"] if alts else "", "first": bool(row.get("first")), "turns": int(row.get("turns") or 1)}]
 
 
 # --------------------------------------------------------------------------------------------------------------- night: queue
@@ -287,16 +305,18 @@ async def enqueue(user_id: str, recording: dict, candidates: list[dict], *, name
             feeds = await _feeds_review(db, user_id, rid)
             for c in candidates:
                 alts = [a for a in (c.get("alts") or []) if isinstance(a, dict) and str(a.get("word") or "").strip()]
-                if len(alts) < 2:
+                who = c.get("kind") == "who"
+                if len(alts) < (1 if who else 2) and not who:
                     continue
-                imp = classify(c.get("before", ""), c.get("span", ""), c.get("after", ""), alts, nameset, c.get("kind", "slot"))
+                imp = ("who_first" if c.get("first") else "who") if who else classify(c.get("before", ""), c.get("span", ""), c.get("after", ""), alts, nameset, c.get("kind", "slot"))
                 by_class[imp] = by_class.get(imp, 0) + 1
                 row = (str(uuid.uuid4()), user_id, rid, day, c["kind"], int(c["start_ms"]), int(c["end_ms"]), str(c.get("before", "")),
                        str(c.get("span", "")), str(c.get("after", "")), json.dumps(alts), str(c.get("pick", "")), imp,
-                       score(imp, alts, feeds), status, _iso(now), expires)
+                       (score(imp, alts, feeds) + (min(10, int(c.get("turns") or 1)) if who else 0.0)), status, _iso(now), expires, str(c.get("chunk_tpl", "")), int(c.get("chunk_t0_ms", c["start_ms"])),
+                       int(c.get("chunk_t1_ms", c["end_ms"])))
                 cur = await db.execute(
                     "INSERT INTO omi_check_items (id, user_id, recording_id, day_local, kind, start_ms, end_ms, before_text, span_text, after_text, "
-                    "alts, pick, importance, score, status, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "alts, pick, importance, score, status, created_at, expires_at, chunk_tpl, chunk_t0_ms, chunk_t1_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT (recording_id, kind, start_ms, end_ms) DO NOTHING", row)
                 stored += int(getattr(cur, "rowcount", 1) or 0)
             await _trim(db, user_id, day, status)
@@ -365,10 +385,11 @@ async def sweep(*, now: Optional[datetime] = None) -> int:
 
 
 # ------------------------------------------------------------------------------------------------------------ morning: serve
-def public(row: Any) -> dict:
-    alts = json.loads(row["alts"] or "[]")
+def public(row: Any, alts: Optional[list] = None) -> dict:
+    alts = json.loads(row["alts"] or "[]") if alts is None else alts
     return {"id": row["id"], "kind": row["kind"], "before": row["before_text"], "span": row["span_text"], "after": row["after_text"],
-            "pick": row["pick"], "alts": [{"i": i, "word": a.get("word", ""), "votes": a.get("votes", 0)} for i, a in enumerate(alts)],
+            "pick": row["pick"], "alts": [{"i": a.get("_i", i), "word": a.get("word", ""), "votes": a.get("votes", 0), **({"cluster": True} if a.get("cluster_id") and not a.get("person_id") else {})}
+                                          for i, a in enumerate(alts)],
             "importance": row["importance"], "has_audio": True}
 
 
@@ -387,17 +408,37 @@ async def list_open(user_id: str) -> dict:
             if r["status"] != "open":
                 done += 1
                 continue
-            text = " ".join([r["before_text"], r["span_text"], r["after_text"]] + [str(a.get("word", "")) for a in json.loads(r["alts"] or "[]")])
+            alts = json.loads(r["alts"] or "[]")
+            text = " ".join([r["before_text"], r["span_text"], r["after_text"]] + ([] if r["kind"] == "who" else [str(a.get("word", "")) for a in alts]))
             try:
                 if await _forgotten(user_id, text):
                     await db.execute("DELETE FROM omi_check_items WHERE id = ?", (r["id"],))
                     continue
+                if r["kind"] == "who":
+                    alts = await _offerable(db, user_id, alts)
             except Exception:  # noqa: BLE001 - an unreadable ledger FAILS CLOSED: nothing is shown
                 logger.warning("TRANSCRIPT_CHECK_LEDGER_UNREADABLE")
                 return {"items": [], "done": done, "total": done}
-            shown.append(public(r))
+            shown.append(public(r, alts))
         await db.commit()
     return {"items": shown, "done": done, "total": done + len(shown)}
+
+
+async def _offerable(db, user_id: str, alts: list) -> list:
+    """The candidates of a ``who`` item the owner may be offered NOW: a person who is still one of his own live people (a deleted / forgotten person is never
+    offered, whatever the night thought) and whose name the forget ledger does not hold; an unnamed voice that still exists. An unreadable ledger raises."""
+    import omi_voices
+    people = {p["id"] for p in await omi_voices.own_people(db, user_id)}
+    clusters = {r["id"] for r in await _fetch(db, "SELECT id FROM omi_voice_clusters WHERE user_id = ? AND status = 'open'", (user_id,))} if any(a.get("cluster_id") for a in alts) else set()
+    out = []
+    for i, a in enumerate(alts):
+        if a.get("person_id"):
+            if a["person_id"] not in people or await _forgotten(user_id, str(a.get("word", ""))):
+                continue
+        elif a.get("cluster_id") not in clusters:
+            continue
+        out.append({**a, "_i": i})
+    return out
 
 
 async def open_count(user_id: str) -> int:
@@ -476,22 +517,19 @@ async def _apply_text(db, row: Any, new: str) -> bool:
     return ok
 
 
-async def _credit_ledger(db, user_id: str, alts: list, answer: str) -> int:
-    """Ground truth: each model that offered the answer agreed; each that offered something else contradicted. Counts only."""
-    n, stamp = 0, _iso(_now())
-    want = _norm(answer)
-    seen: dict[str, bool] = {}
-    for a in alts:
-        agreed = bool(want) and _norm(str(a.get("word", ""))) == want
-        for m in a.get("models") or []:
-            seen[m] = seen.get(m, False) or agreed
-    for model, agreed in seen.items():
-        await db.execute("INSERT INTO asr_contender_ledger (user_id, model, agreed, contradicted, updated_at) VALUES (?,?,?,?,?) "
-                         "ON CONFLICT (user_id, model) DO UPDATE SET agreed = asr_contender_ledger.agreed + ?, "
-                         "contradicted = asr_contender_ledger.contradicted + ?, updated_at = ?",
-                         (user_id, model, int(agreed), int(not agreed), stamp, int(agreed), int(not agreed), stamp))
-        n += 1
-    return n
+def _score_owner(row: Any, chosen: str) -> dict:
+    """Ground truth for the contender ledger: ``omi_repass_eval.note_owner_correction`` scores every model's stored hypothesis for the chunk against the chunk
+    as the owner corrected it (the fused text with this span replaced by his word; a whole-chunk item is his text). Counts only reach ``ledger.jsonl``.
+    Fail-soft: the hypotheses are kept 7 days and may be gone; the correction itself never depends on it."""
+    try:
+        import omi_repass
+        import omi_repass_eval as eu
+        tpl = row["chunk_tpl"] or ""
+        fixed = tpl.replace("\x01", chosen).strip() if tpl else chosen
+        return eu.note_owner_correction(omi_repass.home_dir(), row["user_id"], row["recording_id"], int(row["chunk_t0_ms"]), int(row["chunk_t1_ms"]), fixed)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TRANSCRIPT_CHECK_LEDGER_NOT_WRITTEN reason=%s", type(exc).__name__)
+        return {}
 
 
 class CheckError(Exception):
@@ -500,7 +538,7 @@ class CheckError(Exception):
         self.code, self.status = code, status
 
 
-async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word: Optional[str] = None, via: str = "panel") -> dict:
+async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word: Optional[str] = None, new: bool = False, via: str = "panel") -> dict:
     """The owner settled an item: pick alternative ``alt`` or say ``word``. Corrects the stored segment + transcript (``owner_corrected``),
     feeds the contender ledger, and re-opens the day review of the recording if it had pending candidates. Raises ``CheckError``."""
     if not live():
@@ -509,9 +547,12 @@ async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word:
         row = await _item(db, user_id, item_id)
     if row is None:
         raise CheckError("not_found", 404)
-    if row["status"] != "open":
+    naming_later = row["kind"] == "who" and row["status"] == "answered" and not row["answer"] and word is not None      # "someone new" -> named afterwards
+    if row["status"] != "open" and not naming_later:
         raise CheckError("already_decided")
     alts = json.loads(row["alts"] or "[]")
+    if row["kind"] == "who":
+        return await _answer_who(user_id, row, alts, alt=alt, word=word, new=new, via=via)
     if alt is not None:
         if not (0 <= int(alt) < len(alts)):
             raise CheckError("bad_choice", 400)
@@ -543,13 +584,89 @@ async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word:
             # all land or none do (a failure here propagates; the answer can be retried, and _apply_text is idempotent)
             import omi_day_review as dr
             reopened = await dr.reopen_recording_in(db, user_id, row["recording_id"])
-            ledgered = await _credit_ledger(db, user_id, alts, chosen)
             await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status = 'open'",
                              (stored, via, stamp, row["id"]))
             await db.commit()
+    ledgered = len(_score_owner(row, chosen))
     await _after_decision(user_id)
     logger.info("TRANSCRIPT_CHECK_ANSWERED via=%s ledger=%d reopened=%d", via, ledgered, reopened)
     return {"ok": True, "applied": True, "ledger": ledgered, "reopened": reopened}
+
+
+async def _turn_segment(db, row: Any) -> Optional[str]:
+    """The stored turn this item is about: the recording's segment overlapping its time span the most (a later pass may have re-stored the segments)."""
+    rows = await _fetch(db, "SELECT id, start_ms, end_ms FROM omi_segments WHERE recording_id = ? AND user_id = ?", (row["recording_id"], row["user_id"]))
+    best, share = None, 0
+    for s in rows:
+        ov = min(int(s["end_ms"]), int(row["end_ms"])) - max(int(s["start_ms"]), int(row["start_ms"]))
+        if ov > share:
+            best, share = s["id"], ov
+    return best
+
+
+async def _merge_into(db, user_id: str, seg_id: str, dst: str) -> None:
+    """"The same person as that unnamed voice": the turn - and every turn of the voice it was in - joins cluster ``dst``; the emptied cluster goes and ``dst``'s centroid is rebuilt."""
+    import omi_voices
+    src = [r["voice_cluster_id"] for r in await _fetch(db, "SELECT voice_cluster_id FROM omi_segments WHERE id = ? AND user_id = ? AND voice_cluster_id IS NOT NULL", (seg_id, user_id))]
+    if not await _fetch(db, "SELECT id FROM omi_voice_clusters WHERE id = ? AND user_id = ?", (dst, user_id)):
+        raise CheckError("voice_gone", 410)
+    await db.execute("UPDATE omi_segments SET voice_cluster_id = ? WHERE id = ? AND user_id = ?", (dst, seg_id, user_id))
+    for c in src:
+        if c != dst:
+            await db.execute("UPDATE omi_segments SET voice_cluster_id = ? WHERE voice_cluster_id = ? AND user_id = ?", (dst, c, user_id))
+            await db.execute("DELETE FROM omi_voice_clusters WHERE id = ? AND user_id = ?", (c, user_id))
+    await omi_voices.rebuild_cluster(db, dst)
+
+
+async def _answer_who(user_id: str, row: Any, alts: list, *, alt, word, new, via) -> dict:
+    """"Who said this?": relabel the turn (``omi_voices.tag``: the CONFIRMED tag, and with learning allowed the turn's embedding joins that person's voiceprint),
+    or - someone new - leave it in its persistent unnamed voice for the owner to name later, or merge it into an unnamed voice, or tag by a NAME the owner said /
+    typed (a person created in his own layer). A forgotten or deleted person cannot be chosen; nothing is stored of a name the forget ledger holds."""
+    import omi_voices
+    import omi_day_review as dr
+    async with erase_gate.writing(user_id, erase_gate.generation(user_id)) as ok:
+        if not ok:
+            raise CheckError("erased", 410)
+        async with _db() as db:
+            seg = await _turn_segment(db, row)
+            if not seg:
+                await db.execute("UPDATE omi_check_items SET status = 'expired' WHERE id = ? AND status = 'open'", (row["id"],))
+                await db.commit()
+                raise CheckError("text_moved", 409)
+            answer_label = ""
+            try:
+                if alt is not None:
+                    offered = await _offerable(db, user_id, alts)
+                    if not (0 <= int(alt) < len(alts)) or not any(o.get("_i") == int(alt) for o in offered):
+                        raise CheckError("person_gone", 410)
+                    pick = alts[int(alt)]
+                    answer_label = str(pick.get("word", ""))
+                    if pick.get("person_id"):
+                        await omi_voices.tag(db, user_id, person_id=pick["person_id"], segment_id=seg)
+                    else:
+                        await _merge_into(db, user_id, seg, pick["cluster_id"])
+                elif word is not None:
+                    name = " ".join(str(word).split())[:40]
+                    if not name:
+                        raise CheckError("empty", 400)
+                    if await _forgotten(user_id, name):
+                        raise CheckError("forgotten", 410)
+                    answer_label = name
+                    await omi_voices.tag(db, user_id, name=name, segment_id=seg)
+                elif new:
+                    answer_label = WHO_UNKNOWN
+                    await omi_voices.set_owner_label(db, user_id, seg, "other")
+                else:
+                    raise CheckError("bad_choice", 400)
+            except omi_voices.VoiceError as exc:
+                raise CheckError("voice:" + str(exc)[:40], getattr(exc, "status", 400)) from exc
+            reopened = await dr.reopen_recording_in(db, user_id, row["recording_id"])     # the review reads who said what
+            await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status IN ('open', 'answered')",
+                             ("" if answer_label == WHO_UNKNOWN else "set", via, _iso(_now()), row["id"]))
+            await db.commit()
+    await _after_decision(user_id)
+    logger.info("TRANSCRIPT_CHECK_WHO_ANSWERED via=%s new=%d reopened=%d", via, int(bool(new)), reopened)
+    return {"ok": True, "applied": True, "ledger": 0, "reopened": reopened}
 
 
 async def skip(user_id: str, item_id: str) -> bool:
@@ -578,16 +695,17 @@ async def _after_decision(user_id: str) -> None:
         logger.debug("transcript_check: after-decision cleanup skipped (%s)", type(exc).__name__)
 
 
-async def ledger(user_id: str) -> list[dict]:
-    async with _db() as db:
-        rows = await _fetch(db, "SELECT model, agreed, contradicted FROM asr_contender_ledger WHERE user_id = ? ORDER BY model", (user_id,))
-    return [{"model": r["model"], "agreed": int(r["agreed"]), "contradicted": int(r["contradicted"])} for r in rows]
+def ledger() -> dict:
+    """The per-model contender summary the night re-pass keeps (``omi_repass_eval.summarise`` over ``ledger.jsonl``): counts only, owner hits / misses included."""
+    import omi_repass
+    import omi_repass_eval as eu
+    return {m: {k: v for k, v in o.items() if k in ("owner_hit", "owner_miss")} for m, o in eu.summarise(eu.read_ledger(omi_repass.home_dir())).items()}
 
 
 # ----------------------------------------------------------------------------------------------------------- forget / erase
 async def forget_user(db, user_id: str) -> int:
     n = 0
-    for table in ("omi_check_items", "omi_check_asks", "asr_contender_ledger"):
+    for table in ("omi_check_items", "omi_check_asks"):
         try:
             cur = await db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
             n += int(getattr(cur, "rowcount", 0) or 0)
@@ -836,6 +954,16 @@ def heard_word(text: str) -> str:
     return " ".join(t.split()[:4])
 
 
+_NAMED = re.compile(r"^\W*(?:(?:that's|that is|it's|it is|this is|his name is|her name is|their name is|call (?:him|her|them)|they're|he's|she's)\s+)+", re.I)
+
+
+def heard_name(text: str) -> str:
+    """The name from "that's Quinn" / "it's Quinn Hart": at most 2 words, letters only, capitalised. '' when it is not a name."""
+    t = _NAMED.sub("", (text or "").strip()).strip(" .,!?\"'")
+    ws = [w for w in t.split() if re.fullmatch(r"[A-Za-z][A-Za-z'\-]{0,24}", w)][:2]
+    return " ".join(w[:1].upper() + w[1:] for w in ws)
+
+
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None, extra_ctx: Optional[dict] = None,
                allow_writes: bool = True):
     """Fast-tier hook (voice only). Takes a turn ONLY when it answers the ask Zoe just made, or fills a 'say it' the owner started on the
@@ -852,7 +980,9 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         import expert_dispatch as _xd
         if listening and member and _clock() <= listening[2]:
             _LISTEN.pop(member, None)
-            word = heard_word(text)
+            async with _db() as db:
+                lrow = await _item(db, member, listening[0])
+            word = heard_name(text) if (lrow is not None and lrow["kind"] == "who") else heard_word(text)
             if word:
                 await answer(member, listening[0], word=word, via="voice")
                 return _xd.DispatchResult(domain="memory", reply=HEARD_REPLY, intent="transcript_check", tier=TIER)

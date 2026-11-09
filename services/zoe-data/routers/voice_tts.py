@@ -3473,6 +3473,14 @@ async def _run_voice_memory_passes(
     # proof. The turn's in-session context (the voice conversation history) is not touched here.
     if _is_unidentified(user_id):
         logger.info("GUEST_MEMORY_DISCARD lane=voice passes=all")
+        # A NAMED guest's exchange is kept in THEIR own space only (named_guest_memory; ZOE_NAMED_GUEST_MEMORY), never a member's.
+        try:
+            import named_guest_memory as _ngm
+            import named_guests as _ng_mem
+
+            await _ngm.remember(_ng_mem.current(), session_id, user_text, reply)
+        except Exception:  # noqa: BLE001
+            pass
         return
     try:
         # Mirror of the chat lane: a reply the hold-the-fact tier wrote means the owner's contradicting
@@ -7512,6 +7520,53 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
 
         await _vs_revoke.revoke_member(user_id, "consent_revoked")
     return dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name, model_id=model_id)
+
+
+@router.post("/guests/enroll")
+async def voice_guest_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """A NAMED GUEST's finished panel profile (``named_guests.store_profile``): device token on the LAN only, and only under the
+    single-use ticket the server issued when a verified member asked "learn Quinn's voice" at THIS panel. A profile without a
+    ticket is refused: an unverified voice can never write or overwrite a guest (or a member)."""
+    import named_guest_enrol as _nge
+
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="device token required")
+    from biometric_scope import require_local_panel
+
+    require_local_panel(caller, "guest voice enrolment")
+    try:
+        return await _nge.store_profile(payload or {}, caller)
+    except _nge.GuestError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@router.get("/guests")
+async def voice_guests(caller: dict = Depends(_require_voice_auth)):
+    """The signed-in member's named guests (an admin: the household's). Names and dates only, never a voice signature."""
+    import named_guest_memory as _ngm
+    from biometric_scope import require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
+    return dict(guests=await _ngm.list_for(caller_id, admin=is_admin))
+
+
+@router.delete("/guests/{guest_id}")
+async def voice_guest_forget(guest_id: str, owner_user_id: Optional[str] = None, caller: dict = Depends(_require_voice_auth)):
+    """Erase a named guest: their panel voice signature AND every conversation Zoe kept with them (the contact stays). A member
+    erases their own; an admin may name another member's guest with ``owner_user_id``. 404 when there was nothing to erase."""
+    import named_guest_memory as _ngm
+    from biometric_scope import require_person_scope
+
+    caller_id, is_admin = require_person_scope(caller)
+    owner = owner_user_id if (is_admin and owner_user_id) else caller_id
+    try:
+        gone = await _ngm.erase(owner, guest_id)
+    except Exception as exc:  # noqa: BLE001 - fail closed: never report a forget that did not happen
+        logger.warning("voice/guests forget failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="could not forget that guest; nothing was reported as gone") from exc
+    if not gone:
+        raise HTTPException(status_code=404, detail="no such guest")
+    return dict(ok=True)
 
 
 @router.post("/identify")

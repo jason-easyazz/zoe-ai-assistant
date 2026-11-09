@@ -2,7 +2,8 @@
 
   GET  /api/transcript-check                  the member's open items (best first) + progress ``{done, total}``
   GET  /api/transcript-check/{id}/clip        the item's audio snippet (<= 8 s of WAV)
-  POST /api/transcript-check/{id}/answer      ``{"alt": n}`` (a model's word) or ``{"word": "..."}`` (typed on the phone)
+  POST /api/transcript-check/{id}/answer      ``{"alt": n}`` (a model's word / a candidate person or unnamed voice), ``{"word": "..."}`` (typed on the phone;
+                                              for a "who said this?" item: a NAME) or ``{"new": true}`` (someone new)
   POST /api/transcript-check/{id}/skip
   POST /api/transcript-check/{id}/listen      "say it": Zoe takes the owner's next verified-voice utterance as the word
   GET  /api/transcript-check/{id}/state       status of one item (the screen polls it while Zoe listens)
@@ -51,6 +52,7 @@ async def _member(request: Request, caller: Optional[dict] = Depends(get_current
 class _Answer(BaseModel):
     alt: Optional[int] = Field(default=None, ge=0, le=20)
     word: Optional[str] = Field(default=None, max_length=80)
+    new: bool = False                                   # "who said this?": someone new (a persistent unnamed voice)
 
 
 def _raise(exc: tc.CheckError):
@@ -86,10 +88,10 @@ async def clip(item_id: str, who: dict = Depends(_member)):
 
 @router.post("/{item_id}/answer")
 async def answer(item_id: str, body: _Answer, who: dict = Depends(_member)):
-    if (body.alt is None) == (body.word is None):
-        raise HTTPException(status_code=400, detail="give alt or word")
+    if [body.alt is not None, body.word is not None, body.new].count(True) != 1:
+        raise HTTPException(status_code=400, detail="give alt, word or new")
     try:
-        r = await tc.answer(who["user_id"], item_id, alt=body.alt, word=body.word, via="phone" if body.word is not None else "panel")
+        r = await tc.answer(who["user_id"], item_id, alt=body.alt, word=body.word, new=body.new, via="phone" if body.word is not None else "panel")
     except tc.CheckError as exc:
         _raise(exc)
     return {"ok": True, "applied": r["applied"]}
@@ -111,7 +113,7 @@ async def listen(item_id: str, who: dict = Depends(_member)):
         raise HTTPException(status_code=400, detail="say it needs the panel")      # a phone has a keyboard: it types instead
     async with tc._db() as db:
         row = await tc._item(db, who["user_id"], item_id)
-    if row is None or row["status"] != "open":
+    if row is None or (row["status"] != "open" and not (row["kind"] == "who" and row["status"] == "answered" and not row["answer"])):
         raise HTTPException(status_code=404, detail="not_found")
     tc.listen_for(who["user_id"], item_id, who["panel_id"])
     return {"ok": True, "seconds": int(tc.LISTEN_TTL_S)}
@@ -123,7 +125,8 @@ async def state(item_id: str, who: dict = Depends(_member)):
         row = await tc._item(db, who["user_id"], item_id)
     if row is None:
         raise HTTPException(status_code=404, detail="not_found")
-    return {"status": row["status"], "answer": row["answer"] if row["status"] == "answered" else None}
+    return {"status": row["status"], "answer": row["answer"] if (row["status"] == "answered" and row["kind"] != "who") else None,
+            "named": row["kind"] == "who" and row["status"] == "answered" and row["answer"] == "set"}
 
 
 def register(app: FastAPI) -> bool:

@@ -857,7 +857,7 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_recordings.p
            "panel_review_cards.py", "routers/panel_review_cards.py",
            # the ONE person-voice registry's panel half (channel='panel', 0071): a named guest's print is matched for a GUEST turn
            # only - it never authenticates, never yields member scope (pinned by tests/test_named_guests.py)
-           "named_guests.py"}
+           "named_guests.py", "named_guest_enrol.py", "named_guest_memory.py"}
 NEEDLES = ("learned_voiceprint", "omi_segment", "omi_voice_cluster", "omi_voice_settings", "omi_voices")
 
 

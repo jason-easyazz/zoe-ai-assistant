@@ -81,10 +81,9 @@ TABLES: tuple[Store, ...] = (
     _t("omi_segment_embeddings", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_clusters", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_settings", CONFIG, REACHED, member=_OMI_M),
-    _t("omi_check_items", WORDS, REACHED, member=_OMI_M, entity="omi_recordings.erase_entity"),   # the morning transcript check's queue (0073): omi_voices.forget_user + drop_recording + redact
-    _t("omi_check_asks", METADATA, REACHED, member=_OMI_M),            # the once-a-day ask lock (0073): a date + an outcome, no text
-    _t("asr_contender_ledger", METADATA, REACHED, member=_OMI_M),      # per-model agree/contradict counts from the owner's corrections (0073): counts only
-    _t("omi_wearer_samples", BIOMETRIC, REACHED, member=_OMI_M),       # the night re-pass's wearer-print windows (0072): omi_voices.forget_user + drop_recording
+    _t("omi_check_items", WORDS, REACHED, member=_OMI_M, entity="omi_recordings.erase_entity"),   # the morning transcript check's queue (0075): omi_voices.forget_user + drop_recording + redact
+    _t("omi_check_asks", METADATA, REACHED, member=_OMI_M),            # the once-a-day ask lock (0075): a date + an outcome, no text
+    _t("omi_wearer_samples", BIOMETRIC, REACHED, member=_OMI_M),       # the night re-pass's wearer-print windows (0073): omi_voices.forget_user + drop_recording
     _t("omi_devices", METADATA, REACHED, member=_OMI_M),
     _t("omi_device_health", METADATA, REACHED, member=_OMI_M),         # omi_health.forget_user, called from omi_recordings.forget_user
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
@@ -96,6 +95,7 @@ TABLES: tuple[Store, ...] = (
     _t("person_contact_links", METADATA, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("learned_voiceprints", BIOMETRIC, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),
     _t("learned_voiceprint_segments", BIOMETRIC, REACHED, member=_OMI_M, entity="contacts_store.forget_voiceprints"),
+    _t("named_guest_turns", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),   # via omi_voices.purge_people
     _t("learned_voiceprints_0071", METADATA, OUT_OF_SCOPE,
        "Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the "
        "same migration; it never exists on the Postgres box the dumps read."),
@@ -215,6 +215,11 @@ OTHER: tuple[Store, ...] = (
           "mid-run is caught at the write (user_erase_gate.writing) and the recording tombstoned. state.json (measured speeds, Zoe's own voice reference) and "
           "shadow.jsonl (counts only: no word, no name) hold nothing of a member.",
           member="omi_recordings.forget_user", markers=(".out.jsonl", ".manifest.json", "shadow.jsonl")),
+    Store("omi_repass_hyps", "file", WORDS, REACHED, "The night re-pass's per-chunk hypotheses (~/.zoe/omi-repass/hyps/hyps-<night>.jsonl, 0600): every engine's text for each chunk, the ROVER pick and the "
+          "vote counts, kept 7 days (the audio's own retention; pruned each run) for the contender ledger, the morning transcript check and owner-correction scoring. A member erase rewrites the files "
+          "without that member's lines; an entity forget replaces the name with [forgotten] in every hypothesis (omi_repass_eval.forget_user / erase_entity, called from omi_recordings.forget_user / "
+          "erase_entity). The contender ledger (ledger.jsonl) holds counts only.",
+          member="omi_recordings.forget_user", entity="omi_recordings.erase_entity", markers=("hyps-", "ledger.jsonl")),
     Store("router_retrain_texts", "file", WORDS, REACHED, "The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) "
           "holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files "
           "(router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only.",

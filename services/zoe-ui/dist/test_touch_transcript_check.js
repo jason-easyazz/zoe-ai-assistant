@@ -161,6 +161,25 @@ function boot(opts) {
     const u = boot(); u.mount(); u.Z.unmount(); await settle();
     eq(u.host.textContent, '', 'unmount empties the host and drops the late response');
   }
+  // who said this?
+  {
+    const W = [{ id: 'w1', kind: 'who', before: '', span: 'put the garden things away on Sunday', after: '', pick: 'Quinn', alts: [{ i: 0, word: 'Quinn', votes: 61 }, { i: 2, word: 'Voice 1', votes: 40, cluster: true }] }];
+    const w = boot({ items: JSON.parse(JSON.stringify(W)) });
+    w.mount(); await settle();
+    eq(all(w.host, 'cvl')[0].textContent, W[0].span, 'the turn is a caption line');
+    eq(all(w.host, 'tcw').length, 0, 'no highlighted word on a who item');
+    eq(all(w.host, 'tcchip').map((c) => c.textContent).join('|'), 'Quinn|Same as Voice 1|Someone new', 'candidates, the unnamed voice, someone new');
+    ok(walk(w.host).every((n) => n.tagName !== 'input' && n.tagName !== 'textarea'), 'no keyboard');
+    byAct(w.host, 'new')[0].click(); await settle();
+    eq(JSON.stringify(w.log.calls.filter((c) => /\/answer$/.test(c[1]))[0][2]), '{"new":true}', 'someone new posts new:true');
+    eq(byAct(w.host, 'sayname').length + byAct(w.host, 'later').length, 2, 'then offers to name them by voice, or later');
+    byAct(w.host, 'later')[0].click(); await settle();
+    ok(w.host.textContent.includes('All done'), 'later moves on');
+    const w2 = boot({ items: JSON.parse(JSON.stringify(W)) });
+    w2.mount(); await settle();
+    all(w2.host, 'tcchip')[0].click(); await settle();
+    eq(JSON.stringify(w2.log.calls.filter((c) => /\/answer$/.test(c[1]))[0][2]), '{"alt":0}', 'a person posts that candidate');
+  }
   // Part B: home.html wiring
   ok(/id="tcBody"/.test(home) && /checks:\{home:true/.test(home), 'FULL.checks stage');
   ok(home.indexOf('touch-transcript-check.js') < home.indexOf('function wireChecks'), 'script loads before the estate script uses it');

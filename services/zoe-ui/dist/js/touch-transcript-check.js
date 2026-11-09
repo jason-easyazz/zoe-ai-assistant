@@ -136,11 +136,105 @@
       showItem();
     }
 
+    // ---- "Who said this?" -------------------------------------------------------------------------------------------
+    // The turn is written out as a caption line; the candidate people (best first) are big targets, then "Someone new" (a persistent
+    // unnamed voice the owner can name later - by voice, "that's Quinn", or on the phone), "Play it" and "Skip". A candidate with no
+    // person (an unnamed voice) reads "Same as <voice>" and merges. No keyboard.
+    function showWho(it) {
+      var box = el('div', 'tcwrap');
+      box.appendChild(el('div', 'tcq', 'Who said this?'));
+      var cvf = el('div', 'cvf');
+      var line = el('div', 'cvl', it.span);
+      line.setAttribute('data-id', it.id);
+      cvf.appendChild(line);
+      var chips = el('div', 'tcchips'), acts = el('div', 'tcacts'), sub = el('div', 'tcsub');
+      (it.alts || []).forEach(function (a) {
+        var c = button('tcchip' + (a.cluster ? ' unnamed' : ''), a.cluster ? 'Same as ' + a.word : a.word, (a.cluster ? 'Same voice as ' : 'It was ') + a.word);
+        c.setAttribute('data-alt', String(a.i));
+        c.addEventListener('click', function () { send({ alt: a.i }); });
+        chips.appendChild(c);
+      });
+      var nw = button('tcchip new', 'Someone new', 'Someone I have not named yet');
+      nw.setAttribute('data-act', 'new');
+      nw.addEventListener('click', function () { send({ new: true }, true); });
+      chips.appendChild(nw);
+      [['play', 'Play it'], ['skip', 'Skip']].forEach(function (p) {
+        var b = button('tcbtn', p[1]);
+        b.setAttribute('data-act', p[0]);
+        b.addEventListener('click', function () { act(p[0]); });
+        acts.appendChild(b);
+      });
+      function send(body, offerName) {
+        if (busy) return;
+        busy = true; touch();
+        request('POST', BASE + '/' + encodeURIComponent(it.id) + '/answer', body).then(function (r) {
+          if (!r) return;
+          if (r.status === 200 || r.status === 409) {
+            if (offerName) { naming(); return; }
+            next(); return;
+          }
+          busy = false;
+          say(r.status === 410 ? 'That person isn’t there any more.' : 'That didn’t save. Try again.');
+        });
+      }
+      // "Someone new" is saved at once (the voice stays as an unnamed voice); naming is optional and never needs a keyboard.
+      function naming() {
+        clear(chips); clear(acts); clear(sub);
+        sub.appendChild(el('div', 'tcnote', 'Saved as a new voice. Want to name them now?'));
+        var s = button('tcbtn primary', 'Say the name'); s.setAttribute('data-act', 'sayname');
+        s.addEventListener('click', function () { sayName(); });
+        var l = button('tcbtn', 'Later'); l.setAttribute('data-act', 'later');
+        l.addEventListener('click', function () { next(); });
+        sub.appendChild(s); sub.appendChild(l);
+      }
+      function sayName() {
+        clear(sub);
+        sub.appendChild(el('div', 'tcnote', 'Listening - say, “that’s Quinn”.'));
+        request('POST', BASE + '/' + encodeURIComponent(it.id) + '/listen').then(function (r) {
+          if (!r || r.status !== 200) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I can’t listen from here. You can name them on your phone.')); return; }
+          pollName(0);
+        });
+      }
+      function pollName(elapsed) {
+        pollT = timers.set(function () {
+          pollT = null;
+          if (!live() || view !== 'item' || queue[0] !== it) return;
+          request('GET', BASE + '/' + encodeURIComponent(it.id) + '/state').then(function (r) {
+            if (!r || !live() || queue[0] !== it) return;
+            if (r.json && r.json.named) { next(); return; }
+            if (elapsed + LISTEN_POLL_MS >= LISTEN_MAX_MS) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I didn’t catch it. You can name them later.')); return; }
+            pollName(elapsed + LISTEN_POLL_MS);
+          });
+        }, LISTEN_POLL_MS);
+      }
+      function act(what) {
+        if (busy) return;
+        touch();
+        if (what === 'play') {
+          deps.blob(BASE + '/' + encodeURIComponent(it.id) + '/clip').then(function (b) {
+            if (!live()) return;
+            if (!b) { say('I don’t have that audio any more.'); return; }
+            if (deps.play) deps.play(b);
+          });
+        } else {
+          busy = true;
+          request('POST', BASE + '/' + encodeURIComponent(it.id) + '/skip').then(function (r) {
+            if (!r) return;
+            if (r.status === 200 || r.status === 409) { next(); return; }
+            busy = false; say('That didn’t save. Try again.');
+          });
+        }
+      }
+      box.appendChild(cvf); box.appendChild(chips); box.appendChild(acts); box.appendChild(sub);
+      paint(box);
+    }
+
     // ---- one item ------------------------------------------------------------------------------------------------
     function showItem() {
       view = 'item'; busy = false;
       touch(); progress();
       var it = queue[0];
+      if (it.kind === 'who') { showWho(it); return; }
       var box = el('div', 'tcwrap');
       var cvf = el('div', 'cvf');            // the live-caption component: `.cvf .cvl` is Zoe's speech as written on the Ask surface
       var sentence = el('div', 'cvl');

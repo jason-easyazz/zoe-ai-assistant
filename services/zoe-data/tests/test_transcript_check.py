@@ -43,8 +43,8 @@ def run(coro):
 def tenv(env, monkeypatch, tmp_path):
     _migrate(env.engine, "0054_omi_day_review.py")
     _migrate(env.engine, "0055_omi_segments_voices.py")
-    _migrate(env.engine, "0072_omi_night_repass.py")
-    _migrate(env.engine, "0073_transcript_check.py")
+    _migrate(env.engine, "0073_omi_night_repass.py")
+    _migrate(env.engine, "0075_transcript_check.py")
     monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "on")
     monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(tmp_path / "repass"))
     monkeypatch.setenv("ZOE_OMI_REPASS_ZOE_CLIPS", str(tmp_path / "no-clips"))
@@ -54,21 +54,23 @@ def tenv(env, monkeypatch, tmp_path):
     return env
 
 
-def chunk(rid=None, slots=None, mode="rover", **kw):
-    tokens = [(w.lower(), w) for w in WORDS]
-    slot = {"pos": 6, "best": "seven", "n": 3, "cands": {"seven": 2, "eleven": 1}, "surf": {"seven": "seven", "eleven": "eleven"}}
-    return {"t0_ms": 0, "t1_ms": 3500, "tokens": tokens, "slots": [slot] if slots is None else slots, "mode": mode,
-            "hyps": {"qwen3": "tell Marisol to meet me at seven", "parakeet": "tell Marisol to meet me at seven", "whisper": "tell Marisol to meet me at eleven"}, **kw}
+def chunk(slots=None, low_conf=False, t0=0.0, t1=3.5, hyps=None, rover="tell Marisol to meet me at seven"):
+    """One stored ROVER chunk row, the shape ``omi_repass_eval.check_queue`` returns: slots {pos, pick, votes, who, n}."""
+    slot = {"pos": 6, "pick": "seven", "n": 3, "votes": {"seven": 2, "eleven": 1}, "who": {"seven": ["qwen3", "parakeet"], "eleven": ["whisper"]}}
+    return {"i": 0, "t0": t0, "t1": t1, "rover": rover, "slots": [slot] if slots is None else slots, "low_conf": low_conf, "voters": ["qwen3", "parakeet", "whisper"],
+            "hyps": hyps or {"qwen3": "tell Marisol to meet me at seven", "parakeet": "tell Marisol to meet me at seven", "whisper": "tell Marisol to meet me at eleven"}}
 
 
 def night(env, monkeypatch, chunks, text=WORDS):
-    """A done, re-passed recording whose fusion left ``chunks``; returns the recording id."""
+    """A done, re-passed recording whose fusion left ``chunks`` (contested rows); returns the recording id. The hyps store holds them too, as a real night leaves it."""
     first_pass(env)
     transcribe(env, monkeypatch)
     rid = rows(env)[0]["id"]
     res = result_for(rid, text)
-    res["check_chunks"] = chunks
+    res["check_rows"] = chunks
     run(rp.run_night(budget_s=600, runner=fake_runner({rid: res})))
+    import omi_repass_eval as eu
+    eu.store_hyps(rp.home_dir(), "2026-10-10", [{"u": OWNER, "rid": rid, **c} for c in chunks])
     return rid
 
 
@@ -100,9 +102,9 @@ def test_names_numbers_and_commitments_rank_above_chat():
 
 
 def test_the_day_keeps_only_the_best_ten_and_chunks_never_fill_it(tenv, monkeypatch):
-    slots = [{"pos": 1, "best": f"w{i}", "n": 3, "cands": {f"w{i}": 2, f"x{i}": 1}, "surf": {f"w{i}": f"w{i}", f"x{i}": f"x{i}"}} for i in range(14)]
-    slots.append({"pos": 2, "best": "7", "n": 3, "cands": {"7": 2, "eleven": 1}, "surf": {"7": "7", "eleven": "eleven"}})
-    rid = night(tenv, monkeypatch, [chunk(slots=slots), chunk(slots=[], mode="lowconf"), chunk(slots=[], mode="lowconf", t0_ms=3600)])
+    slots = [{"pos": 1, "pick": f"w{i}", "n": 3, "votes": {f"w{i}": 2, f"x{i}": 1}, "who": {f"w{i}": ["qwen3", "parakeet"], f"x{i}": ["whisper"]}} for i in range(14)]
+    slots.append({"pos": 2, "pick": "7", "n": 3, "votes": {"7": 2, "eleven": 1}, "who": {"7": ["qwen3", "parakeet"], "eleven": ["whisper"]}})
+    rid = night(tenv, monkeypatch, [chunk(slots=slots, rover="a w b c d e f"), chunk(slots=[], low_conf=True), chunk(slots=[], low_conf=True, t0=3.6, t1=7.0)])
     rs = items(tenv)
     assert len(rs) <= tc.max_items()
     assert rs[0]["importance"] in ("number", "name")                                  # the digit outranks the chit-chat
@@ -121,10 +123,10 @@ def test_the_night_pass_queues_a_contested_slot_with_every_models_word(queued):
 
 
 def test_a_low_confidence_chunk_offers_each_models_whole_text(tenv):
-    cands = tc.candidates_from_chunk(chunk(slots=[], mode="lowconf", hyps={"qwen3": "tell Marisol [low confidence]", "parakeet": "tell Marissa", "whisper": "tell Marissa"}))
+    cands = tc.candidates_from_row(chunk(slots=[], low_conf=True, rover="tell Marisol", hyps={"qwen3": "tell Marisol", "parakeet": "tell Marissa", "whisper": "tell Marissa"}))
     (c,) = cands
     assert c["kind"] == "chunk" and c["span"] == "tell Marisol"
-    assert {a["word"]: a["models"] for a in c["alts"]} == {"tell Marisol [low confidence]".replace(" [low confidence]", ""): ["qwen3"], "tell Marissa": ["parakeet", "whisper"]} or len(c["alts"]) == 2
+    assert {a["word"]: a["models"] for a in c["alts"]} == {"tell Marisol": ["qwen3"], "tell Marissa": ["parakeet", "whisper"]}
 
 
 def test_flag_off_stores_nothing(tenv, monkeypatch):
@@ -469,14 +471,13 @@ def test_deleting_the_recording_or_the_member_takes_the_queue_with_it(queued):
     assert items(env) == []
 
 
-def test_forgetting_the_member_erases_queue_lock_and_ledger(queued):
+def test_forgetting_the_member_erases_queue_and_lock(queued):
     env, rid = queued
-    iid = items(env)[0]["id"]
-    run(tc.answer(OWNER, iid, alt=1))
     verified_turn()
-    assert env.db.rows("SELECT * FROM asr_contender_ledger")
+    assert run(tc.prepare_tail(OWNER, "s1", "put the kettle on", "Done."))
+    assert env.db.rows("SELECT * FROM omi_check_asks") and items(env)
     run(omi.forget_user(OWNER))
-    for t in ("omi_check_items", "omi_check_asks", "asr_contender_ledger"):
+    for t in ("omi_check_items", "omi_check_asks"):
         assert env.db.rows(f"SELECT * FROM {t}") == [], t
 
 
@@ -493,9 +494,9 @@ def test_an_answer_corrects_the_segment_and_transcript_and_teaches_the_ledger(qu
     segs = env.db.rows("SELECT text, text_provenance FROM omi_segments WHERE text LIKE '%eleven%'")
     assert segs and segs[0]["text_provenance"] == "owner_corrected"
     assert all(r["text_provenance"] == "owner_corrected" for r in env.db.rows("SELECT text_provenance FROM omi_segments WHERE text LIKE '%eleven%'"))
-    led = {l["model"]: l for l in run(tc.ledger(OWNER))}
-    assert led["whisper"]["agreed"] == 1 and led["whisper"]["contradicted"] == 0               # the owner agreed with whisper
-    assert led["qwen3"]["contradicted"] == 1 and led["qwen3"]["agreed"] == 0                  # and against qwen3 / parakeet
+    led = tc.ledger()                                                                          # #2358's ledger.jsonl, scored by omi_repass_eval.note_owner_correction
+    assert led["whisper"] == {"owner_hit": 1, "owner_miss": 0}                                 # the owner agreed with whisper's whole chunk
+    assert led["qwen3"] == {"owner_hit": 0, "owner_miss": 1} and led["parakeet"] == {"owner_hit": 0, "owner_miss": 1}
     assert items(env)[0]["status"] == "answered" and items(env)[0]["answered_via"] == "panel"
 
 
@@ -504,7 +505,7 @@ def test_an_answer_that_none_of_the_models_had_counts_against_all_of_them(queued
     iid = items(env)[0]["id"]
     run(tc.answer(OWNER, iid, word="nine", via="voice"))
     assert "nine" in rows(env)[0]["transcript"]
-    assert all(l["agreed"] == 0 and l["contradicted"] == 1 for l in run(tc.ledger(OWNER)))
+    assert all(v == {"owner_hit": 0, "owner_miss": 1} for v in tc.ledger().values()) and len(tc.ledger()) == 3
 
 
 def test_an_answer_cannot_be_given_twice_or_to_someone_elses_item(queued):
@@ -564,7 +565,7 @@ def test_a_high_ranked_item_that_feeds_a_pending_candidate_outranks_an_equal_one
     tenv.db.conn.execute("INSERT INTO omi_day_candidates (id, review_id, user_id, day_local, kind, recording_ids, dedup_key, status, created_at) "
                          "VALUES ('c1', 'rev1', ?, '2026-10-10', 'reminder', ?, 'k', 'pending', 'x')", (OWNER, json.dumps([rid])))
     tenv.db.conn.commit()
-    cand = tc.candidates_from_chunk(chunk())
+    cand = tc.candidates_from_row(chunk())
     run(tc.enqueue(OWNER, dict(rows(tenv)[0]), cand))
     (r,) = items(tenv)
     assert r["score"] >= tc.IMPORTANCE_SCORE["number"] + tc.FEEDS_BONUS
@@ -586,7 +587,7 @@ def test_an_answer_that_corrected_nothing_is_refused_and_credits_nothing(queued)
     with pytest.raises(tc.CheckError) as e:
         run(tc.answer(OWNER, iid, alt=1))
     assert e.value.code == "text_moved"
-    assert env.db.rows("SELECT * FROM asr_contender_ledger") == []
+    assert tc.ledger() == {}
     assert items(env)[0]["status"] == "expired" and items(env)[0]["answer"] is None
 
 
@@ -603,7 +604,172 @@ def test_a_failed_review_reopen_fails_the_answer_instead_of_being_swallowed(queu
     iid = items(env)[0]["id"]
     with pytest.raises(RuntimeError):
         run(tc.answer(OWNER, iid, alt=1))
-    assert items(env)[0]["status"] == "open" and env.db.rows("SELECT * FROM asr_contender_ledger") == []
+    assert items(env)[0]["status"] == "open" and tc.ledger() == {}
     monkeypatch.setattr(dr, "reopen_recording_in", real)
     assert run(tc.answer(OWNER, iid, alt=1))["applied"] is True
     assert items(env)[0]["status"] == "answered" and "eleven" in rows(env)[0]["transcript"]
+
+
+def test_the_candidates_consume_what_the_real_rover_returns():
+    """Contract pin against #2358's own fusion: three voters, three different words in one slot -> one contested slot, one candidate offering all three."""
+    import omi_repass_eval as eu
+    hy = {"qwen3-asr": "tell Marisol to meet me at seven", "parakeet-tdt": "tell Marisol to meet me at eleven", "whisper-gpu:large-v3": "tell Marisol to meet me at nine"}
+    fz = eu.rover(hy)
+    row = {"i": 0, "t0": 0.0, "t1": 3.0, "hyps": hy, "rover": fz["text"], "slots": fz["slots"], "low_conf": fz["low_conf"], "voters": fz["voters"]}
+    assert eu.is_contested(row)
+    (c,) = tc.candidates_from_row(row)
+    assert {a["word"] for a in c["alts"]} == {"seven", "eleven", "nine"} and c["before"].endswith("at")
+    assert sorted(m for a in c["alts"] for m in a["models"]) == sorted(hy)
+    assert c["chunk_tpl"].count("\x01") == 1
+
+
+# ── "who said this?" ─────────────────────────────────────────────────────────────────────────────────────────────────────
+WHO = {"t0": 0.0, "t1": 1.5, "text": "put the garden things away on Sunday", "first": True, "turns": 4,
+       "candidates": [{"person_id": "p-quinn", "name": "Quinn", "score": 0.61}, {"person_id": "p-ines", "name": "Ines", "score": 0.52}]}
+
+
+@pytest.fixture
+def who(queued, monkeypatch):
+    """The queued recording plus one 'who said this?' item; omi_voices' own tag / label seams are recorded (their behaviour is pinned by test_omi_voices)."""
+    env, rid = queued
+    import omi_voices
+    calls = []
+
+    async def own_people(db, uid):
+        return [{"id": "p-quinn", "name": "Quinn"}, {"id": "p-ines", "name": "Ines"}]
+
+    async def tag(db, uid, **kw):
+        calls.append(("tag", kw))
+        return {"person_id": kw.get("person_id") or "p-new", "segments": 1, "learning": "learning"}
+
+    async def label(db, uid, seg, value):
+        calls.append(("label", seg, value))
+        return True
+
+    async def rebuild(db, cid):
+        calls.append(("rebuild", cid))
+        return True
+    monkeypatch.setattr(omi_voices, "own_people", own_people)
+    monkeypatch.setattr(omi_voices, "tag", tag)
+    monkeypatch.setattr(omi_voices, "set_owner_label", label)
+    monkeypatch.setattr(omi_voices, "rebuild_cluster", rebuild)
+    run(tc.enqueue(OWNER, dict(rows(env)[0]), tc.candidates_from_who(WHO)))
+    wid = env.db.rows("SELECT id FROM omi_check_items WHERE kind = 'who'")[0]["id"]
+    return env, rid, wid, calls
+
+
+def test_a_who_row_becomes_one_candidate_with_the_people_best_first():
+    (c,) = tc.candidates_from_who(WHO)
+    assert c["kind"] == "who" and c["span"] == WHO["text"] and [a["word"] for a in c["alts"]] == ["Quinn", "Ines"] and c["first"] and c["pick"] == "Quinn"
+    assert tc.candidates_from_who({**WHO, "text": ""}) == []
+
+
+def test_what_an_answer_unlocks_ranks_it_and_it_shares_the_ten_a_day_with_the_words(tenv, monkeypatch):
+    first_pass(tenv)
+    transcribe(tenv, monkeypatch)
+    rec = dict(rows(tenv)[0])
+    words = [tc.candidates_from_row(chunk(slots=[{"pos": 1, "pick": f"w{i}", "n": 3, "votes": {f"w{i}": 2, f"x{i}": 1}, "who": {}}], rover="a w b c", t0=float(i), t1=i + 1.0))[0]
+             for i in range(12)]
+    run(tc.enqueue(OWNER, rec, words))
+    run(tc.enqueue(OWNER, rec, tc.candidates_from_who(WHO)))
+    rs = items(tenv)
+    assert len(rs) == tc.max_items()                                                       # one shared cap
+    assert rs[0]["kind"] == "who" and rs[0]["importance"] == "who_first"                     # a voice's first confirmation unlocks the most
+    run(tc.enqueue(OWNER, rec, tc.candidates_from_who({**WHO, "t0": 5.0, "t1": 6.0, "first": False})))
+    assert [r["importance"] for r in items(tenv) if r["kind"] == "who"] == ["who_first", "who"] or len(items(tenv)) == tc.max_items()
+
+
+def test_a_person_who_is_gone_or_forgotten_is_never_offered(who, monkeypatch):
+    env, rid, wid, calls = who
+    import memory_forgotten as mf
+    import omi_voices
+
+    async def spans(uid, text, **kw):
+        i = text.find("Ines")
+        return [(i, i + 4)] if i >= 0 else []
+    monkeypatch.setattr(mf, "spans", spans)                                                 # Ines was forgotten
+    it = [i for i in run(tc.list_open(OWNER))["items"] if i["kind"] == "who"][0]
+    assert [a["word"] for a in it["alts"]] == ["Quinn"] and it["span"] == WHO["text"]
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, wid, alt=1))                                                   # a stale tap on the forgotten one
+    assert e.value.code == "person_gone" and not [c for c in calls if c[0] == "tag"]
+
+    async def only_quinn(db, uid):
+        return [{"id": "p-quinn", "name": "Quinn"}]
+    monkeypatch.setattr(mf, "spans", lambda *a, **k: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(omi_voices, "own_people", only_quinn)                               # Ines was deleted
+    assert [a["word"] for a in [i for i in run(tc.list_open(OWNER))["items"] if i["kind"] == "who"][0]["alts"]] == ["Quinn"]
+
+
+def test_choosing_a_person_relabels_the_turn_and_teaches_their_print(who):
+    env, rid, wid, calls = who
+    r = run(tc.answer(OWNER, wid, alt=0))
+    (kind, kw), = [c for c in calls if c[0] == "tag"]
+    assert kw["person_id"] == "p-quinn" and kw["segment_id"] and r["applied"]                 # the seam: omi_voices.tag = the confirmed tag + the voiceprint
+    assert env.db.rows("SELECT status FROM omi_check_items WHERE id = ?", (wid,))[0]["status"] == "answered"
+    assert env.db.rows("SELECT * FROM omi_check_items WHERE kind = 'who' AND answer LIKE '%Quinn%'") == []          # no name is kept in the item
+
+
+def test_someone_new_leaves_a_persistent_unnamed_voice_and_can_be_named_by_voice_later(who):
+    env, rid, wid, calls = who
+    run(tc.answer(OWNER, wid, new=True))
+    assert ("label", calls[0][1], "other") == calls[0] and env.db.rows("SELECT status, answer FROM omi_check_items WHERE id = ?", (wid,))[0]["answer"] == ""
+    assert not [c for c in calls if c[0] == "tag"]                                          # nothing named yet
+    verified_turn()
+    tc.listen_for(OWNER, wid, "panel-1")
+    r = run(tc.tier("that's Quinn", OWNER, "s1", channel="voice", allow_writes=True))
+    assert r.reply == tc.HEARD_REPLY
+    (kind, kw), = [c for c in calls if c[0] == "tag"]
+    assert kw["name"] == "Quinn" and kw["segment_id"]
+    assert env.db.rows("SELECT answer FROM omi_check_items WHERE id = ?", (wid,))[0]["answer"] == "set"
+
+
+def test_a_name_the_owner_forgot_cannot_be_given_and_an_answered_item_is_not_renamed(who, monkeypatch):
+    env, rid, wid, calls = who
+    import memory_forgotten as mf
+
+    async def spans(uid, text, **kw):
+        i = text.find("Zebulon")
+        return [(i, i + 7)] if i >= 0 else []
+    monkeypatch.setattr(mf, "spans", spans)
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, wid, word="Zebulon"))
+    assert e.value.code == "forgotten" and env.db.rows("SELECT status FROM omi_check_items WHERE id = ?", (wid,))[0]["status"] == "open"
+    run(tc.answer(OWNER, wid, alt=0))
+    with pytest.raises(tc.CheckError):
+        run(tc.answer(OWNER, wid, word="Dana"))                                              # decided with a person: not re-opened by a word
+
+
+def test_two_unnamed_voices_that_are_the_same_person_can_be_merged(who):
+    env, rid, wid, calls = who
+    now = "2026-10-10T00:00:00Z"
+    cols = [r[1] for r in env.db.rows("PRAGMA table_info(omi_voice_clusters)")]
+    vals = {"id": "c1", "user_id": OWNER, "model_id": "m", "seq": 1, "centroid": b"\x00", "n_segments": 1, "status": "open", "first_heard_at": now, "last_heard_at": now, "created_at": now, "expires_at": "2026-12-01T00:00:00Z"}
+    for cid in ("c1", "c2"):
+        use = {k: v for k, v in {**vals, "id": cid, "seq": 1 if cid == "c1" else 2}.items() if k in cols}
+        env.db.conn.execute(f"INSERT INTO omi_voice_clusters ({', '.join(use)}) VALUES ({', '.join('?' * len(use))})", tuple(use.values()))
+    env.db.conn.execute("UPDATE omi_segments SET voice_cluster_id = 'c2'")
+    env.db.conn.commit()
+    alts = json.dumps([{"word": "Voice 1", "person_id": "", "cluster_id": "c1", "votes": 70, "models": []}])
+    env.db.conn.execute("UPDATE omi_check_items SET alts = ? WHERE id = ?", (alts, wid))
+    env.db.conn.commit()
+    it = [i for i in run(tc.list_open(OWNER))["items"] if i["kind"] == "who"][0]
+    assert it["alts"][0]["cluster"] is True
+    run(tc.answer(OWNER, wid, alt=0))
+    assert {r["voice_cluster_id"] for r in env.db.rows("SELECT voice_cluster_id FROM omi_segments")} == {"c1"}
+    assert [r["id"] for r in env.db.rows("SELECT id FROM omi_voice_clusters")] == ["c1"] and ("rebuild", "c1") in calls
+
+
+def test_a_who_item_whose_turn_has_gone_corrects_nothing(who):
+    env, rid, wid, calls = who
+    env.db.conn.execute("DELETE FROM omi_segments")
+    env.db.conn.commit()
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, wid, new=True))
+    assert e.value.code == "text_moved" and not calls
+
+
+def test_heard_name_takes_only_a_name():
+    assert tc.heard_name("that's quinn") == "Quinn" and tc.heard_name("it's Quinn Hart.") == "Quinn Hart"
+    assert tc.heard_name("this is a really long sentence about nothing") != "" and len(tc.heard_name("this is a really long sentence").split()) <= 2
+    assert tc.heard_name("123 !!") == ""

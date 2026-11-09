@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import difflib
 import json
 import pathlib
 import re
@@ -22,31 +21,31 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "services" / "zoe-data"))
 
 LAB = pathlib.Path.home() / ".zoe" / "lab" / "omi-retranscribe-r2"
-LOWCONF_AWAY = 0.5          # every other model more than half different from the pivot = a low-confidence chunk
 
 
-def _lab_chunks(lab: pathlib.Path):
-    """Yield the transcript_check chunk dicts the lab's ROVER would hand the night pass. Words stay in memory."""
+def _lab_rows(lab: pathlib.Path):
+    """Yield the stored-chunk rows (the shape ``omi_repass_eval.check_queue`` returns) the lab's ROVER makes of its pendant day. Words stay in memory."""
     sys.path.insert(0, str(lab / "fusion"))
-    import rover as rv                                   # the lab prototype: the contract is its slot output
+    import omi_repass_eval as eu
     from common import load
-    for it in load():
-        hyps = {k: v for k, v in it["hyp"].items() if k in rv.VOTERS}
-        away = [1 - difflib.SequenceMatcher(None, hyps["qwen3"].split(), v.split()).ratio() for k, v in hyps.items() if k != "qwen3" and v.strip()]
-        if away and all(a > LOWCONF_AWAY for a in away):
-            yield {"t0_ms": int(it["t0"] * 1000), "t1_ms": int(it["t1"] * 1000), "mode": "lowconf", "hyps": hyps, "slots": [], "tokens": []}
-            continue
-        slots: list = []
-        tokens, _ = rv.rover(it["hyp"], slots)
-        yield {"t0_ms": int(it["t0"] * 1000), "t1_ms": int(it["t1"] * 1000), "mode": "rover", "hyps": hyps, "slots": slots, "tokens": tokens}
+    for i, it in enumerate(load()):
+        names = {"qwen3": "qwen3-asr", "parakeet": "parakeet-tdt", "whisper": "whisper-gpu:large-v3"}      # the lab's short names -> the re-pass's backend ids
+        hyps = {names[k]: v for k, v in it["hyp"].items() if k in names}
+        fz = eu.rover(hyps)
+        yield {"i": i, "t0": it["t0"], "t1": it["t1"], "hyps": hyps, "rover": fz["text"], "slots": fz["slots"], "low_conf": fz["low_conf"], "voters": fz["voters"]}
+
+
+def _contested(r):
+    import omi_repass_eval as eu
+    return eu.is_contested(r)
 
 
 def rehearse_lab(lab: pathlib.Path) -> dict:
     import transcript_check as tc
-    chunks = list(_lab_chunks(lab))
+    chunks = [r for r in _lab_rows(lab) if _contested(r)]
     cands, by_chunk = [], 0
     for ch in chunks:
-        c = tc.candidates_from_chunk(ch)
+        c = tc.candidates_from_row(ch)
         by_chunk += bool(c)
         cands += c
     ranked = []
@@ -77,7 +76,7 @@ async def status(user: str) -> dict:
         rows = await tc._fetch(db, "SELECT status, COUNT(*) AS n FROM omi_check_items WHERE user_id = ? GROUP BY status", (user,))
         asks = await tc._fetch(db, "SELECT day_local, outcome FROM omi_check_asks WHERE user_id = ? ORDER BY day_local DESC LIMIT 7", (user,))
     return {"mode": tc.mode(), "items": {r["status"]: int(r["n"]) for r in rows}, "asks": [{"day": a["day_local"], "outcome": a["outcome"]} for a in asks],
-            "ledger": await tc.ledger(user)}
+            "contender_ledger": tc.ledger()}
 
 
 def shadow_report(log: pathlib.Path, days: int) -> dict:
