@@ -11,7 +11,8 @@ from datetime import date
 from typing import Optional
 
 CHILD_WORDS = frozenset({"child", "kid", "son", "daughter", "baby", "toddler", "grandson", "granddaughter", "grandchild",
-                         "stepson", "stepdaughter", "boy", "girl", "infant", "teen", "teenager", "minor"})
+                         "stepson", "stepdaughter", "boy", "girl", "infant", "teen", "teenager", "minor",
+                         "niece", "nephew", "grandkid"})
 
 
 def person_may_be_child(person: dict, today: Optional[date] = None) -> bool:

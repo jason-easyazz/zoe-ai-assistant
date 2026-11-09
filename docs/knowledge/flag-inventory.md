@@ -3,7 +3,7 @@ type: Reference
 title: ZOE_* flag inventory (GENERATED)
 description: Generated inventory of every ZOE_* environment flag — the declared spec from the flag registry (type, default, allowed values, owner doc) joined with what the scanner finds (readers, the defaults they hard-code, typed_env adoption, .env.example coverage), plus the conflicting-default check and the legacy direct-read ratchet.
 tags: [flags, env, configuration, generated]
-timestamp: 2026-11-09T00:00:00Z
+timestamp: 2026-11-10T00:00:00Z
 ---
 
 # ZOE_* flag inventory
@@ -14,7 +14,7 @@ timestamp: 2026-11-09T00:00:00Z
 python3 tools/audit/flag_inventory.py
 ```
 
-Last generated: 2026-11-09. The table body is deterministic (sorted, no
+Last generated: 2026-11-10. The table body is deterministic (sorted, no
 timestamps) so regeneration diffs show real flag changes only.
 
 Declared columns (type, default, allowed, owner doc) come from the flag registry,
@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 877 prod flags; 293 read through `typed_env`.
+- 881 prod flags; 298 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-877 flags; 826 not documented in `.env.example`.
+881 flags; 830 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -517,6 +517,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MUSIC_SETUP_SECRET` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_MUSIC_SETUP_TTL_S` | int | `900` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'900'` | no | NO | `services/zoe-data/music_setup.py` |
 | `ZOE_NAMED_GUESTS` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/named-guests.md` | `'off'` | yes | NO | `services/zoe-data/named_guests.py` |
+| `ZOE_NAMED_GUEST_CLIPS` | bool | `False` | - | `docs/knowledge/named-guests.md` | `False` | yes | NO | `services/zoe-data/named_guest_clips.py` |
 | `ZOE_NAMED_GUEST_MEMORY` | bool | `False` | - | `docs/knowledge/named-guests.md` | `False` | yes | NO | `services/zoe-data/named_guest_memory.py` |
 | `ZOE_NAMED_GUEST_RECALL_TURNS` | int | `6` | - | `docs/knowledge/named-guests.md` | `6` | yes | NO | `services/zoe-data/named_guest_memory.py` |
 | `ZOE_NIGHT_BUSY` | str | `'~/.zoe/agent-tools/night_busy.sh'` | - | - | `'~/.zoe/agent-tools/night_busy.sh'` | yes | NO | `scripts/maintenance/harness_quiet.py`<br>`scripts/perf/self_improver.py` |
@@ -880,6 +881,9 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_VOICE_BASELINE` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_CHAT_TIMEOUT_S` | int | `20` | - | `docs/knowledge/voice-pipeline.md` | `'20'` | no | NO | `services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/zoe_agent.py` |
 | `ZOE_VOICE_CLIP_EXPECTATIONS` | str | `''` | - | `docs/knowledge/voice-pipeline.md` | `dynamic` | no | NO | `scripts/maintenance/voice_clip_checks.py` |
+| `ZOE_VOICE_CLIP_RETENTION` | bool | `False` | - | `docs/knowledge/named-guests.md` | `False` | yes | NO | `services/zoe-data/voice_clips.py` |
+| `ZOE_VOICE_CLIP_RETENTION_DAYS` | int | `30` | - | `docs/knowledge/named-guests.md` | `30` | yes | NO | `services/zoe-data/voice_clips.py` |
+| `ZOE_VOICE_CLIP_VERDICT` | bool | `False` | - | `docs/knowledge/named-guests.md` | `False` | yes | NO | `services/zoe-data/voice_clips.py` |
 | `ZOE_VOICE_CONTINUATION_HOLD` | bool | `True` | - | `docs/knowledge/voice-pipeline.md` | `'on'` | no | NO | `services/zoe-data/voice_utterance_shape.py` |
 | `ZOE_VOICE_FAST_FIRST_AUDIO` | bool | `True` | - | - | `True` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_FILLER_AFTER_S` | float | `1.6` | - | - | `'1.6'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
@@ -905,7 +909,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_VOICE_PROFILE` | str | `'zoe_au_natural_v1'` | - | - | `'zoe_au_natural_v1'` | no | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_REPLAY_STT` | str | `'inprocess'` | - | `docs/knowledge/chroma-1-5-migration.md` | `'inprocess'` | no | NO | `scripts/maintenance/voice_regression_probe.py` |
 | `ZOE_VOICE_RESULTS` | str | `''` | - | `docs/knowledge/voice-pipeline.md` | `dynamic` | no | NO | `scripts/maintenance/voice_gate_check.py`<br>`scripts/maintenance/voice_regression_probe.py` |
-| `ZOE_VOICE_SAMPLE_DIR` | str | `'/home/zoe/.zoe-voice-samples'` | - | `docs/research/arousal-detection-licence-scope-2026-10-04.md` | `'/home/zoe/.zoe-voice-samples'`, `dynamic` | no | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_corpus_strata.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py` |
+| `ZOE_VOICE_SAMPLE_DIR` | str | `'/home/zoe/.zoe-voice-samples'` | - | `docs/research/arousal-detection-licence-scope-2026-10-04.md` | `'/home/zoe/.zoe-voice-samples'`, `dynamic` | yes | NO | `scripts/maintenance/curate_voice_corpus.py`<br>`scripts/maintenance/router_struggle_retrain.py`<br>`scripts/maintenance/stt_accuracy_report.py`<br>`scripts/maintenance/voice_corpus_strata.py`<br>`scripts/maintenance/voice_regression_probe.py`<br>`services/zoe-data/routers/voice_tts.py`<br>`services/zoe-data/struggle_proposals.py`<br>`services/zoe-data/voice_clips.py` |
 | `ZOE_VOICE_SAVE_AUDIO` | bool | `False` | - | `docs/knowledge/voice-pipeline.md` | `False` | yes | NO | `services/zoe-data/routers/voice_tts.py` |
 | `ZOE_VOICE_SESSION` | bool | `False` | - | `docs/knowledge/voice-verified-session.md` | `False` | yes | NO | `services/zoe-data/voice_session.py` |
 | `ZOE_VOICE_SESSION_BRIDGE` | bool | `False` | - | `docs/knowledge/voice-session-bridge.md` | `False` | yes | NO | `services/zoe-data/voice_session_bridge.py` |

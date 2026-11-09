@@ -61,7 +61,7 @@ _DEFAULT_TTL_S = 120
 # The intercom's rows (``intercom.py``: a member's announcement / ring addressed to ONE named panel) are panel-scoped for the same
 # reason - "tell the kitchen" must never be played by whichever daemon polls first.
 PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll",
-                                          "intercom_announce", "intercom_ring")
+                                          "intercom_announce", "intercom_ring", "voice_clip_play")
 
 # ── Panel COMMANDS riding the same lane (Zoe-driven voice enrolment) ──────────────────────────────────────────────────────
 # A row whose trigger is one of these is not speech: its ``message`` is a JSON object the daemon ACTS on, and the claim returns it
@@ -73,7 +73,9 @@ PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_prof
 #                         would speak the member's name and enrol whoever stands there next
 #   voice_profile_forget  drop ``user_id``'s voice signature from the daemon's cache and disk NOW, then re-sync (one row per
 #                         panel, PANEL-SCOPED above: every speaker must hear it, and only that panel may claim its own row)
-COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget")
+#   voice_clip_play       play a few seconds of a saved unknown-voice clip, then ask "who's this?" (named_guest_clips.py): PANEL-SCOPED;
+#                         the row carries a single-use token, never audio - the daemon redeems it at POST /api/voice/clip-playback
+COMMAND_TRIGGERS: tuple[str, ...] = ("voice_enroll", "voice_profile_forget", "voice_clip_play")
 # A spoken row after which the daemon opens a listening window with no wake word: an OFFER asks a question, and "Hey Zoe, yes" is
 # not a natural way to answer one. Old daemons ignore the flag (the answer then needs the wake word; the pending offer waits 2 min).
 LISTEN_AFTER_TRIGGERS: tuple[str, ...] = ("voice_enroll_offer",)

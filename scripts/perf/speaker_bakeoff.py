@@ -406,6 +406,11 @@ def cmd_index_corpus(a) -> None:
 
     root = Path(os.path.expanduser(a.corpus))
     files = sorted(p for p in root.iterdir() if p.is_file() and p.suffix == ".wav")  # top level only
+    # OWNER corpus: a clip the server judged a guest's / an unknown voice is not the owner (named-guests spec item 9). Legacy clips
+    # (no verdict sidecar) stay in, exactly as before.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+    import panel_voice_log as _pvl
+    files = [p for p in files if _pvl.clip_verdict(str(p)) not in _pvl.NON_MEMBER_KINDS]
     if a.before:
         # Freeze the corpus to what the bake-off saw: the live corpus keeps growing.
         cut = _dt.datetime.fromisoformat(a.before).timestamp()
