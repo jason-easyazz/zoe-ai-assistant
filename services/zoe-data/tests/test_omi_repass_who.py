@@ -149,16 +149,71 @@ def test_the_channel_mean_is_stored_with_model_and_channel_and_replaced_not_dupl
     assert run(who.load_mean(renv.db, OWNER, rp.MODEL_ID, who.CHANNEL_PANEL, "dev1")) is None and run(who.load_mean(renv.db, OWNER, "other-model", who.CHANNEL_PENDANT, "dev1")) is None
 
 
-def test_a_long_session_stores_its_mean_and_a_short_one_uses_the_stored_per_device_mean(renv, monkeypatch):
+def test_a_long_session_stores_its_mean_per_device_and_a_short_one_uses_the_stored_mean_of_ITS_device(renv, monkeypatch):
     transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
     rid = rows(renv)[0]["id"]
-    long_res = {**result_for(rid), "speech_s": 700.0, "windows": [[0.0, 1.5, v(1, 1), 0.2], [0.75, 2.25, v(1, 2), 0.3], [1.5, 3.0, v(2, 1), 0.2]]}
-    seen: list = []
-    run(rp.run_night(budget_s=600, runner=_one_shot(long_res, rid, seen)))
-    stored = renv.db.rows("SELECT model_id, channel, scope, n_units FROM omi_channel_means")
-    assert len(stored) == 1 and stored[0]["channel"] == "pendant" and stored[0]["model_id"] == rp.MODEL_ID and stored[0]["n_units"] == 3
-    renv.db.conn.execute("UPDATE omi_recordings SET repass_state = 'pending', status = 'done'")
+    renv.db.conn.execute("UPDATE omi_recordings SET device_id = 'devA'")
     renv.db.conn.commit()
+    long_res = {**result_for(rid), "speech_s": 700.0, "windows": [[0.0, 1.5, v(1, 1), 0.2], [0.75, 2.25, v(1, 2), 0.3], [1.5, 3.0, v(2, 1), 0.2]]}
+    run(rp.run_night(budget_s=600, runner=_one_shot(long_res, rid, [])))
+    stored = renv.db.rows("SELECT model_id, channel, scope, n_units FROM omi_channel_means")
+    assert len(stored) == 1 and stored[0]["channel"] == "pendant" and stored[0]["scope"] == "devA" and stored[0]["model_id"] == rp.MODEL_ID and stored[0]["n_units"] == 3
+    # tomorrow: a SHORT session on the same device uses that device's stored mean; a short session on ANOTHER device has none
+    seen_mu: list = []
+    real = rp.load_refs
+
+    async def spy(db, uid, zoe, mu=None, loud_cut=None, persist=False):
+        seen_mu.append(mu)
+        return await real(db, uid, zoe, mu, loud_cut, persist)
+
+    monkeypatch.setattr(rp, "load_refs", spy)
+    short = {**result_for(rid), "speech_s": 5.0}
+    for dev in ("devA", "devB"):
+        path = renv.tmp / f"{dev}.wav"
+        path.write_bytes(b"x")
+        renv.db.conn.execute("UPDATE omi_recordings SET repass_state = 'pending', status = 'done', device_id = ?, audio_path = ?", (dev, str(path)))
+        renv.db.conn.commit()
+        run(rp.run_night(budget_s=600, runner=_one_shot(short, rid, [])))
+    assert seen_mu[0] is not None and np.allclose(seen_mu[0], who.unit(who.session_mean([v(1, 1), v(1, 2), v(2, 1)])), atol=1e-6) and seen_mu[1] is None
+
+
+def test_two_devices_of_one_member_never_share_a_channel_mean(renv, monkeypatch):
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    rid = rows(renv)[0]["id"]
+    renv.db.conn.execute("UPDATE omi_recordings SET device_id = 'devA'")
+    renv.db.conn.execute("INSERT INTO omi_recordings (id, user_id, device_id, recording_key, created_at, status, audio_path, duration_s, started_at, repass_state, transcript) "
+                         "SELECT 'rB', user_id, 'devB', 'kB', created_at, status, audio_path, duration_s, started_at, 'pending', transcript FROM omi_recordings WHERE id = ?", (rid,))
+    renv.db.conn.commit()
+    res = {"ok": True, "dur_s": 3.0, "speech_s": 700.0, "asr_s": 1, "emb_s": 0, "words": [[" hi", 0.0, 0.4, 0.9]], "chunks": [[0.0, 2.0, "hi"]]}
+
+    def runner(manifest, out, timeout_s, mem_max="", threads=4):
+        with open(out, "a") as fh:
+            for it in json.loads(Path(manifest).read_text())["items"]:
+                emb = v(1, 0) if it["id"] == rid else v(0, 1)
+                fh.write(json.dumps({**res, "id": it["id"], "windows": [[0.0, 1.5, emb, 0.2], [0.75, 2.25, emb, 0.2]]}) + "\n")
+            fh.write(json.dumps({"done": True, "files": 2, "carried": 0, "failed": 0, "rtf": 0.4}) + "\n")
+        return 0
+
+    run(rp.run_night(budget_s=600, runner=runner))
+    got = {r["scope"]: r["n_units"] for r in renv.db.rows("SELECT scope, n_units FROM omi_channel_means")}
+    assert got == {"devA": 2, "devB": 2}                                                              # one mean per device, each from its OWN turns only
+    ma = run(who.load_mean(renv.db, OWNER, rp.MODEL_ID, who.CHANNEL_PENDANT, "devA"))
+    mb = run(who.load_mean(renv.db, OWNER, rp.MODEL_ID, who.CHANNEL_PENDANT, "devB"))
+    assert not np.allclose(ma, mb)
+
+
+def test_with_fewer_than_three_panel_prints_the_stored_registry_panel_mean_is_used(renv):
+    c = _registry(renv)
+    blob = lambda x: np.asarray(x, dtype=np.float32).tobytes()                                       # noqa: E731
+    for i, (pid, panel) in enumerate((("pa", A_), ("pb", B_), ("pc", C_))):
+        c.execute("INSERT INTO learned_voiceprints VALUES (?, ?, ?, ?, 'panel', ?, 0, 1)", (f"w{i}", OWNER, pid, rp.MODEL_ID, blob(panel)))
+    c.commit()
+    _p, mu3 = run(who.load_people(renv.db, OWNER, rp.MODEL_ID, None, persist=True))                  # three prints: the mean is computed and stored (model_id + channel panel)
+    assert mu3 is not None and renv.db.rows("SELECT channel, scope FROM omi_channel_means")[0]["channel"] == "panel"
+    c.execute("DELETE FROM learned_voiceprints WHERE people_id IN ('pb', 'pc')")
+    c.commit()
+    people, mu1 = run(who.load_people(renv.db, OWNER, rp.MODEL_ID, None))                            # one print left: its own "mean" would zero it, so the STORED mean stands
+    assert np.allclose(mu1, who.unit(mu3), atol=1e-5) and len(people) == 1
 
 
 def _one_shot(res, rid, seen):

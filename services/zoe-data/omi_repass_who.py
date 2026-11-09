@@ -185,7 +185,7 @@ async def store_mean(db, user_id: str, model_id: str, channel: str, scope: str, 
                      (user_id, model_id, channel, scope, _blob(unit(mean)), int(n_units), float(speech_s), stamp))
 
 
-async def load_people(db, user_id: str, model_id: str, mu: Optional[Any]) -> tuple:
+async def load_people(db, user_id: str, model_id: str, mu: Optional[Any], persist: bool = False) -> tuple:
     """(people for ``Refs``, the panel channel mean used). One registry: ``learned_voiceprints`` rows of this model for the member's own people, panel + pendant per person (named guests
     live in the panel channel). A person who may be a child is a label-only person and never matched (the rule everywhere else). Confirmed pendant seconds = the person's owner-tagged lines."""
     from person_age import person_may_be_child
@@ -199,7 +199,19 @@ async def load_people(db, user_id: str, model_id: str, mu: Optional[Any]) -> tup
         d[ch] = unit(_vec(emb))
         d["rej"] = max(d["rej"], int(rej or 0))
     panels = [d[CHANNEL_PANEL] for d in by.values() if CHANNEL_PANEL in d]
-    panel_mu = session_mean(panels) if len(panels) >= 3 else None            # the mean of the panel prints stands in for the mean of the panel clips (those are not kept)
+    # The mean of the panel PRINTS stands in for the mean of the panel clips (those are not kept). With one or two prints a mean would zero the only reference (and be noise), so it needs
+    # >= 3; below that the STORED registry panel mean (model_id + channel panel, scope "registry") is used, so a household that once had three keeps its offset.
+    if len(panels) >= 3:
+        panel_mu = session_mean(panels)
+        if persist:
+            try:
+                await store_mean(db, user_id, model_id, CHANNEL_PANEL, "registry", panel_mu, len(panels), 0.0)
+                await db.commit()
+            except Exception as exc:  # noqa: BLE001 - pre-0073: nothing to store into
+                if type(exc).__name__ != "UndefinedTableError" and "no such table" not in str(exc).lower():
+                    raise
+    else:
+        panel_mu = await load_mean(db, user_id, model_id, CHANNEL_PANEL, "registry")
     secs = {}
     if by:
         for pid, s in await _all(db, "SELECT tagged_person_id, SUM(end_ms - start_ms) FROM omi_segments WHERE user_id = ? AND tagged_person_id IS NOT NULL AND tag_source IS NOT NULL "
