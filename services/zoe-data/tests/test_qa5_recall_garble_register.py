@@ -83,7 +83,6 @@ def test_a_household_question_the_notes_answer_carries_the_packet(floor, questio
 @pytest.mark.parametrize("question", [
     "how old is the universe",          # a question, but nothing in the notes touches it (negative control for the gate)
     "what is the weather today",
-    "what time is it",
     "who is Ada Lovelace",
 ])
 def test_a_question_the_notes_have_nothing_on_injects_nothing(floor, question):
@@ -306,3 +305,34 @@ def test_the_replay_harness_never_writes_a_register(rdb, sent, monkeypatch):    
     monkeypatch.setenv("ZOE_MEMBER_REGISTER", "on")
     sent("be more casual", replay_isolation=True)
     assert run(mr.list_entries("ada_uid")) == []
+
+
+@pytest.mark.parametrize("question", [
+    "Good evening, how are you going tonight?",     # the probe's cold-first-turn utterance: +2.2 s TTFT when it was fetched
+    "what time is it",
+    "how are you?",
+])
+def test_a_question_with_no_content_word_is_never_fetched(floor, question):
+    assert mg.is_question_turn(question) is True
+    assert block(question) == ""
+    assert floor == []
+
+
+def test_a_slow_household_fetch_is_cut_off_and_the_turn_proceeds(monkeypatch):
+    import time as _t
+
+    monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
+    monkeypatch.setattr(zc, "_HOUSEHOLD_FETCH_BUDGET_S", 0.05)
+
+    async def slow(uid, msg, focus=None, no_offer=False):
+        await asyncio.sleep(5)
+        return PACKET
+
+    async def no_people(message, uid):
+        return []
+
+    monkeypatch.setattr(zc, "_fetch_for_prompt_packet", slow)
+    monkeypatch.setattr(zc, "_named_person_floor", no_people)
+    t0 = _t.monotonic()
+    assert block("how old is mira") == ""
+    assert _t.monotonic() - t0 < 1.0

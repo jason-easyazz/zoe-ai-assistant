@@ -1146,6 +1146,7 @@ async def _fetch_for_prompt_packet(user_id: str, message: str, focus=None, no_of
 # The household-question fallback shows fewer notes than a recall-shaped turn: it fires on many more turns, and each block is prefill.
 _HOUSEHOLD_MAX_BULLETS = 8
 _HOUSEHOLD_MAX_CHARS = 1100
+_HOUSEHOLD_FETCH_BUDGET_S = 0.4   # the fallback never holds first-token longer than this (probe: an unbounded fetch added +2.2 s cold)
 
 
 def _truncate_packet(packet: str, *, max_chars: int = _RECALL_MAX_CHARS,
@@ -1294,10 +1295,24 @@ async def _recall_context_block(message: str, user_id: str) -> str:
         return ""
     if shape == "challenge":
         return await _challenge_context_block(message, user_id)
+    if household:
+        # The fallback is opportunistic and runs BEFORE the first token, so it is bounded twice: a question with no content word
+        # (a greeting "how are you going tonight?") can never touch a packet, so it is not fetched at all; and the fetch itself has
+        # a hard budget, so a cold embedding / DB read costs at most that, never seconds of first-turn TTFT.
+        import memory_gate
+
+        if not memory_gate._touch_tokens(message):
+            return ""
     try:
-        packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
-                        else _fetch_for_prompt_packet(user_id, message, no_offer=True) if household
-                        else _fetch_for_prompt_packet(user_id, message))
+        if household:
+            packet = await asyncio.wait_for(_fetch_for_prompt_packet(user_id, message, no_offer=True),
+                                            timeout=_HOUSEHOLD_FETCH_BUDGET_S)
+        else:
+            packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
+                            else _fetch_for_prompt_packet(user_id, message))
+    except asyncio.TimeoutError:
+        logger.info("SEAM_HOUSEHOLD user=%s budget_exceeded=%.2fs - turn proceeds without the block", user_id, _HOUSEHOLD_FETCH_BUDGET_S)
+        return ""
     except Exception as exc:  # noqa: BLE001 — the recall floor must never break a turn
         logger.warning(
             "seam recall inject: packet fetch failed, continuing without it: %s", exc
