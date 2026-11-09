@@ -79,7 +79,7 @@ def test_negative_control_non_emergency_questions_stay_in_the_thread(text):
 # 3. the locale's number, from config ------------------------------------------------------------------------------------
 def test_chest_tightness_gives_the_number_plainly_first():
     out = reply("my chest feels tight and my left arm is tingly")
-    assert out.startswith("Chest tightness") and "Ring 000 now" in out
+    assert out.startswith("Ring 000 now.")
 
 
 def test_number_comes_from_the_household_country_not_a_constant(monkeypatch):
@@ -127,7 +127,8 @@ def test_glucose_bands(text, needle):
     assert needle in reply(text)
 
 
-@pytest.mark.parametrize("text", ["i put 2 sugars in my tea", "this cake has 300 grams of sugar", "sugar is on the list"])
+@pytest.mark.parametrize("text", ["i put 2 sugars in my tea", "this cake has 300 grams of sugar", "sugar is on the list",
+                                  "sugar is 300 grams in this recipe", "the sugar was 2 cups", "sugar is 5 dollars a kilo"])
 def test_negative_control_sugar_talk_is_not_a_reading(text):
     assert reply(text) is None
 
@@ -152,3 +153,23 @@ def test_seam_runs_it_right_after_the_distress_hand_off():
     import zoe_flue_client
     src = inspect.getsource(zoe_flue_client.run_flue_brain_streaming)
     assert src.index("distress_handoff.handle") < src.index("medical_safety.handle") < src.index("_resolve_clarification(message")
+
+
+# review round (cross-review, PR #2356): false positives and the unit boundary -------------------------------------------
+def test_a_unitless_40_is_severely_low_mg_dl_never_40_mmol():
+    out = reply("my blood sugar is 40")
+    assert "mg/dL" in out and "is low" in out and "drink some water" not in out
+
+
+@pytest.mark.parametrize("text", ["what number do i call if the toast burns", "this blurry vision board needs a new photo",
+                                  "seeing spots on the freshly painted wall", "i swallowed my pride and the bleach smell was strong"])
+def test_negative_control_ordinary_phrases_are_not_hijacked(text):
+    assert reply(text) is None
+
+
+def test_a_polite_lead_in_is_not_a_thread():
+    assert "straight back up" not in reply("could you please tell me what number i ring if margaret collapses")
+
+
+def test_burns_that_matter_still_count():
+    assert reply("what number do i ring if the baby is badly scalded").startswith("Ring 000.")

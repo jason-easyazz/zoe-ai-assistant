@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_MEDICAL_SAFETY"
 DATA_DIR = Path(__file__).with_name("medical_safety_data")
 MAX_CHARS = 2000
-_FILLER = re.compile(r"\b(?:and|but|so|oh|ok|okay|sorry|um|uh|hold on|wait|actually|hang on|quick question|one sec|also|by the way)\b|[^\w\s]", re.I)
+_FILLER = re.compile(r"\b(?:and|but|so|oh|ok|okay|sorry|um|uh|hold on|wait|actually|hang on|quick question|one sec|also|by the way|hey|zoe|please|could|can|would|you|tell|me|just|quickly|quick)\b|[^\w\s]", re.I)
 _SELF_INGEST = re.compile(r"(?<!\w)(?:i|ive|i have|i just|i accidentally|i think i|im pretty sure i)\s+(?:accidentally |just |maybe )?(?:ate|eaten|swallowed|drank|drunk|chewed|licked|ingested)(?!\w)")
 _GLUCOSE_NUM = r"(\d{1,3}(?:\.\d)?)(?:\s*(mmol|mg))?"
 
@@ -84,6 +84,7 @@ def _rx() -> dict:
         "ask": w(nq["ask"]), "event": w(nq["event"]), "poison_event": w(nq["poison_event"]),
         "flags": [(f["id"], f["tier"], w(f["re"])) for f in d["red_flags"]],
         "gl": re.compile(rf"(?<!\w)(?:{gl['term']})\W+(?:[a-z]+\W+){{0,4}}?{_GLUCOSE_NUM}", re.I),
+        "gl_after": re.compile(gl["not_glucose_after"], re.I), "gl_ctx": re.compile(w(gl["not_glucose_context"])),
         "gl_plain": re.compile(rf"(?<!\w)(?:{gl['plain_term']})\W+(?:{gl['plain_link']})\W+(?:[a-z]+\W+){{0,3}}?{_GLUCOSE_NUM}", re.I),
     }
 
@@ -110,11 +111,14 @@ def _glucose(s: str, rx: dict) -> Optional[Verdict]:
         if not m:
             continue
         raw, unit = m.group(1), (m.group(2) or "").lower()
+        # a recipe quantity, a price or a duration is not a reading ("sugar is 300 grams in this recipe")
+        if rx["gl_after"].search(s[m.end(1):m.end(1) + 24]) or (key == "gl_plain" and rx["gl_ctx"].search(s)):
+            continue
         try:
             n = float(raw)
         except ValueError:
             continue
-        unit = unit or ("mmol" if 1.0 <= n <= 40 else ("mg" if 40 < n <= 700 else ""))
+        unit = unit or ("mmol" if 1.0 <= n <= 30 else ("mg" if 30 < n <= 700 else ""))   # 40 with no unit is 40 mg/dL (severely low), never 40 mmol/L
         if unit == "mmol" and 1.0 <= n <= 40 or unit == "mg" and 20 <= n <= 700:
             return Verdict("glucose", "glucose", raw, unit, lead=s[:m.start()])
     return None
