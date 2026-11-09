@@ -96,6 +96,20 @@ async def note_introduction(user_id: str, message: str) -> str:
         return ""
 
 
+async def forget_user(user_id: str) -> None:
+    """Member erase (``struggle_detector.delete_user``): drop the introduced names. RAISES on a store failure (fail closed)."""
+    if not (user_id or "").strip():
+        return
+    import user_prefs
+
+    try:
+        await user_prefs.delete_pref(user_id, PREF_KEY)
+    except RuntimeError as exc:
+        if "not initialised" in str(exc):
+            return          # no database in this process (a slim lane): nothing is stored here to erase
+        raise
+
+
 async def names(user_id: str) -> frozenset:
     """Every folded name that is the speaker's own: full names AND first names. Empty when none is known. Never raises."""
     out: set = set()
@@ -115,7 +129,14 @@ async def names(user_id: str) -> frozenset:
             import user_prefs
 
             intro = await user_prefs.get_pref(user_id, PREF_KEY, []) or []
-            raw += [str(x) for x in intro] if isinstance(intro, list) else []
+            intro = [str(x) for x in intro] if isinstance(intro, list) else []
+            try:    # a name the member had forgotten no longer shapes contact suppression
+                import memory_forgotten as _mf
+
+                intro = [x for x in intro if not await _mf.matches(user_id, x)]
+            except Exception:  # noqa: BLE001
+                pass
+            raw += intro
         except Exception:  # noqa: BLE001
             pass
         # a handle account ("jason", "jason_2", "jason.smith") is its owner's name; a GENERATED id (a hex suffix: "demo_bar_0a1b2c3d")

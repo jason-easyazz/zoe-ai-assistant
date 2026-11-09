@@ -165,12 +165,15 @@ def weather_places(text: str) -> list[str]:
     anchor = _WEATHER_ANCHOR_RE.search(low)
     if not anchor:
         return []
-    m = _PREP_PLACE_RE.search(low, anchor.start())
-    if not m:
-        return []
-    place, rest = _place_words(m.group("rest"))
-    if not place:
-        return []
+    pos, m, place, rest = anchor.start(), None, "", ""
+    while True:
+        m = _PREP_PLACE_RE.search(low, pos)
+        if not m:
+            return []
+        place, rest = _place_words(m.group("rest"))
+        if place:
+            break
+        pos = m.start() + 1        # "for the weekend in perth": the first preposition introduced a time - the town follows a later one
     places = [place.title()]
     after = (rest + low[m.end("rest"):]) if rest else low[m.end("rest"):]
     for _ in range(2):

@@ -391,3 +391,57 @@ def test_the_forget_redaction_covers_a_row_that_holds_quotes():
 
     out = ffc.redact_forget_quote('Done — I forgot: "User called the incident a "meltdown" at the shops".')
     assert "meltdown" not in out and out.startswith("Done — I forgot that")
+
+
+def test_a_town_after_a_temporal_preposition_is_still_found():
+    import weather_speech as ws
+
+    assert ws.weather_place("weather forecast for the weekend in Perth") == "Perth"
+    assert ws.weather_place("weather for this weekend in Albany") == "Albany"
+    assert ws.weather_place("weather in Perth") == "Perth"                     # negative control
+    assert ws.weather_place("weather for the weekend") == ""                   # no town at all: the household default
+
+
+def test_the_digest_log_line_for_a_dropped_fact_carries_a_tag_not_the_words():
+    import pathlib
+
+    import memory_digest
+
+    src = pathlib.Path(memory_digest.__file__).read_text(encoding="utf-8")
+    line = next(ln for ln in src.splitlines() if "a fact a correction turn cannot have said" in ln)
+    assert "utterance_tag(fact)" in line and "fact[:50]" not in line
+
+
+def test_a_member_erase_clears_the_introduced_names(monkeypatch):
+    import asyncio
+
+    import own_name
+    import user_prefs
+
+    store = {"names": ["Priya"]}
+
+    async def delete_pref(uid, key, **_k):
+        store.pop("names", None)
+
+    monkeypatch.setattr(user_prefs, "delete_pref", delete_pref)
+    asyncio.run(own_name.forget_user("member-a"))
+    assert "names" not in store
+
+
+def test_a_forgotten_introduced_name_stops_counting(monkeypatch):
+    import asyncio
+
+    import memory_forgotten
+    import own_name
+    import user_prefs
+
+    async def get_pref(uid, key, default=None, **_k):
+        return ["Priyanka", "Walter"] if key == own_name.PREF_KEY else default
+
+    async def matches(uid, text, **_k):
+        return "priyanka" in text.lower()
+
+    monkeypatch.setattr(user_prefs, "get_pref", get_pref)
+    monkeypatch.setattr(memory_forgotten, "matches", matches)
+    got = asyncio.run(own_name.names("member-a"))
+    assert "walter" in got and "priyanka" not in got
