@@ -255,3 +255,15 @@ def test_a_later_routine_medication_does_not_hide_a_dangerous_ingestion():
     assert ms.detect(text).cls.startswith("ingest")
     # negative control: the routine phrasing alone is still not a poisoning
     assert not ms.detect("he swallowed his morning tablets").cls.startswith("ingest")
+
+
+# review round 4 (Codex bot) ---------------------------------------------------------------------------------------------
+def test_accidentally_taking_too_many_tablets_is_an_ingestion_even_beside_a_glucose_reading():
+    out = reply("i accidentally took 20 paracetamol tablets and my blood sugar is 5.5")
+    assert out.startswith("Ring the Poisons Information line")
+
+
+@pytest.mark.parametrize("text", ["i took my tablets with breakfast", "she took two ibuprofen for her headache, can i go to bed",
+                                  "he took the dog out after his tablets"])
+def test_negative_control_ordinary_took_is_not_an_ingestion(text):
+    assert reply(text) is None

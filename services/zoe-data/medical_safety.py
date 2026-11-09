@@ -79,7 +79,7 @@ def _rx() -> dict:
     w = lambda body: re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.I)  # noqa: E731
     ing, nq, gl = d["ingest"], d["number_question"], d["glucose"]
     return {
-        "verb": w(ing["verb"]), "sub": w(ing["substance"]), "idiom": re.compile(ing["idioms"], re.I),
+        "verb": w(ing["verb"]), "sub": w(ing["substance"]), "idiom": re.compile(ing["idioms"], re.I), "took": w(ing["took_verb"]), "took_risky": w(ing["took_risky"]),
         "human": w(ing["human"]), "animal": w(ing["animal"]),
         "neg_adj": re.compile(rf"(?<!\w)(?:{d['negation']})(?:\s+\w+){{0,2}}\s*$", re.I), "unsure": re.compile(r"(?<!\w)(?:not sure|unsure|not certain|dont know|no idea)(?!\w)", re.I),
         "term_any": w(gl["term"] + "|" + gl["plain_term"]),
@@ -129,6 +129,15 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
             if animal and not human:
                 return Verdict("ingest_animal", "poison_animal", lead=s[:v.start()])
             return Verdict("ingest_human", "poison_human", lead=s[:v.start()])
+        # "took" is ordinary ("took my tablets"): only a concerning amount or an accident makes it an ingestion ("accidentally took 20 paracetamol")
+        for v in rx["took"].finditer(sentence):
+            tail = sentence[v.start(): v.end() + 70]
+            if rx["sub"].search(tail) and rx["took_risky"].search(sentence) and not rx["idiom"].search(sentence[max(0, v.start() - 8):]):
+                human = bool(rx["human"].search(sentence) or _SELF_INGEST.search(sentence) or re.search(r"(?<!\w)(?:i|ive|i have)(?!\w)", sentence[:v.start()]))
+                animal = bool(rx["animal"].search(sentence[max(0, v.start() - 45):v.start()]))
+                if animal and not human:
+                    return Verdict("ingest_animal", "poison_animal", lead=s[:v.start()])
+                return Verdict("ingest_human", "poison_human", lead=s[:v.start()])
     return None
 
 
