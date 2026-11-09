@@ -90,8 +90,8 @@ def explicit_text(text: str) -> Optional[str]:
 
     if is_evidence_question(low) or is_memory_challenge(low) or is_own_fact_question(low) or is_event_time_question(low):
         return None
-    if _META_RE.search(low):
-        return None
+    if _META_RE.search(low) or ws._NOT_WEATHER_RE.search(low):
+        return None      # a word question, a thermostat / room / indoor-temperature ask or another meaning of the word: the ordinary path's
     places = ws.weather_places(low)
     if not places or any(p.lower() in _LANGUAGES for p in places):
         return None

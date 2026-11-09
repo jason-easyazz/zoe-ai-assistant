@@ -109,7 +109,8 @@ def test_explicit_place_weather_text():
               "remember that the weather in perth was awful", "add weather stripping in perth", "please remind me about the forecast in perth",
               "set a reminder to check the weather in broome",
               "what exactly did i say about weather in perth", "do you remember what i said about the weather in perth",
-              "what does weather mean in french", "how do you say weather in spanish"):
+              "what does weather mean in french", "how do you say weather in spanish",
+              "whats the temperature in the office in perth", "set the temperature in the bedroom in perth", "whats the temp inside in perth"):
         assert wf.explicit_text(t) is None, t
 
 
