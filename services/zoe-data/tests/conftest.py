@@ -153,6 +153,7 @@ def _self_review_private_dirs(monkeypatch, tmp_path):
     cascade's ``self_review`` step, ``struggle_detector.delete_user``) reads and writes a per-test directory, never the box's own."""
     monkeypatch.setenv("ZOE_SELF_REVIEW_DIR", str(tmp_path / "self-review"))
     monkeypatch.setenv("ZOE_SELF_REVIEW_IMPROVER_DIR", str(tmp_path / "self-improver"))
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "night-extract"))     # the shadow night pre-pass's proposals: the cascade / member erase use a per-test dir
     yield
 
 
