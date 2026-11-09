@@ -109,7 +109,7 @@ def _rx() -> dict:
     return {
         "verb": w(ing["verb"]), "sub": w(ing["substance"]), "idiom": re.compile(ing["idioms"], re.I), "took": w(ing["took_verb"]), "took_risky": w(ing["took_risky"]),
         "human": w(ing["human"]), "animal": w(ing["animal"]), "obj_urgent": w(ing["obj_urgent"]), "obj_minor": w(ing["obj_minor"]), "obj_signs": w(ing["obj_signs"]),
-        "pairs": [(p["id"], p["tier"], _pair_rx(p, d["pair_gap_block"]), re.compile(p["skip"], re.I) if p.get("skip") else None) for p in d.get("pairs", [])],
+        "pairs": [(p["id"], p["tier"], _pair_rx(p, d["pair_gap_block"]), re.compile(rf"(?<!\w)(?:{p['skip']})(?!\w)", re.I) if p.get("skip") else None) for p in d.get("pairs", [])],
         "neg_adj": re.compile(rf"(?<!\w)(?:{d['negation']})(?:\s+\w+){{0,2}}\s*$", re.I), "unsure": re.compile(r"(?<!\w)(?:not sure|unsure|not certain|dont know|no idea)(?!\w)", re.I),
         "term_any": w(gl["term"] + "|" + gl["plain_term"]),
         "ask": w(nq["ask"]), "event": w(nq["event"]), "poison_event": w(nq["poison_event"]),

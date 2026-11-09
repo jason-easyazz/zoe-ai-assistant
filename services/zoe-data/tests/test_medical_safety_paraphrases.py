@@ -33,7 +33,7 @@ CHEST_SYM = ["tight", "tightness", "pressure", "pain", "squeezing", "heavy", "cr
 CHEST_T = ["my chest feels {s}", "my chest is {s}", "my chest has gone {s}", "i have a {s} feeling in my chest", "got a {s} feeling in my chest, been going an hour",
            "{s} in my chest", "there is {s} across my chest", "he says his chest is {s}"]
 CHEST_N = ["a tight feeling in my chest", "a pressure in my chest", "chest tightness", "chest pressure", "chest pain", "tightness in my chest", "my chest is tight",
-           "chest feels tight", "chest is really tight", "a squeezing pain in my chest", "pressure on my chest", "my chest hurts"]
+           "chest feels tight", "got a tight feeling in my chest, it wont stop", "my chest feels constricted and i cant stop shaking", "chest pain and i cant stop sweating", "my chest is tight and my eyes are watering from the topic", "chest is really tight", "a squeezing pain in my chest", "pressure on my chest", "my chest hurts"]
 VISION_S = ["blurry", "blurred", "foggy", "hazy", "double", "fuzzy", "cloudy"]
 VISION_T = ["my eyes are {s}", "my vision is {s}", "my vision has gone {s}", "{s} vision", "i have {s} vision since this morning", "my eyes went {s}",
             "bad headache for 3 days and now my eyes are {s}", "her vision keeps going {s}"]
