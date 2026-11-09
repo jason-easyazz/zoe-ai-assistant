@@ -1,8 +1,8 @@
 /*
- * Touch home: time/temp alignment contract + the sun/moon that rises and sets beside the temp.
- * No browser, no network: runs the REAL CEL block of touch/home.html (CEL-BEGIN..CEL-END) in a vm sandbox and reads the page's CSS/markup.
+ * Touch home: the time/temp edge alignment contract + the BIG sun/moon that crosses the whole panel on the real sunrise/sunset arc.
+ * No browser, no network: runs the REAL CEL block of touch/home.html (CEL-BEGIN..CEL-END) in a vm sandbox and reads the page's CSS/markup/canvas code.
  * The measured alignment (ink edges vs the orb) is asserted in a real Chromium by scripts/maintenance/estate_browser_verify.py.
- * Negative control: CEL_SRC=<mutated copy of home.html> (e.g. flip sin to cos, drop the day-shift, move hclock back to left:74px) - the named checks go red.
+ * Negative control: CEL_SRC=<mutated copy of home.html> (e.g. flip sin to cos, drop the day-shift, shrink the apex, add the small icon back) - the named checks go red.
  * Run: node services/zoe-ui/dist/test_touch_home_sun_moon.js
  */
 const fs = require('fs');
@@ -17,14 +17,18 @@ const box = {};
 vm.createContext(box);
 vm.runInContext(m[0], box);
 const pos = (now, sr, ss) => vm.runInContext(`celPos(${now},${sr},${ss})`, box);
+const xy = (p, h) => vm.runInContext(`celXY(${p},${h})`, box);
 const phase = (now) => vm.runInContext(`moonPhase(${now})`, box);
-const svg = (f) => vm.runInContext(`moonSvg(${f})`, box);
+const mpath = (f) => vm.runInContext(`moonPath(${f})`, box);
 
 let n = 0;
 function check(name, fn) { fn(); n++; console.log('ok  ' + name); }
 const at = (iso) => new Date(iso).getTime();
 const SR = at('2026-11-09T05:22:00'), SS = at('2026-11-09T18:41:00');
 const near = (a, b, tol, msg) => assert(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
+const W = 1280, H = 720;
+// The old static sprites (kept verbatim for every other screen): sun sprite 360 px, solid disc to 25% of its radius; moon sprite 240 px.
+const SUN_R = 0.25 * 180;
 
 check('sun: on the horizon at sunrise, highest at solar noon, back on the horizon at sunset', () => {
   const r = pos(SR, SR, SS), noon = pos((SR + SS) / 2, SR, SS), s = pos(SS - 1, SR, SS);
@@ -55,9 +59,48 @@ check('no feed (0/garbage/inverted): 6am-6pm fallback, never NaN', () => {
     assert(!Number.isNaN(noon.p) && !Number.isNaN(night.p));
   });
 });
-check('h and p always stay in 0..1 (the arc can never leave its band)', () => {
+check('h and p always stay in 0..1', () => {
   for (let t = 0; t < 86400000 * 3; t += 600000) { const r = pos(at('2026-11-09T00:00:00') + t, SR, SS); assert(r.h >= 0 && r.h <= 1 && r.p >= 0 && r.p <= 1, 'out of range at +' + t); }
 });
+
+// ---- the full-screen arc ----
+check('arc: rises from BELOW the bottom edge at the LEFT of the panel (sunrise) - disc fully off screen', () => {
+  const a = xy(0, 0); assert(a.y - SUN_R >= H, `disc must be below the bottom edge: y=${a.y}`); assert(a.x > 0 && a.x < W * 0.12, 'left side: x=' + a.x);
+});
+check('arc: sets below the bottom edge at the RIGHT of the panel (sunset)', () => {
+  const a = xy(1, 0); assert(a.y - SUN_R >= H, `disc below the bottom edge: y=${a.y}`); assert(a.x < W && a.x > W * 0.88, 'right side: x=' + a.x);
+});
+check('arc: apex at solar noon is the TOP-MIDDLE, fully on screen, at or above the old static spot (y 170)', () => {
+  const a = xy(0.5, 1); near(a.x, W / 2, 20, 'noon x is the middle'); assert(a.y - SUN_R >= 0, 'whole disc on screen: y=' + a.y); assert(a.y <= 170, 'at or above the old sun spot: y=' + a.y);
+  assert(a.y <= H * 0.25, 'near the top: ' + a.y);
+});
+check('arc: x is linear in the day fraction and spans nearly the full width; y is the symmetric sin arc', () => {
+  let prev = null;
+  for (let i = 0; i <= 20; i++) { const p = i / 20, a = xy(p, Math.sin(Math.PI * p)); if (prev) assert(a.x > prev.x, 'x increases');
+    const mirror = xy(1 - p, Math.sin(Math.PI * (1 - p))); near(a.y, mirror.y, 0.5, 'symmetric about noon'); prev = a; }
+  const a0 = xy(0, 0), a1 = xy(1, 0); assert(a1.x - a0.x >= W * 0.85, 'spans nearly the full width: ' + (a1.x - a0.x));
+  near(xy(0.25, 0).x - a0.x, (a1.x - a0.x) / 4, 0.5, 'linear x');
+});
+check('the body is drawn at the arc EVERY frame from the real feed, so a first seating cannot replay a sunrise and the dusk handover cannot slide', () => {
+  assert(/cp=celPos\(now,_cel\.sr,_cel\.ss\),xy=celXY\(cp\.p,cp\.h\)/.test(HOME));
+  assert(/if\(cp\.kind==='sun'&&sunOn\)ctx\.drawImage\(sp\.sun,xy\.x-180,xy\.y-180\)/.test(HOME), 'sun drawn centred on the arc point at its OLD sprite size (360 px)');
+  assert(/cp\.kind==='moon'&&\(moonOn\|\|bodyNight\)\)ctx\.drawImage\(moonSprite\(moonPhase\(now\)\),xy\.x-120,xy\.y-120\)/.test(HOME), 'moon drawn centred on the arc point');
+});
+check('size: the sun sprite is exactly the old one (360 px, same stops) and the moon disc matches the sun disc', () => {
+  assert(/sun:mk\(360,360,function\(x\)\{var g=x\.createRadialGradient\(180,180,0,180,180,180\);g\.addColorStop\(0,'rgba\(255,246,208,1\)'\);g\.addColorStop\(\.25,'rgba\(255,240,190,1\)'\);g\.addColorStop\(\.29,'rgba\(255,214,120,\.55\)'\);g\.addColorStop\(\.6,'rgba\(255,200,110,\.16\)'\);g\.addColorStop\(1,'rgba\(255,200,110,0\)'\)/.test(HOME), 'old sun sprite untouched');
+  const mr = +/x\.fillStyle='rgba\(150,166,214,\.28\)';x\.beginPath\(\);x\.arc\(120,120,(\d+),0,6\.29\)/.exec(HOME)[1], sc = +/x\.scale\(([\d.]+),/.exec(HOME)[1];
+  near(mr, SUN_R, 6, 'moon disc radius vs sun disc radius'); near(10 * sc, SUN_R, 6, 'lit moon radius vs sun disc radius');
+});
+check('the body is on the #cv canvas (behind every panel element), and the small icon beside the temp is gone', () => {
+  assert(/<canvas id="cv"><\/canvas>\s*<div id="glow">/.test(HOME));
+  assert(!/hCelI|class="hcel"|id="hCel"|class="hrow"|\.hcel/.test(HOME), 'no small icon element/CSS left');
+});
+
+check('white night text keeps a tight dark halo so the moon passing behind it stays readable', () => {
+  assert(/#stage:not\(\.wxlight\) \.hfull \.hclock \.ht,[^{]*\{text-shadow:0 0 3px rgba\(4,7,24,\.9\)/.test(HOME));
+});
+
+// ---- the moon's phase ----
 check('moon phase from the date alone: new 2026-11-09, full ~2026-11-24, ~29.5 day period', () => {
   const circ = (a, b) => { const d = Math.abs(a - b); return Math.min(d, 1 - d); };
   assert(circ(phase(at('2026-11-09T14:00:00Z')), 0) < 0.03, 'new moon ' + phase(at('2026-11-09T14:00:00Z')));
@@ -67,29 +110,24 @@ check('moon phase from the date alone: new 2026-11-09, full ~2026-11-24, ~29.5 d
 });
 // Rasterise the lit path the way SVG does (two half-arcs between (12,2) and (12,22)) and measure the REAL lit area and which side it is on.
 function litArea(d) {
-  const m = /^M12 2A10 10 0 0 ([01]) 12 22A([\d.]+) 10 0 0 ([01]) 12 2Z$/.exec(d);
-  assert(m, 'unexpected path shape: ' + d);
-  const sl = +m[1], rx = +m[2], st = +m[3], pts = [];
+  const mm = /^M12 2A10 10 0 0 ([01]) 12 22A([\d.]+) 10 0 0 ([01]) 12 2Z$/.exec(d);
+  assert(mm, 'unexpected path shape: ' + d);
+  const sl = +mm[1], rx = +mm[2], st = +mm[3], pts = [];
   const side = (sweep, down) => (down ? (sweep ? 1 : -1) : (sweep ? -1 : 1));   // clockwise from the top is the right side; from the bottom, the left
   for (let i = 0; i <= 200; i++) { const u = (Math.PI * i) / 200; pts.push([12 + side(sl, true) * 10 * Math.sin(u), 12 - 10 * Math.cos(u)]); }
   for (let i = 0; i <= 200; i++) { const u = (Math.PI * i) / 200; pts.push([12 + side(st, false) * rx * Math.sin(u), 12 + 10 * Math.cos(u)]); }
   let a = 0, cx = 0; for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; a += x1 * y2 - x2 * y1; cx += (x1 + x2) * (x1 * y2 - x2 * y1); }
   a /= 2; return { area: Math.abs(a), cx: cx / (6 * a) };   // centroid x: < 12 means the lit part is on the LEFT
 }
-const pathOf = (f) => /d="([^"]+)"/.exec(svg(f))[1];
-check('moon drawing: the lit AREA is the real illuminated fraction (new ~0, quarter ~half, full ~whole disc), on the left while waxing, right while waning', () => {
+check('moon drawing: the lit AREA is the real illuminated fraction, on the left while waxing (southern sky), right while waning', () => {
   const disc = Math.PI * 100;
   [0, 0.05, 0.1, 0.2, 0.25, 0.35, 0.45, 0.5, 0.55, 0.65, 0.75, 0.85, 0.95].forEach((f) => {
-    const want = (1 - Math.cos(2 * Math.PI * f)) / 2, got = litArea(pathOf(f)).area / disc;
+    const want = (1 - Math.cos(2 * Math.PI * f)) / 2, got = litArea(mpath(f)).area / disc;
     near(got, want, 0.01, 'lit fraction at phase ' + f);
   });
-  assert(litArea(pathOf(0)).area < 1, 'new moon: nothing lit'); near(litArea(pathOf(0.5)).area / disc, 1, 0.005, 'full moon: whole disc');
-  [0.1, 0.25, 0.4].forEach((f) => assert(litArea(pathOf(f)).cx < 12, 'waxing lights the left at ' + f));
-  [0.6, 0.75, 0.9].forEach((f) => assert(litArea(pathOf(f)).cx > 12, 'waning lights the right at ' + f));
-});
-check('sun colour: amber at the horizon, pale gold when high', () => {
-  const lo = vm.runInContext('sunColor(0)', box), hi = vm.runInContext('sunColor(1)', box);
-  assert.strictEqual(lo, 'rgb(255,138,61)'); assert.strictEqual(hi, 'rgb(255,214,102)');
+  assert(litArea(mpath(0)).area < 1, 'new moon: nothing lit'); near(litArea(mpath(0.5)).area / disc, 1, 0.005, 'full moon: whole disc');
+  [0.1, 0.25, 0.4].forEach((f) => assert(litArea(mpath(f)).cx < 12, 'waxing lights the left at ' + f));
+  [0.6, 0.75, 0.9].forEach((f) => assert(litArea(mpath(f)).cx > 12, 'waning lights the right at ' + f));
 });
 
 // ---- the page contract (CSS + markup), pinned so a later edit cannot quietly undo the alignment ----
@@ -98,37 +136,14 @@ check('time block starts at the orb\'s left edge: .hclock left == #orb left', ()
   const orbLeft = css(/#orb\{position:absolute;left:(\d+)px/, '#orb left'), clockLeft = css(/\.hfull \.hclock\{position:absolute;left:(\d+)px/, '.hclock left');
   assert.strictEqual(clockLeft, orbLeft);
 });
-check('temp mirrors it: .htemp right == .hclock left, and nothing re-overrides it (the old right:120px "home cog" rule is gone)', () => {
+check('temp mirrors it: .htemp right == .hclock left, and nothing re-overrides it', () => {
   const clockLeft = css(/\.hfull \.hclock\{position:absolute;left:(\d+)px/, '.hclock left');
   const rights = [...HOME.matchAll(/\.hfull \.htemp\{[^}]*?right:(\d+)px/g)].map((x) => x[1]);
   assert.deepStrictEqual(rights, [clockLeft], 'exactly one .htemp right rule: ' + rights);
 });
-check('the sun/moon sits in the temp row, left of the number, inside a band the icon cannot leave', () => {
-  const row = /class="hrow"><div class="hcel" id="hCel"[^>]*><div class="hcelI" id="hCelI"><\/div><\/div><div class="n">/.test(HOME);
-  assert(row, 'hcel must precede .n inside .hrow');
-  const track = +css(/\.hfull \.hcel\{[^}]*?width:(\d+)px/, 'track width'), icon = +css(/\.hfull \.hcelI\{[^}]*?width:(\d+)px/, 'icon width');
-  const travel = +css(/\(pos\.p\*(\d+)\)\.toFixed/, 'x travel');
-  assert(travel + icon <= track, `icon (${icon}) + x travel (${travel}) must fit the track (${track})`);
-  const trackH = +css(/\.hfull \.hcel\{[^}]*?height:(\d+)px/, 'track height'), iconH = +css(/\.hfull \.hcelI\{[^}]*?height:(\d+)px/, 'icon height');
-  const ym = /\((\d+)-(\d+)\*pos\.h\)\.toFixed/.exec(HOME); assert(ym, 'y formula'); const y0 = +ym[1], amp = +ym[2];
-  assert(y0 - amp >= 0, 'peak stays inside the band top');
-  assert(travel >= 100 && travel <= 140, 'x travel reads as an arc: ' + travel); assert(amp >= 56, 'noon is clearly the top: ' + amp);
-  assert(y0 + iconH / 2 === trackH, 'the icon centre sits exactly on the horizon (band bottom) at sunrise and sunset');
-  assert(+css(/\.hfull \.hcel\{[^}]*?margin-top:-(\d+)px/, 'margin-top') === trackH - 58, 'the band extends upward only, so the row (and the Clear-sky label under it) does not move'); assert(y0 + iconH / 2 <= trackH + 1, 'horizon seat stays on the track');
-});
-check('motion is subtle and re-seated every few minutes; first seating never animates', () => {
-  assert(/\.hcelI\[data-mv\]\{transition:transform \d+s linear/.test(HOME), 'transition only after the first seating');
-  assert(!/\.hcelI\{[^}]*transition/.test(HOME), 'the base rule must not animate (a visit would replay the sunrise)');
-  assert(/Date\.now\(\)-_cel\.at>=180000/.test(HOME), '3-minute re-seat');
-  assert(/_cel\.key&&Date\.now\(\)-_cel\.at>=180000/.test(HOME), 'the re-seat is keyed on "seated", so the fallback seat also keeps moving when the feed never answers');
-  assert(/prefers-reduced-motion: reduce\)\{[^}]*transition-duration:\.001ms!important/.test(HOME), 'global reduced-motion rule still present');
-});
-check('a new body (sun at dusk -> moon, moon at dawn -> sun) is seated without a transition, so it never slides back across the band', () => {
-  assert(/if\(key!==_cel\.key\)\{_cel\.key=key;el\.removeAttribute\('data-mv'\);/.test(HOME));
-  assert(/if\(!el\.hasAttribute\('data-mv'\)\)setTimeout\(function\(\)\{el\.setAttribute\('data-mv'/.test(HOME), 'motion is restored after the seat');
-});
-check('home does not also draw the big canvas sun/moon (one sun, not two)', () => {
-  assert(/if\(_cur!=='home'\)ctx\.drawImage\(nt\?sp\.moon:sp\.sun/.test(HOME));
+check('every other screen keeps the old static sprites; reduced-motion keeps the still-sky repaint', () => {
+  assert(/else ctx\.drawImage\(nt\?sp\.moon:sp\.sun,bx-\(nt\?120:180\),by-\(nt\?120:180\)\)/.test(HOME));
+  assert(/if\(RM\)\{setTimeout\(function\(\)\{requestAnimationFrame\(frame\);\},1000\);\}/.test(HOME), 'reduced motion repaints once a second');
 });
 check('weather feed fields used are the ones the router already returns (sunrise/sunset), no new API', () => {
   assert(/Date\.parse\(w\.sunrise\)/.test(HOME) && /Date\.parse\(w\.sunset\)/.test(HOME));
