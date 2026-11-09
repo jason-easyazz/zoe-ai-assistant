@@ -231,6 +231,15 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
                 ex = await extract_slots_for_intent(intent_name, text)
                 if not ex:
                     return None
+                if intent_name == "list_add":
+                    # the router's "which list?" decision (write_intent_gate) is never in the extractor's slots: re-apply the same rule
+                    # here or the expert lane would write "bolts" to the shopping list unasked
+                    import intent_router as _ir
+                    import write_intent_gate as _wig
+
+                    if (str(ex.get("list_type") or "").strip().lower() in ("", "shopping") and not _wig.names_a_list(text)
+                            and _ir._needs_list_choice(str(ex.get("item") or ""))):
+                        ex = dict(ex, ask_list=True, list_type="")
                 slots = ex
             elif kind == "direct":
                 # Regex slots are complete: nothing to extract. Run as the REAL
@@ -366,6 +375,13 @@ def _plan(domain: str, text: str):
             r"going\s+to|gonna|sunny)\b", low))
         return ("weather", {"forecast": fc, **loc}, "read")
     if domain == "time":
+        # A when / what-time question about the person's OWN life is never the clock: "what time do I usually get up?" answered
+        # "It's 2:10 PM." (QA 2026-11-08) because the head claims `time` on the words alone and the precedence flags can be dark.
+        # Unconditional: this only ever hands a clearly personal question to the brain (recall floor + calendar), never a clock ask.
+        from memory_gate import is_event_time_question, is_own_fact_question
+
+        if is_event_time_question(text) or is_own_fact_question(text):
+            return None
         det = detect_intent(text, log_miss=False)
         name = det.name if det and det.name in ("time_query", "date_query") else "time_query"
         return (name, {}, "read")
