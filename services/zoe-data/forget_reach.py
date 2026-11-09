@@ -223,6 +223,12 @@ OTHER: tuple[Store, ...] = (
           "step self_review); a member erase drops all of the member's records and summary events; load_reviews re-checks the ledger.",
           member="struggle_detector.delete_user", entity="self_review.erase_entity",
           markers=(".self-review.jsonl", ".self-review-summary.json")),
+    Store("night_extract_facts", "file", WORDS, REACHED, "~/.zoe/night-extract/: the SHADOW night pre-pass (night_extract.py, ZOE_NIGHT_EXTRACT). "
+          "<night>.night-extract.jsonl holds the facts the GLiNEREL extractor PROPOSED from the member's day (person names, ages, places, pet and kin "
+          "words; 0600, never off-box, never a turn's text) and <night>.night-extract-summary.json counts only. An entity forget drops the member's facts "
+          "naming it (cascade step night_extract); a member erase (struggle_detector.delete_user calls night_extract.delete_user) drops all of the member's facts and summary line; load_facts re-checks the ledger.",
+          member="struggle_detector.delete_user", entity="night_extract.erase_entity",
+          markers=(".night-extract.jsonl", ".night-extract-summary.json")),
     Store("self_improver_candidates", "file", DERIVED, REACHED, "~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B "
           "invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, "
           "a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming "
