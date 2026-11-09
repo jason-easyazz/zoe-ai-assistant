@@ -236,3 +236,14 @@ def test_another_measurement_does_not_override_the_glucose_reading():
 
 def test_negative_control_a_repeated_glucose_term_still_counts_as_the_current_reading():
     assert "2.8 mmol/L is low" in reply("my blood sugar was 5.5 and my sugar is now 2.8")
+
+
+@pytest.mark.parametrize("text", ["my blood sugar is 5.5 but I can't breathe", "my blood sugar is 5.5 but I cannot breathe",
+                                  "blood sugar 6.1 and I can't get any air", "my sugar is 4.8 and it is hard to breathe"])
+def test_inability_to_breathe_beats_a_glucose_reading(text):
+    # Codex on #2356 (P1): the glucose answer bypasses the brain, so the breathing emergency got no emergency instruction
+    assert ms.detect(text).cls == "red_call"
+
+
+def test_a_plain_glucose_reading_is_still_answered_as_a_reading():
+    assert ms.detect("my blood sugar is 5.5 and I breathe fine").cls == "glucose"      # negative control
