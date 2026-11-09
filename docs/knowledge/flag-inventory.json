@@ -8621,6 +8621,29 @@
         },
         "typed_env": false
       },
+      "ZOE_MEDICAL_SAFETY": {
+        "defaults": [
+          "'enforce'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/medical_safety.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "enforce"
+          ],
+          "default": "enforce",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/medical-safety.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMBER_REGISTER": {
         "defaults": [
           "'off'"

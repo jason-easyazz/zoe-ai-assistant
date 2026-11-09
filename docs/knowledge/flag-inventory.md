@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 877 prod flags; 293 read through `typed_env`.
+- 878 prod flags; 294 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 250 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-877 flags; 826 not documented in `.env.example`.
+878 flags; 827 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -445,6 +445,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_MCP_STRICT_USER_ID` | bool | `True` | - | `docs/research/zoe-abilities-connectors-2026-10.md` | `'true'` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ID` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
 | `ZOE_MCP_USER_ROLE` | str | `''` | - | - | `-` | no | NO | `services/zoe-data/mcp_server.py` |
+| `ZOE_MEDICAL_SAFETY` | str | `'enforce'` | `off`, `shadow`, `enforce` | `docs/knowledge/medical-safety.md` | `'enforce'` | yes | NO | `services/zoe-data/medical_safety.py` |
 | `ZOE_MEMBER_REGISTER` | str | `'off'` | `off`, `on` | `docs/knowledge/member-register.md` | `'off'` | yes | NO | `services/zoe-data/member_register.py` |
 | `ZOE_MEMBER_REGISTER_KIDS` | str | `'off'` | `off`, `on` | `docs/knowledge/member-register.md` | `'off'` | yes | NO | `services/zoe-data/member_register.py` |
 | `ZOE_MEMORIES_CURATORS` | bool | `False` | - | `docs/knowledge/memory-curation.md` | `False` | yes | NO | `services/zoe-data/memory_curation.py` |
