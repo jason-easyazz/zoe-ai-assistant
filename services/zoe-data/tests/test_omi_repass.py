@@ -45,6 +45,8 @@ def renv(env, monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "on")
     monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(tmp_path / "repass"))
     monkeypatch.setenv("ZOE_OMI_REPASS_ZOE_CLIPS", str(tmp_path / "no-clips"))
+    for k in ("ZOE_OMI_NIGHT_ASR_SECOND", "ZOE_OMI_NIGHT_ASR_THIRD", "ZOE_OMI_NIGHT_ASR_EVAL"):
+        monkeypatch.setenv(k, "none")                       # the single-engine path by default; test_omi_repass_multi.py turns the other voters on
     return env
 
 

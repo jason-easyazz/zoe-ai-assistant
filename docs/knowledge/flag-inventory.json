@@ -10783,6 +10783,25 @@
         },
         "typed_env": true
       },
+      "ZOE_OMI_REPASS_CT2_DIR": {
+        "defaults": [
+          "dynamic"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_OMI_REPASS_DIR": {
         "defaults": [
           "dynamic"
@@ -10795,6 +10814,44 @@
         "spec": {
           "allowed": null,
           "default": "",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_REPASS_EVAL_MIN": {
+        "defaults": [
+          "25.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 25.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_REPASS_FUSION": {
+        "defaults": [
+          "'rover'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "rover",
           "divergent_ok": {},
           "note": "",
           "owner_doc": "docs/knowledge/omi-night-repass.md",
@@ -21160,6 +21217,9 @@
     }
   },
   "registry_unread": [
+    "ZOE_OMI_NIGHT_ASR_EVAL",
+    "ZOE_OMI_NIGHT_ASR_SECOND",
+    "ZOE_OMI_NIGHT_ASR_THIRD",
     "ZOE_SELF_REVIEW_MAX_CALLS",
     "ZOE_SELF_REVIEW_MAX_TOKENS",
     "ZOE_SPEAKER_WINDOW_THRESHOLD_LONG",

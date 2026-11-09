@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 879 prod flags; 295 read through `typed_env`.
+- 882 prod flags; 298 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 250 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 4 registered flags with no reader in the scanned sources.
+- 7 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-879 flags; 828 not documented in `.env.example`.
+882 flags; 831 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -556,7 +556,10 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OMI_OWNER_USER_ID` | str | `''` | - | `docs/knowledge/bluetooth-settings.md` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_QUIET_SKIP` | bool | `True` | - | `docs/architecture/omi-integration-plan.md` | `True` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_REPASS_CHUNK_S` | float | `14.0` | - | `docs/knowledge/omi-night-repass.md` | `14.0` | yes | NO | `services/zoe-data/omi_repass.py` |
+| `ZOE_OMI_REPASS_CT2_DIR` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_DIR` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
+| `ZOE_OMI_REPASS_EVAL_MIN` | float | `25.0` | - | `docs/knowledge/omi-night-repass.md` | `25.0` | yes | NO | `services/zoe-data/omi_repass.py` |
+| `ZOE_OMI_REPASS_FUSION` | str | `'rover'` | - | `docs/knowledge/omi-night-repass.md` | `'rover'` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_GPU` | str | `'1'` | - | `docs/knowledge/omi-night-repass.md` | `'1'` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_MEM_MAX` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `''` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_MODELS` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
@@ -1251,4 +1254,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`

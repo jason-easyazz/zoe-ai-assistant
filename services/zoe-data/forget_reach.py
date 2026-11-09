@@ -212,6 +212,11 @@ OTHER: tuple[Store, ...] = (
           "mid-run is caught at the write (user_erase_gate.writing) and the recording tombstoned. state.json (measured speeds, Zoe's own voice reference) and "
           "shadow.jsonl (counts only: no word, no name) hold nothing of a member.",
           member="omi_recordings.forget_user", markers=(".out.jsonl", ".manifest.json", "shadow.jsonl")),
+    Store("omi_repass_hyps", "file", WORDS, REACHED, "The night re-pass's per-chunk hypotheses (~/.zoe/omi-repass/hyps/hyps-<night>.jsonl, 0600): every engine's text for each chunk, the ROVER pick and the "
+          "vote counts, kept 7 days (the audio's own retention; pruned each run) for the contender ledger, the morning transcript check and owner-correction scoring. A member erase rewrites the files "
+          "without that member's lines; an entity forget replaces the name with [forgotten] in every hypothesis (omi_repass_eval.forget_user / erase_entity, called from omi_recordings.forget_user / "
+          "erase_entity). The contender ledger (ledger.jsonl) holds counts only.",
+          member="omi_recordings.forget_user", entity="omi_recordings.erase_entity", markers=("hyps-", "ledger.jsonl")),
     Store("router_retrain_texts", "file", WORDS, REACHED, "The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) "
           "holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files "
           "(router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only.",
