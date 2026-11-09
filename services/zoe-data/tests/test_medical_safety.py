@@ -297,3 +297,13 @@ def test_a_clock_time_before_the_reading_is_not_the_reading(text, value):
 
 def test_a_clock_time_with_no_reading_falls_through():
     assert ms.detect("my blood sugar check is at 5:30").cls != "glucose"
+
+
+@pytest.mark.parametrize("text", ["I am choking and my blood sugar is 5.5", "my son is choking, his blood sugar is 6.1"])
+def test_reported_choking_beats_a_glucose_reading(text):
+    # Codex on #2356 (P1): a reported choking got only reassurance about the reading
+    assert ms.detect(text).cls == "red_call"
+
+
+def test_choking_back_tears_is_not_an_emergency():
+    assert ms.detect("I was choking back tears at the film").cls != "red_call"

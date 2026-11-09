@@ -87,6 +87,8 @@ window's stricter bar) is kept as a guest turn instead of being dropped as backg
 | `ZOE_NAMED_GUESTS` | `off` | `off`: no guest is served or matched, the tier is inert. `shadow`: guests are served to the panel and scored; the server logs `NAMED_GUEST mode=shadow would_greet=1` and changes nothing. `on`: matched, greeted, enrolable, member claim guard live. |
 | `ZOE_NAMED_GUEST_MEMORY` | off | Keep and recall a guest's own exchanges (needs `on`). |
 | `ZOE_NAMED_GUEST_RECALL_TURNS` | 6 | How many past exchanges ride into a guest turn (0-20). |
+| `ZOE_GUEST_VOICE_LEARN` | `off` | Passive learning: `shadow` keeps unknown voices and logs, `on` also asks their name. |
+| `ZOE_GUEST_LEARN_*` | see above | `JOIN` 0.45, `TIGHT` 0.50, `MIN_TURNS` 8, `MIN_SESSIONS` 2, `MIN_WAKE` 2, `EXPIRE_DAYS` 14. |
 
 ## Rollout ("test it, if it works, turn it on")
 
@@ -97,10 +99,34 @@ window's stricter bar) is kept as a guest turn instead of being dropped as backg
    check no `would_greet` line coincides with a member speaking.
 3. `ZOE_NAMED_GUESTS=on`, then `ZOE_NAMED_GUEST_MEMORY=1`.
 
+## Passive learning (`named_guest_learning.py`, 0073; `ZOE_GUEST_VOICE_LEARN`, its own flag; the fourth stacked PR)
+
+Owner, 2026-11-08: "Can't Zoe learn a person's voice with enough conversation?"
+
+- **What is kept:** with the flag on, the sync tells the panel `learn_unknown`, and the daemon attaches the turn's speaker
+  EMBEDDING (never audio) to the `speaker` block. The server keeps it (`panel_voice_samples`, at most 30 per voice, under a
+  household `panel_voice_clusters` row) ONLY when the gate scored the voice and no member and no named guest matched.
+- **Never a member's voice:** a sample within the FAR-1 % bar of any consented member profile or any named guest is dropped
+  before it is kept (negative control in the tests). Voices are never merged (one person can form two acoustic clusters: they are
+  then asked twice, never mixed with someone else). A sample joins a voice at `ZOE_GUEST_LEARN_JOIN` (0.45, the cut the Omi
+  calibration chose for the same model).
+- **Confident enough** = `ZOE_GUEST_LEARN_MIN_TURNS` (8) turns, over `ZOE_GUEST_LEARN_MIN_SESSIONS` (2) conversations or days,
+  at least `ZOE_GUEST_LEARN_MIN_WAKE` (2) of them woken by the wake word (a TV that only leaks into listening windows never
+  qualifies), and a mean sample-to-centre cosine of `ZOE_GUEST_LEARN_TIGHT` (0.50). These are STARTING values from the repo's
+  calibration records, not measurements of this household: re-derive them from the shadow week's `GUEST_LEARN` lines (counts and
+  scores only, never a vector or a word).
+- **The ask:** that turn's brain block says to ask once, kindly: "I don't think we've met. What's your name?" (at most once a
+  day). An answer from the same voice within 10 minutes ("I'm Quinn", "it's Quinn", "Quinn") creates a NEW named guest from that
+  voice under the household's first admin (the people row only: the name is the guest's own introduction, not a member's word). A name already held by any named guest, or a
+  household member's name, is refused: an unverified voice can only create, never claim.
+- **Expiry:** a voice with no new turn for `ZOE_GUEST_LEARN_EXPIRE_DAYS` (14) is dropped with its samples.
+- **The owner:** `GET /api/voice/unknown-voices` (admin; counts and dates only), `POST /api/voice/unknown-voices/{id}/name`
+  `{"name"}` ("that was Quinn this morning": a named guest in the naming member's layer), `DELETE /api/voice/unknown-voices/{id}`
+  (or `all`). The nightly backup carries no row data of either table.
+- **Shadow first:** `shadow` keeps samples and logs `GUEST_LEARN ... action=ask` where Zoe WOULD ask, and never asks.
+
 ## Not built yet (follow-ups)
 
-- **Passive learning** (an unknown voice that keeps coming back is clustered and asked "I don't think we've met, what's your
-  name?"): designed in the PR, separate flag, not in this change.
 - **Omi wiring:** the registry and the channel key are shared; Omi does not yet read panel prints (by design until the
   cross-device match is MEASURED - memories-space.md 3.4) and does not yet offer a pendant-tagged person as a panel guest.
 - **Seeding a guest from saved panel clips** and **playing a clip back** to a verified member ("who's this?").
