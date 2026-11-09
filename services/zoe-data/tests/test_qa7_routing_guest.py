@@ -107,7 +107,8 @@ def test_explicit_place_weather_text():
     for t in ("what's the temp in the oven", "temperature for roast chicken", "whats the weather in bunbury and how hot for pork",
               "what time is it in albany", "weather",
               "remember that the weather in perth was awful", "add weather stripping in perth", "please remind me about the forecast in perth",
-              "set a reminder to check the weather in broome"):
+              "set a reminder to check the weather in broome",
+              "what exactly did i say about weather in perth", "do you remember what i said about the weather in perth"):
         assert wf.explicit_text(t) is None, t
 
 

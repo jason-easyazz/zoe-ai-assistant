@@ -80,6 +80,12 @@ def explicit_text(text: str) -> Optional[str]:
         return None
     if ws.is_food_temperature(low) or ws.has_other_question(low) or _COMMAND_LEAD_RE.match(low):
         return None
+    # a question about what the person SAID, a stored fact, their own plans or a memory challenge keeps its memory / brain path
+    # ("what exactly did i say about the weather in perth?"): the shortcut never outranks the memory shapes
+    from memory_gate import is_event_time_question, is_evidence_question, is_memory_challenge, is_own_fact_question
+
+    if is_evidence_question(low) or is_memory_challenge(low) or is_own_fact_question(low) or is_event_time_question(low):
+        return None
     return text if ws.weather_places(low) else None
 
 
