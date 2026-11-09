@@ -449,3 +449,13 @@ def test_a_multi_word_subject_is_compared_token_by_token():
     differ = [dict(base, value=16)]
     ne.compare(differ, ["Mary Jane is 17 years old"])
     assert differ[0]["cmp"] == "contradicts" and differ[0]["reason"] == "different_value"
+
+
+def test_a_rerun_that_yields_no_facts_replaces_the_members_old_rows(tmp_path):
+    # Codex on #2352: a same-night rerun producing nothing for a member left the first run's proposals on disk
+    drive(tmp_path)
+    assert any(r.get("user_id") == USER for r in facts_on_disk(tmp_path))
+    quiet = [("ok thanks", {"entities": [], "relations": []})]
+    s, _ = drive(tmp_path, day=quiet)
+    assert s["status"] == "ok"
+    assert not any(r.get("user_id") == USER for r in facts_on_disk(tmp_path))

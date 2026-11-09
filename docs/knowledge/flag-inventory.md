@@ -29,7 +29,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 865 prod flags; 281 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 251 non-`ZOE_` env names read by prod code (table below).
+- 252 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 9 registered flags with no reader in the scanned sources.
@@ -978,7 +978,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-251 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+252 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1219,6 +1219,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `WAKE_BEEP_ENABLED` | `'true'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKE_BEEP_FREQ_HZ` | `'1046'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKE_BEEP_VOLUME` | `'0.22'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `WAKE_CHIME_ON_WAKE` | `'false'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKE_CONFIRM_COUNT` | `'2'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WAKE_CONFIRM_WINDOW_S` | `'0.8'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `WHATSAPP_FLOW_ENABLED` | `'true'` | no | NO | `services/zoe-data/routers/chat.py` |

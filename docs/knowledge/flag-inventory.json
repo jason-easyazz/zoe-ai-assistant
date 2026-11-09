@@ -20758,6 +20758,16 @@
       ],
       "typed_env": false
     },
+    "WAKE_CHIME_ON_WAKE": {
+      "defaults": [
+        "'false'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
     "WAKE_CONFIRM_COUNT": {
       "defaults": [
         "'2'"

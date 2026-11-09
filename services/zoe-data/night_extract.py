@@ -564,7 +564,7 @@ async def run_night(*, night: str, members: list[str], load_turns: Callable[[str
             rows = await _drop_forgotten(rows) if use_ledger else rows
             erased = _erased_at(dd)           # a member erased since this run loaded their day: their snapshot is never published
             rows = [r for r in rows if erased.get(str(r.get("user_id")), 0.0) < wall_start]
-            keep_old = [r for r in _read(facts_path(night, dd)) if r.get("user_id") not in per_member]       # a re-run replaces the member's own rows
+            keep_old = [r for r in _read(facts_path(night, dd)) if r.get("user_id") not in summary["members"]]       # a re-run replaces the rows of every member it PROCESSED - even one that now yields none
             _write_private(facts_path(night, dd), "".join(json.dumps(r, sort_keys=True) + "\n" for r in keep_old + rows))
             _write_private(summary_path(night, dd), json.dumps({**summary, "perf": {k: out.get(k) for k in ("load_s", "infer_s", "peak_rss_mb", "threads")}},
                                                                indent=1, sort_keys=True))
