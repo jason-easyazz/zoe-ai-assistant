@@ -457,7 +457,7 @@
   "ferret",
   "pet"
  ],
-  "child_cue_words": ["kid", "kids", "child", "children", "son", "sons", "daughter", "daughters", "boy", "boys", "girl", "girls"],
+  "child_cue_words": ["kid", "kids", "child", "children", "son", "sons", "daughter", "daughters", "boy", "boys", "girl", "girls", "grandson", "grandsons", "granddaughter", "granddaughters", "grandchild", "grandchildren", "grandkid", "grandkids", "niece", "nieces", "nephew", "nephews"],
   "name_list_stop_words": ["a", "an", "the", "and", "our", "my", "two", "three", "four", "one", "some", "also", "plus", "both", "all", "of", "is", "are", "named", "called", "who", "which", "that", "i", "we"],
  "guess_roles": [
   "wife",

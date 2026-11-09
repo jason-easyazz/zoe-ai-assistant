@@ -10,7 +10,8 @@ import re
 from datetime import date
 from typing import Optional
 
-CHILD_WORDS = frozenset({"child", "kid", "son", "daughter", "baby", "toddler", "grandson", "granddaughter", "grandchild",
+CHILD_WORDS = frozenset({"child", "kid", "son", "daughter", "baby", "toddler", "grandson", "granddaughter", "grandchild", "grandchildren",
+                         "grandkid", "grandkids", "niece", "nephew", "nieces", "nephews",
                          "stepson", "stepdaughter", "boy", "girl", "infant", "teen", "teenager", "minor"})
 
 

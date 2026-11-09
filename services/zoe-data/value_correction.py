@@ -96,10 +96,12 @@ _YEARS = r"(?:\s+(?:years?[ -]old|yrs?\s+old|yo))?"
 _WORD = r"[A-Za-z][A-Za-z'’\-]{1,24}"
 _REL = (r"(?:sister|brother|mum|mom|mother|dad|father|wife|husband|partner|son|daughter|boyfriend|girlfriend|nan|nana|grandma|"
         r"grandmother|grandpa|grandfather|aunt|auntie|uncle|cousin|niece|nephew|friend|boss)")
-_SUBJ = rf"(?P<subj>(?:my|our)\s+{_REL}|(?:the|my|our)\s+{_WORD}(?:\s+{_WORD})?|{_WORD})"
-_CUE = (r"(?P<cue>(?:(?:a\s+(?:small|quick)\s+)?correction|actually|sorry|no|nope|wait|oh|hang\s+on|i\s+(?:misspoke|meant|said)|"
+# "ashas swimming is on wednesday not thursday": a lazily typed possessive "<name>s <noun>" (the apostrophe dropped) is a subject too
+_POSS = rf"(?!(?:the|my|our|this|that|his|her|its|their|your)\s){_WORD}['’]?s\s+{_WORD}"
+_SUBJ = rf"(?P<subj>(?:my|our)\s+{_REL}|(?:the|my|our)\s+{_WORD}(?:\s+{_WORD})?|{_POSS}|{_WORD})"
+_CUE = (r"(?P<cue>(?:(?:a\s+(?:small|quick)\s+)?correction|actually|actualy|actully|acutally|actualley|sorry|no|nope|wait|oh|hang\s+on|i\s+(?:misspoke|meant|said)|"
         r"(?:that(?:['’]s|\s+is|\s+was)\s+(?:wrong|incorrect|not\s+right)))[,.;:!\-\s]+)*")
-_LEAD = rf"^\W*(?:(?:good\s+)?(?:morning|evening|afternoon)[,.\s]+)?{_CUE}"
+_LEAD = rf"^\W*(?:(?:good\s+)?(?:morning|evening|afternoon)[,.\s]+)?(?:(?:and|also|oh\s+and|and\s+also)[,.\s]+)?{_CUE}"
 _PAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are)\s+(?:actually\s+|really\s+)?(?P<n>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}[,;]?\s+"
                       rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}\W*(?:i\s+misspoke\W*)?$", re.IGNORECASE)
 _AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\s+(?:(?P<pre>actually|now)\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}"
@@ -107,9 +109,41 @@ _AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\
 # "its 76 for margaret, not 78": the value comes first, the subject after "for" (QA 6b)
 _FOR_RE = re.compile(_LEAD + rf"(?:it['’]?s|that['’]?s|thats|it\s+is)\s+(?:actually\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}\s+for\s+{_SUBJ}[,;]?\s+"
                      rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_NUM}){_YEARS}\W*$", re.IGNORECASE)
+# "kais 21 not 22" / "also kai 21 not 22": a lazily typed name (the possessive apostrophe and the "is" both dropped) and two numbers
+# (QA round 7: this shape was never read, and the digest filed the stray "Kais: 21" as a person)
+_BARE_RE = re.compile(_LEAD + rf"(?P<subj>{_WORD})\s+(?P<n>{_NUMH}|{_NUM}){_YEARS}[,;]?\s+(?:and\s+)?not\s+(?P<o>{_NUMH}|{_NUM}){_YEARS}\W*$",
+                      re.IGNORECASE)
+_PREP_RE = re.compile(r"^(?:on|at|in|by|for|around|about)\s+", re.IGNORECASE)
+
+
+def _bare_value(v: str) -> str:
+    """"on friday" -> "friday": a value's lead preposition is not part of the value (the stored row says "exam on Thursday")."""
+    stripped = _PREP_RE.sub("", v.strip())
+    return stripped if stripped and value_of(v) is None else v.strip()
+
+
+_BARE_NOT_NAME = frozenset({"about", "around", "over", "under", "roughly", "maybe", "only", "just", "almost", "nearly", "still",
+                            "page", "price", "cost", "costs", "score", "total", "temp", "monday", "tuesday", "wednesday", "thursday", "friday",
+                            "saturday", "sunday", "number", "size", "age", "aged"})
 _NOT_SUBJECT = frozenset({"it", "this", "that", "there", "here", "he", "she", "they", "we", "i", "you", "what", "who", "which", "the",
                           "a", "an", "my", "our", "your", "his", "her", "their", "so", "its", "zoe", "today", "tomorrow", "yesterday",
                           "tonight", "everything", "nothing", "something", "someone", "everyone", "anything"})
+
+
+_OWNER_NOUN_RE = re.compile(r"^(?P<o>[A-Za-z][A-Za-z\-]{1,24})['’]?s\s+(?P<n>[A-Za-z][A-Za-z\-]{1,24})$")
+
+
+def owner_noun(subject: str):
+    """("Asha", "swimming") for the subject "ashas swimming" / "Asha's swimming", else None. A lazily typed possessive (no
+    apostrophe) loses its final s; the name is capitalised. Pure."""
+    s = (subject or "").strip()
+    if re.match(r"(?i)^(?:the|my|our|this|that|his|her|its|their|your)\s", s):
+        return None
+    m = _OWNER_NOUN_RE.match(s)
+    if not m:
+        return None
+    owner = m.group("o")
+    return owner[:1].upper() + owner[1:].lower(), m.group("n").lower()
 
 
 class Correction(NamedTuple):
@@ -135,7 +169,7 @@ def statement(text: str) -> Optional[Correction]:
             subj = m.group("subj").strip()
             if subj.lower() in _NOT_SUBJECT:
                 continue
-            new, old = m.group("n").strip(), m.group("o").strip()
+            new, old = _bare_value(m.group("n")), _bare_value(m.group("o"))
             if new.lower() == old.lower():
                 continue
             cued = bool((m.group("cue") or "").strip()) or bool(re.search(r"\b(?:actually|really)\s+\S", sentence, re.IGNORECASE))
@@ -143,6 +177,18 @@ def statement(text: str) -> Optional[Correction]:
             if not both_num and (not cued or not same_shape(new, old)):
                 continue
             return Correction(subj, new, old, cued)
+        m = _BARE_RE.match(sentence)
+        if m:
+            subj = m.group("subj").strip()
+            if subj.lower() in _NOT_SUBJECT or subj.lower() in _BARE_NOT_NAME:
+                continue
+            subj = re.sub(r"['’]s$", "", subj)
+            if len(subj) > 3 and subj.lower().endswith("s") and not subj.lower().endswith("ss"):
+                subj = subj[:-1]            # "kais 21" is Kai's: the apostrophe was not typed
+            new, old = m.group("n").strip(), m.group("o").strip()
+            if value_of(new) is not None and value_of(old) is not None and value_of(new) != value_of(old):
+                return Correction(subj, new, old, True)
+            continue
         m = _FOR_RE.match(sentence)
         if m:
             subj = m.group("subj").strip()
@@ -166,6 +212,9 @@ def statement(text: str) -> Optional[Correction]:
 def _subject_re(subject: str):
     """Whole-word match of the subject in a stored row: a name as is, "my <rel>" as the relation word ("User's dad ...")."""
     s = subject.strip()
+    on = owner_noun(s)
+    if on:
+        return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(on[1])}(?![A-Za-z0-9])", re.IGNORECASE)   # the owner is checked in rewrite()
     m = re.match(rf"(?i)(?:my|our)\s+({_REL})$", s)
     if m:
         # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
@@ -178,10 +227,10 @@ def _subject_re(subject: str):
     m = re.match(r"(?i)the\s+(.+)$", s)
     if m:
         s = m.group(1)          # "the pitch" -> any row that names the pitch ("User has a board pitch on Thursday")
-    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?:s(?=:))?(?![A-Za-z0-9])", re.IGNORECASE)   # "Kais: 21" is Kai's row
 
 
-_AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
+_AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+|:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
 
 
 def _row_value(am) -> Optional[float]:
@@ -205,6 +254,9 @@ def rewrite(row_text: str, corr: Correction) -> Optional[str]:
     sm = _subject_re(corr.subject).search(text)
     if not sm:
         return None
+    on = owner_noun(corr.subject)
+    if on and not re.search(rf"(?<![A-Za-z0-9]){re.escape(on[0])}", text, re.IGNORECASE):
+        return None             # "Asha's swimming": a row about the swimming of someone else (or of the user) is not the one corrected
     tail = text[sm.end():]
     if corr.old is not None:
         old_n, new_n = value_of(corr.old), value_of(corr.new)

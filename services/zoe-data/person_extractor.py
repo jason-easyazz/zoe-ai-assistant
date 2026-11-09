@@ -1397,6 +1397,17 @@ async def apply_person_fact(
     value = (value or "").strip()
     if not name or not value:
         return False
+    # "also kais 21 not 22": the lazily typed possessive was read as a person called "Kais" (QA round 7: the row "Kais: 21", and
+    # Kai's age then unanswerable). A correction turn names its subject; a name that is that subject plus a stray s is the subject.
+    try:
+        if source_excerpt and name.lower().endswith("s") and len(name) > 3:
+            import value_correction
+
+            corr = value_correction.statement(source_excerpt)
+            if corr is not None and corr.subject.lower() == name[:-1].lower():
+                name = name[:-1]
+    except Exception:  # noqa: BLE001 - never stop a write over a name repair
+        pass
     # The LLM pass hands over whatever the 4B called a "name": "the meaning" (from a question about the meaning of life) became a
     # household contact that stayed in every recall packet. The regex path has always been gated by ``_looks_like_person_name``;
     # this is the same gate at the one entry the model reaches (QA round 4, open since round 1).
@@ -1410,6 +1421,22 @@ async def apply_person_fact(
     # from is the third place the name can ride in)
     if await _names_forgotten(user_id, "\n".join(t for t in (name, value, source_excerpt or "") if t), origin or source):
         return False
+
+    # The speaker's OWN facts ("its priya ... night shift nurse", "im 36") are the USER's, not a contact called Priya: stored as
+    # "Priya: 36" beside "Asha: 5" the packet could not tell the speaker from the people they talk about, and the daughter's age came
+    # back as the mother's (QA round 7). Filed as a user fact that names the speaker, with no person node.
+    try:
+        import own_name
+
+        if own_name.is_own(name, await own_name.names(user_id)):
+            own_text = re.sub(rf"(?i)\b{re.escape(name)}\b", "User", value, count=1) if re.search(
+                rf"(?i)\b{re.escape(name)}\b", value) else f"User ({name}): {value}"
+            mem_id = await _ingest_to_mempalace(
+                own_text[:300], user_id, name, None, memory_type="fact", source=source, session_id=session_id,
+                pattern_type=None, source_excerpt=source_excerpt, origin=origin)
+            return bool(mem_id) and mem_id != AUTHORITY_BLOCKED
+    except Exception as exc:  # noqa: BLE001 - never stop a write over this
+        logger.debug("apply_person_fact: own-name filing failed (%s)", type(exc).__name__)
 
     _db, should_close = await _ensure_db(db)
     if _db is None:

@@ -84,8 +84,34 @@ def _leading_subject(rest: str, message: str, clauses: list) -> str:
     return first if tail and tail <= (_tokens(rest) | _STOP) else ""
 
 
+_USER_POSS_RE = re.compile(r"^\s*(?:the\s+)?user['’]s\s+(?P<noun>[A-Za-z][A-Za-z\-]{2,24})\b(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+_NOT_AN_OWNER = frozenset({"the", "his", "her", "hers", "its", "their", "your", "this", "that", "my", "our", "user", "thi", "hi", "it"})
+
+
+def _possessive_owner(fact: str, user_message: str) -> Optional[str]:
+    """"User's swimming is on Wednesday" from "actually ashas swimming is on wednesday not thursday": the digest dropped the
+    possessor (QA round 7, "the row lost its subject"). When the turn says "<name>'s <that noun>" (the apostrophe may not have been
+    typed) and no first-person word, the row belongs to that name. The new fact, or None when the turn does not say so."""
+    m = _USER_POSS_RE.match(fact or "")
+    if not m:
+        return None
+    noun = m.group("noun")
+    if noun.lower() in _RELATIONS or _FIRST_PERSON_RE.search(user_message or ""):
+        return None
+    pm = re.search(rf"\b(?P<o>[A-Za-z][A-Za-z\-]{{2,24}}?)['’]?s\s+{re.escape(noun)}\b", user_message or "", re.IGNORECASE)
+    if not pm:
+        return None
+    owner = pm.group("o")
+    if owner.lower() in _NOT_A_SUBJECT or owner.lower() in _NOT_AN_OWNER:
+        return None
+    return f"{owner[:1].upper()}{owner[1:].lower()}'s {noun}{m.group('rest')}"
+
+
 def attribute(fact: str, user_message: str) -> tuple:
     """``("keep", fact)`` | ``("rewrite", new_fact)`` | ``("drop", reason)`` for one digest fact against the turn it came from."""
+    owned = _possessive_owner(fact, user_message)
+    if owned:
+        return "rewrite", owned
     m = _USER_SUBJECT_RE.match(fact or "")
     if not m or not (user_message or "").strip():
         return "keep", fact
