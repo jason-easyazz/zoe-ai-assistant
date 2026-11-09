@@ -11,11 +11,11 @@ tags: [memory, writers, generated, audit]
 role lines live in [`memory-writer-notes.json`](memory-writer-notes.json) (one per writer module - a new writer
 module fails `tests/unit/test_memory_writer_map.py` until it has one).
 
-**82 write sites in 31 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
+**83 write sites in 31 modules** (the 2026-10-05 fidelity audit counted 31 by hand; the 2026-10-18
 deep dive found at least 39). A *write site* is one (module, enclosing function) that calls a `MemoryService`
 write method or upserts a drawers collection directly.
 
-Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 8, `flag_challenged` 1, `ingest` 26, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 29, `scrub_residue` 1, `set_curated_standing` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
+Kinds: `archive_by_entity` 1, `archive_duplicate` 1, `compact_index` 1, `delete_user` 2, `erase_rows` 8, `flag_challenged` 1, `ingest` 27, `raw_add` 1, `raw_delete` 3, `raw_update` 6, `raw_upsert` 7, `record_candidate` 3, `relink_entity` 4, `retire_with_quote` 1, `review` 29, `scrub_residue` 1, `set_curated_standing` 1, `supersede_by` 4, `sweep_soft_archive` 1, `tick_access` 1.
 
 ## What counts
 
@@ -55,7 +55,7 @@ the Flue/TS callers (`services/zoe-core/extensions/memory.ts`), which reach the 
 | `mempalace_baseline.py` | Benchmark fixtures: ingests synthetic rows to score the store. Bench/lab use; never real members. | `run_mempalace_baseline`: ingest |
 | `named_relations.py` | Named people after a relationship noun are kept, never summarised to a count (ingest, review edit). | `_apply_one`: relink_entity<br>`_ingest_user_fact`: ingest, review |
 | `omi_review_apply.py` | Approve a pendant day-review candidate: the ONLY module that writes what the Omi day review proposed (ingest). | `unwrite`: erase_rows<br>`write_owner_fact`: ingest<br>`write_person_fact`: ingest |
-| `person_extractor.py` | Person-fact extraction from conversation: ingests person rows and queues candidates (record_candidate), edits via review under the memory-authority wall. | `_edge_may_change`: record_candidate<br>`_hold_edge_belief`: record_candidate<br>`_hold_fact_belief`: record_candidate<br>`_ingest_to_mempalace`: ingest, relink_entity, review<br>`_reconcile_same_kind_entity_row`: relink_entity, review |
+| `person_extractor.py` | Person-fact extraction from conversation: ingests person rows and queues candidates (record_candidate), edits via review under the memory-authority wall. | `_edge_may_change`: record_candidate<br>`_hold_edge_belief`: record_candidate<br>`_hold_fact_belief`: record_candidate<br>`_ingest_own_fact`: ingest<br>`_ingest_to_mempalace`: ingest, relink_entity, review<br>`_reconcile_same_kind_entity_row`: relink_entity, review |
 | `provenance_answers.py` | "Why did you say that?", the one-sentence fix, "forget that" and off-the-record: rejects the rows a forget or correction names (review reject). | `_forget_turn`: review<br>`fix`: review<br>`forget_it`: erase_rows, review |
 | `routers/journal.py` | Journal API: a journal entry is mirrored into memory (ingest). | `_store_journal_memory`: ingest |
 | `routers/memories.py` | The memories API: the explicit add/edit/review endpoints, plus the admin forget and the internal forget-synthetic teardown (ingest, review, delete_user). | `create_memory_proposal`: ingest<br>`forget_synthetic_user`: delete_user<br>`forget_user`: delete_user<br>`memory_compact_index_endpoint`: compact_index<br>`memory_scrub_residue_endpoint`: scrub_residue<br>`review_memory`: review |
