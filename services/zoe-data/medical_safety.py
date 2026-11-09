@@ -188,6 +188,9 @@ def _stated_sign(s: str, rx: dict) -> bool:
     return False
 
 
+_DRINKING = re.compile(r"(?:drank|drunk|drinking|sipped|sipping)$")
+
+
 def _target(tail: str, rx: dict) -> str:
     """What was swallowed: a battery / magnet / sharp object (urgent), a harmful substance, or a small harmless-looking object. '' = nothing the floor answers."""
     return "object_urgent" if rx["obj_urgent"].search(tail) else "poison_human" if rx["sub"].search(tail) else "object_minor" if rx["obj_minor"].search(tail) else ""
@@ -201,6 +204,8 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
             key = _target(tail, rx)
             if not key:
                 continue
+            if key.startswith("object_") and (_DRINKING.match(v.group(0)) or re.match(r"\s+from\b", sentence[v.end():])):
+                continue         # an OBJECT is swallowed or eaten, never drunk: "drank from a bottle with a screw top" describes the bottle
             lo = max(0, v.start() - 8)
             routine = rx["idiom"].search(sentence[lo:])
             # the routine-medication idiom must be THIS ingestion ("swallowed his morning tablets"), not a later one in the same sentence

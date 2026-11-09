@@ -118,6 +118,8 @@ NEG += ["i lost sight of my keys", "i lost sight of him in the crowd", "we lost 
 NEG += ["everything is double the price now", "everything costs double what it did", "everything looks double the size in this mirror shop", "i cant see right now, someone turned the light off",
         "i cant see well enough to read the menu from here", "everything is blurry about last night"]
 NEG += ["my chest hasnt felt tight", "my chest didnt feel constricted", "my eyes werent blurry", "my chest hasn't been tight all day", "my vision hadnt gone blurry"]
+NEG += ["i drank from a bottle with a screw top", "i drank from a bottle with a plastic cap", "she drank from a cup with a bead pattern", "he drinking from a bottle with a rubber seal",
+        "my vision for the project is hazy", "my vision for next year is hazy", "the company vision is a bit blurry on the details", "our vision of the future is foggy"]
 NEG += ["i feel a bit tired", "my back is sore", "my knee hurts", "my tummy hurts a bit", "i have a sore throat", "my ear aches"]
 NEG += ["tell me a joke", "what is the weather like", "play some music", "add milk to the list"]
 
