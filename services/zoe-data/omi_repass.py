@@ -847,7 +847,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     for rid, r in by_id.items():
         o = got.get(rid)
         if o is None or not o.get("ok"):
-            carry = (o is None and rc in (0, 124)) or (o is not None and o.get("why") == "deadline")
+            carry = (o is None and rc in (0, 124)) or (o is not None and o.get("why") in ("deadline", "backend_failed"))      # a dead backend is not the recording's fault
             await note_failure(rid, carry=carry)
             tally["carried" if carry else "failed"] += 1
             continue
@@ -867,6 +867,6 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     write_state(st)
     res.update(done=done_n, replaced=tally["replaced"], shadow=tally["shadow"], carried=tally["carried"], failed=tally["failed"], erased=tally["erased"],
                agree=round(tally["agree_sum"] / done_n, 3) if done_n else None, me_lines=tally["me"], named_lines=tally["named"], zoe_lines=tally["zoe"],
-               proposed=tally["proposed"], worker_rc=rc, device=done.get("device"), worker_rtf=done.get("rtf"), peak_rss_mb=done.get("peak_rss_mb"),
+               proposed=tally["proposed"], aborted=done.get("aborted") or None, worker_rc=rc, device=done.get("device"), worker_rtf=done.get("rtf"), peak_rss_mb=done.get("peak_rss_mb"),
                wall_s=round(clock() - started))
     return res

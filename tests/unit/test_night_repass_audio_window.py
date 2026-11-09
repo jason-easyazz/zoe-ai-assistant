@@ -33,6 +33,11 @@ def test_the_mmproj_is_added_only_for_the_audio_backend_and_stays_on_the_cpu():
     assert "--mmproj" not in off and "--no-mmproj-offload" not in off                  # control: the 12B command is exactly what it was
     on = nw.llm_spec(PARKED, nw.NightCfg(audio_mmproj=True), lv)["argv"]
     assert on[on.index("--mmproj") + 1].endswith("mmproj-gemma-4-12b-it-qat-q4_0.gguf") and "--no-mmproj-offload" in on and "--jinja" in on
+    # thinking off on the SERVER command line (the per-request kwargs alone returned only thought markers on b11194, trial 2026-11-09), after the build translation
+    assert on[on.index("--chat-template-kwargs") + 1] == '{"enable_thinking":false}'
+    assert "--chat-template-kwargs" not in off
+    parked_b = nw.llm_spec(PARKED, nw.NightCfg(audio_mmproj=True, binary=None), lv)["argv"]
+    assert parked_b.count("--chat-template-kwargs") == 1                                  # the parked (b9733) build keeps its own single copy
     q = nw.llm_spec(PARKED, nw.NightCfg(audio_mmproj=True), nw.Levers("q4km", 8192, "q8_0"))["argv"]
     assert q[q.index("--mmproj") + 1].endswith("mmproj-gemma-4-12B-it-Q8_0.gguf")
 

@@ -673,6 +673,10 @@ def llm_spec(parked_text: str, cfg: NightCfg, lv: Levers) -> "dict[str, Any]":
         if "b9733" not in cfg.binary and "build-jetson-new" not in cfg.binary:
             argv = [argv[0]] + translate_for_new_build(argv[1:])
         spec["env"] = {**spec["env"], "LD_LIBRARY_PATH": str(Path(cfg.binary).parent)}
+    if cfg.audio_mmproj and "--chat-template-kwargs" not in argv:
+        # Measured 2026-11-09 on b11194: ``--reasoning off`` plus a per-request chat_template_kwargs is NOT enough - every audio chunk came back as repeated "<|channel>thought <channel|>"
+        # markers until max_tokens. The June config passed the kwargs on the SERVER command line (after the build translation, which would turn the flag into --reasoning off).
+        argv += ["--chat-template-kwargs", '{"enable_thinking":false}']
     props = {**spec["props"], "MemorySwapMax": "0"}
     if cfg.unified:
         spec["env"] = {**spec["env"], "GGML_CUDA_ENABLE_UNIFIED_MEMORY": "1"}

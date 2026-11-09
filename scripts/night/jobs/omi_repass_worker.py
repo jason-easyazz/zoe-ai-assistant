@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import resource
 import sys
 import time
@@ -122,6 +123,7 @@ class FasterWhisper(AsrBackend):
 CHUNK_MAX_S = 14.0     # the parent passes ``chunk_s`` in the manifest (ZOE_OMI_REPASS_CHUNK_S); never above 30
 AUDIO_PROMPT = ("Transcribe this audio verbatim, exactly as spoken, in English. Output only the spoken words: no summary, no commentary, no timestamps and no speaker labels. "
                 "If there is no intelligible speech, output nothing.")
+FAIL_FAST_N = 3
 REFUSAL_STARTS = ("there is no", "there's no", "i cannot", "i can't", "i'm sorry", "i am sorry", "the audio", "this audio", "no speech", "[silence", "(silence")
 
 
@@ -158,9 +160,18 @@ def audio_prompt(hint: str) -> str:
     return AUDIO_PROMPT + (" " + hint if hint else "")
 
 
+_THOUGHT = re.compile(r"<\|channel>.*?<channel\|>", re.DOTALL)
+_THOUGHT_OPEN = re.compile(r"<\|channel>.*$", re.DOTALL)        # an unterminated thought block: everything after it is the model thinking aloud
+
+
+class BackendFailed(Exception):
+    """The audio backend is producing nothing useful (the first chunks come back empty AND slow): stop the whole job, do not grind through the rest of the day."""
+
+
 def clean_reply(text: str, dur_s: float) -> str:
-    """The model's text -> the transcript, or "" for a refusal / description / runaway loop (more than 7 words a second is a loop, not speech)."""
-    t = " ".join((text or "").replace("\n", " ").split()).strip().strip('"').strip()
+    """The model's text -> the transcript, or "" for a refusal / description / thought markers / runaway loop (more than 7 words a second is a loop, not speech)."""
+    text = _THOUGHT_OPEN.sub(" ", _THOUGHT.sub(" ", text or "")).replace("<channel|>", " ")
+    t = " ".join(text.replace("\n", " ").split()).strip().strip('"').strip()
     low = t.lower()
     if not t or low.startswith(REFUSAL_STARTS):
         return ""
@@ -173,7 +184,7 @@ def gemma_transcribe(base_url: str, wav: bytes, dur_s: float, hint: str = "", mo
     """ONE chunk to a llama-server that has the audio mmproj: OpenAI ``input_audio`` (base64 16 kHz mono WAV). Returns {"text", "completion_tokens", "prompt_tokens", "el"}."""
     import base64
     import urllib.request
-    body = json.dumps({"model": model, "temperature": 0, "max_tokens": int(min(500, 40 + 9 * dur_s)), "stream": False,
+    body = json.dumps({"model": model, "temperature": 0, "max_tokens": int(max(32, min(400, 5 * dur_s))), "stream": False,
                        "messages": [{"role": "user", "content": [{"type": "text", "text": audio_prompt(hint)},
                                                                   {"type": "input_audio", "input_audio": {"data": base64.b64encode(wav).decode("ascii"), "format": "wav"}}]}]}).encode()
     req = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", data=body, headers={"Content-Type": "application/json"})
@@ -193,6 +204,7 @@ class Gemma12bAudio(AsrBackend):
     def __init__(self, threads: int, gpu: bool, url: str = "", model: str = "gemma"):
         super().__init__(threads, gpu)
         self.url, self.model = url or os.environ.get("GEMMA_SERVER_URL", ""), model or os.environ.get("MEMORY_DIGEST_MODEL", "") or "gemma"
+        self.first: list = []         # (empty, slow) of the first FAIL_FAST_N chunks
 
     def load(self) -> None:
         import urllib.request
@@ -211,7 +223,12 @@ class Gemma12bAudio(AsrBackend):
             if deadline and time.time() > deadline:
                 return [], True
             seg = x[int(s * RATE):int(e * RATE)]
-            text = gemma_transcribe(self.url, wav_bytes(seg), e - s, hint, self.model)["text"]
+            r = gemma_transcribe(self.url, wav_bytes(seg), e - s, hint, self.model)
+            text = r["text"]
+            if len(self.first) < FAIL_FAST_N:
+                self.first.append((not text, r.get("el", 0.0) > 2 * (e - s) + 5))
+                if len(self.first) == FAIL_FAST_N and all(em and sl for em, sl in self.first):
+                    raise BackendFailed(f"the first {FAIL_FAST_N} chunks came back empty and slow")
             toks = text.split()
             for i, w in enumerate(toks):
                 a = s + (e - s) * i / len(toks)
@@ -313,6 +330,7 @@ def run(manifest: dict, out_path: str) -> int:
         return 3
     load_s = time.time() - t0
     done = carried = failed = 0
+    aborted = ""
     audio_s = elapsed = 0.0
     with open(out_path, "a", encoding="utf-8") as out:
         os.chmod(out_path, 0o600)
@@ -348,12 +366,17 @@ def run(manifest: dict, out_path: str) -> int:
                 done += 1
                 audio_s += dur
                 elapsed += asr_s + emb_s
+            except BackendFailed as exc:          # the whole job stops: the remaining items are carried (not listed), and the done line says why
+                aborted = str(exc)
+                out.write(json.dumps({"id": rid, "ok": False, "why": "backend_failed"}) + "\n")
+                out.flush()
+                break
             except Exception as exc:  # noqa: BLE001 - one bad file never costs the rest
                 failed += 1
                 out.write(json.dumps({"id": rid, "ok": False, "why": f"error:{type(exc).__name__}"}) + "\n")
             out.flush()
         out.write(json.dumps({"done": True, "asr": name, "diar": manifest.get("diar", "ecapa"), "device": asr.device(), "load_s": round(load_s, 1), "files": done,
-                              "carried": carried, "failed": failed, "audio_s": round(audio_s, 1), "work_s": round(elapsed, 1),
+                              "carried": carried, "failed": failed, "aborted": aborted, "audio_s": round(audio_s, 1), "work_s": round(elapsed, 1),
                               "rtf": round(elapsed / audio_s, 3) if audio_s else None, "peak_rss_mb": round(rss_mb())}) + "\n")
     return 0
 

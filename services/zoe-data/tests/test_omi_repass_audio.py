@@ -111,6 +111,60 @@ def test_chunks_stay_under_30_s_words_get_even_times_and_nonsense_replies_are_dr
     assert late and late_words == []
 
 
+def test_thought_markers_are_stripped_and_the_token_cap_is_tight():
+    w = _worker()
+    assert w.clean_reply("<|channel>thought <channel|>", 5) == ""
+    assert w.clean_reply("<|channel>thought <channel|><|channel>thought <channel|> Hello there", 5) == "Hello there"
+    assert w.clean_reply("Hello <|channel>thought and never closed", 5) == "Hello"
+    got: dict = {}
+    import urllib.request
+
+    class R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}], "usage": {}}).encode()
+
+    def fake_open(req, timeout=0):
+        got["max"] = json.loads(req.data)["max_tokens"]
+        return R()
+
+    orig = urllib.request.urlopen
+    urllib.request.urlopen = fake_open
+    try:
+        w.gemma_transcribe("http://127.0.0.1:1/v1", b"", 2.0)
+        low = got["max"]
+        w.gemma_transcribe("http://127.0.0.1:1/v1", b"", 14.0)
+        hi = got["max"]
+    finally:
+        urllib.request.urlopen = orig
+    assert low == 32 and hi == 70                                       # ~5 tokens per speech second, never under 32
+
+
+def test_the_job_stops_early_when_the_first_three_chunks_are_empty_and_slow(monkeypatch):
+    w = _worker()
+    monkeypatch.setattr(w, "vad_chunks", lambda x: [(i * 5.0, i * 5.0 + 2.0) for i in range(8)])
+    calls = []
+
+    def slow_empty(url, wav, dur, hint="", model="gemma", timeout_s=300.0):
+        calls.append(dur)
+        return {"text": "", "el": 40.0}
+
+    monkeypatch.setattr(w, "gemma_transcribe", slow_empty)
+    be = w.Gemma12bAudio(4, False, url="http://127.0.0.1:11500/v1")
+    with pytest.raises(w.BackendFailed):
+        be.transcribe(np.zeros(16000 * 45, dtype="float32"), "", None)
+    assert len(calls) == 3                                              # it did not grind through the other five
+    ok = w.Gemma12bAudio(4, False, url="http://127.0.0.1:11500/v1")      # control: empty but FAST (silence) is not a failure
+    monkeypatch.setattr(w, "gemma_transcribe", lambda url, wav, dur, hint="", model="gemma", timeout_s=300.0: {"text": "", "el": 0.5})
+    words, late = ok.transcribe(np.zeros(16000 * 45, dtype="float32"), "", None)
+    assert words == [] and not late
+
+
 def test_the_audio_backend_will_not_load_against_the_live_4b():
     with pytest.raises(RuntimeError):
         _worker().Gemma12bAudio(4, False, url="http://127.0.0.1:11434/v1").load()
