@@ -924,7 +924,9 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
 
         if write_claim_guard.mode() == "off":
             return inner
-        return write_claim_guard.guard_stream(inner, user_id, write_receipts.begin(), user_text=message, implied_kind=implied,
+        started = write_receipts.begin()
+        write_claim_guard.note_pending_capture(user_id, message)     # post-turn capture is queued for this turn: a memory claim is honest
+        return write_claim_guard.guard_stream(inner, user_id, started, user_text=message, implied_kind=implied,
                                              session_id=session_id)
     except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn
         logger.warning("write-claim guard unavailable - reply not checked", exc_info=True)
@@ -996,6 +998,7 @@ def _claim_guarded_text(reply: str, message: str, user_id: str, started: float, 
     try:
         import write_claim_guard
 
+        write_claim_guard.note_pending_capture(user_id, message)     # (see _claim_guarded)
         return write_claim_guard.guard_text(reply, user_id, started, user_text=message,
                                             implied_kind=implied_kind, session_id=session_id)
     except Exception:  # noqa: BLE001
