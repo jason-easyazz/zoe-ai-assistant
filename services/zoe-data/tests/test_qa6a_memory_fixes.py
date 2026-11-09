@@ -229,3 +229,12 @@ def test_a_pet_gender_fact_is_not_rewritten_as_a_pet_role():
     assert k.repair("Mo is a girl.", "pet", "My cat named Mo is a girl.") is None
     # negative control: a real misfiled kinship word is still repaired
     assert k.repair("Mo is a daughter", "pet", "kids Ava (8) and a fat cat called Mo") == ("Mo is a pet", "pet")
+
+
+def test_a_predicate_after_a_child_cue_is_not_a_child_name():
+    # Codex on #2350: "My kids have two cats named Mo and Rex" read "have" as a child
+    import kin_pet_guard as k
+
+    msg = "My kids have two cats named Mo and Rex."
+    assert "have" not in k.child_names(msg)
+    assert k.repair("User's pets have long fur", "pet", msg) is None
