@@ -716,9 +716,62 @@ def supported(claim: Claim, user_id: Optional[str], started: float, *, user_text
         turn = None
     else:
         since, turn = started, getattr(started, "turn", None)
+    if is_recap_question(user_text):
+        # a retrospective "did you save that?" asks about COMMITTED writes: a capture merely queued for a turn (pending_capture) is a
+        # promise about the future, never evidence of an earlier save
+        def _has(kind=None):
+            rs = write_receipts.since(user_id, since, [kind] if kind else None, turn=turn)
+            return any(r.source != "pending_capture" and (kind or r.kind not in write_receipts.NOT_A_WRITE) for r in rs)
+
+        return _has() if not claim.kinds else all(_has(kind) for kind in claim.kinds)
     if not claim.kinds:
         return write_receipts.has(user_id, since, turn=turn)
     return all(write_receipts.has(user_id, since, kind, turn=turn) for kind in claim.kinds)
+
+
+PENDING_CAPTURE_MIN_WORDS = 4      # the turn digest reads nothing shorter (memory_digest.run_turn_digest)
+
+
+def note_pending_capture(user_id: Optional[str], user_text: str) -> bool:
+    """A turn the post-turn memory capture (regex extractor, turn digest, person extractors) WILL read is, for the guard, a turn
+    that has a memory write queued: "I'll remember that" on it is a promise the capture keeps seconds later, not a lie (QA round
+    6a: the first self-introduction and "will you remember me?" were answered "I didn't manage to save that" while the rows
+    landed ~70 s on). Records a ``memory`` receipt (source ``pending_capture``) for the current turn. Nothing is recorded for a
+    guest / unrecognised voice (no durable memory pass runs), an off-the-record turn, a forget turn, or words too short to digest.
+    The receipt backs the memory and note kinds only - a list, calendar or forget claim still needs its own writer's receipt.
+    Never raises; True when a receipt was recorded."""
+    try:
+        if mode() == "off" or len((user_text or "").split()) < PENDING_CAPTURE_MIN_WORDS or is_recap_question(user_text):
+            return False        # (a recap question asks about EARLIER writes: this turn's queued capture vouches for none)
+        from user_filters import is_unidentified
+
+        if is_unidentified(user_id):
+            return False
+        import memory_provenance
+        import turn_forget
+
+        if memory_provenance.is_off_record(user_id or "", user_text) or turn_forget.is_forget_turn(user_text):
+            return False
+        import forget_topic
+
+        if forget_topic.parse(user_text):
+            return False        # a TOPIC forget ("forget what I said about X") queues no capture either
+        import user_prefs
+
+        opted_out = user_prefs.cached_memory_opt_out(user_id or "")
+        if opted_out:
+            return False        # the capture drops an opted-out member's candidates: nothing is queued, so nothing is promised
+        if opted_out is None:
+            try:               # unknown now: warm the cache so the NEXT turn is exact (the extractor reads it post-turn anyway)
+                import asyncio
+
+                asyncio.get_running_loop().create_task(user_prefs.is_memory_opted_out(user_id or ""))
+            except Exception:  # noqa: BLE001 - no running loop (a sync caller): the next turn's read warms it
+                pass
+        write_receipts.record(user_id, "memory", "", "pending_capture")
+        return True
+    except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn
+        return False
 
 
 def _log_blocked(claim: Claim, user_id: Optional[str], lane: str, action: str) -> None:

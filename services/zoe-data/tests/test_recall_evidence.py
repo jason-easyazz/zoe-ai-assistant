@@ -370,7 +370,7 @@ async def test_floor_block_stays_inside_the_recall_budget(monkeypatch):
     monkeypatch.setattr(memory_service, "is_guest_memory_user", lambda uid: False)
     monkeypatch.setattr(memories_mod, "_svc", lambda: _FakeSvc(rows))
     block = await zc._recall_context_block("what did I say about the kayak?", "jason")
-    packet = block.split("\n", 1)[1].rsplit("\n", 1)[0]
+    packet = block.split("\n", 1)[1].rsplit("\n", 1)[0].removesuffix("\n" + zc._WHEN_RULE)
     assert len(packet) <= zc._RECALL_MAX_CHARS
     bullets = [ln for ln in packet.splitlines() if ln.startswith("- ")]
     assert 0 < len(bullets) <= zc._RECALL_MAX_BULLETS
