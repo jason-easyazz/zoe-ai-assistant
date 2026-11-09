@@ -10916,6 +10916,63 @@
         },
         "typed_env": true
       },
+      "ZOE_OMI_REPASS_LEAN": {
+        "defaults": [
+          "0.05"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass_who.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.05,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_REPASS_MARGIN": {
+        "defaults": [
+          "0.1"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass_who.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.1,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_REPASS_MARGIN_SHORT": {
+        "defaults": [
+          "0.2"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass_who.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.2,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_OMI_REPASS_MEM_MAX": {
         "defaults": [
           "''"
@@ -10932,6 +10989,25 @@
           "note": "",
           "owner_doc": "docs/knowledge/omi-night-repass.md",
           "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_REPASS_MIN_SCORE": {
+        "defaults": [
+          "0.25"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass_who.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.25,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
         },
         "typed_env": true
       },
@@ -11008,6 +11084,25 @@
           "note": "",
           "owner_doc": "docs/knowledge/omi-night-repass.md",
           "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_OMI_REPASS_ZOE_MIN": {
+        "defaults": [
+          "0.55"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass_who.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 0.55,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
         },
         "typed_env": true
       },
@@ -21249,11 +21344,6 @@
     "ZOE_OMI_NIGHT_ASR_EVAL",
     "ZOE_OMI_NIGHT_ASR_SECOND",
     "ZOE_OMI_NIGHT_ASR_THIRD",
-    "ZOE_OMI_REPASS_LEAN",
-    "ZOE_OMI_REPASS_MARGIN",
-    "ZOE_OMI_REPASS_MARGIN_SHORT",
-    "ZOE_OMI_REPASS_MIN_SCORE",
-    "ZOE_OMI_REPASS_ZOE_MIN",
     "ZOE_SELF_REVIEW_MAX_CALLS",
     "ZOE_SELF_REVIEW_MAX_TOKENS",
     "ZOE_SPEAKER_WINDOW_THRESHOLD_LONG",
