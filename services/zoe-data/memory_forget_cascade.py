@@ -23,6 +23,8 @@ stored anywhere new):
                               log): a record whose text names the entity is DROPPED, hash included
   * ``self_review``         - the nightly self-review's private records (``~/.zoe/self-review/``, ``self_review.erase_entity``): a
                               record of the member whose words or review name the entity is dropped and that night's report re-rendered
+  * ``night_extract``       - the shadow night pre-pass's proposed facts (``~/.zoe/night-extract/``, ``night_extract.erase_entity``): a fact of the
+                              member that names the entity is dropped
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
                               or whose name / email names the entity, loses the link AND the name and email (the row
                               stays, anonymous, so the event keeps its shape); the desktop calendar's legacy
@@ -71,7 +73,7 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
               "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs",
-              "self_review")
+              "self_review", "night_extract")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -214,6 +216,12 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         # the nightly self-review's private records (~/.zoe/self-review/): a record of the member naming the entity is dropped
         return await self_review.erase_entity(user_id, rx, strict=True)
 
+    async def night_extract_() -> int:
+        import night_extract
+
+        # the shadow night pre-pass's proposed facts (~/.zoe/night-extract/): a fact of the member naming the entity is dropped
+        return await night_extract.erase_entity(user_id, rx, strict=True)
+
     if want("restraint_mutes"):
         await _step("restraint_mutes", mutes, res)
     if want("commitments"):
@@ -226,6 +234,8 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         await _step("text_logs", text_logs, res)
     if want("self_review"):
         await _step("self_review", self_review_, res)
+    if want("night_extract"):
+        await _step("night_extract", night_extract_, res)
 
 
 async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
