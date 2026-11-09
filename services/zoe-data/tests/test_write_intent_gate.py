@@ -295,3 +295,24 @@ async def test_expert_list_add_asks_which_list_for_a_non_grocery(monkeypatch, te
     monkeypatch.setattr(intent_router, "execute_intent", fake_execute)
     await xd.dispatch("lists", text, {"user_id": "jason", "session_id": "s1", "score": 0.99})
     assert bool(seen.get("slots", {}).get("ask_list")) is expect_ask, seen
+
+
+@pytest.mark.parametrize("refusal", ["actually cancel that", "no thanks", "Don't add the appointment to my calendar", "never mind"])
+def test_a_refusal_after_an_ask_withdraws_the_authorisation(refusal):
+    # Codex on #2347
+    wig.note_turn("jason", "add dinner friday 7pm")
+    assert wig.check("jason", "calendar_create", {"title": "dinner"}) is None
+    wig.note_turn("jason", refusal)
+    assert wig.check("jason", "calendar_create", {"title": "dinner"}) is not None
+    wig.note_turn("jason", "7pm")                          # even a later short answer rides on nothing now
+    assert wig.check("jason", "calendar_create", {"title": "dinner"}) is not None
+
+
+def test_a_list_directed_verb_is_not_a_calendar_ask():
+    # Codex on #2347
+    assert wig.asks_to_write_calendar("add bolts to my shopping list") is False
+    wig.note_turn("jason", "add bolts to my shopping list")
+    assert wig.check("jason", "calendar_create", {"title": "x"}) is not None
+    # negative controls: abbreviated calendar commands and a mixed turn still ask
+    assert wig.asks_to_write_calendar("add dinner friday 7pm") is True
+    assert wig.asks_to_write_calendar("book the plumber for monday and add bolts to the list") is True

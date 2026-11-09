@@ -129,9 +129,26 @@ def _verb_hit(text: str) -> bool:
     return False
 
 
+_CLAUSE_SPLIT_RX = re.compile(r"[.;!?]|,|\b(?:and\s+then|then|and)\b", re.IGNORECASE)
+#: a refusal / cancellation of the pending write ("actually cancel that", "no thanks", "don't add it")
+_REFUSAL_RX = re.compile(
+    r"^\W*(?:(?:actually|oh|wait|hang\s+on|sorry|no)\W+)*(?:no(?:pe)?\b|cancel\b|never\s*mind\b|forget\s+it\b|scrap\b|stop\b|leave\s+it\b|"
+    r"not\s+now\b|don'?t\b|do\s+not\b)|\b(?:cancel|scrap)\s+(?:that|it|the)\b", re.IGNORECASE)
+
+
+def is_refusal(text: str) -> bool:
+    return bool(_REFUSAL_RX.search(text or ""))
+
+
 def asks_to_write_calendar(text: str) -> bool:
-    """Did this turn explicitly ask for a calendar write? Pure."""
-    return _verb_hit(text)
+    """Did this turn explicitly ask for a calendar write? A clause aimed at a list or another capability ("add bolts to my shopping
+    list") is not one. Pure."""
+    for clause in _CLAUSE_SPLIT_RX.split(text or ""):
+        if _OTHER_TARGET_RX.search(clause) and not _CALENDAR_WORD_RX.search(clause):
+            continue
+        if _verb_hit(clause):
+            return True
+    return False
 
 
 # a hardware / work / personal-admin thing - something the household does not buy at the supermarket
@@ -188,7 +205,10 @@ def note_turn(user_id: str, message: str) -> None:
         now = time.monotonic()
         _turns.pop(uid, None)
         _turns[uid] = (text, now)
-        if asks_to_write_calendar(text):
+        if is_refusal(text):
+            _asked.pop(uid, None)         # "actually cancel that" / "no thanks" / "don't add it": the write conversation is over
+            _offered.pop(uid, None)
+        elif asks_to_write_calendar(text):
             _asked.pop(uid, None)
             _asked[uid] = now
         elif len(text.split()) > _FOLLOWUP_MAX_WORDS:
@@ -233,6 +253,8 @@ def reset_state() -> None:
 
 
 def _calendar_asked(uid: str, text: str) -> bool:
+    if is_refusal(text):
+        return False                 # a refusal is never consent, whatever was asked a moment ago
     if asks_to_write_calendar(text):
         return True
     words = text.split()
