@@ -279,6 +279,12 @@ async def _name_cluster(db, cluster_id: str, name: str, *, owner: Optional[str])
     for cid in doomed:
         await db.execute("DELETE FROM panel_voice_samples WHERE cluster_id = ?", (cid,))
         await db.execute("DELETE FROM panel_voice_clusters WHERE id = ?", (cid,))
+        try:    # every route that names a voice (an answered ask, a member's naming, the spoken tier) leaves its saved clips labelled
+            import voice_clips      # as THIS guest's, so a forget erases the audio too - not only the tier that happened to relabel
+
+            voice_clips.relabel_cluster(cid, "guest", pid)
+        except Exception:  # noqa: BLE001 - a clip label is bookkeeping; the promotion stands
+            logger.warning("named_guest_learning: clip relabel failed", exc_info=True)
     return ng.Guest(person_id=pid, name=name, owner_user_id=owner)
 
 
