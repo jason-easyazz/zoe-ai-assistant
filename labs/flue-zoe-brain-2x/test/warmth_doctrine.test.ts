@@ -53,6 +53,23 @@ test('getting to know you: warm to one specific detail, ONE follow-up, no list-b
   assert.match(WARMTH_DOCTRINE, /no stock lines/);
 });
 
+test('not an interview: one question at most, a statement after a question, something given back', () => {
+  assert.match(WARMTH_DOCTRINE, /ONE question at most per reply, and not every turn/);
+  assert.match(WARMTH_DOCTRINE, /something back before more questions/);
+  assert.match(WARMTH_DOCTRINE, /If your last reply ended on a question, end this one on a statement unless they asked you something/);
+});
+
+test('only what they said: no invented age or count, numbers are checked back once', () => {
+  assert.match(WARMTH_DOCTRINE, /never guess or add a fact about a person/);
+  assert.match(WARMTH_DOCTRINE, /ages in years, not a year/);
+  assert.match(WARMTH_DOCTRINE, /Check it back once/);
+});
+
+test('an answer that does not fit the question just asked is treated as misheard', () => {
+  assert.match(WARMTH_DOCTRINE, /does not make sense as an answer to your question, it was probably misheard/);
+  assert.match(WARMTH_DOCTRINE, /Never build on a reply you cannot make sense of/);
+});
+
 test('phrasing only: self-scoped, names no tool, after voice delivery and before the activator', () => {
   assert.match(WARMTH_DOCTRINE, /phrasing only - the tool rules still come first/);
   assert.doesNotMatch(WARMTH_DOCTRINE, /recall_memory|activate_abilities|remember_emotional_moment/);
@@ -70,8 +87,8 @@ test('an overlay slot: second in order, and the compiled text when no overlay re
   assert.ok(!swapped.includes(WARMTH_DOCTRINE));
 });
 
-test('it stays small: the cached prefix grows by at most ~310 tokens (chars/4) with the unclear-words paragraph', () => {
-  assert.ok(WARMTH_DOCTRINE.length <= 1240, `warmth doctrine is ${WARMTH_DOCTRINE.length} chars`);
+test('it stays small: the cached prefix grows by at most ~475 tokens (chars/4) with the unclear-words and not-an-interview paragraphs', () => {
+  assert.ok(WARMTH_DOCTRINE.length <= 1900, `warmth doctrine is ${WARMTH_DOCTRINE.length} chars`);
 });
 
 // ── unclear words (2026-11-07): a misheard short command is asked about, never answered with a feeling or a bare name ──

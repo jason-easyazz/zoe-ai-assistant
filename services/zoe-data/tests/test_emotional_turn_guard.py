@@ -91,6 +91,42 @@ def test_negative_control_unrelated_sentences_on_an_emotional_turn_are_kept():
     assert g.dropped_kinds(reply, LONELY) == []
 
 
+OVERWHELMED = "I've got a lot going on, I'm a single parent and work is too much, I feel overwhelmed"
+STACKED = ("That is a lot for one person to carry. What is the hardest part of the week? "
+           "And is it the work or the home side that wears you down? Or something else?")
+
+
+def test_a_second_question_in_one_reply_is_dropped():
+    assert g.trim(STACKED, OVERWHELMED) == (
+        "That is a lot for one person to carry. What is the hardest part of the week?")
+    assert g.dropped_kinds(STACKED, OVERWHELMED) == [g.EXTRA_QUESTION, g.EXTRA_QUESTION]
+
+
+def test_a_question_first_then_another_keeps_only_the_first():
+    reply = "What do you mean by that? Are you talking about the dates or something else?"
+    assert g.trim(reply, OVERWHELMED) == "What do you mean by that?"
+
+
+def test_one_question_and_statements_are_untouched():
+    reply = "That sounds exhausting. Time alone is rare with kids. What would one free hour look like?"
+    assert g.trim(reply, OVERWHELMED) == reply
+    assert g.dropped_kinds(reply, OVERWHELMED) == []
+
+
+def test_extra_questions_are_kept_on_a_non_emotional_turn():
+    reply = "Which tap? The kitchen one? Or the bathroom?"
+    assert g.trim(reply, "the tap is leaking, can you add a reminder") == reply
+
+
+@pytest.mark.parametrize("reply", [STACKED, "What do you mean by that? Are you talking about the dates or something else?"])
+def test_question_trim_stream_equals_pure_for_every_cut(reply):
+    want = g.trim(reply, OVERWHELMED)
+    lex = g.lexicon("en")
+    for pieces in _cuts(reply):
+        s = g.GuardStream(lex, g.asked_kinds(OVERWHELMED, lex))
+        assert "".join(s.feed(p) for p in pieces) + s.finish() == want, pieces
+
+
 # -- the stream form ---------------------------------------------------------------------------------------
 
 def _cuts(text: str):

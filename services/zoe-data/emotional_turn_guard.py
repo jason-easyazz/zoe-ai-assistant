@@ -13,7 +13,8 @@ that reply about them: nothing unrelated added"). This module is the determinist
 2. **The reply** (``trim`` / ``filter_stream``): on an emotional turn, a sentence AFTER the first that carries an info kind the user
    did not ask for (``weather``, ``contact_offer``, an ``aside`` that opens "By the way" / "As for the ...") is dropped. The first
    sentence is never touched (it is the acknowledgement) and is released as it streams, so the first sound is not delayed; later
-   sentences are held only until each one ends. Asked-for info is kept: "I'm so stressed, will it rain for the wedding?" keeps its
+   sentences are held only until each one ends. A second QUESTION in the same reply is dropped too (``extra_question``): one question
+   per reply, however many the 4B stacks ("what do you mean? Are you talking about X or something else?"). Asked-for info is kept: "I'm so stressed, will it rain for the wedding?" keeps its
    forecast. A non-emotional turn is never held at all.
 
 WHAT IS AN EMOTIONAL TURN (``is_emotional_turn``, the user's own words only): the distress lexicon scores it (any tier; the hand-off
@@ -48,6 +49,8 @@ LEXICON_KEY = "emotional_turn"
 FALLBACK_LANG = "en"
 #: a pasted essay is not scanned for cues (the regexes stay cheap on the voice path)
 MAX_MESSAGE_CHARS = 600
+#: the info kind logged when a second question in one reply is dropped (not lexicon data: it is about the reply's shape)
+EXTRA_QUESTION = "extra_question"
 _SENTINELS = ("__TOOL__:", "__THINKING__:")
 
 
@@ -153,6 +156,10 @@ def asked_kinds(message: str, lex: Lexicon) -> frozenset:
     return frozenset(k for k, rx in lex.asks.items() if rx.search(low))
 
 
+def _is_question(sentence: str) -> bool:
+    return (sentence or "").rstrip().endswith("?")
+
+
 def info_kind(sentence: str, lex: Lexicon) -> str:
     """The info kind ONE reply sentence carries ("weather", "contact_offer", "aside", ...), or "". Pure."""
     low = _fold(sentence)
@@ -198,6 +205,7 @@ class GuardStream:
         self._first_done = False
         self._buf = ""           # held: the current later sentence, with its leading whitespace
         self._seen = ""          # shadow: the whole reply, judged at finish
+        self._asked_q = False    # a question has already gone out in this reply (the first sentence, or a kept later one)
         self.dropped: list[str] = []
 
     def _judge(self, piece: str) -> str:
@@ -205,6 +213,11 @@ class GuardStream:
         if kind and kind not in self.asked:
             self.dropped.append(kind)
             return ""
+        if _is_question(piece):
+            if self._asked_q:   # one question per reply: a person who is struggling is not interviewed
+                self.dropped.append(EXTRA_QUESTION)
+                return ""
+            self._asked_q = True
         return piece
 
     def _drain(self, final: bool) -> str:
@@ -243,6 +256,7 @@ class GuardStream:
             self._first = combined
             return delta
         cut = max(end, released)
+        self._asked_q = _is_question(combined[:end])
         self._first, self._first_done = "", True
         self._buf = combined[cut:]
         return combined[released:cut] + self._drain(final=False)
