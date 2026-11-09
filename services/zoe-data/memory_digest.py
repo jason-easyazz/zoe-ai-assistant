@@ -1084,6 +1084,16 @@ async def run_turn_digest(
             # The extractor files "the user" by default: a fact the turn says about SOMEONE ELSE ("dad rang. sober for once", "priya no
             # beef. arjun hates onion") is re-attached to that person or dropped, never kept as the user's own (fact_subject).
             try:
+                import value_correction
+
+                if value_correction.invented_on_correction_turn(fact, user_message):
+                    result["skipped_low_quality"] += 1
+                    _count_drop("turn_digest", "correction_turn")
+                    logger.info("run_turn_digest: dropped a fact a correction turn cannot have said: %r", fact[:50])
+                    continue
+            except Exception:  # noqa: BLE001 - the guard must never take the digest down
+                pass
+            try:
                 import fact_subject
 
                 verdict_, fixed_fact = fact_subject.attribute(fact, user_message)

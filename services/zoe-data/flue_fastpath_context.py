@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import OrderedDict
 from typing import Any, Iterable, Optional
 
@@ -154,13 +155,27 @@ def _history_safe(text: str) -> str:
         return text
 
 
+# "Done - I forgot: "User's pet Wren had a meltdown at the shops"." is the forget confirmation: it QUOTES the row it erased. Re-sent to the
+# brain as context it hands the forgotten item straight back ("what happened at the shops" -> the meltdown, right after "Done"; QA 6b
+# a15/b15: the item was gone from the store and still recalled in the SAME session). The brain gets the sentence without the quote.
+_FORGET_QUOTE_RE = re.compile(r"^(\s*Done\s*[-\u2013\u2014]+\s*I\s+forgot:\s*)[\"\u201c][^\"\u201d]*[\"\u201d]", re.IGNORECASE)
+
+
+def redact_forget_quote(text: str) -> str:
+    """``Done - I forgot: "<the row>".`` -> ``Done - I forgot that.`` (the erased text is never re-sent). Anything else is unchanged. Pure."""
+    m = _FORGET_QUOTE_RE.match(text or "")
+    if not m:
+        return text
+    return re.sub(r"\s*:\s*$", "", m.group(1)).rstrip() + " that" + (text or "")[m.end():]
+
+
 def render(pairs: list[tuple[str, str]]) -> str:
     """The delimited block for ``pairs`` (oldest first), newest kept under the char cap; '' when nothing fits."""
     lines: list[str] = []
     used = 0
     for role, text in reversed(pairs):
         if role != "user":
-            text = _history_safe(text)
+            text = redact_forget_quote(_history_safe(text))
         line = f"{'User' if role == 'user' else 'Zoe'}: {_clean(text, _SIDE_CHARS)}"
         if used + len(line) > _TOTAL_CHARS and lines:
             break
