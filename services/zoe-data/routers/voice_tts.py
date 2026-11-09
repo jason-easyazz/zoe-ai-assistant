@@ -7507,6 +7507,24 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     return dict(ok=True, profile_id=profile_id, user_id=user_id, display_name=display_name, model_id=model_id)
 
 
+@router.post("/guests/enroll")
+async def voice_guest_enroll(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """A NAMED GUEST's finished panel profile (``named_guests.store_profile``): device token on the LAN only, and only under the
+    single-use ticket the server issued when a verified member asked "learn Quinn's voice" at THIS panel. A profile without a
+    ticket is refused: an unverified voice can never write or overwrite a guest (or a member)."""
+    import named_guest_enrol as _nge
+
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="device token required")
+    from biometric_scope import require_local_panel
+
+    require_local_panel(caller, "guest voice enrolment")
+    try:
+        return await _nge.store_profile(payload or {}, caller)
+    except _nge.GuestError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @router.post("/identify")
 async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Identify speaker by comparing to enrolled profiles.
