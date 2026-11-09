@@ -681,7 +681,8 @@ const addCalendarEvent = defineTool({
   name: 'add_calendar_event',
   description:
     "Add an event/appointment/meeting to the user's calendar (\"add dentist tomorrow " +
-    'at 3pm", "schedule a meeting Friday at 10am"). For time-based reminders use ' +
+    'at 3pm", "schedule a meeting Friday at 10am"). Only when they ask you to add, put, book or schedule it - never ' +
+    'while they are thinking out loud or planning ("help me think through the logistics"). For time-based reminders use ' +
     'add_reminder instead.',
   input: v.object({
     title: v.pipe(v.string(), v.trim(), v.minLength(1)),
