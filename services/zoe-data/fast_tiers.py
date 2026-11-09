@@ -869,6 +869,8 @@ async def _weather_place_tier(text: str, user_id: str, session_id: str, kwargs: 
         plan_text = carried or _wf.explicit_text(text)
         if not plan_text:
             return None
+        if await _hop_owns_turn(text, user_id):
+            return None          # generic advice that a durable fact of the owner changes is the brain's (same rule as _resolve_core)
         import expert_dispatch as _xd
 
         ctx: dict[str, Any] = dict(kwargs.get("extra_ctx") or {})

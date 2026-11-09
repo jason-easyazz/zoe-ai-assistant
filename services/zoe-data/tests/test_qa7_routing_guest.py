@@ -383,3 +383,23 @@ def test_a_held_question_stays_held_when_the_next_sentence_is_a_dropped_stock_li
     for step in (1, 2, 3, 5, 8):
         ps = rp.PolishStream(rp.closer_lexicon_for("x"), True, strict_cap=True, stock=True)
         assert "".join(ps.feed(text[i:i + step]) for i in range(0, len(text), step)) + ps.finish() == "That sounds heavy.", step
+
+
+def test_questions_held_under_the_strict_breaker_are_still_scrubbed():
+    out = rp.polish("That sounds heavy. What feels worst? Shall I use the recall_memory tool to find your notes? We can take it slowly.",
+                    "x", True, strict_cap=True, stock=True)
+    assert "recall_memory" not in out and out.startswith("That sounds heavy.") and out.endswith("We can take it slowly.")
+
+
+def test_the_weather_shortcut_yields_to_the_personalisation_hop(monkeypatch):
+    import fast_tiers
+
+    async def owns(text, user_id):
+        return True
+
+    async def boom(*a, **k):
+        raise AssertionError("the weather expert must not answer a turn the personalisation hop owns")
+
+    monkeypatch.setattr(fast_tiers, "_hop_owns_turn", owns)
+    monkeypatch.setattr(xd, "dispatch", boom)
+    assert asyncio.run(fast_tiers._weather_place_tier("should i wear a jacket for the weather in perth tomorrow", "u", "s", {})) is None
