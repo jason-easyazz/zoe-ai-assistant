@@ -2647,6 +2647,15 @@ async def run_flue_brain_streaming(
         _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "distress_handoff")
         yield _dh
         return
+    # The medical safety floor (ZOE_MEDICAL_SAFETY, default enforce) is second: a poisoning, an emergency-number question (even mid-thread), a red-flag symptom or a blood
+    # sugar reading gets ONE fixed reply with the household's numbers, whatever memory or the open thread says (docs/knowledge/medical-safety.md).
+    import medical_safety
+
+    _ms = await medical_safety.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")))
+    if _ms:
+        _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "medical_safety")
+        yield _ms
+        return
     message = _resolve_clarification(message, user_id, session_id)
     # A spoken mute ("don't mention that again", "leave it"; ZOE_RESTRAINT): recorded here, before the
     # brain, so the very next brief / raise / packet honours it. In enforce the acknowledgement is
