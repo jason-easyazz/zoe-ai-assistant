@@ -350,6 +350,15 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
             except Exception as exc:
                 logger.debug("latent_intent_detector: offer aging failed: %s", exc)
 
+    # The speaker's own introduction ("its walter", "nadia here") is noted BEFORE anything is mined from the turn, so the person offer
+    # the same words would otherwise raise for them is refused at the store (own_name; QA 6b).
+    try:
+        import own_name
+
+        await own_name.note_introduction(user_id, user_message)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("latent_intent_detector: own-name note failed: %s", exc)
+
     suggestions = await detect(user_message, user_id=user_id, session_id=session_id)
     # Merge the reliable deterministic person proposals (flag-gated), deduping
     # any name the LLM detector already proposed.
