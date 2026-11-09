@@ -214,3 +214,25 @@ def test_without_a_now_marker_the_most_urgent_reading_wins():
 
 def test_a_clock_time_is_not_a_second_reading():
     assert "9.8 mmol/L" in reply("my blood sugar was 9.8 at 3 pm")
+
+
+# review round 3 (Codex bot) ---------------------------------------------------------------------------------------------
+def test_not_sure_why_is_doubt_not_a_denial_of_the_symptom():
+    assert reply("i am not sure why my chest feels tight, my blood sugar is 5.5").startswith("Ring 000 now")
+
+
+def test_negative_control_no_chest_pain_with_a_filler_word_is_still_a_denial():
+    assert reply("i dont have any chest pain, my blood sugar is 5.5").startswith("5.5 mmol/L")
+
+
+def test_an_unlabelled_follow_up_number_keeps_the_established_unit():
+    assert "25 mg/dL is low" in reply("my blood sugar was 100 mg/dL and is now 25")
+
+
+def test_another_measurement_does_not_override_the_glucose_reading():
+    out = reply("my blood sugar was 5.5 and my temperature is now 39")
+    assert out.startswith("5.5 mmol/L is in the usual range")
+
+
+def test_negative_control_a_repeated_glucose_term_still_counts_as_the_current_reading():
+    assert "2.8 mmol/L is low" in reply("my blood sugar was 5.5 and my sugar is now 2.8")

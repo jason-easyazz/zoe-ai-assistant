@@ -81,7 +81,8 @@ def _rx() -> dict:
     return {
         "verb": w(ing["verb"]), "sub": w(ing["substance"]), "idiom": re.compile(ing["idioms"], re.I),
         "human": w(ing["human"]), "animal": w(ing["animal"]),
-        "neg": w(d["negation"]),
+        "neg_adj": re.compile(rf"(?<!\w)(?:{d['negation']})(?:\s+\w+){{0,2}}\s*$", re.I), "unsure": re.compile(r"(?<!\w)(?:not sure|unsure|not certain|dont know|no idea)(?!\w)", re.I),
+        "term_any": w(gl["term"] + "|" + gl["plain_term"]),
         "ask": w(nq["ask"]), "event": w(nq["event"]), "poison_event": w(nq["poison_event"]),
         "flags": [(f["id"], f["tier"], w(f["re"])) for f in d["red_flags"]],
         "gl": re.compile(rf"(?<!\w)(?:{gl['term']})\W+(?:[a-z]+\W+){{0,4}}?{_GLUCOSE_NUM}", re.I),
@@ -94,7 +95,10 @@ def _negated(s: str, start: int, rx: dict) -> bool:
     """Is the symptom at ``start`` denied in its own clause ("I have no chest pain")? Looks only at the 30 characters before it."""
     cuts = [(s.rfind(c, 0, start), len(c)) for c in (".", ",", ";", "!", "?", " but ", " however ", " though ")]
     clause_start = max([i + n for i, n in cuts if i >= 0] + [0])
-    return bool(rx["neg"].search(s[max(clause_start, start - 30):start]))
+    pre = s[max(clause_start, start - 40):start]
+    if rx["unsure"].search(pre):
+        return False   # "not sure why my chest feels tight" doubts the cause, it does not deny the symptom
+    return bool(rx["neg_adj"].search(pre))   # the negation must sit right before the symptom: "no chest pain", "dont have any chest pain"
 
 
 def _flag(s: str, rx: dict, tier: str) -> Optional[Verdict]:
@@ -138,12 +142,12 @@ _NOW = re.compile(r"now|currently|latest")
 _SECOND = re.compile(rf"(?<!\w)(?P<lead>right now|is now|now|currently|latest|then|dropped to|fell to|down to|up to|rose to|went to|reads|reading|is|are)\s+{_GLUCOSE_NUM}", re.I)
 
 
-def _reading(raw: str, unit: str, after: str, rx: dict) -> Optional[tuple]:
+def _reading(raw: str, unit: str, after: str, rx: dict, default_unit: str = "") -> Optional[tuple]:
     """(raw, unit) when ``raw`` followed by ``after`` is a plausible reading, else None (a recipe quantity, a time or a price is not one)."""
     if rx["gl_after"].search(after[:24]):
         return None
     n = float(raw)
-    unit = (unit or "").lower() or ("mmol" if 1.0 <= n <= 30 else ("mg" if 30 < n <= 700 else ""))   # no unit: 40 is 40 mg/dL (severely low), never 40 mmol/L
+    unit = (unit or "").lower() or default_unit or ("mmol" if 1.0 <= n <= 30 else ("mg" if 30 < n <= 700 else ""))   # no unit: 40 is 40 mg/dL (severely low), never 40 mmol/L
     return (raw, unit) if (unit == "mmol" and 1.0 <= n <= 40) or (unit == "mg" and 20 <= n <= 700) else None
 
 
@@ -159,7 +163,10 @@ def _glucose(s: str, rx: dict) -> Optional[Verdict]:
         cands, current = [first], []
         tail = re.split(r"[.!?;](?:\s|$)|\n", s[m.end():], 1)[0]   # a decimal point is not a sentence end
         for sm in _SECOND.finditer(tail):
-            got = _reading(sm.group(2), sm.group(3) or "", tail[sm.end(2):], rx)
+            seg = tail[:sm.start()]
+            if re.search(r"(?<!\w)(?:my|his|her|their|our|your|the)(?!\w)", seg) and not rx["term_any"].search(seg):
+                break   # a newly named thing ("my temperature is now 39") ends the glucose association
+            got = _reading(sm.group(2), sm.group(3) or "", tail[sm.end(2):], rx, default_unit=first[1])
             if got:
                 cands.append(got)
                 if _NOW.search(sm.group("lead")):
