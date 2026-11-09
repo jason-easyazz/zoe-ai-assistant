@@ -33,7 +33,10 @@ test('the warmth doctrine is in the compiled instructions, once', () => {
 test('feelings: a specific reflection, ONE open question, nothing unrelated appended, a later follow-up', () => {
   assert.match(WARMTH_DOCTRINE, /name the specific thing they're carrying/);
   assert.match(WARMTH_DOCTRINE, /never echo their sentence/);
-  assert.match(WARMTH_DOCTRINE, /ask ONE gentle, open question/);
+  assert.match(WARMTH_DOCTRINE, /ask at most ONE gentle, open question/);
+  assert.match(WARMTH_DOCTRINE, /Never ask how they are feeling/);
+  assert.match(WARMTH_DOCTRINE, /ONE question at most per reply/);        // (the not-an-interview paragraph replaced the older one-line rule)
+  assert.match(WARMTH_DOCTRINE, /never say tool, ability, function or group names/);
   assert.match(WARMTH_DOCTRINE, /no weather, offers or news/);
   assert.match(WARMTH_DOCTRINE, /If something hard came up before, ask how it's going/);
 });
@@ -87,8 +90,8 @@ test('an overlay slot: second in order, and the compiled text when no overlay re
   assert.ok(!swapped.includes(WARMTH_DOCTRINE));
 });
 
-test('it stays small: the cached prefix grows by at most ~475 tokens (chars/4) with the unclear-words and not-an-interview paragraphs', () => {
-  assert.ok(WARMTH_DOCTRINE.length <= 1900, `warmth doctrine is ${WARMTH_DOCTRINE.length} chars`);
+test('it stays small: the cached prefix grows by at most ~600 tokens (chars/4) with the unclear-words, not-an-interview and inner-workings paragraphs', () => {
+  assert.ok(WARMTH_DOCTRINE.length <= 2400, `warmth doctrine is ${WARMTH_DOCTRINE.length} chars`);
 });
 
 // ── unclear words (2026-11-07): a misheard short command is asked about, never answered with a feeling or a bare name ──
