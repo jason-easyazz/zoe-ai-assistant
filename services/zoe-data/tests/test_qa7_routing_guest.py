@@ -404,3 +404,16 @@ def test_the_weather_shortcut_yields_to_the_personalisation_hop(monkeypatch):
     monkeypatch.setattr(fast_tiers, "_hop_owns_turn", owns)
     monkeypatch.setattr(xd, "dispatch", boom)
     assert asyncio.run(fast_tiers._weather_place_tier("should i wear a jacket for the weather in perth tomorrow", "u", "s", {})) is None
+
+
+def test_feel_free_advice_is_kept_and_the_invitation_to_talk_is_stock():
+    advice = "Feel free to tell your boss you need a day off."
+    assert not rp.is_stock_line(advice) and rp.polish(advice, "x", False, stock=True) == advice
+    assert not rp.is_stock_line("Feel free to talk to your boss.")
+    for line in ("Feel free to share.", "Feel free to tell me.", "Feel free to talk to me about it.", "Feel free to share more whenever you're ready."):
+        assert rp.is_stock_line(line), line
+
+
+def test_a_skybridge_weather_answer_is_recorded_for_the_place_follow_up():
+    src = (__import__("pathlib").Path(__file__).resolve().parents[1] / "routers" / "voice_tts.py").read_text()
+    assert "weather_followup as _wf_note" in src and "_wf_note.note(effective_user, session_id, text)" in src

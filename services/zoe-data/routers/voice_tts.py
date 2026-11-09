@@ -4604,6 +4604,13 @@ async def voice_command(
                     "content_type": _auth_fail_type,
                 }
         if _skybridge_result and _skybridge_result.get("handled"):
+            try:    # "what's the weather tomorrow" answered by Skybridge: "and in albany" next is the same question (weather_followup)
+                if str((_skybridge_result.get("intent") or {}).get("domain") or "") == "weather":
+                    import weather_followup as _wf_note
+
+                    _wf_note.note(effective_user, session_id, text)
+            except Exception:  # noqa: BLE001 - the note never breaks a turn
+                pass
             _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = (
                 _skybridge_result.get("skybridge_context") or {}
             )

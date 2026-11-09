@@ -170,10 +170,21 @@ _ASKS_RX = re.compile(
     r"should\s+i|would\s+you|will\s+you|any\s+ideas)\b", re.IGNORECASE)
 
 
+_FEEL_FREE_TAIL_RX = re.compile(
+    r"^(?:\s+(?:(?:to\s+)?(?:me|us)|with\s+(?:me|us)|more|anytime|any\s*time|whenever(?:\s+you(?:'re|\s+are)?\s+ready|\s+you\s+like)?|"
+    r"about\s+(?:it|that|anything|whatever|how\s+you\s+feel)(?:\s+(?:you\s+(?:like|want)|on\s+your\s+mind))?|"
+    r"if\s+you\s+(?:want|like|need)(?:\s+to)?|whatever(?:\s+is)?(?:\s+on\s+your\s+mind)?))*[\s.!]*$", re.IGNORECASE)
+
+
 def is_stock_line(sentence: str) -> bool:
     """A sentence that is ONLY a stock listening line: one with a second clause ("I'm here to listen, and that sounds hard") says something."""
     m = _STOCK_RX.match(sentence or "")
-    return bool(m) and not re.search(r"[,;]|\b(?:and|but|that|because)\b", (sentence or "")[m.end():], re.IGNORECASE)
+    if not m or re.search(r"[,;]|\b(?:and|but|that|because)\b", (sentence or "")[m.end():], re.IGNORECASE):
+        return False
+    if re.match(r"^\W*(?:please\s+)?feel\s+free\b", sentence or "", re.IGNORECASE):
+        # an invitation to talk TO ZOE is stock; "feel free to tell your boss you need a day off" is advice and is kept
+        return bool(_FEEL_FREE_TAIL_RX.match((sentence or "")[m.end():]))
+    return True
 
 
 def person_asked(message: str) -> bool:
