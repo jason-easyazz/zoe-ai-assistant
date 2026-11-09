@@ -5053,8 +5053,16 @@ def _enroll_speaker_kwargs(cmd: dict, uid: str, name: str):
         built = _rn34.build_profile(embs)
         return built.vector, list(built.dropped)
 
+    guest = cmd.get("guest") if isinstance(cmd.get("guest"), dict) else None
+
     def upload_profile(vec, n_clips: int) -> bool:
         import numpy as _np
+        if guest is not None:
+            # A NAMED GUEST: the server's single-use ticket names who; the profile never lands on a member.
+            resp = _api_post("/api/voice/guests/enroll", dict(
+                ticket=str(guest.get("ticket") or ""), model_id=_rn34.MODEL_ID, sample_count=int(n_clips),
+                embedding_base64=base64.b64encode(_np.asarray(vec, dtype=_np.float32).tobytes()).decode()), timeout=60)
+            return bool(resp.get("ok"))
         resp = _api_post("/api/voice/enroll", dict(
             embedding_base64=base64.b64encode(_np.asarray(vec, dtype=_np.float32).tobytes()).decode(),
             model_id=_rn34.MODEL_ID, sample_count=int(n_clips), user_id=uid, display_name=name or uid,
@@ -5063,7 +5071,7 @@ def _enroll_speaker_kwargs(cmd: dict, uid: str, name: str):
         return bool(resp.get("ok"))
 
     return dict(clips=max(int(cmd.get("clips") or 0), _rn34.ENROLL_CLIPS), embed=embed, build=build,
-                upload_profile=upload_profile, legacy_upload=(SPEAKER_MODEL == "dual"))
+                upload_profile=upload_profile, legacy_upload=(SPEAKER_MODEL == "dual" and guest is None))
 
 
 def _run_enrollment_mode(pa) -> None:
@@ -5091,6 +5099,13 @@ def _run_enrollment_mode(pa) -> None:
                   timeout=10, retries=1)
 
     extra = _enroll_speaker_kwargs(cmd, uid, name)
+    if isinstance(cmd.get("guest"), dict):
+        # A guest run: only a panel-built ResNet34 profile under the ticket (no audio upload), and no member enrolment result.
+        if not extra:
+            extra = None
+
+        def report(outcome: str, samples: int, reason: str = "") -> None:   # noqa: F811 - the member's enrolment state is not touched
+            log.info("guest enrolment %s samples=%d reason=%s", outcome, samples, reason or "-")
     if extra is None:
         # ResNet34 is the model this panel ACTS on and it will not load (file missing / drift refused): there is nothing it could
         # store, so say so now rather than recording five clips for nothing.
