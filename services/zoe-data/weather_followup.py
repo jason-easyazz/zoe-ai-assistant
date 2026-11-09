@@ -31,11 +31,13 @@ _FOLLOW_RE = re.compile(
     r"^\W*(?:(?:and|so|ok|okay|then|what\s+about|how\s+about|and\s+what\s+about|what\s+of)\s+)+(?:(?:in|for|at)\s+)?"
     r"(?P<place>[a-z][a-z'. -]{1,30}?)\s*[?.!]*\s*$")
 #: a bare "and <words>" that opens with a COMMAND verb is a command, never a place ("and add milk", "and cancel timer")
-_COMMAND_WORD_RE = re.compile(
-    r"^(?:add|put|cancel|set|start|stop|play|pause|resume|skip|turn|switch|toggle|dim|open|close|lock|unlock|call|text|send|message|email|"
-    r"remind|remember|forget|delete|remove|clear|show|read|tell|ask|find|search|look|check|get|buy|book|make|create|schedule|move|change|"
-    r"rename|save|note|write|list|order|order|bring|take|give|let|do|is|are|was|were|can|could|will|would|should|have|has|had|did|does|"
-    r"please|thanks|thank|yes|yeah|yep|no|nope|nah|sure|okay|ok|great|good|cool|nice|lovely|perfect|wow|oh|um|uh)\b")
+_IMPERATIVE = (r"add|put|cancel|set|start|stop|play|pause|resume|skip|turn|switch|toggle|dim|open|close|lock|unlock|call|text|send|message|email|"
+               r"remind|remember|forget|delete|remove|clear|show|read|tell|ask|find|search|look|check|buy|book|make|create|schedule|move|change|"
+               r"rename|save|note|write|list|order|bring|take|give|let|note|record|log|track|mute|unmute|launch|run|post|share|wake|add")
+_COMMAND_WORD_RE = re.compile(r"^(?:" + _IMPERATIVE + r"|get|do|is|are|was|were|can|could|will|would|should|have|has|had|did|does|"
+                              r"please|thanks|thank|yes|yeah|yep|no|nope|nah|sure|okay|ok|great|good|cool|nice|lovely|perfect|wow|oh|um|uh)\b")
+#: a message that OPENS with a command ("remember that the weather in perth was awful", "add weather stripping in perth") is that command's, not a weather ask
+_COMMAND_LEAD_RE = re.compile(r"^(?:(?:please|hey|ok|okay|zoe|and|also|just|can you|could you|would you|will you)\s+)*(?:" + _IMPERATIVE + r")\b")
 _SCOPE_RE = re.compile(r"\b(today|tonight|tomorrow|this\s+weekend|this\s+week|later)\b")
 
 #: (user id, session id) -> (monotonic time, scope word of the last weather ask)
@@ -76,7 +78,7 @@ def explicit_text(text: str) -> Optional[str]:
     low = re.sub(r"\s+", " ", (text or "").lower().replace("’", "'").strip())
     if not low or len(low.split()) > _MAX_WORDS or not _NOUN_RE.search(low):
         return None
-    if ws.is_food_temperature(low) or ws.has_other_question(low):
+    if ws.is_food_temperature(low) or ws.has_other_question(low) or _COMMAND_LEAD_RE.match(low):
         return None
     return text if ws.weather_places(low) else None
 

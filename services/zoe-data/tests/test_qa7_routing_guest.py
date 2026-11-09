@@ -101,8 +101,13 @@ def test_negative_control_weather_only_compounds_are_still_answered():
 def test_explicit_place_weather_text():
     assert wf.explicit_text("temp in albany") == "temp in albany"
     assert wf.explicit_text("what's the weather in broome today")
+    assert wf.explicit_text("tell me the weather in broome") is None      # a command-led ask stays on the router's ordinary path (unchanged)
+    assert wf.explicit_text("is the weather ok in albany tomorrow")
+    assert wf.explicit_text("whats the temperature in kalgoorlie")
     for t in ("what's the temp in the oven", "temperature for roast chicken", "whats the weather in bunbury and how hot for pork",
-              "what time is it in albany", "weather"):
+              "what time is it in albany", "weather",
+              "remember that the weather in perth was awful", "add weather stripping in perth", "please remind me about the forecast in perth",
+              "set a reminder to check the weather in broome"):
         assert wf.explicit_text(t) is None, t
 
 
