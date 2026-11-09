@@ -182,6 +182,7 @@ def test_on_wake_does_not_block_the_recording(daemon, monkeypatch):
         time.sleep(1.0)
 
     monkeypatch.setattr(daemon, "play_wake_beep", slow_beep)
+    monkeypatch.setattr(daemon, "WAKE_CHIME_ON_WAKE", True)
     monkeypatch.setattr(daemon, "_wake_panel_agent", lambda: None)
     monkeypatch.setattr(daemon, "_notify_wake_background", lambda: None)
 
