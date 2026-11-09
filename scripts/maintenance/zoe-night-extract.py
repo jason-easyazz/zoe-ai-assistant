@@ -118,6 +118,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
 
         async def load_turns(uid: str) -> list:
             tr = await md.load_day_messages(uid, start.isoformat(), end.isoformat())       # own words, off-record + forgotten turns out (strict ledger)
+            tr = md.without_rejected_speakers(tr)          # a voice the speaker gate rejected is not the member's: never extracted as theirs
             turns, times = list(getattr(tr, "turns", ())), list(getattr(tr, "times", ()))
             times += [""] * (len(turns) - len(times))
             return [(mid, line, _epoch(at)) for (mid, line), at in zip(turns, times)]

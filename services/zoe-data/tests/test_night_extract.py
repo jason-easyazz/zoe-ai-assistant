@@ -484,3 +484,30 @@ def test_an_unnamed_relative_does_not_invent_a_person_from_a_kinship_alias():
     assert not any(f.get("subject") == "ter" for f in facts), facts
     assert any(f["kind"] == "kin" and f["subject"] == "" for f in facts)             # the unnamed-relative fact is still there
     assert any(f["subject"] == "dana" for f in ne.lexicon_facts("my sister Dana"))   # negative control
+
+
+def test_an_unreadable_baseline_is_unscored_not_an_empty_one(tmp_path):
+    # Codex on #2352: a failed read of the 4B's stored facts was treated as "stored nothing" and every proposal counted extractor_only
+    async def lt(_uid):
+        return turns_of(DAY)
+
+    async def broken(_uid):
+        raise RuntimeError("store down")
+
+    s = run(ne.run_night(night=NIGHT, members=[USER], load_turns=lt, load_stored=broken, extract=make_extract(DAY), d=tmp_path / "out",
+                         run_mode="shadow"))
+    m = s["members"][USER]
+    assert m["baseline"] == "unavailable" and m["extractor_only"] == 0 and m["agree"] == 0
+    rows = facts_on_disk(tmp_path)
+    assert rows and all(r["cmp"] == "unscored" for r in rows)
+    # negative control: a readable empty baseline still scores the proposals as extractor_only
+    s2, _ = drive(tmp_path / "ok")
+    assert s2["members"][USER]["extractor_only"] > 0 and "baseline" not in s2["members"][USER]
+
+
+def test_the_loader_drops_turns_the_speaker_gate_rejected():
+    # Codex on #2352: a rejected voice's "I am 42" became an age proposal under the member
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[3].joinpath("scripts/maintenance/zoe-night-extract.py").read_text(encoding="utf-8")
+    assert "md.without_rejected_speakers(tr)" in src

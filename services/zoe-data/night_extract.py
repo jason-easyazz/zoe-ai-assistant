@@ -555,8 +555,14 @@ async def run_night(*, night: str, members: list[str], load_turns: Callable[[str
         try:
             stored = await load_stored(uid)
         except Exception:  # noqa: BLE001 - no comparison, the facts are still the extractor's
-            stored = []
-        c = compare(facts, stored)
+            stored = None
+        if stored is None:
+            # the baseline could not be read: that is NOT "the 4B stored nothing" - the proposals are kept, unscored, and out of the counts
+            for f in facts:
+                f["cmp"] = "unscored"
+            c = {"agree": 0, "extractor_only": 0, "contradicts": 0, "baseline": "unavailable"}
+        else:
+            c = compare(facts, stored)
         summary["members"][uid].update({"facts": len(facts), **c})
         rows.extend(facts)
     if dry_run:
