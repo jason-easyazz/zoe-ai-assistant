@@ -198,10 +198,18 @@ _SECOND_Q_RE = re.compile(
     r"\b(?:and|also|plus|then|oh\s+and)\s+(?P<rest>(?:what|whats|what's|how|when|where|who|why|which|should|can|could|do|does|is|are|will)\b.*)$")
 
 
+_JOINER_TAIL_RE = re.compile(r"\b(?:and|also|plus|then|oh\s+and)\s+(?P<rest>.+)$")
+
+
 def has_other_question(text: str) -> bool:
     """True when ``text`` carries a second question that is NOT about the weather (a cooking time, a place to eat). "and will it rain
     tomorrow" / "and how hot tomorrow" are weather; "and what about albany" is a place (``weather_places``). Pure."""
     low = re.sub(r"\s+", " ", (text or "").lower().replace("\u2019", "'").strip())
+    # a cooking clause with no question opener ("... and cooking temperature for pork roast", "... plus safe internal temp for chicken")
+    tail = _JOINER_TAIL_RE.search(low)
+    if tail and not _OUTDOOR_WORD_RE.search(tail.group("rest")) and (
+            is_food_temperature(tail.group("rest")) or re.search(rf"\b(?:{_FOOD}|cook\w*|roast\w*|bak\w*|grill\w*)\b", tail.group("rest"))):
+        return True
     m = _SECOND_Q_RE.search(low)
     if not m:
         return False

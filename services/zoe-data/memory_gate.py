@@ -320,7 +320,7 @@ EVENT_TIME_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
                        r"(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\b"),
         # "what exam do i have and when" (QA round 7: answered "You've got nothing on today."): a NAMED kind of event with no day given is a
         # lookup of the user's own plans (memory beside the calendar), never today's agenda and never the clock.
-        ("have_event", r"\bwhat\s+(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\s+(?:do|am|are)\s+(?:i|we)\s+(?:have|got)\b"),
+        ("named_event", r"\bwhat\s+(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\s+(?:do|am|are)\s+(?:i|we)\s+(?:have|got)\b"),
         # "which day is max at kindy" (QA round 7: answered "It's 9:21 PM."): when/which day a NAMED person is somewhere they go
         # regularly is a stored routine of the household, never the clock. A pronoun / "it" / "the" subject never matches.
         ("their_routine", r"\b(?:which\s+days?|what\s+days?|when|what\s+time)\s+(?:is|are|does|do|did|will)\s+"

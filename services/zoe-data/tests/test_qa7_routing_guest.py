@@ -56,6 +56,17 @@ def test_clock_question_still_reaches_the_clock():
     assert xd._plan("time", "what time is it")[0] == "time_query"
 
 
+def test_the_brain_gets_the_stored_rows_for_these_without_a_flag(monkeypatch):
+    """The planners hand them to the brain, so the recall floor must claim them (positive routing: memory + calendar tool)."""
+    import zoe_flue_client as zfc
+
+    monkeypatch.delenv("ZOE_RECALL_PRESENT_STATE_SHAPES", raising=False)
+    assert zfc._recall_question_shape("which day is max at kindy") == "event_time"
+    assert zfc._recall_question_shape("what exam do i have and when") == "event_time"
+    for t in ("what time is it", "what is the capital of france", "what time does the game start"):
+        assert zfc._recall_question_shape(t) == "", t          # negative control: nothing else gained a shape
+
+
 def test_a_named_event_with_no_day_is_not_todays_agenda():
     assert xd._plan("calendar", "what exam do i have and when") is None
 
@@ -73,14 +84,16 @@ def test_negative_control_a_named_event_WITH_a_day_is_still_read():
 
 def test_compound_weather_plus_cooking_is_the_brains():
     for t in ("whats the weather in mandurah and whats the temp for roast potatoes",
-              "whats the weather in bunbury and how hot for a pork roast"):
+              "whats the weather in bunbury and how hot for a pork roast",
+              "weather in bunbury and cooking temperature for pork roast", "weather in bunbury plus cooking temp for chicken",
+              "weather in bunbury and safe internal temp for pork"):
         assert ws.has_other_question(t)
         assert xd._plan("weather", t) is None
 
 
 def test_negative_control_weather_only_compounds_are_still_answered():
     for t in ("weather in perth and will it rain tomorrow", "weather in fremantle today? and mandurah", "weather in perth and what about albany",
-              "weather in perth and how hot tomorrow"):
+              "weather in perth and how hot tomorrow", "weather in perth and outside temp"):
         assert not ws.has_other_question(t)
     assert xd._plan("weather", "weather in perth and will it rain tomorrow")[0] == "weather"
 
