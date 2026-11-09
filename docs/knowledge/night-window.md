@@ -49,10 +49,10 @@ After a restart zoe-data's digest loop sleeps until the NEXT 03:00 and its in-pr
 | Time (local) | What | Notes |
 |---|---|---|
 | 02:00 (+0-5 min) | `zoe-training` | LoRA is off (`ZOE_ENABLE_LORA_TRAINING=false`): about 20 s of data prep. With LoRA on it stops the brain and zoe-data itself; the window refuses while its lock file's pid is alive |
-| 02:30 (+0-10 min) | `zoe-backup` | Postgres first, then the palace tarball |
+| 02:30 (+0-2 min) | **`zoe-night-window --presleep`** (`ExecStartPre=-`) | **one clock since 2026-11-09**: starts `zoe-backup.service` (Postgres first, then the palace tarball), waits for it, then `zoe-memory-export.service`; the installer switches `zoe-backup.timer` / `zoe-memory-export.timer` OFF. Section 19 |
 | 02:32 | `zoe-dreaming` | **absorbed**: the installer disables `zoe-dreaming.timer`; the window runs `zoe-nightly-dreaming.py` itself (12B first, then the 4B if the 12B could not). Two runs would double the work and race for the model |
-| 02:40 (+0-5 min) | `zoe-memory-export` | its own header wants "a copy BEFORE the digest mutates the store"; the window starts after it, so the export is now a copy before EVERYTHING mutates |
-| **02:50 (+0-2 min)** | **`zoe-night-window`** | waits (up to 20 min) for training / backup / export / dreaming to be inactive, up to 30 min for the panel to be quiet (10 min since the last household voice turn: zoe-data's `/health` `last_voice_turn_age_s` first, the panel log over ssh when that is null; neither readable = busy for up to 10 min, then it proceeds and logs it). The unit runs `night_window.sh --jobs digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55` (section 14) |
+| 02:40-02:45 | (the memory export, inside the pre-sleep phase) | its own header wants "a copy BEFORE the digest mutates the store"; the pre-sleep phase runs it before ANY stop, so the export is still a copy before EVERYTHING mutates |
+| **~02:50 (after the pre-sleep phase)** | **`zoe-night-window` (the window proper)** | waits (up to 20 min) for training / backup / export / dreaming to be inactive, up to 30 min for the panel to be quiet (10 min since the last household voice turn: zoe-data's `/health` `last_voice_turn_age_s` first, the panel log over ssh when that is null; neither readable = busy for up to 10 min, then it proceeds and logs it). The unit runs `night_window.sh --jobs digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55` (section 14) |
 | 03:00 | (zoe-data's digest loop) | not alive: stopped (the window runs the body) |
 | **03:55** | **the window must be over** | hard cap 65 min, shrunk to fit; zoe-data must be back before the Sunday 04:00 consolidation loop and the voice gate |
 | 04:10-04:52 | voice gate (Serena restart 04:15, gate 04:30) | a blackout: the window never overlaps it, and a 4B fallback job is cut at 04:10 |
@@ -482,3 +482,24 @@ Changes: (1) up to **3 start attempts** (`LOAD_MAX_ATTEMPTS`), the last with 6 f
 - **After it**: if the pre-job worked more than 20 s the box is compacted (sudo) and MemAvailable/MemFree are measured AGAIN before the levers are chosen (`resettle`), because the choice is made on what is free now.
 - **Report**: the job appears in the jobs table with backend `pre`.
 - Tests: `tests/unit/test_night_repass_window.py` (order against the stops and the 12B start, the budget clip, timeout / missing runtime / killed window all restore, the control without `--pre-jobs`).
+
+## 19. One orchestrator: the pre-sleep phase, and what stays on its own clock (2026-11-09)
+
+**Folded in.** The timer's first slot is now **02:30** (retries 03:05 / 03:15 unchanged). `ExecStartPre=-night_window.sh --presleep` runs `zoe-backup.service` and then `zoe-memory-export.service` with `systemctl --user start --wait`, BEFORE the window's preflight and before anything is stopped. Properties (tests: `tests/unit/test_night_presleep.py`):
+
+- **Independent of the window.** It is its own invocation and the `-` ignores its exit status, so a window that refuses (a lander held the lock, the panel never went quiet, RAM does not fit) still leaves tonight's backup and export taken - the one thing a fold must never break.
+- **Sequenced, idempotent per day.** Backup first, then the export; a unit that already succeeded today (`~/.zoe/night-window/presleep-<date>.json`) is not started again by the 03:05 / 03:15 slots; a FAILED unit is not stamped, so the next slot retries it. A failure never blocks the sleep; it is in the report notes (`presleep <unit>: FAILED rc N`).
+- **Timeline**: 02:30 backup (measured up to ~10 min) -> export (~5 min) -> the window's preflight/sleep at about 02:50, exactly where it started before, so the 12B stage and the pendant re-pass keep their time. The window is still over by 03:55.
+- `night_busy.sh` follows the clock: `deadline` (landers gone by) 02:40 -> **02:20**, deploys pause from 02:45 -> **02:25**, "finished tonight" is measured from 02:25. Voice landings were already paused from 01:55.
+- **Installer** (`install_night_window.sh`): disables `zoe-backup.timer` and `zoe-memory-export.timer` (their services stay), records their prior state, `--uninstall` re-enables them. The two timer templates are removed from the repo and listed in `unit_inventory.RETIRED`.
+
+**Trade-off, stated plainly.** The two removed timers were `Persistent=true` (a night the box was off was made up at the next boot). The window timer is `Persistent=false` ON PURPOSE (it must never put Zoe to sleep at boot), so **a night the box is off at 02:30 is no longer caught up by a boot-time backup**. The weekly `zoe-backup-verify` (Sunday 05:30) still reports a stale backup, and the off-box backup (`zoe-offbox-backup`, its own clock) is untouched. If that is not acceptable, re-add `zoe-backup.timer` alone with `Persistent=true` (the idempotent stamp means a double run is harmless).
+
+**NOT folded, and why.**
+
+| unit | stays separate because |
+|---|---|
+| `zoe-serena-pregate-restart` 04:15, `zoe-voice-regression` 04:30 | they are pinned to the clock, not to the window: they must run on the nights the window refused or failed, and the voice gate's artifact slot is the deploy gate's evidence. Folding them would make the window a process that sits alive through 04:55 holding the night (the landing rules forbid anything alive in 01:50-04:55 except the window itself, which is over by 03:55), and a window crash would silently skip the gate. They already run after the wake. |
+| `zoe-opensrc-refresh`, `zoe-backup-verify` (Sunday 05:30) | weekly, after the window and the gate, on a different cadence; nothing to sequence. |
+| `zoe-offbox-backup` | its own clock and its own failure domain (it exists so the on-box copy is not the only copy). |
+| zoe-data's own 03:00 digest loop | the fallback for a window that did not run; unchanged. |

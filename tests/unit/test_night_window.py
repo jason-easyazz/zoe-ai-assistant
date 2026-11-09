@@ -1766,9 +1766,9 @@ def test_the_service_template_survives_a_long_night_and_always_restores():
 def test_the_timer_template_never_fires_in_the_daytime_and_starts_after_the_other_nightly_jobs():
     text = (SYSTEMD / "zoe-night-window.timer").read_text()
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
-    assert "OnCalendar=*-*-* 02:50:00" in body and "Persistent=false" in body and "Persistent=true" not in body
+    assert "OnCalendar=*-*-* 02:30:00" in body and "Persistent=false" in body and "Persistent=true" not in body
     h, m = re.search(r"OnCalendar=\*-\*-\* (\d+):(\d+)", body).groups()
-    assert (int(h) * 60 + int(m)) > 2 * 60 + 40 + 5                       # after the 02:40 (+5 min) memory export
+    assert (int(h) * 60 + int(m)) >= 2 * 60 + 30                          # the window starts at 02:30: it runs the backup and the memory export itself (--presleep), no longer after their timers
     latest = int(h) * 60 + int(m) + 2                                      # RandomizedDelaySec=120
     assert nw.NightCfg().end_by - latest >= 35 + nw.NightCfg().reserve_min   # even the latest start leaves a usable window before 03:55 (the cap shrinks to fit)
 
@@ -2528,8 +2528,8 @@ def delay_of(body):
 def test_the_timer_retries_after_the_first_attempt_inside_the_window_that_can_still_fit():
     body = _unit_body("zoe-night-window.timer")
     slots = sorted(int(h) * 60 + int(m) for h, m in re.findall(r"OnCalendar=\*-\*-\* (\d+):(\d+)", body))
-    assert slots == [2 * 60 + 50, 3 * 60 + 5, 3 * 60 + 15], "02:50 plus the 03:05 and 03:15 retries"
-    assert slots[0] == 2 * 60 + 50 and len(slots) >= 3, "the 02:50 start plus at least two retries"
+    assert slots == [2 * 60 + 30, 3 * 60 + 5, 3 * 60 + 15], "02:30 plus the 03:05 and 03:15 retries"
+    assert slots[0] == 2 * 60 + 30 and len(slots) >= 3, "the 02:30 start plus at least two retries"
     cfg, delay = nw.NightCfg(), delay_of(body)
     assert cfg.end_by - (slots[0] + delay) >= 35 + cfg.reserve_min, "the first start keeps the full usable window (35 min + the restore reserve)"
     for slot in slots:

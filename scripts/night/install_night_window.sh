@@ -6,6 +6,8 @@
 #   scripts/night/install_night_window.sh --check       what is installed / enabled right now (read-only)
 #   scripts/night/install_night_window.sh --uninstall   disable + remove the two units, re-enable zoe-dreaming.timer if install disabled it
 #
+# It also switches OFF zoe-backup.timer and zoe-memory-export.timer (the window starts those two services itself, in its pre-sleep phase - one orchestrator for the night);
+# their .service units stay. --uninstall re-enables whichever it switched off.
 # It only ADDS zoe-night-window.service / .timer to ~/.config/systemd/user and flips zoe-dreaming.timer; it edits no existing unit file and no drop-in.
 # Why dreaming is disabled: the window runs zoe-nightly-dreaming itself (on the 12B, and on the 4B afterwards if the 12B could not), so a second run at 02:32
 # would double the work and race the window for the model. --keep-dreaming-timer installs the window beside it anyway (not recommended).
@@ -37,7 +39,7 @@ check() {
   local f u
   say "units in $DST:"
   for u in "${UNITS[@]}"; do [ -e "$DST/$u" ] && echo "  installed  $u" || echo "  missing    $u"; done
-  for u in zoe-night-window.timer zoe-dreaming.timer; do
+  for u in zoe-night-window.timer zoe-dreaming.timer zoe-backup.timer zoe-memory-export.timer; do
     printf '  %-28s enabled=%s active=%s\n' "$u" "$("$SYSTEMCTL" --user is-enabled "$u" 2>/dev/null || true)" "$("$SYSTEMCTL" --user is-active "$u" 2>/dev/null || true)"
   done
   [ -e "$STATE" ] && { say "install record ($STATE):"; sed 's/^/  /' "$STATE"; } || say "no install record ($STATE)"
@@ -77,6 +79,15 @@ install() {
   fi
   for u in "${UNITS[@]}"; do do_it cp "$SRC/$u" "$DST/$u"; done
   ctl daemon-reload
+  # the window now runs the backup and the memory export itself: their own timers would run them a second time (a clock of their own, racing the window's stops)
+  local t was_t folded=""
+  for t in zoe-backup.timer zoe-memory-export.timer; do
+    was_t=$("$SYSTEMCTL" --user is-enabled "$t" 2>/dev/null || true)
+    prior_t=""; [ -e "$STATE" ] && prior_t=$(sed -n "s/^${t}_was=//p" "$STATE")
+    [ "$prior_t" = enabled ] && was_t=enabled
+    [ "$DRY" = 0 ] && echo "${t}_was=${was_t:-unknown}" >> "$STATE"
+    if [ "$was_t" = enabled ]; then say "disabling $t: the window runs it in its pre-sleep phase (run --uninstall to undo)"; ctl disable --now "$t" || say "WARNING: could not disable $t: the unit would run twice"; fi
+  done
   if [ "$KEEP_DREAMING" = 0 ] && [ "$dreaming_was" = enabled ]; then
     say "disabling zoe-dreaming.timer: the window runs the dreaming job itself (run --uninstall to undo)"
     disabled_it=1
@@ -92,6 +103,10 @@ uninstall() {
   [ -e "$STATE" ] && was=$(sed -n 's/^dreaming_timer_was=//p' "$STATE")
   ctl disable --now zoe-night-window.timer || true
   ctl disable --now zoe-night-window-restore-retry.timer || true
+  local t
+  for t in zoe-backup.timer zoe-memory-export.timer; do
+    if [ -e "$STATE" ] && [ "$(sed -n "s/^${t}_was=//p" "$STATE" | tail -1)" = enabled ]; then say "re-enabling $t (install had disabled it)"; ctl enable --now "$t" || say "WARNING: could not re-enable $t"; fi
+  done
   for u in "${UNITS[@]}"; do do_it rm -f "$DST/$u"; done
   ctl daemon-reload
   if [ "$was" = enabled ]; then
