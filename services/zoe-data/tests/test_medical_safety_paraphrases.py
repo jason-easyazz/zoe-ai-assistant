@@ -37,7 +37,7 @@ CHEST_N = ["a tight feeling in my chest", "a pressure in my chest", "chest tight
 VISION_S = ["blurry", "blurred", "foggy", "hazy", "double", "fuzzy", "cloudy"]
 VISION_T = ["my eyes are {s}", "my vision is {s}", "my vision has gone {s}", "{s} vision", "i have {s} vision since this morning", "my eyes went {s}",
             "bad headache for 3 days and now my eyes are {s}", "her vision keeps going {s}"]
-VISION_N = ["i can't see properly", "cant see clearly", "i cant see straight", "everything is blurry", "everything looks double", "i lost vision in one eye",
+VISION_N = ["i can't see properly", "cant see clearly", "i cant see straight", "everything is blurry", "everything looks double", "i lost vision in one eye", "i have lost my sight",
             "i cant see out of my left eye", "i am seeing double", "seeing floaters", "my eyesight is blurry"]
 STROKE = ["his face is drooping", "her face is drooping on one side", "her smile is crooked and numb", "slurred speech", "his speech is slurred", "her speech went garbled",
           "he is slurring his words", "my arm suddenly went numb", "his leg suddenly went weak", "her face went numb", "my mouth is drooping", "my face is dropping"]
@@ -114,6 +114,7 @@ NEG += ["there is a pain in the chest of drawers", "the pain in the chest of dra
 NEG += ["i ate a little bit of toast", "my toddler ate a small piece of apple", "i ate onion rings for dinner", "the baby ate a small piece of cake", "i ate a tiny bit of chicken"]
 NEG += ["i chewed my nails again", "she bites her nails when she is nervous", "he was chewing his fingernails", "i cut my toenails"]
 NEG += ["my chest is fine but my knee hurts", "my chest is fine but my back hurts", "chest is clear though my head is pounding and my arm aches", "my eyes are fine but my hand is a bit double jointed"]
+NEG += ["i lost sight of my keys", "i lost sight of him in the crowd", "we lost sight of the kids at the beach", "she is losing sight of her goals"]
 NEG += ["i feel a bit tired", "my back is sore", "my knee hurts", "my tummy hurts a bit", "i have a sore throat", "my ear aches"]
 NEG += ["tell me a joke", "what is the weather like", "play some music", "add milk to the list"]
 
