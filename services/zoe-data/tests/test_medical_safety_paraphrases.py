@@ -115,6 +115,8 @@ NEG += ["i ate a little bit of toast", "my toddler ate a small piece of apple", 
 NEG += ["i chewed my nails again", "she bites her nails when she is nervous", "he was chewing his fingernails", "i cut my toenails"]
 NEG += ["my chest is fine but my knee hurts", "my chest is fine but my back hurts", "chest is clear though my head is pounding and my arm aches", "my eyes are fine but my hand is a bit double jointed"]
 NEG += ["i lost sight of my keys", "i lost sight of him in the crowd", "we lost sight of the kids at the beach", "she is losing sight of her goals"]
+NEG += ["everything is double the price now", "everything costs double what it did", "everything looks double the size in this mirror shop", "i cant see right now, someone turned the light off",
+        "i cant see well enough to read the menu from here", "everything is blurry about last night"]
 NEG += ["i feel a bit tired", "my back is sore", "my knee hurts", "my tummy hurts a bit", "i have a sore throat", "my ear aches"]
 NEG += ["tell me a joke", "what is the weather like", "play some music", "add milk to the list"]
 
