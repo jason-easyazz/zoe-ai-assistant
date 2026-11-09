@@ -91,12 +91,14 @@ def _canon(s: str) -> str:
     return word.sub(lambda m: syn.get(m.group(0), m.group(0)), s)
 
 
-def _pair_rx(p: dict) -> "re.Pattern":
+def _pair_rx(p: dict, block: str) -> "re.Pattern":
     gap, body, sym = int(p.get("window", 4)), p["body"], p["sym"]
     pre = "".join(rf"(?<!{re.escape(w)} )" for w in p.get("body_not_after", []))
     post = "".join(rf"(?!\s+(?:{n}))" for n in [("|".join(p.get("body_not_before", [])))] if n)
     b = rf"{pre}(?:{body}){post}"
-    return re.compile(rf"(?<!\w)(?:{b})(?!\w)(?:\s+\w+){{0,{gap}}}\s+(?:{sym})(?!\w)|(?<!\w)(?:{sym})(?:\s+\w+){{0,{gap}}}\s+{b}(?!\w)", re.I)
+    # the words BETWEEN may not turn to a contrast or another body part ("my chest is fine but my knee hurts"): the symptom must belong to THIS body word
+    mid = rf"(?:\s+(?!(?:{block})(?!\w))\w+){{0,{gap}}}"
+    return re.compile(rf"(?<!\w)(?:{b})(?!\w){mid}\s+(?:{sym})(?!\w)|(?<!\w)(?:{sym}){mid}\s+{b}(?!\w)", re.I)
 
 
 @lru_cache(maxsize=1)
@@ -107,7 +109,7 @@ def _rx() -> dict:
     return {
         "verb": w(ing["verb"]), "sub": w(ing["substance"]), "idiom": re.compile(ing["idioms"], re.I), "took": w(ing["took_verb"]), "took_risky": w(ing["took_risky"]),
         "human": w(ing["human"]), "animal": w(ing["animal"]), "obj_urgent": w(ing["obj_urgent"]), "obj_minor": w(ing["obj_minor"]), "obj_signs": w(ing["obj_signs"]),
-        "pairs": [(p["id"], p["tier"], _pair_rx(p), re.compile(p["skip"], re.I) if p.get("skip") else None) for p in d.get("pairs", [])],
+        "pairs": [(p["id"], p["tier"], _pair_rx(p, d["pair_gap_block"]), re.compile(p["skip"], re.I) if p.get("skip") else None) for p in d.get("pairs", [])],
         "neg_adj": re.compile(rf"(?<!\w)(?:{d['negation']})(?:\s+\w+){{0,2}}\s*$", re.I), "unsure": re.compile(r"(?<!\w)(?:not sure|unsure|not certain|dont know|no idea)(?!\w)", re.I),
         "term_any": w(gl["term"] + "|" + gl["plain_term"]),
         "ask": w(nq["ask"]), "event": w(nq["event"]), "poison_event": w(nq["poison_event"]),

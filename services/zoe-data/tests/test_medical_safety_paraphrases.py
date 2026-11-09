@@ -113,6 +113,7 @@ NEG += ["there is a pain in the chest of drawers", "the pain in the chest of dra
         "the pressure cooker lid hit my chest"]
 NEG += ["i ate a little bit of toast", "my toddler ate a small piece of apple", "i ate onion rings for dinner", "the baby ate a small piece of cake", "i ate a tiny bit of chicken"]
 NEG += ["i chewed my nails again", "she bites her nails when she is nervous", "he was chewing his fingernails", "i cut my toenails"]
+NEG += ["my chest is fine but my knee hurts", "my chest is fine but my back hurts", "chest is clear though my head is pounding and my arm aches", "my eyes are fine but my hand is a bit double jointed"]
 NEG += ["i feel a bit tired", "my back is sore", "my knee hurts", "my tummy hurts a bit", "i have a sore throat", "my ear aches"]
 NEG += ["tell me a joke", "what is the weather like", "play some music", "add milk to the list"]
 
