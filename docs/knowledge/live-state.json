@@ -3316,6 +3316,20 @@
    "kind": "unknown",
    "readers": 1
   },
+  "ZOE_OFFER_FOLLOWUP_BINDING": {
+   "defaults": [
+    "off"
+   ],
+   "kind": "bool",
+   "readers": 1
+  },
+  "ZOE_OFFER_FOLLOWUP_TTL_S": {
+   "defaults": [
+    "600.0"
+   ],
+   "kind": "number",
+   "readers": 1
+  },
   "ZOE_OMI_AUDIO_DIR": {
    "defaults": [
     "unset"

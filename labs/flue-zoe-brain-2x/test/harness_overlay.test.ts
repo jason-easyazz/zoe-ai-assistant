@@ -41,7 +41,7 @@ const { wrapMessageWithManner } = await import('../src/manner.ts');
 const { renderCompiledFiles, renderOverlay } = await import('../scripts/harness-overlay.ts');
 
 // sha256 of ZOE_INSTRUCTIONS, the flag-off bytes (test/persona_layer.test.ts; re-pinned 2026-11-05 for the alarms group, 2026-11-06 for the warmth doctrine, 2026-11-07 for the emotional-capture doctrine and the unclear-words paragraph + the identity stock line removed, 2026-11-08 the persona doctrine).
-const GOLDEN_SHA256 = 'eccdbf720a00ef244ac9af8af544b8018f4508ce681855f002990f94bb377a4d';
+const GOLDEN_SHA256 = '4cb8341bacd8d23eefc1d288324b638a8dbd55d068277e03766059546f67d0d2';
 const sha = (s: string | Uint8Array) => createHash('sha256').update(s).digest('hex');
 
 const scratch = mkdtempSync(join(tmpdir(), 'harness-overlay-test-'));

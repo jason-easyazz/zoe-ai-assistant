@@ -206,6 +206,8 @@ _ENTRIES = (
     _f('ZOE_CONTACTS_CONVERSATIONAL', 'str', '', doc='docs/knowledge/contacts-conversation.md'),
     _f('ZOE_CONTACT_BACKFILL_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),
     _f('ZOE_CONTACT_OFFER_BATCH', 'str', '', doc='docs/knowledge/contacts-conversation.md'),
+    _f('ZOE_OFFER_FOLLOWUP_BINDING', 'bool', False, doc='services/zoe-data/AGENTS.md'),
+    _f('ZOE_OFFER_FOLLOWUP_TTL_S', 'float', 600.0, doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_CONTEXT_TOKEN_BUDGET', 'int', 5500),
     _f('ZOE_CONTRACTION_REPAIR', 'bool', True, doc='services/zoe-data/AGENTS.md', note='kill switch: off'),
     _f('ZOE_CONTINUE_WINDOW_S', 'float', 2.0, doc='docs/knowledge/voice-pipeline.md'),
