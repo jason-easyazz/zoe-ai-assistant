@@ -170,12 +170,12 @@ def _stated_sign(s: str, rx: dict) -> bool:
     for i, seg in enumerate(parts):
         if not (rx["obj_minor"].search(seg) or (i and _CONTINUES.match(seg) and rx["obj_minor"].search(parts[i - 1]))):
             continue
-        if seg.rstrip().endswith("?") or _HYPOTHETICAL.search(seg):
-            continue
         if i and not rx["obj_minor"].search(seg) and (rx["human"].search(seg) or re.search(r"(?<!\w)(?:i|im|ive|my)(?!\w)", seg)):
             continue
         for m in rx["obj_signs"].finditer(seg):
-            if not _negated(seg, m.start(), rx):
+            clause = seg[max(seg.rfind(",", 0, m.start()), seg.rfind(";", 0, m.start())) + 1:]   # the symptom's OWN clause: "is drooling, what should i do" still asserts it
+            clause = clause.split(",", 1)[0]
+            if not _negated(seg, m.start(), rx) and not _HYPOTHETICAL.search(clause):
                 return True
     return False
 
