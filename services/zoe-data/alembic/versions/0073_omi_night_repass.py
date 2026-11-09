@@ -6,7 +6,9 @@
   * ``omi_recordings.repass_attempts`` - how many nights tried it (a carry-over is not a failure; a crash is).
   * ``omi_recordings.repass_model``    - PROVENANCE: the ASR model + the speaker model that wrote the stored text, e.g. ``large-v3+ecapa``.
   * ``omi_recordings.repass_at``       - PROVENANCE: when the pass finished (UTC text, like every other stamp here).
-  * ``omi_wearer_samples``             - the WEARER's pendant-channel voice reference, as the 1.5 s ECAPA windows it is made of: ``confirmed`` ones
+  * ``omi_channel_means``              - the per-channel MEAN of unit speaker embeddings (model_id + channel + scope = the device), the offset the speaker step removes from pendant turns / prints;
+                                         a short session falls back to the stored per-device mean. Biometric-derived: erased with the member (``omi_voices.forget_user``).
+  * ``omi_wearer_samples``             - the WEARER's pendant-channel voice reference, as the speaker units (panel ResNet34 embeddings) it is made of: ``confirmed`` ones
                                          (segments the owner labelled "me", or a heuristic proposal the owner confirmed) form the print;
                                          ``proposed`` ones (the loudest-nearest-voice heuristic) are NEVER used until the owner confirms them.
                                          Biometric: erased with the recording (``omi_voices.drop_recording``) and with the member
@@ -61,6 +63,19 @@ def upgrade() -> None:
                UNIQUE (recording_id, start_ms, end_ms, model_id)
            )"""
     )
+    op.execute(
+        f"""CREATE TABLE IF NOT EXISTS omi_channel_means (
+               user_id TEXT NOT NULL,
+               model_id TEXT NOT NULL,
+               channel TEXT NOT NULL CHECK (channel IN ('pendant', 'panel')),
+               scope TEXT NOT NULL DEFAULT '',
+               mean {blob} NOT NULL,
+               n_units INTEGER NOT NULL DEFAULT 0,
+               speech_s DOUBLE PRECISION NOT NULL DEFAULT 0,
+               updated_at TEXT NOT NULL,
+               PRIMARY KEY (user_id, model_id, channel, scope)
+           )"""
+    )
     op.execute("CREATE INDEX IF NOT EXISTS idx_omi_wearer_samples_user ON omi_wearer_samples (user_id, model_id, status)")
     op.execute("CREATE INDEX IF NOT EXISTS idx_omi_wearer_samples_rec ON omi_wearer_samples (recording_id)")
     if _pg():
@@ -77,6 +92,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS idx_omi_recordings_repass")
     op.execute("DROP TABLE IF EXISTS omi_wearer_samples")
+    op.execute("DROP TABLE IF EXISTS omi_channel_means")
     if _pg():
         for name, _ in COLUMNS:
             op.execute(f"ALTER TABLE omi_recordings DROP COLUMN IF EXISTS {name}")

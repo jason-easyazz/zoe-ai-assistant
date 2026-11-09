@@ -842,7 +842,7 @@ def test_guests_and_panels_cannot_call_the_voice_api(env, monkeypatch):
     assert env.client.get("/api/omi/voices").status_code == 403                    # a panel's device token is not the person
 
 
-ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_recordings.py", "routers/omi_voices.py", "routers/omi_recordings.py", "contacts_store.py", "person_merge.py",
+ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_repass_who.py", "omi_recordings.py", "routers/omi_voices.py", "routers/omi_recordings.py", "contacts_store.py", "person_merge.py",
            "memory_forget_cascade.py",
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller

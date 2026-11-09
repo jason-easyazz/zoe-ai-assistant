@@ -200,11 +200,11 @@ def test_production_runs_qwen_then_parakeet_then_the_third_voter_then_the_evalua
     calls: list = []
     out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, calls)))
     assert [c["asr"] for c in calls] == [PIV, PAR, DIS, WH, GR]                                     # production first, value-per-minute order, evaluation last
-    assert [c["diar"] for c in calls] == ["ecapa", "none", "none", "none", "none"]                    # the speaker model is loaded once, by the pivot
+    assert [c["diar"] for c in calls] == ["resnet34", "none", "none", "none", "none"]                    # the speaker model is loaded once, by the pivot
     assert calls[0]["chunks"] == [None] and calls[1]["chunks"][0] == [[0.0, 2.0], [2.5, 4.5]] and calls[3]["ct2"] and not calls[1]["ct2"]    # later engines get the PIVOT'S chunks; CT2 build only for whisper-gpu
     assert out["status"] == "ok" and out["engines"] == [PIV, PAR, DIS] and out["eval_engines"] == [WH, GR]
     r = rows(renv)[0]
-    assert r["transcript"] == "the cat sat on the mat" and r["repass_model"] == f"{PIV}+{PAR}+{DIS}/rover+ecapa"       # the vote fixed the pivot's "bat"; provenance names the voters
+    assert r["transcript"] == "the cat sat on the mat" and r["repass_model"] == f"{PIV}+{PAR}+{DIS}/rover+resnet34"       # the vote fixed the pivot's "bat"; provenance names the voters
     home = tmp_path / "repass"
     led = [json.loads(x) for x in (home / "ledger.jsonl").read_text().splitlines()]
     assert {x["model"] for x in led} == {PIV, PAR, DIS, WH, GR} and {x["model"] for x in led if x["eval"]} == {WH, GR}

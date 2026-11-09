@@ -15,8 +15,9 @@
 #   Qwen/Qwen3-ASR-1.7B-hf            default ASR (Apache-2.0)                  -> $MODELS/Qwen3-ASR-1.7B-hf
 #   nvidia/parakeet-tdt-0.6b-v3       production second engine (CC-BY-4.0: attribution) -> $MODELS/parakeet-tdt-0.6b-v3
 #   ibm-granite/granite-speech-5.0-2b evaluation contender (Apache-2.0)         -> $MODELS/granite-speech-5.0-2b
-#   Systran/faster-whisper-large-v3 (evaluation contender, needs the CUDA CTranslate2 build), Systran/faster-distil-whisper-large-v3 (CPU last resort), speechbrain/spkrec-ecapa-voxceleb
-#                                     (speaker windows): HF cache, pinned revision. Systran is the only org the Whisper weights may come from.
+#   Systran/faster-whisper-large-v3 / faster-distil-whisper-large-v3 (third voter, evaluation contender; need the CUDA CTranslate2 build): HF cache, pinned revision + weights hash.
+#                                     Systran is the only org the Whisper weights may come from.
+#   The SPEAKER model is the panel's WeSpeaker ResNet34 int8 (~/.cache/zoe-speaker-resnet34, built by scripts/setup/fetch_speaker_models.sh build; pinned sha256 in zoe_speaker_resnet34.py): --check verifies it.
 # Licences: transformers / speechbrain / faster-whisper / ctranslate2 Apache-2.0 or MIT.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +36,6 @@ PINS=(
 HF_PINS=(
   "Systran/faster-whisper-large-v3|edaa852ec7e145841d8ffdb056a99866b5f0a478|model.bin|69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1"
   "Systran/faster-distil-whisper-large-v3|c3058b475261292e64a0412df1d2681c06260fab|model.bin|b79368e19b6623813609431a6e5ee309a71506701ebc49fd7820e692dec7c5f5"
-  "speechbrain/spkrec-ecapa-voxceleb|0f99f2d0ebe89ac095bcc5903c4dd8f72b367286|embedding_model.ckpt|0575cb64845e6b9a10db9bcb74d5ac32b326b8dc90352671d345e2ee3d0126a2"
 )
 MODE=install; SEED=""; ALLOW_CPU=0
 while [ $# -gt 0 ]; do
@@ -60,7 +60,7 @@ check() {
   if [ -x "$VENV/bin/python" ]; then echo "venv      ok  $VENV"; else echo "venv      MISSING  $VENV"; return 1; fi
   ZOE_CHECK_ALLOW_CPU="$ALLOW_CPU" "$VENV/bin/python" - <<'PY' || rc=1
 import importlib.metadata as m, os
-want = {"transformers": "5.17.0", "faster-whisper": "1.2.1", "ctranslate2": "4.8.5", "speechbrain": "1.1.2", "torch": "2.8.0", "torchaudio": "2.8.0"}
+want = {"transformers": "5.17.0", "faster-whisper": "1.2.1", "ctranslate2": "4.8.5", "onnxruntime": "1.23.2", "torch": "2.8.0", "torchaudio": "2.8.0"}
 bad = 0
 for k, v in want.items():
     try:
@@ -78,12 +78,14 @@ try:
         print("gpu       NO   torch.cuda.is_available() is False: the GPU backends would run on the CPU (check ZOE_OMI_REPASS_USERSITE / the pth)")
         bad |= 0 if os.environ.get("ZOE_CHECK_ALLOW_CPU") == "1" else 1
     from transformers import AutoModelForMultimodalLM, AutoModelForSpeechSeq2Seq, AutoModelForTDT, AutoProcessor  # noqa: F401
-    import faster_whisper.vad, speechbrain.inference.speaker  # noqa: F401
-    print("imports   ok  transformers (Qwen3 / Parakeet / Granite classes), silero VAD, speechbrain")
+    import faster_whisper.vad, onnxruntime  # noqa: F401
+    print("imports   ok  transformers (Qwen3 / Parakeet / Granite classes), silero VAD, onnxruntime")
 except Exception as exc:
     print(f"imports   FAILED {type(exc).__name__}: {str(exc)[:120]}"); bad = 1
 raise SystemExit(bad)
 PY
+  local r34="${ZOE_OMI_TAG_MODEL_DIR:-$HOME/.cache/zoe-speaker-resnet34}/wespeaker_resnet34_i8qdq_u8s8.onnx" r34sha="d1f65aa0e09ba00793df05ecdb21df7c5fc1336e219e029d399b2f5aa71eae32"
+  if sha_ok "$r34" "$r34sha"; then echo "speaker   ok  WeSpeaker ResNet34 int8 sha256 = the pinned artefact"; elif [ -f "$r34" ]; then echo "speaker   MISMATCH  $r34 is not the pinned artefact"; rc=1; else echo "speaker   MISSING  $r34 (run scripts/setup/fetch_speaker_models.sh build)"; rc=1; fi
   for spec in "${PINS[@]}"; do
     IFS='|' read -r dir repo rev file sha <<< "$spec"
     if sha_ok "$MODELS/$dir/$file" "$sha"; then
