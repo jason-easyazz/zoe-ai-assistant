@@ -2118,7 +2118,7 @@
       el._ink=key;}catch(e){}}
   function homeInk(){inkTrim(document.getElementById('hClock'),'l');inkTrim(document.getElementById('hDate'),'l');inkTrim(document.querySelector('#hTemp .n'),'r');inkTrim(document.querySelector('#hTemp .c'),'r');}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
-    homeInk();if(_cel.sr&&Date.now()-_cel.at>=180000)celApply();}   // the sun/moon re-seats every few minutes
+    homeInk();if(_cel.key&&Date.now()-_cel.at>=180000)celApply();}   // the sun/moon re-seats every few minutes
   function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';
     _cel.sr=Date.parse(w.sunrise)||0;_cel.ss=Date.parse(w.sunset)||0;celApply();homeInk();
     // The home scene matches the sky (design intent): same scene mapping as

@@ -117,6 +117,7 @@ check('motion is subtle and re-seated every few minutes; first seating never ani
   assert(/\.hcelI\[data-mv\]\{transition:transform \d+s linear/.test(HOME), 'transition only after the first seating');
   assert(!/\.hcelI\{[^}]*transition/.test(HOME), 'the base rule must not animate (a visit would replay the sunrise)');
   assert(/Date\.now\(\)-_cel\.at>=180000/.test(HOME), '3-minute re-seat');
+  assert(/_cel\.key&&Date\.now\(\)-_cel\.at>=180000/.test(HOME), 'the re-seat is keyed on "seated", so the fallback seat also keeps moving when the feed never answers');
   assert(/prefers-reduced-motion: reduce\)\{[^}]*transition-duration:\.001ms!important/.test(HOME), 'global reduced-motion rule still present');
 });
 check('home does not also draw the big canvas sun/moon (one sun, not two)', () => {
