@@ -369,6 +369,8 @@ async def write_conversation_note(user_id: str, c: dict, via: str) -> str:
     """The owner approved a note about a pendant conversation: keep it in their layer (idempotent on the candidate)."""
     import conversation_notes
 
+    if not conversation_notes.enabled():
+        raise ApplyError("notes_off", 409)         # a candidate proposed while the flag was on is not written once it is off
     ev = (c.get("evidence") or [{}])[0]
     at = conversation_notes._epoch_of(ev.get("at")) or _now().timestamp()
     return await conversation_notes.write_approved(user_id, c["payload"], candidate_id=str(c["id"]), day=str(c.get("day_local") or ""),

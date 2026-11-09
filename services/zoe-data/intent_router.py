@@ -4192,8 +4192,9 @@ async def _execute_forget_last(user_id: str) -> str:
     try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
         import conversation_notes
         await conversation_notes.erase_for_text(user_id, text, at=ts)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
+        failed += 1
     logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
     if failed:
         # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn

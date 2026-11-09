@@ -53,7 +53,7 @@ import re
 import time
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Iterable, Optional, Sequence
 
@@ -595,7 +595,7 @@ def _log(owner: str, m: str, layer: str, out: dict) -> None:
 
 
 # --- serving ----------------------------------------------------------------------------------------------------------------
-_YOUNG: "OrderedDict[str, tuple]" = OrderedDict()      # session id -> (brain turns so far, note ids chosen on the first)
+_YOUNG: "OrderedDict[str, tuple]" = OrderedDict()      # session id -> (brain turns so far, note ids chosen on the first, ids kept quiet)
 _SERVED_AT: "OrderedDict[str, float]" = OrderedDict()  # "<user>|<note id>" -> monotonic time last offered
 
 
@@ -609,6 +609,7 @@ def _bounded(d: "OrderedDict", key: str, value) -> None:
 def reset_state() -> None:
     _YOUNG.clear()
     _SERVED_AT.clear()
+    _VISITS.clear()
 
 
 def _ago(ended: str, now: float) -> str:
@@ -674,6 +675,31 @@ async def _unforgotten(owner: str, notes: list) -> list:
     return kept
 
 
+async def _defer_to_facts(uid: str, notes: list) -> list:
+    """Precedence in CODE (user-stated > confirmed > inferred): a note is inferred. When the member has a stated / confirmed durable fact
+    that is NEWER than the note and touches its open threads or follow-up (>= 2 content words in common), the note keeps only its
+    summary - "waiting to hear about the race entry" is not offered after they said they got in. A fact read that fails strips the
+    open parts of every note (fail to the safer, quieter note). Members only; a guest has no memory rows."""
+    if not any(n.open_threads or n.follow_up for n in notes):
+        return notes                                  # nothing open to go stale: no read at all
+    try:
+        from memory_service import get_memory_service
+
+        facts = await asyncio.wait_for(get_memory_service().load_durable_for_hop(uid), _LEDGER_BUDGET_S * 2)
+        stamped = [(_epoch_of((r.metadata or {}).get("added_at")) or float((r.metadata or {}).get("added_ts") or 0.0) or 0.0, _tokens(r.text))
+                   for r in facts]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("conversation notes: facts unreadable, open threads dropped (%s)", type(exc).__name__)
+        stamped = None
+    out = []
+    for n in notes:
+        ended = _epoch_of(n.ended_at) or 0.0
+        mine = _tokens(" ".join([*n.open_threads, n.follow_up]))
+        newer = stamped is None or any(at > ended and len(toks & mine) >= 2 for at, toks in stamped)
+        out.append(replace(n, open_threads=[], follow_up="") if newer and (n.open_threads or n.follow_up) else n)
+    return out
+
+
 async def _unmuted(uid: str, notes: list) -> list:
     import restraint
 
@@ -717,30 +743,32 @@ async def block_for(user_id: str, session_id: str, *, now: Optional[float] = Non
         uid = (user_id or "").strip()
         if not uid or not session_id or is_unidentified(uid) or uid in _GUESTS:
             return ""
-        seen, chosen = _YOUNG.get(session_id, (0, ()))
+        seen, chosen, quiet = _YOUNG.get(session_id, (0, (), frozenset()))
         if seen >= _YOUNG_TURNS:
             return ""
-        _bounded(_YOUNG, session_id, (seen + 1, chosen))
+        _bounded(_YOUNG, session_id, (seen + 1, chosen, quiet))
         if not _speaker_ok(session_id):
             return ""
         t = _now() if now is None else now
         if seen == 0:
             pool = [n for n in await load_active(uid, "", now=t) if n.served_count < MAX_SERVED]
-            mono = time.monotonic()
+            mono = _mono()
             pool = [n for n in pool if mono - _SERVED_AT.get(f"{uid}|{n.id}", -1e9) >= COOLDOWN_S]
-            picked = await _unmuted(uid, await _unforgotten(uid, pool))
-            chosen = tuple(n.id for n in picked[:BLOCK_NOTES])
-            _bounded(_YOUNG, session_id, (1, chosen))
-            notes = picked[:BLOCK_NOTES]
+            picked = (await _unmuted(uid, await _unforgotten(uid, pool)))[:BLOCK_NOTES]
+            notes = await _defer_to_facts(uid, picked)
+            chosen = tuple(n.id for n in notes)
+            quiet = frozenset(n.id for n, was in zip(notes, picked) if (was.open_threads or was.follow_up) and not (n.open_threads or n.follow_up))
+            _bounded(_YOUNG, session_id, (1, chosen, quiet))
             if m == "on" and notes:
                 for n in notes:
-                    _bounded(_SERVED_AT, f"{uid}|{n.id}", time.monotonic())
+                    _bounded(_SERVED_AT, f"{uid}|{n.id}", mono)
                 await _bump([n.id for n in notes])
         else:
             if not chosen:
                 return ""
             notes = [n for n in await load_active(uid, "", limit=12, now=t) if n.id in chosen]
             notes = await _unmuted(uid, await _unforgotten(uid, notes))
+            notes = [replace(n, open_threads=[], follow_up="") if n.id in quiet else n for n in notes]   # the first turn's precedence decision stands
         if not notes:
             return ""
         block = render(notes, now=t)
@@ -752,17 +780,38 @@ async def block_for(user_id: str, session_id: str, *, now: Optional[float] = Non
         return ""
 
 
+_VISIT_GAP_S = 30 * 60
+_VISITS: "OrderedDict[str, tuple]" = OrderedDict()     # "<owner>|<guest>" -> (last turn monotonic, notes offered this visit)
+
+
+def _mono() -> float:
+    return time.monotonic()
+
+
 async def guest_lines(guest: Any) -> list:
-    """That named guest's notes as prompt lines (their own layer, theirs only), '' list when off / shadow / none. ``guest`` is the
-    matched ``named_guests.Guest``. Never raises; a failed ledger read serves nothing."""
+    """That named guest's notes as prompt lines (their own layer, theirs only), [] when off / shadow / none. ``guest`` is the matched
+    ``named_guests.Guest``. Offered like a member's: on the first ``_YOUNG_TURNS`` matched turns of a VISIT (a visit ends after
+    ``_VISIT_GAP_S`` of silence), the newest ``BLOCK_NOTES`` notes younger than the TTL, each at most ``MAX_SERVED`` times. Never
+    raises; a failed ledger read serves nothing."""
     m = mode()
     if m == "off" or guest is None:
         return []
     try:
-        t = _now()
-        notes = await _unforgotten(guest.owner_user_id, await load_active(guest.owner_user_id, guest.person_id, limit=BLOCK_NOTES, now=t))
+        t, mono = _now(), _mono()
+        key = f"{guest.owner_user_id}|{guest.person_id}"
+        last, offered = _VISITS.get(key, (-1e9, 0))
+        new_visit = mono - last > _VISIT_GAP_S
+        offered = 0 if new_visit else offered
+        _bounded(_VISITS, key, (mono, offered))
+        if offered >= _YOUNG_TURNS:
+            return []
+        pool = [n for n in await load_active(guest.owner_user_id, guest.person_id, limit=6, now=t) if n.served_count < MAX_SERVED]
+        notes = (await _unforgotten(guest.owner_user_id, pool))[:BLOCK_NOTES]
         if not notes:
             return []
+        _bounded(_VISITS, key, (mono, offered + 1))
+        if m == "on" and new_visit:
+            await _bump([n.id for n in notes])
         logger.info("CONVERSATION_NOTES_INJECT user=%s mode=%s layer=guest notes=%d ids=%s", guest.owner_user_id, m, len(notes),
                     ",".join(n.id[:8] for n in notes))
         if m != "on":
@@ -785,13 +834,16 @@ async def write_approved(user_id: str, payload: dict, *, candidate_id: str, day:
     note.sensitive = _is_private(" ".join([note.summary, *note.topics, *note.open_threads]))
     if len(note.summary) < 8:
         raise ValueError("empty note")
+    m = mode()
+    if m == "off":
+        raise PermissionError("notes_off")       # a candidate proposed while the flag was on is not written once it is off
     async with _db() as db:
         async with db.execute("SELECT id FROM conversation_notes WHERE user_id = ? AND people_id = '' AND episode_key = ?",
                               (user_id, convo.key)) as cur:
             row = await cur.fetchone()
     if row:
         return f"conversation_notes:{row[0]}"
-    nid = await save(user_id, "", convo, note, source="pendant", status="active")
+    nid = await save(user_id, "", convo, note, source="pendant", status="active" if m == "on" else "shadow")
     if not nid:
         raise RuntimeError("note not stored")
     return f"conversation_notes:{nid}"
@@ -932,7 +984,7 @@ async def erase_for_text(user_id: str, text: str, *, at: Optional[float] = None)
                 return True
         return len(mine) >= 2 and len(_tokens(all_text) & mine) >= 2
 
-    return await _delete_where(user_id, doomed, people_id="", strict=False)
+    return await _delete_where(user_id, doomed, people_id="", strict=True)
 
 
 async def erase_people(db, owner: str, person_ids: Iterable[str]) -> int:

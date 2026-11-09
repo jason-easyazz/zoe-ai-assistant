@@ -8,7 +8,8 @@ sentinel or absent; a member's turn in the same window is counted and left alone
 blocks zoe-data folded into each message, and hands the conversation to the SAME note pass the nightly run uses
 (``conversation_notes.notes_for_convos``), stored in the guest's own layer (``people_id`` = their enrolled person).
 
-Nothing is copied out of the Flue file; only the note is stored. A forgotten name, a distress hand-off and an off-the-record cue
+Nothing is copied out of the Flue file; only the note is stored, and only while ``ZOE_CONVERSATION_NOTES`` is shadow / on (shadow notes
+are promoted to servable by the first ``on`` night). A dry run needs no flag. A forgotten name, a distress hand-off and an off-the-record cue
 keep a turn out, exactly as for the nightly pass. ``dry_run`` makes the model call and prints the notes it WOULD write; it stores nothing.
 Runbook: ``docs/knowledge/conversation-notes.md`` "Backfill a guest's earlier chat". CLI: ``scripts/maintenance/conversation_notes_backfill.py``.
 """
@@ -150,6 +151,10 @@ async def run(owner: str, name: str, db_path: str, since: float, until: float, *
     import memory_forgotten as mf
     import named_guest_memory as ngm
 
+    m = cn.mode()
+    if m == "off" and not dry_run:
+        return {"status": "refused", "error": ("ZOE_CONVERSATION_NOTES is off: nothing is stored while the feature is dark. Set it to shadow "
+                                               "(stored, not served) or on in this process's environment (zoe-data's .env), or use --dry-run")}
     guests = [g for g in await ngm.list_for(owner) if g["name"].strip().lower() == name.strip().lower()]
     if len(guests) != 1:
         return {"status": "refused", "error": ("no enrolled guest with that name in this member's layer (enrol them first: "
@@ -164,7 +169,8 @@ async def run(owner: str, name: str, db_path: str, since: float, until: float, *
     guest_ref = cn._GuestRef(guest["guest_id"], guest["name"], owner)
     convos = cn._convos(owner, guest_ref.person_id, rows, with_name=guest_ref.name, minor=await cn._guest_minor(guest_ref), now=now,
                         settle=False)
-    out = await cn.notes_for_convos(owner, guest_ref.person_id, convos, source="backfill", status="active", dry_run=dry_run)
+    out = await cn.notes_for_convos(owner, guest_ref.person_id, convos, source="backfill", status="active" if m == "on" else "shadow",
+                                     dry_run=dry_run)
     return {"status": "ok", "dry_run": dry_run, "guest": guest["name"], "exchanges_in_window": len(exchanges), "guest_exchanges": len(rows),
             "skipped": {**skipped, "forgotten": dropped_forgotten}, "conversations": out["convos"], "already_noted": out["known"],
             "too_short": out["too_short"], "no_note": out["no_note"], "stored": out["stored"], "notes": out["notes"]}

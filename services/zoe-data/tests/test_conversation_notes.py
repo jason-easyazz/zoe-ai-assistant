@@ -39,11 +39,23 @@ def _llm(obj=None, calls=None):
     return fake
 
 
+_facts: list = []
+
+
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     monkeypatch.delenv("ZOE_CONVERSATION_NOTES", raising=False)
     cn.reset_state()
     monkeypatch.setattr(cn, "_now", lambda: NOW)
+    _facts[:] = []
+    import memory_service
+
+    class _Svc:                                    # the member's durable facts (the precedence check); none unless a test adds some
+        async def load_durable_for_hop(self, uid):
+            if _facts and _facts[0] == "boom":
+                raise RuntimeError("boom")
+            return list(_facts)
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
     prev = cn.set_llm(None)
     memory_forgotten.set_backend(memory_forgotten.MemoryBackend())
     monkeypatch.setenv(memory_forgotten.SALT_ENV, "s" * 40)
@@ -199,9 +211,9 @@ def test_the_conversation_still_going_is_not_noted_yet(member, monkeypatch):
 
 
 def test_a_note_is_never_a_memory_row(member, monkeypatch):
-    """A stated fact beats a note, structurally: the note pass has no write into MemoryService at all (a note is inferred)."""
+    """A note is never a memory row: the note code has no WRITE into MemoryService (it reads durable facts only, to defer to them)."""
     src = open(cn.__file__).read()
-    assert not re.search(r"import memory_service|get_memory_service|\.ingest\(", src)
+    assert not re.search(r"\.ingest\(|\.review\(|erase_rows|add_memory|\.upsert\(", src)
     block = cn.render([cn.Stored("n1", "", cn._iso(NOW - DAY), cn._iso(NOW - DAY), "They talked about running.", [], "", [], "", False, 0, "chat")], now=NOW)
     assert "wins over them" in block and "not facts they told you" in block                  # the serve rule says so to the brain
 
@@ -527,6 +539,7 @@ def test_the_proposal_floors(monkeypatch):
 def test_approval_writes_into_the_owners_layer_and_a_forget_unwrites_it(env, monkeypatch):
     import omi_review_apply as oa
 
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
     payload = {"summary": "They talked about how the interview went and the cycling trip.", "with": "", "topics": ["interview"], "open": []}
     ref = run(cn.write_approved(OWNER, payload, candidate_id="cand-1", day="2026-11-08", at_epoch=NOW))
     assert ref.startswith("conversation_notes:")
@@ -598,7 +611,8 @@ def test_the_block_list_matches_the_live_client():
     assert tuple(bf.CONTEXT_BLOCKS) == tuple(zoe_flue_client._FLUE_CONTEXT_BLOCKS)
 
 
-def test_backfill_dry_run_then_store_into_the_guests_layer_only(env, tmp_path):
+def test_backfill_dry_run_then_store_into_the_guests_layer_only(env, tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
     q = add_guest(env)
     db = str(tmp_path / "flue.db")
     _flue_db(db)
@@ -621,3 +635,122 @@ def test_backfill_refuses_an_unenrolled_or_ambiguous_name(env, tmp_path):
     db = str(tmp_path / "flue.db")
     _flue_db(db)
     assert run(bf.run(OWNER, "Nobody", db, NOW - 60, NOW + 600, dry_run=True))["status"] == "refused"
+
+
+# --- review round: flag-dark on every entry point, bounded guest serving, precedence in code, fail-closed "forget that" ----------------------
+def test_a_guest_is_offered_a_note_at_the_start_of_a_visit_not_on_every_turn(env, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    q = add_guest(env)
+    _said(q, CHAT, db=env)
+    cn.set_llm(_llm())
+    run(cn.run_guests(OWNER, now=NOW))
+    clock = [1000.0]
+    monkeypatch.setattr(cn, "_mono", lambda: clock[0])
+    guest = ng.Guest(q, "Quinn", OWNER)
+    ng.bind_turn(guest)
+
+    def heard():
+        return "Notes from earlier conversations" in run(ng.brain_block("guest"))
+    assert [heard(), heard(), heard(), heard()] == [True, True, False, False]       # two turns, then she is just talking
+    clock[0] += 3600                                                                 # an hour later: a new visit
+    assert heard() and env.q("SELECT served_count FROM conversation_notes") == [(2,)]
+    clock[0] += 3600
+    assert heard() and env.q("SELECT served_count FROM conversation_notes") == [(3,)]
+    clock[0] += 3600
+    assert not heard()                                                               # served MAX_SERVED visits: retired
+    ng.bind_turn(None)
+
+
+def test_every_entry_point_is_dark_with_the_flag_off(env, monkeypatch, tmp_path):
+    q = add_guest(env)
+    _said(q, CHAT, db=env)
+    calls = []
+    cn.set_llm(_llm(calls=calls))
+    assert run(cn.run_guests(OWNER, now=NOW))["status"] == "off" and run(cn.run_member(OWNER, now=NOW))["status"] == "off"
+    db = str(tmp_path / "flue.db")
+    _flue_db(db)
+    rep = run(bf.run(OWNER, "Quinn", db, NOW - 60, NOW + 600, dry_run=False, now=NOW + DAY))
+    assert rep["status"] == "refused" and "off" in rep["error"]                                      # the backfill stores nothing while dark
+    assert run(bf.run(OWNER, "Quinn", db, NOW - 60, NOW + 600, dry_run=True, now=NOW + DAY))["status"] == "ok"   # a dry run is harmless
+    payload = {"summary": "They talked about how the interview went and the cycling trip.", "open": []}
+    with pytest.raises(PermissionError):
+        run(cn.write_approved(OWNER, payload, candidate_id="c1", day="2026-11-08", at_epoch=NOW))      # a candidate approved after the flag went off
+    import omi_review_apply as oa
+    with pytest.raises(oa.ApplyError):
+        run(oa.write_conversation_note(OWNER, {"id": "c1", "payload": payload, "evidence": []}, "desktop"))
+    ng.bind_turn(ng.Guest(q, "Quinn", OWNER))
+    assert "Notes from earlier" not in run(ng.brain_block("guest"))
+    ng.bind_turn(None)
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+
+
+def test_in_shadow_the_backfill_and_an_approval_store_shadow_rows(env, monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "shadow")
+    add_guest(env)
+    db = str(tmp_path / "flue.db")
+    _flue_db(db)
+    cn.set_llm(_llm())
+    assert run(bf.run(OWNER, "Quinn", db, NOW - 60, NOW + 600, dry_run=False, now=NOW + DAY))["stored"] == 1
+    run(cn.write_approved(OWNER, {"summary": "They talked about how the interview went and the cycling trip.", "open": []},
+                          candidate_id="c9", day="2026-11-08", at_epoch=NOW))
+    assert sorted(r[0] for r in env.q("SELECT status FROM conversation_notes")) == ["shadow", "shadow"]
+
+
+def test_a_newer_stated_fact_beats_the_notes_open_thread(served, monkeypatch):
+    """Precedence in code: "waiting to hear about the race entry" is not offered after the member said they got in."""
+    import memory_service
+
+    class Ref:
+        def __init__(self, text, at):
+            self.text, self.metadata = text, {"added_at": cn._iso(at)}
+    # control: an OLDER fact about the same thing changes nothing
+    _facts[:] = [Ref("I am waiting to hear about my race entry", NOW - 30 * DAY)]
+    block = run(cn.block_for(OWNER, "sess-old", now=NOW))
+    assert "Left open: waiting to hear about the race entry" in block and "Worth asking" in block
+    # arm under test: a NEWER stated fact drops the open parts, keeps the summary
+    cn.reset_state()
+    _facts[:] = [Ref("My race entry came through, I got into the half marathon", NOW - 3600)]
+    block = run(cn.block_for(OWNER, "sess-new", now=NOW))
+    assert "half marathon" in block and "Left open" not in block and "Worth asking" not in block
+    assert "Left open" not in run(cn.block_for(OWNER, "sess-new", now=NOW))                          # and the second young turn agrees
+    # a newer fact about something else leaves the note whole
+    cn.reset_state()
+    _facts[:] = [Ref("I take the dog to the beach on Fridays", NOW - 1 * DAY)]
+    assert "Left open:" in run(cn.block_for(OWNER, "sess-else", now=NOW))
+    # an unreadable fact store: the quieter note
+    cn.reset_state()
+    served.conn.execute("UPDATE conversation_notes SET served_count = 0")                              # three sessions already offered it
+    served.conn.commit()
+    _facts[:] = ["boom"]
+    out = run(cn.block_for(OWNER, "sess-boom", now=NOW))
+    assert out and "Left open" not in out
+    del memory_service
+
+
+def test_forget_that_fails_closed_and_says_so(member, monkeypatch):
+    import intent_router as ir
+    import turn_forget
+
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+
+    class Svc:
+        async def review(self, *a, **k):
+            return object()
+    import memory_service
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
+
+    async def rows(svc, uid, text, ts):
+        return []
+    monkeypatch.setattr(turn_forget, "rows_from_turn", rows)
+    monkeypatch.setattr(turn_forget, "previous_turn", lambda uid, **k: turn_forget.Turn("I got dismissed today and it hurts", NOW, "h", 1))
+    monkeypatch.setattr(turn_forget, "retract", lambda *a, **k: None)
+    monkeypatch.setattr(turn_forget, "mark_forgotten", lambda *a, **k: None)
+    import exact_words
+
+    async def noop(*a, **k):
+        return 0
+    monkeypatch.setattr(exact_words, "erase_text", noop)
+    monkeypatch.setattr(exact_words, "forget_transcript", noop)
+    assert run(ir._execute_forget_last(OWNER)).startswith("Done")                                 # control: the notes erase works
+    monkeypatch.setattr(cn, "_db", lambda: (_ for _ in ()).throw(RuntimeError("store down")))
+    assert run(ir._execute_forget_last(OWNER)) == ir.FORGET_STORE_DOWN_REPLY                       # the arm under test: not erased -> not "done"

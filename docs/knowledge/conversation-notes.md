@@ -66,8 +66,10 @@ filters already applied), model call pattern, forget ledger, voice-bridge placem
   private subjects. The same pass runs over each named guest's own turns (`named_guest_turns`) for the member who enrolled them.
 * **Serve** (flag `on`) - members: `block_for`, beside the voice bridge in `zoe_flue_client`: confirmed speaker only, the first 2 brain
   turns of a session, the newest 2 notes younger than 21 days, each offered at most 3 times with a 6-hour cool-down, strict forget-ledger
-  and mute filters, `[MEMORY CONTEXT ...]` delimiters so the sidecar elides it from older turns. Guests: `guest_lines` inside
-  `named_guests.brain_block`, theirs only. The block tells the brain: sparingly, naturally, never recite, never mention notes, what the person
+  and mute filters, `[MEMORY CONTEXT ...]` delimiters so the sidecar elides it from older turns. **Precedence in code**: a stated / confirmed durable
+  fact NEWER than the note that shares two content words with its open threads or follow-up removes those parts for the session ("waiting to hear
+  about the race entry" is not offered after they said they got in); an unreadable fact store drops them too. Guests: `guest_lines` inside
+  `named_guests.brain_block`, theirs only, on the first 2 matched turns of a VISIT (30 minutes of silence ends one), each note at most 3 visits. The block tells the brain: sparingly, naturally, never recite, never mention notes, what the person
   said or confirmed wins, drop it if they want to move on.
 * **Pendant** - `omi_day_review` proposes a `conversation_note` candidate (asked for only while the flag is on; needs a real conversation,
   2+ cited lines, a grounded summary, no mood field - Zoe cannot tell whether the other person is a child - and none of the health / money / grief / family-conflict / distress classes). `omi_review_apply.write_conversation_note`
@@ -84,7 +86,8 @@ filters already applied), model call pattern, forget ledger, voice-bridge placem
 |---|---|---|
 | `ZOE_CONVERSATION_NOTES` | `off` | `off` nothing runs. `shadow`: the nightly pass writes notes as `shadow` rows and `block_for` logs `CONVERSATION_NOTES_INJECT mode=shadow` with the note ids it WOULD serve, serving nothing. `on`: notes are `active` and served; the first `on` night promotes the shadow rows still inside the 21-day TTL |
 | guests | needs `ZOE_NAMED_GUESTS=on` and `ZOE_NAMED_GUEST_MEMORY=1` as well | a guest's notes are written and served only when the guest layer itself is on |
-| pendant | needs `ZOE_OMI_DAY_REVIEW` on/shadow as well | the proposal exists only while `ZOE_CONVERSATION_NOTES` is not `off` |
+| pendant | needs `ZOE_OMI_DAY_REVIEW` on/shadow as well | the proposal exists only while `ZOE_CONVERSATION_NOTES` is not `off`, and an approval after the flag went off is refused (`notes_off`); in shadow an approved note is stored as a `shadow` row |
+| backfill | refuses to store while the flag is `off` | `--dry-run` needs no flag; in `shadow` it stores `shadow` rows, in `on` `active` ones |
 
 Logs carry counts and 8-character ids, never text. To read the shadow notes: `conversation_notes_backfill.py --show` (guest) or
 `SELECT ... FROM conversation_notes` as the DB owner.
@@ -115,6 +118,7 @@ python3 scripts/maintenance/conversation_notes_backfill.py --owner <your user id
 python3 scripts/maintenance/conversation_notes_backfill.py --owner <your user id> --name Quinn --show
 ```
 
+Set `ZOE_CONVERSATION_NOTES` to `shadow` (stored, not served until the first `on` night) or `on` in zoe-data's environment first - the CLI refuses to store while it is `off`.
 Notes: it refuses between 01:50 and 04:55 (the night window owns the brain); it reads the Flue file read-only; a member's turns in the window
 are counted and left out; a turn naming a forgotten name is left out; it is idempotent (a rerun stores nothing). The notes are served only
 once `ZOE_CONVERSATION_NOTES=on` and `ZOE_NAMED_GUESTS=on` and `ZOE_NAMED_GUEST_MEMORY=1`. The pendant side of the same Sunday conversation
