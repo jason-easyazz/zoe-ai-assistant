@@ -167,11 +167,15 @@ def _stated_sign(s: str, rx: dict) -> bool:
     """A sign (drooling, pain, cant swallow ...) ASSERTED about the child who swallowed the object: in the sentence that names the object, or the next one when it
     carries on about the same child ("... swallowed a coin. now he is drooling"). Questions, watch-for lists and denials do not count."""
     parts = re.findall(r"[^.!?;\n]+[.!?;\n]?", s)
+    humans = lambda t: {m.group(0) for m in rx["human"].finditer(t)}   # noqa: E731
     for i, seg in enumerate(parts):
-        if not (rx["obj_minor"].search(seg) or (i and _CONTINUES.match(seg) and rx["obj_minor"].search(parts[i - 1]))):
-            continue
-        if i and not rx["obj_minor"].search(seg) and (rx["human"].search(seg) or re.search(r"(?<!\w)(?:i|im|ive|my)(?!\w)", seg)):
-            continue
+        if not rx["obj_minor"].search(seg):
+            # a later sentence counts only when it carries on about the SAME child: a pronoun / "now", or the same person word named again
+            if not (i and rx["obj_minor"].search(parts[i - 1])):
+                continue
+            same = humans(seg) & humans(parts[i - 1])
+            if re.search(r"(?<!\w)(?:i|im|ive)(?!\w)", seg) or not (same or _CONTINUES.match(seg)):
+                continue   # the member's own ailment ("my back has pain") or another person ("my mum has pain")
         for m in rx["obj_signs"].finditer(seg):
             clause = seg[max(seg.rfind(",", 0, m.start()), seg.rfind(";", 0, m.start())) + 1:]   # the symptom's OWN clause: "is drooling, what should i do" still asserts it
             clause = clause.split(",", 1)[0]
@@ -215,6 +219,15 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
                     return Verdict("ingest_animal", "poison_animal", lead=s[:v.start()])
                 return Verdict("ingest_human", key, lead=s[:v.start()])
     return None
+
+
+_INGEST_RANK = {"object_urgent": 0, "poison_human": 1, "object_minor": 2, "poison_animal": 3}
+
+
+def _ingestion_all(s: str, rx: dict) -> Optional[Verdict]:
+    """The most urgent ingestion ACROSS the turn ("swallowed a coin. she also swallowed a battery" is the battery), human before animal."""
+    found = [v for v in (_ingestion(seg, rx) for seg in re.findall(r"[^.!?;\n]+[.!?;\n]?", s)) if v]
+    return min(found, key=lambda v: _INGEST_RANK.get(v.key, 9)) if found else None
 
 
 def _mmol(raw: str, unit: str) -> float:
@@ -284,7 +297,7 @@ def detect(text: str) -> Verdict:
             return NONE
         rx = _rx()
         c = _canon(s)
-        ing = _ingestion(s, rx)
+        ing = _ingestion_all(s, rx)
         call = _flag(s, rx, "call") or _pair(c, rx, "call")
         if ing and ing.key == "object_minor" and not call:
             # a coin AND a stated sign (drooling, pain, cant swallow): the number now, not "ring if there is..."

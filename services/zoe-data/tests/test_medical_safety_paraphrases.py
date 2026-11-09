@@ -218,6 +218,16 @@ def test_a_metal_nail_is_urgent_but_nail_biting_is_not():
     assert _verdict("my toddler swallowed a nail") == ("ingest_human", "object_urgent")
 
 
+def test_the_most_urgent_ingestion_across_the_turn_wins():
+    assert _verdict("my child swallowed a coin. she also swallowed a battery") == ("ingest_human", "object_urgent")
+    assert _verdict("my child swallowed a bead. she also drank some bleach") == ("ingest_human", "poison_human")
+
+
+def test_the_same_child_named_again_still_reports_the_sign_but_another_person_does_not():
+    assert _verdict("my child swallowed a coin. my child is drooling") == ("red_call", "object_signs")
+    assert _verdict("my child swallowed a coin. my mum has pain") == ("ingest_human", "object_minor")
+
+
 def test_a_sign_in_the_next_sentence_about_the_same_child_counts():
     assert _verdict("my child swallowed a coin. now he is drooling") == ("red_call", "object_signs")
 
