@@ -328,3 +328,37 @@ def test_guest_tier_answers_before_any_router():
     res = fast_tiers._qa7_conversation_tier("hi. im quinn, remember me", "guest-abc")
     assert res is not None and res.tier == "guest_asks" and "I'll remember" not in res.reply
     assert fast_tiers._qa7_conversation_tier("hi. im quinn, remember me", "demo_member") is None
+
+
+# ── review round (Codex on #2368) ────────────────────────────────────────────────────────────────────
+
+def test_a_run_of_trailing_questions_is_dropped_together_under_the_strict_breaker():
+    out = rp.polish("That sounds heavy. What feels worst? Is it the kids?", "x", True, strict_cap=True, stock=True)
+    assert out == "That sounds heavy."
+    # negative control: a question followed by a statement is not "trailing" - kept; and non-strict behaviour is unchanged
+    keep = "That sounds heavy. What feels worst? I'm glad you said it."
+    assert rp.polish(keep, "x", True, strict_cap=True, stock=True) == keep
+    assert rp.polish("That sounds heavy. What feels worst? Is it the kids?", "x", False) == "That sounds heavy. What feels worst? Is it the kids?"
+
+
+def test_a_warm_acknowledgement_is_not_a_stock_line():
+    ack = "I'm happy to hear you talked to your youngest."
+    assert not rp.is_stock_line(ack)
+    assert rp.polish(ack, "yeah", False, stock=True) == ack
+    assert rp.is_stock_line("I'm here to listen.") and rp.is_stock_line("Feel free to share.")      # the real stock lines still are
+
+
+def test_the_inherited_day_survives_a_bare_place_follow_up(monkeypatch):
+    import fast_tiers
+
+    seen = []
+
+    async def fake_dispatch(domain, text, ctx, *, write_ok=True):
+        seen.append(text)
+        return xd.DispatchResult(domain="weather", reply="Tomorrow in Albany: 18 degrees.", intent="weather")
+
+    monkeypatch.setattr(xd, "dispatch", fake_dispatch)
+    wf.note("u", "s", "weather in perth tomorrow")
+    asyncio.run(fast_tiers._weather_place_tier("and albany", "u", "s", {}))
+    asyncio.run(fast_tiers._weather_place_tier("and broome", "u", "s", {}))
+    assert seen == ["what's the weather in albany tomorrow", "what's the weather in broome tomorrow"]

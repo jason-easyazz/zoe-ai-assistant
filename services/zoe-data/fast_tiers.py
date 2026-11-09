@@ -876,6 +876,8 @@ async def _weather_place_tier(text: str, user_id: str, session_id: str, kwargs: 
         res = await _xd.dispatch("weather", plan_text, ctx, write_ok=kwargs.get("allow_writes") is not False)
         if res is not None and not getattr(res, "tier", ""):
             res.tier = "weather_place"
+        if res is not None and getattr(res, "reply", ""):
+            _wf.note(user_id, session_id, plan_text)     # the EFFECTIVE question: a bare "and broome" must not erase the inherited day
         return res
     except Exception as exc:  # noqa: BLE001 - never let the tier break a turn
         logger.warning("fast_tiers weather place tier failed (non-fatal): %s", exc)
@@ -1054,7 +1056,8 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
     res = await _weather_place_tier(text, user_id, session_id, kwargs) if kwargs.get("phase") != "conversation" else None
     if res is None:
         res = await _resolve_core(text, user_id, session_id, **kwargs)
-    if res is not None and (getattr(res, "domain", "") == "weather" or getattr(res, "intent", "") == "weather"):
+    if (res is not None and getattr(res, "tier", "") != "weather_place"
+            and (getattr(res, "domain", "") == "weather" or getattr(res, "intent", "") == "weather")):
         try:        # the conversation's last answer was the weather: "and in albany" is the same question (weather_followup)
             import weather_followup as _wf
 

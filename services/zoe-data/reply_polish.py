@@ -161,7 +161,7 @@ def reset_state() -> None:
 #: the sentence is a stock "I'm here to listen" line, not something said about what the person told Zoe
 _STOCK_RX = re.compile(
     r"^\W*(?:i['\u2019]?m|i\s+am)\s+(?:always\s+|right\s+|just\s+)?(?:here|all\s+ears|listening)\b(?:\s+(?:to\s+listen|for\s+you|if\s+you|whenever|when\s+you|and\s+listening))?"
-    r"|^\W*(?:please\s+)?feel\s+free\s+to\s+(?:share|talk|tell|open\s+up)\b|^\W*i['\u2019]?m\s+(?:here|happy)\s+to\s+(?:listen|hear)\b"
+    r"|^\W*(?:please\s+)?feel\s+free\s+to\s+(?:share|talk|tell|open\s+up)\b|^\W*i['\u2019]?m\s+here\s+to\s+(?:listen|hear)\b"
     , re.IGNORECASE)
 #: said only when a stock line was the WHOLE reply: a statement, no question, nothing invented
 STOCK_REPLACEMENT = "That sounds like a lot to carry. You don't have to sort it all out at once."
@@ -237,6 +237,9 @@ class PolishStream:
         if self._held and not sent.strip():
             return ""               # trailing whitespace is not "text follows": a held closing question stays held (and is dropped)
         out = ""
+        if self._held and self.strict_cap and sent.rstrip().endswith("?"):
+            self._held += sent          # a run of trailing questions stays held TOGETHER: all dropped at the end, none released one by one
+            return ""
         if self._held:                  # a question that is not the last sentence after all
             out += self._release(self._held)
             self._held = ""
