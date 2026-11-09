@@ -107,6 +107,12 @@ def test_a_question_first_then_another_keeps_only_the_first():
     assert g.trim(reply, OVERWHELMED) == "What do you mean by that?"
 
 
+@pytest.mark.parametrize("sentence", ["What feels hardest?", 'What feels hardest?"', "What feels hardest?**", "(What feels hardest?)"])
+def test_a_wrapped_question_is_still_a_question(sentence):
+    assert g._is_question(sentence)
+    assert not g._is_question("That feels hard.")
+
+
 def test_one_question_and_statements_are_untouched():
     reply = "That sounds exhausting. Time alone is rare with kids. What would one free hour look like?"
     assert g.trim(reply, OVERWHELMED) == reply

@@ -157,7 +157,8 @@ def asked_kinds(message: str, lex: Lexicon) -> frozenset:
 
 
 def _is_question(sentence: str) -> bool:
-    return (sentence or "").rstrip().endswith("?")
+    """Ends in ``?``, closing quotes / brackets / markdown marks after it tolerated."""
+    return (sentence or "").rstrip().rstrip("\"'”’)]}*_").endswith("?")
 
 
 def info_kind(sentence: str, lex: Lexicon) -> str:
