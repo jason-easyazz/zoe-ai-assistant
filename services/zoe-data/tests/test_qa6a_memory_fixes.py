@@ -220,3 +220,12 @@ def test_a_later_name_with_its_own_predicate_is_not_another_child():
     assert k.repair("User's pet Mo likes fish", "pet", msg) is None
     # negative control: the first child may carry a predicate ("daughter Ava is 8") and the list still reads
     assert k.child_names("my daughter Ava is 8 and my son Ben is 4") >= {"ava", "ben"}
+
+
+def test_a_pet_gender_fact_is_not_rewritten_as_a_pet_role():
+    # Codex on #2350: "Mo is a girl" is a correct pet fact; boy / girl are not kinship roles
+    import kin_pet_guard as k
+
+    assert k.repair("Mo is a girl.", "pet", "My cat named Mo is a girl.") is None
+    # negative control: a real misfiled kinship word is still repaired
+    assert k.repair("Mo is a daughter", "pet", "kids Ava (8) and a fat cat called Mo") == ("Mo is a pet", "pet")

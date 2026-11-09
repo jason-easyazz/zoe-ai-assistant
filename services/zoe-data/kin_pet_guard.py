@@ -18,6 +18,9 @@ from typing import Optional
 import lexicons as _lexicons
 
 _EN = _lexicons.load("en")
+#: kinship roles only: boy / girl also describe an ANIMAL's sex ("Mo is a girl"), so they never drive the child -> pet rewrite
+_GENDER_WORDS = frozenset({"boy", "boys", "girl", "girls"})
+_KIN_ALT = "|".join(sorted((re.escape(w) for w in _EN.get("child_cue_words", []) if w.lower() not in _GENDER_WORDS), key=len, reverse=True))
 _CHILD_ALT = "|".join(sorted((re.escape(w) for w in _EN.get("child_cue_words", [])), key=len, reverse=True))
 _PET_ALT = "|".join(sorted((re.escape(w) for w in _EN.get("pet_words", []) if w != "pet"), key=len, reverse=True))
 _STOP = frozenset(w.lower() for w in _EN.get("name_list_stop_words", []))
@@ -100,8 +103,8 @@ def repair(fact: str, fact_type: str, user_message: str) -> Optional[tuple]:
             return fact[:m.start("w")] + "child" + fact[m.end("w"):], "relationship"
         if fact_type == "pet" and not _PET_FACT_RE.search(fact):
             return fact, "relationship"         # filed as a pet, names a child, no pet noun to fix: the type alone is wrong
-    if as_pet and not as_kid and _CHILD_ALT:
-        m = _attached(fact, as_pet, rf"(?:{_CHILD_ALT})")
+    if as_pet and not as_kid and _KIN_ALT:
+        m = _attached(fact, as_pet, rf"(?:{_KIN_ALT})")
         if m:
             return fact[:m.start("w")] + "pet" + fact[m.end("w"):], "pet"
     return None
