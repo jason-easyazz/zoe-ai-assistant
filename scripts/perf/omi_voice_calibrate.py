@@ -297,6 +297,9 @@ async def main() -> None:
     prof = None
     if want & {"A", "B"}:                   # only A and B need the private panel corpus (B needs A's wearer profile)
         panel = sorted(glob.glob(os.path.join(a.panel_dir, "*.wav")))
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
+        import panel_voice_log as _pvl
+        panel = _pvl.owner_voice_clips(panel)       # the wearer's profile comes from OWNER clips only (a guest's is not theirs)
         rng.shuffle(panel)
         enrol = [e for e in (embed_file(emb, f) for f in panel[:5]) if e is not None]
         if not enrol:

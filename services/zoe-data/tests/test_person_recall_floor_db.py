@@ -253,6 +253,8 @@ async def test_force_recall_and_focus_run_the_search_and_lead_the_relational_blo
 def seam(store, svc, monkeypatch):
     monkeypatch.setenv("ZOE_SEAM_RECALL_INJECT", "1")
     monkeypatch.delenv("ZOE_SEAM_CONTINUITY_INJECT", raising=False)
+    # these tests pin the NAMED-PERSON floor alone; the generic household-question fallback would answer the same asks
+    monkeypatch.setenv("ZOE_RECALL_HOUSEHOLD_QUESTIONS", "0")
     entities = _EntitySvc()
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: entities)
     return svc

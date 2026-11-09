@@ -994,6 +994,19 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
             answered = None
         if answered is not None:
             return answered
+        # named_guest_clips (ZOE_NAMED_GUEST_CLIPS, default OFF): "who was that this morning?" plays a saved unknown-voice clip to a
+        # verified adult member, and their "that's Quinn" names it. A guest / unverified voice / child gets None (ordinary speech).
+        try:
+            import named_guest_clips as _ngc
+
+            _ctx = kwargs.get("extra_ctx") or {}
+            answered = await _ngc.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       speaker_verified=_ctx.get("speaker_verified"), panel_id=_ctx.get("panel_id"),
+                                       allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
         # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
         try:

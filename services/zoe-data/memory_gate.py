@@ -795,3 +795,78 @@ def is_emotional_turn(message: str) -> bool:
         return True
     low = (message or "").replace("’", "'").replace("‘", "'").lower()
     return any(cue in low for cue in EMOTIONAL_TRIGGER_WORDS) or any(cue in low for cue in EMOTIONAL_WEIGHT_WORDS)
+
+
+# ── Household questions (QA round 5, 2026-11-08, ZOE_RECALL_HOUSEHOLD_QUESTIONS) ─────────────────────────
+# "how old is anaya", "does tom eat meat", "whats priyas job", "do i drink coffee", "what did the physio say" matched NO floor
+# shape (no my/I-question grammar, and the person was not a `people` row, so the named-person floor had nobody to resolve), the
+# 4B did not elect to call recall_memory (30 of 33 denials carried no packet at all - neither the floor nor the tool), and it
+# answered "I don't have that" with the fact in the store. The grammar can never list every way a person asks about their own
+# household, so this is the generic half: ANY question turn gets its packet fetched, and the packet is shown to the model only
+# when it TOUCHES the question - a content word of the question (a name, a kin or pet word, a thing) appears in it. A question
+# the notes have nothing to say about ("how old is the universe") injects nothing and costs one in-process read.
+_Q_WH = r"(?:who|whom|whose|what|whats|what['’]s|when|where|which|why|how)"
+_Q_AUX = (r"(?:do|does|did|is|are|was|were|am|can|could|will|would|should|has|have|had|isn['’]?t|aren['’]?t|doesn['’]?t|"
+          r"didn['’]?t|don['’]?t|wasn['’]?t|weren['’]?t|hasn['’]?t|haven['’]?t)")
+_Q_LEAD = r"^\W*(?:(?:so|and|but|ok|okay|um|uh|hey|oh|also|zoe)[\s,]+)*"
+_QUESTION_WH_RE = re.compile(_Q_LEAD + _Q_WH + r"\b", re.IGNORECASE)
+# An auxiliary opener is a question only with a subject after it: "do the dishes" / "have a look" are commands.
+_QUESTION_AUX_RE = re.compile(
+    _Q_LEAD + _Q_AUX + r"\s+(?!(?:the|a|an|some|this|that|these|those|up|off|on|out|it\s+(?:now|again)|me\s+a)\b)\w", re.IGNORECASE)
+MAX_HOUSEHOLD_QUESTION_CHARS = 240
+
+#: words that carry no topic: a packet and a question always share these, so they never count as "touching"
+_TOUCH_STOP = frozenset((
+    "a an and are aren as at be been being but by can could did does doesn done for from get got had has have having her hers him his "
+    "how i if in into is isn it its just me mine my myself no not now of off on one or our ours out she should so some than that the "
+    "their them then there these they this those to too up us was wasn we were what when where which who whom whose why will with "
+    "would yes you your yours yourself "
+    "about after again also any because before both each even ever few more most much many other over own really same still such "
+    "tell told say said says know knew think thought remember remembered mean meant want wanted need needed like likes please "
+    "tonight today tomorrow yesterday morning evening week day days time times thing things something anything everything "
+    "old long name named called call user users known facts fact zoe mem person people "
+    "ask ago back come came give go going gone good great let make made much new right see seen take talk talked tried try use used way "
+    "yeah okay hey hello thanks thank").split())
+_TOUCH_WORD_RE = re.compile(r"[a-z]+(?:['’][a-z]+)?")
+_BRACKET_TAG_RE = re.compile(r"\[[^\]\n]*\]")
+
+
+def household_questions_enabled() -> bool:
+    """``ZOE_RECALL_HOUSEHOLD_QUESTIONS`` - default ON; ``0|false|no|off`` is the kill switch. Per-call env read."""
+    from typed_env import env_bool
+
+    return env_bool("ZOE_RECALL_HOUSEHOLD_QUESTIONS", True)
+
+
+def is_question_turn(message: str) -> bool:
+    """A short turn that is shaped like a question: a wh-word first, or an auxiliary with a subject after it, or one that ends in a
+    question mark. The lazy typed form ("does tom eat meat", no mark) counts. Pure."""
+    msg = (message or "").strip()
+    if not msg or len(msg) > MAX_HOUSEHOLD_QUESTION_CHARS:
+        return False
+    if msg.endswith("?") or _QUESTION_WH_RE.search(msg) or _QUESTION_AUX_RE.search(msg):
+        return True
+    return False
+
+
+def _touch_tokens(text: str) -> set[str]:
+    """Content words of ``text``: lower-cased, possessive 's dropped, a plural / lazily-typed possessive ``priyas`` also as ``priya``;
+    function words and the packet's own scaffolding words are gone."""
+    out: set[str] = set()
+    for raw in _TOUCH_WORD_RE.findall(_BRACKET_TAG_RE.sub(" ", text or "").lower().replace("’", "'")):
+        had_apostrophe = "'" in raw
+        word, _, tail = raw.partition("'")
+        if had_apostrophe and tail != "s":
+            continue        # don't / I'm / we'll: a contraction's stem ("don", "won") is not a content word; only a possessive 's keeps its name
+        if len(word) < 3 or word in _TOUCH_STOP:
+            continue
+        out.add(word)
+        if not had_apostrophe and len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+            out.add(word[:-1])
+    return out
+
+
+def packet_touches_question(message: str, packet: str) -> bool:
+    """Does any content word of the question appear in the packet? Pure."""
+    q = _touch_tokens(message)
+    return bool(q) and bool(q & _touch_tokens(packet))
