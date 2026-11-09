@@ -92,6 +92,7 @@ TABLES: tuple[Store, ...] = (
     _t("person_contact_links", METADATA, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("learned_voiceprints", BIOMETRIC, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),
     _t("learned_voiceprint_segments", BIOMETRIC, REACHED, member=_OMI_M, entity="contacts_store.forget_voiceprints"),
+    _t("named_guest_turns", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),   # via omi_voices.purge_people
     _t("learned_voiceprints_0071", METADATA, OUT_OF_SCOPE,
        "Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the "
        "same migration; it never exists on the Postgres box the dumps read."),
