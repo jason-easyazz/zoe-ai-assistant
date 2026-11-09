@@ -78,6 +78,15 @@ async def _segments_present(db) -> bool:
     return bool(rows) and bool(rows[0][0])
 
 
+async def _guest_turns_present(db) -> bool:
+    try:
+        rows = await _fetchall(db, "SELECT to_regclass('named_guest_turns') IS NOT NULL",
+                               "SELECT COUNT(*) = 1 FROM sqlite_master WHERE type = 'table' AND name = 'named_guest_turns'", ())
+    except Exception:  # noqa: BLE001 - cannot tell: merge without it, as before 0072
+        return False
+    return bool(rows) and bool(rows[0][0])
+
+
 class PersonMergeError(Exception):
     """Merge cannot proceed (missing person, same id, cross-user). Endpoint → 404/400."""
 
@@ -213,6 +222,7 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
 
     contacts_present = await _contact_tables_present(db)
     segments_present = await _segments_present(db)
+    guest_turns_present = await _guest_turns_present(db)
 
     async def _apply() -> tuple[dict, int, int]:
         repointed: dict[str, int] = {}
@@ -247,6 +257,11 @@ async def merge_person(db, user_id: str, source_id: str, target_id: str, *,
                 repointed[f"omi_segments.{col}"] = await _exec(
                     db, f"UPDATE omi_segments SET {col}=$1 WHERE {col}=$2 AND user_id=$3",
                     f"UPDATE omi_segments SET {col}=? WHERE {col}=? AND user_id=?", (target_id, source_id, user_id))
+
+        if guest_turns_present:   # a named guest's own conversations follow the person (named_guest_memory, 0072)
+            repointed["named_guest_turns"] = await _exec(
+                db, "UPDATE named_guest_turns SET people_id=$1 WHERE people_id=$2 AND user_id=$3",
+                "UPDATE named_guest_turns SET people_id=? WHERE people_id=? AND user_id=?", (target_id, source_id, user_id))
 
         # ── 2. Re-point satellite tables ─────────────────────────────────────
         for table in _SATELLITE_TABLES:

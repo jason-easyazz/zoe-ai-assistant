@@ -735,6 +735,9 @@ async def purge_people(db, user_id: str, person_ids: Iterable[str]) -> int:
                         f"WHERE user_id = ? AND tagged_person_id IN ({ph})", (user_id, *ids))
     n += await _run(db, f"UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL "
                         f"WHERE user_id = ? AND suggested_person_id IN ({ph})", (user_id, *ids))
+    import named_guest_memory      # a named guest's remembered panel conversations go with their voice (the same person, this layer)
+
+    n += await named_guest_memory.erase_people(db, user_id, ids)
     await db.commit()
     return n
 

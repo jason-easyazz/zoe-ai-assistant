@@ -921,7 +921,7 @@ async def forget_voiceprints(db, user_id: str, rx) -> int:
     return n
 
 
-FORGET_USER_TABLES = (("learned_voiceprints", "owner_user_id"), ("contact_fields", "user_id"), ("contact_merge_reviews", "user_id"),
+FORGET_USER_TABLES = (("learned_voiceprints", "owner_user_id"), ("named_guest_turns", "user_id"), ("contact_fields", "user_id"), ("contact_merge_reviews", "user_id"),
                       ("person_contact_links", "user_id"), ("source_contacts", "user_id"), ("contact_sources", "user_id"))
 
 
