@@ -54,6 +54,7 @@ def test_a_saved_clip_gets_the_servers_verdict_beside_it(corpus, tmp_path_factor
     got = vc.read(clip)
     assert got["kind"] == "unknown" and got["cluster"] == "cluster-1" and "ts" in got
     assert oct(os.stat(vc.sidecar_path(clip)).st_mode & 0o777) == "0o600"
+    time.sleep(0.01)                                                                  # clip names carry milliseconds: two captures in one ms collide
     clip2 = capture(src)                                                              # a NEW transcription never labels the old clip
     assert clip2 != clip and vc.read(clip2) is None
     assert vc.record("member", "member-a") and vc.read(clip2)["id"] == "member-a" and vc.read(clip)["kind"] == "unknown"
