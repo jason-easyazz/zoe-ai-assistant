@@ -123,6 +123,10 @@ check('motion is subtle and re-seated every few minutes; first seating never ani
   assert(/_cel\.key&&Date\.now\(\)-_cel\.at>=180000/.test(HOME), 'the re-seat is keyed on "seated", so the fallback seat also keeps moving when the feed never answers');
   assert(/prefers-reduced-motion: reduce\)\{[^}]*transition-duration:\.001ms!important/.test(HOME), 'global reduced-motion rule still present');
 });
+check('a new body (sun at dusk -> moon, moon at dawn -> sun) is seated without a transition, so it never slides back across the band', () => {
+  assert(/if\(key!==_cel\.key\)\{_cel\.key=key;el\.removeAttribute\('data-mv'\);/.test(HOME));
+  assert(/if\(!el\.hasAttribute\('data-mv'\)\)setTimeout\(function\(\)\{el\.setAttribute\('data-mv'/.test(HOME), 'motion is restored after the seat');
+});
 check('home does not also draw the big canvas sun/moon (one sun, not two)', () => {
   assert(/if\(_cur!=='home'\)ctx\.drawImage\(nt\?sp\.moon:sp\.sun/.test(HOME));
 });

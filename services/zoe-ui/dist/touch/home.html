@@ -2105,7 +2105,7 @@
   var _cel={sr:0,ss:0,at:0,key:''};
   function celApply(){try{var el=document.getElementById('hCelI');if(!el)return;var now=Date.now(),pos=celPos(now,_cel.sr,_cel.ss);_cel.at=now;
     var ph=pos.kind==='moon'?Math.round(moonPhase(now)*60)/60:0,key=pos.kind+':'+ph;
-    if(key!==_cel.key){_cel.key=key;el.className='hcelI '+pos.kind;el.innerHTML=pos.kind==='sun'?sunSvg():moonSvg(ph);}
+    if(key!==_cel.key){_cel.key=key;el.removeAttribute('data-mv');el.className='hcelI '+pos.kind;el.innerHTML=pos.kind==='sun'?sunSvg():moonSvg(ph);}
     el.style.color=pos.kind==='sun'?sunColor(pos.h):'';
     el.style.transform='translate('+(pos.p*120).toFixed(1)+'px,'+(68-64*pos.h).toFixed(1)+'px)';
     if(!el.hasAttribute('data-mv'))setTimeout(function(){el.setAttribute('data-mv','1');},60);}catch(e){}}   // decoration only: never let it break the screen
