@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 905 prod flags; 322 read through `typed_env`.
+- 907 prod flags; 324 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 253 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-905 flags; 854 not documented in `.env.example`.
+907 flags; 856 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -164,6 +164,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CONTACT_OFFER_BATCH` | str | `''` | - | `docs/knowledge/contacts-conversation.md` | `''` | no | NO | `services/zoe-data/contacts_conversation.py` |
 | `ZOE_CONTEXT_TOKEN_BUDGET` | int | `5500` | - | - | `5500` | yes | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CONTINUE_WINDOW_S` | float | `2.0` | - | `docs/knowledge/voice-pipeline.md` | `2.0` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `ZOE_CONTRACTION_REPAIR` | bool | `True` | - | `services/zoe-data/AGENTS.md` | `True` | yes | NO | `services/zoe-data/contraction_repair.py` |
 | `ZOE_CONVERSATION_ENDER_ACKS` | str | `"Okay — I'm here when you need me.\|No worries. Talk soon.\|Okay."` | - | - | `"Okay — I'm here when you need me.\|No worries. Talk soon.\|Okay."` | no | NO | `services/zoe-data/conversation_opener.py` |
 | `ZOE_CONVERSATION_FEEDBACK` | bool | `True` | - | `docs/knowledge/voice-lane-parity.md` | `True` | yes | NO | `services/zoe-data/conversation_feedback.py` |
 | `ZOE_CORE_ALLOW_WRITES` | bool | `False` | - | - | `'false'` | no | NO | `services/zoe-core/extensions/abilities.ts` |
@@ -723,6 +724,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_RECALL_GATE_TRACE` | str | `''` | - | `docs/knowledge/recall-gate.md` | `''` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
 | `ZOE_RECALL_GATE_TRACE_DAYS` | int | `7` | - | `docs/knowledge/recall-gate.md` | `7` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
 | `ZOE_RECALL_GATE_TRACE_DIR` | str | `''` | - | `docs/knowledge/recall-gate.md` | `''` | yes | NO | `services/zoe-data/recall_gate_trace.py` |
+| `ZOE_RECALL_HOUSEHOLD_QUESTIONS` | bool | `True` | - | `services/zoe-data/AGENTS.md` | `True` | yes | NO | `services/zoe-data/memory_gate.py` |
 | `ZOE_RECALL_PRESENT_STATE_SHAPES` | str | `''` | - | `docs/architecture/beat-the-bar-2026-program.md` | `-` | no | NO | `services/zoe-data/zoe_flue_client.py` |
 | `ZOE_RELATIONSHIP_GRAPH_ENABLED` | str | `''` | - | `docs/knowledge/relationship-memory-flag-enable.md` | `''` | no | NO | `services/zoe-data/relationship_graph.py` |
 | `ZOE_RELAY_HOSTNAME` | str | `''` | - | `docs/knowledge/panel-relay-r1-box.md` | `''` | no | NO | `services/zoe-data/relay_ingress.py` |

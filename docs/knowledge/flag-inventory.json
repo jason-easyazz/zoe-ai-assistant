@@ -3134,6 +3134,25 @@
         },
         "typed_env": false
       },
+      "ZOE_CONTRACTION_REPAIR": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/contraction_repair.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_CONVERSATION_ENDER_ACKS": {
         "defaults": [
           "\"Okay \u2014 I'm here when you need me.|No worries. Talk soon.|Okay.\""
@@ -14028,6 +14047,25 @@
           "note": "default ~/.zoe/recall-gate-trace; the test conftest pins it",
           "owner_doc": "docs/knowledge/recall-gate.md",
           "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_RECALL_HOUSEHOLD_QUESTIONS": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "bool"
         },
         "typed_env": true
       },
