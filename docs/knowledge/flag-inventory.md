@@ -26,13 +26,13 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 890 prod flags; 306 read through `typed_env`.
+- 892 prod flags; 308 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 251 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
-- 17 registered flags with no reader in the scanned sources.
+- 15 registered flags with no reader in the scanned sources.
 
 ## Conflicting read defaults
 
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-890 flags; 839 not documented in `.env.example`.
+892 flags; 841 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -535,11 +535,13 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OFFBOX_STATE_DIR` | str | `''` | - | - | `dynamic` | no | NO | `scripts/maintenance/zoe_offbox.py` |
 | `ZOE_OFFER_FOLLOWUP_BINDING` | bool | `False` | - | `services/zoe-data/AGENTS.md` | `False` | yes | NO | `services/zoe-data/intent_router.py` |
 | `ZOE_OFFER_FOLLOWUP_TTL_S` | float | `600.0` | - | `services/zoe-data/AGENTS.md` | `600.0` | yes | NO | `services/zoe-data/intent_router.py` |
+| `ZOE_OMI_ANCHOR_FLUE_DB` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_panel_anchor.py` |
 | `ZOE_OMI_ANCHOR_PANEL_LOG` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `''` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_ANCHOR_PRIOR_S` | float | `88.0` | - | `docs/knowledge/omi-night-repass.md` | `88.0` | yes | NO | `services/zoe-data/omi_voices.py` |
 | `ZOE_OMI_AUDIO_DIR` | str | `''` | - | `docs/architecture/omi-integration-plan.md` | `''` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIO_RETENTION_DAYS` | int | `7` | - | `docs/architecture/omi-integration-plan.md` | `7` | yes | NO | `services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_AUDIT_PATH` | str | `''` | - | `docs/knowledge/bluetooth-settings.md` | `''` | yes | NO | `services/zoe-data/omi_devices.py` |
+| `ZOE_OMI_CLEAN_READ` | str | `'off'` | `off`, `on` | `docs/knowledge/omi-night-repass.md` | `'off'` | yes | NO | `scripts/maintenance/zoe-omi-cleanread.py` |
 | `ZOE_OMI_DAY_REVIEW` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/night-window.md` | `-` | no | NO | `services/zoe-data/omi_day_review.py` |
 | `ZOE_OMI_DAY_REVIEW_IDLE_S` | int | `600` | - | `docs/architecture/memories-space.md` | `600` | no | NO | `services/zoe-data/omi_day_review.py` |
 | `ZOE_OMI_DAY_REVIEW_LANE` | str | `'night'` | - | `docs/architecture/memories-space.md` | `'night'` | no | NO | `services/zoe-data/omi_day_review.py` |
@@ -1082,7 +1084,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `FOLLOW_UP_MAX_TURNS` | `'5'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `FOLLOW_UP_VAD_THRESHOLD` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `FORCE_FULL_CONTEXT` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
-| `GEMMA_SERVER_URL` | `''`, `'http://127.0.0.1:11434'`, `'http://127.0.0.1:11434/v1'`, `-`, `dynamic` | no | NO | `scripts/maintenance/music_discovery_batch.py`<br>`scripts/maintenance/zoe-struggle-proposals.py`<br>`scripts/night/jobs/night_digest.py`<br>`scripts/perf/measure_speed.py`<br>`services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts`<br>`services/zoe-data/gemma_endpoint.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/ui_compose.py`<br>`services/zoe-data/zoe_agent.py` |
+| `GEMMA_SERVER_URL` | `''`, `'http://127.0.0.1:11434'`, `'http://127.0.0.1:11434/v1'`, `-`, `dynamic` | no | NO | `scripts/maintenance/music_discovery_batch.py`<br>`scripts/maintenance/zoe-omi-cleanread.py`<br>`scripts/maintenance/zoe-struggle-proposals.py`<br>`scripts/night/jobs/night_digest.py`<br>`scripts/perf/measure_speed.py`<br>`services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts`<br>`services/zoe-data/gemma_endpoint.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/ui_compose.py`<br>`services/zoe-data/zoe_agent.py` |
 | `GITHUB_OUTPUT` | `-` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `GITHUB_STEP_SUMMARY` | `-` | no | NO | `scripts/maintenance/pytest_junit_guard.py` |
 | `GREPTILE_API_KEY` | `-` | no | NO | `services/zoe-data/greptile_client.py` |
@@ -1121,7 +1123,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `MEMORY_AUTO_INGEST` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `MEMORY_CONSOLIDATION_ENABLED` | `'true'` | no | NO | `services/zoe-data/routers/system.py` |
 | `MEMORY_DIGEST_ENABLED` | `'true'` | no | NO | `services/zoe-data/routers/system.py` |
-| `MEMORY_DIGEST_MODEL` | `''`, `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | no | NO | `scripts/maintenance/zoe-struggle-proposals.py`<br>`services/zoe-data/contact_backfill.py`<br>`services/zoe-data/latent_intent_detector.py`<br>`services/zoe-data/memory_authority.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/memory_retire.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/person_extractor_llm.py`<br>`services/zoe-data/structural_reader.py`<br>`services/zoe-data/structural_verifier.py`<br>`services/zoe-data/user_portrait.py` |
+| `MEMORY_DIGEST_MODEL` | `''`, `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | no | NO | `scripts/maintenance/zoe-omi-cleanread.py`<br>`scripts/maintenance/zoe-struggle-proposals.py`<br>`services/zoe-data/contact_backfill.py`<br>`services/zoe-data/latent_intent_detector.py`<br>`services/zoe-data/memory_authority.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/memory_retire.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/person_extractor_llm.py`<br>`services/zoe-data/structural_reader.py`<br>`services/zoe-data/structural_verifier.py`<br>`services/zoe-data/user_portrait.py` |
 | `MEMPALACE_DATA_DIR` | `'~/.mempalace'`, `(required)`, `-`, `dynamic` | no | NO | `scripts/maintenance/memory_authority_backfill.py`<br>`scripts/maintenance/memory_views_report.py`<br>`scripts/perf/recall_gate_replay.py`<br>`services/zoe-data/live_store_guard.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `MEMPALACE_KNOWN_ENTITIES` | `dynamic` | no | NO | `scripts/perf/zmb/pilot/mempalace_deepdive.py` |
 | `MEMPALACE_PATH` | `'/home/zoe/.mempalace'` | no | NO | `scripts/maintenance/check_emotional_thread.py` |
@@ -1263,4 +1265,4 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 Flags set in `.env`/units/shell or read through a computed name, or dead entries to delete from the registry.
 
-`ZOE_OMI_ANCHOR_FLUE_DB`, `ZOE_OMI_ANCHOR_JITTER_S`, `ZOE_OMI_ANCHOR_MAX_SPREAD_S`, `ZOE_OMI_ANCHOR_MIN_CLIPS`, `ZOE_OMI_ANCHOR_MIN_MATCH`, `ZOE_OMI_ANCHOR_MIN_WORDS`, `ZOE_OMI_ANCHOR_TTS_LAG_S`, `ZOE_OMI_ANCHOR_ZOE_MIN_COVER`, `ZOE_OMI_ANCHOR_ZOE_MIN_WORDS`, `ZOE_OMI_CLEAN_READ`, `ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
+`ZOE_OMI_ANCHOR_JITTER_S`, `ZOE_OMI_ANCHOR_MAX_SPREAD_S`, `ZOE_OMI_ANCHOR_MIN_CLIPS`, `ZOE_OMI_ANCHOR_MIN_MATCH`, `ZOE_OMI_ANCHOR_MIN_WORDS`, `ZOE_OMI_ANCHOR_TTS_LAG_S`, `ZOE_OMI_ANCHOR_ZOE_MIN_COVER`, `ZOE_OMI_ANCHOR_ZOE_MIN_WORDS`, `ZOE_OMI_NIGHT_ASR_EVAL`, `ZOE_OMI_NIGHT_ASR_SECOND`, `ZOE_OMI_NIGHT_ASR_THIRD`, `ZOE_SELF_REVIEW_MAX_CALLS`, `ZOE_SELF_REVIEW_MAX_TOKENS`, `ZOE_SPEAKER_WINDOW_THRESHOLD_LONG`, `ZOE_SPEAKER_WINDOW_THRESHOLD_SHORT`
