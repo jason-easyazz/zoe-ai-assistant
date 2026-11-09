@@ -10764,6 +10764,25 @@
         },
         "typed_env": true
       },
+      "ZOE_OMI_REPASS_CHUNK_S": {
+        "defaults": [
+          "14.0"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/omi_repass.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": 14.0,
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/omi-night-repass.md",
+          "type": "float"
+        },
+        "typed_env": true
+      },
       "ZOE_OMI_REPASS_DIR": {
         "defaults": [
           "dynamic"
@@ -19247,6 +19266,7 @@
         "scripts/maintenance/music_discovery_batch.py",
         "scripts/maintenance/zoe-struggle-proposals.py",
         "scripts/night/jobs/night_digest.py",
+        "scripts/night/jobs/omi_repass_worker.py",
         "scripts/perf/measure_speed.py",
         "services/zoe-core/bench/pi_brain_latency.py",
         "services/zoe-core/extensions/provider-local-gemma.ts",
@@ -19254,10 +19274,11 @@
         "services/zoe-data/memory_digest.py",
         "services/zoe-data/night_mind.py",
         "services/zoe-data/omi_day_review.py",
+        "services/zoe-data/omi_repass.py",
         "services/zoe-data/ui_compose.py",
         "services/zoe-data/zoe_agent.py"
       ],
-      "typed_env": false
+      "typed_env": true
     },
     "GITHUB_OUTPUT": {
       "defaults": [
@@ -19676,11 +19697,13 @@
     "MEMORY_DIGEST_MODEL": {
       "defaults": [
         "''",
+        "'gemma'",
         "'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'"
       ],
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/zoe-struggle-proposals.py",
+        "scripts/night/jobs/omi_repass_worker.py",
         "services/zoe-data/contact_backfill.py",
         "services/zoe-data/latent_intent_detector.py",
         "services/zoe-data/memory_authority.py",
@@ -19942,6 +19965,26 @@
       "in_env_example": false,
       "readers": [
         "services/zoe-auth/sso/n8n.py"
+      ],
+      "typed_env": false
+    },
+    "NIGHT_AUDIO_EXTRA_MIB": {
+      "defaults": [
+        "'1600'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
+      ],
+      "typed_env": false
+    },
+    "NIGHT_AUDIO_MMPROJ": {
+      "defaults": [
+        "-"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/night_window.py"
       ],
       "typed_env": false
     },

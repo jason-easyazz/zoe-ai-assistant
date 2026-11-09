@@ -61,7 +61,12 @@ MIN_WEARER_WINDOWS = 10                           # a wearer print needs this ma
 BACKENDS: dict = {
     "faster-whisper:large-v3": {"rtf": 1.0, "gpu_rtf": None, "peak_rss_mb": 2100, "fallback": "faster-whisper:distil-large-v3"},
     "faster-whisper:distil-large-v3": {"rtf": 0.45, "gpu_rtf": None, "peak_rss_mb": 2400, "fallback": None},
+    #: the night 12B's OWN audio encoder (mmproj on the CPU): it runs INSIDE the window's 12B stage, after the 12B load, and shares its memory - ``extra_12b_mib`` is the mmproj +
+    #: encoder buffers the window adds to its RAM arithmetic. DECODE-BOUND: ~3.3 tokens per speech second at the measured 5.9 tok/s plus ~0.15 s of prefill = ~0.7 s per second of
+    #: audio when it is all speech (pessimistic; real days are mostly silence the VAD skips). The lab trial (asr2_gemma12b.json) replaces this with a measured figure.
+    "gemma4-12b-audio": {"rtf": 0.7, "gpu_rtf": None, "peak_rss_mb": 300, "fallback": None, "runs_on": "12b", "extra_12b_mib": 900},
 }
+AUDIO_ASR = "gemma4-12b-audio"
 DEFAULT_ASR = "faster-whisper:large-v3"
 DIAR_BACKENDS = ("ecapa",)                        # the speaker-window engines the worker has (``omi_repass_worker.DIAR``); MODEL_ID is tied to this one
 DIAR_RSS_MB = 700
@@ -766,7 +771,7 @@ def zoe_clips() -> list[str]:
 
 
 async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = None, now: Optional[datetime] = None, dry_run: bool = False,
-                    clock: Callable[[], float] = time.time) -> dict:
+                    clock: Callable[[], float] = time.time, stage_12b: bool = False) -> dict:
     """The night job. Reads the pending recordings, plans the model against ``budget_s``, runs the worker once, applies each finished recording. Returns a
     counts-only summary (the CLI prints it). ``runner(manifest, out, timeout_s, mem_max=, threads=) -> rc`` is injectable (tests)."""
     from db_compat import get_compat_db
@@ -792,6 +797,13 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     if pref not in BACKENDS or diar_backend() not in DIAR_BACKENDS:
         return {**res, "status": "bad_backend", "asr": pref, "diar": diar_backend(), "known": sorted(BACKENDS)}
     plan = plan_model(audio_s, budget_s, st.get("rtf"), pref)
+    wants_12b = BACKENDS[pref].get("runs_on") == "12b"
+    if wants_12b != stage_12b:      # a pre-12B CPU backend must not run beside the loaded 12B (RAM floor), and the 12B-audio backend needs it loaded
+        return {**res, "status": "wrong_stage", "asr": pref, "stage": "12b" if stage_12b else "pre"}
+    if wants_12b:
+        url = env_str("GEMMA_SERVER_URL", "")
+        if not url or ":11434" in url or "127.0.0.1" not in url:      # the 12B's loopback url only: never the daytime 4B, never a remote model
+            return {**res, "status": "needs_12b", "asr": pref}
     res.update(pending=len(rows), audio_s=round(audio_s), model=plan["model"], est_s=plan["est_s"], fits=plan["fits"], fallback_model=plan["fallback"])
     if dry_run:
         return {**res, "status": "dry_run"}
@@ -810,7 +822,8 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     stamp = uuid.uuid4().hex[:8]
     man, out = work / f"{stamp}.manifest.json", work / f"{stamp}.out.jsonl"
     deadline = started + max(30.0, budget_s - 45.0)               # 45 s kept back for the DB writes and the release of audio
-    man.write_text(json.dumps({"asr": plan["model"], "diar": diar_backend(), "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "0") == "1", "deadline_epoch": deadline,
+    on_12b = BACKENDS[plan["model"]].get("runs_on") == "12b"
+    man.write_text(json.dumps({"asr": plan["model"], "diar": diar_backend(), "threads": threads, "llm_url": env_str("GEMMA_SERVER_URL", "") if on_12b else "", "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "gpu": env_str("ZOE_OMI_REPASS_GPU", "0") == "1", "deadline_epoch": deadline,
                                "rtf": {**DEFAULT_RTF, **(st.get("rtf") or {})}.get(plan["model"], 1.0), "items": items,
                                "zoe_clips": [] if zoe_ref else zoe_clips()}))
     os.chmod(man, 0o600)

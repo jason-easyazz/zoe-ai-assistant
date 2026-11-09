@@ -26,10 +26,10 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 877 prod flags; 293 read through `typed_env`.
+- 878 prod flags; 294 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 251 non-`ZOE_` env names read by prod code (table below).
+- 253 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 4 registered flags with no reader in the scanned sources.
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-877 flags; 826 not documented in `.env.example`.
+878 flags; 827 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -555,6 +555,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_OMI_NIGHT_REPASS` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/omi-night-repass.md` | `'off'` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_OWNER_USER_ID` | str | `''` | - | `docs/knowledge/bluetooth-settings.md` | `''` | yes | NO | `services/zoe-data/omi_devices.py`<br>`services/zoe-data/omi_recordings.py` |
 | `ZOE_OMI_QUIET_SKIP` | bool | `True` | - | `docs/architecture/omi-integration-plan.md` | `True` | yes | NO | `services/zoe-data/omi_recordings.py` |
+| `ZOE_OMI_REPASS_CHUNK_S` | float | `14.0` | - | `docs/knowledge/omi-night-repass.md` | `14.0` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_DIR` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `dynamic` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_GPU` | str | `'0'` | - | `docs/knowledge/omi-night-repass.md` | `'0'` | yes | NO | `services/zoe-data/omi_repass.py` |
 | `ZOE_OMI_REPASS_MEM_MAX` | str | `''` | - | `docs/knowledge/omi-night-repass.md` | `''` | yes | NO | `services/zoe-data/omi_repass.py` |
@@ -990,7 +991,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-251 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+253 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
@@ -1069,7 +1070,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `FOLLOW_UP_MAX_TURNS` | `'5'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `FOLLOW_UP_VAD_THRESHOLD` | `'0.35'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `FORCE_FULL_CONTEXT` | `'false'` | no | NO | `services/zoe-data/zoe_agent.py` |
-| `GEMMA_SERVER_URL` | `''`, `'http://127.0.0.1:11434'`, `'http://127.0.0.1:11434/v1'`, `-`, `dynamic` | no | NO | `scripts/maintenance/music_discovery_batch.py`<br>`scripts/maintenance/zoe-struggle-proposals.py`<br>`scripts/night/jobs/night_digest.py`<br>`scripts/perf/measure_speed.py`<br>`services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts`<br>`services/zoe-data/gemma_endpoint.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/ui_compose.py`<br>`services/zoe-data/zoe_agent.py` |
+| `GEMMA_SERVER_URL` | `''`, `'http://127.0.0.1:11434'`, `'http://127.0.0.1:11434/v1'`, `-`, `dynamic` | yes | NO | `scripts/maintenance/music_discovery_batch.py`<br>`scripts/maintenance/zoe-struggle-proposals.py`<br>`scripts/night/jobs/night_digest.py`<br>`scripts/night/jobs/omi_repass_worker.py`<br>`scripts/perf/measure_speed.py`<br>`services/zoe-core/bench/pi_brain_latency.py`<br>`services/zoe-core/extensions/provider-local-gemma.ts`<br>`services/zoe-data/gemma_endpoint.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/omi_repass.py`<br>`services/zoe-data/ui_compose.py`<br>`services/zoe-data/zoe_agent.py` |
 | `GITHUB_OUTPUT` | `-` | no | NO | `scripts/maintenance/voice_gate_check.py` |
 | `GITHUB_STEP_SUMMARY` | `-` | no | NO | `scripts/maintenance/pytest_junit_guard.py` |
 | `GREPTILE_API_KEY` | `-` | no | NO | `services/zoe-data/greptile_client.py` |
@@ -1108,7 +1109,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `MEMORY_AUTO_INGEST` | `'false'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `MEMORY_CONSOLIDATION_ENABLED` | `'true'` | no | NO | `services/zoe-data/routers/system.py` |
 | `MEMORY_DIGEST_ENABLED` | `'true'` | no | NO | `services/zoe-data/routers/system.py` |
-| `MEMORY_DIGEST_MODEL` | `''`, `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | no | NO | `scripts/maintenance/zoe-struggle-proposals.py`<br>`services/zoe-data/contact_backfill.py`<br>`services/zoe-data/latent_intent_detector.py`<br>`services/zoe-data/memory_authority.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/memory_retire.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/person_extractor_llm.py`<br>`services/zoe-data/structural_reader.py`<br>`services/zoe-data/structural_verifier.py`<br>`services/zoe-data/user_portrait.py` |
+| `MEMORY_DIGEST_MODEL` | `''`, `'gemma'`, `'gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf'` | no | NO | `scripts/maintenance/zoe-struggle-proposals.py`<br>`scripts/night/jobs/omi_repass_worker.py`<br>`services/zoe-data/contact_backfill.py`<br>`services/zoe-data/latent_intent_detector.py`<br>`services/zoe-data/memory_authority.py`<br>`services/zoe-data/memory_digest.py`<br>`services/zoe-data/memory_retire.py`<br>`services/zoe-data/night_mind.py`<br>`services/zoe-data/omi_day_review.py`<br>`services/zoe-data/person_extractor_llm.py`<br>`services/zoe-data/structural_reader.py`<br>`services/zoe-data/structural_verifier.py`<br>`services/zoe-data/user_portrait.py` |
 | `MEMPALACE_DATA_DIR` | `'~/.mempalace'`, `(required)`, `-`, `dynamic` | no | NO | `scripts/maintenance/memory_authority_backfill.py`<br>`scripts/maintenance/memory_views_report.py`<br>`scripts/perf/recall_gate_replay.py`<br>`services/zoe-data/live_store_guard.py`<br>`services/zoe-data/mcp_server.py`<br>`services/zoe-data/memory_service.py`<br>`services/zoe-data/zoe_agent.py` |
 | `MEMPALACE_KNOWN_ENTITIES` | `dynamic` | no | NO | `scripts/perf/zmb/pilot/mempalace_deepdive.py` |
 | `MEMPALACE_PATH` | `'/home/zoe/.mempalace'` | no | NO | `scripts/maintenance/check_emotional_thread.py` |
@@ -1130,6 +1131,8 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `MUSIC_ASSISTANT_TOKEN` | `''` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/intent_router.py`<br>`services/zoe-data/music_oauth.py`<br>`services/zoe-data/music_service.py`<br>`services/zoe-data/routers/music.py` |
 | `MUSIC_ASSISTANT_URL` | `'http://localhost:8095'` | no | NO | `scripts/maintenance/ma_idle_reap.py`<br>`services/zoe-data/intent_router.py`<br>`services/zoe-data/ma_ondemand.py`<br>`services/zoe-data/music_oauth.py`<br>`services/zoe-data/music_service.py`<br>`services/zoe-data/routers/music.py` |
 | `N8N_API_KEY` | `''` | no | NO | `services/zoe-auth/sso/n8n.py` |
+| `NIGHT_AUDIO_EXTRA_MIB` | `'1600'` | no | NO | `scripts/night/night_window.py` |
+| `NIGHT_AUDIO_MMPROJ` | `-` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_BATCH` | `'512'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_CACHE_RAM_MIB` | `'512'` | no | NO | `scripts/night/night_window.py` |
 | `NIGHT_CAP_MIN` | `'65'` | no | NO | `scripts/night/night_window.py` |

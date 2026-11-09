@@ -505,3 +505,7 @@ Changes: (1) up to **3 start attempts** (`LOAD_MAX_ATTEMPTS`), the last with 6 f
 | `zoe-opensrc-refresh`, `zoe-backup-verify` (Sunday 05:30) | weekly, after the window and the gate, on a different cadence; nothing to sequence. |
 | `zoe-offbox-backup` | its own clock and its own failure domain (it exists so the on-box copy is not the only copy). |
 | zoe-data's own 03:00 digest loop | the fallback for a window that did not run; unchanged. |
+
+## 20. The 12B's audio mmproj: only for the `gemma4-12b-audio` re-pass backend (2026-11-09)
+
+The window DROPS `--mmproj` from the 12B command (`bakeoff.deep_clone_command`); `cfg.audio_mmproj` (the explicit switch `--audio-mmproj` / `NIGHT_AUDIO_MMPROJ=1`, set together with `ZOE_OMI_NIGHT_ASR=gemma4-12b-audio`) adds `--mmproj <audio> --no-mmproj-offload --jinja` back. With it the re-pass runs as the first job of the 12B stage (not a pre-job), and the lever arithmetic reserves `NIGHT_AUDIO_EXTRA_MIB` (1600) more. Details and the budget: [omi-night-repass.md](omi-night-repass.md). Tests: `tests/unit/test_night_repass_audio_window.py`.

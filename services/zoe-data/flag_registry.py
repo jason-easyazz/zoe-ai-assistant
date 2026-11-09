@@ -607,6 +607,7 @@ _ENTRIES = (
     _f('ZOE_OMI_NIGHT_REPASS', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/omi-night-repass.md'),
     _f('ZOE_OMI_OWNER_USER_ID', 'str', '', doc='docs/knowledge/bluetooth-settings.md'),
     _f('ZOE_OMI_QUIET_SKIP', 'bool', True, doc='docs/architecture/omi-integration-plan.md'),
+    _f('ZOE_OMI_REPASS_CHUNK_S', 'float', 14.0, doc='docs/knowledge/omi-night-repass.md'),
     _f('ZOE_OMI_REPASS_DIR', 'str', '', doc='docs/knowledge/omi-night-repass.md'),
     _f('ZOE_OMI_REPASS_GPU', 'str', '0', doc='docs/knowledge/omi-night-repass.md'),
     _f('ZOE_OMI_REPASS_MEM_MAX', 'str', '', doc='docs/knowledge/omi-night-repass.md'),

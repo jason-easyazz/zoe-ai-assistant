@@ -31,6 +31,7 @@ from test_omi_recordings import OWNER, _migrate, env, make_wav, rows, upload  # 
 import asyncio
 
 UTC = timezone.utc
+SVC_DIR = Path(__file__).resolve().parents[1]
 
 
 def run(coro):
@@ -387,7 +388,15 @@ def test_the_name_hint_reaches_the_worker_and_forgotten_names_do_not(renv, monke
 
 def test_the_day_review_waits_for_a_pending_recording_only_when_on(renv, monkeypatch):
     transcribe(first_pass(renv) and renv, monkeypatch)
-    import omi_day_review as dr
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("omi_day_review_fresh", SVC_DIR / "omi_day_review.py")     # by path: another test lane may have put a different copy in sys.modules
+    dr = importlib.util.module_from_spec(spec)
+    import sys as _sys
+    _sys.modules["omi_day_review_fresh"] = dr                 # dataclasses look their module up here
+    try:
+        spec.loader.exec_module(dr)
+    finally:
+        _sys.modules.pop("omi_day_review_fresh", None)
     assert dr._repass_defers() is True
     sql = f"SELECT id FROM omi_recordings WHERE status = 'done' AND NOT {rp.PENDING_SQL}"
     assert renv.db.rows(sql) == []                                                              # pending + audio: not read yet

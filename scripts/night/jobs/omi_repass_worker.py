@@ -116,10 +116,115 @@ class FasterWhisper(AsrBackend):
         return words, False
 
 
+# ── the 12B's OWN audio (gemma4-12b-audio) ───────────────────────────────────────────────────────────────────────────────
+#: VAD chunking IDENTICAL to the round-2 bake-off's ``chunk.py`` (silero via faster-whisper): speech spans of at most ``CHUNK_MAX_S`` (<= 30; 14 in the bake-off), gaps under
+#: 0.4 s merged while the chunk stays short, spans under 0.3 s dropped.
+CHUNK_MAX_S = 14.0     # the parent passes ``chunk_s`` in the manifest (ZOE_OMI_REPASS_CHUNK_S); never above 30
+AUDIO_PROMPT = ("Transcribe this audio verbatim, exactly as spoken, in English. Output only the spoken words: no summary, no commentary, no timestamps and no speaker labels. "
+                "If there is no intelligible speech, output nothing.")
+REFUSAL_STARTS = ("there is no", "there's no", "i cannot", "i can't", "i'm sorry", "i am sorry", "the audio", "this audio", "no speech", "[silence", "(silence")
+
+
+def vad_chunks(x) -> list:
+    """[(t0, t1)] seconds: the bake-off's chunking, so every engine sees the same pieces."""
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+    ts = get_speech_timestamps(x, VadOptions(min_silence_duration_ms=250, max_speech_duration_s=CHUNK_MAX_S, speech_pad_ms=150, threshold=0.4))
+    merged: list = []
+    for t in ts:
+        s, e = t["start"] / RATE, t["end"] / RATE
+        if merged and s - merged[-1][1] < 0.4 and e - merged[-1][0] <= CHUNK_MAX_S:
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+    return [(s, e) for s, e in merged if e - s >= 0.3]
+
+
+def wav_bytes(x) -> bytes:
+    """16 kHz mono 16-bit WAV of float32 samples."""
+    import io
+    import wave
+    import numpy as np
+    pcm = (np.clip(x, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def audio_prompt(hint: str) -> str:
+    return AUDIO_PROMPT + (" " + hint if hint else "")
+
+
+def clean_reply(text: str, dur_s: float) -> str:
+    """The model's text -> the transcript, or "" for a refusal / description / runaway loop (more than 7 words a second is a loop, not speech)."""
+    t = " ".join((text or "").replace("\n", " ").split()).strip().strip('"').strip()
+    low = t.lower()
+    if not t or low.startswith(REFUSAL_STARTS):
+        return ""
+    if len(t.split()) > 7 * max(dur_s, 1.0) + 10:
+        return ""
+    return t
+
+
+def gemma_transcribe(base_url: str, wav: bytes, dur_s: float, hint: str = "", model: str = "gemma", timeout_s: float = 300.0) -> dict:
+    """ONE chunk to a llama-server that has the audio mmproj: OpenAI ``input_audio`` (base64 16 kHz mono WAV). Returns {"text", "completion_tokens", "prompt_tokens", "el"}."""
+    import base64
+    import urllib.request
+    body = json.dumps({"model": model, "temperature": 0, "max_tokens": int(min(500, 40 + 9 * dur_s)), "stream": False,
+                       "messages": [{"role": "user", "content": [{"type": "text", "text": audio_prompt(hint)},
+                                                                  {"type": "input_audio", "input_audio": {"data": base64.b64encode(wav).decode("ascii"), "format": "wav"}}]}]}).encode()
+    req = urllib.request.Request(base_url.rstrip("/") + "/chat/completions", data=body, headers={"Content-Type": "application/json"})
+    t0 = time.time()
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        d = json.loads(r.read())
+    u = d.get("usage") or {}
+    return {"text": clean_reply(((d.get("choices") or [{}])[0].get("message") or {}).get("content", ""), dur_s), "completion_tokens": u.get("completion_tokens"),
+            "prompt_tokens": u.get("prompt_tokens"), "el": time.time() - t0}
+
+
+class Gemma12bAudio(AsrBackend):
+    """The night 12B's own audio encoder: VAD chunks of at most 30 s go to the 12B the window has ALREADY loaded (``--mmproj`` on the CPU), asking for a verbatim transcript with the name
+    hint. The model returns TEXT only, so word times are spread evenly across each chunk and every word's confidence is a flat 0.6 (no per-word score exists); who spoke still comes from
+    ECAPA windows. This backend shares the 12B's memory and speed (decode-bound) - the window runs it AFTER the 12B load."""
+
+    def __init__(self, threads: int, gpu: bool, url: str = "", model: str = "gemma"):
+        super().__init__(threads, gpu)
+        self.url, self.model = url or os.environ.get("GEMMA_SERVER_URL", ""), model or os.environ.get("MEMORY_DIGEST_MODEL", "") or "gemma"
+
+    def load(self) -> None:
+        import urllib.request
+        if not self.url or ":11434" in self.url:
+            raise RuntimeError("no 12B url (the live 4B on :11434 is never used for this)")
+        with urllib.request.urlopen(self.url.rstrip("/").removesuffix("/v1") + "/health", timeout=10) as r:
+            if r.status != 200:
+                raise RuntimeError("12B not healthy")
+
+    def device(self) -> str:
+        return "12b-gpu+mmproj-cpu"
+
+    def transcribe(self, x, hint: str, deadline):
+        words: list = []
+        for s, e in vad_chunks(x):
+            if deadline and time.time() > deadline:
+                return [], True
+            seg = x[int(s * RATE):int(e * RATE)]
+            text = gemma_transcribe(self.url, wav_bytes(seg), e - s, hint, self.model)["text"]
+            toks = text.split()
+            for i, w in enumerate(toks):
+                a = s + (e - s) * i / len(toks)
+                b = s + (e - s) * (i + 1) / len(toks)
+                words.append([(" " if words else "") + w, round(a, 3), round(b, 3), 0.6])
+        return words, False
+
+
 #: ASR registry: backend id -> factory(threads, gpu). Ids are what ``ZOE_OMI_NIGHT_ASR`` / the manifest's ``asr`` name.
 ASR = {
     "faster-whisper:large-v3": lambda t, g: FasterWhisper(t, g, "large-v3"),
     "faster-whisper:distil-large-v3": lambda t, g: FasterWhisper(t, g, "distil-large-v3"),
+    "gemma4-12b-audio": lambda t, g: Gemma12bAudio(t, g),
 }
 #: diarisation / speaker-window registry (the seam: ``windows(x, speech) -> [(t0, t1, emb, rms)]``); the parent matches the embeddings, so a
 #: segmenting engine (pyannote, Sortformer) can slot in by returning windows of its own turns.
@@ -194,6 +299,10 @@ def run(manifest: dict, out_path: str) -> int:
     threads = int(manifest.get("threads", 4))
     deadline = float(manifest.get("deadline_epoch") or 0) or None
     rtf = float(manifest.get("rtf") or 1.0)
+    global CHUNK_MAX_S
+    CHUNK_MAX_S = max(2.0, min(30.0, float(manifest.get("chunk_s") or CHUNK_MAX_S)))
+    if manifest.get("llm_url"):
+        os.environ["GEMMA_SERVER_URL"] = manifest["llm_url"]
     t0 = time.time()
     try:
         asr = ASR[name](threads, bool(manifest.get("gpu")))

@@ -150,6 +150,10 @@ FREED_FACTOR = 0.8
 WINNER_BINARY = f"{HOME}/llama.cpp-b11194/build-jetson/bin/llama-server"
 MODEL_FILES = {"qat": "models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf", "q4km": "models/gemma4-12b/gemma-4-12B-it-Q4_K_M.gguf"}
 CTX_OPTIONS = (32768, 16384, 8192)
+#: The 12B's OWN audio (the ``gemma4-12b-audio`` re-pass backend, docs/knowledge/omi-night-repass.md): the 12B's mmproj carries a ``gemma4ua`` audio encoder. The window normally DROPS ``--mmproj``
+#: from the 12B command (``bakeoff.deep_clone_command``); with ``cfg.audio_mmproj`` it adds it back, on the CPU (``--no-mmproj-offload``: on the GPU it fragments the carveout and OOMs, measured June).
+AUDIO_ASR = "gemma4-12b-audio"        # pinned equal to omi_repass.AUDIO_ASR by a test
+MMPROJ_FILES = {"qat": "models/gemma4-12b-qat/mmproj-gemma-4-12b-it-qat-q4_0.gguf", "q4km": "models/gemma4-12b/mmproj-gemma-4-12B-it-Q8_0.gguf"}
 KV_OPTIONS = ("q8_0", "q4_0")
 #: preference: the QAT file first (it is TRAINED for q4_0 and is the smaller file; Q4_K_M is only offered by --model or when it is the only file on disk), then KV q8_0
 #: (a q4_0 cache costs long-context accuracy; the jobs' prompts are 3-8k tokens, so 16k with q8_0 beats 32k with q4_0), then the larger context
@@ -469,6 +473,12 @@ class NightCfg(bk.Cfg):
     #: PRE-JOBS run after the stops and BEFORE the 12B loads, while the box is at its emptiest (the 4B, Kokoro, the router and zoe-data all stopped): CPU work in its own capped
     #: scope that must not sit beside the 12B (MemAvailable floor). Default none; the unit passes ``--pre-jobs omi_repass`` (docs/knowledge/omi-night-repass.md).
     pre_jobs: tuple = ()
+    #: include the audio ``--mmproj`` in the 12B command and run ``omi_repass`` INSIDE the 12B stage (after the load) instead of before it. An EXPLICIT switch (``--audio-mmproj`` / ``NIGHT_AUDIO_MMPROJ=1``,
+    #: set together with ``ZOE_OMI_NIGHT_ASR=gemma4-12b-audio`` in the zoe-data env): the window reads no ZOE_* flag. A mismatch is loud and harmless - the re-pass job REFUSES a backend that
+    #: does not belong to its stage (``wrong_stage``). Default OFF: the 12B command is exactly what it was.
+    audio_mmproj: bool = os.environ.get("NIGHT_AUDIO_MMPROJ") == "1"
+    #: RAM the audio backend adds beside the 12B, in MiB: the mmproj + its CPU encoder buffers (~0.5-0.9 GB; the lab trial measures it) + the worker process (ECAPA / torch / VAD ~0.7 GB)
+    audio_extra_mib: float = float(os.environ.get("NIGHT_AUDIO_EXTRA_MIB", "1600"))
     #: PRE-SLEEP units (``--presleep``): the nightly backup and the memory export, SEQUENCED by this program (backup first, then the export - "a copy BEFORE the digest mutates
     #: the store") while Zoe is still awake. Started with ``systemctl --user start --wait`` so the units' own Nice/IO class and logs are unchanged. docs/knowledge/night-window.md section 19.
     presleep_units: tuple = ("zoe-backup.service", "zoe-memory-export.service")
@@ -528,6 +538,14 @@ class NightCfg(bk.Cfg):
 
     def model_path(self, key: str) -> str:
         return f"{self.home}/{MODEL_FILES[key]}"
+
+    def mmproj_path(self, key: str) -> str:
+        return f"{self.home}/{MMPROJ_FILES[key]}"
+
+    @property
+    def reserve_mib(self) -> float:
+        """What the jobs need beside the 12B in the lever arithmetic: the configured reserve, plus the audio backend's mmproj + worker when it is selected."""
+        return self.job_reserve_mib + (self.audio_extra_mib if self.audio_mmproj else 0.0)
 
     @property
     def blackout_list(self) -> tuple:
@@ -644,6 +662,12 @@ def llm_spec(parked_text: str, cfg: NightCfg, lv: Levers) -> "dict[str, Any]":
     _set_flag(argv, "--ubatch-size", str(cfg.ubatch))
     if "--metrics" not in argv:
         argv.append("--metrics")
+    if cfg.audio_mmproj:      # the audio encoder, kept on the CPU; thinking is already off in the generated command (--reasoning off / --chat-template-kwargs)
+        _set_flag(argv, "--mmproj", cfg.mmproj_path(lv.model))
+        if "--no-mmproj-offload" not in argv:
+            argv.append("--no-mmproj-offload")
+        if "--jinja" not in argv:
+            argv.append("--jinja")
     if cfg.binary:
         argv[0] = cfg.binary
         if "b9733" not in cfg.binary and "build-jetson-new" not in cfg.binary:
@@ -770,7 +794,14 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
     jobs["omi_day_review"] = JobSpec("omi_day_review", odr if cfg.omi_day_review_script.exists() else [], t.get("omi_day_review", 2400.0),
                                      best_effort=True, budget_flag="--budget-s",
                                      skip_reason="" if cfg.omi_day_review_script.exists() else f"{cfg.omi_day_review_script.name} not found")
-    return [jobs[j] for j in cfg.jobs if j in jobs]
+    ordered = [jobs[j] for j in cfg.jobs if j in jobs]
+    if cfg.audio_mmproj and "omi_repass" in cfg.pre_jobs:
+        # The re-pass with the 12B's own audio: AFTER the load, FIRST in the stage (the digest, the extract and the day review read its clean text), with the 12B's url, best effort,
+        # and leaving the rest of the stage its share (the later jobs measured 7 min; 25 keeps room for a full day review).
+        rp = JobSpec("omi_repass", [cfg.py, str(cfg.omi_repass_script), "--model-url", base + "/v1"] if cfg.omi_repass_script.exists() else [], t.get("omi_repass", 2400.0), best_effort=True,
+                     keep_s=25 * 60.0, budget_flag="--budget-s", skip_reason="" if cfg.omi_repass_script.exists() else f"{cfg.omi_repass_script.name} not found")
+        ordered.insert(0, rp)
+    return ordered
 
 
 def presleep_path(cfg: NightCfg, host: "bk.Host") -> Path:
@@ -843,6 +874,8 @@ def build_pre_jobs(cfg: NightCfg) -> "list[JobSpec]":
     recordings since the last pass, CPU, in its own capped scope. Best effort (unfinished recordings carry to the next night), budgeted (``--budget-s``: the pass plans
     inside its own kill time) and clipped so the 12B stage keeps ``cfg.pre_keep_min``. A no-op while ``ZOE_OMI_NIGHT_REPASS`` is off."""
     t = cfg.job_timeout_s
+    if cfg.audio_mmproj:      # the 12B-audio backend needs the loaded 12B: it is the FIRST job of the 12B stage (``build_jobs``), not a pre-job
+        return []
     specs = {"omi_repass": JobSpec("omi_repass", [cfg.py, str(cfg.omi_repass_script)] if cfg.omi_repass_script.exists() else [], t.get("omi_repass", 2400.0), best_effort=True,
                                    keep_s=cfg.pre_keep_min * 60.0, budget_flag="--budget-s",
                                    skip_reason="" if cfg.omi_repass_script.exists() else f"{cfg.omi_repass_script.name} not found")}
@@ -1270,7 +1303,7 @@ class NightWindow(bk.Window):
             binary = cfg.binary or spec["binary"]
             if not host.exists(binary):
                 self.refuse(f"the llama-server binary {binary} does not exist")
-        self.sizes = {k: s for k in MODEL_FILES for s in [host.file_size(cfg.model_path(k))] if s}
+        self.sizes = {k: s for k in MODEL_FILES for s in [host.file_size(cfg.model_path(k))] if s and (not cfg.audio_mmproj or host.exists(cfg.mmproj_path(k)))}
         if not self.sizes:
             self.refuse("no 12B model file on disk: " + ", ".join(cfg.model_path(k) for k in MODEL_FILES))
         if cfg.model_choice in MODEL_FILES and cfg.model_choice not in self.sizes:
@@ -1469,7 +1502,7 @@ class NightWindow(bk.Window):
             self.log("pre-stop prediction skipped: the stop set's memory is unreadable here; the measurement after the stops decides")
             return
         pss = held
-        rows = evaluate(self.sizes, predict_avail(avail_now, held, self.stop_set, 1.0), self.cfg.min_avail_mb, self.cfg.job_reserve_mib, self.cfg.margin_mib)
+        rows = evaluate(self.sizes, predict_avail(avail_now, held, self.stop_set, 1.0), self.cfg.min_avail_mb, self.cfg.reserve_mib, self.cfg.margin_mib)
         best = max(rows, key=lambda r: r["margin_jobs"]) if rows else None
         if best and not best["fits"]:
             self.refuse(f"even if every stopped unit freed ALL of its memory ({sum(pss.values()):.0f} MiB), MemAvailable would be {best['avail']:.0f} MiB against {best['need_jobs']:.0f} MiB for the smallest "
@@ -1535,11 +1568,11 @@ class NightWindow(bk.Window):
 
     def choose(self, avail: float, free: "Optional[float]" = None) -> "dict[str, Any]":
         cfg = self.cfg
-        rows = evaluate(self.sizes, avail, cfg.min_avail_mb, cfg.job_reserve_mib, cfg.margin_mib, free_mib=free)
+        rows = evaluate(self.sizes, avail, cfg.min_avail_mb, cfg.reserve_mib, cfg.margin_mib, free_mib=free)
         pick = choose_levers(rows, model=cfg.model_choice, ctx=cfg.ctx_choice, kv=cfg.kv_choice)
         pre = self.rec.get("pre_stop") or {}
         self.rec["arith"] = {"avail_measured_mib": round(avail, 0), "free_measured_mib": None if free is None else round(free, 0),
-                             "predicted_after_stops_mib": pre.get("predicted_after_stops_mib"), "avail_before_mib": pre.get("avail_mib"), "floor_mib": cfg.min_avail_mb, "job_reserve_mib": cfg.job_reserve_mib,
+                             "predicted_after_stops_mib": pre.get("predicted_after_stops_mib"), "avail_before_mib": pre.get("avail_mib"), "floor_mib": cfg.min_avail_mb, "job_reserve_mib": cfg.reserve_mib,
                              "rows": [{"levers": r["levers"].label(), "need_load": round(r["need_load"]), "need_jobs": round(r["need_jobs"]), "margin_jobs": round(r["margin_jobs"]),
                                        "fits": r["fits"]} for r in rows], "chosen": pick["levers"].label() if pick else None}
         for line in self.table_lines(rows, pick["levers"] if pick else None):
@@ -2756,7 +2789,7 @@ class NightWindow(bk.Window):
         default_pick = None
         for name, stop in sets:
             pred = predict_avail(avail, pss, stop)
-            rows = evaluate(self.sizes, pred, cfg.min_avail_mb, cfg.job_reserve_mib, cfg.margin_mib)
+            rows = evaluate(self.sizes, pred, cfg.min_avail_mb, cfg.reserve_mib, cfg.margin_mib)
             pick = choose_levers(rows, model=cfg.model_choice, ctx=cfg.ctx_choice, kv=cfg.kv_choice)
             self.log("")
             self.log(f"  stop set: {name} -> {', '.join(u.removesuffix('.service') for u in stop)}; predicted MemAvailable {pred:.0f}")
@@ -2837,6 +2870,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
     ap.add_argument("--catchup", action="store_true", help="with --presleep, any hour: the boot timer's catch-up for the removed Persistent=true backup / export timers - runs only if no backup succeeded in the last 26 h")
     ap.add_argument("--presleep", action="store_true", help="run the pre-sleep phase only (backup, then memory export, sequenced; idempotent per day) and exit 0; the unit's ExecStartPre=-")
+    ap.add_argument("--audio-mmproj", action="store_true", help="add the 12B's audio --mmproj (CPU) to the 12B command and run the omi_repass job inside the 12B stage (the gemma4-12b-audio backend)")
     ap.add_argument("--pre-jobs", default=None, help="comma list of jobs that run after the stops and BEFORE the 12B loads (omi_repass; default none)")
     ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,struggle_proposals,self_review,omi_day_review)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
@@ -2899,6 +2933,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
         cfg.jobs = tuple(j.strip() for j in args.jobs.split(",") if j.strip())
     if args.pre_jobs is not None:
         cfg.pre_jobs = tuple(j.strip() for j in args.pre_jobs.split(",") if j.strip())
+    cfg.audio_mmproj = cfg.audio_mmproj or bool(args.audio_mmproj)
     bad_pre = [j for j in cfg.pre_jobs if j not in ("omi_repass",)]
     if bad_pre:
         raise Refused(f"unknown pre-job(s) {', '.join(bad_pre)} (omi_repass)")

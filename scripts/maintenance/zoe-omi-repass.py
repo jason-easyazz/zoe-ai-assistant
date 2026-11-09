@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -36,6 +37,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--budget-s", type=float, default=1500.0)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--probe-gpu", action="store_true")
+    ap.add_argument("--model-url", default="", help="the night 12B's loopback /v1 url, for the gemma4-12b-audio backend (the window passes it); the live 4B (:11434) and non-loopback urls are refused")
     ap.add_argument("--requeue-failed", action="store_true", help="after a fix: put recordings the pass gave up on (WAV still held) back in the queue")
     ap.add_argument("--wearer-status", action="store_true")
     ap.add_argument("--wearer-lines", action="store_true")
@@ -45,6 +47,13 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--user", default="")
     a = ap.parse_args(argv)
     import omi_repass as rp
+    if a.model_url:
+        import ipaddress
+        import urllib.parse
+        host = urllib.parse.urlparse(a.model_url).hostname or ""
+        if not (host == "localhost" or (host and ipaddress.ip_address(host).is_loopback)) or ":11434" in a.model_url:
+            raise SystemExit(f"refusing --model-url {a.model_url!r}: the 12B's loopback url only")
+        os.environ["GEMMA_SERVER_URL"] = a.model_url
 
     if a.probe_gpu:
         t0 = time.time()
@@ -80,7 +89,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
                         print(f"  [{ln['at_ms'] // 1000}s] {ln['text']}", file=sys.stderr)
                     return 0, {"status": "ok"}
                 return 0, {"status": "ok", **await rp.wearer_status(db, a.user)}
-        return 0, await rp.run_night(budget_s=a.budget_s, dry_run=a.dry_run)
+        return 0, await rp.run_night(budget_s=a.budget_s, dry_run=a.dry_run, stage_12b=bool(a.model_url))
     finally:
         await close_pool()
 
