@@ -708,6 +708,32 @@ async def _reconcile_same_kind_entity_row(
     return new_ref.id
 
 
+async def _ingest_own_fact(text: str, user_id: str, *, source: str, session_id: Optional[str] = None,
+                           source_excerpt: Optional[str] = None, origin: Optional[str] = None) -> Optional[str]:
+    """One fact about the SPEAKER themself, as a plain user fact: no entity, no person tag, no pending-person slug (so the people
+    layer never sees a "person" called by the speaker's own name). The same storable-fact gate as every person write."""
+    try:
+        from memory_quality import is_storable_fact
+
+        storable, reason = is_storable_fact(text)
+        if not storable:
+            from memory_reject_ledger import record_reject
+
+            record_reject("person_extractor", reason)
+            return None
+        from memory_service import get_memory_service
+
+        ref = await get_memory_service().ingest(
+            text, user_id=user_id, source=source, session_id=session_id, memory_type="fact", status="approved",
+            tags=["auto_extract", "own_fact"], source_excerpt=source_excerpt, origin=origin)
+        if ref is not None and (getattr(ref, "metadata", None) or {}).get("authority_blocked"):
+            return AUTHORITY_BLOCKED
+        return ref.id if ref else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("person_extractor: own-fact ingest failed: %s", exc)
+        return None
+
+
 async def _ingest_to_mempalace(
     text: str,
     user_id: str,
@@ -1424,9 +1450,8 @@ async def apply_person_fact(
         if _intro and own_name.is_own(name, frozenset({_fold_name(_intro), _fold_name(_intro).split()[0]})):
             own_text = re.sub(rf"(?i)\b{re.escape(name)}\b", "User", value, count=1) if re.search(
                 rf"(?i)\b{re.escape(name)}\b", value) else f"User ({name}): {value}"
-            mem_id = await _ingest_to_mempalace(
-                own_text[:300], user_id, name, None, memory_type="fact", source=source, session_id=session_id,
-                pattern_type=None, source_excerpt=source_excerpt, origin=origin)
+            mem_id = await _ingest_own_fact(own_text[:300], user_id, source=source, session_id=session_id,
+                                            source_excerpt=source_excerpt, origin=origin)
             return bool(mem_id) and mem_id != AUTHORITY_BLOCKED
     except Exception as exc:  # noqa: BLE001 - never stop a write over this
         logger.debug("apply_person_fact: own-name filing failed (%s)", type(exc).__name__)

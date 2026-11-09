@@ -229,6 +229,12 @@ def test_the_digest_row_that_lost_its_possessor_gets_it_back():
         == ("rewrite", "Chris's swimming is on Wednesday")
     assert fact_subject.attribute("User's swimming is on Wednesday", "chris swimming is on wednesday", known)[0] == "keep"
     assert fact_subject.attribute("User's swimming is on Wednesday", msg)[0] == "keep"
+    # two people have the activity in the turn: the clause that carries the fact's own words decides
+    two = "Asha's swimming is on Wednesday. Dev's swimming is on Thursday"
+    assert fact_subject.attribute("User's swimming is on Wednesday", two)[1] == "Asha's swimming is on Wednesday"
+    assert fact_subject.attribute("User's swimming is on Thursday", two)[1] == "Dev's swimming is on Thursday"
+    assert fact_subject.attribute("User's swimming is on Friday", two)[0] == "keep"           # no clause backs it: never guessed
+    assert fact_subject.attribute("User's swimming is on Wednesday", "Asha's swimming is on Wednesday. Dev's swimming is on Wednesday")[0] == "keep"
     # Carlo AND Carlos are known: "carlos swimming" could be either, so it is never guessed
     assert fact_subject.attribute("User's swimming is on Wednesday", "carlos swimming is on wednesday", frozenset({"carlo", "carlos"}))[0] == "keep"
     assert fact_subject.attribute("User's swimming is on Wednesday", "carlos swimming is on wednesday", frozenset({"carlos"})) \
@@ -259,6 +265,12 @@ def _stub_person_writer(monkeypatch, calls, people=None):
     monkeypatch.setattr(pe, "_resolve_person", resolve)
     monkeypatch.setattr(pe, "_ingest_to_mempalace", ingest)
 
+    async def own(text, user_id, **_k):
+        calls.append(("<own>", text, None))
+        return "mem-own"
+
+    monkeypatch.setattr(pe, "_ingest_own_fact", own)
+
 
 def test_the_stray_s_of_a_correction_is_not_a_person(monkeypatch):
     calls = []
@@ -288,6 +300,23 @@ def test_the_stray_s_of_a_correction_is_not_a_person(monkeypatch):
 
 
 # ── 3. the speaker's own facts ───────────────────────────────────────────────────────────────────────────────────────
+
+def test_an_own_fact_is_ingested_with_no_person_linkage(monkeypatch):
+    import memory_service
+
+    seen = {}
+
+    class Svc:
+        async def ingest(self, text, **kw):
+            seen.update(kw, text=text)
+            return types.SimpleNamespace(id="m1", metadata={})
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
+    assert run(pe._ingest_own_fact("User is a night shift nurse", UID, source="conversation")) == "m1"
+    assert seen["text"] == "User is a night shift nurse" and seen["memory_type"] == "fact"
+    assert "entity_type" not in seen and "entity_id" not in seen                    # not a person_pending slug for "Priya"
+    assert "person" not in seen["tags"] and not any(t.startswith("slug:") for t in seen["tags"])
+
 
 def test_the_speakers_own_facts_are_the_users_not_a_contact(monkeypatch):
     calls = []

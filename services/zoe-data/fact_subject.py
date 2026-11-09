@@ -100,9 +100,21 @@ def _possessive_owner(fact: str, user_message: str, known_names=frozenset()) -> 
     noun = m.group("noun")
     if noun.lower() in _RELATIONS or _FIRST_PERSON_RE.search(user_message or ""):
         return None, False
-    pm = re.search(rf"\b(?P<o>[A-Za-z][A-Za-z\-]{{1,24}}?)(?P<p>['’]s|s)\s+{re.escape(noun)}\b", user_message or "", re.IGNORECASE)
-    if not pm:
+    pat = re.compile(rf"\b(?P<o>[A-Za-z][A-Za-z\-]{{1,24}}?)(?P<p>['’]s|s)\s+{re.escape(noun)}\b", re.IGNORECASE)
+    want = _tokens(m.group("rest"))
+    cands = [(len(want & _tokens(c)), cm) for c in _clauses(user_message) for cm in [pat.search(c)] if cm]
+    if not cands:
         return None, False
+    if len(cands) > 1:
+        # several people have this activity in the turn ("Asha's swimming is on Wednesday. Dev's swimming is on Thursday"): the clause
+        # that carries the fact's own words decides; a tie between different owners is never guessed
+        best = max(n for n, _ in cands)
+        owners = {cm.group("o").lower() for n, cm in cands if n == best}
+        if best == 0 or len(owners) > 1:
+            return None, False
+        pm = next(cm for n, cm in cands if n == best)
+    else:
+        pm = cands[0][1]
     stem, lazy = pm.group("o"), not pm.group("p").startswith(("'", "’"))
     owner = stem
     if lazy:
