@@ -33,7 +33,7 @@ from typing import Any, Iterable, Optional
 import numpy as np
 
 from person_age import CHILD_WORDS, person_may_be_child  # noqa: F401  (re-exported: omi_day_review + tests use these names)
-from typed_env import env_bool, env_float, env_int
+from typed_env import env_bool, env_float, env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -172,11 +172,152 @@ async def store_segments(db, user_id: str, rid: str, segs: list, *, model_id: Op
     return ids
 
 
-async def zoe_spoken_spans(db, user_id: str, rid: str) -> list[tuple[int, int]]:
-    """THE SEAM for "the pendant heard Zoe" (gap audit P1-5): spans (ms into recording ``rid``) when a panel was speaking a reply
-    to this member, so those lines are marked ``not_person='zoe'``. Returns [] today: no store logs TTS playback with wall-clock
-    times yet, and only a ``device`` / ``corrected`` recording clock may be aligned to one. Fill this, not the callers."""
-    return []
+_PANEL_CACHE: dict = {}          # (minute, window) -> panel turns; the night job asks per recording, the Pi is read once
+
+
+def _panel_turns(t0: float, t1: float) -> list:
+    """The wall panel's voice turns around [t0, t1] (epoch s) from its voice.log - a local copy (``ZOE_OMI_ANCHOR_PANEL_LOG``) or one bounded ssh read. [] on any failure."""
+    import os
+    import sys
+    key = (int(t0 // 600), int(t1 // 600))
+    if key in _PANEL_CACHE:
+        return _PANEL_CACHE[key]
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "lib"))
+        import panel_voice_log as pvl
+        lines = pvl.fetch_lines(env_str("ZOE_OMI_ANCHOR_PANEL_LOG", "") or None, timeout_s=20)
+        tns = [t for t in pvl.turns(pvl.events(lines)) if t.recorded_ts is not None and t0 - 120 <= t.recorded_ts.timestamp() <= t1 + 120]
+        try:
+            for i, c in pvl.match_clips(tns, pvl.corpus_index()).items():
+                tns[i].clip = c.path
+        except Exception:  # noqa: BLE001 - clips are optional: the offset then rests on the text alone
+            pass
+    except Exception as exc:  # noqa: BLE001
+        logger.info("OMI_ANCHOR panel log unreadable: %s", type(exc).__name__)
+        tns = []
+    _PANEL_CACHE.clear()
+    _PANEL_CACHE[key] = tns
+    return tns
+
+
+def _read_wav(path: str) -> Optional[tuple]:
+    import wave
+    try:
+        with wave.open(path, "rb") as w:
+            if w.getsampwidth() != 2:
+                return None
+            ch, sr = w.getnchannels(), w.getframerate()
+            x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float64) / 32768.0
+        return (x.reshape(-1, ch).mean(axis=1) if ch > 1 else x), sr
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def measure_shifts(audio_path: str, t0: float, turns: list, *, max_clips: int = 8) -> list:
+    """Per-clip clock shifts (panel_time - pendant_time, s) by log-mel correlation of the panel's saved clips against the recording's audio, searched +-60 s
+    around the nominal offset (``ZOE_OMI_ANCHOR_PRIOR_S``, 88). A clip that does not stand out is skipped. [] when nothing can be measured."""
+    import os
+    import omi_panel_anchor as pa
+    pend = _read_wav(audio_path) if audio_path and os.path.exists(audio_path) else None
+    if not pend:
+        return []
+    prior = env_float("ZOE_OMI_ANCHOR_PRIOR_S", 88.0)
+    out = []
+    for t in [x for x in turns if getattr(x, "clip", None)][:max_clips]:
+        clip = _read_wav(t.clip)
+        if not clip or clip[1] != pend[1]:
+            continue
+        panel_t = t.recorded_ts.timestamp()
+        hit = pa.correlate_shift(pend[0], clip[0], pend[1], predicted_s=panel_t - prior - t0)
+        if hit:
+            out.append(panel_t - (t0 + hit[0]))
+    return out
+
+
+def anchor_mode() -> str:
+    """``ZOE_OMI_PANEL_ANCHORS``: ``off`` (default - nothing reads the panel), ``night`` (the night re-pass only; one bounded ssh read of the panel log) or ``on``
+    (the first pass too - a network read in the upload path, so not recommended)."""
+    from typed_env import env_str
+    v = env_str("ZOE_OMI_PANEL_ANCHORS", "off").strip().lower()
+    return v if v in ("night", "on") else "off"
+
+
+async def panel_evidence(db, user_id: str, rid: str, *, night: bool = False, segs: Optional[list] = None, said: Optional[list] = None, turns: Optional[list] = None,
+                         shifts: Optional[list] = None, guest_verdict: Any = None, greeting: Optional[str] = None) -> Optional[tuple]:
+    """(Evidence, recording start epoch s, first-pass segments) for one recording, or None when the panel's account cannot be trusted against it.
+    None unless the recording clock is ``device`` / ``corrected`` (an ``estimated`` clock cannot be aligned) and the Flue store AND the panel log were
+    readable. ``said``/``turns``/``shifts`` are injection points (tests, and the log-mel offset measurement); ``guest_verdict(turn)`` -> person key for a
+    named guest the panel recognised (the voice.log carries the member claim only). The offset is 0.0 with ``offset_clips`` 0 until shifts fix it, and
+    then ``covered`` stays False: an unaligned clock must not decide who is Zoe."""
+    import omi_panel_anchor as pa
+    mode = anchor_mode()
+    if mode == "off" or (mode == "night" and not night):
+        return None
+    rows = await _all(db, "SELECT started_at, duration_s, time_quality FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
+    if not rows or rows[0][2] not in ("device", "corrected"):
+        return None
+    try:
+        t0 = datetime.strptime(rows[0][0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+    t1 = t0 + float(rows[0][1] or 0)
+    if segs is None:
+        segs = [{"start_ms": r[0], "end_ms": r[1], "text": r[2] or ""} for r in await _all(
+            db, "SELECT start_ms, end_ms, text FROM omi_segments WHERE recording_id = ? AND user_id = ? ORDER BY seq", (rid, user_id))]
+    sd = said if said is not None else pa.flue_said(t0, t1)
+    tn = turns if turns is not None else _panel_turns(t0, t1)
+    if sd is None or not tn:
+        return None
+    def resolve(t):
+        who = getattr(t, "claim_user", None)
+        g = guest_verdict(t) if guest_verdict else None
+        if g:
+            return "guest", g
+        return ("member", "you") if who and who == user_id else ("member", None) if who else ("unknown", None)
+    zs = [s for s in sd if s.kind == "zoe"]
+    if greeting and zs:                 # the logged voice_greeting ("Good evening ...") is spoken before the first reply's own words
+        zs[0].text = greeting.strip() + " " + zs[0].text
+    sayings = zs + pa.join_verdicts([s for s in sd if s.kind == "person"], tn, resolve)
+    if shifts is None:
+        arow = await _all(db, "SELECT audio_path FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
+        import asyncio
+        shifts = await asyncio.to_thread(measure_shifts, (arow[0][0] if arow else "") or "", t0, tn)
+    est = pa.estimate_offset(shifts) if shifts else None
+    ev = pa.Evidence(said=sayings, offset_s=est[0] if est else 0.0, offset_clips=est[1] if est else 0, covered=est is not None)
+    return ev, t0, segs
+
+
+async def zoe_spoken_spans(db, user_id: str, rid: str, **kw) -> list[tuple[int, int]]:
+    """THE SEAM for "the pendant heard Zoe": spans (ms into recording ``rid``) of the first-pass segments that MATCH something Zoe actually said, within the
+    clock jitter (``omi_panel_anchor.zoe_spans``) - text and time, never her voice print alone, and never a line that names her. [] when the panel's
+    account cannot be aligned (no device/corrected clock, no readable store/log, no night offset): the caller then keeps its print fallback."""
+    import omi_panel_anchor as pa
+    got = await panel_evidence(db, user_id, rid, **kw)
+    if not got or not got[0].covered:
+        return []
+    ev, t0, segs = got
+    return pa.zoe_spans(segs, ev, t0)
+
+
+async def panel_spans(db, user_id: str, rid: str, **kw) -> tuple:
+    """(Zoe spans, person anchors, covered) from ONE evidence read - the re-pass's single call."""
+    import omi_panel_anchor as pa
+    got = await panel_evidence(db, user_id, rid, night=True, **kw)
+    if not got or not got[0].covered:
+        return [], [], False
+    ev, t0, segs = got
+    return pa.zoe_spans(segs, ev, t0), pa.person_anchors(segs, ev, t0), True
+
+
+async def panel_anchors(db, user_id: str, rid: str, **kw) -> list[dict]:
+    """Strong anchors from panel utterances with a KNOWN per-clip speaker (``omi_panel_anchor.person_anchors``): [{start_ms, end_ms, key, speaker}]. [] when
+    unaligned or when every panel verdict was unknown."""
+    import omi_panel_anchor as pa
+    got = await panel_evidence(db, user_id, rid, **kw)
+    if not got or not got[0].covered:
+        return []
+    ev, t0, segs = got
+    return pa.person_anchors(segs, ev, t0)
 
 
 def mark_overlaps(segs: list, spans: list, kind: str = "zoe", min_share: float = 0.5) -> int:
@@ -787,6 +928,13 @@ async def redact(db, user_id: str, rx: "re.Pattern[str]", mark: str) -> int:
     for sid, text in await _all(db, "SELECT id, text FROM omi_segments WHERE user_id = ?", (user_id,)):
         if text and rx.search(text):
             n += await _run(db, "UPDATE omi_segments SET text = ? WHERE id = ?", (rx.sub(mark, text), sid))
+    try:                                        # the clean-read twin (0073) names the same people: it is forgotten with the verbatim
+        for sid, text in await _all(db, "SELECT id, clean_text FROM omi_segments WHERE user_id = ? AND clean_text != ''", (user_id,)):
+            if text and rx.search(text):
+                n += await _run(db, "UPDATE omi_segments SET clean_text = ? WHERE id = ?", (rx.sub(mark, text), sid))
+    except Exception as exc:  # noqa: BLE001
+        if not (_missing(exc) or type(exc).__name__ == "UndefinedColumnError" or "no such column" in str(exc).lower()):      # pre-0073: no twin to redact
+            raise
     return n
 
 

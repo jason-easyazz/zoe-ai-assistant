@@ -547,7 +547,7 @@ def test_a_tagged_line_marked_not_a_person_is_untagged_and_unlearned(env, monkey
 
 
 def test_lines_under_zoes_own_speech_are_not_a_person(env, monkeypatch):
-    async def spoke(db, uid, rec):
+    async def spoke(db, uid, rec, **kw):
         return [(2500, 6000)]
     monkeypatch.setattr(ov, "zoe_spoken_spans", spoke)
     rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, SAM)))
@@ -842,7 +842,7 @@ def test_guests_and_panels_cannot_call_the_voice_api(env, monkeypatch):
     assert env.client.get("/api/omi/voices").status_code == 403                    # a panel's device token is not the person
 
 
-ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_repass_who.py", "omi_recordings.py", "routers/omi_voices.py", "routers/omi_recordings.py", "contacts_store.py", "person_merge.py",
+ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_repass_clean.py", "omi_transcript_book.py", "omi_repass_who.py", "omi_recordings.py", "routers/omi_voices.py", "routers/omi_recordings.py", "contacts_store.py", "person_merge.py",
            "memory_forget_cascade.py",
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller

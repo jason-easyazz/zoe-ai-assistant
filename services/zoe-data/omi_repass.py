@@ -28,6 +28,7 @@ Invariants (each has a negative control in ``tests/test_omi_repass.py``):
 from __future__ import annotations
 
 import asyncio
+import copy
 import difflib
 import hashlib
 import json
@@ -278,7 +279,8 @@ label_window = who.label_window
 LEARN_YOU_MIN = 0.5                                # omi_voices.learn's "this unsure line is far enough from the wearer to learn as a bystander" bar
 
 
-def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, smooth: int = 3, zoe_spans: Iterable = ()) -> list[dict]:
+def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, smooth: int = 3, zoe_spans: Iterable = (), anchors: Iterable = (),
+                zoe_by_log: bool = False) -> list[dict]:
     """Words (``[word, t0, t1, p]``) + windows (``[t0, t1, emb, rms]``) -> speaker lines: each word takes the label of the windows covering its
     midpoint (a vote, strong verdicts weigh double), labels are smoothed over +-``smooth`` words, and runs of one label join into a line unless a
     silence of ``gap_s`` separates them. A one-or-two-word run of an uncertain label between two lines is absorbed (label flicker)."""
@@ -286,13 +288,28 @@ def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, s
         return []
     ws = [(float(w[1]), float(w[2])) for w in words]
     spans = [(int(a), int(b)) for a, b in zoe_spans]
+    anc = [(int(a["start_ms"]), int(a["end_ms"]), str(a["key"])) for a in anchors]       # panel utterances of a KNOWN speaker (omi_panel_anchor): above the voice match
+    if zoe_by_log and refs.zoe is not None:        # the panel log covers this recording: Zoe is what she SAID, never what a voice print resembles
+        refs = copy.copy(refs)
+        refs.zoe = None
 
     def zoe_hit(t0: float, t1: float) -> bool:       # the panel log's Zoe replies are exact: a unit mostly inside one IS Zoe
         d = max(1.0, (t1 - t0) * 1000.0)
         return any(max(0.0, min(t1 * 1000.0, b) - max(t0 * 1000.0, a)) / d >= 0.5 for a, b in spans)
 
-    verdicts = [(float(w[0]), float(w[1]), label_window(w[2], refs, dur_s=float(w[1]) - float(w[0]), rms=(float(w[3]) if len(w) > 3 else None), zoe_hit=zoe_hit(float(w[0]), float(w[1]))))
-                for w in windows]
+    def anchored(t0: float, t1: float) -> Optional[str]:
+        d = max(1.0, (t1 - t0) * 1000.0)
+        best = max(((max(0.0, min(t1 * 1000.0, b) - max(t0 * 1000.0, a)) / d, k) for a, b, k in anc), default=(0.0, None))
+        return best[1] if best[0] >= 0.5 else None
+
+    def verdict(w) -> dict:
+        t0, t1 = float(w[0]), float(w[1])
+        key = anchored(t0, t1)
+        if key and not zoe_hit(t0, t1):               # the panel's own record of who spoke beats the voice match; Zoe's logged speech beats the anchor
+            return {"key": key, "conf": "sure", "ranked": [], "margin": None}
+        return label_window(w[2], refs, dur_s=t1 - t0, rms=(float(w[3]) if len(w) > 3 else None), zoe_hit=zoe_hit(t0, t1))
+
+    verdicts = [(float(w[0]), float(w[1]), verdict(w)) for w in windows]
     raw: list[str] = []
     for a, b in ws:
         mid = (a + b) / 2.0
@@ -333,6 +350,8 @@ def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, s
         text = re.sub(r"\s+", " ", ln["text"]).strip()
         if not text:
             continue
+        if ln["key"] == "zoe" and re.search(r"\bzoe\b", text, re.I):
+            ln["key"] = "?"                           # a line that NAMES Zoe is addressed to her: never her own
         cover = [w for w in windows if float(w[0]) < ln["end"] and float(w[1]) > ln["start"]]
         emb = _unit(np.mean([_unit(w[2]) for w in cover], axis=0)) if cover else None
         out.append({"cands": who.candidates(emb, refs) if (emb is not None and ln["key"].endswith("?")) else [], "key": ln["key"], "start_ms": int(round(ln["start"] * 1000)), "end_ms": max(int(round(ln["end"] * 1000)), int(round(ln["start"] * 1000)) + 1),
@@ -524,15 +543,16 @@ async def load_refs(db, user_id: str, zoe: Optional[Any], mu: Optional[Any] = No
     return Refs(you=you, zoe=zoe, people=people, mu=mu, you_panel_only=panel_only, loud_cut=loud_cut)
 
 
-async def zoe_spans_for(uid: str, rid: str) -> list:
-    """Zoe's own replies in the panel log, in ms into the recording (exact; ``[]`` until a store logs TTS playback with wall-clock times)."""
+async def panel_evidence_for(uid: str, rid: str) -> tuple:
+    """(Zoe spans, person anchors, covered) from what the panel recorded for this recording - ``omi_voices.panel_spans``. ``covered`` True means the panel log was
+    aligned to the pendant's clock this night, so Zoe is decided by what she SAID and her voice print no longer can. ([], [], False) on any failure."""
     import omi_voices
     from db_compat import get_compat_db
     try:
         async with get_compat_db() as db:
-            return list(await omi_voices.zoe_spoken_spans(db, uid, rid))
+            return await omi_voices.panel_spans(db, uid, rid)
     except Exception:  # noqa: BLE001
-        return []
+        return [], [], False
 
 
 async def _first_pass_segments(db, rid: str) -> list[dict]:
@@ -596,7 +616,8 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
     import omi_voices
     from db_compat import get_compat_db
     rid, uid = r["id"], r["user_id"]
-    lines = build_lines(res["words"], res["windows"], refs, zoe_spans=await zoe_spans_for(uid, rid))          # Zoe's replies first (exact), then the people
+    spans, anchors, by_log = await panel_evidence_for(uid, rid)
+    lines = build_lines(res["words"], res["windows"], refs, zoe_spans=spans, anchors=anchors, zoe_by_log=by_log)   # the panel's record first (Zoe's sayings, known speakers), then the voices
     segs = []
     for ln in lines:
         f = segment_fields(ln, refs)
@@ -640,7 +661,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                 former = sorted({o["voice_cluster_id"] for o in old if o.get("voice_cluster_id")})
                 pending_wearer_labels = [o for o in old if o.get("owner_label") == "you"]
                 try:
-                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid))
+                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs, night=True))
                     ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=MODEL_ID, channel="pendant" if refs.you is not None else None)
                     for sid, s in zip(ids, segs):
                         sets, vals = [], []

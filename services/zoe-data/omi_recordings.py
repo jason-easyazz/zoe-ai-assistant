@@ -1190,7 +1190,7 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             if segs is not None:              # segments land BEFORE the row says done, and the WAV goes only after both
                 import omi_voices
                 try:
-                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid))  # Zoe's own replies: not a person
+                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs))  # Zoe's own replies: not a person
                     seg_ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=model_id,
                                                               channel="panel" if spk_state == "tagged" else None)
                 except Exception as exc:  # noqa: BLE001 - a segment-store failure never costs the transcript
