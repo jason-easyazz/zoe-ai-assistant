@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """The ASR + speaker-embedding half of the pendant night re-pass, as a STANDALONE process in its own venv (``~/.zoe/venvs/omi-repass``).
 
-It exists so faster-whisper, torch and speechbrain (and their ~2.5 GB) never enter zoe-data or the night window: the job starts it under
+It exists so torch, transformers, faster-whisper and speechbrain (and their GBs) never enter zoe-data or the night window: the job starts it under
 ``systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0 nice -n 10`` while Zoe sleeps, and reads a JSONL back. It knows nothing about
 the database, members, names or labels - the parent (``services/zoe-data/omi_repass.py``) owns every decision.
 
     omi_repass_worker.py --manifest M.json --out OUT.jsonl      transcribe + embed each item; one JSON line per finished item
     omi_repass_worker.py --probe-gpu                            print what the GPU path could do on this stack (one JSON line), change nothing
 
-Manifest: {"asr": "faster-whisper:large-v3"|"faster-whisper:distil-large-v3" (ASR registry), "diar": "ecapa" (DIAR registry), "threads": 4, "gpu": false, "hint": "Names: ...", "deadline_epoch": 1.7e9,
-           "rtf": 1.0, "zoe_clips": [paths], "items": [{"id": "...", "path": "...", "hint": "(optional, per item)"}]}
+Manifest: {"asr": "qwen3-asr"|"parakeet-tdt"|"faster-whisper:large-v3"|... (ASR registry), "diar": "ecapa" (DIAR registry), "threads": 4, "gpu": true, "models_dir": "...", "chunk_s": 14,
+           "hint": "Names: ..." (only faster-whisper uses it: the transformers engines are NOT prompt-biased, the parent normalises names afterwards), "deadline_epoch": 1.7e9, "rtf": 1.0, "zoe_clips": [paths], "items": [{"id": "...", "path": "...", "hint": "(optional, per item)"}]}
 Output lines: {"zoe_ref": [...]} once (when zoe_clips were given), then per item {"id", "ok": true, "dur_s", "speech_s", "asr_s", "emb_s",
            "words": [[w, t0, t1, p]...], "windows": [[t0, t1, [192 floats], rms]...]} or {"id", "ok": false, "why"}, then {"done": true, ...}.
 An item is never half-written: if the deadline passes mid-file the item is reported ``why: "deadline"`` and the parent carries it to the next night.
-Offline by construction (HF_HUB_OFFLINE=1, models resolved from the pinned snapshots in the HF cache). Audio and words are never logged.
+Offline by construction (HF_HUB_OFFLINE=1; the transformers engines load from ``models_dir`` = ~/.zoe/models/omi-repass, fetched at pinned revisions by setup_omi_repass.sh; faster-whisper /
+ECAPA from the pinned HF-cache snapshots). Audio and words are never logged.
 Exit 0 ok, 3 a model/package is missing, 1 any other failure.
 """
 from __future__ import annotations
@@ -35,12 +36,24 @@ MODELS = {
     "distil-large-v3": ("Systran/faster-distil-whisper-large-v3", "c3058b475261292e64a0412df1d2681c06260fab"),
 }
 ECAPA = ("speechbrain/spkrec-ecapa-voxceleb", "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286")
+#: the round-2 bake-off winners (official repos; revisions pinned in scripts/setup/setup_omi_repass.sh): directory names under ``models_dir``
+TRANSFORMERS_DIRS = {"qwen3-asr": "Qwen3-ASR-1.7B-hf", "parakeet-tdt": "parakeet-tdt-0.6b-v3"}
+MODELS_DIR = os.path.expanduser("~/.zoe/models/omi-repass")
+CHUNK_MAX_S = 14.0         # the bake-off's VAD chunk length; the parent passes ``chunk_s`` (ZOE_OMI_REPASS_CHUNK_S); never above 30
 RATE = 16000
 WIN_S, HOP_S, MIN_WIN_S = 1.5, 0.75, 0.8
 
 
 def rss_mb() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+
+def gpu_peak_mb():
+    try:
+        import torch
+        return round(torch.cuda.max_memory_allocated() / 1e6) if torch.cuda.is_available() else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def snapshot(repo: str, rev: str) -> str:
@@ -116,8 +129,93 @@ class FasterWhisper(AsrBackend):
         return words, False
 
 
+def vad_chunks(x) -> list:
+    """[(t0, t1)] seconds: the bake-off's chunking (silero via faster-whisper; speech spans of at most ``CHUNK_MAX_S``, gaps under 0.4 s merged, spans under 0.3 s dropped),
+    so every engine sees the same pieces."""
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+    ts = get_speech_timestamps(x, VadOptions(min_silence_duration_ms=250, max_speech_duration_s=CHUNK_MAX_S, speech_pad_ms=150, threshold=0.4))
+    merged: list = []
+    for t in ts:
+        s, e = t["start"] / RATE, t["end"] / RATE
+        if merged and s - merged[-1][1] < 0.4 and e - merged[-1][0] <= CHUNK_MAX_S:
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+    return [(s, e) for s, e in merged if e - s >= 0.3]
+
+
+class ChunkedAsr(AsrBackend):
+    """An engine that returns TEXT per VAD chunk (no word times): the words of a chunk are spread evenly across it with a flat 0.6 confidence; who spoke still comes from the
+    ECAPA windows. No name hint is given to the engine (the bake-off: no candidate spells a household name unbiased, and a keyword prompt made one invent a name on non-speech) -
+    the parent normalises names afterwards from the household / named-guest lexicon."""
+    dev = "cpu"
+
+    def run_chunk(self, x) -> str:
+        raise NotImplementedError
+
+    def device(self) -> str:
+        return self.dev
+
+    def _device(self, torch) -> str:
+        return "cuda" if self.gpu and torch.cuda.is_available() else "cpu"
+
+    def transcribe(self, x, hint: str, deadline):
+        words: list = []
+        for s, e in vad_chunks(x):
+            if deadline and time.time() > deadline:
+                return [], True
+            toks = " ".join((self.run_chunk(x[int(s * RATE):int(e * RATE)]) or "").split()).split()
+            for i, w in enumerate(toks):
+                a, b = s + (e - s) * i / len(toks), s + (e - s) * (i + 1) / len(toks)
+                words.append([(" " if words else "") + w, round(a, 3), round(b, 3), 0.6])
+        return words, False
+
+
+class Qwen3Asr(ChunkedAsr):
+    """Qwen/Qwen3-ASR-1.7B-hf via transformers (the bake-off winner): bfloat16 on the GPU with the default torch allocator. Measured: GPU RTF 0.42 per speech second, ~4.0 GB GPU, ~8.7 GB process RSS, ~14 s load."""
+
+    def load(self) -> None:
+        import torch
+        from transformers import AutoModelForMultimodalLM, AutoProcessor
+        path = os.path.join(MODELS_DIR, TRANSFORMERS_DIRS["qwen3-asr"])
+        if not os.path.isdir(path):
+            raise FileNotFoundError("qwen3-asr weights missing")
+        self.torch, self.dev = torch, self._device(torch)
+        self.p = AutoProcessor.from_pretrained(path)
+        self.m = AutoModelForMultimodalLM.from_pretrained(path, dtype=torch.bfloat16).to(self.dev).eval()
+
+    def run_chunk(self, x) -> str:
+        inp = self.p.apply_transcription_request(audio=x, language="English").to(self.dev, self.m.dtype)
+        with self.torch.inference_mode():
+            o = self.m.generate(**inp, max_new_tokens=300, do_sample=False)
+        return self.p.decode(o[:, inp["input_ids"].shape[1]:], return_format="transcription_only")[0].strip()
+
+
+class ParakeetTdt(ChunkedAsr):
+    """nvidia/parakeet-tdt-0.6b-v3 via transformers (the budget fallback): GPU RTF 0.08, ~5.7 GB process RSS. ``generate()`` returns an output object on the GPU path: decode ``.sequences``."""
+
+    def load(self) -> None:
+        import torch
+        from transformers import AutoModelForTDT, AutoProcessor
+        path = os.path.join(MODELS_DIR, TRANSFORMERS_DIRS["parakeet-tdt"])
+        if not os.path.isdir(path):
+            raise FileNotFoundError("parakeet-tdt weights missing")
+        self.torch, self.dev = torch, self._device(torch)
+        self.p = AutoProcessor.from_pretrained(path)
+        self.m = AutoModelForTDT.from_pretrained(path, dtype=torch.float32).to(self.dev).eval()
+
+    def run_chunk(self, x) -> str:
+        inp = self.p(x, sampling_rate=RATE, return_tensors="pt").to(self.dev)
+        with self.torch.inference_mode():
+            o = self.m.generate(**inp)
+        seq = getattr(o, "sequences", o)
+        return self.p.batch_decode(seq, skip_special_tokens=True)[0].strip()
+
+
 #: ASR registry: backend id -> factory(threads, gpu). Ids are what ``ZOE_OMI_NIGHT_ASR`` / the manifest's ``asr`` name.
 ASR = {
+    "qwen3-asr": lambda t, g: Qwen3Asr(t, g),
+    "parakeet-tdt": lambda t, g: ParakeetTdt(t, g),
     "faster-whisper:large-v3": lambda t, g: FasterWhisper(t, g, "large-v3"),
     "faster-whisper:distil-large-v3": lambda t, g: FasterWhisper(t, g, "distil-large-v3"),
 }
@@ -187,7 +285,10 @@ def zoe_reference(emb: Embedder, clips: list):
 
 def run(manifest: dict, out_path: str) -> int:
     from faster_whisper.vad import VadOptions, get_speech_timestamps
-    name = manifest.get("asr", "faster-whisper:large-v3")
+    name = manifest.get("asr", "qwen3-asr")
+    global MODELS_DIR, CHUNK_MAX_S
+    MODELS_DIR = manifest.get("models_dir") or MODELS_DIR
+    CHUNK_MAX_S = max(2.0, min(30.0, float(manifest.get("chunk_s") or CHUNK_MAX_S)))
     if name not in ASR or manifest.get("diar", "ecapa") not in DIAR:
         print(f"unknown backend {name}/{manifest.get('diar')}", file=sys.stderr)
         return 1
@@ -243,7 +344,7 @@ def run(manifest: dict, out_path: str) -> int:
                 failed += 1
                 out.write(json.dumps({"id": rid, "ok": False, "why": f"error:{type(exc).__name__}"}) + "\n")
             out.flush()
-        out.write(json.dumps({"done": True, "asr": name, "diar": manifest.get("diar", "ecapa"), "device": asr.device(), "load_s": round(load_s, 1), "files": done,
+        out.write(json.dumps({"done": True, "asr": name, "diar": manifest.get("diar", "ecapa"), "device": asr.device(), "gpu_peak_mb": gpu_peak_mb(), "load_s": round(load_s, 1), "files": done,
                               "carried": carried, "failed": failed, "audio_s": round(audio_s, 1), "work_s": round(elapsed, 1),
                               "rtf": round(elapsed / audio_s, 3) if audio_s else None, "peak_rss_mb": round(rss_mb())}) + "\n")
     return 0

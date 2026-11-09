@@ -31,6 +31,7 @@ from test_omi_recordings import OWNER, _migrate, env, make_wav, rows, upload  # 
 import asyncio
 
 UTC = timezone.utc
+SVC_DIR = Path(__file__).resolve().parents[1]
 
 
 def run(coro):
@@ -125,9 +126,9 @@ async def _pending(env):
 def test_on_replaces_the_text_with_provenance_and_then_releases_the_wav(renv, monkeypatch):
     r0 = transcribe(first_pass(renv) and renv, monkeypatch, "moonshine garble")
     out = run(rp.run_night(budget_s=600, runner=fake_runner()))
-    assert out["status"] == "ok" and out["replaced"] == 1 and out["model"] == "faster-whisper:large-v3"
+    assert out["status"] == "ok" and out["replaced"] == 1 and out["model"] == "qwen3-asr"
     r = rows(renv)[0]
-    assert r["transcript"] == "Hello there friend" and r["repass_state"] == "done" and r["repass_model"] == "faster-whisper:large-v3+ecapa" and r["repass_at"]
+    assert r["transcript"] == "Hello there friend" and r["repass_state"] == "done" and r["repass_model"] == "qwen3-asr+ecapa" and r["repass_at"]
     assert r["audio_path"] == "" and not Path(r0["audio_path"]).exists()                     # the pass has seen it: now the WAV goes
     segs = renv.db.rows("SELECT speaker, model_id, text FROM omi_segments")
     assert segs and all(s["model_id"] == rp.MODEL_ID for s in segs)
@@ -273,12 +274,12 @@ def test_propose_wearer_needs_a_real_cluster():
 # ── budget ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_the_planner_prefers_the_big_model_drops_to_the_fallback_and_says_when_nothing_fits():
-    assert rp.plan_model(600, 1500)["model"] == "faster-whisper:large-v3" and rp.plan_model(600, 1500)["fits"]
-    p = rp.plan_model(2500, 1500)
-    assert p["model"] == "faster-whisper:distil-large-v3" and p["fallback"] and p["fits"]
-    q = rp.plan_model(9000, 1500)
-    assert q["model"] == "faster-whisper:distil-large-v3" and not q["fits"]
-    assert rp.plan_model(2500, 1500, {"faster-whisper:large-v3": 0.3})["model"] == "faster-whisper:large-v3"       # last night's measured speed wins
+    assert rp.plan_model(600, 1500)["model"] == "qwen3-asr" and rp.plan_model(600, 1500)["fits"]
+    p = rp.plan_model(4000, 1500)                                             # 4000 s x 0.42 = 1680 s > 85 % of 1500 s: drop to parakeet (x 0.08 = 320 s)
+    assert p["model"] == "parakeet-tdt" and p["fallback"] and p["fits"]
+    q = rp.plan_model(20000, 1500)
+    assert q["model"] == "parakeet-tdt" and not q["fits"]
+    assert rp.plan_model(4000, 1500, {"qwen3-asr": 0.2})["model"] == "qwen3-asr"       # last night's measured speed wins
 
 
 def test_a_recording_the_budget_could_not_reach_carries_to_the_next_night_untouched(renv, monkeypatch):
@@ -387,7 +388,15 @@ def test_the_name_hint_reaches_the_worker_and_forgotten_names_do_not(renv, monke
 
 def test_the_day_review_waits_for_a_pending_recording_only_when_on(renv, monkeypatch):
     transcribe(first_pass(renv) and renv, monkeypatch)
-    import omi_day_review as dr
+    import importlib.util
+    import sys as _sys
+    spec = importlib.util.spec_from_file_location("omi_day_review_fresh", SVC_DIR / "omi_day_review.py")     # by path: another test lane may have put a different copy in sys.modules
+    dr = importlib.util.module_from_spec(spec)
+    _sys.modules["omi_day_review_fresh"] = dr                 # dataclasses look their module up here
+    try:
+        spec.loader.exec_module(dr)
+    finally:
+        _sys.modules.pop("omi_day_review_fresh", None)
     assert dr._repass_defers() is True
     sql = f"SELECT id FROM omi_recordings WHERE status = 'done' AND NOT {rp.PENDING_SQL}"
     assert renv.db.rows(sql) == []                                                              # pending + audio: not read yet

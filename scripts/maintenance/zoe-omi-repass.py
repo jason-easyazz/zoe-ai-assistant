@@ -36,6 +36,9 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--budget-s", type=float, default=1500.0)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--probe-gpu", action="store_true")
+    ap.add_argument("--rehearse", action="store_true", help="the DAYTIME REHEARSAL: the real job path on ONE recording (the newest 20-180 s one, or --recording ID), whatever the flag says, writing nothing. "
+                    "Run it through `night_window.sh --rehearse-repass` (the same stops, compaction and restore order as the night); it must pass before ZOE_OMI_NIGHT_REPASS goes to shadow")
+    ap.add_argument("--recording", default="", help="with --rehearse: the recording id to use")
     ap.add_argument("--requeue-failed", action="store_true", help="after a fix: put recordings the pass gave up on (WAV still held) back in the queue")
     ap.add_argument("--wearer-status", action="store_true")
     ap.add_argument("--wearer-lines", action="store_true")
@@ -80,18 +83,20 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
                         print(f"  [{ln['at_ms'] // 1000}s] {ln['text']}", file=sys.stderr)
                     return 0, {"status": "ok"}
                 return 0, {"status": "ok", **await rp.wearer_status(db, a.user)}
-        return 0, await rp.run_night(budget_s=a.budget_s, dry_run=a.dry_run)
+        return 0, await rp.run_night(budget_s=a.budget_s, dry_run=a.dry_run, rehearse=a.rehearse, recording_id=a.recording)
     finally:
         await close_pool()
 
 
 def main() -> int:
     rc, summary = asyncio.run(amain())
-    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device")
+    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device", "worker_rtf", "peak_rss_mb", "gpu_peak_mb")
     print("NIGHT_JOB omi_repass " + " ".join(f"{k}={summary[k]}" for k in keys if k in summary), file=sys.stderr)
     print(json.dumps(summary, sort_keys=True))
     if summary.get("status") == "model_missing":
         return 3
+    if summary.get("rehearse") and summary.get("status") != "rehearsal_ok":
+        return 4                                  # a rehearsal that did not pass must fail loudly (the window reports exit 5); it never ends "ok" on an idle / flag / memory refusal
     return rc
 
 
