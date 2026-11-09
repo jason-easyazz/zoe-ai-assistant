@@ -856,11 +856,11 @@
      edge; homeInk() trims each glyph's side bearing so it is the INK, not the text box, that lines up. */
   .hfull .htemp{position:absolute;top:38px;right:44px;text-align:right;text-shadow:0 2px 16px rgba(0,0,0,.4)}
   .hfull .htemp .hrow{display:flex;align-items:flex-end;justify-content:flex-end;gap:10px}
-  /* The sun / moon is one unit with the temp: a small arc just left of the number. Its height is the real sun (or moon) position;
+  /* The sun / moon is one unit with the temp: it arcs left to right over the day (bottom-left at sunrise, top-middle at noon, bottom-right at sunset) just left of the number. Its height is the real sun (or moon) position;
      the band is clipped at the horizon line (the bottom edge) so it rises out of and sets into it, and it can never reach the number. */
-  .hfull .hcel{position:relative;top:-8px;flex:none;width:72px;height:76px;margin-top:-18px;clip-path:inset(-30px -30px 0 -30px);pointer-events:none}
+  .hfull .hcel{position:relative;top:-8px;flex:none;width:152px;height:84px;margin-top:-26px;clip-path:inset(-30px -30px 0 -30px);pointer-events:none}
   .hfull .hcel::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;border-radius:1px;background:currentColor;opacity:.28}
-  .hfull .hcelI{position:absolute;left:0;top:0;width:32px;height:32px;transform:translate(0,60px)}
+  .hfull .hcelI{position:absolute;left:0;top:0;width:32px;height:32px;transform:translate(0,68px)}
   .hfull .hcelI[data-mv]{transition:transform 150s linear,color 150s linear}   /* only after the first seating: a visit must not replay the sunrise */
   .hfull .hcelI svg{display:block;width:100%;height:100%;overflow:visible}
   .hfull .hcelI.sun svg{filter:drop-shadow(0 0 9px currentColor)}
@@ -2107,7 +2107,7 @@
     var ph=pos.kind==='moon'?Math.round(moonPhase(now)*60)/60:0,key=pos.kind+':'+ph;
     if(key!==_cel.key){_cel.key=key;el.className='hcelI '+pos.kind;el.innerHTML=pos.kind==='sun'?sunSvg():moonSvg(ph);}
     el.style.color=pos.kind==='sun'?sunColor(pos.h):'';
-    el.style.transform='translate('+(pos.p*40).toFixed(1)+'px,'+(60-56*pos.h).toFixed(1)+'px)';
+    el.style.transform='translate('+(pos.p*120).toFixed(1)+'px,'+(68-64*pos.h).toFixed(1)+'px)';
     if(!el.hasAttribute('data-mv'))setTimeout(function(){el.setAttribute('data-mv','1');},60);}catch(e){}}   // decoration only: never let it break the screen
   // Ink alignment: trim a text box's side bearing so the glyph edge (not the box) sits on the line. Canvas measureText is the ruler.
   var _inkCtx=null;

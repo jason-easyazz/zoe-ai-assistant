@@ -15,7 +15,7 @@ Owner words (2026-11-09): "the sun and the moon need to be closer to the temp ..
 - The time's left edge lines up with the orb's left edge (44 px from the screen edge) - the glyph ink, not the text box.
 - The temp mirrors it: its right edge is the same 44 px from the right screen edge.
 - The sun (day) or moon (night) sits just left of the temp, close enough to read as one unit with it, and never overlaps the number or the description under it.
-- It rises and sets: low at sunrise, highest at solar noon, low at sunset; at night the moon does the same between sunset and the next sunrise. Its height follows the real sunrise/sunset the weather feed already carries.
+- It travels a real ARC over the day (owner 2026-11-09): it emerges from below the horizon at the band's bottom-LEFT at sunrise, climbs to the top-MIDDLE at solar noon, and sets below the horizon at the bottom-RIGHT at sunset - x is linear in the day fraction, y is `sin(pi*p)`. The moon does the same between sunset and the next sunrise. The real sunrise/sunset come from the weather feed the panel already uses.
 - The moon shows its phase (computed from the date; no new API).
 - It re-seats every few minutes, moves subtly, and a visit to the home screen never replays a sunrise.
 - Reduced-motion: it still sits at the right place, it just does not glide. Both skies (light day, dark night) read well.
@@ -25,7 +25,7 @@ Owner words (2026-11-09): "the sun and the moon need to be closer to the temp ..
 
 - Layout: `.hclock` is `left:44px`; `.htemp` is `right:44px` (the old `right:120px` "clear the home cog" override is gone - there is no cog on home). `homeInk()` trims each text box's glyph side bearing (canvas `measureText`) so the ink lands on the line for any digits.
 - Position: `celPos(now, sunrise, sunset)` (pure, between `CEL-BEGIN` and `CEL-END`) gives `{kind, p, h}`; `h = sin(pi * p)` over the day (sun) or the night (moon). Sunrise/sunset come from `GET /api/weather/current` (`sunrise`, `sunset`), shifted by whole days so a stale fetch still brackets now; with no feed it falls back to 6am-6pm.
-- Drawing: `.hcel` is a 72x76 band in the temp row; the icon's `--cx`/`--cy` are set from `p`/`h`. The band is clipped at its bottom edge (the horizon line) so the body rises out of and sets into it, and `x travel + icon width <= band width` is pinned so it cannot reach the number.
+- Drawing: `.hcel` is a 152x84 band in the temp row (120 px of x travel + the 32 px icon; its top and left reach over empty sky, never the clock, date, number or label); the icon's `transform` is set from `p`/`h`. The band is clipped at its bottom edge (the horizon line) so the body rises out of and sets into it, and `x travel + icon width <= band width` is pinned so it cannot reach the number.
 - Moon phase: `moonPhase()` from the synodic month; `MOON_WAXING_LIT_LEFT` picks which limb is lit while waxing (flip it for a northern panel).
 
 ## Verification

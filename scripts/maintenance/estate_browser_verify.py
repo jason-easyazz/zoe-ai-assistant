@@ -69,6 +69,8 @@ with sync_playwright() as p:
     check(tr is not None and abs((geo["W"]-1-tr)-cl)<=2, f"temp ink right edge is {None if tr is None else geo['W']-1-tr}px from the right, mirroring the time's {cl}px from the left (within 2px)")
     ic=geo["icon"]
     check(ic is not None and ic["r"]<=geo["temp"]["l"] and ic["l"]>=geo["track"]["l"]-1 and ic["r"]<=geo["track"]["r"]+1 and ic["t"]>=geo["track"]["t"]-1, f"sun/moon sits left of the temp, inside its band, never over the number: {geo}")
+    ov=pg.evaluate("""()=>{const r=s=>{const e=document.querySelector(s);if(!e)return null;const b=e.getBoundingClientRect();return {l:b.left,r:b.right,t:b.top,b:b.bottom}};const hit=(a,b)=>a&&b&&a.l<b.r&&b.l<a.r&&a.t<b.b&&b.t<a.b;const band=r('#hCel'),clock=r('#hClock'),desc=r('#hTemp .c'),date=r('#hDate'),temp=r('#hTemp .n');const i=r('#hCelI');return {band,clock:hit(band,clock),desc:hit(band,desc),date:hit(band,date),temp:hit(band,temp),iconDesc:hit(i,desc)}}""")
+    check(not (ov["clock"] or ov["desc"] or ov["date"] or ov["temp"]), f"the sun/moon band overlaps neither the clock, the date, the temp number nor the label: {ov}")
     pg.reload(wait_until="load"); time.sleep(2); pg.clock.run_for(9000); time.sleep(1)   # undo the measurement styling
     print("--- 1. CSP: the orb reaches the daemon (fulfilled by the harness, never the real daemon)")
     pg.click("#orb", force=True); pg.clock.run_for(300); time.sleep(0.5)

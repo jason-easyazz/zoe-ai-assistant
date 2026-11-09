@@ -111,7 +111,10 @@ check('the sun/moon sits in the temp row, left of the number, inside a band the 
   assert(travel + icon <= track, `icon (${icon}) + x travel (${travel}) must fit the track (${track})`);
   const trackH = +css(/\.hfull \.hcel\{[^}]*?height:(\d+)px/, 'track height'), iconH = +css(/\.hfull \.hcelI\{[^}]*?height:(\d+)px/, 'icon height');
   const ym = /\((\d+)-(\d+)\*pos\.h\)\.toFixed/.exec(HOME); assert(ym, 'y formula'); const y0 = +ym[1], amp = +ym[2];
-  assert(y0 - amp >= 0, 'peak stays inside the band top'); assert(y0 + iconH / 2 <= trackH + 1, 'horizon seat stays on the track');
+  assert(y0 - amp >= 0, 'peak stays inside the band top');
+  assert(travel >= 100 && travel <= 140, 'x travel reads as an arc: ' + travel); assert(amp >= 56, 'noon is clearly the top: ' + amp);
+  assert(y0 + iconH / 2 === trackH, 'the icon centre sits exactly on the horizon (band bottom) at sunrise and sunset');
+  assert(+css(/\.hfull \.hcel\{[^}]*?margin-top:-(\d+)px/, 'margin-top') === trackH - 58, 'the band extends upward only, so the row (and the Clear-sky label under it) does not move'); assert(y0 + iconH / 2 <= trackH + 1, 'horizon seat stays on the track');
 });
 check('motion is subtle and re-seated every few minutes; first seating never animates', () => {
   assert(/\.hcelI\[data-mv\]\{transition:transform \d+s linear/.test(HOME), 'transition only after the first seating');
