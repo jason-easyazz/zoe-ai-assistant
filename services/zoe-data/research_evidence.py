@@ -238,6 +238,34 @@ _PERSONAL_DATA_TARGET_RE = re.compile(
 )
 
 
+# A simple question is answered, not briefed (QA 6b): "whats the best oven temp for roast potatoes" matched the "what's the best"
+# frame and "where can i get a decent pie in northam" the "where can I get" frame, and both were answered "Before I start research,
+# I need ... location, budget, timeframe". The brief is for a SHOPPING / BOOKING hunt (something to buy, hire or compare). A how-to
+# or cooking question ("best way / time / temp to ..."), or a nearby-place lookup that already names its place and asks no price,
+# goes to the brain, which answers it directly.
+_DIRECT_QUESTION_RE = re.compile(
+    r"\b(?:what'?s|what\s+is|what\s+are)\s+the\s+best\s+(?:way|time|temp\w*|method|order|day|setting|speed|ratio|"
+    r"length|amount|age|size|thing|idea|trick|tip)s?\b"
+)
+_LOCAL_LOOKUP_RE = re.compile(r"\bwhere\s+can\s+i\s+(?:get|find)\b.*\b(?:in|near|around|at)\s+[a-z]")
+_BUY_WORDS_RE = re.compile(r"\b(?:buy|cheap\w*|price[sd]?|cost\w*|budget|deal|discount|hire|rent|book|flights?|hotels?|quote|compare)\b|\$")
+
+
+def is_direct_question(message: str) -> bool:
+    """True for a how-to / cooking / nearby-place question that must be answered directly, never briefed. Pure."""
+    msg = (message or "").strip().lower()
+    if not msg or _BUY_WORDS_RE.search(msg):
+        return False
+    try:
+        from weather_speech import is_food_temperature
+
+        if is_food_temperature(msg):
+            return True
+    except Exception:  # noqa: BLE001 - the regexes below still apply
+        pass
+    return bool(_DIRECT_QUESTION_RE.search(msg) or _LOCAL_LOOKUP_RE.search(msg))
+
+
 def classify_query(message: str) -> str:
     msg = (message or "").strip().lower()
     factual_starts = (
@@ -260,7 +288,7 @@ def classify_query(message: str) -> str:
     if _PERSONAL_DATA_TARGET_RE.search(msg):
         return "general"
     if _RESEARCH_FRAME_RE.search(msg):
-        return "research"
+        return "general" if is_direct_question(msg) else "research"
     return "general"
 
 

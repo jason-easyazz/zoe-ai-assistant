@@ -1249,10 +1249,12 @@ def detect_intent(
                 or any(kw in t for kw in ("tomorrow", "this week", "forecast"))
             )
             slots = {"qualifier": qualifier, "forecast": is_forecast}
-            from weather_speech import weather_place   # a place the user named beats the household default
-            place = weather_place(t)
-            if place:
-                slots["location"] = place
+            from weather_speech import weather_places   # the place(s) the user named beat the household default
+            places = weather_places(t)
+            if places:
+                slots["location"] = places[0]
+                if places[1:]:
+                    slots["also_locations"] = places[1:]
             return Intent("weather", slots)
 
     # --- JOURNAL ---
@@ -5313,14 +5315,21 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
 
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
-        return await _execute_weather_direct(
-            user_id=user_id,
-            forecast=bool(intent.slots.get("forecast")),
-            advice=str(intent.slots.get("advice") or ""),
-            location=str(intent.slots.get("location") or ""),
-            focus=str(intent.slots.get("focus") or ""),
-            day=str(intent.slots.get("day") or ""),
-        )
+        # "weather in fremantle and mandurah": every named place is answered, none silently dropped (QA 6b).
+        _where = [str(intent.slots.get("location") or "")] + [str(x) for x in (intent.slots.get("also_locations") or [])]
+        _parts = []
+        for _loc in _where[:3]:
+            _r = await _execute_weather_direct(
+                user_id=user_id,
+                forecast=bool(intent.slots.get("forecast")),
+                advice=str(intent.slots.get("advice") or ""),
+                location=_loc,
+                focus=str(intent.slots.get("focus") or ""),
+                day=str(intent.slots.get("day") or ""),
+            )
+            if _r:
+                _parts.append(_r)
+        return " ".join(_parts) or None
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)
