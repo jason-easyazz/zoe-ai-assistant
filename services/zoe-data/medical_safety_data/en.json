@@ -24,7 +24,7 @@
   {"id": "stroke", "tier": "call", "body": "face|mouth|smile", "sym": "droop|numb", "window": 4, "skip": "(?:dental|dentist|injection|anaesthetic|needle)"},
   {"id": "vision", "tier": "soon", "body": "vision|eyes", "sym": "blurry|double|dim|floaters|flashes", "window": 4, "skip": "(?:vision boards?|double (?:check|dose|up|shot|cheese|checked|checking|brew|bed)|onions?|chlorine|pool|contacts?|lens(?:es)?|crying|cried|tears|screen time|photo)"}
  ],
- "negation": "no|not|without|never|nothing|nor|dont have|doesnt have|didnt have|havent had|hasnt had|free of|denies|isnt|arent|wasnt|werent",
+ "negation": "no|not|without|never|nothing|nor|dont have|doesnt have|didnt have|havent had|hasnt had|free of|denies|isnt|arent|wasnt|werent|hasnt|havent|hadnt|didnt|doesnt",
  "red_flags": [
   {"id": "heart", "tier": "call", "re": "chest (?:hurts?|is hurting|aches?|is aching)|chest (?:feels? |is |has |gets? )?(?:so |really |very |a bit |quite )?(?:tight|tightness|pain|painful|pressure|heavy|crushing|squeez\\w*)|(?:tightness|pain|pressure|heaviness|squeezing) (?:in|across|around|on) (?:my|his|her|their|the) chest(?! of drawers| freezer| cold| infection| of tea)|chest (?:and|with) (?:left )?arm|pain (?:down|in) (?:my|his|her) (?:left )?arm and (?:chest|jaw)"},
   {"id": "stroke", "tier": "call", "re": "face (?:is |has )?(?:droop\\w*|dropping|numb)|slurr\\w* (?:speech|words)|cant (?:speak|talk) properly|sudden(?:ly)? (?:numb\\w*|weak\\w*|confus\\w*|cant see)|one side of (?:my|his|her|their) (?:body|face)|cant (?:move|lift|feel) (?:my|his|her|their) (?:arm|leg|face)"},

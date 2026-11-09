@@ -140,7 +140,7 @@ def _flag(s: str, rx: dict, tier: str) -> Optional[Verdict]:
     return None
 
 
-_DENIED_INSIDE = re.compile(r"(?<!\w)(?:no|not|isnt|arent|wasnt|never|dont|doesnt|without|nothing)(?!\w)")   # "my eyes are not blurry": the denial sits between body and symptom
+_DENIED_INSIDE = re.compile(r"(?<!\w)(?:no|not|isnt|arent|wasnt|werent|never|dont|doesnt|didnt|hasnt|havent|hadnt|wouldnt|without|nothing|nor)(?!\w)")   # "my eyes are not blurry": the denial sits between body and symptom
 
 
 def _pair(c: str, rx: dict, tier: str) -> Optional[Verdict]:
@@ -176,8 +176,10 @@ def _stated_sign(s: str, rx: dict) -> bool:
             if not (i and rx["obj_minor"].search(parts[i - 1])):
                 continue
             same = humans(seg) & humans(parts[i - 1])
-            if re.search(r"(?<!\w)(?:i|im|ive)(?!\w)", seg) or not (same or _CONTINUES.match(seg)):
-                continue   # the member's own ailment ("my back has pain") or another person ("my mum has pain")
+            speaker = bool(_SELF_INGEST.search(parts[i - 1]))   # the member swallowed it herself: "i swallowed a coin. i cant swallow" is the same person
+            first = bool(re.search(r"(?<!\w)(?:i|im|ive)(?!\w)", seg))
+            if (first and not speaker) or not (same or _CONTINUES.match(seg) or (speaker and first)):
+                continue   # the member's own ailment after a child's ingestion ("my back has pain") or another person ("my mum has pain")
         for m in rx["obj_signs"].finditer(seg):
             clause = seg[max(seg.rfind(",", 0, m.start()), seg.rfind(";", 0, m.start())) + 1:]   # the symptom's OWN clause: "is drooling, what should i do" still asserts it
             clause = clause.split(",", 1)[0]

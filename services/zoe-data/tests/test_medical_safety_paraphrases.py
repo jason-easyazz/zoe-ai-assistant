@@ -117,6 +117,7 @@ NEG += ["my chest is fine but my knee hurts", "my chest is fine but my back hurt
 NEG += ["i lost sight of my keys", "i lost sight of him in the crowd", "we lost sight of the kids at the beach", "she is losing sight of her goals"]
 NEG += ["everything is double the price now", "everything costs double what it did", "everything looks double the size in this mirror shop", "i cant see right now, someone turned the light off",
         "i cant see well enough to read the menu from here", "everything is blurry about last night"]
+NEG += ["my chest hasnt felt tight", "my chest didnt feel constricted", "my eyes werent blurry", "my chest hasn't been tight all day", "my vision hadnt gone blurry"]
 NEG += ["i feel a bit tired", "my back is sore", "my knee hurts", "my tummy hurts a bit", "i have a sore throat", "my ear aches"]
 NEG += ["tell me a joke", "what is the weather like", "play some music", "add milk to the list"]
 
@@ -230,6 +231,12 @@ def test_the_most_urgent_ingestion_across_the_turn_wins():
 def test_the_same_child_named_again_still_reports_the_sign_but_another_person_does_not():
     assert _verdict("my child swallowed a coin. my child is drooling") == ("red_call", "object_signs")
     assert _verdict("my child swallowed a coin. my mum has pain") == ("ingest_human", "object_minor")
+
+
+def test_the_speaker_own_ingestion_keeps_her_first_person_signs():
+    assert _verdict("i swallowed a coin. now i am drooling") == ("red_call", "object_signs")
+    assert _verdict("i swallowed a coin. i cant swallow") == ("red_call", "object_signs")
+    assert _verdict("my child swallowed a coin. i have pain in my back") == ("ingest_human", "object_minor")
 
 
 def test_a_sign_in_the_next_sentence_about_the_same_child_counts():
