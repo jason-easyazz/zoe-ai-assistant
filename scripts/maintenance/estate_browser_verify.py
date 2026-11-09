@@ -54,7 +54,7 @@ with sync_playwright() as p:
     pg.goto(BASE+"/touch/home.html?panel_id="+args.panel_id+"&kiosk=1", wait_until="load"); time.sleep(2); pg.clock.run_for(9000); time.sleep(2)
     st=pg.evaluate("()=>({authOn:!!document.querySelector('#authov.on'), sess:!!localStorage.getItem('zoe_session')})")
     check(not st["authOn"] and st["sess"], f"boots to ambient home as guest: {st}")
-    print("--- 0b. home layout: the time's INK edge sits on the orb's left edge, the temp's ink edge is the same distance from the right edge, the sun/moon is beside the temp")
+    print("--- 0b. home layout: the time's INK edge sits on the orb's left edge, the temp's ink edge is the same distance from the right edge, the sun/moon is the big canvas body, not an icon")
     pg.evaluate("()=>{const c=document.getElementById('hClock'),n=document.querySelector('#hTemp .n');[c,n].forEach(e=>{e.style.setProperty('color','#ff00ff','important');e.style.setProperty('text-shadow','none','important')});['#hDate','#hTemp .c','.today','#dock','#orb'].forEach(q=>{const e=document.querySelector(q);if(e)e.style.visibility='hidden'});document.getElementById('cv').style.display='none';document.getElementById('stage').style.background='#000'}")
     pg.clock.run_for(100); time.sleep(0.4)
     import io
@@ -64,13 +64,10 @@ with sync_playwright() as p:
         xs=[x for x in range(x0,x1) for y in range(y0,y1) if px[x,y][0]>200 and px[x,y][1]<100 and px[x,y][2]>200]
         return (min(xs),max(xs)) if xs else (None,None)
     cl,_=inkx(0,640,40,200); _,tr=inkx(900,1280,30,100)
-    geo=pg.evaluate("()=>{const o=document.getElementById('orb'),i=document.getElementById('hCelI'),t=document.querySelector('#hTemp .n'),k=document.getElementById('hCel');const r=e=>e&&e.getBoundingClientRect();return {orbLeft:o.offsetLeft,W:innerWidth,icon:i?{l:r(i).left,r:r(i).right,t:r(i).top,b:r(i).bottom}:null,temp:{l:r(t).left},track:k?{l:r(k).left,r:r(k).right,t:r(k).top-30,b:r(k).bottom}:null}}")
+    geo=pg.evaluate("()=>({orbLeft:document.getElementById('orb').offsetLeft,W:innerWidth,smallIcon:!!document.getElementById('hCelI')||!!document.getElementById('hCel')})")
     check(cl is not None and abs(cl-geo["orbLeft"])<=2, f"time ink left edge {cl}px == orb left edge {geo['orbLeft']}px (within 2px)")
     check(tr is not None and abs((geo["W"]-1-tr)-cl)<=2, f"temp ink right edge is {None if tr is None else geo['W']-1-tr}px from the right, mirroring the time's {cl}px from the left (within 2px)")
-    ic=geo["icon"]
-    check(ic is not None and ic["r"]<=geo["temp"]["l"] and ic["l"]>=geo["track"]["l"]-1 and ic["r"]<=geo["track"]["r"]+1 and ic["t"]>=geo["track"]["t"]-1, f"sun/moon sits left of the temp, inside its band, never over the number: {geo}")
-    ov=pg.evaluate("""()=>{const r=s=>{const e=document.querySelector(s);if(!e)return null;const b=e.getBoundingClientRect();return {l:b.left,r:b.right,t:b.top,b:b.bottom}};const hit=(a,b)=>a&&b&&a.l<b.r&&b.l<a.r&&a.t<b.b&&b.t<a.b;const band=r('#hCel'),clock=r('#hClock'),desc=r('#hTemp .c'),date=r('#hDate'),temp=r('#hTemp .n');const i=r('#hCelI');return {band,clock:hit(band,clock),desc:hit(band,desc),date:hit(band,date),temp:hit(band,temp),iconDesc:hit(i,desc)}}""")
-    check(not (ov["clock"] or ov["desc"] or ov["date"] or ov["temp"]), f"the sun/moon band overlaps neither the clock, the date, the temp number nor the label: {ov}")
+    check(not geo["smallIcon"], "the small sun/moon icon beside the temp is gone (the big canvas sun/moon crosses the panel instead)")
     pg.reload(wait_until="load"); time.sleep(2); pg.clock.run_for(9000); time.sleep(1)   # undo the measurement styling
     print("--- 1. CSP: the orb reaches the daemon (fulfilled by the harness, never the real daemon)")
     pg.click("#orb", force=True); pg.clock.run_for(300); time.sleep(0.5)
