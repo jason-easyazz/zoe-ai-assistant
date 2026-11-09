@@ -219,6 +219,27 @@ def _looks_like_person_name(name: str) -> bool:
     return True
 
 
+#: words that are never part of a person's name: a "name" holding one is a noun phrase the model lifted from the sentence
+_NOT_IN_A_NAME = frozenset({
+    "meaning", "life", "thing", "things", "stuff", "idea", "way", "weather", "news", "question", "answer", "problem",
+    "reason", "sort", "one", "ones", "someone", "somebody", "anyone", "everyone", "nobody", "people", "person", "family",
+    "friends", "kids", "children", "parents", "list",
+})
+
+
+def _plausible_name_shape(name: str) -> bool:
+    """A name is short, starts with a letter, and holds no common-noun word ("the meaning", "that thing", "my life"). Function
+    words inside real names ("Joan of Arc", "Ludwig van Beethoven") are fine: only the noun list is refused, as whole words."""
+    words = re.findall(r"[^\W\d_][\w'’-]*", name or "", re.UNICODE)
+    if not words or len(words) > 5 or len(name) > 60:
+        return False
+    return not any(w.lower() in _NOT_IN_A_NAME for w in words)
+
+
+def pattern_label(fact_type: str) -> str:
+    return re.sub(r"[^a-z_]", "", (fact_type or "").lower())[:20] or "fact"
+
+
 # ── Month name → int ──────────────────────────────────────────────────────────
 _MONTHS = {
     "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -1375,6 +1396,13 @@ async def apply_person_fact(
     name = (name or "").strip()
     value = (value or "").strip()
     if not name or not value:
+        return False
+    # The LLM pass hands over whatever the 4B called a "name": "the meaning" (from a question about the meaning of life) became a
+    # household contact that stayed in every recall packet. The regex path has always been gated by ``_looks_like_person_name``;
+    # this is the same gate at the one entry the model reaches (QA round 4, open since round 1).
+    if not _looks_like_person_name(name) or not _plausible_name_shape(name):
+        logger.info("person_extractor: skipped non-name from the model (%s)", pattern_label(fact_type))
+        _count_guard_drop("non_name")
         return False
     if await _opted_out(user_id, source, origin):
         return False

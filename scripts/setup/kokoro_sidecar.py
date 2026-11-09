@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import struct
+import sys
 import threading
 import time
 import wave
@@ -674,6 +675,7 @@ async def lifespan(app: FastAPI):
         raise
     yield
     logger.info("Kokoro sidecar shutting down.")
+    _cancel_idle_trim()
     stop_flush.set()
     # Stop the background precache (it does no disk I/O, so cancel is safe) and
     # DRAIN the periodic flush (await, never cancel) so any in-flight
@@ -777,7 +779,69 @@ async def _run_synthesis(text: str, voice: str, speed: float = 1.0) -> bytes:
     """Async wrapper: runs blocking inference in thread pool under the lock."""
     loop = asyncio.get_event_loop()
     async with _pipeline_lock:
-        return await loop.run_in_executor(None, _blocking_synthesize, text, voice, speed)
+        out = await loop.run_in_executor(None, _blocking_synthesize, text, voice, speed)
+    _schedule_idle_trim(loop)
+    return out
+
+
+# Idle trim (ZOE_KOKORO_IDLE_TRIM_S, default 0 = off): _blocking_synthesize trims the CUDA
+# pool BEFORE each synth, so the last synth's activation blocks stay resident until the next
+# request. With this on, the pool is trimmed once the sidecar has been idle for N seconds,
+# off the hot path (the next synth's own pre-trim then finds nothing to do). Measurement:
+# docs/knowledge/ram-audit-voice-2026-11.md; harness scripts/perf/measure_kokoro_idle_trim_ab.py.
+def _idle_trim_seconds() -> float:
+    """ZOE_KOKORO_IDLE_TRIM_S through the flag registry (typed_env); ANY failure means OFF.
+
+    The sidecar must never fail to start over an optional trim, so a missing/odd
+    services/zoe-data tree degrades to 0 instead of raising."""
+    try:
+        zoe_data = str(Path(__file__).resolve().parents[2] / "services" / "zoe-data")
+        if zoe_data not in sys.path:
+            sys.path.append(zoe_data)  # append: never shadow the sidecar's own imports
+        import typed_env
+        return max(0.0, float(typed_env.flag("ZOE_KOKORO_IDLE_TRIM_S")))
+    except Exception:
+        return 0.0
+
+
+_IDLE_TRIM_S = _idle_trim_seconds()
+_idle_trim_handle: "asyncio.TimerHandle | None" = None
+
+
+def _trim_cuda_cache() -> None:
+    import torch
+    torch.cuda.empty_cache()
+
+
+async def _idle_trim() -> None:
+    if _pipeline_lock.locked():  # a synth is running or queued; it reschedules on completion
+        return
+    loop = asyncio.get_event_loop()
+    async with _pipeline_lock:
+        await loop.run_in_executor(None, _trim_cuda_cache)
+
+
+def _fire_idle_trim() -> None:
+    """Timer callback: drop the spent handle first (nothing retains a fired timer)."""
+    global _idle_trim_handle
+    _idle_trim_handle = None
+    asyncio.ensure_future(_idle_trim())
+
+
+def _cancel_idle_trim() -> None:
+    """Cancel a pending trim and forget it (called on shutdown and before re-arming)."""
+    global _idle_trim_handle
+    if _idle_trim_handle is not None:
+        _idle_trim_handle.cancel()
+        _idle_trim_handle = None
+
+
+def _schedule_idle_trim(loop) -> None:
+    global _idle_trim_handle
+    if _IDLE_TRIM_S <= 0 or _device != "cuda":
+        return
+    _cancel_idle_trim()
+    _idle_trim_handle = loop.call_later(_IDLE_TRIM_S, _fire_idle_trim)
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────

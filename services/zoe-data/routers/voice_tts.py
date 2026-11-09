@@ -5118,6 +5118,16 @@ async def voice_command(
     try:
         from intent_router import detect_intent as _detect_pub, execute_intent as _exec_pub
         _pub_intent = _detect_pub(text, log_miss=False)
+        if _pub_intent is not None and _pub_intent.name not in ("reminder_create", "acknowledgement"):
+            # "yes please, 2:45" answering Zoe's own reminder offer is NOT a time question: skip the fast tier so the
+            # brain (which has the conversation) acts on the offer. Flag-gated; unknown/expired offer never binds.
+            try:
+                from intent_router import reminder_offer_reply_text as _rem_offer_reply
+
+                if await _rem_offer_reply(text, effective_user, session_id=session_id):
+                    _pub_intent = None
+            except Exception:
+                pass
         # A bare "thank you" / "cheers" / "ok" is a social micro-reply: no data, no policy question, no brain round-trip (live
         # 2026-10-23: "Thank you" was classified `acknowledgement` here and still went to the brain, which answered "I'm Zoe.").
         # It is not in the capability matrix, so it skips the matrix lookup. An "ok" that ACCEPTS Zoe's last offer is not a bare

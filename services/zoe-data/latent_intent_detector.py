@@ -301,6 +301,21 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
     except Exception:  # noqa: BLE001
         pass
 
+    # A STANDING no to contact offers ("no contacts please") is stored for the member and closes every open offer; the way back is
+    # "you can offer contacts again". Deterministic, before anything else mines the turn.
+    try:
+        import contact_offer_policy as _cop
+        from pending_suggestions import allow_contact_offers, decline_contact_offers
+
+        if _cop.is_standing_decline(user_message):
+            closed = await decline_contact_offers(user_id)
+            logger.info("CONTACT_OFFERS_DECLINED user=%s closed=%d", user_id, closed)
+            return 0
+        if _cop.is_standing_accept(user_message):
+            await allow_contact_offers(user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("latent_intent_detector: standing decline check failed: %s", exc)
+
     # Age surfaced contact offers by ONE user turn. This hook runs exactly once
     # per real user chat/voice turn, which makes it the sanctioned aging tick —
     # packet builds no longer age offers (QA review F5a: per-fold aging killed

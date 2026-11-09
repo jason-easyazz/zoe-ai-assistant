@@ -126,6 +126,12 @@ def lab(monkeypatch):
     monkeypatch.setattr(manner_block, "is_adult", adult)
     monkeypatch.setattr(nc, "_name", name)
     monkeypatch.setattr(nc, "_dates", dates)
+    # The suite's threads are dated 2026-11-03 and its TODAY is 2026-11-04: freeze the card's "now" there. Left on the wall clock, every
+    # build/serve test went red once the real date passed THREAD_RECENT_DAYS from the seeds (2026-11-09, all PRs' validate at once).
+    # A ``now`` the test passes (card_for(now=...)) is still honoured.
+    real_local_today = nc._local_today
+    frozen = dt.datetime(2026, 11, 4, 10, 0, tzinfo=dt.timezone.utc)
+    monkeypatch.setattr(nc, "_local_today", lambda now=None: real_local_today(now or frozen))
     yield st, backend
     asyncio.run(nc.drain())
     nc.set_store(nc.SqlStore())
