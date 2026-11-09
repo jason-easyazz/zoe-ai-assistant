@@ -123,7 +123,7 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
 - **Offline pendant transcription (the night re-pass)** — decision 2026-11-09: the Omi pendant's audio gets a
   best-quality OFFLINE second transcript, made at night while Zoe sleeps, **separate from the live Moonshine rock** (Moonshine
   still writes the first transcript within minutes of a sync; nothing live depends on the re-pass). The round-2 bake-off chose
-  **Qwen3-ASR-1.7B (the pivot) + Parakeet-TDT-0.6B-v3 + a third voter (distil-large-v3) fused by ROVER word voting on the GPU, ECAPA speaker windows, and Whisper large-v3 / Granite on a rotating evaluation sample feeding a contender ledger (the owner decides any drop)**, run in its own
+  **Qwen3-ASR-1.7B (the pivot) + Parakeet-TDT-0.6B-v3 + a third voter (Whisper large-v3 when the night has room, else distil-large-v3) fused by ROVER word voting on the GPU, ECAPA speaker windows, and Whisper large-v3 / Granite on a rotating evaluation sample feeding a contender ledger (the owner decides any drop)**, run in its own
   venv and capped scope by `scripts/night/jobs/omi_repass_worker.py` before the 12B loads. The ASR and diarisation engines are a **pluggable seam**
   (`ZOE_OMI_NIGHT_ASR` / `ZOE_OMI_NIGHT_DIAR`, declared in `omi_repass.BACKENDS`): the model choice here is NOT a rock and may
   be replaced by a later winner without touching this file's rocks. Flag-dark (`ZOE_OMI_NIGHT_REPASS=off|shadow|on`; a daytime

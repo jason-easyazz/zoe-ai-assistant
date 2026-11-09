@@ -204,6 +204,27 @@ def test_production_runs_qwen_then_parakeet_then_the_third_voter_then_the_evalua
     assert "ledger" not in json.dumps(out) and out["contributions"][PIV]["invented"] >= 1             # the summary is counts; the pivot's "bat" is its invented word
 
 
+def test_the_third_voter_is_whisper_large_v3_when_the_night_has_room_else_distil_else_none(renv, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
+    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_EVAL", "none")
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    for dur, budget, want in ((1500, 3000, WH), (1500, 2000, DIS), (1500, 1450, None)):
+        renv.db.conn.execute("UPDATE omi_recordings SET duration_s = ?, repass_state = 'pending'", (dur,))
+        renv.db.conn.commit()
+        out = run(rp.run_night(budget_s=budget, runner=multi_runner(TEXTS, []), dry_run=True))
+        assert out["engines"] == [PIV, PAR] + ([want] if want else []), (dur, budget, out["engines"])
+
+
+def test_granite_never_votes_in_production_even_when_asked(renv, monkeypatch):
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_THIRD", GR)                     # a mistaken config still puts it through the budget check, but the default never does
+    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_EVAL")
+    assert GR in rp.eval_backends() and rp.third_choices() == [GR]                    # an explicit (mistaken) config is honoured but passes the same budget check
+    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
+    assert GR not in rp.third_choices() and rp.third_choices() == [WH, DIS]
+
+
 def test_an_over_budget_night_keeps_the_pivot_and_drops_the_other_voters_and_the_evaluation(renv, monkeypatch):
     on(monkeypatch)
     transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")

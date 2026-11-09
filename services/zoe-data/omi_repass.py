@@ -124,14 +124,16 @@ def second_backend() -> str:
     return (_ids("ZOE_OMI_NIGHT_ASR_SECOND", "parakeet-tdt") or [""])[0]
 
 
-def third_backend() -> str:
-    """The third production voter (``ZOE_OMI_NIGHT_ASR_THIRD``): ROVER needs at least three voters to outvote the pivot. Default distil-large-v3 on the GPU (see the spec for why)."""
-    return (_ids("ZOE_OMI_NIGHT_ASR_THIRD", "whisper-gpu:distil-large-v3") or [""])[0]
+def third_choices() -> list[str]:
+    """The third production voter, in preference order (``ZOE_OMI_NIGHT_ASR_THIRD``): ROVER needs at least three voters to outvote the pivot. Whisper large-v3 (GPU) when the night
+    has room - the measured best third voter - else distil-large-v3 (about 40 % cheaper, within noise of it on the hand reference). The first that fits the budget is used."""
+    return _ids("ZOE_OMI_NIGHT_ASR_THIRD", "whisper-gpu:large-v3,whisper-gpu:distil-large-v3")
 
 
 def eval_backends() -> list[str]:
-    """The EVALUATION contenders (``ZOE_OMI_NIGHT_ASR_EVAL``): a rotating sample of the day's speech, never in the stored text."""
-    return _ids("ZOE_OMI_NIGHT_ASR_EVAL", "whisper-gpu:large-v3,granite-speech")
+    """The EVALUATION contenders (``ZOE_OMI_NIGHT_ASR_EVAL``): a rotating sample of the day's speech, never in the stored text. Whatever voted that night is left out; Granite is
+    evaluation-only because measured adding it as a fourth voter HURTS the vote (5.0-5.2 % WER against 4.5 % for Qwen3 + Parakeet + Whisper large-v3)."""
+    return _ids("ZOE_OMI_NIGHT_ASR_EVAL", "whisper-gpu:large-v3,whisper-gpu:distil-large-v3,granite-speech")
 
 
 def ct2_dir() -> str:
@@ -903,11 +905,12 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     rt = {**DEFAULT_RTF, **(st.get("rtf") or {})}
     multi = primary == eu.PIVOT
     second = second_backend() if multi else ""
-    third = third_backend() if multi and second else ""
-    evals = [e for e in eval_backends() if e not in (primary, second, third)] if multi else []
+    third = ""
     if second and audio_s * (rt[primary] + rt[second]) > budget_s * PLAN_MARGIN:      # production first: the pivot alone this night, the rest carries
-        second = third = ""
-        evals = []
+        second = ""
+    if second:                                                                       # the best third voter that the night has room for (large-v3 when it fits, else distil)
+        third = next((c for c in third_choices() if audio_s * (rt[primary] + rt[second] + rt.get(c, 1.0)) <= budget_s * PLAN_MARGIN), "")
+    evals = [e for e in eval_backends() if e not in (primary, second, third)] if multi and second else []
     voters = [primary] + [x for x in (second, third) if x]
     res.update(pending=len(rows), audio_s=round(audio_s), model=primary, est_s=plan["est_s"], fits=plan["fits"], fallback_model=plan["fallback"], engines=voters, eval_engines=evals,
                est_voters_s=round(audio_s * sum(rt[v] for v in voters)))
