@@ -3,13 +3,13 @@ guest is; runbook ``docs/knowledge/named-guests.md``).
 
   the ask      the spoken tier (``fast_tiers``, after ``voice_enrollment``): a member whose voice the server accepted, or who signed in
                with a fresh PIN (``speaker_verified`` not False), and who is positively an adult. A guest, an unverified voice, a child
-               or a typed channel is refused with a spoken reason. The name of a household member is refused (they enrol themselves).
+               ASKER or a typed channel is refused with a spoken reason. The name of a household member is refused (they enrol themselves).
   the run      the SAME daemon enrolment run members use (``voice_enroll`` command, the member script with the guest's name), carrying
                ``guest.ticket``: a single-use, panel-bound, 4-minute server ticket that names the member and the guest.
   the store    ``POST /api/voice/guests/enroll`` -> ``store_profile``: refused without that ticket, so an unverified voice can never
                create, overwrite or re-enrol a guest (or a member). The guest is the member's OWN person (an existing one of that
                name is linked); the print is a ``learned_voiceprints`` row with ``channel='panel'``, replacing that member's old one.
-               A child (or possible child) is refused, and so is a profile within the FAR-1 % bar of any member's own (the member
+               A child GUEST is enrolled like anyone (owner 2026-11-08) and marked child-safe at match time; a profile within the FAR-1 % bar of any member's own (the member
                said the phrases, not the guest). A name the member once forgot is released AFTER the store (an explicit
                re-teach, as the forget ledger asks).
 Pinned by ``tests/test_named_guest_enrol.py``. Flag: ``ZOE_NAMED_GUESTS`` (the tier answers only when ``on``).
@@ -149,7 +149,6 @@ async def store_profile(payload: dict, caller: dict) -> dict:
     import contacts_store as cs
     import omi_voices
     from db_compat import get_compat_db
-    from person_age import person_may_be_child
 
     blob = vec.astype("<f4").tobytes()
     async with get_compat_db() as db:
@@ -162,8 +161,6 @@ async def store_profile(payload: dict, caller: dict) -> dict:
             person = await omi_voices._resolve_person(db, t.owner_user_id, None, t.name, "named_guest_enrol")
         except omi_voices.VoiceError as exc:
             raise GuestError(str(exc), exc.status) from exc
-        if person_may_be_child(person):
-            raise GuestError("a child's voice is not learned", 409)
         now = cs.now_iso()
         await db.execute("DELETE FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? AND model_id = ? AND channel = ?",
                          (t.owner_user_id, person["id"], model_id, CHANNEL))
