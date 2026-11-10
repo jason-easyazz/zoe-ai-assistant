@@ -237,7 +237,7 @@ jobs:
           pytest services/zoe-data/tests -m ci_safe \
             -o faulthandler_timeout=300 \
             --ignore=services/zoe-data/tests/samantha_live \
-            --maxfail=200 -q \
+            --maxfail=200 -q --durations=300 --durations-min=0.5 \
             --override-ini="asyncio_mode=auto"
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
@@ -280,7 +280,7 @@ jobs:
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
             -o faulthandler_timeout=300 \
             tests/unit -m ci_safe \
-            --maxfail=200 -q \
+            --maxfail=200 -q --durations=300 --durations-min=0.5 \
             --override-ini="asyncio_mode=auto"
         env:
           POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
