@@ -3,7 +3,8 @@
 # Contract: never arms a merge unless the probe artifact says pass FOR THIS HEAD. See docs/knowledge/landing-tooling.md.
 # Exit codes: 0 landed/nothing to do, 4 probe not pass, 5 re-queue (head moved / conflict / not clean), 6 not landable yet
 # (draft, unresolved or unreadable threads), 7 validate failed on this head, 8 needs a hand merge, 9 night pause / no time
-# (re-queue), 10 PR is on a hold list.
+# (re-queue), 10 PR is on a hold list, 12 the probe PASSED but the PR was not merged (went BEHIND/DIRTY, or the CI wait ended) -
+# the voice loop re-queues it at the FRONT (it still needs a fresh probe: the deploy gate binds evidence to the exact head/tree).
 . "$(dirname "${BASH_SOURCE[0]}")/landing_lib.sh"
 set -u; PR=$1; WT=$2; BR=$3; TITLE=$4; cd "$LANDING_REPO" || exit 1
 # 2026-10-27 night contract (the 2026-10-26 window REFUSED "a voice-PR landing is running" and lost the night): this process must be GONE - lock
@@ -50,6 +51,12 @@ export ZOE_HARNESS_LANDING=1
 [ "$(gh pr view "$PR" --json mergeable --jq .mergeable)" = CONFLICTING ] && { if "$LANDING_RESOLVE_SCRIPT" "$PR"; then log "conflict auto-resolved before the probe"; sleep 20; else log "CONFLICTING and not auto-resolvable - exit 5"; exit 5; fi; }
 # wait out any running docs chain BEFORE updating the branch (2026-10-13: #2013 merged after #2004 updated -> BEHIND after its probe, a wasted cycle)
 for i in $(seq 1 90); do landing_running docs_merge_chain.sh || break; need_probe_time "waiting for the docs chain"; log "docs chain running - waiting"; sleep 60; done
+# 2026-11-10 voice hold (landing_lib.sh): nothing else lands from here to the merge; ONE EXIT trap releases it on every way out.
+KOKORO_TRAP=0; ARMED=0
+lander_exit(){ [ "$KOKORO_TRAP" = 1 ] && systemctl --user start kokoro-tts.service >/dev/null 2>&1; [ "$ARMED" = 1 ] && landing_disarm_unless_merged "$PR"; landing_voice_hold_release; }
+trap lander_exit EXIT
+landing_voice_hold_take "$PR" || { log "voice hold not taken (hold lock busy, unwritable, or the open-PR list unreadable) - nothing updated; re-queue (exit 9)"; exit 9; }
+log "voice hold taken (the chain holds its merges until this lander exits)"
 gh pr update-branch "$PR" >/dev/null 2>&1 && log "branch updated" || log "update-branch: $(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)"
 if [ "$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)" = DIRTY ]; then if "$LANDING_RESOLVE_SCRIPT" "$PR"; then log "DIRTY -> inventory/ledger conflict auto-resolved (sig 48)"; sleep 90; gh pr update-branch "$PR" >/dev/null 2>&1; else log "DIRTY -> needs a hand merge (sig 48) - NOT landing"; exit 8; fi; fi
 sleep 8; git -C "$WT" fetch -q --no-write-fetch-head origin "+refs/heads/$BR:$LREF" && git -C "$WT" reset -q --hard "$LREF"; cp -n "$LANDING_REPO/services/zoe-data/.env" "$WT/services/zoe-data/.env" 2>/dev/null || true
@@ -68,7 +75,7 @@ wait_deploy(){ for i in $(seq 1 90); do git fetch -q --no-write-fetch-head origi
     if [ "${inprog:-0}" = 0 ] && { [ "${done_for_M:-0}" -ge 1 ] || [ $age -ge 480 ]; }; then return; fi; need_probe_time "waiting for the main deploy"; log "waiting for main ${M:0:8} deploy"; sleep 15; done; }
 # never probe within 3 min of a sidecar / zoe-data restart (cold prompt cache -> CANT_DO storm)
 for svc in flue-zoe-brain-2x zoe-data; do ts=$(systemctl --user show -p ExecMainStartTimestamp --value $svc); age=$(( $(date +%s) - $(date -d "$ts" +%s 2>/dev/null || echo 0) )); [ $age -lt 180 ] && { log "$svc restarted ${age}s ago - waiting"; sleep $((180-age)); }; done
-trap 'systemctl --user start kokoro-tts.service >/dev/null 2>&1' EXIT
+KOKORO_TRAP=1   # lander_exit restarts Kokoro from here on
 # serialise with the docs chain (2026-10-13: #1998 merged while #1999 was armed and waiting on validate -> BEHIND -> disarmed).
 # (docs-chain wait moved BEFORE update-branch, 2026-10-13 - see above it)
 log "probe (avail $(avail))"; wait_deploy
@@ -110,15 +117,19 @@ if [ -n "$RUN" ]; then gh run rerun "$RUN" >/dev/null 2>&1 && log "gate rerun $R
 gh pr checks "$PR" --json name,state --jq '[.[]|select(.name=="validate" or .name=="secret-scan" or .name=="voice-gate")|"\(.name)=\(.state)"]|join(" ")' | xargs -I{} echo "[$(date +%T)] #$PR checks: {}"
 CHK=$(gh pr checks "$PR" --json name,state --jq '[.[]|select(.name=="validate")|.state]|join("")'); if [ "$CHK" = FAILURE ]; then echo "$HEAD_SHA" >> "$LANDING_HOME/validate-failed-heads.txt"; log "validate FAILED on the probed head $HEAD_SHA - NOT arming; fix + push (exit 7, sig #42)"; exit 7; fi
 NOWHEAD=$(gh pr view "$PR" --json headRefOid --jq .headRefOid); [ "$NOWHEAD" != "$HEAD_SHA" ] && { log "PR head moved past the probed commit (${NOWHEAD:0:8} != ${HEAD_SHA:0:8}) - NOT arming (the squash tree would differ from the probed tree and the deploy gate refuses it, sig #40); re-queue"; exit 5; }
-MS=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus); case "$MS" in BEHIND|DIRTY) log "mergeState=$MS after the probe - NOT arming (an update-branch would move the head past its probe, sig #36); re-queue"; exit 5;; esac
+MS=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus); case "$MS" in BEHIND|DIRTY) log "mergeState=$MS after the probe - NOT arming (an update-branch would move the head past its probe, sig #36); re-queue at the FRONT (exit 12)"; exit 12;; esac
 # last look before arming: the PR must still be a non-draft (it was checked at the top; a convert-to-draft since then is the owner pulling it back)
 [ "$(gh pr view "$PR" --json isDraft --jq .isDraft 2>/dev/null)" = false ] || { log "PR is a draft (or unreadable) at arm time - NOT arming (exit 6)"; exit 6; }
 # Never leave a voice PR armed behind this process: --match-head-commit only binds the request, a later writer push would keep the arm and merge an
 # unprobed head. So any exit after arming while the PR is not MERGED disarms (EXIT trap), and the wait below disarms the instant the head moves.
-trap 'systemctl --user start kokoro-tts.service >/dev/null 2>&1; [ "${ARMED:-0}" = 1 ] && landing_disarm_unless_merged "$PR"' EXIT
-ARMED=1
+# anything armed since the hold was taken (an agent, a human) is dropped too, and re-armed on exit; unreadable = not arming
+landing_voice_hold_sweep "$PR" || { log "pre-arm sweep failed (open-PR list unreadable) - NOT arming; re-queue at the FRONT (exit 12)"; exit 12; }
+ARMED=1   # lander_exit (EXIT trap) disarms from here on unless MERGED
 gh pr merge "$PR" --squash --auto --match-head-commit "$HEAD_SHA" >/dev/null 2>&1 && log "auto-merge armed (bound to the probed head ${HEAD_SHA:0:8}: a later push cannot merge unprobed)"
-landing_wait_merged "$PR" "$HEAD_SHA"; WAIT_RC=$?
+landing_wait_merged "$PR" "$HEAD_SHA" | while IFS= read -r l; do log "$l"; done; WAIT_RC=${PIPESTATUS[0]}
 [ "$WAIT_RC" = 5 ] && { log "head moved after arming - auto-merge DISARMED at once; re-queue (exit 5)"; exit 5; }
-[ "$WAIT_RC" = 0 ] || log "not merged within the wait - auto-merge DISARMED (the voice loop re-queues it; never left armed)"
-log "state: $(gh pr view "$PR" --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"')"
+FINAL=$(gh pr view "$PR" --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"'); log "state: $FINAL"
+[ "$WAIT_RC" = 0 ] && exit 0
+case "$FINAL" in MERGED*) exit 0;; esac
+log "not merged within the wait - auto-merge DISARMED (never left armed); the probe passed, so the voice loop re-queues it at the FRONT (exit 12)"
+exit 12

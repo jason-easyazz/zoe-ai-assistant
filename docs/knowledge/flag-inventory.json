@@ -2780,6 +2780,25 @@
         },
         "typed_env": false
       },
+      "ZOE_CHAT_TURN_LOCK": {
+        "defaults": [
+          "'/tmp/zoe-chat-turn.lock'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/landing/quiet_for_probe.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "/tmp/zoe-chat-turn.lock",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/landing-tooling.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_CHAT_URL": {
         "defaults": [
           "'http://localhost:8000'"
@@ -12875,6 +12894,25 @@
           "type": "str"
         },
         "typed_env": false
+      },
+      "ZOE_PROBE_GATE_LOCK": {
+        "defaults": [
+          "'/tmp/zoe-probe-gate.lock'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "scripts/landing/quiet_for_probe.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": "/tmp/zoe-probe-gate.lock",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/landing-tooling.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_PROBLEM_LOOP": {
         "defaults": [

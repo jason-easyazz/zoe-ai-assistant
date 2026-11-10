@@ -26,7 +26,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 
 ## Summary
 
-- 883 prod flags; 300 read through `typed_env`.
+- 885 prod flags; 302 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
 - 252 non-`ZOE_` env names read by prod code (table below).
@@ -58,7 +58,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Production flags
 
-883 flags; 832 not documented in `.env.example`.
+885 flags; 834 not documented in `.env.example`.
 
 | Flag | Type | Default | Allowed | Owner doc | Read default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|---|---|---|---|
@@ -146,6 +146,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_CHANGE_NOTICES_STATE_DIR` | str | `''` | - | - | `-` | yes | NO | `services/zoe-data/change_notices.py` |
 | `ZOE_CHAT_CONTEXT_MAX_SESSIONS` | int | `2000` | - | - | `'2000'` | no | NO | `services/zoe-data/routers/chat.py` |
 | `ZOE_CHAT_INJECT_DB_MEMORY` | bool | `False` | - | - | `'0'` | no | NO | `services/zoe-data/routers/chat.py` |
+| `ZOE_CHAT_TURN_LOCK` | str | `'/tmp/zoe-chat-turn.lock'` | - | `docs/knowledge/landing-tooling.md` | `'/tmp/zoe-chat-turn.lock'` | yes | NO | `scripts/landing/quiet_for_probe.py` |
 | `ZOE_CHAT_URL` | str | `'http://localhost:8000'` | - | `docs/guides/OPERATOR_RUNBOOK.md` | `'http://localhost:8000'` | no | NO | `services/zoe-data/zoe_agent.py` |
 | `ZOE_CHEAP_PR_AGENT_API_URL` | str | `'https://openrouter.ai/api/v1/chat/completions'` | - | - | `'https://openrouter.ai/api/v1/chat/completions'` | no | NO | `scripts/maintenance/zoe_cheap_pr_agent.py` |
 | `ZOE_CHEAP_PR_AGENT_CMD` | str | `''` | - | `docs/architecture/zoe-flue-integration.md` | `-` | no | NO | `services/zoe-data/greploop_guard.py` |
@@ -664,6 +665,7 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 | `ZOE_PROACTIVE_SLOW_LOOP_S` | int | `300` | - | - | `'300'` | no | NO | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN` | str | `''` | - | `docs/knowledge/synthetic-users-and-proactive-recipients.md` | `''` | no | yes | `services/zoe-data/proactive/engine.py` |
 | `ZOE_PROACTIVE_SPOKEN_TRIGGERS` | str | `'morning_checkin'` | - | `docs/knowledge/feature-audit-2026-09-25.md` | `'morning_checkin'` | no | yes | `services/zoe-data/proactive/engine.py` |
+| `ZOE_PROBE_GATE_LOCK` | str | `'/tmp/zoe-probe-gate.lock'` | - | `docs/knowledge/landing-tooling.md` | `'/tmp/zoe-probe-gate.lock'` | yes | NO | `scripts/landing/quiet_for_probe.py` |
 | `ZOE_PROBLEM_LOOP` | str | `'off'` | `off`, `shadow`, `on` | `docs/knowledge/authority-table.md` | `'off'` | yes | NO | `services/zoe-data/household_authority.py` |
 | `ZOE_PROVENANCE_PERSIST` | bool | `True` | - | `docs/knowledge/samantha-bar.md` | `True` | yes | NO | `services/zoe-data/reply_ledger.py` |
 | `ZOE_PROVISION_CODE_TTL_S` | int | `300` | - | `docs/architecture/panel-anywhere.md` | `'300'` | no | NO | `services/zoe-data/routers/panel_provision.py` |

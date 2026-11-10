@@ -177,7 +177,9 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
 1. **Serialise.** Drop `--auto` on every other open PR before starting; nothing may merge between
    this PR's merge and its deploy (a second merge changes the target tree and the head-bound artifact
    stops matching). Bring the branch up to date (`gh pr update-branch`) **first** — every update is a
-   new head and needs a new probe.
+   new head and needs a new probe. `land_voice_pr.sh` automates this step (2026-11-10, the *voice hold*
+   in `docs/knowledge/landing-tooling.md`): it drops other PRs' `--auto` before update-branch and again
+   before arming, holds the docs chain, and re-arms them bound to their same head when it exits.
 2. **Probe the final head.** On the Jetson, in a clean worktree at the PR head sha, first copy the
    live env in (`cp -n /home/zoe/assistant/services/zoe-data/.env <worktree>/services/zoe-data/.env
    && chmod 600 <worktree>/services/zoe-data/.env` — without it the probe records an error, see
