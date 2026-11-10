@@ -190,6 +190,11 @@ def _infer_event_category(text: str) -> str:
 
 #: a courtesy tail on a list command ("..., please", "thanks", "for me"); the list-add patterns read the text without it
 _LIST_TRAILING_COURTESY_RE = re.compile(r"(?:,?\s+(?:please|thanks|thank you|cheers|for me))+$")
+# "dont forget to add screws" / "remember to put the bins on the list" is the ADD command with a reminder-ish lead-in (QA round 7: the natural-language
+# pattern read "to add screws" as the ITEM, the head vetoed it, and the brain said "I can't actually add things to a shopping list").
+_FORGET_TO_ADD_LEAD_RE = re.compile(r"^(?:(?:please|and|also|oh)\s+)*(?:(?:don'?t|do not)\s+forget|remember|make sure you|make sure)\s+to\s+(?=(?:add|put)\s)")
+# A DECISION question ("should i get a new ute or fix the old one") is never a complaint, even when it holds "fix the": the brain answers it.
+_DECISION_QUESTION_RE = re.compile(r"^(?:(?:hey|ok|okay|so|and|um|zoe)\s+)*(?:should|shall|would|could)\s+(?:i|we)\b|\b(?:should|shall)\s+(?:i|we)\b.*\bor\b")
 
 
 def _normalize_chat_intent_text(raw: str) -> str:
@@ -1445,6 +1450,9 @@ def detect_intent(
     lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
     if len(lt.split()) < 2:
         lt = t          # the courtesy word WAS the whole object ("add cheers"): keep it as before
+    _forget_to_add = bool(_FORGET_TO_ADD_LEAD_RE.match(lt))
+    if _forget_to_add:
+        lt = _FORGET_TO_ADD_LEAD_RE.sub("", lt, count=1)
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [
@@ -1510,6 +1518,15 @@ def detect_intent(
                 list_type = _infer_list(item)
                 if list_type == "shopping" and _needs_list_choice(item):
                     return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
+                if _forget_to_add:
+                    # "dont forget to add print my study notes": no list was named, so ASK which (a reminder offer or a "can't add things" is
+                    # what the brain made of it); groceries still go straight on the shopping list.
+                    import write_intent_gate
+
+                    if (list_type != "shopping" or write_intent_gate.looks_non_grocery(item)
+                            or re.match(r"(?:print|call|ring|renew|book|pay|email|text|send|return|collect|post|submit|finish|study|clean|fix|cancel|"
+                                        r"organi[sz]e|pick up|drop off|hand in|sign|register|enrol)\b", item, re.IGNORECASE)):
+                        return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
                 return Intent("list_add", {"item": item, "list_type": list_type})
 
     # --- LIST ADD (natural language shopping) ---
@@ -1801,7 +1818,7 @@ def detect_intent(
         r'|\byou\s+(?:messed|failed)\b',
         re.I,
     )
-    if _USER_ISSUE_RE.search(t):
+    if _USER_ISSUE_RE.search(t) and not _DECISION_QUESTION_RE.search(t):
         return Intent("user_issue_report", {"message": text})
 
     # Open-domain Q&A / creative — route to agent (closes intent-gap backlog without brittle regex)
