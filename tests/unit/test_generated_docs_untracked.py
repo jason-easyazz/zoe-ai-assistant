@@ -12,6 +12,7 @@ hand-written policy prose that the test also checks (``test_forget_reach_invento
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,6 +33,8 @@ HAND_ANNOTATED_STAYS_TRACKED = ("docs/knowledge/forget-reach.md",)
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     if shutil.which("git") is None or not (REPO / ".git").exists():
+        if os.environ.get("CI"):   # tests/AGENTS.md: a dependency skip never hides a check under CI
+            pytest.fail("CI runner without a git checkout: the generated-docs tracking state cannot be checked")
         pytest.skip("not a git checkout")
     return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True, timeout=60)
 
