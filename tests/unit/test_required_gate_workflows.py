@@ -431,14 +431,14 @@ _STEP_BUDGET_MIN = {
     ("zoe-data-shard", "Lane — zoe-data (ci_safe) shard"): 25,
     ("unit-shard", "Lane — tests/unit (ci_safe) shard"): 25,
     ("checks", "Lane — Home Assistant MCP bridge"): 5,
-    ("checks", "Lane — zoe-auth (full)"): 5,
+    ("zoe-auth", "Lane — zoe-auth (full)"): 5,
     ("checks", "People MemPalace integration cleanup"): 5,
     ("checks", "People graph invariants on CI PostgreSQL"): 5,
     ("collect", "Collect — zoe-data (ci_safe), full selection"): 5,
     ("collect", "Collect — tests/unit (ci_safe), full selection"): 5,
     ("zoe-data-py312", "Lane — zoe-data (ci_safe) on Python 3.12"): 40,
 }
-_JOB_BUDGET_MIN = {"checks": 30, "zoe-data-shard": 35, "unit-shard": 35, "collect": 15, "validate": 10,
+_JOB_BUDGET_MIN = {"checks": 30, "zoe-auth": 15, "zoe-data-shard": 35, "unit-shard": 35, "collect": 15, "validate": 10,
                    "zoe-data-py312": 70, "deps-resolvable": 15, "secret-scan": 10}
 # Jobs whose pytest steps only COLLECT (--collect-only) never run a test, so they need no per-test hang dump.
 _COLLECT_ONLY = {"collect"}
@@ -469,7 +469,7 @@ def test_lane_timeout_budgets_are_pinned_exactly():
 # ways an aggregator turns a red shard green — or never reports — are each pinned here.
 
 _INFORMATIONAL = {"zoe-data-py312", "deps-resolvable", "secret-scan"}
-_GATE_NEEDS = ("checks", "zoe-data-shard", "unit-shard", "collect")
+_GATE_NEEDS = ("checks", "zoe-auth", "zoe-data-shard", "unit-shard", "collect")
 
 
 def _validate_jobs() -> dict:
