@@ -788,7 +788,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                     # the first-pass lines are about to be replaced: what their tags taught the people's voiceprints is released first (the segment ids die with them, and a later
                     # correction of the NEW line only knows the new id); the carried tags re-teach below under the new ids
                     try:
-                        await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")])
+                        await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")], keep_empty=True)
                     except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
                         if not omi_voices._missing(exc):
                             raise
@@ -1103,6 +1103,10 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     work = home_dir() / "work"
     work.mkdir(parents=True, exist_ok=True)
     os.chmod(work, 0o700)
+    try:
+        eu.sweep_work(home_dir())          # a run SIGKILLed / rebooted mid-flight leaves its worker files: recovered here, and by retention + erasure
+    except Exception:  # noqa: BLE001 - housekeeping never stops the night
+        pass
     deadline = started + max(30.0, budget_s - 45.0)               # 45 s kept back for the DB writes and the release of audio
     skipped: dict = {}
 

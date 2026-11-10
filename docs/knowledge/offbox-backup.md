@@ -61,7 +61,7 @@ including words that were since forgotten.
 
 Never shipped from `~/.zoe` (each is an fnmatch on any path component, `ZOE_TREE_EXCLUDES`): anything `*backup*` (backups of
 backups, the ad-hoc owner-script backups that hold raw text or secrets), caches and venvs, `bakeoff-*` and the chroma migration
-rehearsal (lab artefacts), logs, **`omi-recordings`** (pendant audio: claim-time retention and third parties' voices), compaction
+rehearsal (lab artefacts), logs, **`omi-recordings`** (pendant audio: claim-time retention and third parties' voices), **`omi-repass`** (the night re-pass's hypotheses and worker outputs: words + speaker embeddings, 7-day retention), compaction
 salvage files, and `env` / `secrets` (they go in the secrets tier instead). The router corpus itself is tracked in git
 (`labs/functiongemma-finetune/data/`), so GitHub already holds it.
 

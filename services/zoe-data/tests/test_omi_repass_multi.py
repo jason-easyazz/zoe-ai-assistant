@@ -135,6 +135,27 @@ def test_hypotheses_are_private_pruned_and_forget_reached(tmp_path):
     assert eu.forget_user(home, "m1") == 2 and "m1" not in f.read_text() and "m2" in f.read_text()
 
 
+def test_abandoned_work_files_are_swept_by_retention_and_by_erasure_but_a_live_run_is_left_alone(tmp_path):
+    """A SIGKILL / reboot mid-run leaves work/<id>.out.jsonl (transcripts + embeddings): retention, an erasure and the next run clear it once stale."""
+    import os
+    import time
+    home = tmp_path / "h"
+    (home / "work").mkdir(parents=True)
+    old, live = home / "work" / "dead.out.jsonl", home / "work" / "live.manifest.json"
+    old.write_text("{}")
+    live.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    assert eu.sweep_work(home) == 1 and not old.exists() and live.exists()      # a running pass's files are younger than the stale age
+    old.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    eu.forget_user(home, "m1")
+    assert not old.exists() and live.exists()
+    old.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    eu.prune_hyps(home, date(2026, 11, 9))
+    assert not old.exists() and live.exists()
+
+
 def test_the_check_queue_lists_contested_and_low_confidence_chunks_with_alternatives_and_votes(tmp_path):
     home = tmp_path / "h"
     hy_low = {PIV: "completely different words here now", PAR: "zzz yyy xxx www vvv", DIS: "aaa bbb ccc ddd eee"}

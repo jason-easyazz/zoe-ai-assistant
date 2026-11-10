@@ -391,6 +391,25 @@ def prune_hyps(home: Path, today: Optional[date] = None, keep_days: int = HYPS_K
                 n += 1
         except ValueError:
             continue
+    sweep_work(home)
+    return n
+
+
+WORK_STALE_S = 6 * 3600          # a worker's manifest / output older than this belongs to a run that died (a night is ~2 h); live runs delete their own files
+
+
+def sweep_work(home: Path, older_than_s: float = WORK_STALE_S, now: Optional[float] = None) -> int:
+    """Delete the abandoned per-run work files (``work/<id>.manifest.json`` + ``.out.jsonl``: audio paths, raw transcripts, speaker embeddings) a SIGKILL / reboot left behind."""
+    import time
+    n, t = 0, (now if now is not None else time.time())
+    d = home / "work"
+    for p in (list(d.iterdir()) if d.is_dir() else []):
+        try:
+            if p.is_file() and t - p.stat().st_mtime >= older_than_s:
+                p.unlink()
+                n += 1
+        except OSError:
+            continue
     return n
 
 
@@ -412,6 +431,7 @@ def _rewrite(home: Path, fn: Callable[[dict], Optional[dict]]) -> int:
         tmp.write_text("\n".join(keep) + ("\n" if keep else ""))
         os.chmod(tmp, 0o600)
         os.replace(tmp, p)
+    sweep_work(home)          # an erasure also clears what a dead run left (the work files hold the same words, and voice embeddings)
     return n
 
 

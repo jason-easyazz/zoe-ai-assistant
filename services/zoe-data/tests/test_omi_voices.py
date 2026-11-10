@@ -536,6 +536,21 @@ def test_a_retag_moves_what_the_first_tag_taught_to_the_right_person(env, monkey
     assert env.db.q("SELECT n_segments FROM learned_voiceprints WHERE people_id = ?", (alex,)) == [(2,)]
 
 
+def test_releasing_the_last_contribution_with_keep_empty_keeps_the_print_and_its_opt_out(env, monkeypatch):
+    """The night re-pass replaces a recording's segments: a stopped voice whose only contributions were there must not be deleted and silently
+    recreated with learning on (``keep_empty``). Negative control: the default still drops the print."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    segs = [r[0] for r in env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0, status = 'confirmed', rejections = 2")
+    env.db.conn.commit()
+    run(ov._release_contributions(env.db, A, segs, keep_empty=True))
+    assert env.db.q("SELECT learning_enabled, status, rejections, n_segments, n_recordings FROM learned_voiceprints") == [(0, "confirmed", 2, 0, 0)]
+    run(ov._release_contributions(env.db, A, segs))                       # nothing left to release; the plain rebuild of an empty print drops it
+    vp = env.db.q("SELECT id FROM learned_voiceprints")[0][0]
+    assert run(ov.rebuild(env.db, vp)) is False and env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+
+
 def test_a_tagged_line_marked_not_a_person_is_untagged_and_unlearned(env, monkeypatch):
     cid = _sam_cluster(env, monkeypatch, n=2)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})

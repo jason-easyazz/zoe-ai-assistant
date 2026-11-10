@@ -618,11 +618,13 @@ async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Opti
     return {"id": pid, "name": clean, "birthday": None, "relationship": None, "created": True}
 
 
-async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_person: Optional[str] = None) -> list[tuple]:
+async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_person: Optional[str] = None, keep_empty: bool = False) -> list[tuple]:
     """Take these segments' contributions out of the member's voiceprints (all of them, or all but ``keep_person``'s) and REBUILD
     each voiceprint that lost one - the print goes when none is left. A re-tag or a "not a person" correction must un-learn what
     the first tag taught. Returns ``(segment_id, model_id, embedding)`` of what was released so a re-tag can hand it to the new
-    person (the held embedding was deleted at the first tag, so the contribution is the only copy)."""
+    person (the held embedding was deleted at the first tag, so the contribution is the only copy). ``keep_empty``: a print left with no
+    contribution stays as an EMPTY row (its learning opt-out, status and rejections intact) instead of going - for a caller that is about to
+    re-teach it (the night re-pass replacing a recording's segments)."""
     sql = ("SELECT c.voiceprint_id, c.segment_id, v.model_id, c.embedding FROM learned_voiceprint_segments c "
            "JOIN learned_voiceprints v ON v.id = c.voiceprint_id WHERE v.owner_user_id = ? "
            f"AND c.segment_id IN ({_qs(len(seg_ids))})")
@@ -633,7 +635,7 @@ async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_p
     for vp, sid, _model, _blob_ in rows:
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, sid))
     for vp in sorted({r[0] for r in rows}):
-        await rebuild(db, vp)
+        await rebuild(db, vp, keep_empty=keep_empty)
     return [(r[1], r[2], r[3]) for r in rows]
 
 
@@ -803,9 +805,14 @@ def loo_mean(E: np.ndarray, tau: float = LOO_TAU) -> tuple[Optional[np.ndarray],
     return _unit(E[keep].mean(axis=0)), sorted(dropped)
 
 
-async def rebuild(db, vp_id: str) -> bool:
-    """Recompute a voiceprint from its contributions (un-learning). None left = the voiceprint goes. Returns True if it remains."""
+async def rebuild(db, vp_id: str, *, keep_empty: bool = False) -> bool:
+    """Recompute a voiceprint from its contributions (un-learning). None left = the voiceprint goes (``keep_empty``: it stays as a zeroed row with its
+    settings). Returns True if it remains."""
     rows = await _all(db, "SELECT embedding, recording_id FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp_id,))
+    if not rows and keep_empty:
+        await _run(db, "UPDATE learned_voiceprints SET embedding = ?, n_segments = 0, n_recordings = 0, updated_at = ? WHERE id = ?",
+                   (_blob(np.zeros(256)), _iso(_now()), vp_id))
+        return True
     if not rows:
         await _run(db, "DELETE FROM learned_voiceprints WHERE id = ?", (vp_id,))
         return False
