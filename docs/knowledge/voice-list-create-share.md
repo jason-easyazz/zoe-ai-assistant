@@ -57,6 +57,12 @@ Each line is checkable by a QA chat or a test; none is "(not yet)".
 
 ## Known limits
 
+- "Make a shopping list" does not create a list: the household has ONE (family-visible by definition), so Zoe says she already has it.
+- The heads-up is at-most-once and unhurried by design: it is claimed when it enters the recipient's brain turn (a turn that fails
+  after that does not repeat it), at most two per turn, and it waits for a turn no other offer/verify/emotional block occupies.
+- A list name is owner-chosen text in another member's brain prompt: it is capped (48), stripped of quotes/brackets and framed as a
+  label, never an instruction - the same exposure and the same defence as the contact-offer block.
+
 - The heads-up rides a brain turn: a turn a fast path answers without the brain does not carry it; it waits for the next brain turn.
 - A shared personal-type list is family-visible, so a type-only "add X to my personal list" prefers the household list of that type
   (the existing household-list rule). Naming the list is unambiguous.
