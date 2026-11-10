@@ -70,6 +70,7 @@ STEP_UP_DIVERGENCE: dict[str, str] = {
     # APScheduler 3.11 needs tzlocal>=3 and drops pytz (see requirements-py312.txt for the jobstore
     # evidence); fastapi is a patch step. The 3.10 rollback env keeps its hand-installed versions.
     "fastapi": "3.12 lane 0.162.0 (+ starlette 1.10.0, needs >=3.11); 3.10 rollback env holds 0.143.0",
+    "starlette": "3.12 lane 1.10.0 (1.8+ needs >=3.11); 3.10 rollback env holds 1.3.1 (1.7.0 is the last 3.10 release)",
     "websockets": "3.12 lane 17.2 (needs >=3.11); 3.10 rollback env holds 16.1.1",
     "apscheduler": "3.12 lane 3.11.3 (+ tzlocal 5.4.5, pytz pinned explicitly); 3.10 rollback env holds 3.10.4 + tzlocal 2.1",
     # 2026-11-10 routine batch: both releases require Python >=3.11; the 3.10 rollback manifest stays put.
