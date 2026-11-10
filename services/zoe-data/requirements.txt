@@ -33,6 +33,10 @@
 # below were reconciled to the live Orin on 2026-08-06.
 # ═══════════════════════════════════════════════════════════════════════════
 fastapi==0.143.0
+# Starlette is pinned EXPLICITLY: FastAPI only floors it (>=0.46), so it floated to 1.8+ (needs
+# Python >=3.11) and broke `deps-resolvable` on 3.10. 1.3.1 is what the hand-managed 3.10 rollback
+# env holds; 1.7.0 is the last release that still installs on 3.10. The LIVE 3.12 lane pins 1.10.0.
+starlette==1.3.1
 # 3.10 LANE HOLDS 0.49.0 — this file describes the hand-managed system Python 3.10
 # site-packages, which is now ROLLBACK-ONLY (zoe-data runs the 3.12 venv, B0.7), and
 # that env still has 0.49.0. The LIVE 3.12 lane moved to 0.53.0 on 2026-09-27
