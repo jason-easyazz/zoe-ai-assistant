@@ -729,6 +729,8 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
     kinds = {p: _kind(p) for p in paths}
 
     for p, k in kinds.items():
+        if k == "unknown" and p.startswith("labs/"):
+            continue   # labs/ is isolated from the runtime and no CI lane runs it; it is reported as unreached
         if k == "unknown":
             # a binary / model / unrecognised artefact: text references cannot establish its runtime consumers
             sel.full_all_reason = f"{p}: unknown file type (static selection cannot see who loads it)"
@@ -817,8 +819,8 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
         if p.endswith(CODE_EXT) and not p.startswith("labs/"):
             # CODE no test reaches statically may still be reached at runtime (a registry, a built path):
             # never a green zero-test run for it - run the lane(s) that load its tree
-            for ln in (_consuming_lanes(p) if p.startswith("services/") else
-                       [x for x in LANES if x.name == "tests-unit"]):
+            # (a service no lane owns - omi-sync, zoe-vaultd, panel-bluetooth, zoe-ui - is tested from tests/unit)
+            for ln in (_consuming_lanes(p) or [x for x in LANES if x.name == "tests-unit"]):
                 sel.lane_full.setdefault(ln.name, f"{p} changed and no test reaches it statically")
     if not non_doc and not sel.tests and not sel.lane_full:
         sel.notes.append("docs-only diff: no test reads the changed docs, so no tests are affected")

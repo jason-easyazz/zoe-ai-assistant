@@ -217,6 +217,9 @@ def test_unreached_code_change_is_named_and_runs_its_lane(repo):
     _edit(repo, "services/zoe-data/orphan_mod.py", "X = 1\n")
     _, s = _run(repo, "--dry-run")
     assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
+    _edit(repo, "services/omi-sync/omi_sync/spool.py", "X = 1\n")    # a service no lane owns -> tests/unit
+    _, s = _run(repo, "--dry-run")
+    assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["tests-unit"] == "full"
 
 
 def test_unreached_data_file_is_only_named(repo):
