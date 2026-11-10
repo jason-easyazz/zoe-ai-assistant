@@ -383,6 +383,22 @@ def test_an_ambiguous_name_is_held_never_shortened(monkeypatch):
     assert vc.may_shorten(vc.statement("also carlos 21 not 22"), False, False)                     # control: positively no match -> still shortens
 
 
+def test_a_failed_name_lookup_is_not_an_absence_and_never_shortens(monkeypatch):
+    calls = []
+    _nobody_is_the_speaker(monkeypatch)
+    _no_activity_writes(monkeypatch)
+    _stub_person_writer(monkeypatch, calls, {"carlo": types.SimpleNamespace(person_id="p-carlo", ambiguous=False)})
+    real = pe._resolve_person
+
+    async def broken(name, *a, **k):
+        if name == "Carlos":
+            raise RuntimeError("people graph unavailable")
+        return await real(name, *a, **k)
+    monkeypatch.setattr(pe, "_resolve_person", broken)
+    run(pe.apply_person_fact("Carlos", "fact", "21", user_id=UID, source="conversation", source_excerpt="also carlos 21 not 22"))
+    assert not any(c[2] == "p-carlo" for c in calls)
+
+
 _EXPLICIT_FORMS = ["actually Carlos's swimming is on Wednesday not Thursday", "Carlos is 21 not 22", "actually Carlos's age is 21 not 22"]
 
 

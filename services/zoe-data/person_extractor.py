@@ -1475,11 +1475,13 @@ async def apply_person_fact(
             # The model has no "age" type and files an age as whatever it picks: an age is ONE
             # current value per person, so it is keyed "age" and a new age supersedes the old one.
             pattern_type = "age"
+        _resolve_failed = False
         try:
             res = await _resolve_person(name, user_id, _db)
         except Exception as exc:  # noqa: BLE001
             logger.debug("apply_person_fact: resolve failed for %r: %s", name, exc)
             res = None
+            _resolve_failed = True      # a failed lookup is NOT "no such person": the name is never repaired on the strength of it
         # "also kais 21 not 22": a correction turn names its subject and the lazily typed possessive was read as a person called
         # "Kais" (QA round 7: the row "Kais: 21", and Kai's age then unanswerable). When nobody is called Kais but the member's Kai
         # exists, the fact is Kai's; with nobody known either way the name stands as typed (a real "Chris" is never shortened).
@@ -1487,7 +1489,7 @@ async def apply_person_fact(
             # only a POSITIVE "no such person" is an absence: an ambiguous resolution (two Carloses) has no person_id either, but it is a match
             # that the ambiguity guard below must see - shortening it would file the fact on a different person
             _ambiguous = bool(getattr(res, "ambiguous", False))
-            if (res is None or (not getattr(res, "person_id", None) and not _ambiguous)) and source_excerpt and len(name) > 3 \
+            if not _resolve_failed and (res is None or (not getattr(res, "person_id", None) and not _ambiguous)) and source_excerpt and len(name) > 3 \
                     and name.lower().endswith("s") and not name.lower().endswith("ss"):
                 import value_correction
 
