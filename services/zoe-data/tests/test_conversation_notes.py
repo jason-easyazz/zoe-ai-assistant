@@ -1019,3 +1019,28 @@ def test_the_nightly_guest_pass_drops_off_the_record_exchanges(env, monkeypatch)
     assert out["stored"] == 1 and calls
     sent = json.dumps(calls)
     assert "Zebediah" not in sent and "llama" not in sent and "half marathon" in sent       # negative control: ordinary turns still reach the summarizer
+
+
+def test_a_partial_erase_during_the_approval_window_drops_the_approved_note(env, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    payload = {"summary": "They talked about how the interview went and the cycling trip.", "with": "", "topics": ["interview"], "open": []}
+    real = cn._db
+    state = {"hit": False}
+
+    class _Spy:
+        def __init__(self, cm):
+            self.cm = cm
+
+        async def __aenter__(self):
+            if not state["hit"]:
+                state["hit"] = True
+                await cn.erase_topic(OWNER, lambda text: "cycling" in text.lower())     # a partial erase lands during write_approved's own query
+            return await self.cm.__aenter__()
+
+        async def __aexit__(self, *a):
+            return await self.cm.__aexit__(*a)
+    monkeypatch.setattr(cn, "_db", lambda: _Spy(real()))
+    with pytest.raises(RuntimeError):
+        run(cn.write_approved(OWNER, payload, candidate_id="c10", day="2026-11-08", at_epoch=NOW))
+    monkeypatch.setattr(cn, "_db", real)
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]

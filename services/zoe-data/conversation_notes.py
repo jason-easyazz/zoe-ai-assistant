@@ -915,6 +915,7 @@ async def guest_lines(guest: Any) -> list:
 async def write_approved(user_id: str, payload: dict, *, candidate_id: str, day: str, at_epoch: float) -> str:
     """The owner approved a pendant ``conversation_note`` candidate: store it in THEIR layer (``status='active'``, source
     ``pendant``). Idempotent on the candidate. Returns ``conversation_notes:<id>``; RAISES when it could not be stored."""
+    part = partial_epoch(user_id)          # snapshot at ENTRY: a partial erase during the idempotence query below must drop the note, not precede its snapshot
     convo = Convo(episode_key(user_id, "pendant", candidate_id), at_epoch, at_epoch, [], 0, clean(payload.get("with"), 60))
     # no mood: a pendant conversation is with someone Zoe cannot tell is a child, and the child rule is "no mood" (the owner can still
     # read the feeling in the summary they approve)
@@ -932,7 +933,7 @@ async def write_approved(user_id: str, payload: dict, *, candidate_id: str, day:
             row = await cur.fetchone()
     if row:
         return f"conversation_notes:{row[0]}"
-    nid = await save(user_id, "", convo, note, source="pendant", status="active" if m == "on" else "shadow", gate_held=True)
+    nid = await save(user_id, "", convo, note, source="pendant", status="active" if m == "on" else "shadow", gate_held=True, partial_at=part)
     if not nid:
         raise RuntimeError("note not stored")
     return f"conversation_notes:{nid}"
