@@ -795,7 +795,9 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         # the first-pass lines are about to be replaced: what their tags taught the people's voiceprints is released first (the segment ids die with them, and a later
                         # correction of the NEW line only knows the new id); the carried tags re-teach below under the new ids
                         try:
-                            await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")], keep_empty=True)
+                            tagged_old = [o["id"] for o in old if o.get("tagged_person_id")]
+                            if tagged_old:
+                                await omi_voices._release_contributions(db, uid, tagged_old, keep_empty=True, skip_frozen=True)
                         except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
                             if not omi_voices._missing(exc):
                                 raise

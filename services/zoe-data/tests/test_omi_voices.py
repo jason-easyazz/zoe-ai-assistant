@@ -1441,3 +1441,28 @@ def test_the_panel_cache_serves_each_recording_its_own_interval(monkeypatch):
     assert [t.recorded_ts.timestamp() for t in first] == [stamps[0]]
     assert [t.recorded_ts.timestamp() for t in second] == [stamps[1]]
     ov._PANEL_CACHE.clear()
+
+
+def test_release_skip_frozen_keeps_a_stopped_voices_contributions_and_an_empty_list_is_a_noop(env, monkeypatch):
+    """Review (re-pass): a print whose learning was stopped must keep its contributions through a replacement (the re-pass cannot re-teach it); an empty id list
+    must not build ``IN ()`` (a Postgres syntax error). Negative control: without skip_frozen the stopped print is emptied."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    segs = [r[0] for r in env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    class _NoQuery:                                  # SQLite accepts ``IN ()``, so prove no query is issued at all
+        def __getattr__(self, name):
+            raise AssertionError("an empty id list must not touch the database")
+    assert run(ov._release_contributions(_NoQuery(), A, [], keep_empty=True)) == []
+    assert run(ov._release_contributions(env.db, A, segs, keep_empty=True, skip_frozen=True)) == []
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(2,)] and env.db.q("SELECT n_segments FROM learned_voiceprints") == [(2,)]
+    run(ov._release_contributions(env.db, A, segs, keep_empty=True))
+    assert env.db.q("SELECT n_segments FROM learned_voiceprints") == [(0,)]
+
+
+def test_mark_overlaps_never_overrides_a_carried_human_decision():
+    segs = [{"start_ms": 0, "end_ms": 4000, "carry": {"tagged_person_id": "p1"}, "not_person": None},
+            {"start_ms": 0, "end_ms": 4000}]
+    assert ov.mark_overlaps(segs, [(0, 4000)]) == 1
+    assert segs[0]["not_person"] is None and segs[1]["not_person"] == "zoe"

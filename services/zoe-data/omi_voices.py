@@ -344,12 +344,13 @@ async def panel_anchors(db, user_id: str, rid: str, **kw) -> list[dict]:
 
 
 def mark_overlaps(segs: list, spans: list, kind: str = "zoe", min_share: float = 0.5) -> int:
-    """Mark each segment at least ``min_share`` inside the given spans as not a person. Pure; returns how many."""
+    """Mark each segment at least ``min_share`` inside the given spans as not a person. Pure; returns how many. A line carrying a HUMAN decision (``carry``: a tag, "me" or not-person from the
+    owner) is never overridden: the owner's word wins over the panel's guess."""
     n = 0
     for s in segs:
         dur = max(1, int(s["end_ms"]) - int(s["start_ms"]))
         cover = sum(max(0, min(int(s["end_ms"]), b) - max(int(s["start_ms"]), a)) for a, b in spans)
-        if cover / dur >= min_share and not s.get("not_person"):
+        if cover / dur >= min_share and not s.get("not_person") and not s.get("carry"):
             s["not_person"] = kind
             n += 1
     return n
@@ -641,19 +642,24 @@ async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Opti
     return {"id": pid, "name": clean, "birthday": None, "relationship": None, "created": True}
 
 
-async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_person: Optional[str] = None, keep_empty: bool = False) -> list[tuple]:
+async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_person: Optional[str] = None, keep_empty: bool = False, skip_frozen: bool = False) -> list[tuple]:
     """Take these segments' contributions out of the member's voiceprints (all of them, or all but ``keep_person``'s) and REBUILD
     each voiceprint that lost one - the print goes when none is left. A re-tag or a "not a person" correction must un-learn what
     the first tag taught. Returns ``(segment_id, model_id, embedding)`` of what was released so a re-tag can hand it to the new
     person (the held embedding was deleted at the first tag, so the contribution is the only copy). ``keep_empty``: a print left with no
     contribution stays as an EMPTY row (its learning opt-out, status and rejections intact) instead of going - for a caller that is about to
-    re-teach it (the night re-pass replacing a recording's segments)."""
+    re-teach it (the night re-pass replacing a recording's segments). ``skip_frozen``: a print whose learning was stopped keeps its contributions (the re-pass could
+    not re-teach it, so releasing would shrink or zero a print the owner froze). No segment ids -> nothing to do (``IN ()`` is a syntax error on Postgres)."""
+    if not seg_ids:
+        return []
     sql = ("SELECT c.voiceprint_id, c.segment_id, v.model_id, c.embedding FROM learned_voiceprint_segments c "
            "JOIN learned_voiceprints v ON v.id = c.voiceprint_id WHERE v.owner_user_id = ? "
            f"AND c.segment_id IN ({_qs(len(seg_ids))})")
     params: list = [user_id, *seg_ids]
     if keep_person:
         sql, params = sql + " AND v.people_id != ?", params + [keep_person]
+    if skip_frozen:
+        sql += " AND v.learning_enabled = 1"
     rows = await _all(db, sql, tuple(params))
     for vp, sid, _model, _blob_ in rows:
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, sid))
