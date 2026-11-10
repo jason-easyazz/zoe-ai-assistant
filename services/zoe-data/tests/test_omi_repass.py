@@ -460,3 +460,49 @@ def test_every_declared_backend_carries_its_budget_facts_and_the_worker_has_it()
         assert {"rtf", "gpu_rtf", "peak_rss_mb", "fallback"} <= set(b) and b["rtf"] > 0 and b["peak_rss_mb"] > 0
         assert f'"{name}"' in src, name                                                        # declared here AND registered in the worker
         assert rp.scope_mem_max(name).endswith("M")
+
+
+def _ledger_down_strict_only(monkeypatch):
+    import memory_forgotten as mf
+
+    async def down(user_id, text, *, near=True, strict=False):
+        if strict:
+            raise mf.LedgerUnavailable("down")
+        raise RuntimeError("ledger read failed")           # main's non-strict call swallows ANY failure
+    monkeypatch.setattr(mf, "spans", down)
+
+
+def test_first_pass_fails_closed_on_an_unreadable_ledger_only_while_the_repass_flag_is_on(renv, monkeypatch):
+    """Review #1: flag ON - forgotten text must never be stored, so an unreadable ledger stores no transcript (left for a retry). Flag OFF - exactly main: fail open."""
+    _ledger_down_strict_only(monkeypatch)
+    first_pass(renv)
+    r = transcribe(renv, monkeypatch, "Dana called")
+    assert "Dana" not in (r["transcript"] or "") and r["status"] != "done"
+    monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "off")
+    renv.db.conn.execute("UPDATE omi_recordings SET status = 'pending', attempts = 0")
+    renv.db.conn.commit()
+    r = transcribe(renv, monkeypatch, "Dana called")
+    assert r["status"] == "done" and r["transcript"] == "Dana called"
+
+
+def test_a_completed_member_forget_and_entity_erase_remove_work_files_of_any_age(renv, tmp_path):
+    import re as _re
+    import omi_repass_eval as eu
+    home = tmp_path / "repass"
+    (home / "work").mkdir(parents=True)
+    for n in ("a", "b"):
+        (home / "work" / f"{n}.manifest.json").write_text('{"items": [{"id": "r1", "hint": "Dana"}]}')
+        (home / "work" / f"{n}.out.jsonl").write_text('{"id": "r1", "words": ["Dana"]}')
+    eu.erase_entity(home, "m1", _re.compile("Dana"), "[forgotten]")
+    assert list((home / "work").iterdir()) == []
+    (home / "work" / "c.out.jsonl").write_text("{}")
+    eu.forget_user(home, "m1")
+    assert list((home / "work").iterdir()) == []
+
+
+def test_flag_off_redaction_stays_fail_open_even_when_the_ledger_modules_cannot_be_imported(renv, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "memory_forgotten", None)          # import raises ImportError
+    assert run(omi._redact_forgotten("u1", "Dana called")) == "Dana called"
+    with pytest.raises(Exception):
+        run(omi._redact_forgotten("u1", "Dana called", strict=True))

@@ -907,23 +907,27 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
         return 0
 
 
-async def _redact_forgotten(user_id: str, text: str) -> str:
+async def _redact_forgotten(user_id: str, text: str, *, strict: bool = False) -> str:
     """A transcript lands AFTER a forget: redact it against the forget ledger so a forgotten name cannot come back through here.
-    FAIL CLOSED: if the ledger cannot be read the text cannot be proven free of a forgotten name, so this RAISES (``LedgerUnavailable``) and the caller
-    stores nothing - the first pass leaves the recording pending for a retry, the night re-pass reports it failed and keeps the first-pass text."""
+    ``strict`` = FAIL CLOSED: an unreadable ledger cannot prove the text free of a forgotten name, so this RAISES (``LedgerUnavailable``) and the caller stores
+    nothing. The night re-pass always asks for it (it can keep the first-pass text). The first pass asks only while ``ZOE_OMI_NIGHT_REPASS`` is not off:
+    with the flag off it is the original fail-open (an unreadable ledger must not lose the transcript; ``erase_entity`` covers the live case)."""
     if not text:
         return text
-    import forget_match as fm
-    import memory_forgotten as mf
     try:
-        spans = await mf.spans(user_id, text, strict=True)
-    except mf.LedgerUnavailable:
-        logger.warning("omi_recordings: forget ledger unreadable - transcript text withheld, not stored")
-        raise
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("omi_recordings: forget ledger check failed (%s) - transcript text withheld, not stored", type(exc).__name__)
+        import forget_match as fm
+        import memory_forgotten as mf
+        spans = await mf.spans(user_id, text, strict=True) if strict else await mf.spans(user_id, text)
+        return fm.redact(text, spans)[0] if spans else text
+    except Exception as exc:  # noqa: BLE001 - imports included: flag-off stays main's fail-open
+        if not strict:
+            logger.debug("omi_recordings: forget ledger not applied (%s)", type(exc).__name__)
+            return text
+        logger.warning("omi_recordings: forget ledger unreadable (%s) - transcript text withheld, not stored", type(exc).__name__)
+        import memory_forgotten as mf
+        if isinstance(exc, mf.LedgerUnavailable):
+            raise
         raise mf.LedgerUnavailable(type(exc).__name__) from exc
-    return fm.redact(text, spans)[0] if spans else text
 
 
 # --- transcription ------------------------------------------------------------------------------------------------------
@@ -1142,21 +1146,23 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     level: dict = {}
     segs: Optional[list] = None            # the omi_segments rows (only while ZOE_OMI_SPEAKER_TAG is not off)
     spk_state, model_id = "unverified", None
+    import omi_repass as _rp
+    strict = _rp.mode() != "off"          # flag off: the first pass stays exactly as it was (ledger failure = fail open)
     try:
         turns, spk_state, model_id = await _diarise(uid, path, now)
         if turns:
             texts = await transcribe_turns(path, [(t.start_ms, t.end_ms) for t in turns], gate=lambda: _patient_gate(now),
                                            pause_s=pause_s, stats=seen_chunks)
             segs = [{"start_ms": t.start_ms, "end_ms": t.end_ms, "speaker": t.speaker, "score": t.score, "windows": t.windows,
-                     "embedding": t.embedding, "text": await _redact_forgotten(uid, x)} for t, x in zip(turns, texts)]
+                     "embedding": t.embedding, "text": await _redact_forgotten(uid, x, strict=strict)} for t, x in zip(turns, texts)]
             text = " ".join(x["text"] for x in segs if x["text"].strip())
         else:
             spans: Optional[list] = [] if _tag_mode() != "off" else None
             text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks, spans=spans)
-            text = await _redact_forgotten(uid, text)
+            text = await _redact_forgotten(uid, text, strict=strict)
             if spans is not None:
                 segs = [{"start_ms": a, "end_ms": b, "speaker": "unverified", "score": None, "windows": 0, "embedding": None,
-                         "text": await _redact_forgotten(uid, x)} for a, b, x in spans]
+                         "text": await _redact_forgotten(uid, x, strict=strict)} for a, b, x in spans]
         if not text.strip():                    # diagnostics for the WARNING below; off the event loop (a 10-minute WAV is ~10M samples)
             level = await asyncio.to_thread(measure_wav_file, path)
     except GateClosed as exc:                   # the gate closed mid-job: not a failure, try again later

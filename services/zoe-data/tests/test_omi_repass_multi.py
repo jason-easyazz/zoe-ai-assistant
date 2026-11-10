@@ -162,7 +162,8 @@ def test_abandoned_work_files_are_swept_by_retention_and_by_erasure_but_a_live_r
     old.write_text("{}")
     os.utime(old, (time.time() - 7 * 3600,) * 2)
     eu.forget_user(home, "m1")
-    assert not old.exists() and live.exists()
+    assert not old.exists() and not live.exists()          # an erasure clears EVERY work file whatever its age (they name no member: none can be proven clean)
+    live.write_text("{}")
     old.write_text("{}")
     os.utime(old, (time.time() - 7 * 3600,) * 2)
     eu.prune_hyps(home, date(2026, 11, 9))
@@ -258,6 +259,21 @@ def test_the_third_voter_is_whisper_large_v3_when_the_night_has_room_else_distil
         renv.db.conn.commit()
         out = run(rp.run_night(budget_s=budget, runner=multi_runner(TEXTS, []), dry_run=True))
         assert out["engines"] == [PIV, PAR] + ([want] if want else []), (dur, budget, out["engines"])
+
+
+def test_the_evaluation_samples_the_whisper_that_did_not_vote_when_the_third_voter_fell_back_to_distil(renv, monkeypatch):
+    """Review #2: the eval set used to drop thirds[:1] (large-v3) up front, so a night whose third voter was distil evaluated neither whisper."""
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
+    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_EVAL", f"{WH},{DIS},{GR}")
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 1500")
+    renv.db.conn.commit()
+    real = rp.plan_voters
+    monkeypatch.setattr(rp, "plan_voters", lambda durs, rem, rt, second, thirds, **k: {**real(durs, rem, rt, second, [DIS], **k)})    # the budget picks distil
+    out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [])))
+    assert out["engines"] == [PIV, PAR, DIS], out["engines"]
+    assert out["eval_engines"] == [WH, GR], out["eval_engines"]
 
 
 def test_granite_never_votes_in_production_even_when_the_config_asks_for_it(renv, monkeypatch):

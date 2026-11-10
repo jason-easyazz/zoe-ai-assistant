@@ -760,7 +760,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                 # ordered against this write by the lock itself - redacting before we held it could store text the ledger forgot in between.
                 try:
                     for sgm in segs:
-                        sgm["text"] = await omi._redact_forgotten(uid, sgm["text"])
+                        sgm["text"] = await omi._redact_forgotten(uid, sgm["text"], strict=True)
                 except Exception as exc:  # noqa: BLE001 - forget ledger unreadable: nothing is stored; the recording stays pending for the next night
                     return {"status": "failed", "why": "forget_ledger:" + type(exc).__name__, **counts}
                 text = " ".join(sgm["text"] for sgm in segs if sgm["text"].strip()).strip()
@@ -1033,7 +1033,7 @@ async def preview_one(r: dict, res: dict, *, refs: Refs, names: list) -> dict:
     lines = build_lines(res["words"], res["windows"], refs)
     texts = []
     for ln in lines:
-        texts.append(await omi._redact_forgotten(r["user_id"], normalise_names(segment_fields(ln, refs)["text"], names)))
+        texts.append(await omi._redact_forgotten(r["user_id"], normalise_names(segment_fields(ln, refs)["text"], names), strict=True))
     text = " ".join(t for t in texts if t.strip()).strip()
     return {"words": len(res["words"]), "lines": len(lines), "speakers": len({ln["key"] for ln in lines}), "dur_s": res.get("dur_s"), "speech_s": res.get("speech_s"),
             "asr_s": res.get("asr_s"), "emb_s": res.get("emb_s"), "agree": word_agreement(r.get("transcript") or "", text), "chars": len(text),
@@ -1084,7 +1084,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     multi = primary == eu.PIVOT
     second = second_backend() if multi else ""
     thirds = [c for c in third_choices() if c not in (primary, second)] if second else []
-    evals = [e for e in eval_backends() if e not in (primary, second) and e not in thirds[:1]] if multi and second else []
+    evals = [e for e in eval_backends() if e not in (primary, second)] if multi and second else []
     voters = [primary] + [x for x in (second, thirds[0] if thirds else "") if x]      # the PLAN before the pivot has run; the voters that really ran are set after the split below
     res.update(pending=len(rows), audio_s=round(audio_s), model=primary, est_s=plan["est_s"], fits=plan["fits"], fallback_model=plan["fallback"], engines=voters, eval_engines=evals,
                est_voters_s=round(audio_s * sum(rt[v] for v in voters)))

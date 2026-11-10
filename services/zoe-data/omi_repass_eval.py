@@ -405,7 +405,7 @@ def sweep_work(home: Path, older_than_s: float = WORK_STALE_S, now: Optional[flo
     d = home / "work"
     for p in (list(d.iterdir()) if d.is_dir() else []):
         try:
-            if p.is_file() and t - p.stat().st_mtime >= older_than_s:
+            if p.is_file() and (older_than_s <= 0 or t - p.stat().st_mtime >= older_than_s):
                 p.unlink()
                 n += 1
         except OSError:
@@ -431,7 +431,7 @@ def _rewrite(home: Path, fn: Callable[[dict], Optional[dict]]) -> int:
         tmp.write_text("\n".join(keep) + ("\n" if keep else ""))
         os.chmod(tmp, 0o600)
         os.replace(tmp, p)
-    sweep_work(home)          # an erasure also clears what a dead run left (the work files hold the same words, and voice embeddings)
+    sweep_work(home, 0)       # an erasure clears EVERY work file whatever its age: they hold the same words + voice embeddings and name no member, so none can be proven clean (scratch; a run that loses one retries)
     return n
 
 

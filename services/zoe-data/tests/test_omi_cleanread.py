@@ -185,7 +185,7 @@ def test_a_forgotten_name_is_redacted_in_the_twin_and_zoes_lines_never_reach_the
         return "Zebulon said we should go to the market on Saturday morning"
     import omi_recordings as omi
 
-    async def redact(uid, text):
+    async def redact(uid, text, **kw):
         return re.sub("Zebulon", "[forgotten]", text)
     monkeypatch.setattr(omi, "_redact_forgotten", redact)
     run(oc.run(llm=llm))
