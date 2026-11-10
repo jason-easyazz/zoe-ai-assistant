@@ -141,6 +141,32 @@ def test_on_replaces_the_text_with_provenance_and_then_releases_the_wav(renv, mo
     assert segs and all(s["model_id"] == rp.MODEL_ID for s in segs)
 
 
+def test_a_failure_while_replacing_segments_leaves_the_original_recording_intact(renv, monkeypatch):
+    """The segment swap is ONE transaction: a crash after the delete must not leave the owner's first-pass lines gone with nothing in their place."""
+    import omi_voices
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine garble")
+    rid = rows(renv)[0]["id"]
+    renv.db.conn.execute("INSERT INTO omi_segments (id, recording_id, user_id, seq, start_ms, end_ms, text, speaker, created_at) "
+                         "VALUES ('seg-first', ?, ?, 0, 0, 1000, 'first pass line', 'unverified', '2026-11-09T00:00:00Z')", (rid, OWNER))
+    renv.db.conn.commit()
+    before = renv.db.rows("SELECT id, text FROM omi_segments ORDER BY id")
+    assert [b["id"] for b in before] == ["seg-first"]
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("interrupted after the delete")
+    real = omi_voices.store_segments
+
+    async def store_then_boom(*a, **k):
+        await real(*a, **k)
+        await boom()
+    monkeypatch.setattr(omi_voices, "store_segments", store_then_boom)
+    out = run(rp.run_night(budget_s=600, runner=fake_runner()))
+    assert out["replaced"] == 0
+    assert renv.db.rows("SELECT id, text FROM omi_segments ORDER BY id") == before
+    r = rows(renv)[0]
+    assert r["transcript"] == "moonshine garble" and r["repass_state"] != "done"
+
+
 def test_shadow_replaces_nothing_and_logs_counts_never_words(renv, monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "shadow")
     transcribe(first_pass(renv) and renv, monkeypatch, "moonshine text")

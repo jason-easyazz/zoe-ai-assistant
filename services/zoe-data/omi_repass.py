@@ -784,57 +784,59 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                 former = sorted({o["voice_cluster_id"] for o in old if o.get("voice_cluster_id")})
                 pending_wearer_labels = [o for o in old if o.get("owner_label") == "you"]
                 try:
-                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs, night=True))
-                    # the first-pass lines are about to be replaced: what their tags taught the people's voiceprints is released first (the segment ids die with them, and a later
-                    # correction of the NEW line only knows the new id); the carried tags re-teach below under the new ids
-                    try:
-                        await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")], keep_empty=True)
-                    except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
-                        if not omi_voices._missing(exc):
-                            raise
-                    ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=MODEL_ID, channel="pendant" if refs.you is not None else None)
-                    for sid, s in zip(ids, segs):
-                        sets, vals = [], []
-                        c = s.get("carry")
-                        if c or s.get("not_person"):
-                            sets.append("not_person = ?")
-                            vals.append(s.get("not_person"))
-                        if c:
-                            for k in ("owner_label", "owner_labelled_at", "tagged_person_id", "tag_source", "tagged_at"):
-                                sets.append(f"{k} = ?")
-                                vals.append(c.get(k))
-                        elif s.get("person") and not s.get("not_person"):
-                            sets += ["suggested_person_id = ?", "suggested_score = ?"]
-                            vals += [s["person"], s.get("person_score")]
-                        if sets:
-                            await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
-                    untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
-                    if untagged and adult:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
-                        await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)
-                    if adult:
-                        await _learn_carried_tags(db, uid, ids, segs, rid)
-                    ttl = _iso((now or _now()) + timedelta(days=omi_voices.EMBED_TTL_DAYS))
-                    who_items = []
-                    for sid, sg in zip(ids, segs):             # the "who said this?" turns: the owner's tap adds THIS embedding to the person's pendant print (omi_voices.tag)
-                        if adult and sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
-                            await db.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, ?) "
-                                             "ON CONFLICT (segment_id) DO NOTHING", (sid, uid, MODEL_ID, _blob(sg["embedding"]), ttl))
-                            who_items.append({"seg_id": sid, "t0": round(sg["start_ms"] / 1000.0, 3), "t1": round(sg["end_ms"] / 1000.0, 3),
-                                              "mark": "lean" if sg.get("lean") else "unknown",
-                                              "cands": sg["cands"]})
-                    counts["who_items"] = who_items
-                    if pending_wearer_labels and adult:
-                        spans = [(o["start_ms"], o["end_ms"]) for o in pending_wearer_labels]
-                        counts["wearer_windows"] = await _add_wearer_samples(db, uid, rid, res["windows"], spans, source="owner_label", status="confirmed")
-                    for cid in former:
-                        await omi_voices.rebuild_cluster(db, cid)
+                    # ONE explicit transaction: asyncpg auto-commits each statement outside one (AsyncpgCompat.commit() is a no-op), so without it a failure
+                    # between the segment delete and the recording update would leave the owner's original lines gone and nothing in their place
+                    async with db.transaction():
+                        omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs, night=True))
+                        # the first-pass lines are about to be replaced: what their tags taught the people's voiceprints is released first (the segment ids die with them, and a later
+                        # correction of the NEW line only knows the new id); the carried tags re-teach below under the new ids
+                        try:
+                            await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")], keep_empty=True)
+                        except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
+                            if not omi_voices._missing(exc):
+                                raise
+                        ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=MODEL_ID, channel="pendant" if refs.you is not None else None)
+                        for sid, s in zip(ids, segs):
+                            sets, vals = [], []
+                            c = s.get("carry")
+                            if c or s.get("not_person"):
+                                sets.append("not_person = ?")
+                                vals.append(s.get("not_person"))
+                            if c:
+                                for k in ("owner_label", "owner_labelled_at", "tagged_person_id", "tag_source", "tagged_at"):
+                                    sets.append(f"{k} = ?")
+                                    vals.append(c.get(k))
+                            elif s.get("person") and not s.get("not_person"):
+                                sets += ["suggested_person_id = ?", "suggested_score = ?"]
+                                vals += [s["person"], s.get("person_score")]
+                            if sets:
+                                await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
+                        untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
+                        if untagged and adult:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
+                            await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)
+                        if adult:
+                            await _learn_carried_tags(db, uid, ids, segs, rid)
+                        ttl = _iso((now or _now()) + timedelta(days=omi_voices.EMBED_TTL_DAYS))
+                        who_items = []
+                        for sid, sg in zip(ids, segs):             # the "who said this?" turns: the owner's tap adds THIS embedding to the person's pendant print (omi_voices.tag)
+                            if adult and sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
+                                await db.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, ?) "
+                                                 "ON CONFLICT (segment_id) DO NOTHING", (sid, uid, MODEL_ID, _blob(sg["embedding"]), ttl))
+                                who_items.append({"seg_id": sid, "t0": round(sg["start_ms"] / 1000.0, 3), "t1": round(sg["end_ms"] / 1000.0, 3),
+                                                  "mark": "lean" if sg.get("lean") else "unknown",
+                                                  "cands": sg["cands"]})
+                        counts["who_items"] = who_items
+                        if pending_wearer_labels and adult:
+                            spans = [(o["start_ms"], o["end_ms"]) for o in pending_wearer_labels]
+                            counts["wearer_windows"] = await _add_wearer_samples(db, uid, rid, res["windows"], spans, source="owner_label", status="confirmed")
+                        for cid in former:
+                            await omi_voices.rebuild_cluster(db, cid)
+                        state = "tagged" if (refs.you is not None and not refs.you_panel_only) else "unverified"
+                        await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, speaker_state = ?, repass_state = 'done', repass_model = ?, repass_at = ?, "
+                                         "repass_attempts = repass_attempts + 1 WHERE id = ? AND repass_state IN ('pending', '')", (text, state, model_label, stamp, rid))
                 except Exception as exc:  # noqa: BLE001 - the transcript is still better than none; but never a half-written segment set
                     logger.warning("OMI_REPASS_SEGMENTS_NOT_STORED id=%s reason=%s", rid, type(exc).__name__)
-                    await db.rollback()
                     return {"status": "failed", "why": "segments:" + type(exc).__name__, **counts}
-                state = "tagged" if (refs.you is not None and not refs.you_panel_only) else "unverified"
-                await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, speaker_state = ?, repass_state = 'done', repass_model = ?, repass_at = ?, "
-                                 "repass_attempts = repass_attempts + 1 WHERE id = ? AND repass_state IN ('pending', '')", (text, state, model_label, stamp, rid))
                 await db.commit()
                 counts.update(status="replaced", carried=carried)
             if adult and (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then

@@ -278,3 +278,25 @@ def test_the_tap_for_you_confirms_a_wearer_sample_and_the_tap_for_a_person_adds_
     other = q[-1]["seg_id"]
     out2 = run(rp.confirm_who(renv.db, OWNER, other, "pa"))
     assert called == {"person_id": "pa", "segment_id": other, "source": "owner"} and out2["person"] == "pa"          # the existing machinery learns the embedding into that person's pendant print
+
+
+def test_stale_proposals_expire_from_the_retention_loop_with_the_repass_flag_off(renv, monkeypatch):
+    """The re-pass flag off must not stop an unconfirmed wearer proposal expiring (run_night returns before its own drop when off)."""
+    import asyncio
+    import omi_recordings as omi
+    blob = np.asarray(A_, dtype=np.float32).tobytes()
+    for n, (sid, created) in enumerate((("old", "2000-01-01T00:00:00Z"), ("fresh", "2999-01-01T00:00:00Z"))):
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, 'x', ?, ?, ?, ?, 'heuristic', 'proposed', ?)", (sid, OWNER, rp.MODEL_ID, n * 100, n * 100 + 50, blob, created))
+    renv.db.conn.commit()
+    monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "off")
+    monkeypatch.setattr(omi, "RETENTION_S", 0.01)
+
+    async def go():
+        try:
+            await asyncio.wait_for(omi.run_retention_loop(), 1.0)
+        except asyncio.TimeoutError:
+            pass
+    run(go())
+    left = {r["id"] for r in renv.db.rows("SELECT id FROM omi_wearer_samples WHERE status = 'proposed'")}
+    assert left == {"fresh"}

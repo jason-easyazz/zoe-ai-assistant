@@ -1524,6 +1524,14 @@ async def run_retention_loop() -> None:
             import omi_repass          # the re-pass's private hypotheses expire on their date too, flag on or off, busy or idle
             import omi_repass_eval
             omi_repass_eval.prune_hyps(omi_repass.home_dir())
+            try:   # unconfirmed wearer proposals expire after PROPOSAL_KEEP_DAYS even with the re-pass flag off (run_night returns before its own drop when off)
+                from db_compat import get_compat_db
+                async with get_compat_db() as db:
+                    await omi_repass.drop_stale_proposals(db)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                if "omi_wearer_samples" not in str(exc):       # pre-0074: nothing to expire yet
+                    logger.warning("omi_repass: proposal expiry failed (%s)", type(exc).__name__)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

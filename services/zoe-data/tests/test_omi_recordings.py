@@ -65,18 +65,37 @@ class _Sqlite:
     def __init__(self, path):
         self.conn = sqlite3.connect(path, check_same_thread=False)      # TestClient runs the app in its own thread
         self.conn.row_factory = sqlite3.Row
+        self._txn = 0
 
     def execute(self, sql, params=()):
         async def _run():
             await asyncio.sleep(0)
             cur = self.conn.execute(sql, tuple(params))
             rows = cur.fetchall()
-            self.conn.commit()
+            if not self._txn:
+                self.conn.commit()
             return _Cursor(rows, rowcount=cur.rowcount)
         return _ExecResult(_run())
 
     async def commit(self):
-        self.conn.commit()
+        if not self._txn:
+            self.conn.commit()
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        """Like asyncpg's: every write inside commits together on a clean exit, or none does on an exception (production auto-commits OUTSIDE one)."""
+        self._txn += 1
+        try:
+            yield self
+        except BaseException:
+            self._txn -= 1
+            if not self._txn:
+                self.conn.rollback()
+            raise
+        else:
+            self._txn -= 1
+            if not self._txn:
+                self.conn.commit()
 
     def rows(self, sql, params=()):
         return self.conn.execute(sql, params).fetchall()

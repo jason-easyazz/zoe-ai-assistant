@@ -281,10 +281,15 @@ def flue_said(t0: float, t1: float, *, db_path: Optional[str] = None) -> Optiona
     out: list = []
     try:
         lo, hi = t0 - 120, t1 + 120
-        for (data,) in con.execute("SELECT data FROM flue_conversation_stream_batches ORDER BY rowid DESC LIMIT 400000"):
+        for (path_, seq, data) in con.execute("SELECT path, seq, data FROM flue_conversation_stream_batches ORDER BY rowid DESC LIMIT 400000"):
             try:
                 evs = json.loads(data)
-            except ValueError:
+                if isinstance(evs, dict) and "$flueChunkCount" in evs:
+                    # a large batch is stored as a sentinel + rows in the chunk table (the same representation self_review.flue_replies rebuilds)
+                    parts = con.execute("SELECT data FROM flue_conversation_stream_batch_chunks WHERE path = ? AND seq = ? ORDER BY chunk_index",
+                                        (path_, seq)).fetchall()
+                    evs = json.loads("".join(p[0] for p in parts))
+            except (ValueError, sqlite3.Error):
                 continue
             for e in evs if isinstance(evs, list) else [evs]:
                 if not isinstance(e, dict):

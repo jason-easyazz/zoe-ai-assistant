@@ -166,6 +166,24 @@ def test_flue_reader_joins_deltas_into_replies_and_reads_user_turns(tmp_path):
     assert pa.flue_said(REC, REC + 60, db_path=str(tmp_path / "missing.db")) is None            # an unreadable store is "no evidence", not []
 
 
+def test_flue_reader_rebuilds_a_chunked_batch(tmp_path):
+    evs = [{"type": "assistant_text_delta", "timestamp": _iso(REC + 7), "messageId": "m", "blockId": "b", "sequence": 1, "delta": "Chunked "},
+           {"type": "assistant_text_delta", "timestamp": _iso(REC + 8), "messageId": "m", "blockId": "b", "sequence": 2, "delta": "reply."}]
+    blob = json.dumps(evs)
+    p = tmp_path / "zoe-brain.db"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE flue_conversation_stream_batches (path TEXT, seq INTEGER, data TEXT)")
+    con.execute("CREATE TABLE flue_conversation_stream_batch_chunks (path TEXT, seq INTEGER, chunk_index INTEGER, data TEXT)")
+    con.execute("INSERT INTO flue_conversation_stream_batches VALUES ('p', 1, ?)", (json.dumps({"$flueChunkCount": 2}),))
+    half = len(blob) // 2
+    con.execute("INSERT INTO flue_conversation_stream_batch_chunks VALUES ('p', 1, 1, ?)", (blob[half:],))      # out of order on purpose
+    con.execute("INSERT INTO flue_conversation_stream_batch_chunks VALUES ('p', 1, 0, ?)", (blob[:half],))
+    con.commit()
+    con.close()
+    got = pa.flue_said(REC, REC + 60, db_path=str(p))
+    assert [(s.kind, s.text) for s in got] == [("zoe", "Chunked reply.")]
+
+
 # ── the seams in omi_voices ────────────────────────────────────────────────────────────────────
 
 class FakeDb:
