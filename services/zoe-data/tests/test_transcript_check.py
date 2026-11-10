@@ -276,10 +276,14 @@ def test_a_barge_in_gets_no_line_and_keeps_the_day(queued):
 
     async def interrupted():
         g = tc.append_stream(reply(), "put the kettle on", OWNER, "s1")
-        await g.__anext__()
-        await g.aclose()
+        for _ in range(2):
+            await g.__anext__()                                    # the whole ordinary reply ...
+        tail = await g.__anext__()                                 # ... and the appended line is now being spoken: the day's ask is RESERVED
+        assert "transcripts" in tail and env.db.rows("SELECT * FROM omi_check_asks") != []
+        await g.aclose()                                           # barge-in mid-line
     run(interrupted())
-    assert env.db.rows("SELECT * FROM omi_check_asks") == []
+    assert env.db.rows("SELECT * FROM omi_check_asks") == []       # released: the owner never heard it, so the day is kept
+    assert "s1" not in tc._PENDING
 
 
 def test_non_command_text_in_a_stream_is_not_a_reply(queued):
@@ -798,14 +802,19 @@ def test_the_other_one_sided_case_leaves_the_transcript_alone(queued):
     assert rows(env)[0]["transcript"] == transcript
 
 
-def test_a_ledger_failure_never_blocks_a_committed_correction(queued, monkeypatch):
+def test_a_ledger_failure_never_blocks_a_committed_correction(queued, monkeypatch, caplog):
     env, rid = queued
     import omi_repass_eval as eu
+    attempts = []
 
     def boom(*a, **k):
+        attempts.append(1)
         raise OSError("disk full")
     monkeypatch.setattr(eu, "note_owner_correction", boom)
+    caplog.set_level("WARNING")
     assert run(tc.answer(OWNER, items(env)[0]["id"], alt=1))["applied"] is True
+    assert attempts, "the answer must still TRY to feed the contender ledger"
+    assert any("TRANSCRIPT_CHECK_LEDGER_NOT_WRITTEN" in m for m in caplog.messages), "a skipped ledger credit must be loud, not silent"
     assert items(env)[0]["status"] == "answered" and "eleven" in rows(env)[0]["transcript"]
 
 
