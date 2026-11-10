@@ -28,14 +28,6 @@ passlib[bcrypt]==1.7.4
 cryptography>=50.0.2
 typing-extensions==4.16.0
 email-validator==2.3.0
-# redis is HELD IN THE 5.x LINE. 6.0.0 made retries default (3, then 10 in 8.0.0,
-# with exponential backoff) where 5.x did none, and 8.0.0 also defaults
-# socket_timeout/socket_connect_timeout to 5s. api/dependencies.py builds a
-# client against REDIS_HOST (default `zoe-redis`) — a host that was RETIRED in
-# March 2026 and no longer exists — so every connection attempt fails. Under 5.x
-# that fails fast and drops to the in-memory limiter; under 8.x it would retry
-# ten times with backoff first.
-redis==5.3.1
 psycopg2-binary>=2.9.13
 # httpx <0.28 is deliberate — see commit 74120547 (auth test compatibility).
 httpx>=0.27.0,<0.28
