@@ -112,6 +112,19 @@ def test_owner_corrections_are_scored_as_ground_truth_hits_and_misses(tmp_path):
     assert eu.note_owner_correction(home, "someone-else", "r1", 0, 2000, "x") == {}                  # another member's chunks are never scored
 
 
+def test_a_speaker_check_row_overlapping_the_corrected_span_is_skipped_not_a_crash(tmp_path):
+    """run_night() stores who_said items beside the transcript hypotheses; they have no 'hyps'. A correction over both must still score the transcript row."""
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-09", [
+        {"u": "m1", "rid": "r1", "i": 0, "t0": 0.0, "t1": 2.0, "hyps": {PIV: "book the tickets", PAR: "look the pickets"}},
+        {"kind": "who_said", "u": "m1", "rid": "r1", "seg_id": "s1", "t0": 0.5, "t1": 1.5, "mark": "unknown", "cands": []}])
+    tally = eu.note_owner_correction(home, "m1", "r1", 0, 2000, "book the tickets", "2026-11-09")
+    assert tally == {PIV: {"hit": 1, "miss": 0}, PAR: {"hit": 0, "miss": 1}}                  # the transcript row is scored once; the speaker check is not
+    only = tmp_path / "h2"
+    eu.store_hyps(only, "2026-11-09", [{"kind": "who_said", "u": "m1", "rid": "r1", "seg_id": "s1", "t0": 0.5, "t1": 1.5, "mark": "lean", "cands": []}])
+    assert eu.note_owner_correction(only, "m1", "r1", 0, 2000, "x") == {}
+
+
 # ── hypothesis store ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_hypotheses_are_private_pruned_and_forget_reached(tmp_path):

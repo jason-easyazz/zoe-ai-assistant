@@ -494,9 +494,11 @@ def note_owner_correction(home: Path, user_id: str, rid: str, start_ms: int, end
                 r = json.loads(line)
             except ValueError:
                 continue
+            if (r.get("kind") or "transcript") != "transcript":
+                continue                                    # a who_said / speaker-check row shares the store but holds no hypotheses: nothing to score
             if r.get("u") != user_id or r.get("rid") != rid or r["t1"] * 1000 <= start_ms or r["t0"] * 1000 >= end_ms:
                 continue
-            for m, v in score_correction(fixed, r["hyps"]).items():
+            for m, v in score_correction(fixed, r.get("hyps") or {}).items():
                 t = tally.setdefault(m, [0, 0])
                 t[0 if v == "hit" else 1] += 1
     night = night or datetime.now(timezone.utc).date().isoformat()
