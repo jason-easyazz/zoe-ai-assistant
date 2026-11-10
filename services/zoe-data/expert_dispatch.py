@@ -231,6 +231,15 @@ async def dispatch(domain: str, text: str, ctx: dict[str, Any], *, write_ok: boo
                 ex = await extract_slots_for_intent(intent_name, text)
                 if not ex:
                     return None
+                if intent_name == "list_add":
+                    # the router's "which list?" decision (write_intent_gate) is never in the extractor's slots: re-apply the same rule
+                    # here or the expert lane would write "bolts" to the shopping list unasked
+                    import intent_router as _ir
+                    import write_intent_gate as _wig
+
+                    if (str(ex.get("list_type") or "").strip().lower() in ("", "shopping") and not _wig.names_a_list(text)
+                            and _ir._needs_list_choice(str(ex.get("item") or ""))):
+                        ex = dict(ex, ask_list=True, list_type="")
                 slots = ex
             elif kind == "direct":
                 # Regex slots are complete: nothing to extract. Run as the REAL
@@ -278,7 +287,7 @@ _WEATHER_WORD_RE = re.compile(
     r"\b(?:weather|forecast|rain\w*|outside|sunny|wind\w*|humid\w*|storm\w*|today|tomorrow|tonight|week)\b", re.IGNORECASE)
 
 
-from weather_speech import is_food_temperature, weather_place  # noqa: E402  (pure helpers, no import cycle)
+from weather_speech import is_food_temperature, weather_places  # noqa: E402  (pure helpers, no import cycle)
 
 
 def _is_unit_conversion(text: str) -> bool:
@@ -344,8 +353,12 @@ def _plan(domain: str, text: str):
 
     if domain == "weather":
         low = text.lower()
-        place = weather_place(low)      # a place the user NAMED beats the household default
-        loc = {"location": place} if place else {}
+        from weather_speech import has_other_question
+
+        if has_other_question(low):
+            return None      # two questions in one turn ("...and how hot for a pork roast"): the brain answers both, never half
+        places = weather_places(low)      # the place(s) the user NAMED beat the household default
+        loc = {"location": places[0], **({"also_locations": places[1:]} if places[1:] else {})} if places else {}
         # Advice questions get a DIRECT yes/no answer, not a forecast dump.
         if re.search(r"\bumbrella\b|\brain(coat)?\b|will\s+it\s+rain|going\s+to\s+rain", low):
             return ("weather", {"advice": "rain", **loc}, "read")
@@ -366,6 +379,13 @@ def _plan(domain: str, text: str):
             r"going\s+to|gonna|sunny)\b", low))
         return ("weather", {"forecast": fc, **loc}, "read")
     if domain == "time":
+        # A when / what-time question about the person's OWN life is never the clock: "what time do I usually get up?" answered
+        # "It's 2:10 PM." (QA 2026-11-08) because the head claims `time` on the words alone and the precedence flags can be dark.
+        # Unconditional: this only ever hands a clearly personal question to the brain (recall floor + calendar), never a clock ask.
+        from memory_gate import is_event_time_question, is_own_fact_question
+
+        if is_event_time_question(text) or is_own_fact_question(text):
+            return None
         det = detect_intent(text, log_miss=False)
         name = det.name if det and det.name in ("time_query", "date_query") else "time_query"
         return (name, {}, "read")
@@ -385,6 +405,15 @@ def _plan(domain: str, text: str):
                 and "raw" not in (det.slots or {}):
             return (det.name, dict(det.slots), "direct")
         return ("people_expert", {}, "expert")
+
+    if domain == "calendar":
+        # "what exam do i have and when" names no day: reading TODAY's agenda answered "You've got nothing on today." (QA round 7). A
+        # question about when the user's own event is, with no day given, is the brain's (recall floor + the calendar tool).
+        from memory_gate import is_event_time_question
+
+        if (is_event_time_question(text) and not _calendar_qualifier(text)
+                and not re.search(r"\b(?:appointments?|meetings?|events?)\b", text, re.IGNORECASE)):
+            return None      # (a generic "what appointments do I have" is still the agenda; a NAMED kind of event is not)
 
     # calendar / lists / reminders / timers — disambiguate SHOW (read, safe)
     # from CREATE (write) using a regex hit first, else the create-signal cue.

@@ -190,3 +190,13 @@ def test_a_matched_guest_never_inherits_the_panels_member_session():
     for assign in ("_has_scope_identity = bool(_scope_identity_user)", "effective_user = _panel_bound_user"):
         assert body.index(assign) < guard, assign
 
+
+
+def test_dropping_a_childs_pendant_voiceprint_keeps_their_panel_print(env):
+    # Codex on #2346: tagging a pendant line as the same child deleted the panel enrolment too
+    gid = enrol(env)
+    env.conn.execute("INSERT INTO learned_voiceprints (id, owner_user_id, people_id, model_id, channel, embedding, created_at, updated_at, "
+                     "expires_at) VALUES ('pp', ?, ?, ?, 'pendant', ?, 'x', 'x', 'x')", (OWNER, gid, MID, unit(9).tobytes()))
+    env.conn.commit()
+    run(ov._drop_voiceprints(env, OWNER, gid))
+    assert env.q("SELECT channel FROM learned_voiceprints WHERE people_id = ?", (gid,)) == [("panel",)]

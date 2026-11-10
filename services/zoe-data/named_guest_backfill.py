@@ -136,6 +136,18 @@ async def run(owner: str, name: str, paths: Sequence[str], *, embedder, dry_run:
     clean = nge._clean_name(name)
     if not clean:
         raise nge.GuestError("that is not a plain name", 400)
+    forgotten = False
+    if not dry_run:
+        # Snapshot the forget state BEFORE the slow embedding, as the ticketed enrolment does at issue: a forget made mid-run must
+        # reach the store-time check as "forgotten since", never be read late and passed as an explicit re-teach.
+        import memory_forgotten as mf
+
+        if not mf.configured():
+            raise nge.GuestError("the forget ledger is not configured; nothing was stored", 503)
+        try:
+            forgotten = await mf.matches(owner, clean, strict=True)    # the owner naming a forgotten name here is an explicit re-teach
+        except Exception as exc:  # noqa: BLE001
+            raise nge.GuestError("the forget ledger is unavailable; nothing was stored", 503) from exc
     clips, vec = assess(embed(paths, embedder), await member_profiles(model_id), min_kept=min_kept)
     counts: dict = {}
     for c in clips:
@@ -150,12 +162,6 @@ async def run(owner: str, name: str, paths: Sequence[str], *, embedder, dry_run:
         raise nge.GuestError("named guests are off (ZOE_NAMED_GUESTS): nothing was stored", 404)
     if await es.audience_of(owner) != "adult":
         raise nge.GuestError("the owner must be an adult member: nothing was stored", 403)
-    import memory_forgotten as mf
-
-    try:
-        forgotten = await mf.matches(owner, clean, strict=True)    # the owner naming a forgotten name here is an explicit re-teach
-    except Exception as exc:  # noqa: BLE001
-        raise nge.GuestError("the forget ledger is unavailable; nothing was stored", 503) from exc
     out = await nge.store_print(owner, clean, vec, model_id, sample_count=counts.get("kept", 0), forgotten_at_issue=forgotten,
                                 ref="named_guest_backfill")
     report.update(stored=True, guest_id=out["guest_id"])

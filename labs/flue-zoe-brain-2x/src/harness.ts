@@ -147,7 +147,7 @@ const SLOT_FILES = new Map<string, OverlayDoctrineSlot>(OVERLAY_DOCTRINE_SLOTS.m
 // llama slot is windowed, but a bigger prompt is slower to prefill on every cache miss).
 export const MAX_FILE_BYTES = 16 * 1024;
 export const MAX_TEXT_CHARS = 6000;
-export const MAX_INSTRUCTIONS_CHARS = 13_500;
+export const MAX_INSTRUCTIONS_CHARS = 14_500;
 export const MAX_TOOL_DESCRIPTION_CHARS = 1000;
 /** zoe-data's wire ceiling for a manner block (manner.ts MANNER_MAX_CHARS). */
 export const MAX_MANNER_CHARS = 800;

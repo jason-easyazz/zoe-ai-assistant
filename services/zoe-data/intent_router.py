@@ -190,6 +190,11 @@ def _infer_event_category(text: str) -> str:
 
 #: a courtesy tail on a list command ("..., please", "thanks", "for me"); the list-add patterns read the text without it
 _LIST_TRAILING_COURTESY_RE = re.compile(r"(?:,?\s+(?:please|thanks|thank you|cheers|for me))+$")
+# "dont forget to add screws" / "remember to put the bins on the list" is the ADD command with a reminder-ish lead-in (QA round 7: the natural-language
+# pattern read "to add screws" as the ITEM, the head vetoed it, and the brain said "I can't actually add things to a shopping list").
+_FORGET_TO_ADD_LEAD_RE = re.compile(r"^(?:(?:please|and|also|oh)\s+)*(?:(?:don'?t|do not)\s+forget|remember|make sure you|make sure)\s+to\s+(?=(?:add|put)\s)")
+# A DECISION question ("should i get a new ute or fix the old one") is never a complaint, even when it holds "fix the": the brain answers it.
+_DECISION_QUESTION_RE = re.compile(r"^(?:(?:hey|ok|okay|so|and|um|zoe)\s+)*(?:should|shall|would|could)\s+(?:i|we)\b|\b(?:should|shall)\s+(?:i|we)\b.*\bor\b")
 
 
 def _normalize_chat_intent_text(raw: str) -> str:
@@ -1249,10 +1254,12 @@ def detect_intent(
                 or any(kw in t for kw in ("tomorrow", "this week", "forecast"))
             )
             slots = {"qualifier": qualifier, "forecast": is_forecast}
-            from weather_speech import weather_place   # a place the user named beats the household default
-            place = weather_place(t)
-            if place:
-                slots["location"] = place
+            from weather_speech import weather_places   # the place(s) the user named beat the household default
+            places = weather_places(t)
+            if places:
+                slots["location"] = places[0]
+                if places[1:]:
+                    slots["also_locations"] = places[1:]
             return Intent("weather", slots)
 
     # --- JOURNAL ---
@@ -1443,6 +1450,9 @@ def detect_intent(
     lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
     if len(lt.split()) < 2:
         lt = t          # the courtesy word WAS the whole object ("add cheers"): keep it as before
+    _forget_to_add = bool(_FORGET_TO_ADD_LEAD_RE.match(lt))
+    if _forget_to_add:
+        lt = _FORGET_TO_ADD_LEAD_RE.sub("", lt, count=1)
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [
@@ -1456,6 +1466,8 @@ def detect_intent(
             item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             if not _list_item_ok(item):
                 continue            # a sentence, not an item: never stored, never claimed
+            if _unnamed_list(lst) and _needs_list_choice(item):
+                return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
             return Intent("list_add", {"item": item, **_list_slots(lst)})
 
     # --- LIST ADD (STT-garbled leading "add") ---
@@ -1504,6 +1516,17 @@ def detect_intent(
                 if not _list_item_ok(item):
                     continue
                 list_type = _infer_list(item)
+                if list_type == "shopping" and _needs_list_choice(item):
+                    return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
+                if _forget_to_add:
+                    # "dont forget to add print my study notes": no list was named, so ASK which (a reminder offer or a "can't add things" is
+                    # what the brain made of it); groceries still go straight on the shopping list.
+                    import write_intent_gate
+
+                    if (list_type != "shopping" or write_intent_gate.looks_non_grocery(item)
+                            or re.match(r"(?:print|call|ring|renew|book|pay|email|text|send|return|collect|post|submit|finish|study|clean|fix|cancel|"
+                                        r"organi[sz]e|pick up|drop off|hand in|sign|register|enrol)\b", item, re.IGNORECASE)):
+                        return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
                 return Intent("list_add", {"item": item, "list_type": list_type})
 
     # --- LIST ADD (natural language shopping) ---
@@ -1795,7 +1818,7 @@ def detect_intent(
         r'|\byou\s+(?:messed|failed)\b',
         re.I,
     )
-    if _USER_ISSUE_RE.search(t):
+    if _USER_ISSUE_RE.search(t) and not _DECISION_QUESTION_RE.search(t):
         return Intent("user_issue_report", {"message": text})
 
     # Open-domain Q&A / creative — route to agent (closes intent-gap backlog without brittle regex)
@@ -2829,6 +2852,24 @@ _TASK_KEYWORDS = {
 }
 
 
+_GENERIC_LIST_NAMES = frozenset({"", "the", "my", "our", "a", "this", "that", "your"})
+
+
+def _unnamed_list(lst: str) -> bool:
+    """"add X to the list" / "to my list": the list is a pronoun-ish word, not a name or a type."""
+    return str(lst or "").strip().lower() in _GENERIC_LIST_NAMES
+
+
+def _needs_list_choice(item: str) -> bool:
+    """No list was named and the item is clearly not a grocery (bolts, steel cap boots, an invoice): the household shopping list is
+    the wrong default (owner's fridge rule: household items go on household lists), so Zoe asks which list. Milk goes straight on."""
+    import write_intent_gate
+
+    if write_intent_gate.mode() != "on":
+        return False            # off / shadow: the add goes straight to the shopping list, exactly as before the gate existed
+    return write_intent_gate.looks_non_grocery(item)
+
+
 def _infer_list(item: str) -> str:
     lower = item.lower()
     if any(kw in lower for kw in _TASK_KEYWORDS):
@@ -3115,6 +3156,11 @@ async def _execute_list_add_direct(intent: Intent, user_id: str) -> Optional[str
     mcp_server's list_add_item tool (same list resolution, family/personal
     visibility default, and list creation) for the acting user. Returns a confirming string on
     success; None only on genuine failure (so ok:false still means real failure)."""
+    if (intent.slots or {}).get("ask_list") and str((intent.slots or {}).get("item") or "").strip():
+        # No list named and not a grocery: ask which list instead of defaulting to the household shopping list.
+        import write_intent_gate
+
+        return write_intent_gate.which_list_question(str(intent.slots.get("item") or ""))
     intent = _canonical_list_slots(intent)
     slots = intent.slots or {}
     item = str(slots.get("item") or "").strip()
@@ -5292,14 +5338,21 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
 
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
-        return await _execute_weather_direct(
-            user_id=user_id,
-            forecast=bool(intent.slots.get("forecast")),
-            advice=str(intent.slots.get("advice") or ""),
-            location=str(intent.slots.get("location") or ""),
-            focus=str(intent.slots.get("focus") or ""),
-            day=str(intent.slots.get("day") or ""),
-        )
+        # "weather in fremantle and mandurah": every named place is answered, none silently dropped (QA 6b).
+        _where = [str(intent.slots.get("location") or "")] + [str(x) for x in (intent.slots.get("also_locations") or [])]
+        _parts = []
+        for _loc in _where[:3]:
+            _r = await _execute_weather_direct(
+                user_id=user_id,
+                forecast=bool(intent.slots.get("forecast")),
+                advice=str(intent.slots.get("advice") or ""),
+                location=_loc,
+                focus=str(intent.slots.get("focus") or ""),
+                day=str(intent.slots.get("day") or ""),
+            )
+            if _r:
+                _parts.append(_r)
+        return " ".join(_parts) or None
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)

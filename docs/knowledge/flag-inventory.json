@@ -256,6 +256,9 @@
         "unset"
       ],
       "sites": {
+        "scripts/maintenance/conversation_notes_backfill.py": [
+          "'Australia/Perth'"
+        ],
         "services/zoe-data/brain_scheduler.py": [
           "'Australia/Perth'"
         ],
@@ -3134,6 +3137,25 @@
         },
         "typed_env": false
       },
+      "ZOE_CONTRACTION_REPAIR": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/contraction_repair.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_CONVERSATION_ENDER_ACKS": {
         "defaults": [
           "\"Okay \u2014 I'm here when you need me.|No worries. Talk soon.|Okay.\""
@@ -3169,6 +3191,29 @@
           "note": "",
           "owner_doc": "docs/knowledge/voice-lane-parity.md",
           "type": "bool"
+        },
+        "typed_env": true
+      },
+      "ZOE_CONVERSATION_NOTES": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/conversation_notes.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/conversation-notes.md",
+          "type": "str"
         },
         "typed_env": true
       },
@@ -8602,6 +8647,29 @@
         },
         "typed_env": false
       },
+      "ZOE_MEDICAL_SAFETY": {
+        "defaults": [
+          "'enforce'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/medical_safety.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "enforce"
+          ],
+          "default": "enforce",
+          "divergent_ok": {},
+          "note": "",
+          "owner_doc": "docs/knowledge/medical-safety.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_MEMBER_REGISTER": {
         "defaults": [
           "'off'"
@@ -10081,6 +10149,29 @@
           "divergent_ok": {},
           "note": "",
           "owner_doc": "",
+          "type": "str"
+        },
+        "typed_env": true
+      },
+      "ZOE_NIGHT_EXTRACT": {
+        "defaults": [
+          "'off'"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/night_extract.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "off",
+          "divergent_ok": {},
+          "note": "phase 1: shadow only; on is not built",
+          "owner_doc": "docs/knowledge/night-extract.md",
           "type": "str"
         },
         "typed_env": true
@@ -13517,6 +13608,25 @@
         },
         "typed_env": true
       },
+      "ZOE_RECALL_HOUSEHOLD_QUESTIONS": {
+        "defaults": [
+          "True"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/memory_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": null,
+          "default": true,
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "bool"
+        },
+        "typed_env": true
+      },
       "ZOE_RECALL_PRESENT_STATE_SHAPES": {
         "defaults": [
           "-"
@@ -13668,6 +13778,29 @@
           "type": "int"
         },
         "typed_env": false
+      },
+      "ZOE_REPLY_POLISH": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/reply_polish.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "on",
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
       },
       "ZOE_REPO_ROOT": {
         "defaults": [
@@ -16370,6 +16503,7 @@
         ],
         "in_env_example": false,
         "readers": [
+          "scripts/maintenance/conversation_notes_backfill.py",
           "services/zoe-data/brain_scheduler.py",
           "services/zoe-data/calendar_ical.py",
           "services/zoe-data/household_locale.py",
@@ -18104,6 +18238,29 @@
         },
         "typed_env": false
       },
+      "ZOE_WRITE_INTENT_GATE": {
+        "defaults": [
+          "-"
+        ],
+        "in_env_example": false,
+        "readers": [
+          "services/zoe-data/write_intent_gate.py"
+        ],
+        "registered": true,
+        "spec": {
+          "allowed": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "default": "on",
+          "divergent_ok": {},
+          "note": "kill switch: off",
+          "owner_doc": "services/zoe-data/AGENTS.md",
+          "type": "str"
+        },
+        "typed_env": true
+      },
       "ZOE_WS_IDLE_TIMEOUT_SECONDS": {
         "defaults": [
           "120.0"
@@ -18243,6 +18400,7 @@
     "scripts/lib/node_listen_host.mjs": 1,
     "scripts/maintenance/check_emotional_thread.py": 2,
     "scripts/maintenance/compact_pipeline_state.py": 1,
+    "scripts/maintenance/conversation_notes_backfill.py": 1,
     "scripts/maintenance/curate_voice_corpus.py": 2,
     "scripts/maintenance/engineering_harness_loop.py": 1,
     "scripts/maintenance/harness_quiet.py": 5,
@@ -19433,6 +19591,16 @@
       ],
       "typed_env": false
     },
+    "HF_HUB_CACHE": {
+      "defaults": [
+        "dynamic"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/jobs/glinerel_worker.py"
+      ],
+      "typed_env": false
+    },
     "HF_HUB_OFFLINE": {
       "defaults": [
         "dynamic"
@@ -19683,6 +19851,7 @@
       "readers": [
         "scripts/maintenance/zoe-struggle-proposals.py",
         "services/zoe-data/contact_backfill.py",
+        "services/zoe-data/conversation_notes.py",
         "services/zoe-data/latent_intent_detector.py",
         "services/zoe-data/memory_authority.py",
         "services/zoe-data/memory_digest.py",
@@ -20217,6 +20386,16 @@
       "in_env_example": false,
       "readers": [
         "scripts/maintenance/reap_stale_omnigent_runners.py"
+      ],
+      "typed_env": false
+    },
+    "OMP_NUM_THREADS": {
+      "defaults": [
+        "'4'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/night/jobs/glinerel_worker.py"
       ],
       "typed_env": false
     },
@@ -20967,6 +21146,16 @@
       ],
       "typed_env": false
     },
+    "WAKE_CHIME_ON_WAKE": {
+      "defaults": [
+        "'false'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/setup/zoe_voice_daemon.py"
+      ],
+      "typed_env": false
+    },
     "WAKE_CONFIRM_COUNT": {
       "defaults": [
         "'2'"
@@ -21112,7 +21301,11 @@
     }
   },
   "registry_unread": [
-    "ZOE_CONVERSATION_NOTES",
+    "ZOE_NIGHT_EXTRACT_BATCH",
+    "ZOE_NIGHT_EXTRACT_DIR",
+    "ZOE_NIGHT_EXTRACT_MEM_MAX",
+    "ZOE_NIGHT_EXTRACT_THREADS",
+    "ZOE_NIGHT_EXTRACT_VENV",
     "ZOE_SELF_REVIEW_MAX_CALLS",
     "ZOE_SELF_REVIEW_MAX_TOKENS",
     "ZOE_SPEAKER_WINDOW_THRESHOLD_LONG",
