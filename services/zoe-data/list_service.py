@@ -764,16 +764,19 @@ def note_focus_list(user_id: Optional[str], list_id: str) -> None:
 
 
 def focus_list(user_id: Optional[str]) -> Optional[str]:
-    """The list id this member last created/named inside the window, else the list of their last add, else None."""
+    """The list this member most recently touched: whichever is NEWER of the list they last created/named (``note_focus_list``)
+    and the list of their last add, each inside its window; None when neither is."""
     u = (user_id or "").strip()
+    now = _focus_now()
+    cands: list[tuple[float, str]] = []
     hit = _FOCUS_LISTS.get(u)
-    if hit is not None and _focus_now() - hit[1] <= FOCUS_LIST_WINDOW_S:
-        return hit[0]
+    if hit is not None and now - hit[1] <= FOCUS_LIST_WINDOW_S:
+        cands.append((hit[1], hit[0]))
     if u and not panel_principal.is_guest_id(u):
-        added = recent_add(u)
-        if added is not None:
-            return added[0]
-    return None
+        added = _RECENT_ADDS.get(_recent_key(u))
+        if added is not None and now - added[2] <= FOCUS_LIST_WINDOW_S:
+            cands.append((added[2], added[0]))
+    return max(cands)[1] if cands else None
 
 
 def looks_like_correction_of(old_text: str, new_text: str) -> bool:

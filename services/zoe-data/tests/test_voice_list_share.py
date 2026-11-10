@@ -464,3 +464,53 @@ async def test_a_groceries_household_list_is_locked_like_shopping():
     db = _house()
     db.lists.append({"id": "g", "user_id": "alex", "name": "Groceries", "list_type": "shopping", "visibility": "family"})
     assert (await list_sharing.set_list_visibility(db, list_id="g", user_id="alex", share=False))["status"] == "locked"
+
+
+def test_a_cursor_rowcount_is_read_like_a_status_string():
+    from db_pool import _Cursor
+
+    assert [list_sharing._changed(x) for x in (_Cursor([], rowcount=1), _Cursor([], rowcount=0), _Cursor([{"a": 1}]))] == [1, 0, 1]
+
+
+@pytest.mark.asyncio
+async def test_share_works_when_the_driver_returns_a_cursor_not_a_status_string():
+    """Production's get_db_ctx() execute() returns a db_pool._Cursor: the share must still land and queue its heads-ups."""
+    from db_pool import _Cursor
+
+    db = _house()
+    db.lists.append({"id": "c1", "user_id": "alex", "name": "Camping Supplies", "list_type": "personal", "visibility": "personal"})
+    orig = db.execute
+
+    async def cursor_execute(*args):
+        status = await orig(*args)
+        return _Cursor([], rowcount=int(str(status).rsplit(" ", 1)[-1])) if str(status).startswith("UPDATE") else status
+
+    db.execute = cursor_execute
+    out = await list_sharing.set_list_visibility(db, list_id="c1", user_id="alex", share=True)
+    assert out["status"] == "shared" and sorted(p["user_id"] for p in db.pending) == ["blair", "casey"]
+
+
+@pytest.mark.asyncio
+async def test_an_add_to_list_b_after_creating_list_a_moves_what_it_means():
+    list_service.clear_recent_adds()
+    db = _house()
+    await _say(db, "alex", "create a list called Alpha")
+    await _say(db, "alex", "create a list called Beta and add rope to it")        # Beta is newest
+    await _say(db, "alex", "share it to the house")
+    assert {x["name"]: x["visibility"] for x in db.lists if x["name"] in ("Alpha", "Beta")} == {"Alpha": "personal", "Beta": "family"}
+
+
+def test_focus_follows_the_most_recent_of_a_create_and_an_add(monkeypatch):
+    list_service.clear_recent_adds()
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(list_service, "_focus_now", lambda: clock["t"])
+    import time as _time
+
+    monkeypatch.setattr(_time, "monotonic", lambda: clock["t"])
+    list_service.note_focus_list("alex", "A")
+    clock["t"] += 5
+    list_service.note_recent_add("alex", "B", "item")        # an add to B after creating A
+    assert list_service.focus_list("alex") == "B"
+    clock["t"] += 5
+    list_service.note_focus_list("alex", "C")                 # a later create wins again
+    assert list_service.focus_list("alex") == "C"

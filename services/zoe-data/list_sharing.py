@@ -61,10 +61,13 @@ def safe_inline(value: str, cap: int = 48) -> str:
 
 
 def _changed(status) -> int:
-    """Rows a driver reported changing (asyncpg's "UPDATE 1", or an int). Anything else counts as ZERO: an owner-checked
+    """Rows a driver reported changing (asyncpg's "UPDATE 1", an int, or a cursor's ``rowcount``). Anything else counts as ZERO: an owner-checked
     visibility write is only believed when the driver positively says a row changed."""
-    if isinstance(status, int):
+    if isinstance(status, int) and not isinstance(status, bool):
         return status
+    rowcount = getattr(status, "rowcount", None)        # get_db_ctx() / AsyncpgCompat hand back a db_pool._Cursor
+    if isinstance(rowcount, int) and not isinstance(rowcount, bool):
+        return max(rowcount, 0)
     m = re.search(r"\b(?:UPDATE|INSERT\s+\d+)\s+(\d+)\s*$", str(status or ""))
     return int(m.group(1)) if m else 0
 
