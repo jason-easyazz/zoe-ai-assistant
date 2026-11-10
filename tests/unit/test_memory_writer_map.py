@@ -1,11 +1,13 @@
 """The memory writer map is GENERATED from code and a new writer cannot appear without a map entry (deep dive B8).
 
-REPO rules: the committed map equals a fresh generation, every writer module has a role note, and the count never
-falls below the deep dive's floor (39; the 10-05 audit's hand count of 31 was stale). NEGATIVE CONTROLS run the same
-detector on synthetic modules so each rule is proven able to fail.
+REPO rules: the generator runs cleanly on this tree, every writer module has a role note, and the count never falls below
+the deep dive's floor (39; the 10-05 audit's hand count of 31 was stale). NEGATIVE CONTROLS run the same detector on
+synthetic modules so each rule is proven able to fail.
 
-When this goes red: `python3 tools/audit/memory_writer_map.py` regenerates the doc; add a role line for a new module to
-`docs/knowledge/memory-writer-notes.json` (say what triggers the write and whose words it stores).
+The map itself is a LOCAL build product since 2026-11-10 (gitignored; a committed copy conflicted on concurrent PRs).
+Read it with `python3 tools/audit/memory_writer_map.py` (writes `docs/knowledge/memory-writer-map.md`, no network).
+When this goes red: add a role line for a new module to `docs/knowledge/memory-writer-notes.json` (say what triggers the
+write and whose words it stores).
 """
 from __future__ import annotations
 
@@ -39,10 +41,13 @@ def test_every_writer_module_has_a_role_note(writers):
     )
 
 
-def test_committed_map_matches_the_code(writers):
-    fresh = mwm.render(writers, mwm.load_notes(_REPO))
-    committed = (_REPO / mwm.MAP_REL).read_text(encoding="utf-8")
-    assert fresh == committed, f"{mwm.MAP_REL} is stale - rerun: python3 tools/audit/memory_writer_map.py"
+def test_the_generator_runs_cleanly_and_writes_the_rendered_map(writers, tmp_path):
+    out = tmp_path / "memory-writer-map.md"
+    assert mwm.main(["--repo", str(_REPO), "--out", str(out)]) == 0
+    assert out.read_text(encoding="utf-8") == mwm.render(writers, mwm.load_notes(_REPO))
+    assert mwm.main(["--repo", str(_REPO), "--out", str(out), "--check"]) == 0
+    out.write_text("stale\n", encoding="utf-8")
+    assert mwm.main(["--repo", str(_REPO), "--out", str(out), "--check"]) == 1, "--check cannot fail"
 
 
 def test_the_map_finds_at_least_the_39_writers_the_deep_dive_counted(writers):

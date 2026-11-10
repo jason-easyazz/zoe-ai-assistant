@@ -256,7 +256,9 @@ def test_numpy_backend_accepts_an_npz_path_too():
 
 
 def test_backend_flag_is_in_the_inventory():
-    inv = json.loads((REPO / "docs" / "knowledge" / "flag-inventory.json").read_text())
+    from flag_inventory_support import inventory   # scanned from this tree; the JSON is a local build product
+
+    inv = inventory()
     row = inv["flags"]["prod"]["ZOE_ROUTER_HEADS_BACKEND"]
     assert row["defaults"] == ["'numpy'"]
     assert row["readers"] == ["services/zoe-data/router_heads_numpy.py"]
