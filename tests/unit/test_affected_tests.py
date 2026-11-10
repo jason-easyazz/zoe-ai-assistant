@@ -499,11 +499,31 @@ def test_lanes_mirror_validate_workflow():
     assert re.search(r'PYTHONPATH="\$\{\{ github.workspace \}\}:\$\{\{ github.workspace \}\}/services/zoe-data[:"]', job)
     assert re.search(r"tests/unit -m ci_safe", job) and lanes["tests-unit"].pythonpath == (".", "services/zoe-data")
     assert re.search(r"services/zoe-auth/tests \\\n\s+--maxfail", job) and lanes["zoe-auth"].marker is None
+    # zoe-auth runs on its container's interpreter in CI (its own job), so locally too, via the twin script
+    assert lanes["zoe-auth"].python_from == "scripts/maintenance/zoe_auth_tests.sh"
+    assert (REPO / lanes["zoe-auth"].python_from).is_file()
+    assert not any(ln.python_from for ln in at.LANES if ln.name != "zoe-auth")
     for f in lanes["ha-bridge"].only_files + lanes["people-mempalace"].only_files + lanes["people-graph-pg"].only_files:
         assert f in job
     for k, v in at.LANE_ENV.items():
         assert f'{k}: "{v}"' in job
     assert not any(ln.name for ln in at.LANES if "-n" in ln.extra_args)
+
+
+def test_lane_python_is_resolved_at_run_time_and_fails_loud(tmp_path):
+    """A python_from lane plans offline (no venv build) and a broken interpreter is a failure, never this python."""
+    ok = tmp_path / "ok.sh"
+    ok.write_text('echo "building..." >&2\necho /opt/fake/bin/python\n')
+    bad = tmp_path / "bad.sh"
+    bad.write_text("echo nope >&2\nexit 3\n")
+    lane = at.Lane("x", "t", None, (), None, python_from="ok.sh")
+    assert at.lane_command(lane, None, [])[0] == "$(ok.sh --print-python)"
+    assert at.resolve_lane_python(tmp_path, lane) == "/opt/fake/bin/python"
+    with pytest.raises(RuntimeError):
+        at.resolve_lane_python(tmp_path, at.Lane("x", "t", None, (), None, python_from="bad.sh"))
+    plain = at.Lane("y", "t", None, (), None)
+    assert at.lane_command(plain, None, [])[0] == at.sys.executable
+    assert at.resolve_lane_python(tmp_path, plain) == at.sys.executable
 
 
 def test_real_repo_selection_is_sane():

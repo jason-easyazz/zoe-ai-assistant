@@ -23,6 +23,7 @@ jobs:
   #
   # Now the work runs as parallel jobs, and `validate` is an AGGREGATOR at the bottom of this file:
   #   checks           validators, Alembic on CI PostgreSQL, actionlint, py_compile, and the small lanes
+  #   zoe-auth         the zoe-auth suite on Python 3.11, its container's interpreter (not the shared 3.10 install)
   #   zoe-data-shard   services/zoe-data/tests -m ci_safe, split ZOE_DATA_SHARDS ways (matrix)
   #   unit-shard       tests/unit -m ci_safe, split UNIT_SHARDS ways (matrix)
   #   collect          each split lane's FULL --collect-only selection, for the completeness proof
@@ -203,21 +204,6 @@ jobs:
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
 
-      # Full zoe-auth suite — no hand enumeration (the old 4-file list
-      # silently dropped test_oidc_login / test_rbac / test_security).
-      - name: Lane — zoe-auth (full)
-        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
-        timeout-minutes: 5
-        run: |
-          PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
-            -o faulthandler_timeout=240 \
-            services/zoe-auth/tests \
-            --maxfail=200 -q
-        env:
-          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
-          ZOE_DATA_DB: ":memory:"
-          ZOE_MEMORY_STARTUP_STRICT: "false"
-
       - name: People MemPalace integration cleanup
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         timeout-minutes: 5
@@ -248,6 +234,41 @@ jobs:
         env:
           ZOE_TEST_PG_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_REQUIRE_PG_TESTS: "1"
+
+  # zoe-auth's full suite on PYTHON 3.11, the interpreter its container runs (services/zoe-auth/Dockerfile FROM).
+  #
+  # It has its own job because the shared ci-deps install is 3.10, zoe-data's rollback interpreter. Installing
+  # zoe-auth's manifest there tested zoe-auth on an interpreter it never runs on, and it failed the whole gate on
+  # any >=3.11-only release (#2387: fastapi 0.162 / python-multipart 0.0.33). This job installs ONLY zoe-auth's own
+  # requirements.txt, the manifest the image is built from. No Postgres is needed: the suite runs on SQLite
+  # (tests/sqlite_compat.py). Full directory, no hand enumeration: the old 4-file list silently dropped
+  # test_oidc_login / test_rbac / test_security.
+  #
+  # Local twin (offline after the first run): scripts/maintenance/zoe_auth_tests.sh. tests/unit/test_ci_instrument_honesty.py
+  # pins this job's interpreter to the Dockerfile and checks that its pytest command matches the script.
+  zoe-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install zoe-auth deps (its own manifest only)
+        id: deps
+        run: pip install --quiet -r services/zoe-auth/requirements.txt
+
+      - name: Lane — zoe-auth (full)
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" python -m pytest \
+            -o faulthandler_timeout=240 \
+            services/zoe-auth/tests \
+            --maxfail=200 -q
 
   # zoe-data slim-dep-green tests are selected by the `ci_safe` marker (registered in pytest.ini), not a
   # hand-enumerated file list — a new slim-safe test runs here just by adding a co-located
@@ -443,7 +464,7 @@ jobs:
   # concludes, and it concludes success ONLY when every needed job's result is exactly `success` — `failure`,
   # `cancelled` and `skipped` are all red here. Then it proves the shards ran every collected test exactly once.
   validate:
-    needs: [checks, zoe-data-shard, unit-shard, collect]
+    needs: [checks, zoe-auth, zoe-data-shard, unit-shard, collect]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -479,7 +500,7 @@ jobs:
           python3 - <<'PY'
           import json, os, sys
           needs = json.loads(os.environ["NEEDS_JSON"])
-          expected = {"checks", "zoe-data-shard", "unit-shard", "collect"}
+          expected = {"checks", "zoe-auth", "zoe-data-shard", "unit-shard", "collect"}
           bad = {job: (needs.get(job) or {}).get("result") for job in sorted(expected)}
           bad = {job: result for job, result in bad.items() if result != "success"}
           if set(needs) != expected:
