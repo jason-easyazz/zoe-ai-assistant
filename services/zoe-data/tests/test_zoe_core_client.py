@@ -178,7 +178,7 @@ class _Stub:
                     self._json({"ok": True})
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
-        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+        threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
 
     @property
     def url(self) -> str:

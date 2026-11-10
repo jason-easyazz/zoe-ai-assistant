@@ -310,8 +310,12 @@ def test_refuses_to_restore_from_outside_the_archive(sandbox):
     assert rs.SERVED_GGUF.read_bytes()[:8] == b"GGUFGOOD"
 
 
-def test_recover_rejects_a_marker_for_a_different_served_path(sandbox):
-    """A stale marker from another checkout must not drive a live restore."""
+def test_recover_rejects_a_marker_for_a_different_served_path(sandbox, monkeypatch):
+    """A stale marker from another checkout must not drive a live restore.
+
+    The brain is pinned HEALTHY: unpinned, recover() probed the real brain URL and, on a box without one, waited 180 s for it
+    and returned 1 for THAT reason - so the assertion below never isolated the marker refusal."""
+    monkeypatch.setattr(rs, "http_ok", lambda *a, **k: True)
     _fake_gguf(rs.SERVED_GGUF, b"GOOD")
     lkg = _fake_gguf(rs.ARCHIVE_DIR / "lkg_x.gguf", b"OLD")
     rs.DEPLOY_MARKER.write_text(json.dumps({
