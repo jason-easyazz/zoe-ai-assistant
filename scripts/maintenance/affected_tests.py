@@ -110,7 +110,7 @@ AGGREGATOR_FANOUT = 20
 READER_HOPS = 1   # importer levels above a python module that READS a changed non-python file
 LAZY_HOPS = int(os.environ.get("AFFECTED_TESTS_LAZY_HOPS", "2"))
 LOCK_PATH = os.environ.get("AFFECTED_TESTS_LOCK", "/tmp/zoe-test-lane.lock")
-LANDER_RE = r"^bash [^ ]*/land_voice_pr\.sh"
+LANDER_RE = r"^(\S*/)?bash [^ ]*/land_voice_pr\.sh"   # argv-anchored (never self-matches a waiter's own cmdline)
 
 DOC_EXT = {".md", ".rst", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"}
 TEXT_EXT = {".py", ".sh", ".bash", ".yml", ".yaml", ".js", ".mjs", ".cjs", ".ts", ".json", ".toml", ".ini",
@@ -555,7 +555,7 @@ def _kind(rel: str) -> str:
         return "conftest"
     if "/alembic/" in rel or rel.endswith("/alembic.ini"):
         return "migration"
-    if n in GLOBAL_CONFIG and "/" not in rel:
+    if n in GLOBAL_CONFIG:
         return "global-config"
     if DEP_RE.search(rel):
         return "deps"
@@ -733,7 +733,14 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
             # a binary / model / unrecognised artefact: text references cannot establish its runtime consumers
             sel.full_all_reason = f"{p}: unknown file type (static selection cannot see who loads it)"
         elif k == "global-config":
-            sel.full_all_reason = f"{p} changed (pytest/packaging config affects every lane)"
+            # root config reaches every lane; a nested one (a service's pyproject / pytest.ini) the lanes
+            # that load that service - or every lane when it sits outside any service
+            owner = [] if "/" not in p else _consuming_lanes(p)
+            if owner:
+                for ln in owner:
+                    sel.lane_full.setdefault(ln.name, f"{p} changed (pytest/packaging config)")
+            elif not p.startswith("labs/"):
+                sel.full_all_reason = f"{p} changed (pytest/packaging config affects every lane)"
         elif k == "deps":
             owner = _consuming_lanes(p)
             if owner:

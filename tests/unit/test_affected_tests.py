@@ -343,6 +343,23 @@ def test_lane_slot_rechecks_the_box_under_the_lock(tmp_path, monkeypatch):
     assert released == [True]
 
 
+def test_nested_pytest_config_forces_the_lanes_that_load_it(repo):
+    _edit(repo, "services/zoe-data/pyproject.toml", "[tool.pytest.ini_options]\n")
+    _, s = _run(repo, "--dry-run")
+    assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
+
+
+@pytest.mark.parametrize("cmdline,hit", [
+    ("bash /home/zoe/assistant/scripts/landing/land_voice_pr.sh 2367 /w fix/x pr2367", True),
+    ("/bin/bash /home/zoe/assistant/scripts/landing/land_voice_pr.sh 2367", True),
+    ("/usr/bin/bash scripts/landing/land_voice_pr.sh", True),
+    ("bash -c until ! pgrep -f land_voice_pr.sh; do sleep 5; done", False),   # a waiter must not self-match
+    ("python3 tail_land_voice_pr.sh.log", False),
+])
+def test_lander_pattern_is_argv_anchored(cmdline, hit):
+    assert bool(re.search(at.LANDER_RE, cmdline)) is hit
+
+
 def test_referenced_unknown_file_type_still_falls_back_to_full(repo):
     _edit(repo, "services/zoe-data/models/head.npz", "x")
     _edit(repo, "services/zoe-data/tests/test_lists.py",
