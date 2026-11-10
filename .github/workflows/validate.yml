@@ -566,11 +566,16 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          # MUST match the Jetson's interpreter — resolvability is
-          # Python-version-specific. websockets 17 and av 18 install fine on 3.11
-          # and not at all on 3.10, so resolving on the wrong version would bless
-          # a manifest the box cannot install.
-          python-version: '3.10'
+          # Each manifest MUST resolve on the interpreter it is installed with —
+          # resolvability is Python-version-specific. websockets 17 and av 18 install
+          # fine on 3.11 and not at all on 3.10, so resolving on the wrong version would
+          # bless a manifest the box cannot install (or redden one that installs fine).
+          # 3.10 = the Jetson host (zoe-data rollback lane, setfit lab); 3.11 = the
+          # zoe-auth and HA-bridge container images (their Dockerfile FROM lines).
+          # The LAST version listed is the default `python3`.
+          python-version: |
+            3.11
+            3.10
 
       # `packaging` is vendored INSIDE pip, not importable as a top-level module on
       # a bare runner — the assertion script below needs it as a real import. A dev
@@ -581,15 +586,18 @@ jobs:
       - name: Resolve every requirements manifest
         run: |
           set -euo pipefail
-          FILES="
-            services/zoe-data/requirements.txt
-            services/zoe-auth/requirements.txt
-            services/homeassistant-mcp-bridge/requirements.txt
-            labs/setfit-router/requirements.txt
+          # "<manifest> <python it is installed with>" — keep in step with the Dockerfiles
+          # (tests/unit/test_deps_resolvable_interpreters.py pins this).
+          MANIFESTS="
+            services/zoe-data/requirements.txt 3.10
+            services/zoe-auth/requirements.txt 3.11
+            services/homeassistant-mcp-bridge/requirements.txt 3.11
+            labs/setfit-router/requirements.txt 3.10
           "
-          for f in $FILES; do
-            echo "::group::pip resolve $f"
-            python3 -m pip install --dry-run --ignore-installed --quiet \
+          echo "$MANIFESTS" | while read -r f py; do
+            [ -z "$f" ] && continue
+            echo "::group::pip resolve $f (python $py)"
+            "python$py" -m pip install --dry-run --ignore-installed --quiet \
               --report "report.json" -r "$f"
             python3 - "$f" <<'PY'
           import json, sys
