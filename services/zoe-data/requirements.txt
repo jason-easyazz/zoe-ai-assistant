@@ -32,7 +32,7 @@
 # reporting-only) — the only host where the answer means anything. Exact pins
 # below were reconciled to the live Orin on 2026-08-06.
 # ═══════════════════════════════════════════════════════════════════════════
-fastapi==0.143.0
+fastapi==0.162.0
 # 3.10 LANE HOLDS 0.49.0 — this file describes the hand-managed system Python 3.10
 # site-packages, which is now ROLLBACK-ONLY (zoe-data runs the 3.12 venv, B0.7), and
 # that env still has 0.49.0. The LIVE 3.12 lane moved to 0.53.0 on 2026-09-27
@@ -60,7 +60,7 @@ aiosqlite==0.22.1
 asyncpg==0.32.0
 alembic==1.20.1
 psycopg2-binary==2.9.13
-python-multipart==0.0.32
+python-multipart==0.0.33
 httpx==0.28.1
 aiohttp==3.14.5
 # websockets 16.1.1 is the LAST RELEASE THAT INSTALLS ON PYTHON 3.10 — 17.0
@@ -84,7 +84,7 @@ PyJWT==2.15.1
 # such as `binary` retired; models regenerated from spec/1.0) — zoe-data only
 # EMITS the 14 event classes it imports, and every shape it emits encodes to
 # byte-identical SSE under 0.1.19 and 1.0.0 (pinned by test_ag_ui_chat_contract).
-ag-ui-protocol==0.1.19
+ag-ui-protocol==0.1.22
 python-json-logger>=4.1.0
 
 # ── Vector memory store: NOT in this manifest (B9, 2026-10-18) ──────────────
@@ -220,7 +220,7 @@ livekit-protocol==1.1.8
 # was checked numerically rather than by changelog: resampling 48k stereo s16 ->
 # 16k mono s16 (the exact config that file uses) is BIT-IDENTICAL between 16.1.0
 # and 17.1.0, and deterministic across runs. Both ship cp310 aarch64 wheels.
-aiortc==1.15.0
+aiortc==1.16.0
 av==17.1.0
 # A2A federation + skill discovery + web search
 # ddgs floor raised to the version verified on the box 2026-09-26 (9.16.0); the
