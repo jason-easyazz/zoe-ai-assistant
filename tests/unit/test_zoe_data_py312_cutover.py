@@ -72,6 +72,9 @@ STEP_UP_DIVERGENCE: dict[str, str] = {
     "fastapi": "3.12 lane 0.162.0 (+ starlette 1.10.0, needs >=3.11); 3.10 rollback env holds 0.143.0",
     "websockets": "3.12 lane 17.2 (needs >=3.11); 3.10 rollback env holds 16.1.1",
     "apscheduler": "3.12 lane 3.11.3 (+ tzlocal 5.4.5, pytz pinned explicitly); 3.10 rollback env holds 3.10.4 + tzlocal 2.1",
+    # 2026-11-10 routine batch: both releases require Python >=3.11; the 3.10 rollback manifest stays put.
+    "python-multipart": "3.12 lane 0.0.33 (needs >=3.11); 3.10 rollback env holds 0.0.32",
+    "aiortc": "3.12 lane 1.16.0 (needs >=3.11); 3.10 rollback env holds 1.15.0",
 }
 
 
