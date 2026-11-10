@@ -158,7 +158,7 @@ def _fake_systemctl(tmp_path, fail=""):
     sc.write_text(f"""#!/bin/bash
 echo "$@" >> {log}
 case "$*" in
-  *"enable --now {fail or "NEVER-MATCHES"}"*) exit 1 ;;
+  *"{fail or "NEVER-MATCHES"}"*) exit 1 ;;
   *is-enabled*) u="${{@: -1}}"; if [ -e {d}/$u ]; then echo disabled; exit 1; fi; echo enabled ;;
   *"disable --now"*) touch {d}/"${{@: -1}}" ;;
   *"enable --now"*) rm -f {d}/"${{@: -1}}" ;;
@@ -229,9 +229,18 @@ def test_presleep_is_serialised_by_a_lock_file_released_after_the_run(tmp_path):
 
 
 def test_a_failed_install_puts_the_backup_and_export_timers_back(tmp_path):
-    sc, log, off = _fake_systemctl(tmp_path, fail="zoe-night-window.timer")
+    sc, log, off = _fake_systemctl(tmp_path, fail="enable --now zoe-night-window.timer")
     env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "NIGHT_DIR": str(tmp_path / "n"), "NIGHT_UNIT_DIR": str(tmp_path / "u"), "NIGHT_SYSTEMCTL": str(sc)}
     r = subprocess.run(["bash", str(REPO / "scripts/night/install_night_window.sh")], capture_output=True, text=True, timeout=60, env=env)
     assert r.returncode != 0, r.stdout + r.stderr                                    # the window timer would not enable: the install fails ...
     assert "disable --now zoe-backup.timer" in log.read_text()                       # control: it did switch them off first
     assert not (off / "zoe-backup.timer").exists() and not (off / "zoe-memory-export.timer").exists(), "... and must leave the nightly backup schedule running"
+
+
+def test_an_install_that_cannot_switch_a_legacy_timer_off_fails_and_restores_the_other(tmp_path):
+    sc, log, off = _fake_systemctl(tmp_path, fail="disable --now zoe-memory-export.timer")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "NIGHT_DIR": str(tmp_path / "n"), "NIGHT_UNIT_DIR": str(tmp_path / "u"), "NIGHT_SYSTEMCTL": str(sc)}
+    r = subprocess.run(["bash", str(REPO / "scripts/night/install_night_window.sh")], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode != 0, "a legacy timer left enabled would run the backup / export twice beside the window: that must not report success"
+    assert "enable --now zoe-backup.timer" in log.read_text() and not (off / "zoe-backup.timer").exists()      # the one it had switched off is back
+    assert "enable --now zoe-night-window.timer" not in log.read_text()

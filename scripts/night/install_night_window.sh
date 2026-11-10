@@ -95,7 +95,7 @@ install() {
   # the window now runs the backup and the memory export itself: their own timers would run them a second time (a clock of their own, racing the window's stops)
   for t in zoe-backup.timer zoe-memory-export.timer; do
     case "$t" in zoe-backup.timer) was_t=$orig_backup ;; *) was_t=$orig_export ;; esac
-    if [ "$was_t" = enabled ]; then say "disabling $t: the window runs it in its pre-sleep phase (run --uninstall to undo)"; ctl disable --now "$t" && DISABLED_TIMERS="$DISABLED_TIMERS $t" || say "WARNING: could not disable $t: the unit would run twice"; fi
+    if [ "$was_t" = enabled ]; then say "disabling $t: the window runs it in its pre-sleep phase (run --uninstall to undo)"; ctl disable --now "$t" && DISABLED_TIMERS="$DISABLED_TIMERS $t" || { say "could not disable $t: it would run the backup / export a second time beside the window: rolling back"; rollback_dreaming 0; exit 1; }; fi
   done
   if [ "$KEEP_DREAMING" = 0 ] && [ "$dreaming_was" = enabled ]; then
     say "disabling zoe-dreaming.timer: the window runs the dreaming job itself (run --uninstall to undo)"
