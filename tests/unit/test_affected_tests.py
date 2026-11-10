@@ -232,6 +232,20 @@ def test_unreached_code_change_is_named_and_runs_its_lane(repo):
     assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["tests-unit"] == "full"
 
 
+def test_txt_inside_a_service_is_data_not_docs(repo):
+    _edit(repo, "services/zoe-data/prompts/system.txt", "be kind\n")
+    _, s = _run(repo, "--dry-run")
+    assert "services/zoe-data/prompts/system.txt" in s["unreached"]
+    assert not any("docs-only" in n for n in s["notes"])
+
+
+def test_ui_asset_is_named_not_a_full_fallback(repo):
+    (repo / "services/zoe-ui/dist/img").mkdir(parents=True)
+    (repo / "services/zoe-ui/dist/img/sun.png").write_bytes(b"\x89PNG")
+    _, s = _run(repo, "--dry-run")
+    assert s["mode"] == "none" and "services/zoe-ui/dist/img/sun.png" in s["unreached"]
+
+
 def test_unreached_data_file_is_only_named(repo):
     _edit(repo, "services/zoe-data/data/table.yml", "a: 1\n")
     _, s = _run(repo, "--dry-run")

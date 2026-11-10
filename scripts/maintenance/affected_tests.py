@@ -116,6 +116,8 @@ LAZY_HOPS = int(os.environ.get("AFFECTED_TESTS_LAZY_HOPS", "2"))
 LOCK_PATH = os.environ.get("AFFECTED_TESTS_LOCK", "/tmp/zoe-test-lane.lock")
 LANDER_RE = r"^(\S*/)?bash [^ ]*/land_voice_pr\.sh"   # argv-anchored (never self-matches a waiter's own cmdline)
 
+ASSET_EXT = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf", ".ico", ".woff", ".woff2", ".ttf",
+             ".mp3", ".wav", ".ogg"}
 DOC_EXT = {".md", ".rst", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"}
 TEXT_EXT = {".py", ".sh", ".bash", ".yml", ".yaml", ".js", ".mjs", ".cjs", ".ts", ".json", ".toml", ".ini",
             ".cfg", ".conf", ".service", ".timer", ".socket", ".path", ".html", ".css", ".sql", ".env",
@@ -569,8 +571,13 @@ def _kind(rel: str) -> str:
         return "deps"
     if ext == ".py":
         return "py"
-    if rel.startswith("docs/") or (ext in DOC_EXT and not DEP_RE.search(rel)):
+    # DOCUMENTATION by location, not extension: a .txt / .md inside a service or script tree may be runtime
+    # data (a prompt, a lexicon) and is treated as text that a test must reach
+    is_doc_name = n in ("AGENTS.md", "CLAUDE.md", "README.md", "CHANGELOG.md") or n.startswith("README")
+    if rel.startswith("docs/") or is_doc_name or ("/" not in rel and ext in DOC_EXT):
         return "doc"
+    if ext in ASSET_EXT:
+        return "text"   # a UI image / font / sound: no python lane loads it; named when no test reaches it
     if ext in TEXT_EXT or n in TEXT_NAMES:
         return "text"
     return "unknown"
