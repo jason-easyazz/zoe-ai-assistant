@@ -1163,3 +1163,27 @@ def test_every_cited_line_is_kept_whole_and_an_over_long_citation_is_refused(mon
     assert cand is None and counts.get("drop_too_many_cited")                                    # a 4th citation is refused, never silently dropped
     cand, _ = _verify(_item(ids=["r1.1", "r1.2", "r1.3"], quote="So how did the interview go yesterday"), monkeypatch)
     assert cand and [e["line"] for e in cand.evidence] == ["r1.1", "r1.2", "r1.3"]               # control: three citations are all kept
+
+
+def test_a_lost_pool_fails_the_erase_but_a_never_built_one_is_an_empty_store(monkeypatch):
+    """"pool not initialised" is an empty store only for a process that never had a pool; one that LOST its pool must fail so the cascade retries."""
+    import db_pool
+
+    class _NoPool:
+        async def __aenter__(self):
+            raise RuntimeError("db pool not initialised")
+
+        async def __aexit__(self, *a):
+            return False
+    monkeypatch.setattr(cn, "_db", lambda: _NoPool())
+    rx = memory_forgotten.name_pattern("Dana")
+    monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: False)
+    assert run(cn.forget_user(OWNER)) == 0 and run(cn.erase_entity(OWNER, rx, strict=True)) == 0 and run(cn.erase_topic(OWNER, lambda t: True)) == 0
+    monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: True)
+    with pytest.raises(RuntimeError):
+        run(cn.forget_user(OWNER))
+    with pytest.raises(RuntimeError):
+        run(cn.erase_entity(OWNER, rx, strict=True))
+    with pytest.raises(RuntimeError):
+        run(cn.erase_topic(OWNER, lambda t: True))
+    assert run(cn.erase_entity(OWNER, rx)) == 0                                                  # non-strict keeps its documented 0 + WARNING

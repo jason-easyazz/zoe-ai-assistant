@@ -353,6 +353,18 @@ def _missing_table(exc: BaseException) -> bool:
     return "conversation_notes" in s and ("no such table" in s or "does not exist" in s)
 
 
+def _no_store(exc: BaseException) -> bool:
+    """Is this failure "there is no notes store to clear"? A table that is not migrated, or a process that NEVER built a database pool (a lab / bare
+    unit run). A process that had a pool and LOST it is not that: the notes may still be stored, so the erase must fail and be retried."""
+    if _missing_table(exc):
+        return True
+    if isinstance(exc, RuntimeError) and "not initialised" in str(exc):
+        from db_pool import pool_ever_initialised
+
+        return not pool_ever_initialised()
+    return False
+
+
 @contextlib.asynccontextmanager
 async def _gate_already_held():
     yield True
@@ -1057,7 +1069,7 @@ async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *
             await db.commit()
             return n
     except Exception as exc:  # noqa: BLE001
-        if _missing_table(exc) or (isinstance(exc, RuntimeError) and "not initialised" in str(exc)):
+        if _no_store(exc):
             return 0
         if strict:
             raise
@@ -1075,7 +1087,7 @@ async def forget_user(user_id: str) -> int:
             await db.commit()
             return int(getattr(cur, "rowcount", 0) or 0)
     except Exception as exc:  # noqa: BLE001
-        if _missing_table(exc) or (isinstance(exc, RuntimeError) and "not initialised" in str(exc)):
+        if _no_store(exc):
             return 0
         logger.error("conversation_notes: notes NOT erased for a forgotten user (%s)", type(exc).__name__)
         raise
