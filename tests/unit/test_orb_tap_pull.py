@@ -47,7 +47,7 @@ def daemon(monkeypatch):
 
 def _post(d, path, headers=None):
     srv = socketserver.TCPServer(("127.0.0.1", 0), d._HealthHandler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         d._orb_activate_event.clear()
         d._orb_pull_event.clear()

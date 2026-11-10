@@ -347,7 +347,7 @@ jobs:
               // Size is measured the way pr-hygiene measures it: generated files excluded
               // (a lockfile or flag-inventory churn must not buy a review). The
               // load-bearing check runs over the FULL list.
-              const GENERATED = [/^docs\/knowledge\/flag-inventory\.(md|json)$/, /^services\/zoe-ui\/dist\/lib\//, /package-lock\.json$/];
+              const GENERATED = [/^docs\/knowledge\/flag-inventory\.(md|json)$/, /^services\/zoe-ui\/dist\/lib\//, /package-lock\.json$/, /^tools\/ci\/shard_weights\.json$/];
               const BIG = { files: 10, lines: 400 };   // pr-hygiene's warn ceiling
               const files = await ok(`PR #${pr.number} files`, () =>
                 github.paginate(github.rest.pulls.listFiles, { ...base, pull_number: pr.number, per_page: 100 }));
