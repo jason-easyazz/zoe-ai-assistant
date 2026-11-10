@@ -329,5 +329,5 @@ class FakeHindsight:
                 self._do("DELETE")
 
         srv = ThreadingHTTPServer((host, port), H)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
         return srv

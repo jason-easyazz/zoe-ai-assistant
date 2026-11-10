@@ -14,6 +14,8 @@ Pure parsing: no database, no network, no model (``ci_safe``).
 """
 from __future__ import annotations
 
+import ast
+import functools
 import re
 from pathlib import Path
 
@@ -30,6 +32,14 @@ REPO = SVC.parents[1]
 MEMBER_SITE = SVC / "memory_service.py"
 ENTITY_SITES = (SVC / "intent_router.py", SVC / "memory_forget_cascade.py", SVC / "memory_service.py",
                 REPO / "scripts" / "maintenance" / "export_memory_store.py", REPO / "scripts" / "maintenance" / "redact_backups.py")
+
+
+@functools.lru_cache(maxsize=16)
+def _parse(source: str) -> ast.Module:
+    """Parse once per distinct SOURCE TEXT: ``_references`` re-read the same five call-site files (memory_service.py is 4.6k lines)
+    once per inventory store, and ``_chroma_calls`` parsed each hit twice. The trees are only ever READ. Keyed by content, not path,
+    so a control that rewrites a file gets a fresh parse; bounded, so a whole-tree scan never holds ~900 trees at once."""
+    return ast.parse(source)
 
 
 def _service_py() -> list[Path]:
@@ -98,9 +108,7 @@ def _sink_literals(source: str) -> list[str]:
     """File-sink names in one module, by AST: a string constant with a name before a sink extension (``"x.jsonl"``,
     ``"~/.zoe/data/x.jsonl"``), or a BARE extension used to BUILD a path (``f"{stem}.jsonl"``, ``base + ".db"``, ``p.with_suffix(".db")``).
     A bare extension in a comparison (``p.suffix == ".jsonl"``) is a type check, not a sink."""
-    import ast
-
-    tree = ast.parse(source)
+    tree = _parse(source)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     out = []
     for n in ast.walk(tree):
@@ -119,10 +127,8 @@ def _sink_literals(source: str) -> list[str]:
 
 def _chroma_calls(source: str) -> list[tuple[str, str]]:
     """``(kind, value)`` for each Chroma collection open: kind ``const`` (a string literal), ``name`` (a variable) or ``dynamic``."""
-    import ast
-
     out = []
-    for n in ast.walk(ast.parse(source)):
+    for n in ast.walk(_parse(source)):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in _CHROMA_CALLS:
             arg = n.args[0] if n.args else next((k.value for k in n.keywords if k.arg == "name"), None)
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
@@ -213,12 +219,10 @@ def _references(site: Path, mod: str, func: str, within: str | None = None) -> b
     so a comment, a string or an ``import`` line that merely names it does not count. ``within`` limits the search to one function.
     In the store's OWN module the eraser is a method/function called there (``self._delete_ids(...)`` / ``_run(...)``): the module
     being the call site is not enough. An eraser that IS the entry point of its own module is only checked for existence."""
-    import ast
-
     own = site.stem == mod
     if own and func == within:
         return True
-    tree = ast.parse(site.read_text(encoding="utf-8"))
+    tree = _parse(site.read_text(encoding="utf-8"))
     scope: list = [tree]
     if within:
         scope = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == within]
