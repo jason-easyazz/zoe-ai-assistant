@@ -58,7 +58,10 @@ if argv[:2] == ["pr", "view"]:
     }
     emit({k: (full.get(k) if k in want else None) for k in full} if want != [""] else full)
 elif argv[:2] == ["pr", "list"]:
-    emit([{"number": int(n), "isDraft": p.get("isDraft", False), "headRefName": "b%s" % n}
+    if state.get("pr_list_fails"):
+        sys.exit(1)
+    emit([{"number": int(n), "isDraft": p.get("isDraft", False), "headRefName": "b%s" % n,
+           "headRefOid": p.get("headRefOid", "a" * 40), "autoMergeRequest": ({"enabledBy": "x"} if p.get("armed") else None)}
           for n, p in state["prs"].items() if p.get("state", "OPEN") == "OPEN"])
 elif argv[:2] == ["pr", "checks"]:
     p = pr_of(argv[2])
@@ -81,6 +84,10 @@ elif argv[:2] == ["api", "graphql"]:
     if state.get("graphql_errors"):
         out["errors"] = [{"message": "partial failure"}]
     emit(out)
+elif argv[:2] == ["pr", "merge"] and "--auto" in argv and str(argv[2]) in state.get("arm_fails", []):
+    sys.exit(1)
+elif argv[:2] == ["pr", "merge"] and "--disable-auto" in argv and str(argv[2]) in state.get("disarm_fails", []):
+    sys.exit(1)
 # pr merge / ready / update-branch, run ..., anything else: logged, succeed silently
 '''
 
@@ -146,6 +153,9 @@ class Rig:
             "FAKE_GH_STATE": str(self.state_file),
             "FAKE_GH_LOG": str(self.gh_log),
             "ZOE_LANDING_HEALTH_URL": f"file://{self.health}",
+            # the probe-vs-chat locks (landing_quiet_chat_take / quiet_for_probe.py): never the box's real /tmp ones
+            "ZOE_PROBE_GATE_LOCK": str(self.tmp / "probe-gate.lock"),
+            "ZOE_CHAT_TURN_LOCK": str(self.tmp / "chat-turn.lock"),
         }
         env.update(extra)
         return env

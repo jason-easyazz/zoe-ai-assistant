@@ -327,10 +327,32 @@ def test_generated_churn_does_not_buy_a_review(tmp_path):
     r = _run(tmp_path, _script(), files=[
         {"filename": "package-lock.json", "additions": 400, "deletions": 400},
         {"filename": "docs/knowledge/flag-inventory.json", "additions": 300, "deletions": 300},
+        {"filename": "tools/ci/shard_weights.json", "additions": 600, "deletions": 600},
         {"filename": "docs/knowledge/x.md", "additions": 5, "deletions": 1},
     ])
     assert r["addLabels"] == 0
     assert any("settled but routine" in line for line in r["log"])
+
+
+def _generated_regexes(script: str) -> list[str]:
+    """The ``GENERATED`` regex sources, evaluated by node itself (a JS regex literal is not something to re-parse in Python)."""
+    import re
+
+    m = re.search(r"const GENERATED = (\[.*?\]);", script, re.S)
+    assert m, "no GENERATED list in the script"
+    out = subprocess.run([node, "-e", f"const G = {m.group(1)}; console.log(JSON.stringify(G.map(r => r.source)))"],
+                         capture_output=True, text=True, timeout=30, check=True).stdout
+    return json.loads(out)
+
+
+def test_the_generated_list_is_the_same_one_pr_hygiene_measures_with():
+    """The two size measurements must agree: a file pr-hygiene treats as generated (e.g. the shard weights, regenerated wholesale
+    by tools/ci/shard_ledger.py) but greptile-gate counts would buy a review, and the reverse would fail hygiene on churn."""
+    hygiene = yaml.safe_load((REPO / ".github" / "workflows" / "pr-hygiene.yml").read_text())
+    h_script = next(st["with"]["script"] for st in hygiene["jobs"]["size-and-overlap"]["steps"] if "github-script" in str(st.get("uses", "")))
+    ours, theirs = _generated_regexes(_script()), _generated_regexes(h_script)
+    assert ours and sorted(ours) == sorted(theirs), (ours, theirs)
+    assert "^tools\\/ci\\/shard_weights\\.json$" in ours, ours
 
 
 def test_unreadable_files_hold(tmp_path):
