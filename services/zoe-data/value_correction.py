@@ -171,6 +171,30 @@ def may_shorten(corr: "Correction", exact_exists: bool, ambiguous: bool = False)
     return lazy_form and not exact_exists and not ambiguous and _may_be_lazy((on or (corr.subject,))[0])
 
 
+async def person_status(name: str, user_id: str) -> str:
+    """How the member's people graph answers a typed name: ``exact`` (one person), ``ambiguous`` (several), ``none`` (POSITIVELY nobody) or
+    ``error`` (the lookup could not be made). The same resolver ``person_extractor.apply_person_fact`` uses. Anything but ``none`` blocks a
+    shortening to a different name: an unreadable graph is not an absence. Never raises."""
+    try:
+        import person_extractor as pe
+
+        db, opened = await pe._ensure_db(None)
+        if db is None:
+            return "error"
+        try:
+            res = await pe._resolve_person(name, user_id, db)
+        finally:
+            if opened:
+                await db.close()
+        if res is None:
+            return "error"
+        if getattr(res, "ambiguous", False):
+            return "ambiguous"
+        return "exact" if getattr(res, "person_id", None) else "none"
+    except Exception:  # noqa: BLE001
+        return "error"
+
+
 def _owner_noun_re(owner: str, noun: str, lazy: bool = False):
     """The row says the OWNER has the NOUN: "<owner>('s) <noun>" side by side. The owner is the word as typed; with ``lazy`` (nobody has
     a row under the exact word) also without its final s; never a longer word. "Dev's swimming with Asha" is not Asha's swimming."""
@@ -409,6 +433,13 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
         if not hits and may_shorten(corr, exact_subject_row):
+            # the memory rows alone cannot say whether the typed name is a real person: Carlos may be in the people graph with no row naming him
+            # yet. Ask the SAME resolver apply_person_fact uses; only a positive "no such person" lets the shortening through.
+            _typed = (owner_noun(corr.subject) or (corr.subject,))[0]
+            _status = await person_status(_typed, user_id)
+        else:
+            _status = "skip"
+        if not hits and _status == "none":
             # nobody has a row under the name exactly as typed: "kais 21 not 22" is Kai's (the apostrophe was not typed). Never the
             # other way round - "Carlos" does not rewrite Carlo's row while a Carlos row exists, nor when Carlos is the typed name.
             for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):

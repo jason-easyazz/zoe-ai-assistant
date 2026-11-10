@@ -180,6 +180,9 @@ class _Row:
         self.id, self.text, self.metadata = i, text, {"user_id": UID}
 
 
+_PEOPLE: dict = {}      # typed name (lower) -> person_status for the stubbed people graph
+
+
 class _Svc:
     def __init__(self, *texts):
         self.rows = [_Row(f"r{i}", t) for i, t in enumerate(texts)]
@@ -203,6 +206,10 @@ def _apply(svc, text, monkeypatch):
 
     monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
     monkeypatch.setattr(correction_apply, "_is_unidentified", lambda _u: False)
+
+    async def graph(name, _uid):                        # the people graph: positively nobody unless a test says otherwise
+        return _PEOPLE.get(name.lower(), "none")
+    monkeypatch.setattr(vc, "person_status", graph)
     return run(vc.apply(text, UID, None, svc=svc))
 
 
@@ -397,6 +404,47 @@ def test_a_failed_name_lookup_is_not_an_absence_and_never_shortens(monkeypatch):
     monkeypatch.setattr(pe, "_resolve_person", broken)
     run(pe.apply_person_fact("Carlos", "fact", "21", user_id=UID, source="conversation", source_excerpt="also carlos 21 not 22"))
     assert not any(c[2] == "p-carlo" for c in calls)
+
+
+@pytest.mark.parametrize("status,edits", [("none", 1), ("exact", 0), ("ambiguous", 0), ("error", 0)])
+def test_the_row_path_asks_the_people_graph_before_shortening(monkeypatch, status, edits):
+    """Carlos is a PERSON with no memory row; only Carlo has one. Only a positive 'nobody' lets 'carlos 21 not 22' reach Carlo's row."""
+    _PEOPLE.clear()
+    _PEOPLE["carlos"] = status
+    try:
+        svc = _Svc("Carlo is 22")
+        assert _apply(svc, "also carlos 21 not 22", monkeypatch) == edits
+        assert len(svc.edits) == edits
+    finally:
+        _PEOPLE.clear()
+
+
+def test_person_status_maps_the_resolver_and_an_unreadable_graph_is_an_error(monkeypatch):
+    import person_extractor as pe
+
+    class _Db:
+        async def close(self):
+            return None
+
+    async def ensure(_d=None):
+        return _Db(), True
+    monkeypatch.setattr(pe, "_ensure_db", ensure)
+    for res, want in ((types.SimpleNamespace(person_id="p", ambiguous=False), "exact"), (types.SimpleNamespace(person_id=None, ambiguous=True), "ambiguous"),
+                      (types.SimpleNamespace(person_id=None, ambiguous=False), "none")):
+        async def resolve(*_a, _r=res, **_k):
+            return _r
+        monkeypatch.setattr(pe, "_resolve_person", resolve)
+        assert run(vc.person_status("Carlos", UID)) == want
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("down")
+    monkeypatch.setattr(pe, "_resolve_person", boom)
+    assert run(vc.person_status("Carlos", UID)) == "error"
+
+    async def nodb(_d=None):
+        return None, False
+    monkeypatch.setattr(pe, "_ensure_db", nodb)
+    assert run(vc.person_status("Carlos", UID)) == "error"
 
 
 _EXPLICIT_FORMS = ["actually Carlos's swimming is on Wednesday not Thursday", "Carlos is 21 not 22", "actually Carlos's age is 21 not 22"]
