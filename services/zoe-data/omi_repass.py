@@ -1134,6 +1134,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                     pass
         if rc == 3 and not got:
             skipped[engine] = "model_unavailable"
+            return {"rc": rc, "got": got, "done": done, "zref": zref, "skipped": "model_unavailable"}      # the pivot caller returns before any recording's retry is consumed
         return {"rc": rc, "got": got, "done": done, "zref": zref}
 
     # ── pass 1: the pivot, on all the audio, with the speaker windows ──

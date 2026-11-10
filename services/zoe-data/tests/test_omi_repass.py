@@ -238,6 +238,17 @@ def test_the_planner_prefers_the_big_model_drops_to_the_fallback_and_says_when_n
     assert rp.plan_model(4000, 1500, {"qwen3-asr": 0.2})["model"] == "qwen3-asr"       # last night's measured speed wins
 
 
+def test_a_missing_pivot_model_burns_no_recording_retries(renv, monkeypatch):
+    """The worker exits 3 (model / package unavailable) with no results: the night reports model_missing and every recording keeps its retries."""
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    def no_model(manifest, out, timeout_s, mem_max="", threads=4):
+        return 3
+    out = run(rp.run_night(budget_s=600, runner=no_model))
+    r = rows(renv)[0]
+    assert out["status"] == "model_missing" and out["why"] == "model_unavailable"
+    assert r["repass_state"] == "pending" and r["repass_attempts"] == 0 and r["transcript"] == "moonshine"
+
+
 def test_a_recording_the_budget_could_not_reach_carries_to_the_next_night_untouched(renv, monkeypatch):
     transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
     rid = rows(renv)[0]["id"]
