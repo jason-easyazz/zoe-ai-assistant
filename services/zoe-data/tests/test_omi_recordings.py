@@ -1075,6 +1075,8 @@ def test_a_failed_hypothesis_rewrite_drops_the_members_hypotheses_instead_of_kee
     with pytest.raises(OSError):                                                # negative control: strict still raises (the cascade retries) and drops nothing
         run(omi.erase_entity(OWNER, re.compile(r"\bDana\b"), strict=True))
     assert gone == []
+    monkeypatch.setattr(omi_repass_eval, "forget_user", boom)                   # the fallback fails too: the erase reports NOTHING done (0, logged ERROR) - never a success
+    assert run(omi.erase_entity(OWNER, re.compile(r"\bDana\b"))) == 0
 
 
 def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(env, monkeypatch):

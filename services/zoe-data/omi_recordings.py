@@ -879,8 +879,9 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
                 import omi_repass
                 import omi_repass_eval
                 n += omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
-            except Exception as exc2:  # noqa: BLE001
+            except Exception as exc2:  # noqa: BLE001 - nothing proves the forgotten text is gone: fail the erase (a strict caller retries; the outer handler logs)
                 logger.error("omi_recordings: re-pass hypotheses NOT erased for a forgotten entity (%s)", type(exc2).__name__)
+                raise
         async with erase_gate.erasing(user_id, bump=False):
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, transcript, audio_path FROM omi_recordings WHERE user_id = ? AND status = 'done'", (user_id,)):

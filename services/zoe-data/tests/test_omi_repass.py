@@ -222,9 +222,11 @@ def test_a_forget_ledger_outage_fails_closed_nothing_is_stored(renv, monkeypatch
     transcribe(first_pass(renv) and renv, monkeypatch, "moonshine text")
     _ledger_down(monkeypatch)
     rid = rows(renv)[0]["id"]
+    before = rows(renv)[0]["repass_attempts"]
     out = run(rp.run_night(budget_s=600, runner=fake_runner({rid: result_for(rid, ("Dana", "called", "today"))})))
     r = rows(renv)[0]
-    assert out["replaced"] == 0 and r["transcript"] == "moonshine text" and r["repass_state"] != "done"
+    assert out["replaced"] == 0 and r["transcript"] == "moonshine text" and r["repass_state"] in ("pending", "")      # still owed: retried, not failed for good
+    assert r["repass_attempts"] == before
     assert not any("Dana" in (x["text"] or "") for x in renv.db.rows("SELECT text FROM omi_segments"))
 
 
