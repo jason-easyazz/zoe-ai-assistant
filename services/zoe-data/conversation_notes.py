@@ -318,6 +318,21 @@ async def note_for(convo: Convo) -> Optional[Note]:
     return validate(parse(raw), convo)
 
 
+# --- partial erases vs. a note being written -------------------------------------------------------------------------------
+_PARTIAL: dict = {}      # member -> count of partial erases (topic / "forget that" / name / guest) started or finished in this process
+
+
+def partial_epoch(owner: str) -> int:
+    """How many partial erases of ``owner``'s notes have started or finished. Snapshot it BEFORE the model reads a conversation; a note whose
+    snapshot is stale was made from words that may since have been forgotten, and is dropped (it is rebuilt next pass from what is left).
+    The whole-member erase has its own gate (``user_erase_gate.generation``)."""
+    return _PARTIAL.get(owner, 0)
+
+
+def _partial_bump(owner: str) -> None:
+    _PARTIAL[owner] = _PARTIAL.get(owner, 0) + 1
+
+
 # --- the store --------------------------------------------------------------------------------------------------------------
 def _db():
     from db_compat import get_compat_db
@@ -331,18 +346,22 @@ def _missing_table(exc: BaseException) -> bool:
 
 
 async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: str, status: str,
-               scheduled_at: Optional[int] = None) -> Optional[str]:
+               scheduled_at: Optional[int] = None, partial_at: Optional[int] = None) -> Optional[str]:
     """Insert one note. Idempotent on (layer, episode): a second run finds the first and writes nothing. Returns the id, or None
     when it already existed, could not be stored, or the member was ERASED since ``scheduled_at`` (the erase generation the pass
-    snapshotted before it read the transcript; None = now). Never raises."""
+    snapshotted before it read the transcript; None = now), or a PARTIAL erase (topic, "forget that", a name, a guest) ran since ``partial_at``
+    (``partial_epoch`` snapshotted before the model call; None = now). Never raises."""
     import user_erase_gate as erase_gate
 
     nid = str(uuid.uuid4())
     gen = erase_gate.generation(owner) if scheduled_at is None else scheduled_at
+    part = partial_epoch(owner) if partial_at is None else partial_at
     try:
         async with erase_gate.writing(owner, gen) as live, _db() as db:
             if not live:
                 return None             # forgotten means forever: a note made from a pre-erase transcript is never written
+            if partial_epoch(owner) != part:
+                return None             # a partial erase ran while the model was reading: its words may be the forgotten ones
             async with db.execute("SELECT id FROM conversation_notes WHERE user_id = ? AND people_id = ? AND episode_key = ?",
                                   (owner, people_id, convo.key)) as cur:
                 if await cur.fetchone():
@@ -355,6 +374,10 @@ async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: 
                  int(convo.turns), json.dumps([str(i) for i in convo.turn_ids]), note.summary, json.dumps(note.topics), note.mood, json.dumps(note.open_threads), note.follow_up,
                  1 if note.sensitive else 0, _iso(_now())))
             await db.commit()
+            if partial_epoch(owner) != part:       # a partial erase started between the check and the insert: its sweep may have missed this row
+                await db.execute("DELETE FROM conversation_notes WHERE id = ?", (nid,))
+                await db.commit()
+                return None
         return nid
     except Exception as exc:  # noqa: BLE001
         logger.warning("CONVERSATION_NOTES not stored (%s)", type(exc).__name__)
@@ -462,6 +485,7 @@ async def notes_for_convos(owner: str, people_id: str, convos: Iterable[Convo], 
         if not worth_a_note(convo):
             res["too_short"] += 1
             continue
+        part = partial_epoch(owner)                    # BEFORE the model reads the words: a partial erase during the call drops the note
         note = await note_for(convo)
         if note is None:
             res["no_note"] += 1
@@ -470,7 +494,7 @@ async def notes_for_convos(owner: str, people_id: str, convos: Iterable[Convo], 
             res["notes"].append({"key": convo.key, "started": _iso(convo.started), "ended": _iso(convo.ended), "turns": convo.turns,
                                  "with": convo.with_name, **note.__dict__})
             continue
-        nid = await save(owner, people_id, convo, note, source=source, status=status, scheduled_at=gen)
+        nid = await save(owner, people_id, convo, note, source=source, status=status, scheduled_at=gen, partial_at=part)
         if nid:
             res["stored"] += 1
             res["notes"].append({"key": convo.key, "id": nid})
@@ -842,6 +866,10 @@ async def guest_lines(guest: Any) -> list:
     if m == "off" or guest is None:
         return []
     try:
+        import named_guest_memory
+
+        if not named_guest_memory.memory_on():         # the guest-memory switch off stops EVERY form of guest recall, stored summaries included
+            return []
         t, mono = _now(), _mono()
         key = f"{guest.owner_user_id}|{guest.person_id}"
         last, offered = _VISITS.get(key, (-1e9, 0))
@@ -975,6 +1003,7 @@ async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *
                         strict: bool = True) -> int:
     """Delete the layer's notes for which ``doomed(note, text)`` is true; ``text`` = the note's words plus its source turns' words (a
     note that paraphrases a forgotten name still rests on the turn that said it). Reads the layer's rows (a handful)."""
+    _partial_bump(user_id)         # a note being written right now (model call in flight) sees this and is dropped, not saved
     try:
         async with _db() as db:
             sql = f"SELECT {_COLS} FROM conversation_notes WHERE user_id = ?"
@@ -999,6 +1028,8 @@ async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *
             raise
         logger.warning("CONVERSATION_NOTES erase failed (%s)", type(exc).__name__)
         return 0
+    finally:
+        _partial_bump(user_id)
 
 
 async def forget_user(user_id: str) -> int:
@@ -1048,6 +1079,7 @@ async def erase_people(db, owner: str, person_ids: Iterable[str]) -> int:
     ids = sorted(set(person_ids))
     if not ids:
         return 0
+    _partial_bump(owner)
     try:
         cur = await db.execute(f"DELETE FROM conversation_notes WHERE user_id = ? AND people_id IN ({', '.join('?' * len(ids))})",
                                (owner, *ids))
@@ -1055,4 +1087,6 @@ async def erase_people(db, owner: str, person_ids: Iterable[str]) -> int:
         if _missing_table(exc):
             return 0
         raise
+    finally:
+        _partial_bump(owner)
     return int(getattr(cur, "rowcount", 0) or 0)

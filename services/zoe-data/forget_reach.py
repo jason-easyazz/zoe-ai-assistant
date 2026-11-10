@@ -212,6 +212,9 @@ OTHER: tuple[Store, ...] = (
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
     Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
           "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
+    Store("flue_session_log", "file", WORDS, GAP, "The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
+          "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
+          "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
     Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
           "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py).",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),

@@ -899,3 +899,59 @@ def test_a_backfilled_note_whose_source_cannot_be_read_back_is_removed_by_any_fo
 def test_a_backfilled_note_is_reached_through_the_streamed_tail_of_the_reply(env, tmp_path, monkeypatch):
     _backfilled_with_dana(env, tmp_path, monkeypatch, in_reply=True)
     assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1
+
+
+# --- review round: partial erases, ordering, off the record, the guest-memory switch ---------------------------------------------
+@pytest.mark.parametrize("erase", ["topic", "text", "entity"])
+def test_a_partial_erase_that_finishes_while_the_model_is_thinking_wins(member, monkeypatch, erase):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    inner = _llm()
+
+    async def erased_midway(messages):
+        if erase == "topic":
+            await cn.erase_topic(OWNER, lambda text: "marathon" in text.lower())
+        elif erase == "text":
+            await cn.erase_for_text(OWNER, "the half marathon training plan", at=NOW - 3600)
+        else:
+            await cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)
+        return await inner(messages)
+    cn.set_llm(erased_midway)
+    out = run(cn.run_member(OWNER, now=NOW))
+    assert out["stored"] == 0 and member.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+    cn.set_llm(inner)                                          # the next pass rebuilds it from what is left: the drop is not permanent
+    assert run(cn.run_member(OWNER, now=NOW))["stored"] == 1
+
+
+def test_the_entity_forget_clears_dependent_notes_before_the_transcript_redaction():
+    import inspect
+    import intent_router
+
+    src = inspect.getsource(intent_router)
+    body = src[src.index("async def memory_forget_entity"):] if "async def memory_forget_entity" in src else src
+    assert body.index("conversation_notes.erase_entity") < body.index("forget_redact.on_forget")
+
+
+def _ex(n, user, reply="ok"):
+    return bf.Exchange(f"s{n}", "sess", NOW + n, "", False, user, reply)
+
+
+def test_backfill_drops_off_the_record_exchanges_and_the_turn_after_a_bare_cue():
+    xs = [_ex(0, "we went to the beach"), _ex(1, "off the record: I hate my boss"), _ex(2, "back to the beach plans"),
+          _ex(3, "off the record"), _ex(4, "my secret is X"), _ex(5, "what does off the record mean?"), _ex(6, "fine")]
+    kept, dropped = bf.drop_off_record(xs)
+    assert [x.submission_id for x in kept] == ["s0", "s2", "s5", "s6"] and dropped == 3
+
+
+def test_stored_guest_notes_stop_with_the_guest_memory_switch(env, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    monkeypatch.setattr(cn, "_verdict", lambda: True)
+    q = add_guest(env)
+    _said(q, CHAT, db=env)
+    cn.set_llm(_llm())
+    assert run(cn.run_guests(OWNER, now=NOW))["stored"] == 1
+    ng.bind_turn(ng.Guest(q, "Quinn", OWNER))
+    assert "half marathon" in run(ng.brain_block("guest"))
+    cn.reset_state()
+    monkeypatch.setenv("ZOE_NAMED_GUEST_MEMORY", "0")
+    assert "half marathon" not in run(ng.brain_block("guest"))
+    ng.bind_turn(None)

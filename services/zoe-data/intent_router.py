@@ -4521,6 +4521,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             logger.warning("memory_forget_entity: struggle-row erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish clearing my notes about that conversation just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the short notes about past conversations that rest on turns naming it (conversation_notes). BEFORE the transcript redaction below:
+        # a note that paraphrases the name ("a friend") is found through its source turns' words, which the redaction is about to overwrite.
+        try:
+            import conversation_notes
+            from memory_forget_cascade import _name_re
+            await conversation_notes.erase_entity(user_id, _name_re(name), strict=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: conversation-note erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish clearing my notes about our past conversations just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the verbatim transcript (chat_messages: the digest's source, the session history): the name's span becomes a fixed
         # marker in place (ids and timestamps kept), plus the in-process turn marks. Same rule: a failure is not "forgotten".
         try:

@@ -144,6 +144,22 @@ def guest_exchanges(all_exchanges: list) -> tuple[list, dict]:
     return kept, skipped
 
 
+def drop_off_record(exchanges: list) -> tuple[list, int]:
+    """Exchanges minus the ones said off the record: a turn carrying the cue (and its reply), and the turn after a BARE cue (which arms the
+    next turn). The Flue event log keeps these words for session history; memory is never rebuilt from them. Oldest-first input."""
+    from memory_provenance import parse_off_record
+
+    kept, dropped, armed = [], 0, False
+    for x in exchanges:
+        cue = parse_off_record(x.user)
+        if cue is not None or armed:
+            dropped += 1
+            armed = cue is not None and not cue.payload.strip()
+            continue
+        kept.append(x)
+    return kept, dropped
+
+
 async def run(owner: str, name: str, db_path: str, since: float, until: float, *, dry_run: bool, now: Optional[float] = None) -> dict:
     """Notes for the enrolled guest ``name`` (in ``owner``'s layer) from the Flue turns of the window. Returns a JSON-able report."""
     import conversation_notes as cn
@@ -164,6 +180,7 @@ async def run(owner: str, name: str, db_path: str, since: float, until: float, *
     guest = guests[0]
     exchanges = read_exchanges(db_path, since, until)
     mine, skipped = guest_exchanges(exchanges)
+    mine, dropped_off_record = drop_off_record(mine)
     mine = [x for x in mine if not distress_handoff.guarded_text(f"{x.user} {x.reply}")]
     mine, dropped_forgotten = await mf.keep_unforgotten(owner, mine, text_of=lambda x: f"{x.user} {x.reply}", strict=True)
     rows = [(x.submission_id, x.epoch, x.user, x.reply) for x in mine]
@@ -173,7 +190,7 @@ async def run(owner: str, name: str, db_path: str, since: float, until: float, *
     out = await cn.notes_for_convos(owner, guest_ref.person_id, convos, source="backfill", status="active" if m == "on" else "shadow",
                                      dry_run=dry_run)
     return {"status": "ok", "dry_run": dry_run, "guest": guest["name"], "exchanges_in_window": len(exchanges), "guest_exchanges": len(rows),
-            "skipped": {**skipped, "forgotten": dropped_forgotten}, "conversations": out["convos"], "already_noted": out["known"],
+            "skipped": {**skipped, "forgotten": dropped_forgotten, "off_record": dropped_off_record}, "conversations": out["convos"], "already_noted": out["known"],
             "too_short": out["too_short"], "no_note": out["no_note"], "stored": out["stored"], "notes": out["notes"]}
 
 
