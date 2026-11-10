@@ -514,3 +514,19 @@ def test_focus_follows_the_most_recent_of_a_create_and_an_add(monkeypatch):
     clock["t"] += 5
     list_service.note_focus_list("alex", "C")                 # a later create wins again
     assert list_service.focus_list("alex") == "C"
+
+
+@pytest.mark.parametrize("action", ["share_list", "unshare_list"])
+def test_a_below_floor_router_abstain_defers_a_share_to_the_brain(action):
+    """A mis-heard share must not publish (or hide) a list on a sliver of router evidence: below the unsure floor it is vetoed."""
+    below_gate = {"two_stage": {"domain": "chat", "head_conf": 0.31, "gated": True, "head_top": "lists", "reason": "below_gate"}}
+    intent = sky.SkybridgeIntent(domain="lists", action=action, query="it")
+    assert sky.skybridge_router_gate("share it", intent, below_gate)[:2] == ("veto", "router_unsure_low_conf")
+
+
+@pytest.mark.asyncio
+async def test_a_compound_create_on_an_existing_work_list_keeps_its_todo_type_and_one_task():
+    db = FakeDb(lists=[{"id": "w1", "user_id": "alex", "name": "Projects", "list_type": "work", "visibility": "personal", "deleted": 0}],
+                items_by_list={"w1": []})
+    await _say(db, "alex", "create a list called Projects and add call mum and dad to it")
+    assert [i["text"] for i in db.items_by_list["w1"]] == ["call mum and dad"]

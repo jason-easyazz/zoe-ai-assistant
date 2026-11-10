@@ -2479,7 +2479,7 @@ def _looks_like_list_name(message: str) -> bool:
 
 _READ_ACTIONS = frozenset({"show", "overview", "forecast", "current", "today"})
 _WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "rename_item", "correct_last_item",
-                            "create_list", "create_event", "update_time", "edit_event", "delete_event", "remember_fact", "create"})
+                            "create_list", "share_list", "unshare_list", "create_event", "update_time", "edit_event", "delete_event", "remember_fact", "create"})
 # Domains holding the household's personal data: the only ones the unsure floor applies to (music / smart-home / timers
 # keep the garbled-STT recovery - their worst case is a wrong song, not a wrong record).
 _UNSURE_FLOOR_DOMAINS = frozenset({"calendar", "lists", "people"})
@@ -4404,6 +4404,10 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
             existing = [household]
     created = False
     list_id = str(dict(existing[0])["id"]) if existing else ""
+    if existing:
+        # An existing list keeps ITS type (an existing work list "Projects" is a to-do list: "call mum and dad" is one task there),
+        # whatever type the spoken name suggested.
+        list_type = str(dict(existing[0]).get("list_type") or list_type)
     if not existing:
         list_id = str(uuid.uuid4())
         status = await db.execute(
