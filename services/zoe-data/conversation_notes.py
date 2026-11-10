@@ -78,7 +78,7 @@ _YOUNG_TURNS = 2              # brain turns of a session that carry the block (t
 _MAX_SESSIONS = 256
 _LEDGER_BUDGET_S = 0.6
 _NOTE_MAX_TOKENS = 380
-MAX_SOURCE_IDS = 60
+_SOURCE_CHUNK = 400            # bind variables per source-turn lookup (EVERY source id is kept and read: forgetting needs the whole chain)
 SUMMARY_CHARS = 320
 ITEM_CHARS = 120
 MOOD_CHARS = 60
@@ -330,12 +330,19 @@ def _missing_table(exc: BaseException) -> bool:
     return "conversation_notes" in s and ("no such table" in s or "does not exist" in s)
 
 
-async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: str, status: str) -> Optional[str]:
+async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: str, status: str,
+               scheduled_at: Optional[int] = None) -> Optional[str]:
     """Insert one note. Idempotent on (layer, episode): a second run finds the first and writes nothing. Returns the id, or None
-    when it already existed or could not be stored (never raises)."""
+    when it already existed, could not be stored, or the member was ERASED since ``scheduled_at`` (the erase generation the pass
+    snapshotted before it read the transcript; None = now). Never raises."""
+    import user_erase_gate as erase_gate
+
     nid = str(uuid.uuid4())
+    gen = erase_gate.generation(owner) if scheduled_at is None else scheduled_at
     try:
-        async with _db() as db:
+        async with erase_gate.writing(owner, gen) as live, _db() as db:
+            if not live:
+                return None             # forgotten means forever: a note made from a pre-erase transcript is never written
             async with db.execute("SELECT id FROM conversation_notes WHERE user_id = ? AND people_id = ? AND episode_key = ?",
                                   (owner, people_id, convo.key)) as cur:
                 if await cur.fetchone():
@@ -345,7 +352,7 @@ async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: 
                 "turn_count, turn_ids, summary, topics, mood, open_threads, follow_up, sensitive, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (nid, owner, people_id, convo.key, source, status, clean(convo.with_name, 60), _iso(convo.started), _iso(convo.ended),
-                 int(convo.turns), json.dumps([str(i) for i in convo.turn_ids][:MAX_SOURCE_IDS]), note.summary, json.dumps(note.topics), note.mood, json.dumps(note.open_threads), note.follow_up,
+                 int(convo.turns), json.dumps([str(i) for i in convo.turn_ids]), note.summary, json.dumps(note.topics), note.mood, json.dumps(note.open_threads), note.follow_up,
                  1 if note.sensitive else 0, _iso(_now())))
             await db.commit()
         return nid
@@ -439,10 +446,13 @@ async def _bump(ids: Sequence[str]) -> None:
 
 # --- the nightly pass -------------------------------------------------------------------------------------------------------
 async def notes_for_convos(owner: str, people_id: str, convos: Iterable[Convo], *, source: str, status: str,
-                           dry_run: bool = False) -> dict:
+                           dry_run: bool = False, scheduled_at: Optional[int] = None) -> dict:
     """Make and store a note for each conversation that has none. The one place the pass is decided, shared by the nightly member
     pass, the guest pass and the owner backfill. ``dry_run`` returns the notes it WOULD write and stores nothing."""
     res = {"convos": 0, "known": 0, "too_short": 0, "no_note": 0, "stored": 0, "notes": []}
+    import user_erase_gate as erase_gate
+
+    gen = erase_gate.generation(owner) if scheduled_at is None else scheduled_at
     have = await known_keys(owner, people_id)
     for convo in convos:
         res["convos"] += 1
@@ -460,7 +470,7 @@ async def notes_for_convos(owner: str, people_id: str, convos: Iterable[Convo], 
             res["notes"].append({"key": convo.key, "started": _iso(convo.started), "ended": _iso(convo.ended), "turns": convo.turns,
                                  "with": convo.with_name, **note.__dict__})
             continue
-        nid = await save(owner, people_id, convo, note, source=source, status=status)
+        nid = await save(owner, people_id, convo, note, source=source, status=status, scheduled_at=gen)
         if nid:
             res["stored"] += 1
             res["notes"].append({"key": convo.key, "id": nid})
@@ -509,11 +519,20 @@ async def run_member(user_id: str, *, now: Optional[float] = None) -> dict:
     res = {"user_id": user_id, "mode": m, "status": "ok"}
     if m == "off" or not user_id or user_id in _GUESTS:
         return {**res, "status": "off"}
+    try:
+        import user_prefs
+
+        if await user_prefs.is_memory_opted_out(user_id):
+            return {**res, "status": "opted_out"}       # an automatic writer: the member's opt-out stops it before it reads a word
+    except Exception:  # noqa: BLE001 - cannot tell: write nothing tonight
+        return {**res, "status": "error"}
     if m == "on":
         await promote_shadow(user_id)
     try:
         import memory_digest as md
+        import user_erase_gate as erase_gate
 
+        gen = erase_gate.generation(user_id)             # BEFORE the transcript is read: an erase after this drops every note below
         t = _now() if now is None else now
         end = datetime.fromtimestamp(t, tz=timezone.utc)
         text = await md.load_day_messages(user_id, (end - timedelta(hours=LOOKBACK_H)).isoformat(), end.isoformat())
@@ -527,7 +546,8 @@ async def run_member(user_id: str, *, now: Optional[float] = None) -> dict:
             if mid and ep is not None and line:
                 rows.append((mid, ep, line, ""))
         convos = _convos(user_id, "", rows, minor=await _is_minor(user_id), now=t)
-        out = await notes_for_convos(user_id, "", convos, source="chat", status="active" if m == "on" else "shadow")
+        out = await notes_for_convos(user_id, "", convos, source="chat", status="active" if m == "on" else "shadow",
+                                    scheduled_at=gen)
     except Exception as exc:  # noqa: BLE001 - the nightly pass never fails on its notes
         logger.warning("CONVERSATION_NOTES member pass failed (%s)", type(exc).__name__)
         return {**res, "status": "error"}
@@ -546,6 +566,9 @@ async def run_guests(owner: str, *, now: Optional[float] = None) -> dict:
 
         if not ngm.memory_on():
             return {**res, "status": "guest_memory_off"}
+        import user_erase_gate as erase_gate
+
+        gen = erase_gate.generation(owner)
         t = _now() if now is None else now
         for g in await ngm.list_for(owner):
             res["guests"] += 1
@@ -555,7 +578,7 @@ async def run_guests(owner: str, *, now: Optional[float] = None) -> dict:
             guest = _GuestRef(g["guest_id"], g["name"], owner)
             convos = _convos(owner, guest.person_id, turns, with_name=guest.name, minor=await _guest_minor(guest), now=t)
             out = await notes_for_convos(owner, guest.person_id, convos, source="panel_guest",
-                                         status="active" if m == "on" else "shadow")
+                                         status="active" if m == "on" else "shadow", scheduled_at=gen)
             res["stored"] += out["stored"]
             _log(owner, m, "guest", out)
     except Exception as exc:  # noqa: BLE001
@@ -921,18 +944,22 @@ async def promote_shadow(owner: str) -> int:
 async def _source_text(db, owner: str, s: "Stored") -> str:
     """The words of the turns a note was made from, by id (member: ``chat_messages``; guest: ``named_guest_turns``). A table that is not
     there is no text (the note's own words still count). RAISES on any other failure, so a strict forget is retried."""
-    ids = [str(i) for i in s.turn_ids if i][:MAX_SOURCE_IDS]
+    ids = [str(i) for i in s.turn_ids if i]
     if not ids:
         return ""
-    marks = ", ".join("?" * len(ids))
+    parts: list = []
     try:
-        if s.people_id:
-            sql, params = (f"SELECT user_text, reply FROM named_guest_turns WHERE user_id = ? AND people_id = ? AND id IN ({marks})",
-                           (owner, s.people_id, *ids))
-        else:
-            sql, params = f"SELECT content FROM chat_messages WHERE id IN ({marks})", tuple(ids)
-        async with db.execute(sql, params) as cur:
-            return " ".join(" ".join(str(c or "") for c in r) for r in await cur.fetchall())
+        for at in range(0, len(ids), _SOURCE_CHUNK):          # ALL the ids, in chunks: a paraphrased summary rests on any turn
+            chunk = ids[at:at + _SOURCE_CHUNK]
+            marks = ", ".join("?" * len(chunk))
+            if s.people_id:
+                sql, params = (f"SELECT user_text, reply FROM named_guest_turns WHERE user_id = ? AND people_id = ? AND id IN ({marks})",
+                               (owner, s.people_id, *chunk))
+            else:
+                sql, params = f"SELECT content FROM chat_messages WHERE id IN ({marks})", tuple(chunk)
+            async with db.execute(sql, params) as cur:
+                parts.extend(" ".join(str(c or "") for c in r) for r in await cur.fetchall())
+        return " ".join(parts)
     except Exception as exc:  # noqa: BLE001
         t = str(exc)
         if "no such table" in t or "does not exist" in t:

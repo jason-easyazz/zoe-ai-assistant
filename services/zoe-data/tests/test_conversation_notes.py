@@ -56,6 +56,11 @@ def _clean(monkeypatch):
                 raise RuntimeError("boom")
             return list(_facts)
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
+    import user_prefs
+
+    async def _not_opted_out(uid, **_kw):               # the preference table lives in Postgres; a test that cares overrides this
+        return False
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", _not_opted_out)
     prev = cn.set_llm(None)
     memory_forgotten.set_backend(memory_forgotten.MemoryBackend())
     monkeypatch.setenv(memory_forgotten.SALT_ENV, "s" * 40)
@@ -804,3 +809,49 @@ def test_a_private_note_never_names_its_subject_to_the_brain():
                   open_threads=["the surgery date"], follow_up="how the knee is", sensitive=True, served_count=0, source="chat")
     line = cn._note_line(n, 0.0)
     assert "knee" not in line and "surgeon" not in line and "surgery" not in line and "private" in line
+
+
+# --- review round: opt-out, erase race, whole provenance ------------------------------------------------------------------------
+def test_a_member_who_opted_out_gets_no_automatic_note_and_no_model_call(member, monkeypatch):
+    import user_prefs
+
+    async def opted_out(uid, **_kw):
+        return True
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    calls = []
+    cn.set_llm(_llm(calls=calls))
+    out = run(cn.run_member(OWNER, now=NOW))
+    assert out["status"] == "opted_out" and not calls
+    assert member.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+
+
+def test_an_erase_that_finishes_while_the_model_is_thinking_wins(member, monkeypatch):
+    import user_erase_gate as erase_gate
+
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    inner = _llm()
+
+    async def erased_midway(messages):
+        async with erase_gate.erasing(OWNER):
+            pass                                                   # the whole-user erase completes during the model call
+        return await inner(messages)
+    cn.set_llm(erased_midway)
+    out = run(cn.run_member(OWNER, now=NOW))
+    assert out["stored"] == 0
+    assert member.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+    erase_gate.reset()
+
+
+def test_every_source_turn_of_a_long_conversation_is_kept_and_forgettable(member):
+    member.conn.execute("CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)")
+    ids = [f"t{i}" for i in range(61)]
+    for i in ids:
+        text = "my friend Dana is coming" if i == "t60" else "just chatting"
+        member.conn.execute("INSERT INTO chat_messages VALUES (?, 's', 'user', ?, 'x')", (i, text))
+    member.conn.commit()
+    convo = cn.Convo("k-long", NOW - 5000, NOW - 4000, [("them", "hi")], 61, "", False, ids)
+    note = cn.Note("They chatted.", [], "", [], "", False)
+    nid = run(cn.save(OWNER, "", convo, note, source="chat", status="active"))
+    assert nid and len(json.loads(member.q("SELECT turn_ids FROM conversation_notes")[0][0])) == 61
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1       # only turn 61 named her
