@@ -13,11 +13,12 @@ What it does
    ``$AFFECTED_TESTS_BASE`` or the first of ``origin/main``, ``main``, ``master``
    that resolves locally (no fetch). ``--files`` bypasses git entirely.
 2. Builds a STATIC dependency graph of the repo (rebuilt every run from the
-   files on disk, so it cannot go stale; an mtime-keyed parse cache under the
-   git dir only makes it faster):
-     * python import edges (AST ``import``/``from`` anywhere in a file, plus
-       string constants naming a module: ``importlib.import_module("x")``,
-       ``mock.patch("pkg.mod.attr")``, ``monkeypatch.setattr("mod.attr", ...)``);
+   files on disk, so it cannot go stale; a CONTENT-keyed parse cache in the
+   clone's common git dir only makes it faster, ~2 s warm vs ~30 s cold):
+     * python import edges (AST ``import``/``from``; a function-scope import in
+       non-test code is followed only to importers that use that function, for
+       ``LAZY_HOPS`` levels), plus string constants naming a module
+       (``mock.patch("pkg.mod.attr")``, ``monkeypatch.setattr("mod.attr", ...)``);
      * text-reference edges: a file whose string literals (python) or tokens
        (sh/yml/js/...) name another file by repo path, or by basename (with its
        parent directory also named when the basename is not unique). This is
@@ -34,8 +35,8 @@ What it does
 
 Safe by default — it falls back to the FULL lane(s) and says why when:
 ``conftest.py`` / ``pytest.ini`` / ``pyproject.toml`` / ``setup.cfg`` /
-requirements or constraints changed; a changed module is imported (even
-transitively) by a lane's conftest; the selection would cover more than
+requirements or constraints / an Alembic migration changed; a changed module
+is used directly by a lane's conftest; the selection would cover more than
 ``HUB_FRACTION`` of a lane anyway; a changed file is of an unknown type and no
 test references it; the base ref cannot be resolved; or git fails. It never
 silently selects zero tests for a code change: a code change no test can reach
@@ -62,7 +63,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SUMMARY_SCHEMA = 1
-CACHE_VERSION = 8
+CACHE_VERSION = 9
 REPO = Path(__file__).resolve().parents[2]
 
 # --- lanes: MIRROR of .github/workflows/validate.yml (pinned by tests/unit/test_affected_tests.py) ---
@@ -121,7 +122,8 @@ DEP_RE = re.compile(r"(^|/)(requirements[^/]*\.txt|constraints[^/]*\.txt|Pipfile
 # files scanned as reference SOURCES (their text may name another file). Bounded: big data blobs skipped.
 REF_SCAN_EXT = {".py", ".sh", ".bash", ".yml", ".yaml", ".mjs", ".cjs", ".toml", ".ini", ".cfg", ".service",
                 ".timer"}
-REF_SCAN_MAX_BYTES = 400_000
+REF_SCAN_MAX_BYTES = 400_000          # data blobs (yml/json/...) past this are not scanned
+REF_SCAN_MAX_PY_BYTES = 8_000_000     # python is always parsed (routers/voice_tts.py is ~410 KB)
 # a test that walks the tree (rglob/os.walk/git ls-files) can be affected by ANY added/removed/non-doc file
 SCANNER_RE = re.compile(r"\.rglob\(|os\.walk\(|\bls-files\b|glob\.glob\(|\.glob\(\s*[\"']\*\*")
 REPO_ANCHOR_RE = re.compile(r"\bls-files\b|parents\[\d\]|\bREPO(_ROOT)?\b|\bROOT\b|--show-toplevel")
@@ -164,21 +166,20 @@ def changed_files(root: Path, base: str) -> tuple[str, list[tuple[str, str]]]:
     """(merge_base_sha, [(status, path)]) — working tree vs merge-base, plus untracked."""
     mb = _git(root, "merge-base", base, "HEAD").strip()
     out: dict[str, str] = {}
-    for line in _git(root, "diff", "--no-renames", "--name-status", mb, "--").splitlines():
-        if not line.strip():
-            continue
-        st, path = line.split("\t", 1)
-        out[path] = st[0]
-    for path in _git(root, "ls-files", "--others", "--exclude-standard").splitlines():
-        if path.strip():
+    parts = _git(root, "diff", "-z", "--no-renames", "--name-status", mb, "--").split("\0")
+    for st, path in zip(parts[0::2], parts[1::2]):
+        if path:
+            out[path] = st[0]
+    for path in _git(root, "ls-files", "-z", "--others", "--exclude-standard").split("\0"):
+        if path:
             out[path] = "A"
     return mb, sorted((s, p) for p, s in out.items())
 
 
 def repo_files(root: Path) -> list[str]:
     try:
-        files = set(_git(root, "ls-files").splitlines())
-        files |= set(_git(root, "ls-files", "--others", "--exclude-standard").splitlines())
+        files = set(_git(root, "ls-files", "-z").split("\0"))
+        files |= set(_git(root, "ls-files", "-z", "--others", "--exclude-standard").split("\0"))
     except (subprocess.CalledProcessError, FileNotFoundError):
         files = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and ".git" not in p.parts}
     return sorted(f for f in files if f and not any(s in f for s in SKIP_DIRS) and (root / f).is_file())
@@ -297,7 +298,7 @@ def load_records(root: Path, files: list[str]) -> dict[str, dict]:
             data = (root / rel).read_bytes()
         except OSError:
             continue
-        if len(data) > REF_SCAN_MAX_BYTES:
+        if len(data) > (REF_SCAN_MAX_PY_BYTES if rel.endswith(".py") else REF_SCAN_MAX_BYTES):
             recs[rel] = _EMPTY_REC
             continue
         # keyed by CONTENT, not mtime: a checkout/rebase that keeps size and mtime cannot serve a stale parse
@@ -1003,7 +1004,7 @@ def main(argv: list[str] | None = None) -> int:
                         cmd = ["nice", "-n", "10", *cmd]
                     r = subprocess.run(cmd, cwd=root, env=lane_env(root, lane),
                                        stdout=sys.stderr if a.json == "-" else None)
-                    ln["rc"] = r.returncode
+                    ln["rc"] = r.returncode if r.returncode >= 0 else 128 - r.returncode   # signal -> 128+N
             except TimeoutError as exc:
                 ln["rc"] = 75
                 error = str(exc)
