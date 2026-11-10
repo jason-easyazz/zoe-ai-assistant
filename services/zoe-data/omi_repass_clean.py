@@ -103,6 +103,19 @@ class Verdict:
     run: int = 0
 
 
+# words that carry the MEANING of a sentence's polarity: a cleaner that drops one reverses what the person said ("I do not want to sell the house" ->
+# "I do want to sell the house"), and a subsequence / percentage budget cannot see that. Keys are the ``keys()`` form (apostrophes out: "don't" -> "dont").
+NEGATIONS = frozenset({"not", "no", "never", "nothing", "nobody", "none", "neither", "nor", "without", "cannot", "nope", "nowhere", "noone",
+                       "cant", "dont", "doesnt", "didnt", "wont", "wouldnt", "shouldnt", "couldnt", "isnt", "arent", "wasnt", "werent",
+                       "hasnt", "havent", "hadnt", "aint", "mustnt", "neednt", "mightnt", "shant"})
+
+
+def negations(text: str) -> int:
+    """Negation words in the RAW text (before ``keys()`` collapses immediate repeats: "not not" is two negations). Apostrophes out, as in ``keys``."""
+    raw = re.sub(r"[^a-z0-9]+", " ", (text or "").lower().replace("'", "").replace("\u2019", "")).split()
+    return sum(1 for w in raw if w in NEGATIONS)
+
+
 def guard(verbatim: str, clean: str, *, max_frac: float = MAX_DROP_FRAC, max_run: int = MAX_DROP_RUN) -> Verdict:
     """May ``clean`` be shown for ``verbatim``? In-order subsequence, <= ``max_frac`` of the words dropped, no dropped run > ``max_run``. Pure."""
     v, c = keys(verbatim), keys(clean)
@@ -123,6 +136,8 @@ def guard(verbatim: str, clean: str, *, max_frac: float = MAX_DROP_FRAC, max_run
     longest = max(longest, len(v) - i)                   # the tail the clean text dropped
     dropped = len(v) - len(c)
     frac = dropped / len(v)
+    if negations(clean) < negations(verbatim):
+        return Verdict(False, "negation_dropped", dropped, frac, longest)          # never show a cleanup that reverses what was said
     if frac > max_frac:
         return Verdict(False, "too_many_dropped", dropped, frac, longest)
     if longest > max_run:
@@ -282,7 +297,7 @@ async def pending_segments(db, limit: int = 2000) -> list:
                               "WHERE r.status = 'done' AND s.clean_how = '' AND s.text != '' ORDER BY r.started_at, s.seq LIMIT ?", (limit,))
     except Exception as exc:  # noqa: BLE001
         if type(exc).__name__ == "UndefinedColumnError" or "no such column" in str(exc).lower():
-            return []                                          # pre-0074: nothing to do
+            return []                                          # pre-0075: nothing to do
         raise
     return [tuple(r) for r in rows]
 
@@ -311,7 +326,10 @@ async def run(*, llm: Optional[Callable[[str], Any]], budget_s: float = 0.0, now
             if not live:
                 continue
             async with db_factory() as db:
-                shown = await omi._redact_forgotten(uid, r["text"])
+                try:
+                    shown = await omi._redact_forgotten(uid, r["text"], strict=True)
+                except Exception:  # noqa: BLE001 - forget ledger unreadable: no display twin is stored (the raw line stays as it was)
+                    continue
                 await db.execute("UPDATE omi_segments SET clean_text = ?, clean_how = ? WHERE id = ? AND user_id = ? AND text = ?", (shown, r["how"], sid, uid, text))
                 await db.commit()
     out = summary(results)

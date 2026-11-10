@@ -52,13 +52,13 @@ def test_enrolment_links_the_members_existing_person_and_replaces_their_old_prin
     other = enrol(env, owner=OTHER)                                  # another member's Quinn is THEIR person, in THEIR layer
     assert other != "q1" and env.q("SELECT user_id, visibility FROM people WHERE id = ?", (other,)) == [(OTHER, "personal")]
 
-def test_a_member_or_a_child_is_never_enrolled_as_a_guest(env):
+def test_a_member_is_never_enrolled_as_a_guest_but_a_child_is(env):
     with pytest.raises(nge.GuestError):
         enrol(env, name="Blake")                                      # a household member enrols themselves
     env.conn.execute("INSERT INTO people (id, user_id, name, relationship, visibility) VALUES ('k', ?, 'Kit', 'son', 'personal')",
                      (OWNER,))
-    with pytest.raises(nge.GuestError):
-        enrol(env, name="Kit")
+    assert enrol(env, name="Kit") == "k"                              # owner 2026-11-08: a child is recognised like anyone
+    assert env.q("SELECT COUNT(*) FROM learned_voiceprints WHERE people_id = 'k'") == [(1,)]
 
 def test_the_spoken_tier_needs_a_verified_adult_member(env, monkeypatch):
     queued = []

@@ -26,6 +26,7 @@ forget, re-issue the forget (the ledger table is restored with the data it prote
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,12 +82,13 @@ TABLES: tuple[Store, ...] = (
     _t("omi_segment_embeddings", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_clusters", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_settings", CONFIG, REACHED, member=_OMI_M),
-    _t("omi_channel_means", BIOMETRIC, REACHED, member=_OMI_M),        # the speaker step's per-channel mean offset (0074): omi_voices.forget_user
-    _t("omi_wearer_samples", BIOMETRIC, REACHED, member=_OMI_M),       # the night re-pass's wearer-print windows (0074): omi_voices.forget_user + drop_recording
+    _t("omi_channel_means", BIOMETRIC, REACHED, member=_OMI_M),        # the speaker step's per-channel mean offset (0075): omi_voices.forget_user
+    _t("omi_wearer_samples", BIOMETRIC, REACHED, member=_OMI_M),       # the night re-pass's wearer-print windows (0075): omi_voices.forget_user + drop_recording
     _t("omi_devices", METADATA, REACHED, member=_OMI_M),
     _t("omi_device_health", METADATA, REACHED, member=_OMI_M),         # omi_health.forget_user, called from omi_recordings.forget_user
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("omi_day_candidates", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
+    _t("conversation_notes", WORDS, REACHED, member="conversation_notes.forget_user", entity="conversation_notes.erase_entity"),
     _t("contact_fields", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("contact_sources", METADATA, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("source_contacts", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
@@ -212,15 +214,19 @@ OTHER: tuple[Store, ...] = (
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
     Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
           "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
+    Store("flue_session_log", "file", WORDS, GAP, "The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
+          "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
+          "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
     Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
-          "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member.",
+          "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py).",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
     Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "
           "panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own.",
           markers=("zoe-brain.db",)),
     Store("omi_repass_work", "file", WORDS, REACHED, "The pendant night re-pass's per-run work files (~/.zoe/omi-repass/work/<id>.manifest.json + <id>.out.jsonl, 0600) hold the audio PATHS and the "
-          "recognised WORDS of the recordings in one night run; the run deletes them in a finally block as soon as the results are applied (minutes). A member erase "
-          "mid-run is caught at the write (user_erase_gate.writing) and the recording tombstoned. state.json (measured speeds, Zoe's own voice reference) and "
+          "recognised WORDS of the recordings in one night run; the run deletes them in a finally block as soon as the results are applied (minutes). A member erase, "
+          "an entity erase or a recording delete deletes EVERY work file whatever its age (they name no member, so none can be proven clean; a run that loses one retries), "
+          "and a mid-run erase is caught at the write (user_erase_gate.writing) and the recording tombstoned. state.json (measured speeds, Zoe's own voice reference) and "
           "shadow.jsonl (counts only: no word, no name) hold nothing of a member.",
           member="omi_recordings.forget_user", markers=(".out.jsonl", ".manifest.json", "shadow.jsonl")),
     Store("omi_repass_hyps", "file", WORDS, REACHED, "The night re-pass's per-chunk hypotheses (~/.zoe/omi-repass/hyps/hyps-<night>.jsonl, 0600): every engine's text for each chunk, the ROVER pick and the "
@@ -238,6 +244,12 @@ OTHER: tuple[Store, ...] = (
           "step self_review); a member erase drops all of the member's records and summary events; load_reviews re-checks the ledger.",
           member="struggle_detector.delete_user", entity="self_review.erase_entity",
           markers=(".self-review.jsonl", ".self-review-summary.json")),
+    Store("night_extract_facts", "file", WORDS, REACHED, "~/.zoe/night-extract/: the SHADOW night pre-pass (night_extract.py, ZOE_NIGHT_EXTRACT). "
+          "<night>.night-extract.jsonl holds the facts the GLiNEREL extractor PROPOSED from the member's day (person names, ages, places, pet and kin "
+          "words; 0600, never off-box, never a turn's text) and <night>.night-extract-summary.json counts only. An entity forget drops the member's facts "
+          "naming it (cascade step night_extract); a member erase (struggle_detector.delete_user calls night_extract.delete_user) drops all of the member's facts and summary line; load_facts re-checks the ledger.",
+          member="struggle_detector.delete_user", entity="night_extract.erase_entity",
+          markers=(".night-extract.jsonl", ".night-extract-summary.json")),
     Store("self_improver_candidates", "file", DERIVED, REACHED, "~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B "
           "invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, "
           "a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming "
@@ -325,11 +337,17 @@ def discover_user_tables(sources: Iterable[Path]) -> dict[str, str]:
     return found
 
 
+@functools.lru_cache(maxsize=16)
+def _defined_function_names(source: str) -> frozenset[str]:
+    """Every (async) function / method name defined anywhere in ``source`` (memoised by content: the inventory check asks about one
+    4.6k-line module once per store)."""
+    return frozenset(n.name for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+
+
 def function_defined(py_file: Path, qualified: str) -> bool:
     """Is ``module.func`` (or ``module.Class.method`` / ``module._private_func``) defined in ``py_file``? Pure AST: no import."""
     name = qualified.split(".")[-1]
-    tree = ast.parse(Path(py_file).read_text(encoding="utf-8"))
-    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name for n in ast.walk(tree))
+    return name in _defined_function_names(Path(py_file).read_text(encoding="utf-8"))
 
 
 def uncovered_tables(discovered: Iterable[str]) -> list[str]:

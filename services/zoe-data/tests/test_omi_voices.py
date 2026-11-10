@@ -153,6 +153,9 @@ def env(monkeypatch, tmp_path):
         monkeypatch.setenv(k, v)
     monkeypatch.setattr(omi, "voice_busy", lambda now_mono=None: False)
     monkeypatch.setattr(omi, "night_window", lambda now=None: False)
+    # the live box is not the test's: a voice turn or a night unit running NOW must not gate a unit test (2026-11-09 flake)
+    monkeypatch.setattr(omi, "live_busy_reason", lambda: None)
+    monkeypatch.setattr(omi, "last_voice_age_s", lambda now_mono=None: None)
 
     async def adult(uid, db=None):
         return uid in (A, B)
@@ -534,6 +537,21 @@ def test_a_retag_moves_what_the_first_tag_taught_to_the_right_person(env, monkey
     env.client.post(f"/api/omi/segments/{seg_b}/tag", json={"person_id": alex})
     assert env.db.q("SELECT COUNT(*) FROM learned_voiceprints WHERE people_id = ?", (sam,)) == [(0,)]
     assert env.db.q("SELECT n_segments FROM learned_voiceprints WHERE people_id = ?", (alex,)) == [(2,)]
+
+
+def test_releasing_the_last_contribution_with_keep_empty_keeps_the_print_and_its_opt_out(env, monkeypatch):
+    """The night re-pass replaces a recording's segments: a stopped voice whose only contributions were there must not be deleted and silently
+    recreated with learning on (``keep_empty``). Negative control: the default still drops the print."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    segs = [r[0] for r in env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0, status = 'confirmed', rejections = 2")
+    env.db.conn.commit()
+    run(ov._release_contributions(env.db, A, segs, keep_empty=True))
+    assert env.db.q("SELECT learning_enabled, status, rejections, n_segments, n_recordings FROM learned_voiceprints") == [(0, "confirmed", 2, 0, 0)]
+    run(ov._release_contributions(env.db, A, segs))                       # nothing left to release; the plain rebuild of an empty print drops it
+    vp = env.db.q("SELECT id FROM learned_voiceprints")[0][0]
+    assert run(ov.rebuild(env.db, vp)) is False and env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
 
 
 def test_a_tagged_line_marked_not_a_person_is_untagged_and_unlearned(env, monkeypatch):
@@ -1400,3 +1418,26 @@ def test_the_voices_read_says_which_tagging_mode_is_live(env, monkeypatch):
     assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "shadow"
     monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "bogus")
     assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "off"
+
+
+def test_the_panel_cache_serves_each_recording_its_own_interval(monkeypatch):
+    """Two recordings in the same ten-minute bucket: the second is not served the first one's slice of the panel log."""
+    import datetime as dt
+    import sys
+    import types
+
+    base = 1_790_000_000.0 - (1_790_000_000.0 % 600)           # a bucket start
+    stamps = [base + 30, base + 400]                           # one turn near each recording
+
+    class T:
+        def __init__(self, ts):
+            self.recorded_ts = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
+    fake = types.SimpleNamespace(fetch_lines=lambda *_a, **_k: [], events=lambda lines: lines, turns=lambda ev: [T(t) for t in stamps],
+                                 match_clips=lambda *_a, **_k: {}, corpus_index=lambda: None)
+    monkeypatch.setitem(sys.modules, "panel_voice_log", fake)
+    ov._PANEL_CACHE.clear()
+    first = ov._panel_turns(base + 10, base + 60)
+    second = ov._panel_turns(base + 380, base + 430)    # same bucket key
+    assert [t.recorded_ts.timestamp() for t in first] == [stamps[0]]
+    assert [t.recorded_ts.timestamp() for t in second] == [stamps[1]]
+    ov._PANEL_CACHE.clear()

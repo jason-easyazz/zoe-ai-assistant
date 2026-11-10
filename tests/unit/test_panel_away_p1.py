@@ -150,7 +150,7 @@ def server():
     g = _gate(http=http)
     g.http = http
     srv = gate_mod.serve(g, 0)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     yield g, srv.server_address[1]
     srv.shutdown()
     srv.server_close()

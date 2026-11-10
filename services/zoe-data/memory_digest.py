@@ -16,6 +16,8 @@ import asyncio
 import functools
 import json
 import logging
+
+import log_redaction as _log_redaction
 import os
 import re
 import time
@@ -843,6 +845,16 @@ def _then_quote_retire(fn):
     return wrapper
 
 
+async def _known_person_names(user_id: str) -> frozenset:
+    """Lower-cased names of the people this member has told Zoe about (their ``people`` rows). Empty on any failure. Bounded."""
+    try:
+        import person_recall_floor
+
+        return frozenset(n.lower() for _pid, n in await person_recall_floor._known_people(user_id))
+    except Exception:  # noqa: BLE001 - a read that failed means "nobody known": the lazy possessive is then left alone
+        return frozenset()
+
+
 @_then_quote_retire
 async def run_turn_digest(
     user_id: str,
@@ -1084,9 +1096,22 @@ async def run_turn_digest(
             # The extractor files "the user" by default: a fact the turn says about SOMEONE ELSE ("dad rang. sober for once", "priya no
             # beef. arjun hates onion") is re-attached to that person or dropped, never kept as the user's own (fact_subject).
             try:
+                import value_correction
+
+                if value_correction.invented_on_correction_turn(fact, user_message):
+                    result["skipped_low_quality"] += 1
+                    _count_drop("turn_digest", "correction_turn")
+                    logger.info("run_turn_digest: dropped a fact a correction turn cannot have said: %s", _log_redaction.utterance_tag(fact))
+                    continue
+            except Exception:  # noqa: BLE001 - the guard must never take the digest down
+                pass
+            try:
                 import fact_subject
 
-                verdict_, fixed_fact = fact_subject.attribute(fact, user_message)
+                _known_names = frozenset()
+                if fact_subject.lazy_owner_candidate(fact, user_message):   # "ashas swimming": Asha's, or a name ending in s - the member's people decide
+                    _known_names = await _known_person_names(user_id)
+                verdict_, fixed_fact = fact_subject.attribute(fact, user_message, _known_names)
                 if verdict_ == "drop":
                     result["skipped_low_quality"] += 1
                     _count_drop("turn_digest", "other_subject")
@@ -3324,6 +3349,18 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
     except Exception as exc:
         logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, exc)
         result["open_loops"] = {"status": "error", "error": str(exc)}
+
+    # Phase 1.55: conversation notes (ZOE_CONVERSATION_NOTES, default OFF - a no-op without I/O when off): one short note per
+    # finished conversation of this member (and of the named guests they enrolled), in their own layer, so Zoe can pick a topic
+    # back up next time. Never a memory row; docs/knowledge/conversation-notes.md.
+    try:
+        import conversation_notes
+
+        notes_result = await conversation_notes.run_nightly(user_id)
+        if notes_result.get("status") != "off":
+            result["conversation_notes"] = notes_result
+    except Exception as exc:
+        logger.warning("dreaming: conversation notes failed user=%s: %s", user_id, exc)
 
     # Phase 1.6: proactivity selector (ZOE_PROACTIVE_SELECTOR, default OFF — a
     # no-op without I/O when off). Ranks tonight's loops/moments/events.

@@ -403,6 +403,9 @@ def test_every_pytest_step_in_validate_has_a_timeout_and_hang_dump():
             where = f"{jname}: {step.get('name')}"
             tm = step.get("timeout-minutes")
             assert isinstance(tm, int) and 0 < tm <= 60, f"{where}: needs a sane step timeout-minutes, got {tm!r}"
+            if jname in _COLLECT_ONLY:
+                assert "--collect-only" in step["run"], where
+                continue
             m = re.search(r"faulthandler_timeout=(\d+)", step["run"])
             assert m, f"{where}: pytest must pass -o faulthandler_timeout so a hang dumps its stack"
             assert int(m.group(1)) < tm * 60, f"{where}: faulthandler must fire before the step is killed"
@@ -419,21 +422,26 @@ def test_every_validate_workflow_job_has_a_job_timeout_above_its_step_sum():
         assert "timeout-minutes" in _load("validate.yml")["jobs"][ctx]
 
 
-# Exact budgets. Raised 2026-11-07: the suite grew and the runner shares a box, so the
-# zoe-data lanes now take 18-24 min (8 recent runs; the old 24 min cap tripped) -> 40 = ~1.6x
-# max; tests/unit 10-13 min; whole `validate` job 31-38 min. Loosening
-# one is a deliberate edit to this table (floor: >= 2x p90, so a slow runner never
-# turns a healthy lane red; ceiling: well under GitHub's 6 h default).
+# Exact budgets. Re-cut 2026-11-10 when the gate was sharded: a zoe-data shard (1/4 of a lane that took
+# 18-26 min serially) and a tests/unit shard (1/2 of 10-13 min) are each expected at ~6-8 min, so 25 min per
+# shard step is >= 3x; the py312 lane stays unsharded at 40 (~1.6x its 23-25 min). Loosening one is a
+# deliberate edit to this table (floor: >= 2x p90, so a slow runner never turns a healthy lane red;
+# ceiling: well under GitHub's 6 h default).
 _STEP_BUDGET_MIN = {
-    ("validate", "Lane — zoe-data (ci_safe)"): 40,
-    ("validate", "Lane — Home Assistant MCP bridge"): 5,
-    ("validate", "Lane — tests/unit (ci_safe)"): 30,
-    ("validate", "Lane — zoe-auth (full)"): 5,
-    ("validate", "People MemPalace integration cleanup"): 5,
-    ("validate", "People graph invariants on CI PostgreSQL"): 5,
+    ("zoe-data-shard", "Lane — zoe-data (ci_safe) shard"): 25,
+    ("unit-shard", "Lane — tests/unit (ci_safe) shard"): 25,
+    ("checks", "Lane — Home Assistant MCP bridge"): 5,
+    ("checks", "Lane — zoe-auth (full)"): 5,
+    ("checks", "People MemPalace integration cleanup"): 5,
+    ("checks", "People graph invariants on CI PostgreSQL"): 5,
+    ("collect", "Collect — zoe-data (ci_safe), full selection"): 5,
+    ("collect", "Collect — tests/unit (ci_safe), full selection"): 5,
     ("zoe-data-py312", "Lane — zoe-data (ci_safe) on Python 3.12"): 40,
 }
-_JOB_BUDGET_MIN = {"validate": 100, "zoe-data-py312": 70, "deps-resolvable": 15, "secret-scan": 10}
+_JOB_BUDGET_MIN = {"checks": 30, "zoe-data-shard": 35, "unit-shard": 35, "collect": 15, "validate": 10,
+                   "zoe-data-py312": 70, "deps-resolvable": 15, "secret-scan": 10}
+# Jobs whose pytest steps only COLLECT (--collect-only) never run a test, so they need no per-test hang dump.
+_COLLECT_ONLY = {"collect"}
 
 
 _PER_TEST_HANG_S = 300   # no ci_safe test legitimately runs 5 minutes
@@ -447,8 +455,90 @@ def test_lane_timeout_budgets_are_pinned_exactly():
     for (jname, sname), want in _STEP_BUDGET_MIN.items():
         step = next(s for s in jobs[jname]["steps"] if s.get("name") == sname)
         assert step.get("timeout-minutes") == want, (jname, sname)
+        if jname in _COLLECT_ONLY:
+            continue
         # faulthandler_timeout is PER TEST (pytest restarts the timer for every test), so it is a short per-test hang budget, not the step
         # budget: a test hanging late in a 24-min lane must still dump its stack well before the step is killed.
         assert f"faulthandler_timeout={min(_PER_TEST_HANG_S, want * 60 - 60)}" in step["run"], (jname, sname)
     found = {(j, s["name"]) for j, job in jobs.items() for s in _pytest_steps(job)}
     assert found == set(_STEP_BUDGET_MIN), found ^ set(_STEP_BUDGET_MIN)
+
+
+# --- the sharded gate (2026-11-10) -------------------------------------------
+# The lanes run as parallel jobs and the REQUIRED context is an aggregator job named `validate`. The classic
+# ways an aggregator turns a red shard green — or never reports — are each pinned here.
+
+_INFORMATIONAL = {"zoe-data-py312", "deps-resolvable", "secret-scan"}
+_GATE_NEEDS = ("checks", "zoe-data-shard", "unit-shard", "collect")
+
+
+def _validate_jobs() -> dict:
+    return _load("validate.yml")["jobs"]
+
+
+def test_validate_is_an_always_running_aggregator_over_every_gate_job():
+    jobs = _validate_jobs()
+    agg = jobs["validate"]
+    assert agg.get("name", "validate") == "validate" and "strategy" not in agg, "the required check would be renamed"
+    # Without always() a failed/cancelled/skipped need SKIPS the aggregator: a skipped required check counts as
+    # passing in branch protection, and on some paths the context never reports at all.
+    assert str(agg["if"]).replace(" ", "") == "${{always()}}", agg.get("if")
+    gate = {j for j in jobs if j not in _INFORMATIONAL and j != "validate"}
+    assert set(agg["needs"]) == gate == set(_GATE_NEEDS), (
+        f"validate must need EVERY gate job: needs={sorted(agg['needs'])}, gate={sorted(gate)}")
+    for j in gate | {"validate"}:
+        assert not jobs[j].get("continue-on-error"), j
+        assert not any(s.get("continue-on-error") for s in jobs[j]["steps"]), j
+
+
+def test_no_shard_check_name_collides_with_a_required_context():
+    """A matrix instance publishes `<name>` with the matrix value substituted. None may be named like a required
+    context, or a shard could satisfy (or shadow) the gate by name."""
+    for jid, job in _validate_jobs().items():
+        if jid == "validate" or "strategy" not in job:
+            continue
+        for g in job["strategy"]["matrix"]["group"]:
+            name = str(job.get("name", jid)).replace("${{ matrix.group }}", str(g))
+            assert name not in REQUIRED_CONTEXTS, name
+
+
+def _verdict_script() -> str:
+    import textwrap
+
+    step = _validate_jobs()["validate"]["steps"][-1]
+    assert "always()" in str(step.get("if")), "the verdict step must run even after a failed verification step"
+    assert "toJSON(needs)" in str(step["env"]["NEEDS_JSON"])
+    m = re.search(r"python3 - <<'PY'\n(.*?)\n\s*PY\s*$", step["run"], re.S)
+    assert m, step["run"][:300]
+    return textwrap.dedent(m.group(1))
+
+
+def _verdict(needs: dict) -> int:
+    import os
+    import sys
+
+    env = dict(os.environ, NEEDS_JSON=json.dumps(needs))
+    return subprocess.run([sys.executable, "-c", _verdict_script()], env=env,
+                          capture_output=True, text=True).returncode
+
+
+def test_the_verdict_passes_only_when_every_need_succeeded():
+    """BEHAVIOURAL: run the aggregator's real verdict script against simulated `needs` contexts."""
+    ok = {j: {"result": "success", "outputs": {}} for j in _GATE_NEEDS}
+    assert _verdict(ok) == 0
+    for j in _GATE_NEEDS:
+        for bad in ("failure", "cancelled", "skipped", ""):
+            needs = json.loads(json.dumps(ok))
+            needs[j]["result"] = bad
+            assert _verdict(needs) == 1, (j, bad)
+    # a dropped need and a foreign need both fail closed
+    assert _verdict({j: v for j, v in ok.items() if j != "unit-shard"}) == 1
+    assert _verdict(dict(ok, extra={"result": "success"})) == 1
+    assert _verdict({}) == 1
+
+
+def test_the_verdict_names_exactly_the_jobs_the_aggregator_needs():
+    """The script's expected set and the job's `needs:` must be the same list, or one can drift silently."""
+    m = re.search(r"expected = \{([^}]*)\}", _verdict_script())
+    assert m
+    assert set(re.findall(r'"([^"]+)"', m.group(1))) == set(_validate_jobs()["validate"]["needs"])

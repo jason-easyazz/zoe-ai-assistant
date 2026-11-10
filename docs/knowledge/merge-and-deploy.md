@@ -177,7 +177,9 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
 1. **Serialise.** Drop `--auto` on every other open PR before starting; nothing may merge between
    this PR's merge and its deploy (a second merge changes the target tree and the head-bound artifact
    stops matching). Bring the branch up to date (`gh pr update-branch`) **first** — every update is a
-   new head and needs a new probe.
+   new head and needs a new probe. `land_voice_pr.sh` automates this step (2026-11-10, the *voice hold*
+   in `docs/knowledge/landing-tooling.md`): it drops other PRs' `--auto` before update-branch and again
+   before arming, holds the docs chain, and re-arms them bound to their same head when it exits.
 2. **Probe the final head.** On the Jetson, in a clean worktree at the PR head sha, first copy the
    live env in (`cp -n /home/zoe/assistant/services/zoe-data/.env <worktree>/services/zoe-data/.env
    && chmod 600 <worktree>/services/zoe-data/.env` — without it the probe records an error, see
@@ -525,6 +527,18 @@ With `strict = true` only **one** PR can be up-to-date at a time, so a batch of 
   fix doesn't silently drop prior review context. Cross-link the old and new PR numbers.
 
 ## CI test discovery — `validate.yml` runs an ENUMERATED list
+
+- **The required `validate` is SHARDED (2026-11-10)**: the slow `ci_safe` lanes run as parallel matrix jobs
+  (`zoe-data-shard` ×4, `unit-shard` ×2; `tools/ci/pytest_shard_ledger.py` cuts contiguous, time-weighted slices
+  of the same ordered collection from the per-file `tools/ci/shard_weights.json`), and the job named `validate` is an aggregator: `needs:` every gate job,
+  `if: always()`, red unless every result is exactly `success` (failed, cancelled and skipped are all red),
+  and it verifies the shard ledgers (`tools/ci/shard_ledger.py`) partition the `collect` job's full selection
+  — a test dropped or duplicated by the split fails the gate. Shards stay marker-based: nothing lists files.
+  Changing a shard count means the matrix list, `--shard-count` and the aggregator's `--expect-shards` together
+  (`tests/unit/test_ci_instrument_honesty.py` pins that they agree). Every shard prints its slowest tests
+  (`--durations=50 --durations-min=1.0`) and records per-test durations in its ledger artifact; when shards drift
+  uneven, refresh the weights from a run's ledgers: download the `shard-ledger-*` artifacts, then
+  `python3 tools/ci/shard_ledger.py weights --out tools/ci/shard_weights.json <ledger>.json…` (by hand, never per PR).
 
 - Parts of `validate.yml` run an **explicit, enumerated list of test files**, not pytest
   path-discovery. A new `tests/**` file **silently does not run in CI** unless its lane picks it up —

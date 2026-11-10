@@ -494,7 +494,7 @@ class NightCfg(bk.Cfg):
     test_lane_path: str = os.environ.get("NIGHT_TEST_LANE_LOCK", "/tmp/zoe-test-lane.lock")
     test_lane_wait_min: float = float(os.environ.get("NIGHT_TEST_LANE_WAIT_MIN", "10"))
     busy_poll_s: float = 30.0
-    jobs: tuple = ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_cleanread", "omi_day_review")
+    jobs: tuple = ("digest", "extract_prepass", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_cleanread", "omi_day_review")
     #: PRE-JOBS run after the stops and BEFORE the 12B loads, while the box is at its emptiest (the 4B, Kokoro, the router and zoe-data all stopped): CPU work in its own capped
     #: scope that must not sit beside the 12B (MemAvailable floor). Default none; the unit passes ``--pre-jobs omi_repass`` (docs/knowledge/omi-night-repass.md).
     pre_jobs: tuple = ()
@@ -530,6 +530,8 @@ class NightCfg(bk.Cfg):
     self_review_script: Path = REPO / "scripts" / "maintenance" / "zoe-self-review.py"
     #: the pendant CLEAN READ (services/zoe-data/omi_repass_clean.py): a display twin of each turn, bounded, best effort, before the day review
     omi_cleanread_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-cleanread.py"
+    #: the shadow entity/relation pre-pass (services/zoe-data/night_extract.py, flag ZOE_NIGHT_EXTRACT): CPU-only in its own capped scope, right after the digest it is compared with
+    night_extract_script: Path = REPO / "scripts" / "maintenance" / "zoe-night-extract.py"
     fallback_4b: bool = True
     #: ``--mode`` handed to zoe-night-mind.py. Its CLI default is enforce (the night has run in enforce since the window was installed); passing it explicitly means a changed CLI default can never silently change the night
     night_mind_mode: str = "enforce"
@@ -538,7 +540,7 @@ class NightCfg(bk.Cfg):
     decode_history_nights: int = 7
     py: str = sys.executable
     trial: bool = False
-    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "struggle_proposals": 480.0, "self_review": 600.0, "omi_cleanread": 600.0, "omi_day_review": 2400.0, "omi_repass": 2400.0, "compaction": 900.0})
+    job_timeout_s: "dict[str, float]" = dataclasses.field(default_factory=lambda: {"digest": 1500.0, "dreaming": 1200.0, "night_mind": 1500.0, "struggle_proposals": 480.0, "self_review": 600.0, "omi_cleanread": 600.0, "omi_day_review": 2400.0, "omi_repass": 2400.0, "extract_prepass": 420.0, "compaction": 900.0})
     metrics_poll_s: float = 5.0
     live_health_port: int = 11434
 
@@ -781,6 +783,11 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
         "digest": JobSpec("digest", [cfg.py, str(REPO / "scripts" / "night" / "jobs" / "night_digest.py")], t["digest"], fallback_4b=True, needs_loop_miss=True),
         "dreaming": JobSpec("dreaming", [cfg.py, str(REPO / "scripts" / "maintenance" / "zoe-nightly-dreaming.py"), "--skip-compaction"], t["dreaming"], fallback_4b=True),
     }
+    # The shadow pre-pass: the GLiNEREL model in a separate venv process, capped at 1600M by its own systemd scope (so it cannot take the window down), CPU only, the 12B idle meanwhile.
+    # Placed right after the digest (measured 2026-11-08: ~3.7 GB MemAvailable here, the extractor peaks ~1.2 GB, the floor is 1.2 GB). Best-effort, no 4B fallback, a no-op while ZOE_NIGHT_EXTRACT is off.
+    jobs["extract_prepass"] = JobSpec("extract_prepass", [cfg.py, str(cfg.night_extract_script)] if cfg.night_extract_script.exists() else [], t.get("extract_prepass", 420.0),
+                                      best_effort=True, budget_flag="--budget-s",
+                                      skip_reason="" if cfg.night_extract_script.exists() else f"{cfg.night_extract_script.name} not found")
     tps = f"{decode_tps:.2f}" if decode_tps else "8.0"
     pps = f"{prefill_tps:.1f}" if prefill_tps else "650.0"                 # the 4B's rate: only when the probe gave none
     if cfg.night_mind_cmd.strip():
@@ -2908,7 +2915,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--presleep", action="store_true", help="run the pre-sleep phase only (backup, then memory export, sequenced; idempotent per day) and exit 0; the unit's ExecStartPre=-")
     ap.add_argument("--rehearse-repass", action="store_true", help="DAYTIME REHEARSAL of the pendant re-pass: the real stops / compaction / restore order and the real omi_repass job on ONE recording, writing nothing (refuses 01:50-04:55 and while night_busy.sh voice is busy)")
     ap.add_argument("--pre-jobs", default=None, help="comma list of jobs that run after the stops and BEFORE the 12B loads (omi_repass; default none)")
-    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review)")
+    ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,extract_prepass,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review)")
     ap.add_argument("--night-mind-cmd", default=None, help="the night-mind pass command line; {model_url} / {model_url_v1} are the 12B's base URL")
     ap.add_argument("--night-mind-mode", choices=("shadow", "enforce"), default=None, help="--mode handed to zoe-night-mind.py (default enforce: what the night has always run; shadow = calls and checks, nothing written)")
     ap.add_argument("--no-fallback", action="store_true", help="do not run a job on the live 4B after the restore when it did not finish on the 12B")
@@ -3016,9 +3023,9 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
         cfg.report_dir = args.report_dir
     if args.night_dir:
         cfg.night_dir = args.night_dir
-    unknown = [j for j in cfg.jobs if j not in ("digest", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_cleanread", "omi_day_review")]
+    unknown = [j for j in cfg.jobs if j not in ("digest", "extract_prepass", "dreaming", "night_mind", "struggle_proposals", "self_review", "omi_cleanread", "omi_day_review")]
     if unknown:
-        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, dreaming, night_mind, struggle_proposals, self_review, omi_day_review)")
+        raise Refused(f"unknown job(s) {', '.join(unknown)} (digest, extract_prepass, dreaming, night_mind, struggle_proposals, self_review, omi_cleanread, omi_day_review)")
     return cfg
 
 

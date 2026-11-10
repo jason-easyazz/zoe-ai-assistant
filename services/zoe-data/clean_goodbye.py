@@ -76,7 +76,7 @@ _LEAD = r"(?:(?:zoe|ok|okay|alright|right|well|so|anyway|cool|great|yeah|yep|tha
 _TRAIL = r"(?:\s+(?:zoe|mate|then|now|bye|cheers|thanks|thank you))*"
 _DAYPART = r"(?:later|soon|tomorrow|tonight|then|in the morning|next week|on monday|in a bit|in a while)"
 _CORE = (
-    r"good\s?night|night\s?night|nighty\s?night|night|sleep (?:well|tight)|sweet dreams",
+    r"good\s?night|night\s?night|nighty\s?night|night|g'?nite|g'?night|nite(?: nite)?|gn|nini|nighty|sleep (?:well|tight)|sweet dreams",
     r"good\s?bye|bye(?: bye)?(?: for now)?|cheerio|cya|laters|ttyl|see (?:you|ya)(?: " + _DAYPART + r")?",
     r"catch (?:you|ya) " + _DAYPART,
     r"(?:talk|speak)(?: to you)? " + _DAYPART,
@@ -93,6 +93,18 @@ _COURTESY = (
 )
 _CORE_RX = re.compile(r"^" + _LEAD + r"(?:" + "|".join(_CORE) + r")" + _TRAIL + r"$")
 _COURTESY_RX = re.compile(r"^" + _LEAD + r"(?:" + "|".join(_COURTESY) + r")" + _TRAIL + r"$")
+
+
+# The spelled-short goodnights ("gnite", "g'night", "nite nite", "gn", "nini", "nighty"): a transcript or a thumb renders them every way, and
+# the router head has no class for them (QA round 7: "gnite" -> "Did you want me to do something with the light?"). Whole utterance only.
+_GOODNIGHT_SHORT_RX = re.compile(
+    r"^" + _LEAD + r"(?:night\s?night|nighty(?:\s?night)?|g'?nite|g'?night|nite(?: nite)?|gn|nini)" + _TRAIL + r"$")
+
+
+def is_goodnight_short(message: str) -> bool:
+    """A whole-utterance spelled-short goodnight ("gnite", "nite nite", "gn", "g'night zoe"): always a goodbye, never a device command. Pure."""
+    n = _norm(message)
+    return bool(n) and len(n.split()) <= 4 and "?" not in (message or "") and bool(_GOODNIGHT_SHORT_RX.match(n))
 
 
 def is_farewell(message: str) -> bool:

@@ -73,6 +73,7 @@ os.environ["ZOE_ADHOC_BACKUP_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "adhoc-bac
 # The router retrain ledger (router_retrain_ledger, Phase 3 of the struggle loop) lives under ~/.zoe/router_retrain by default, and every
 # forget / user delete reaches it (struggle_proposals.forget_events / forget_user): a test's forget must never edit the live ledger.
 os.environ["ZOE_ROUTER_RETRAIN_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "router_retrain")
+os.environ["ZOE_OMI_REPASS_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "omi-repass")      # the night re-pass hypotheses + work files: forget_user() / sweep_work() DELETE here
 # The known state paths that default under ``~/.zoe`` (2026-10-29: the suite wrote 6 test panel ids into the LIVE ``~/.zoe/warm-speaker.json``.
 # ``warm_speaker._path()`` refuses the live file only while ``PYTEST_CURRENT_TEST`` is set, and its ``warm-speaker-save`` thread outlives the
 # test that spawned it - the save ran with the guard off and landed on the real path). A session-wide pin makes the real path unreachable
@@ -153,6 +154,7 @@ def _self_review_private_dirs(monkeypatch, tmp_path):
     cascade's ``self_review`` step, ``struggle_detector.delete_user``) reads and writes a per-test directory, never the box's own."""
     monkeypatch.setenv("ZOE_SELF_REVIEW_DIR", str(tmp_path / "self-review"))
     monkeypatch.setenv("ZOE_SELF_REVIEW_IMPROVER_DIR", str(tmp_path / "self-improver"))
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "night-extract"))     # the shadow night pre-pass's proposals: the cascade / member erase use a per-test dir
     yield
 
 
@@ -213,10 +215,18 @@ def _reply_polish_and_write_gate_state_is_per_test():
 
 
 @pytest.fixture(autouse=True)
-def _restraint_head_worker_never_outlives_its_test():
+def _restraint_head_worker_never_outlives_its_test(monkeypatch):
     """``restraint_head.defer`` starts a daemon worker that embeds through the (native) tokenizer + ONNX session. Left running it
     races the NEXT test's model load / the interpreter's finalisation - the 2026-10-29 ``Fatal Python error: Segmentation fault`` in
-    ``tokenize <- restraint_head._run_worker`` ~95% through the ci_safe lane. Join it after every test that started one."""
+    ``tokenize <- restraint_head._run_worker`` ~95% through the ci_safe lane. Join it after every test that started one.
+
+    The idle worker notices its stop event only between ``_QUEUE.get(timeout=_POLL_S)`` polls (by design: no shared wake-up a
+    replacement worker could steal), so the join below cost every test that stamped a memory the full 0.5 s poll - ~4 min of
+    the lane (2026-11-10 durations). The poll is shortened for the test (restored by monkeypatch AFTER the join, since this
+    fixture depends on it); a test that pins its own ``_POLL_S`` still wins, being set later."""
+    mod = sys.modules.get("restraint_head")
+    if mod is not None:
+        monkeypatch.setattr(mod, "_POLL_S", 0.01)
     yield
     mod = sys.modules.get("restraint_head")
     if mod is not None:

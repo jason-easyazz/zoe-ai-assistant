@@ -87,7 +87,7 @@ def env(monkeypatch, tmp_path):
     db = _Sqlite(path)
     db.conn.executescript(BASE)
     engine = sa.create_engine(f"sqlite:///{path}")
-    for f in ("0053_contacts_data_model.py", "0055_omi_segments_voices.py", "0071_named_guests.py", "0072_named_guest_turns.py", "0073_panel_voice_clusters.py"):
+    for f in ("0053_contacts_data_model.py", "0055_omi_segments_voices.py", "0071_named_guests.py", "0072_named_guest_turns.py", "0073_panel_voice_clusters.py", "0074_conversation_notes.py"):
         _migrate(engine, f)
 
     @contextlib.asynccontextmanager

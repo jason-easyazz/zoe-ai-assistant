@@ -112,6 +112,19 @@ def test_owner_corrections_are_scored_as_ground_truth_hits_and_misses(tmp_path):
     assert eu.note_owner_correction(home, "someone-else", "r1", 0, 2000, "x") == {}                  # another member's chunks are never scored
 
 
+def test_a_speaker_check_row_overlapping_the_corrected_span_is_skipped_not_a_crash(tmp_path):
+    """run_night() stores who_said items beside the transcript hypotheses; they have no 'hyps'. A correction over both must still score the transcript row."""
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-09", [
+        {"u": "m1", "rid": "r1", "i": 0, "t0": 0.0, "t1": 2.0, "hyps": {PIV: "book the tickets", PAR: "look the pickets"}},
+        {"kind": "who_said", "u": "m1", "rid": "r1", "seg_id": "s1", "t0": 0.5, "t1": 1.5, "mark": "unknown", "cands": []}])
+    tally = eu.note_owner_correction(home, "m1", "r1", 0, 2000, "book the tickets", "2026-11-09")
+    assert tally == {PIV: {"hit": 1, "miss": 0}, PAR: {"hit": 0, "miss": 1}}                  # the transcript row is scored once; the speaker check is not
+    only = tmp_path / "h2"
+    eu.store_hyps(only, "2026-11-09", [{"kind": "who_said", "u": "m1", "rid": "r1", "seg_id": "s1", "t0": 0.5, "t1": 1.5, "mark": "lean", "cands": []}])
+    assert eu.note_owner_correction(only, "m1", "r1", 0, 2000, "x") == {}
+
+
 # ── hypothesis store ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_hypotheses_are_private_pruned_and_forget_reached(tmp_path):
@@ -133,6 +146,28 @@ def test_hypotheses_are_private_pruned_and_forget_reached(tmp_path):
     m1 = [json.loads(x) for x in text.splitlines() if '"m1"' in x][0]
     assert "Dana" not in json.dumps(m1) and m1["rover"] == "call [forgotten] now" and "[forgotten]" in m1["slots"][0]["votes"]       # the ROVER pick and the contested-slot picks / vote keys / who keys too
     assert eu.forget_user(home, "m1") == 2 and "m1" not in f.read_text() and "m2" in f.read_text()
+
+
+def test_abandoned_work_files_are_swept_by_retention_and_by_erasure_but_a_live_run_is_left_alone(tmp_path):
+    """A SIGKILL / reboot mid-run leaves work/<id>.out.jsonl (transcripts + embeddings): retention, an erasure and the next run clear it once stale."""
+    import os
+    import time
+    home = tmp_path / "h"
+    (home / "work").mkdir(parents=True)
+    old, live = home / "work" / "dead.out.jsonl", home / "work" / "live.manifest.json"
+    old.write_text("{}")
+    live.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    assert eu.sweep_work(home) == 1 and not old.exists() and live.exists()      # a running pass's files are younger than the stale age
+    old.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    eu.forget_user(home, "m1")
+    assert not old.exists() and not live.exists()          # an erasure clears EVERY work file whatever its age (they name no member: none can be proven clean)
+    live.write_text("{}")
+    old.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    eu.prune_hyps(home, date(2026, 11, 9))
+    assert not old.exists() and live.exists()
 
 
 def test_the_check_queue_lists_contested_and_low_confidence_chunks_with_alternatives_and_votes(tmp_path):
@@ -224,6 +259,21 @@ def test_the_third_voter_is_whisper_large_v3_when_the_night_has_room_else_distil
         renv.db.conn.commit()
         out = run(rp.run_night(budget_s=budget, runner=multi_runner(TEXTS, []), dry_run=True))
         assert out["engines"] == [PIV, PAR] + ([want] if want else []), (dur, budget, out["engines"])
+
+
+def test_the_evaluation_samples_the_whisper_that_did_not_vote_when_the_third_voter_fell_back_to_distil(renv, monkeypatch):
+    """Review #2: the eval set used to drop thirds[:1] (large-v3) up front, so a night whose third voter was distil evaluated neither whisper."""
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
+    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_EVAL", f"{WH},{DIS},{GR}")
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 1500")
+    renv.db.conn.commit()
+    real = rp.plan_voters
+    monkeypatch.setattr(rp, "plan_voters", lambda durs, rem, rt, second, thirds, **k: {**real(durs, rem, rt, second, [DIS], **k)})    # the budget picks distil
+    out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [])))
+    assert out["engines"] == [PIV, PAR, DIS], out["engines"]
+    assert out["eval_engines"] == [WH, GR], out["eval_engines"]
 
 
 def test_granite_never_votes_in_production_even_when_the_config_asks_for_it(renv, monkeypatch):
@@ -400,3 +450,41 @@ def test_a_recording_the_pivot_cannot_reach_carries_to_the_next_night_and_the_re
 
 async def _async(v):
     return v
+
+
+# ── review round: unicode erase, large numbers, recording delete, human decisions ─────────────────────────────────
+
+def test_a_forgotten_accented_name_is_erased_from_every_word_field_and_a_year_survives_fusion(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "José came"}, "rover": "José came",
+                                        "slots": [{"pick": "josé", "votes": {"josé": 2}, "who": {"josé": [PIV]}}]}])
+    assert eu.erase_entity(home, "m1", re.compile(r"\bJosé\b", re.I), "[forgotten]") == 1
+    blob = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text(encoding="utf-8")
+    assert "José" not in blob and "josé" not in blob.lower() and "[forgotten]" in blob
+    assert eu.rover({PIV: "The year is 2026."})["text"] == "The year is 2026."
+
+
+def test_deleting_a_recording_removes_only_its_hypotheses(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "a"}}, {"u": "m1", "rid": "r2", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "b"}}])
+    assert eu.forget_recording(home, "m1", "r1") == 1
+    left = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text()
+    assert '"r2"' in left and '"r1"' not in left
+
+
+def test_a_merged_line_keeps_the_owners_decision_and_a_human_person_clears_the_models_not_person():
+    old = [{"start_ms": i * 10000, "end_ms": (i + 1) * 10000, "owner_label": "you", "tagged_person_id": None, "not_person": None} for i in range(3)]
+    new = [{"start_ms": 0, "end_ms": 30000, "not_person": "zoe", "person": "p1"}]
+    assert rp.carry_labels(new, old) == 1
+    assert new[0]["carry"]["owner_label"] == "you" and new[0]["not_person"] is None
+    tv = [{"start_ms": 0, "end_ms": 10000, "owner_label": None, "tagged_person_id": None, "not_person": "tv"}]
+    n2 = [{"start_ms": 0, "end_ms": 10000, "person": "p1"}]
+    assert rp.carry_labels(n2, tv) == 1 and n2[0]["not_person"] == "tv" and "person" not in n2[0]
+
+
+def test_a_decomposed_spelling_of_an_accented_name_is_erased_too(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "José came"}, "rover": "José came", "slots": []}])
+    assert eu.erase_entity(home, "m1", re.compile("José", re.I), "[forgotten]") == 1
+    blob = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text(encoding="utf-8")
+    assert "came" in blob and "Jos" not in blob

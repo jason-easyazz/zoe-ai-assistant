@@ -190,6 +190,11 @@ def _infer_event_category(text: str) -> str:
 
 #: a courtesy tail on a list command ("..., please", "thanks", "for me"); the list-add patterns read the text without it
 _LIST_TRAILING_COURTESY_RE = re.compile(r"(?:,?\s+(?:please|thanks|thank you|cheers|for me))+$")
+# "dont forget to add screws" / "remember to put the bins on the list" is the ADD command with a reminder-ish lead-in (QA round 7: the natural-language
+# pattern read "to add screws" as the ITEM, the head vetoed it, and the brain said "I can't actually add things to a shopping list").
+_FORGET_TO_ADD_LEAD_RE = re.compile(r"^(?:(?:please|and|also|oh)\s+)*(?:(?:don'?t|do not)\s+forget|remember|make sure you|make sure)\s+to\s+(?=(?:add|put)\s)")
+# A DECISION question ("should i get a new ute or fix the old one") is never a complaint, even when it holds "fix the": the brain answers it.
+_DECISION_QUESTION_RE = re.compile(r"^(?:(?:hey|ok|okay|so|and|um|zoe)\s+)*(?:should|shall|would|could)\s+(?:i|we)\b|\b(?:should|shall)\s+(?:i|we)\b.*\bor\b")
 
 
 def _normalize_chat_intent_text(raw: str) -> str:
@@ -1249,10 +1254,12 @@ def detect_intent(
                 or any(kw in t for kw in ("tomorrow", "this week", "forecast"))
             )
             slots = {"qualifier": qualifier, "forecast": is_forecast}
-            from weather_speech import weather_place   # a place the user named beats the household default
-            place = weather_place(t)
-            if place:
-                slots["location"] = place
+            from weather_speech import weather_places   # the place(s) the user named beat the household default
+            places = weather_places(t)
+            if places:
+                slots["location"] = places[0]
+                if places[1:]:
+                    slots["also_locations"] = places[1:]
             return Intent("weather", slots)
 
     # --- JOURNAL ---
@@ -1443,6 +1450,9 @@ def detect_intent(
     lt = _LIST_TRAILING_COURTESY_RE.sub("", t)
     if len(lt.split()) < 2:
         lt = t          # the courtesy word WAS the whole object ("add cheers"): keep it as before
+    _forget_to_add = bool(_FORGET_TO_ADD_LEAD_RE.match(lt))
+    if _forget_to_add:
+        lt = _FORGET_TO_ADD_LEAD_RE.sub("", lt, count=1)
 
     # --- LIST ADD (with explicit list name) ---
     for pattern in [
@@ -1508,6 +1518,15 @@ def detect_intent(
                 list_type = _infer_list(item)
                 if list_type == "shopping" and _needs_list_choice(item):
                     return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
+                if _forget_to_add:
+                    # "dont forget to add print my study notes": no list was named, so ASK which (a reminder offer or a "can't add things" is
+                    # what the brain made of it); groceries still go straight on the shopping list.
+                    import write_intent_gate
+
+                    if (list_type != "shopping" or write_intent_gate.looks_non_grocery(item)
+                            or re.match(r"(?:print|call|ring|renew|book|pay|email|text|send|return|collect|post|submit|finish|study|clean|fix|cancel|"
+                                        r"organi[sz]e|pick up|drop off|hand in|sign|register|enrol)\b", item, re.IGNORECASE)):
+                        return Intent("list_add", {"item": item, "list_type": "", "ask_list": True})
                 return Intent("list_add", {"item": item, "list_type": list_type})
 
     # --- LIST ADD (natural language shopping) ---
@@ -1799,7 +1818,7 @@ def detect_intent(
         r'|\byou\s+(?:messed|failed)\b',
         re.I,
     )
-    if _USER_ISSUE_RE.search(t):
+    if _USER_ISSUE_RE.search(t) and not _DECISION_QUESTION_RE.search(t):
         return Intent("user_issue_report", {"message": text})
 
     # Open-domain Q&A / creative — route to agent (closes intent-gap backlog without brittle regex)
@@ -4216,6 +4235,12 @@ async def _execute_forget_last(user_id: str) -> str:
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
+        import conversation_notes
+        await conversation_notes.erase_for_text(user_id, text, at=ts)
+    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
+        logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
+        failed += 1
     logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
     if failed:
         # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn
@@ -4230,6 +4255,16 @@ async def _execute_forget_last(user_id: str) -> str:
     if text.rstrip().endswith("?"):
         return FORGET_WHICH_REPLY       # a question keeps nothing to forget: they mean something else
     return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."
+
+
+def _note_forget_session(user_id: str) -> None:
+    """A forget is about to run: the brain's own session history of this conversation still holds what is being forgotten, so the
+    member's next brain turn starts a fresh sidecar session (forget_session; QA round 7). Never raises."""
+    try:
+        import forget_session
+        forget_session.note_forget(user_id)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
@@ -4383,11 +4418,13 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # capture runs minutes behind a chat, so the newest write is usually another turn's (QA round 3b, 2026-11-07: a
     # "forget that" after a remark about the kitchen erased an unrelated, important row). No turn to bind to -> ask.
     if intent.name == "memory_forget_last":
+        _note_forget_session(user_id)
         return await _execute_forget_last(user_id)
 
     if intent.name == "memory_forget_entity" and intent.slots.get("topic"):
         # "forget what I told you about my mum's heart": rows holding the whole topic, never a fuzzy sweep (forget_topic)
         import forget_topic
+        _note_forget_session(user_id)
         return await forget_topic.execute(user_id, str(intent.slots.get("topic") or ""))
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
@@ -4417,6 +4454,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         name = str(intent.slots.get("name", "")).strip()
         if not name:
             return "Who should I forget about? Give me the name and I'll do it."
+        _note_forget_session(user_id)
         # an alias the owner CONFIRMED ("Did you also mean ...?" -> yes) takes this same path once; it never sweeps for aliases of an alias
         alias_confirmed = bool(intent.slots.get("alias_confirmed"))
         try:
@@ -4495,6 +4533,16 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         except Exception as exc:  # noqa: BLE001
             logger.warning("memory_forget_entity: struggle-row erase failed (%s)", type(exc).__name__)
             return ("I couldn't finish clearing my notes about that conversation just now, so I can't say it's forgotten yet. "
+                    "I won't bring it up meanwhile - please tell me again in a moment.")
+        # ... and the short notes about past conversations that rest on turns naming it (conversation_notes). BEFORE the transcript redaction below:
+        # a note that paraphrases the name ("a friend") is found through its source turns' words, which the redaction is about to overwrite.
+        try:
+            import conversation_notes
+            from memory_forget_cascade import _name_re
+            await conversation_notes.erase_entity(user_id, _name_re(name), strict=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("memory_forget_entity: conversation-note erase failed (%s)", type(exc).__name__)
+            return ("I couldn't finish clearing my notes about our past conversations just now, so I can't say it's forgotten yet. "
                     "I won't bring it up meanwhile - please tell me again in a moment.")
         # ... and the verbatim transcript (chat_messages: the digest's source, the session history): the name's span becomes a fixed
         # marker in place (ids and timestamps kept), plus the in-process turn marks. Same rule: a failure is not "forgotten".
@@ -5313,14 +5361,21 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
 
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
-        return await _execute_weather_direct(
-            user_id=user_id,
-            forecast=bool(intent.slots.get("forecast")),
-            advice=str(intent.slots.get("advice") or ""),
-            location=str(intent.slots.get("location") or ""),
-            focus=str(intent.slots.get("focus") or ""),
-            day=str(intent.slots.get("day") or ""),
-        )
+        # "weather in fremantle and mandurah": every named place is answered, none silently dropped (QA 6b).
+        _where = [str(intent.slots.get("location") or "")] + [str(x) for x in (intent.slots.get("also_locations") or [])]
+        _parts = []
+        for _loc in _where[:3]:
+            _r = await _execute_weather_direct(
+                user_id=user_id,
+                forecast=bool(intent.slots.get("forecast")),
+                advice=str(intent.slots.get("advice") or ""),
+                location=_loc,
+                focus=str(intent.slots.get("focus") or ""),
+                day=str(intent.slots.get("day") or ""),
+            )
+            if _r:
+                _parts.append(_r)
+        return " ".join(_parts) or None
 
     if intent.name == "list_show":
         direct_result = await _execute_list_show_direct(intent, user_id)

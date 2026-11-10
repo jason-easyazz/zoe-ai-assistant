@@ -391,22 +391,35 @@ def word_agreement(a: str, b: str, cap: int = 2500) -> float:
 
 
 def carry_labels(new: list[dict], old: list[dict], min_share: float = 0.5) -> int:
-    """Copy the owner's DECISIONS from the first-pass segments onto the new segment that mostly overlaps them (a new line is covered >= ``min_share``
-    by one old line that has a decision). Decisions: owner_label, tagged_person_id (+ source / time), not_person. Returns how many new lines got one."""
+    """Copy the owner's DECISIONS from the first-pass segments onto the new segment they cover (>= ``min_share`` of it, counting every old line that carries the SAME decision together, so a
+    merged re-pass line covering three consecutive 10-second turns the owner labelled alike keeps the label). Decisions: owner_label, tagged_person_id (+ source / time), not_person.
+    The human decision is AUTHORITATIVE: a carried person / "me" decision clears the model's own not-person verdict on the new line, and a carried not-person mark replaces the person
+    suggestion. Returns how many new lines got one."""
     n = 0
     for s in new:
         dur = max(1, s["end_ms"] - s["start_ms"])
-        best, best_ov = None, 0
+        groups: dict = {}
         for o in old:
             if not (o.get("owner_label") or o.get("tagged_person_id") or o.get("not_person")):
                 continue
             ov = max(0, min(s["end_ms"], o["end_ms"]) - max(s["start_ms"], o["start_ms"]))
-            if ov > best_ov:
-                best, best_ov = o, ov
-        if best is not None and best_ov / dur >= min_share:
+            if ov <= 0:
+                continue
+            g = groups.setdefault((o.get("owner_label"), o.get("tagged_person_id"), o.get("not_person")), {"total": 0, "best": o, "best_ov": 0})
+            g["total"] += ov
+            if ov > g["best_ov"]:
+                g["best"], g["best_ov"] = o, ov
+        if not groups:
+            continue
+        g = max(groups.values(), key=lambda x: x["total"])
+        if g["total"] / dur >= min_share:
+            best = g["best"]
             s["carry"] = {k: best.get(k) for k in ("owner_label", "owner_labelled_at", "tagged_person_id", "tag_source", "tagged_at", "not_person")}
-            if best.get("not_person") and not s.get("not_person"):
+            if best.get("not_person"):
                 s["not_person"] = best["not_person"]
+                s.pop("person", None)
+            else:
+                s["not_person"] = None                    # the owner named / labelled this voice: the model's "Zoe / TV" guess does not hide it
             n += 1
     return n
 
@@ -576,8 +589,9 @@ async def household_names(db, user_id: str) -> list[str]:
             import named_guests
             if await named_guests._forgotten(user_id, n):
                 continue
-        except Exception:  # noqa: BLE001 - a ledger outage withholds nothing it cannot judge: the name is a spelling hint, not a memory
-            pass
+        except Exception as exc:  # noqa: BLE001 - FAIL CLOSED: a name that cannot be proven un-forgotten is not offered to the ASR (or written to the manifest)
+            logger.warning("OMI_REPASS household name withheld: forget ledger unreadable (%s)", type(exc).__name__)
+            continue
         out.append(n)
     return out
 
@@ -688,6 +702,35 @@ def _shadow_log(rec: dict) -> None:
     os.chmod(p, 0o600)
 
 
+async def _redact_row(uid: str, row: dict) -> dict:
+    """A hypothesis row about to be stored: every word-bearing field (each engine's text, the fused text, the contested slots' picks / vote keys / who keys) goes through the forget ledger first.
+    FAIL CLOSED: a ledger that cannot be read raises (the caller stores nothing for that member this night) - unlike the transcript path, original words must never be written unredacted."""
+    import forget_match as fm
+    import memory_forgotten as mf
+    if row.get("kind") == "who_said":
+        return row
+
+    async def red(t: str) -> str:
+        if not t:
+            return t
+        spans = await mf.spans(uid, t, strict=True)
+        return fm.redact(t, spans)[0] if spans else t
+
+    async def go(o: Any) -> Any:
+        if isinstance(o, str):
+            return await red(o)
+        if isinstance(o, dict):
+            out: dict = {}
+            for k, v in o.items():
+                nk = await red(k) if isinstance(k, str) else k
+                out[nk] = (out[nk] + v) if (nk in out and isinstance(v, (int, float)) and isinstance(out[nk], (int, float))) else await go(v)
+            return out
+        if isinstance(o, list):
+            return [await go(v) for v in o]
+        return o
+    return {**row, **{k: await go(row[k]) for k in ("hyps", "rover", "slots") if k in row}}
+
+
 async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label: str, seen: dict, m: str, now: Optional[datetime] = None) -> dict:
     """Apply one worker result to one recording. ``m`` is the mode the job started in. Returns a counts-only summary dict (``status``: replaced |
     shadow | erased | gone | failed). Never raises for a data problem."""
@@ -708,13 +751,18 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
               "zoe": sum(ln["key"] == "zoe" for ln in lines), "named": sum(ln["key"].startswith("p:") for ln in lines)}
     stamp = _iso(now or _now())
     text = ""
+    import manner_block
+    adult = await manner_block.eligible(uid)       # D14, fail closed: a child's (or an unverifiable member's) pendant gets TEXT only - no voiceprint, wearer sample or held embedding is retained
     async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
         async with get_compat_db() as db:
             if live:
                 # REDACTION HAPPENS HERE, INSIDE THE GATE: an entity forget (``erasing(bump=False)``) does not move the generation, so it is only
                 # ordered against this write by the lock itself - redacting before we held it could store text the ledger forgot in between.
-                for sgm in segs:
-                    sgm["text"] = await omi._redact_forgotten(uid, sgm["text"])
+                try:
+                    for sgm in segs:
+                        sgm["text"] = await omi._redact_forgotten(uid, sgm["text"], strict=True)
+                except Exception as exc:  # noqa: BLE001 - forget ledger unreadable: nothing is stored; the recording stays pending for the next night
+                    return {"status": "failed", "why": "forget_ledger:" + type(exc).__name__, **counts}
                 text = " ".join(sgm["text"] for sgm in segs if sgm["text"].strip()).strip()
                 counts["agree"] = word_agreement(old_text, text)
             if not live:                              # the member was erased since this was read: nothing of it survives (the first pass's rule)
@@ -740,52 +788,62 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                 former = sorted({o["voice_cluster_id"] for o in old if o.get("voice_cluster_id")})
                 pending_wearer_labels = [o for o in old if o.get("owner_label") == "you"]
                 try:
-                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs, night=True))
-                    ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=MODEL_ID, channel="pendant" if refs.you is not None else None)
-                    for sid, s in zip(ids, segs):
-                        sets, vals = [], []
-                        if s.get("not_person"):
-                            sets.append("not_person = ?")
-                            vals.append(s["not_person"])
-                        c = s.get("carry")
-                        if c:
-                            for k in ("owner_label", "owner_labelled_at", "tagged_person_id", "tag_source", "tagged_at"):
-                                sets.append(f"{k} = ?")
-                                vals.append(c.get(k))
-                        elif s.get("person") and not s.get("not_person"):
-                            sets += ["suggested_person_id = ?", "suggested_score = ?"]
-                            vals += [s["person"], s.get("person_score")]
-                        if sets:
-                            await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
-                    untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
-                    if untagged:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
-                        await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)
-                    await _learn_carried_tags(db, uid, ids, segs, rid)
-                    ttl = _iso((now or _now()) + timedelta(days=omi_voices.EMBED_TTL_DAYS))
-                    who_items = []
-                    for sid, sg in zip(ids, segs):             # the "who said this?" turns: the owner's tap adds THIS embedding to the person's pendant print (omi_voices.tag)
-                        if sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
-                            await db.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, ?) "
-                                             "ON CONFLICT (segment_id) DO NOTHING", (sid, uid, MODEL_ID, _blob(sg["embedding"]), ttl))
-                            who_items.append({"seg_id": sid, "t0": round(sg["start_ms"] / 1000.0, 3), "t1": round(sg["end_ms"] / 1000.0, 3),
-                                              "mark": "lean" if sg.get("lean") else "unknown",
-                                              "cands": sg["cands"]})
-                    counts["who_items"] = who_items
-                    if pending_wearer_labels:
-                        spans = [(o["start_ms"], o["end_ms"]) for o in pending_wearer_labels]
-                        counts["wearer_windows"] = await _add_wearer_samples(db, uid, rid, res["windows"], spans, source="owner_label", status="confirmed")
-                    for cid in former:
-                        await omi_voices.rebuild_cluster(db, cid)
+                    # ONE explicit transaction: asyncpg auto-commits each statement outside one (AsyncpgCompat.commit() is a no-op), so without it a failure
+                    # between the segment delete and the recording update would leave the owner's original lines gone and nothing in their place
+                    async with db.transaction():
+                        omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs, night=True))
+                        # the first-pass lines are about to be replaced: what their tags taught the people's voiceprints is released first (the segment ids die with them, and a later
+                        # correction of the NEW line only knows the new id); the carried tags re-teach below under the new ids
+                        try:
+                            await omi_voices._release_contributions(db, uid, [o["id"] for o in old if o.get("tagged_person_id")], keep_empty=True)
+                        except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
+                            if not omi_voices._missing(exc):
+                                raise
+                        ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=MODEL_ID, channel="pendant" if refs.you is not None else None)
+                        for sid, s in zip(ids, segs):
+                            sets, vals = [], []
+                            c = s.get("carry")
+                            if c or s.get("not_person"):
+                                sets.append("not_person = ?")
+                                vals.append(s.get("not_person"))
+                            if c:
+                                for k in ("owner_label", "owner_labelled_at", "tagged_person_id", "tag_source", "tagged_at"):
+                                    sets.append(f"{k} = ?")
+                                    vals.append(c.get(k))
+                            elif s.get("person") and not s.get("not_person"):
+                                sets += ["suggested_person_id = ?", "suggested_score = ?"]
+                                vals += [s["person"], s.get("person_score")]
+                            if sets:
+                                await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
+                        untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
+                        if untagged and adult:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
+                            await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)
+                        if adult:
+                            await _learn_carried_tags(db, uid, ids, segs, rid)
+                        ttl = _iso((now or _now()) + timedelta(days=omi_voices.EMBED_TTL_DAYS))
+                        who_items = []
+                        for sid, sg in zip(ids, segs):             # the "who said this?" turns: the owner's tap adds THIS embedding to the person's pendant print (omi_voices.tag)
+                            if adult and sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
+                                await db.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, ?) "
+                                                 "ON CONFLICT (segment_id) DO NOTHING", (sid, uid, MODEL_ID, _blob(sg["embedding"]), ttl))
+                                who_items.append({"seg_id": sid, "t0": round(sg["start_ms"] / 1000.0, 3), "t1": round(sg["end_ms"] / 1000.0, 3),
+                                                  "mark": "lean" if sg.get("lean") else "unknown",
+                                                  "cands": sg["cands"]})
+                        counts["who_items"] = who_items
+                        if pending_wearer_labels and adult:
+                            spans = [(o["start_ms"], o["end_ms"]) for o in pending_wearer_labels]
+                            counts["wearer_windows"] = await _add_wearer_samples(db, uid, rid, res["windows"], spans, source="owner_label", status="confirmed")
+                        for cid in former:
+                            await omi_voices.rebuild_cluster(db, cid)
+                        state = "tagged" if (refs.you is not None and not refs.you_panel_only) else "unverified"
+                        await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, speaker_state = ?, repass_state = 'done', repass_model = ?, repass_at = ?, "
+                                         "repass_attempts = repass_attempts + 1 WHERE id = ? AND repass_state IN ('pending', '')", (text, state, model_label, stamp, rid))
                 except Exception as exc:  # noqa: BLE001 - the transcript is still better than none; but never a half-written segment set
                     logger.warning("OMI_REPASS_SEGMENTS_NOT_STORED id=%s reason=%s", rid, type(exc).__name__)
-                    await db.rollback()
                     return {"status": "failed", "why": "segments:" + type(exc).__name__, **counts}
-                state = "tagged" if (refs.you is not None and not refs.you_panel_only) else "unverified"
-                await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, speaker_state = ?, repass_state = 'done', repass_model = ?, repass_at = ?, "
-                                 "repass_attempts = repass_attempts + 1 WHERE id = ? AND repass_state IN ('pending', '')", (text, state, model_label, stamp, rid))
                 await db.commit()
                 counts.update(status="replaced", carried=carried)
-            if (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then
+            if adult and (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then
                 try:
                     pick = propose_wearer(res["windows"])
                     if pick:
@@ -975,7 +1033,7 @@ async def preview_one(r: dict, res: dict, *, refs: Refs, names: list) -> dict:
     lines = build_lines(res["words"], res["windows"], refs)
     texts = []
     for ln in lines:
-        texts.append(await omi._redact_forgotten(r["user_id"], normalise_names(segment_fields(ln, refs)["text"], names)))
+        texts.append(await omi._redact_forgotten(r["user_id"], normalise_names(segment_fields(ln, refs)["text"], names), strict=True))
     text = " ".join(t for t in texts if t.strip()).strip()
     return {"words": len(res["words"]), "lines": len(lines), "speakers": len({ln["key"] for ln in lines}), "dur_s": res.get("dur_s"), "speech_s": res.get("speech_s"),
             "asr_s": res.get("asr_s"), "emb_s": res.get("emb_s"), "agree": word_agreement(r.get("transcript") or "", text), "chars": len(text),
@@ -1011,7 +1069,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             try:
                 await drop_stale_proposals(db, now=now)
                 await db.commit()
-            except Exception:  # noqa: BLE001 - pre-0074
+            except Exception:  # noqa: BLE001 - pre-0075
                 pass
     if not rows:
         return {**res, "status": "idle", "pending": 0}
@@ -1026,7 +1084,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     multi = primary == eu.PIVOT
     second = second_backend() if multi else ""
     thirds = [c for c in third_choices() if c not in (primary, second)] if second else []
-    evals = [e for e in eval_backends() if e not in (primary, second) and e not in thirds[:1]] if multi and second else []
+    evals = [e for e in eval_backends() if e not in (primary, second)] if multi and second else []
     voters = [primary] + [x for x in (second, thirds[0] if thirds else "") if x]      # the PLAN before the pivot has run; the voters that really ran are set after the split below
     res.update(pending=len(rows), audio_s=round(audio_s), model=primary, est_s=plan["est_s"], fits=plan["fits"], fallback_model=plan["fallback"], engines=voters, eval_engines=evals,
                est_voters_s=round(audio_s * sum(rt[v] for v in voters)))
@@ -1051,6 +1109,10 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     work = home_dir() / "work"
     work.mkdir(parents=True, exist_ok=True)
     os.chmod(work, 0o700)
+    try:
+        eu.sweep_work(home_dir())          # a run SIGKILLed / rebooted mid-flight leaves its worker files: recovered here, and by retention + erasure
+    except Exception:  # noqa: BLE001 - housekeeping never stops the night
+        pass
     deadline = started + max(30.0, budget_s - 45.0)               # 45 s kept back for the DB writes and the release of audio
     skipped: dict = {}
 
@@ -1078,6 +1140,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                     pass
         if rc == 3 and not got:
             skipped[engine] = "model_unavailable"
+            return {"rc": rc, "got": got, "done": done, "zref": zref, "skipped": "model_unavailable"}      # the pivot caller returns before any recording's retry is consumed
         return {"rc": rc, "got": got, "done": done, "zref": zref}
 
     # ── pass 1: the pivot, on all the audio, with the speaker windows ──
@@ -1107,9 +1170,12 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                 mu_by[key_] = who.session_mean([w[2] for w in wins_])
                 if not rehearse:
                     try:
-                        await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[key_], len(wins_), speech_, now)
-                        await db.commit()
-                    except Exception as exc:  # noqa: BLE001 - pre-0074
+                        from manner_block import eligible as _elig
+                        async with erase_gate.writing(uid_, seen.get(uid_, 0)) as live_:        # a member erased while the worker ran keeps no channel mean (it is derived from their voice)
+                            if live_ and await _elig(uid_):
+                                await who.store_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_, mu_by[key_], len(wins_), speech_, now)
+                                await db.commit()
+                    except Exception as exc:  # noqa: BLE001 - pre-0075
                         logger.warning("OMI_REPASS_MEAN_NOT_STORED reason=%s", type(exc).__name__)
             else:
                 mu_by[key_] = await who.load_mean(db, uid_, MODEL_ID, who.CHANNEL_PENDANT, dev_)
@@ -1256,16 +1322,28 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         home = home_dir()
         stored = [{k: v for k, v in r.items() if k != "_fz"} for rid, rws in chunk_rows.items() if rid not in drop_rids for r in rws]
         stored += [w for w in who_rows if w["rid"] not in drop_rids]                  # the "who said this?" items ride in the same private store (ids and scores only, no words)
-        gen = {u: erase_gate.generation(u) for u in {r["u"] for r in stored}}
-        stored = [r for r in stored if gen[r["u"]] == seen.get(r["u"], 0)]            # a member erased since this job was read keeps no hypotheses
         if cl or who_rows:
             if cl:
                 eu.append_ledger(home, night, contrib, evals)
-            eu.store_hyps(home, night, stored)
+            by_user: dict[str, list] = {}
+            for row in stored:
+                by_user.setdefault(row["u"], []).append(row)
+            for u, urows in by_user.items():            # per member, INSIDE the erase gate the hypothesis sweep shares: an erase that completed since the job was read keeps nothing
+                async with erase_gate.writing(u, seen.get(u, 0)) as live:
+                    if live:
+                        g0 = erase_gate.generation(u)
+                        try:
+                            rids_ = sorted({x["rid"] for x in urows})
+                            async with get_compat_db() as db_:        # a recording deleted since the job was read (delete_recording does not move the generation) keeps no hypotheses
+                                alive = {str(r_[0]) for r_ in await _all(db_, f"SELECT id FROM omi_recordings WHERE user_id = ? AND status != 'deleted' AND id IN ({','.join('?' * len(rids_))})", (u, *rids_))}
+                            keep = [await _redact_row(u, row) for row in urows if row["rid"] in alive]
+                        except Exception as exc:  # noqa: BLE001 - fail closed: nothing of this member's words is stored this night
+                            logger.warning("OMI_REPASS_HYPS_NOT_STORED reason=%s", type(exc).__name__)
+                            continue
+                        eu.store_hyps(home, night, keep)
+                        if erase_gate.generation(u) != g0:
+                            eu.forget_user(home, u)                 # an erase landed during the write: swept again
             eu.prune_hyps(home, (now or _now()).date())
-            for u in gen:
-                if erase_gate.generation(u) != gen[u]:
-                    eu.forget_user(home, u)
         if (now or _now()).weekday() == 0:                       # Monday: the weekly verdict line for the morning report
             res["contenders"] = eu.contender_line(eu.read_ledger(home))
     except OSError as exc:

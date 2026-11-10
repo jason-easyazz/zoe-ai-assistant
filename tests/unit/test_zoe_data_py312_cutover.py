@@ -70,8 +70,12 @@ STEP_UP_DIVERGENCE: dict[str, str] = {
     # APScheduler 3.11 needs tzlocal>=3 and drops pytz (see requirements-py312.txt for the jobstore
     # evidence); fastapi is a patch step. The 3.10 rollback env keeps its hand-installed versions.
     "fastapi": "3.12 lane 0.162.0 (+ starlette 1.10.0, needs >=3.11); 3.10 rollback env holds 0.143.0",
+    "starlette": "3.12 lane 1.10.0 (1.8+ needs >=3.11); 3.10 rollback env holds 1.3.1 (1.7.0 is the last 3.10 release)",
     "websockets": "3.12 lane 17.2 (needs >=3.11); 3.10 rollback env holds 16.1.1",
     "apscheduler": "3.12 lane 3.11.3 (+ tzlocal 5.4.5, pytz pinned explicitly); 3.10 rollback env holds 3.10.4 + tzlocal 2.1",
+    # 2026-11-10 routine batch: both releases require Python >=3.11; the 3.10 rollback manifest stays put.
+    "python-multipart": "3.12 lane 0.0.33 (needs >=3.11); 3.10 rollback env holds 0.0.32",
+    "aiortc": "3.12 lane 1.16.0 (needs >=3.11); 3.10 rollback env holds 1.15.0",
 }
 
 
@@ -418,3 +422,19 @@ def test_parity_check_catches_a_diverged_pin(tmp_path):
     assert "moonshine-voice==0.1.3" in text
     stale.write_text(text.replace("moonshine-voice==0.1.3", "moonshine-voice==0.0.62"))
     assert _diverged(REQ_310, stale) == {"moonshine-voice": ("0.1.3", "0.0.62")}
+
+
+def test_dependabot_ignores_every_lane_divergent_package():
+    """Dependabot sees requirements.txt and requirements-py312.txt as one set, so a
+    diverged package that is not ignored by name gets a PR that either needs Python
+    >=3.11 (rollback lane) or downgrades the live lane (#2371/#2388/#2392)."""
+    cfg = yaml.safe_load((REPO / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    entry = next(
+        u for u in cfg["updates"]
+        if u["package-ecosystem"] == "pip" and u["directory"] == "/services/zoe-data"
+    )
+    ignored = {i["dependency-name"].lower() for i in entry["ignore"]}
+    missing = sorted(n for n in STEP_UP_DIVERGENCE if n.lower() not in ignored)
+    assert not missing, (
+        f"STEP_UP_DIVERGENCE names without a dependabot ignore for /services/zoe-data: {missing}"
+    )

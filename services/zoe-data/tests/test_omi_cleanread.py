@@ -76,6 +76,27 @@ def test_a_good_answer_is_used_a_bad_one_falls_back_and_counts_a_violation():
     assert oc.marked(bad["how"]) and not oc.marked("llm") and not oc.marked("det")
 
 
+@pytest.mark.parametrize("said,flipped", [
+    ("I do not want to sell the house until next summer", "I do want to sell the house until next summer"),
+    ("honestly I don't think we should go to the market on Saturday morning", "honestly I think we should go to the market on Saturday morning"),
+    ("we are going to the shops with nobody else along on Saturday", "we are going to the shops with else along on Saturday"),
+    ("I can go to the market and get bread but without any of the cheese today", "I can go to the market and get bread but any of the cheese today"),
+])
+def test_a_cleanup_that_deletes_a_negation_is_refused_and_falls_back(said, flipped):
+    assert oc.guard(said, flipped).reason == "negation_dropped"
+    r = run(oc.clean_turn(said, lambda t: flipped))
+    assert r["how"] == "det_fb" and r["violation"] and r["reason"] == "negation_dropped" and oc.guard(said, r["text"]).ok
+    assert run(oc.clean_turn(said, lambda t: said))["how"] == "llm"                            # control: the same sentence kept whole is accepted
+
+
+def test_a_doubled_negation_counts_twice_and_a_contraction_is_one():
+    said = "I will not not go to the market on Saturday morning with them"
+    assert oc.guard(said, "I will not go to the market on Saturday morning with them").reason == "negation_dropped"
+    r = run(oc.clean_turn(said, lambda t: "I will not go to the market on Saturday morning with them"))
+    assert r["how"] != "llm" and r["violation"]
+    assert oc.negations("I don't know, I can't say, never") == 3 and oc.negations("I know") == 0
+
+
 def test_an_unreachable_model_degrades_without_counting_a_violation():
     def boom(t):
         raise ConnectionError("down")
@@ -164,7 +185,7 @@ def test_a_forgotten_name_is_redacted_in_the_twin_and_zoes_lines_never_reach_the
         return "Zebulon said we should go to the market on Saturday morning"
     import omi_recordings as omi
 
-    async def redact(uid, text):
+    async def redact(uid, text, **kw):
         return re.sub("Zebulon", "[forgotten]", text)
     monkeypatch.setattr(omi, "_redact_forgotten", redact)
     run(oc.run(llm=llm))
@@ -250,3 +271,32 @@ def test_guard_normalisation_matches_the_labs_measured_one_times_numbers_and_fil
     assert oc.guard("so you know we went to to the shops today after work", "So we went to the shops today after work.").ok   # "you know" and the stutter are free
     assert oc.request("some words here", "m")["chat_template_kwargs"] == {"enable_thinking": False}          # the lab's request shape
     assert oc.guard("we went to the shops", "we went to the shop").reason == "not_subsequence"             # a changed word is still refused
+
+
+def test_cleanread_cli_with_only_a_fallback_url_uses_that_model(monkeypatch):
+    """Review: --fallback-url alone built ``second`` but llm() returned None, silently falling back to the deterministic cleaner."""
+    import db_pool
+    script = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "zoe-omi-cleanread.py"
+    spec = importlib.util.spec_from_file_location("zoe_omi_cleanread_cli", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setenv("ZOE_OMI_CLEAN_READ", "on")
+    called: list = []
+
+    def fake_from_url(url, name):
+        async def f(text):
+            called.append(url)
+            return "cleaned"
+        return f
+
+    async def fake_run(*, llm, budget_s, limit):
+        return {"status": "ok", "answer": await llm("x") if llm else "no-llm"}
+
+    async def noop():
+        return None
+    monkeypatch.setattr(oc, "llm_from_url", fake_from_url)
+    monkeypatch.setattr(oc, "run", fake_run)
+    monkeypatch.setattr(db_pool, "init_pool", noop)
+    monkeypatch.setattr(db_pool, "close_pool", noop)
+    rc, summary = run(mod.amain(["--fallback-url", "http://127.0.0.1:9/v1"]))
+    assert rc == 0 and summary["answer"] == "cleaned" and called == ["http://127.0.0.1:9/v1"]

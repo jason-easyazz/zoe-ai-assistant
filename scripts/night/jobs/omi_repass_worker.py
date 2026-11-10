@@ -288,14 +288,24 @@ ASR = {
 DIAR = {"resnet34": lambda t: ResNet34Units(t)}
 
 
-def read_audio(path: str):
+def read_audio(path: str, resample: bool = False):
+    """``resample``: for the Kokoro reference clips only (the sidecar writes 24 kHz WAVs); pendant audio must already be 16 kHz and anything else is refused."""
     import numpy as np
     import soundfile as sf
     x, sr = sf.read(path, dtype="float32")
     if x.ndim > 1:
         x = x.mean(1)
     if sr != RATE:
-        raise ValueError(f"rate {sr}")
+        if not resample or sr <= 0:
+            raise ValueError(f"rate {sr}")
+        try:
+            from math import gcd
+            from scipy.signal import resample_poly
+            g = gcd(int(RATE), int(sr))
+            x = resample_poly(x, int(RATE) // g, int(sr) // g).astype("float32")
+        except ImportError:
+            n = int(len(x) * RATE / sr)
+            x = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype("float32")
     return np.ascontiguousarray(x)
 
 
@@ -338,7 +348,7 @@ def zoe_reference(emb: Embedder, clips: list):
     es = []
     for p in clips[:40]:
         try:
-            x = read_audio(p)
+            x = read_audio(p, resample=True)
         except Exception:  # noqa: BLE001
             continue
         if len(x) > 2.5 * RATE:
