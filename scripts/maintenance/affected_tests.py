@@ -105,6 +105,7 @@ LANE_ENV = {"ZOE_DATA_DB": ":memory:", "ZOE_MEMORY_STARTUP_STRICT": "false"}
 
 HUB_FRACTION = 0.5
 AGGREGATOR_FANOUT = 20
+READER_HOPS = 1   # importer levels above a python module that READS a changed non-python file
 LAZY_HOPS = int(os.environ.get("AFFECTED_TESTS_LAZY_HOPS", "2"))
 LOCK_PATH = os.environ.get("AFFECTED_TESTS_LOCK", "/tmp/zoe-test-lane.lock")
 LANDER_RE = r"^bash [^ ]*/land_voice_pr\.sh"
@@ -660,7 +661,7 @@ def _closure(g: Graph, start: str, seg_index: dict[str, set[str]],
             if _is_test_file(src) or _runner(src):
                 nxt.setdefault(src, (why, dec(b), None))        # a test / script that reads or runs it
             elif cur == start and src.endswith(".py"):
-                nxt.setdefault(src, (why, min(dec(b), 1), None))  # a module that reads it: direct importers
+                nxt.setdefault(src, (why, min(dec(b), READER_HOPS), None))  # a module that reads it
             # a workflow / unit / compose file naming it is not followed: tests that read THOSE as text
             # are not affected by the named file's content
         for src, (why, nb, nf) in nxt.items():
@@ -956,6 +957,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mem-wait", type=int, default=1800)
     a = ap.parse_args(argv)
     _OUT[0] = a.json == "-"
+    xdist = [x for x in passthrough if x == "-n" or re.match(r"^(-n\S+|--numprocesses|--dist|-d$)", x)]
+    if xdist:
+        # parallel pytest on this box once hard-hung it; the lane lock assumes ONE process
+        ap.error(f"refusing pytest-xdist passthrough {xdist}: test lanes run single-process (tests/AGENTS.md)")
     root = Path(a.repo).resolve()
 
     sel = Selection()

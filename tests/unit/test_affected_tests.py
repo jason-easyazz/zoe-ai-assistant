@@ -119,6 +119,41 @@ def test_lazy_import_is_followed_to_direct_importers(repo):
                                         "services/zoe-data/tests/test_registry.py"]
 
 
+@pytest.mark.parametrize("args", [["-n", "3"], ["-n3"], ["--numprocesses=2"], ["--dist", "load"]])
+def test_xdist_passthrough_is_refused(repo, args):
+    with pytest.raises(SystemExit) as exc:
+        at.main(["--repo", str(repo), "--no-lock", "--dry-run", "--", *args])
+    assert exc.value.code == 2
+
+
+def test_lazy_import_bound_is_two_importer_levels(repo):
+    """Documented precision bound (tests/AGENTS.md): a lazy import reaches LAZY_HOPS levels of importers.
+    Pinned so widening or narrowing it is a deliberate, reviewed change, not drift."""
+    _edit(repo, "services/zoe-data/mid.py", "import registry\n\ndef go():\n    return registry.load()\n")
+    _edit(repo, "services/zoe-data/top.py", "import mid\n\ndef run():\n    return mid.go()\n")
+    for name, mod, call in (("test_mid.py", "mid", "go"), ("test_top.py", "top", "run")):
+        _edit(repo, f"services/zoe-data/tests/{name}", f"import pytest\nimport {mod}\npytestmark = pytest.mark.ci_safe\n\n"
+                                                       f"def test_it():\n    assert {mod}.{call}() == []\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "chain")
+    _edit(repo, "services/zoe-data/lists.py", "def items():\n    return list(())\n")
+    _, s = _run(repo, "--dry-run", "HEAD")
+    sel = _selected(s)["zoe-data"]
+    assert "services/zoe-data/tests/test_registry.py" in sel and "services/zoe-data/tests/test_mid.py" in sel
+    assert "services/zoe-data/tests/test_top.py" not in sel     # 3 levels above the lazy import: a known gap
+    assert at.LAZY_HOPS == 2
+
+
+def test_lazy_import_is_not_followed_into_importers_that_never_call_it(repo):
+    _edit(repo, "services/zoe-data/tests/test_registry_other.py",
+          "import pytest\nimport registry\npytestmark = pytest.mark.ci_safe\n\ndef test_mod():\n    assert registry\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "other")
+    _edit(repo, "services/zoe-data/lists.py", "def items():\n    return list(())\n")
+    _, s = _run(repo, "--dry-run", "HEAD")
+    assert "services/zoe-data/tests/test_registry_other.py" not in _selected(s)["zoe-data"]
+
+
 def test_conftest_change_falls_back_to_the_full_lane(repo):
     _edit(repo, "services/zoe-data/tests/conftest.py", FILES["services/zoe-data/tests/conftest.py"] + "\n# x\n")
     _, s = _run(repo, "--dry-run")
