@@ -153,6 +153,9 @@ def env(monkeypatch, tmp_path):
         monkeypatch.setenv(k, v)
     monkeypatch.setattr(omi, "voice_busy", lambda now_mono=None: False)
     monkeypatch.setattr(omi, "night_window", lambda now=None: False)
+    # the live box is not the test's: a voice turn or a night unit running NOW must not gate a unit test (2026-11-09 flake)
+    monkeypatch.setattr(omi, "live_busy_reason", lambda: None)
+    monkeypatch.setattr(omi, "last_voice_age_s", lambda now_mono=None: None)
 
     async def adult(uid, db=None):
         return uid in (A, B)
