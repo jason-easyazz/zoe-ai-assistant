@@ -63,7 +63,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SUMMARY_SCHEMA = 1
-CACHE_VERSION = 10
+CACHE_VERSION = 11
 REPO = Path(__file__).resolve().parents[2]
 
 # --- lanes: MIRROR of .github/workflows/validate.yml (pinned by tests/unit/test_affected_tests.py) ---
@@ -133,7 +133,8 @@ REF_SCAN_MAX_BYTES = 400_000          # data blobs (yml/json/...) past this are 
 REF_SCAN_MAX_PY_BYTES = 8_000_000     # python is always parsed (routers/voice_tts.py is ~410 KB)
 # a test that walks the tree (rglob/os.walk/git ls-files) can be affected by ANY added/removed/non-doc file
 SCANNER_RE = re.compile(r"\.rglob\(|os\.walk\(|\bls-files\b|glob\.glob\(|\.glob\(\s*[\"']\*\*")
-REPO_ANCHOR_RE = re.compile(r"\bls-files\b|parents\[\d\]|\bREPO(_ROOT)?\b|\bROOT\b|--show-toplevel")
+# anchored on the checkout (a walk of tmp_path is not a repo walk). __file__ covers `Path(__file__).parent.parent`
+REPO_ANCHOR_RE = re.compile(r"\bls-files\b|parents\[\d\]|\bREPO(_ROOT)?\b|ROOT\b|(?i:\broot\b)|--show-toplevel|__file__")
 FILE_EXT_TAIL = {"py", "sh", "yml", "yaml", "json", "md", "html", "js", "mjs", "txt", "toml", "ini", "cfg", "env",
                  "service", "timer", "css", "sql", "log", "jsonl", "csv", "lock", "conf", "png", "onnx", "gguf"}
 TOKEN_RE = re.compile(r"[A-Za-z0-9_.@/+-]+")

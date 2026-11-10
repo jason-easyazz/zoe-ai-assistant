@@ -381,6 +381,17 @@ def test_marker_mention_is_not_a_marker(repo):
     assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
 
 
+def test_repo_walking_test_runs_on_any_code_change(repo):
+    _edit(repo, "services/zoe-data/tests/test_walks.py",
+          "import pytest\nfrom pathlib import Path\npytestmark = pytest.mark.ci_safe\n\ndef test_all():\n"
+          "    root = Path(__file__).resolve().parent.parent\n    assert list(root.rglob('*.py'))\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "walker")
+    _edit(repo, "services/zoe-data/util.py", "def twice(x):\n    return x * 2\n")
+    _, s = _run(repo, "--dry-run", "HEAD")
+    assert "services/zoe-data/tests/test_walks.py" in _selected(s)["zoe-data"]
+
+
 def test_changed_test_files_run_or_are_named(repo):
     _edit(repo, "services/zoe-data/tests/test_lists.py", FILES["services/zoe-data/tests/test_lists.py"] + "# x\n")
     _edit(repo, "tests/integration/test_other.py", "def test_x():\n    pass\n")   # no validate lane runs it
