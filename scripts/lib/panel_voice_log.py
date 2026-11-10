@@ -211,6 +211,33 @@ def clip_time(name: str, mtime: float) -> Optional[dt.datetime]:
     return None
 
 
+# The server's verdict on a saved clip, written beside it by services/zoe-data/voice_clips.py (ZOE_VOICE_CLIP_VERDICT):
+# ``<clip>.verdict.json`` = {"kind": "member" | "guest" | "unknown", ...}. NO sidecar = a legacy clip, kept as the owner's exactly as
+# before (history is never relabelled by guessing). The suffix is pinned equal to the writer's by tests/unit/test_voice_clip_verdict.py.
+VERDICT_SUFFIX = ".verdict.json"
+NON_MEMBER_KINDS = ("guest", "unknown")
+
+
+def clip_verdict(wav_path: str) -> Optional[str]:
+    """``member`` | ``guest`` | ``unknown`` for a labelled clip, None for a legacy / unreadable one."""
+    import json
+
+    base = str(wav_path)
+    side = (base[:-4] if base.endswith(".wav") else base) + VERDICT_SUFFIX
+    try:
+        with open(side) as f:
+            kind = (json.load(f) or {}).get("kind")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return kind if kind in ("member", "guest", "unknown") else None
+
+
+def owner_voice_clips(paths: Iterable[str]) -> list:
+    """The clips an OWNER-voice metric may use: member-verdict and legacy (unlabelled) clips; a guest's or an unknown voice's is
+    dropped. Said-vs-did replay does NOT use this (the words are the test, not the voice)."""
+    return [p for p in paths if clip_verdict(str(p)) not in NON_MEMBER_KINDS]
+
+
 def wav_seconds(path: str) -> Optional[float]:
     try:
         with wave.open(path, "rb") as w:

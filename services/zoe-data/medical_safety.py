@@ -14,7 +14,13 @@ hard-coded per person; no country = "your local emergency number"). The classes,
   3. an emergency-number question ("what number do I ring if <person> collapses"). It pre-empts any thread: the number is the whole reply, plus one line saying
      the earlier question can be asked again.
   4. red-flag symptoms that need a doctor today (blurred vision, blood where it should not be): see a doctor today, the number if it gets worse.
+  4b. swallowed OBJECTS (QA 7): a button battery, magnet or sharp object = the number now; a coin, lego or small part = the number if there is choking, trouble
+     breathing, drooling or pain, otherwise the Poisons line and what to watch for. Choking in the same turn still wins as a red flag.
   5. a blood sugar reading: what the number generally means for someone with diabetes, and when to act. Never a diagnosis; always "check your plan or your GP".
+PARAPHRASES (QA 7). Besides exact phrases, a turn is also read in a CANONICAL form: each word is mapped through the small ``synonyms`` table (tightness / squeezing /
+heavy -> tight / pressure; blurred / hazy / foggy -> blurry; ...) and the ``pairs`` rules fire on a BODY word and a SYMPTOM word in the same clause within a few words,
+in either order ("tight feeling in my chest", "my chest feels tight", "pressure in my chest", "eyes are blurry"), with per-rule skip words (chest of drawers, a tight
+shirt, a blurry photo). Still deterministic, still stdlib, still no model.
 A non-emergency question in a thread ("how long should it rest", "what number is the vet") matches nothing and stays with the brain.
 
 FLAG ``ZOE_MEDICAL_SAFETY`` off | shadow | enforce (DEFAULT enforce; a typo enforces). shadow logs the class only. Logs carry the class id, never the words. The turn is
@@ -74,13 +80,36 @@ def _data() -> dict:
 
 
 @lru_cache(maxsize=1)
+def _syn() -> tuple:
+    d = _data().get("synonyms") or {}
+    return d, re.compile(r"[a-z]+")
+
+
+def _canon(s: str) -> str:
+    """Words folded to their canonical symptom word via the synonym table (same length rules do not matter: it is matched on its own string)."""
+    syn, word = _syn()
+    return word.sub(lambda m: syn.get(m.group(0), m.group(0)), s)
+
+
+def _pair_rx(p: dict, block: str) -> "re.Pattern":
+    gap, body, sym = int(p.get("window", 4)), p["body"], p["sym"]
+    pre = "".join(rf"(?<!{re.escape(w)} )" for w in p.get("body_not_after", []))
+    post = "".join(rf"(?!\s+(?:{n}))" for n in [("|".join(p.get("body_not_before", [])))] if n)
+    b = rf"{pre}(?:{body}){post}"
+    # the words BETWEEN may not turn to a contrast or another body part ("my chest is fine but my knee hurts"): the symptom must belong to THIS body word
+    mid = rf"(?:\s+(?!(?:{block})(?!\w))\w+){{0,{gap}}}"
+    return re.compile(rf"(?<!\w)(?:{b})(?!\w){mid}\s+(?:{sym})(?!\w)|(?<!\w)(?:{sym}){mid}\s+{b}(?!\w)", re.I)
+
+
+@lru_cache(maxsize=1)
 def _rx() -> dict:
     d = _data()
     w = lambda body: re.compile(rf"(?<!\w)(?:{body})(?!\w)", re.I)  # noqa: E731
     ing, nq, gl = d["ingest"], d["number_question"], d["glucose"]
     return {
         "verb": w(ing["verb"]), "sub": w(ing["substance"]), "idiom": re.compile(ing["idioms"], re.I), "took": w(ing["took_verb"]), "took_risky": w(ing["took_risky"]),
-        "human": w(ing["human"]), "animal": w(ing["animal"]),
+        "human": w(ing["human"]), "animal": w(ing["animal"]), "obj_urgent": w(ing["obj_urgent"]), "obj_minor": w(ing["obj_minor"]), "obj_signs": w(ing["obj_signs"]),
+        "pairs": [(p["id"], p["tier"], _pair_rx(p, d["pair_gap_block"]), re.compile(rf"(?<!\w)(?:{p['skip']})(?!\w)", re.I) if p.get("skip") else None) for p in d.get("pairs", [])],
         "neg_adj": re.compile(rf"(?<!\w)(?:{d['negation']})(?:\s+\w+){{0,2}}\s*$", re.I), "unsure": re.compile(r"(?<!\w)(?:not sure|unsure|not certain|dont know|no idea)(?!\w)", re.I),
         "term_any": w(gl["term"] + "|" + gl["plain_term"]),
         "ask": w(nq["ask"]), "event": w(nq["event"]), "poison_event": w(nq["poison_event"]),
@@ -111,8 +140,60 @@ def _flag(s: str, rx: dict, tier: str) -> Optional[Verdict]:
     return None
 
 
+_DENIED_INSIDE = re.compile(r"(?<!\w)(?:no|not|isnt|arent|wasnt|werent|never|dont|doesnt|didnt|hasnt|havent|hadnt|wouldnt|without|nothing|nor)(?!\w)")   # "my eyes are not blurry": the denial sits between body and symptom
+
+
+def _pair(c: str, rx: dict, tier: str) -> Optional[Verdict]:
+    """A body word + symptom word within a few words, in the canonical form (``_canon``), not denied, not skipped ("my shirt is tight across the chest")."""
+    for fid, t, pat, skip in rx["pairs"]:
+        if t != tier:
+            continue
+        for m in pat.finditer(c):
+            if skip and skip.search(c[max(0, m.start() - 30): m.end() + 30]):
+                continue
+            if not _negated(c, m.start(), rx) and not _DENIED_INSIDE.search(m.group(0)):
+                return Verdict("red_call" if tier == "call" else "red_soon", fid)
+    return None
+
+
 #: wording that makes an ingestion a concern even when the medication itself is the member's usual one
 _ACCIDENT = re.compile(r"(?<!\w)(?:accident\w*|by mistake|too many|too much|double(?: the| my| his| her)? dose|twice|overdos\w*|extra)(?!\w)", re.I)
+
+
+#: a sentence that ASKS about, or hypothesises, signs ("what signs of pain should i watch for") does not report them
+_HYPOTHETICAL = re.compile(r"(?<!\w)(?:what|which|how|should|signs?|symptoms?|watch|look(?:ing)? for|in case|whether|might|could|would|if|unless|until|any)(?!\w)")
+_CONTINUES = re.compile(r"\s*(?:he|she|they|hes|shes|theyre|its|now|and|then|but)(?!\w)")
+
+
+def _stated_sign(s: str, rx: dict) -> bool:
+    """A sign (drooling, pain, cant swallow ...) ASSERTED about the child who swallowed the object: in the sentence that names the object, or the next one when it
+    carries on about the same child ("... swallowed a coin. now he is drooling"). Questions, watch-for lists and denials do not count."""
+    parts = re.findall(r"[^.!?;\n]+[.!?;\n]?", s)
+    humans = lambda t: {m.group(0) for m in rx["human"].finditer(t)}   # noqa: E731
+    for i, seg in enumerate(parts):
+        if not rx["obj_minor"].search(seg):
+            # a later sentence counts only when it carries on about the SAME child: a pronoun / "now", or the same person word named again
+            if not (i and rx["obj_minor"].search(parts[i - 1])):
+                continue
+            same = humans(seg) & humans(parts[i - 1])
+            speaker = bool(_SELF_INGEST.search(parts[i - 1]))   # the member swallowed it herself: "i swallowed a coin. i cant swallow" is the same person
+            first = bool(re.search(r"(?<!\w)(?:i|im|ive)(?!\w)", seg))
+            if (first and not speaker) or not (same or _CONTINUES.match(seg) or (speaker and first)):
+                continue   # the member's own ailment after a child's ingestion ("my back has pain") or another person ("my mum has pain")
+        for m in rx["obj_signs"].finditer(seg):
+            clause = seg[max(seg.rfind(",", 0, m.start()), seg.rfind(";", 0, m.start())) + 1:]   # the symptom's OWN clause: "is drooling, what should i do" still asserts it
+            clause = clause.split(",", 1)[0]
+            if not _negated(seg, m.start(), rx) and not _HYPOTHETICAL.search(clause):
+                return True
+    return False
+
+
+_DRINKING = re.compile(r"(?:drank|drunk|drinking|sipped|sipping)$")
+
+
+def _target(tail: str, rx: dict) -> str:
+    """What was swallowed: a battery / magnet / sharp object (urgent), a harmful substance, or a small harmless-looking object. '' = nothing the floor answers."""
+    return "object_urgent" if rx["obj_urgent"].search(tail) else "poison_human" if rx["sub"].search(tail) else "object_minor" if rx["obj_minor"].search(tail) else ""
 
 
 def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
@@ -120,9 +201,11 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
     for sentence in re.split(r"[.!?;\n]", s):
         for v in rx["verb"].finditer(sentence):
             tail = sentence[v.start(): v.end() + 70]
-            sub = rx["sub"].search(tail)
-            if not sub:
+            key = _target(tail, rx)
+            if not key:
                 continue
+            if key.startswith("object_") and (_DRINKING.match(v.group(0)) or re.match(r"\s+from\b", sentence[v.end():])):
+                continue         # an OBJECT is swallowed or eaten, never drunk: "drank from a bottle with a screw top" describes the bottle
             lo = max(0, v.start() - 8)
             routine = rx["idiom"].search(sentence[lo:])
             # the routine-medication idiom must be THIS ingestion ("swallowed his morning tablets"), not a later one in the same sentence
@@ -132,18 +215,28 @@ def _ingestion(s: str, rx: dict) -> Optional[Verdict]:
             animal = bool(rx["animal"].search(sentence[max(0, v.start() - 45):v.start()]))   # the animal must be the SUBJECT (before the verb), not a bystander
             if animal and not human:
                 return Verdict("ingest_animal", "poison_animal", lead=s[:v.start()])
-            return Verdict("ingest_human", "poison_human", lead=s[:v.start()])
+            return Verdict("ingest_human", key, lead=s[:v.start()])
         # "took" is ordinary ("took my tablets"): only a concerning amount or an accident makes it an ingestion ("accidentally took 20 paracetamol")
         for v in rx["took"].finditer(sentence):
             tail = sentence[v.start(): v.end() + 70]
-            if rx["sub"].search(tail) and rx["took_risky"].search(sentence) and (
+            key = "object_urgent" if rx["obj_urgent"].search(tail) else "poison_human" if rx["sub"].search(tail) else ""
+            if key and rx["took_risky"].search(sentence) and (
                     not rx["idiom"].search(sentence[max(0, v.start() - 8):]) or _ACCIDENT.search(sentence)):
                 human = bool(rx["human"].search(sentence) or _SELF_INGEST.search(sentence) or re.search(r"(?<!\w)(?:i|ive|i have)(?!\w)", sentence[:v.start()]))
                 animal = bool(rx["animal"].search(sentence[max(0, v.start() - 45):v.start()]))
                 if animal and not human:
                     return Verdict("ingest_animal", "poison_animal", lead=s[:v.start()])
-                return Verdict("ingest_human", "poison_human", lead=s[:v.start()])
+                return Verdict("ingest_human", key, lead=s[:v.start()])
     return None
+
+
+_INGEST_RANK = {"object_urgent": 0, "poison_human": 1, "object_minor": 2, "poison_animal": 3}
+
+
+def _ingestion_all(s: str, rx: dict) -> Optional[Verdict]:
+    """The most urgent ingestion ACROSS the turn ("swallowed a coin. she also swallowed a battery" is the battery), human before animal."""
+    found = [v for v in (_ingestion(seg, rx) for seg in re.findall(r"[^.!?;\n]+[.!?;\n]?", s)) if v]
+    return min(found, key=lambda v: _INGEST_RANK.get(v.key, 9)) if found else None
 
 
 def _mmol(raw: str, unit: str) -> float:
@@ -212,10 +305,15 @@ def detect(text: str) -> Verdict:
         if not s:
             return NONE
         rx = _rx()
-        ing = _ingestion(s, rx)
-        if ing:
+        c = _canon(s)
+        ing = _ingestion_all(s, rx)
+        call = _flag(s, rx, "call") or _pair(c, rx, "call")
+        if ing and ing.key == "object_minor" and not call:
+            # a coin AND a stated sign (drooling, pain, cant swallow): the number now, not "ring if there is..."
+            if _stated_sign(s, rx):
+                return Verdict("red_call", "object_signs")
+        if ing and not (call and ing.key == "object_minor"):   # a coin AND choking: the ambulance answer is the better one
             return ing
-        call = _flag(s, rx, "call")
         if call:
             return call
         ask, ev = rx["ask"].search(s), rx["event"].search(s)
@@ -223,7 +321,7 @@ def detect(text: str) -> Verdict:
             first = min(ask.start(), ev.start())
             key = "emergency_number_poison" if rx["poison_event"].search(s[first:]) else "emergency_number"
             return Verdict("number", key, lead=s[:first])
-        soon = _flag(s, rx, "soon")
+        soon = _flag(s, rx, "soon") or _pair(c, rx, "soon")
         if soon:
             return soon
         return _glucose(s, rx) or NONE
@@ -261,7 +359,7 @@ def build_reply(v: Verdict, *, minor: bool = False) -> str:
     emergency, poison = _lines()
     f = dict(emergency=emergency, poison_number=poison or r["poison_number_fallback"])
     if v.cls == "ingest_human":
-        out = r["poison_human" if poison else "poison_human_nolines"].format(**f)
+        out = r[v.key if poison else v.key + "_nolines"].format(**f)
     elif v.cls == "ingest_animal":
         out = r["poison_animal"].format(**f)
     elif v.cls == "number":

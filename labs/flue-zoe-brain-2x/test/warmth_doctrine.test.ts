@@ -71,6 +71,7 @@ test('only what they said: no invented age or count, numbers are checked back on
 test('an answer that does not fit the question just asked is treated as misheard', () => {
   assert.match(WARMTH_DOCTRINE, /does not make sense as an answer to your question, it was probably misheard/);
   assert.match(WARMTH_DOCTRINE, /Never build on a reply you cannot make sense of/);
+  assert.match(WARMTH_DOCTRINE, /Unrelated words \(a colour, an animal\) are not an answer/);
 });
 
 test('phrasing only: self-scoped, names no tool, after voice delivery and before the activator', () => {

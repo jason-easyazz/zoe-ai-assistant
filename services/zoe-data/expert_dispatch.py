@@ -353,6 +353,10 @@ def _plan(domain: str, text: str):
 
     if domain == "weather":
         low = text.lower()
+        from weather_speech import has_other_question
+
+        if has_other_question(low):
+            return None      # two questions in one turn ("...and how hot for a pork roast"): the brain answers both, never half
         places = weather_places(low)      # the place(s) the user NAMED beat the household default
         loc = {"location": places[0], **({"also_locations": places[1:]} if places[1:] else {})} if places else {}
         # Advice questions get a DIRECT yes/no answer, not a forecast dump.
@@ -401,6 +405,15 @@ def _plan(domain: str, text: str):
                 and "raw" not in (det.slots or {}):
             return (det.name, dict(det.slots), "direct")
         return ("people_expert", {}, "expert")
+
+    if domain == "calendar":
+        # "what exam do i have and when" names no day: reading TODAY's agenda answered "You've got nothing on today." (QA round 7). A
+        # question about when the user's own event is, with no day given, is the brain's (recall floor + the calendar tool).
+        from memory_gate import is_event_time_question
+
+        if (is_event_time_question(text) and not _calendar_qualifier(text)
+                and not re.search(r"\b(?:appointments?|meetings?|events?)\b", text, re.IGNORECASE)):
+            return None      # (a generic "what appointments do I have" is still the agenda; a NAMED kind of event is not)
 
     # calendar / lists / reminders / timers — disambiguate SHOW (read, safe)
     # from CREATE (write) using a regex hit first, else the create-signal cue.

@@ -121,6 +121,22 @@ def test_a_guest_enrolment_uploads_the_profile_under_the_ticket_only(daemon, mon
     assert posted[0][0] == "/api/voice/enroll"                     # the member path is unchanged
 
 
+def test_a_clip_command_redeems_its_token_plays_then_asks_and_opens_the_window(daemon, monkeypatch):
+    posted, played, spoken = [], [], []
+    monkeypatch.setattr(daemon, "_api_post", lambda path, body, **k: posted.append((path, body)) or {"audio_base64": "QUJD", "content_type": "audio/wav"})
+    monkeypatch.setattr(daemon, "play_audio_b64", lambda a, c="audio/wav": played.append(a) or True)
+    monkeypatch.setattr(daemon, "_speak_announcement_then_listen", lambda ann: spoken.append(ann) or True)
+    cmd = {"kind": "voice_clip_play", "token": "T9", "ask": "Who's this?"}
+    assert daemon._handle_server_command({"command": cmd}) is True
+    assert posted[0][0] == "/api/voice/clip-playback" and posted[0][1]["token"] == "T9" and played == ["QUJD"]
+    assert spoken[0]["text"] == "Who's this?" and spoken[0]["follow_up"] is True       # asked, then a window with no wake word
+    # controls: a refused token plays and asks nothing (and is not acknowledged); a command with no token does nothing at all
+    posted.clear(), played.clear(), spoken.clear()
+    monkeypatch.setattr(daemon, "_api_post", lambda path, body, **k: {"error": "no such clip"})
+    assert daemon._handle_server_command({"command": cmd}) is False and played == [] and spoken == []
+    assert daemon._handle_server_command({"command": {"kind": "voice_clip_play"}}) is False
+
+
 def test_the_embedding_rides_only_when_the_server_asks_for_it(daemon, rig, monkeypatch):
     monkeypatch.setitem(daemon._profile_cache, "learn_unknown", False)
     assert "embedding" not in daemon._speaker_field(daemon._identify_speaker_resnet34(b"wav"))

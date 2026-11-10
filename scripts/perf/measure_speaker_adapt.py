@@ -365,6 +365,10 @@ def main() -> int:
     MIN_AVAIL_MB = args.min_avail_mb
 
     corpus = sorted(Path(args.corpus).expanduser().glob("*.wav"), key=lambda p: p.stat().st_mtime)
+    # genuine trials are the OWNER's voice: drop clips the server judged a guest's / unknown (legacy clips with no verdict stay)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+    import panel_voice_log as _pvl
+    corpus = [Path(p) for p in _pvl.owner_voice_clips(corpus)]
     imp_files = [sorted(Path(d).expanduser().glob("*.wav")) for d in args.impostors]
     specs = [("owner", corpus, args.limit)] + [(f"imp{i}", f, None) for i, f in enumerate(imp_files)]
     try:

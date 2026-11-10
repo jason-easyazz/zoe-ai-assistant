@@ -10,9 +10,9 @@ import re
 from datetime import date
 from typing import Optional
 
-CHILD_WORDS = frozenset({"child", "kid", "son", "daughter", "baby", "toddler", "grandson", "granddaughter", "grandchild", "grandchildren",
-                         "grandkid", "grandkids", "niece", "nephew", "nieces", "nephews",
-                         "stepson", "stepdaughter", "boy", "girl", "infant", "teen", "teenager", "minor"})
+CHILD_WORDS = frozenset({"child", "kid", "son", "daughter", "baby", "toddler", "grandson", "granddaughter", "grandchild",
+                         "stepson", "stepdaughter", "boy", "girl", "infant", "teen", "teenager", "minor",
+                         "niece", "nephew", "grandkid", "grandchildren", "grandkids", "nieces", "nephews"})
 
 
 def person_may_be_child(person: dict, today: Optional[date] = None) -> bool:
