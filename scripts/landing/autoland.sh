@@ -3,6 +3,7 @@
 #   - voice-path diff (voice_gate_check --scope-only) -> make sure it is in the voice queue (4-field format)
 #   - otherwise -> one docs_merge_chain pass (which holds on threads/checks and merges when green)
 # Pauses only while night_busy.sh deploy says so (02:45 until the 12B window has finished). Stops at STOP_AT (default 12:00 next day).
+# Starts no chain pass while a voice lander holds the voice hold (landing_lib.sh), so nothing overtakes a probed voice PR.
 # Hold lists: $ZOE_LANDING_HOME/coord/hold.txt and chain-hold.txt (landing_is_held). ZOE_LANDING_ONCE=1 = a single pass.
 . "$(dirname "${BASH_SOURCE[0]}")/landing_lib.sh"
 C=$LANDING_HOME/coord
@@ -27,6 +28,7 @@ while [ "$(date +%s)" -lt "$STOP_AT" ]; do
     fi
     exec 9>"$C/docs-chain.lock"; flock 9
     while landing_running land_voice_pr.sh land_queue.sh docs_merge_chain.sh; do sleep 5; done
+    while landing_voice_hold_active >/dev/null; do sleep 30; done   # a probed voice PR is landing (bounded: a stale hold clears itself)
     quiet || bash "$LANDING_DIR/docs_merge_chain.sh" "$pr" >> "$LANDING_LOG" 2>&1
     flock -u 9
     grep -qE '^[0-9]+ ' "$P/voice-pending.txt" 2>/dev/null && sleep 240

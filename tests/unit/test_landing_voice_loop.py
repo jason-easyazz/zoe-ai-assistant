@@ -308,7 +308,7 @@ def test_a_head_change_after_arming_disarms_at_once(rig):
 
 
 def test_not_merged_in_the_wait_disarms_even_when_the_head_is_unchanged(rig):
-    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED")
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required=GREEN_REQ)
     r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
 
@@ -328,6 +328,8 @@ def test_the_exit_trap_disarms_an_unmerged_pr_and_the_lander_installs_it(rig):
 
 
 # ---- a probed head whose required check is still running keeps waiting (2026-11-04) --------------------------------------
+# Every not-merged wait reads the state ONE more time before it disarms (2026-11-10), hence the "+ 1" in the pr-view counts below.
+GREEN_REQ = {"validate": "pass", "secret-scan": "pass"}
 
 def pr_views(rig):
     return [c for c in rig.gh_calls() if c.startswith("pr view 7")]
@@ -337,14 +339,15 @@ def test_a_pending_required_check_on_the_same_head_waits_past_the_base_wait(rig)
     prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pending", "secret-scan": "pass"})
     r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 12                      # extended from 3 to the hard cap of 12, then disarmed
+    assert len(pr_views(rig)) == 12 + 1                  # extended from 3 to the hard cap of 12, then disarmed
 
 
 def test_the_base_wait_alone_gives_up_when_nothing_is_pending(rig):
-    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pass"})
+    prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required=GREEN_REQ)
     r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 3
+    assert len(pr_views(rig)) == 3 + 1
+    assert "wait ended: base wait spent: required checks ok, mergeState=BLOCKED" in r.stdout
 
 
 def test_a_pending_check_that_finishes_and_merges_lands(rig):
@@ -362,7 +365,7 @@ def test_a_failed_required_check_disarms_at_once(rig):
     prs(rig, headRefOid=HEAD, armed=True, required={"validate": "fail", "secret-scan": "pending"})
     r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 1
+    assert len(pr_views(rig)) == 1 + 1
 
 
 def test_a_head_change_while_checks_are_pending_disarms_at_once(rig):
@@ -376,25 +379,25 @@ def test_a_dirty_or_behind_pr_disarms_at_once_even_with_a_pending_check(rig, ms)
     prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus=ms, required={"validate": "pending"})
     r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 1
+    assert len(pr_views(rig)) == 1 + 1
 
 
 def test_the_night_deadline_stops_the_extended_wait(rig):
     prs(rig, headRefOid=HEAD, armed=True, required={"validate": "pending"})
     r = run_lib(rig, f"left(){{ echo 100; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 1
+    assert len(pr_views(rig)) == 1 + 1
 
 
 def test_the_extension_stops_when_nothing_is_pending_any_more(rig):
     # pending through the base wait, then all-pass but unmerged: must not ride on to the cap
     prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pending"})
     flip = rig.tmp / "pass.py"
-    flip.write_text(f'import json\nf="{rig.state_file}"\nd=json.load(open(f))\nd["prs"]["7"]["required"]={{"validate":"pass"}}\njson.dump(d,open(f,"w"))\n')
+    flip.write_text(f'import json\nf="{rig.state_file}"\nd=json.load(open(f))\nd["prs"]["7"]["required"]={{"validate":"pass","secret-scan":"pass"}}\njson.dump(d,open(f,"w"))\n')
     body = f'n=0; sleep(){{ n=$((n+1)); [ $n -eq 4 ] && python3 "{flip}"; return 0; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?'
     r = run_lib(rig, body)
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 5                       # 3 base + 1 extended (pending) + 1 poll that saw pass
+    assert len(pr_views(rig)) == 5 + 1                   # 3 base + 1 extended (pending) + 1 poll that saw pass (+ the re-check)
 
 
 def test_an_unreadable_head_never_earns_the_extension(rig):
@@ -403,13 +406,13 @@ def test_an_unreadable_head_never_earns_the_extension(rig):
     rig.set_state(st)
     r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 3 12; echo rc=$?")
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 3
+    assert len(pr_views(rig)) == 3 + 1
 
 
 def test_a_cap_below_the_base_wait_bounds_the_base_wait_too(rig):
     prs(rig, headRefOid=HEAD, armed=True, mergeStateStatus="BLOCKED", required={"validate": "pending"})
     r = run_lib(rig, f"landing_wait_merged 7 {HEAD} 10 4; echo rc=$?")
-    assert "rc=1" in r.stdout and len(pr_views(rig)) == 4
+    assert "rc=1" in r.stdout and len(pr_views(rig)) == 4 + 1
 
 
 def test_the_night_deadline_arriving_mid_extension_stops_it(rig):
@@ -417,4 +420,4 @@ def test_the_night_deadline_arriving_mid_extension_stops_it(rig):
     body = f'n=0; sleep(){{ n=$((n+1)); return 0; }}; left(){{ [ $n -ge 5 ] && echo 100 || echo 9999; }}; landing_wait_merged 7 {HEAD} 3 12; echo rc=$?'
     r = run_lib(rig, body)
     assert "rc=1" in r.stdout and len(disarms(rig)) == 1
-    assert len(pr_views(rig)) == 6                       # stopped at the first poll after 5 sleeps, well short of the 12 cap
+    assert len(pr_views(rig)) == 6 + 1                   # stopped at the first poll after 5 sleeps, well short of the 12 cap
