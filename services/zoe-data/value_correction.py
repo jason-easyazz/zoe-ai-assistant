@@ -159,6 +159,17 @@ def _may_be_lazy(word: str) -> bool:
     return len(word) > 3 and word.lower().endswith("s") and not word.lower().endswith("ss")
 
 
+def may_shorten(corr: "Correction", exact_exists: bool) -> bool:
+    """THE one rule for shortening a typed name to a known one ("kais" -> Kai, "ashas" -> Asha), shared by every writer that resolves a
+    correction's subject (``apply`` here, ``person_extractor.apply_person_fact``): only when the correction is a LAZY form (the bare
+    "kais 21 not 22", or an owner+noun possessive typed without its apostrophe), the name could carry a stray s, and NOTHING exact
+    exists - no row / person under the name as typed. An explicit possessive ("Carlos's ...") and a plain "Carlos is 21 not 22" name
+    Carlos: they never reach Carlo. Pure."""
+    on = owner_noun(corr.subject)
+    lazy_form = bool(corr.lazy) or (on is not None and not explicit_possessive(corr.subject))
+    return lazy_form and not exact_exists and _may_be_lazy((on or (corr.subject,))[0])
+
+
 def _owner_noun_re(owner: str, noun: str, lazy: bool = False):
     """The row says the OWNER has the NOUN: "<owner>('s) <noun>" side by side. The owner is the word as typed; with ``lazy`` (nobody has
     a row under the exact word) also without its final s; never a longer word. "Dev's swimming with Asha" is not Asha's swimming."""
@@ -396,7 +407,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
-        if not hits and not exact_subject_row and (corr.lazy or (_on is not None and not explicit_possessive(corr.subject))) and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
+        if not hits and may_shorten(corr, exact_subject_row):
             # nobody has a row under the name exactly as typed: "kais 21 not 22" is Kai's (the apostrophe was not typed). Never the
             # other way round - "Carlos" does not rewrite Carlo's row while a Carlos row exists, nor when Carlos is the typed name.
             for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):

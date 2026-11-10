@@ -1489,7 +1489,7 @@ async def apply_person_fact(
                 import value_correction
 
                 corr = value_correction.statement(source_excerpt)
-                if corr is not None and corr.subject.lower() == name.lower():
+                if corr is not None and corr.subject.lower() == name.lower() and value_correction.may_shorten(corr, False):
                     alt = await _resolve_person(name[:-1], user_id, _db)
                     if alt is not None and getattr(alt, "person_id", None) and not alt.ambiguous:
                         name, res = name[:-1], alt

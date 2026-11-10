@@ -322,6 +322,72 @@ def test_the_stray_s_of_a_correction_is_not_a_person(monkeypatch):
     assert calls[0][0] == "Chris"                                 # negative control: nobody called Chri exists, a real name is never shortened
 
 
+def _no_activity_writes(monkeypatch):
+    for fn in ("_write_activity", "_post_write_hooks"):
+        async def noop(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(pe, fn, noop)
+
+
+def _nobody_is_the_speaker(monkeypatch):
+    import own_name
+
+    async def nobody(_u):
+        return frozenset()
+
+    monkeypatch.setattr(own_name, "names", nobody)
+
+
+def test_an_explicit_name_is_never_shortened_to_a_known_person(monkeypatch):
+    """The person writer shares value_correction.may_shorten: only the lazy bare form shortens, and never when the name has its own record."""
+    calls = []
+    _nobody_is_the_speaker(monkeypatch)
+    _no_activity_writes(monkeypatch)
+    carlo = types.SimpleNamespace(person_id="p-carlo", ambiguous=False)
+    carlos = types.SimpleNamespace(person_id="p-carlos", ambiguous=False)
+    _stub_person_writer(monkeypatch, calls, {"carlo": carlo})
+    for turn in ("Carlos is 21 not 22", "actually Carlos's age is 21 not 22"):
+        calls.clear()
+        run(pe.apply_person_fact("Carlos", "fact", "21", user_id=UID, source="conversation", source_excerpt=turn))
+        assert calls and all(c[0] == "Carlos" and c[2] != "p-carlo" for c in calls), turn           # never filed on Carlo
+    calls.clear()
+    run(pe.apply_person_fact("Carlos", "fact", "21", user_id=UID, source="conversation", source_excerpt="also carlos 21 not 22"))
+    assert calls == [("Carlo", "Carlo: 21", "p-carlo")]                                             # control: the lazy bare form, nobody called Carlos, IS Carlo's
+    _stub_person_writer(monkeypatch, calls, {"carlo": carlo, "carlos": carlos})
+    calls.clear()
+    run(pe.apply_person_fact("Carlos", "fact", "21", user_id=UID, source="conversation", source_excerpt="also carlos 21 not 22"))
+    assert calls and all(c[2] == "p-carlos" for c in calls)                                         # a Carlos record exists: the lazy form is Carlos too
+
+
+_EXPLICIT_FORMS = ["actually Carlos's swimming is on Wednesday not Thursday", "Carlos is 21 not 22", "actually Carlos's age is 21 not 22"]
+
+
+@pytest.mark.parametrize("turn", _EXPLICIT_FORMS)
+def test_table_an_explicit_carlos_never_writes_on_carlo_anywhere(monkeypatch, turn):
+    """ONE table over the explicit forms, through every writer: the shared rule, the correction apply (rows) and the person writer."""
+    corr = vc.statement(turn)
+    assert corr is not None
+    assert vc.may_shorten(corr, False) is False                                                     # the shared rule itself
+    svc = _Svc("Carlo is 22", "Carlo's swimming is on Thursday")
+    assert _apply(svc, turn, monkeypatch) == 0 and svc.edits == []                                  # the row writer
+    calls = []
+    _nobody_is_the_speaker(monkeypatch)
+    _no_activity_writes(monkeypatch)
+    _stub_person_writer(monkeypatch, calls, {"carlo": types.SimpleNamespace(person_id="p-carlo", ambiguous=False)})
+    run(pe.apply_person_fact("Carlos", "fact", corr.new, user_id=UID, source="conversation", source_excerpt=turn))
+    assert all(c[2] != "p-carlo" for c in calls)                                                    # the person writer
+
+
+def test_the_shared_rule_for_the_lazy_forms():
+    lazy = vc.statement("also carlos 21 not 22")
+    assert lazy.lazy and vc.may_shorten(lazy, False) and not vc.may_shorten(lazy, True)             # lazy, and only with no exact record
+    owner_lazy = vc.statement("actually carlos swimming is on wednesday not thursday")
+    assert vc.may_shorten(owner_lazy, False) and not vc.may_shorten(owner_lazy, True)
+    assert vc.may_shorten(vc.statement("also chris 21 not 22"), False)                               # a name that could carry a stray s may shorten (the caller still needs a KNOWN shorter one)
+    assert not vc.may_shorten(vc.statement("also dev 21 not 22"), False)                            # ... one that cannot, never
+
+
 # ── 3. the speaker's own facts ───────────────────────────────────────────────────────────────────────────────────────
 
 def test_an_own_fact_is_ingested_with_no_person_linkage(monkeypatch):
