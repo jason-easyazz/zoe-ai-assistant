@@ -15,7 +15,7 @@ requests>=2.32.0
 # installs torch itself (the macOS arm64 wheel from PyPI is CPU/MPS, no CUDA index
 # needed - the Pi note about the CPU wheel index does not apply) and the install
 # script pre-fetches the hub model into $ZOE_MAC_PANEL_HOME/torch.
-torch>=2.2
+torch>=2.13.0
 #
 # DROPPED (Pi-only or disabled on the Mac):
 #   resemblyzer              speaker ID is off in the template (SPEAKER_ID_ENABLED=false); pulls webrtcvad/numba builds

@@ -21,7 +21,7 @@
 # so an unrelated ~/.local upgrade does not read as Kokoro drift.
 
 # --- the model stack (voice numerics) ---
-torch==2.8.0
+torch==2.13.0
 kokoro==0.9.4
 misaki==0.9.4
 transformers==5.17.0
