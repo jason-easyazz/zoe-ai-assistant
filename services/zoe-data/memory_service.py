@@ -1843,14 +1843,15 @@ class MemoryService:
             )
         return rows
 
-    async def load_durable_for_hop(self, user_id: str) -> list[MemoryRef]:
+    async def load_durable_for_hop(self, user_id: str, *, strict: bool = False) -> list[MemoryRef]:
         """The OWNER's durable facts, newest first, for the personalisation hop (``personalisation_hop``): approved rows
         the owner stated (``memory_authority`` class ``user_stated`` or above, or ``user_stated_derived``: a paraphrase the
         owner's own turn supports), never a mood or a recorded change, never
         a pasted row, and only rows this user owns (a family-visible row another member wrote is not theirs). NO age
         cut and no rank cut: ``load_for_prompt`` ranks by a 70-day decay, which is exactly what buries "I work night
         shifts" under last week's chatter. Read-only, no access ticks. Raises nothing the caller must handle: a
-        failed read is ``[]``."""
+        failed read is ``[]`` - unless ``strict``, where a failed read RAISES (a caller that must tell "no facts" from
+        "could not read" - a precedence check - uses it)."""
         if is_guest_memory_user(user_id):
             return []
         self._require(user_id, "user_id is required")
@@ -1858,6 +1859,8 @@ class MemoryService:
             return await self._run_sync(self._durable_rows_sync, user_id)
         except Exception as exc:
             logger.warning("memory_service: load_durable_for_hop failed user=%s: %s", user_id, exc)
+            if strict:
+                raise
             return []
 
     async def recheck_durable(self, user_id: str, ids: list[str]) -> list[MemoryRef]:
@@ -2101,6 +2104,12 @@ class MemoryService:
             await omi_day_review.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: day-review erasure failed ({type(exc).__name__})") from exc
+        # Conversation notes (migration 0074): summaries of what the member (and the guests they enrolled) talked about. Fail closed.
+        try:
+            import conversation_notes
+            await conversation_notes.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: conversation-notes erasure failed ({type(exc).__name__})") from exc
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.

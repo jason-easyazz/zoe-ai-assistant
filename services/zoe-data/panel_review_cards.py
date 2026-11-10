@@ -52,7 +52,7 @@ PRIVATE_REPLY = "That's private. Say it again so I know it's you, or unlock with
 TITLES = {"open_loops": "On your plate", "day_review": "Your day"}
 GROUPS = {"day": "From your day", "voices": "New voices"}
 _KIND_LABEL = {"calendar_event": "Event", "list_item": "List", "reminder": "Reminder", "follow_up": "To do", "person": "Person",
-               "owner_fact": "About you"}
+               "owner_fact": "About you", "conversation_note": "Conversation"}
 
 
 def enabled() -> bool:
@@ -361,7 +361,7 @@ def loops_card(panel_id: str, member: str, loops: list[dict]) -> dict:
 
 def _candidate_item(c: dict) -> tuple[str, str]:
     p = c.get("payload") or {}
-    text = next((str(p.get(k)) for k in ("title", "item", "name", "fact", "text") if p.get(k)), "")
+    text = next((str(p.get(k)) for k in ("title", "item", "name", "fact", "summary", "text") if p.get(k)), "")
     when = " ".join(str(p.get(k)) for k in ("date", "time") if p.get(k))
     return " ".join(text.split())[:160], " ".join(x for x in (_KIND_LABEL.get(str(c.get("kind")), "Item"), when) if x)
 

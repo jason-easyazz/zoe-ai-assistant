@@ -39,9 +39,10 @@
     const KIND_LABEL = {
         calendar_event: 'Calendar', list_item: 'List', reminder: 'Reminder', follow_up: 'Follow-up', person: 'New person',
         owner_fact: 'About you', person_fact: 'About a person', person_relation: 'Relationship',
+        conversation_note: 'Conversation',
     };
     const FIELD_LABEL = { title: 'What', date: 'Date', time: 'Time', item: 'Item', list: 'List', name: 'Name',
-        relation: 'Relationship to you', fact: 'Fact' };
+        relation: 'Relationship to you', fact: 'Fact', summary: 'Note' };
     /* what the server's refusal codes mean to the owner (omi_review_apply.ApplyError); unknown codes get a plain fallback */
     const REVIEW_ERRORS = {
         held_conflict: 'This contradicts something you approved before.',
@@ -517,6 +518,7 @@
             case 'person_fact': return (p.name || 'Someone') + ': ' + (p.fact || '');
             case 'person_relation': return (p.name || 'Someone') + ' is your ' + relWord(p.relation);
             case 'owner_fact': return p.fact || '';
+            case 'conversation_note': return (p.with ? 'With ' + p.with + ': ' : '') + (p.summary || '');
             case 'person': return (p.name || '') + (p.relation ? ' (your ' + relWord(p.relation) + ')' : '');
             case 'list_item': return (p.item || '') + ' (' + (p.list || 'shopping') + ' list)';
             case 'calendar_event':
