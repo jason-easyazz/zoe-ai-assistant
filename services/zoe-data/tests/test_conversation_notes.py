@@ -818,6 +818,11 @@ def test_a_member_who_opted_out_gets_no_automatic_note_and_no_model_call(member,
     async def opted_out(uid, **_kw):
         return True
     monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
+    import memory_digest as md
+
+    async def no_read(*_a, **_k):
+        raise AssertionError("the transcript must not be read for an opted-out member")
+    monkeypatch.setattr(md, "load_day_messages", no_read)
     monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
     calls = []
     cn.set_llm(_llm(calls=calls))
@@ -845,13 +850,13 @@ def test_an_erase_that_finishes_while_the_model_is_thinking_wins(member, monkeyp
 
 def test_every_source_turn_of_a_long_conversation_is_kept_and_forgettable(member):
     member.conn.execute("CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT)")
-    ids = [f"t{i}" for i in range(61)]
+    ids = [f"t{i}" for i in range(461)]
     for i in ids:
-        text = "my friend Dana is coming" if i == "t60" else "just chatting"
+        text = "my friend Dana is coming" if i == "t460" else "just chatting"
         member.conn.execute("INSERT INTO chat_messages VALUES (?, 's', 'user', ?, 'x')", (i, text))
     member.conn.commit()
-    convo = cn.Convo("k-long", NOW - 5000, NOW - 4000, [("them", "hi")], 61, "", False, ids)
+    convo = cn.Convo("k-long", NOW - 5000, NOW - 4000, [("them", "hi")], 461, "", False, ids)
     note = cn.Note("They chatted.", [], "", [], "", False)
     nid = run(cn.save(OWNER, "", convo, note, source="chat", status="active"))
-    assert nid and len(json.loads(member.q("SELECT turn_ids FROM conversation_notes")[0][0])) == 61
+    assert nid and len(json.loads(member.q("SELECT turn_ids FROM conversation_notes")[0][0])) == 461
     assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1       # only turn 61 named her
