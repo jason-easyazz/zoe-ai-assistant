@@ -365,6 +365,24 @@ def test_an_explicit_name_is_never_shortened_to_a_known_person(monkeypatch):
     assert calls and all(c[2] == "p-carlos" for c in calls)                                         # a Carlos record exists: the lazy form is Carlos too
 
 
+def test_an_ambiguous_name_is_held_never_shortened(monkeypatch):
+    """Two people called Carlos (person_id None, ambiguous) plus a Carlo: the lazy 'carlos 21 not 22' reaches the ambiguity guard, not Carlo."""
+    calls, held = [], []
+    _nobody_is_the_speaker(monkeypatch)
+    _no_activity_writes(monkeypatch)
+    carlo = types.SimpleNamespace(person_id="p-carlo", ambiguous=False)
+    two = types.SimpleNamespace(person_id=None, ambiguous=True, tier="exact", matches=[object(), object()])
+    _stub_person_writer(monkeypatch, calls, {"carlo": carlo, "carlos": two})
+
+    async def hold(*a, **k):
+        held.append(a[1] if len(a) > 1 else "")
+    monkeypatch.setattr(pe, "_hold_fact_belief", hold)
+    run(pe.apply_person_fact("Carlos", "fact", "21", user_id=UID, source="conversation", source_excerpt="also carlos 21 not 22"))
+    assert not any(c[2] == "p-carlo" for c in calls) and held                                     # held as ambiguous, nothing filed on Carlo
+    assert not vc.may_shorten(vc.statement("also carlos 21 not 22"), False, True)                  # the shared rule
+    assert vc.may_shorten(vc.statement("also carlos 21 not 22"), False, False)                     # control: positively no match -> still shortens
+
+
 _EXPLICIT_FORMS = ["actually Carlos's swimming is on Wednesday not Thursday", "Carlos is 21 not 22", "actually Carlos's age is 21 not 22"]
 
 

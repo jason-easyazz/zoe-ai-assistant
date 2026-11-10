@@ -159,15 +159,16 @@ def _may_be_lazy(word: str) -> bool:
     return len(word) > 3 and word.lower().endswith("s") and not word.lower().endswith("ss")
 
 
-def may_shorten(corr: "Correction", exact_exists: bool) -> bool:
+def may_shorten(corr: "Correction", exact_exists: bool, ambiguous: bool = False) -> bool:
     """THE one rule for shortening a typed name to a known one ("kais" -> Kai, "ashas" -> Asha), shared by every writer that resolves a
     correction's subject (``apply`` here, ``person_extractor.apply_person_fact``): only when the correction is a LAZY form (the bare
     "kais 21 not 22", or an owner+noun possessive typed without its apostrophe), the name could carry a stray s, and NOTHING exact
     exists - no row / person under the name as typed. An explicit possessive ("Carlos's ...") and a plain "Carlos is 21 not 22" name
-    Carlos: they never reach Carlo. Pure."""
+    Carlos: they never reach Carlo. ``ambiguous``: the typed name resolved to SEVERAL people (two Carloses) - that is a match to ask about, never an
+    absence to repair, so it never shortens. Pure."""
     on = owner_noun(corr.subject)
     lazy_form = bool(corr.lazy) or (on is not None and not explicit_possessive(corr.subject))
-    return lazy_form and not exact_exists and _may_be_lazy((on or (corr.subject,))[0])
+    return lazy_form and not exact_exists and not ambiguous and _may_be_lazy((on or (corr.subject,))[0])
 
 
 def _owner_noun_re(owner: str, noun: str, lazy: bool = False):

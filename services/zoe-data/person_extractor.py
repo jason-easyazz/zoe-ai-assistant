@@ -1484,12 +1484,15 @@ async def apply_person_fact(
         # "Kais" (QA round 7: the row "Kais: 21", and Kai's age then unanswerable). When nobody is called Kais but the member's Kai
         # exists, the fact is Kai's; with nobody known either way the name stands as typed (a real "Chris" is never shortened).
         try:
-            if (res is None or not getattr(res, "person_id", None)) and source_excerpt and len(name) > 3 and name.lower().endswith("s") \
-                    and not name.lower().endswith("ss"):
+            # only a POSITIVE "no such person" is an absence: an ambiguous resolution (two Carloses) has no person_id either, but it is a match
+            # that the ambiguity guard below must see - shortening it would file the fact on a different person
+            _ambiguous = bool(getattr(res, "ambiguous", False))
+            if (res is None or (not getattr(res, "person_id", None) and not _ambiguous)) and source_excerpt and len(name) > 3 \
+                    and name.lower().endswith("s") and not name.lower().endswith("ss"):
                 import value_correction
 
                 corr = value_correction.statement(source_excerpt)
-                if corr is not None and corr.subject.lower() == name.lower() and value_correction.may_shorten(corr, False):
+                if corr is not None and corr.subject.lower() == name.lower() and value_correction.may_shorten(corr, False, _ambiguous):
                     alt = await _resolve_person(name[:-1], user_id, _db)
                     if alt is not None and getattr(alt, "person_id", None) and not alt.ambiguous:
                         name, res = name[:-1], alt
