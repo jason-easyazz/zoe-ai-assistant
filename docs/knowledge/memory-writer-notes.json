@@ -3,6 +3,7 @@
   "services/zoe-data/correction_apply.py": "A spoken correction (\"X is their dog\", a day-first date) rewrites the stored fact (review edit) and ingests the corrected one; ZOE_CORRECTION_APPLY.",
   "services/zoe-data/value_correction.py": "A user-stated spoken value correction (\"Oliver is 25, not 24\") supersedes the member's stored rows about that subject (review edit under conversation_correction); always on, evidence-only.",
   "services/zoe-data/expert_dispatch.py": "Tier-1.5 domain experts: stores a voice_fact, retires the fact it replaces (review archive) and supersedes on a stated change.",
+  "services/zoe-data/forget_topic.py": "Topic forget (\"forget everything about X\"): archives the owner's matching memory rows (review archive, optional physical erase_rows) and erases the owner's own words about the topic from the recent turns and the exact-words index; refuses a broad topic touching neither rows nor words.",
   "services/zoe-data/hindsight_retain_candidates.py": "Hindsight evaluation path: creates a PENDING row for later admission (ingest). Not on the live turn path.",
   "services/zoe-data/hold_the_fact.py": "Hold the fact: restores the owner's stated value after a model pushback (review edit); ZOE_HOLD_THE_FACT.",
   "services/zoe-data/intent_router.py": "Intent-first router: the 'remember that' / 'forget that' / 'forget the last thing' fast paths (ingest, forget_last, review reject/archive).",

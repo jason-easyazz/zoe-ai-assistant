@@ -1012,6 +1012,9 @@ async def _persist_memory_candidates_impl(user_id: str, session_id: str, user_me
         t = (user_message or "").strip()
         if _FORGET_LAST_RE.match(t) or _FORGET_ENTITY_RE.match(t):
             return True
+        import forget_topic as _ft_cap
+        if _ft_cap.parse(_capture_words(t).strip()) is not None:
+            return True          # a topic forget is an instruction, never a fact, and never "forget the previous turn"
         # A short retraction of the PREVIOUS turn that another lane answered ("actually no, don't remember that, forget
         # that please. its not a real plan" reached the brain, QA round 3b): the owner still asked, so that turn is
         # retracted here - its rows and its capture still in flight - exactly as the forget intent does (idempotent: after
@@ -1724,7 +1727,7 @@ async def chat_stream_generator(
                     yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
                     return
         intent = await detect_and_extract_intent(
-            message_for_processing, user_id, context=_chat_ctx
+            message_for_processing, user_id, context=_chat_ctx, session_id=session_id
         ) if use_intent_fast_path else None
         # The router head is the authority over a keyword claim (INTENT_GATE):
         # "who is flying in on Thursday…" must reach the brain + recall packet,
@@ -2546,7 +2549,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                         },
                     }
 
-            intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
+            intent = await detect_and_extract_intent(message_for_processing, user_id, session_id=session_id) if use_intent_fast_path else None
             # The router head is the authority over a keyword claim (INTENT_GATE) —
             # Samantha bar S1 was answered here by the "who is <X>" contacts lookup.
             if intent is not None:

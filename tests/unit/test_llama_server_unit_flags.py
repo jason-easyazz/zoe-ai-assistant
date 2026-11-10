@@ -172,14 +172,16 @@ def test_swa_full_is_on():
     )
 
 
-def test_cache_ram_is_1024_and_coupled_to_swa_full():
+def test_cache_ram_is_512_and_coupled_to_swa_full():
     cmd = _exec_start()
     swa_full = re.search(r"(?:^|\s)--swa-full(?:\s|$)", cmd) is not None
     cram = int(_flag(cmd, "--cache-ram") or 0)
-    # With --swa-full each cached entry is ~81 MiB (was ~172), so 1024 MiB keeps the
-    # coverage 2048 gave before it. Without --swa-full, 1024 would halve that coverage.
+    # With --swa-full each cached entry is ~81 MiB (was ~172). 2026-11-08: 1024 -> 512
+    # (docs/knowledge/ram-audit-voice-2026-11.md): the cache first filled after
+    # ~36 h and only stale aux one-shots were evicted. Without --swa-full entries double,
+    # so the cap must go back to >= 2048 (re-decide it, do not keep 512).
     if swa_full:
-        assert cram == 1024, f"--cache-ram {cram}: 1024 is the replay-gated size with --swa-full"
+        assert cram == 512, f"--cache-ram {cram}: 512 is the size adopted with --swa-full"
     else:
         assert cram >= 2048, f"--cache-ram {cram} without --swa-full halves prompt-cache coverage"
 

@@ -261,6 +261,8 @@ _EXPLICIT_FORGET_RE = _re.compile(r"^\s*(?:please\s+)?(?:forget\s+|never\s+mind\
 # The opener / chained shapes memory_quality.is_forget_command recognises ("no, don't remember that! forget that",
 # "oh please forget that I said ...", QA 2026-11-05) are just as explicit - when they NAME memory (forget / remember /
 # save / store). "delete that" / "scrap that" alone still go to the head, for the reason above.
+_FORGET_TO_ADD_RE = _re.compile(
+    r"^\s*(?:(?:please|and|also|oh)\s+)*(?:(?:don['\u2019]?t|do not)\s+forget|remember|make sure(?:\s+you)?)\s+to\s+(?:add|put)\s+\S", _re.IGNORECASE)
 _NAMES_MEMORY_RE = _re.compile(r"\b(?:forget|remember|save|store)\b", _re.IGNORECASE)
 
 
@@ -274,6 +276,15 @@ def _explicit_forget(text: str) -> bool:
         return False
 
 
+def _topic_forget(text: str) -> bool:
+    """A whole-utterance topic forget ("forget what I told you about my mum's heart", forget_topic): as explicit as "forget that"."""
+    try:
+        import forget_topic
+        return forget_topic.parse(text or "") is not None
+    except Exception:  # noqa: BLE001 - the gate must never break a turn
+        return False
+
+
 def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     """True = the keyword intent may execute. Runs the head (numpy, no sidecar)
     only for an intent that has a router class; logs
@@ -282,8 +293,15 @@ def intent_gate(intent_name: str, text: str, *, lane: str) -> bool:
     try:
         if not intent_gate_enabled() or intent_name not in _INTENT_ROUTER_DOMAINS:
             return True
+        if intent_name == "memory_forget_entity" and _topic_forget(text):
+            logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_topic_forget", lane, intent_name)
+            return True
         if intent_name == "memory_forget_last" and _explicit_forget(text):
             logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_forget_command", lane, intent_name)
+            return True
+        if intent_name == "list_add" and _FORGET_TO_ADD_RE.match(text or ""):
+            # "dont forget to add screws": the add verb is explicit, the head (bare words) said smart_home / notes / reminders (QA round 7)
+            logger.info("INTENT_GATE lane=%s intent=%s decision=allow reason=explicit_add_command", lane, intent_name)
             return True
         import semantic_router as _sr
 
@@ -814,6 +832,60 @@ async def _feedback_tier(text: str, user_id: str, session_id: str, kwargs: dict)
         return None
 
 
+def _qa7_conversation_tier(text: str, user_id: str):
+    """Two whole-utterance shapes answered in code (QA round 7), before any router or model:
+
+    * a guest's "remember me" / "forget me" / "who am I" (``guest_asks``): the honest answer, never a false "I'll remember".
+    * a spelled-short goodnight ("gnite", "nite nite", "gn"; ``clean_goodbye.is_goodnight_short``): a goodbye, never "do you want me to
+      do something with the light?" (the head has no class for it and the brain guessed a device).
+    NEVER raises."""
+    try:
+        import expert_dispatch as _xd
+        import guest_asks as _ga
+
+        line = _ga.reply(text, user_id)
+        if line:
+            return _xd.DispatchResult(domain="guest", reply=line, intent=f"guest_{_ga.kind(text)}", tier="guest_asks")
+        import clean_goodbye as _cg
+
+        if _cg.is_goodnight_short(text):
+            return _xd.DispatchResult(domain="chat", reply=_cg.farewell_fallback("night"), intent="goodnight", tier="goodnight")
+    except Exception as exc:  # noqa: BLE001 - never let the tier break a turn
+        logger.warning("fast_tiers qa7 conversation tier failed (non-fatal): %s", exc)
+    return None
+
+
+async def _weather_place_tier(text: str, user_id: str, session_id: str, kwargs: dict):
+    """A weather question that NAMES a place is the weather expert's, and "and in albany" right after a weather answer is the same question
+    (``weather_followup``; QA round 7: "temp in albany" went to the people expert and then a model stub, "and broome" to "I'm not sure what
+    you mean"). Deterministic, before the router; the expert plans the place, a model never does. NEVER raises."""
+    try:
+        import weather_followup as _wf
+
+        carried = None
+        scope = _wf.recent(user_id, session_id)
+        if scope is not None:
+            carried = _wf.followup_text(text, scope)
+        plan_text = carried or _wf.explicit_text(text)
+        if not plan_text:
+            return None
+        if await _hop_owns_turn(text, user_id):
+            return None          # generic advice that a durable fact of the owner changes is the brain's (same rule as _resolve_core)
+        import expert_dispatch as _xd
+
+        ctx: dict[str, Any] = dict(kwargs.get("extra_ctx") or {})
+        ctx.update({"user_id": user_id, "session_id": session_id, "score": 1.0})
+        res = await _xd.dispatch("weather", plan_text, ctx, write_ok=kwargs.get("allow_writes") is not False)
+        if res is not None and not getattr(res, "tier", ""):
+            res.tier = "weather_place"
+        if res is not None and getattr(res, "reply", ""):
+            _wf.note(user_id, session_id, plan_text)     # the EFFECTIVE question: a bare "and broome" must not erase the inherited day
+        return res
+    except Exception as exc:  # noqa: BLE001 - never let the tier break a turn
+        logger.warning("fast_tiers weather place tier failed (non-fatal): %s", exc)
+        return None
+
+
 def _struggle_ack(text: str):
     """``ZOE_STRUGGLE_DETECT=on`` only: a bare "that was wrong" that NO tier answered gets one short deterministic line instead of
     a model turn (the verdict row is ``conversation_feedback``'s, the struggle event the detector's). Off / shadow = None, so the
@@ -862,18 +934,38 @@ async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: 
 
 
 async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
+    # A reply that ANSWERS Zoe's own pending reminder offer ("yes please, 2:45 so i'm not late") is not a time question: the domain
+    # tiers would hand the bare words to the time expert ("It's 8:54 AM"). Defer the whole turn (flag-gated ZOE_OFFER_FOLLOWUP_BINDING,
+    # default off, a cheap shape check first) so the caller's reminder / brain lane, which has the conversation, acts on the offer.
+    # The deferral comes AFTER the distress tier on the chat path (phase None): "sure 3pm because I want to hurt myself" must reach the
+    # crisis handling, never a reminder. phase="domain" means the conversation half (distress included) already ran.
+    async def _offer_reply_deferred() -> bool:
+        try:
+            from intent_router import reminder_offer_reply_text as _rem_offer
+
+            return bool(await _rem_offer(text, user_id, session_id=session_id))
+        except Exception:  # noqa: BLE001 - the binding never breaks a turn
+            return False
+
+    if kwargs.get("phase") == "domain" and await _offer_reply_deferred():
+        return None
     # `phase="domain"` is the second half of a split run (the caller ran `phase="conversation"` already): the wrapper tiers
     # (distress, provenance, feedback, self-model) are part of the conversation half, so they must not run - or count the turn - twice.
     if kwargs.get("phase") != "domain":
         answered = await _distress_tier(text, user_id, kwargs)
         if answered is not None:
             return answered
+        if kwargs.get("phase") != "conversation" and await _offer_reply_deferred():
+            return None
         # Feedback FIRST (after distress): a verdict is recorded even when a later stage answers it ("that's wrong, it's Thursday" after
         # an explained answer is the provenance fix's, and still leaves its `correction` row). The wrong verdicts only write and go on.
         answered = await _feedback_tier(text, user_id, session_id, kwargs)
         if answered is not None:
             return answered
         answered = await _provenance_tier(text, user_id, session_id, kwargs)
+        if answered is not None:
+            return answered
+        answered = _qa7_conversation_tier(text, user_id)
         if answered is not None:
             return answered
         # voice_enrollment (ZOE_ENROLL_OFFER, default OFF = returns before any work): the spoken yes/no to Zoe's offer to learn a voice, "learn
@@ -976,7 +1068,17 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
         answered = _calc_tier(text, user_id, session_id)
         if answered is not None:
             return answered
-    res = await _resolve_core(text, user_id, session_id, **kwargs)
+    res = await _weather_place_tier(text, user_id, session_id, kwargs) if kwargs.get("phase") != "conversation" else None
+    if res is None:
+        res = await _resolve_core(text, user_id, session_id, **kwargs)
+    if (res is not None and getattr(res, "tier", "") != "weather_place"
+            and (getattr(res, "domain", "") == "weather" or getattr(res, "intent", "") == "weather")):
+        try:        # the conversation's last answer was the weather: "and in albany" is the same question (weather_followup)
+            import weather_followup as _wf
+
+            _wf.note(user_id, session_id, text)
+        except Exception:  # noqa: BLE001
+            pass
     if res is None and kwargs.get("phase") != "domain":
         res = _struggle_ack(text)
     if res is not None and getattr(res, "reply", ""):

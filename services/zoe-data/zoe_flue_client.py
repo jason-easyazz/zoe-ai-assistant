@@ -840,6 +840,13 @@ def _recall_question_shape(message: str) -> str:
         return "challenge"
     if _PERSONAL_QUESTION_RE.search(msg):
         return "personal"
+    # "which day is max at kindy" / "what exam do i have and when" (QA round 7): a stored routine or plan of the household's. These two
+    # event-time kinds are NOT behind ZOE_RECALL_PRESENT_STATE_SHAPES - the planners now hand them to the brain, so the recall floor must put the
+    # stored rows in front of it (the clock and today's agenda no longer answer them).
+    from memory_gate import event_time_question_kind
+
+    if event_time_question_kind(msg) in ("their_routine", "named_event"):
+        return "event_time"
 
     if _present_state_shapes_enabled():
         # "Am I still doing the half-marathon?", "How's my mum?" (day-sim 6/6n) and
@@ -1105,7 +1112,7 @@ def _recall_inject_enabled() -> bool:
     }
 
 
-async def _fetch_for_prompt_packet(user_id: str, message: str, focus=None) -> str:
+async def _fetch_for_prompt_packet(user_id: str, message: str, focus=None, no_offer: bool = False) -> str:
     """The /api/memories/for-prompt packet text, fetched IN-PROCESS.
 
     Calls the composer function directly (routers.memories.memory_for_prompt)
@@ -1119,10 +1126,16 @@ async def _fetch_for_prompt_packet(user_id: str, message: str, focus=None) -> st
     ``person_recall_floor.NamedPerson``) forces the semantic search and the
     relational block, led by those people. Absent, the call is byte-identical to
     what it always was.
+
+    ``no_offer`` (the household-question fallback, whose packet may be fetched and then NOT shown): the packet neither ticks the
+    contact-offer cooldown nor carries an offer - the same ``tool_call`` contract the recall_memory tool uses - so an offer is never
+    spent on a block the model did not get.
     """
     from routers.memories import memory_for_prompt
 
     extra: dict = {}
+    if no_offer:
+        extra["tool_call"] = True
     if focus:
         import person_recall_floor
 
@@ -1135,6 +1148,12 @@ async def _fetch_for_prompt_packet(user_id: str, message: str, focus=None) -> st
         **extra,
     )
     return str((result or {}).get("packet") or "")
+
+
+# The household-question fallback shows fewer notes than a recall-shaped turn: it fires on many more turns, and each block is prefill.
+_HOUSEHOLD_MAX_BULLETS = 8
+_HOUSEHOLD_MAX_CHARS = 1100
+_HOUSEHOLD_FETCH_BUDGET_S = 0.4   # the fallback never holds first-token longer than this (probe: an unbounded fetch added +2.2 s cold)
 
 
 def _truncate_packet(packet: str, *, max_chars: int = _RECALL_MAX_CHARS,
@@ -1220,6 +1239,13 @@ _CHALLENGE_RULE = (
     "If none does, say plainly that you don't have that noted and ask them to tell you again. Never describe something they said, "
     "or a past conversation, that these notes do not contain."
 )
+# QA round 6a: "what did I say I'd be doing today" got "You mentioned this morning that you're the head chef" - a time and an occasion
+# attached to a fact whose row carries neither. A bullet shows when it was said only if it carries a bracketed date (recall_evidence);
+# the rule rides INSIDE the block, so it holds on every recall turn without touching the pinned persona text.
+_WHEN_RULE = (
+    "A note says when it was told only if a date is shown on it. Never say when the user said or did something (\"this morning\", "
+    "\"yesterday\", \"last week\") unless the note shows it; otherwise say what is noted without a time."
+)
 _CHALLENGE_EMPTY = "(Nothing stored matches what the user is asking about.)"
 
 
@@ -1263,20 +1289,53 @@ async def _recall_context_block(message: str, user_id: str) -> str:
         named = await _named_person_floor(message, user_id)
         if named:
             shape = "named_person"
+    household = False
+    if not shape:
+        # Any other QUESTION turn ("how old is anaya", "does tom eat meat", "do i drink coffee"): its packet is fetched and shown only if
+        # it touches the question (memory_gate.packet_touches_question). A continuity turn (a feeling) keeps its own block.
+        import memory_gate
+
+        if memory_gate.household_questions_enabled() and memory_gate.is_question_turn(message) \
+                and not is_continuity_turn(message, user_id):
+            shape, household = "household", True
     if not shape:
         return ""
     if shape == "challenge":
         return await _challenge_context_block(message, user_id)
+    if household:
+        # The fallback is opportunistic and runs BEFORE the first token, so it is bounded twice: a question with no content word
+        # (a greeting "how are you going tonight?") can never touch a packet, so it is not fetched at all; and the fetch itself has
+        # a hard budget, so a cold embedding / DB read costs at most that, never seconds of first-turn TTFT.
+        import memory_gate
+
+        if not memory_gate._touch_tokens(message):
+            return ""
     try:
-        packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
-                        else _fetch_for_prompt_packet(user_id, message))
+        if household:
+            packet = await asyncio.wait_for(_fetch_for_prompt_packet(user_id, message, no_offer=True),
+                                            timeout=_HOUSEHOLD_FETCH_BUDGET_S)
+        else:
+            packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
+                            else _fetch_for_prompt_packet(user_id, message))
+    except asyncio.TimeoutError:
+        logger.info("SEAM_HOUSEHOLD user=%s budget_exceeded=%.2fs - turn proceeds without the block", user_id, _HOUSEHOLD_FETCH_BUDGET_S)
+        return ""
     except Exception as exc:  # noqa: BLE001 — the recall floor must never break a turn
         logger.warning(
             "seam recall inject: packet fetch failed, continuing without it: %s", exc
         )
         return ""
     packet = (_truncate_packet_keeping_relational((packet or "").strip()) if named
+              else _truncate_packet((packet or "").strip(), max_chars=_HOUSEHOLD_MAX_CHARS,
+                                    max_bullets=_HOUSEHOLD_MAX_BULLETS) if household
               else _truncate_packet((packet or "").strip()))
+    if household:
+        import memory_gate
+
+        touched = memory_gate.packet_touches_question(message, packet)
+        logger.info("SEAM_HOUSEHOLD user=%s touched=%d chars=%d", user_id, int(touched), len(packet))
+        if not touched:
+            return ""
     bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
     logger.info("SEAM_RECALL user=%s shape=%s bullets=%d chars=%d",
                 user_id, shape, bullets, len(packet))
@@ -1326,7 +1385,7 @@ async def _recall_context_block(message: str, user_id: str) -> str:
         except Exception as exc:  # noqa: BLE001 - the guard must never break a turn
             logger.debug("role guess guard setup failed (non-fatal): %s", type(exc).__name__)
     body = f"{packet}\n{rule}" if rule else packet
-    return f"{_recall_block_open()}\n{body}\n{_RECALL_BLOCK_CLOSE}"
+    return f"{_recall_block_open()}\n{body}\n{_WHEN_RULE}\n{_RECALL_BLOCK_CLOSE}"
 
 
 # ── Personalisation hop (ZOE_PERSONALISATION_HOP, default ON) ───────────────
@@ -2640,6 +2699,15 @@ async def run_flue_brain_streaming(
         _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "distress_handoff")
         yield _dh
         return
+    # The medical safety floor (ZOE_MEDICAL_SAFETY, default enforce) is second: a poisoning, an emergency-number question (even mid-thread), a red-flag symptom or a blood
+    # sugar reading gets ONE fixed reply with the household's numbers, whatever memory or the open thread says (docs/knowledge/medical-safety.md).
+    import medical_safety
+
+    _ms = await medical_safety.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")))
+    if _ms:
+        _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "medical_safety")
+        yield _ms
+        return
     message = _resolve_clarification(message, user_id, session_id)
     # A spoken mute ("don't mention that again", "leave it"; ZOE_RESTRAINT): recorded here, before the
     # brain, so the very next brief / raise / packet honours it. In enforce the acknowledgement is
@@ -2694,6 +2762,11 @@ async def run_flue_brain_streaming(
     # aside) is dropped (emotional_turn_guard, default off). off: nothing wraps the stream; a non-emotional turn is never held.
     if emotional_turn_guard.mode() != "off":
         turn = emotional_turn_guard.filter_stream(turn, _spoken, user_id)
+    # Plumbing words never reach the person ("I'd activate the home ability..."), and a generic closing question is dropped when the last
+    # reply already ended on one (reply_polish, ZOE_REPLY_POLISH=off|shadow|on, default on). off: nothing wraps the stream.
+    import reply_polish
+
+    turn = reply_polish.filter_stream(turn, _spoken, user_id, session_id)   # off: passes through untouched, still notes the reply for the write gate
     # A clean goodbye, a plain "are you there?", a silence never remarked on (clean_goodbye, ZOE_CLEAN_GOODBYE):
     # holds the reply ONLY on such a turn (a few anchored regexes on the user's words); every other turn streams
     # byte-identical. Outermost, so it cleans the text the owner would actually hear.
@@ -2800,6 +2873,11 @@ async def _run_flue_brain_streaming_turn(
     import memory_retire
 
     memory_retire.note_turn(uid, message, voice=bool(kwargs.get("voice_mode")))
+    # A write needs an ask (ZOE_WRITE_INTENT_GATE, default on): the turn's words, so `/api/system/intent-dispatch` can refuse a calendar
+    # write the person never asked for ("help me think through the logistics") and a hardware item on the shopping list.
+    import write_intent_gate
+
+    write_intent_gate.note_turn(uid, message)
 
     # the owner asked for their own words ("what exactly did I say about ..."): the recall_memory tool call made during this
     # turn carries only the model's query, so the turn's question is noted for /for-prompt's exact-words block (exact_words)
@@ -2987,6 +3065,12 @@ async def _run_flue_brain_streaming_turn(
     outbound_message = _wrap_message_with_now_card(
         outbound_message, await _now_card_context_block(uid, bool(kwargs.get("voice_mode"))))
     # Manner block (ZOE_MANNER_BLOCK, default OFF; adults only): rides between the persona line and the identity line. "" = unchanged bytes.
+    # An explicit style request in THIS turn ("stop ending with questions", "be more casual") is stored first, so the line rendered next
+    # already carries it and this very reply obeys it (register_requests; rides ZOE_MEMBER_REGISTER, adults only, a no-op while off).
+    if not kwargs.get("replay_isolation"):
+        import register_requests
+
+        await register_requests.apply(uid, message)
     outbound_message = _wrap_message_with_register(outbound_message, await _register_context_block(uid))
     outbound_message = _wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the

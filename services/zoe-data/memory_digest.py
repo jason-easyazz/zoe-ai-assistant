@@ -16,6 +16,8 @@ import asyncio
 import functools
 import json
 import logging
+
+import log_redaction as _log_redaction
 import os
 import re
 import time
@@ -1084,6 +1086,16 @@ async def run_turn_digest(
             # The extractor files "the user" by default: a fact the turn says about SOMEONE ELSE ("dad rang. sober for once", "priya no
             # beef. arjun hates onion") is re-attached to that person or dropped, never kept as the user's own (fact_subject).
             try:
+                import value_correction
+
+                if value_correction.invented_on_correction_turn(fact, user_message):
+                    result["skipped_low_quality"] += 1
+                    _count_drop("turn_digest", "correction_turn")
+                    logger.info("run_turn_digest: dropped a fact a correction turn cannot have said: %s", _log_redaction.utterance_tag(fact))
+                    continue
+            except Exception:  # noqa: BLE001 - the guard must never take the digest down
+                pass
+            try:
                 import fact_subject
 
                 verdict_, fixed_fact = fact_subject.attribute(fact, user_message)
@@ -1101,6 +1113,15 @@ async def run_turn_digest(
             except Exception:  # noqa: BLE001 - the guard must never take the digest down
                 pass
             fact_type = item.get("type", "fact")
+            try:    # a child filed as a pet because a kids list ended beside an animal (kin_pet_guard; the owner's own words decide)
+                import kin_pet_guard
+
+                _retyped = kin_pet_guard.repair(fact, fact_type, user_message)
+                if _retyped is not None:
+                    fact, fact_type = _retyped
+                    logger.info("run_turn_digest: re-typed a fact between child and pet from the owner's own words")
+            except Exception:  # noqa: BLE001 - the guard must never take the digest down
+                pass
             fact_tags = ["turn_digest", "auto_extract"] + (["corrected"] if fixed is not None else [])
             fact_changes = False
             if change_cue:

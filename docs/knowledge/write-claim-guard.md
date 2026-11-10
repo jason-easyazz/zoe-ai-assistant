@@ -151,8 +151,9 @@ of it lexicon data (`write_claims.json`), no word list in code:
   entry) and `memory_retire` (a retired note) record `forget`; `_execute_list_remove_direct` (the brain's `list_remove`)
   records `list_removed`. The brain has NO calendar / reminder / alarm delete tool, so such a removal claim in a brain turn is
   always replaced - which is the truth.
-* **Honest lines per kind** (`honest_by_kind`): a memory claim gets "I didn't manage to save that…", a forget "I haven't been
-  able to forget that yet, so it's still saved.", a removal "I didn't manage to remove that, so it's still there." - "want me
+* **Honest lines per kind** (`honest_by_kind`): a memory claim gets "I didn't manage to save that…", a forget "I haven't forgotten
+  anything yet. Tell me what to forget, ..." (also what a blocked memory/note claim becomes on a turn that ASKED to forget -
+  never "I didn't manage to save that", QA round 4), a removal "I didn't manage to remove that, so it's still there." - "want me
   to try again?" is not offered where no tool could do it.
 
 ## Device switches (2026-11-07) - receipt kind `device`
@@ -266,3 +267,15 @@ delete a contact yet, so they are still in your contacts. You can remove them fr
 `write_receipts.record(user_id, "contact_removed", ...)` after the row is soft-deleted, and this line can go. Pinned by
 `tests/test_qa5_memory_fixes.py`.
 
+
+## A queued capture is an honest memory claim (QA round 6a, 2026-11-08)
+
+The first self-introduction ("Will you remember me?", a family intro) was answered "I didn't manage to save that" while the rows
+landed ~70 s later: the brain's "I'll remember that" had no `memory` receipt because the save is the POST-turn capture (regex
+extractor, turn digest, person extractors), which runs after the reply. `write_claim_guard.note_pending_capture(user_id, text)` is
+called where the turn begins (`brain_dispatch._claim_guarded` / `_claim_guarded_text`) and records a `memory` receipt with source
+`pending_capture`, so a memory or note claim on a turn the capture will read is honest. Nothing is recorded for a guest or
+unrecognised voice (no durable memory pass runs), an off-the-record turn, a forget turn (it gets the forget line), a recap question
+("did you save ...", which asks about earlier writes) or words shorter than the digest reads (4). It never vouches for a list,
+calendar, reminder or forget claim. If the capture then fails it is counted and logged (`memory pass ... FAILED`), as before.
+Pinned by `tests/test_qa6a_memory_fixes.py`.

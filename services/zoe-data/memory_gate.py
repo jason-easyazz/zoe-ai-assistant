@@ -307,8 +307,28 @@ EVENT_TIME_QUESTION_PATTERNS: tuple[tuple[str, re.Pattern], ...] = tuple(
     for kind, rx in (
         ("my_event", r"\b" + _ET_WH + r"(?:['’]s|\s+(?:is|are|was|were|does|do|did|will))\s+"
                      r"(?:my|our)\s+(?:[\w'’-]+\s+){0,3}?" + _ET_NOUN + r"\b"),
+        # "when is jonahs learner test" (QA 2026-11-08): a named person's plan is the user's stored plan too, so it never reaches the
+        # clock and the recall floor consults memory beside the calendar. "jonahs"/"jonah's"/"mums": a possessive, never this/its.
+        ("their_event", r"\b" + _ET_WH + r"(?:['’]s|\s+(?:is|are|was|were|does|do|did|will))\s+"
+                        r"(?!(?:this|its|his|hers|ours|christmas|physics|mathematics|economics|politics|athletics|gymnastics|news)\b)[a-z][\w-]*?(?:['’]s?|(?<![siu])s)\s+(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\b"),
+        # "what time do I usually get up?" (QA 2026-11-08: answered "It's 2:10 PM."): a habit of the user's own, stored as a routine.
+        ("my_habit", r"\b(?:when|what\s+time)\s+(?:do|did|would|will|am|are)\s+(?:i|we)\s+"
+                     r"(?:usually|normally|typically|generally|always|often|regularly|tend\s+to|(?:get|wake)\s+up|"
+                     r"go\s+to\s+(?:bed|sleep|work)|head\s+(?:off|out)|knock\s+off|clock\s+(?:on|off)|"
+                     r"have\s+(?:lunch|dinner|breakfast|a\s+break))\b"),
         ("have_event", r"\b" + _ET_WH + r"\s+(?:do|am|are|have)\s+(?:i|we)\s+(?:got\s+)?"
                        r"(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\b"),
+        # "what exam do i have and when" (QA round 7: answered "You've got nothing on today."): a NAMED kind of event with no day given is a
+        # lookup of the user's own plans (memory beside the calendar), never today's agenda and never the clock.
+        ("named_event", r"\bwhat\s+(?:[\w'’-]+\s+){0,2}?" + _ET_NOUN + r"\s+(?:do|am|are)\s+(?:i|we)\s+(?:have|got)\b"),
+        # "which day is max at kindy" (QA round 7: answered "It's 9:21 PM."): when/which day a NAMED person is somewhere they go
+        # regularly is a stored routine of the household, never the clock. A pronoun / "it" / "the" subject never matches.
+        ("their_routine", r"\b(?:which\s+days?|what\s+days?|when|what\s+time)\s+(?:is|are|does|do|did|will)\s+"
+                          r"(?!(?:it|this|that|there|the|everyone|everybody|he|she|they|we|you|i)\b)[a-z][\w'’-]*\s+"
+                          r"(?:(?:at|in|go|goes|going\s+to|start|starts|finish|finishes|back\s+at|off\s+to)\s+)+(?:the\s+)?"
+                          r"(?:kindy|kinder\w*|school|daycare|day\s*care|childcare|preschool|pre-?primary|creche|uni|university|college|"
+                          r"work|swimming|footy|netball|soccer|dance|dancing|piano|football|basketball|cricket|gym|church|camp|"
+                          r"training|practice|class|lessons?)\b"),
         ("my_move", r"\b(?:when|what\s+time)\s+(?:do|am|are)\s+(?:i|we)\s+(?:seeing|meeting|"
                     r"fly(?:ing)?|land(?:ing)?|leav(?:e|ing)|depart(?:ing)?|due|booked|"
                     r"start(?:ing)?|finish(?:ing)?|on)\b"),
@@ -479,6 +499,12 @@ def person_question_sentences(message: str) -> list[str]:
     return [s for s in event_sentences(message) if is_person_question_sentence(s)]
 
 
+def _lazy_possessive_of(token: str, head: str) -> bool:
+    """``theos`` is Theo's typed without the apostrophe (QA 2026-11-08: "whats theos deal" was answered as the word "theos").
+    Only a name of 3+ letters, and only the plain ``+s`` form; a name that already ends in s is left to the exact match."""
+    return len(head) >= 3 and not head.endswith("s") and token == head + "s"
+
+
 def person_names_in_question(message: str, known_names) -> list[str]:
     """The ``known_names`` (one user's own contact / person-entity names) that
     ``message`` names, in order of first mention, at most ``PERSON_FLOOR_MAX_NAMED``.
@@ -513,7 +539,7 @@ def person_names_in_question(message: str, known_names) -> list[str]:
                     or (len(toks) >= 2 and len(first_owner.get(head, ())) != 1)):
                 continue
             for i, (t, cap) in enumerate(msg_tokens):
-                if t == head and (cap or caseless):
+                if (t == head or _lazy_possessive_of(t, head)) and (cap or caseless):
                     pos = i
                     break
         if pos >= 0:
@@ -769,3 +795,78 @@ def is_emotional_turn(message: str) -> bool:
         return True
     low = (message or "").replace("’", "'").replace("‘", "'").lower()
     return any(cue in low for cue in EMOTIONAL_TRIGGER_WORDS) or any(cue in low for cue in EMOTIONAL_WEIGHT_WORDS)
+
+
+# ── Household questions (QA round 5, 2026-11-08, ZOE_RECALL_HOUSEHOLD_QUESTIONS) ─────────────────────────
+# "how old is anaya", "does tom eat meat", "whats priyas job", "do i drink coffee", "what did the physio say" matched NO floor
+# shape (no my/I-question grammar, and the person was not a `people` row, so the named-person floor had nobody to resolve), the
+# 4B did not elect to call recall_memory (30 of 33 denials carried no packet at all - neither the floor nor the tool), and it
+# answered "I don't have that" with the fact in the store. The grammar can never list every way a person asks about their own
+# household, so this is the generic half: ANY question turn gets its packet fetched, and the packet is shown to the model only
+# when it TOUCHES the question - a content word of the question (a name, a kin or pet word, a thing) appears in it. A question
+# the notes have nothing to say about ("how old is the universe") injects nothing and costs one in-process read.
+_Q_WH = r"(?:who|whom|whose|what|whats|what['’]s|when|where|which|why|how)"
+_Q_AUX = (r"(?:do|does|did|is|are|was|were|am|can|could|will|would|should|has|have|had|isn['’]?t|aren['’]?t|doesn['’]?t|"
+          r"didn['’]?t|don['’]?t|wasn['’]?t|weren['’]?t|hasn['’]?t|haven['’]?t)")
+_Q_LEAD = r"^\W*(?:(?:so|and|but|ok|okay|um|uh|hey|oh|also|zoe)[\s,]+)*"
+_QUESTION_WH_RE = re.compile(_Q_LEAD + _Q_WH + r"\b", re.IGNORECASE)
+# An auxiliary opener is a question only with a subject after it: "do the dishes" / "have a look" are commands.
+_QUESTION_AUX_RE = re.compile(
+    _Q_LEAD + _Q_AUX + r"\s+(?!(?:the|a|an|some|this|that|these|those|up|off|on|out|it\s+(?:now|again)|me\s+a)\b)\w", re.IGNORECASE)
+MAX_HOUSEHOLD_QUESTION_CHARS = 240
+
+#: words that carry no topic: a packet and a question always share these, so they never count as "touching"
+_TOUCH_STOP = frozenset((
+    "a an and are aren as at be been being but by can could did does doesn done for from get got had has have having her hers him his "
+    "how i if in into is isn it its just me mine my myself no not now of off on one or our ours out she should so some than that the "
+    "their them then there these they this those to too up us was wasn we were what when where which who whom whose why will with "
+    "would yes you your yours yourself "
+    "about after again also any because before both each even ever few more most much many other over own really same still such "
+    "tell told say said says know knew think thought remember remembered mean meant want wanted need needed like likes please "
+    "tonight today tomorrow yesterday morning evening week day days time times thing things something anything everything "
+    "old long name named called call user users known facts fact zoe mem person people "
+    "ask ago back come came give go going gone good great let make made much new right see seen take talk talked tried try use used way "
+    "yeah okay hey hello thanks thank").split())
+_TOUCH_WORD_RE = re.compile(r"[a-z]+(?:['’][a-z]+)?")
+_BRACKET_TAG_RE = re.compile(r"\[[^\]\n]*\]")
+
+
+def household_questions_enabled() -> bool:
+    """``ZOE_RECALL_HOUSEHOLD_QUESTIONS`` - default ON; ``0|false|no|off`` is the kill switch. Per-call env read."""
+    from typed_env import env_bool
+
+    return env_bool("ZOE_RECALL_HOUSEHOLD_QUESTIONS", True)
+
+
+def is_question_turn(message: str) -> bool:
+    """A short turn that is shaped like a question: a wh-word first, or an auxiliary with a subject after it, or one that ends in a
+    question mark. The lazy typed form ("does tom eat meat", no mark) counts. Pure."""
+    msg = (message or "").strip()
+    if not msg or len(msg) > MAX_HOUSEHOLD_QUESTION_CHARS:
+        return False
+    if msg.endswith("?") or _QUESTION_WH_RE.search(msg) or _QUESTION_AUX_RE.search(msg):
+        return True
+    return False
+
+
+def _touch_tokens(text: str) -> set[str]:
+    """Content words of ``text``: lower-cased, possessive 's dropped, a plural / lazily-typed possessive ``priyas`` also as ``priya``;
+    function words and the packet's own scaffolding words are gone."""
+    out: set[str] = set()
+    for raw in _TOUCH_WORD_RE.findall(_BRACKET_TAG_RE.sub(" ", text or "").lower().replace("’", "'")):
+        had_apostrophe = "'" in raw
+        word, _, tail = raw.partition("'")
+        if had_apostrophe and tail != "s":
+            continue        # don't / I'm / we'll: a contraction's stem ("don", "won") is not a content word; only a possessive 's keeps its name
+        if len(word) < 3 or word in _TOUCH_STOP:
+            continue
+        out.add(word)
+        if not had_apostrophe and len(word) > 4 and word.endswith("s") and not word.endswith("ss"):
+            out.add(word[:-1])
+    return out
+
+
+def packet_touches_question(message: str, packet: str) -> bool:
+    """Does any content word of the question appear in the packet? Pure."""
+    q = _touch_tokens(message)
+    return bool(q) and bool(q & _touch_tokens(packet))

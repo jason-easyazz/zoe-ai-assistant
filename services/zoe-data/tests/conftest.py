@@ -52,6 +52,10 @@ os.environ["ZOE_STRUCTURAL_VERIFIER"] = "off"
 # The post-turn 4B callers wait out a hot conversation (brain_slot_guard). A test that drives a brain turn and then a
 # background pass in one process would sleep for the quiet window: off for the suite, on in test_brain_slot_guard.py.
 os.environ["ZOE_BRAIN_SLOT_GUARD"] = "off"
+# reply_polish (default ON in production) holds a reply back at sentence boundaries to judge a closing question, so a brain stream
+# arrives in different CHUNKS than the fake brain sent; the many seam tests that assert exact chunks use the raw stream. Off for the
+# suite, on in test_reply_polish.py (which clears it and drives the wrapper itself).
+os.environ["ZOE_REPLY_POLISH"] = "off"
 # The app log. A test that enters the FastAPI lifespan (a TestClient context) runs ``configure_logging``, which attaches a handler
 # to the ROOT logger writing to ``$ZOE_LOG_DIR`` (default ``~/.zoe-logs/zoe-data.app.log``) - the live server's own log. Measured
 # 2026-10-13: three CI-runner pytest runs (118 lines each) and one agent worktree run put 355 synthetic-user ``memory_forget_cascade:
@@ -149,6 +153,7 @@ def _self_review_private_dirs(monkeypatch, tmp_path):
     cascade's ``self_review`` step, ``struggle_detector.delete_user``) reads and writes a per-test directory, never the box's own."""
     monkeypatch.setenv("ZOE_SELF_REVIEW_DIR", str(tmp_path / "self-review"))
     monkeypatch.setenv("ZOE_SELF_REVIEW_IMPROVER_DIR", str(tmp_path / "self-improver"))
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "night-extract"))     # the shadow night pre-pass's proposals: the cascade / member erase use a per-test dir
     yield
 
 
@@ -191,6 +196,21 @@ def _voice_activity_stamp_starts_empty(monkeypatch):
         return
     monkeypatch.setattr(voice_activity, "_LAST_VOICE_ACTIVITY_MONO", None)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reply_polish_and_write_gate_state_is_per_test():
+    """``reply_polish`` remembers whether a session's last reply ended on a question, and ``write_intent_gate`` the last noted turn;
+    both are process-wide dicts keyed by (user, session), which tests reuse ("jason", "s1"). Clear them around every test."""
+    for name in ("reply_polish", "write_intent_gate"):
+        mod = sys.modules.get(name)
+        if mod is not None:
+            mod.reset_state()
+    yield
+    for name in ("reply_polish", "write_intent_gate"):
+        mod = sys.modules.get(name)
+        if mod is not None:
+            mod.reset_state()
 
 
 @pytest.fixture(autouse=True)

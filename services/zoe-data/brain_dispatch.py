@@ -916,6 +916,7 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
     implied = _take_deferred_write()     # taken (cleared) on EVERY turn, replay included, so it never outlives its turn
     if kwargs.get("replay_isolation"):
         return inner
+    inner = _contraction_repaired(inner)    # a spliced "I don'm" is put back to "I'm" (contraction_repair), before any other guard reads it
     inner = _tool_text_guarded(inner)    # call SYNTAX is never shown or spoken (tool_text_guard)
     try:
         import write_claim_guard
@@ -923,10 +924,23 @@ def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs
 
         if write_claim_guard.mode() == "off":
             return inner
-        return write_claim_guard.guard_stream(inner, user_id, write_receipts.begin(), user_text=message, implied_kind=implied,
+        started = write_receipts.begin()
+        write_claim_guard.note_pending_capture(user_id, message)     # post-turn capture is queued for this turn: a memory claim is honest
+        return write_claim_guard.guard_stream(inner, user_id, started, user_text=message, implied_kind=implied,
                                              session_id=session_id)
     except Exception:  # noqa: BLE001 - bookkeeping must never stop a turn
         logger.warning("write-claim guard unavailable - reply not checked", exc_info=True)
+        return inner
+
+
+def _contraction_repaired(inner: AsyncIterator[str]) -> AsyncIterator[str]:
+    """``contraction_repair.filter_stream``: the MTP draft splice "I don'm" / "you don're" is restored. Fail-open."""
+    try:
+        import contraction_repair
+
+        return contraction_repair.filter_stream(inner)
+    except Exception:  # noqa: BLE001 - a repair must never stop a turn
+        logger.warning("contraction repair unavailable - reply not repaired", exc_info=True)
         return inner
 
 
@@ -974,10 +988,17 @@ def _claim_guarded_text(reply: str, message: str, user_id: str, started: float, 
     """The one-shot form of ``_claim_guarded`` (same rule, same replay exemption)."""
     if kwargs.get("replay_isolation") or not reply:
         return reply
+    try:
+        import contraction_repair
+
+        reply = contraction_repair.repair_text(reply)
+    except Exception:  # noqa: BLE001
+        pass
     reply = _tool_text_guarded_text(reply)
     try:
         import write_claim_guard
 
+        write_claim_guard.note_pending_capture(user_id, message)     # (see _claim_guarded)
         return write_claim_guard.guard_text(reply, user_id, started, user_text=message,
                                             implied_kind=implied_kind, session_id=session_id)
     except Exception:  # noqa: BLE001

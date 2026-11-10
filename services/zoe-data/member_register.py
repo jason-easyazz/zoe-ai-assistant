@@ -54,8 +54,10 @@ ENUM_KEYS: dict[str, dict[str, str]] = {
     "formality": {"casual": "an easy, casual tone", "neutral": "", "formal": "a more formal tone"},
     "humour": {"off": "no jokes", "light": "light humour is welcome when they start it"},
     "pace": {"slow": "an unhurried pace", "normal": "", "brisk": "a brisk pace"},
+    # "stop ending with questions": a standing, explicit request of the member (register_requests.py stores it as stated)
+    "questions": {"none": "never end a reply with a question", "normal": ""},
 }
-KEY_ORDER = ("length", "formality", "humour", "pace")
+KEY_ORDER = ("length", "formality", "humour", "pace", "questions")
 MAX_TOPICS = 5
 TOPIC_MAX_CHARS = 24
 _TOPIC_RE = re.compile(r"^[a-z0-9][a-z0-9 \-]{0,%d}$" % (TOPIC_MAX_CHARS - 1))

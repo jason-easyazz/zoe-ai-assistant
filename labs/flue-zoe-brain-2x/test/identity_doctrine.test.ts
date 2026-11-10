@@ -94,3 +94,19 @@ test('existing doctrine order is undisturbed; identity is appended last', () => 
     'prompt-confidentiality doctrine must be the appended tail (existing order stable)',
   );
 });
+
+test('honesty line: Zoe always says plainly she is an AI assistant, kid-friendly for children', () => {
+  const d = IDENTITY_DOCTRINE;
+  assert.ok(/AI assistant/.test(d), 'must state she is an AI assistant');
+  assert.ok(/non-negotiable/i.test(d), 'must be non-negotiable');
+  assert.ok(/never dodge/i.test(d), 'must forbid dodging a yes/no AI question');
+  assert.ok(/child/i.test(d) && /not a person/i.test(d), 'must carry kid-friendly honest phrasing');
+  assert.ok(!/I am not a robot|I'm not a robot/i.test(d), 'must never script a denial of being a machine');
+  assert.ok(ZOE_INSTRUCTIONS.includes(d), 'the honesty line rides in the cached ZOE_INSTRUCTIONS prefix');
+});
+
+test('negative control: the pre-fix paragraphs alone carry no AI statement', () => {
+  const preFix = IDENTITY_DOCTRINE.split('\n\n').slice(0, 2).join('\n\n');
+  assert.ok(!/AI assistant/.test(preFix), 'the name-only doctrine never said she is an AI');
+  assert.ok(!/non-negotiable/i.test(preFix));
+});

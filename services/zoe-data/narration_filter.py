@@ -51,7 +51,7 @@ def enabled() -> bool:
 _FILLER = r"(?:(?:ok(?:ay)?|sure|alright|right|hmm+|um+|well|so|yes|yeah|oh|sorry|of\s+course|certainly|absolutely)[\s,.!…-]+)?"
 _LEAD = (
     r"(?:i(?:['’]ll|\s+will|['’]m\s+going\s+to|\s+am\s+going\s+to|\s+shall|['’]ll\s+just|\s+will\s+just|"
-    r"['’]m\s+just\s+going\s+to)"
+    r"['’]m\s+just\s+going\s+to|\s+(?:first\s+)?need\s+to|['’]ll\s+need\s+to|\s+have\s+to)"
     r"|let\s+me(?:\s+just)?|allow\s+me\s+to|let['’]s|"
     r"(?:one|just\s+a)\s+(?:moment|sec(?:ond)?|tick)[\s,.!…-]+(?:while\s+i|as\s+i|i['’]ll|let\s+me)|"
     r"give\s+me\s+(?:a\s+)?(?:moment|sec(?:ond)?)\s+to)\s+"
