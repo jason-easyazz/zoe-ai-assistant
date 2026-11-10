@@ -26,6 +26,7 @@ forget, re-issue the forget (the ledger table is restored with the data it prote
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -331,11 +332,17 @@ def discover_user_tables(sources: Iterable[Path]) -> dict[str, str]:
     return found
 
 
+@functools.lru_cache(maxsize=16)
+def _defined_function_names(source: str) -> frozenset[str]:
+    """Every (async) function / method name defined anywhere in ``source`` (memoised by content: the inventory check asks about one
+    4.6k-line module once per store)."""
+    return frozenset(n.name for n in ast.walk(ast.parse(source)) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+
+
 def function_defined(py_file: Path, qualified: str) -> bool:
     """Is ``module.func`` (or ``module.Class.method`` / ``module._private_func``) defined in ``py_file``? Pure AST: no import."""
     name = qualified.split(".")[-1]
-    tree = ast.parse(Path(py_file).read_text(encoding="utf-8"))
-    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name for n in ast.walk(tree))
+    return name in _defined_function_names(Path(py_file).read_text(encoding="utf-8"))
 
 
 def uncovered_tables(discovered: Iterable[str]) -> list[str]:

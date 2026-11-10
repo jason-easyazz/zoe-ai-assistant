@@ -98,8 +98,11 @@ def scaled(monkeypatch):
     monkeypatch.setattr(nm, "TIMEOUT_FLOOR_S", 0.0)
 
 
-#: the 'model': 200 tok/s prefill, 200 tok/s decode, holds the answer for what that costs
-TRUE_PREFILL, TRUE_DECODE = 200.0, 200.0
+#: the 'model': 200 tok/s prefill, 2000 tok/s decode, holds the answer for what that costs. Every arm here is given the TRUE decode
+#: rate, so decode time is identical on both sides of each comparison and only the PREFILL rate separates "times out" from "lands"
+#: (the gap is prompt x (1/200 - 1/650), unchanged); decode was 200 tok/s until 2026-11-10, which only made each 640-token K-cell
+#: call wait 3.2 s for nothing (the K-cell test alone was 36 s)
+TRUE_PREFILL, TRUE_DECODE = 200.0, 2000.0
 MESSAGES = [{"role": "system", "content": "s" * 100}, {"role": "user", "content": "w" * 1300}]
 
 
@@ -117,12 +120,12 @@ def test_a_slow_answer_succeeds_with_the_measured_rates_and_the_old_formula_time
     srv = slow_server()
     try:
         cfg = nm.Config(url=srv.url[:-3], model="12B", decode_tok_s=TRUE_DECODE, prefill_tok_s=TRUE_PREFILL)
-        assert call(cfg) is not None                                                      # ~2.1 s answer inside a ~2.7 s budget
+        assert call(cfg) is not None                                                      # ~1.8 s answer inside a ~2.1 s budget
         old = nm.Config(url=srv.url[:-3], model="12B", decode_tok_s=TRUE_DECODE, prefill_tok_s=nm.PREFILL_TOK_S)       # the prefill constant of the old formula
         with pytest.raises(nm.ModelTimeout) as ei:
-            call(old)                                                                     # the same answer in a ~1.3 s budget
+            call(old)                                                                     # the same answer in a ~0.9 s budget
         assert ei.value.budget_s == old.timeout_for(nm.est_tokens(MESSAGES[0]["content"]) + nm.est_tokens(MESSAGES[1]["content"]), 64)
-        assert "budget_s=" in str(ei.value) and "650 tok/s" in str(ei.value) and "200 tok/s" in str(ei.value)
+        assert "budget_s=" in str(ei.value) and "650 tok/s" in str(ei.value) and f"{TRUE_DECODE:g} tok/s" in str(ei.value)
     finally:
         srv.close()
 
@@ -140,7 +143,7 @@ def test_a_timed_out_night_logs_llm_timeout_with_the_budget_and_still_reports_it
         assert res["status"] == "llm_unreachable" and res["llm_timeout"] is True and res["timeout_budget_s"] > 0
         assert res["calls"] >= 1 and res["prompt_tokens"] >= 0                            # the failed call counts: never the 0 the cells reported
         line = next(r.getMessage() for r in caplog.records if "status=llm_timeout" in r.getMessage())
-        assert f"budget_s={res['timeout_budget_s']}" in line and "decode_tok_s=200" in line and "prefill_tok_s=650" in line
+        assert f"budget_s={res['timeout_budget_s']}" in line and f"decode_tok_s={TRUE_DECODE:g}" in line and "prefill_tok_s=650" in line
     finally:
         srv.close()
 

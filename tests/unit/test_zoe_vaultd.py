@@ -608,7 +608,7 @@ def test_config_refuses_overlapping_roles(tmp_path):
 def test_socket_peer_check(make_core, tmp_path):
     c, _ = make_core(client_uids=(ME + 1,), phone_uids=(ME + 2,))
     srv = core.serve(c, block=False)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         assert oct(os.stat(c.cfg.socket_path).st_mode & 0o777) == "0o660"
         assert core.request(c.cfg.socket_path, {"verb": "status"}) == {"ok": False, "error": "peer_refused"}

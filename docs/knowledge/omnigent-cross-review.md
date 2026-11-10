@@ -14,9 +14,15 @@ that keeps findings from becoming billed Greptile rounds.
 
 ## When to run it
 
-- **Pre-ready (default):** run it on the DRAFT PR once the work is complete,
-  fix findings, push ONCE, then mark ready. (It reads `gh pr diff`, so the diff
-  must be pushed — drafts are free, so push-to-draft costs nothing.) Findings caught here never become billed review
+- **Before the first push (default since 2026-11-10): review locally, then push once.**
+  `cross_review.sh --local origin/main...HEAD "<contract>"` reviews the committed diff of your
+  own worktree with no PR at all. Fix every finding locally, then push ONCE and open the draft.
+  Every push is re-reviewed by the bots (the Codex bot reviews every head), so a pre-push finding
+  costs nothing while a post-push one costs a push and a review round: helper PRs took 6-10
+  pushes while this script needed a PR number first.
+- **Pre-ready, on the PR:** `cross_review.sh <PR#> "<contract>"` on the DRAFT once the work is
+  complete (the polly path, which also reads the surrounding code at the PR head). Batch its
+  findings into one push, then mark ready. Findings caught here never become billed review
   rounds or blocking threads.
 - **Post-open (advisory):** on an open PR while the gate runs. The report stays
   in the Omnigent session — never copied into PR threads.
@@ -28,7 +34,17 @@ that keeps findings from becoming billed Greptile rounds.
 
 ```bash
 scripts/maintenance/cross_review.sh <PR#> "<2-4 sentence contract>"
+scripts/maintenance/cross_review.sh --local <base>..<head> "<2-4 sentence contract>"   # pre-push, no PR
 ```
+
+**`--local`** hands ONLY `git diff <base>..<head>` of the repo it runs in (`CROSS_REVIEW_LOCAL_REPO`
+overrides), size-capped like the PR path, to codex, then pi. Read-only by construction: a diff of two
+committed revisions under `GIT_OPTIONAL_LOCKS=0`, no fetch/checkout/worktree/ref, a range of two plain
+revisions only; nothing touches `/workspace` or the live checkout and the live-HEAD tripwire still runs.
+polly (needs a PR) is skipped; no Claude backend; exit **2** = *not reviewed*. Commit first, and use
+THREE dots against main (`origin/main...HEAD`, from the merge-base): two dots against a `main` that moved
+on shows its newer commits as reverted changes in your diff. Pinned by
+`tests/unit/test_cross_review_local.py`.
 
 `cross_review.sh` is a dispatcher with **automatic fallback** (2026-10-18). It tries, in
 order, and stops at the first cross-vendor report:

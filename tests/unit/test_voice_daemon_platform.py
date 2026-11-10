@@ -690,7 +690,7 @@ def _post_activate(d, headers):
     import http.client
     import socketserver
     srv = socketserver.TCPServer(("127.0.0.1", 0), d._HealthHandler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         d._orb_activate_event.clear()
         conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=5)
@@ -741,7 +741,7 @@ def test_a_lan_peer_is_refused_over_real_http(pi, path):
     if ip is None:
         pytest.skip("no non-loopback IPv4 on this machine")
     srv = socketserver.TCPServer((ip, 0), pi._HealthHandler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         pi._orb_activate_event.clear()
         pi._enroll_cancel.clear()

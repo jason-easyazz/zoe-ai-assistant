@@ -21,7 +21,7 @@ emit(){ key=$(printf '%s' "$1" | sed -E 's/^\[[^]]*\] ?//' | md5sum | cut -c1-16
 prev_open=""
 while true; do
   { tail -n +"$((start_lq+1))" "$LQ"; tail -n +"$((start_vl+1))" "$VL"; } \
-    | grep -E "PROBE NOT PASS|PARKED|needs a hand merge|unresolved review thread|validate=FAILURE|FAILED|CONFLICTING|already failed validate" \
+    | grep -E "PROBE NOT PASS|VOICE HOLD STALE|PARKED|needs a hand merge|unresolved review thread|validate=FAILURE|FAILED|CONFLICTING|already failed validate" \
     | grep -vE "$SKIP" | while IFS= read -r l; do emit "$l"; done
   open=$(gh pr list --state open --json number,isDraft --jq '.[]|select(.isDraft|not)|.number' 2>/dev/null | sort -n | tr '\n' ' ')
   if [ -n "$prev_open" ]; then
