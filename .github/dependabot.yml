@@ -171,13 +171,10 @@ updates:
     groups:
       pip-minor-patch:
         update-types: [minor, patch]
-    # The container runs Python 3.11, but CI installs this file into the shared
-    # 3.10 lane (.github/actions/ci-deps), so a >=3.11-only release fails
-    # `validate` before a test runs (#2387). fastapi + pydantic also move only
-    # with the audit in requirements.txt. Move these by hand until zoe-auth
-    # gets its own 3.11 CI lane.
+    # CI tests this manifest on Python 3.11, like the container (validate.yml's
+    # `zoe-auth` job), so a >=3.11-only release is fine here. fastapi and
+    # pydantic still move only by hand, with the audit in requirements.txt:
+    # a security update still arrives for them.
     ignore:
-      - dependency-name: "fastapi"          # 0.162 needs starlette 1.10 (>=3.11)
-      - dependency-name: "starlette"
-      - dependency-name: "pydantic"         # moves with fastapi (requirements.txt header)
-      - dependency-name: "python-multipart" # 0.0.33 needs >=3.11
+      - dependency-name: "fastapi"
+      - dependency-name: "pydantic"

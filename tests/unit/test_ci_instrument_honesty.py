@@ -225,6 +225,8 @@ EXPECTED_LANES = {
     "Lane — Home Assistant MCP bridge",
     "Lane — zoe-auth (full)",
 }
+# Gate jobs that test a service on ITS container's interpreter from ITS own manifest, not the shared 3.10 ci-deps.
+OWN_RUNTIME_JOBS = {"zoe-auth"}
 SPLIT_RE = re.compile(r"--shard-count (\d+) --shard-index \$\{\{ matrix\.group \}\} --shard-weights=tools/ci/shard_weights\.json")
 # `=` is load-bearing: a SPACE-separated path value is read as a positional test path while pytest determines its
 # rootdir (before plugin options are parsed), which can shift every node id (tests/unit/test_shard_ledger.py).
@@ -323,10 +325,68 @@ def validate_violations(spec: dict) -> list[str]:
             out.append(f"{jname}: the shard no longer prints its slowest tests")
 
     for jname, job in gate.items():
+        if jname in OWN_RUNTIME_JOBS:
+            out.extend(zoe_auth_violations(spec))
+            continue
         deps = [s for s in job.get("steps") or [] if s.get("uses") == "./.github/actions/ci-deps"]
         if not deps or str(deps[0]["with"]["python-version"]) != "3.10":
             out.append(f"{jname}: the required gate no longer installs via ./.github/actions/ci-deps on python 3.10")
     return out
+
+
+def _pytest_args(text: str) -> list[str]:
+    """The pytest arguments of a zoe-auth run, from `-o` to `-q`, with line continuations joined."""
+    joined = re.sub(r"\\\n\s*", " ", text)
+    m = re.search(r"pytest\s+(-o faulthandler_timeout=\S+.*?--maxfail=200 -q)", joined, re.S)
+    return m.group(1).split() if m else []
+
+
+def zoe_auth_violations(spec: dict) -> list[str]:
+    """zoe-auth runs Python X.Y in production (its Dockerfile FROM), so its gate job must run that interpreter and
+    install only its own manifest. On the shared 3.10 install a >=3.11-only release failed the whole gate (#2387),
+    and zoe-auth was tested on an interpreter it never runs on. The local twin must run the same pytest command."""
+    out: list[str] = []
+    job = spec["jobs"].get("zoe-auth")
+    if job is None:
+        return ["no zoe-auth job: its suite would run nowhere"]
+    m = re.search(r"^FROM python:(\d+\.\d+)", (REPO / "services" / "zoe-auth" / "Dockerfile").read_text(encoding="utf-8"), re.M)
+    want = m.group(1) if m else "?"
+    setup = [s for s in job.get("steps") or [] if str(s.get("uses", "")).startswith("actions/setup-python@")]
+    if len(setup) != 1 or str((setup[0].get("with") or {}).get("python-version")) != want:
+        out.append(f"zoe-auth: must set up exactly Python {want} (services/zoe-auth/Dockerfile FROM)")
+    if any(s.get("uses") == "./.github/actions/ci-deps" for s in job.get("steps") or []):
+        out.append("zoe-auth: the shared 3.10 ci-deps install is back")
+    install = [ln.split() for s in job.get("steps") or [] for ln in _code_lines(s) if "pip install" in ln]
+    if install != [["pip", "install", "--quiet", "-r", "services/zoe-auth/requirements.txt"]]:
+        out.append(f"zoe-auth: must install only its own manifest, got {install}")
+    if "services" in job:
+        out.append("zoe-auth: the suite is SQLite-only; a Postgres service would hide a new dependency")
+    lane = next((s for s in job.get("steps") or [] if s.get("name") == "Lane — zoe-auth (full)"), {})
+    twin = (REPO / "scripts" / "maintenance" / "zoe_auth_tests.sh").read_text(encoding="utf-8")
+    if not _pytest_args(str(lane.get("run", ""))) or _pytest_args(str(lane.get("run", ""))) != _pytest_args(twin):
+        out.append("zoe-auth: the lane's pytest command differs from scripts/maintenance/zoe_auth_tests.sh")
+    return out
+
+
+def test_zoe_auth_runs_its_container_interpreter():
+    assert zoe_auth_violations(_load("validate.yml")) == []
+
+
+@pytest.mark.parametrize("break_it", ["py310", "shared_install", "extra_flag", "postgres"])
+def test_zoe_auth_check_can_fail(break_it):
+    spec = copy.deepcopy(_load("validate.yml"))
+    steps = spec["jobs"]["zoe-auth"]["steps"]
+    if break_it == "py310":
+        next(s for s in steps if str(s.get("uses", "")).startswith("actions/setup-python@"))["with"]["python-version"] = "3.10"
+    elif break_it == "shared_install":
+        steps.insert(1, {"uses": "./.github/actions/ci-deps", "with": {"python-version": "3.10"}})
+    elif break_it == "extra_flag":
+        lane = next(s for s in steps if s.get("name") == "Lane — zoe-auth (full)")
+        lane["run"] = lane["run"].replace("--maxfail=200 -q", "-k smoke --maxfail=200 -q")
+    else:
+        spec["jobs"]["zoe-auth"]["services"] = {"postgres": {"image": "pgvector/pgvector:pg17"}}
+    assert zoe_auth_violations(spec), break_it
+    assert validate_violations(spec), break_it
 
 
 def test_validate_lanes_are_independent_and_not_fail_fast():
@@ -406,7 +466,7 @@ def test_python_312_job_exists_beside_the_required_job_and_matches_its_install()
     assert str(py312["with"]["python-version"]) == "3.12"
     action = yaml.safe_load((REPO / ".github" / "actions" / "ci-deps" / "action.yml").read_text(encoding="utf-8"))
     names = [s.get("name") for s in action["runs"]["steps"]]
-    assert "Install slim CI deps" in names and "Install lane deps (zoe-auth, numpy, LiveKit wheels)" in names
+    assert "Install slim CI deps" in names and "Install lane deps (pytest, numpy, LiveKit wheels)" in names
 
     # The same lane command as the required zoe-data shards, minus the split; the 3.12 job is database-free (the
     # ci_safe contract), so it carries no Postgres service, no migrations and no password fallback literal.
