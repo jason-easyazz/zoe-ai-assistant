@@ -303,6 +303,14 @@ def _wire_version() -> int:
 
 def _endpoint(session_id: str, *, stream: bool = False) -> str:
     sid = (session_id or "default").strip() or "default"
+    # After a forget the sidecar's own history of this conversation still holds what was forgotten: address a fresh session instead
+    # (forget_session). The member comes from the session map the turn envelope fills; an unknown session is addressed unchanged.
+    try:
+        import forget_session
+
+        sid = forget_session.sidecar_session(_SESSION_UID.get(sid), sid)
+    except Exception:  # noqa: BLE001 - never stop a turn over this
+        pass
     # URL-encode the sid as a single path segment: a raw session id containing
     # '/', '?', '#', or '..' would otherwise change the route (path traversal /
     # query injection) instead of addressing that literal Flue session.

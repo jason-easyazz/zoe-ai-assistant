@@ -4257,6 +4257,16 @@ async def _execute_forget_last(user_id: str) -> str:
     return f"Done — I won't keep what you just said (\"{_forget_preview(text)}\")."
 
 
+def _note_forget_session(user_id: str) -> None:
+    """A forget is about to run: the brain's own session history of this conversation still holds what is being forgotten, so the
+    member's next brain turn starts a fresh sidecar session (forget_session; QA round 7). Never raises."""
+    try:
+        import forget_session
+        forget_session.note_forget(user_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str]:
     # ^ shared write funnel: fail-open to least-privilege guest, not admin, when a
     #   caller omits identity (#1021/#1032 posture). All live callers pass an explicit
@@ -4408,11 +4418,13 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     # capture runs minutes behind a chat, so the newest write is usually another turn's (QA round 3b, 2026-11-07: a
     # "forget that" after a remark about the kitchen erased an unrelated, important row). No turn to bind to -> ask.
     if intent.name == "memory_forget_last":
+        _note_forget_session(user_id)
         return await _execute_forget_last(user_id)
 
     if intent.name == "memory_forget_entity" and intent.slots.get("topic"):
         # "forget what I told you about my mum's heart": rows holding the whole topic, never a fuzzy sweep (forget_topic)
         import forget_topic
+        _note_forget_session(user_id)
         return await forget_topic.execute(user_id, str(intent.slots.get("topic") or ""))
 
     if intent.name == "memory_forget_entity" and intent.slots.get("undo"):
@@ -4442,6 +4454,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         name = str(intent.slots.get("name", "")).strip()
         if not name:
             return "Who should I forget about? Give me the name and I'll do it."
+        _note_forget_session(user_id)
         # an alias the owner CONFIRMED ("Did you also mean ...?" -> yes) takes this same path once; it never sweeps for aliases of an alias
         alias_confirmed = bool(intent.slots.get("alias_confirmed"))
         try:

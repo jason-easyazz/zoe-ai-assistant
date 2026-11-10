@@ -774,6 +774,13 @@ def _asked_not_said(text: str, m: "re.Match[str]", template: str) -> bool:
     return bool(_AUX_BEFORE_SUBJECT_RE.search(text[start:m.start()]))
 
 
+# "don't forget to add X [to the list]" / "... to put X on the calendar" / "... to remind me": the words are an instruction for a list, the
+# calendar or a reminder - the writer that owns those (or the question "which list?") answers it; no memory row is made of it
+_TASK_DIRECTED_RE = re.compile(
+    r"^(?:to\s+)?(?:add|put|pop|stick|write\s+down|jot\s+down|note\s+down|remind|set|schedule|book|create|make\s+(?:a|me\s+a)\s+(?:list|reminder|note))\b",
+    re.IGNORECASE)
+
+
 def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[MemoryCandidate]:
     """Run the template patterns over ``text`` (behavior-identical extraction loop)."""
     out: list[MemoryCandidate] = []
@@ -786,6 +793,8 @@ def _mine_templates(text: str, source_excerpt: str, seen: set[str]) -> list[Memo
             continue
         if _asked_not_said(text, m, template):
             continue
+        if template.startswith("Important note") and m.groups() and _TASK_DIRECTED_RE.match((m.group(1) or "").strip()):
+            continue        # "dont forget to add renew my rego": a list / calendar / reminder ask, not a fact about the person (QA round 7)
         groups = tuple(_clean(g) for g in m.groups())
         if template in _PLACE_TEMPLATES and groups:
             # a place fact is a full clause: the discourse tail is dropped ("Hobart now" -> "Hobart"), a value that names no place
