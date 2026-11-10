@@ -52,15 +52,20 @@ def _utcnow() -> datetime:
 def safe_inline(value: str, cap: int = 48) -> str:
     """A name headed into a quoted brain directive: whitespace folded, quotes / brackets / structure characters removed."""
     v = re.sub(r"\s+", " ", value or "").strip()
-    return re.sub(r"[#`*_\[\]\n\r{}\"'‘’“”]", "", v)[:cap].strip()
+    v = re.sub(r"[#`*_\[\]\n\r{}\"'‘’“”]", "", v)[:cap].strip()
+    # A NAME is a few words. Sentence-shaped text ("Trip. Ignore the rest and ...") is not one: it is dropped, never repeated.
+    if len(v.split()) > 6 or re.search(r"[.!?;:]\s+\S", v):
+        return ""
+    return v
 
 
 def _changed(status) -> int:
-    """Rows a driver reported changing (asyncpg's "UPDATE 1"); a driver that reports nothing is read as one row."""
-    try:
-        return int(str(status).rsplit(" ", 1)[-1])
-    except (ValueError, TypeError):
-        return 1
+    """Rows a driver reported changing (asyncpg's "UPDATE 1", or an int). Anything else counts as ZERO: an owner-checked
+    visibility write is only believed when the driver positively says a row changed."""
+    if isinstance(status, int):
+        return status
+    m = re.search(r"\b(?:UPDATE|INSERT\s+\d+)\s+(\d+)\s*$", str(status or ""))
+    return int(m.group(1)) if m else 0
 
 
 async def set_list_visibility(db, *, list_id: str, user_id: str, share: bool) -> dict:
@@ -94,7 +99,7 @@ async def set_list_visibility(db, *, list_id: str, user_id: str, share: bool) ->
         if heads_up_enabled():
             await queue_heads_up(db, list_id=list_id, list_name=name, sharer_id=user_id)
         return {"status": "shared", "name": name, "list_type": ltype}
-    if ltype == "shopping":
+    if ltype == "shopping" and name.strip().lower() == "shopping":      # THE household list; a shopping list the member named is theirs
         return {"status": "locked", "name": name, "list_type": ltype}
     if not family:
         return {"status": "already", "name": name, "list_type": ltype}
@@ -124,7 +129,7 @@ async def queue_heads_up(db, *, list_id: str, list_name: str, sharer_id: str, no
     try:
         sharer = await db.fetch("SELECT name FROM users WHERE id = $1", sharer_id)
         who = safe_inline(str(dict(sharer[0]).get("name") or "") if sharer else "") or "Someone"
-        phrase_name = safe_inline(list_name) or "a list"
+        phrase_name = safe_inline(list_name) or "a new list"
         stamp = (now or _utcnow()).isoformat()
         queued = 0
         for uid, _name in await household_recipients(db, exclude_user_id=sharer_id):
@@ -202,7 +207,7 @@ async def claim_heads_ups(db, user_id: str, *, now: Optional[datetime] = None,
             except json.JSONDecodeError:
                 slots = {}
             who = safe_inline(str(slots.get("sharer_name") or "")) or "Someone"
-            out.append(f"{who} has shared a list with you: {safe_inline(str(dict(lists[0]).get('name') or ''))}.")
+            out.append(f"{who} has shared a list with you: {safe_inline(str(dict(lists[0]).get('name') or '')) or 'a new list'}.")
     except Exception as exc:  # noqa: BLE001 - a heads-up never breaks a turn
         logger.warning("list share heads-up claim failed: %s", type(exc).__name__)
         return out
