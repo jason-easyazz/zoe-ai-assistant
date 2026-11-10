@@ -941,12 +941,16 @@ async def promote_shadow(owner: str) -> int:
 
 
 # --- forget -----------------------------------------------------------------------------------------------------------------
-async def _source_text(db, owner: str, s: "Stored") -> str:
+async def _source_text(db, owner: str, s: "Stored") -> Optional[str]:
     """The words of the turns a note was made from, by id (member: ``chat_messages``; guest: ``named_guest_turns``). A table that is not
     there is no text (the note's own words still count). RAISES on any other failure, so a strict forget is retried."""
     ids = [str(i) for i in s.turn_ids if i]
     if not ids:
         return ""
+    if s.source == "backfill":                 # Flue submission ids, not table rows: read the event log back (None = unprovable)
+        import conversation_notes_backfill as bf
+
+        return await asyncio.to_thread(bf.source_text, ids, s.started_at, s.ended_at)
     parts: list = []
     try:
         for at in range(0, len(ids), _SOURCE_CHUNK):          # ALL the ids, in chunks: a paraphrased summary rests on any turn
@@ -982,7 +986,8 @@ async def _delete_where(user_id: str, doomed: Callable[["Stored", str], bool], *
                 rows = [_stored(r) for r in await cur.fetchall()]
             n = 0
             for s in rows:
-                if doomed(s, f"{s.text} {await _source_text(db, user_id, s)}"):
+                src = await _source_text(db, user_id, s)
+                if src is None or doomed(s, f"{s.text} {src}"):          # None: a backfilled note whose source cannot be read back goes
                     await db.execute("DELETE FROM conversation_notes WHERE id = ?", (s.id,))
                     n += 1
             await db.commit()

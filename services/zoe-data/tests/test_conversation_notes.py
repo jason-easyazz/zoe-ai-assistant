@@ -860,3 +860,34 @@ def test_every_source_turn_of_a_long_conversation_is_kept_and_forgettable(member
     nid = run(cn.save(OWNER, "", convo, note, source="chat", status="active"))
     assert nid and len(json.loads(member.q("SELECT turn_ids FROM conversation_notes")[0][0])) == 461
     assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1       # only turn 61 named her
+
+
+def _backfilled_with_dana(env, tmp_path, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    q = add_guest(env)
+    chat = list(CHAT)
+    chat[1] = ("My friend Dana says the pacing will sort itself out, I am worried about the race", chat[1][1])
+    monkeypatch.setitem(globals(), "CHAT", chat)             # _flue_db reads the module-level CHAT
+    db = str(tmp_path / "flue.db")
+    _flue_db(db)
+    monkeypatch.setenv("ZOE_FLUE_BRAIN_DB", db)
+    cn.set_llm(_llm())                                                                    # a summary that never spells Dana
+    assert run(bf.run(OWNER, "Quinn", db, NOW - 60, NOW + 600, dry_run=False, now=NOW + DAY))["stored"] == 1
+    assert "Dana" not in str(env.q("SELECT summary, topics, open_threads, follow_up FROM conversation_notes")[0])
+    return db
+
+
+def test_a_backfilled_note_that_paraphrases_a_forgotten_name_goes_with_it(env, tmp_path, monkeypatch):
+    _backfilled_with_dana(env, tmp_path, monkeypatch)
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Leo"), strict=True)) == 0          # control: another name, kept
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+
+
+def test_a_backfilled_note_whose_source_cannot_be_read_back_is_removed_by_any_forget(env, tmp_path, monkeypatch):
+    db = _backfilled_with_dana(env, tmp_path, monkeypatch)
+    import os
+
+    os.remove(db)                                                                          # the event log rotated away
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Leo"), strict=True)) == 1          # unprovable -> gone

@@ -175,3 +175,33 @@ async def run(owner: str, name: str, db_path: str, since: float, until: float, *
     return {"status": "ok", "dry_run": dry_run, "guest": guest["name"], "exchanges_in_window": len(exchanges), "guest_exchanges": len(rows),
             "skipped": {**skipped, "forgotten": dropped_forgotten}, "conversations": out["convos"], "already_noted": out["known"],
             "too_short": out["too_short"], "no_note": out["no_note"], "stored": out["stored"], "notes": out["notes"]}
+
+
+def flue_db_path() -> str:
+    """Where the Flue brain's event log lives (``ZOE_FLUE_BRAIN_DB`` overrides the repo default)."""
+    import os
+    import pathlib
+
+    return os.environ.get("ZOE_FLUE_BRAIN_DB") or str(
+        pathlib.Path(__file__).resolve().parents[2] / "labs" / "flue-zoe-brain-2x" / "data" / "zoe-brain.db")
+
+
+def source_text(ids: list, started: str, ended: str) -> Optional[str]:
+    """The words of a backfilled note's source exchanges (Flue ``submissionId`` = the note's ``turn_ids``), read back READ-ONLY from the
+    event log so a forget can reach a paraphrasing note. None = they cannot ALL be found (file gone / rotated): the caller must treat the
+    note as unprovable and remove it (forgotten means forever). Never raises."""
+    from memory_episodes import _epoch
+
+    want = {str(i) for i in ids if i}
+    if not want:
+        return ""
+    try:
+        s, e = _epoch(started), _epoch(ended)
+        if s is None or e is None:
+            return None
+        found = {x.submission_id: f"{x.user} {x.reply}" for x in read_exchanges(flue_db_path(), s - 60, e + 60)
+                 if x.submission_id in want}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("CONVERSATION_NOTES backfill source unreadable (%s)", type(exc).__name__)
+        return None
+    return " ".join(found.values()) if want <= set(found) else None
