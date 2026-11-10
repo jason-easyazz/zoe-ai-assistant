@@ -79,14 +79,6 @@ def test_the_two_timers_are_gone_from_the_repo_and_registered_retired():
         assert (REPO / "scripts/setup/systemd" / svc).exists()
 
 
-def test_the_installer_switches_the_two_timers_off_and_back_on(tmp_path):
-    r = subprocess.run(["bash", str(REPO / "scripts/night/install_night_window.sh"), "--dry-run"], capture_output=True, text=True, timeout=60,
-                       env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "NIGHT_DIR": str(tmp_path / "n"), "NIGHT_UNIT_DIR": str(tmp_path / "u"), "NIGHT_SYSTEMCTL": "true"})
-    text = r.stdout + r.stderr
-    assert "zoe-backup.timer" in (REPO / "scripts/night/install_night_window.sh").read_text() and "zoe-memory-export.timer" in (REPO / "scripts/night/install_night_window.sh").read_text()
-    assert r.returncode == 0, text
-
-
 def test_an_unrelated_hour_is_refused_for_presleep_unless_forced(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(nw, "run_presleep", lambda *a, **k: called.append(1) or {})
@@ -158,7 +150,7 @@ def test_the_catchup_units_exist_and_are_installed_with_the_window():
     assert "zoe-night-presleep-catchup.timer" in (REPO / "scripts/night/install_night_window.sh").read_text()
 
 
-def _fake_systemctl(tmp_path):
+def _fake_systemctl(tmp_path, fail=""):
     d = tmp_path / "off"
     d.mkdir()
     log = tmp_path / "ctl.log"
@@ -166,6 +158,7 @@ def _fake_systemctl(tmp_path):
     sc.write_text(f"""#!/bin/bash
 echo "$@" >> {log}
 case "$*" in
+  *"enable --now {fail or "NEVER-MATCHES"}"*) exit 1 ;;
   *is-enabled*) u="${{@: -1}}"; if [ -e {d}/$u ]; then echo disabled; exit 1; fi; echo enabled ;;
   *"disable --now"*) touch {d}/"${{@: -1}}" ;;
   *"enable --now"*) rm -f {d}/"${{@: -1}}" ;;
@@ -233,3 +226,12 @@ def test_presleep_is_serialised_by_a_lock_file_released_after_the_run(tmp_path):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)               # free again once the run finished
     finally:
         os.close(fd)
+
+
+def test_a_failed_install_puts_the_backup_and_export_timers_back(tmp_path):
+    sc, log, off = _fake_systemctl(tmp_path, fail="zoe-night-window.timer")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "NIGHT_DIR": str(tmp_path / "n"), "NIGHT_UNIT_DIR": str(tmp_path / "u"), "NIGHT_SYSTEMCTL": str(sc)}
+    r = subprocess.run(["bash", str(REPO / "scripts/night/install_night_window.sh")], capture_output=True, text=True, timeout=60, env=env)
+    assert r.returncode != 0, r.stdout + r.stderr                                    # the window timer would not enable: the install fails ...
+    assert "disable --now zoe-backup.timer" in log.read_text()                       # control: it did switch them off first
+    assert not (off / "zoe-backup.timer").exists() and not (off / "zoe-memory-export.timer").exists(), "... and must leave the nightly backup schedule running"

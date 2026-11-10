@@ -47,7 +47,12 @@ check() {
 }
 
 # Put zoe-dreaming.timer back (only when install had switched it off) so a failed install never leaves the night without a schedule.
+DISABLED_TIMERS=""      # the backup / export timers THIS run switched off: a failed install puts them back, else the box has no nightly backup until --uninstall
 rollback_dreaming() {
+  local t
+  for t in $DISABLED_TIMERS; do
+    ctl enable --now "$t" || say "WARNING: could not re-enable $t: run  systemctl --user enable --now $t"
+  done
   [ "${1:-0}" = 1 ] || return 0
   ctl enable --now zoe-dreaming.timer || say "WARNING: could not re-enable zoe-dreaming.timer: run  systemctl --user enable --now zoe-dreaming.timer"
 }
@@ -90,7 +95,7 @@ install() {
   # the window now runs the backup and the memory export itself: their own timers would run them a second time (a clock of their own, racing the window's stops)
   for t in zoe-backup.timer zoe-memory-export.timer; do
     case "$t" in zoe-backup.timer) was_t=$orig_backup ;; *) was_t=$orig_export ;; esac
-    if [ "$was_t" = enabled ]; then say "disabling $t: the window runs it in its pre-sleep phase (run --uninstall to undo)"; ctl disable --now "$t" || say "WARNING: could not disable $t: the unit would run twice"; fi
+    if [ "$was_t" = enabled ]; then say "disabling $t: the window runs it in its pre-sleep phase (run --uninstall to undo)"; ctl disable --now "$t" && DISABLED_TIMERS="$DISABLED_TIMERS $t" || say "WARNING: could not disable $t: the unit would run twice"; fi
   done
   if [ "$KEEP_DREAMING" = 0 ] && [ "$dreaming_was" = enabled ]; then
     say "disabling zoe-dreaming.timer: the window runs the dreaming job itself (run --uninstall to undo)"
