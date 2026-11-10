@@ -1,4 +1,4 @@
-"""0075 - the MORNING TRANSCRIPT CHECK (``transcript_check.py``; flag ``ZOE_TRANSCRIPT_CHECK``, default off). Spec: ``docs/knowledge/transcript-check.md``.
+"""0076 - the MORNING TRANSCRIPT CHECK (``transcript_check.py``; flag ``ZOE_TRANSCRIPT_CHECK``, default off). Spec: ``docs/knowledge/transcript-check.md``.
 
   * ``omi_check_items``       - the night re-pass's check queue: one UNCERTAIN span (a word, a low-confidence chunk, or - kind 'who' - a turn whose speaker is unsure) of one recording, with the
                                 sentence around it, each model's alternative (JSON ``alts``), the audio snippet bounds, the chunk template the
@@ -9,15 +9,15 @@
                                 once-a-day lock.
   * ``omi_segments.text_provenance`` - '' (the pass's own text) | 'owner_corrected' (the owner touched the word).
 
-Additive; ``IF NOT EXISTS`` / a column probe keep reruns safe on PostgreSQL and SQLite. CHAIN: on 0073 (the night re-pass, #2358). 0074 is #2360 (conversation notes); renumber at merge if the heads move.
+Additive; ``IF NOT EXISTS`` / a column probe keep reruns safe on PostgreSQL and SQLite. CHAIN: on 0075 (the night re-pass, #2358); renumber at merge if the heads move.
 """
 
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0075"
-down_revision = "0073"
+revision = "0076"
+down_revision = "0075"
 branch_labels = None
 depends_on = None
 

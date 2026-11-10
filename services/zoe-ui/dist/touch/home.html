@@ -883,22 +883,13 @@
   /* The time's left ink edge sits on the orb's left edge (44px) and the temp's right ink edge is the same 44px from the right
      edge; homeInk() trims each glyph's side bearing so it is the INK, not the text box, that lines up. */
   .hfull .htemp{position:absolute;top:38px;right:44px;text-align:right;text-shadow:0 2px 16px rgba(0,0,0,.4)}
-  .hfull .htemp .hrow{display:flex;align-items:flex-end;justify-content:flex-end;gap:10px}
-  /* The sun / moon is one unit with the temp: it arcs left to right over the day (bottom-left at sunrise, top-middle at noon, bottom-right at sunset) just left of the number. Its height is the real sun (or moon) position;
-     the band is clipped at the horizon line (the bottom edge) so it rises out of and sets into it, and it can never reach the number. */
-  .hfull .hcel{position:relative;top:-8px;flex:none;width:152px;height:84px;margin-top:-26px;clip-path:inset(-30px -30px 0 -30px);pointer-events:none}
-  .hfull .hcel::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;border-radius:1px;background:currentColor;opacity:.28}
-  .hfull .hcelI{position:absolute;left:0;top:0;width:32px;height:32px;transform:translate(0,68px)}
-  .hfull .hcelI[data-mv]{transition:transform 150s linear,color 150s linear}   /* only after the first seating: a visit must not replay the sunrise */
-  .hfull .hcelI svg{display:block;width:100%;height:100%;overflow:visible}
-  .hfull .hcelI.sun svg{filter:drop-shadow(0 0 9px currentColor)}
-  .hfull .hcelI.moon svg{filter:drop-shadow(0 0 7px rgba(190,205,255,.55))}
-  .wxovc .hcel{opacity:.6}
   .hfull .htemp .n{font-size:58px;font-weight:250;letter-spacing:-.02em;line-height:1}
   .hfull .htemp .c{font-size:20px;color:rgba(255,255,255,.8);margin-top:4px}
   .hfull .hclock{position:absolute;left:44px;top:44px;text-shadow:0 4px 34px rgba(0,0,0,.4)}
   .hfull .hclock .ht{font-size:170px;font-weight:200;letter-spacing:-.045em;line-height:.88}
   .hfull .hclock .hd{font-size:30px;color:rgba(255,255,255,.84);margin-top:14px}
+  /* the big moon (or a bright sky) can pass behind the white night text: a tight dark halo keeps it readable (the day scene's dark text sits on the cream sun) */
+  #stage:not(.wxlight) .hfull .hclock .ht,#stage:not(.wxlight) .hfull .hclock .hd,#stage:not(.wxlight) .hfull .htemp .n,#stage:not(.wxlight) .hfull .htemp .c{text-shadow:0 0 3px rgba(4,7,24,.9),0 2px 22px rgba(4,7,24,.75)}
   .hfull .today{position:absolute;right:70px;bottom:176px;width:434px}
   .hfull .today .thk{font-size:15px;letter-spacing:.18em;text-transform:uppercase;color:rgba(255,255,255,.66);margin-bottom:12px;text-align:right}
   .hfull .today .tr{display:grid;grid-template-columns:13px 94px 1fr;gap:16px;align-items:center;padding:13px 0;border-top:1px solid rgba(255,255,255,.16)}
@@ -1341,7 +1332,7 @@
         +'<div class="wkf"><div id="wkBody" class="wkbody"><div class="wkempty">Loading…</div></div></div>'},
     home:{home:false, bg:DUSK, canvas:true,
       html:'<div class="hfull">'
-        +'<div class="htemp" id="hTemp"><div class="hrow"><div class="hcel" id="hCel" aria-hidden="true"><div class="hcelI" id="hCelI"></div></div><div class="n">—°</div></div><div class="c"></div></div>'
+        +'<div class="htemp" id="hTemp"><div class="n">—°</div><div class="c"></div></div>'
         +'<div class="hclock"><div class="ht" id="hClock">--:--</div><div class="hd" id="hDate"></div></div>'
         +'<div class="today"><div class="thk">Your Day</div><div id="hToday"></div></div>'
         +'</div>'},
@@ -1399,7 +1390,7 @@
   // (the weather-star canvas twinkle and the Cover Flow spring). Live-tracked.
   var RM=false;try{var _rmq=window.matchMedia('(prefers-reduced-motion: reduce)');RM=!!_rmq.matches;if(_rmq.addEventListener)_rmq.addEventListener('change',function(e){RM=!!e.matches;});}catch(e){}
   var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),W=1280,H=720;cv.width=W;cv.height=H;
-  var stars=[],drops=[],wxOn=false,wxGlow=true,starA=1,rainOn=false,sunOn=false,moonOn=false,cloudN=0; // wxGlow: warm dusk glow, off for clear night; starA: star brightness 0..1 (0 = no stars, daytime); rainOn: draw rain streaks
+  var bodyNight=false,stars=[],drops=[],wxOn=false,wxGlow=true,starA=1,rainOn=false,sunOn=false,moonOn=false,cloudN=0; // wxGlow: warm dusk glow, off for clear night; starA: star brightness 0..1 (0 = no stars, daytime); rainOn: draw rain streaks
   (function seed(){for(var i=0;i<26;i++)stars.push({x:Math.random()*W,y:Math.random()*H*.6,r:Math.random()*1.6+.3,tw:Math.random()*6.28});for(var j=0;j<70;j++)drops.push({x:Math.random()*W,y:Math.random()*H,l:10+Math.random()*14,v:.5+Math.random()*.5});})();
   // Sun/moon/cloud sprites are drawn ONCE to offscreen canvases (no per-frame gradients: the Pi is CPU-poor).
   var SKY_CLOUDS=[{x:700,y:196,s:1,ph:0},{x:830,y:128,s:.8,ph:2.1},{x:570,y:236,s:.7,ph:4.2}],_skySpr=null;
@@ -1414,11 +1405,24 @@
       cloudD:mk(300,110,puffs('255,255,255')),
       cloudN:mk(300,110,puffs('58,68,92'))};
     return _skySpr;}
+  // The moon with its REAL phase, same glow as the old static moon but a disc the size of the sun's (r 46 vs the sun's solid r 45). One sprite per
+  // phase step (1/60 of a month ~ 12 h): the lit part is moonPath() scaled onto the disc, the dark part is a faint disc so a new moon is still there.
+  var _moonSpr={};
+  function moonSprite(f){var key=Math.round(f*60)%60;if(_moonSpr[key])return _moonSpr[key];
+    var c=document.createElement('canvas');c.width=240;c.height=240;var x=c.getContext('2d');
+    var g=x.createRadialGradient(120,120,0,120,120,120);g.addColorStop(0,'rgba(210,222,255,.4)');g.addColorStop(.3,'rgba(190,205,255,.2)');g.addColorStop(1,'rgba(190,205,255,0)');x.fillStyle=g;x.fillRect(0,0,240,240);
+    x.fillStyle='rgba(150,166,214,.28)';x.beginPath();x.arc(120,120,46,0,6.29);x.fill();
+    x.save();x.translate(120,120);x.scale(4.6,4.6);x.translate(-12,-12);x.fillStyle='#eaf0ff';x.fill(new Path2D(moonPath(key/60)));x.restore();
+    _moonSpr[key]=c;return c;}
   function frame(t){ if(wxOn){ctx.clearRect(0,0,W,H);
       if(wxGlow){var s2=ctx.createRadialGradient(220,560,10,220,560,280);s2.addColorStop(0,'rgba(255,210,150,.6)');s2.addColorStop(1,'rgba(255,210,150,0)');ctx.fillStyle=s2;ctx.beginPath();ctx.arc(220,560,280,0,6.29);ctx.fill();}
       if(starA>0){ctx.fillStyle='#fff';stars.forEach(function(st){ctx.globalAlpha=starA*(RM?.72:(.5+.5*Math.sin(t/700+st.tw))*.9);ctx.beginPath();ctx.arc(st.x,st.y,st.r,0,6.29);ctx.fill();});ctx.globalAlpha=1;}
-      if(sunOn||moonOn){var sp=skySprites(),bx=700,by=170,nt=!sunOn;
-        if(_cur!=='home')ctx.drawImage(nt?sp.moon:sp.sun,bx-(nt?120:180),by-(nt?120:180));   // home: the sun/moon is the little arc beside the temp (celApply)
+      if(sunOn||moonOn||(bodyNight&&_cur==='home')){var sp=skySprites(),bx=700,by=170,nt=!sunOn;
+        if(_cur==='home'){   // home: the big sun/moon crosses the whole panel on the real sunrise/sunset arc (below the bottom edge at both ends)
+          var now=Date.now(),cp=celPos(now,_cel.sr,_cel.ss),xy=celXY(cp.p,cp.h);
+          if(cp.kind==='sun'&&sunOn)ctx.drawImage(sp.sun,xy.x-180,xy.y-180);
+          else if(cp.kind==='moon'&&(moonOn||bodyNight))ctx.drawImage(moonSprite(moonPhase(now)),xy.x-120,xy.y-120);}
+        else ctx.drawImage(nt?sp.moon:sp.sun,bx-(nt?120:180),by-(nt?120:180));
         for(var ci=0;ci<cloudN;ci++){var cc=SKY_CLOUDS[ci];ctx.globalAlpha=nt?.8:.92;ctx.drawImage(nt?sp.cloudN:sp.cloudD,cc.x-150*cc.s+wxDrift(t,cc.ph,RM),cc.y-55*cc.s,300*cc.s,110*cc.s);}
         ctx.globalAlpha=1;}
       if(rainOn){ctx.strokeStyle='rgba(200,215,235,.45)';ctx.lineWidth=1.4;ctx.beginPath();drops.forEach(function(d){var y=RM?d.y:(d.y+t*d.v*.9)%H;ctx.moveTo(d.x,y);ctx.lineTo(d.x-d.l*.25,y+d.l);});ctx.stroke();}
@@ -1594,7 +1598,7 @@
     [].forEach.call(pick.querySelectorAll('button'),function(b){b.classList.toggle('sel',b.dataset.id===id);});
     if(f){
       cardwrap.classList.remove('on'); full.classList.add('on');
-      stage.style.background=f.bg; wxOn=!!f.canvas; starA=1; rainOn=false; sunOn=false; moonOn=false; cloudN=0; cv.classList.toggle('on',!!f.canvas);
+      stage.style.background=f.bg; wxOn=!!f.canvas; starA=1; rainOn=false; sunOn=false; moonOn=false; bodyNight=false; cloudN=0; cv.classList.toggle('on',!!f.canvas);
       glow.style.background=f.glow||'none'; glow.classList.toggle('on',!!f.glow);
       home.classList.toggle('hide',f.home===false);
       full.innerHTML=f.html;
@@ -2119,7 +2123,7 @@
   // CEL-BEGIN (pure: the vm test extracts this block) - where the sun (day) or moon (night) is, from the weather feed's own sunrise/sunset
   var CEL_DAY=86400000;
   // sr/ss are ms (today's sunrise and sunset, any day - they are shifted by whole days to bracket `now`, so a stale fetch still places it).
-  // Returns {kind:'sun'|'moon', p:0..1 across that day/night, h:0..1 height (sin: low at the horizon, 1 at solar noon / midnight)}.
+  // Returns {kind:'sun'|'moon', p:0..1 across that day/night, h:0..1 height (sin: 0 at the horizon, 1 at solar noon / midnight)}.
   function celPos(now,sr,ss){
     if(!(sr>0&&ss>sr&&(ss-sr)<CEL_DAY)){var d0=new Date(now);d0.setHours(0,0,0,0);sr=d0.getTime()+6*3600000;ss=d0.getTime()+18*3600000;}   // no feed: 6am-6pm
     var k=Math.floor((now-sr)/CEL_DAY);sr+=k*CEL_DAY;ss+=k*CEL_DAY;                  // sr <= now < sr+1 day
@@ -2127,24 +2131,19 @@
     if(now<ss){kind='sun';a=sr;b=ss;}else{kind='moon';a=ss;b=sr+CEL_DAY;}            // after sunset: the moon until tomorrow's sunrise
     var p=Math.min(1,Math.max(0,(now-a)/(b-a)));
     return {kind:kind,p:p,h:Math.sin(Math.PI*p)};}
+  // The full-screen arc on the 1280x720 stage: x runs linearly across nearly the whole width, y = BELOW the bottom edge - amplitude*sin(pi*p),
+  // so the body rises out of the bottom-left, tops out at the top-middle at noon (fully on screen) and sets below the bottom-right.
+  var CEL_X0=40,CEL_X1=1240,CEL_Y0=790,CEL_APEX=140;
+  function celXY(p,h){return {x:CEL_X0+(CEL_X1-CEL_X0)*p,y:CEL_Y0-(CEL_Y0-CEL_APEX)*h};}
   // Phase 0..1 (0 new, .5 full) from the date alone (mean synodic month from the 2000-01-06 new moon) - no feed, no network.
   function moonPhase(now){var jd=now/CEL_DAY+2440587.5,f=((jd-2451550.1)/29.530588853)%1;return f<0?f+1:f;}
   // Waxing lights the LEFT limb in this sky (southern view); flip the constant for a northern panel.
   var MOON_WAXING_LIT_LEFT=true;
-  function moonSvg(f){var r=10,k=Math.cos(2*Math.PI*f),rx=(r*Math.abs(k)).toFixed(2),waxing=f<.5,left=(waxing===MOON_WAXING_LIT_LEFT);
-    // lit limb = the half circle on the lit side; terminator = half ellipse (bulges toward the lit side for a crescent, away for gibbous)
-    var d='M12 2A10 10 0 0 '+(left?0:1)+' 12 22A'+rx+' 10 0 0 '+((k>0)===left?1:0)+' 12 2Z';
-    return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="rgba(190,205,255,.2)"/><path d="'+d+'" fill="#e6ecff"/></svg>';}
-  function sunSvg(){return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>';}
-  function sunColor(h){var t=Math.min(1,h*1.6);return 'rgb(255,'+Math.round(138+76*t)+','+Math.round(61+41*t)+')';}   // amber at the horizon -> pale gold high up
+  // The lit part of a 24x24 moon disc (r=10 around 12,12) as an SVG path: the lit limb is a half circle, the terminator a half ellipse.
+  function moonPath(f){var r=10,k=Math.cos(2*Math.PI*f),rx=(r*Math.abs(k)).toFixed(2),waxing=f<.5,left=(waxing===MOON_WAXING_LIT_LEFT);
+    return 'M12 2A10 10 0 0 '+(left?0:1)+' 12 22A'+rx+' 10 0 0 '+((k>0)===left?1:0)+' 12 2Z';}
   // CEL-END
-  var _cel={sr:0,ss:0,at:0,key:''};
-  function celApply(){try{var el=document.getElementById('hCelI');if(!el)return;var now=Date.now(),pos=celPos(now,_cel.sr,_cel.ss);_cel.at=now;
-    var ph=pos.kind==='moon'?Math.round(moonPhase(now)*60)/60:0,key=pos.kind+':'+ph;
-    if(key!==_cel.key){_cel.key=key;el.removeAttribute('data-mv');el.className='hcelI '+pos.kind;el.innerHTML=pos.kind==='sun'?sunSvg():moonSvg(ph);}
-    el.style.color=pos.kind==='sun'?sunColor(pos.h):'';
-    el.style.transform='translate('+(pos.p*120).toFixed(1)+'px,'+(68-64*pos.h).toFixed(1)+'px)';
-    if(!el.hasAttribute('data-mv'))setTimeout(function(){el.setAttribute('data-mv','1');},60);}catch(e){}}   // decoration only: never let it break the screen
+  var _cel={sr:0,ss:0};
   // Ink alignment: trim a text box's side bearing so the glyph edge (not the box) sits on the line. Canvas measureText is the ruler.
   var _inkCtx=null;
   function inkTrim(el,side){if(!el||!el.textContent)return;
@@ -2154,14 +2153,14 @@
       el._ink=key;}catch(e){}}
   function homeInk(){inkTrim(document.getElementById('hClock'),'l');inkTrim(document.getElementById('hDate'),'l');inkTrim(document.querySelector('#hTemp .n'),'r');inkTrim(document.querySelector('#hTemp .c'),'r');}
   function tickClock(){var c=document.getElementById('hClock');if(!c)return;var d=new Date(),h=d.getHours()%12;if(h===0)h=12;c.textContent=h+':'+two(d.getMinutes());var dt=document.getElementById('hDate');if(dt)dt.textContent=d.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
-    homeInk();if(_cel.key&&Date.now()-_cel.at>=180000)celApply();}   // the sun/moon re-seats every few minutes
+    homeInk();}
   function loadWeather(){apiGet('/api/weather/current').then(function(w){if(_cur!=='home')return;var el=document.getElementById('hTemp');if(!el||!w)return;var t=(w.temp!=null?w.temp:w.temperature);el.querySelector('.n').textContent=(t!=null?Math.round(t):'—')+'°';var c=(w.description||w.condition||'');el.querySelector('.c').textContent=c?c.charAt(0).toUpperCase()+c.slice(1):'';
-    _cel.sr=Date.parse(w.sunrise)||0;_cel.ss=Date.parse(w.sunset)||0;celApply();homeInk();
+    _cel.sr=Date.parse(w.sunrise)||0;_cel.ss=Date.parse(w.sunset)||0;homeInk();   // the canvas sun/moon reads these every frame
     // The home scene matches the sky (design intent): same scene mapping as
     // the weather surface — clear day, clear night, cloud, rain — with the
     // dusk gradient kept for golden-hour codes and as the pre-fetch default.
     if(_cur==='home')wxApplySky(wxSky(w.icon));
-  }).catch(function(){if(_cur==='home'&&!_cel.sr)celApply();});}   // feed down and never seen: the 6am-6pm fallback seat
+  }).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
       if(_cur!=='home')return;
@@ -2169,8 +2168,7 @@
       if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55;grid-template-columns:1fr"><span class="tn">Nothing scheduled today</span></div>';return;}
       host.innerHTML=evs.slice(0,4).map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
     }).catch(function(){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn">Couldn’t load your day</span></div>';});}
-  function initHome(){_cel.at=0;_cel.key='';tickClock();if(_cel.sr)celApply();   // no feed yet: place nothing until it answers (a fallback seat would then slide to the real one)
-   _homeTick=setInterval(tickClock,15000);loadWeather();loadToday();loadCheckCard();
+  function initHome(){tickClock();_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();loadCheckCard();
     _wxTick=setInterval(function(){if(_cur==='home'){loadWeather();loadToday();loadCheckCard();}},600000);}
 
   // ---- weather screen (real current + hourly forecast, condition-adaptive) ----
@@ -2194,7 +2192,7 @@
   function wxDrift(t,ph,rm){return rm?0:Math.sin(t/9000+ph)*45;}   // slow cloud drift (px); reduced motion = a static frame
   // WXSKY-END
   function wxApplySky(sky){stage.style.background=sky.bg;stage.classList.toggle('wxlight',sky.light);stage.classList.toggle('wxovc',sky.overcast);
-    wxGlow=sky.glow;starA=sky.stars;rainOn=sky.rain;sunOn=sky.sun;moonOn=sky.moon;cloudN=sky.clouds;wxOn=sky.canvas;cv.classList.toggle('on',sky.canvas);}
+    wxGlow=sky.glow;starA=sky.stars;rainOn=sky.rain;sunOn=sky.sun;moonOn=sky.moon;bodyNight=(sky.scene==='night');cloudN=sky.clouds;wxOn=sky.canvas;cv.classList.toggle('on',sky.canvas);}
   function fmtHour(iso){var m=/T(\d{2}):/.exec(iso||'');if(!m)return '';var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+' '+ap;}
   function loadWxScreen(){
     apiGet('/api/weather/current').then(function(w){if(_cur!=='weather'||!w)return;  // ignore if the user navigated away

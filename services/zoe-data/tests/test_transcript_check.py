@@ -1,4 +1,4 @@
-"""The MORNING TRANSCRIPT CHECK (``transcript_check.py``, migration 0073, flag ``ZOE_TRANSCRIPT_CHECK``). Spec: docs/knowledge/transcript-check.md.
+"""The MORNING TRANSCRIPT CHECK (``transcript_check.py``, migration 0076, flag ``ZOE_TRANSCRIPT_CHECK``). Spec: docs/knowledge/transcript-check.md.
 
 Groups (each invariant has its negative control next to it):
   rank       names / numbers / times first, chit-chat last, capped per day, whole-chunk items capped lower
@@ -43,8 +43,8 @@ def run(coro):
 def tenv(env, monkeypatch, tmp_path):
     _migrate(env.engine, "0054_omi_day_review.py")
     _migrate(env.engine, "0055_omi_segments_voices.py")
-    _migrate(env.engine, "0073_omi_night_repass.py")
-    _migrate(env.engine, "0075_transcript_check.py")
+    _migrate(env.engine, "0075_omi_night_repass.py")
+    _migrate(env.engine, "0076_transcript_check.py")
     monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "on")
     monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(tmp_path / "repass"))
     monkeypatch.setenv("ZOE_OMI_REPASS_ZOE_CLIPS", str(tmp_path / "no-clips"))

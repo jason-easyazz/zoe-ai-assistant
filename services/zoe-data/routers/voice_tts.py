@@ -3080,6 +3080,8 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
         dst = os.path.join(d, f"{_t.strftime('%Y%m%d-%H%M%S', _t.localtime(_now))}_{int(_now*1000)%1000:03d}.wav")
         # Copy synchronously (fast) before the caller unlinks the original.
         shutil.copyfile(wav_path, dst)
+        import voice_clips as _vc
+        _vc.note_saved(dst)         # the server's speaker verdict is written beside it once the turn is judged (ZOE_VOICE_CLIP_VERDICT)
     except Exception as exc:
         logger.warning("STT capture failed: %s", exc)
         return
@@ -3089,6 +3091,8 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
 
 async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None) -> str:
     _stt_raw_var.set({})  # a fresh holder per transcription: never a previous turn's raw text
+    import voice_clips as _vc
+    _vc.begin()           # ... and never a previous turn's saved clip
     # ``pre_text``: a transcript the under-speech STT stream already finished for THIS clip (voice_stt_stream; the caller
     # verified the sample counts match). Capture below still runs, so the corpus keeps growing exactly as before.
     if pre_text:
@@ -3642,6 +3646,32 @@ async def voice_command(
     import named_guests as _named_guests
 
     _named_guests.bind_turn(await _named_guests.accept(payload, caller, member_identified=bool(identified_user_id)))
+    # ZOE_GUEST_VOICE_LEARN (flag-dark, named_guest_learning.py): a scored voice no member and no named guest matched keeps its
+    # EMBEDDING (never audio) under an unknown voice; once Zoe is sure it is one person she asks its name, and the answer makes it a
+    # named guest. Off = no work at all.
+    import named_guest_learning as _ng_learn
+
+    _ng_learn.bind_ask(False)
+    if (_ng_learn.mode() != "off" and _named_guests.current() is None and not identified_user_id
+            and _speaker_verified is False):
+        _learned = await _ng_learn.observe(payload, caller, session_id=str((payload or {}).get("session_id") or panel_id),
+                                           wake=not (payload or {}).get("window"), text=text)
+        if _learned.get("action") == "named":
+            _named_guests.bind_turn(_learned["guest"])      # this turn answered "what's your name?": greet them by it
+        _ng_learn.bind_ask(_learned.get("action") == "ask")
+        _learned_cluster = str(_learned.get("cluster_id") or "")
+    else:
+        _learned_cluster = ""
+    # ZOE_VOICE_CLIP_VERDICT (flag-dark): label the saved corpus clip with what the server judged this voice to be (voice_clips.py).
+    # A turn with no verdict at all (the gate off) stays unlabelled = a legacy clip, exactly as before.
+    import voice_clips as _voice_clips
+
+    if identified_user_id:
+        _voice_clips.record("member", identified_user_id)
+    elif (_clip_guest := _named_guests.current()) is not None:
+        _voice_clips.record("guest", _clip_guest.person_id)
+    elif _speaker_verified is False:
+        _voice_clips.record("unknown", "", _learned_cluster)
     # ZOE_RESTRAINT: a voice the gate did NOT confirm (False) may be a guest in the room; the brief, the raise and
     # the recall packet withhold sensitive classes for this turn whatever it asks (restraint.decide, "guest").
     from restraint import bind_verdict as _restraint_bind_verdict
@@ -4598,6 +4628,13 @@ async def voice_command(
                     "content_type": _auth_fail_type,
                 }
         if _skybridge_result and _skybridge_result.get("handled"):
+            try:    # "what's the weather tomorrow" answered by Skybridge: "and in albany" next is the same question (weather_followup)
+                if str((_skybridge_result.get("intent") or {}).get("domain") or "") == "weather":
+                    import weather_followup as _wf_note
+
+                    _wf_note.note(effective_user, session_id, text)
+            except Exception:  # noqa: BLE001 - the note never breaks a turn
+                pass
             _VOICE_SESSIONS.setdefault(panel_id, {})["skybridge_context"] = (
                 _skybridge_result.get("skybridge_context") or {}
             )
@@ -6020,6 +6057,10 @@ async def _window_speaker_drop(payload: dict, caller: dict, transcript: str, pan
         logger.warning("voice/%s window speaker frame failed (dropping the window turn): %s", route, _win_exc)
         _gate = {"done": True, "reply": "", "skipped": "not_addressed", "reason": "voice_mismatch"}
     if _gate is not None and side_effects:
+        if _win_verdict is False:
+            import voice_clips as _vc_win
+
+            _vc_win.record("unknown")          # a voice the gate refused: not the owner's, whatever it said
         # The rejected voice is still SOMEONE in the room: record it in the crowd log (no session, no brain, no memory write), so the
         # day-review summary is not spoken aloud on the strength of a crowd that only ever spoke into skipped follow-ups.
         try:
@@ -7569,6 +7610,65 @@ async def voice_guest_forget(guest_id: str, owner_user_id: Optional[str] = None,
     return dict(ok=True)
 
 
+@router.post("/clip-playback")
+async def voice_clip_playback(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """The panel daemon redeems a ``voice_clip_play`` token for the few seconds of audio it plays (named_guest_clips.py): device token on
+    the LAN only, single use, this panel only. 404 for anything else (no hint which)."""
+    import named_guest_clips as _ngc
+
+    if caller.get("source") != "device":
+        raise HTTPException(status_code=403, detail="device token required")
+    from biometric_scope import require_local_panel
+
+    require_local_panel(caller, "clip playback")
+    out = _ngc.redeem(str((payload or {}).get("token") or ""), str(caller.get("panel_id") or ""))
+    if out is None:
+        raise HTTPException(status_code=404, detail="no such clip")
+    return out
+
+
+@router.get("/unknown-voices")
+async def voice_unknown_voices(caller: dict = Depends(_require_voice_auth)):
+    """Unknown voices Zoe has heard addressing her at the panel (an admin's view): counts and dates only, never a voice."""
+    import named_guest_learning as _ngl
+    from biometric_scope import require_person_scope
+
+    _uid, is_admin = require_person_scope(caller)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="unknown voices are the household owner's to review")
+    return dict(voices=await _ngl.list_unknown())
+
+
+@router.post("/unknown-voices/{voice_id}/name")
+async def voice_unknown_name(voice_id: str, payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """"That was Quinn this morning": a member names an unknown voice; it becomes a named guest in THEIR layer. 409 when the name is
+    a member's or an existing guest's (a name is never claimed), 404 when the voice is gone."""
+    import named_guest_learning as _ngl
+    from biometric_scope import require_person_scope
+
+    uid, _admin = require_person_scope(caller)
+    out = await _ngl.name_unknown(voice_id, str((payload or {}).get("name") or ""), uid)
+    if out is None:
+        raise HTTPException(status_code=409, detail="that voice cannot take that name (gone, a member's name, or already a guest's)")
+    return dict(ok=True, **out)
+
+
+@router.delete("/unknown-voices/{voice_id}")
+async def voice_unknown_forget(voice_id: str, caller: dict = Depends(_require_voice_auth)):
+    """Erase one unknown voice (``all`` erases every one): its samples and its row. Admin only; fails closed."""
+    import named_guest_learning as _ngl
+    from biometric_scope import require_person_scope
+
+    _uid, is_admin = require_person_scope(caller)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="unknown voices are the household owner's to erase")
+    try:
+        n = await _ngl.erase_unknown(None if voice_id == "all" else voice_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail="could not erase; nothing was reported as gone") from exc
+    return dict(ok=True, erased=n)
+
+
 @router.post("/identify")
 async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """Identify speaker by comparing to enrolled profiles.
@@ -7689,6 +7789,10 @@ async def voice_profiles_sync(models: Optional[str] = None, caller: dict = Depen
         logger.warning("voice/profiles/sync: guest feed failed: %s", type(exc).__name__)
         guests = []
     extra = dict(guests=guests) if guests else dict()
+    import named_guest_learning as _ngl_sync
+
+    if _ngl_sync.mode() != "off":
+        extra["learn_unknown"] = True      # the panel then attaches an unmatched turn's embedding (never audio) for learning
     return dict(
         **extra,
         ok=True,

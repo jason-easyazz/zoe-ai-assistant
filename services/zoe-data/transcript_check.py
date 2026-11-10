@@ -8,7 +8,7 @@ Flag ``ZOE_TRANSCRIPT_CHECK`` = off | shadow | on (default OFF). Spec and owner 
   on      the queue is real: audio is held for each open item (inside the existing retention), the owner's first verified-voice turn
           after 06:00 carries ONE appended line, and the panel "Transcript check" screen serves the items.
 
-Two halves with one table (``omi_check_items``, migration 0073) between them:
+Two halves with one table (``omi_check_items``, migration 0076) between them:
 
   NIGHT   ``candidates_from_row`` turns the ROVER fusion's stored chunk rows (contested slots, low_conf chunks) into
           candidates; ``enqueue`` ranks them (names, numbers/times/dates, commitments, anything feeding a day-review candidate first;
@@ -129,7 +129,7 @@ def _db():
 
 
 def _missing(exc: Exception) -> bool:
-    """The table is not migrated (a box that has not run 0073) or there is no pool in this process: nothing to read or erase."""
+    """The table is not migrated (a box that has not run 0076) or there is no pool in this process: nothing to read or erase."""
     text = f"{type(exc).__name__} {exc}".lower()
     return any(s in text for s in ("no such table", "does not exist", "undefinedtable", "not initialised", "no such column"))
 

@@ -62,6 +62,8 @@ ZOE_FILES = {
     "logs/l.txt": b"no",
     "poll.log.3": b"no",
     "omi-recordings/u/r.wav": b"no",
+    "omi-repass/hyps/hyps-2026-11-09.jsonl": b"no",      # the night re-pass's words + worker outputs (embeddings) never leave the box
+    "omi-repass/work/ab.out.jsonl": b"no",
     "recall-gate-trace/trace.jsonl": b"no",      # the opt-in recall-gate trace (raw turns + row text) never leaves the box
     "secrets/vapid_keys.json": b"no",
     "env/x.env": b"no",

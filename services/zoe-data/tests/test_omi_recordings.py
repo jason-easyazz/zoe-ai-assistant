@@ -65,18 +65,37 @@ class _Sqlite:
     def __init__(self, path):
         self.conn = sqlite3.connect(path, check_same_thread=False)      # TestClient runs the app in its own thread
         self.conn.row_factory = sqlite3.Row
+        self._txn = 0
 
     def execute(self, sql, params=()):
         async def _run():
             await asyncio.sleep(0)
             cur = self.conn.execute(sql, tuple(params))
             rows = cur.fetchall()
-            self.conn.commit()
+            if not self._txn:
+                self.conn.commit()
             return _Cursor(rows, rowcount=cur.rowcount)
         return _ExecResult(_run())
 
     async def commit(self):
-        self.conn.commit()
+        if not self._txn:
+            self.conn.commit()
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        """Like asyncpg's: every write inside commits together on a clean exit, or none does on an exception (production auto-commits OUTSIDE one)."""
+        self._txn += 1
+        try:
+            yield self
+        except BaseException:
+            self._txn -= 1
+            if not self._txn:
+                self.conn.rollback()
+            raise
+        else:
+            self._txn -= 1
+            if not self._txn:
+                self.conn.commit()
 
     def rows(self, sql, params=()):
         return self.conn.execute(sql, params).fetchall()
@@ -1037,6 +1056,29 @@ def test_forgetting_a_name_redacts_the_transcript_and_drops_the_audio(env, monke
     assert row["audio_path"] == "" and not Path(path).exists() and row["keep_audio"] == 0
 
 
+def test_a_failed_hypothesis_rewrite_drops_the_members_hypotheses_instead_of_keeping_forgotten_text(env, monkeypatch, tmp_path):
+    import omi_repass
+    import omi_repass_eval
+    home = tmp_path / "repass"
+    home.mkdir()
+    monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(home))
+    gone = []
+
+    def boom(*_a, **_k):
+        raise OSError("disk")
+    monkeypatch.setattr(omi_repass_eval, "erase_entity", boom)
+    monkeypatch.setattr(omi_repass_eval, "forget_user", lambda h, u: gone.append((str(h), u)) or 3)
+    assert omi_repass.home_dir() == home
+    run(omi.erase_entity(OWNER, re.compile(r"\bDana\b")))                       # not strict: the member's hypotheses are DROPPED, not left holding the name
+    assert gone == [(str(home), OWNER)]
+    gone.clear()
+    with pytest.raises(OSError):                                                # negative control: strict still raises (the cascade retries) and drops nothing
+        run(omi.erase_entity(OWNER, re.compile(r"\bDana\b"), strict=True))
+    assert gone == []
+    monkeypatch.setattr(omi_repass_eval, "forget_user", boom)                   # the fallback fails too: the erase reports NOTHING done (0, logged ERROR) - never a success
+    assert run(omi.erase_entity(OWNER, re.compile(r"\bDana\b"))) == 0
+
+
 def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(env, monkeypatch):
     upload(env, make_wav(3.0))
 
@@ -1045,7 +1087,7 @@ def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(e
 
     import memory_forgotten as mf
 
-    async def fake_spans(user_id, text, *, near=True):
+    async def fake_spans(user_id, text, *, near=True, strict=False):
         i = text.find("Dana")
         return [(i, i + 4)] if i >= 0 and user_id == OWNER else []
 
@@ -1074,8 +1116,8 @@ def test_nothing_else_reads_pendant_transcripts():
                "omi_diarize.py", "omi_voices.py", "routers/omi_voices.py",
                # the forget-reach inventory (A6) only NAMES the table as a store key; it opens nothing
                "forget_reach.py",
-               # the night re-pass (0073): the SECOND, offline transcript of the same audio; it replaces a transcript the same way the first pass writes it
-               "omi_repass.py",
+               # the night re-pass (0075): the SECOND, offline transcript of the same audio; it replaces a transcript the same way the first pass writes it
+               "omi_repass.py", "omi_repass_clean.py", "omi_transcript_book.py",
                # the morning transcript check: the OWNER corrects words of their own transcript (owner_corrected); owner-only routes, forgotten spans never shown
                "transcript_check.py", "routers/transcript_check.py"}
     hits = set()

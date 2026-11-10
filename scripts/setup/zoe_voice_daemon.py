@@ -2880,6 +2880,7 @@ def _sync_speaker_profiles(force: bool = False) -> None:
             _profile_cache["fetched_at"] = time.time()
             _profile_cache["profiles"] = profiles
             _profile_cache["guests"] = guests
+            _profile_cache["learn_unknown"] = bool(data.get("learn_unknown"))
         try:
             os.makedirs(os.path.dirname(_PROFILE_CACHE_PATH), mode=0o700, exist_ok=True)
             fd = os.open(_PROFILE_CACHE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -3043,6 +3044,9 @@ def _identify_speaker_resnet34(wav_bytes: bytes):
         return None
     claim = _Claim(r["user_id"], r["score"], r["model_id"], r["seconds"])
     claim.guest = _match_guest_local(r["_vec"], r["model_id"])
+    with _profile_cache_lock:
+        learn = bool(_profile_cache.get("learn_unknown"))
+    claim.vec = r["_vec"] if learn else None    # the server asked for unmatched turns' embeddings (passive guests); never audio
     if claim.guest is not None and claim.guest[1] > r["score"]:
         # The voice is closer to a named guest than to the member: never offered to adapt the MEMBER's profile with it.
         return claim
@@ -3589,6 +3593,11 @@ def _speaker_field(claim: object) -> dict | None:
             speech_s = getattr(claim, "speech_s", None)
             if isinstance(speech_s, (int, float)) and math.isfinite(speech_s):
                 block["speech_s"] = round(float(speech_s), 2)
+            vec = getattr(claim, "vec", None)
+            if vec is not None:
+                # Only while the server's ZOE_GUEST_VOICE_LEARN is on (sync ``learn_unknown``): the server keeps it ONLY when no member
+                # and no named guest matched. A signature, never audio.
+                block["embedding"] = base64.b64encode(np.asarray(vec, dtype=np.float32).tobytes()).decode()
             guest = getattr(claim, "guest", None)
             if guest:
                 # A named guest candidate rides BESIDE the member candidate; the server judges both (a guest is never a member).
@@ -4887,11 +4896,38 @@ def _handle_server_command(ann: dict) -> bool:
             return _queue_enrollment(cmd)
         if kind == "voice_profile_forget":
             return _purge_speaker_profile(str(cmd.get("user_id") or ""))
+        if kind == "voice_clip_play":
+            return _play_clip_then_ask(cmd)
     except Exception as exc:  # noqa: BLE001
         log.warning("panel command %s failed: %s: %s", kind or "?", type(exc).__name__, exc)
         return False
     log.warning("panel command ignored (unknown kind %r)", kind)
     return False
+
+
+def _play_clip_then_ask(cmd: dict) -> bool:
+    """Play the few seconds the server holds behind a single-use token (named_guest_clips.py), then ask who it is and open a listening
+    window (no wake word) for the answer. The audio never rides the announcement row. True = played (the row is acknowledged)."""
+    global _ignore_wake_until
+    token = str(cmd.get("token") or "").strip()
+    if not token:
+        return False
+    resp = _api_post("/api/voice/clip-playback", {"token": token, "panel_id": PANEL_ID}, timeout=15, retries=0)
+    audio_b64 = resp.get("audio_base64")
+    if not audio_b64:
+        log.warning("clip playback: no audio (%s)", resp.get("error", "refused"))
+        return False
+    _recording_active.set()
+    _ignore_wake_until = time.monotonic() + _ANNOUNCE_WAKE_GUARD_MAX_S
+    try:
+        played = play_audio_b64(audio_b64, resp.get("content_type", "audio/wav"))
+    finally:
+        _recording_active.clear()
+        _ignore_wake_until = time.monotonic() + POST_PLAY_COOLDOWN_S
+    ask = str(cmd.get("ask") or "").strip()
+    if played and ask:
+        _speak_announcement_then_listen({"id": "clip-ask", "text": ask, "trigger_type": "voice_clip_play", "follow_up": True})
+    return played
 
 
 def _queue_enrollment(cmd: dict) -> bool:

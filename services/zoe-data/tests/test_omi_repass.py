@@ -1,4 +1,4 @@
-"""The pendant NIGHT RE-PASS (``omi_repass.py``, migration 0073, flag ``ZOE_OMI_NIGHT_REPASS``). Spec: docs/knowledge/omi-night-repass.md.
+"""The pendant NIGHT RE-PASS (``omi_repass.py``, migration 0075, flag ``ZOE_OMI_NIGHT_REPASS``). Spec: docs/knowledge/omi-night-repass.md.
 
 Groups (each invariant has its negative control next to it):
   hold        audio is never deleted before the pass has seen it (flag on/shadow), the flag-off control still deletes, retention still bounds the hold
@@ -8,7 +8,7 @@ Groups (each invariant has its negative control next to it):
   budget      the planner picks the cheaper backend / carries what does not fit; a carried recording is untouched
   seam        an unknown backend is refused loudly; the declared backends carry their budget facts
 
-Synthetic data only. The DB is the real migrations 0045 / 0055 / 0073 on SQLite; the worker is a fake runner that writes the JSONL a real one would.
+Synthetic data only. The DB is the real migrations 0045 / 0055 / 0075 on SQLite; the worker is a fake runner that writes the JSONL a real one would.
 """
 from __future__ import annotations
 
@@ -41,12 +41,17 @@ def run(coro):
 @pytest.fixture
 def renv(env, monkeypatch, tmp_path):
     _migrate(env.engine, "0055_omi_segments_voices.py")
-    _migrate(env.engine, "0073_omi_night_repass.py")
+    _migrate(env.engine, "0075_omi_night_repass.py")
     monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "on")
     monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(tmp_path / "repass"))
     monkeypatch.setenv("ZOE_OMI_REPASS_ZOE_CLIPS", str(tmp_path / "no-clips"))
     for k in ("ZOE_OMI_NIGHT_ASR_SECOND", "ZOE_OMI_NIGHT_ASR_THIRD", "ZOE_OMI_NIGHT_ASR_EVAL"):
         monkeypatch.setenv(k, "none")                       # the single-engine path by default; test_omi_repass_multi.py turns the other voters on
+    import manner_block
+
+    async def _adult(uid, db=None):                         # the pass retains voice data only for a positively-adult member; the tests' member is one (a child test overrides this)
+        return True
+    monkeypatch.setattr(manner_block, "eligible", _adult)
     return env
 
 
@@ -130,10 +135,36 @@ def test_on_replaces_the_text_with_provenance_and_then_releases_the_wav(renv, mo
     out = run(rp.run_night(budget_s=600, runner=fake_runner()))
     assert out["status"] == "ok" and out["replaced"] == 1 and out["model"] == "qwen3-asr"
     r = rows(renv)[0]
-    assert r["transcript"] == "Hello there friend" and r["repass_state"] == "done" and r["repass_model"] == "qwen3-asr+ecapa" and r["repass_at"]
+    assert r["transcript"] == "Hello there friend" and r["repass_state"] == "done" and r["repass_model"] == "qwen3-asr+resnet34" and r["repass_at"]
     assert r["audio_path"] == "" and not Path(r0["audio_path"]).exists()                     # the pass has seen it: now the WAV goes
     segs = renv.db.rows("SELECT speaker, model_id, text FROM omi_segments")
     assert segs and all(s["model_id"] == rp.MODEL_ID for s in segs)
+
+
+def test_a_failure_while_replacing_segments_leaves_the_original_recording_intact(renv, monkeypatch):
+    """The segment swap is ONE transaction: a crash after the delete must not leave the owner's first-pass lines gone with nothing in their place."""
+    import omi_voices
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine garble")
+    rid = rows(renv)[0]["id"]
+    renv.db.conn.execute("INSERT INTO omi_segments (id, recording_id, user_id, seq, start_ms, end_ms, text, speaker, created_at) "
+                         "VALUES ('seg-first', ?, ?, 0, 0, 1000, 'first pass line', 'unverified', '2026-11-09T00:00:00Z')", (rid, OWNER))
+    renv.db.conn.commit()
+    before = renv.db.rows("SELECT id, text FROM omi_segments ORDER BY id")
+    assert [b["id"] for b in before] == ["seg-first"]
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("interrupted after the delete")
+    real = omi_voices.store_segments
+
+    async def store_then_boom(*a, **k):
+        await real(*a, **k)
+        await boom()
+    monkeypatch.setattr(omi_voices, "store_segments", store_then_boom)
+    out = run(rp.run_night(budget_s=600, runner=fake_runner()))
+    assert out["replaced"] == 0
+    assert renv.db.rows("SELECT id, text FROM omi_segments ORDER BY id") == before
+    r = rows(renv)[0]
+    assert r["transcript"] == "moonshine garble" and r["repass_state"] != "done"
 
 
 def test_shadow_replaces_nothing_and_logs_counts_never_words(renv, monkeypatch, tmp_path):
@@ -166,7 +197,7 @@ def test_a_forgotten_span_stays_redacted_after_the_pass(renv, monkeypatch):
     transcribe(first_pass(renv) and renv, monkeypatch)
     import memory_forgotten as mf
 
-    async def fake_spans(user_id, text, *, near=True):
+    async def fake_spans(user_id, text, *, near=True, strict=False):
         i = text.find("Dana")
         return [(i, i + 4)] if i >= 0 and user_id == OWNER else []
 
@@ -176,6 +207,49 @@ def test_a_forgotten_span_stays_redacted_after_the_pass(renv, monkeypatch):
     r = rows(renv)[0]
     assert "Dana" not in r["transcript"] and r["transcript"].startswith("[forgotten]")
     assert all("Dana" not in (s["text"] or "") for s in renv.db.rows("SELECT text FROM omi_segments"))
+
+
+def _ledger_down(monkeypatch):
+    import memory_forgotten as mf
+
+    async def down(user_id, text, *, near=True, strict=False):
+        raise mf.LedgerUnavailable("down")
+    monkeypatch.setattr(mf, "spans", down)
+
+
+def test_a_forget_ledger_outage_fails_closed_nothing_is_stored(renv, monkeypatch):
+    """Forgotten means forever: when the ledger cannot be read the new text cannot be proven clean, so the first-pass transcript stays and nothing is replaced."""
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine text")
+    _ledger_down(monkeypatch)
+    rid = rows(renv)[0]["id"]
+    before = rows(renv)[0]["repass_attempts"]
+    out = run(rp.run_night(budget_s=600, runner=fake_runner({rid: result_for(rid, ("Dana", "called", "today"))})))
+    r = rows(renv)[0]
+    assert out["replaced"] == 0 and r["transcript"] == "moonshine text" and r["repass_state"] in ("pending", "")      # still owed: retried, not failed for good
+    assert r["repass_attempts"] == before
+    assert not any("Dana" in (x["text"] or "") for x in renv.db.rows("SELECT text FROM omi_segments"))
+
+
+def test_household_names_withholds_a_name_it_cannot_prove_unforgotten(renv, monkeypatch):
+    renv.db.conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, role TEXT)")
+    renv.db.conn.execute("INSERT INTO users VALUES ('u1', 'Billie Example', 'member')")
+    renv.db.conn.commit()
+    import named_guests
+
+    async def names():
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            return await rp.household_names(db, OWNER)
+
+    async def fine(owner, name):
+        return False
+    monkeypatch.setattr(named_guests, "_forgotten", fine)
+    assert any("Billie" in n for n in run(names()))                             # negative control: with the ledger up the name is offered
+
+    async def down(owner, name):
+        raise RuntimeError("ledger down")
+    monkeypatch.setattr(named_guests, "_forgotten", down)
+    assert run(names()) == []                                                   # ledger unreadable: nothing is offered to the ASR
 
 
 def test_control_without_a_ledger_hit_the_name_is_kept(renv, monkeypatch):
@@ -199,71 +273,20 @@ def test_a_member_erased_while_the_job_ran_has_nothing_written(renv, monkeypatch
 
 # ── labels ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def test_nobody_is_me_without_a_confirmed_print():
+def test_nobody_is_me_without_any_print():
     refs = rp.Refs()
     words = [[" hi", 0.0, 0.3, 0.9], [" there", 0.4, 0.8, 0.9]]
     lines = rp.build_lines(words, [[0.0, 1.5, vec(0), 0.3]], refs)
     assert [ln["key"] for ln in lines] == ["unverified"]
-    assert rp.label_window(vec(0), refs)["label"] == "unverified"
+    assert rp.label_window(vec(0), refs)["key"] == "unverified"
 
 
-def test_the_wearer_print_labels_me_other_and_unsure_and_zoe_is_not_a_person(monkeypatch):
-    refs = rp.Refs(you=vec(0), zoe=vec(1))
-    assert rp.label_window(vec(0), refs)["label"] == "you"
-    assert rp.label_window(vec(1), refs)["label"] == "zoe"
-    assert rp.label_window(vec(2), refs)["label"] == "other"
-    mid = list(np.array(vec(0)) * 0.4 + np.array(vec(2)) * 0.9)
-    assert rp.label_window(mid, refs)["label"] in ("unsure", "other")
-
-
-def test_a_taught_person_is_suggested_only_with_the_margin():
-    refs = rp.Refs(you=vec(0), people=[{"person": "p1", "v": vec(3)}, {"person": "p2", "v": vec(4)}])
-    v = rp.label_window(vec(3), refs)
-    assert v["label"] == "person" and v["person"] == "p1"
-    close = list(np.array(vec(3)) + np.array(vec(4)))             # equidistant between two prints: no name
-    assert rp.label_window(close, refs)["label"] != "person"
-
-
-def test_a_human_decision_on_a_first_pass_line_survives_the_pass(renv, monkeypatch):
-    transcribe(first_pass(renv) and renv, monkeypatch)
-    rid = rows(renv)[0]["id"]
-    renv.db.conn.execute("INSERT INTO omi_segments (id, recording_id, user_id, seq, start_ms, end_ms, text, speaker, created_at, owner_label, owner_labelled_at) "
-                         "VALUES ('old1', ?, ?, 0, 0, 3000, 'moon', 'other', '2026-10-10T00:00:00Z', 'you', '2026-10-10T01:00:00Z')", (rid, OWNER))
-    renv.db.conn.commit()
-    run(rp.run_night(budget_s=600, runner=fake_runner()))
-    seg = renv.db.rows("SELECT owner_label, speaker, text FROM omi_segments")
-    assert seg and all(s["owner_label"] == "you" for s in seg) and seg[0]["text"] != "moon"
-    n = renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'confirmed'")[0]["n"]
-    assert n >= 1                                              # the owner's own "me" label seeded the wearer print
-
-
-def test_a_heuristic_proposal_is_never_used_until_the_owner_confirms(renv, monkeypatch):
-    transcribe(first_pass(renv) and renv, monkeypatch)
-    rid = rows(renv)[0]["id"]
-    wins = [[i * 0.75, i * 0.75 + 1.5, vec(0), 0.3] for i in range(12)]
-    run(rp.run_night(budget_s=600, runner=fake_runner({rid: {**result_for(rid), "windows": wins}})))
-    st = run(_wearer(renv))
-    assert st["confirmed"] == 0 and st["proposals"] and run(_print(renv)) is None            # proposed, not used
-    run(_confirm(renv, st["proposals"][0]["id"]))
-    assert run(_print(renv)) is not None
-
-
-async def _wearer(env):
-    from db_compat import get_compat_db
-    async with get_compat_db() as db:
-        return await rp.wearer_status(db, OWNER)
-
-
-async def _print(env):
-    from db_compat import get_compat_db
-    async with get_compat_db() as db:
-        return await rp.wearer_print(db, OWNER)
-
-
-async def _confirm(env, pid):
-    from db_compat import get_compat_db
-    async with get_compat_db() as db:
-        return await rp.confirm_wearer(db, OWNER, pid)
+def test_a_panel_only_wearer_print_can_make_a_turn_at_most_you_maybe():
+    refs = rp.Refs(you=vec(0), you_panel_only=True)
+    v = rp.label_window(vec(0), refs, dur_s=3.0)
+    assert v["key"] == "you?" and v["conf"] == "lean"                                             # the owner's PANEL profile alone never says "me" outright
+    confirmed = rp.Refs(you=vec(0))
+    assert rp.label_window(vec(0), confirmed, dur_s=3.0)["key"] == "you"
 
 
 def test_propose_wearer_needs_a_real_cluster():
@@ -282,6 +305,17 @@ def test_the_planner_prefers_the_big_model_drops_to_the_fallback_and_says_when_n
     q = rp.plan_model(20000, 1500)
     assert q["model"] == "parakeet-tdt" and not q["fits"]
     assert rp.plan_model(4000, 1500, {"qwen3-asr": 0.2})["model"] == "qwen3-asr"       # last night's measured speed wins
+
+
+def test_a_missing_pivot_model_burns_no_recording_retries(renv, monkeypatch):
+    """The worker exits 3 (model / package unavailable) with no results: the night reports model_missing and every recording keeps its retries."""
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    def no_model(manifest, out, timeout_s, mem_max="", threads=4):
+        return 3
+    out = run(rp.run_night(budget_s=600, runner=no_model))
+    r = rows(renv)[0]
+    assert out["status"] == "model_missing" and out["why"] == "model_unavailable"
+    assert r["repass_state"] == "pending" and r["repass_attempts"] == 0 and r["transcript"] == "moonshine"
 
 
 def test_a_recording_the_budget_could_not_reach_carries_to_the_next_night_untouched(renv, monkeypatch):
@@ -336,7 +370,7 @@ def test_a_forget_that_lands_between_redaction_and_the_write_gate_still_redacts(
     import memory_forgotten as mf
     learned = {"on": False}
 
-    async def fake_spans(user_id, text, *, near=True):
+    async def fake_spans(user_id, text, *, near=True, strict=False):
         i = text.find("Dana")
         return [(i, i + 4)] if (learned["on"] and i >= 0) else []
 
@@ -356,16 +390,19 @@ def test_a_forget_that_lands_between_redaction_and_the_write_gate_still_redacts(
     assert all("Dana" not in (x["text"] or "") for x in renv.db.rows("SELECT text FROM omi_segments"))
 
 
-def test_a_speech_span_shorter_than_one_window_is_skipped_not_a_crash():
+def test_speaker_units_are_one_embedding_per_short_turn_and_voting_windows_for_a_long_one_and_a_tiny_turn_is_skipped():
     import importlib.util
-    spec = importlib.util.spec_from_file_location("omi_repass_worker", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
+    spec = importlib.util.spec_from_file_location("omi_repass_worker_units", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
     w = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(w)
-    emb = w.Embedder.__new__(w.Embedder)
-    emb.one = lambda seg: np.zeros(4)
-    x = np.ones(16000 * 6, dtype="float32")
-    wins = emb.windows(x, [{"start": 0, "end": 8000}, {"start": 16000, "end": 16000 * 4}])      # a 0.5 s span first (the old code hit an unbound variable), then 3 s
-    assert wins and all(b - a >= 0.8 for a, b, _e, _r in wins) and wins[0][0] == 1.0
+    emb = w.ResNet34Units.__new__(w.ResNet34Units)
+    emb.one = lambda seg: np.ones(4)
+    x = np.ones(16000 * 30, dtype="float32")
+    wins = emb.units(x, [(1.0, 1.3), (2.0, 6.0), (10.0, 20.0)])           # 0.3 s: skipped; 4 s: ONE unit; 10 s: 1.5 s windows, hop 0.75
+    assert [(a, b) for a, b, _e, _r in wins[:1]] == [(2.0, 6.0)]
+    longs = [(a, b) for a, b, _e, _r in wins[1:]]
+    assert longs[0] == (10.0, 11.5) and longs[1][0] == 10.75 and len(longs) >= 12 and all(b - a <= 1.5 for a, b in longs)       # never a 20 s slab
+    assert len([1 for a, b, _e, _r in wins if b - a > 8.0]) == 0
 
 
 def test_the_name_hint_reaches_the_worker_and_forgotten_names_do_not(renv, monkeypatch):
@@ -423,3 +460,78 @@ def test_every_declared_backend_carries_its_budget_facts_and_the_worker_has_it()
         assert {"rtf", "gpu_rtf", "peak_rss_mb", "fallback"} <= set(b) and b["rtf"] > 0 and b["peak_rss_mb"] > 0
         assert f'"{name}"' in src, name                                                        # declared here AND registered in the worker
         assert rp.scope_mem_max(name).endswith("M")
+
+
+def _ledger_down_strict_only(monkeypatch):
+    import memory_forgotten as mf
+
+    async def down(user_id, text, *, near=True, strict=False):
+        if strict:
+            raise mf.LedgerUnavailable("down")
+        raise RuntimeError("ledger read failed")           # main's non-strict call swallows ANY failure
+    monkeypatch.setattr(mf, "spans", down)
+
+
+def test_first_pass_fails_closed_on_an_unreadable_ledger_only_while_the_repass_flag_is_on(renv, monkeypatch):
+    """Review #1: flag ON - forgotten text must never be stored, so an unreadable ledger stores no transcript (left for a retry). Flag OFF - exactly main: fail open."""
+    _ledger_down_strict_only(monkeypatch)
+    first_pass(renv)
+    r = transcribe(renv, monkeypatch, "Dana called")
+    assert "Dana" not in (r["transcript"] or "") and r["status"] != "done"
+    monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "off")
+    renv.db.conn.execute("UPDATE omi_recordings SET status = 'pending', attempts = 0")
+    renv.db.conn.commit()
+    r = transcribe(renv, monkeypatch, "Dana called")
+    assert r["status"] == "done" and r["transcript"] == "Dana called"
+
+
+def test_a_completed_member_forget_and_entity_erase_remove_work_files_of_any_age(renv, tmp_path):
+    import re as _re
+    import omi_repass_eval as eu
+    home = tmp_path / "repass"
+    (home / "work").mkdir(parents=True)
+    for n in ("a", "b"):
+        (home / "work" / f"{n}.manifest.json").write_text('{"items": [{"id": "r1", "hint": "Dana"}]}')
+        (home / "work" / f"{n}.out.jsonl").write_text('{"id": "r1", "words": ["Dana"]}')
+    eu.erase_entity(home, "m1", _re.compile("Dana"), "[forgotten]")
+    assert list((home / "work").iterdir()) == []
+    (home / "work" / "c.out.jsonl").write_text("{}")
+    eu.forget_user(home, "m1")
+    assert list((home / "work").iterdir()) == []
+
+
+def test_flag_off_redaction_stays_fail_open_even_when_the_ledger_modules_cannot_be_imported(renv, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "memory_forgotten", None)          # import raises ImportError
+    assert run(omi._redact_forgotten("u1", "Dana called")) == "Dana called"
+    with pytest.raises(Exception):
+        run(omi._redact_forgotten("u1", "Dana called", strict=True))
+
+
+def test_entity_erase_rewrites_hypotheses_inside_the_gate_so_a_write_in_flight_cannot_survive_it(renv, tmp_path, monkeypatch):
+    """Review: the hypothesis rewrite used to run BEFORE the erase gate, so a writer holding ``writing`` could land forgotten text after it."""
+    import re as _re
+    home = Path(rp.home_dir())
+    (home / "hyps").mkdir(parents=True, exist_ok=True)
+    f = home / "hyps" / "hyps-2026-11-10.jsonl"
+    f.write_text("")
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def writer():
+            async with erase_gate.writing("m1", erase_gate.generation("m1")):
+                entered.set()
+                await release.wait()
+                f.write_text(json.dumps({"u": "m1", "rid": "r1", "hyps": {"e": "Dana called"}, "rover": "Dana called", "slots": []}) + "\n")
+
+        w = asyncio.ensure_future(writer())
+        await entered.wait()
+        er = asyncio.ensure_future(omi.erase_entity("m1", _re.compile("Dana"), strict=True))
+        await asyncio.sleep(0.05)
+        assert not er.done()                          # the erase is queued behind the in-flight write, not racing past it
+        release.set()
+        await w
+        await er
+    run(scenario())
+    assert "Dana" not in f.read_text() and "[forgotten]" in f.read_text()

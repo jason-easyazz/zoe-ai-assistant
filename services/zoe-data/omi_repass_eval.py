@@ -18,6 +18,7 @@ import difflib
 import json
 import os
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -63,7 +64,7 @@ def norm_keep(s: str) -> list[str]:
     """Normalised words that KEEP fillers (the voting and the fused text stay verbatim): lower case, numbers < 1000 spelt, punctuation removed."""
     s = (s or "").lower().replace("-", " ").replace("\u2014", " ").replace("\u2019", "'")
     s = re.sub(r"\b(\d+)\b", lambda m: _n2w(int(m.group(1))) if int(m.group(1)) < 1000 else m.group(1), s)
-    return re.sub(r"[^a-z' ]+", " ", s).split()
+    return re.sub(r"[^a-z0-9' ]+", " ", s).split()       # digits survive only for numbers >= 1000 (smaller ones were spelt above): a year or an amount is kept
 
 
 def _rtoks(text: str) -> list[tuple]:
@@ -203,14 +204,16 @@ LOW_CONF_TAG = "[low confidence]"
 
 
 def is_contested(row: dict) -> bool:
-    """A stored chunk row the owner's morning transcript check should look at: flagged low confidence, or any ROVER slot without a strict majority."""
-    return bool(row.get("low_conf") or row.get("slots"))
+    """A stored row the owner's morning transcript check should look at: a "who said this?" turn (``kind`` who_said), or a chunk flagged low confidence / with a ROVER slot without a strict majority."""
+    return row.get("kind") == "who_said" or bool(row.get("low_conf") or row.get("slots"))
 
 
-def check_queue(home: Path, user_id: str, rid: Optional[str] = None) -> list[dict]:
+def check_queue(home: Path, user_id: str, rid: Optional[str] = None, kind: Optional[str] = None) -> list[dict]:
     """THE INPUT for the owner's morning transcript-check feature (feature/transcript-check): per contested chunk of the member's recordings - ``rid``, ``i``, ``t0``/``t1``, each
     model's alternative (``hyps``), the ROVER pick (``rover``), the contested slots with their vote counts (``slots``: pick, votes {word: n}, who {word: [models]}) and ``low_conf``.
-    PRIVATE (it holds words): the caller is the member's own surface. Newest night first."""
+    A SECOND item kind, ``who_said``, carries the turns the speaker step would not decide (``mark`` = "lean" for "X?", "unknown" for "?"): ``rid``, ``seg_id`` (the stored segment: the owner's tap
+    calls ``omi_repass.confirm_who`` with the person, which adds that turn's embedding to the person's pendant print), ``t0``/``t1`` and ``cands`` = [[person id | "you", score]] best first.
+    ``kind`` filters ("transcript" | "who_said"). PRIVATE (it holds words and voice-match scores): the caller is the member's own surface. Newest night first."""
     d = hyps_dir(home)
     out: list[dict] = []
     for p in (sorted(d.glob("hyps-*.jsonl"), reverse=True) if d.exists() else []):
@@ -219,8 +222,9 @@ def check_queue(home: Path, user_id: str, rid: Optional[str] = None) -> list[dic
                 r = json.loads(line)
             except ValueError:
                 continue
-            if r.get("u") == user_id and (rid is None or r.get("rid") == rid) and is_contested(r):
-                out.append({k: r.get(k) for k in ("rid", "i", "t0", "t1", "hyps", "rover", "slots", "low_conf", "voters")})
+            k = r.get("kind") or "transcript"
+            if r.get("u") == user_id and (rid is None or r.get("rid") == rid) and (kind is None or k == kind) and is_contested(r):
+                out.append({"kind": k, **{x: r.get(x) for x in ("rid", "i", "t0", "t1", "hyps", "rover", "slots", "low_conf", "voters", "seg_id", "mark", "cands")}})
     return out
 
 
@@ -387,6 +391,25 @@ def prune_hyps(home: Path, today: Optional[date] = None, keep_days: int = HYPS_K
                 n += 1
         except ValueError:
             continue
+    sweep_work(home)
+    return n
+
+
+WORK_STALE_S = 6 * 3600          # a worker's manifest / output older than this belongs to a run that died (a night is ~2 h); live runs delete their own files
+
+
+def sweep_work(home: Path, older_than_s: float = WORK_STALE_S, now: Optional[float] = None) -> int:
+    """Delete the abandoned per-run work files (``work/<id>.manifest.json`` + ``.out.jsonl``: audio paths, raw transcripts, speaker embeddings) a SIGKILL / reboot left behind."""
+    import time
+    n, t = 0, (now if now is not None else time.time())
+    d = home / "work"
+    for p in (list(d.iterdir()) if d.is_dir() else []):
+        try:
+            if p.is_file() and (older_than_s <= 0 or t - p.stat().st_mtime >= older_than_s):
+                p.unlink()
+                n += 1
+        except OSError:
+            continue
     return n
 
 
@@ -408,6 +431,7 @@ def _rewrite(home: Path, fn: Callable[[dict], Optional[dict]]) -> int:
         tmp.write_text("\n".join(keep) + ("\n" if keep else ""))
         os.chmod(tmp, 0o600)
         os.replace(tmp, p)
+    sweep_work(home, 0)       # an erasure clears EVERY work file whatever its age: they hold the same words + voice embeddings and name no member, so none can be proven clean (scratch; a run that loses one retries)
     return n
 
 
@@ -416,17 +440,42 @@ def forget_user(home: Path, user_id: str) -> int:
     return _rewrite(home, lambda r: None if r.get("u") == user_id else r)
 
 
+def _scrub(obj: Any, rx: "re.Pattern[str]", mark: str) -> Any:
+    """Redact DECODED strings and dict keys (never the JSON text: ``json.dumps`` escapes non-ASCII, so a name such as an accented one would not match)."""
+    if isinstance(obj, str):
+        return rx.sub(mark, unicodedata.normalize("NFC", obj))       # composed and decomposed spellings of an accented name are the same name
+    if isinstance(obj, dict):
+        out: dict = {}
+        for k, v in obj.items():
+            nk = rx.sub(mark, k) if isinstance(k, str) else k
+            if nk in out and isinstance(out[nk], (int, float)) and isinstance(v, (int, float)):
+                out[nk] += v                                   # two forgotten spellings collapse onto the mark: keep the vote count
+            else:
+                out[nk] = _scrub(v, rx, mark)
+        return out
+    if isinstance(obj, list):
+        return [_scrub(v, rx, mark) for v in obj]
+    return obj
+
+
 def erase_entity(home: Path, user_id: str, rx: "re.Pattern[str]", mark: str = "[forgotten]") -> int:
-    """A forgotten name: it is replaced wherever a hypothesis of that member holds it."""
+    """A forgotten name: it is replaced wherever a hypothesis of that member holds it (hypotheses, the ROVER pick AND the contested-slot picks / vote keys / who keys)."""
+    rxn = re.compile(unicodedata.normalize("NFC", rx.pattern), rx.flags) if isinstance(getattr(rx, "pattern", None), str) else rx
+
     def fn(r: dict) -> Optional[dict]:
         if r.get("u") != user_id:
             return r
-        blob = json.dumps({k: r.get(k) for k in ("hyps", "rover", "slots")})
-        if not rx.search(blob):
+        before = {k: r.get(k) for k in ("hyps", "rover", "slots")}
+        clean = _scrub(before, rxn, mark)
+        if clean == before:
             return r
-        clean = json.loads(rx.sub(mark, blob))                      # hypotheses, the ROVER pick AND the contested-slot picks / vote keys / who keys
         return {**r, **clean}
     return _rewrite(home, fn)
+
+
+def forget_recording(home: Path, user_id: str, rid: str) -> int:
+    """A recording is deleted: every hypothesis / who-said line of THAT recording goes."""
+    return _rewrite(home, lambda r: None if (r.get("u") == user_id and r.get("rid") == rid) else r)
 
 
 def score_correction(fixed: str, hyps: dict, bar: float = 0.95) -> dict:
@@ -445,9 +494,11 @@ def note_owner_correction(home: Path, user_id: str, rid: str, start_ms: int, end
                 r = json.loads(line)
             except ValueError:
                 continue
+            if (r.get("kind") or "transcript") != "transcript":
+                continue                                    # a who_said / speaker-check row shares the store but holds no hypotheses: nothing to score
             if r.get("u") != user_id or r.get("rid") != rid or r["t1"] * 1000 <= start_ms or r["t0"] * 1000 >= end_ms:
                 continue
-            for m, v in score_correction(fixed, r["hyps"]).items():
+            for m, v in score_correction(fixed, r.get("hyps") or {}).items():
                 t = tally.setdefault(m, [0, 0])
                 t[0 if v == "hit" else 1] += 1
     night = night or datetime.now(timezone.utc).date().isoformat()

@@ -111,13 +111,10 @@ def is_food_temperature(text: str) -> bool:
     return bool(_FOOD_TEMP_RE.search(low)) and not _OUTDOOR_WORD_RE.search(low)
 
 
-# "weather in Perth" / "what's the forecast for Broome tomorrow": the place the user NAMED (never the household default).
-_PLACE_TAIL = (r"(?:\s+(?:for\s+(?:the\s+)?)?(?:today|tomorrow|tonight|right\s+now|now|the\s+(?:week|weekend)|"
-               r"this\s+(?:week|weekend|morning|afternoon|evening)|please|at\s+the\s+moment))*")
-_PLACE_RE = re.compile(
-    rf"\b(?:weather|forecast|temp(?:erature)?|raining|rain|hot|cold|warm|windy)\b.*?\b(?:in|for|at)\s+"
-    rf"(?P<place>[a-z][a-z'.-]*(?:\s+[a-z][a-z'.-]*){{0,2}}?){_PLACE_TAIL}\s*[?.!]*$"
-)
+# "weather in Perth" / "what's the forecast for Broome tomorrow" / "weather in bunbury today, we're driving down saturday":
+# the place(s) the user NAMED (never the household default). The place is the run of words after in/for/at up to the first
+# stop word or punctuation mark, so a trailing clause ("today, were driving down saturday") no longer hides it (QA 6b: the
+# old pattern was anchored to the END of the message, so Bunbury / Albany fell back to the household's town).
 _NOT_A_PLACE = frozenset((
     "the a an my our your this that it here there town area home house inside outside indoors outdoors case general morning "
     "afternoon evening night day today tomorrow tonight week weekend early late summer winter spring autumn oven fridge freezer "
@@ -125,20 +122,109 @@ _NOT_A_PLACE = frozenset((
     "hall hallway attic basement cellar bedroom bathroom lounge roast bbq dinner lunch breakfast trip holiday picnic walk run "
     "game party wedding event me us you them"
 ).split())
+# words that END a place name: time words, days, pronouns, verbs and joiners that follow it in a sentence
+_PLACE_STOP = _NOT_A_PLACE | frozenset((
+    "now please at on in for and or but then also plus so if when while because since as is are was were be been am do does did "
+    "we i he she they will would can could should going gonna driving flying heading headed visiting want wanted need needed "
+    "like thanks thank monday tuesday wednesday thursday friday saturday sunday next last coming moment later soon what how "
+    "about with tho though right ok okay too again just"
+).split())
+_WEATHER_ANCHOR_RE = re.compile(r"\b(?:weather|forecast|temp(?:erature)?|raining|rain|hot|cold|warm|windy|sunny|humid)\b")
+_TIME_LEAD_RE = re.compile(
+    r"^(?:[\s,;?.!]*(?:for\s+)?(?:the\s+)?(?:today|tomorrow|tonight|now|please|right\s+now|this\s+(?:week|weekend|morning|afternoon|evening)))*")
+# an abbreviation period belongs to the place ("St. Louis", "Mt. Barker"); any other period ends the clause
+_PLACE_CHARS = r"(?:[^?!.,;:]|(?:(?<=\bst)|(?<=\bmt)|(?<=\bft)|(?<=\bste)|(?<=\bpt))\.)*"
+_PREP_PLACE_RE = re.compile(r"\b(?:in|for|at)\s+(?P<rest>[a-z]" + _PLACE_CHARS + ")")
+_ALSO_RE = re.compile(
+    r"^[\s,;?.!]*(?:and|or|plus|then|also)\s+(?:(?:what|how)\s+about\s+)?(?:(?P<prep>in|for|at)\s+)?(?P<rest>[a-z]" + _PLACE_CHARS + ")")
+
+
+def _place_words(rest: str) -> tuple[str, str]:
+    """(place, remainder) from the words after a preposition: up to 3 tokens, ended by a stop word. ("", rest) when the first
+    token is a stop word (``in the oven``, ``in living room``) - that is a room or a time, never a town."""
+    toks = rest.split()
+    if not toks or toks[0].strip("'.-") in _PLACE_STOP:
+        return "", rest
+    out = []
+    for tok in toks[:3]:
+        w = tok.strip("'.-")
+        if not w or w in _PLACE_STOP:
+            break
+        out.append(w)
+    if not out:
+        return "", rest
+    return " ".join(out), " ".join(toks[len(out):])
+
+
+def weather_places(text: str) -> list[str]:
+    """The places a weather question names, in order, at most 3 (``weather in fremantle today? and mandurah`` ->
+    ``["Fremantle", "Mandurah"]``); ``[]`` for the household default. Pure."""
+    low = re.sub(r"\s+", " ", (text or "").lower().replace("\u2019", "'").strip())
+    if not low or is_food_temperature(low):
+        return []
+    anchor = _WEATHER_ANCHOR_RE.search(low)
+    if not anchor:
+        return []
+    pos, m, place, rest = anchor.start(), None, "", ""
+    while True:
+        m = _PREP_PLACE_RE.search(low, pos)
+        if not m:
+            return []
+        place, rest = _place_words(m.group("rest"))
+        if place:
+            break
+        pos = m.start() + 1        # "for the weekend in perth": the first preposition introduced a time - the town follows a later one
+    places = [place.title()]
+    after = (rest + low[m.end("rest"):]) if rest else low[m.end("rest"):]
+    for _ in range(2):
+        after = _TIME_LEAD_RE.sub("", after)
+        am = _ALSO_RE.match(after)
+        if not am:
+            break
+        p2, rest2 = _place_words(am.group("rest"))
+        after = rest2 + after[am.end():]
+        # a bare "and <word>" is a place only when it ENDS the question; "and in <word>" / "what about <word>" is explicit
+        explicit = bool(am.group("prep")) or bool(re.search(r"\babout\b", am.group(0)))
+        if not p2 or (not explicit and _TIME_LEAD_RE.sub("", rest2).strip(" ?.!,;")):
+            break
+        if p2.title() not in places:
+            places.append(p2.title())
+    return places
+
+
+# A weather question with a SECOND, different question riding on it ("whats the weather in bunbury and how hot for a pork roast", QA round 7):
+# the weather expert answered the first half and the second was dropped without a word. The brain holds both tools, so the whole turn is its.
+_SECOND_Q_RE = re.compile(
+    r"(?:\b(?:and|also|plus|then|oh\s+and)\s+|[.?!;,]\s+)(?P<rest>(?:what|whats|what's|how|when|where|who|why|which|should|can|could|do|does|is|are|will)\b.*)$")
+
+
+_JOINER_TAIL_RE = re.compile(r"(?:\b(?:and|also|plus|then|oh\s+and)\s+|[.?!;,]\s+)(?P<rest>.+)$")
+
+
+def has_other_question(text: str) -> bool:
+    """True when ``text`` carries a second question that is NOT about the weather (a cooking time, a place to eat). "and will it rain
+    tomorrow" / "and how hot tomorrow" are weather; "and what about albany" is a place (``weather_places``). Pure."""
+    low = re.sub(r"\s+", " ", (text or "").lower().replace("\u2019", "'").strip())
+    # a cooking clause with no question opener ("... and cooking temperature for pork roast", "... plus safe internal temp for chicken")
+    tail = _JOINER_TAIL_RE.search(low)
+    if tail and not _OUTDOOR_WORD_RE.search(tail.group("rest")) and (
+            is_food_temperature(tail.group("rest")) or re.search(rf"\b(?:{_FOOD}|cook\w*|roast\w*|bak\w*|grill\w*)\b", tail.group("rest"))):
+        return True
+    m = _SECOND_Q_RE.search(low)
+    if not m:
+        return False
+    rest = m.group("rest")
+    if is_food_temperature(rest) or (re.search(rf"\b(?:{_FOOD})\b", rest) and not _OUTDOOR_WORD_RE.search(rest)):
+        return True      # a cooking question, however it is phrased ("how hot for a pork roast")
+    if _KEYWORD_RE.search(rest) or _WEATHER_ANCHOR_RE.search(rest) or classify_weather_ask(rest) is not None:
+        return False
+    return not re.match(r"^(?:what|how)(?:'s|s)?\s+about\b", rest)
 
 
 def weather_place(text: str) -> str:
-    """The place a weather question names ("weather in perth" -> "perth"), or "" for the household default. Pure."""
-    low = re.sub(r"\s+", " ", (text or "").lower().strip())
-    if is_food_temperature(low):
-        return ""
-    m = _PLACE_RE.search(low)
-    if not m:
-        return ""
-    place = m.group("place").strip(" .'-")
-    if not place or any(tok in _NOT_A_PLACE or tok == "for" for tok in place.split()):
-        return ""      # ANY token of a room / time / purpose word means it is not a town ("living room", "early morning", "work")
-    return place.title()
+    """The first place a weather question names ("weather in perth" -> "Perth"), or "" for the household default. Pure."""
+    p = weather_places(text)
+    return p[0] if p else ""
 
 
 @dataclass(frozen=True)

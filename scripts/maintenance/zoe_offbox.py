@@ -104,6 +104,7 @@ ZOE_TREE_EXCLUDES = (
     "bakeoff-*", "chroma-migration-rehearsal",   # lab artefacts (the bake-off pgdata is root-owned)
     "logs", "*.log", "*.log.[0-9]*",              # text logs age out on the box (forget-reach: app_logs)
     "omi-recordings",          # pendant audio: claim-time retention + third-party voices; never off-box
+    "omi-repass",              # the night re-pass's hypotheses (the words, 7-day retention) + worker outputs (speaker embeddings): never off-box
     "recall-gate-trace",       # the owner's opt-in recall-gate trace: raw turns + row text, 7-day retention; never off-box
     "compaction-salvage-*",    # transient emergency spill files
     "env", "secrets",          # the secrets tier owns these

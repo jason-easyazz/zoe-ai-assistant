@@ -18,8 +18,9 @@ THE GUARANTEES (each pinned by ``tests/test_named_guests.py``, with a break-the-
      ``speaker_profiles`` row and is dropped. No PIN-free session, no member data, no member memory.
   2. When the guest scores above the member the panel also named, the MEMBER claim is dropped (``on`` only): a voice closer to a
      guest than to a member is not that member.
-  3. A person who is (or may be) a child, a soft-deleted person, or a name the member FORGOT (the forget ledger, strict: an outage
-     means no guest) is never matched or served to a panel.
+  3. A soft-deleted person, or a name the member FORGOT (the forget ledger, strict: an outage means no guest) is never matched or
+     served to a panel. A child is NOT refused (owner 2026-11-08: voice works the same for adults and children): a person who is or
+     may be a child (``person_age``) is MARKED ``Guest.child`` and the turn gets the child-safe block (``guest_line``).
   Enrolment (only a verified adult member, through a single-use ticket) is ``named_guest_enrol.py``; what is kept and erasing is
   ``named_guest_memory.py``.
 
@@ -57,6 +58,7 @@ class Guest:
     name: str
     owner_user_id: str
     score: float = 0.0
+    child: bool = False      # a possible child (``person_age``): recognised exactly like anyone, handled child-safe (never refused)
 
 
 # The guest this turn's voice matched (bound by voice_command, read by the brain blocks and the post-turn memory pass). A
@@ -142,10 +144,14 @@ async def accept(payload: dict, caller: dict, *, member_identified: bool) -> Opt
             return None
         g = _claim_gate(payload, caller)
         if g is None:
+            cand = guest_claim(payload)
+            if m == "shadow" and cand is not None and (caller or {}).get("source") == "device":
+                await _log_margins(m, payload, cand, await _lookup(cand[0], speaker_models.acting_model(), cand[1]), matched=False)
             return None
         guest = await _lookup(g[0], speaker_models.acting_model(), g[1])
         if guest is None:
             return None
+        await _log_margins(m, payload, g, guest, matched=True)
         if m == "shadow":
             logger.info("NAMED_GUEST mode=shadow would_greet=1 score=%.3f", g[1])
             return None
@@ -154,6 +160,23 @@ async def accept(payload: dict, caller: dict, *, member_identified: bool) -> Opt
     except Exception as exc:  # noqa: BLE001
         logger.warning("named_guests: accept failed (plain guest turn): %s", type(exc).__name__)
         return None
+
+
+async def _log_margins(m: str, payload: dict, cand: tuple[str, float], guest: Optional["Guest"], *, matched: bool) -> None:
+    """The match MARGINS (guest score minus the model's bar, and minus the member candidate's score), counts and scores only, tagged
+    ``child=0|1``: ResNet34 is trained on adult voices, so whether a child-marked profile needs its own bar is read from these lines
+    (shadow week: ``grep NAMED_GUEST_MARGIN``). Near-misses (under the bar) are logged too, in shadow only. Never raises."""
+    if guest is None:
+        return
+    try:
+        block = (payload or {}).get("speaker") or {}
+        bar = speaker_models.claim_threshold(str(block.get("model_id") or ""), block.get("speech_s"), str((payload or {}).get("window") or ""))
+        member = _finite(block.get("score"))
+        logger.info("NAMED_GUEST_MARGIN mode=%s child=%d matched=%d score=%.3f margin_bar=%s margin_member=%s", m, int(guest.child),
+                    int(matched), cand[1], "na" if bar is None else "%.3f" % (cand[1] - bar),
+                    "na" if member is None else "%.3f" % (cand[1] - member))
+    except Exception:  # noqa: BLE001 - a log line is never worth a turn
+        pass
 
 
 async def _lookup(person_id: str, model_id: str, score: float) -> Optional[Guest]:
@@ -166,12 +189,13 @@ async def _lookup(person_id: str, model_id: str, score: float) -> Optional[Guest
             "WHERE v.people_id = ? AND v.channel = ? AND v.model_id = ? AND v.learning_enabled = 1 AND p.user_id = v.owner_user_id "
             "AND (p.deleted = 0 OR p.deleted IS NULL) LIMIT 1", (person_id, CHANNEL, model_id)) as cur:
             row = await cur.fetchone()
-    if row is None or person_may_be_child({"relationship": row[2], "birthday": row[3]}):
+    if row is None:
         return None
     name = _safe(row[1], 40)
     if not name or await _forgotten(str(row[0]), name):
         return None
-    return Guest(person_id=person_id, name=name, owner_user_id=str(row[0]), score=score)
+    return Guest(person_id=person_id, name=name, owner_user_id=str(row[0]), score=score,
+                 child=person_may_be_child({"relationship": row[2], "birthday": row[3]}))
 
 
 async def _forgotten(owner_user_id: str, name: str) -> bool:
@@ -190,7 +214,6 @@ async def sync_entries(served_models: Iterable[str]) -> list[dict]:
     if mode() == "off":
         return []
     from db_compat import get_compat_db
-    from person_age import person_may_be_child
 
     served = set(served_models)
     async with get_compat_db() as db:
@@ -201,7 +224,7 @@ async def sync_entries(served_models: Iterable[str]) -> list[dict]:
             rows = await cur.fetchall()
     out = []
     for r in rows:
-        if r[3] not in served or person_may_be_child({"relationship": r[4], "birthday": r[5]}):
+        if r[3] not in served:
             continue
         if await _forgotten(str(r[6]), _safe(r[1], 40)):        # raises on a ledger outage: the caller serves no guest at all
             continue
@@ -213,6 +236,14 @@ async def sync_entries(served_models: Iterable[str]) -> list[dict]:
 # ── the brain ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def guest_line(guest: Guest) -> str:
+    if guest.child:
+        from member_register import KID_REGISTER
+
+        return (f"You are talking with {guest.name}, a child who is a guest of this household: not a member and not the owner. "
+                f"Address them as {guest.name}. {KID_REGISTER} Keep everything child-safe: nothing frightening, violent, sexual or "
+                f"adult-only (no alcohol, drugs, gambling or adult jokes), no flirting, no secrets from their grown-ups. If they seem "
+                f"upset, hurt or unsafe, be kind and suggest they tell a grown-up who is here. Do not share or change anything private "
+                f"of any household member (their lists, calendar, reminders, messages or memories).")
     return (f"You are talking with {guest.name}, a guest of this household: not a member and not the owner. Address them as "
             f"{guest.name}. They have guest permissions only: do not share or change anything private of any household member "
             f"(their lists, calendar, reminders, messages or memories).")
@@ -224,9 +255,14 @@ async def brain_block(user_id: str) -> str:
         guest = current()
         from user_filters import is_unidentified
 
-        if guest is None or not is_unidentified(user_id):
+        if not is_unidentified(user_id):
             return ""
         from identity_facts import BLOCK_CLOSE, BLOCK_OPEN
+
+        if guest is None:
+            import named_guest_learning     # an unknown voice Zoe is now sure of: ask its name (ZOE_GUEST_VOICE_LEARN=on)
+
+            return f"{BLOCK_OPEN}\n{named_guest_learning.ask_line()}\n{BLOCK_CLOSE}" if named_guest_learning.asking() else ""
 
         lines = [guest_line(guest)]
         import named_guest_memory
@@ -235,6 +271,12 @@ async def brain_block(user_id: str) -> str:
         if past:
             lines.append(f"Earlier conversations with {guest.name} (theirs only):")
             lines.extend(past)
+        import conversation_notes     # notes about their earlier conversations (ZOE_CONVERSATION_NOTES): THEIR layer, theirs only
+
+        notes = await conversation_notes.guest_lines(guest)
+        if notes:
+            lines.append(f"Notes from earlier conversations with {guest.name} (theirs only, not a member's):")
+            lines.extend(notes)
         return f"{BLOCK_OPEN}\n" + "\n".join(lines) + f"\n{BLOCK_CLOSE}"
     except Exception as exc:  # noqa: BLE001
         logger.debug("named_guests: brain block skipped: %s", type(exc).__name__)

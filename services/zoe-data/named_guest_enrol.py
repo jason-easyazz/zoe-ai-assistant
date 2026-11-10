@@ -3,13 +3,13 @@ guest is; runbook ``docs/knowledge/named-guests.md``).
 
   the ask      the spoken tier (``fast_tiers``, after ``voice_enrollment``): a member whose voice the server accepted, or who signed in
                with a fresh PIN (``speaker_verified`` not False), and who is positively an adult. A guest, an unverified voice, a child
-               or a typed channel is refused with a spoken reason. The name of a household member is refused (they enrol themselves).
+               ASKER or a typed channel is refused with a spoken reason. The name of a household member is refused (they enrol themselves).
   the run      the SAME daemon enrolment run members use (``voice_enroll`` command, the member script with the guest's name), carrying
                ``guest.ticket``: a single-use, panel-bound, 4-minute server ticket that names the member and the guest.
   the store    ``POST /api/voice/guests/enroll`` -> ``store_profile``: refused without that ticket, so an unverified voice can never
                create, overwrite or re-enrol a guest (or a member). The guest is the member's OWN person (an existing one of that
                name is linked); the print is a ``learned_voiceprints`` row with ``channel='panel'``, replacing that member's old one.
-               A child (or possible child) is refused, and so is a profile within the FAR-1 % bar of any member's own (the member
+               A child GUEST is enrolled like anyone (owner 2026-11-08) and marked child-safe at match time; a profile within the FAR-1 % bar of any member's own (the member
                said the phrases, not the guest). A name the member once forgot is released AFTER the store (an explicit
                re-teach, as the forget ledger asks).
 Pinned by ``tests/test_named_guest_enrol.py``. Flag: ``ZOE_NAMED_GUESTS`` (the tier answers only when ``on``).
@@ -137,47 +137,53 @@ async def store_profile(payload: dict, caller: dict) -> dict:
         vec = None
     if vec is None:
         raise GuestError("invalid embedding for this model")
+    return await store_print(t.owner_user_id, t.name, vec, model_id, sample_count=(payload or {}).get("sample_count"),
+                             forgotten_at_issue=t.forgotten_at_issue, ref="named_guest_enrol")
+
+
+async def store_print(owner: str, name: str, vec, model_id: str, *, sample_count, forgotten_at_issue: bool, ref: str) -> dict:
+    """THE one write of a named guest's panel print, shared by the panel's ticketed upload (``store_profile``) and the owner's
+    backfill from saved clips (``named_guest_backfill``): the same refusals (a member's name, a profile within the FAR-1 % bar of a
+    member's, a name forgotten since the ask began, a ledger outage), the member's OWN person, ``channel='panel'``. Raises
+    ``GuestError``."""
     import memory_forgotten as mf
 
     try:
-        forgotten_now = await mf.matches(t.owner_user_id, t.name, strict=True)
+        forgotten_now = await mf.matches(owner, name, strict=True)
     except Exception as exc:  # noqa: BLE001 - the ledger cannot answer: nothing is stored
         raise GuestError("the forget ledger is unavailable; nothing was stored", 503) from exc
-    if forgotten_now and not t.forgotten_at_issue:
+    if forgotten_now and not forgotten_at_issue:
         # The member forgot this name AFTER the enrolment began (review #2341): the pending upload must not undo that forget.
         raise GuestError("that name was forgotten after the enrolment began; nothing was stored", 409)
     import contacts_store as cs
     import omi_voices
     from db_compat import get_compat_db
-    from person_age import person_may_be_child
 
     blob = vec.astype("<f4").tobytes()
     async with get_compat_db() as db:
-        if await _is_member_name(db, t.name):
+        if await _is_member_name(db, name):
             raise GuestError("that is a household member", 409)
         if await _sounds_like_a_member(db, vec, model_id):
             # The member (not the guest) said the phrases: storing it would make the member's own voice "Quinn" and drop their claims.
             raise GuestError("that voice sounds like a household member", 409)
         try:
-            person = await omi_voices._resolve_person(db, t.owner_user_id, None, t.name, "named_guest_enrol")
+            person = await omi_voices._resolve_person(db, owner, None, name, ref)
         except omi_voices.VoiceError as exc:
             raise GuestError(str(exc), exc.status) from exc
-        if person_may_be_child(person):
-            raise GuestError("a child's voice is not learned", 409)
         now = cs.now_iso()
         await db.execute("DELETE FROM learned_voiceprints WHERE owner_user_id = ? AND people_id = ? AND model_id = ? AND channel = ?",
-                         (t.owner_user_id, person["id"], model_id, CHANNEL))
+                         (owner, person["id"], model_id, CHANNEL))
         await db.execute(
             "INSERT INTO learned_voiceprints (id, owner_user_id, people_id, model_id, channel, embedding, n_segments, n_recordings, "
             "status, learning_enabled, created_at, updated_at, last_confirmed_at, expires_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'confirmed', 1, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), t.owner_user_id, person["id"], model_id, CHANNEL, blob,
-             max(1, min(int(payload.get("sample_count") or 1), 16)), now, now, now, omi_voices.KEEP_UNTIL_FORGOTTEN))
+            (str(uuid.uuid4()), owner, person["id"], model_id, CHANNEL, blob,
+             max(1, min(int(sample_count or 1), 16)), now, now, now, omi_voices.KEEP_UNTIL_FORGOTTEN))
         await db.commit()
-    if t.forgotten_at_issue:
+    if forgotten_at_issue:
         try:
             # The member's explicit re-teach: they asked to learn a name they had forgotten (AFTER the store, as the ledger asks).
-            await mf.release(t.owner_user_id, person["name"])
+            await mf.release(owner, person["name"])
         except Exception as exc:  # noqa: BLE001 - the shield stays; the guest is then simply not matched
             logger.warning("named_guests: forget-ledger release failed: %s", type(exc).__name__)
     logger.info("NAMED_GUEST enrolled=1 linked_existing=%d", 0 if person.get("created") else 1)

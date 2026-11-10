@@ -182,6 +182,7 @@ def test_every_post_turn_llama_caller_goes_through_the_gate():
 
     import latent_intent_detector
     import memory_digest
+    import conversation_notes
     import memory_retire
     import person_extractor_llm
     import structural_reader
@@ -194,6 +195,7 @@ def test_every_post_turn_llama_caller_goes_through_the_gate():
         (structural_reader, structural_reader._call),
         (structural_verifier, structural_verifier.judge),
         (memory_retire, memory_retire.ask_judge),
+        (conversation_notes, conversation_notes._complete),
     ):
         src = inspect.getsource(fn)
         # run_background, not the bare background_slot: only it yields the slot to a household turn that starts mid-call.

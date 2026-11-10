@@ -80,12 +80,36 @@ async def recall_lines(guest: Guest) -> list[str]:
     return list(reversed(out))
 
 
+async def turns_since(owner_user_id: str, person_id: str, since_epoch: float) -> list[tuple]:
+    """``(id, epoch, user_text, reply)`` of one guest's kept exchanges since ``since_epoch``, oldest first. The night pass that makes
+    ``conversation_notes`` reads this; it is the guest's own layer, read for that guest's notes only."""
+    from db_compat import get_compat_db
+    from memory_episodes import _epoch
+
+    async with get_compat_db() as db:
+        async with db.execute("SELECT id, created_at, user_text, reply FROM named_guest_turns WHERE user_id = ? AND people_id = ? "
+                              "ORDER BY created_at ASC", (owner_user_id, person_id)) as cur:
+            rows = await cur.fetchall()
+    out = []
+    for r in rows:
+        at = _epoch(r[1])
+        if at is not None and at >= since_epoch:
+            out.append((str(r[0]), at, str(r[2] or ""), str(r[3] or "")))
+    return out
+
+
 async def erase_people(db, owner_user_id: str, person_ids: Iterable[str]) -> int:
     """Every remembered turn of these guests in this member's layer (the forget path). RAISES on a failure, except a missing
     table (before 0072 there is nothing to erase)."""
     ids = sorted(set(person_ids))
     if not ids:
         return 0
+    try:      # their saved corpus clips go with them (voice_clips; counts only, never raises, nothing when none were labelled)
+        import voice_clips
+
+        voice_clips.erase_guests(ids)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("named_guests: saved clips of a forgotten guest not removed (%s)", type(exc).__name__)
     try:
         cur = await db.execute(f"DELETE FROM named_guest_turns WHERE user_id = ? AND people_id IN ({', '.join('?' * len(ids))})",
                                (owner_user_id, *ids))
@@ -93,7 +117,14 @@ async def erase_people(db, owner_user_id: str, person_ids: Iterable[str]) -> int
         if "named_guest_turns" in str(exc) and ("no such table" in str(exc) or "does not exist" in str(exc)):
             return 0
         raise
-    return int(getattr(cur, "rowcount", 0) or 0)
+    notes = 0
+    try:      # the notes made from those turns are theirs too (conversation_notes; raises, except a missing table)
+        import conversation_notes
+
+        notes = await conversation_notes.erase_people(db, owner_user_id, ids)
+    except ImportError:
+        pass
+    return int(getattr(cur, "rowcount", 0) or 0) + notes
 
 
 async def list_for(owner_user_id: str, *, admin: bool = False) -> list[dict]:

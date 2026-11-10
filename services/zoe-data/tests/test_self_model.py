@@ -101,8 +101,17 @@ def test_every_group_flag_and_unsupported_id_has_a_line_in_every_language():
             assert u["alt"] in groups, u
 
 
-def test_every_flag_named_in_the_neutral_file_is_in_the_inventory():
-    inv = json.loads((REPO / "docs/knowledge/flag-inventory.json").read_text())["flags"]["prod"]
+def test_every_flag_named_in_the_neutral_file_is_in_the_inventory(tmp_path, monkeypatch, request):
+    # The inventory is a LOCAL build product (deploy / a device generates it; never committed, never fetched), so scan
+    # this tree and point the runtime reader at that copy - otherwise inventory_default() reads an absent file and the
+    # agreement check below passes vacuously.
+    from flag_inventory_support import write_inventory
+
+    monkeypatch.setattr(sm, "INVENTORY", write_inventory(tmp_path / "flag-inventory.json"))
+    sm._inventory.cache_clear()
+    request.addfinalizer(sm._inventory.cache_clear)   # never leak the scanned copy into a later test
+    inv = json.loads(sm.INVENTORY.read_text())["flags"]["prod"]
+    assert sm._inventory(), "self_model did not load the scanned inventory"
     nf = sm.neutral()
     flags = [d["flag"] for d in nf["dark_flags"]] + [r["flag"] for r in nf["memory_rules"] if r.get("flag")] \
         + [e["flag"] for e in nf["egress"] if e.get("flag")]

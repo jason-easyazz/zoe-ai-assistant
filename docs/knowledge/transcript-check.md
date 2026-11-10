@@ -25,7 +25,7 @@ Each box has a test (`services/zoe-data/tests/test_transcript_check.py`, `test_t
 
 ## What it is
 
-Two halves around one table (`omi_check_items`, migration `0075`).
+Two halves around one table (`omi_check_items`, migration `0076`).
 
 **Night (the re-pass).** The night re-pass runs Qwen3-ASR and Parakeet every night, and Whisper / Granite on a sample, then a ROVER word vote fuses them. Where no strict majority agreed (a *contested slot*), or every other model is more than 50% away from Qwen3 (a chunk flagged `[low confidence]`), the span goes on the check queue. `transcript_check.candidates_from_row` takes the stored ROVER chunk rows `omi_repass_eval.is_contested` selects (`t0`/`t1`, `hyps` {model: text}, `rover` the pick, `slots` `{pos, pick, votes, who, n}`, `low_conf`; the shape `omi_repass_eval.check_queue` returns) and `enqueue` ranks it:
 
@@ -71,7 +71,7 @@ Flags: `ZOE_TRANSCRIPT_CHECK`, `ZOE_TRANSCRIPT_CHECK_MAX_ITEMS` (10), `ZOE_TRANS
 ## Contracts with other work
 
 - **Stacked on #2358** (the night re-pass; its ROVER fusion, `omi_repass_eval`, hyps store and ledger are consumed, not rebuilt). `omi_repass.run_night` hands `finish_one` each recording's contested chunk rows (`res["check_rows"]`) so items exist BEFORE the WAV is released; `omi_repass_eval.check_queue(home, user, rid)` reads the same rows back from `hyps/hyps-<night>.jsonl` (7-day cut).
-- **Migration `0075`** chains on #2358's `0073`; `0073` is also #2346's panel_voice_clusters and `0074` is #2360's conversation notes (three open heads share those numbers). Renumber at merge: the validate gate's single-head check will say so.
+- **Migration `0076`** chains on #2358's `0075` (the night re-pass); `alembic heads` is a single head. If another migration lands first, renumber at merge: the validate gate's single-head check will say so.
 - The **contender ledger** is #2358's `ledger.jsonl` (`owner_hit` / `owner_miss` per model); `transcript_check.ledger()` summarises it.
 - Conversation notes (#2360) and clip playback (#2346) are untouched; the screen plays its snippet through its own route (`omi_recordings.span_clip`, the same cut and rules as `segment_clip`).
 

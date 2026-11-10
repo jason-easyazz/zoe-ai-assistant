@@ -1249,6 +1249,11 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_omi_rec.run_retention_loop(), name="omi_retention")
     except Exception as _omi_exc:
         logger.warning("omi transcription loop not started (non-fatal): %s", _omi_exc)
+    try:  # non-member corpus clips expire (flag-dark ZOE_VOICE_CLIP_RETENTION, read per pass); the loop is a sleep when off
+        import voice_clips as _voice_clips_ret
+        asyncio.create_task(_voice_clips_ret.run_retention_loop(), name="voice_clip_retention")
+    except Exception as _vc_exc:
+        logger.warning("voice clip retention loop not started (non-fatal): %s", _vc_exc)
     try:
         import omi_health as _omi_health
         import omi_recordings as _omi_rec_h

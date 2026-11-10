@@ -112,6 +112,19 @@ def test_owner_corrections_are_scored_as_ground_truth_hits_and_misses(tmp_path):
     assert eu.note_owner_correction(home, "someone-else", "r1", 0, 2000, "x") == {}                  # another member's chunks are never scored
 
 
+def test_a_speaker_check_row_overlapping_the_corrected_span_is_skipped_not_a_crash(tmp_path):
+    """run_night() stores who_said items beside the transcript hypotheses; they have no 'hyps'. A correction over both must still score the transcript row."""
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-09", [
+        {"u": "m1", "rid": "r1", "i": 0, "t0": 0.0, "t1": 2.0, "hyps": {PIV: "book the tickets", PAR: "look the pickets"}},
+        {"kind": "who_said", "u": "m1", "rid": "r1", "seg_id": "s1", "t0": 0.5, "t1": 1.5, "mark": "unknown", "cands": []}])
+    tally = eu.note_owner_correction(home, "m1", "r1", 0, 2000, "book the tickets", "2026-11-09")
+    assert tally == {PIV: {"hit": 1, "miss": 0}, PAR: {"hit": 0, "miss": 1}}                  # the transcript row is scored once; the speaker check is not
+    only = tmp_path / "h2"
+    eu.store_hyps(only, "2026-11-09", [{"kind": "who_said", "u": "m1", "rid": "r1", "seg_id": "s1", "t0": 0.5, "t1": 1.5, "mark": "lean", "cands": []}])
+    assert eu.note_owner_correction(only, "m1", "r1", 0, 2000, "x") == {}
+
+
 # ── hypothesis store ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_hypotheses_are_private_pruned_and_forget_reached(tmp_path):
@@ -133,6 +146,28 @@ def test_hypotheses_are_private_pruned_and_forget_reached(tmp_path):
     m1 = [json.loads(x) for x in text.splitlines() if '"m1"' in x][0]
     assert "Dana" not in json.dumps(m1) and m1["rover"] == "call [forgotten] now" and "[forgotten]" in m1["slots"][0]["votes"]       # the ROVER pick and the contested-slot picks / vote keys / who keys too
     assert eu.forget_user(home, "m1") == 2 and "m1" not in f.read_text() and "m2" in f.read_text()
+
+
+def test_abandoned_work_files_are_swept_by_retention_and_by_erasure_but_a_live_run_is_left_alone(tmp_path):
+    """A SIGKILL / reboot mid-run leaves work/<id>.out.jsonl (transcripts + embeddings): retention, an erasure and the next run clear it once stale."""
+    import os
+    import time
+    home = tmp_path / "h"
+    (home / "work").mkdir(parents=True)
+    old, live = home / "work" / "dead.out.jsonl", home / "work" / "live.manifest.json"
+    old.write_text("{}")
+    live.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    assert eu.sweep_work(home) == 1 and not old.exists() and live.exists()      # a running pass's files are younger than the stale age
+    old.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    eu.forget_user(home, "m1")
+    assert not old.exists() and not live.exists()          # an erasure clears EVERY work file whatever its age (they name no member: none can be proven clean)
+    live.write_text("{}")
+    old.write_text("{}")
+    os.utime(old, (time.time() - 7 * 3600,) * 2)
+    eu.prune_hyps(home, date(2026, 11, 9))
+    assert not old.exists() and live.exists()
 
 
 def test_the_check_queue_lists_contested_and_low_confidence_chunks_with_alternatives_and_votes(tmp_path):
@@ -200,11 +235,11 @@ def test_production_runs_qwen_then_parakeet_then_the_third_voter_then_the_evalua
     calls: list = []
     out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, calls)))
     assert [c["asr"] for c in calls] == [PIV, PAR, DIS, WH, GR]                                     # production first, value-per-minute order, evaluation last
-    assert [c["diar"] for c in calls] == ["ecapa", "none", "none", "none", "none"]                    # the speaker model is loaded once, by the pivot
+    assert [c["diar"] for c in calls] == ["resnet34", "none", "none", "none", "none"]                    # the speaker model is loaded once, by the pivot
     assert calls[0]["chunks"] == [None] and calls[1]["chunks"][0] == [[0.0, 2.0], [2.5, 4.5]] and calls[3]["ct2"] and not calls[1]["ct2"]    # later engines get the PIVOT'S chunks; CT2 build only for whisper-gpu
     assert out["status"] == "ok" and out["engines"] == [PIV, PAR, DIS] and out["eval_engines"] == [WH, GR]
     r = rows(renv)[0]
-    assert r["transcript"] == "the cat sat on the mat" and r["repass_model"] == f"{PIV}+{PAR}+{DIS}/rover+ecapa"       # the vote fixed the pivot's "bat"; provenance names the voters
+    assert r["transcript"] == "the cat sat on the mat" and r["repass_model"] == f"{PIV}+{PAR}+{DIS}/rover+resnet34"       # the vote fixed the pivot's "bat"; provenance names the voters
     home = tmp_path / "repass"
     led = [json.loads(x) for x in (home / "ledger.jsonl").read_text().splitlines()]
     assert {x["model"] for x in led} == {PIV, PAR, DIS, WH, GR} and {x["model"] for x in led if x["eval"]} == {WH, GR}
@@ -226,6 +261,21 @@ def test_the_third_voter_is_whisper_large_v3_when_the_night_has_room_else_distil
         assert out["engines"] == [PIV, PAR] + ([want] if want else []), (dur, budget, out["engines"])
 
 
+def test_the_evaluation_samples_the_whisper_that_did_not_vote_when_the_third_voter_fell_back_to_distil(renv, monkeypatch):
+    """Review #2: the eval set used to drop thirds[:1] (large-v3) up front, so a night whose third voter was distil evaluated neither whisper."""
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
+    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_EVAL", f"{WH},{DIS},{GR}")
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 1500")
+    renv.db.conn.commit()
+    real = rp.plan_voters
+    monkeypatch.setattr(rp, "plan_voters", lambda durs, rem, rt, second, thirds, **k: {**real(durs, rem, rt, second, [DIS], **k)})    # the budget picks distil
+    out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [])))
+    assert out["engines"] == [PIV, PAR, DIS], out["engines"]
+    assert out["eval_engines"] == [WH, GR], out["eval_engines"]
+
+
 def test_granite_never_votes_in_production_even_when_the_config_asks_for_it(renv, monkeypatch):
     monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_THIRD", GR)
     monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", GR)
@@ -242,8 +292,16 @@ def test_an_over_budget_night_keeps_the_pivot_and_drops_the_other_voters_and_the
     renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 2600")
     renv.db.conn.commit()
     calls: list = []
-    out = run(rp.run_night(budget_s=1500, runner=multi_runner(TEXTS, calls)))                       # 2600 s x (0.42 + 0.08) = 1300 s > 85 % of 1500
-    assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == [] and out["model"] == PIV     # the pivot is never swapped out; the rest carries
+    t = [1000.0]
+    inner = multi_runner(TEXTS, calls)
+
+    def runner(*a, **k):
+        rc = inner(*a, **k)
+        t[0] += 1300.0                                                                               # the pivot's pass took its measured time (2600 s x 0.42 = 1092 s plus loads)
+        return rc
+    out = run(rp.run_night(budget_s=1500, runner=runner, clock=lambda: t[0]))
+    assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == [] and out["model"] == PIV     # the pivot is never swapped out; no time was left for a voter
+    assert out["qwen_only_min"] > 0 and out["fused3_min"] == 0 and out["carried_min"] == 0                # ... and the recording still got its Qwen3 text
     assert rows(renv)[0]["transcript"] == "the bat sat on the mat"                                    # the pivot alone
 
 
@@ -306,3 +364,127 @@ def test_the_weekly_contender_line_appears_on_mondays_only(renv, monkeypatch):
     renv.db.conn.commit()
     tuesday = monday + timedelta(days=1)
     assert "contenders" not in run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, calls), now=tuesday))
+
+
+# ── capacity: Qwen3 on ALL the audio, the other voters on the IMPORTANT recordings first (owner, 2026-11-09) ──────────────────────────────────
+
+def test_importance_scores_names_numbers_times_commitments_and_pending_candidates():
+    names = ["Sam", "Alex"]
+    plain = rp.importance("uh nothing much happening around here", names)
+    assert plain == 0
+    assert rp.importance("Sam is coming round", names) == 3                                       # a household name
+    assert rp.importance("we got 12 of them", names) == 2                                         # a number
+    assert rp.importance("remind me to call him tomorrow at 5:30", names) == 6                    # commitment + time + the digits as numbers
+    assert rp.importance("Sam said call me tomorrow, I owe him 40 dollars", names) == 3 + 2 + 2 + 2
+    assert rp.importance("nothing here", names, candidate=True) == 4                              # feeds a pending day-review candidate
+    assert rp.importance("Samantha is here", names) == 0                                          # whole words only
+
+
+def test_plan_voters_gives_the_important_recordings_all_three_voters_then_two_and_the_rest_keep_qwen3_only():
+    rt = {PIV: 0.42, PAR: 0.08, WH: 0.74, DIS: 0.44}
+    durs = [("a", 1000.0), ("b", 1000.0), ("c", 1000.0)]
+    full = rp.plan_voters(durs, 10000, rt, PAR, [WH, DIS])
+    assert full == {"second": ["a", "b", "c"], "third": ["a", "b", "c"], "third_engine": WH}               # room for everyone: the best third voter
+    tight = rp.plan_voters(durs, 1500, rt, PAR, [WH, DIS])
+    assert tight["third_engine"] == DIS and tight["third"] == ["a", "b"] and tight["second"] == ["a", "b", "c"]   # distil covers more recordings than large-v3 would
+    none = rp.plan_voters(durs, 300, rt, PAR, [WH, DIS])
+    assert none["third"] == [] and none["third_engine"] == "" and none["second"] == ["a", "b"]
+    nothing = rp.plan_voters(durs, 30, rt, PAR, [WH, DIS])
+    assert nothing == {"second": [], "third": [], "third_engine": ""}                                       # no time after the pivot: Qwen3 only
+    assert rp.plan_voters(durs, 10000, rt, "", [WH]) == {"second": [], "third": [], "third_engine": ""}
+
+
+def _two_recordings(renv, a_text, b_text, dur=1000):
+    from test_omi_recordings import make_wav, upload
+    upload(renv, make_wav(3.0, hz=220), key="r1.0-1", started="2026-10-10T01:00:00Z")
+    upload(renv, make_wav(3.0, hz=330), key="r1.0-2", started="2026-10-10T01:30:00Z")
+    ids = [r["id"] for r in rows(renv, "SELECT id FROM omi_recordings ORDER BY started_at")]
+    for rid, text in zip(ids, (a_text, b_text)):
+        renv.db.conn.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, repass_state = 'pending', duration_s = ? WHERE id = ?", (text, dur, rid))
+    renv.db.conn.commit()
+    return ids
+
+
+def test_the_pivot_reads_everything_important_first_and_the_voters_only_what_the_time_left_reaches(renv, monkeypatch):
+    on(monkeypatch, evals="none")
+    old_boring, new_important = _two_recordings(renv, "uh nothing much going on here", "remind me to call Sam tomorrow at 5:30")
+    monkeypatch.setattr(rp, "household_names", lambda db, uid: _async(["Sam"]))
+    calls: list = []
+    t = [1000.0]
+    inner = multi_runner(TEXTS, calls)
+
+    def runner(*a, **k):
+        rc = inner(*a, **k)
+        t[0] += 840.0 if len(calls) == 1 else 0.0                                                          # the pivot used 840 s of the 1100 s night
+        return rc
+    out = run(rp.run_night(budget_s=1100, runner=runner, clock=lambda: t[0]))
+    assert calls[0]["asr"] == PIV and calls[0]["ids"] == [new_important, old_boring]                      # Qwen3 reads ALL the audio, the important recording first
+    assert [c["asr"] for c in calls] == [PIV, PAR] and calls[1]["ids"] == [new_important]                 # the time left reaches Parakeet on ONE recording: the important one
+    assert out["done"] == 2 and out["carried"] == 0 and out["engines"] == [PIV, PAR]
+    assert out["fused2_min"] > 0 and out["qwen_only_min"] > 0 and out["fused3_min"] == 0 and out["carried_min"] == 0
+    assert abs(out["speech_min"] - (out["fused2_min"] + out["qwen_only_min"])) < 0.02
+    assert all(r["transcript"] for r in rows(renv))                                                        # nobody is left without Qwen3 text
+
+
+def test_a_recording_the_pivot_cannot_reach_carries_to_the_next_night_and_the_report_says_how_much(renv, monkeypatch):
+    on(monkeypatch, evals="none")
+    old_boring, new_important = _two_recordings(renv, "uh nothing much going on here", "remind me to call Sam tomorrow at 5:30")
+
+    def runner(manifest, out, timeout_s, mem_max="", threads=4):
+        man = json.loads(Path(manifest).read_text())
+        with open(out, "a") as fh:
+            for it in man["items"]:
+                if it["id"] == new_important:
+                    r = result_for(it["id"])
+                    r["chunks"] = [[0.0, 2.0, "call sam tomorrow"], [2.5, 4.5, "at five thirty"]]
+                    fh.write(json.dumps(r) + "\n")
+                else:
+                    fh.write(json.dumps({"id": it["id"], "ok": False, "why": "deadline"}) + "\n")      # the budget ran out before the boring one
+            fh.write(json.dumps({"done": True, "files": 1, "carried": 1, "failed": 0, "rtf": 0.4, "device": "cuda"}) + "\n")
+        return 0
+    out = run(rp.run_night(budget_s=1100, runner=runner))
+    assert out["carried"] == 1 and out["done"] == 1 and out["carried_min"] > 15.0                         # 1000 s = 16.7 min waiting for tomorrow
+    left = {r["id"]: r for r in rows(renv)}
+    assert left[old_boring]["repass_state"] == "pending" and left[new_important]["repass_state"] != "pending"       # the carried one is still owed (and its WAV is still held)
+
+
+async def _async(v):
+    return v
+
+
+# ── review round: unicode erase, large numbers, recording delete, human decisions ─────────────────────────────────
+
+def test_a_forgotten_accented_name_is_erased_from_every_word_field_and_a_year_survives_fusion(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "José came"}, "rover": "José came",
+                                        "slots": [{"pick": "josé", "votes": {"josé": 2}, "who": {"josé": [PIV]}}]}])
+    assert eu.erase_entity(home, "m1", re.compile(r"\bJosé\b", re.I), "[forgotten]") == 1
+    blob = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text(encoding="utf-8")
+    assert "José" not in blob and "josé" not in blob.lower() and "[forgotten]" in blob
+    assert eu.rover({PIV: "The year is 2026."})["text"] == "The year is 2026."
+
+
+def test_deleting_a_recording_removes_only_its_hypotheses(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "a"}}, {"u": "m1", "rid": "r2", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "b"}}])
+    assert eu.forget_recording(home, "m1", "r1") == 1
+    left = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text()
+    assert '"r2"' in left and '"r1"' not in left
+
+
+def test_a_merged_line_keeps_the_owners_decision_and_a_human_person_clears_the_models_not_person():
+    old = [{"start_ms": i * 10000, "end_ms": (i + 1) * 10000, "owner_label": "you", "tagged_person_id": None, "not_person": None} for i in range(3)]
+    new = [{"start_ms": 0, "end_ms": 30000, "not_person": "zoe", "person": "p1"}]
+    assert rp.carry_labels(new, old) == 1
+    assert new[0]["carry"]["owner_label"] == "you" and new[0]["not_person"] is None
+    tv = [{"start_ms": 0, "end_ms": 10000, "owner_label": None, "tagged_person_id": None, "not_person": "tv"}]
+    n2 = [{"start_ms": 0, "end_ms": 10000, "person": "p1"}]
+    assert rp.carry_labels(n2, tv) == 1 and n2[0]["not_person"] == "tv" and "person" not in n2[0]
+
+
+def test_a_decomposed_spelling_of_an_accented_name_is_erased_too(tmp_path):
+    home = tmp_path / "h"
+    eu.store_hyps(home, "2026-11-01", [{"u": "m1", "rid": "r1", "i": 0, "t0": 0, "t1": 5, "hyps": {PIV: "José came"}, "rover": "José came", "slots": []}])
+    assert eu.erase_entity(home, "m1", re.compile("José", re.I), "[forgotten]") == 1
+    blob = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text(encoding="utf-8")
+    assert "came" in blob and "Jos" not in blob

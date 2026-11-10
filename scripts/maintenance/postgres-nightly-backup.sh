@@ -44,7 +44,7 @@ fi
 # Biometrics of third parties never reach a dump (docs/architecture/memories-space.md section 2.6 guardrail 1): nothing
 # redacts these dumps on a forget, so the learned-voice tables are backed up as SCHEMA only. A restore re-learns them.
 # (A pattern that matches no table - the multica db - is ignored by pg_dump.) Pinned by tests/test_omi_voices.py.
-BIOMETRIC_TABLES="learned_voiceprints learned_voiceprint_segments omi_segment_embeddings omi_voice_clusters omi_wearer_samples"
+BIOMETRIC_TABLES="learned_voiceprints learned_voiceprint_segments omi_segment_embeddings omi_voice_clusters panel_voice_clusters panel_voice_samples omi_wearer_samples omi_channel_means"
 exclude_args=()
 for t in $BIOMETRIC_TABLES; do
   exclude_args+=("--exclude-table-data=$t")

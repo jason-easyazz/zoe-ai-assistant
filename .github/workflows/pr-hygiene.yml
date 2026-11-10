@@ -43,6 +43,7 @@ jobs:
               /^docs\/knowledge\/flag-inventory\.(md|json)$/,
               /^services\/zoe-ui\/dist\/lib\//,
               /package-lock\.json$/,
+              /^tools\/ci\/shard_weights\.json$/,       // regenerated wholesale by tools/ci/shard_ledger.py weights
             ];
             const OVERRIDE = 'oversized-ok';
             const WARN  = { files: 10, lines: 400 };   // research ceiling — detection falls past here
