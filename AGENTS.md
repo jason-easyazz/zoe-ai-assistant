@@ -131,7 +131,7 @@ Exactly two contexts block a merge. Both are reproducible on a laptop:
 
 | context | what it proves | run it locally |
 |---|---|---|
-| `validate` | an AGGREGATOR job (`if: always()`, red unless every needed job SUCCEEDED) over parallel jobs: `checks` (structure + critical-file validators, offline-memory policy, Alembic migrations, **actionlint with a negative control**, `py_compile` over every zoe-data module, the zoe-auth + HA-bridge + people lanes), the `ci_safe` lanes split into `zoe-data-shard` ×4 and `unit-shard` ×2 (pytest-split), and `collect` — then proves from shard ledgers that every collected test ran in exactly one shard (`tools/ci/shard_ledger.py`) | `python3 tools/audit/validate_structure.py`; `pytest services/zoe-data/tests -m ci_safe` |
+| `validate` | an AGGREGATOR job (`if: always()`, red unless every needed job SUCCEEDED) over parallel jobs: `checks` (structure + critical-file validators, offline-memory policy, Alembic migrations, **actionlint with a negative control**, `py_compile` over every zoe-data module, the zoe-auth + HA-bridge + people lanes), the `ci_safe` lanes split into time-weighted `zoe-data-shard` ×4 and `unit-shard` ×2 matrices (`tools/ci/pytest_shard_ledger.py`), and `collect` — then proves from shard ledgers that every collected test ran in exactly one shard (`tools/ci/shard_ledger.py`) | `python3 tools/audit/validate_structure.py`; `pytest services/zoe-data/tests -m ci_safe` |
 | `secret-scan` | ggshield over **branch history**, not just the head tree | `ggshield secret scan ci` |
 
 Plus `required_conversation_resolution` (every thread resolved) and `strict` (up to date
