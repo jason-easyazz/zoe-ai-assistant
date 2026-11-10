@@ -48,6 +48,10 @@ Usage:
         [--tighten-ratchet]    # lower flag-ratchet.json to the current legacy-read counts
 
 Do NOT hand-edit the generated markdown — rerun this tool.
+
+Both outputs are LOCAL build products, gitignored since 2026-11-10 (the committed copies conflicted on nearly every
+concurrent PR). The deploy regenerates the JSON on the box after it moves the tree (``services/zoe-data/self_model.py``
+reads it at runtime); anyone who wants to read the table runs this tool. No network, no GitHub.
 """
 from __future__ import annotations
 

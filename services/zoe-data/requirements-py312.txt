@@ -46,12 +46,12 @@ starlette==1.10.0
 # it moved, and the real-socket A/B that proved it: see requirements.txt (whose
 # 3.10 rollback lane deliberately stays on 0.49.0 — STEP_UP_DIVERGENCE).
 uvicorn[standard]==0.54.0
-pydantic==2.14.2
+pydantic==2.14.3
 aiosqlite==0.22.1
 asyncpg==0.32.0
 alembic==1.20.1
 psycopg2-binary==2.9.13
-python-multipart==0.0.32
+python-multipart==0.0.33
 httpx==0.28.1
 aiohttp==3.14.5
 # 17.2 since 2026-10-28 (25 days old; 17.3 is 8 days old and held). 17.x needs Python >=3.11, so this
@@ -120,7 +120,7 @@ joblib==1.5.3
 APScheduler==3.11.3
 tzlocal==5.4.5
 pytz==2026.3
-SQLAlchemy==2.0.55
+SQLAlchemy==2.0.57
 pywebpush==2.5.0
 py-vapid==1.9.6
 # DIRECT, UNGUARDED module-level imports (memory_metrics.py, voice_metrics.py,
@@ -137,7 +137,7 @@ psutil==7.2.2
 scipy==1.17.1
 
 # ── WebRTC / LiveKit ──────────────────────────────────────────────────────
-livekit==1.2.0
+livekit==1.2.1
 # `livekit_aiortc.py` does `from livekit.protocol import rtc` — a SEPARATE
 # distribution (`livekit-protocol`) that `livekit` does not depend on; it only
 # ever arrived via the unused livekit-agents. CI already installs it by hand
@@ -145,7 +145,7 @@ livekit==1.2.0
 livekit-protocol==1.1.27
 # aiortc 1.15.0 (latest release) declares av>=14,<18, so av 18/19 is BLOCKED by aiortc, not by Python
 # (re-checked 2026-10-29 against the 1.15.0 pyproject; Dependabot #2214 av 19.0.2 would break resolution).
-aiortc==1.15.0
+aiortc==1.16.0
 av==17.1.0
 
 # ── A2A federation + skill discovery + web search ─────────────────────────
