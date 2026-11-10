@@ -808,12 +808,15 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
         if keep:
             sel.tests[lane.name] = keep
 
-    reached_tests = {t for lane in LANES for t in _lane_tests(g, lane) if t in seen}
+    # "reached" = a test that will actually RUN reaches it: a kept (marker-passing) selection, or any test of a
+    # lane that already runs full. A change whose only reachers are unmarked tests is not covered by a run.
+    ran = {t for ts in sel.tests.values() for t in ts}
+    full_tests = {t for ln in LANES if ln.name in sel.lane_full for t in _lane_tests(g, ln)}
     for p in paths:
         k = kinds[p]
         if k in ("doc", "conftest", "deps", "global-config", "migration"):
             continue
-        if reached_tests & set(per_file[p]) or (_is_test_file(p) and lane_of(p)):
+        if (ran | full_tests) & set(per_file[p]) or (_is_test_file(p) and lane_of(p)):
             continue
         sel.unreached.append(p)
         if p.endswith(CODE_EXT) and not p.startswith("labs/"):
@@ -1081,7 +1084,11 @@ def main(argv: list[str] | None = None) -> int:
     if a.json == "-":
         print(json.dumps(summ, indent=1))
     elif a.json:
-        Path(a.json).write_text(json.dumps(summ, indent=1) + "\n")
+        try:
+            Path(a.json).write_text(json.dumps(summ, indent=1) + "\n")
+        except OSError as exc:   # never let the summary mask pytest's rc
+            log(f"[affected-tests] could not write {a.json}: {exc}")
+            rc = rc or 74
     log(f"[affected-tests] rc={rc}" + (" (dry run)" if a.dry_run else ""))
     return rc
 

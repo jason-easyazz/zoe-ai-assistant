@@ -346,6 +346,34 @@ def test_lane_slot_rechecks_the_box_under_the_lock(tmp_path, monkeypatch):
     assert released == [True]
 
 
+def test_change_reached_only_by_unmarked_tests_runs_its_lane(repo):
+    """The lane's -m ci_safe would deselect the only tests that reach it: that is not a covered change."""
+    _edit(repo, "services/zoe-data/solo.py", "def f():\n    return 1\n")
+    _edit(repo, "services/zoe-data/tests/test_solo.py", "import solo\n\ndef test_f():\n    assert solo.f() == 1\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "solo")
+    _edit(repo, "services/zoe-data/solo.py", "def f():\n    return 2 - 1\n")
+    _, s = _run(repo, "--dry-run", "HEAD")
+    assert s["unmarked"] == {"zoe-data": ["services/zoe-data/tests/test_solo.py"]}
+    assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
+
+
+def test_deleted_nested_conftest_forces_its_lane(repo):
+    _edit(repo, "services/zoe-data/tests/sub/conftest.py", "import pytest\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "nested")
+    (repo / "services/zoe-data/tests/sub/conftest.py").unlink()
+    _, s = _run(repo, "--dry-run", "HEAD")
+    lane = next(ln for ln in s["lanes"] if ln["lane"] == "zoe-data")
+    assert lane["mode"] == "full" and "conftest" in lane["reason"]
+
+
+def test_unwritable_json_never_masks_the_pytest_rc(repo, tmp_path):
+    _edit(repo, "services/zoe-data/util.py", "def twice(x):\n    return 3 * x\n")
+    rc = at.main(["--repo", str(repo), "--no-lock", "--json", str(tmp_path / "no" / "such" / "dir.json")])
+    assert rc == 1
+
+
 def test_nested_pytest_config_forces_the_lanes_that_load_it(repo):
     _edit(repo, "services/zoe-data/pyproject.toml", "[tool.pytest.ini_options]\n")
     _, s = _run(repo, "--dry-run")
@@ -392,6 +420,7 @@ def test_lanes_mirror_validate_workflow():
     wf = (REPO / ".github/workflows/validate.yml").read_text()
     job = wf.split("\n  zoe-data-py312:")[0]
     lanes = {ln.name: ln for ln in at.LANES}
+    assert set(lanes) == {"zoe-data", "tests-unit", "zoe-auth", "ha-bridge", "people-mempalace"}
     assert re.search(r"pytest services/zoe-data/tests -m ci_safe", job)
     assert "--ignore=services/zoe-data/tests/samantha_live" in job
     assert lanes["zoe-data"].marker == "ci_safe" and lanes["zoe-data"].pythonpath == ("services/zoe-data",)
