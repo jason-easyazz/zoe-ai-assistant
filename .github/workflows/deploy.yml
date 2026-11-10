@@ -274,6 +274,15 @@ jobs:
           # concurrent fetch on this shared .git could have advanced to a commit
           # pushed after the gate ran (a silent bypass of the gate above).
           git reset --hard "$target"
+          # The flag inventory is a LOCAL build product, not a tracked file (2026-11-10: the committed copy conflicted
+          # on nearly every concurrent PR). services/zoe-data/self_model.py reads docs/knowledge/flag-inventory.json at
+          # runtime, and the reset above deletes a copy the target no longer tracks — so regenerate it HERE, from the
+          # tree just deployed, before anything restarts. Pure local scan (stdlib + `git ls-files`), no network.
+          # Non-fatal by design: without the file self_model falls back to "env value, else off" — degraded wording,
+          # not a broken service — and CI already ran this exact generator on this tree (test_flag_inventory.py).
+          if ! python3 tools/audit/flag_inventory.py >/dev/null; then
+            echo "::warning::flag inventory regeneration failed; self_model will report unset flags as off until the next deploy"
+          fi
           # What this run is deploying; the last step stamps it into the marker once the
           # health check has passed.
           echo "DEPLOY_TARGET_SHA=${target}" >> "$GITHUB_ENV"

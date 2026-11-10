@@ -49,7 +49,9 @@ def check_claims(text: str, flags: dict) -> list[str]:
 
 @pytest.fixture(scope="module")
 def inventory() -> dict:
-    return json.loads((_REPO / "docs" / "knowledge" / "flag-inventory.json").read_text())
+    """The inventory scanned from THIS tree, in memory - never a generated file on disk, which is gitignored and may
+    be absent or stale (2026-11-10). Same scan ``tools/audit/flag_inventory.py`` writes; local, no network."""
+    return live_state._load_flag_inventory().scan_repo(_REPO)
 
 
 @pytest.fixture(scope="module")
@@ -79,15 +81,17 @@ def test_roadmap_flag_claims_match_code_defaults(derived):
     assert check_claims(text, derived) == []
 
 
-def test_committed_live_state_agrees_with_the_inventory_for_every_claimed_flag(derived):
-    """The generated file is what readers open; for the flags the roadmap cites it must say what the inventory says."""
-    committed = json.loads((_REPO / "docs" / "knowledge" / "live-state.json").read_text())
-    assert committed["kind"] == "code-defaults"
-    text = (_REPO / "docs" / "ROADMAP.md").read_text()
-    for name, _ in CLAIM.findall(text):
-        assert committed["flags"][name]["defaults"] == derived[name]["defaults"], (
-            f"{name}: docs/knowledge/live-state.json is stale - run python3 tools/audit/live_state.py"
-        )
+def test_the_generator_writes_exactly_the_derivation(tmp_path, inventory, built):
+    """``tools/audit/live_state.py`` (a local build product since 2026-11-10, not a committed file) runs cleanly and
+    writes byte-for-byte what this test derives in memory, and its own ``--check`` agrees with what it wrote."""
+    inv_path, out = tmp_path / "flag-inventory.json", tmp_path / "live-state.json"
+    inv_path.write_text(json.dumps(inventory))
+    assert live_state.main(["--inventory", str(inv_path), "--out", str(out)]) == 0
+    assert out.read_text() == live_state.render(built)
+    assert json.loads(out.read_text())["kind"] == "code-defaults"
+    assert live_state.main(["--inventory", str(inv_path), "--out", str(out), "--check"]) == 0
+    out.write_text(out.read_text().replace('"code-defaults"', '"stale"'))
+    assert live_state.main(["--inventory", str(inv_path), "--out", str(out), "--check"]) == 1, "--check cannot fail"
 
 
 # -- negative controls: the checker must be able to fail ------------------------------------------------------------------------
@@ -176,11 +180,6 @@ def test_no_numeric_default_is_on_or_off_without_a_bool_reader(derived, inventor
             if raw.strip("'\"") in ("0", "1") and live_state.normalise_default(raw, rec["kind"]) in ("on", "off"):
                 bad.append(name)
     assert bad == []
-
-
-def test_committed_live_state_is_exactly_the_derivation(built):
-    committed = (_REPO / "docs" / "knowledge" / "live-state.json").read_text()
-    assert committed == live_state.render(built), "docs/knowledge/live-state.json is stale - run python3 tools/audit/live_state.py"
 
 
 # -- reader-shape classification, on a throwaway repo so each shape is pinned independently --------------------------------------

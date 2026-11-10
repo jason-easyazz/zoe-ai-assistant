@@ -139,6 +139,10 @@ fi
 # which runs a second fetch and could advance the tree to a commit pushed after
 # the gate ran (a silent bypass of the very gate above). Greptile P1 on #1344.
 git -C "$LIVE" merge --ff-only "$target"
+# The flag inventory is a local build product (gitignored since 2026-11-10) that self_model.py reads at runtime:
+# regenerate it from the tree just merged, locally (no network), before the restart. Non-fatal, as in deploy.yml.
+(cd "$LIVE" && python3 tools/audit/flag_inventory.py >/dev/null) \
+    || echo "⚠ flag inventory regeneration failed; self_model reports unset flags as off until the next deploy" >&2
 
 # Short recheck right before the restart (review on #2234): the long wait above ran BEFORE the
 # lock, so a turn or a night window may have started since. All three waits (household, night, probe) are bounded small because

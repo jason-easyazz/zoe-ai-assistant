@@ -215,9 +215,14 @@ credentials/
 # zoe-core's Pi project settings: compaction sized for ONE 8192-token llama-server
 # slot (Pi 0.82.1 defaults reserve 16384 / keep 20000 assume a 128k+ window).
 !services/zoe-core/.pi/settings.json
-# generated flag inventory (tools/audit/flag_inventory.py) — no secrets, names+defaults only
-!docs/knowledge/flag-inventory.json
-!docs/knowledge/live-state.json
+# GENERATED docs are local build products, never committed (2026-11-10): the committed copies conflicted on nearly
+# every concurrent PR. Regenerate locally, no network: python3 tools/audit/flag_inventory.py (+ live_state.py,
+# memory_writer_map.py). The deploy regenerates flag-inventory.json on the box (self_model.py reads it at runtime).
+# Their invariants are tested from the code, not from these files. tests/unit/test_generated_docs_untracked.py pins this.
+docs/knowledge/flag-inventory.json
+docs/knowledge/flag-inventory.md
+docs/knowledge/live-state.json
+docs/knowledge/memory-writer-map.md
 # household-data canary: keyed digests only, no values (tools/audit/privacy_canary.py; the key and the list live outside the repo)
 !tools/audit/privacy_canary_digests.json
 # zoe-data test fixtures: golden recordings replayed by ci_safe tests. Contract
