@@ -1044,3 +1044,73 @@ def test_a_partial_erase_during_the_approval_window_drops_the_approved_note(env,
         run(cn.write_approved(OWNER, payload, candidate_id="c10", day="2026-11-08", at_epoch=NOW))
     monkeypatch.setattr(cn, "_db", real)
     assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+
+
+def test_note_generation_goes_through_the_brain_slot_guard_and_yields_to_a_household_turn(monkeypatch):
+    """The real completion path: it acquires brain_slot_guard (label conversation_notes), and a household turn that starts mid-call CANCELS the
+    request and the call is retried after the turn - it never keeps the llama slot against a conversation."""
+    import asyncio
+    import httpx
+    import brain_slot_guard as g
+
+    g.reset()
+    monkeypatch.setenv(g.ENV, "on")
+    monkeypatch.setenv(g.ENV_QUIET_S, "0.05")
+    monkeypatch.setenv(g.ENV_MAX_DEFER_S, "2")
+    seen = {"labels": [], "starts": 0, "cancelled": 0}
+    real_run = g.run_background
+
+    async def spy(label, call):
+        seen["labels"].append(label)
+        return await real_run(label, call)
+    monkeypatch.setattr(g, "run_background", spy)
+    release = {"ev": None}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            seen["starts"] += 1
+            try:
+                await release["ev"].wait()
+            except asyncio.CancelledError:
+                seen["cancelled"] += 1
+                raise
+
+            class R:
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return {"choices": [{"message": {"content": "{\"skip\": true}"}}]}
+            return R()
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    cn.set_llm(None)
+
+    async def go():
+        release["ev"] = asyncio.Event()
+        task = asyncio.ensure_future(cn._complete([{"role": "user", "content": "hi"}]))
+        for _ in range(200):
+            if seen["starts"]:
+                break
+            await asyncio.sleep(0.01)
+        assert seen["starts"] == 1                                   # it holds the slot
+        g.turn_started()                                             # a household turn begins
+        for _ in range(200):
+            if seen["cancelled"]:
+                break
+            await asyncio.sleep(0.01)
+        assert seen["cancelled"] == 1                                # the note request was cancelled at once
+        g.turn_finished()
+        release["ev"].set()
+        return await asyncio.wait_for(task, 5)
+    assert "skip" in run(go())
+    assert seen["labels"] == ["conversation_notes"] and seen["starts"] == 2      # retried after the turn, through the guard
+    g.reset()

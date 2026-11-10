@@ -215,6 +215,7 @@ def set_llm(fn: Optional[LLM]) -> Optional[LLM]:
 async def _complete(messages: list) -> str:
     if _llm is not None:
         return await _llm(messages)
+    import brain_slot_guard
     import httpx
     import memory_digest as md
 
@@ -222,10 +223,16 @@ async def _complete(messages: list) -> str:
                "max_tokens": _NOTE_MAX_TOKENS, "temperature": 0.1, "stream": False}
     text = "".join(m.get("content", "") for m in messages)
     timeout = md._pass_timeout(45.0, "", text, _NOTE_MAX_TOKENS)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(f"{md._GEMMA_URL}/v1/chat/completions", json=payload)
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"] or ""
+
+    async def _llm_call() -> str:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{md._GEMMA_URL}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"] or ""
+
+    # EVERY note generation (nightly member / guest passes, the owner backfill: they all land here) waits for the brain's one llama slot to be
+    # quiet and is CANCELLED the moment a household turn starts (brain_slot_guard.run_background), so it can neither evict nor delay the conversation.
+    return await brain_slot_guard.run_background("conversation_notes", _llm_call)
 
 
 def messages_for(convo: Convo) -> list:
