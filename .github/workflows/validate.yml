@@ -15,10 +15,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  # ── THE REQUIRED `validate` GATE, SHARDED (2026-11-10) ──────────────────────────────────────────────────────
+  #
+  # `validate` used to be ONE job that ran every lane serially: ~41 min, of which ~26 were the zoe-data
+  # ci_safe lane and ~13 the tests/unit ci_safe lane. Branch protection is `strict`, so every merge sends every
+  # other open PR back through it — that 41 min was the throughput ceiling of the whole repo.
+  #
+  # Now the work runs as parallel jobs, and `validate` is an AGGREGATOR at the bottom of this file:
+  #   checks           validators, Alembic on CI PostgreSQL, actionlint, py_compile, and the small lanes
+  #   zoe-data-shard   services/zoe-data/tests -m ci_safe, split ZOE_DATA_SHARDS ways (matrix)
+  #   unit-shard       tests/unit -m ci_safe, split UNIT_SHARDS ways (matrix)
+  #   collect          each split lane's FULL --collect-only selection, for the completeness proof
+  #   validate         needs all of the above, `if: always()`, red unless every one SUCCEEDED and the shard
+  #                    ledgers partition the full selection exactly (tools/ci/shard_ledger.py)
+  #
+  # Why process-isolated matrix shards and not pytest-xdist: each shard is ONE serial pytest process running a
+  # contiguous slice of the same ordered collection the old single lane ran, so test order and per-file module
+  # state are what they always were. xdist would interleave files across workers inside one runner, which these
+  # suites (module-level sys.modules swaps, process env, fixed state paths) were never proven safe for.
+  #
+  # Why tools/ci/pytest_shard_ledger.py cuts the slices and not pytest-split: measured on this suite, equal-COUNT
+  # slices ran 4-12 min (one file, test_memory_authority_matrix.py, is ~20% of the zoe-data lane), and
+  # pytest-split's per-TEST durations file is ~4 MB for these 30k tests — a generated file to commit and refresh,
+  # the very thing this workflow stopped doing — or a cache that can hand two shards of one run different
+  # durations. The plugin cuts by a ~60 KB per-FILE weights file (tools/ci/shard_weights.json, refreshed by hand
+  # from shard ledgers with `tools/ci/shard_ledger.py weights`); stale weights only unbalance the slices, and the
+  # ledger check below proves the partition every run regardless.
+  #
+  # The REQUIRED context name `validate` must keep reporting: see tests/unit/test_required_gate_workflows.py and
+  # tests/unit/test_ci_instrument_honesty.py, which pin the aggregator, its `needs`, `if: always()` and the
+  # every-result-must-be-success rule. A shard count is changed in ONE place — the matrix list AND the
+  # `--shard-count` value AND the aggregator's `--expect-shards` move together (the tests pin that they agree).
+  checks:
     runs-on: ubuntu-latest
-    # Lane step timeouts sum to 90 min; a healthy run is ~35 (zoe-data lane 19-24, tests/unit 10-13). See test_required_gate_workflows.py.
-    timeout-minutes: 100
+    # Healthy ~3 min; the pytest step budgets below sum to 20.
+    timeout-minutes: 30
 
     env:
       CI_DB_PASSWORD: ${{ secrets.POSTGRES_CI_PASSWORD || 'ci-postgres-pw' }}
@@ -41,41 +72,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+      - name: Install CI deps (slim list + lane deps)
+        id: deps
+        uses: ./.github/actions/ci-deps
         with:
           python-version: '3.10'
-
-      # Slim install — avoids Jetson-specific packages (torch/onnx/whisper stacks)
-      # that would timeout or fail on x86_64 GitHub runners.
-      #
-      # KEEP THE PINNED ENTRIES IN LOCKSTEP WITH services/zoe-data/requirements.txt —
-      # EXCEPT a package recorded in STEP_UP_DIVERGENCE (tests/unit/
-      # test_zoe_data_py312_cutover.py): there the pin follows requirements-py312.txt,
-      # the LIVE lane, since the 3.10 manifest describes a rollback-only env
-      # (uvicorn, ag-ui-protocol, livekit-protocol as of 2026-09-27).
-      # The 3.12-ONLY step-ups (websockets 17, starlette 1.8, APScheduler 3.11.3 + tzlocal 5.4 + pytz, fastapi 0.143.1;
-      # 2026-10-28) are deliberately NOT here: this list must install on Python 3.10 AND stay byte-identical to the
-      # zoe-data-py312 job's (tests/unit/test_ci_instrument_honesty.py). They are proven by the local full ci_safe run
-      # on a throwaway venv built from requirements-py312.txt (PR body), not by this lane.
-      # Anything left unpinned here resolves to the newest release at CI time, so
-      # the lane silently tests a DIFFERENT version than production runs — which is
-      # exactly how uvicorn/websockets drifted (CI was exercising uvicorn 0.5x and
-      # websockets 16.x while the manifest pinned 0.32.0 and 14.0). The
-      # `deps-resolvable` job below proves the manifests themselves still resolve;
-      # this list only has to agree with them.
-      # ONE deliberate exception: icalendar (calendar_ical.py, alembic 0052) is pinned here only. Nothing on the
-      # request path imports it yet; it joins requirements.txt with the calendar connectors work (a manifest edit
-      # is voice-gated, see voice_gate_check.VOICE_PATH_PATTERNS) - docs/architecture/calendar-data-model.md s7.
-      - name: Install slim CI deps
-        id: slim_deps
-        run: |
-          pip install --quiet \
-            aiosqlite asyncpg psycopg2-binary alembic \
-            fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
-            pydantic pywebpush py-vapid cryptography \
-            "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
-            python-multipart "uvicorn[standard]==0.54.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
-            pyyaml "icalendar==7.3.0"
 
       - name: Validate project structure
         run: python3 tools/audit/validate_structure.py
@@ -179,77 +180,15 @@ jobs:
             | sort | xargs python3 -m py_compile
           echo "All Python files: syntax OK"
 
-      # Run pure unit tests plus zoe-auth contract tests that use lightweight DB fakes.
       # Heavy tests requiring Jetson-specific packages (whisper, torch, MemPalace)
       # still run on the Jetson or during focused local validation.
       #
-      # EVERY LANE BELOW RUNS EVEN IF AN EARLIER ONE FAILED (2026-10-19, deep dive 2
-      # lane K / T-2). These used to be ONE bash block of four `pytest -x` calls, and
-      # GitHub's `bash -e` stops a block at the first failing line: a single failing
-      # source-text test stopped the zoe-data lane at "1 failed, 211 passed" of ~18,500
-      # and the tests/unit + zoe-auth invocations behind it never ran at all, so one red
-      # test hid thousands of unknowns. Now: separate steps, each gated on
-      # `!cancelled()` + the dependency install (not on its sibling lanes), and
-      # `--maxfail=200` instead of `-x` — a systemic break still stops early enough to
-      # keep the run short, but 200 failures are enough to show its shape. The job (the
-      # REQUIRED `validate` context) is red if ANY lane is red.
-      # tests/unit/test_validate_workflow_lanes.py pins all of this.
-      - name: Install lane deps (zoe-auth, numpy, LiveKit wheels)
-        id: lane_deps
-        if: ${{ !cancelled() && steps.slim_deps.outcome == 'success' }}
-        run: |
-          pip install --quiet -r services/zoe-auth/requirements.txt
-          # numpy: lets the ci_safe semantic_router/router-head tests actually run
-          # in this slim lane (they fake the embedding model + head; no fastembed
-          # or sklearn needed). Without it they importorskip -> silently skip.
-          pip install --quiet "numpy<2"
-          # LiveKit/WebRTC ingest deps. test_livekit_audio_frame_bytes.py
-          # importorskips av/aiortc at module scope and the module it exercises
-          # (livekit_aiortc) imports livekit.protocol at top level — without these
-          # the whole ingest-fidelity suite SKIPS, pytest reports green, and the
-          # required gate stops guarding the _AudioStream padding fix. All three
-          # resolve to manylinux x86_64 wheels for cp310 with no source build
-          # (verified: `pip download --only-binary=:all:
-          #  --platform manylinux_2_28_x86_64 --python-version 3.10 --abi cp310`).
-          # Versions are pinned to what the Jetson actually runs (av 17.1.0 /
-          # aiortc 1.15.0 since 2026-09-26; the x86_64 cp310 wheels were re-verified
-          # with `pip download` when the pins moved).
-          # test_livekit_ci_dep_guard.py FAILS this lane if they ever go missing,
-          # so deleting this line cannot silently re-open the hole.
-          pip install --quiet "av==17.1.0" "aiortc==1.15.0" "livekit-protocol==1.1.27"
-
-      # zoe-data slim-dep-green tests are selected by the `ci_safe` marker
-      # (registered in pytest.ini), not a hand-enumerated file list — so a new
-      # slim-safe test runs here just by adding a co-located
-      # `pytestmark = pytest.mark.ci_safe` line, no YAML edit. The full dir runs
-      # on the Jetson (self-hosted-tests.yml) as the catch-all safety net, so an
-      # UNMARKED new test still runs somewhere. See tests/AGENTS.md.
-      # The cross-test isolation leak that used to force --deselect exclusions
-      # here is FIXED: test_auth_unauthenticated (bisected as the necessary
-      # poison) swapped in a new `auth` module object without restoring the
-      # original, so later dependency_overrides keyed by the new object never
-      # matched → guest verdicts → 403s. Its fixture now restores the saved
-      # module IDENTITY (test_metrics_auth_regression got the same fix).
-      - name: Lane — zoe-data (ci_safe)
-        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
-        timeout-minutes: 40
-        run: |
-          pytest services/zoe-data/tests -m ci_safe \
-            -o faulthandler_timeout=300 \
-            --ignore=services/zoe-data/tests/samantha_live \
-            --maxfail=200 -q \
-            --override-ini="asyncio_mode=auto"
-        env:
-          PYTHONPATH: ${{ github.workspace }}/services/zoe-data
-          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
-          ZOE_DATA_DB: ":memory:"
-          ZOE_MEMORY_STARTUP_STRICT: "false"
-          # Household-data canary key (tests/unit/test_privacy_canary.py; tools/audit/privacy_canary.py). An
-          # owner-provisioned repository secret; unset = that one scan reports a skip, the mechanism tests still run.
-          ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
-
+      # EVERY LANE RUNS EVEN IF AN EARLIER ONE FAILED (2026-10-19, deep dive 2 lane K / T-2): separate steps,
+      # each gated on `!cancelled()` + the dependency install (not on its sibling lanes), and `--maxfail=200`
+      # instead of `-x`. The required `validate` aggregator is red if ANY job here is red.
+      # tests/unit/test_ci_instrument_honesty.py pins all of this.
       - name: Lane — Home Assistant MCP bridge
-        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         timeout-minutes: 5
         run: |
           pytest \
@@ -264,33 +203,10 @@ jobs:
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
 
-      # Repo-root tests/unit uses the SAME marker lane as zoe-data (no
-      # hand-enumerated file list — that list silently dropped every other
-      # tests/unit file out of CI). Slim-dep-green files opt in with a
-      # co-located `pytestmark = pytest.mark.ci_safe`; unmarked files
-      # (live-service smokes, PyJWT/yaml-dependent) run in the full-dir
-      # tests/unit catch-all on the Jetson (self-hosted-tests.yml).
-      # test_remediate_ownerless_memories.py + test_memory_service_fixes.py
-      # (the two formerly enumerated here) are ci_safe-marked, so they
-      # still run in this lane. See tests/AGENTS.md.
-      - name: Lane — tests/unit (ci_safe)
-        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
-        timeout-minutes: 30
-        run: |
-          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data" pytest \
-            -o faulthandler_timeout=300 \
-            tests/unit -m ci_safe \
-            --maxfail=200 -q \
-            --override-ini="asyncio_mode=auto"
-        env:
-          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
-          ZOE_DATA_DB: ":memory:"
-          ZOE_MEMORY_STARTUP_STRICT: "false"
-
       # Full zoe-auth suite — no hand enumeration (the old 4-file list
       # silently dropped test_oidc_login / test_rbac / test_security).
       - name: Lane — zoe-auth (full)
-        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         timeout-minutes: 5
         run: |
           PYTHONPATH="${{ github.workspace }}/services/zoe-auth:${{ github.workspace }}/services/zoe-auth/tests" pytest \
@@ -303,7 +219,7 @@ jobs:
           ZOE_MEMORY_STARTUP_STRICT: "false"
 
       - name: People MemPalace integration cleanup
-        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         timeout-minutes: 5
         run: |
           PYTHONPATH="${{ github.workspace }}/services/zoe-data" pytest \
@@ -316,11 +232,11 @@ jobs:
 
       # The people graph's invariants (advisory locks, transactional supersede + rollback, the 0043 timestamp trigger
       # and indexes) only exist on REAL PostgreSQL. The file is deliberately NOT ci_safe (the slim lane has no
-      # database), so the marker lane above never selects it: this step runs it by path against the service container
+      # database), so the marker lanes never select it: this step runs it by path against the service container
       # the Alembic step just migrated to head. ZOE_REQUIRE_PG_TESTS turns a missing database / driver into a FAILURE
       # here instead of a silent skip. It still skips cleanly everywhere else (no URL -> skipped).
       - name: People graph invariants on CI PostgreSQL
-        if: ${{ !cancelled() && steps.alembic.outcome == 'success' && steps.lane_deps.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.alembic.outcome == 'success' && steps.deps.outcome == 'success' }}
         timeout-minutes: 5
         run: |
           pip install --quiet asyncpg
@@ -333,31 +249,265 @@ jobs:
           ZOE_TEST_PG_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_REQUIRE_PG_TESTS: "1"
 
+  # zoe-data slim-dep-green tests are selected by the `ci_safe` marker (registered in pytest.ini), not a
+  # hand-enumerated file list — a new slim-safe test runs here just by adding a co-located
+  # `pytestmark = pytest.mark.ci_safe` line, no YAML edit, and the shard plugin assigns it to a shard at
+  # collection time (no per-shard file list exists anywhere). The full dir runs on the Jetson
+  # (self-hosted-tests.yml) as the catch-all safety net, so an UNMARKED new test still runs somewhere.
+  #
+  # NO Postgres service: the ci_safe zoe-data lane is database-free by contract (tests/AGENTS.md), and the
+  # zoe-data-py312 job has run the identical lane without one since 2026-10-19 with identical counts.
+  #
+  # The cut is positional (time-weighted contiguous slices of the ordered selection), so it is stable even though
+  # a few tests mint random parametrize ids per process.
+  zoe-data-shard:
+    name: zoe-data ci_safe (${{ matrix.group }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install CI deps (slim list + lane deps)
+        id: deps
+        uses: ./.github/actions/ci-deps
+        with:
+          python-version: '3.10'
+
+      - name: Lane — zoe-data (ci_safe) shard
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        timeout-minutes: 25
+        run: |
+          pytest services/zoe-data/tests -m ci_safe \
+            -o faulthandler_timeout=300 \
+            --ignore=services/zoe-data/tests/samantha_live \
+            --maxfail=200 -q \
+            --override-ini="asyncio_mode=auto" \
+            -p pytest_shard_ledger \
+            --shard-count 4 --shard-index ${{ matrix.group }} --shard-weights=tools/ci/shard_weights.json \
+            --durations=50 --durations-min=1.0
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/tools/ci
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+          # Household-data canary key (tests/unit/test_privacy_canary.py; tools/audit/privacy_canary.py). An
+          # owner-provisioned repository secret; unset = that one scan reports a skip, the mechanism tests still run.
+          ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
+          PYTEST_SHARD_LEDGER: ${{ runner.temp }}/ledger/zoe-data-${{ matrix.group }}.json
+
+      - name: Upload shard ledger
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-ledger-zoe-data-${{ matrix.group }}
+          path: ${{ runner.temp }}/ledger/
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 7
+
+  # Repo-root tests/unit uses the SAME marker lane as zoe-data (no hand-enumerated file list — that list
+  # silently dropped every other tests/unit file out of CI). Unmarked files run in the full-dir tests/unit
+  # catch-all on the Jetson (self-hosted-tests.yml). Keeps a Postgres service + POSTGRES_URL, as the lane always had.
+  unit-shard:
+    name: tests/unit ci_safe (${{ matrix.group }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2]
+
+    # A Postgres service because a few ci_safe tests/unit tests open a pool against POSTGRES_URL in CI
+    # (test_mcp_server's stdio server). Trust auth on the throwaway loopback container, so this job carries NO
+    # password literal: the `checks` job keeps the one CI password fallback the repo has always had.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: zoe
+          POSTGRES_USER: zoe
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U zoe"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install CI deps (slim list + lane deps)
+        id: deps
+        uses: ./.github/actions/ci-deps
+        with:
+          python-version: '3.10'
+
+      - name: Lane — tests/unit (ci_safe) shard
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        timeout-minutes: 25
+        run: |
+          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/tools/ci" pytest \
+            -o faulthandler_timeout=300 \
+            tests/unit -m ci_safe \
+            --maxfail=200 -q \
+            --override-ini="asyncio_mode=auto" \
+            -p pytest_shard_ledger \
+            --shard-count 2 --shard-index ${{ matrix.group }} --shard-weights=tools/ci/shard_weights.json \
+            --durations=50 --durations-min=1.0
+        env:
+          POSTGRES_URL: postgresql://zoe@localhost:5432/zoe
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+          PYTEST_SHARD_LEDGER: ${{ runner.temp }}/ledger/unit-${{ matrix.group }}.json
+
+      - name: Upload shard ledger
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-ledger-unit-${{ matrix.group }}
+          path: ${{ runner.temp }}/ledger/
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 7
+
+  # The completeness proof's reference: each split lane's FULL selection, collected (not run) in a fresh
+  # process with the same deps, PYTHONPATH and env as its shards. `validate` checks the shards against it.
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install CI deps (slim list + lane deps)
+        id: deps
+        uses: ./.github/actions/ci-deps
+        with:
+          python-version: '3.10'
+
+      - name: Collect — zoe-data (ci_safe), full selection
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          pytest services/zoe-data/tests -m ci_safe \
+            --ignore=services/zoe-data/tests/samantha_live \
+            -q --collect-only \
+            --override-ini="asyncio_mode=auto" \
+            -p pytest_shard_ledger | tail -n 3
+        env:
+          PYTHONPATH: ${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/tools/ci
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+          ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
+          PYTEST_SHARD_LEDGER: ${{ runner.temp }}/ledger/full-zoe-data.json
+
+      - name: Collect — tests/unit (ci_safe), full selection
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          set -o pipefail
+          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/tools/ci" pytest \
+            tests/unit -m ci_safe \
+            -q --collect-only \
+            --override-ini="asyncio_mode=auto" \
+            -p pytest_shard_ledger | tail -n 3
+        env:
+          # The unit shards' exact URL (set, so any collection-time branch on it matches); nothing is listening
+          # here and collection never connects.
+          POSTGRES_URL: postgresql://zoe@localhost:5432/zoe
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"
+          PYTEST_SHARD_LEDGER: ${{ runner.temp }}/ledger/full-unit.json
+
+      - name: Upload full-selection ledgers
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: shard-ledger-full
+          path: ${{ runner.temp }}/ledger/
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 7
+
+  # THE REQUIRED CONTEXT. An aggregator, not a lane: it does no testing itself, it decides.
+  #
+  # `if: always()` is load-bearing — without it a failed or cancelled shard SKIPS this job, and a skipped job
+  # publishes no failing `validate`... the required context would then never report (GitHub waits forever) or,
+  # worse, report `skipped`, which branch protection treats as passing. With `always()` it ALWAYS runs and
+  # concludes, and it concludes success ONLY when every needed job's result is exactly `success` — `failure`,
+  # `cancelled` and `skipped` are all red here. Then it proves the shards ran every collected test exactly once.
+  validate:
+    needs: [checks, zoe-data-shard, unit-shard, collect]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: tools/ci
+
+      - name: Download shard ledgers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: shard-ledger-*
+          path: ledgers
+          merge-multiple: true
+
+      - name: Every collected test ran in exactly one shard
+        if: ${{ !cancelled() }}
+        run: |
+          ls -l ledgers || true
+          rc=0
+          python3 tools/ci/shard_ledger.py verify --lane zoe-data --full ledgers/full-zoe-data.json \
+            --expect-shards 4 ledgers/zoe-data-*.json || rc=1
+          python3 tools/ci/shard_ledger.py verify --lane tests/unit --full ledgers/full-unit.json \
+            --expect-shards 2 ledgers/unit-*.json || rc=1
+          exit "$rc"
+
+      - name: Every needed job must have SUCCEEDED (skipped / cancelled / failed = red)
+        if: ${{ always() }}
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          expected = {"checks", "zoe-data-shard", "unit-shard", "collect"}
+          bad = {job: (needs.get(job) or {}).get("result") for job in sorted(expected)}
+          bad = {job: result for job, result in bad.items() if result != "success"}
+          if set(needs) != expected:
+              print(f"::error::needs drifted from the expected set: {sorted(needs)} != {sorted(expected)}")
+              sys.exit(1)
+          for job, result in bad.items():
+              print(f"::error::{job} concluded {result!r}, not 'success' — the required gate is red")
+          if bad:
+              sys.exit(1)
+          print("all needed jobs succeeded:", ", ".join(sorted(expected)))
+          PY
+
   # The zoe-data ci_safe lane on PYTHON 3.12 — the interpreter the LIVE service runs.
   #
-  # The required `validate` job above runs 3.10 (the rollback-only interpreter the
-  # Jetson's system python still is). Production zoe-data has run the B0.7 3.12 venv
-  # since the cutover, so a 3.12-only break (a removed stdlib module, a changed
-  # asyncio default, a typing change) would have been green in the required gate and
-  # red on the box. 2026-10-19 deep dive 2 lane K / T-2.
+  # The required gate runs 3.10 (the rollback-only interpreter the Jetson's system python still is).
+  # Production zoe-data has run the B0.7 3.12 venv since the cutover, so a 3.12-only break (a removed stdlib
+  # module, a changed asyncio default, a typing change) would have been green in the required gate and red on
+  # the box. 2026-10-19 deep dive 2 lane K / T-2.
   #
-  # A SEPARATE JOB, deliberately not a matrix on `validate`: required contexts are
-  # authenticated by NAME, and a matrix renames the check (`validate (3.10)`), which
-  # would leave the required `validate` context permanently unreported — GitHub
-  # waits for it forever and `main` freezes (tests/unit/test_required_gate_workflows.py
-  # is the guard on that failure). So `validate` keeps its exact name and shape, and
-  # this job is NOT branch-protected: it reports a visible check on every PR, heeded
-  # when red, promoted to required only after it has shown itself stable (the same
-  # path `deps-resolvable` is on). Adding a required context is a branch-protection
-  # change, which is the owner's, not this PR's.
+  # A SEPARATE, NOT branch-protected job: it reports a visible check on every PR, heeded when red, promoted to
+  # required only after it has shown itself stable (the same path `deps-resolvable` is on). Adding a required
+  # context is a branch-protection change, which is the owner's.
   #
-  # Same slim install and lane command as `validate` (tests/unit/test_ci_instrument_honesty.py
-  # asserts the install blocks are identical so the two cannot drift apart silently). NO
-  # Postgres service and no migrations: the ci_safe zoe-data lane is database-free by
-  # contract (tests/AGENTS.md - a test that needs postgres is left unmarked), and measured
-  # on CPython 3.12.13 with POSTGRES_URL unset it is 18,702 passed. The service is also the
-  # only place `validate` carries its CI password fallback; not copying it keeps one
-  # occurrence of that literal in the repo instead of two.
+  # Deliberately NOT sharded (2026-11-10): it is informational, so its ~25 min never holds a merge, and four more
+  # runners per PR would push concurrent PRs past the account's parallel-job limit and queue the REQUIRED shards.
+  #
+  # Same deps action and lane command as the zoe-data shards minus the split (tests/unit/test_ci_instrument_honesty.py
+  # asserts it). NO Postgres service and no migrations: the ci_safe zoe-data lane is database-free by contract.
   zoe-data-py312:
     runs-on: ubuntu-latest
     timeout-minutes: 70
@@ -365,31 +515,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
+      - name: Install CI deps (slim list + lane deps)
+        id: deps
+        uses: ./.github/actions/ci-deps
         with:
           python-version: '3.12'
 
-      - name: Install slim CI deps
-        id: slim_deps
-        run: |
-          pip install --quiet \
-            aiosqlite asyncpg psycopg2-binary alembic \
-            fastapi "httpx>=0.27.0,<0.28" "apscheduler==3.10.4" "tzlocal>=2,<3" "sqlalchemy>=2.0,<3.0" \
-            pydantic pywebpush py-vapid cryptography \
-            "ag-ui-protocol==1.0.0" "websockets==16.1.1" "pyjwt==2.15.0" passlib \
-            python-multipart "uvicorn[standard]==0.54.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
-            pyyaml "icalendar==7.3.0"
-
-      - name: Install lane deps (zoe-auth, numpy, LiveKit wheels)
-        id: lane_deps
-        if: ${{ !cancelled() && steps.slim_deps.outcome == 'success' }}
-        run: |
-          pip install --quiet -r services/zoe-auth/requirements.txt
-          pip install --quiet "numpy<2"
-          pip install --quiet "av==17.1.0" "aiortc==1.15.0" "livekit-protocol==1.1.27"
-
       - name: Lane — zoe-data (ci_safe) on Python 3.12
-        if: ${{ !cancelled() && steps.lane_deps.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         timeout-minutes: 40
         run: |
           python3 --version
@@ -397,12 +530,13 @@ jobs:
             -o faulthandler_timeout=300 \
             --ignore=services/zoe-data/tests/samantha_live \
             --maxfail=200 -q \
-            --override-ini="asyncio_mode=auto"
+            --override-ini="asyncio_mode=auto" \
+            --durations=50 --durations-min=1.0
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
-          # Same env as the required lane minus the database (tests/unit/test_ci_instrument_honesty.py pins it).
+          # Same env as the required shards minus the shard plumbing (tests/unit/test_ci_instrument_honesty.py pins it).
           ZOE_PRIVACY_CANARY_KEY: ${{ secrets.ZOE_PRIVACY_CANARY_KEY }}
 
   # Are the dependency manifests still SATISFIABLE, and do their load-bearing
