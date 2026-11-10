@@ -44,7 +44,12 @@ _CHILD_FACT_RE = re.compile(rf"\b(?:{_CHILD_ALT})\b", re.IGNORECASE) if _CHILD_A
 
 def child_names(message: str) -> set:
     """Lower-cased names listed straight after a child cue ("kids Ava (8) and Ben (4)"), never an article or filler word."""
-    out: set = set()
+    return set(child_cues(message))
+
+
+def child_cues(message: str) -> dict:
+    """Lower-cased child name -> the cue word it followed, singular ("grandson Max is 4" -> {"max": "grandson"}). A list shares its cue."""
+    out: dict = {}
     if not _CHILD_CUE_RE:
         return out
     text = message or ""
@@ -58,12 +63,23 @@ def child_names(message: str) -> set:
                 break            # "my kids have two cats": a predicate word is not a child's name
             if idx > 0 and _NEW_CLAUSE_RE.match(text, m.end()):
                 break            # ", and Mo is our cat": a later name with its own predicate starts a new clause, it is not another child
-            out.add(m.group(1).lower())
+            out[m.group(1).lower()] = _singular(re.sub(r"[\s:,-]+(?:(?:are|is|named|called)\b[\s:,-]*)*$", "", cue.group(0)).lower())
             sep = _SEP_RE.match(text, m.end())
             if not sep:
                 break
             pos = sep.end()
     return out
+
+
+_OWN_NOUN = frozenset({"grandson", "granddaughter", "grandchild", "grandkid", "niece", "nephew"})
+
+
+def _singular(word: str) -> str:
+    w = word.strip()
+    for plural, one in (("children", "child"), ("grandchildren", "grandchild")):
+        if w == plural:
+            return one
+    return w[:-1] if w.endswith("s") and len(w) > 3 else w
 
 
 def pet_names(message: str) -> set:
@@ -95,7 +111,8 @@ def repair(fact: str, fact_type: str, user_message: str) -> Optional[tuple]:
     """``(fact, type)`` re-typed when the turn's own words say the fact's named subject is a child filed as a pet (or a pet filed
     as a child); None when nothing needs changing. The pet / child noun must describe the NAMED subject: "Ava loves her pet
     hamster" (a child with a pet) is left alone."""
-    kids, pets = child_names(user_message), pet_names(user_message)
+    cues = child_cues(user_message)
+    kids, pets = set(cues), pet_names(user_message)
     both = kids & pets      # one word cannot be both: leave the ambiguous alone, in either direction
     kids, pets = kids - both, pets - both
     if not kids and not pets:
@@ -104,7 +121,10 @@ def repair(fact: str, fact_type: str, user_message: str) -> Optional[tuple]:
     if as_kid and not as_pet:
         m = _attached(fact, as_kid, r"pets?")
         if m:
-            return fact[:m.start("w")] + "child" + fact[m.end("w"):], "relationship"
+            noun = cues.get(sorted(as_kid)[0], "child") if len(as_kid) == 1 else "child"
+            if noun not in _OWN_NOUN:
+                noun = "child"          # "grandson", not "child", for a grandson; the plain cues keep the old wording
+            return fact[:m.start("w")] + noun + fact[m.end("w"):], "relationship"
         if fact_type == "pet" and not _PET_FACT_RE.search(fact):
             return fact, "relationship"         # filed as a pet, names a child, no pet noun to fix: the type alone is wrong
     if as_pet and not as_kid and _KIN_ALT:

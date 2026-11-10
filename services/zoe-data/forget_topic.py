@@ -37,7 +37,12 @@ _VERB = (r"(?:forget|delete|remove|erase|scrap|"
          r"(?:do\s*n'?t|do\s+not|stop)\s+(?:keep|keeping|remember|remembering|save|saving|store|storing))")
 _QUANT = (r"(?:everything|anything|all(?:\s+of\s+it)?"
           r"|what(?:ever)?\s+(?:i(?:'?ve)?|we)\s+(?:just\s+)?(?:told\s+you|said|mentioned)"
-          r"|what\s+you\s+know|your\s+memories|the\s+memories)")
+          r"|what\s+you\s+know|your\s+memories|the\s+memories"
+          # "forget the thing about asha and mushrooms", "forget the bit about my brother" (QA round 7): the same instruction in the
+          # words people actually use; the noun is REQUIRED (bare "forget about my day" stays a dismissal)
+          r"|(?:all\s+)?(?:the|that|this|those|these)\s+(?:(?:little|small|whole|other|sad|silly)\s+)?"
+          r"(?:thing|things|bit|bits|part|parts|stuff|story|stories|detail|details|info|information|note|notes)"
+          r"(?:\s+(?:i|we)\s+(?:just\s+)?(?:told\s+you|said|mentioned))?)")
 # the quantifier is REQUIRED: "forget about my day" is a dismissal, not an instruction to erase anything
 _TOPIC_RE = re.compile(
     r"^[\s,.!?;:-]*" + _OPENER + _VERB + r"\s+" + _QUANT + r"\s+(?:you\s+know\s+)?about\s+"
@@ -220,6 +225,14 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
         res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)
     except Exception as exc:  # noqa: BLE001
         logger.warning("forget_topic: words erase failed (%s)", type(exc).__name__)
+        res.store_down = True
+        return res
+    try:     # the member's short notes about past conversations that are about the topic (conversation_notes; raises on a store error)
+        import conversation_notes
+
+        await conversation_notes.erase_topic(user_id, lambda text: row_matches(groups, text))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
     archived: list = []

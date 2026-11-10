@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-118 stores: 44 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+120 stores: 45 reached, 31 out of scope, 44 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -135,6 +135,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `omi_device_health` | pg_table | metadata | reached | member: `omi_recordings.forget_user` | - |
 | `omi_day_reviews` | pg_table | words | reached | member: `omi_day_review.forget_user` / entity: `omi_day_review.erase_entity` | - |
 | `omi_day_candidates` | pg_table | words | reached | member: `omi_day_review.forget_user` / entity: `omi_day_review.erase_entity` | - |
+| `conversation_notes` | pg_table | words | reached | member: `conversation_notes.forget_user` / entity: `conversation_notes.erase_entity` | - |
 | `contact_fields` | pg_table | words | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
 | `contact_sources` | pg_table | metadata | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
 | `source_contacts` | pg_table | words | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
@@ -216,6 +217,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `recall_gate_trace` | file | words | reached | member: `local_text_logs.erase_all_text` / entity: `local_text_logs.erase_entity` | ~/.zoe/recall-gate-trace/: the owner's opt-in trace (ZOE_RECALL_GATE_TRACE, default off) - the owner's words + row text per gate decision, 0600, 7-day retention, never off-box. A member erase clears it household-wide (via local_text_logs.erase_all_text), an entity forget drops every line naming the entity (via local_text_logs.erase_entity, cascade step text_logs); both inside that module's erase barrier, which the trace's appends honour. |
 | `production_feedback_log` | file | words | out_of_scope | - | Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in. |
 | `voice_stt_log` | file | words | gap | - | ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, no user id, no retention, outside the cascade. Rotated by size only. |
+| `flue_session_log` | file | words | gap | - | The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget cascade (conversation_notes.erase_entity); the log itself is outside the cascade. |
 | `voice_sample_corpus` | corpus | biometric | gap | - | ~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py). |
 | `router_retrain_texts` | file | words | reached | member: `struggle_detector.delete_user` / entity: `struggle_detector.erase_entity` | The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files (router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only. |
 | `self_review_records` | file | words | reached | member: `struggle_detector.delete_user` / entity: `self_review.erase_entity` | ~/.zoe/self-review/: the nightly self-review (self_review.py, ZOE_SELF_REVIEW). <night>.self-review.jsonl + <night>.md hold the OWNER's flagged turns verbatim (0600, never off-box; other members are ids and classes only); the summary is counts, ids and utterance hashes. An entity forget drops the member's records naming it (cascade step self_review); a member erase drops all of the member's records and summary events; load_reviews re-checks the ledger. |

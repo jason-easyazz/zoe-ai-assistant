@@ -303,6 +303,14 @@ def _wire_version() -> int:
 
 def _endpoint(session_id: str, *, stream: bool = False) -> str:
     sid = (session_id or "default").strip() or "default"
+    # After a forget the sidecar's own history of this conversation still holds what was forgotten: address a fresh session instead
+    # (forget_session). The member comes from the session map the turn envelope fills; an unknown session is addressed unchanged.
+    try:
+        import forget_session
+
+        sid = forget_session.sidecar_session(_SESSION_UID.get(sid), sid)
+    except Exception:  # noqa: BLE001 - never stop a turn over this
+        pass
     # URL-encode the sid as a single path segment: a raw session id containing
     # '/', '?', '#', or '..' would otherwise change the route (path traversal /
     # query injection) instead of addressing that literal Flue session.
@@ -2991,6 +2999,12 @@ async def _run_flue_brain_streaming_turn(
     import voice_session_bridge
 
     bridge_block = await voice_session_bridge.block_for(uid, session_id)
+    # Notes about earlier conversations with this member (ZOE_CONVERSATION_NOTES, default OFF; conversation_notes.py): the first
+    # brain turns of a session carry the member's newest 1-2 notes as soft context ("last time you talked about X; it is open").
+    # Same slot and delimiters as the bridge (the sidecar elides it from older turns); confirmed speaker only; shadow logs, serves "".
+    import conversation_notes
+
+    notes_block = await conversation_notes.block_for(uid, session_id)
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → bridge → fast-path → recall → offer → the user's words. "" when the flag is
@@ -3013,7 +3027,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
-    _blocks = "\n".join(b for b in (identity_block, bridge_block, fastpath_block, recall_block, offer_block,
+    _blocks = "\n".join(b for b in (identity_block, bridge_block, notes_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
     # the start of the outbound message and forge the trusted marker. Only reachable

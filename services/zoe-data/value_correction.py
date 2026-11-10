@@ -96,10 +96,12 @@ _YEARS = r"(?:\s+(?:years?[ -]old|yrs?\s+old|yo))?"
 _WORD = r"[A-Za-z][A-Za-z'’\-]{1,24}"
 _REL = (r"(?:sister|brother|mum|mom|mother|dad|father|wife|husband|partner|son|daughter|boyfriend|girlfriend|nan|nana|grandma|"
         r"grandmother|grandpa|grandfather|aunt|auntie|uncle|cousin|niece|nephew|friend|boss)")
-_SUBJ = rf"(?P<subj>(?:my|our)\s+{_REL}|(?:the|my|our)\s+{_WORD}(?:\s+{_WORD})?|{_WORD})"
-_CUE = (r"(?P<cue>(?:(?:a\s+(?:small|quick)\s+)?correction|actually|sorry|no|nope|wait|oh|hang\s+on|i\s+(?:misspoke|meant|said)|"
+# "ashas swimming is on wednesday not thursday": a lazily typed possessive "<name>s <noun>" (the apostrophe dropped) is a subject too
+_POSS = rf"(?!(?:the|my|our|this|that|his|her|its|their|your)\s){_WORD}['’]?s\s+{_WORD}"
+_SUBJ = rf"(?P<subj>(?:my|our)\s+{_REL}|(?:the|my|our)\s+{_WORD}(?:\s+{_WORD})?|{_POSS}|{_WORD})"
+_CUE = (r"(?P<cue>(?:(?:a\s+(?:small|quick)\s+)?correction|actually|actualy|actully|acutally|actualley|sorry|no|nope|wait|oh|hang\s+on|i\s+(?:misspoke|meant|said)|"
         r"(?:that(?:['’]s|\s+is|\s+was)\s+(?:wrong|incorrect|not\s+right)))[,.;:!\-\s]+)*")
-_LEAD = rf"^\W*(?:(?:good\s+)?(?:morning|evening|afternoon)[,.\s]+)?{_CUE}"
+_LEAD = rf"^\W*(?:(?:good\s+)?(?:morning|evening|afternoon)[,.\s]+)?(?:(?:and|also|oh\s+and|and\s+also)[,.\s]+)?{_CUE}"
 _PAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are)\s+(?:actually\s+|really\s+)?(?P<n>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}[,;]?\s+"
                       rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}\W*(?:i\s+misspoke\W*)?$", re.IGNORECASE)
 _AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\s+(?:(?P<pre>actually|now)\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}"
@@ -107,9 +109,100 @@ _AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\
 # "its 76 for margaret, not 78": the value comes first, the subject after "for" (QA 6b)
 _FOR_RE = re.compile(_LEAD + rf"(?:it['’]?s|that['’]?s|thats|it\s+is)\s+(?:actually\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}\s+for\s+{_SUBJ}[,;]?\s+"
                      rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_NUM}){_YEARS}\W*$", re.IGNORECASE)
+# "kais 21 not 22" / "also kai 21 not 22": a lazily typed name (the possessive apostrophe and the "is" both dropped) and two numbers
+# (QA round 7: this shape was never read, and the digest filed the stray "Kais: 21" as a person)
+_BARE_RE = re.compile(_LEAD + rf"(?P<subj>{_WORD})\s+(?P<n>{_NUMH}|{_NUM}){_YEARS}[,;]?\s+(?:and\s+)?not\s+(?P<o>{_NUMH}|{_NUM}){_YEARS}\W*$",
+                      re.IGNORECASE)
+_PREP_RE = re.compile(r"^(?:on|at|in|by|for|around|about)\s+", re.IGNORECASE)
+
+
+def _bare_value(v: str) -> str:
+    """"on friday" -> "friday": a value's lead preposition is not part of the value (the stored row says "exam on Thursday")."""
+    stripped = _PREP_RE.sub("", v.strip())
+    return stripped if stripped and value_of(v) is None else v.strip()
+
+
+_BARE_NOT_NAME = frozenset({"about", "around", "over", "under", "roughly", "maybe", "only", "just", "almost", "nearly", "still",
+                            "page", "price", "cost", "costs", "score", "total", "temp", "monday", "tuesday", "wednesday", "thursday", "friday",
+                            "saturday", "sunday", "number", "size", "age", "aged"})
 _NOT_SUBJECT = frozenset({"it", "this", "that", "there", "here", "he", "she", "they", "we", "i", "you", "what", "who", "which", "the",
                           "a", "an", "my", "our", "your", "his", "her", "their", "so", "its", "zoe", "today", "tomorrow", "yesterday",
                           "tonight", "everything", "nothing", "something", "someone", "everyone", "anything"})
+
+
+_OWNER_NOUN_RE = re.compile(r"^(?P<o>[A-Za-z][A-Za-z\-]{1,24}?)(?P<p>['’]s|s)\s+(?P<n>[A-Za-z][A-Za-z\-]{1,24})$")
+
+
+def owner_noun(subject: str):
+    """(owner, noun) for the subject "ashas swimming" / "Asha's swimming", else None. With an apostrophe the owner is exact ("asha");
+    without one the typed word is kept whole ("ashas": a lazily typed possessive OR a name that ends in s, so a row decides which -
+    see ``_owner_re``). The noun is lower-cased. Pure."""
+    s = (subject or "").strip()
+    if re.match(r"(?i)^(?:the|my|our|this|that|his|her|its|their|your)\s", s):
+        return None
+    m = _OWNER_NOUN_RE.match(s)
+    if not m:
+        return None
+    lazy = not m.group("p").startswith(("'", "’"))
+    word = m.group("o") + ("s" if lazy else "")
+    return word[:1].upper() + word[1:].lower(), m.group("n").lower()
+
+
+def explicit_possessive(subject: str) -> bool:
+    """True when the subject was typed with its apostrophe ("Carlos's swimming"): the owner is then exactly that word, never a shortened name."""
+    m = _OWNER_NOUN_RE.match((subject or "").strip())
+    return bool(m) and m.group("p").startswith(("'", "’")) and owner_noun(subject) is not None
+
+
+def _may_be_lazy(word: str) -> bool:
+    """Could ``word`` be a name typed with a stray final s ("kais" for Kai)? A name that ends in s may also be exactly that name."""
+    return len(word) > 3 and word.lower().endswith("s") and not word.lower().endswith("ss")
+
+
+def may_shorten(corr: "Correction", exact_exists: bool, ambiguous: bool = False) -> bool:
+    """THE one rule for shortening a typed name to a known one ("kais" -> Kai, "ashas" -> Asha), shared by every writer that resolves a
+    correction's subject (``apply`` here, ``person_extractor.apply_person_fact``): only when the correction is a LAZY form (the bare
+    "kais 21 not 22", or an owner+noun possessive typed without its apostrophe), the name could carry a stray s, and NOTHING exact
+    exists - no row / person under the name as typed. An explicit possessive ("Carlos's ...") and a plain "Carlos is 21 not 22" name
+    Carlos: they never reach Carlo. ``ambiguous``: the typed name resolved to SEVERAL people (two Carloses) - that is a match to ask about, never an
+    absence to repair, so it never shortens. Pure."""
+    on = owner_noun(corr.subject)
+    lazy_form = bool(corr.lazy) or (on is not None and not explicit_possessive(corr.subject))
+    return lazy_form and not exact_exists and not ambiguous and _may_be_lazy((on or (corr.subject,))[0])
+
+
+async def person_status(name: str, user_id: str) -> str:
+    """How the member's people graph answers a typed name: ``exact`` (one person), ``ambiguous`` (several), ``none`` (POSITIVELY nobody) or
+    ``error`` (the lookup could not be made). The same resolver ``person_extractor.apply_person_fact`` uses. Anything but ``none`` blocks a
+    shortening to a different name: an unreadable graph is not an absence. Never raises."""
+    try:
+        import person_extractor as pe
+
+        db, opened = await pe._ensure_db(None)
+        if db is None:
+            return "error"
+        try:
+            res = await pe._resolve_person(name, user_id, db)
+        finally:
+            if opened:
+                await db.close()
+        if res is None:
+            return "error"
+        if getattr(res, "ambiguous", False):
+            return "ambiguous"
+        return "exact" if getattr(res, "person_id", None) else "none"
+    except Exception:  # noqa: BLE001
+        return "error"
+
+
+def _owner_noun_re(owner: str, noun: str, lazy: bool = False):
+    """The row says the OWNER has the NOUN: "<owner>('s) <noun>" side by side. The owner is the word as typed; with ``lazy`` (nobody has
+    a row under the exact word) also without its final s; never a longer word. "Dev's swimming with Asha" is not Asha's swimming."""
+    alts = [owner]
+    if lazy and _may_be_lazy(owner):
+        alts.append(owner[:-1])
+    alt = "|".join(re.escape(a) for a in sorted(alts, key=len, reverse=True))
+    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]s)?\s+{re.escape(noun)}(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 class Correction(NamedTuple):
@@ -117,6 +210,7 @@ class Correction(NamedTuple):
     new: str
     old: Optional[str]       # None: an age restated with no old value ("Anaya is 7 now")
     cued: bool = False
+    lazy: bool = False       # the subject is a bare name typed WITHOUT its possessive apostrophe ("kais 21 not 22"): the only plain-name form that may shorten
 
 
 def statement(text: str) -> Optional[Correction]:
@@ -135,7 +229,7 @@ def statement(text: str) -> Optional[Correction]:
             subj = m.group("subj").strip()
             if subj.lower() in _NOT_SUBJECT:
                 continue
-            new, old = m.group("n").strip(), m.group("o").strip()
+            new, old = _bare_value(m.group("n")), _bare_value(m.group("o"))
             if new.lower() == old.lower():
                 continue
             cued = bool((m.group("cue") or "").strip()) or bool(re.search(r"\b(?:actually|really)\s+\S", sentence, re.IGNORECASE))
@@ -143,6 +237,19 @@ def statement(text: str) -> Optional[Correction]:
             if not both_num and (not cued or not same_shape(new, old)):
                 continue
             return Correction(subj, new, old, cued)
+        m = _BARE_RE.match(sentence)
+        if m:
+            subj = m.group("subj").strip()
+            if subj.lower() in _NOT_SUBJECT or subj.lower() in _BARE_NOT_NAME:
+                continue
+            typed_apostrophe = bool(re.search(r"['’]s$", subj))
+            subj = re.sub(r"['’]s$", "", subj)      # "kais" stays as typed: a lazy possessive OR a name ending in s - the row decides
+            if subj.lower() in _NOT_SUBJECT or subj.lower() in _BARE_NOT_NAME or subj.lower().rstrip("s") in _NOT_SUBJECT:
+                continue                    # "thats 21 not 22" is no name
+            new, old = m.group("n").strip(), m.group("o").strip()
+            if value_of(new) is not None and value_of(old) is not None and value_of(new) != value_of(old):
+                return Correction(subj, new, old, True, not typed_apostrophe)
+            continue
         m = _FOR_RE.match(sentence)
         if m:
             subj = m.group("subj").strip()
@@ -163,9 +270,12 @@ def statement(text: str) -> Optional[Correction]:
     return None
 
 
-def _subject_re(subject: str):
+def _subject_re(subject: str, lazy: bool = False):
     """Whole-word match of the subject in a stored row: a name as is, "my <rel>" as the relation word ("User's dad ...")."""
     s = subject.strip()
+    on = owner_noun(s)
+    if on:
+        return _owner_noun_re(on[0], on[1], lazy)
     m = re.match(rf"(?i)(?:my|our)\s+({_REL})$", s)
     if m:
         # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
@@ -178,10 +288,26 @@ def _subject_re(subject: str):
     m = re.match(r"(?i)the\s+(.+)$", s)
     if m:
         s = m.group(1)          # "the pitch" -> any row that names the pitch ("User has a board pitch on Thursday")
-    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)
+    stem = s[:-1] if lazy and _may_be_lazy(s) else None
+    if stem:
+        # a name typed with a stray s ("kais 21 not 22" for Kai): the word as typed, or without its s
+        return re.compile(rf"(?<![A-Za-z0-9'’])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)   # exactly the word: "Carlo" never reaches "Carlos: 22"
 
 
 _AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
+# the compact "Name: 22" row: the colon must come right after the subject, and a number that is the hour of a time ("10:22") is no age
+_COMPACT_AGE = re.compile(rf"^(?P<pre>\s*:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?!:\d)(?:(?P<post>\s+(?:years?[ -]old|yrs?\s+old|yo))|(?=\s*(?:[,;.(]|$)))", re.IGNORECASE)
+
+
+def _age_matches(tail: str) -> list:
+    """The age numbers in the text after the subject: a compact ``: N`` straight after it, then every "is/aged/turned N"."""
+    out = []
+    cm = _COMPACT_AGE.match(tail)
+    if cm:
+        out.append(cm)
+    out.extend(re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE))
+    return out
 
 
 def _row_value(am) -> Optional[float]:
@@ -195,14 +321,14 @@ def _render_value(v: float, like: str) -> str:
     return number_like(whole, like) + (" and a half" if v - whole else "")
 
 
-def rewrite(row_text: str, corr: Correction) -> Optional[str]:
+def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
     """``row_text`` with the corrected value, or None when the row is not the fact being corrected. Pure.
 
     The row must name the subject; a value pair needs the old value as a whole word AFTER the subject's first mention (the
     value is the subject's, not an earlier name's) and not already hold the new one; an age restatement rewrites the one age
     number that follows the subject ("Anaya is six", "Oliver, aged 24"). A row that mentions another number first is left alone."""
     text = row_text or ""
-    sm = _subject_re(corr.subject).search(text)
+    sm = _subject_re(corr.subject, lazy_s).search(text)
     if not sm:
         return None
     tail = text[sm.end():]
@@ -210,7 +336,7 @@ def rewrite(row_text: str, corr: Correction) -> Optional[str]:
         old_n, new_n = value_of(corr.old), value_of(corr.new)
         if old_n is not None and new_n is not None:
             # an AGE pair: the subject's number, whatever its spelling ("24" == "twenty-four", "3" -> "3 and a half")
-            for am in re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE):
+            for am in _age_matches(tail):
                 if _row_value(am) == old_n:
                     return (text[:sm.end()] + tail[:am.start("num")] + _render_value(new_n, am.group("num"))
                             + tail[(am.end("half") if am.group("half") else am.end("num")):])
@@ -226,7 +352,7 @@ def rewrite(row_text: str, corr: Correction) -> Optional[str]:
     new_n = value_of(corr.new)
     if new_n is None:
         return None
-    ages = list(re.finditer(_AGE_IN_ROW, tail, re.IGNORECASE))
+    ages = _age_matches(tail)
     if not ages:
         return None
     am = ages[0]
@@ -292,13 +418,37 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             svc = get_memory_service()
         uid = user_id.strip().lower()
         hits = []
+        exact_subject_row = False
+        exact_re = _subject_re(corr.subject, False)
+        _on = owner_noun(corr.subject)
+        # the exact OWNER, whatever attribute the row is about: "Carlos is 22" means Carlos exists, so "carlos swimming" is never Carlo's
+        owner_re = re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(_on[0])}(?![A-Za-z0-9])", re.IGNORECASE) if _on else None
         for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
             meta = r.metadata or {}
             if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
                 continue
+            if exact_re.search(r.text or "") or (owner_re and owner_re.search(r.text or "")):
+                exact_subject_row = True
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
+        if not hits and may_shorten(corr, exact_subject_row):
+            # the memory rows alone cannot say whether the typed name is a real person: Carlos may be in the people graph with no row naming him
+            # yet. Ask the SAME resolver apply_person_fact uses; only a positive "no such person" lets the shortening through.
+            _typed = (owner_noun(corr.subject) or (corr.subject,))[0]
+            _status = await person_status(_typed, user_id)
+        else:
+            _status = "skip"
+        if not hits and _status == "none":
+            # nobody has a row under the name exactly as typed: "kais 21 not 22" is Kai's (the apostrophe was not typed). Never the
+            # other way round - "Carlos" does not rewrite Carlo's row while a Carlos row exists, nor when Carlos is the typed name.
+            for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
+                meta = r.metadata or {}
+                if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
+                    continue
+                new_text = rewrite(r.text or "", corr, lazy_s=True)
+                if new_text and new_text != r.text:
+                    hits.append((r, new_text))
         if corr.old is not None and session_id and not _is_unidentified(user_id):
             # the misheard / misspoken fact may not be stored yet (the post-turn digest of an earlier turn lands minutes later):
             # that digest rewrites the old value before it writes (correction_apply.correct_fact)
