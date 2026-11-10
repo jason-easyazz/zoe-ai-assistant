@@ -291,7 +291,8 @@ def validate(obj: Optional[dict], convo: Convo) -> Optional[Note]:
     if convo.minor and _frightening(" ".join([summary, *topics, *items, follow])):
         return None                                        # a child's note holds nothing frightening: dropped in code, not by prompt
     note = Note(summary, topics, mood, items, follow)
-    note.sensitive = _is_private(" ".join([summary, *topics, *items, follow]))
+    # EVERY field that is rendered to the brain goes through the classifier, mood included: private content in any one of them sets the flag
+    note.sensitive = _is_private(" ".join([summary, *topics, mood, *items, follow]))
     return note
 
 
@@ -556,12 +557,21 @@ def _convos(owner: str, people_id: str, rows: Sequence[tuple], *, with_name: str
 
 
 async def _is_minor(user_id: str) -> bool:
-    """Is this member a minor? No stored record = an adult (the persona layer's rule); a LOOKUP FAILURE = a child (no mood is kept
-    when we cannot tell - the same posture as the guest path)."""
+    """Is this member a minor? Two independent authorities, either one is enough: the persona layer's member mode, and the ACCOUNT role
+    (``enrollment_state.audience_of``: ``auth_users.role`` against ``manner_block.CHILD_ROLES`` - a child with no ``member_modes`` row is still a
+    child). A member who is not POSITIVELY an adult (a missing account, an unrecognised role, a failed lookup) is treated as a minor: no mood is
+    kept, the child prompt and the frightening-content filter apply - the same fail-safe posture as the guest path."""
     try:
         import persona_layer
 
-        return bool((await persona_layer.load_member_mode(user_id)).minor)
+        if bool((await persona_layer.load_member_mode(user_id)).minor):
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    try:
+        from enrollment_state import audience_of
+
+        return (await audience_of(user_id)) not in ("adult", "synthetic")
     except Exception:  # noqa: BLE001
         return True
 

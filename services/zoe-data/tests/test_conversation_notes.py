@@ -784,7 +784,12 @@ def test_a_failed_age_lookup_is_a_child_for_a_member_too(monkeypatch):
     async def adult(uid):
         return Mode()
     monkeypatch.setattr(persona_layer, "load_member_mode", adult)
-    assert run(cn._is_minor(OWNER)) is False                                                         # control: a known adult
+    import enrollment_state
+
+    async def adult_account(uid, db=None):
+        return "adult"
+    monkeypatch.setattr(enrollment_state, "audience_of", adult_account)
+    assert run(cn._is_minor(OWNER)) is False                                                         # control: a known adult (persona AND account role)
 
 
 def test_shadow_logs_what_it_would_serve_from_the_shadow_rows(member, monkeypatch, caplog):
@@ -1192,3 +1197,57 @@ def test_a_lost_pool_fails_the_erase_but_a_never_built_one_is_an_empty_store(mon
     monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: False)
     assert cn._no_store(RuntimeError("db_pool not initialised — call init_pool() first")) is True
     assert cn._no_store(RuntimeError("transaction not initialised")) is False
+
+
+def test_a_child_account_with_no_persona_row_is_a_minor_and_a_failed_lookup_is_too(monkeypatch):
+    """Two authorities: persona member mode OR the account role (enrollment_state.audience_of). Not positively an adult -> a minor."""
+    import enrollment_state
+    import persona_layer
+
+    async def no_row(uid):                                    # persona_layer's default for a member with no member_modes row: NOT a minor
+        return persona_layer.MemberMode(minor=False) if hasattr(persona_layer, "MemberMode") else types_ns(minor=False)
+
+    def types_ns(**kw):
+        import types
+        return types.SimpleNamespace(**kw)
+    monkeypatch.setattr(persona_layer, "load_member_mode", no_row)
+    for audience, want in (("minor", True), ("adult", False), ("unknown", True), ("synthetic", False)):
+        async def aud(uid, db=None, _a=audience):
+            return _a
+        monkeypatch.setattr(enrollment_state, "audience_of", aud)
+        assert run(cn._is_minor("kid-1")) is want, audience                          # child role + no persona row -> minor; adult control -> adult
+
+    async def boom(uid, db=None):
+        raise RuntimeError("auth_users unavailable")
+    monkeypatch.setattr(enrollment_state, "audience_of", boom)
+    assert run(cn._is_minor("kid-1")) is True                                        # role lookup failed -> treated as a minor
+
+    async def minor_row(uid):
+        return types_ns(minor=True)
+    monkeypatch.setattr(persona_layer, "load_member_mode", minor_row)
+
+    async def adult(uid, db=None):
+        return "adult"
+    monkeypatch.setattr(enrollment_state, "audience_of", adult)
+    assert run(cn._is_minor("kid-1")) is True                                        # the persona authority alone is enough too
+
+
+def test_a_child_role_with_no_persona_row_gets_no_mood_and_the_frightening_filter(monkeypatch):
+    convo = cn.Convo("k-kid", NOW - 3600, NOW - 3000, [("them", "we talked about the haunted house and the scary ghost"), ("zoe", "that sounds spooky")],
+                     4, "", True)
+    obj = {"skip": False, "summary": "They talked about the haunted house and a scary ghost.", "topics": ["haunted house"], "mood": "excited", "open": []}
+    assert cn.validate(obj, convo) is None                                             # a child's note holds nothing frightening
+    calm = {"skip": False, "summary": "They talked about the haunted house they visited.", "topics": ["haunted house"], "mood": "excited", "open": []}
+    convo2 = cn.Convo("k-kid2", NOW - 3600, NOW - 3000, [("them", "we visited the haunted house today"), ("zoe", "that sounds fun")], 4, "", True)
+    note = cn.validate(calm, convo2)
+    assert note is not None and note.mood == ""                                        # a minor's note has no mood
+
+
+def test_private_content_that_sits_only_in_the_mood_marks_the_note_private():
+    convo = cn.Convo("k-mood", NOW - 3600, NOW - 3000, [("them", "the interview went well and I told them about the cycling trip"), ("zoe", "great")],
+                     4, "", False)
+    quiet = {"skip": False, "summary": "They talked about how the interview went and the cycling trip.", "topics": ["interview"], "mood": "pleased", "open": []}
+    assert cn.validate(quiet, convo).sensitive is False                                # control: nothing private anywhere
+    worried = {**quiet, "mood": "worried about debt"}
+    note = cn.validate(worried, convo)
+    assert note is not None and note.sensitive is True                                 # the private subject sits only in the mood
