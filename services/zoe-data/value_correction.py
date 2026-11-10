@@ -253,7 +253,7 @@ def _subject_re(subject: str, lazy: bool = False):
 
 _AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
 # the compact "Name: 22" row: the colon must come right after the subject, and a number that is the hour of a time ("10:22") is no age
-_COMPACT_AGE = re.compile(rf"^(?P<pre>\s*:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?!:\d)(?P<post>{_YEARS})(?=\s*(?:[,;.(]|$))", re.IGNORECASE)
+_COMPACT_AGE = re.compile(rf"^(?P<pre>\s*:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?!:\d)(?:(?P<post>\s+(?:years?[ -]old|yrs?\s+old|yo))|(?=\s*(?:[,;.(]|$)))", re.IGNORECASE)
 
 
 def _age_matches(tail: str) -> list:

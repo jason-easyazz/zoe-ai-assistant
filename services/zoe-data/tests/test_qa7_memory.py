@@ -416,4 +416,5 @@ def test_compact_age_row_ignores_a_number_that_starts_another_attribute():
     assert rewrite("Kai: 22 Willow Street", corr) is None
     assert rewrite("Kai: 22", corr) == "Kai: 21"
     assert rewrite("Kai: 22 years old", corr) == "Kai: 21 years old"
+    assert rewrite("Kai: 22 years old likes trains", corr) == "Kai: 21 years old likes trains"
     assert rewrite("Kai: 22, likes trains", corr) == "Kai: 21, likes trains"
