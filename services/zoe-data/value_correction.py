@@ -160,7 +160,7 @@ def _owner_noun_re(owner: str, noun: str, lazy: bool = False):
     if lazy and _may_be_lazy(owner):
         alts.append(owner[:-1])
     alt = "|".join(re.escape(a) for a in sorted(alts, key=len, reverse=True))
-    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]?s)?\s+{re.escape(noun)}(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]s)?\s+{re.escape(noun)}(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 class Correction(NamedTuple):

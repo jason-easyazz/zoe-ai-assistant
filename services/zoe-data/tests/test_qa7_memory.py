@@ -418,3 +418,10 @@ def test_compact_age_row_ignores_a_number_that_starts_another_attribute():
     assert rewrite("Kai: 22 years old", corr) == "Kai: 21 years old"
     assert rewrite("Kai: 22 years old likes trains", corr) == "Kai: 21 years old likes trains"
     assert rewrite("Kai: 22, likes trains", corr) == "Kai: 21, likes trains"
+
+
+def test_an_apostrophized_owner_is_matched_exactly_never_expanded_to_a_longer_name():
+    c = vc.statement("actually Carlo's swimming is on Wednesday not Thursday")
+    assert c is not None and vc.owner_noun(c.subject) == ("Carlo", "swimming")
+    assert vc.rewrite("Carlos swimming is on Thursday", c) is None          # Carlos is another person
+    assert vc.rewrite("Carlo's swimming is on Thursday", c) == "Carlo's swimming is on Wednesday"
