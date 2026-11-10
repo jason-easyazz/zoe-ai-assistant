@@ -104,6 +104,7 @@ LANES += (
 LANE_ENV = {"ZOE_DATA_DB": ":memory:", "ZOE_MEMORY_STARTUP_STRICT": "false"}
 
 HUB_FRACTION = 0.5
+CODE_EXT = (".py", ".sh", ".bash", ".js", ".mjs", ".cjs")
 AGGREGATOR_FANOUT = 20
 READER_HOPS = 1   # importer levels above a python module that READS a changed non-python file
 LAZY_HOPS = int(os.environ.get("AFFECTED_TESTS_LAZY_HOPS", "2"))
@@ -593,6 +594,12 @@ def _conftests_for(g: Graph, lane: Lane) -> list[str]:
     return sorted(set(out))
 
 
+def _consuming_lanes(rel: str) -> list[Lane]:
+    """lanes that run a service's code: it owns them, or they put the service on PYTHONPATH."""
+    svc = "/".join(rel.split("/")[:2]) if rel.startswith("services/") else None
+    return [ln for ln in LANES if svc and (ln.service_dir == svc or svc in ln.pythonpath)]
+
+
 def conftest_direct_deps(g: Graph, conftest: str) -> list[str]:
     """modules a conftest uses DIRECTLY (imports, or names as ``sys.modules.get("mod")``).
 
@@ -724,7 +731,7 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
         if k == "global-config":
             sel.full_all_reason = f"{p} changed (pytest/packaging config affects every lane)"
         elif k == "deps":
-            owner = [ln for ln in LANES if ln.service_dir and p.startswith(ln.service_dir + "/")]
+            owner = _consuming_lanes(p)
             if owner:
                 for ln in owner:
                     sel.lane_full.setdefault(ln.name, f"{p} changed (lane dependencies)")
@@ -733,9 +740,7 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
         elif k == "migration":
             # a migration changes the schema every DB-backed test builds (#2323: a new 0070 revision broke
             # eleven migration / data-model tests that never name it): every lane that runs that service's code
-            svc = "/".join(p.split("/")[:2]) if p.startswith("services/") else None
-            owner = [ln for ln in LANES if svc and (ln.service_dir == svc or svc in ln.pythonpath)]
-            for ln in owner or LANES:
+            for ln in _consuming_lanes(p) or LANES:
                 sel.lane_full.setdefault(ln.name, f"{p} changed (a schema migration)")
         elif k == "conftest":
             hit = [ln for ln in LANES if p in _conftests_for(g, ln)]
@@ -801,6 +806,12 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
             sel.full_all_reason = f"{p}: unknown file type and no test references it"
             return sel
         sel.unreached.append(p)
+        if p.endswith(CODE_EXT) and not p.startswith("labs/"):
+            # CODE no test reaches statically may still be reached at runtime (a registry, a built path):
+            # never a green zero-test run for it - run the lane(s) that load its tree
+            for ln in (_consuming_lanes(p) if p.startswith("services/") else
+                       [x for x in LANES if x.name == "tests-unit"]):
+                sel.lane_full.setdefault(ln.name, f"{p} changed and no test reaches it statically")
     if not non_doc and not sel.tests and not sel.lane_full:
         sel.notes.append("docs-only diff: no test reads the changed docs, so no tests are affected")
     return sel

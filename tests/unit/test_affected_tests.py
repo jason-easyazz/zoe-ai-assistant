@@ -180,7 +180,9 @@ def test_schema_migration_falls_back_to_the_full_lane(repo):
 def test_config_and_dependency_changes_fall_back_to_full(repo, rel):
     _edit(repo, rel, "# changed\n")
     _, s = _run(repo, "--dry-run")
-    assert any(ln["mode"] == "full" for ln in s["lanes"])
+    modes = {ln["lane"]: ln["mode"] for ln in s["lanes"]}
+    # every lane that loads zoe-data (tests/unit puts it on PYTHONPATH) runs full, not just the owner
+    assert modes.get("zoe-data") == "full" and modes.get("tests-unit") == "full"
     if rel == "pytest.ini":
         assert s["mode"] == "full" and "pytest.ini" in s["fallback_reason"]
 
@@ -205,10 +207,22 @@ def test_docs_only_diff_selects_nothing_and_says_so(repo, capsys):
     assert "docs-only" in capsys.readouterr().out
 
 
-def test_unreached_code_change_is_named_never_silent(repo):
+def test_unreached_code_change_is_named_and_runs_its_lane(repo):
+    """Code no test reaches statically may be reached at runtime: never a green zero-test run for it."""
     _edit(repo, "scripts/maintenance/orphan.py", "X = 1\n")
     _, s = _run(repo, "--dry-run")
     assert "scripts/maintenance/orphan.py" in s["unreached"]
+    lane = next(ln for ln in s["lanes"] if ln["lane"] == "tests-unit")
+    assert lane["mode"] == "full" and "no test reaches it" in lane["reason"]
+    _edit(repo, "services/zoe-data/orphan_mod.py", "X = 1\n")
+    _, s = _run(repo, "--dry-run")
+    assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
+
+
+def test_unreached_data_file_is_only_named(repo):
+    _edit(repo, "services/zoe-data/data/table.yml", "a: 1\n")
+    _, s = _run(repo, "--dry-run")
+    assert "services/zoe-data/data/table.yml" in s["unreached"] and s["mode"] == "none"
 
 
 def test_unknown_file_type_falls_back_to_full(repo):
@@ -309,6 +323,10 @@ def test_shell_wrapper_is_the_entrypoint(repo):
                         "--no-lock", "--dry-run", "--json", "-"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["mode"] == "none"
+    _edit(repo, "services/zoe-data/util.py", "def twice(x):\n    return 3 * x\n")   # a real red test
+    r = subprocess.run(["bash", str(REPO / "scripts/maintenance/affected_tests.sh"), "--repo", str(repo),
+                        "--no-lock", "--json", "-"], capture_output=True, text=True)
+    assert r.returncode == 1 and json.loads(r.stdout)["rc"] == 1
 
 
 def test_lanes_mirror_validate_workflow():
