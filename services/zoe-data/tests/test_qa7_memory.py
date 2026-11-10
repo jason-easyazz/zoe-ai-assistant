@@ -262,6 +262,11 @@ def test_the_digest_row_that_lost_its_possessor_gets_it_back():
     assert fact_subject.attribute("User's swimming is on Wednesday", "carlos swimming is on wednesday", frozenset({"carlo", "carlos"}))[0] == "keep"
     assert fact_subject.attribute("User's swimming is on Wednesday", "carlos swimming is on wednesday", frozenset({"carlos"})) \
         == ("rewrite", "Carlos's swimming is on Wednesday")
+    # the same rule for the digest's subject: an EXPLICIT possessive is that name, never shortened to a known Carlo; the lazy form shortens only with no Carlos known
+    assert fact_subject.attribute("User's swimming is on Wednesday", "actually Carlos's swimming is on wednesday", frozenset({"carlo"})) \
+        == ("rewrite", "Carlos's swimming is on Wednesday")
+    assert fact_subject.attribute("User's swimming is on Wednesday", "carlos swimming is on wednesday", frozenset({"carlo"})) \
+        == ("rewrite", "Carlo's swimming is on Wednesday")
     # negative controls: the user's own, or a relation word, or a turn that names no owner
     assert fact_subject.attribute("User's swimming is on Wednesday", "my swimming is on wednesday")[0] == "keep"
     assert fact_subject.attribute("User's swimming is on Wednesday", "swimming is on wednesday")[0] == "keep"
@@ -376,7 +381,7 @@ def test_table_an_explicit_carlos_never_writes_on_carlo_anywhere(monkeypatch, tu
     _no_activity_writes(monkeypatch)
     _stub_person_writer(monkeypatch, calls, {"carlo": types.SimpleNamespace(person_id="p-carlo", ambiguous=False)})
     run(pe.apply_person_fact("Carlos", "fact", corr.new, user_id=UID, source="conversation", source_excerpt=turn))
-    assert all(c[2] != "p-carlo" for c in calls)                                                    # the person writer
+    assert calls and all(c[2] != "p-carlo" for c in calls)                                         # the person writer (it still files the fact, on Carlos)
 
 
 def test_the_shared_rule_for_the_lazy_forms():
