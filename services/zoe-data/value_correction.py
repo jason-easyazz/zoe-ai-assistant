@@ -376,11 +376,14 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         hits = []
         exact_subject_row = False
         exact_re = _subject_re(corr.subject, False)
+        _on = owner_noun(corr.subject)
+        # the exact OWNER, whatever attribute the row is about: "Carlos is 22" means Carlos exists, so "carlos swimming" is never Carlo's
+        owner_re = re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(_on[0])}(?![A-Za-z0-9])", re.IGNORECASE) if _on else None
         for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
             meta = r.metadata or {}
             if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
                 continue
-            if exact_re.search(r.text or ""):
+            if exact_re.search(r.text or "") or (owner_re and owner_re.search(r.text or "")):
                 exact_subject_row = True
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:

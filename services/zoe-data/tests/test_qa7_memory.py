@@ -218,6 +218,12 @@ def test_apply_prefers_the_exact_name_and_only_then_the_lazy_one(monkeypatch):
     # a Carlos row exists but already says 21: "carlos 21 not 22" must not fall back to Carlo's 22
     svc = _Svc("Carlo is 22", "Carlos is 21")
     assert _apply(svc, "also carlos 21 not 22", monkeypatch) == 0 and svc.edits == []
+    # Carlos exists (an age row) and Carlo has the swimming row: "carlos swimming" must not rewrite Carlo's
+    svc = _Svc("Carlos is 22", "Carlo's swimming is on Thursday")
+    assert _apply(svc, "actually carlos swimming is on wednesday not thursday", monkeypatch) == 0 and svc.edits == []
+    # negative control: with no Carlos row at all the lazy fallback still reaches Carlo
+    svc = _Svc("Carlo's swimming is on Thursday")
+    assert _apply(svc, "actually carlos swimming is on wednesday not thursday", monkeypatch) == 1
     # nobody matches either way: nothing changes
     svc = _Svc("Zara is 22")
     assert _apply(svc, "also kais 21 not 22", monkeypatch) == 0 and svc.edits == []
