@@ -27,6 +27,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from typed_env import env_str
+
 KEY = "dream_window"
 MIN_WINDOW_MIN = 90
 MIN_CHAIN_MIN = 150
@@ -38,14 +40,14 @@ ADULT_ROLES = ("admin", "owner")
 
 
 def mirror_path() -> Path:
-    return Path(os.environ.get("ZOE_DREAM_WINDOW_FILE") or (Path.home() / ".zoe" / "dream-window.json"))
+    return Path(env_str("ZOE_DREAM_WINDOW_FILE") or (Path.home() / ".zoe" / "dream-window.json"))
 
 
 def env_defaults() -> dict:
     """The fallback defaults: the code's, overridden by ``ZOE_DREAM_*`` if (and only if) the override is itself valid."""
     d = dict(DEFAULTS)
-    cand = {"earliest": os.environ.get("ZOE_DREAM_EARLIEST"), "latest": os.environ.get("ZOE_DREAM_LATEST"), "awake_by": os.environ.get("ZOE_DREAM_AWAKE_BY"),
-            "quiet_min": os.environ.get("ZOE_DREAM_QUIET_MIN")}
+    cand = {"earliest": env_str("ZOE_DREAM_EARLIEST"), "latest": env_str("ZOE_DREAM_LATEST"), "awake_by": env_str("ZOE_DREAM_AWAKE_BY"),
+            "quiet_min": env_str("ZOE_DREAM_QUIET_MIN")}
     cand = {k: v for k, v in cand.items() if v}
     if cand:
         merged = {**d, **{k: (int(v) if k == "quiet_min" and str(v).isdigit() else v) for k, v in cand.items()}}

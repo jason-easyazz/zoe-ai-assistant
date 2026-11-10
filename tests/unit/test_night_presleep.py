@@ -191,3 +191,45 @@ def test_the_installer_switches_the_two_timers_off_survives_a_reinstall_and_unin
     assert r3.returncode == 0, r3.stdout + r3.stderr
     assert not (off / "zoe-backup.timer").exists() and not (off / "zoe-memory-export.timer").exists()   # re-enabled
     assert "enable --now zoe-backup.timer" in log.read_text()
+
+
+def test_a_timed_out_unit_is_stopped_before_the_next_one_starts(tmp_path):
+    w, host, cfg = make(tmp_path)
+    real = host.run
+
+    def run(argv, timeout=60.0, mutating=True, env=None):
+        if argv[-1] == "zoe-backup.service" and "start" in argv:
+            host.cmds.append((list(argv), mutating))
+            raise subprocess.TimeoutExpired(argv, timeout)           # `start --wait` ends the CLIENT only; the unit keeps running
+        return real(argv, timeout=timeout, mutating=mutating, env=env)
+    host.run = run
+    nw.run_presleep(cfg, host, host.log)
+    j = host.joined()
+    stop = next(i for i, c in enumerate(j) if c.endswith("stop zoe-backup.service"))
+    export = next(i for i, c in enumerate(j) if "start --wait zoe-memory-export.service" in c)
+    assert stop < export, "the export must not start while the backup unit may still be running"
+
+
+def test_a_refused_window_still_reports_a_failed_presleep(tmp_path):
+    w, host, cfg = make(tmp_path, fail_run=("zoe-backup.service",))
+    nw.run_presleep(cfg, host, host.log)
+
+    def refuse():
+        raise nw.Refused("test refusal")
+    w.preflight = refuse
+    w.run()
+    assert any(n.startswith("presleep zoe-backup.service: FAILED") for n in w.rec["notes"])
+
+
+def test_presleep_is_serialised_by_a_lock_file_released_after_the_run(tmp_path):
+    import fcntl
+    import os
+    w, host, cfg = make(tmp_path)
+    nw.run_presleep(cfg, host, host.log)
+    lock = cfg.night_dir / "presleep.lock"
+    assert lock.exists()
+    fd = os.open(str(lock), os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)               # free again once the run finished
+    finally:
+        os.close(fd)

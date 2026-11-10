@@ -832,6 +832,25 @@ def presleep_path(cfg: NightCfg, host: "bk.Host") -> Path:
 
 
 def run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", catchup: bool = False) -> "dict[str, Any]":
+    """Serialised across processes (the window's ExecStartPre and the boot catch-up are separate units): one holder at a time, the second waits then re-reads the checkpoint."""
+    lock_fd = None
+    try:
+        cfg.night_dir.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(str(cfg.night_dir / "presleep.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    except OSError as exc:
+        log(f"presleep: could not take the pre-sleep lock ({exc}); going on without it")
+    try:
+        return _run_presleep(cfg, host, log, catchup)
+    finally:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+
+
+def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", catchup: bool = False) -> "dict[str, Any]":
     """The night's first phase, BEFORE the window's preflight: the backup, then the memory export, one after the other. It is a SEPARATE invocation (the unit's
     ``ExecStartPre=-``), so the backup never depends on the window being able to run: a refused or failed window still leaves tonight's backup taken. Idempotent per day (a unit
     that already succeeded today is not started again by the 03:05 / 03:15 retry slots). A failed unit is logged LOUDLY and recorded for the report; it never blocks the sleep
@@ -860,6 +879,10 @@ def run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", c
         except Exception as exc:  # noqa: BLE001 - a hung or missing unit must not stop the night
             rc = 255
             log(f"presleep: {unit} could not be run ({type(exc).__name__})")
+            try:      # `start --wait` timing out only ends the CLIENT: stop the unit so the next one never overlaps a still-running backup
+                host.run(["systemctl", "--user", "stop", unit], timeout=120.0, mutating=True)
+            except Exception:  # noqa: BLE001
+                pass
         state[unit] = {"rc": rc, "wall_s": round(host.mono() - t0), "at": dt.datetime.fromtimestamp(host.now()).isoformat(timespec="seconds")}
         log(f"presleep: {unit} {'ok' if rc == 0 else f'FAILED rc {rc} - see its journal / log; the night goes on'} in {state[unit]['wall_s']}s")
         try:      # a CHECKPOINT after each unit, atomically: a kill between the backup and the export must not make the next slot take the backup again
@@ -2581,11 +2604,11 @@ class NightWindow(bk.Window):
             return self.run_dry()
         rc = EXIT_OK
         try:
+            self.note_presleep()                 # BEFORE the preflight: a REFUSED window's report carries a failed backup too
             self.preflight()
             if self.cfg.trial:
                 self.cfg.live_unit_text = self.host.run(["systemctl", "--user", "cat", BRAIN], mutating=False).out
             self.opened = True
-            self.note_presleep()
             self.write_marker()
             avail, free = self.sleep_units()
             if self.cfg.rehearse:
