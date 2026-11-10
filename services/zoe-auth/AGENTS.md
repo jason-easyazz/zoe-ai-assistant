@@ -32,6 +32,8 @@ Dedicated authentication service: user auth, OIDC provider, SSO, and touch-panel
 
 Service tests in `tests/`, then live login plus `/api/auth/` flow through nginx.
 
+- The suite runs on the image's interpreter (`FROM python:X.Y` in `Dockerfile`), never the host's 3.10. Locally (offline after the first run) use `scripts/maintenance/zoe_auth_tests.sh`. In CI it is `validate.yml`'s own `zoe-auth` job, which installs only `requirements.txt`. `affected_tests.sh` uses the same interpreter. A release that needs a newer Python than the shared 3.10 lane therefore no longer breaks the gate.
+
 ## Child DOX Index
 
 No child AGENTS.md files.

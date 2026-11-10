@@ -6,7 +6,7 @@ fastapi==0.141.1
 uvicorn[standard]==0.54.0
 pydantic==2.13.4
 pydantic[email]==2.13.4
-python-multipart==0.0.32
+python-multipart==0.0.33
 # bcrypt is CAPPED BELOW 5.0 DELIBERATELY. 5.0.0 turned bcrypt's 72-byte limit
 # from silent truncation into a `ValueError` on BOTH hashpw and checkpw, and
 # core/auth.py's password policy allows up to 128 characters — so any user whose
