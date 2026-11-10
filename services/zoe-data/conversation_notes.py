@@ -299,7 +299,7 @@ def validate(obj: Optional[dict], convo: Convo) -> Optional[Note]:
     except Exception:  # noqa: BLE001 - cannot tell: keep nothing
         return None
     # EVERY field that is rendered to the brain goes through the classifier, mood included: private content in any one of them sets the flag
-    note.sensitive = _is_private(" ".join([summary, *topics, mood, *items, follow]))
+    note.sensitive = _is_private(" ".join([summary, *topics, mood, *items, follow, convo.with_name]))
     return note
 
 
@@ -960,6 +960,10 @@ async def write_approved(user_id: str, payload: dict, *, candidate_id: str, day:
     note.sensitive = _is_private(" ".join([note.summary, *note.topics, *note.open_threads, note.follow_up, convo.with_name]))
     if len(note.summary) < 8:
         raise ValueError("empty note")
+    import distress_handoff
+
+    if distress_handoff.guarded_text(" ".join([note.summary, *note.topics, *note.open_threads, note.follow_up, convo.with_name])):
+        raise PermissionError("distress")        # approval-time edits and direct calls come after verify(): the writer checks the assembled note itself
     m = mode()
     if m == "off":
         raise PermissionError("notes_off")       # a candidate proposed while the flag was on is not written once it is off

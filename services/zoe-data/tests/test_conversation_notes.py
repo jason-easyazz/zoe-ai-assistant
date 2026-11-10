@@ -1285,3 +1285,24 @@ def test_the_pendant_with_name_is_checked_like_every_other_field(monkeypatch):
     assert cand and cand.payload["with"] == "Sam"                                        # control
     cand, counts = _verify(_item(fields={**_item()["fields"], "with": "someone with cancer and big debts"}), monkeypatch)
     assert cand is None and counts.get("drop_sensitive")                                 # a private subject in "with" is refused like the summary
+
+
+def test_private_content_only_in_the_with_name_marks_a_generated_note_private():
+    convo = cn.Convo("k-w", NOW - 3600, NOW - 3000, [("them", "the interview went well and the cycling trip"), ("zoe", "great")], 4, "someone with cancer and big debts", False)
+    obj = {"skip": False, "summary": "They talked about how the interview went and the cycling trip.", "topics": ["interview"], "mood": "pleased", "open": []}
+    assert cn.validate(obj, convo).sensitive is True
+    clean_convo = cn.Convo("k-w2", NOW - 3600, NOW - 3000, [("them", "the interview went well and the cycling trip"), ("zoe", "great")], 4, "Sam", False)
+    assert cn.validate(obj, clean_convo).sensitive is False                              # control
+
+
+def test_the_approval_writer_refuses_a_distress_note_even_when_edited_after_verify(env, monkeypatch):
+    import distress_handoff
+
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    monkeypatch.setattr(distress_handoff, "guarded_text", lambda t: "hopeless" in t)
+    ok = {"summary": "They talked about how the interview went and the cycling trip.", "with": "Sam", "topics": [], "open": []}
+    assert run(cn.write_approved(OWNER, ok, candidate_id="c-ok", day="2026-11-08", at_epoch=NOW)).startswith("conversation_notes:")      # control
+    for bad in ({**ok, "with": "feeling hopeless"}, {**ok, "summary": "They talked about feeling hopeless about the interview."}):
+        with pytest.raises(PermissionError):
+            run(cn.write_approved(OWNER, bad, candidate_id="c-bad", day="2026-11-08", at_epoch=NOW))
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
