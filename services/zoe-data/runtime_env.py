@@ -40,7 +40,14 @@ def bootstrap_runtime_env() -> None:
     if _ENV_BOOTSTRAPPED:
         return
     _ENV_BOOTSTRAPPED = True
+    load_env_keys(_BOOTSTRAP_KEYS)
 
+
+def load_env_keys(keys) -> None:
+    """Populate the named ``keys`` that are missing from ``os.environ`` out of the known .env files (a real environment value
+    always wins). For an out-of-service tool (a CLI) that needs a key the service gets from systemd, e.g. the forget-ledger salt.
+    Never logs or returns a value."""
+    wanted = frozenset(keys)
     for path in _ENV_FILES:
         env_path = Path(path)
         if not env_path.is_file():
@@ -52,7 +59,7 @@ def bootstrap_runtime_env() -> None:
                     continue
                 key, value = line.split("=", 1)
                 key = key.strip()
-                if not key or key not in _BOOTSTRAP_KEYS or key in os.environ:
+                if not key or key not in wanted or key in os.environ:
                     continue
                 os.environ[key] = value.strip().strip('"').strip("'")
         except OSError:
