@@ -1542,7 +1542,7 @@ async def run_retention_loop() -> None:
                     await omi_repass.drop_stale_proposals(db)
                     await db.commit()
             except Exception as exc:  # noqa: BLE001
-                if "omi_wearer_samples" not in str(exc):       # pre-0074: nothing to expire yet
+                if "omi_wearer_samples" not in str(exc):       # pre-0075: nothing to expire yet
                     logger.warning("omi_repass: proposal expiry failed (%s)", type(exc).__name__)
         except asyncio.CancelledError:
             raise

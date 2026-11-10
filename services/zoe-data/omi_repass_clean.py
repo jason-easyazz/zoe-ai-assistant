@@ -297,7 +297,7 @@ async def pending_segments(db, limit: int = 2000) -> list:
                               "WHERE r.status = 'done' AND s.clean_how = '' AND s.text != '' ORDER BY r.started_at, s.seq LIMIT ?", (limit,))
     except Exception as exc:  # noqa: BLE001
         if type(exc).__name__ == "UndefinedColumnError" or "no such column" in str(exc).lower():
-            return []                                          # pre-0074: nothing to do
+            return []                                          # pre-0075: nothing to do
         raise
     return [tuple(r) for r in rows]
 

@@ -536,7 +536,7 @@ async def recordings_with_segments(db, user_id: str, recording_ids: list[str]) -
 async def _withdraw_wearer_samples(db, user_id: str, seg_ids: list[str]) -> int:
     """The owner corrected these lines AWAY from "me" (other / a named person / not a person): the wearer-print windows a first-pass "you" decision taught from inside them
     (``omi_wearer_samples``, source owner_label, keyed by recording + time) are withdrawn, so ``wearer_print`` stops identifying that voice as the wearer. A window belongs to a line when
-    its midpoint lies inside it. A box without the table (0074 not applied) has nothing to withdraw."""
+    its midpoint lies inside it. A box without the table (0075 not applied) has nothing to withdraw."""
     if not seg_ids:
         return 0
     n = 0
@@ -951,7 +951,7 @@ async def drop_recording(db, rid: str) -> None:
         await _run(db, "DELETE FROM omi_segments WHERE recording_id = ?", (rid,))
         for cid in clusters:
             await rebuild_cluster(db, cid)
-        try:          # the night pass's wearer-print windows (0074) go with the audio they came from; a box without 0074 has none
+        try:          # the night pass's wearer-print windows (0075) go with the audio they came from; a box without 0075 has none
             await _run(db, "DELETE FROM omi_wearer_samples WHERE recording_id = ?", (rid,))
         except Exception as exc:  # noqa: BLE001
             if not _missing(exc):
@@ -982,12 +982,12 @@ async def redact(db, user_id: str, rx: "re.Pattern[str]", mark: str) -> int:
     for sid, text in await _all(db, "SELECT id, text FROM omi_segments WHERE user_id = ?", (user_id,)):
         if text and rx.search(text):
             n += await _run(db, "UPDATE omi_segments SET text = ? WHERE id = ?", (rx.sub(mark, text), sid))
-    try:                                        # the clean-read twin (0074) names the same people: it is forgotten with the verbatim
+    try:                                        # the clean-read twin (0075) names the same people: it is forgotten with the verbatim
         for sid, text in await _all(db, "SELECT id, clean_text FROM omi_segments WHERE user_id = ? AND clean_text != ''", (user_id,)):
             if text and rx.search(text):
                 n += await _run(db, "UPDATE omi_segments SET clean_text = ? WHERE id = ?", (rx.sub(mark, text), sid))
     except Exception as exc:  # noqa: BLE001
-        if not (_missing(exc) or type(exc).__name__ == "UndefinedColumnError" or "no such column" in str(exc).lower()):      # pre-0074: no twin to redact
+        if not (_missing(exc) or type(exc).__name__ == "UndefinedColumnError" or "no such column" in str(exc).lower()):      # pre-0075: no twin to redact
             raise
     return n
 
@@ -1002,7 +1002,7 @@ async def forget_user(db, user_id: str) -> int:
         for table in ("omi_segment_embeddings", "omi_segments", "omi_voice_clusters", "omi_voice_settings"):
             n += await _run(db, f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
         try:
-            n += await _run(db, "DELETE FROM omi_wearer_samples WHERE user_id = ?", (user_id,))      # 0074; the other tables must still be erased on a box without it
+            n += await _run(db, "DELETE FROM omi_wearer_samples WHERE user_id = ?", (user_id,))      # 0075; the other tables must still be erased on a box without it
             n += await _run(db, "DELETE FROM omi_channel_means WHERE user_id = ?", (user_id,))
         except Exception as exc:  # noqa: BLE001
             if not _missing(exc):
