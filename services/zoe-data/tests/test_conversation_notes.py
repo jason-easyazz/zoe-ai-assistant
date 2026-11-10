@@ -1211,7 +1211,7 @@ def test_a_child_account_with_no_persona_row_is_a_minor_and_a_failed_lookup_is_t
         import types
         return types.SimpleNamespace(**kw)
     monkeypatch.setattr(persona_layer, "load_member_mode", no_row)
-    for audience, want in (("minor", True), ("adult", False), ("unknown", True), ("synthetic", False)):
+    for audience, want in (("minor", True), ("adult", False), ("unknown", True), ("synthetic", True)):
         async def aud(uid, db=None, _a=audience):
             return _a
         monkeypatch.setattr(enrollment_state, "audience_of", aud)

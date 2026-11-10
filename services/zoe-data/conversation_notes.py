@@ -578,7 +578,7 @@ async def _is_minor(user_id: str) -> bool:
     try:
         from enrollment_state import audience_of
 
-        return (await audience_of(user_id)) not in ("adult", "synthetic")
+        return (await audience_of(user_id)) != "adult"
     except Exception:  # noqa: BLE001
         return True
 
