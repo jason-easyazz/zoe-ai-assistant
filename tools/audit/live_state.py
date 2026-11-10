@@ -16,11 +16,17 @@ integer (``ZOE_SMART_TURN_THREADS=1`` is one thread). The inventory carries no t
 shape at each call site (``env_bool`` vs ``env_int`` / ``int(os.environ.get(...))`` vs ``== "1"``), and a numeric default is turned
 into on/off ONLY with positive evidence that the flag is read as a bool. Each flag records its ``kind``.
 
-Deterministic by construction (sorted, no timestamps), so regeneration diffs show real flag changes only.
+Deterministic by construction (sorted, no timestamps).
+
+NOT COMMITTED (2026-11-10): the file is a local, gitignored build product - it conflicted on nearly every concurrent PR. The check
+that matters runs from the code on every test run (``tests/unit/test_roadmap_flag_claims.py`` derives the same state in memory), so
+nothing needs the file except a human who wants to read it. Generating it needs no network: ``--inventory`` reuses a just-written
+``docs/knowledge/flag-inventory.json``, otherwise the code is scanned afresh.
 
 Usage:
-    python3 tools/audit/live_state.py            # write docs/knowledge/live-state.json
-    python3 tools/audit/live_state.py --check    # exit 1 when the committed file is stale (writes nothing)
+    python3 tools/audit/live_state.py                      # scan the code, write docs/knowledge/live-state.json (local only)
+    python3 tools/audit/live_state.py --inventory PATH     # derive from an already generated flag-inventory.json
+    python3 tools/audit/live_state.py --check              # exit 1 when the local file is stale (writes nothing)
 """
 from __future__ import annotations
 
@@ -306,18 +312,24 @@ def render(state: dict) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--repo", type=Path, default=REPO)
-    ap.add_argument("--check", action="store_true", help="exit 1 if the committed file differs from the derivation")
+    ap.add_argument("--check", action="store_true", help="exit 1 if the local file differs from the derivation")
+    ap.add_argument("--inventory", type=Path, default=None,
+                    help="a flag-inventory.json generated from THIS tree (default: scan the code now)")
+    ap.add_argument("--out", type=Path, default=None, help=f"output path (default: <repo>/{OUT})")
     args = ap.parse_args(argv)
-    inv = json.loads((args.repo / INVENTORY).read_text())
+    if args.inventory is not None:
+        inv = json.loads(args.inventory.read_text())
+    else:
+        inv = _load_flag_inventory().scan_repo(args.repo)
     text = render(build(inv, reader_kinds(args.repo, inv)))
-    out = args.repo / OUT
+    out = args.out or args.repo / OUT
     if args.check:
         if not out.exists() or out.read_text() != text:
-            print(f"{OUT} is stale: run python3 tools/audit/live_state.py", file=sys.stderr)
+            print(f"{out} is stale: run python3 tools/audit/live_state.py", file=sys.stderr)
             return 1
         return 0
     out.write_text(text)
-    print(f"wrote {OUT} ({len(json.loads(text)['flags'])} flags)")
+    print(f"wrote {out} ({len(json.loads(text)['flags'])} flags)")
     return 0
 
 

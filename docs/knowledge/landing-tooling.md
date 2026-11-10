@@ -27,7 +27,11 @@ Public repo: nothing here names a household member; the only identifiers are the
 | `landing_lib.sh` | sourced: paths, hold lists, thread count, probe-retry decision, head watcher |
 
 `resolve_inventory_conflict.sh` (the generated-inventory conflict resolver) is NOT moved yet; it is still looked up in
-`$ZOE_LANDING_HOME` (override `ZOE_LANDING_RESOLVE_SCRIPT`).
+`$ZOE_LANDING_HOME` (override `ZOE_LANDING_RESOLVE_SCRIPT`). Since 2026-11-10 the inventory, live-state and writer map are
+gitignored, so there is nothing for it to regenerate: it still resolves the `incident-runbook.md` / `open-problems.md` keep-both
+cases. A PR branched before that change that edited the inventory sees ONE modify/delete conflict on it — resolve with
+`git rm docs/knowledge/flag-inventory.{md,json} docs/knowledge/live-state.json` (the resolver's `git checkout origin/main --`
+of those paths no longer applies).
 
 ## Rules the tests pin (`tests/unit/test_landing_*.py`, all `ci_safe`)
 
