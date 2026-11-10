@@ -46,10 +46,12 @@ runs:
           python-multipart "uvicorn[standard]==0.54.0" "prometheus-client==0.26.0" "python-json-logger>=4.1.0" \
           pyyaml "icalendar==7.3.0"
 
-    - name: Install lane deps (zoe-auth, numpy, LiveKit wheels)
+    - name: Install lane deps (pytest, numpy, LiveKit wheels)
       shell: bash
       run: |
-        pip install --quiet -r services/zoe-auth/requirements.txt
+        # pytest used to arrive with services/zoe-auth/requirements.txt. That manifest now installs only in
+        # validate.yml's own `zoe-auth` job on Python 3.11 (its container's interpreter), so pin the runner here.
+        pip install --quiet "pytest==9.1.1" "pytest-asyncio==1.4.0"
         # numpy: lets the ci_safe semantic_router/router-head tests actually run
         # in this slim lane (they fake the embedding model + head; no fastembed
         # or sklearn needed). Without it they importorskip -> silently skip.

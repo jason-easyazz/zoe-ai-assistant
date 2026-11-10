@@ -80,6 +80,9 @@ class Lane:
     ignore: tuple[str, ...] = ()
     only_files: tuple[str, ...] = ()  # lane runs exactly these files (HA bridge)
     extra_args: tuple[str, ...] = ()
+    # repo-relative script that prints this lane's interpreter (`<script> --print-python`); None = this python.
+    # zoe-auth runs on its container's Python (validate.yml's `zoe-auth` job), not the shared one.
+    python_from: str | None = None
 
 
 LANES: tuple[Lane, ...] = (
@@ -89,7 +92,7 @@ LANES: tuple[Lane, ...] = (
     Lane("tests-unit", "tests/unit", "ci_safe", (".", "services/zoe-data"), None,
          extra_args=("--override-ini=asyncio_mode=auto",)),
     Lane("zoe-auth", "services/zoe-auth/tests", None, ("services/zoe-auth", "services/zoe-auth/tests"),
-         "services/zoe-auth"),
+         "services/zoe-auth", python_from="scripts/maintenance/zoe_auth_tests.sh"),
     Lane("ha-bridge", "services/homeassistant-mcp-bridge/tests", None, ("services/zoe-data",),
          "services/homeassistant-mcp-bridge",
          only_files=("services/homeassistant-mcp-bridge/tests/test_ha_bridge.py",
@@ -854,13 +857,28 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
 
 def lane_command(lane: Lane, tests: list[str] | None, passthrough: list[str]) -> list[str]:
     targets = tests if tests is not None else (list(lane.only_files) or [lane.test_root])
-    cmd = [sys.executable, "-m", "pytest", *targets, "-q", "-o", "faulthandler_timeout=300"]
+    # A python_from lane's interpreter is resolved when it runs (resolve_lane_python), never while planning:
+    # building it can need the network the first time, and --dry-run must stay offline and side-effect free.
+    python = f"$({lane.python_from} --print-python)" if lane.python_from else sys.executable
+    cmd = [python, "-m", "pytest", *targets, "-q", "-o", "faulthandler_timeout=300"]
     if lane.marker:
         cmd += ["-m", lane.marker]
     for i in lane.ignore:
         cmd += [f"--ignore={i}"]
     cmd += list(lane.extra_args) + list(passthrough)
     return cmd
+
+
+def resolve_lane_python(root: Path, lane: Lane) -> str:
+    """The interpreter a python_from lane runs on. Raises RuntimeError when it cannot be built or checked."""
+    if not lane.python_from:
+        return sys.executable
+    r = subprocess.run(["bash", str(root / lane.python_from), "--print-python"], cwd=root,
+                       stdout=subprocess.PIPE, text=True)
+    python = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+    if r.returncode != 0 or not python:
+        raise RuntimeError(f"{lane.python_from} --print-python failed (rc={r.returncode})")
+    return python
 
 
 def lane_env(root: Path, lane: Lane) -> dict[str, str]:
@@ -1107,6 +1125,8 @@ def main(argv: list[str] | None = None) -> int:
             t0 = time.monotonic()
             try:
                 with _lane_slot(a):
+                    if lane.python_from:
+                        ln["command"][0] = resolve_lane_python(root, lane)
                     cmd = ln["command"]
                     if not a.no_lock:
                         cmd = ["nice", "-n", "10", *cmd]
@@ -1117,6 +1137,10 @@ def main(argv: list[str] | None = None) -> int:
                 ln["rc"] = 75
                 error = str(exc)
                 log(f"[affected-tests] {exc}")
+            except RuntimeError as exc:   # the lane's interpreter could not be built: a failure, never a skip
+                ln["rc"] = 2
+                error = str(exc)
+                log(f"[affected-tests] lane {lane.name}: {exc}")
             ln["duration_s"] = round(time.monotonic() - t0, 1)
             log(f"[affected-tests] lane {lane.name}: rc={ln['rc']} in {ln['duration_s']}s")
             if ln["rc"] and not rc:

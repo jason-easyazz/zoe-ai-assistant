@@ -20,7 +20,7 @@
 #
 # Floors are pinned by tests/unit/test_ha_bridge_requirements_pinned.py. The image must be
 # REBUILT for any change here to take effect (the code is volume-mounted; deps are not).
-fastapi==0.162.0
+fastapi==0.162.1
 starlette==1.10.0
 uvicorn==0.54.0
 pydantic==2.14.3
