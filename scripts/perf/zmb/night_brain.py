@@ -230,7 +230,7 @@ class FakeNightServer:
         self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
         self.port = self.srv.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}/v1"
-        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        threading.Thread(target=self.srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
 
     def close(self) -> None:
         self.srv.shutdown()

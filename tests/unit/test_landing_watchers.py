@@ -124,14 +124,10 @@ def test_chain_arms_a_clean_nondraft_pr_with_all_threads_resolved(rig):
                                                                   {"name": "secret-scan", "state": "SUCCESS"}]}},
           "threads": {"21": {"total": 130, "unresolved": []}}}
     rig.set_state(st)
-    # the fake never flips the PR to MERGED, so bound the 90-iteration loop by a state that merges after arming
-    # (watch for the arm call, then stop): run with a short timeout and inspect the log.
-    import subprocess
-    try:
-        rig.run("docs_merge_chain.sh", "21", ZOE_LANDING_CHAIN_HOLD_S="0", ZOE_LANDING_CHAIN_STEP_S="0",
-                ZOE_LANDING_NOW_EPOCH=NOON, ZOE_LANDING_REPO=str(REPO), timeout=3)
-    except subprocess.TimeoutExpired:
-        pass
+    # the fake never flips the PR to MERGED, so bound the loop by its pass count (it used to be killed by a 3 s timeout) and
+    # inspect the log
+    rig.run("docs_merge_chain.sh", "21", ZOE_LANDING_CHAIN_HOLD_S="0", ZOE_LANDING_CHAIN_STEP_S="0",
+            ZOE_LANDING_NOW_EPOCH=NOON, ZOE_LANDING_REPO=str(REPO), ZOE_LANDING_CHAIN_PASSES="3")
     assert any(c.startswith("pr merge 21 --squash --auto") for c in rig.gh_calls())
 
 
@@ -156,20 +152,21 @@ def test_chain_pauses_during_the_measured_deploy_pause(rig):
 
 
 def test_chain_skips_the_pass_when_the_changed_file_list_is_unreadable_or_empty(rig):
+    # every pass is identical, so a few prove the rule as well as the production 90 (which cost ~13 s here); the log count
+    # pins that EACH pass was skipped for the file list, not merely that nothing merged
     for variant in ({"files_fail": True}, {"empty": True}):
         pr = dict(GREEN, files=[] if variant.get("empty") else ["docs/x.md"])
         rig.set_state({"prs": {"21": pr}, "threads": {"21": {"total": 0, "unresolved": []}}, **{k: v for k, v in variant.items() if k == "files_fail"}})
-        chain_run(rig)
+        log = rig.home / "logs" / "land_queue.log"
+        before = log.read_text().count("changed-file list unreadable - skipping this pass") if log.exists() else 0
+        chain_run(rig, ZOE_LANDING_CHAIN_PASSES="4")
         assert merges(rig) == [], variant
+        assert log.read_text().count("changed-file list unreadable - skipping this pass") - before == 4, variant
 
 
 def test_chain_arms_bound_to_the_head_it_classified(rig):
     rig.set_state({"prs": {"21": dict(GREEN, files=["docs/x.md"], headRefOid="d" * 40)}, "threads": {"21": {"total": 0, "unresolved": []}}})
-    import subprocess
-    try:
-        chain_run(rig, timeout=3)
-    except subprocess.TimeoutExpired:
-        pass
+    chain_run(rig, ZOE_LANDING_CHAIN_PASSES="3")      # bounded by passes, not a 3 s kill
     calls = [c for c in rig.gh_calls() if c.startswith("pr merge 21 --squash --auto")]
     assert calls and all("--match-head-commit " + "d" * 40 in c for c in calls), calls
 

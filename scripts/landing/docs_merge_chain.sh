@@ -6,12 +6,13 @@
 cd "$LANDING_REPO" || exit 1   # gh needs a repo cwd (sig: "failed to run git: not a git repository")
 P_RESOLVE=$LANDING_RESOLVE_SCRIPT
 NIGHT_S=${ZOE_LANDING_CHAIN_NIGHT_S:-300}; HOLD_S=${ZOE_LANDING_CHAIN_HOLD_S:-120}; STEP_S=${ZOE_LANDING_CHAIN_STEP_S:-60}   # poll cadence (tests shrink it)
+PASSES=${ZOE_LANDING_CHAIN_PASSES:-90}   # passes per PR before giving up (tests shrink it)
 mkdir -p "$(dirname "$LANDING_LOG")"
 log(){ echo "[$(date '+%F %T')] chain $*" >> "$LANDING_LOG"; }
 for PR in "$@"; do
   landing_is_held "$PR" && { log "#$PR is on HOLD (hold list) - skipping"; continue; }
   log "=== #$PR"; updated=0; holds=0
-  for i in $(seq 1 90); do
+  for i in $(seq 1 "$PASSES"); do
     h=$(date -d "@$(landing_now)" +%H%M); if [ "$h" -ge 0350 ] && [ "$h" -le 0455 ]; then log "nightly voice gate window - chain paused (no update/arm until 04:55)"; sleep 300; continue; fi
     stale=$(landing_window_open); wrc=$?
     [ "$wrc" = 0 ] && { log "#$PR night window open (WINDOW_OPEN) - chain paused, no update/arm until it closes"; sleep 120; continue; }
