@@ -62,9 +62,9 @@ def _n2w(n: int) -> str:
 
 def norm_keep(s: str) -> list[str]:
     """Normalised words that KEEP fillers (the voting and the fused text stay verbatim): lower case, numbers < 1000 spelt, punctuation removed."""
-    s = (s or "").lower().replace("-", " ").replace("\u2014", " ").replace("\u2019", "'")
+    s = unicodedata.normalize("NFC", s or "").lower().replace("-", " ").replace("\u2014", " ").replace("\u2019", "'")
     s = re.sub(r"\b(\d+)\b", lambda m: _n2w(int(m.group(1))) if int(m.group(1)) < 1000 else m.group(1), s)
-    return re.sub(r"[^a-z0-9' ]+", " ", s).split()       # digits survive only for numbers >= 1000 (smaller ones were spelt above): a year or an amount is kept
+    return "".join(c if (c.isalnum() or c == "'" or unicodedata.category(c)[0] == "M") else " " for c in s).split()       # digits survive only for numbers >= 1000 (smaller ones were spelt above): a year or an amount is kept
 
 
 def _rtoks(text: str) -> list[tuple]:

@@ -488,3 +488,11 @@ def test_a_decomposed_spelling_of_an_accented_name_is_erased_too(tmp_path):
     assert eu.erase_entity(home, "m1", re.compile("José", re.I), "[forgotten]") == 1
     blob = (home / "hyps" / "hyps-2026-11-01.jsonl").read_text(encoding="utf-8")
     assert "came" in blob and "Jos" not in blob
+
+
+def test_rover_and_clean_read_keys_keep_non_latin_letters_and_accents():
+    """Review: ``[^a-z0-9]`` dropped every non-ASCII letter ("resume" with accents -> "r sum"; a CJK name -> nothing), so a changed non-Latin name passed the guard."""
+    import omi_repass_clean as oc
+    assert eu.norm_keep("\u738b\u660e said r\u00e9sum\u00e9, ok") == ["\u738b\u660e", "said", "r\u00e9sum\u00e9", "ok"]
+    assert oc.keys("Anna \u738b\u660e called") == ["anna", "\u738b\u660e", "called"]
+    assert not oc.guard("Anna \u738b\u660e called me", "Anna \u674e\u534e called me").ok
