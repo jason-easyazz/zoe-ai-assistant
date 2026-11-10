@@ -144,6 +144,16 @@ def test_lazy_import_bound_is_two_importer_levels(repo):
     assert at.LAZY_HOPS == 2
 
 
+def test_lazy_import_filter_sees_aliased_imports(repo):
+    _edit(repo, "services/zoe-data/tests/test_alias.py", "import pytest\nfrom registry import load as run\n"
+          "pytestmark = pytest.mark.ci_safe\n\ndef test_it():\n    assert run() == []\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "alias")
+    _edit(repo, "services/zoe-data/lists.py", "def items():\n    return list(())\n")
+    _, s = _run(repo, "--dry-run", "HEAD")
+    assert "services/zoe-data/tests/test_alias.py" in _selected(s)["zoe-data"]
+
+
 def test_lazy_import_is_not_followed_into_importers_that_never_call_it(repo):
     _edit(repo, "services/zoe-data/tests/test_registry_other.py",
           "import pytest\nimport registry\npytestmark = pytest.mark.ci_safe\n\ndef test_mod():\n    assert registry\n")
@@ -356,6 +366,14 @@ def test_change_reached_only_by_unmarked_tests_runs_its_lane(repo):
     _, s = _run(repo, "--dry-run", "HEAD")
     assert s["unmarked"] == {"zoe-data": ["services/zoe-data/tests/test_solo.py"]}
     assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
+
+
+def test_changed_test_files_run_or_are_named(repo):
+    _edit(repo, "services/zoe-data/tests/test_lists.py", FILES["services/zoe-data/tests/test_lists.py"] + "# x\n")
+    _edit(repo, "tests/integration/test_other.py", "def test_x():\n    pass\n")   # no validate lane runs it
+    _, s = _run(repo, "--dry-run")
+    assert "services/zoe-data/tests/test_lists.py" in _selected(s)["zoe-data"]
+    assert "tests/integration/test_other.py" in s["unreached"]
 
 
 def test_deleted_nested_conftest_forces_its_lane(repo):

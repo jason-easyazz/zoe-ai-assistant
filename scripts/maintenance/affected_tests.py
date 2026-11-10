@@ -63,7 +63,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SUMMARY_SCHEMA = 1
-CACHE_VERSION = 9
+CACHE_VERSION = 10
 REPO = Path(__file__).resolve().parents[2]
 
 # --- lanes: MIRROR of .github/workflows/validate.yml (pinned by tests/unit/test_affected_tests.py) ---
@@ -215,6 +215,9 @@ def _parse_py(text: str) -> dict:
             imports += [[a.name, 0, None, scope] for a in node.names]
         elif isinstance(node, ast.ImportFrom):
             imports.append([node.module or "", node.level, [a.name for a in node.names if a.name != "*"], scope])
+            idents.update(a.name for a in node.names)   # `from registry import load as run` still USES load
+            if scope is not None:
+                defs.setdefault(scope, set()).update(a.name for a in node.names)
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and len(node.value) < 400:
             strings.append(node.value)
         elif isinstance(node, ast.Name):
@@ -816,9 +819,11 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
         k = kinds[p]
         if k in ("doc", "conftest", "deps", "global-config", "migration"):
             continue
-        if (ran | full_tests) & set(per_file[p]) or (_is_test_file(p) and lane_of(p)):
+        if (ran | full_tests) & set(per_file[p]):
             continue
         sel.unreached.append(p)
+        if _is_test_file(p):
+            continue   # a test no validate lane runs (unmarked, outside only_files, deleted): named, not a lane
         if p.endswith(CODE_EXT) and not p.startswith("labs/"):
             # CODE no test reaches statically may still be reached at runtime (a registry, a built path):
             # never a green zero-test run for it - run the lane(s) that load its tree
@@ -899,6 +904,9 @@ class LaneLock:
                     os.close(self.fd)
                     raise TimeoutError(f"could not take {self.path} within {self.timeout_s}s")
                 time.sleep(2)
+            except BaseException:
+                os.close(self.fd)
+                raise
 
     def __exit__(self, *exc):
         if self.fd is not None:
