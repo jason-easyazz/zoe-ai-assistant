@@ -358,7 +358,7 @@ def _no_store(exc: BaseException) -> bool:
     unit run). A process that had a pool and LOST it is not that: the notes may still be stored, so the erase must fail and be retried."""
     if _missing_table(exc):
         return True
-    if isinstance(exc, RuntimeError) and "not initialised" in str(exc):
+    if isinstance(exc, RuntimeError) and "pool not initialised" in str(exc).replace("db_pool", "pool"):
         from db_pool import pool_ever_initialised
 
         return not pool_ever_initialised()

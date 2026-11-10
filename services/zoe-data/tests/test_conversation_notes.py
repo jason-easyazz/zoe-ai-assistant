@@ -1187,3 +1187,8 @@ def test_a_lost_pool_fails_the_erase_but_a_never_built_one_is_an_empty_store(mon
     with pytest.raises(RuntimeError):
         run(cn.erase_topic(OWNER, lambda t: True))
     assert run(cn.erase_entity(OWNER, rx)) == 0                                                  # non-strict keeps its documented 0 + WARNING
+    # only the POOL's own error is "no store": any other "not initialised" failure is a real failure
+    assert cn._no_store(RuntimeError("db_pool not initialised — call init_pool() first")) is False       # (pool was ever initialised here)
+    monkeypatch.setattr(db_pool, "pool_ever_initialised", lambda: False)
+    assert cn._no_store(RuntimeError("db_pool not initialised — call init_pool() first")) is True
+    assert cn._no_store(RuntimeError("transaction not initialised")) is False
