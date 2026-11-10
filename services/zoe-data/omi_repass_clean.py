@@ -110,8 +110,10 @@ NEGATIONS = frozenset({"not", "no", "never", "nothing", "nobody", "none", "neith
                        "hasnt", "havent", "hadnt", "aint", "mustnt", "neednt", "mightnt", "shant"})
 
 
-def negations(keyed: list) -> int:
-    return sum(1 for w in keyed if w in NEGATIONS)
+def negations(text: str) -> int:
+    """Negation words in the RAW text (before ``keys()`` collapses immediate repeats: "not not" is two negations). Apostrophes out, as in ``keys``."""
+    raw = re.sub(r"[^a-z0-9]+", " ", (text or "").lower().replace("'", "").replace("\u2019", "")).split()
+    return sum(1 for w in raw if w in NEGATIONS)
 
 
 def guard(verbatim: str, clean: str, *, max_frac: float = MAX_DROP_FRAC, max_run: int = MAX_DROP_RUN) -> Verdict:
@@ -134,7 +136,7 @@ def guard(verbatim: str, clean: str, *, max_frac: float = MAX_DROP_FRAC, max_run
     longest = max(longest, len(v) - i)                   # the tail the clean text dropped
     dropped = len(v) - len(c)
     frac = dropped / len(v)
-    if negations(c) < negations(v):
+    if negations(clean) < negations(verbatim):
         return Verdict(False, "negation_dropped", dropped, frac, longest)          # never show a cleanup that reverses what was said
     if frac > max_frac:
         return Verdict(False, "too_many_dropped", dropped, frac, longest)

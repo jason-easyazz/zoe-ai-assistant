@@ -86,8 +86,15 @@ def test_a_cleanup_that_deletes_a_negation_is_refused_and_falls_back(said, flipp
     assert oc.guard(said, flipped).reason == "negation_dropped"
     r = run(oc.clean_turn(said, lambda t: flipped))
     assert r["how"] == "det_fb" and r["violation"] and r["reason"] == "negation_dropped" and oc.guard(said, r["text"]).ok
-    keep = said.replace(" um", "")
-    assert run(oc.clean_turn(said, lambda t: said))["how"] == "llm" and keep                  # control: the same sentence kept whole is accepted
+    assert run(oc.clean_turn(said, lambda t: said))["how"] == "llm"                            # control: the same sentence kept whole is accepted
+
+
+def test_a_doubled_negation_counts_twice_and_a_contraction_is_one():
+    said = "I will not not go to the market on Saturday morning with them"
+    assert oc.guard(said, "I will not go to the market on Saturday morning with them").reason == "negation_dropped"
+    r = run(oc.clean_turn(said, lambda t: "I will not go to the market on Saturday morning with them"))
+    assert r["how"] != "llm" and r["violation"]
+    assert oc.negations("I don't know, I can't say, never") == 3 and oc.negations("I know") == 0
 
 
 def test_an_unreachable_model_degrades_without_counting_a_violation():
