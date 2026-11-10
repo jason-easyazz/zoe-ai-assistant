@@ -215,6 +215,9 @@ def test_apply_prefers_the_exact_name_and_only_then_the_lazy_one(monkeypatch):
     svc = _Svc("Kai is 22", "Zara is 22")
     assert _apply(svc, "also kais 21 not 22", monkeypatch) == 1
     assert svc.edits == [("r0", "Kai is 21")]
+    # a Carlos row exists but already says 21: "carlos 21 not 22" must not fall back to Carlo's 22
+    svc = _Svc("Carlo is 22", "Carlos is 21")
+    assert _apply(svc, "also carlos 21 not 22", monkeypatch) == 0 and svc.edits == []
     # nobody matches either way: nothing changes
     svc = _Svc("Zara is 22")
     assert _apply(svc, "also kais 21 not 22", monkeypatch) == 0 and svc.edits == []

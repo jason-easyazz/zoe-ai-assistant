@@ -374,14 +374,18 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             svc = get_memory_service()
         uid = user_id.strip().lower()
         hits = []
+        exact_subject_row = False
+        exact_re = _subject_re(corr.subject, False)
         for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
             meta = r.metadata or {}
             if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
                 continue
+            if exact_re.search(r.text or ""):
+                exact_subject_row = True
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
-        if not hits and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
+        if not hits and not exact_subject_row and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
             # nobody has a row under the name exactly as typed: "kais 21 not 22" is Kai's (the apostrophe was not typed). Never the
             # other way round - "Carlos" does not rewrite Carlo's row while a Carlos row exists, nor when Carlos is the typed name.
             for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
