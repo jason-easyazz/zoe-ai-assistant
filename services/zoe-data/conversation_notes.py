@@ -490,6 +490,9 @@ async def notes_for_convos(owner: str, people_id: str, convos: Iterable[Convo], 
         if note is None:
             res["no_note"] += 1
             continue
+        if partial_epoch(owner) != part:
+            res["no_note"] += 1               # a partial erase ran during the model call: the note is dropped (dry run included)
+            continue
         if dry_run:
             res["notes"].append({"key": convo.key, "started": _iso(convo.started), "ended": _iso(convo.ended), "turns": convo.turns,
                                  "with": convo.with_name, **note.__dict__})

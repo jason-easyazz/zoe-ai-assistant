@@ -927,8 +927,24 @@ def test_the_entity_forget_clears_dependent_notes_before_the_transcript_redactio
     import intent_router
 
     src = inspect.getsource(intent_router)
-    body = src[src.index("async def memory_forget_entity"):] if "async def memory_forget_entity" in src else src
-    assert body.index("conversation_notes.erase_entity") < body.index("forget_redact.on_forget")
+    start = src.index("transcript redaction failed")                        # the redaction step of the entity forget ...
+    window = src[max(0, start - 3500):start]
+    assert "conversation_notes.erase_entity" in window and "forget_redact.on_forget" in window
+    assert window.index("conversation_notes.erase_entity") < window.index("forget_redact.on_forget")      # ... and the note erase right before it
+
+
+def test_a_dry_run_note_is_dropped_by_a_partial_erase_during_the_model_call(member, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    inner = _llm()
+
+    async def erased_midway(messages):
+        await cn.erase_topic(OWNER, lambda text: "marathon" in text.lower())
+        return await inner(messages)
+    cn.set_llm(erased_midway)
+    out = run(cn.notes_for_convos(OWNER, "", [_convo()], source="chat", status="active", dry_run=True))
+    assert out["notes"] == [] and out["no_note"] == 1
+    cn.set_llm(inner)
+    assert len(run(cn.notes_for_convos(OWNER, "", [_convo()], source="chat", status="active", dry_run=True))["notes"]) == 1
 
 
 def _ex(n, user, reply="ok"):
