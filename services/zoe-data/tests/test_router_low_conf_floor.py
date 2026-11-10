@@ -139,9 +139,9 @@ def test_out_of_range_floor_does_not_disable_tools(monkeypatch):
 
 
 def test_floor_is_in_the_flag_inventory():
-    inv = json.loads((SVC.parents[1] / "docs" / "knowledge" /
-                      "flag-inventory.json").read_text())
-    assert "ZOE_ROUTER_HEAD_MIN_CONF" in json.dumps(inv)
+    from flag_inventory_support import inventory   # scanned from this tree; the JSON is a local build product
+
+    assert "ZOE_ROUTER_HEAD_MIN_CONF" in json.dumps(inventory())
     assert router_two_stage.min_conf() == router_two_stage.MIN_CONF_DEFAULT == 0.70
 
 
