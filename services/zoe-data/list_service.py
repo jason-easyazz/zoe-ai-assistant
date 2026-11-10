@@ -44,6 +44,22 @@ class HouseholdListUnavailable(Exception):
     """A guest asked for a household list that does not exist and may not be created by a guest."""
 
 
+# Lists whose entries are separate THINGS, never one task: shopping and bucket, plus a PERSONAL list the member named themselves
+# ("Camping Supplies", "Bunnings") - what a voice-created list is. A to-do list (tasks/work, or the default "Personal" list) holds
+# whole tasks, so "call mum and dad" there stays ONE item.
+THINGS_LIST_TYPES = frozenset({"shopping", "bucket"})
+_DEFAULT_PERSONAL_NAMES = frozenset({"", "personal", "personal list", "personal todos", "personal to do", "to do", "todo", "to-do",
+                                     "tasks", "my list", "list"})
+
+
+def splits_items(list_type: str, list_name: str = "") -> bool:
+    """True when ONE spoken add ("paint brush, paint and tarps") is several items on this list - see ``THINGS_LIST_TYPES``."""
+    lt = (list_type or "").strip().lower()
+    if lt in THINGS_LIST_TYPES:
+        return True
+    return lt == "personal" and " ".join((list_name or "").lower().split()) not in _DEFAULT_PERSONAL_NAMES
+
+
 def default_visibility(list_type: str) -> str:
     """Visibility the voice/MCP add paths give a list they auto-create: family only for a known household type."""
     return "family" if list_type in HOUSEHOLD_LIST_TYPES else "personal"
@@ -650,8 +666,9 @@ async def add_items_to_list(db, *, text: str, **kwargs) -> dict:
     """:func:`add_item_to_list` for a spoken add that may name several items: each item is added unless it is already open on
     the list. Returns the LAST outcome's ``list_id`` plus ``added`` / ``already`` (item texts), ``item_ids`` and ``outcomes``."""
     added, already, ids, outcomes = [], [], [], []
-    # Only a SHOPPING list is a list of separate things: "call mum and dad" on a to-do list is one task.
-    parts = (split_items(text) if kwargs.get("list_type") == "shopping" else [normalize_item_text(text)]) or [text]
+    # A list of separate THINGS splits ("tent, sleeping bags and bug spray"); a to-do list does not ("call mum and dad" is one task).
+    parts = (split_items(text) if splits_items(kwargs.get("list_type") or "", kwargs.get("list_name") or "")
+             else [normalize_item_text(text)]) or [text]
     receipts: list[tuple] = []
     # ONE transaction for the whole spoken add: all items land or none do, and receipts are recorded after it commits.
     async with _outer_add_txn(db):
@@ -721,6 +738,42 @@ def any_recent_add() -> bool:
 
 def clear_recent_adds() -> None:
     _RECENT_ADDS.clear()
+    _FOCUS_LISTS.clear()
+
+
+# ── The list "it" means ("share it to the house" right after "create a list called X") ──────────────────────────────────
+#: How long a list a member just created / named stays the one "it" refers to.
+FOCUS_LIST_WINDOW_S = 1800.0
+_FOCUS_LISTS: dict[str, tuple[str, float]] = {}       # who -> (list_id, monotonic when noted)
+
+
+def _focus_now() -> float:
+    import time
+
+    return time.monotonic()
+
+
+def note_focus_list(user_id: Optional[str], list_id: str) -> None:
+    """Remember the list this member just created or named, so a bare "it" in the next breath resolves to it. A guest has none."""
+    u = (user_id or "").strip()
+    if not list_id or panel_principal.is_guest_id(u) or u == panel_principal.HOUSEHOLD_VIEWER:
+        return
+    if len(_FOCUS_LISTS) >= _MAX_RECENT:
+        _FOCUS_LISTS.pop(min(_FOCUS_LISTS, key=lambda k: _FOCUS_LISTS[k][1]), None)
+    _FOCUS_LISTS[u] = (str(list_id), _focus_now())
+
+
+def focus_list(user_id: Optional[str]) -> Optional[str]:
+    """The list id this member last created/named inside the window, else the list of their last add, else None."""
+    u = (user_id or "").strip()
+    hit = _FOCUS_LISTS.get(u)
+    if hit is not None and _focus_now() - hit[1] <= FOCUS_LIST_WINDOW_S:
+        return hit[0]
+    if u and not panel_principal.is_guest_id(u):
+        added = recent_add(u)
+        if added is not None:
+            return added[0]
+    return None
 
 
 def looks_like_correction_of(old_text: str, new_text: str) -> bool:
