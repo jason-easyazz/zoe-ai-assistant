@@ -204,8 +204,18 @@ def _db(quality="device"):
     return FakeDb({"FROM omi_recordings WHERE": [(started, 120.0, quality)], "FROM omi_segments": []})
 
 
-def _turns(claim="owner"):
-    return [SimpleNamespace(recorded_ts=dt.datetime.fromtimestamp(REC + 30 + OFFSET), duration_s=3.0, claim_user=claim, clip=None)]
+def _turns(claim="owner", score=0.9):
+    return [SimpleNamespace(recorded_ts=dt.datetime.fromtimestamp(REC + 30 + OFFSET), duration_s=3.0, claim_user=claim, claim_score=score, clip=None)]
+
+
+@pytest.fixture(autouse=True)
+def _server_accepts_claims_at_or_above_half(monkeypatch):
+    """The server's acceptance (routers/voice_tts._accepted_voice_claim: threshold + consent) stands in as 'score >= 0.5'."""
+    from routers import voice_tts as vt
+
+    async def accepted(payload, caller):
+        return payload["voice_user_id"] if float(payload["voice_score"]) >= 0.5 and caller.get("source") == "device" else None
+    monkeypatch.setattr(vt, "_accepted_voice_claim", accepted)
 
 
 def run(coro):
@@ -241,6 +251,24 @@ def test_the_greeting_prefix_joins_the_first_reply_and_a_guest_session_keeps_the
     spans, anchors, covered = run(ov.panel_spans(_db(), "owner", "r", segs=segs, said=said, turns=_turns("owner"), shifts=[88.0, 88.4], greeting="Good evening."))
     assert covered and spans and spans[0][0] >= 10000 and spans[-1][1] <= 14000
     assert [(a["key"], a["start_ms"]) for a in anchors] == [("you", 40000)]
+
+
+def test_a_claim_the_server_rejects_gives_no_you_anchor(monkeypatch):
+    """The daemon logs its best match even when its own decision was accept=False: a rejected claim must leave the speaker UNKNOWN."""
+    monkeypatch.setenv("ZOE_OMI_PANEL_ANCHORS", "on")
+    first = zoe(REC + 10 + OFFSET, "How can I help you with the shopping list tonight?")
+    segs = [seg(10, 14, GREETING), seg(40, 44, "I think the car needs a new battery before the trip")]
+    said = [first, pa.Said("person", REC + 31 + OFFSET, REC + 31 + OFFSET, "I think the car needs a new battery before the trip")]
+    for turns, want in ((_turns("owner", 0.9), [("you", 40000)]), (_turns("owner", 0.1), [])):        # control: accepted -> anchor; rejected -> none
+        spans, anchors, covered = run(ov.panel_spans(_db(), "owner", "r", segs=segs, said=said, turns=turns, shifts=[88.0, 88.4], greeting="Good evening."))
+        assert [(a["key"], a["start_ms"]) for a in anchors] == want
+    from routers import voice_tts as vt
+
+    async def boom(payload, caller):
+        raise RuntimeError("gate unavailable")
+    monkeypatch.setattr(vt, "_accepted_voice_claim", boom)
+    _s, anchors, _c = run(ov.panel_spans(_db(), "owner", "r", segs=segs, said=said, turns=_turns("owner", 0.9), shifts=[88.0, 88.4], greeting="Good evening."))
+    assert anchors == []                                                                                 # acceptance not establishable -> unknown
 
 
 # ── build_lines: the panel's record above the voice match; the print never makes Zoe ──────────────

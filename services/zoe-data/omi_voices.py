@@ -245,6 +245,24 @@ def anchor_mode() -> str:
     return v if v in ("night", "on") else "off"
 
 
+async def _accepted_member(t) -> Optional[str]:
+    """The member a panel clip's speaker claim identifies once the SERVER accepts it: the same gate as ``routers/voice_tts._accepted_voice_claim``
+    (the acting model's threshold, the member's live consent). The voice.log carries the daemon's raw best match - it is logged even when its
+    own decision was ``accept=False`` - so it is never trusted on its own. Not established (no claim, rejected, gate unavailable) -> None: the
+    speaker stays unknown and the pendant's voice match decides."""
+    user, score = getattr(t, "claim_user", None), getattr(t, "claim_score", None)
+    if not user or score is None:
+        return None
+    try:
+        import speaker_models
+        from routers import voice_tts as vt
+        payload = {"voice_user_id": user, "voice_score": score, "voice_model_id": speaker_models.acting_model()}     # the log's claim is the ACTING model's
+        return await vt._accepted_voice_claim(payload, {"source": "device"})
+    except Exception as exc:  # noqa: BLE001 - cannot establish acceptance: unknown, never "you"
+        logger.info("OMI_ANCHOR claim acceptance unavailable: %s", type(exc).__name__)
+        return None
+
+
 async def panel_evidence(db, user_id: str, rid: str, *, night: bool = False, segs: Optional[list] = None, said: Optional[list] = None, turns: Optional[list] = None,
                          shifts: Optional[list] = None, guest_verdict: Any = None, greeting: Optional[str] = None) -> Optional[tuple]:
     """(Evidence, recording start epoch s, first-pass segments) for one recording, or None when the panel's account cannot be trusted against it.
@@ -271,11 +289,13 @@ async def panel_evidence(db, user_id: str, rid: str, *, night: bool = False, seg
     tn = turns if turns is not None else _panel_turns(t0, t1)
     if sd is None or not tn:
         return None
+    accepted = {id(t): await _accepted_member(t) for t in tn}          # the server's own acceptance of each clip's claim, not the raw claim
+
     def resolve(t):
-        who = getattr(t, "claim_user", None)
         g = guest_verdict(t) if guest_verdict else None
         if g:
             return "guest", g
+        who = accepted.get(id(t))
         return ("member", "you") if who and who == user_id else ("member", None) if who else ("unknown", None)
     zs = [s for s in sd if s.kind == "zoe"]
     if greeting and zs:                 # the logged voice_greeting ("Good evening ...") is spoken before the first reply's own words

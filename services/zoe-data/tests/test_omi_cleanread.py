@@ -76,6 +76,20 @@ def test_a_good_answer_is_used_a_bad_one_falls_back_and_counts_a_violation():
     assert oc.marked(bad["how"]) and not oc.marked("llm") and not oc.marked("det")
 
 
+@pytest.mark.parametrize("said,flipped", [
+    ("I do not want to sell the house until next summer", "I do want to sell the house until next summer"),
+    ("honestly I don't think we should go to the market on Saturday morning", "honestly I think we should go to the market on Saturday morning"),
+    ("we are going to the shops with nobody else along on Saturday", "we are going to the shops with else along on Saturday"),
+    ("I can go to the market and get bread but without any of the cheese today", "I can go to the market and get bread but any of the cheese today"),
+])
+def test_a_cleanup_that_deletes_a_negation_is_refused_and_falls_back(said, flipped):
+    assert oc.guard(said, flipped).reason == "negation_dropped"
+    r = run(oc.clean_turn(said, lambda t: flipped))
+    assert r["how"] == "det_fb" and r["violation"] and r["reason"] == "negation_dropped" and oc.guard(said, r["text"]).ok
+    keep = said.replace(" um", "")
+    assert run(oc.clean_turn(said, lambda t: said))["how"] == "llm" and keep                  # control: the same sentence kept whole is accepted
+
+
 def test_an_unreachable_model_degrades_without_counting_a_violation():
     def boom(t):
         raise ConnectionError("down")
