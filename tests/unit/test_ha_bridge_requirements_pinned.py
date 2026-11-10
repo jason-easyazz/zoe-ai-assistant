@@ -30,6 +30,7 @@ SECURITY_FLOORS = {
     "anyio": (4, 14, 2),     # GHSA-82r6-8w77-94w6, GHSA-5p39-cfhj-2xmp
     "idna": (3, 15),         # GHSA-65pc-fj4g-8rjx
     "click": (8, 3, 3),      # PYSEC-2026-2132 / CVE-2026-7246
+    "certifi": (2026, 10, 18),  # GHSA-6q48-6c7w-9gw2 (emSign roots removed)
 }
 
 
