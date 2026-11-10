@@ -100,6 +100,10 @@ LANES += (
     Lane("people-mempalace", "tests/integration", None, ("services/zoe-data",), None,
          only_files=("tests/integration/test_people_mempalace_sync.py",),
          extra_args=("--override-ini=asyncio_mode=auto",)),
+    # validate.yml's "People graph invariants on CI PostgreSQL" step (skips locally without ZOE_TEST_PG_URL)
+    Lane("people-graph-pg", "services/zoe-data/tests", None, ("services/zoe-data",), None,
+         only_files=("services/zoe-data/tests/test_people_graph_postgres.py",),
+         extra_args=("--override-ini=asyncio_mode=auto",)),
 )
 LANE_ENV = {"ZOE_DATA_DB": ":memory:", "ZOE_MEMORY_STARTUP_STRICT": "false"}
 
@@ -575,7 +579,9 @@ def _lane_has_marker(root: Path, lane: Lane, rel: str) -> bool:
     if lane.marker is None:
         return True
     try:
-        return lane.marker in (root / rel).read_text(encoding="utf-8", errors="replace")
+        # the marker APPLIED (``pytestmark = pytest.mark.ci_safe`` / ``@pytest.mark.ci_safe``), not a mention of it
+        text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        return re.search(rf"\bmark\.{re.escape(lane.marker)}\b", text) is not None
     except OSError:
         return False
 

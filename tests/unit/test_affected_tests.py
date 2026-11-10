@@ -368,6 +368,19 @@ def test_change_reached_only_by_unmarked_tests_runs_its_lane(repo):
     assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
 
 
+def test_marker_mention_is_not_a_marker(repo):
+    """'this file is not ci_safe' in a docstring must not count as the marker (-m would deselect it)."""
+    _edit(repo, "services/zoe-data/solo.py", "def f():\n    return 1\n")
+    _edit(repo, "services/zoe-data/tests/test_solo.py",
+          '"""Deliberately not ci_safe."""\nimport solo\n\ndef test_f():\n    assert solo.f() == 1\n')
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "solo")
+    _edit(repo, "services/zoe-data/solo.py", "def f():\n    return 2 - 1\n")
+    _, s = _run(repo, "--dry-run", "HEAD")
+    assert s["unmarked"] == {"zoe-data": ["services/zoe-data/tests/test_solo.py"]}
+    assert {ln["lane"]: ln["mode"] for ln in s["lanes"]}["zoe-data"] == "full"
+
+
 def test_changed_test_files_run_or_are_named(repo):
     _edit(repo, "services/zoe-data/tests/test_lists.py", FILES["services/zoe-data/tests/test_lists.py"] + "# x\n")
     _edit(repo, "tests/integration/test_other.py", "def test_x():\n    pass\n")   # no validate lane runs it
@@ -438,7 +451,10 @@ def test_lanes_mirror_validate_workflow():
     wf = (REPO / ".github/workflows/validate.yml").read_text()
     job = wf.split("\n  zoe-data-py312:")[0]
     lanes = {ln.name: ln for ln in at.LANES}
-    assert set(lanes) == {"zoe-data", "tests-unit", "zoe-auth", "ha-bridge", "people-mempalace"}
+    assert set(lanes) == {"zoe-data", "tests-unit", "zoe-auth", "ha-bridge", "people-mempalace", "people-graph-pg"}
+    # every by-path pytest step in validate.yml is some lane's only_files (no step left unmirrored)
+    by_path = set(re.findall(r"^\s+((?:services|tests)/\S+/test_\w+\.py)\s*\\?$", job, re.M))
+    assert by_path == {f for ln in at.LANES for f in ln.only_files}, by_path
     assert re.search(r"pytest services/zoe-data/tests -m ci_safe", job)
     assert "--ignore=services/zoe-data/tests/samantha_live" in job
     assert lanes["zoe-data"].marker == "ci_safe" and lanes["zoe-data"].pythonpath == ("services/zoe-data",)
@@ -446,7 +462,7 @@ def test_lanes_mirror_validate_workflow():
     assert re.search(r'PYTHONPATH="\$\{\{ github.workspace \}\}:\$\{\{ github.workspace \}\}/services/zoe-data[:"]', job)
     assert re.search(r"tests/unit -m ci_safe", job) and lanes["tests-unit"].pythonpath == (".", "services/zoe-data")
     assert re.search(r"services/zoe-auth/tests \\\n\s+--maxfail", job) and lanes["zoe-auth"].marker is None
-    for f in lanes["ha-bridge"].only_files + lanes["people-mempalace"].only_files:
+    for f in lanes["ha-bridge"].only_files + lanes["people-mempalace"].only_files + lanes["people-graph-pg"].only_files:
         assert f in job
     for k, v in at.LANE_ENV.items():
         assert f'{k}: "{v}"' in job
