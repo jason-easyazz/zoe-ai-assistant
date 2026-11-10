@@ -35,7 +35,7 @@ email-validator==2.3.0
 # March 2026 and no longer exists — so every connection attempt fails. Under 5.x
 # that fails fast and drops to the in-memory limiter; under 8.x it would retry
 # ten times with backoff first.
-redis==5.3.1
+redis==8.1.0
 psycopg2-binary>=2.9.13
 # httpx <0.28 is deliberate — see commit 74120547 (auth test compatibility).
 httpx>=0.27.0,<0.28
