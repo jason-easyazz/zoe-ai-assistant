@@ -790,3 +790,17 @@ def test_shadow_logs_what_it_would_serve_from_the_shadow_rows(member, monkeypatc
         assert run(cn.block_for(OWNER, "sess-shadow", now=NOW)) == ""
     assert "CONVERSATION_NOTES_INJECT user=member-a mode=shadow" in caplog.text and "notes=1" in caplog.text
     assert "half marathon" not in caplog.text                                                         # ids and counts, never the words
+
+
+def test_a_childs_note_with_anything_frightening_is_dropped_in_code():
+    obj = {"summary": "They talked about the half marathon and a scary monster story.", "topics": [], "open": []}
+    assert cn.validate(dict(obj), _convo(minor=True)) is None
+    ok = {"summary": "They talked about the half marathon and their pacing.", "topics": [], "open": []}
+    assert cn.validate(dict(ok), _convo(minor=True)) is not None
+
+
+def test_a_private_note_never_names_its_subject_to_the_brain():
+    n = cn.Stored(id="1", with_name="", started_at="", ended_at="", summary="Their knee needs a surgeon.", topics=["knee"], mood="",
+                  open_threads=["the surgery date"], follow_up="how the knee is", sensitive=True, served_count=0, source="chat")
+    line = cn._note_line(n, 0.0)
+    assert "knee" not in line and "surgeon" not in line and "surgery" not in line and "private" in line

@@ -280,9 +280,21 @@ def validate(obj: Optional[dict], convo: Convo) -> Optional[Note]:
     mood = "" if convo.minor else clean(obj.get("mood"), MOOD_CHARS)
     if mood and re.search(r"\b(diagnos|disorder|depress|bipolar|suicid|self.?harm)\w*", mood, re.I):
         mood = ""                                          # a mood is how they seemed, never a clinical label
+    if convo.minor and _frightening(" ".join([summary, *topics, *items, follow])):
+        return None                                        # a child's note holds nothing frightening: dropped in code, not by prompt
     note = Note(summary, topics, mood, items, follow)
     note.sensitive = _is_private(" ".join([summary, *topics, *items, follow]))
     return note
+
+
+_FRIGHT = re.compile(r"\b(kill\w*|murder\w*|dead|death|die[ds]?|dying|funeral|corpse|blood\w*|gun\w*|shoot\w*|shot|stab\w*|weapon\w*|"
+                     r"violen\w*|abus\w*|assault\w*|rape\w*|suicid\w*|self.?harm\w*|terrif\w*|nightmare\w*|monster\w*|"
+                     r"ghost\w*|scary|scared|frighten\w*|horror|war|bomb\w*|attack\w*|kidnap\w*|drown\w*|cancer|porn\w*)\b", re.I)
+
+
+def _frightening(text: str) -> bool:
+    """A child's note must hold nothing frightening. A word list, deliberately over-eager: a dropped note is the safe error."""
+    return bool(_FRIGHT.search(text or ""))
 
 
 def _is_private(text: str) -> bool:
@@ -630,6 +642,9 @@ def _ago(ended: str, now: float) -> str:
 
 
 def _note_line(n: Stored, now: float, *, guest_name: str = "") -> str:
+    if n.sensitive:       # a private subject is never NAMED to the brain: no summary, topic or thread, so it cannot be raised unprompted
+        return (f"- {_ago(n.ended_at, now)}: something private came up. Do not name it or ask about it; at most ask how they have been, "
+                "and only if the moment is open. If they bring it up themselves, what they say wins.")
     parts = [f"- {_ago(n.ended_at, now)}: {n.summary}"]
     if n.mood:
         parts.append(f"They seemed {n.mood}.")
