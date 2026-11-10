@@ -1146,3 +1146,20 @@ def test_a_pendant_note_keeps_every_cited_line_as_evidence_and_a_forget_of_a_per
     env.conn.commit()
     assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Zelda"), strict=True)) == 0
     assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
+
+
+def test_every_cited_line_is_kept_whole_and_an_over_long_citation_is_refused(monkeypatch):
+    import omi_day_review as dr
+
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    lines = _lines()
+    long_answer = "it went well, they asked about the cycling trip I took last year " + ("and we talked on and on about nothing much " * 12) + "then Dana laughed"
+    assert len(long_answer) > 500
+    lines["r1.2"] = dr.Line(id="r1.2", text=long_answer, recording_id="rec1", at="2026-11-08T10:00:00Z", clock="exact", speaker="not_sure")
+    monkeypatch.setattr(sys.modules[__name__], "_lines", lambda: lines)
+    cand, _ = _verify(_dana_item(), monkeypatch)
+    assert cand and "Dana" in json.dumps(cand.evidence)                                          # a name beyond character 400 is still reachable
+    cand, counts = _verify(_item(ids=["r1.1", "r1.2", "r1.3", "r1.4"], quote="So how did the interview go yesterday"), monkeypatch)
+    assert cand is None and counts.get("drop_too_many_cited")                                    # a 4th citation is refused, never silently dropped
+    cand, _ = _verify(_item(ids=["r1.1", "r1.2", "r1.3"], quote="So how did the interview go yesterday"), monkeypatch)
+    assert cand and [e["line"] for e in cand.evidence] == ["r1.1", "r1.2", "r1.3"]               # control: three citations are all kept

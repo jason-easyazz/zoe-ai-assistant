@@ -903,9 +903,13 @@ def verify(item: Any, by_id: dict[str, Line], said_at: Callable[[Line], datetime
         return None
     kind = str(item.get("kind") or "").strip()
     fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-    ids = [str(i).strip() for i in (item.get("ids") or []) if str(i).strip()][:3]
+    all_ids = [str(i).strip() for i in (item.get("ids") or []) if str(i).strip()]
+    ids = all_ids[:3]
     if kind not in MODEL_KINDS or (kind == "conversation_note" and not _notes_on()):
         drop("bad_kind")
+        return None
+    if kind == "conversation_note" and len(all_ids) > len(ids):
+        drop("too_many_cited")            # a summary rests on EVERY line it cites: dropping the 4th would hide a dependency from a later forget
         return None
     cited = [by_id[i] for i in ids if i in by_id]
     if not cited or len(cited) != len(ids):
@@ -1058,9 +1062,6 @@ def verify_conversation_note(fields: dict, item: dict, cited: Sequence[Line], li
     return _candidate("conversation_note", payload, key, cited, line, span, 0.5, speaker, all_evidence=True)
 
 
-_EVIDENCE_LINE_CHARS = 400      # a cited line kept as evidence for a summary (the owner's own words, as they approve them)
-
-
 def _evidence(line: Line, span: str) -> dict:
     """One evidence entry: the line, the recording, the exact quote, when, which clock, which zone - and, for a diarised line, the
     segment and who said it (``speaker``; ``person_id`` when the member tagged the voice). Pointers and the quote, nothing else."""
@@ -1084,7 +1085,7 @@ def _candidate(kind: str, payload: dict, key: str, cited: Sequence[Line], line: 
         for ln in cited:
             if ln.id not in seen:
                 seen.add(ln.id)
-                ev.append(_evidence(ln, (ln.text or "")[:_EVIDENCE_LINE_CHARS]))
+                ev.append(_evidence(ln, ln.text or ""))      # the WHOLE line: a name late in it must still be found by a forget
     return Candidate(kind=kind, payload=payload, evidence=ev,
                      recording_ids=sorted({ln.recording_id for ln in cited}), confidence=round(max(0.1, min(0.95, conf)), 2),
                      speaker=speaker, dedup_key=hashlib.sha256(key.encode()).hexdigest()[:24])
