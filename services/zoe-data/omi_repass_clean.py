@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -53,11 +54,11 @@ def keys(text: str) -> list:
     """Comparable word keys (the lab's measured normalisation): lowercase, apostrophes / punctuation out, times and spoken numbers as digits ("nine twenty five a m"
     and "9:25 a.m." are the same keys), filler words and "you know" / "I mean" dropped, immediate 1-3 word repeats collapsed - on BOTH sides, so a model that removes
     a filler or a stutter is not charged for it."""
-    t = (text or "").lower().replace("'", "").replace("\u2019", "")
+    t = unicodedata.normalize("NFC", text or "").lower().replace("'", "").replace("\u2019", "")
     t = re.sub(r"(\d)[:.](\d)", r"\1\2", t)
     t = re.sub(r"\ba\.?\s?m\b\.?", "am", t)
     t = re.sub(r"\bp\.?\s?m\b\.?", "pm", t)
-    w = re.sub(r"[^a-z0-9]+", " ", t).split()
+    w = "".join(c if (c.isalnum() or unicodedata.category(c)[0] == "M") else " " for c in t).split()
     out, i = [], 0
     while i < len(w):
         x = w[i]
