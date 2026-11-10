@@ -114,6 +114,15 @@ def test_local_review_runs_no_mutating_git_and_leaves_every_checkout_as_it_was(r
     assert list(rig.tmp.iterdir()) == [], "something was left in TMPDIR"
 
 
+def test_local_mode_does_not_even_sweep_stale_review_leftovers_in_the_live_checkout(rig):
+    # a leftover of a dead PR-mode review (pid 1 is never ours): PR mode would remove it; --local must leave the live repo alone
+    _git("-C", str(rig.live_dir), "update-ref", "refs/zoe-review/pr-9-999999", "HEAD")
+    stale = rig.review_root / "review-9-999999-abcdef"
+    stale.mkdir(parents=True); (stale / ".zoe-cross-review").write_text("")
+    assert rig.run().returncode == 0
+    assert _git("-C", str(rig.live_dir), "for-each-ref", "refs/zoe-review/") and stale.exists()
+
+
 def test_every_backend_failing_is_exit_2_not_reviewed(rig):
     r = rig.run(STUB_CODEX="quota", STUB_PI="quota")
     assert r.returncode == 2, r.stderr

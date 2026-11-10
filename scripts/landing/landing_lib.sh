@@ -242,6 +242,7 @@ LANDING_VOICE_HOLD=${ZOE_LANDING_VOICE_HOLD:-$LANDING_HOME/coord/voice-hold}
 LANDING_VOICE_HOLD_DISARMED=${ZOE_LANDING_VOICE_HOLD_DISARMED:-$LANDING_HOME/coord/voice-hold-disarmed.txt}
 landing_pid_start(){ sed -E 's/^.*\) //' "/proc/$1/stat" 2>/dev/null | awk '{print $20}'; }   # stat field 22; comm may contain spaces
 # Every hold operation runs under ONE flock (<hold>.lock), so take / sweep / release / stale-clear / re-arm never interleave. 2 = lock not won.
+# Every gh call made while it is held is bounded (timeout 30 s): a hung gh must not keep the lock - and so the chain - held for ever.
 _hold_locked(){ mkdir -p "$(dirname "$LANDING_VOICE_HOLD")"; ( flock -w 60 5 || exit 2; "$@" ) 5>"$LANDING_VOICE_HOLD.lock"; }
 
 # landing_voice_hold_take <pr>: take the hold for THIS shell ($$), then drop every other armed PR's auto-merge (recorded for re-arming).
@@ -256,13 +257,13 @@ _hold_sweep(){
   local pr=$1 n h rc=0
   [ "${ZOE_LANDING_VOICE_HOLD_SWEEP:-1}" = 0 ] && return 0
   # an unreadable list = 1 (the lander does not go on as if nothing else were armed)
-  gh pr list --state open --limit 300 --json number,headRefOid,autoMergeRequest \
+  timeout -k 5 30 gh pr list --state open --limit 300 --json number,headRefOid,autoMergeRequest \
        --jq '.[] | select(.autoMergeRequest != null) | "\(.number) \(.headRefOid)"' 2>/dev/null > "$LANDING_VOICE_HOLD.armed.$$" || rc=1
   while read -r n h; do
     { [ -z "$n" ] || [ "$n" = "$pr" ]; } && continue
     # record BEFORE disarming: a crash in between leaves a record (re-arming an armed PR is a no-op), never a silently lost arm
     grep -qE "^$n " "$LANDING_VOICE_HOLD_DISARMED" 2>/dev/null || echo "$n $h" >> "$LANDING_VOICE_HOLD_DISARMED"
-    gh pr merge "$n" --disable-auto >/dev/null 2>&1 \
+    timeout -k 5 30 gh pr merge "$n" --disable-auto >/dev/null 2>&1 \
       && echo "[$(date '+%F %T')] voice-hold #$pr: auto-merge of #$n dropped while it lands (re-armed on release, bound to ${h:0:8})" >> "$LANDING_LOG"
   done < "$LANDING_VOICE_HOLD.armed.$$"
   rm -f "$LANDING_VOICE_HOLD.armed.$$"
@@ -277,9 +278,9 @@ _hold_rearm(){
   : > "$f.keep"
   while read -r n h; do
     [ -n "$n" ] || continue
-    cur=$(gh pr view "$n" --json state,headRefOid --jq '"\(.state) \(.headRefOid)"' 2>/dev/null)
+    cur=$(timeout -k 5 30 gh pr view "$n" --json state,headRefOid --jq '"\(.state) \(.headRefOid)"' 2>/dev/null)
     if [ "$cur" = "OPEN $h" ]; then
-      if gh pr merge "$n" --squash --auto --match-head-commit "$h" >/dev/null 2>&1; then
+      if timeout -k 5 30 gh pr merge "$n" --squash --auto --match-head-commit "$h" >/dev/null 2>&1; then
         echo "[$(date '+%F %T')] voice-hold released: #$n auto-merge re-armed (bound to ${h:0:8})" >> "$LANDING_LOG"
       else echo "$n $h" >> "$f.keep"; fi
     elif [ -z "$cur" ]; then echo "$n $h" >> "$f.keep"           # unreadable: try again next time

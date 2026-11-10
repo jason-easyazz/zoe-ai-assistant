@@ -395,7 +395,8 @@ esac
 # Arm the tripwire BEFORE any backend runs. An unreadable live checkout is a configuration
 # error: without a baseline the tripwire could not tell a moved HEAD from an unmoved one.
 LIVE_BEFORE=$(live_state) || { echo "ALARM: cannot read the live checkout's HEAD at $LIVE (set CROSS_REVIEW_LIVE_CHECKOUT) — refusing to review without the tripwire" >&2; exit 1; }
-sweep_stale_reviews
+# --local touches nothing in the live checkout, not even its own stale review leftovers (the next PR-mode run sweeps them)
+[ -n "$LOCAL_RANGE" ] || sweep_stale_reviews
 
 # ---------------------------------------------------------------- backend: polly ---
 try_polly() {
