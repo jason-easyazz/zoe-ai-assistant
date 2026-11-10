@@ -227,6 +227,14 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
         logger.warning("forget_topic: words erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
+    try:     # the member's short notes about past conversations that are about the topic (conversation_notes; raises on a store error)
+        import conversation_notes
+
+        await conversation_notes.erase_topic(user_id, lambda text: row_matches(groups, text))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
+        res.store_down = True
+        return res
     archived: list = []
     for r in rows:
         try:

@@ -127,7 +127,7 @@ pass, a network call in the upload path, so not recommended).
 
 ## Clean read and the book format - `omi_repass_clean.py`, `omi_transcript_book.py`
 
-A DISPLAY layer (flag `ZOE_OMI_CLEAN_READ=off|on`, default off; migration 0074 adds `omi_segments.clean_text` / `clean_how`). Each turn gets a lightly cleaned twin beside the
+A DISPLAY layer (flag `ZOE_OMI_CLEAN_READ=off|on`, default off; migration 0075 adds `omi_segments.clean_text` / `clean_how`). Each turn gets a lightly cleaned twin beside the
 verbatim; **memory, extraction, the day review, search and the ledger read the verbatim only** (a test pins that none of those modules mentions `clean_text`). One T=0 request per turn on
 the 12B (the window job `omi_cleanread`, before the day review, best effort, capped 10 minutes; by hand `zoe-omi-cleanread.py --model-url <4B>` or `--fallback-url` when the 12B stage was
 skipped or fails). Turns under 6 words use the deterministic cleaner only (fillers um/uh/ah/er/hmm/mm out, immediate 1-3 word repeats collapsed, "like" out only when sentence-initial or before a comma).
@@ -193,7 +193,7 @@ ln -s ~/.zoe/lab/omi-retranscribe-r2/ct2build ~/.zoe/ct2build      # or set ZOE_
 # 1. the runtime (once; needs network; the models are ~11 GB incl. Granite; torch is the box's existing Jetson CUDA build)
 scripts/setup/setup_omi_repass.sh --seed-from ~/.zoe/lab/omi-retranscribe-r2/models   # or without --seed-from to download the pinned revisions
 scripts/setup/setup_omi_repass.sh --check                  # must say: gpu ok, imports ok, both models ok
-# 2. the schema (the normal deploy runs alembic: migration 0074)
+# 2. the schema (the normal deploy runs alembic: migration 0075)
 # 3. wire the pre-job into the window: the shipped unit passes --pre-jobs omi_repass (re-run scripts/night/install_night_window.sh; a no-op while the flag is off)
 # 4. THE DAYTIME REHEARSAL (above) - repeat until it passes
 # 5. go SHADOW (the first-pass WAVs are then held for the pass; zoe-data env, then restart zoe-data):

@@ -22,6 +22,9 @@ the owner's own approval (``routers/omi_day_review.py``). Every write goes throu
                   It contradicts any approved row about that person (``omi_day_review.facts_conflict``, whoever said either) ->
                   ``held_conflict``, never written beside it; the same fact already there -> linked (``known:memory:<id>``), not
                   written twice.
+  conversation_note a short note about a real conversation the wearer had (``conversation_notes.write_approved``, only while
+                  ZOE_CONVERSATION_NOTES is shadow / on): stored in the OWNER's own layer, ``source='pendant'``; written_ref
+                  ``conversation_notes:<id>``. Never a memory row. Forgetting the recording / the name erases it (``unwrite``).
   person_relation the person's relationship to the OWNER (``people.relationship``) on the owner's PERSONAL people row only, and only
                   when it is empty; a different one already there -> ``held_conflict``; written_ref ``people:<id>#relationship``.
 
@@ -51,7 +54,9 @@ EDITABLE = {"calendar_event": ("title", "date", "time"), "list_item": ("item", "
             "follow_up": ("title",), "person": ("name", "relation"), "owner_fact": ("fact",), "person_fact": ("fact",),
             # a relationship is NOT editable: the candidate is the quoted words, and an edited one would carry provenance its quote
             # does not support (dismiss it, and set the relationship on the person instead)
-            "person_relation": ()}
+            "person_relation": (),
+            # a note about a conversation: the owner may reword the summary before it is kept (it is re-capped and held to the floors)
+            "conversation_note": ("summary",)}
 VIAS = ("voice", "panel_touch", "desktop", "phone")
 #: ``open_loops.context`` of a loop the proactive engine must never raise (a pendant follow-up, D5)
 QUIET_LOOP_PREFIX = "pendant:"
@@ -79,7 +84,7 @@ def apply_edits(kind: str, payload: dict, fields: Optional[dict]) -> dict:
         if k not in EDITABLE.get(kind, ()):
             raise ApplyError(f"field_not_editable:{k}", 422)
         v = dr.clean(v, 160)
-        if k in ("title", "item", "name", "fact") and not v:
+        if k in ("title", "item", "name", "fact", "summary") and not v:
             raise ApplyError(f"empty_field:{k}", 422)
         if k == "date" and v:
             try:
@@ -360,6 +365,18 @@ def _written_by(row: Any, candidate_id: str) -> bool:
         and str(md.get("origin") or "") == dr.WRITER
 
 
+async def write_conversation_note(user_id: str, c: dict, via: str) -> str:
+    """The owner approved a note about a pendant conversation: keep it in their layer (idempotent on the candidate)."""
+    import conversation_notes
+
+    if not conversation_notes.enabled():
+        raise ApplyError("notes_off", 409)         # a candidate proposed while the flag was on is not written once it is off
+    ev = (c.get("evidence") or [{}])[0]
+    at = conversation_notes._epoch_of(ev.get("at")) or _now().timestamp()
+    return await conversation_notes.write_approved(user_id, c["payload"], candidate_id=str(c["id"]), day=str(c.get("day_local") or ""),
+                                                   at_epoch=at)
+
+
 async def unwrite(user_id: str, rows: list) -> int:
     """Erase what ``person_fact`` / ``person_relation`` candidates wrote (forget: the person, the name, the recording). A memory row
     is HARD-erased (``MemoryService.erase_rows``: drawers, audit trail, the physical residue); a relationship goes back to empty only
@@ -368,6 +385,7 @@ async def unwrite(user_id: str, rows: list) -> int:
     link wrote nothing and erases nothing. RAISES on a failure, so the caller deletes nothing and is retried. Returns rows erased."""
     mem: list[str] = []
     rels: list[tuple[str, str]] = []
+    notes: list[str] = []                  # conversation_note candidates: their ``conversation_notes:<id>`` written_ref
     orphans: dict[str, set] = {}           # person id -> candidate ids whose write may have landed without a ``written_ref``
     for r in rows:
         ref = str(r.get("written_ref") or "")
@@ -377,7 +395,18 @@ async def unwrite(user_id: str, rows: list) -> int:
             orphans.setdefault(str((r.get("payload") or {}).get("person_id") or ""), set()).add(str(r["id"]))
         elif r.get("kind") == "person_relation" and ref.startswith("people:"):
             rels.append((ref.split(":", 1)[1].split("#", 1)[0], str((r.get("payload") or {}).get("relation") or "")))
+        elif r.get("kind") == "conversation_note":
+            notes.append(ref if ref.startswith("conversation_notes:") else
+                         (f"conversation_notes_by_candidate:{r['id']}" if not ref and r.get("status") == "approving" and r.get("id") else ""))
     n = 0
+    if any(notes):
+        import conversation_notes
+
+        for ref in (x for x in notes if x):
+            if ref.startswith("conversation_notes_by_candidate:"):     # a crash between the write and its written_ref
+                n += await conversation_notes.delete_pendant_candidate(user_id, ref.split(":", 1)[1])
+            else:
+                n += await conversation_notes.delete_by_ref(user_id, ref)
     if mem or orphans:
         from memory_service import get_memory_service
         svc = get_memory_service()
@@ -396,14 +425,16 @@ async def unwrite(user_id: str, rows: list) -> int:
                                        (pid, user_id, dr.clean(rel, 60)))
                 n += int(getattr(cur, "rowcount", 0) or 0)
             await db.commit()
-    if mem or rels:
-        logger.info("OMI_REVIEW_UNWRITE user=%s memory=%d relationships=%d erased=%d", user_id, len(mem), len(rels), n)
+    if mem or rels or any(notes):
+        logger.info("OMI_REVIEW_UNWRITE user=%s memory=%d relationships=%d notes=%d erased=%d", user_id, len(mem), len(rels),
+                    len([x for x in notes if x]), n)
     return n
 
 
 WRITERS = {"calendar_event": "write_calendar_event", "list_item": "write_list_item", "reminder": "write_reminder",
            "follow_up": "write_follow_up", "person": "write_person", "owner_fact": "write_owner_fact",
-           "person_fact": "write_person_fact", "person_relation": "write_person_relation"}
+           "person_fact": "write_person_fact", "person_relation": "write_person_relation",
+           "conversation_note": "write_conversation_note"}
 
 
 # --- the floors re-checked at write time (gap audit P0-3) ------------------------------------------------------------------
@@ -491,7 +522,7 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
         async with get_compat_db() as db:
             await db.execute("UPDATE omi_day_candidates SET status = 'pending', write_error = ? WHERE id = ? AND user_id = ?",
                              (code[:80], cid, user_id))
-            if c["kind"] in dr.PERSON_KINDS:        # a recorded intent that did not land is no write: a forget must not follow it
+            if c["kind"] in dr.UNWRITE_KINDS:       # a recorded intent that did not land is no write: a forget must not follow it
                 await db.execute("UPDATE omi_day_candidates SET written_ref = NULL WHERE id = ? AND user_id = ?", (cid, user_id))
             await db.commit()
         logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=failed code=%s", user_id, c["kind"], code)
@@ -500,7 +531,7 @@ async def approve(user_id: str, cid: str, *, fields: Optional[dict] = None, via:
         cur = await db.execute("UPDATE omi_day_candidates SET status = 'approved', written_ref = ?, decided_at = ? WHERE id = ? "
                                "AND user_id = ?", (ref, dr._iso(_now()), cid, user_id))
         await db.commit()
-    if c["kind"] in dr.PERSON_KINDS and not getattr(cur, "rowcount", 1):
+    if c["kind"] in dr.UNWRITE_KINDS and not getattr(cur, "rowcount", 1):
         # a forget (the person, the name, the recording) deleted the candidate while this write ran: what it wrote goes too
         await unwrite(user_id, [{"kind": c["kind"], "written_ref": ref, "payload": c["payload"]}])
         logger.info("OMI_REVIEW_APPLY user=%s kind=%s result=forgotten_during_write", user_id, c["kind"])
