@@ -45,6 +45,7 @@ SSOT: docs/knowledge/conversation-notes.md.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -345,8 +346,13 @@ def _missing_table(exc: BaseException) -> bool:
     return "conversation_notes" in s and ("no such table" in s or "does not exist" in s)
 
 
+@contextlib.asynccontextmanager
+async def _gate_already_held():
+    yield True
+
+
 async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: str, status: str,
-               scheduled_at: Optional[int] = None, partial_at: Optional[int] = None) -> Optional[str]:
+               scheduled_at: Optional[int] = None, partial_at: Optional[int] = None, gate_held: bool = False) -> Optional[str]:
     """Insert one note. Idempotent on (layer, episode): a second run finds the first and writes nothing. Returns the id, or None
     when it already existed, could not be stored, or the member was ERASED since ``scheduled_at`` (the erase generation the pass
     snapshotted before it read the transcript; None = now), or a PARTIAL erase (topic, "forget that", a name, a guest) ran since ``partial_at``
@@ -357,7 +363,8 @@ async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: 
     gen = erase_gate.generation(owner) if scheduled_at is None else scheduled_at
     part = partial_epoch(owner) if partial_at is None else partial_at
     try:
-        async with erase_gate.writing(owner, gen) as live, _db() as db:
+        # ``gate_held``: the caller (the owner's approval) already holds ``erase_gate.writing`` and checked it live - it is not re-entrant, so taking it again would deadlock
+        async with (_gate_already_held() if gate_held else erase_gate.writing(owner, gen)) as live, _db() as db:
             if not live:
                 return None             # forgotten means forever: a note made from a pre-erase transcript is never written
             if partial_epoch(owner) != part:
@@ -642,7 +649,12 @@ async def _guest_turns(owner: str, person_id: str, since_epoch: float) -> list:
     import memory_forgotten as mf
     import named_guest_memory as ngm
 
-    rows = [r for r in await ngm.turns_since(owner, person_id, since_epoch) if not distress_handoff.guarded_text(f"{r[2]} {r[3]}")]
+    import conversation_notes_backfill as bf
+
+    # off the record: a cue turn and its reply, and the turn after a BARE cue, never become a note (the guest layer keeps the words for recall
+    # of the visit only; memory is not rebuilt from them)
+    raw, _off = bf.drop_off_record(await ngm.turns_since(owner, person_id, since_epoch), user_of=lambda r: r[2])
+    rows = [r for r in raw if not distress_handoff.guarded_text(f"{r[2]} {r[3]}")]
     kept, _dropped = await mf.keep_unforgotten(owner, rows, text_of=lambda r: f"{r[2]} {r[3]}", strict=True)
     return kept
 
@@ -920,7 +932,7 @@ async def write_approved(user_id: str, payload: dict, *, candidate_id: str, day:
             row = await cur.fetchone()
     if row:
         return f"conversation_notes:{row[0]}"
-    nid = await save(user_id, "", convo, note, source="pendant", status="active" if m == "on" else "shadow")
+    nid = await save(user_id, "", convo, note, source="pendant", status="active" if m == "on" else "shadow", gate_held=True)
     if not nid:
         raise RuntimeError("note not stored")
     return f"conversation_notes:{nid}"

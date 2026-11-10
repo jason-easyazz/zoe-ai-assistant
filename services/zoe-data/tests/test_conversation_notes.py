@@ -971,3 +971,51 @@ def test_stored_guest_notes_stop_with_the_guest_memory_switch(env, monkeypatch):
     monkeypatch.setenv("ZOE_NAMED_GUEST_MEMORY", "0")
     assert "half marathon" not in run(ng.brain_block("guest"))
     ng.bind_turn(None)
+
+
+def test_the_owners_approval_completes_while_holding_the_erase_gate_and_a_queued_erase_still_wins(env, monkeypatch):
+    """omi_review_apply.approve holds erase_gate.writing around the writer; the writer must not take that non-reentrant lock again."""
+    import asyncio
+    import user_erase_gate as erase_gate
+
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    payload = {"summary": "They talked about how the interview went and the cycling trip.", "with": "", "topics": ["interview"], "open": []}
+
+    async def go():
+        gen = erase_gate.generation(OWNER)
+        order = []
+
+        async def approve():
+            async with erase_gate.writing(OWNER, gen) as ok:
+                assert ok
+                ref = await asyncio.wait_for(cn.write_approved(OWNER, payload, candidate_id="c9", day="2026-11-08", at_epoch=NOW), 5)
+                await asyncio.sleep(0.05)                          # an erase arrives while the approval still holds the gate
+                order.append("approved")
+                return ref
+
+        async def erase():
+            await asyncio.sleep(0.01)
+            async with erase_gate.erasing(OWNER):
+                order.append("erased")
+                await cn.forget_user(OWNER)
+        ref, _ = await asyncio.wait_for(asyncio.gather(approve(), erase()), 10)
+        return ref, order
+    ref, order = run(go())
+    assert ref.startswith("conversation_notes:") and order == ["approved", "erased"]     # no deadlock, and the erase waited, then removed it
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+    erase_gate.reset()
+
+
+def test_the_nightly_guest_pass_drops_off_the_record_exchanges(env, monkeypatch):
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    monkeypatch.setattr(cn, "_verdict", lambda: True)
+    q = add_guest(env)
+    lines = [*CHAT, ("off the record: I really hate my boss Zebediah", "Understood."), ("Anyway the training is going fine", "Good."),
+             ("off the record", "Go ahead."), ("my secret plan involves a llama", "Noted."), ("Okay that is all for today", "Take care.")]
+    _said(q, lines, db=env)
+    calls = []
+    cn.set_llm(_llm(calls=calls))
+    out = run(cn.run_guests(OWNER, now=NOW))
+    assert out["stored"] == 1 and calls
+    sent = json.dumps(calls)
+    assert "Zebediah" not in sent and "llama" not in sent and "half marathon" in sent       # negative control: ordinary turns still reach the summarizer

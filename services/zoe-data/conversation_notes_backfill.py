@@ -144,14 +144,14 @@ def guest_exchanges(all_exchanges: list) -> tuple[list, dict]:
     return kept, skipped
 
 
-def drop_off_record(exchanges: list) -> tuple[list, int]:
+def drop_off_record(exchanges: list, user_of=lambda x: x.user) -> tuple[list, int]:
     """Exchanges minus the ones said off the record: a turn carrying the cue (and its reply), and the turn after a BARE cue (which arms the
-    next turn). The Flue event log keeps these words for session history; memory is never rebuilt from them. Oldest-first input."""
+    next turn). The Flue event log keeps these words for session history; memory is never rebuilt from them. Oldest-first input; ``user_of`` reads the user's words of one item."""
     from memory_provenance import parse_off_record
 
     kept, dropped, armed = [], 0, False
     for x in exchanges:
-        cue = parse_off_record(x.user)
+        cue = parse_off_record(user_of(x))
         if cue is not None or armed:
             dropped += 1
             armed = cue is not None and not cue.payload.strip()
