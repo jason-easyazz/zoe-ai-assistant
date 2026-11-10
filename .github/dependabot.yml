@@ -21,8 +21,12 @@
 # SECURITY updates are NOT configured here. This file drives VERSION updates
 # only; whether Dependabot also opens PRs for security ALERTS is the repo setting
 # "Dependabot security updates" (`gh api repos/<owner>/<repo>/automated-security-fixes`).
-# The `ignore:` lists below also apply to those security PRs, so a held pin's
-# alert gets no bot PR: it stays an open alert, triaged by hand.
+# (enabled 2026-11-10). Do NOT rely on the `ignore:` lists below to keep held
+# pins out of those PRs: measured on the first batch, a security fix for a
+# transitive dep bumped its IGNORED parent (#2376/#2377 moved pi-coding-agent to
+# fix undici/minimatch), and a manifest with no entry here got a rock bump
+# (#2374, torch 2.8 -> 2.13 in scripts/setup). Every security PR that touches a
+# held pin or a voice-path manifest is closed and fixed by a deliberate PR.
 #
 # TRANSITIVE fixes under a held parent (@flue/*, @earendil-works/pi-*) go in the
 # lab's package.json `overrides` — the parents pin exact versions, so the lock
@@ -34,7 +38,7 @@
 # (every entry is a held voice pin and nothing is installed from it — it is the
 # drift manifest for the system-site-packages Kokoro venv) and the panel-Pi
 # manifests (services/omi-sync, services/panel-bluetooth: operator-installed on
-# the Pi). Alerts still fire for them; triage by hand.
+# the Pi). Alerts (and security PRs) still fire for them; triage by hand.
 
 version: 2
 updates:
