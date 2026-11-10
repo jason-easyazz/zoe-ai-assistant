@@ -316,6 +316,44 @@ def test_lane_lock_times_out_with_tempfail(tmp_path):
         pass
 
 
+def test_lane_slot_rechecks_the_box_under_the_lock(tmp_path, monkeypatch):
+    """A lander that starts during a long lock wait must still go first: busy under the lock -> release, wait."""
+    import fcntl
+    import types
+    lock = tmp_path / "lane.lock"
+    monkeypatch.setattr(at, "LOCK_PATH", str(lock))
+    monkeypatch.setattr(at, "wait_for_box", lambda *a: None)
+    states = iter(["a voice landing is running", None])
+    monkeypatch.setattr(at, "_box_busy", lambda mem: next(states))
+    released = []
+
+    def fake_sleep(_s):   # while "waiting", the lane lock must be FREE for the lander
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            released.append(True)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    monkeypatch.setattr(at.time, "sleep", fake_sleep)
+    args = types.SimpleNamespace(no_lock=False, lander_wait=3600, mem_min_mb=0, mem_wait=0, lock_timeout=5)
+    with at._lane_slot(args) as slot:
+        assert slot.lock is not None and slot.lock.fd is not None
+    assert released == [True]
+
+
+def test_referenced_unknown_file_type_still_falls_back_to_full(repo):
+    _edit(repo, "services/zoe-data/models/head.npz", "x")
+    _edit(repo, "services/zoe-data/tests/test_lists.py",
+          FILES["services/zoe-data/tests/test_lists.py"] + "HEAD = 'models/head.npz'\n")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "-A")
+    _git(repo, "-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "head")
+    _edit(repo, "services/zoe-data/models/head.npz", "y")
+    _, s = _run(repo, "--dry-run", "HEAD")
+    assert s["mode"] == "full" and "unknown file type" in s["fallback_reason"]
+
+
 def test_shell_wrapper_is_the_entrypoint(repo):
     """scripts/maintenance/affected_tests.sh is what agents and the self-evolution harness call."""
     _edit(repo, "docs/guide.md", "# guide v4\n")

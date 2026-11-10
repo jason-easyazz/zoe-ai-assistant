@@ -104,6 +104,7 @@ LANES += (
 LANE_ENV = {"ZOE_DATA_DB": ":memory:", "ZOE_MEMORY_STARTUP_STRICT": "false"}
 
 HUB_FRACTION = 0.5
+HUB_MIN_LANE = 20   # a lane this small just runs its selection (the hub fallback would save nothing)
 CODE_EXT = (".py", ".sh", ".bash", ".js", ".mjs", ".cjs")
 AGGREGATOR_FANOUT = 20
 READER_HOPS = 1   # importer levels above a python module that READS a changed non-python file
@@ -728,7 +729,10 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
     kinds = {p: _kind(p) for p in paths}
 
     for p, k in kinds.items():
-        if k == "global-config":
+        if k == "unknown":
+            # a binary / model / unrecognised artefact: text references cannot establish its runtime consumers
+            sel.full_all_reason = f"{p}: unknown file type (static selection cannot see who loads it)"
+        elif k == "global-config":
             sel.full_all_reason = f"{p} changed (pytest/packaging config affects every lane)"
         elif k == "deps":
             owner = _consuming_lanes(p)
@@ -782,7 +786,7 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
                 chosen[t] = "could not be parsed (its imports are unknown)"
         if not chosen:
             continue
-        if len(chosen) > HUB_FRACTION * len(lane_tests) and len(lane_tests) > 20:
+        if len(chosen) > HUB_FRACTION * len(lane_tests) and len(lane_tests) > HUB_MIN_LANE:
             sel.lane_full[lane.name] = (f"selection covers {len(chosen)}/{len(lane_tests)} tests "
                                         f"(> {int(HUB_FRACTION * 100)}%): a hub module changed")
             continue
@@ -802,9 +806,6 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
             continue
         if reached_tests & set(per_file[p]) or (_is_test_file(p) and lane_of(p)):
             continue
-        if k == "unknown":
-            sel.full_all_reason = f"{p}: unknown file type and no test references it"
-            return sel
         sel.unreached.append(p)
         if p.endswith(CODE_EXT) and not p.startswith("labs/"):
             # CODE no test reaches statically may still be reached at runtime (a registry, a built path):
@@ -891,6 +892,45 @@ class LaneLock:
         if self.fd is not None:
             fcntl.flock(self.fd, fcntl.LOCK_UN)
             os.close(self.fd)
+
+
+def _box_busy(mem_min_mb: int) -> str | None:
+    if subprocess.run(["pgrep", "-f", LANDER_RE], capture_output=True).returncode == 0:
+        return "a voice landing is running"
+    mem = _mem_available_mb()
+    if mem_min_mb and mem is not None and mem < mem_min_mb:
+        return f"MemAvailable {mem} MB < {mem_min_mb} MB"
+    return None
+
+
+class _lane_slot:
+    """The test-lane lock, taken only while the box is free: wait out a lander / low memory, take the lock,
+    then RE-CHECK under it (a lander may have started during a long lock wait); if the box turned busy,
+    release and wait again. Bounded by --lander-wait; after that the run proceeds (it is already niced)."""
+
+    def __init__(self, a):
+        self.a, self.lock = a, None
+
+    def __enter__(self):
+        a = self.a
+        if a.no_lock:
+            return self
+        deadline = time.monotonic() + a.lander_wait
+        while True:
+            wait_for_box(max(0, int(deadline - time.monotonic())), a.mem_min_mb, a.mem_wait)
+            self.lock = LaneLock(LOCK_PATH, a.lock_timeout)
+            self.lock.__enter__()
+            busy = _box_busy(a.mem_min_mb)
+            if not busy or time.monotonic() >= deadline:
+                return self
+            log(f"[affected-tests] {busy} after taking the lane lock; releasing it and waiting")
+            self.lock.__exit__(None, None, None)
+            self.lock = None
+            time.sleep(30)
+
+    def __exit__(self, *exc):
+        if self.lock is not None:
+            self.lock.__exit__(*exc)
 
 
 def plan(sel: Selection, root: Path, passthrough: list[str]) -> list[dict]:
@@ -1008,13 +1048,12 @@ def main(argv: list[str] | None = None) -> int:
     report(sel, lanes)
     rc = 0
     if not a.dry_run and lanes:
-        wait_for_box(0 if a.no_lock else a.lander_wait, a.mem_min_mb if not a.no_lock else 0, a.mem_wait)
         for ln in lanes:
             lane = next(x for x in LANES if x.name == ln["lane"])
             log(f"[affected-tests] running lane {lane.name}: {' '.join(ln['command'][1:])}")
             t0 = time.monotonic()
             try:
-                with LaneLock(None if a.no_lock else LOCK_PATH, a.lock_timeout):
+                with _lane_slot(a):
                     cmd = ln["command"]
                     if not a.no_lock:
                         cmd = ["nice", "-n", "10", *cmd]
