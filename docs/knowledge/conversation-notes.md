@@ -135,7 +135,7 @@ arrives through the day review as a proposal you approve (flag on); it is stored
 * A note is an LLM summary of the owner's own words; its quality depends on the digest model. Every field is grounded against the transcript
   by word overlap, which stops invention but not a bad paraphrase. The shadow period is for reading real notes.
 * "Forget that" binds to the previous turn, which cannot yet be in a nightly note; the time-span rule covers the rare overlap and a paraphrase. A guest cannot forget a note (guests have no forget; the owner's "forget Quinn" erases them all).
-* Source-turn matching needs the source rows to still hold the name when the forget runs (the entity forget runs at once; the nightly transcript redaction comes later). A backfilled note's `turn_ids` are Flue submission ids, which no table resolves: it is matched by its own words only.
+* Source-turn matching needs the source rows to still hold the name when the forget runs (the entity forget runs at once; the nightly transcript redaction comes later). A backfilled note's `turn_ids` are Flue submission ids: a forget reads those exchanges back (read-only) from the Flue event log (`conversation_notes_backfill.source_text`); if they cannot all be found (log rotated or moved, `ZOE_FLUE_BRAIN_DB` overrides the path) the note is removed by ANY forget, since it cannot be proven clean.
 * The legacy `zoe_agent` lane does not serve notes; the live lane is Flue.
 * The forget-completeness probe covers `conversation_notes` as a layer; the Flue sidecar's own transcript store (the source the backfill reads) is
   the existing `flue_conversation_store` gap in `open-problems.md`.

@@ -97,7 +97,7 @@ def read_exchanges(db_path: str, since: float, until: float) -> list:
     replies: dict = {}
     try:
         for path, data in conn.execute("SELECT path, data FROM flue_conversation_stream_batches ORDER BY rowid"):
-            if not any(p in data for p in prefixes):
+            if not any(p in data for p in prefixes) and "assistant_text_delta" not in data:     # reply deltas carry no timestamp
                 continue
             try:
                 events = json.loads(data)

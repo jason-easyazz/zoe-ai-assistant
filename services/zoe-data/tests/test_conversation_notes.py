@@ -859,14 +859,17 @@ def test_every_source_turn_of_a_long_conversation_is_kept_and_forgettable(member
     note = cn.Note("They chatted.", [], "", [], "", False)
     nid = run(cn.save(OWNER, "", convo, note, source="chat", status="active"))
     assert nid and len(json.loads(member.q("SELECT turn_ids FROM conversation_notes")[0][0])) == 461
-    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1       # only turn 61 named her
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1       # only the last turn named her
 
 
-def _backfilled_with_dana(env, tmp_path, monkeypatch):
+def _backfilled_with_dana(env, tmp_path, monkeypatch, in_reply=False):
     monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
     q = add_guest(env)
     chat = list(CHAT)
-    chat[1] = ("My friend Dana says the pacing will sort itself out, I am worried about the race", chat[1][1])
+    if in_reply:                                                  # the name is only in the reply's streamed tail (a later delta batch)
+        chat[1] = (chat[1][0], "Okay, tell me more about it. Dana would say the same thing too.")
+    else:
+        chat[1] = ("My friend Dana says the pacing will sort itself out, I am worried about the race", chat[1][1])
     monkeypatch.setitem(globals(), "CHAT", chat)             # _flue_db reads the module-level CHAT
     db = str(tmp_path / "flue.db")
     _flue_db(db)
@@ -891,3 +894,8 @@ def test_a_backfilled_note_whose_source_cannot_be_read_back_is_removed_by_any_fo
 
     os.remove(db)                                                                          # the event log rotated away
     assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Leo"), strict=True)) == 1          # unprovable -> gone
+
+
+def test_a_backfilled_note_is_reached_through_the_streamed_tail_of_the_reply(env, tmp_path, monkeypatch):
+    _backfilled_with_dana(env, tmp_path, monkeypatch, in_reply=True)
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1
