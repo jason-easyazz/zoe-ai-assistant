@@ -24,6 +24,9 @@ CI_DIR = REPO / "tools" / "ci"
 _spec = importlib.util.spec_from_file_location("shard_ledger", CI_DIR / "shard_ledger.py")
 sl = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sl)
+_spec2 = importlib.util.spec_from_file_location("_pytest_shard_ledger_under_test", CI_DIR / "pytest_shard_ledger.py")
+led = importlib.util.module_from_spec(_spec2)
+_spec2.loader.exec_module(led)
 
 _SUITE = '''
 import secrets
@@ -65,14 +68,6 @@ def _pytest(suite: Path, ledger: Path, *args: str) -> subprocess.CompletedProces
         cwd=suite, env=env, capture_output=True, text=True, timeout=120)
 
 
-def _has_pytest_split() -> bool:
-    if importlib.util.find_spec("pytest_split") is not None:
-        return True
-    if os.environ.get("CI"):
-        pytest.fail("pytest-split is not installed on this CI runner: the sharded gate cannot run (ci-deps action)")
-    return False
-
-
 def test_the_plugin_records_selection_after_marker_deselection_and_every_report(tmp_path):
     suite = _suite(tmp_path)
     full = tmp_path / "full.json"
@@ -101,22 +96,79 @@ def test_the_plugin_is_inert_without_its_env(tmp_path):
     assert not list(tmp_path.rglob("*.json"))
 
 
-def test_real_pytest_split_shards_partition_the_full_selection(tmp_path):
-    """End to end with the real splitter, exactly as validate.yml invokes it (same algorithm, same flags)."""
-    if not _has_pytest_split():
-        pytest.skip("pytest-split not installed locally (the CI ci-deps action installs it); verifier is still tested below")
+@pytest.mark.parametrize("weights", [None, {"test_a.py": 50.0}, {"test_b.py": 0.0, "test_a.py": 1.0}])
+def test_real_shards_partition_the_full_selection(tmp_path, weights):
+    """End to end, exactly as validate.yml invokes it (same plugin, same flags), with and without weights."""
     suite = _suite(tmp_path)
+    args = []
+    if weights is not None:
+        wpath = tmp_path / "w.json"
+        wpath.write_text(json.dumps({"files": weights}))
+        args = [f"--shard-weights={wpath}"]   # `=` form, exactly as validate.yml passes it
     assert _pytest(suite, tmp_path / "full.json", "--collect-only").returncode == 0
     shards = []
     for g in (1, 2, 3):
         p = tmp_path / f"shard-{g}.json"
-        r = _pytest(suite, p, "--splits", "3", "--group", str(g), "--splitting-algorithm", "duration_based_chunks")
+        r = _pytest(suite, p, "--shard-count", "3", "--shard-index", str(g), *args)
         assert r.returncode == 0, r.stdout + r.stderr
-        shards.append((p.name, json.loads(p.read_text())))
+        assert f"[zoe-shards] shard {g}/3" in r.stdout
+        led = json.loads(p.read_text())
+        assert set(led["durations"]) >= set(led["selected"]), "every selected test's duration is recorded"
+        shards.append((p.name, led))
     full = json.loads((tmp_path / "full.json").read_text())
     assert sl.verify("suite", full, shards, 3) == []
-    assert sum(len(s["selected"]) for _, s in shards) == len(full["selected"])
-    assert all(s["selected"] for _, s in shards), "every shard must get work"
+    # contiguous: the shards, in index order, are the full ORDER, not just the full set
+    flat = [sl.norm(n) for _, s in shards for n in s["selected"]]
+    assert flat == [sl.norm(n) for n in full["selected"]]
+
+
+def test_a_space_separated_weights_path_is_refused(tmp_path):
+    w = tmp_path / "w.json"
+    w.write_text(json.dumps({"files": {}}))
+    r = _pytest(_suite(tmp_path), tmp_path / "x.json", "--shard-count", "2", "--shard-index", "1", "--shard-weights", str(w))
+    assert r.returncode == 4 and "--shard-weights=PATH" in (r.stdout + r.stderr), r.stdout + r.stderr
+
+
+def test_a_bad_shard_index_is_a_usage_error(tmp_path):
+    r = _pytest(_suite(tmp_path), tmp_path / "x.json", "--shard-count", "3", "--shard-index", "4")
+    assert r.returncode == 4, r.stdout + r.stderr
+
+
+# ── the cut itself ───────────────────────────────────────────────────────────────────────────────────────
+
+def test_slices_are_contiguous_complete_and_balanced():
+    for costs, count in (([1.0] * 10, 3), ([5.0, 1, 1, 1, 1, 1], 2), ([0.0] * 7, 3), ([1.0] * 3, 3), ([9.0, 0, 0, 0], 4)):
+        b = led.slice_bounds(costs, count)
+        assert len(b) == count and b[0][0] == 0 and b[-1][1] == len(costs)
+        assert all(b[i][1] == b[i + 1][0] for i in range(count - 1)), b      # contiguous, no gap, no overlap
+        assert all(e > s for s, e in b), (costs, b)                           # never an empty shard
+    b = led.slice_bounds([1.0] * 100, 4)
+    assert [e - s for s, e in b] == [25, 25, 25, 25]
+    b = led.slice_bounds([30.0] + [1.0] * 90, 4)                              # one heavy test: the rest re-balance
+    sums = [sum(([30.0] + [1.0] * 90)[s:e]) for s, e in b]
+    assert max(sums) - min(sums) <= 2, sums
+
+
+def test_estimate_spreads_a_file_weight_over_its_tests_and_defaults_the_rest():
+    ids = ["a.py::t1", "a.py::t2", "b.py::t1"]
+    assert led.estimate(ids, {"a.py": 10.0}, 0.5) == [5.0, 5.0, 0.5]
+
+
+def test_the_committed_weights_file_is_well_formed():
+    data = json.loads((CI_DIR / "shard_weights.json").read_text())
+    files = data["files"]
+    assert files and all(isinstance(v, (int, float)) and v >= 0 for v in files.values())
+    assert all(k.endswith(".py") and "::" not in k for k in files), "weights are per FILE, never per test"
+
+
+def test_weights_are_rebuilt_from_ledgers(tmp_path):
+    a = {"durations": {"x.py::t1": 1.25, "x.py::t2": 0.5, "y.py::t[1]": 2.0}}
+    b = {"y.py::t[2]": 3.0}                                     # a plain {nodeid: s} map is accepted too
+    assert sl.file_weights([a, b]) == {"x.py": 1.8, "y.py": 5.0}
+    (tmp_path / "a.json").write_text(json.dumps(a))
+    out = tmp_path / "w.json"
+    assert sl.main(["weights", "--out", str(out), str(tmp_path / "a.json")]) == 0
+    assert json.loads(out.read_text())["files"] == {"x.py": 1.8, "y.py": 2.0}
 
 
 # ── the verifier, on synthetic ledgers: every defect it exists to catch ──────────────────────────────────────

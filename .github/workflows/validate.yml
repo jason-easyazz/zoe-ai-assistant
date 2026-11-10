@@ -30,15 +30,22 @@ jobs:
   #                    ledgers partition the full selection exactly (tools/ci/shard_ledger.py)
   #
   # Why process-isolated matrix shards and not pytest-xdist: each shard is ONE serial pytest process running a
-  # contiguous slice of the same ordered collection the old single lane ran (pytest-split's
-  # `duration_based_chunks`), so test order and per-file module state are what they always were. xdist would
-  # interleave files across workers inside one runner, which these suites (module-level sys.modules swaps,
-  # process env, fixed state paths) were never proven safe for.
+  # contiguous slice of the same ordered collection the old single lane ran, so test order and per-file module
+  # state are what they always were. xdist would interleave files across workers inside one runner, which these
+  # suites (module-level sys.modules swaps, process env, fixed state paths) were never proven safe for.
+  #
+  # Why tools/ci/pytest_shard_ledger.py cuts the slices and not pytest-split: measured on this suite, equal-COUNT
+  # slices ran 4-12 min (one file, test_memory_authority_matrix.py, is ~20% of the zoe-data lane), and
+  # pytest-split's per-TEST durations file is ~4 MB for these 30k tests — a generated file to commit and refresh,
+  # the very thing this workflow stopped doing — or a cache that can hand two shards of one run different
+  # durations. The plugin cuts by a ~60 KB per-FILE weights file (tools/ci/shard_weights.json, refreshed by hand
+  # from shard ledgers with `tools/ci/shard_ledger.py weights`); stale weights only unbalance the slices, and the
+  # ledger check below proves the partition every run regardless.
   #
   # The REQUIRED context name `validate` must keep reporting: see tests/unit/test_required_gate_workflows.py and
   # tests/unit/test_ci_instrument_honesty.py, which pin the aggregator, its `needs`, `if: always()` and the
   # every-result-must-be-success rule. A shard count is changed in ONE place — the matrix list AND the
-  # `--splits` value AND the aggregator's `--expect-shards` move together (the tests pin that they agree).
+  # `--shard-count` value AND the aggregator's `--expect-shards` move together (the tests pin that they agree).
   checks:
     runs-on: ubuntu-latest
     # Healthy ~3 min; the pytest step budgets below sum to 20.
@@ -244,15 +251,15 @@ jobs:
 
   # zoe-data slim-dep-green tests are selected by the `ci_safe` marker (registered in pytest.ini), not a
   # hand-enumerated file list — a new slim-safe test runs here just by adding a co-located
-  # `pytestmark = pytest.mark.ci_safe` line, no YAML edit, and pytest-split assigns it to a shard at
+  # `pytestmark = pytest.mark.ci_safe` line, no YAML edit, and the shard plugin assigns it to a shard at
   # collection time (no per-shard file list exists anywhere). The full dir runs on the Jetson
   # (self-hosted-tests.yml) as the catch-all safety net, so an UNMARKED new test still runs somewhere.
   #
   # NO Postgres service: the ci_safe zoe-data lane is database-free by contract (tests/AGENTS.md), and the
   # zoe-data-py312 job has run the identical lane without one since 2026-10-19 with identical counts.
   #
-  # `duration_based_chunks` with no stored durations = equal-COUNT contiguous slices of the ordered selection.
-  # It is positional, so it is stable even though a few tests mint random parametrize ids per process.
+  # The cut is positional (time-weighted contiguous slices of the ordered selection), so it is stable even though
+  # a few tests mint random parametrize ids per process.
   zoe-data-shard:
     name: zoe-data ci_safe (${{ matrix.group }}/4)
     runs-on: ubuntu-latest
@@ -281,8 +288,7 @@ jobs:
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto" \
             -p pytest_shard_ledger \
-            --splits 4 --group ${{ matrix.group }} --splitting-algorithm duration_based_chunks \
-            --store-durations --durations-path "${{ runner.temp }}/ledger/durations-zoe-data-${{ matrix.group }}.json" \
+            --shard-count 4 --shard-index ${{ matrix.group }} --shard-weights=tools/ci/shard_weights.json \
             --durations=50 --durations-min=1.0
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data:${{ github.workspace }}/tools/ci
@@ -352,8 +358,7 @@ jobs:
             --maxfail=200 -q \
             --override-ini="asyncio_mode=auto" \
             -p pytest_shard_ledger \
-            --splits 2 --group ${{ matrix.group }} --splitting-algorithm duration_based_chunks \
-            --store-durations --durations-path "${{ runner.temp }}/ledger/durations-unit-${{ matrix.group }}.json" \
+            --shard-count 2 --shard-index ${{ matrix.group }} --shard-weights=tools/ci/shard_weights.json \
             --durations=50 --durations-min=1.0
         env:
           POSTGRES_URL: postgresql://zoe@localhost:5432/zoe

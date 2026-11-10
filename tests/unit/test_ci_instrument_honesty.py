@@ -225,7 +225,9 @@ EXPECTED_LANES = {
     "Lane — Home Assistant MCP bridge",
     "Lane — zoe-auth (full)",
 }
-SPLIT_RE = re.compile(r"--splits (\d+) --group \$\{\{ matrix\.group \}\} --splitting-algorithm duration_based_chunks")
+SPLIT_RE = re.compile(r"--shard-count (\d+) --shard-index \$\{\{ matrix\.group \}\} --shard-weights=tools/ci/shard_weights\.json")
+# `=` is load-bearing: a SPACE-separated path value is read as a positional test path while pytest determines its
+# rootdir (before plugin options are parsed), which can shift every node id (tests/unit/test_shard_ledger.py).
 
 
 def gate_jobs(spec: dict) -> dict:
@@ -299,16 +301,16 @@ def validate_violations(spec: dict) -> list[str]:
         run = "\n".join(ln for s in job["steps"] for ln in _code_lines(s))
         m = SPLIT_RE.search(run)
         if not m:
-            out.append(f"{jname}: no pytest-split invocation with the matrix group")
+            out.append(f"{jname}: no --shard-count/--shard-index invocation with the matrix group")
             continue
         n = int(m.group(1))
         if groups != list(range(1, n + 1)):
-            out.append(f"{jname}: matrix groups {groups} do not cover --splits {n} exactly (a group would never run)")
+            out.append(f"{jname}: matrix groups {groups} do not cover --shard-count {n} exactly (a group would never run)")
         if f"({{{{ matrix.group }}}}/{n})" not in str(job.get("name", "")).replace("${{ matrix.group }}", "{{ matrix.group }}"):
             out.append(f"{jname}: the job name does not say /{n}")
         exp = re.search(rf"--lane {re.escape(lane)} .*?--expect-shards (\d+)", agg_run, re.S)
         if not exp or int(exp.group(1)) != n:
-            out.append(f"{jname}: the aggregator's --expect-shards for {lane} does not equal --splits {n}")
+            out.append(f"{jname}: the aggregator's --expect-shards for {lane} does not equal --shard-count {n}")
         if "-p pytest_shard_ledger" not in run:
             out.append(f"{jname}: the shard does not write its ledger")
         lane_env = next((s.get("env") or {} for s in job["steps"] if str(s.get("name", "")).startswith(LANE_PREFIX)), {})
@@ -363,7 +365,7 @@ def test_validate_check_can_fail():
 
     spec = copy.deepcopy(good)
     spec["jobs"]["zoe-data-shard"]["strategy"]["matrix"]["group"] = [1, 2, 3]
-    assert any("do not cover --splits" in v for v in validate_violations(spec))
+    assert any("do not cover --shard-count" in v for v in validate_violations(spec))
 
     spec = copy.deepcopy(good)
     spec["jobs"]["zoe-data-shard"]["strategy"]["fail-fast"] = True
@@ -390,8 +392,7 @@ def _norm(step: dict) -> list[str]:
 
 
 _SHARD_ONLY = (" -p pytest_shard_ledger",
-               " --splits 4 --group ${{ matrix.group }} --splitting-algorithm duration_based_chunks",
-               ' --store-durations --durations-path "${{ runner.temp }}/ledger/durations-zoe-data-${{ matrix.group }}.json"')
+               " --shard-count 4 --shard-index ${{ matrix.group }} --shard-weights=tools/ci/shard_weights.json")
 
 
 def test_python_312_job_exists_beside_the_required_job_and_matches_its_install():
@@ -405,7 +406,7 @@ def test_python_312_job_exists_beside_the_required_job_and_matches_its_install()
     assert str(py312["with"]["python-version"]) == "3.12"
     action = yaml.safe_load((REPO / ".github" / "actions" / "ci-deps" / "action.yml").read_text(encoding="utf-8"))
     names = [s.get("name") for s in action["runs"]["steps"]]
-    assert "Install slim CI deps" in names and "Install lane deps (zoe-auth, numpy, LiveKit wheels, pytest-split)" in names
+    assert "Install slim CI deps" in names and "Install lane deps (zoe-auth, numpy, LiveKit wheels)" in names
 
     # The same lane command as the required zoe-data shards, minus the split; the 3.12 job is database-free (the
     # ci_safe contract), so it carries no Postgres service, no migrations and no password fallback literal.
