@@ -214,10 +214,18 @@ def _reply_polish_and_write_gate_state_is_per_test():
 
 
 @pytest.fixture(autouse=True)
-def _restraint_head_worker_never_outlives_its_test():
+def _restraint_head_worker_never_outlives_its_test(monkeypatch):
     """``restraint_head.defer`` starts a daemon worker that embeds through the (native) tokenizer + ONNX session. Left running it
     races the NEXT test's model load / the interpreter's finalisation - the 2026-10-29 ``Fatal Python error: Segmentation fault`` in
-    ``tokenize <- restraint_head._run_worker`` ~95% through the ci_safe lane. Join it after every test that started one."""
+    ``tokenize <- restraint_head._run_worker`` ~95% through the ci_safe lane. Join it after every test that started one.
+
+    The idle worker notices its stop event only between ``_QUEUE.get(timeout=_POLL_S)`` polls (by design: no shared wake-up a
+    replacement worker could steal), so the join below cost every test that stamped a memory the full 0.5 s poll - ~4 min of
+    the lane (2026-11-10 durations). The poll is shortened for the test (restored by monkeypatch AFTER the join, since this
+    fixture depends on it); a test that pins its own ``_POLL_S`` still wins, being set later."""
+    mod = sys.modules.get("restraint_head")
+    if mod is not None:
+        monkeypatch.setattr(mod, "_POLL_S", 0.01)
     yield
     mod = sys.modules.get("restraint_head")
     if mod is not None:

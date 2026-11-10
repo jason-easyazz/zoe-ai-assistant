@@ -131,7 +131,7 @@ def test_the_shared_embedder_asks_the_loopback_shim_and_refuses_anything_else():
             self.end_headers()
             self.wfile.write(data)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     try:
         ef = ShimEmbeddingFunction(f"http://127.0.0.1:{srv.server_address[1]}")
         out = ef(["a", "b", "c"])
