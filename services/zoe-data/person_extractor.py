@@ -708,6 +708,32 @@ async def _reconcile_same_kind_entity_row(
     return new_ref.id
 
 
+async def _ingest_own_fact(text: str, user_id: str, *, source: str, session_id: Optional[str] = None,
+                           source_excerpt: Optional[str] = None, origin: Optional[str] = None) -> Optional[str]:
+    """One fact about the SPEAKER themself, as a plain user fact: no entity, no person tag, no pending-person slug (so the people
+    layer never sees a "person" called by the speaker's own name). The same storable-fact gate as every person write."""
+    try:
+        from memory_quality import is_storable_fact
+
+        storable, reason = is_storable_fact(text)
+        if not storable:
+            from memory_reject_ledger import record_reject
+
+            record_reject("person_extractor", reason)
+            return None
+        from memory_service import get_memory_service
+
+        ref = await get_memory_service().ingest(
+            text, user_id=user_id, source=source, session_id=session_id, memory_type="fact", status="approved",
+            tags=["auto_extract", "own_fact"], source_excerpt=source_excerpt, origin=origin)
+        if ref is not None and (getattr(ref, "metadata", None) or {}).get("authority_blocked"):
+            return AUTHORITY_BLOCKED
+        return ref.id if ref else None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("person_extractor: own-fact ingest failed: %s", exc)
+        return None
+
+
 async def _ingest_to_mempalace(
     text: str,
     user_id: str,
@@ -1411,6 +1437,25 @@ async def apply_person_fact(
     if await _names_forgotten(user_id, "\n".join(t for t in (name, value, source_excerpt or "") if t), origin or source):
         return False
 
+    # The speaker's OWN facts ("its priya ... night shift nurse", "im 36") are the USER's, not a contact called Priya: stored as
+    # "Priya: 36" beside "Asha: 5" the packet could not tell the speaker from the people they talk about, and the daughter's age came
+    # back as the mother's (QA round 7). Filed as a user fact that names the speaker, with no person node.
+    try:
+        import own_name
+        from people_utils import _fold_name
+
+        # the name the speaker gave for THEMSELF in the very text this fact was mined from ("its priya, night shift nurse"): the
+        # account-name list alone is a suppression list, never identity - "my colleague Priya is a teacher" is a different Priya
+        _intro = own_name.introduced_name(source_excerpt or "")
+        if _intro and own_name.is_own(name, frozenset({_fold_name(_intro), _fold_name(_intro).split()[0]})):
+            own_text = re.sub(rf"(?i)\b{re.escape(name)}\b", "User", value, count=1) if re.search(
+                rf"(?i)\b{re.escape(name)}\b", value) else f"User ({name}): {value}"
+            mem_id = await _ingest_own_fact(own_text[:300], user_id, source=source, session_id=session_id,
+                                            source_excerpt=source_excerpt, origin=origin)
+            return bool(mem_id) and mem_id != AUTHORITY_BLOCKED
+    except Exception as exc:  # noqa: BLE001 - never stop a write over this
+        logger.debug("apply_person_fact: own-name filing failed (%s)", type(exc).__name__)
+
     _db, should_close = await _ensure_db(db)
     if _db is None:
         return False
@@ -1430,11 +1475,32 @@ async def apply_person_fact(
             # The model has no "age" type and files an age as whatever it picks: an age is ONE
             # current value per person, so it is keyed "age" and a new age supersedes the old one.
             pattern_type = "age"
+        _resolve_failed = False
         try:
             res = await _resolve_person(name, user_id, _db)
         except Exception as exc:  # noqa: BLE001
             logger.debug("apply_person_fact: resolve failed for %r: %s", name, exc)
             res = None
+            _resolve_failed = True      # a failed lookup is NOT "no such person": the name is never repaired on the strength of it
+        # "also kais 21 not 22": a correction turn names its subject and the lazily typed possessive was read as a person called
+        # "Kais" (QA round 7: the row "Kais: 21", and Kai's age then unanswerable). When nobody is called Kais but the member's Kai
+        # exists, the fact is Kai's; with nobody known either way the name stands as typed (a real "Chris" is never shortened).
+        try:
+            # only a POSITIVE "no such person" is an absence: an ambiguous resolution (two Carloses) has no person_id either, but it is a match
+            # that the ambiguity guard below must see - shortening it would file the fact on a different person
+            _ambiguous = bool(getattr(res, "ambiguous", False))
+            if not _resolve_failed and (res is None or (not getattr(res, "person_id", None) and not _ambiguous)) and source_excerpt and len(name) > 3 \
+                    and name.lower().endswith("s") and not name.lower().endswith("ss"):
+                import value_correction
+
+                corr = value_correction.statement(source_excerpt)
+                if corr is not None and corr.subject.lower() == name.lower() and value_correction.may_shorten(corr, False, _ambiguous):
+                    alt = await _resolve_person(name[:-1], user_id, _db)
+                    if alt is not None and getattr(alt, "person_id", None) and not alt.ambiguous:
+                        name, res = name[:-1], alt
+                        fact_text = value if name.lower() in value.lower() else f"{name}: {value}"
+        except Exception:  # noqa: BLE001 - never stop a write over a name repair
+            pass
         if res is not None and res.ambiguous:
             # two people answer to this name: held as a pending candidate, never stored as an approved slug-keyed fact
             logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %r held, not guessed",
