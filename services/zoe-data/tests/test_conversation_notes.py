@@ -45,6 +45,10 @@ _facts: list = []
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
+    try:    # routers.memories binds get_memory_service BY NAME at import: first imported while this fixture's stub is patched in, it would keep the stub for the whole session
+        import routers.memories  # noqa: F401
+    except Exception:  # noqa: BLE001
+        pass
     monkeypatch.delenv("ZOE_CONVERSATION_NOTES", raising=False)
     cn.reset_state()
     monkeypatch.setattr(cn, "_now", lambda: NOW)
@@ -1348,3 +1352,38 @@ def test_the_real_durable_read_raises_in_strict_mode_and_swallows_otherwise():
     assert run(memory_service.MemoryService.load_durable_for_hop(Fake(), "member-a")) == []
     with pytest.raises(RuntimeError):
         run(memory_service.MemoryService.load_durable_for_hop(Fake(), "member-a", strict=True))
+
+
+class _FactRow:
+    def __init__(self, text, added_at, **md):
+        self.text = text
+        self.metadata = {"added_at": cn._iso(added_at), **md}
+
+
+def _race_note(turn_ids):
+    return cn.Stored(id="n9", with_name="", started_at=cn._iso(NOW - 4000), ended_at=cn._iso(NOW - 3600), summary="They talked about the race entry.",
+                     topics=["race entry"], mood="", open_threads=["waiting to hear about the race entry"], follow_up="whether the race entry came through",
+                     sensitive=False, served_count=0, source="chat", turn_ids=turn_ids)
+
+
+def test_a_fact_mined_from_the_noted_conversation_is_not_a_later_update(monkeypatch):
+    """The nightly digest ingests 'I entered the race' AFTER the note's end time; it came from the same turns, so it must not suppress the note."""
+    import memory_service
+
+    facts = [_FactRow("They entered the race entry for the half marathon", NOW - 600, user_turn_id="msg-2")]
+
+    class Svc:
+        async def load_durable_for_hop(self, uid, strict=False):
+            return facts
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: Svc())
+    kept = run(cn._defer_to_facts(OWNER, [_race_note(["msg-1", "msg-2"])]))
+    assert len(kept) == 1 and kept[0].open_threads and kept[0].follow_up                      # same source: the note survives whole
+    # negative control: the same fact from a DIFFERENT turn is a genuinely later update and still suppresses the note
+    facts[:] = [_FactRow("They entered the race entry for the half marathon", NOW - 600, user_turn_id="msg-77")]
+    assert run(cn._defer_to_facts(OWNER, [_race_note(["msg-1", "msg-2"])])) == []
+    # a statement timestamp older than the note's end beats the later ingestion time
+    facts[:] = [_FactRow("They entered the race entry for the half marathon", NOW - 600, stated_at=cn._iso(NOW - 3900))]
+    assert len(run(cn._defer_to_facts(OWNER, [_race_note(["msg-1"])]))) == 1
+    # unknown provenance and no statement time: ingestion time counts (fail safe)
+    facts[:] = [_FactRow("They entered the race entry for the half marathon", NOW - 600)]
+    assert run(cn._defer_to_facts(OWNER, [_race_note(["msg-1"])])) == []

@@ -803,8 +803,7 @@ async def _defer_to_facts(uid: str, notes: list) -> list:
         from memory_service import get_memory_service
 
         facts = await asyncio.wait_for(get_memory_service().load_durable_for_hop(uid, strict=True), _LEDGER_BUDGET_S * 2)
-        stamped = [(_epoch_of((r.metadata or {}).get("added_at")) or float((r.metadata or {}).get("added_ts") or 0.0) or 0.0, _tokens(r.text))
-                   for r in facts]
+        stamped = [_stamp_fact(r) for r in facts]
     except Exception as exc:  # noqa: BLE001
         logger.debug("conversation notes: facts unreadable, open threads dropped (%s)", type(exc).__name__)
         stamped = None
@@ -815,9 +814,25 @@ async def _defer_to_facts(uid: str, notes: list) -> list:
             continue
         ended = _epoch_of(n.ended_at) or 0.0
         mine = _tokens(" ".join([n.summary, *n.topics, *n.open_threads, n.follow_up]))
-        if not any(at > ended and len(toks & mine) >= 2 for at, toks in stamped):
+        sources = {str(t) for t in n.turn_ids if t}
+        # a fact mined from the VERY conversation the note describes (its source turn is one of the note's turns) is not a later update, however
+        # late the digest ingested it; a fact from any other turn, or whose provenance is unknown, still counts as later (fail safe)
+        if not any(at > ended and len(toks & mine) >= 2 and not (tids & sources) for at, toks, tids in stamped):
             out.append(n)
     return out
+
+
+_STATED_AT_KEYS = ("stated_at", "said_at", "source_at", "statement_at")
+
+
+def _stamp_fact(r) -> tuple:
+    """``(when, tokens, source turn ids)`` of a durable fact. ``when`` is the time the member SAID it when the row records one (a statement
+    timestamp), else the ingestion time - which is only ever compared for a fact whose source turn is NOT one of the note's own turns."""
+    md = r.metadata or {}
+    said = next((e for e in (_epoch_of(md.get(k)) for k in _STATED_AT_KEYS) if e), None)
+    at = said or _epoch_of(md.get("added_at")) or float(md.get("added_ts") or 0.0) or 0.0
+    tids = {str(md.get(k)) for k in ("user_turn_id", "turn_ref") if md.get(k)}
+    return at, _tokens(r.text), tids
 
 
 async def _unmuted(uid: str, notes: list) -> list:

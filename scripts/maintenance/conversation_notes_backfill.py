@@ -76,7 +76,9 @@ async def _main(args) -> int:
             return await _show(args.owner, args.name)
         import conversation_notes_backfill as bf
 
-        tz = ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
+        from typed_env import env_str
+
+        tz = ZoneInfo(env_str("ZOE_TIMEZONE", "Australia/Perth"))
         if _in_night_window(datetime.now(tz)):
             print(json.dumps({"status": "refused", "error": "the night window (01:50-04:55) owns the brain; run this outside it"}))
             return 3

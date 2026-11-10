@@ -196,10 +196,11 @@ async def run(owner: str, name: str, db_path: str, since: float, until: float, *
 
 def flue_db_path() -> str:
     """Where the Flue brain's event log lives (``ZOE_FLUE_BRAIN_DB`` overrides the repo default)."""
-    import os
     import pathlib
 
-    return os.environ.get("ZOE_FLUE_BRAIN_DB") or str(
+    from typed_env import env_str
+
+    return env_str("ZOE_FLUE_BRAIN_DB", "") or str(
         pathlib.Path(__file__).resolve().parents[2] / "labs" / "flue-zoe-brain-2x" / "data" / "zoe-brain.db")
 
 
