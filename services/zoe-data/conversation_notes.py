@@ -995,6 +995,18 @@ async def promote_shadow(owner: str) -> int:
 async def _source_text(db, owner: str, s: "Stored") -> Optional[str]:
     """The words of the turns a note was made from, by id (member: ``chat_messages``; guest: ``named_guest_turns``). A table that is not
     there is no text (the note's own words still count). RAISES on any other failure, so a strict forget is retried."""
+    if s.source == "pendant":
+        # an approved pendant note keeps its source POINTER, not a copy: the day-review candidate that wrote it (``written_ref``) holds every cited
+        # line as evidence. A candidate that is gone has already been erased with its note.
+        try:
+            async with db.execute("SELECT evidence FROM omi_day_candidates WHERE user_id = ? AND written_ref = ?",
+                                  (owner, f"conversation_notes:{s.id}")) as cur:
+                return " ".join(str(r[0] or "") for r in await cur.fetchall())
+        except Exception as exc:  # noqa: BLE001
+            t = str(exc)
+            if "no such table" in t or "does not exist" in t:
+                return ""
+            raise
     ids = [str(i) for i in s.turn_ids if i]
     if not ids:
         return ""

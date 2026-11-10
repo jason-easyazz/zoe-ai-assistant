@@ -1055,7 +1055,10 @@ def verify_conversation_note(fields: dict, item: dict, cited: Sequence[Line], li
         return None
     payload = {"summary": summary, "with": cn.clean(fields.get("with"), 60), "topics": topics, "open": open_}
     key = f"conversation_note|{_norm(summary)}"
-    return _candidate("conversation_note", payload, key, cited, line, span, 0.5, speaker)
+    return _candidate("conversation_note", payload, key, cited, line, span, 0.5, speaker, all_evidence=True)
+
+
+_EVIDENCE_LINE_CHARS = 400      # a cited line kept as evidence for a summary (the owner's own words, as they approve them)
 
 
 def _evidence(line: Line, span: str) -> dict:
@@ -1070,10 +1073,19 @@ def _evidence(line: Line, span: str) -> dict:
 
 
 def _candidate(kind: str, payload: dict, key: str, cited: Sequence[Line], line: Line, span: str, conf: float,
-               speaker: str) -> Candidate:
+               speaker: str, all_evidence: bool = False) -> Candidate:
     if line.clock == "estimated":
         conf -= 0.1                              # the day itself may be wrong (P1-2): the owner sees the clock it came from
-    return Candidate(kind=kind, payload=payload, evidence=[_evidence(line, span)],
+    ev = [_evidence(line, span)]
+    if all_evidence:
+        # a SUMMARY rests on every line it cited, not on one quote: each contributing line is kept (the main one first), so a forget that names a
+        # person only an earlier / later line mentions (the question, then Dana's answer) still finds the candidate - and through it the approved note
+        seen = {line.id}
+        for ln in cited:
+            if ln.id not in seen:
+                seen.add(ln.id)
+                ev.append(_evidence(ln, (ln.text or "")[:_EVIDENCE_LINE_CHARS]))
+    return Candidate(kind=kind, payload=payload, evidence=ev,
                      recording_ids=sorted({ln.recording_id for ln in cited}), confidence=round(max(0.1, min(0.95, conf)), 2),
                      speaker=speaker, dedup_key=hashlib.sha256(key.encode()).hexdigest()[:24])
 

@@ -7,6 +7,7 @@ a stated fact is never overridden by one.
 from __future__ import annotations
 
 import json
+import sys
 import re
 import sqlite3
 import time
@@ -1114,3 +1115,34 @@ def test_note_generation_goes_through_the_brain_slot_guard_and_yields_to_a_house
     assert "skip" in run(go())
     assert seen["labels"] == ["conversation_notes"] and seen["starts"] == 2      # retried after the turn, through the guard
     g.reset()
+
+
+def _dana_item():
+    return _item(ids=["r1.1", "r1.2"], quote="So how did the interview go yesterday")
+
+
+def test_a_pendant_note_keeps_every_cited_line_as_evidence_and_a_forget_of_a_person_named_only_there_removes_it(env, monkeypatch):
+    import omi_day_review as dr
+    import omi_review_apply as oa
+
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    lines = _lines()
+    lines["r1.2"] = dr.Line(id="r1.2", text="Dana says it went well, they asked about the cycling trip I took last year", recording_id="rec1",
+                            at="2026-11-08T10:00:00Z", clock="exact", speaker="not_sure")
+    monkeypatch.setattr(sys.modules[__name__], "_lines", lambda: lines)
+    cand, _ = _verify(_dana_item(), monkeypatch)
+    assert cand and len(cand.evidence) == 2 and cand.evidence[0]["line"] == "r1.1"            # the quoted line first, then the other cited line
+    assert "Dana" in json.dumps(cand.evidence) and "Dana" not in json.dumps(cand.payload)       # the name lives only in a non-quoted cited line
+    # approve: the note keeps no copy of the words, only the candidate that wrote it (written_ref) points at them
+    ref = run(cn.write_approved(OWNER, cand.payload, candidate_id="c-dana", day="2026-11-08", at_epoch=NOW))
+    env.conn.execute("CREATE TABLE IF NOT EXISTS omi_day_candidates (id TEXT PRIMARY KEY, user_id TEXT, evidence TEXT, written_ref TEXT)")
+    env.conn.execute("INSERT INTO omi_day_candidates (id, user_id, evidence, written_ref) VALUES ('c-dana', ?, ?, ?)", (OWNER, json.dumps(cand.evidence), ref))
+    env.conn.commit()
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Dana"), strict=True)) == 1       # reached through the source pointer
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(0,)]
+    # negative control: a name that is in no cited line leaves the note
+    ref2 = run(cn.write_approved(OWNER, cand.payload, candidate_id="c-dana2", day="2026-11-08", at_epoch=NOW + 5))
+    env.conn.execute("INSERT INTO omi_day_candidates (id, user_id, evidence, written_ref) VALUES ('c-dana2', ?, ?, ?)", (OWNER, json.dumps(cand.evidence), ref2))
+    env.conn.commit()
+    assert run(cn.erase_entity(OWNER, memory_forgotten.name_pattern("Zelda"), strict=True)) == 0
+    assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
