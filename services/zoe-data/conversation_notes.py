@@ -291,6 +291,13 @@ def validate(obj: Optional[dict], convo: Convo) -> Optional[Note]:
     if convo.minor and _frightening(" ".join([summary, *topics, *items, follow])):
         return None                                        # a child's note holds nothing frightening: dropped in code, not by prompt
     note = Note(summary, topics, mood, items, follow)
+    try:
+        import distress_handoff
+
+        if distress_handoff.guarded_text(" ".join([summary, *topics, mood, *items, follow, convo.with_name])):
+            return None                                    # the model's OWN words (mood has no grounding check) never carry a distress hand-off into a note
+    except Exception:  # noqa: BLE001 - cannot tell: keep nothing
+        return None
     # EVERY field that is rendered to the brain goes through the classifier, mood included: private content in any one of them sets the flag
     note.sensitive = _is_private(" ".join([summary, *topics, mood, *items, follow]))
     return note
@@ -950,7 +957,7 @@ async def write_approved(user_id: str, payload: dict, *, candidate_id: str, day:
     # read the feeling in the summary they approve)
     note = Note(clean(payload.get("summary"), SUMMARY_CHARS), [clean(t, 40) for t in _list(json.dumps(payload.get("topics") or []))][:5],
                 "", [clean(t, ITEM_CHARS) for t in (payload.get("open") or [])][:3], clean(payload.get("follow_up"), ITEM_CHARS))
-    note.sensitive = _is_private(" ".join([note.summary, *note.topics, *note.open_threads]))
+    note.sensitive = _is_private(" ".join([note.summary, *note.topics, *note.open_threads, note.follow_up, convo.with_name]))
     if len(note.summary) < 8:
         raise ValueError("empty note")
     m = mode()

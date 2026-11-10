@@ -1053,7 +1053,8 @@ def verify_conversation_note(fields: dict, item: dict, cited: Sequence[Line], li
               if t and cn._grounded(t, seen, 0.5)]
     open_ = [t for t in (cn.clean(x, cn.ITEM_CHARS) for x in (fields.get("open") if isinstance(fields.get("open"), list) else [])[:2])
              if len(t) >= 6 and cn._grounded(t, seen, 0.4)]
-    text = " ".join([summary, *topics, *open_])
+    with_ = cn.clean(fields.get("with"), 60)
+    text = " ".join([summary, *topics, *open_, with_])          # every rendered field, the "with" name included
     if _distress(text) or _restraint(text) & _SENSITIVE_ALL or _IDENTITY.search(summary):
         drop("sensitive")
         return None

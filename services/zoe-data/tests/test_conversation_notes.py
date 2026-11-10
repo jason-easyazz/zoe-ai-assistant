@@ -1251,3 +1251,37 @@ def test_private_content_that_sits_only_in_the_mood_marks_the_note_private():
     worried = {**quiet, "mood": "worried about debt"}
     note = cn.validate(worried, convo)
     assert note is not None and note.sensitive is True                                 # the private subject sits only in the mood
+
+
+@pytest.mark.parametrize("field,value", [("topics", ["owing money on a loan"]), ("open", ["waiting on a cancer test result"]),
+                                         ("follow_up", "how the debt repayments are going")])
+def test_private_content_in_any_rendered_field_marks_the_note_private(field, value):
+    convo = cn.Convo("k-any", NOW - 3600, NOW - 3000, [("them", "the interview went well, the cycling trip, money for the loan and a cancer test result and the debt repayments"),
+                                                       ("zoe", "great")], 4, "", False)
+    base = {"skip": False, "summary": "They talked about how the interview went and the cycling trip.", "topics": ["interview"], "mood": "pleased", "open": [],
+            "follow_up": ""}
+    assert cn.validate(base, convo).sensitive is False                                  # control
+    note = cn.validate({**base, field: value}, convo)
+    assert note is not None and note.sensitive is True, field
+
+
+def test_a_distress_hand_off_in_a_model_written_field_drops_the_note(monkeypatch):
+    import distress_handoff
+
+    convo = cn.Convo("k-d", NOW - 3600, NOW - 3000, [("them", "the interview went well and the cycling trip"), ("zoe", "great")], 4, "", False)
+    obj = {"skip": False, "summary": "They talked about how the interview went and the cycling trip.", "topics": ["interview"], "mood": "pleased", "open": []}
+    assert cn.validate(obj, convo) is not None
+    monkeypatch.setattr(distress_handoff, "guarded_text", lambda t: "hopeless" in t)
+    assert cn.validate({**obj, "mood": "hopeless"}, convo) is None
+
+
+def test_the_pendant_with_name_is_checked_like_every_other_field(monkeypatch):
+    import omi_day_review as dr
+
+    monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+    lines = _lines()
+    monkeypatch.setattr(sys.modules[__name__], "_lines", lambda: lines)
+    cand, _ = _verify(_item(fields={**_item()["fields"], "with": "Sam"}), monkeypatch)
+    assert cand and cand.payload["with"] == "Sam"                                        # control
+    cand, counts = _verify(_item(fields={**_item()["fields"], "with": "someone with cancer and big debts"}), monkeypatch)
+    assert cand is None and counts.get("drop_sensitive")                                 # a private subject in "with" is refused like the summary
