@@ -230,6 +230,11 @@ def test_apply_prefers_the_exact_name_and_only_then_the_lazy_one(monkeypatch):
     # ... and a Carlos row about another attribute blocks the lazy form too
     svc = _Svc("Carlos's birthday is in May", "Carlo's swimming is on Thursday")
     assert _apply(svc, "actually carlos swimming is on wednesday not thursday", monkeypatch) == 0 and svc.edits == []
+    # only the bare lazy form shortens: an apostrophized or a plain "is" statement naming Carlos is never Carlo's
+    svc = _Svc("Carlo is 22")
+    assert _apply(svc, "also Carlos's 21 not 22", monkeypatch) == 0 and svc.edits == []
+    svc = _Svc("Carlo is 22")
+    assert _apply(svc, "Carlos is 21 not 22", monkeypatch) == 0 and svc.edits == []
     # nobody matches either way: nothing changes
     svc = _Svc("Zara is 22")
     assert _apply(svc, "also kais 21 not 22", monkeypatch) == 0 and svc.edits == []

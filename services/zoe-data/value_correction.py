@@ -174,6 +174,7 @@ class Correction(NamedTuple):
     new: str
     old: Optional[str]       # None: an age restated with no old value ("Anaya is 7 now")
     cued: bool = False
+    lazy: bool = False       # the subject is a bare name typed WITHOUT its possessive apostrophe ("kais 21 not 22"): the only plain-name form that may shorten
 
 
 def statement(text: str) -> Optional[Correction]:
@@ -205,12 +206,13 @@ def statement(text: str) -> Optional[Correction]:
             subj = m.group("subj").strip()
             if subj.lower() in _NOT_SUBJECT or subj.lower() in _BARE_NOT_NAME:
                 continue
+            typed_apostrophe = bool(re.search(r"['’]s$", subj))
             subj = re.sub(r"['’]s$", "", subj)      # "kais" stays as typed: a lazy possessive OR a name ending in s - the row decides
             if subj.lower() in _NOT_SUBJECT or subj.lower() in _BARE_NOT_NAME or subj.lower().rstrip("s") in _NOT_SUBJECT:
                 continue                    # "thats 21 not 22" is no name
             new, old = m.group("n").strip(), m.group("o").strip()
             if value_of(new) is not None and value_of(old) is not None and value_of(new) != value_of(old):
-                return Correction(subj, new, old, True)
+                return Correction(subj, new, old, True, not typed_apostrophe)
             continue
         m = _FOR_RE.match(sentence)
         if m:
@@ -394,7 +396,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
-        if not hits and not exact_subject_row and not explicit_possessive(corr.subject) and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
+        if not hits and not exact_subject_row and (corr.lazy or (_on is not None and not explicit_possessive(corr.subject))) and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
             # nobody has a row under the name exactly as typed: "kais 21 not 22" is Kai's (the apostrophe was not typed). Never the
             # other way round - "Carlos" does not rewrite Carlo's row while a Carlos row exists, nor when Carlos is the typed name.
             for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
