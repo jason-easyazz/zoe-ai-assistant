@@ -667,6 +667,48 @@ async def _add_wearer_samples(db, user_id: str, rid: str, windows: list, spans: 
     return n
 
 
+async def _frozen_contributions(db, user_id: str, seg_ids: list[str]) -> list[tuple]:
+    """[(voiceprint_id, old_segment_id)] of the contributions a STOPPED (learning_enabled = 0) print holds for these first-pass segments."""
+    if not seg_ids:
+        return []
+    import omi_voices
+    try:
+        rows = await _all(db, "SELECT c.voiceprint_id, c.segment_id FROM learned_voiceprint_segments c JOIN learned_voiceprints v ON v.id = c.voiceprint_id "
+                              f"WHERE v.owner_user_id = ? AND v.learning_enabled = 0 AND c.segment_id IN ({','.join('?' * len(seg_ids))})", (user_id, *seg_ids))
+    except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has none
+        if not omi_voices._missing(exc):
+            raise
+        return []
+    return [(r[0], r[1]) for r in rows]
+
+
+async def _relink_frozen(db, frozen: list[tuple], old: list[dict], new_ids: list[str], segs: list[dict]) -> None:
+    """The first-pass segments are gone, so a stopped print's preserved contributions are RE-KEYED to the replacement line that carries the same person tag over the same span
+    (a later "that is me" / "not a person" correction of that line can then release them). No matching line: the contribution is dropped and the print rebuilt (nothing
+    could ever release it). Never creates a contribution."""
+    if not frozen:
+        return
+    import omi_voices
+    by_old = {o["id"]: o for o in old}
+    touched: set = set()
+    for vp, osid in frozen:
+        o = by_old.get(osid)
+        best, best_ov = None, 0
+        for nid, sg in zip(new_ids, segs):
+            if o is None or (sg.get("carry") or {}).get("tagged_person_id") != o.get("tagged_person_id"):
+                continue
+            ov = min(sg["end_ms"], o["end_ms"]) - max(sg["start_ms"], o["start_ms"])
+            if ov > best_ov:
+                best, best_ov = nid, ov
+        if best is not None and not await _all(db, "SELECT 1 FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, best)):
+            await db.execute("UPDATE learned_voiceprint_segments SET segment_id = ? WHERE voiceprint_id = ? AND segment_id = ?", (best, vp, osid))
+        else:
+            await db.execute("DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
+            touched.add(vp)
+    for vp in sorted(touched):
+        await omi_voices.rebuild(db, vp, keep_empty=True)
+
+
 async def _learn_carried_tags(db, user_id: str, seg_ids: list[str], segs: list[dict], rid: str) -> int:
     """The owner's earlier tags (first-pass segments) teach the R34 person prints: each carried ``tagged_person_id`` line's embedding joins that
     person's pendant print in THIS model (the same rules as ``omi_voices.tag``: learning allowed, never a child)."""
@@ -787,6 +829,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                 carried = carry_labels(segs, old)
                 former = sorted({o["voice_cluster_id"] for o in old if o.get("voice_cluster_id")})
                 pending_wearer_labels = [o for o in old if o.get("owner_label") == "you"]
+                frozen: list = []
                 try:
                     # ONE explicit transaction: asyncpg auto-commits each statement outside one (AsyncpgCompat.commit() is a no-op), so without it a failure
                     # between the segment delete and the recording update would leave the owner's original lines gone and nothing in their place
@@ -797,6 +840,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         try:
                             tagged_old = [o["id"] for o in old if o.get("tagged_person_id")]
                             if tagged_old:
+                                frozen = await _frozen_contributions(db, uid, tagged_old)         # a stopped print keeps these: relinked to the new line ids below
                                 await omi_voices._release_contributions(db, uid, tagged_old, keep_empty=True, skip_frozen=True)
                         except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
                             if not omi_voices._missing(exc):
@@ -817,6 +861,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                                 vals += [s["person"], s.get("person_score")]
                             if sets:
                                 await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
+                        await _relink_frozen(db, frozen, old, ids, segs)
                         untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
                         if untagged and adult:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
                             await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)

@@ -1466,3 +1466,26 @@ def test_mark_overlaps_never_overrides_a_carried_human_decision():
             {"start_ms": 0, "end_ms": 4000}]
     assert ov.mark_overlaps(segs, [(0, 4000)]) == 1
     assert segs[0]["not_person"] is None and segs[1]["not_person"] == "zoe"
+
+
+def test_frozen_print_contributions_are_relinked_to_the_replacement_line_so_a_correction_releases_them(env, monkeypatch):
+    """Review (re-pass): a stopped print keeps its contributions through a segment replacement, but they were keyed to the DELETED first-pass ids, so correcting the replacement line
+    released nothing. Negative control: the un-relinked id releases nothing; the relinked one releases the contribution. A line with no matching replacement drops its contribution."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    old = [dict(zip(("id", "start_ms", "end_ms", "tagged_person_id"), r)) for r in env.db.q(
+        "SELECT id, start_ms, end_ms, tagged_person_id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    assert len(old) == 2
+    frozen = run(rp._frozen_contributions(env.db, A, [o["id"] for o in old]))
+    assert len(frozen) == 2
+    # the replacement lines: one covering the first old line with the carried tag, nothing for the second
+    new_id = "replacement-line-1"
+    segs = [{"start_ms": old[0]["start_ms"], "end_ms": old[0]["end_ms"], "carry": {"tagged_person_id": pid}}]
+    assert run(ov._release_contributions(env.db, A, [new_id], skip_frozen=False)) == []            # control: before relinking the new id releases nothing
+    run(rp._relink_frozen(env.db, frozen, old, [new_id], segs))
+    assert env.db.q("SELECT segment_id FROM learned_voiceprint_segments") == [(new_id,)]            # the unmatched contribution was dropped, the matched one re-keyed
+    released = run(ov._release_contributions(env.db, A, [new_id], keep_empty=True))
+    assert [r[0] for r in released] == [new_id] and env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(0,)]
