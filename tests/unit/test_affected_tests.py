@@ -319,7 +319,8 @@ def test_lanes_mirror_validate_workflow():
     assert re.search(r"pytest services/zoe-data/tests -m ci_safe", job)
     assert "--ignore=services/zoe-data/tests/samantha_live" in job
     assert lanes["zoe-data"].marker == "ci_safe" and lanes["zoe-data"].pythonpath == ("services/zoe-data",)
-    assert re.search(r'PYTHONPATH="\$\{\{ github.workspace \}\}:\$\{\{ github.workspace \}\}/services/zoe-data" pytest', job)
+    # tests/unit: repo root + zoe-data (CI also adds tools/ci for its shard plugin, which a local run does not load)
+    assert re.search(r'PYTHONPATH="\$\{\{ github.workspace \}\}:\$\{\{ github.workspace \}\}/services/zoe-data[:"]', job)
     assert re.search(r"tests/unit -m ci_safe", job) and lanes["tests-unit"].pythonpath == (".", "services/zoe-data")
     assert re.search(r"services/zoe-auth/tests \\\n\s+--maxfail", job) and lanes["zoe-auth"].marker is None
     for f in lanes["ha-bridge"].only_files + lanes["people-mempalace"].only_files:
