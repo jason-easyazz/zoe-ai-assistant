@@ -248,12 +248,12 @@ def _subject_re(subject: str, lazy: bool = False):
     if stem:
         # a name typed with a stray s ("kais 21 not 22" for Kai): the word as typed, or without its s
         return re.compile(rf"(?<![A-Za-z0-9'’])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9])", re.IGNORECASE)
-    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?:s(?=:))?(?![A-Za-z0-9])", re.IGNORECASE)   # "Kais: 21" is Kai's row
+    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)   # exactly the word: "Carlo" never reaches "Carlos: 22"
 
 
 _AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
 # the compact "Name: 22" row: the colon must come right after the subject, and a number that is the hour of a time ("10:22") is no age
-_COMPACT_AGE = re.compile(rf"^(?P<pre>\s*:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?!:\d)(?P<post>{_YEARS})", re.IGNORECASE)
+_COMPACT_AGE = re.compile(rf"^(?P<pre>\s*:\s*)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?!:\d)(?P<post>{_YEARS})(?=\s*(?:[,;.(]|$))", re.IGNORECASE)
 
 
 def _age_matches(tail: str) -> list:

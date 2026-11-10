@@ -399,3 +399,21 @@ def test_a_list_or_calendar_ask_makes_no_memory_row(text):
 ])
 def test_negative_controls_a_real_note_is_still_kept(text, row):
     assert [c.text for c in memory_extractor._mine_templates(text, text, set())] == [row]
+
+
+def test_exact_name_never_consumes_another_names_final_s():
+    from value_correction import Correction, rewrite
+
+    corr = Correction("Carlo", "21", "22", True)
+    assert rewrite("Carlo: 22", corr) == "Carlo: 21"
+    assert rewrite("Carlos: 22", corr) is None
+
+
+def test_compact_age_row_ignores_a_number_that_starts_another_attribute():
+    from value_correction import Correction, rewrite
+
+    corr = Correction("Kai", "21", "22", True)
+    assert rewrite("Kai: 22 Willow Street", corr) is None
+    assert rewrite("Kai: 22", corr) == "Kai: 21"
+    assert rewrite("Kai: 22 years old", corr) == "Kai: 21 years old"
+    assert rewrite("Kai: 22, likes trains", corr) == "Kai: 21, likes trains"
