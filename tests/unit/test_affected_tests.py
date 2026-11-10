@@ -447,6 +447,18 @@ def test_lander_pattern_is_argv_anchored(cmdline, hit):
     assert bool(re.search(at.LANDER_RE, cmdline)) is hit
 
 
+@pytest.mark.parametrize("gate_rc,busy", [(0, True), (1, False)])
+def test_night_busy_gate_pauses_test_runs(tmp_path, monkeypatch, gate_rc, busy):
+    gate = tmp_path / "night_busy.sh"
+    gate.write_text(f'[ "$1" = test ] || exit 9\nexit {gate_rc}\n')
+    monkeypatch.setenv("AFFECTED_TESTS_NIGHT_BUSY", str(gate))
+    monkeypatch.setattr(at, "LANDER_RE", r"^no-such-lander-ever$")
+    assert at._night_pause() is busy
+    assert (at._box_busy(0) is not None) is busy
+    monkeypatch.setenv("AFFECTED_TESTS_NIGHT_BUSY", str(tmp_path / "absent.sh"))   # off-host: never a pause
+    assert at._night_pause() is False
+
+
 def test_referenced_unknown_file_type_still_falls_back_to_full(repo):
     _edit(repo, "services/zoe-data/models/head.npz", "x")
     _edit(repo, "services/zoe-data/tests/test_lists.py",

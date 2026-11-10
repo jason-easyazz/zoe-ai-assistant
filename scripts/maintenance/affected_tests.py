@@ -30,7 +30,8 @@ What it does
 4. Runs ONLY the selected tests, one pytest per lane (lanes cannot share a
    process — see tests/AGENTS.md), each under ``/tmp/zoe-test-lane.lock``
    (``flock(2)``, the same lock ``flock(1)`` takes), niced, never ``-n``,
-   after waiting out a running voice lander and low MemAvailable. Exits with
+   after waiting out a running voice lander, the night window / backup
+   (``night_busy.sh test``) and low MemAvailable, re-checked under the lock. Exits with
    the real pytest rc (first failing lane's rc).
 
 Safe by default — it falls back to the FULL lane(s) and says why when:
@@ -879,17 +880,33 @@ def _mem_available_mb() -> int | None:
     return None
 
 
+def _night_pause() -> bool:
+    """scripts/AGENTS.md rule (3): agent test runs pause while the night window or the backup runs (RAM).
+    The gate is `night_busy.sh test` (exit 0 = pause). Off-host (no script, no systemd) it is never a pause."""
+    gate = os.environ.get("AFFECTED_TESTS_NIGHT_BUSY") or str(REPO / "scripts/landing/night_busy.sh")
+    if not Path(gate).is_file():
+        return False
+    try:
+        return subprocess.run(["bash", gate, "test"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def wait_for_box(lander_wait_s: int, mem_min_mb: int, mem_wait_s: int) -> None:
-    """landings outrank test runs; low memory waits (bounded, then proceeds)."""
+    """landings outrank test runs, the night window / backup pause them; low memory waits (bounded, then
+    proceeds)."""
     deadline = time.monotonic() + lander_wait_s
-    announced = False
+    announced = ""
     while lander_wait_s > 0 and time.monotonic() < deadline:
-        r = subprocess.run(["pgrep", "-f", LANDER_RE], capture_output=True)
-        if r.returncode != 0:
+        if subprocess.run(["pgrep", "-f", LANDER_RE], capture_output=True).returncode == 0:
+            why = "a voice landing is running; waiting for it (landings outrank test runs)"
+        elif _night_pause():
+            why = "the night window or the backup is running; test runs pause (night_busy.sh test)"
+        else:
             break
-        if not announced:
-            log("[affected-tests] a voice landing is running; waiting for it (landings outrank test runs)")
-            announced = True
+        if why != announced:
+            log(f"[affected-tests] {why}")
+            announced = why
         time.sleep(30)
     deadline = time.monotonic() + mem_wait_s
     while mem_min_mb > 0 and time.monotonic() < deadline:
@@ -931,6 +948,8 @@ class LaneLock:
 def _box_busy(mem_min_mb: int) -> str | None:
     if subprocess.run(["pgrep", "-f", LANDER_RE], capture_output=True).returncode == 0:
         return "a voice landing is running"
+    if _night_pause():
+        return "the night window or the backup is running"
     mem = _mem_available_mb()
     if mem_min_mb and mem is not None and mem < mem_min_mb:
         return f"MemAvailable {mem} MB < {mem_min_mb} MB"
