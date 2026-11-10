@@ -217,11 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     ap.add_argument("--check", action="store_true", help="exit 1 when the doc is stale or a writer module has no note")
+    ap.add_argument("--out", type=Path, default=None, help=f"output path (default: <repo>/{MAP_REL}; a local, gitignored file)")
     args = ap.parse_args(argv)
     writers = collect(args.repo)
     notes = load_notes(args.repo)
     text = render(writers, notes)
-    target = args.repo / MAP_REL
+    target = args.out or args.repo / MAP_REL
     print(f"memory writers: {count_sites(writers)} write sites in {len(writers)} modules")
     gaps = missing_notes(writers, notes)
     if args.check:
@@ -230,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
             print("modules with no role note: " + ", ".join(gaps))
             ok = False
         if not target.exists() or target.read_text(encoding="utf-8") != text:
-            print(f"{MAP_REL} is stale - rerun: python3 tools/audit/memory_writer_map.py")
+            print(f"{target} is stale - rerun: python3 tools/audit/memory_writer_map.py")
             ok = False
         return 0 if ok else 1
     target.write_text(text, encoding="utf-8")
