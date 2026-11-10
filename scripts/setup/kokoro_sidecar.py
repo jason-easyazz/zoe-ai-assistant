@@ -35,6 +35,7 @@ import io
 import json
 import logging
 import os
+import re
 import struct
 import sys
 import threading
@@ -61,6 +62,13 @@ logger = logging.getLogger(__name__)
 
 _PORT = int(os.environ.get("KOKORO_SIDECAR_PORT", "10201"))
 _VOICE = os.environ.get("KOKORO_VOICE", "af_sky").strip() or "af_sky"
+# A request's `voice` must be a bare Kokoro voice id (af_sky, bf_emma, ...), the same
+# shape zoe-data's voice_settings._VOICE_NAME_RE enforces. KPipeline.load_voice treats
+# a value ending in ".pt" as a FILESYSTEM PATH and torch.load()s it, and a "," value
+# as a blend of several such loads -- so an unchecked string is a torch.load of a
+# caller-chosen file (the weights_only-unpickler RCE class, GHSA-63cw-57p8-fm3p, on
+# the held Jetson torch 2.8.0). Ids only: no ".", "/", "," or path traversal.
+_VOICE_NAME_RE = re.compile(r"^[a-z0-9_]{2,64}$")
 _SAMPLE_RATE = 24000  # Kokoro outputs 24 kHz
 
 # Backend: KPipeline on CUDA (~2.3GB, ~150ms), falling back to CPU on its own if
@@ -852,6 +860,14 @@ class SynthRequest(BaseModel):
     speed: float = 1.0
 
 
+def _checked_voice(raw: str | None) -> str:
+    """The request's voice id, or HTTP 400 if it is not a bare voice id."""
+    voice = (raw or _VOICE).strip() or _VOICE
+    if not _VOICE_NAME_RE.fullmatch(voice):
+        raise HTTPException(status_code=400, detail="voice must be a Kokoro voice id")
+    return voice
+
+
 @app.get("/health")
 async def health():
     body = {
@@ -876,7 +892,7 @@ async def synthesize(req: SynthRequest):
     if _pipeline is None:
         raise HTTPException(status_code=503, detail="Kokoro model not loaded")
 
-    voice = (req.voice or _VOICE).strip() or _VOICE
+    voice = _checked_voice(req.voice)
 
     # Fast path: serve pre-synthesised / previously-synthesised WAV instantly.
     # Cacheable for ANY voice — the key is voice-scoped, so a non-default voice
@@ -929,7 +945,7 @@ async def synthesize_stream(req: SynthRequest):
         raise HTTPException(status_code=400, detail="text is required")
     if _pipeline is None:
         raise HTTPException(status_code=503, detail="Kokoro model not loaded")
-    voice = (req.voice or _VOICE).strip() or _VOICE
+    voice = _checked_voice(req.voice)
     speed = req.speed
     _DONE = object()
 

@@ -17,6 +17,24 @@
 # against the PR head) — a green `validate` is not enough.
 # labs/flue-zoe-telegram-2x is a front-door channel, not voice path, but
 # deploy.yml also rebuilds + restarts it on change: check the bot after merge.
+#
+# SECURITY updates are NOT configured here. This file drives VERSION updates
+# only; whether Dependabot also opens PRs for security ALERTS is the repo setting
+# "Dependabot security updates" (`gh api repos/<owner>/<repo>/automated-security-fixes`).
+# The `ignore:` lists below also apply to those security PRs, so a held pin's
+# alert gets no bot PR: it stays an open alert, triaged by hand.
+#
+# TRANSITIVE fixes under a held parent (@flue/*, @earendil-works/pi-*) go in the
+# lab's package.json `overrides` — the parents pin exact versions, so the lock
+# alone cannot move. A dependency inside a package that ships npm-shrinkwrap.json
+# (pi-coding-agent does) CANNOT be overridden; it moves only with the parent.
+#
+# Every LIVE manifest must be listed below, or its drift is silent until an
+# alert fires. Not listed on purpose: scripts/setup/requirements-kokoro.txt
+# (every entry is a held voice pin and nothing is installed from it — it is the
+# drift manifest for the system-site-packages Kokoro venv) and the panel-Pi
+# manifests (services/omi-sync, services/panel-bluetooth: operator-installed on
+# the Pi). Alerts still fire for them; triage by hand.
 
 version: 2
 updates:
@@ -111,3 +129,30 @@ updates:
       - dependency-name: "scipy"            # 1.18+ needs numpy>=2 and Python>=3.12; the numpy<2 ceiling holds (chromadb + both voice rocks), so it cannot resolve (#2074); patches within 1.17.x still flow
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "livekit-protocol" # lane-specific on purpose: py312 lane 1.1.27, the 3.10 rollback manifest holds 1.1.8 (STEP_UP_DIVERGENCE in tests/unit/test_zoe_data_py312_cutover.py, #2074); move each lane by hand, never auto-bump the rollback pin
+
+  # LIVE container (homeassistant-mcp-bridge). Every transitive dep is pinned
+  # exactly (requirements.txt header), so a grouped weekly PR is the only way
+  # they move. deploy.yml does NOT rebuild this image: after a merge, run
+  # `docker compose build homeassistant-mcp-bridge && docker compose up -d
+  # homeassistant-mcp-bridge` or the pin change never reaches the box.
+  - package-ecosystem: pip
+    directory: /services/homeassistant-mcp-bridge
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
+
+  # LIVE container (zoe-auth). deploy.yml rebuilds it when services/zoe-auth/
+  # changes. fastapi + pydantic move together (requirements.txt header).
+  - package-ecosystem: pip
+    directory: /services/zoe-auth
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies]
+    groups:
+      pip-minor-patch:
+        update-types: [minor, patch]
