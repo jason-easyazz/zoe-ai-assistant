@@ -94,6 +94,12 @@ LANES: tuple[Lane, ...] = (
                      "services/homeassistant-mcp-bridge/tests/test_ha_tool_names.py"),
          extra_args=("--override-ini=asyncio_mode=auto",)),
 )
+LANES += (
+    # validate.yml's "People MemPalace integration cleanup" step: one file, run by path
+    Lane("people-mempalace", "tests/integration", None, ("services/zoe-data",), None,
+         only_files=("tests/integration/test_people_mempalace_sync.py",),
+         extra_args=("--override-ini=asyncio_mode=auto",)),
+)
 LANE_ENV = {"ZOE_DATA_DB": ":memory:", "ZOE_MEMORY_STARTUP_STRICT": "false"}
 
 HUB_FRACTION = 0.5
@@ -543,6 +549,8 @@ def _kind(rel: str) -> str:
     ext = ("." + n.rsplit(".", 1)[-1]) if "." in n else ""
     if n == "conftest.py":
         return "conftest"
+    if "/alembic/" in rel or rel.endswith("/alembic.ini"):
+        return "migration"
     if n in GLOBAL_CONFIG and "/" not in rel:
         return "global-config"
     if DEP_RE.search(rel):
@@ -720,6 +728,13 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
                     sel.lane_full.setdefault(ln.name, f"{p} changed (lane dependencies)")
             else:
                 sel.full_all_reason = sel.full_all_reason or f"{p} changed (dependency manifest outside a lane)"
+        elif k == "migration":
+            # a migration changes the schema every DB-backed test builds (#2323: a new 0070 revision broke
+            # eleven migration / data-model tests that never name it): every lane that runs that service's code
+            svc = "/".join(p.split("/")[:2]) if p.startswith("services/") else None
+            owner = [ln for ln in LANES if svc and (ln.service_dir == svc or svc in ln.pythonpath)]
+            for ln in owner or LANES:
+                sel.lane_full.setdefault(ln.name, f"{p} changed (a schema migration)")
         elif k == "conftest":
             hit = [ln for ln in LANES if p in _conftests_for(g, ln)]
             for ln in hit:
@@ -776,7 +791,7 @@ def select(root: Path, changed: list[tuple[str, str]], files: list[str] | None =
     reached_tests = {t for lane in LANES for t in _lane_tests(g, lane) if t in seen}
     for p in paths:
         k = kinds[p]
-        if k in ("doc", "conftest", "deps", "global-config"):
+        if k in ("doc", "conftest", "deps", "global-config", "migration"):
             continue
         if reached_tests & set(per_file[p]) or (_is_test_file(p) and lane_of(p)):
             continue

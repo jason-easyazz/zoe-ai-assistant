@@ -134,6 +134,13 @@ def test_module_a_conftest_uses_directly_falls_back_to_the_full_lane(repo):
     assert lane["mode"] == "full" and "fixture_state.py" in lane["reason"]
 
 
+def test_schema_migration_falls_back_to_the_full_lane(repo):
+    _edit(repo, "services/zoe-data/alembic/versions/0001_x.py", "revision = '0001'\n")
+    _, s = _run(repo, "--dry-run")
+    lane = next(ln for ln in s["lanes"] if ln["lane"] == "zoe-data")
+    assert lane["mode"] == "full" and "migration" in lane["reason"]
+
+
 @pytest.mark.parametrize("rel", ["pytest.ini", "services/zoe-data/requirements.txt"])
 def test_config_and_dependency_changes_fall_back_to_full(repo, rel):
     _edit(repo, rel, "# changed\n")
@@ -280,7 +287,7 @@ def test_lanes_mirror_validate_workflow():
     assert re.search(r'PYTHONPATH="\$\{\{ github.workspace \}\}:\$\{\{ github.workspace \}\}/services/zoe-data" pytest', job)
     assert re.search(r"tests/unit -m ci_safe", job) and lanes["tests-unit"].pythonpath == (".", "services/zoe-data")
     assert re.search(r"services/zoe-auth/tests \\\n\s+--maxfail", job) and lanes["zoe-auth"].marker is None
-    for f in lanes["ha-bridge"].only_files:
+    for f in lanes["ha-bridge"].only_files + lanes["people-mempalace"].only_files:
         assert f in job
     for k, v in at.LANE_ENV.items():
         assert f'{k}: "{v}"' in job
