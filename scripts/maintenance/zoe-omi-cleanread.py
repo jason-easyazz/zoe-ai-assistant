@@ -76,7 +76,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
 
     async def llm(text: str):
         if primary is None:
-            return None
+            return await second(text) if second is not None else None      # a fallback-only config still uses the model it was given
         try:
             return await primary(text)
         except Exception:  # noqa: BLE001 - the 12B did not answer: the second server, else the deterministic cleaner

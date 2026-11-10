@@ -866,23 +866,24 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
     try:
         from db_compat import get_compat_db
         n = 0
-        try:
-            import omi_repass
-            import omi_repass_eval
-            n += omi_repass_eval.erase_entity(omi_repass.home_dir(), user_id, rx, _FORGOTTEN_MARK)       # the re-pass's stored hypotheses naming it
-        except Exception as exc:  # noqa: BLE001
-            if strict:
-                raise
-            # not strict, but still never leave forgotten text behind: the hypotheses are private, week-long and regenerable, so drop ALL of the member's
-            logger.error("omi_recordings: re-pass hypotheses could not be redacted (%s) - dropping the member's hypotheses instead", type(exc).__name__)
+        async with erase_gate.erasing(user_id, bump=False):
+            # the hypotheses are rewritten INSIDE the gate the hypothesis writer also takes (``writing``): a write in flight lands first and is erased with the rest, a queued one runs after and is redacted against the ledger
             try:
                 import omi_repass
                 import omi_repass_eval
-                n += omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
-            except Exception as exc2:  # noqa: BLE001 - nothing proves the forgotten text is gone: fail the erase (a strict caller retries; the outer handler logs)
-                logger.error("omi_recordings: re-pass hypotheses NOT erased for a forgotten entity (%s)", type(exc2).__name__)
-                raise
-        async with erase_gate.erasing(user_id, bump=False):
+                n += omi_repass_eval.erase_entity(omi_repass.home_dir(), user_id, rx, _FORGOTTEN_MARK)       # the re-pass's stored hypotheses naming it
+            except Exception as exc:  # noqa: BLE001
+                if strict:
+                    raise
+                # not strict, but still never leave forgotten text behind: the hypotheses are private, week-long and regenerable, so drop ALL of the member's
+                logger.error("omi_recordings: re-pass hypotheses could not be redacted (%s) - dropping the member's hypotheses instead", type(exc).__name__)
+                try:
+                    import omi_repass
+                    import omi_repass_eval
+                    n += omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+                except Exception as exc2:  # noqa: BLE001 - nothing proves the forgotten text is gone: fail the erase (a strict caller retries; the outer handler logs)
+                    logger.error("omi_recordings: re-pass hypotheses NOT erased for a forgotten entity (%s)", type(exc2).__name__)
+                    raise
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, transcript, audio_path FROM omi_recordings WHERE user_id = ? AND status = 'done'", (user_id,)):
                     text = r["transcript"] or ""

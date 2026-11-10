@@ -271,3 +271,32 @@ def test_guard_normalisation_matches_the_labs_measured_one_times_numbers_and_fil
     assert oc.guard("so you know we went to to the shops today after work", "So we went to the shops today after work.").ok   # "you know" and the stutter are free
     assert oc.request("some words here", "m")["chat_template_kwargs"] == {"enable_thinking": False}          # the lab's request shape
     assert oc.guard("we went to the shops", "we went to the shop").reason == "not_subsequence"             # a changed word is still refused
+
+
+def test_cleanread_cli_with_only_a_fallback_url_uses_that_model(monkeypatch):
+    """Review: --fallback-url alone built ``second`` but llm() returned None, silently falling back to the deterministic cleaner."""
+    import db_pool
+    script = Path(__file__).resolve().parents[3] / "scripts" / "maintenance" / "zoe-omi-cleanread.py"
+    spec = importlib.util.spec_from_file_location("zoe_omi_cleanread_cli", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setenv("ZOE_OMI_CLEAN_READ", "on")
+    called: list = []
+
+    def fake_from_url(url, name):
+        async def f(text):
+            called.append(url)
+            return "cleaned"
+        return f
+
+    async def fake_run(*, llm, budget_s, limit):
+        return {"status": "ok", "answer": await llm("x") if llm else "no-llm"}
+
+    async def noop():
+        return None
+    monkeypatch.setattr(oc, "llm_from_url", fake_from_url)
+    monkeypatch.setattr(oc, "run", fake_run)
+    monkeypatch.setattr(db_pool, "init_pool", noop)
+    monkeypatch.setattr(db_pool, "close_pool", noop)
+    rc, summary = run(mod.amain(["--fallback-url", "http://127.0.0.1:9/v1"]))
+    assert rc == 0 and summary["answer"] == "cleaned" and called == ["http://127.0.0.1:9/v1"]

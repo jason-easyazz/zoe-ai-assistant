@@ -506,3 +506,32 @@ def test_flag_off_redaction_stays_fail_open_even_when_the_ledger_modules_cannot_
     assert run(omi._redact_forgotten("u1", "Dana called")) == "Dana called"
     with pytest.raises(Exception):
         run(omi._redact_forgotten("u1", "Dana called", strict=True))
+
+
+def test_entity_erase_rewrites_hypotheses_inside_the_gate_so_a_write_in_flight_cannot_survive_it(renv, tmp_path, monkeypatch):
+    """Review: the hypothesis rewrite used to run BEFORE the erase gate, so a writer holding ``writing`` could land forgotten text after it."""
+    import re as _re
+    home = Path(rp.home_dir())
+    (home / "hyps").mkdir(parents=True, exist_ok=True)
+    f = home / "hyps" / "hyps-2026-11-10.jsonl"
+    f.write_text("")
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def writer():
+            async with erase_gate.writing("m1", erase_gate.generation("m1")):
+                entered.set()
+                await release.wait()
+                f.write_text(json.dumps({"u": "m1", "rid": "r1", "hyps": {"e": "Dana called"}, "rover": "Dana called", "slots": []}) + "\n")
+
+        w = asyncio.ensure_future(writer())
+        await entered.wait()
+        er = asyncio.ensure_future(omi.erase_entity("m1", _re.compile("Dana"), strict=True))
+        await asyncio.sleep(0.05)
+        assert not er.done()                          # the erase is queued behind the in-flight write, not racing past it
+        release.set()
+        await w
+        await er
+    run(scenario())
+    assert "Dana" not in f.read_text() and "[forgotten]" in f.read_text()
