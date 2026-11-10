@@ -135,10 +135,15 @@ def test_polly_only_in_local_mode_is_not_reviewed(rig):
     assert r.returncode == 2 and rig.calls() == [], r.stderr
 
 
-@pytest.mark.parametrize("rng", ["--output=/tmp/x..HEAD", "HEAD", "HEAD~1..-p", "a b..HEAD", "HEAD;id..HEAD", ""])
+@pytest.mark.parametrize("rng", ["--output=/tmp/x..HEAD", "HEAD", "HEAD~1..-p", "a b..HEAD", "HEAD;id..HEAD", "",
+                                 "HEAD....HEAD", "HEAD~1..HEAD..HEAD", "nosuchref..HEAD"])
 def test_a_range_that_is_not_two_plain_revisions_is_refused(rig, rng):
     r = rig.run(rng=rng)
     assert r.returncode == 1 and rig.calls() == [] and not [c for c in rig.git_calls() if " diff " in f" {c} "], r.stderr
+
+
+def test_a_three_dot_range_from_the_merge_base_is_accepted(rig):
+    assert rig.run(rng="HEAD~1...HEAD").returncode == 0
 
 
 def test_an_empty_diff_is_not_reviewed(rig):

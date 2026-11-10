@@ -158,6 +158,14 @@ if [ "${1:-}" = --local ]; then
   LOCAL_REPO="${CROSS_REVIEW_LOCAL_REPO:-$(git rev-parse --show-toplevel 2>/dev/null)}"
   [ -n "$LOCAL_REPO" ] && git -C "$LOCAL_REPO" rev-parse -q --verify HEAD >/dev/null 2>&1 \
     || { echo "ALARM: --local must run inside a git checkout (or set CROSS_REVIEW_LOCAL_REPO)" >&2; exit 1; }
+  # exactly ONE separator, and each side must name a commit (`a..b..c`, `HEAD....HEAD` are refused, not reviewed as something else)
+  _sep='..'; case "$LOCAL_RANGE" in *...*) _sep='...';; esac
+  _base="${LOCAL_RANGE%%"$_sep"*}"; _head="${LOCAL_RANGE#*"$_sep"}"
+  for _rev in "$_base" "$_head"; do
+    case "$_rev" in *..*) echo "ALARM: --local range has more than one separator: $LOCAL_RANGE" >&2; exit 1;; esac
+    git -C "$LOCAL_REPO" rev-parse -q --verify --end-of-options "$_rev^{commit}" >/dev/null 2>&1 \
+      || { echo "ALARM: --local: '$_rev' is not a commit in $LOCAL_REPO" >&2; exit 1; }
+  done
   PR=0   # only names the scratch dir review-0-<pid>-XXXXXX (the stale sweep's shape); never used as a PR number
   LABEL="the local diff $LOCAL_RANGE (not pushed, no PR yet)"
 else
