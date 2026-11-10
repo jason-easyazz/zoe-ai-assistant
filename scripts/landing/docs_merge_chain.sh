@@ -47,7 +47,9 @@ for PR in "$@"; do
       if RESOLVE_BEHIND=1 $P_RESOLVE "$PR"; then updated=$((updated+1)); log "#$PR branch updated locally + inventory regenerated (#$updated)"; sleep "$STEP_S"; continue; fi
       gh pr update-branch "$PR" >/dev/null 2>&1 && { updated=$((updated+1)); log "#$PR branch updated (#$updated)"; sleep "$STEP_S"; continue; }
     fi
-    if [ "$armed" = false ] && [ "$pend" = 0 ] && [ "$(gh pr view "$PR" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then gh pr merge "$PR" --squash --auto ${head:+--match-head-commit "$head"} >/dev/null 2>&1 && log "#$PR auto-merge armed (threads 0, required checks green)"; fi
+    if [ "$armed" = false ] && [ "$pend" = 0 ] && [ "$(gh pr view "$PR" --json isDraft --jq .isDraft 2>/dev/null)" = false ]; then gh pr merge "$PR" --squash --auto ${head:+--match-head-commit "$head"} >/dev/null 2>&1 && log "#$PR auto-merge armed (threads 0, required checks green)"
+      # a hold taken between the check above and this arm: drop it again at once (the lander's pre-arm sweep is the backstop)
+      landing_voice_hold_active >/dev/null && gh pr merge "$PR" --disable-auto >/dev/null 2>&1 && log "#$PR auto-merge dropped again: a voice hold appeared"; fi
     sleep "$STEP_S"
   done
 done; log "CHAIN DONE"

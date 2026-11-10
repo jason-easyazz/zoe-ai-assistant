@@ -75,7 +75,6 @@ wait_deploy(){ for i in $(seq 1 90); do git fetch -q --no-write-fetch-head origi
     if [ "${inprog:-0}" = 0 ] && { [ "${done_for_M:-0}" -ge 1 ] || [ $age -ge 480 ]; }; then return; fi; need_probe_time "waiting for the main deploy"; log "waiting for main ${M:0:8} deploy"; sleep 15; done; }
 # never probe within 3 min of a sidecar / zoe-data restart (cold prompt cache -> CANT_DO storm)
 for svc in flue-zoe-brain-2x zoe-data; do ts=$(systemctl --user show -p ExecMainStartTimestamp --value $svc); age=$(( $(date +%s) - $(date -d "$ts" +%s 2>/dev/null || echo 0) )); [ $age -lt 180 ] && { log "$svc restarted ${age}s ago - waiting"; sleep $((180-age)); }; done
-KOKORO_TRAP=1   # lander_exit restarts Kokoro from here on
 # serialise with the docs chain (2026-10-13: #1998 merged while #1999 was armed and waiting on validate -> BEHIND -> disarmed).
 # (docs-chain wait moved BEFORE update-branch, 2026-10-13 - see above it)
 log "probe (avail $(avail))"; wait_deploy
@@ -97,10 +96,10 @@ need_probe_time "holding the brain lock"
 # 2026-10-29: the TEST-LANE lock is taken BEFORE Kokoro is stopped (landing_probe_window, landing_lib.sh): flock is not FIFO, agents' test runs
 # kept winning the lane and the probe waited 60+ min with Kokoro already stopped = Zoe mute in the daytime. A lane not won in time = exit 9, Kokoro untouched.
 landing_pre_stop(){ ! bash "$LANDING_DIR/night_busy.sh" voice && [ "$(left)" -ge 900 ]; }   # re-run after the lane wait
-run_probe(){ flock -w 120 /tmp/zoe-voice-harness.lock timeout -k 20 "$(landing_probe_timeout "$(left)")" nice -n 5 "$LANDING_PYTHON" scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir "$PWT/services/zoe-data" </dev/null 8>&- 2>&1 | grep -E 'probe —|medians|status=|SKIP|ERROR' | cut -c1-200; }
+run_probe(){ KOKORO_TRAP=1; flock -w 120 /tmp/zoe-voice-harness.lock timeout -k 20 "$(landing_probe_timeout "$(left)")" nice -n 5 "$LANDING_PYTHON" scripts/maintenance/voice_regression_probe.py --samples 20 --stt remote --service-dir "$PWT/services/zoe-data" </dev/null 8>&- 2>&1 | grep -E 'probe —|medians|status=|SKIP|ERROR' | cut -c1-200; }
 # The probe always runs to completion (capped by `timeout`); a push mid-probe shows up as artifact revision != current head below -> exit 5, nothing armed.
 PROBE_T0=$(date +%s)
-landing_probe_window $(( $(left) - 900 > 60 ? $(left) - 900 : 60 )) "$PR" "$HEAD_SHA" run_probe; PROBE_RC=$?
+landing_probe_window $(( $(left) - 900 > 60 ? $(left) - 900 : 60 )) "$PR" "$HEAD_SHA" run_probe; PROBE_RC=$?; KOKORO_TRAP=0   # the window restarted Kokoro; the trap restarts it only if we die mid-probe
 [ "$PROBE_RC" = 9 ] && { log "test lane busy, household not quiet, or the pre-stop gate said no - Kokoro untouched - exit 9"; flock -u 9; exec 9>&-; exit 9; }
 systemctl --user start kokoro-tts.service
 flock -u 9; exec 9>&-    # 2026-10-27: the probe is over - release the brain lock NOW, not after the CI / merge wait below

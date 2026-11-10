@@ -195,6 +195,16 @@ def test_taking_the_hold_fails_loudly_when_its_lock_is_busy_or_the_pr_list_unrea
     assert 'landing_voice_hold_take "$PR" || {' in code and 'landing_voice_hold_sweep "$PR" || {' in code
 
 
+def test_a_second_lander_cannot_take_over_a_live_hold(rig):
+    owner = hold_owner(rig)
+    try:
+        r = lib(rig, "landing_voice_hold_take 60; echo rc=$?")
+        now = (rig.home / "coord" / "voice-hold").read_text().split()[0]
+    finally:
+        owner.kill(); owner.wait()
+    assert "rc=1" in r.stdout and now == "50"
+
+
 def test_release_only_by_the_owner_and_an_exit_trap_releases_it(rig):
     other = lib(rig, f'echo "50 1 1 {NOON}" > "$LANDING_VOICE_HOLD"; landing_voice_hold_release; [ -e "$LANDING_VOICE_HOLD" ] && echo kept')
     assert "kept" in other.stdout, "a process that does not own the hold must not drop it"

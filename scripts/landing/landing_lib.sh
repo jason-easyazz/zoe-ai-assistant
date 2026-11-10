@@ -247,6 +247,7 @@ _hold_locked(){ mkdir -p "$(dirname "$LANDING_VOICE_HOLD")"; ( flock -w 60 5 || 
 # landing_voice_hold_take <pr>: take the hold for THIS shell ($$), then drop every other armed PR's auto-merge (recorded for re-arming).
 landing_voice_hold_take(){ _hold_locked _hold_take "$1"; }
 _hold_take(){
+  local cur; cur=$(_hold_active 2>/dev/null) && [ "$cur" != "$1" ] && return 1   # another LIVE lander's hold is never overwritten
   echo "$1 $$ $(landing_pid_start $$) $(landing_now)" > "$LANDING_VOICE_HOLD.$$" && mv -f "$LANDING_VOICE_HOLD.$$" "$LANDING_VOICE_HOLD" || return 1
   _hold_sweep "$1"
 }
