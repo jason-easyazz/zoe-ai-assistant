@@ -69,6 +69,7 @@ DECLARED: dict[str, tuple[str, str]] = {
     "wake_prewarm": (EXCEPTION, "loads the household prefix when a person wakes the panel"),
     "prefix_keeper": (EXCEPTION, "re-loads the household prefix a helper batch displaced, so the next wake is warm"),
     "contact_backfill._llm_extract_people": (REQUEST, "explicit person-triggered contact backfill"),
+    "conversation_notes": (REQUEST, "the nightly conversation-note pass and the owner-run guest backfill (never a daytime idle call)"),
 }
 # module/function prefixes that ARE a person's turn (the request is in flight when they run).
 TURN_PREFIXES = ("zoe_agent.", "nlu_extractor.", "intent_classifier_llm.", "ui_compose.", "turn:")
