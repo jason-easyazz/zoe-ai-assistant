@@ -142,6 +142,8 @@ class ShareDb(FakeDb):
             rows = [r for r in self.lists if r["name"].lower() in (name, name + " list") and not r.get("deleted")
                     and (r["visibility"] == "family" or r["user_id"] == who)]
             return sorted(rows, key=lambda r: 0 if r["user_id"] == who else 1)
+        if sql.startswith("SELECT role FROM users WHERE id = $1"):
+            return [{"role": self.users[args[1]][1]}] if args[1] in self.users else []
         if sql.startswith("SELECT name FROM users WHERE id = $1"):
             return [{"name": self.users[args[1]][0]}] if args[1] in self.users else []
         if sql.startswith("SELECT id, name, role FROM users"):
@@ -445,3 +447,20 @@ async def test_make_a_shopping_list_reuses_the_household_one_and_creates_nothing
     r = await _say(db, "alex", "make a shopping list")
     assert [x for x in db.lists if x["name"] == "Shopping"] == before        # no private twin, and the family list is untouched
     assert "already have" in r["spoken_summary"] and r["actions"][0]["list_id"] == "fam"
+
+
+@pytest.mark.asyncio
+async def test_a_recipient_who_became_a_guest_before_delivery_hears_nothing():
+    list_service.clear_recent_adds()
+    db = _house()
+    await _shared_by_alex(db)
+    db.users["blair"] = ("Blair", "guest")
+    assert await list_sharing.claim_heads_ups(db, "blair", now=T0) == []
+    assert next(p for p in db.pending if p["user_id"] == "blair")["resolved"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_groceries_household_list_is_locked_like_shopping():
+    db = _house()
+    db.lists.append({"id": "g", "user_id": "alex", "name": "Groceries", "list_type": "shopping", "visibility": "family"})
+    assert (await list_sharing.set_list_visibility(db, list_id="g", user_id="alex", share=False))["status"] == "locked"

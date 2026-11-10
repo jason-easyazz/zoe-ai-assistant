@@ -33,6 +33,7 @@ PENDING, DROPPED, DELIVERED = 0, 1, 2
 HEADS_UP_MAX_AGE = timedelta(days=14)
 MAX_PER_TURN = 2
 _GUEST_ROLES = frozenset({"guest", "kiosk"})
+_HOUSEHOLD_SHOPPING_NAMES = frozenset({"shopping", "shopping list", "groceries", "grocery", "grocery list"})
 
 
 def share_enabled() -> bool:
@@ -99,7 +100,7 @@ async def set_list_visibility(db, *, list_id: str, user_id: str, share: bool) ->
         if heads_up_enabled():
             await queue_heads_up(db, list_id=list_id, list_name=name, sharer_id=user_id)
         return {"status": "shared", "name": name, "list_type": ltype}
-    if ltype == "shopping" and name.strip().lower() == "shopping":      # THE household list; a shopping list the member named is theirs
+    if ltype == "shopping" and name.strip().lower() in _HOUSEHOLD_SHOPPING_NAMES:      # THE household list; a shopping list the member named is theirs
         return {"status": "locked", "name": name, "list_type": ltype}
     if not family:
         return {"status": "already", "name": name, "list_type": ltype}
@@ -187,6 +188,9 @@ async def claim_heads_ups(db, user_id: str, *, now: Optional[datetime] = None,
             "SELECT id, description, pre_filled_slots, created_at FROM pending_suggestions "
             "WHERE user_id = $1 AND action_type = $2 AND resolved = 0 ORDER BY created_at ASC LIMIT 10",
             user_id, HEADS_UP_ACTION)
+        who_rows = await db.fetch("SELECT role FROM users WHERE id = $1", user_id)
+        if not who_rows or str(dict(who_rows[0]).get("role") or "").lower() in _GUEST_ROLES:
+            return []           # no longer (or never) a household member: nothing is said, and the rows wait
         for r in rows:
             row = dict(r)
             made = _parse_stamp(row.get("created_at"))
