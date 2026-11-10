@@ -263,8 +263,9 @@ _hold_sweep(){
     { [ -z "$n" ] || [ "$n" = "$pr" ]; } && continue
     # record BEFORE disarming: a crash in between leaves a record (re-arming an armed PR is a no-op), never a silently lost arm
     grep -qE "^$n " "$LANDING_VOICE_HOLD_DISARMED" 2>/dev/null || echo "$n $h" >> "$LANDING_VOICE_HOLD_DISARMED"
-    timeout -k 5 30 gh pr merge "$n" --disable-auto >/dev/null 2>&1 \
-      && echo "[$(date '+%F %T')] voice-hold #$pr: auto-merge of #$n dropped while it lands (re-armed on release, bound to ${h:0:8})" >> "$LANDING_LOG"
+    if timeout -k 5 30 gh pr merge "$n" --disable-auto >/dev/null 2>&1; then
+      echo "[$(date '+%F %T')] voice-hold #$pr: auto-merge of #$n dropped while it lands (re-armed on release, bound to ${h:0:8})" >> "$LANDING_LOG"
+    else rc=1; fi   # a PR we could not disarm may still merge first: the caller must not go on as if it were held
   done < "$LANDING_VOICE_HOLD.armed.$$"
   rm -f "$LANDING_VOICE_HOLD.armed.$$"
   return "$rc"
@@ -310,7 +311,8 @@ landing_voice_hold_active(){
 }
 _hold_active(){
   local pr pid st t age max=${ZOE_LANDING_VOICE_HOLD_MAX_S:-10800} why=""
-  read -r pr pid st t < "$LANDING_VOICE_HOLD" 2>/dev/null || return 1
+  # no hold, but a list a failed re-arm kept: retry it now (every chain pass reads this), so a transient gh failure is not permanent
+  read -r pr pid st t < "$LANDING_VOICE_HOLD" 2>/dev/null || { _hold_rearm; return 1; }
   case "$max" in ''|*[!0-9]*) max=10800;; esac
   case "$t" in ''|*[!0-9]*) t=0;; esac
   age=$(( $(landing_now) - t ))

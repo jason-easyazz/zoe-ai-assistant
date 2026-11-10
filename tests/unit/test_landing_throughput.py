@@ -176,8 +176,14 @@ def test_a_failed_rearm_is_kept_and_retried_by_the_next_release_not_lost(rig):
     rec = rig.home / "coord" / "voice-hold-disarmed.txt"
     assert rec.read_text().split() == ["21", "c" * 40], "a re-arm that failed must stay recorded"
     rig.set_state({**st, "arm_fails": []})
-    lib(rig, "landing_voice_hold_take 51; landing_voice_hold_release")
+    lib(rig, "landing_voice_hold_active; true")          # no hold now: the next chain pass alone retries the kept list
     assert calls(rig, "pr merge 21 --squash --auto")[-1].endswith("c" * 40) and not rec.exists()
+
+
+def test_a_pr_the_sweep_could_not_disarm_fails_the_sweep(rig):
+    rig.set_state({"prs": {"21": {"headRefOid": "c" * 40, "armed": True}}, "threads": {}, "disarm_fails": ["21"]})
+    assert "rc=1" in lib(rig, "landing_voice_hold_sweep 50; echo rc=$?").stdout
+    assert (rig.home / "coord" / "voice-hold-disarmed.txt").read_text().split()[0] == "21"
 
 
 def test_taking_the_hold_fails_loudly_when_its_lock_is_busy_or_the_pr_list_unreadable(rig):
