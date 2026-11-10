@@ -3350,6 +3350,18 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, exc)
         result["open_loops"] = {"status": "error", "error": str(exc)}
 
+    # Phase 1.55: conversation notes (ZOE_CONVERSATION_NOTES, default OFF - a no-op without I/O when off): one short note per
+    # finished conversation of this member (and of the named guests they enrolled), in their own layer, so Zoe can pick a topic
+    # back up next time. Never a memory row; docs/knowledge/conversation-notes.md.
+    try:
+        import conversation_notes
+
+        notes_result = await conversation_notes.run_nightly(user_id)
+        if notes_result.get("status") != "off":
+            result["conversation_notes"] = notes_result
+    except Exception as exc:
+        logger.warning("dreaming: conversation notes failed user=%s: %s", user_id, exc)
+
     # Phase 1.6: proactivity selector (ZOE_PROACTIVE_SELECTOR, default OFF — a
     # no-op without I/O when off). Ranks tonight's loops/moments/events.
     try:

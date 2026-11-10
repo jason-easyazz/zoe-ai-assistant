@@ -97,6 +97,8 @@ LAYERS: dict[str, Layer] = {l.name: l for l in (
           "member_register.live_entries + render (the speaking-register line)"),
     Layer("named_guest_turns", True, "contacts_store.forget_voiceprints -> omi_voices.purge_people",
           "named_guests.accept + brain_block (the guest's name and their own past exchanges) + sync_entries (the panel feed)"),
+    Layer("conversation_notes", True, "conversation_notes.erase_entity (cascade step conversation_notes)",
+          "conversation_notes.block_for (the start-of-conversation note block)"),
 )}
 
 #: Derived layers the probe cannot drive in-process. Each key must appear in the open-problems "forget-completeness" entry.
@@ -848,13 +850,64 @@ class NamedGuests(Probe):
         self.nge.reset()
 
 
+class ConversationNotes(Probe):
+    """Conversation notes (``conversation_notes``): two notes in USER's layer, one naming FRIEND and one KEEP. Served = the real start-of-
+    conversation block for a confirmed speaker. The erase is the cascade's real step; the serve wall is the strict ledger filter."""
+
+    async def setup(self, monkeypatch, request):
+        import contextlib as _cl
+
+        import sqlalchemy as sa
+
+        import conversation_notes as cn
+        import db_compat
+        from named_guest_support import BASE, _migrate, _Sqlite
+
+        self.cn = cn
+        path = str(request.getfixturevalue("tmp_path") / "notes.db")
+        self.db = _Sqlite(path)
+        self.db.conn.executescript(BASE)
+        _migrate(sa.create_engine(f"sqlite:///{path}"), "0074_conversation_notes.py")
+
+        @_cl.asynccontextmanager
+        async def fake_db():
+            yield self.db
+        monkeypatch.setattr(db_compat, "get_compat_db", fake_db)
+        monkeypatch.setenv("ZOE_CONVERSATION_NOTES", "on")
+        monkeypatch.setattr(cn, "_verdict", lambda: True)
+        cn.reset_state()
+
+    async def seed(self):
+        cn = self.cn
+        now = time.time()
+        for i, who in enumerate((FRIEND, KEEP)):
+            convo = cn.Convo(f"k{i}", now - 3 * 86400, now - 3 * 86400 + 60, [], 4, "")
+            await cn.save(USER, "", convo, cn.Note(f"They talked about a trip with {who} and the weekend plans.", [f"trip with {who}"], "", [], ""),
+                          source="chat", status="active")
+
+    async def erase(self):
+        await self.cn.erase_entity(USER, mf.name_pattern(FRIEND), strict=True)
+
+    async def served(self):
+        self.cn.reset_state()
+        return await self.cn.block_for(USER, "probe-session")
+
+    def disable(self, monkeypatch):
+        async def keep_all(_uid, rows, **_k):
+            return list(rows), 0
+        monkeypatch.setattr(mf, "keep_unforgotten", keep_all)
+
+    async def teardown(self):
+        self.cn.reset_state()
+
+
 PROBES: dict[str, Callable[[], Probe]] = {
     "exact_words": ExactWords, "night_mind": NightMind, "digest_transcript": DigestTranscript, "memories_wall": MemoriesWall,
     "palace_reads": PalaceReads, "recall_packet": RecallPacket, "person_profile": PersonProfile,
     "relationship_graph": RelationshipGraph, "user_model_card": UserModelCard, "portrait": Portrait, "open_loops": OpenLoops,
     "proactive_candidates": ProactiveCandidates, "contact_offers": ContactOffers, "day_review": DayReview,
     "self_review": SelfReview, "night_extract": NightExtract, "now_card": NowCard, "member_register": MemberRegister,
-    "named_guest_turns": NamedGuests,
+    "named_guest_turns": NamedGuests, "conversation_notes": ConversationNotes,
 }
 
 

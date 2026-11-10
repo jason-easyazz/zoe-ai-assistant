@@ -23,6 +23,8 @@ stored anywhere new):
                               log): a record whose text names the entity is DROPPED, hash included
   * ``self_review``         - the nightly self-review's private records (``~/.zoe/self-review/``, ``self_review.erase_entity``): a
                               record of the member whose words or review name the entity is dropped and that night's report re-rendered
+  * ``conversation_notes``  - short notes about past conversations (alembic 0074, ``conversation_notes.erase_entity``): a note of the
+                              member's layer (guests' included) whose text names the entity is deleted
   * ``night_extract``       - the shadow night pre-pass's proposed facts (``~/.zoe/night-extract/``, ``night_extract.erase_entity``): a fact of the
                               member that names the entity is dropped
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
@@ -73,7 +75,7 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
               "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs",
-              "self_review", "night_extract")
+              "self_review", "night_extract", "conversation_notes")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -204,6 +206,12 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         # candidate whose text no longer names them - the person was renamed since - still goes. The name pass above covers a retry.
         return n + await omi_day_review.forget_people(user_id, res.person_ids)
 
+    async def notes_() -> int:
+        import conversation_notes
+
+        # short notes about past conversations (migration 0074): a note of the member's layer naming the entity is deleted
+        return await conversation_notes.erase_entity(user_id, rx, strict=True)
+
     async def text_logs() -> int:
         import local_text_logs
 
@@ -230,6 +238,8 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         await _step("omi_recordings", omi, res)
     if want("omi_day_review"):
         await _step("omi_day_review", omi_review, res)
+    if want("conversation_notes"):
+        await _step("conversation_notes", notes_, res)
     if want("text_logs"):
         await _step("text_logs", text_logs, res)
     if want("self_review"):
