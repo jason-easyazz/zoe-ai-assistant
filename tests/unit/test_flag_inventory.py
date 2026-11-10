@@ -111,74 +111,37 @@ def test_markdown_deterministic_and_dateless_body(fixture_repo: Path) -> None:
     assert other.split("## Production flags", 1)[1] == body
 
 
-def test_committed_inventory_matches_generator_output() -> None:
-    """Drift guard: the committed generated files match a fresh generator run.
-
-    The generator is deterministic by construction (sorted output; the only
-    date lives in the markdown header), so a byte-exact comparison is cheap
-    and honest: render with the date already committed in the markdown, then
-    require both files to match exactly. On failure, regenerate and commit:
-    ``python3 tools/audit/flag_inventory.py``.
-    """
-    md_path = _REPO / "docs" / "knowledge" / "flag-inventory.md"
-    json_path = _REPO / "docs" / "knowledge" / "flag-inventory.json"
-    committed_md = md_path.read_text(encoding="utf-8")
-    committed_json = json_path.read_text(encoding="utf-8")
-
-    m = re.search(r"^Last generated: (\d{4}-\d{2}-\d{2})\.", committed_md, re.MULTILINE)
-    assert m, "committed markdown is missing its 'Last generated: YYYY-MM-DD.' line"
-
-    data = flag_inventory.scan_repo(_REPO)
-    regen_hint = "stale inventory — rerun: python3 tools/audit/flag_inventory.py"
-    assert flag_inventory.render_markdown(data, m.group(1)) == committed_md, regen_hint
-    assert json.dumps(data, indent=2, sort_keys=True) + "\n" == committed_json, regen_hint
+def test_the_generator_runs_cleanly_on_this_tree(tmp_path: Path) -> None:
+    """The inventory is a LOCAL build product, not a committed file (2026-11-10: the committed copy conflicted on
+    nearly every concurrent PR). What this guards instead: the real generator, run exactly as a developer, the
+    deploy or a device runs it (``main()``, no network), completes on this tree and writes a parseable JSON plus a
+    markdown page that render back to each other. The INVARIANTS the inventory used to stand in for — every
+    ``ZOE_*`` read is registered, defaults agree, the legacy-read ratchet — are ``tests/unit/test_flag_registry.py``,
+    which scans the code directly."""
+    out_json, out_md = tmp_path / "flag-inventory.json", tmp_path / "flag-inventory.md"
+    assert flag_inventory.main(["--repo", str(_REPO), "--json", str(out_json), "--markdown", str(out_md)]) == 0
+    data = flag_inventory.scan_repo(_REPO)   # an independent second scan: the output must be deterministic
+    assert len(data["flags"]["prod"]) > 100, "the scan found almost no flags - the generator is not scanning this tree"
+    assert out_json.read_text(encoding="utf-8") == json.dumps(data, indent=2, sort_keys=True) + "\n"
+    md = out_md.read_text(encoding="utf-8")
+    m = re.search(r"^Last generated: (\d{4}-\d{2}-\d{2})\.", md, re.MULTILINE)
+    assert m, "the markdown lost its 'Last generated: YYYY-MM-DD.' line"
+    assert flag_inventory.render_markdown(data, m.group(1)) == md, "two scans rendered different markdown"
 
 
-def test_precommit_keeps_the_inventory_fresh_hook_wired():
-    """The freshness hook must stay wired — a stale committed inventory cost six
-    separate incidents (red CI + merge conflicts) on 2026-07-27 before it
-    existed. Pins presence and the properties that make it correct: it runs the
-    real generator, AUTO-FIXES by restaging the regenerated files (not merely
-    failing, which just moves the papercut to commit time), fires on Python
-    changes, and stays date-insensitive (the -I stamp filters), or every commit
-    on a later calendar day false-fails."""
+def test_no_precommit_hook_restages_the_generated_inventory():
+    """The old ``zoe-flag-inventory-fresh`` hook regenerated the inventory and ``git add``-ed it into every commit.
+    That is exactly what made the files conflict on every concurrent PR, so it is gone, and re-adding a hook that
+    stages a generated file would silently bring the conflicts back (they are gitignored; ``git add`` would fail)."""
     import yaml
 
     cfg = yaml.safe_load((_REPO / ".pre-commit-config.yaml").read_text())
-    # ALL local blocks, not just the first — moving the hook intact to a second
-    # `repo: local` block is correctly wired and must not false-fail (polly
-    # cross-review, non-blocking finding).
     hooks = [h for r in cfg["repos"] if r["repo"] == "local" for h in r.get("hooks", [])]
-    hook = next((h for h in hooks if h["id"] == "zoe-flag-inventory-fresh"), None)
-    assert hook is not None, "zoe-flag-inventory-fresh hook removed from pre-commit"
-    # Structural, not substring: the generator must be the FIRST command the
-    # entry executes — `echo tools/audit/flag_inventory.py …` mentions the path
-    # without running it and must fail here (Codex P2 on the earlier substring).
-    import shlex as _shlex
-    outer = _shlex.split(hook["entry"])
-    assert outer[:2] == ["bash", "-c"] and len(outer) >= 3, \
-        f"unexpected entry shape: {hook['entry']!r}"
-    script_tokens = _shlex.split(outer[2])
-    assert script_tokens[:2] == ["python3", "tools/audit/flag_inventory.py"], \
-        "entry's first command no longer executes the real generator"
-    # AUTO-FIX contract: the hook must RESTAGE the regenerated inventory (git
-    # add) so the commit carries a fresh copy — a check-only hook that just
-    # exits 1 moves the papercut to commit time (regenerate-by-hand + re-commit)
-    # instead of killing it. `git add` of the two generated files pins that.
-    assert "git add" in hook["entry"], \
-        "hook must auto-fix by restaging the regenerated inventory, not merely fail"
-    import re as _re
-    assert _re.search(hook["files"], "services/zoe-data/example.py"), \
-        "hook must fire on Python changes"
-    # scan_repo() reads .env.example for every flag's in_env_example bit — an
-    # .env.example-only commit must also trigger regeneration (Codex P2).
-    assert _re.search(hook["files"], ".env.example"), \
-        "hook must fire on .env.example changes"
-    # BOTH -I filters: the JSON's `timestamp:` line churns with the date too —
-    # dropping either filter false-fails every later-calendar-day commit while
-    # a single-filter assertion stays green (polly cross-review, blocking #1).
-    assert '-I "Last generated:"' in hook["entry"], "date-insensitivity dropped (md stamp)"
-    assert '-I "^timestamp:"' in hook["entry"], "date-insensitivity dropped (json timestamp)"
+    assert not any(h["id"] == "zoe-flag-inventory-fresh" for h in hooks)
+    for h in hooks:
+        entry = str(h.get("entry", ""))
+        for generated in ("flag-inventory", "live-state.json", "memory-writer-map"):
+            assert not ("git add" in entry and generated in entry), (h["id"], generated)
 
 
 def test_wrapper_spellings_are_scanned_and_value_shape_is_skipped(tmp_path):
