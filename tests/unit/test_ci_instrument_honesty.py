@@ -208,45 +208,122 @@ def test_self_hosted_nightly_is_not_a_required_context():
 
 
 # ── validate.yml ─────────────────────────────────────────────────────────────
+#
+# Since 2026-11-10 the required gate is SHARDED: the lanes run in parallel jobs and the job named `validate` is an
+# aggregator that `needs:` all of them (see the header of validate.yml). These checks follow the lanes into
+# whichever gate job holds them.
 
 LANE_PREFIX = "Lane — "
+AGGREGATOR = "validate"
+# The informational jobs in validate.yml: not part of the required gate, so not needed by the aggregator.
+NOT_GATE = {"zoe-data-py312", "deps-resolvable", "secret-scan"}
+# shard job -> the lane it splits and the aggregator's `--lane` label for it
+SHARD_JOBS = {"zoe-data-shard": "zoe-data", "unit-shard": "tests/unit"}
+EXPECTED_LANES = {
+    "Lane — zoe-data (ci_safe) shard",
+    "Lane — tests/unit (ci_safe) shard",
+    "Lane — Home Assistant MCP bridge",
+    "Lane — zoe-auth (full)",
+}
+SPLIT_RE = re.compile(r"--splits (\d+) --group \$\{\{ matrix\.group \}\} --splitting-algorithm duration_based_chunks")
+
+
+def gate_jobs(spec: dict) -> dict:
+    return {j: cfg for j, cfg in spec["jobs"].items() if j not in NOT_GATE and j != AGGREGATOR}
 
 
 def validate_violations(spec: dict) -> list[str]:
     out: list[str] = []
-    job = spec["jobs"]["validate"]
+    jobs = spec["jobs"]
+    agg = jobs.get(AGGREGATOR)
+    if agg is None:
+        return ["no `validate` job: the required context has no producer"]
     # The required context is the job's check-run name. A matrix, or a `name:` that is not
     # the id, renames it ("validate (3.10)") and the required context never reports.
-    if "strategy" in job:
+    if "strategy" in agg:
         out.append("`validate` has a strategy/matrix: that renames the required check")
-    if job.get("name", "validate") != "validate":
-        out.append(f"`validate` job renamed to {job.get('name')!r}")
-    if job.get("continue-on-error"):
-        out.append("`validate` is continue-on-error")
-    if job.get("runs-on") != "ubuntu-latest":
+    if agg.get("name", AGGREGATOR) != AGGREGATOR:
+        out.append(f"`validate` job renamed to {agg.get('name')!r}")
+    if agg.get("runs-on") != "ubuntu-latest":
         out.append("`validate` no longer runs on ubuntu-latest")
+    if str(agg.get("if", "")).replace(" ", "") != "${{always()}}":
+        out.append("`validate` is not `if: always()` — a failed/cancelled shard would SKIP the required context")
+    needs = agg.get("needs") or []
+    needs = [needs] if isinstance(needs, str) else list(needs)
+    gate = gate_jobs(spec)
+    if set(needs) != set(gate):
+        out.append(f"`validate` needs {sorted(needs)} but the gate jobs are {sorted(gate)}: an un-needed job cannot hold the gate")
+    verdict = "\n".join(_code_lines(agg["steps"][-1])) if agg.get("steps") else ""
+    if "toJSON(needs)" not in str((agg.get("steps") or [{}])[-1].get("env", "")) or '!= "success"' not in verdict:
+        out.append("`validate`'s last step does not fail on every needed result that is not exactly 'success'")
+    if "always()" not in str((agg.get("steps") or [{}])[-1].get("if", "")):
+        out.append("`validate`'s verdict step can be skipped")
+    agg_run = "\n".join(ln for s in agg.get("steps") or [] for ln in _code_lines(s))
+    if "tools/ci/shard_ledger.py verify" not in agg_run:
+        out.append("`validate` no longer verifies the shard ledgers (a dropped test would go unnoticed)")
 
-    steps = job["steps"]
-    for s in steps:
-        if s.get("continue-on-error"):
-            out.append(f"{s.get('name')}: continue-on-error in the required job")
-        for ln in _code_lines(s):
-            if "pytest" in ln and re.search(r"(?<!\S)-x(?!\S)|--exitfirst", ln):
-                out.append(f"{s.get('name')}: `-x` stops the run at the first failure")
+    for jname, job in [(AGGREGATOR, agg)] + list(gate.items()):
+        if job.get("continue-on-error"):
+            out.append(f"{jname} is continue-on-error")
+        for s in job.get("steps") or []:
+            if s.get("continue-on-error"):
+                out.append(f"{jname}/{s.get('name')}: continue-on-error in the required gate")
+            for ln in _code_lines(s):
+                if "pytest" in ln and re.search(r"(?<!\S)-x(?!\S)|--exitfirst", ln):
+                    out.append(f"{s.get('name')}: `-x` stops the run at the first failure")
 
-    lanes = [s for s in steps if str(s.get("name", "")).startswith(LANE_PREFIX)]
-    if len(lanes) != 4:
-        out.append(f"expected 4 separate pytest lane steps, found {len(lanes)}")
-    for s in lanes:
+    lanes = {}
+    for jname, job in gate.items():
+        for s in job.get("steps") or []:
+            if str(s.get("name", "")).startswith(LANE_PREFIX):
+                lanes[s["name"]] = (jname, s)
+    if set(lanes) != EXPECTED_LANES:
+        out.append(f"expected the 4 pytest lane steps {sorted(EXPECTED_LANES)}, found {sorted(lanes)}")
+    for name, (jname, s) in lanes.items():
         if not _is_pytest_step(s):
-            out.append(f"{s.get('name')}: no pytest invocation")
+            out.append(f"{name}: no pytest invocation")
         if not _has_tok(s, "--maxfail=200"):
-            out.append(f"{s.get('name')}: missing --maxfail=200")
+            out.append(f"{name}: missing --maxfail=200")
         if "!cancelled()" not in str(s.get("if", "")):
-            out.append(f"{s.get('name')}: runs only if an earlier lane passed")
-    py = next((s for s in steps if "setup-python" in str(s.get("uses", ""))), None)
-    if not py or str(py["with"]["python-version"]) != "3.10":
-        out.append("required `validate` job no longer pins python 3.10")
+            out.append(f"{name}: runs only if an earlier lane passed")
+
+    for jname, lane in SHARD_JOBS.items():
+        job = gate.get(jname)
+        if job is None:
+            out.append(f"shard job {jname} is missing")
+            continue
+        strat = job.get("strategy") or {}
+        groups = (strat.get("matrix") or {}).get("group")
+        if strat.get("fail-fast") is not False:
+            out.append(f"{jname}: fail-fast must be false, or one red shard cancels the others and hides their results")
+        run = "\n".join(ln for s in job["steps"] for ln in _code_lines(s))
+        m = SPLIT_RE.search(run)
+        if not m:
+            out.append(f"{jname}: no pytest-split invocation with the matrix group")
+            continue
+        n = int(m.group(1))
+        if groups != list(range(1, n + 1)):
+            out.append(f"{jname}: matrix groups {groups} do not cover --splits {n} exactly (a group would never run)")
+        if f"({{{{ matrix.group }}}}/{n})" not in str(job.get("name", "")).replace("${{ matrix.group }}", "{{ matrix.group }}"):
+            out.append(f"{jname}: the job name does not say /{n}")
+        exp = re.search(rf"--lane {re.escape(lane)} .*?--expect-shards (\d+)", agg_run, re.S)
+        if not exp or int(exp.group(1)) != n:
+            out.append(f"{jname}: the aggregator's --expect-shards for {lane} does not equal --splits {n}")
+        if "-p pytest_shard_ledger" not in run:
+            out.append(f"{jname}: the shard does not write its ledger")
+        lane_env = next((s.get("env") or {} for s in job["steps"] if str(s.get("name", "")).startswith(LANE_PREFIX)), {})
+        if "PYTEST_SHARD_LEDGER" not in lane_env:
+            out.append(f"{jname}: PYTEST_SHARD_LEDGER is not set, so the ledger plugin is inert")
+        up = [s for s in job["steps"] if "upload-artifact" in str(s.get("uses", ""))]
+        if not up or "always()" not in str(up[0].get("if", "")):
+            out.append(f"{jname}: the ledger upload is not `if: always()`")
+        if "--durations=50" not in run:
+            out.append(f"{jname}: the shard no longer prints its slowest tests")
+
+    for jname, job in gate.items():
+        deps = [s for s in job.get("steps") or [] if s.get("uses") == "./.github/actions/ci-deps"]
+        if not deps or str(deps[0]["with"]["python-version"]) != "3.10":
+            out.append(f"{jname}: the required gate no longer installs via ./.github/actions/ci-deps on python 3.10")
     return out
 
 
@@ -257,9 +334,11 @@ def test_validate_lanes_are_independent_and_not_fail_fast():
 def test_validate_check_can_fail():
     good = _load("validate.yml")
 
+    def lane(spec, name="Lane — zoe-data (ci_safe) shard"):
+        return next(s for j in gate_jobs(spec).values() for s in j["steps"] if s.get("name") == name)
+
     spec = copy.deepcopy(good)
-    lane = next(s for s in spec["jobs"]["validate"]["steps"] if str(s.get("name", "")).startswith(LANE_PREFIX))
-    lane["run"] = lane["run"].replace("--maxfail=200", "-x")
+    lane(spec)["run"] = lane(spec)["run"].replace("--maxfail=200", "-x")
     assert any("`-x`" in v for v in validate_violations(spec))
 
     spec = copy.deepcopy(good)
@@ -267,17 +346,52 @@ def test_validate_check_can_fail():
     assert any("renames the required check" in v for v in validate_violations(spec))
 
     spec = copy.deepcopy(good)
-    lane = next(s for s in spec["jobs"]["validate"]["steps"] if str(s.get("name", "")).startswith(LANE_PREFIX))
-    lane.pop("if")
+    lane(spec).pop("if")
     assert any("runs only if an earlier lane passed" in v for v in validate_violations(spec))
 
     spec = copy.deepcopy(good)
     spec["jobs"]["validate"]["name"] = "validate (3.10)"
     assert any("renamed" in v for v in validate_violations(spec))
 
+    spec = copy.deepcopy(good)
+    spec["jobs"]["validate"].pop("if")
+    assert any("always()" in v for v in validate_violations(spec))
+
+    spec = copy.deepcopy(good)
+    spec["jobs"]["validate"]["needs"] = [n for n in spec["jobs"]["validate"]["needs"] if n != "unit-shard"]
+    assert any("un-needed job" in v for v in validate_violations(spec))
+
+    spec = copy.deepcopy(good)
+    spec["jobs"]["zoe-data-shard"]["strategy"]["matrix"]["group"] = [1, 2, 3]
+    assert any("do not cover --splits" in v for v in validate_violations(spec))
+
+    spec = copy.deepcopy(good)
+    spec["jobs"]["zoe-data-shard"]["strategy"]["fail-fast"] = True
+    assert any("fail-fast" in v for v in validate_violations(spec))
+
+    spec = copy.deepcopy(good)
+    for s in spec["jobs"]["validate"]["steps"]:
+        if "run" in s:
+            s["run"] = s["run"].replace("--expect-shards 4", "--expect-shards 3")
+    assert any("--expect-shards" in v for v in validate_violations(spec))
+
+    spec = copy.deepcopy(good)
+    verdict = spec["jobs"]["validate"]["steps"][-1]
+    verdict["run"] = verdict["run"].replace('!= "success"', '== "failure"')
+    assert any("not exactly 'success'" in v for v in validate_violations(spec))
+
+    spec = copy.deepcopy(good)
+    lane(spec)["continue-on-error"] = True
+    assert any("continue-on-error" in v for v in validate_violations(spec))
+
 
 def _norm(step: dict) -> list[str]:
     return _code_lines(step)
+
+
+_SHARD_ONLY = (" -p pytest_shard_ledger",
+               " --splits 4 --group ${{ matrix.group }} --splitting-algorithm duration_based_chunks",
+               ' --store-durations --durations-path "${{ runner.temp }}/ledger/durations-zoe-data-${{ matrix.group }}.json"')
 
 
 def test_python_312_job_exists_beside_the_required_job_and_matches_its_install():
@@ -286,27 +400,36 @@ def test_python_312_job_exists_beside_the_required_job_and_matches_its_install()
     assert "validate" in jobs and "zoe-data-py312" in jobs
     assert jobs["zoe-data-py312"].get("name", "zoe-data-py312") not in ("validate", "secret-scan")
 
-    py312 = next(s for s in jobs["zoe-data-py312"]["steps"] if "setup-python" in str(s.get("uses", "")))
+    # ONE install for every lane job (the composite action), so the interpreters are the only difference.
+    py312 = next(s for s in jobs["zoe-data-py312"]["steps"] if s.get("uses") == "./.github/actions/ci-deps")
     assert str(py312["with"]["python-version"]) == "3.12"
+    action = yaml.safe_load((REPO / ".github" / "actions" / "ci-deps" / "action.yml").read_text(encoding="utf-8"))
+    names = [s.get("name") for s in action["runs"]["steps"]]
+    assert "Install slim CI deps" in names and "Install lane deps (zoe-auth, numpy, LiveKit wheels, pytest-split)" in names
 
-    def by_name(job: str, name: str) -> dict:
-        return next(s for s in jobs[job]["steps"] if s.get("name") == name)
-
-    # Byte-identical (comments aside) installs, so the two cannot drift apart.
-    assert _norm(by_name("validate", "Install slim CI deps")) == _norm(by_name("zoe-data-py312", "Install slim CI deps"))
-    lane_deps = "Install lane deps (zoe-auth, numpy, LiveKit wheels)"
-    assert _norm(by_name("validate", lane_deps)) == _norm(by_name("zoe-data-py312", lane_deps))
-
-    # The same lane command; the 3.12 job is database-free (the ci_safe contract), so it carries no
-    # Postgres service, no migrations and no password fallback literal - only the DB-free env.
+    # The same lane command as the required zoe-data shards, minus the split; the 3.12 job is database-free (the
+    # ci_safe contract), so it carries no Postgres service, no migrations and no password fallback literal.
     assert "services" not in jobs["zoe-data-py312"]
+    assert "services" not in jobs["zoe-data-shard"]
     assert not any("Alembic" in str(s.get("name", "")) for s in jobs["zoe-data-py312"]["steps"])
     lane312 = next(s for s in jobs["zoe-data-py312"]["steps"] if str(s.get("name", "")).startswith(LANE_PREFIX))
-    lane310 = by_name("validate", "Lane — zoe-data (ci_safe)")
-    strip = lambda s: [ln for ln in _norm(s) if "--version" not in ln]  # noqa: E731
-    assert strip(lane312) == strip(lane310)
-    db_free = {k: v for k, v in lane310["env"].items() if k != "POSTGRES_URL"}
-    assert lane312["env"] == db_free
+    shard = next(s for s in jobs["zoe-data-shard"]["steps"] if str(s.get("name", "")).startswith(LANE_PREFIX))
+
+    def unsplit(step: dict) -> list[str]:
+        lines = [ln for ln in _norm(step) if "--version" not in ln]
+        out = []
+        for ln in lines:
+            for frag in _SHARD_ONLY:
+                ln = ln.replace(frag, "")
+            out.append(ln)
+        return out
+
+    assert all(frag.strip() in " ".join(_norm(shard)) for frag in _SHARD_ONLY), "the shard lost its split/ledger args"
+    assert unsplit(lane312) == unsplit(shard)
+    shard_env = dict(shard["env"])
+    shard_env.pop("PYTEST_SHARD_LEDGER")
+    shard_env["PYTHONPATH"] = shard_env["PYTHONPATH"].replace(":${{ github.workspace }}/tools/ci", "")
+    assert lane312["env"] == shard_env
 
 
 def test_python_312_job_runs_on_every_pull_request():
