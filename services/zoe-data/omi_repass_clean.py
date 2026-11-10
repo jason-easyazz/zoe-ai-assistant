@@ -311,7 +311,10 @@ async def run(*, llm: Optional[Callable[[str], Any]], budget_s: float = 0.0, now
             if not live:
                 continue
             async with db_factory() as db:
-                shown = await omi._redact_forgotten(uid, r["text"])
+                try:
+                    shown = await omi._redact_forgotten(uid, r["text"])
+                except Exception:  # noqa: BLE001 - forget ledger unreadable: no display twin is stored (the raw line stays as it was)
+                    continue
                 await db.execute("UPDATE omi_segments SET clean_text = ?, clean_how = ? WHERE id = ? AND user_id = ? AND text = ?", (shown, r["how"], sid, uid, text))
                 await db.commit()
     out = summary(results)

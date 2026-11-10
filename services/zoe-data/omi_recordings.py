@@ -873,7 +873,14 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
         except Exception as exc:  # noqa: BLE001
             if strict:
                 raise
-            logger.warning("omi_recordings: re-pass hypotheses naming a forgotten entity NOT redacted (%s)", type(exc).__name__)
+            # not strict, but still never leave forgotten text behind: the hypotheses are private, week-long and regenerable, so drop ALL of the member's
+            logger.error("omi_recordings: re-pass hypotheses could not be redacted (%s) - dropping the member's hypotheses instead", type(exc).__name__)
+            try:
+                import omi_repass
+                import omi_repass_eval
+                n += omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+            except Exception as exc2:  # noqa: BLE001
+                logger.error("omi_recordings: re-pass hypotheses NOT erased for a forgotten entity (%s)", type(exc2).__name__)
         async with erase_gate.erasing(user_id, bump=False):
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, transcript, audio_path FROM omi_recordings WHERE user_id = ? AND status = 'done'", (user_id,)):
@@ -900,18 +907,22 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
 
 
 async def _redact_forgotten(user_id: str, text: str) -> str:
-    """A transcript lands AFTER a forget: redact it against the forget ledger so a forgotten name cannot come back through here."""
+    """A transcript lands AFTER a forget: redact it against the forget ledger so a forgotten name cannot come back through here.
+    FAIL CLOSED: if the ledger cannot be read the text cannot be proven free of a forgotten name, so this RAISES (``LedgerUnavailable``) and the caller
+    stores nothing - the first pass leaves the recording pending for a retry, the night re-pass reports it failed and keeps the first-pass text."""
     if not text:
         return text
+    import forget_match as fm
+    import memory_forgotten as mf
     try:
-        import forget_match as fm
-        import memory_forgotten as mf
-        spans = await mf.spans(user_id, text)
-        if spans:
-            return fm.redact(text, spans)[0]
-    except Exception as exc:  # noqa: BLE001 - the ledger being unreadable must not lose the transcript; erase_entity covers the live case
-        logger.debug("omi_recordings: forget ledger not applied (%s)", type(exc).__name__)
-    return text
+        spans = await mf.spans(user_id, text, strict=True)
+    except mf.LedgerUnavailable:
+        logger.warning("omi_recordings: forget ledger unreadable - transcript text withheld, not stored")
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("omi_recordings: forget ledger check failed (%s) - transcript text withheld, not stored", type(exc).__name__)
+        raise mf.LedgerUnavailable(type(exc).__name__) from exc
+    return fm.redact(text, spans)[0] if spans else text
 
 
 # --- transcription ------------------------------------------------------------------------------------------------------

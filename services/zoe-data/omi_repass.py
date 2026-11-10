@@ -589,8 +589,9 @@ async def household_names(db, user_id: str) -> list[str]:
             import named_guests
             if await named_guests._forgotten(user_id, n):
                 continue
-        except Exception:  # noqa: BLE001 - a ledger outage withholds nothing it cannot judge: the name is a spelling hint, not a memory
-            pass
+        except Exception as exc:  # noqa: BLE001 - FAIL CLOSED: a name that cannot be proven un-forgotten is not offered to the ASR (or written to the manifest)
+            logger.warning("OMI_REPASS household name withheld: forget ledger unreadable (%s)", type(exc).__name__)
+            continue
         out.append(n)
     return out
 
@@ -757,8 +758,11 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
             if live:
                 # REDACTION HAPPENS HERE, INSIDE THE GATE: an entity forget (``erasing(bump=False)``) does not move the generation, so it is only
                 # ordered against this write by the lock itself - redacting before we held it could store text the ledger forgot in between.
-                for sgm in segs:
-                    sgm["text"] = await omi._redact_forgotten(uid, sgm["text"])
+                try:
+                    for sgm in segs:
+                        sgm["text"] = await omi._redact_forgotten(uid, sgm["text"])
+                except Exception as exc:  # noqa: BLE001 - forget ledger unreadable: nothing is stored; the recording stays pending for the next night
+                    return {"status": "failed", "why": "forget_ledger:" + type(exc).__name__, **counts}
                 text = " ".join(sgm["text"] for sgm in segs if sgm["text"].strip()).strip()
                 counts["agree"] = word_agreement(old_text, text)
             if not live:                              # the member was erased since this was read: nothing of it survives (the first pass's rule)

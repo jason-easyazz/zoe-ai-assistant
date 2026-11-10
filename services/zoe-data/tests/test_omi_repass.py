@@ -197,7 +197,7 @@ def test_a_forgotten_span_stays_redacted_after_the_pass(renv, monkeypatch):
     transcribe(first_pass(renv) and renv, monkeypatch)
     import memory_forgotten as mf
 
-    async def fake_spans(user_id, text, *, near=True):
+    async def fake_spans(user_id, text, *, near=True, strict=False):
         i = text.find("Dana")
         return [(i, i + 4)] if i >= 0 and user_id == OWNER else []
 
@@ -207,6 +207,47 @@ def test_a_forgotten_span_stays_redacted_after_the_pass(renv, monkeypatch):
     r = rows(renv)[0]
     assert "Dana" not in r["transcript"] and r["transcript"].startswith("[forgotten]")
     assert all("Dana" not in (s["text"] or "") for s in renv.db.rows("SELECT text FROM omi_segments"))
+
+
+def _ledger_down(monkeypatch):
+    import memory_forgotten as mf
+
+    async def down(user_id, text, *, near=True, strict=False):
+        raise mf.LedgerUnavailable("down")
+    monkeypatch.setattr(mf, "spans", down)
+
+
+def test_a_forget_ledger_outage_fails_closed_nothing_is_stored(renv, monkeypatch):
+    """Forgotten means forever: when the ledger cannot be read the new text cannot be proven clean, so the first-pass transcript stays and nothing is replaced."""
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine text")
+    _ledger_down(monkeypatch)
+    rid = rows(renv)[0]["id"]
+    out = run(rp.run_night(budget_s=600, runner=fake_runner({rid: result_for(rid, ("Dana", "called", "today"))})))
+    r = rows(renv)[0]
+    assert out["replaced"] == 0 and r["transcript"] == "moonshine text" and r["repass_state"] != "done"
+    assert not any("Dana" in (x["text"] or "") for x in renv.db.rows("SELECT text FROM omi_segments"))
+
+
+def test_household_names_withholds_a_name_it_cannot_prove_unforgotten(renv, monkeypatch):
+    renv.db.conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, role TEXT)")
+    renv.db.conn.execute("INSERT INTO users VALUES ('u1', 'Billie Example', 'member')")
+    renv.db.conn.commit()
+    import named_guests
+
+    async def names():
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            return await rp.household_names(db, OWNER)
+
+    async def fine(owner, name):
+        return False
+    monkeypatch.setattr(named_guests, "_forgotten", fine)
+    assert any("Billie" in n for n in run(names()))                             # negative control: with the ledger up the name is offered
+
+    async def down(owner, name):
+        raise RuntimeError("ledger down")
+    monkeypatch.setattr(named_guests, "_forgotten", down)
+    assert run(names()) == []                                                   # ledger unreadable: nothing is offered to the ASR
 
 
 def test_control_without_a_ledger_hit_the_name_is_kept(renv, monkeypatch):
@@ -327,7 +368,7 @@ def test_a_forget_that_lands_between_redaction_and_the_write_gate_still_redacts(
     import memory_forgotten as mf
     learned = {"on": False}
 
-    async def fake_spans(user_id, text, *, near=True):
+    async def fake_spans(user_id, text, *, near=True, strict=False):
         i = text.find("Dana")
         return [(i, i + 4)] if (learned["on"] and i >= 0) else []
 

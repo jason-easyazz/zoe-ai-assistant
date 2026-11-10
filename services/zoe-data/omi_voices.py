@@ -172,32 +172,35 @@ async def store_segments(db, user_id: str, rid: str, segs: list, *, model_id: Op
     return ids
 
 
-_PANEL_CACHE: dict = {}          # (minute, window) -> panel turns; the night job asks per recording, the Pi is read once
+_PANEL_CACHE: dict = {}          # (first bucket, last bucket) -> the panel turns of the WHOLE buckets (+ margin); the night job asks per recording, the Pi is read once
+_PANEL_BUCKET_S, _PANEL_MARGIN_S = 600, 120
 
 
 def _panel_turns(t0: float, t1: float) -> list:
-    """The wall panel's voice turns around [t0, t1] (epoch s) from its voice.log - a local copy (``ZOE_OMI_ANCHOR_PANEL_LOG``) or one bounded ssh read. [] on any failure."""
+    """The wall panel's voice turns around [t0, t1] (epoch s) from its voice.log - a local copy (``ZOE_OMI_ANCHOR_PANEL_LOG``) or one bounded ssh read. [] on any failure.
+    The cache holds every turn of the buckets the key names and each call filters to ITS OWN interval, so a later recording in the same bucket is not served the first one's slice."""
     import os
     import sys
-    key = (int(t0 // 600), int(t1 // 600))
-    if key in _PANEL_CACHE:
-        return _PANEL_CACHE[key]
-    try:
-        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "lib"))
-        import panel_voice_log as pvl
-        lines = pvl.fetch_lines(env_str("ZOE_OMI_ANCHOR_PANEL_LOG", "") or None, timeout_s=20)
-        tns = [t for t in pvl.turns(pvl.events(lines)) if t.recorded_ts is not None and t0 - 120 <= t.recorded_ts.timestamp() <= t1 + 120]
+    key = (int(t0 // _PANEL_BUCKET_S), int(t1 // _PANEL_BUCKET_S))
+    lo, hi = t0 - _PANEL_MARGIN_S, t1 + _PANEL_MARGIN_S
+    if key not in _PANEL_CACHE:
+        wide_lo, wide_hi = key[0] * _PANEL_BUCKET_S - _PANEL_MARGIN_S, (key[1] + 1) * _PANEL_BUCKET_S + _PANEL_MARGIN_S
         try:
-            for i, c in pvl.match_clips(tns, pvl.corpus_index()).items():
-                tns[i].clip = c.path
-        except Exception:  # noqa: BLE001 - clips are optional: the offset then rests on the text alone
-            pass
-    except Exception as exc:  # noqa: BLE001
-        logger.info("OMI_ANCHOR panel log unreadable: %s", type(exc).__name__)
-        tns = []
-    _PANEL_CACHE.clear()
-    _PANEL_CACHE[key] = tns
-    return tns
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "lib"))
+            import panel_voice_log as pvl
+            lines = pvl.fetch_lines(env_str("ZOE_OMI_ANCHOR_PANEL_LOG", "") or None, timeout_s=20)
+            tns = [t for t in pvl.turns(pvl.events(lines)) if t.recorded_ts is not None and wide_lo <= t.recorded_ts.timestamp() <= wide_hi]
+            try:
+                for i, c in pvl.match_clips(tns, pvl.corpus_index()).items():
+                    tns[i].clip = c.path
+            except Exception:  # noqa: BLE001 - clips are optional: the offset then rests on the text alone
+                pass
+        except Exception as exc:  # noqa: BLE001
+            logger.info("OMI_ANCHOR panel log unreadable: %s", type(exc).__name__)
+            tns = []
+        _PANEL_CACHE.clear()
+        _PANEL_CACHE[key] = tns
+    return [t for t in _PANEL_CACHE[key] if lo <= t.recorded_ts.timestamp() <= hi]
 
 
 def _read_wav(path: str) -> Optional[tuple]:

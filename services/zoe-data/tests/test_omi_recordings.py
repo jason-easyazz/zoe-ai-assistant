@@ -1056,6 +1056,27 @@ def test_forgetting_a_name_redacts_the_transcript_and_drops_the_audio(env, monke
     assert row["audio_path"] == "" and not Path(path).exists() and row["keep_audio"] == 0
 
 
+def test_a_failed_hypothesis_rewrite_drops_the_members_hypotheses_instead_of_keeping_forgotten_text(env, monkeypatch, tmp_path):
+    import omi_repass
+    import omi_repass_eval
+    home = tmp_path / "repass"
+    home.mkdir()
+    monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(home))
+    gone = []
+
+    def boom(*_a, **_k):
+        raise OSError("disk")
+    monkeypatch.setattr(omi_repass_eval, "erase_entity", boom)
+    monkeypatch.setattr(omi_repass_eval, "forget_user", lambda h, u: gone.append((str(h), u)) or 3)
+    assert omi_repass.home_dir() == home
+    run(omi.erase_entity(OWNER, re.compile(r"\bDana\b")))                       # not strict: the member's hypotheses are DROPPED, not left holding the name
+    assert gone == [(str(home), OWNER)]
+    gone.clear()
+    with pytest.raises(OSError):                                                # negative control: strict still raises (the cascade retries) and drops nothing
+        run(omi.erase_entity(OWNER, re.compile(r"\bDana\b"), strict=True))
+    assert gone == []
+
+
 def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(env, monkeypatch):
     upload(env, make_wav(3.0))
 
@@ -1064,7 +1085,7 @@ def test_a_transcript_that_lands_after_a_forget_is_redacted_against_the_ledger(e
 
     import memory_forgotten as mf
 
-    async def fake_spans(user_id, text, *, near=True):
+    async def fake_spans(user_id, text, *, near=True, strict=False):
         i = text.find("Dana")
         return [(i, i + 4)] if i >= 0 and user_id == OWNER else []
 

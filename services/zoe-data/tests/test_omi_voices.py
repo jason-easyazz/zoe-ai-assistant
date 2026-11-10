@@ -1418,3 +1418,26 @@ def test_the_voices_read_says_which_tagging_mode_is_live(env, monkeypatch):
     assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "shadow"
     monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "bogus")
     assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "off"
+
+
+def test_the_panel_cache_serves_each_recording_its_own_interval(monkeypatch):
+    """Two recordings in the same ten-minute bucket: the second is not served the first one's slice of the panel log."""
+    import datetime as dt
+    import sys
+    import types
+
+    base = 1_790_000_000.0 - (1_790_000_000.0 % 600)           # a bucket start
+    stamps = [base + 30, base + 400]                           # one turn near each recording
+
+    class T:
+        def __init__(self, ts):
+            self.recorded_ts = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
+    fake = types.SimpleNamespace(fetch_lines=lambda *_a, **_k: [], events=lambda lines: lines, turns=lambda ev: [T(t) for t in stamps],
+                                 match_clips=lambda *_a, **_k: {}, corpus_index=lambda: None)
+    monkeypatch.setitem(sys.modules, "panel_voice_log", fake)
+    ov._PANEL_CACHE.clear()
+    first = ov._panel_turns(base + 10, base + 60)
+    second = ov._panel_turns(base + 380, base + 430)    # same bucket key
+    assert [t.recorded_ts.timestamp() for t in first] == [stamps[0]]
+    assert [t.recorded_ts.timestamp() for t in second] == [stamps[1]]
+    ov._PANEL_CACHE.clear()
