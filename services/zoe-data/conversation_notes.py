@@ -802,7 +802,7 @@ async def _defer_to_facts(uid: str, notes: list) -> list:
     try:
         from memory_service import get_memory_service
 
-        facts = await asyncio.wait_for(get_memory_service().load_durable_for_hop(uid), _LEDGER_BUDGET_S * 2)
+        facts = await asyncio.wait_for(get_memory_service().load_durable_for_hop(uid, strict=True), _LEDGER_BUDGET_S * 2)
         stamped = [(_epoch_of((r.metadata or {}).get("added_at")) or float((r.metadata or {}).get("added_ts") or 0.0) or 0.0, _tokens(r.text))
                    for r in facts]
     except Exception as exc:  # noqa: BLE001

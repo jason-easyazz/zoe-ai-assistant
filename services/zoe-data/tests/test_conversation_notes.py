@@ -52,7 +52,7 @@ def _clean(monkeypatch):
     import memory_service
 
     class _Svc:                                    # the member's durable facts (the precedence check); none unless a test adds some
-        async def load_durable_for_hop(self, uid):
+        async def load_durable_for_hop(self, uid, strict=False):
             if _facts and _facts[0] == "boom":
                 raise RuntimeError("boom")
             return list(_facts)
@@ -1306,3 +1306,45 @@ def test_the_approval_writer_refuses_a_distress_note_even_when_edited_after_veri
         with pytest.raises(PermissionError):
             run(cn.write_approved(OWNER, bad, candidate_id="c-bad", day="2026-11-08", at_epoch=NOW))
     assert env.q("SELECT COUNT(*) FROM conversation_notes") == [(1,)]
+
+
+def test_a_failed_fact_read_strips_open_threads_and_follow_ups_it_is_not_no_newer_facts(monkeypatch):
+    """load_durable_for_hop swallows a storage error into []: the precedence check must use the STRICT read so an outage is not 'no newer facts'."""
+    import memory_service
+
+    note = cn.Stored(id="n1", with_name="", started_at=cn._iso(NOW - 4000), ended_at=cn._iso(NOW - 3600), summary="They talked about the race entry.",
+                     topics=["race"], mood="", open_threads=["waiting to hear about the race entry"], follow_up="whether the race entry came through",
+                     sensitive=False, served_count=0, source="chat")
+
+    class Dead:                                              # the real read: swallows the error into [] unless strict
+        async def load_durable_for_hop(self, uid, strict=False):
+            if strict:
+                raise RuntimeError("store down")
+            return []
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: Dead())
+    out = run(cn._defer_to_facts(OWNER, [note]))
+    assert len(out) == 1 and out[0].open_threads == [] and out[0].follow_up == ""        # the quieter note
+    assert out[0].summary == note.summary
+
+    class Fine:
+        async def load_durable_for_hop(self, uid, strict=False):
+            return []
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: Fine())
+    kept = run(cn._defer_to_facts(OWNER, [note]))
+    assert kept[0].open_threads == note.open_threads and kept[0].follow_up == note.follow_up       # control: a healthy empty read keeps them
+
+
+def test_the_real_durable_read_raises_in_strict_mode_and_swallows_otherwise():
+    import memory_service
+
+    class Fake:
+        _durable_rows_sync = None
+
+        def _require(self, *a, **k):
+            return None
+
+        async def _run_sync(self, *a, **k):
+            raise RuntimeError("chroma down")
+    assert run(memory_service.MemoryService.load_durable_for_hop(Fake(), "member-a")) == []
+    with pytest.raises(RuntimeError):
+        run(memory_service.MemoryService.load_durable_for_hop(Fake(), "member-a", strict=True))
