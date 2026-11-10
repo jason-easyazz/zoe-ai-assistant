@@ -29,7 +29,7 @@ Read default `dynamic` = not statically extractable; `(required)` = bare
 - 883 prod flags; 300 read through `typed_env`.
 - 757 legacy direct read sites in prod code across 225 files (ceiling in `docs/knowledge/flag-ratchet.json`; may only go down).
 - 15 flags whose readers hard-code different effective defaults (table below).
-- 252 non-`ZOE_` env names read by prod code (table below).
+- 257 non-`ZOE_` env names read by prod code (table below).
 - 0 flags read but not registered (CI fails on any).
 - 310 prod flags with no owner doc yet.
 - 9 registered flags with no reader in the scanned sources.
@@ -996,12 +996,17 @@ Same flag, readers hard-coding different EFFECTIVE defaults (`'1'` ≡ `True`; `
 
 ## Non-`ZOE_` env names read by prod code
 
-252 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
+257 names. These gate live paths too but are not `ZOE_*` flags, so they are not in the registry; listed so they are visible. (`typed_env` = read through an accessor.)
 
 | Name | Default(s) | typed_env | .env.example | Readers |
 |---|---|---|---|---|
 | `ACTIVATE_ALLOWED_ORIGINS` | `''` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
 | `ACTIVATE_GUARD` | `'on'` | no | NO | `scripts/setup/zoe_voice_daemon.py` |
+| `AFFECTED_TESTS_BASE` | `-` | no | NO | `scripts/maintenance/affected_tests.py` |
+| `AFFECTED_TESTS_CACHE` | `(required)`, `-` | no | NO | `scripts/maintenance/affected_tests.py` |
+| `AFFECTED_TESTS_LAZY_HOPS` | `'2'` | no | NO | `scripts/maintenance/affected_tests.py` |
+| `AFFECTED_TESTS_LOCK` | `'/tmp/zoe-test-lane.lock'` | no | NO | `scripts/maintenance/affected_tests.py` |
+| `AFFECTED_TESTS_NO_CACHE` | `-` | no | NO | `scripts/maintenance/affected_tests.py` |
 | `AGENT_GUARD` | `'on'` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `AGENT_PORT` | `'8765'` | no | NO | `scripts/setup/touchscreen/zoe-panel-agent.py` |
 | `AMBIENT_CAPTURE_ENABLED` | `'false'` | no | yes | `scripts/setup/zoe_voice_daemon.py` |

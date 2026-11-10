@@ -18617,6 +18617,57 @@
       ],
       "typed_env": false
     },
+    "AFFECTED_TESTS_BASE": {
+      "defaults": [
+        "-"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/maintenance/affected_tests.py"
+      ],
+      "typed_env": false
+    },
+    "AFFECTED_TESTS_CACHE": {
+      "defaults": [
+        "(required)",
+        "-"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/maintenance/affected_tests.py"
+      ],
+      "typed_env": false
+    },
+    "AFFECTED_TESTS_LAZY_HOPS": {
+      "defaults": [
+        "'2'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/maintenance/affected_tests.py"
+      ],
+      "typed_env": false
+    },
+    "AFFECTED_TESTS_LOCK": {
+      "defaults": [
+        "'/tmp/zoe-test-lane.lock'"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/maintenance/affected_tests.py"
+      ],
+      "typed_env": false
+    },
+    "AFFECTED_TESTS_NO_CACHE": {
+      "defaults": [
+        "-"
+      ],
+      "in_env_example": false,
+      "readers": [
+        "scripts/maintenance/affected_tests.py"
+      ],
+      "typed_env": false
+    },
     "AGENT_GUARD": {
       "defaults": [
         "'on'"

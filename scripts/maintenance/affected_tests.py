@@ -99,7 +99,7 @@ LANE_ENV = {"ZOE_DATA_DB": ":memory:", "ZOE_MEMORY_STARTUP_STRICT": "false"}
 HUB_FRACTION = 0.5
 AGGREGATOR_FANOUT = 20
 LAZY_HOPS = int(os.environ.get("AFFECTED_TESTS_LAZY_HOPS", "2"))
-LOCK_PATH = os.environ.get("ZOE_TEST_LANE_LOCK", "/tmp/zoe-test-lane.lock")
+LOCK_PATH = os.environ.get("AFFECTED_TESTS_LOCK", "/tmp/zoe-test-lane.lock")
 LANDER_RE = r"^bash [^ ]*/land_voice_pr\.sh"
 
 DOC_EXT = {".md", ".rst", ".txt", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf"}
@@ -696,7 +696,7 @@ def _explain(seen: dict[str, tuple[str, str]], node: str) -> str:
             break
         hops.append(f"{why} {via}")
         cur = via
-    if len(hops) > 4 and not __import__("os").environ.get("AT_FULLCHAIN"):
+    if len(hops) > 4:
         hops = hops[:2] + ["..."] + hops[-1:]
     return " -> ".join(hops) + " (changed)"
 
