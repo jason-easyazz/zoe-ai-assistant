@@ -148,6 +148,12 @@ def owner_noun(subject: str):
     return word[:1].upper() + word[1:].lower(), m.group("n").lower()
 
 
+def explicit_possessive(subject: str) -> bool:
+    """True when the subject was typed with its apostrophe ("Carlos's swimming"): the owner is then exactly that word, never a shortened name."""
+    m = _OWNER_NOUN_RE.match((subject or "").strip())
+    return bool(m) and m.group("p").startswith(("'", "’")) and owner_noun(subject) is not None
+
+
 def _may_be_lazy(word: str) -> bool:
     """Could ``word`` be a name typed with a stray final s ("kais" for Kai)? A name that ends in s may also be exactly that name."""
     return len(word) > 3 and word.lower().endswith("s") and not word.lower().endswith("ss")
@@ -388,7 +394,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
-        if not hits and not exact_subject_row and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
+        if not hits and not exact_subject_row and not explicit_possessive(corr.subject) and _may_be_lazy((owner_noun(corr.subject) or (corr.subject,))[0]):
             # nobody has a row under the name exactly as typed: "kais 21 not 22" is Kai's (the apostrophe was not typed). Never the
             # other way round - "Carlos" does not rewrite Carlo's row while a Carlos row exists, nor when Carlos is the typed name.
             for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):

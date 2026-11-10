@@ -224,6 +224,12 @@ def test_apply_prefers_the_exact_name_and_only_then_the_lazy_one(monkeypatch):
     # negative control: with no Carlos row at all the lazy fallback still reaches Carlo
     svc = _Svc("Carlo's swimming is on Thursday")
     assert _apply(svc, "actually carlos swimming is on wednesday not thursday", monkeypatch) == 1
+    # an EXPLICIT possessive never shortens: "Carlos's swimming" is Carlos's, even when only Carlo has a swimming row
+    svc = _Svc("Carlo's swimming is on Thursday")
+    assert _apply(svc, "actually Carlos's swimming is on wednesday not thursday", monkeypatch) == 0 and svc.edits == []
+    # ... and a Carlos row about another attribute blocks the lazy form too
+    svc = _Svc("Carlos's birthday is in May", "Carlo's swimming is on Thursday")
+    assert _apply(svc, "actually carlos swimming is on wednesday not thursday", monkeypatch) == 0 and svc.edits == []
     # nobody matches either way: nothing changes
     svc = _Svc("Zara is 22")
     assert _apply(svc, "also kais 21 not 22", monkeypatch) == 0 and svc.edits == []
