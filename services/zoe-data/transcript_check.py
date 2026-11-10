@@ -352,7 +352,7 @@ async def _trim(db, user_id: str, day: str, status: str) -> int:
 
 
 async def open_recording_ids(user_id: Optional[str] = None) -> set[str]:
-    """Recordings whose WAV an OPEN item still needs (``release_tagged_audio`` skips them). Empty unless live. Never raises."""
+    """Recordings whose WAV an OPEN item still needs (``release_tagged_audio`` skips them). Empty unless live. Raises on a real read failure (callers keep the audio)."""
     if not live():
         return set()
     try:
@@ -363,8 +363,10 @@ async def open_recording_ids(user_id: Optional[str] = None) -> set[str]:
                 sql += " AND user_id = ?"
                 params += (user_id,)
             return {r["recording_id"] for r in await _fetch(db, sql, params)}
-    except Exception:  # noqa: BLE001
-        return set()
+    except Exception as exc:  # noqa: BLE001
+        if _missing(exc):                       # not migrated / no pool: no items exist, so nothing is held
+            return set()
+        raise                                   # a transient read failure must NOT read as "nothing held": the caller (release_tagged_audio) fails closed and keeps the WAV
 
 
 async def sweep(*, now: Optional[datetime] = None) -> int:

@@ -816,3 +816,19 @@ def test_a_stale_second_who_answer_is_refused(who):
     with pytest.raises(tc.CheckError):
         run(tc.answer(OWNER, wid, alt=1))
     assert len(calls) == n
+
+
+def test_a_failed_hold_read_raises_so_the_wav_is_kept_not_released(tenv, monkeypatch):
+    """A transient read failure must not read as 'nothing held' (release_tagged_audio would then delete audio an open item needs)."""
+    night(tenv, monkeypatch, [chunk()])
+    assert run(tc.open_recording_ids())                                                # an open item holds its recording
+
+    def boom(msg):
+        def _raise():
+            raise RuntimeError(msg)
+        return _raise
+    monkeypatch.setattr(tc, "_db", boom("connection reset"))
+    with pytest.raises(RuntimeError):
+        run(tc.open_recording_ids())
+    monkeypatch.setattr(tc, "_db", boom("no pool: not initialised"))
+    assert run(tc.open_recording_ids()) == set()                                       # not migrated / no pool is genuinely "nothing held"
