@@ -12,6 +12,7 @@
 WHO: the X-Panel-Card token (``panel_review_cards.authorize``: honoured only while that member's voice session on that panel is open, or when
 the request also carries the member's own session) OR the member's own signed-in session (a PIN sign-in on the panel, or the phone). A guest,
 an anonymous caller and a device token are refused; every query filters on the member, so another member's id is simply 404.
+Via a session, the panel is named by ``X-Panel-Id`` and accepted only for a member bound to that panel (``_session_panel``); "say it" needs one.
 """
 from __future__ import annotations
 
@@ -46,7 +47,22 @@ async def _member(request: Request, caller: Optional[dict] = Depends(get_current
     if not caller or caller.get("auth_degraded"):
         raise HTTPException(status_code=401, detail="sign_in")
     user = await _require_owner(await require_signed_in(caller))
-    return {"user_id": user["user_id"], "panel_id": ""}
+    return {"user_id": user["user_id"], "panel_id": await _session_panel(request, user["user_id"])}
+
+
+async def _session_panel(request: Request, user_id: str) -> str:
+    """The panel a member's own SESSION is acting from. The panel's page names itself in ``X-Panel-Id``, but a header is only a claim: it is honoured ONLY when the
+    session's member is bound to that panel in ``panel_user_bindings`` (the rule ``panel_auth._resolve_session_principal_for_panel`` applies to a PIN answer). A phone,
+    an unbound member, an unknown panel or an unreadable table all give "" - "say it" then refuses rather than listening on a panel the member was never at."""
+    claimed = " ".join(request.headers.get("X-Panel-Id", "").split())[:64]
+    if not claimed:
+        return ""
+    try:
+        async with tc._db() as db:
+            rows = await tc._fetch(db, "SELECT 1 FROM panel_user_bindings WHERE panel_id = ? AND user_id = ? LIMIT 1", (claimed, user_id))
+    except Exception:  # noqa: BLE001 - fail closed
+        return ""
+    return claimed if rows else ""
 
 
 class _Answer(BaseModel):

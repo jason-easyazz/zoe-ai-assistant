@@ -841,3 +841,128 @@ def test_a_failed_hold_read_raises_so_the_wav_is_kept_not_released(tenv, monkeyp
         run(tc.open_recording_ids())
     monkeypatch.setattr(tc, "_db", boom("no pool: not initialised"))
     assert run(tc.open_recording_ids()) == set()                                       # not migrated / no pool is genuinely "nothing held"
+
+
+# ── hardening (follow-up to the Codex findings on #2365) ─────────────────────────────────────────────────────────────────
+def _forgetting(monkeypatch, word):
+    import memory_forgotten as mf
+
+    async def spans(uid, text, **kw):
+        i = text.find(word)
+        return [(i, i + len(word))] if i >= 0 else []
+    monkeypatch.setattr(mf, "spans", spans)
+
+
+def test_a_forget_landing_after_the_request_started_cannot_be_written_back(queued, monkeypatch):
+    """P1: the forget ledger is read UNDER the erase gate. A forget that lands while the request waits for the gate (the entity erase holds it) is seen, not raced."""
+    env, rid = queued
+    iid = items(env)[0]["id"]
+
+    async def scenario():
+        async with erase_gate.writing(OWNER, erase_gate.generation(OWNER)):        # the entity erase holds the gate ...
+            task = asyncio.ensure_future(tc.answer(OWNER, iid, word="Zebulon"))
+            await asyncio.sleep(0.05)                                              # ... the answer is already in flight, waiting for it ...
+            _forgetting(monkeypatch, "Zebulon")                                    # ... and the erase lands "Zebulon" in the ledger
+        return await task
+    with pytest.raises(tc.CheckError) as e:
+        run(scenario())
+    assert e.value.status == 410 and "Zebulon" not in rows(env)[0]["transcript"] and items(env)[0]["status"] == "open"
+    assert not env.db.rows("SELECT 1 FROM omi_segments WHERE text LIKE '%Zebulon%'")
+
+
+def test_control_the_same_wait_without_a_forget_writes_the_word(queued):
+    env, rid = queued
+    iid = items(env)[0]["id"]
+
+    async def scenario():
+        async with erase_gate.writing(OWNER, erase_gate.generation(OWNER)):
+            task = asyncio.ensure_future(tc.answer(OWNER, iid, word="Zebulon"))
+            await asyncio.sleep(0.05)
+        return await task
+    assert run(scenario())["applied"] is True and "Zebulon" in rows(env)[0]["transcript"]
+
+
+def test_an_unreadable_ledger_refuses_an_answer_and_writes_nothing(queued, monkeypatch):
+    env, rid = queued
+    import memory_forgotten as mf
+
+    async def down(uid, text, **kw):
+        raise RuntimeError("ledger down")
+    monkeypatch.setattr(mf, "spans", down)
+    transcript = rows(env)[0]["transcript"]
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, items(env)[0]["id"], alt=1))
+    assert e.value.status == 410 and rows(env)[0]["transcript"] == transcript and items(env)[0]["status"] == "open"
+
+
+def _two_identical_turns(env):
+    """Two stored turns that say the same words; the item is about the SECOND one."""
+    c = env.db.conn
+    c.execute("DELETE FROM omi_segments")
+    for seq, (a, b) in enumerate(((0, 1000), (2000, 3000))):
+        c.execute("INSERT INTO omi_segments (id, recording_id, user_id, seq, start_ms, end_ms, text, speaker, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                  (f"sg{seq}", rows(env)[0]["id"], OWNER, seq, a, b, "meet me at seven", "you", "2026-10-10T00:00:00Z"))
+    c.execute("UPDATE omi_recordings SET transcript = 'meet me at seven meet me at seven'")
+    c.execute("UPDATE omi_check_items SET start_ms = 2000, end_ms = 3000, before_text = 'meet me at', after_text = ''")
+    c.commit()
+
+
+def test_a_repeated_phrase_corrects_the_selected_occurrence(queued):
+    """P2: the swap lands on the occurrence of the SELECTED segment, not the first regex hit in the transcript."""
+    env, rid = queued
+    _two_identical_turns(env)
+    alts = json.loads(items(env)[0]["alts"])
+    assert run(tc.answer(OWNER, items(env)[0]["id"], alt=[i for i, a in enumerate(alts) if a["word"] == "eleven"][0]))["applied"] is True
+    assert rows(env)[0]["transcript"] == "meet me at seven meet me at eleven"
+    assert [r["text"] for r in env.db.rows("SELECT text FROM omi_segments ORDER BY seq")] == ["meet me at seven", "meet me at eleven"]
+
+
+def test_control_correcting_the_first_occurrence_leaves_the_second(queued):
+    env, rid = queued
+    _two_identical_turns(env)
+    env.db.conn.execute("UPDATE omi_check_items SET start_ms = 0, end_ms = 1000")
+    env.db.conn.commit()
+    alts = json.loads(items(env)[0]["alts"])
+    run(tc.answer(OWNER, items(env)[0]["id"], alt=[i for i, a in enumerate(alts) if a["word"] == "eleven"][0]))
+    assert rows(env)[0]["transcript"] == "meet me at eleven meet me at seven"
+
+
+def _bind(env, panel, member=OWNER):
+    c = env.db.conn
+    c.execute("CREATE TABLE IF NOT EXISTS panel_user_bindings (panel_id TEXT, user_id TEXT, binding_type TEXT)")
+    c.execute("INSERT INTO panel_user_bindings (panel_id, user_id, binding_type) VALUES (?,?,'default')", (panel, member))
+    c.commit()
+
+
+def test_a_signed_in_session_on_its_bound_panel_can_say_it(queued):
+    """P2: a PIN-signed-in session (no card token) names its panel in X-Panel-Id; it is honoured for a member bound to that panel."""
+    env, rid = queued
+    _bind(env, "panel-1")
+    c = _client(env, {"user_id": OWNER, "role": "member", "username": OWNER})
+    iid = items(env)[0]["id"]
+    r = c.post(f"/api/transcript-check/{iid}/listen", headers={"X-Panel-Id": "panel-1"})
+    assert r.status_code == 200, r.text
+    assert tc._LISTEN[OWNER][:2] == (iid, "panel-1")
+
+
+def test_a_claimed_panel_the_member_is_not_bound_to_is_not_trusted(queued):
+    env, rid = queued
+    _bind(env, "panel-1")
+    c = _client(env, {"user_id": OWNER, "role": "member", "username": OWNER})
+    iid = items(env)[0]["id"]
+    assert c.post(f"/api/transcript-check/{iid}/listen", headers={"X-Panel-Id": "panel-2"}).status_code == 400     # unbound panel: refused
+    assert c.post(f"/api/transcript-check/{iid}/listen").status_code == 400                                         # a phone names no panel
+    assert OWNER not in tc._LISTEN
+
+
+def test_say_it_is_not_eaten_by_speech_at_another_panel(queued):
+    """P2: a pending "say it" is bound to the panel it was started on."""
+    env, rid = queued
+    iid = items(env)[0]["id"]
+    tc.listen_for(OWNER, iid, "panel-1")
+    verified_turn(session="s2", panel="panel-2")
+    assert run(tc.tier("it's eight", OWNER, "s2", channel="voice", allow_writes=True)) is None
+    assert OWNER in tc._LISTEN and items(env)[0]["status"] == "open"                        # not consumed, listener stays
+    verified_turn(session="s1", panel="panel-1")
+    r = run(tc.tier("it's eight", OWNER, "s1", channel="voice", allow_writes=True))
+    assert r.reply == tc.HEARD_REPLY and OWNER not in tc._LISTEN and items(env)[0]["answer"] == "eight"

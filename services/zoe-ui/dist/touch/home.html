@@ -3774,7 +3774,7 @@
   // (X-Session-ID) and, when a voice "yes" opened the screen, the card token minted for THIS panel's open voice session (X-Panel-Card);
   // the server decides who may see anything. No keyboard: "say it" is voice, "fix on phone" is a QR.
   var _tcToken='',_tcTokenAt=0;
-  function tcHeaders(json){var h={'X-Session-ID':sid()};if(_tcToken&&Date.now()-_tcTokenAt<590000)h['X-Panel-Card']=_tcToken;if(json)h['Content-Type']='application/json';return h;}
+  function tcHeaders(json){var h={'X-Session-ID':sid()};var _pid=tcPanelId();if(_pid)h['X-Panel-Id']=String(_pid);if(_tcToken&&Date.now()-_tcTokenAt<590000)h['X-Panel-Card']=_tcToken;if(json)h['Content-Type']='application/json';return h;}
   function tcPanelId(){return _panelDevId();}
   function wireChecks(){
     var host=document.getElementById('tcBody'),meta=document.getElementById('tcMeta');
