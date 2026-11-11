@@ -534,6 +534,23 @@ def _plan(text: str, row: Any, variants: list, new: str) -> Optional[str]:
     return None
 
 
+def _segment_window(transcript: str, segs: list, seg_id: str) -> Optional[tuple[int, int]]:
+    """Where segment ``seg_id`` sits in the recording transcript: the segments are the transcript's turns in ``seq`` order, so each one is found after the previous
+    one. None when the segments no longer line up with the transcript (the caller then falls back to the context-anchored whole-text swap)."""
+    cursor = 0
+    for sg in segs:
+        t = (sg["text"] or "").strip()
+        if not t:
+            continue
+        i = transcript.find(t, cursor)
+        if i < 0:
+            return None
+        if sg["id"] == seg_id:
+            return i, i + len(t)
+        cursor = i + len(t)
+    return None
+
+
 async def _apply_text(db, row: Any, new: str) -> bool:
     """Correct BOTH stores or neither. Every store that holds this stretch must contain the span: at least one overlapping ``omi_segments`` row, and the recording
     transcript when it has words. The swaps are planned first and written only when the whole plan holds, so a one-sided match (a store that moved on) writes nothing
@@ -541,18 +558,34 @@ async def _apply_text(db, row: Any, new: str) -> bool:
     old = row["span_text"]
     rid, uid = row["recording_id"], row["user_id"]
     variants = [old + LOW_CONFIDENCE_MARK, old] if row["kind"] == "chunk" else [old]
-    segs = await _fetch(db, "SELECT id, text FROM omi_segments WHERE recording_id = ? AND user_id = ? AND start_ms <= ? AND end_ms >= ? ORDER BY seq",
+    segs = await _fetch(db, "SELECT id, text, start_ms, end_ms FROM omi_segments WHERE recording_id = ? AND user_id = ? AND start_ms < ? AND end_ms > ? ORDER BY seq",
                         (rid, uid, int(row["end_ms"]), int(row["start_ms"])))
     writes = []
+    hit_seg, hit_share = None, -1                 # the segment that holds the span with the most overlap: the transcript is corrected at THAT segment's occurrence
     for sg in segs:
         out = _plan(sg["text"], row, variants, new)
         if out is not None:
+            share = min(int(sg["end_ms"]), int(row["end_ms"])) - max(int(sg["start_ms"]), int(row["start_ms"]))
+            if share > hit_share:
+                hit_seg, hit_share = sg["id"], share
             writes.append(("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected', clean_text = '', clean_how = '' WHERE id = ? AND user_id = ?", (out, sg["id"], uid)))
     if segs and not writes:
         return False
     recs = await _fetch(db, "SELECT transcript FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, uid))
     if recs and (recs[0]["transcript"] or "").strip():
-        out = _plan(recs[0]["transcript"], row, variants, new)
+        transcript = recs[0]["transcript"]
+        window = None
+        if hit_seg is not None:
+            every = await _fetch(db, "SELECT id, text FROM omi_segments WHERE recording_id = ? AND user_id = ? ORDER BY seq", (rid, uid))
+            window = _segment_window(transcript, every, hit_seg)
+        if window is not None:                    # a repeated phrase: only the selected segment's own occurrence is rewritten
+            a, b = window
+            part = _plan(transcript[a:b], row, variants, new)
+            out = None if part is None else transcript[:a] + part + transcript[b:]
+        elif segs and old and transcript.count(old) > 1:
+            return False                          # the segments no longer line up with the transcript and the words repeat: which one is unknowable, so write nothing
+        else:
+            out = _plan(transcript, row, variants, new)
         if out is None:
             return False
         writes.append(("UPDATE omi_recordings SET transcript = ? WHERE id = ? AND user_id = ?", (out, rid, uid)))
@@ -610,13 +643,19 @@ async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word:
     if chosen == NONE_WORD:
         chosen = ""
     import omi_recordings as omi
-    stored = await omi._redact_forgotten(user_id, chosen) if chosen else ""
-    if await _forgotten(user_id, " ".join([row["before_text"], chosen, row["after_text"]])):
-        raise CheckError("forgotten", 410)
     stamp = _iso(_now())
     async with erase_gate.writing(user_id, erase_gate.generation(user_id)) as ok:
         if not ok:
             raise CheckError("erased", 410)
+        # The forget ledger is read UNDER the erase gate, before any mutation: an entity forget (bump=False) takes this same lock, so a name forgotten while this
+        # request was in flight is already in the ledger here and cannot be written back. Unreadable ledger = refuse (``_forgotten`` is strict; redaction is strict).
+        try:
+            stored = await omi._redact_forgotten(user_id, chosen, strict=True) if chosen else ""
+            forgotten = await _forgotten(user_id, " ".join([row["before_text"], chosen, row["after_text"]]))
+        except Exception as exc:  # noqa: BLE001 - fail closed: nothing is written when the ledger cannot vouch for the text
+            raise CheckError("forgotten", 410) from exc
+        if forgotten:
+            raise CheckError("forgotten", 410)
         async with _db() as db:
             fresh = await _item(db, user_id, item_id)
             if fresh is None or fresh["status"] != "open":
@@ -1035,7 +1074,9 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         if not pend and not listening:
             return None
         import expert_dispatch as _xd
-        if listening and member and _clock() <= listening[2]:
+        turn = _TURNS.get(sid)
+        # A pending "say it" belongs to the panel the owner pressed it on: speech at another panel (even the owner's, verified) neither fills it nor eats it.
+        if listening and member and _clock() <= listening[2] and turn is not None and str(turn.panel_id or "") == listening[1]:
             _LISTEN.pop(member, None)
             async with _db() as db:
                 lrow = await _item(db, member, listening[0])
