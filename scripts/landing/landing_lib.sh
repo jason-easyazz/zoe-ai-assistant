@@ -97,6 +97,23 @@ landing_head_parked(){
   [ -n "$head" ] && grep -qxF "$1:${head:0:12}" "$LANDING_HOME/probe-failed-heads.txt" 2>/dev/null
 }
 
+# landing_evidence_reusable <probed-sha> <new-head>: 0 only when THIS lander's probe evidence (the shared artifact, which must still
+# record <probed-sha>) may be REUSED at <new-head> - the probed commit is an ancestor of <new-head> and the tree diff between them touches
+# nothing voice-relevant (voice_gate_check.py --allow-reuse; offline, over $LANDING_REPO's objects). Every other check the gate makes
+# (pass, fresh, clean, baseline, VAD, per-clip) still applies. Prints the checker's decision line(s). Anything unreadable = 1 (re-probe).
+# The checker is the LIVE checkout's copy (trusted main), never the PR's. ZOE_LANDING_GATE_CHECK overrides (tests).
+LANDING_GATE_CHECK=${ZOE_LANDING_GATE_CHECK:-$LANDING_REPO/scripts/maintenance/voice_gate_check.py}
+landing_evidence_reusable(){
+  local probed=$1 new=$2 rec
+  case "$probed$new" in *[!0-9a-f]*|'') echo "not two full shas ('$probed' '$new')"; return 1;; esac
+  [ "${#probed}" = 40 ] && [ "${#new}" = 40 ] || { echo "not two full shas"; return 1; }
+  rec=$(python3 "$LANDING_GATE_CHECK" --artifact "$LANDING_VOICE_ARTIFACT" --print-artifact-commit 2>/dev/null) || rec=""
+  [ "$rec" = "$probed" ] || { echo "the shared artifact no longer records the probed ${probed:0:8} (now '${rec:0:8}') - not this probe's evidence"; return 1; }
+  python3 "$LANDING_GATE_CHECK" --repo "$LANDING_REPO" --artifact "$LANDING_VOICE_ARTIFACT" --require \
+    --expect-revision "$new" --allow-reuse 2>&1 | grep -E '^voice-gate: (evidence reuse|OK|BLOCKED)' | cut -c1-600
+  return "${PIPESTATUS[0]}"
+}
+
 # landing_artifact_fresh <artifact> <t0-epoch>: 0 only if the artifact file was (re)written at or after <t0> - i.e. by THIS probe attempt.
 landing_artifact_fresh(){ [ "$(stat -c %Y "$1" 2>/dev/null || echo 0)" -ge "$2" ]; }
 

@@ -86,6 +86,16 @@ elif argv[:2] == ["api", "graphql"]:
     emit(out)
 elif argv[:2] == ["pr", "merge"] and "--auto" in argv and str(argv[2]) in state.get("arm_fails", []):
     sys.exit(1)
+elif argv[:2] == ["pr", "update-branch"] and pr_of(argv[2]).get("on_update"):
+    # a state TRANSITION (evidence-reuse tests): apply the patch, run its optional shell (e.g. move the branch in a test origin)
+    patch = state["prs"][str(argv[2])].pop("on_update")
+    if patch.get("_shell"):
+        subprocess.run(["bash", "-c", patch.pop("_shell")], check=True)
+    state["prs"][str(argv[2])].update(patch)
+    json.dump(state, open(os.environ["FAKE_GH_STATE"], "w"))
+elif argv[:2] == ["pr", "merge"] and "--auto" in argv and pr_of(argv[2]).get("merge_on_arm"):
+    state["prs"][str(argv[2])]["state"] = "MERGED"
+    json.dump(state, open(os.environ["FAKE_GH_STATE"], "w"))
 elif argv[:2] == ["pr", "merge"] and "--disable-auto" in argv and str(argv[2]) in state.get("disarm_fails", []):
     sys.exit(1)
 # pr merge / ready / update-branch, run ..., anything else: logged, succeed silently

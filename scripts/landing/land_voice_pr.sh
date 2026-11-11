@@ -1,10 +1,12 @@
 #!/bin/bash
 # land_voice_pr.sh <pr> <worktree> <branch> <title>: head-bound replay probe (Kokoro paused) -> gate rerun -> auto-merge -> wait MERGED.
-# Contract: never arms a merge unless the probe artifact says pass FOR THIS HEAD. See docs/knowledge/landing-tooling.md.
-# Exit codes: 0 landed/nothing to do, 4 probe not pass, 5 re-queue (head moved / conflict / not clean), 6 not landable yet
-# (draft, unresolved or unreadable threads), 7 validate failed on this head, 8 needs a hand merge, 9 night pause / no time
-# (re-queue), 10 PR is on a hold list, 12 the probe PASSED but the PR was not merged (went BEHIND/DIRTY, or the CI wait ended) -
-# the voice loop re-queues it at the FRONT (it still needs a fresh probe: the deploy gate binds evidence to the exact head/tree).
+# Contract: never arms a merge unless the probe artifact says pass FOR THIS HEAD - or for a probed ANCESTOR whose evidence
+# voice_gate_check.py --allow-reuse accepts at this head (the tree diff between them is voice-free; 2026-11-11, `rebind` below).
+# See docs/knowledge/landing-tooling.md.
+# Exit codes: 0 landed/nothing to do, 4 probe not pass, 5 re-queue (head moved and the evidence is not reusable there / conflict /
+# not clean), 6 not landable yet (draft, unresolved or unreadable threads), 7 validate failed on this head, 8 needs a hand merge,
+# 9 night pause / no time (re-queue), 10 PR is on a hold list, 12 the probe PASSED but the PR was not merged (DIRTY, BEHIND with a
+# voice-relevant update, or the CI wait ended) - the voice loop re-queues it at the FRONT for a fresh probe.
 . "$(dirname "${BASH_SOURCE[0]}")/landing_lib.sh"
 set -u; PR=$1; WT=$2; BR=$3; TITLE=$4; cd "$LANDING_REPO" || exit 1
 # 2026-10-27 night contract (the 2026-10-26 window REFUSED "a voice-PR landing is running" and lost the night): this process must be GONE - lock
@@ -111,10 +113,47 @@ case "$PROBE_STATUS" in pass*) :;; *) mkdir -p "$LANDING_ARTIFACT_DIR"; cp -f "$
 # rerun the PR's latest voice-gate run so the verdict reads the fresh head-bound artifact
 RUN=$(gh run list --workflow voice-gate.yml --limit 30 --json databaseId,headSha --jq ".[]|select(.headSha==\"$HEAD_SHA\")|.databaseId" | head -1)
 if [ -n "$RUN" ]; then gh run rerun "$RUN" >/dev/null 2>&1 && log "gate rerun $RUN"; for i in $(seq 1 60); do st=$(gh run view "$RUN" --json status,conclusion --jq '"\(.status)/\(.conclusion)"'); case "$st" in completed/*) break;; esac; [ "$(left)" -gt 120 ] || break; sleep 10; done; log "gate: $st"; else log "no voice-gate run for this head yet (not a voice-path PR?)"; fi
+# EVIDENCE REUSE (2026-11-11): the probe's evidence is for PROBED_SHA. When the head moves after the probe - `strict` makes the PR go BEHIND
+# when anything else merges, or someone pushes - the lander MAY carry on at the new head instead of re-probing, but ONLY when
+# landing_evidence_reusable says so (landing_lib.sh -> voice_gate_check.py --allow-reuse: the probed commit is an ancestor of the new head and
+# the tree diff between them touches nothing voice-relevant). Refused or unreadable = the old exits (5 / 12 -> a fresh probe). Bounded by
+# ZOE_LANDING_REBIND_MAX (default 3) per landing, so the loop below always ends.
+PROBED_SHA=$HEAD_SHA; REBINDS=0; REBIND_MAX=${ZOE_LANDING_REBIND_MAX:-3}
+case "$REBIND_MAX" in ''|*[!0-9]*) REBIND_MAX=3;; esac
+# rebind <new-head> <why>: 0 = HEAD_SHA is now <new-head> (evidence reused); 1 = not (the caller exits as before)
+rebind(){
+  local new=$1 why=$2 got out
+  [ "$REBINDS" -lt "$REBIND_MAX" ] || { log "$why: rebind cap ($REBIND_MAX) reached - a fresh probe instead"; return 1; }
+  [ "$(left)" -gt 600 ] || { log "$why: too close to the night deadline to rebind"; return 1; }
+  REBINDS=$((REBINDS+1))
+  git -C "$WT" fetch -q --no-write-fetch-head origin "+refs/heads/$BR:$LREF"; got=$(git -C "$WT" rev-parse "$LREF" 2>/dev/null)
+  { [ -n "$new" ] && [ "$got" = "$new" ]; } || { log "$why: the branch tip here (${got:0:8}) is not the PR head (${new:0:8}) - cannot check reuse"; return 1; }
+  if out=$(landing_evidence_reusable "$PROBED_SHA" "$new"); then
+    log "$why: probe evidence for ${PROBED_SHA:0:8} REUSED at ${new:0:8} (rebind $REBINDS/$REBIND_MAX)"; printf '%s\n' "$out" | while IFS= read -r l; do log "  $l"; done
+    HEAD_SHA=$new; return 0
+  fi
+  log "$why: probe evidence for ${PROBED_SHA:0:8} NOT reusable at ${new:0:8}"; printf '%s\n' "$out" | while IFS= read -r l; do log "  $l"; done
+  return 1
+}
+while :; do
 gh pr checks "$PR" --json name,state --jq '[.[]|select(.name=="validate" or .name=="secret-scan" or .name=="voice-gate")|"\(.name)=\(.state)"]|join(" ")' | xargs -I{} echo "[$(date +%T)] #$PR checks: {}"
-CHK=$(gh pr checks "$PR" --json name,state --jq '[.[]|select(.name=="validate")|.state]|join("")'); if [ "$CHK" = FAILURE ]; then echo "$HEAD_SHA" >> "$LANDING_HOME/validate-failed-heads.txt"; log "validate FAILED on the probed head $HEAD_SHA - NOT arming; fix + push (exit 7, sig #42)"; exit 7; fi
-NOWHEAD=$(gh pr view "$PR" --json headRefOid --jq .headRefOid); [ "$NOWHEAD" != "$HEAD_SHA" ] && { log "PR head moved past the probed commit (${NOWHEAD:0:8} != ${HEAD_SHA:0:8}) - NOT arming (the squash tree would differ from the probed tree and the deploy gate refuses it, sig #40); re-queue"; exit 5; }
-MS=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus); case "$MS" in BEHIND|DIRTY) log "mergeState=$MS after the probe - NOT arming (an update-branch would move the head past its probe, sig #36); re-queue at the FRONT (exit 12)"; exit 12;; esac
+CHK=$(gh pr checks "$PR" --json name,state --jq '[.[]|select(.name=="validate")|.state]|join("")'); if [ "$CHK" = FAILURE ]; then echo "$HEAD_SHA" >> "$LANDING_HOME/validate-failed-heads.txt"; log "validate FAILED on head $HEAD_SHA - NOT arming; fix + push (exit 7, sig #42)"; exit 7; fi
+NOWHEAD=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+if [ "$NOWHEAD" != "$HEAD_SHA" ]; then
+  rebind "$NOWHEAD" "head moved (${HEAD_SHA:0:8} -> ${NOWHEAD:0:8})" && continue
+  log "PR head moved past the probed commit (${NOWHEAD:0:8} != ${HEAD_SHA:0:8}) and the evidence is not reusable there - NOT arming (sig #40); re-queue"; exit 5
+fi
+MS=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus)
+case "$MS" in
+  DIRTY) log "mergeState=DIRTY after the probe - NOT arming; re-queue at the FRONT (exit 12)"; exit 12;;
+  BEHIND)
+    # strict: bring it up to date, then reuse the evidence if what came in from main is voice-free (else a fresh probe: exit 12 as before)
+    gh pr update-branch "$PR" >/dev/null 2>&1 || { log "mergeState=BEHIND and update-branch failed - re-queue at the FRONT (exit 12)"; exit 12; }
+    NEW=$HEAD_SHA; for i in $(seq 1 12); do sleep "${ZOE_LANDING_UPDATE_POLL_S:-5}"; NEW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null); [ -n "$NEW" ] && [ "$NEW" != "$HEAD_SHA" ] && break; done
+    { [ -n "$NEW" ] && [ "$NEW" != "$HEAD_SHA" ]; } || { log "mergeState=BEHIND, update-branch ran, but the head did not move - re-queue at the FRONT (exit 12)"; exit 12; }
+    rebind "$NEW" "updated with main (was BEHIND)" && continue
+    log "mergeState=BEHIND after the probe and the evidence is not reusable at the updated head - NOT arming; re-queue at the FRONT for a fresh probe (exit 12)"; exit 12;;
+esac
 # last look before arming: the PR must still be a non-draft (it was checked at the top; a convert-to-draft since then is the owner pulling it back)
 [ "$(gh pr view "$PR" --json isDraft --jq .isDraft 2>/dev/null)" = false ] || { log "PR is a draft (or unreadable) at arm time - NOT arming (exit 6)"; exit 6; }
 # Never leave a voice PR armed behind this process: --match-head-commit only binds the request, a later writer push would keep the arm and merge an
@@ -122,11 +161,14 @@ MS=$(gh pr view "$PR" --json mergeStateStatus --jq .mergeStateStatus); case "$MS
 # anything armed since the hold was taken (an agent, a human) is dropped too, and re-armed on exit; unreadable = not arming
 landing_voice_hold_sweep "$PR" || { log "pre-arm sweep failed (open-PR list unreadable) - NOT arming; re-queue at the FRONT (exit 12)"; exit 12; }
 ARMED=1   # lander_exit (EXIT trap) disarms from here on unless MERGED
-gh pr merge "$PR" --squash --auto --match-head-commit "$HEAD_SHA" >/dev/null 2>&1 && log "auto-merge armed (bound to the probed head ${HEAD_SHA:0:8}: a later push cannot merge unprobed)"
+# HEAD_SHA is the probed head, or a head rebind() proved the probe's evidence reusable at - never anything else
+gh pr merge "$PR" --squash --auto --match-head-commit "$HEAD_SHA" >/dev/null 2>&1 && log "auto-merge armed (bound to ${HEAD_SHA:0:8}, evidence from the probe of ${PROBED_SHA:0:8}: a later push cannot merge unprobed)"
 landing_wait_merged "$PR" "$HEAD_SHA" | while IFS= read -r l; do log "$l"; done; WAIT_RC=${PIPESTATUS[0]}
-[ "$WAIT_RC" = 5 ] && { log "head moved after arming - auto-merge DISARMED at once; re-queue (exit 5)"; exit 5; }
-FINAL=$(gh pr view "$PR" --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"'); log "state: $FINAL"
 [ "$WAIT_RC" = 0 ] && exit 0
-case "$FINAL" in MERGED*) exit 0;; esac
+# head moved after arming (auto-merge already DISARMED): back to the top, which rebinds only if the evidence is reusable there, else exit 5
+[ "$WAIT_RC" = 5 ] && { log "head moved after arming - auto-merge DISARMED at once; checking evidence reuse"; continue; }
+FINAL=$(gh pr view "$PR" --json state,mergeStateStatus --jq '"\(.state) \(.mergeStateStatus)"'); log "state: $FINAL"
+case "$FINAL" in MERGED*) exit 0;; *" BEHIND") log "went BEHIND in the wait (auto-merge DISARMED) - checking evidence reuse"; continue;; esac
 log "not merged within the wait - auto-merge DISARMED (never left armed); the probe passed, so the voice loop re-queues it at the FRONT (exit 12)"
 exit 12
+done
