@@ -651,6 +651,15 @@ _MANIFEST_NAMES = frozenset({
     "pyproject.toml", "setup.py", "setup.cfg", "pipfile", "pipfile.lock", "poetry.lock",
     "uv.lock", "constraints.txt", ".npmrc", ".nvmrc", ".python-version", ".tool-versions",
     "tsconfig.json", ".dockerignore", "makefile",
+    # other ecosystems' manifests (Codex cross-review: the list must not be Python/npm-only)
+    "go.mod", "go.sum", "go.work", "cargo.toml", "gemfile", "composer.json", "pom.xml",
+    "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+    "gradle.properties", "environment.yml", "environment.yaml", "conda.yml", "conda.yaml",
+    "pixi.toml", "deno.json", "deno.jsonc", "bun.lockb", "cmakelists.txt", "meson.build",
+    "build.rs", "flake.nix", "default.nix", "shell.nix", ".yarnrc", ".yarnrc.yml", "pip.conf",
+    # checkout control: attributes/filters/EOL/working-tree-encoding can change the bytes a
+    # fresh checkout of H holds for a blob that is IDENTICAL in P - a diff-tree cannot see that
+    ".gitattributes", ".gitmodules", ".lfsconfig",
 })
 _UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".mount", ".target")
 _MODEL_SUFFIXES = (".onnx", ".gguf", ".npy", ".npz", ".joblib", ".pt", ".pth", ".bin",
@@ -706,7 +715,10 @@ def _git_run(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo), "-c", "core.fsmonitor=false", "--no-pager", *args],
         capture_output=True, timeout=60,
-        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
+        env={**{k: v for k, v in os.environ.items()
+                if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                             "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")},
+             "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
              "GIT_NO_REPLACE_OBJECTS": "1"})
 
 

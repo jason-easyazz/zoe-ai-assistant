@@ -270,7 +270,7 @@ So `reuse_relevance(path)` = `VOICE_PATH_PATTERNS` ∪ `REUSE_EXTRA_PREFIXES` (`
 its tests, `labs/flue-zoe-brain-2x/` and `services/zoe-core/` whole, `services/livekit/`, `scripts/lib|perf|
 deploy|setup/`, `config/`) ∪ `REUSE_EXTRA_FILES` (the path-loads above, the flag inventory + generator,
 `deploy.yml`, `deploy_live.sh`) ∪ **every dependency manifest, lockfile, Dockerfile, compose file, env file,
-systemd unit/drop-in and model/weights file anywhere** — except inside `REUSE_ISOLATED_SERVICE_DIRS`, which
+systemd unit/drop-in and model/weights file anywhere, in any ecosystem (go.mod, Cargo.toml, Gemfile, Gradle, conda, ...), plus the checkout-control files `.gitattributes` / `.gitmodules` / `.lfsconfig` (an EOL, filter or working-tree-encoding change alters a fresh checkout of an IDENTICAL blob, which a tree diff cannot see)** — except inside `REUSE_ISOLATED_SERVICE_DIRS`, which
 today is only `services/zoe-auth/`. That exception is evidenced, not assumed: compose builds zoe-auth from
 its own dir, its `requirements.txt` is read only by its own Dockerfile and its own CI job, zoe-data reaches
 it only over HTTP (`auth.py` → `ZOE_AUTH_URL`), and the replay runs in-process as a fixed member id, so a
