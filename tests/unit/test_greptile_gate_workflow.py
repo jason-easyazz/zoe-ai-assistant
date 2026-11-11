@@ -277,8 +277,10 @@ def test_request_label_hands_off_a_routine_pr(tmp_path):
 
 def test_voice_path_mirror_matches_the_canonical_definition():
     """The gate's VOICE_PATH is a MIRROR of scripts/maintenance/voice_gate_check.py
-    VOICE_PATH_PATTERNS (the voice-gate's own definition). Every pattern there must
-    appear in the workflow as the same regex, so the two cannot drift apart."""
+    VOICE_PATH_NARROW_PATTERNS - the curated load-bearing set, NOT the wider
+    VOICE_PATH_PATTERNS the replay gate classifies with (2026-11-11: every zoe-data change
+    is replay-gated but Greptile is billed per review, so its eligibility must not widen).
+    Every NARROW pattern must appear in the workflow as the same regex, no WIDE one may."""
     import importlib.util
     spec = importlib.util.spec_from_file_location("vgc", REPO / "scripts" / "maintenance" / "voice_gate_check.py")
     mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
@@ -292,13 +294,22 @@ def test_voice_path_mirror_matches_the_canonical_definition():
         return "/^" + out + "$/"
 
     script = _script()
-    missing = [p for p in mod.VOICE_PATH_PATTERNS if glob_to_js(p) not in script]
+    missing = [p for p in mod.VOICE_PATH_NARROW_PATTERNS if glob_to_js(p) not in script]
     assert not missing, f"voice-path patterns missing from greptile-gate.yml VOICE_PATH: {missing}"
     # ...and so is the EXCLUSION (documentation is never voice scope): same regex, and
     # applied to the load-bearing check, so a docs-only Kokoro note does not buy a review.
     missing_ex = [p for p in mod.VOICE_PATH_EXCLUDES if glob_to_js(p) not in script]
     assert mod.VOICE_PATH_EXCLUDES and not missing_ex, f"voice-path excludes missing from greptile-gate.yml: {missing_ex}"
     assert "!VOICE_PATH_EXCLUDE.some(re => re.test(f.filename))" in script
+    leaked = [p for p in mod.VOICE_PATH_WIDE_PATTERNS if glob_to_js(p) in script]
+    assert not leaked, f"replay-gate-only patterns leaked into greptile-gate.yml: {leaked}"
+
+
+def test_a_plain_zoe_data_file_is_not_greptile_eligible_on_its_own(tmp_path):
+    """The replay gate covers all of services/zoe-data; Greptile must not follow it."""
+    r = _run(tmp_path, _script(), files=[{"filename": "services/zoe-data/routers/lists.py", "additions": 5, "deletions": 1}])
+    assert r["addLabels"] == 0
+    assert any("settled but routine" in line for line in r["log"])
 
 
 def test_a_docs_only_kokoro_note_is_not_load_bearing_but_kokoro_code_is(tmp_path):
