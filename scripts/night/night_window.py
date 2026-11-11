@@ -2044,6 +2044,16 @@ class NightWindow(bk.Window):
         for unit, r in sorted(st.items()):
             self.rec["notes"].append(f"presleep {unit}: " + ("ok" if r.get("rc") == 0 else f"FAILED rc {r.get('rc')}") + f" in {r.get('wall_s')}s")
 
+    @staticmethod
+    def repass_flag() -> str:
+        """``ZOE_OMI_NIGHT_REPASS`` (off | shadow | on) through the typed registry reader, like every other flag read."""
+        sys.path.insert(0, str(REPO / "services" / "zoe-data"))
+        try:
+            from typed_env import env_str
+        finally:
+            sys.path.remove(str(REPO / "services" / "zoe-data"))
+        return env_str("ZOE_OMI_NIGHT_REPASS", "off").strip().lower()
+
     def repass_preflight(self) -> None:
         """Before any service is stopped: is the pendant re-pass runtime there (venv + pinned models, as ``setup_omi_repass.sh --check`` defines them) and can the
         process reach its database? A rehearsal has nothing else to do, so it is REFUSED (exit 2, nothing stopped). A real night SKIPS the omi_repass slot, loudly,
@@ -2051,7 +2061,7 @@ class NightWindow(bk.Window):
         cfg = self.cfg
         if "omi_repass" not in cfg.pre_jobs or not cfg.repass_preflight or self.dry:
             return
-        if not cfg.rehearse and os.environ.get("ZOE_OMI_NIGHT_REPASS", "off").strip().lower() in ("", "off", "0", "false"):
+        if not cfg.rehearse and self.repass_flag() in ("", "off", "0", "false"):
             return
         why = ""
         if not cfg.omi_repass_script.exists():
