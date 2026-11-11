@@ -188,3 +188,20 @@ def test_interrupted_rebuild_keeps_descendants_on_retry():
     assert s.rebuild(concat) == 1, "the second level is rebuilt on retry, from the already-rebuilt first level"
     served = dict(s.serve())
     assert len(served) == 2 and all("a surviving note" in p and "xj55" not in p for p in served.values())
+
+
+def test_rebuild_retries_after_a_crash_between_write_and_queue_delete():
+    """The first level's rebuilt artifact is committed but its queue row survives (a crash in that window)."""
+    s = LineageStore(":memory:")
+    s.ingest("gone", "forgotten note vb31")
+    s.ingest("keep", "a surviving note")
+    s.write_derived("a", "L1", "forgotten note vb31 | a surviving note", ["gone", "keep"], depth=1)
+    s.write_derived("b", "L2", "digest: forgotten note vb31 | a surviving note", ["a"], depth=2)
+    s.forget("gone")
+    n, old, layer, depth = s.db.execute("SELECT n, old_id, layer, depth FROM rebuild_queue ORDER BY depth, n").fetchone()
+    assert old == "a"
+    s.write_derived(f"{old}~r{n}", layer, "a surviving note", ["keep"], depth=depth)  # written, queue row not deleted
+    s.rebuild(concat)  # must not hit the primary key, and must still rebuild the second level
+    served = dict(s.serve())
+    assert len(served) == 2 and all("a surviving note" in p and "vb31" not in p for p in served.values())
+    assert s.db.execute("SELECT COUNT(*) FROM rebuild_queue").fetchone()[0] == 0

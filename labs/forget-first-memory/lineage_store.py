@@ -166,7 +166,8 @@ class LineageStore:
             ps = [p for p in ps if self._payload(p) is not None]
             if ps:
                 new = f"{old}~r{n}"
-                self.write_derived(new, layer, derive(layer, [self._payload(p) for p in ps]), ps, depth=depth)
+                if self._payload(new) is None:  # else: written by a run that died before deleting its queue row
+                    self.write_derived(new, layer, derive(layer, [self._payload(p) for p in ps]), ps, depth=depth)
                 renamed[old] = new
                 built += 1
             self.db.execute("DELETE FROM rebuild_queue WHERE n = ?", (n,))
@@ -188,14 +189,18 @@ class LineageStore:
         q, args = "SELECT id, payload FROM artifacts WHERE state = 'live'", ()
         if layer:
             q, args = q + " AND layer = ?", (layer,)
-        rows = self.db.execute(q, args).fetchall()
-        out = []
-        for aid, payload in rows:  # wall 2: ancestry against tombstones, even if the quarantine missed it
-            anc = [r[0] for r in self.db.execute(ANCESTORS, (aid,))]
-            if anc and self.db.execute(f"SELECT 1 FROM tombstones WHERE id IN ({','.join('?' * len(anc))}) LIMIT 1",
-                                       anc).fetchone():
-                continue
-            out.append((aid, payload))
+        self.db.execute("BEGIN")  # one read snapshot: a forget on another connection cannot land between rows and ancestry
+        try:
+            rows = self.db.execute(q, args).fetchall()
+            out = []
+            for aid, payload in rows:  # wall 2: ancestry against tombstones, even if the quarantine missed it
+                anc = [r[0] for r in self.db.execute(ANCESTORS, (aid,))]
+                if anc and self.db.execute(f"SELECT 1 FROM tombstones WHERE id IN ({','.join('?' * len(anc))}) LIMIT 1",
+                                           anc).fetchone():
+                    continue
+                out.append((aid, payload))
+        finally:
+            self.db.execute("COMMIT")
         return out
 
     def residue(self, needle: str) -> list[str]:

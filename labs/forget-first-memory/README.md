@@ -28,13 +28,13 @@ anywhere. Labels: [Proven] = a test or the bench printed it on this box; [Experi
   the raw db/journal/wal bytes for the needle's tail (FTS5 prefix-compresses terms, so the head of a term may not be contiguous).
 - `write_legacy()`: a deliberately lineage-less write path, used only as the negative control.
 
-`test_lineage_store.py` (107 cases, seeded `random`, no `hypothesis` installed): random DAGs of 8-40 sources, depth 1-4,
+`test_lineage_store.py` (108 cases, seeded `random`, no `hypothesis` installed): random DAGs of 8-40 sources, depth 1-4,
 5-30 artifacts per layer, fan-in 1-3, derivation = verbatim concatenation of parents (worst case: every derived row copies its
 sources). `bench.py`: forget latency + fan-out grid and an on-disk residue comparison.
 
 ## Results (this box, Jetson Orin, sqlite 3.37.2, 2026-11-11 22:38 AWST)
 
-**Property tests [Proven, on synthetic DAGs]:** `107 passed` (rc 0), under `flock -x /tmp/zoe-test-lane.lock`, no xdist.
+**Property tests [Proven, on synthetic DAGs]:** `108 passed` (rc 0), under `flock -x /tmp/zoe-test-lane.lock`, no xdist.
 Over 60 random DAGs, after forgetting 1-3 sources: zero residue in any table/column/FTS shadow table or FTS `MATCH`, nothing
 served (mid-forget, after purge and after rebuild), re-ingest refused (exact and case/whitespace variant), late derived writes onto a
 quarantined parent refused, no collateral (every artifact outside the closures still served), no over-deletion (every surviving
