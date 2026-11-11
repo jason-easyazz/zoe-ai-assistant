@@ -12,7 +12,7 @@
 #   2. Patches the ZOE_SELF_BEGIN block in /home/zoe/.hermes/SOUL.md
 #   3. Writes ~/.zoe/zoe_self_compact.txt (compact 500-char context prefix)
 #   4. Updates CAPABILITIES.md with current MCP tool list
-#      → written to ~/assistant/CAPABILITIES.md
+#      → written to ~/.zoe/CAPABILITIES.md
 #   5. Writes ~/.openclaw/workspace/FEDERATION_SKILLS.md with live skill counts per agent
 #
 # NOTE: the Zoe Agent system prompt does NOT inline the regenerated ZOE_SELF.md
