@@ -186,7 +186,19 @@ def test_unchanged_head_and_clean_state_arms_the_probed_head_exactly(world):
     assert world.arms() == [f"pr merge 7 --squash --auto --match-head-commit {world.p}"]
 
 
-def test_dirty_is_still_exit_12_with_no_update():
-    code = (LANDING / "land_voice_pr.sh").read_text()
-    dirty = next(ln for ln in code.splitlines() if ln.strip().startswith("DIRTY)"))
-    assert "exit 12" in dirty and "update-branch" not in dirty
+def test_dirty_is_still_exit_12_with_no_update_and_no_arm(world):
+    """Executed, not grepped (Codex cross-review round 3)."""
+    world.rig.set_state({"threads": {}, "prs": {"7": {"headRefOid": world.p, "mergeStateStatus": "DIRTY",
+                                                       "merge_on_arm": True}}})
+    r = world.run()
+    assert r.returncode == 12 and "DIRTY" in r.stdout, r.stdout + r.stderr
+    assert world.arms() == []
+    assert not any(c.startswith("pr update-branch") for c in world.rig.gh_calls())
+
+
+def test_behind_whose_update_fails_is_exit_12_with_no_arm(world):
+    world.rig.set_state({"threads": {}, "prs": {"7": {"headRefOid": world.p, "mergeStateStatus": "BEHIND",
+                                                       "merge_on_arm": True}}})   # no transition: the head never moves
+    r = world.run()
+    assert r.returncode == 12 and "head did not move" in r.stdout, r.stdout + r.stderr
+    assert world.arms() == []
