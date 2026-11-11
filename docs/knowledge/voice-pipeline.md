@@ -448,6 +448,17 @@ records `status: error`. The copy is gitignored, so the tree still records clean
 `~/.config/systemd/user/`). Numbers are RELATIVE (warm harness) — used for *drift vs baseline*, not
 as live performance.
 
+### What the gate covers: all of `services/zoe-data/` (2026-11-11)
+
+Owner decision 2026-11-11: **every `services/zoe-data` change (minus its tests) gets a voice replay before
+merge.** `VOICE_PATH_PATTERNS` in `scripts/maintenance/voice_gate_check.py` is the union of
+`VOICE_PATH_NARROW_PATTERNS` (the curated set, each entry reasoned in the source) and
+`VOICE_PATH_WIDE_PATTERNS` (`services/zoe-data/*` minus `tests/*` and `*.md`, plus the replay's closure files
+outside zoe-data). `test_voice_evidence_reuse_closure.py` re-traces the replay's import closure on every run and
+requires zero ungated files. A zoe-data PR is therefore classified VOICE at PR time and lands via
+`voice-pending.txt` and the voice loop; evidence reuse still spares a re-probe when a later update is
+voice-free. Greptile eligibility mirrors the narrow list only. Detail: `merge-and-deploy.md` "Scope".
+
 ## The gate emits a heartbeat, and the deploy path checks it
 
 *"A gate that can silently not-run is not a gate."* This gate was once deadlocked from birth (it

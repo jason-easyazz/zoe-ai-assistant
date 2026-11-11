@@ -161,8 +161,8 @@ def test_the_closure_is_real_not_vacuous():
                  "scripts/lib/service_python.py", "scripts/maintenance/harness_quiet.py"):
         assert must in CLOSURE, must
     assert len(CLOSURE) > 300, len(CLOSURE)
-    gaps = [f for f in CLOSURE if not vgc.touched_voice_files([f], vgc.VOICE_PATH_PATTERNS)]
-    assert len(gaps) > 100, "the deploy-scope patterns are a deliberate subset of the closure"
+    narrow = [f for f in CLOSURE if not vgc.touched_voice_files([f], vgc.VOICE_PATH_NARROW_PATTERNS)]
+    assert len(narrow) > 100, "the narrow (Greptile) list is a deliberate subset of the closure"
 
 
 def test_every_path_load_in_the_closure_is_known():
@@ -186,6 +186,8 @@ def test_negative_control_the_pin_sees_a_narrowed_rule(monkeypatch):
     monkeypatch.setattr(vgc, "REUSE_EXTRA_PREFIXES",
                         tuple(p for p in vgc.REUSE_EXTRA_PREFIXES if p != "services/zoe-data/"))
     monkeypatch.setattr(vgc, "REUSE_SAFE_PREFIXES", vgc.REUSE_SAFE_PREFIXES + ("services/zoe-data/",))
+    # ...and the pattern set too, which since 2026-11-11 also covers the whole tree
+    monkeypatch.setattr(vgc, "VOICE_PATH_PATTERNS", vgc.VOICE_PATH_NARROW_PATTERNS)
     assert any(not vgc.reuse_relevance(f) for f in CLOSURE)
 
 
@@ -194,3 +196,36 @@ def test_no_allowlisted_area_contains_a_closure_file_unless_vetoed():
     for f in CLOSURE:
         if f.startswith(vgc.REUSE_SAFE_PREFIXES):
             assert vgc.reuse_relevance(f), f"{f} is allowlisted and nothing vetoes it"
+
+
+def test_the_closure_is_fully_covered_by_the_voice_path_patterns():
+    """Owner decision 2026-11-11: every zoe-data change (minus tests) is replay-gated. The
+    DEPLOY/PR scope (VOICE_PATH_PATTERNS) must classify EVERY file the replay can load as
+    voice path: zero ungated, not merely reported."""
+    ungated = sorted(f for f in CLOSURE | {v for v in PATH_LOADS.values() if v}
+                     if not vgc.touched_voice_files([f], vgc.VOICE_PATH_PATTERNS))
+    assert not ungated, (
+        "files the replay probe loads are NOT in VOICE_PATH_PATTERNS (add them to "
+        f"VOICE_PATH_WIDE_PATTERNS in voice_gate_check.py): {ungated}")
+
+
+def test_negative_control_the_full_coverage_pin_sees_a_narrowed_scope(monkeypatch):
+    monkeypatch.setattr(vgc, "VOICE_PATH_PATTERNS", vgc.VOICE_PATH_NARROW_PATTERNS)
+    assert any(not vgc.touched_voice_files([f], vgc.VOICE_PATH_PATTERNS) for f in CLOSURE)
+
+
+def test_zoe_data_scope_negative_controls():
+    t = lambda f: bool(vgc.touched_voice_files([f], vgc.VOICE_PATH_PATTERNS))  # noqa: E731
+    assert t("services/zoe-data/some_brand_new_module.py")          # any non-test file
+    assert t("services/zoe-data/routers/lists.py")
+    assert t("services/zoe-data/lexicons_data/en.json")             # runtime data
+    assert not t("services/zoe-data/tests/test_lists.py")           # tests are not
+    assert not t("services/zoe-data/tests/conftest.py")
+    assert t("services/zoe-data/tests/replay_samples.py")           # ...except the replay's
+    assert not t("services/zoe-data/AGENTS.md")                     # docs are not
+    assert not t("docs/knowledge/voice-pipeline.md")
+    assert not t("services/zoe-auth/main.py")
+    # narrow (Greptile) list: a zoe-data file is NOT voice-load-bearing on its own
+    n = lambda f: bool(vgc.touched_voice_files([f], vgc.VOICE_PATH_NARROW_PATTERNS))  # noqa: E731
+    assert not n("services/zoe-data/routers/lists.py")
+    assert n("services/zoe-data/fast_tiers.py")
