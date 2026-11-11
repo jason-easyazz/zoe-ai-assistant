@@ -497,6 +497,16 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   rebuild from survivors, FTS optimize), a fail-closed serve wall, and a salted re-ingest ledger. Seeded property tests with a
   lineage-less negative control (hand-run, never CI-wired, scratch temp-dir data only) + `bench.py` (forget latency, fan-out,
   on-disk residue per strategy). README is the record, including a writer-lineage table read from `services/zoe-data`.
+- `felt-scorecard/` - **felt scorecard** (`docs/research/samantha-frontier-2026-11-11.md`
+  section 4, P1): one read-only script, `scorecard.py`, that prints (table or `--json`) whether
+  the memory circuit is closed on real household turns, from live log-marker counts, aggregate
+  Postgres SELECTs (read-only session + read-only transaction; queries must return numbers),
+  MemPalace `chroma.sqlite3` opened `mode=ro`, and `night-window.log`. It prints counts and
+  timings only, never a log line, row or env value; unmeasurable numbers print `unmeasured`
+  with the reason. The panel log on the Pi is opt-in (`--panel`, over ssh; the Pi side emits only an
+  allowlist of timestamps and numeric timing fields). `test_scorecard.py` feeds the parsers synthetic lines
+  and is hand-run under `flock -x /tmp/zoe-test-lane.lock` (no `ci_safe` marker, not CI-wired).
+  README holds the 2026-11-12 output and the comparison with the 2026-11-11 hand measurement.
 - `p0-deroot/` — **P0 de-root lab** (`docs/architecture/p0-deroot.md` section 6): one
   no-network container booting systemd 249 (not `--privileged`) with the deliverables
   of `scripts/setup/p0-deroot/` installed verbatim, three stand-in services probing
