@@ -120,6 +120,15 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   `skybridge_service.py`) is still live — the estate calls it.
 - **`zoe-auth`**, **`zoe-cloudflared`** — auth + edge tunnel (infra).
 
+- **Offline pendant transcription (the night re-pass)** — decision 2026-11-09: the Omi pendant's audio gets a
+  best-quality OFFLINE second transcript, made at night while Zoe sleeps, **separate from the live Moonshine rock** (Moonshine
+  still writes the first transcript within minutes of a sync; nothing live depends on the re-pass). The round-2 bake-off chose
+  **Qwen3-ASR-1.7B (the pivot) + Parakeet-TDT-0.6B-v3 + a third voter (Whisper large-v3 when the night has room, else distil-large-v3) fused by ROVER word voting on the GPU, the panel's own ResNet34 speaker step (mean-removed, abstaining), and Whisper large-v3 / Granite on a rotating evaluation sample feeding a contender ledger (the owner decides any drop)**, run in its own
+  venv and capped scope by `scripts/night/jobs/omi_repass_worker.py` before the 12B loads. The ASR and diarisation engines are a **pluggable seam**
+  (`ZOE_OMI_NIGHT_ASR` / `ZOE_OMI_NIGHT_DIAR`, declared in `omi_repass.BACKENDS`): the model choice here is NOT a rock and may
+  be replaced by a later winner without touching this file's rocks. Flag-dark (`ZOE_OMI_NIGHT_REPASS=off|shadow|on`; a daytime
+  rehearsal must pass before shadow). Spec: [`knowledge/omi-night-repass.md`](knowledge/omi-night-repass.md).
+
 ## 🧩 Live modules (don't mistake these for dead)
 
 Running as containers today — **keep**:
@@ -177,8 +186,9 @@ Do not grep for `zoe-music` and treat a `zoe-music-assistant` hit as a module re
   internet server (the authoritative copy now lives there).
 - **Dockerized `zoe-llamacpp`** — retired; the brain is host-native `llama-server`.
 - **wyoming-piper TTS** — retired (replaced by Kokoro to reclaim ~2 GB RAM).
-- **whisper as *primary* STT** — superseded by Moonshine (a faster-whisper worker may
-  exist as a secondary/fallback, but Moonshine is the rock).
+- **whisper as *primary* (live) STT** — superseded by Moonshine (a faster-whisper worker may
+  exist as a secondary/fallback, but Moonshine is the rock). A faster-whisper worker's only role is the
+  **offline** pendant night re-pass above (a CPU last resort), which never serves a voice turn.
 
 ## 📏 The rule (how this stays locked)
 

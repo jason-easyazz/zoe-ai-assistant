@@ -748,6 +748,9 @@ async def delete_recording(user_id: str, rid: str) -> bool:
                 return False
             import omi_day_review          # FIRST: the day review's quotes of this recording go too (a failure keeps the recording for a retry)
             await omi_day_review.forget_recording(user_id, rid)
+            import omi_repass          # the night re-pass's stored hypotheses of THIS recording (its words, private files); a failure keeps the recording for a retry
+            import omi_repass_eval
+            omi_repass_eval.forget_recording(omi_repass.home_dir(), user_id, rid)
             await _tombstone(db, rows[0], _now())
             await db.commit()
     logger.info("OMI_DELETED id=%s", rid)
@@ -772,8 +775,12 @@ async def update_recording(user_id: str, rid: str, *, keep_audio: Optional[bool]
         if not getattr(cur, "rowcount", 1):
             return None
         if keep_audio is False:       # un-keeping an already-transcribed (or empty-transcript) recording drops the WAV now - the owner's explicit call
-            rows = await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
-            if rows and rows[0]["status"] in ("done", "empty_transcript") and rows[0]["audio_path"]:
+            import omi_repass
+            held = omi_repass.holds_audio()
+            rows = await _fetch(db, "SELECT id, audio_path, status" + (", repass_state" if held else "") + " FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
+            if rows and held and rows[0]["repass_state"] in ("pending", "failed", ""):
+                pass          # the night pass has not read this audio yet (or failed on it): the WAV stays until it has (or until retention); the pass releases it after
+            elif rows and rows[0]["status"] in ("done", "empty_transcript") and rows[0]["audio_path"]:
                 _unlink(rows[0]["audio_path"])
                 await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL WHERE id = ?", (rid,))
                 await db.commit()
@@ -799,7 +806,15 @@ async def forget_user(user_id: str) -> int:
         n = 0
         voice_failure: Optional[BaseException] = None
         health_failure: Optional[BaseException] = None
+        hyps_failure: Optional[BaseException] = None
         async with erase_gate.erasing(user_id):
+            try:        # the night re-pass's per-chunk hypotheses (words, private files), swept INSIDE the gate the hypothesis writer also takes: a failure is LOUD, raised below after the rest has run
+                import omi_repass
+                import omi_repass_eval
+                omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("OMI_REPASS_HYPS_ERASE_INCOMPLETE user=%s reason=%s", user_id, type(exc).__name__)
+                hyps_failure = exc
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, audio_path, status FROM omi_recordings WHERE user_id = ? AND status != 'deleted'", (user_id,)):
                     await _tombstone(db, r, _now())
@@ -827,6 +842,8 @@ async def forget_user(user_id: str) -> int:
                 logger.warning("omi_devices: pendant registrations NOT unassigned for a forgotten user (%s)", type(exc).__name__)
         if voice_failure is not None:
             raise VoiceEraseIncomplete(type(voice_failure).__name__) from voice_failure
+        if hyps_failure is not None:
+            raise VoiceEraseIncomplete("hyps:" + type(hyps_failure).__name__) from hyps_failure
         if health_failure is not None:
             raise HealthEraseIncomplete(type(health_failure).__name__) from health_failure
         return n
@@ -850,6 +867,23 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
         from db_compat import get_compat_db
         n = 0
         async with erase_gate.erasing(user_id, bump=False):
+            # the hypotheses are rewritten INSIDE the gate the hypothesis writer also takes (``writing``): a write in flight lands first and is erased with the rest, a queued one runs after and is redacted against the ledger
+            try:
+                import omi_repass
+                import omi_repass_eval
+                n += omi_repass_eval.erase_entity(omi_repass.home_dir(), user_id, rx, _FORGOTTEN_MARK)       # the re-pass's stored hypotheses naming it
+            except Exception as exc:  # noqa: BLE001
+                if strict:
+                    raise
+                # not strict, but still never leave forgotten text behind: the hypotheses are private, week-long and regenerable, so drop ALL of the member's
+                logger.error("omi_recordings: re-pass hypotheses could not be redacted (%s) - dropping the member's hypotheses instead", type(exc).__name__)
+                try:
+                    import omi_repass
+                    import omi_repass_eval
+                    n += omi_repass_eval.forget_user(omi_repass.home_dir(), user_id)
+                except Exception as exc2:  # noqa: BLE001 - nothing proves the forgotten text is gone: fail the erase (a strict caller retries; the outer handler logs)
+                    logger.error("omi_recordings: re-pass hypotheses NOT erased for a forgotten entity (%s)", type(exc2).__name__)
+                    raise
             async with get_compat_db() as db:
                 for r in await _fetch(db, "SELECT id, transcript, audio_path FROM omi_recordings WHERE user_id = ? AND status = 'done'", (user_id,)):
                     text = r["transcript"] or ""
@@ -874,19 +908,27 @@ async def erase_entity(user_id: str, rx: "re.Pattern[str]", *, strict: bool = Fa
         return 0
 
 
-async def _redact_forgotten(user_id: str, text: str) -> str:
-    """A transcript lands AFTER a forget: redact it against the forget ledger so a forgotten name cannot come back through here."""
+async def _redact_forgotten(user_id: str, text: str, *, strict: bool = False) -> str:
+    """A transcript lands AFTER a forget: redact it against the forget ledger so a forgotten name cannot come back through here.
+    ``strict`` = FAIL CLOSED: an unreadable ledger cannot prove the text free of a forgotten name, so this RAISES (``LedgerUnavailable``) and the caller stores
+    nothing. The night re-pass always asks for it (it can keep the first-pass text). The first pass asks only while ``ZOE_OMI_NIGHT_REPASS`` is not off:
+    with the flag off it is the original fail-open (an unreadable ledger must not lose the transcript; ``erase_entity`` covers the live case)."""
     if not text:
         return text
     try:
         import forget_match as fm
         import memory_forgotten as mf
-        spans = await mf.spans(user_id, text)
-        if spans:
-            return fm.redact(text, spans)[0]
-    except Exception as exc:  # noqa: BLE001 - the ledger being unreadable must not lose the transcript; erase_entity covers the live case
-        logger.debug("omi_recordings: forget ledger not applied (%s)", type(exc).__name__)
-    return text
+        spans = await mf.spans(user_id, text, strict=True) if strict else await mf.spans(user_id, text)
+        return fm.redact(text, spans)[0] if spans else text
+    except Exception as exc:  # noqa: BLE001 - imports included: flag-off stays main's fail-open
+        if not strict:
+            logger.debug("omi_recordings: forget ledger not applied (%s)", type(exc).__name__)
+            return text
+        logger.warning("omi_recordings: forget ledger unreadable (%s) - transcript text withheld, not stored", type(exc).__name__)
+        import memory_forgotten as mf
+        if isinstance(exc, mf.LedgerUnavailable):
+            raise
+        raise mf.LedgerUnavailable(type(exc).__name__) from exc
 
 
 # --- transcription ------------------------------------------------------------------------------------------------------
@@ -1105,21 +1147,23 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     level: dict = {}
     segs: Optional[list] = None            # the omi_segments rows (only while ZOE_OMI_SPEAKER_TAG is not off)
     spk_state, model_id = "unverified", None
+    import omi_repass as _rp
+    strict = _rp.mode() != "off"          # flag off: the first pass stays exactly as it was (ledger failure = fail open)
     try:
         turns, spk_state, model_id = await _diarise(uid, path, now)
         if turns:
             texts = await transcribe_turns(path, [(t.start_ms, t.end_ms) for t in turns], gate=lambda: _patient_gate(now),
                                            pause_s=pause_s, stats=seen_chunks)
             segs = [{"start_ms": t.start_ms, "end_ms": t.end_ms, "speaker": t.speaker, "score": t.score, "windows": t.windows,
-                     "embedding": t.embedding, "text": await _redact_forgotten(uid, x)} for t, x in zip(turns, texts)]
+                     "embedding": t.embedding, "text": await _redact_forgotten(uid, x, strict=strict)} for t, x in zip(turns, texts)]
             text = " ".join(x["text"] for x in segs if x["text"].strip())
         else:
             spans: Optional[list] = [] if _tag_mode() != "off" else None
             text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks, spans=spans)
-            text = await _redact_forgotten(uid, text)
+            text = await _redact_forgotten(uid, text, strict=strict)
             if spans is not None:
                 segs = [{"start_ms": a, "end_ms": b, "speaker": "unverified", "score": None, "windows": 0, "embedding": None,
-                         "text": await _redact_forgotten(uid, x)} for a, b, x in spans]
+                         "text": await _redact_forgotten(uid, x, strict=strict)} for a, b, x in spans]
         if not text.strip():                    # diagnostics for the WARNING below; off the event loop (a 10-minute WAV is ~10M samples)
             level = await asyncio.to_thread(measure_wav_file, path)
     except GateClosed as exc:                   # the gate closed mid-job: not a failure, try again later
@@ -1172,7 +1216,7 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             if segs is not None:              # segments land BEFORE the row says done, and the WAV goes only after both
                 import omi_voices
                 try:
-                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid))  # Zoe's own replies: not a person
+                    omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs))  # Zoe's own replies: not a person
                     seg_ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=model_id,
                                                               channel="panel" if spk_state == "tagged" else None)
                 except Exception as exc:  # noqa: BLE001 - a segment-store failure never costs the transcript
@@ -1183,8 +1227,11 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                     except Exception:  # noqa: BLE001
                         pass
             # held for tagging: only while a line needs a name, never past audio_expires_at (release_tagged_audio / purge_expired_audio)
-            hold = keep or (keep_for_tagging() and bool(seg_ids) and spk_state == "tagged" and any(needs_name(x) for x in segs or []))
+            import omi_repass
+            repass = omi_repass.holds_audio()      # the night pass has not seen this audio yet: the WAV is HELD for it (bounded by audio_expires_at)
+            hold = keep or repass or (keep_for_tagging() and bool(seg_ids) and spk_state == "tagged" and any(needs_name(x) for x in segs or []))
             await db.execute("UPDATE omi_recordings SET status = 'done', transcript = ?, transcribed_at = ?, speaker_state = ?"
+                             + (", repass_state = 'pending'" if repass else "")
                              + ("" if hold else ", audio_path = '', audio_bytes = 0, audio_expires_at = NULL")
                              + " WHERE id = ? AND status = 'transcribing'", (text, _iso(_now()), spk_state, rid))
             await db.commit()
@@ -1365,6 +1412,9 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
         from db_compat import get_compat_db
         async with get_compat_db() as db:
             sql = "SELECT id, user_id, audio_path FROM omi_recordings WHERE status = 'done' AND keep_audio = 0 AND audio_path != ''"
+            import omi_repass
+            if omi_repass.holds_audio():          # a recording the night pass still owes a look is never released here (retention still bounds it)
+                sql += " AND repass_state NOT IN ('pending', 'failed')"      # 'failed' keeps the WAV to retention so a fixed pass can be re-run on it
             rows = await _fetch(db, sql + (" AND user_id = ?" if user_id else ""), (user_id,) if user_id else ())
             for r in rows:
                 if keep_for_tagging():
@@ -1490,6 +1540,17 @@ async def run_retention_loop() -> None:
             await purge_expired_audio()
             await release_tagged_audio()
             await _sweep_voices()
+            import omi_repass          # the re-pass's private hypotheses expire on their date too, flag on or off, busy or idle
+            import omi_repass_eval
+            omi_repass_eval.prune_hyps(omi_repass.home_dir())
+            try:   # unconfirmed wearer proposals expire after PROPOSAL_KEEP_DAYS even with the re-pass flag off (run_night returns before its own drop when off)
+                from db_compat import get_compat_db
+                async with get_compat_db() as db:
+                    await omi_repass.drop_stale_proposals(db)
+                    await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                if "omi_wearer_samples" not in str(exc):       # pre-0075: nothing to expire yet
+                    logger.warning("omi_repass: proposal expiry failed (%s)", type(exc).__name__)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

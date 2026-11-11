@@ -539,6 +539,21 @@ def test_a_retag_moves_what_the_first_tag_taught_to_the_right_person(env, monkey
     assert env.db.q("SELECT n_segments FROM learned_voiceprints WHERE people_id = ?", (alex,)) == [(2,)]
 
 
+def test_releasing_the_last_contribution_with_keep_empty_keeps_the_print_and_its_opt_out(env, monkeypatch):
+    """The night re-pass replaces a recording's segments: a stopped voice whose only contributions were there must not be deleted and silently
+    recreated with learning on (``keep_empty``). Negative control: the default still drops the print."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    segs = [r[0] for r in env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0, status = 'confirmed', rejections = 2")
+    env.db.conn.commit()
+    run(ov._release_contributions(env.db, A, segs, keep_empty=True))
+    assert env.db.q("SELECT learning_enabled, status, rejections, n_segments, n_recordings FROM learned_voiceprints") == [(0, "confirmed", 2, 0, 0)]
+    run(ov._release_contributions(env.db, A, segs))                       # nothing left to release; the plain rebuild of an empty print drops it
+    vp = env.db.q("SELECT id FROM learned_voiceprints")[0][0]
+    assert run(ov.rebuild(env.db, vp)) is False and env.db.q("SELECT COUNT(*) FROM learned_voiceprints") == [(0,)]
+
+
 def test_a_tagged_line_marked_not_a_person_is_untagged_and_unlearned(env, monkeypatch):
     cid = _sam_cluster(env, monkeypatch, n=2)
     env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
@@ -550,7 +565,7 @@ def test_a_tagged_line_marked_not_a_person_is_untagged_and_unlearned(env, monkey
 
 
 def test_lines_under_zoes_own_speech_are_not_a_person(env, monkeypatch):
-    async def spoke(db, uid, rec):
+    async def spoke(db, uid, rec, **kw):
         return [(2500, 6000)]
     monkeypatch.setattr(ov, "zoe_spoken_spans", spoke)
     rid = transcribe(env, monkeypatch, turns((0, 3, "you", 0.6, WEARER), (3, 6, "other", 0.0, SAM)))
@@ -845,7 +860,7 @@ def test_guests_and_panels_cannot_call_the_voice_api(env, monkeypatch):
     assert env.client.get("/api/omi/voices").status_code == 403                    # a panel's device token is not the person
 
 
-ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_recordings.py", "routers/omi_voices.py", "routers/omi_recordings.py", "contacts_store.py", "person_merge.py",
+ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_repass_clean.py", "omi_transcript_book.py", "omi_repass_who.py", "omi_recordings.py", "routers/omi_voices.py", "routers/omi_recordings.py", "contacts_store.py", "person_merge.py",
            "memory_forget_cascade.py",
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller
@@ -1403,3 +1418,147 @@ def test_the_voices_read_says_which_tagging_mode_is_live(env, monkeypatch):
     assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "shadow"
     monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "bogus")
     assert env.client.get("/api/omi/voices").json()["speaker_tag"] == "off"
+
+
+def test_the_panel_cache_serves_each_recording_its_own_interval(monkeypatch):
+    """Two recordings in the same ten-minute bucket: the second is not served the first one's slice of the panel log."""
+    import datetime as dt
+    import sys
+    import types
+
+    base = 1_790_000_000.0 - (1_790_000_000.0 % 600)           # a bucket start
+    stamps = [base + 30, base + 400]                           # one turn near each recording
+
+    class T:
+        def __init__(self, ts):
+            self.recorded_ts = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
+    fake = types.SimpleNamespace(fetch_lines=lambda *_a, **_k: [], events=lambda lines: lines, turns=lambda ev: [T(t) for t in stamps],
+                                 match_clips=lambda *_a, **_k: {}, corpus_index=lambda: None)
+    monkeypatch.setitem(sys.modules, "panel_voice_log", fake)
+    ov._PANEL_CACHE.clear()
+    first = ov._panel_turns(base + 10, base + 60)
+    second = ov._panel_turns(base + 380, base + 430)    # same bucket key
+    assert [t.recorded_ts.timestamp() for t in first] == [stamps[0]]
+    assert [t.recorded_ts.timestamp() for t in second] == [stamps[1]]
+    ov._PANEL_CACHE.clear()
+
+
+def test_release_skip_frozen_keeps_a_stopped_voices_contributions_and_an_empty_list_is_a_noop(env, monkeypatch):
+    """Review (re-pass): a print whose learning was stopped must keep its contributions through a replacement (the re-pass cannot re-teach it); an empty id list
+    must not build ``IN ()`` (a Postgres syntax error). Negative control: without skip_frozen the stopped print is emptied."""
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    segs = [r[0] for r in env.db.q("SELECT segment_id FROM learned_voiceprint_segments ORDER BY segment_id")]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    class _NoQuery:                                  # SQLite accepts ``IN ()``, so prove no query is issued at all
+        def __getattr__(self, name):
+            raise AssertionError("an empty id list must not touch the database")
+    assert run(ov._release_contributions(_NoQuery(), A, [], keep_empty=True)) == []
+    assert run(ov._release_contributions(env.db, A, segs, keep_empty=True, skip_frozen=True)) == []
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(2,)] and env.db.q("SELECT n_segments FROM learned_voiceprints") == [(2,)]
+    run(ov._release_contributions(env.db, A, segs, keep_empty=True))
+    assert env.db.q("SELECT n_segments FROM learned_voiceprints") == [(0,)]
+
+
+def test_mark_overlaps_never_overrides_a_carried_human_decision():
+    segs = [{"start_ms": 0, "end_ms": 4000, "carry": {"tagged_person_id": "p1"}, "not_person": None},
+            {"start_ms": 0, "end_ms": 4000}]
+    assert ov.mark_overlaps(segs, [(0, 4000)]) == 1
+    assert segs[0]["not_person"] is None and segs[1]["not_person"] == "zoe"
+
+
+def test_frozen_print_contributions_are_relinked_to_the_replacement_line_so_a_correction_releases_them(env, monkeypatch):
+    """Review (re-pass): a stopped print keeps its contributions through a segment replacement, but they were keyed to the DELETED first-pass ids, so correcting the replacement line
+    released nothing. Negative control: the un-relinked id releases nothing; the relinked one releases the contribution. A line with no matching replacement drops its contribution."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    old = [dict(zip(("id", "start_ms", "end_ms", "tagged_person_id"), r)) for r in env.db.q(
+        "SELECT id, start_ms, end_ms, tagged_person_id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    assert len(old) == 2
+    frozen = run(rp._frozen_contributions(env.db, A, [o["id"] for o in old]))
+    assert len(frozen) == 2
+    env.db.conn.execute("PRAGMA foreign_keys = ON")
+    env.db.conn.execute("DELETE FROM omi_segments")                      # what store_segments does to the old lines: contributions carry no FK to them, so they survive (review claim checked)
+    env.db.conn.commit()
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(2,)]
+    # the replacement lines: one covering the first old line with the carried tag, nothing for the second
+    new_id = "replacement-line-1"
+    segs = [{"start_ms": old[0]["start_ms"], "end_ms": old[0]["end_ms"], "carry": {"tagged_person_id": pid}}]
+    assert run(ov._release_contributions(env.db, A, [new_id], skip_frozen=False)) == []            # control: before relinking the new id releases nothing
+    run(rp._relink_frozen(env.db, frozen, old, [new_id], segs))
+    assert env.db.q("SELECT segment_id FROM learned_voiceprint_segments") == [(new_id,)]            # the unmatched contribution was dropped, the matched one re-keyed
+    released = run(ov._release_contributions(env.db, A, [new_id], keep_empty=True))
+    assert [r[0] for r in released] == [new_id] and env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(0,)]
+
+
+def test_replacement_keeps_contributions_when_the_member_or_the_global_learning_switch_is_off(env, monkeypatch):
+    """Review (re-pass): ``set_member_learning(False)`` writes only omi_voice_settings and the flag is global; neither flips a print's own ``learning_enabled``. Nothing re-teaches
+    then, so a replacement must KEEP the contributions (and return them to be relinked). Negative control: with learning on they are released."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    ids = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    count = lambda: env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments")[0][0]      # noqa: E731
+    assert count() == 2 and env.db.q("SELECT learning_enabled FROM learned_voiceprints") == [(1,)]
+    run(ov.set_member_learning(env.db, A, False))                                    # member-wide off: the print's own switch stays 1
+    assert len(run(rp._release_or_freeze(env.db, A, ids))) == 2 and count() == 2
+    run(ov.set_member_learning(env.db, A, True))
+    monkeypatch.setenv("ZOE_OMI_LEARN_VOICES", "0")                                  # global flag off
+    assert len(run(rp._release_or_freeze(env.db, A, ids))) == 2 and count() == 2
+    monkeypatch.setenv("ZOE_OMI_LEARN_VOICES", "1")                                  # control: learning on -> released for the re-teach
+    assert run(rp._release_or_freeze(env.db, A, ids)) == [] and count() == 0
+
+
+def test_merged_replacement_line_fuses_the_frozen_contributions_instead_of_dropping_one(env, monkeypatch):
+    """Review: two first-pass lines of one person merged into one replacement line; the second frozen contribution hit the existing-row branch and was DELETED. Now the two embeddings
+    are fused (unit mean) into the one row. Negative control: the stored embedding is neither original (the old code left the first, unchanged)."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    old = [dict(zip(("id", "start_ms", "end_ms", "tagged_person_id"), r)) for r in env.db.q(
+        "SELECT id, start_ms, end_ms, tagged_person_id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    frozen = run(rp._frozen_contributions(env.db, A, [o["id"] for o in old]))
+    a = np.zeros(256)
+    a[0] = 1.0
+    b = np.zeros(256)
+    b[1] = 1.0
+    for (vp, sid), v in zip(sorted(frozen, key=lambda x: x[1]), (a, b)):
+        env.db.conn.execute("UPDATE learned_voiceprint_segments SET embedding = ? WHERE voiceprint_id = ? AND segment_id = ?", (rp._blob(v), vp, sid))
+    env.db.conn.commit()
+    segs = [{"start_ms": 0, "end_ms": 10000, "carry": {"tagged_person_id": pid}}]
+    run(rp._relink_frozen(env.db, frozen, old, ["merged"], segs))
+    rows_ = env.db.q("SELECT segment_id, embedding FROM learned_voiceprint_segments")
+    assert [r[0] for r in rows_] == ["merged"]
+    got = rp._unit(rp._vec(rows_[0][1]))
+    assert abs(float(got @ rp._unit(a + b)) - 1.0) < 1e-4 and abs(float(got @ a) - 1.0) > 0.1
+
+
+def test_three_colliding_frozen_contributions_fuse_with_equal_weight(env, monkeypatch):
+    """Review: pairwise ``unit(unit(a+b)+c)`` over-weights the last sample. Equal weight: the result is ``unit(a+b+c)``."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    old = [dict(zip(("id", "start_ms", "end_ms", "tagged_person_id"), r)) for r in env.db.q(
+        "SELECT id, start_ms, end_ms, tagged_person_id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    vp, rec = env.db.q("SELECT voiceprint_id, recording_id FROM learned_voiceprint_segments")[0]
+    old.append({"id": "third-old", "start_ms": old[0]["start_ms"], "end_ms": old[0]["end_ms"], "tagged_person_id": pid})
+    env.db.conn.execute("INSERT INTO learned_voiceprint_segments (voiceprint_id, segment_id, recording_id, embedding, added_at) VALUES (?, 'third-old', ?, ?, '2026-11-10T00:00:00Z')",
+                        (vp, rec, rp._blob(np.zeros(256))))
+    env.db.conn.commit()
+    frozen = run(rp._frozen_contributions(env.db, A, [o["id"] for o in old]))
+    assert len(frozen) == 3
+    vs = [np.eye(256)[0], np.eye(256)[1], np.eye(256)[2]]
+    for (v_, sid), v in zip(sorted(frozen, key=lambda x: x[1]), vs):
+        env.db.conn.execute("UPDATE learned_voiceprint_segments SET embedding = ? WHERE voiceprint_id = ? AND segment_id = ?", (rp._blob(v), v_, sid))
+    env.db.conn.commit()
+    run(rp._relink_frozen(env.db, frozen, old, ["merged"], [{"start_ms": 0, "end_ms": 10000, "carry": {"tagged_person_id": pid}}]))
+    (row,) = env.db.q("SELECT embedding FROM learned_voiceprint_segments")
+    assert abs(float(rp._unit(rp._vec(row[0])) @ rp._unit(sum(vs))) - 1.0) < 1e-4

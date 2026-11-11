@@ -1,0 +1,20 @@
+# The pendant night re-pass runtime (scripts/setup/setup_omi_repass.sh). Top-level pins; pip resolves the rest. torch itself is NOT here: it is the Jetson CUDA build
+# (torch 2.8.0, CUDA 12.6) already installed in the user site (~/.local/lib/python3.10/site-packages), made visible to the isolated venv by a zz_usersite.pth.
+# transformers stack = the round-2 bake-off's, so its GPU numbers apply (transformers 5.17.0, torch 2.8.0):
+transformers==5.17.0
+tokenizers==0.23.2
+huggingface-hub==1.11.0
+safetensors==0.8.0
+accelerate==1.13.0
+torchaudio==2.8.0
+decorator==5.3.1
+numpy==1.26.4
+scipy==1.15.3
+soundfile==0.13.1
+librosa==0.11.0
+sentencepiece==0.2.1
+# VAD (silero, the bake-off's chunking) + the CPU last-resort ASR:
+faster-whisper==1.2.1
+ctranslate2==4.8.5
+onnxruntime==1.23.2
+av==17.1.0
