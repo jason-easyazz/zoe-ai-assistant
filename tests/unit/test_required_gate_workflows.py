@@ -229,6 +229,29 @@ def test_voice_gate_binds_evidence_to_the_pr_head():
     assert "pull_request.head.sha" in str(env.get("HEAD_SHA", "")), env
 
 
+def test_voice_gate_reuse_reads_pr_objects_as_data_only():
+    """Evidence reuse (2026-11-11) makes the self-hosted job FETCH the PR head's and the
+    probed commit's git objects. That is only safe while they stay DATA: every git command
+    in this workflow is a fetch into the private refs/voice-gate/ namespace (no tags, no
+    FETCH_HEAD), nothing checks out / merges / resets / builds them, the probed sha comes
+    only from the checker's validated --print-artifact-commit, and the assertion that
+    consumes them is the BASE checker with --allow-reuse beside --expect-revision."""
+    spec = _load("voice-gate.yml")
+    shell = "\n".join(_executed_shell(job) for job in spec["jobs"].values())
+    git_cmds = re.findall(r"(?<![-\w])git\s+(?:-C\s+\S+\s+)?([a-z-]+)", shell)
+    assert git_cmds and set(git_cmds) == {"fetch"}, git_cmds
+    joined = shell.replace("\\\n", " ")
+    fetches = re.findall(r"git fetch[^\n|]*", joined)
+    assert len(fetches) == 2, fetches
+    for f in fetches:
+        assert "--no-tags" in f and "--no-write-fetch-head" in f and ":refs/voice-gate/" in f, f
+    for banned in ("checkout ", "switch ", "worktree", "reset ", "merge ", "npm ", "pip ", "make "):
+        assert not re.search(rf"(?<![-\w]){re.escape(banned)}", joined), banned
+    assert 'probed="$(python3 scripts/maintenance/voice_gate_check.py --print-artifact-commit)"' in joined
+    evidence = _executed_shell(spec["jobs"]["replay-evidence"])
+    assert re.search(r'--expect-revision "\$\{HEAD_SHA\}" --allow-reuse', evidence), evidence
+
+
 def test_voice_gate_consumes_the_pr_as_data_not_code():
     """The changed-file list comes from the API, not from running git over a
     checkout of the PR. Reading a filename can do nothing."""

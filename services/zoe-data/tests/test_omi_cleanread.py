@@ -300,3 +300,24 @@ def test_cleanread_cli_with_only_a_fallback_url_uses_that_model(monkeypatch):
     monkeypatch.setattr(db_pool, "close_pool", noop)
     rc, summary = run(mod.amain(["--fallback-url", "http://127.0.0.1:9/v1"]))
     assert rc == 0 and summary["answer"] == "cleaned" and called == ["http://127.0.0.1:9/v1"]
+
+
+def test_transcript_book_day_window_is_local_midnight_to_local_midnight_across_dst(monkeypatch):
+    """Review: the window end was ``UTC(midnight) + 24 h``, an hour off on a DST day. Sydney: 2026-04-05 is 25 h (DST ends), 2026-10-04 is 23 h (DST starts).
+    Negative control: an ordinary day is 24 h either way."""
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo("Australia/Sydney")
+    seen: list = []
+
+    async def fake_all(db, sql, params=()):
+        seen.append(params)
+        return []
+    monkeypatch.setattr(book, "_all", fake_all)
+
+    def window(day):
+        seen.clear()
+        run(book.load_day(None, "u1", day, tz))
+        return seen[0][2], seen[0][3]
+    assert window(dt.date(2026, 4, 5)) == ("2026-04-04T13:00:00Z", "2026-04-05T14:00:00Z")      # 25 h: ends at the next LOCAL midnight (UTC+10 again)
+    assert window(dt.date(2026, 10, 4)) == ("2026-10-03T14:00:00Z", "2026-10-04T13:00:00Z")     # 23 h
+    assert window(dt.date(2026, 6, 10)) == ("2026-06-09T14:00:00Z", "2026-06-10T14:00:00Z")     # control: 24 h

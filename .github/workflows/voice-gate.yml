@@ -66,6 +66,12 @@
 #   * The pull request enters only as DATA: a changed-file list fetched from the
 #     GitHub API, and a 40-hex head SHA. Reading a filename can do nothing;
 #     running the PR's own copy of the checker could do anything.
+#     Since 2026-11-11 the self-hosted job also FETCHES the git objects of the PR
+#     head and of the probed commit (evidence reuse) into refs/voice-gate/*. They
+#     are read only by the BASE checker through `git diff-tree --raw` and
+#     `git merge-base` — tree entries and ancestry, no blob is even read. They are
+#     never checked out, merged, built or run, and a fetch runs no hook. A failed
+#     fetch makes the checker refuse reuse; it cannot make it accept.
 #   * Two distinct attacks are closed by the same rule. (a) BYPASS: a PR that
 #     edits voice_gate_check.py to print `voice=false` would have waved itself
 #     through, because the gate was running the PR's own classifier. (b) RCE: a
@@ -218,7 +224,8 @@ jobs:
     runs-on: self-hosted
     permissions:
       # READ-ONLY, deliberately. This job runs on the Jetson; it reads one JSON
-      # file and needs nothing else. It must never hold `checks: write` — the job
+      # file plus git objects (an anonymous fetch of this public repo) and needs
+      # nothing else. It must never hold `checks: write` — the job
       # closest to the production box is the last one that should be able to
       # satisfy the merge gate.
       contents: read
@@ -238,6 +245,33 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # EVIDENCE REUSE (2026-11-11). When `strict` forces a probed PR to be updated
+      # with main, the new head no longer equals the probed commit. The checker may
+      # still accept the evidence if the probed commit is an ANCESTOR of this head
+      # and the TREE diff between them touches nothing voice-relevant
+      # (voice_gate_check.reusable_evidence). That needs the two commits' git
+      # OBJECTS here — DATA, like the file list: they are fetched into a private
+      # ref namespace and read with `git diff-tree --raw` / `merge-base` only.
+      # Nothing is checked out, merged, built or executed, no hook runs on a
+      # fetch, and the code doing the reading is still the BASE's checker. A
+      # fetch that fails just leaves the commits unresolvable, and the checker
+      # then REFUSES reuse (fail closed) — it never guesses.
+      - name: Make the PR head and the probed commit available as objects (data only)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          git fetch --no-tags --no-write-fetch-head --depth=100 origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/voice-gate/pr-head" \
+            || echo "::warning::could not fetch the PR head objects; evidence reuse will be refused"
+          # The probed commit as the artifact records it, printed only when it is a
+          # validated 40-hex sha (anything else prints nothing and exits 1).
+          if probed="$(python3 scripts/maintenance/voice_gate_check.py --print-artifact-commit)"; then
+            git fetch --no-tags --no-write-fetch-head --depth=100 origin \
+              "+${probed}:refs/voice-gate/probed" \
+              || echo "::warning::could not fetch the probed commit ${probed}; evidence reuse will be refused"
+          fi
+
       - name: Assert a fresh passing replay-gate result BOUND to this PR head
         env:
           # The PR head enters as a 40-hex string and is only ever COMPARED
@@ -252,8 +286,10 @@ jobs:
           # --require: scope already decided this PR needs the gate.
           # --expect-revision: the artifact must record having exercised THIS
           # commit. Freshness alone is not evidence for this PR's code.
+          # --allow-reuse: ...or an ANCESTOR of it whose tree differs from this
+          # head's in no voice-relevant path. The log names which, and why.
           python3 scripts/maintenance/voice_gate_check.py \
-            --require --expect-revision "${HEAD_SHA}"
+            --require --expect-revision "${HEAD_SHA}" --allow-reuse
 
   # ----------------------------------------------------------- the verdict ----
   # PUBLISHES THE `voice-gate` CHECK — informational, fail-closed, NOT
@@ -333,7 +369,9 @@ jobs:
               conclusion = 'success';
               title = 'Replay gate proven for this head';
               summary = `Voice-path files: \`${files}\`\n\nA fresh, passing replay-gate result ` +
-                `bound to \`${headSha}\` was verified on the self-hosted runner.`;
+                `bound to \`${headSha}\` was verified on the self-hosted runner — either for ` +
+                `this exact commit, or REUSED from a probed ancestor whose tree differs from ` +
+                `this head's in no voice-relevant path (the evidence job's log names which).`;
             } else if (evidence === 'skipped' && isFork) {
               // A gated-off fork looks identical to a missing runner unless named.
               title = 'Fork PR needs maintainer approval';

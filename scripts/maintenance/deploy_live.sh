@@ -129,8 +129,14 @@ if ! grep -q -- '--expect-tree-of' "$SCRIPT_DIR/voice_gate_check.py"; then
     echo "⚠ voice_gate_check.py predates --expect-tree-of; binding to the exact commit instead." >&2
     bind_flag="--expect-revision"
 fi
+# Evidence reuse (2026-11-11, same as deploy.yml): an artifact for an earlier commit whose tree differs from
+# $target in no voice-relevant path also clears; feature-detected so an older checker gets the strict binding.
+reuse_flag=""
+if [ "$bind_flag" = "--expect-tree-of" ] && grep -q -- '--allow-reuse' "$SCRIPT_DIR/voice_gate_check.py"; then
+    reuse_flag="--allow-reuse"
+fi
 if ! python3 "$SCRIPT_DIR/voice_gate_check.py" --repo "$LIVE" --diff "${prev}..${target}" \
-        "$bind_flag" "$target"; then
+        "$bind_flag" "$target" ${reuse_flag:+"$reuse_flag"}; then
     echo "✗ REFUSING TO DEPLOY: voice-path change without a fresh passing replay-gate result for ${target:0:7} (see above)." >&2
     exit 1
 fi

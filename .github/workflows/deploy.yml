@@ -244,9 +244,19 @@ jobs:
             echo "::warning::live voice_gate_check.py predates --expect-tree-of; binding to the exact commit (--expect-revision) for this run."
             bind_flag="--expect-revision"
           fi
+          # EVIDENCE REUSE (2026-11-11): an artifact for an earlier commit P (e.g. the
+          # probed PR head before `strict` made it update with main) also clears the
+          # deploy when the tree diff P -> $target touches nothing voice-relevant
+          # (voice_gate_check.reusable_evidence; offline, over this repo's objects).
+          # Feature-detected for the same bootstrap reason as --expect-tree-of: a live
+          # checker without the flag simply gets the strict binding, never an error.
+          reuse_flag=""
+          if [ "$bind_flag" = "--expect-tree-of" ] && grep -q -- '--allow-reuse' scripts/maintenance/voice_gate_check.py; then
+            reuse_flag="--allow-reuse"
+          fi
           if ! python3 scripts/maintenance/voice_gate_check.py \
                  --repo /home/zoe/assistant --diff "${prev}..${target}" \
-                 "${bind_flag}" "${target}"; then
+                 "${bind_flag}" "${target}" ${reuse_flag:+"$reuse_flag"}; then
             echo "::error::REFUSING TO DEPLOY: ${prev:0:7}..${target:0:7} changes the voice runtime path without a fresh passing replay-gate result for the code being deployed (see above)."
             echo "Live tree stays at ${prev} — nothing was deployed or restarted."
             echo "To unwedge, on the Jetson as user zoe, replay a checkout of ${target:0:7}"

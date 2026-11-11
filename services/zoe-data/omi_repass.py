@@ -667,6 +667,77 @@ async def _add_wearer_samples(db, user_id: str, rid: str, windows: list, spans: 
     return n
 
 
+async def _release_or_freeze(db, uid: str, tagged_old: list[str]) -> list[tuple]:
+    """The first-pass lines are about to be replaced. Where the re-pass WILL re-teach (``omi_voices.may_learn``: flag on, the member's switch on, an adult) the old contributions are
+    released (a print's own stopped switch still protects it); where learning is stopped (the print's own switch, the member's, or the global flag) NOTHING re-teaches, so the
+    contributions are kept and returned [(voiceprint_id, old_segment_id)] to be relinked to the new line ids."""
+    import omi_voices
+    no_learning = not await omi_voices.may_learn(db, uid)
+    frozen = await _frozen_contributions(db, uid, tagged_old, all_prints=no_learning)
+    if not no_learning:
+        await omi_voices._release_contributions(db, uid, tagged_old, keep_empty=True, skip_frozen=True)
+    return frozen
+
+
+async def _frozen_contributions(db, user_id: str, seg_ids: list[str], *, all_prints: bool = False) -> list[tuple]:
+    """[(voiceprint_id, old_segment_id)] of the contributions a STOPPED (learning_enabled = 0) print holds for these first-pass segments; ``all_prints`` (the member or the global
+    learning switch is off) counts every print as stopped."""
+    if not seg_ids:
+        return []
+    import omi_voices
+    try:
+        rows = await _all(db, "SELECT c.voiceprint_id, c.segment_id FROM learned_voiceprint_segments c JOIN learned_voiceprints v ON v.id = c.voiceprint_id "
+                              f"WHERE v.owner_user_id = ?{'' if all_prints else ' AND v.learning_enabled = 0'} AND c.segment_id IN ({','.join('?' * len(seg_ids))})", (user_id, *seg_ids))
+    except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has none
+        if not omi_voices._missing(exc):
+            raise
+        return []
+    return [(r[0], r[1]) for r in rows]
+
+
+async def _relink_frozen(db, frozen: list[tuple], old: list[dict], new_ids: list[str], segs: list[dict]) -> None:
+    """The first-pass segments are gone, so a stopped print's preserved contributions are RE-KEYED to the replacement line that carries the same person tag over the same span
+    (a later "that is me" / "not a person" correction of that line can then release them). No matching line: the contribution is dropped and the print rebuilt (nothing
+    could ever release it). Never creates a contribution."""
+    if not frozen:
+        return
+    import omi_voices
+    by_old = {o["id"]: o for o in old}
+    touched: set = set()
+    fused_sum: dict = {}
+    for vp, osid in frozen:
+        o = by_old.get(osid)
+        best, best_ov = None, 0
+        for nid, sg in zip(new_ids, segs):
+            if o is None or (sg.get("carry") or {}).get("tagged_person_id") != o.get("tagged_person_id"):
+                continue
+            ov = min(sg["end_ms"], o["end_ms"]) - max(sg["start_ms"], o["start_ms"])
+            if ov > best_ov:
+                best, best_ov = nid, ov
+        held = await _all(db, "SELECT embedding FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, best)) if best is not None else []
+        if best is not None and not held:
+            await db.execute("UPDATE learned_voiceprint_segments SET segment_id = ? WHERE voiceprint_id = ? AND segment_id = ?", (best, vp, osid))
+        elif best is not None:
+            # two first-pass lines of the same person merged into ONE replacement line: a contribution is keyed (print, segment), so the two embeddings are FUSED (unit mean) into the
+            # one row instead of the later being discarded - a stopped print cannot be re-taught, so dropping a sample would lose it for good
+            mine = await _all(db, "SELECT embedding FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
+            if mine:
+                total = fused_sum.get((vp, best))
+                if total is None:
+                    total = _unit(_vec(held[0][0]))
+                total = total + _unit(_vec(mine[0][0]))      # the running UNNORMALISED sum: every merged sample weighs the same however many collide
+                fused_sum[(vp, best)] = total
+                fused = _unit(total)
+                await db.execute("UPDATE learned_voiceprint_segments SET embedding = ? WHERE voiceprint_id = ? AND segment_id = ?", (_blob(fused), vp, best))
+            await db.execute("DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
+            touched.add(vp)
+        else:
+            await db.execute("DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
+            touched.add(vp)
+    for vp in sorted(touched):
+        await omi_voices.rebuild(db, vp, keep_empty=True)
+
+
 async def _learn_carried_tags(db, user_id: str, seg_ids: list[str], segs: list[dict], rid: str) -> int:
     """The owner's earlier tags (first-pass segments) teach the R34 person prints: each carried ``tagged_person_id`` line's embedding joins that
     person's pendant print in THIS model (the same rules as ``omi_voices.tag``: learning allowed, never a child)."""
@@ -787,6 +858,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                 carried = carry_labels(segs, old)
                 former = sorted({o["voice_cluster_id"] for o in old if o.get("voice_cluster_id")})
                 pending_wearer_labels = [o for o in old if o.get("owner_label") == "you"]
+                frozen: list = []
                 try:
                     # ONE explicit transaction: asyncpg auto-commits each statement outside one (AsyncpgCompat.commit() is a no-op), so without it a failure
                     # between the segment delete and the recording update would leave the owner's original lines gone and nothing in their place
@@ -797,7 +869,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         try:
                             tagged_old = [o["id"] for o in old if o.get("tagged_person_id")]
                             if tagged_old:
-                                await omi_voices._release_contributions(db, uid, tagged_old, keep_empty=True, skip_frozen=True)
+                                frozen = await _release_or_freeze(db, uid, tagged_old)
                         except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
                             if not omi_voices._missing(exc):
                                 raise
@@ -817,6 +889,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                                 vals += [s["person"], s.get("person_score")]
                             if sets:
                                 await db.execute(f"UPDATE omi_segments SET {', '.join(sets)} WHERE id = ? AND user_id = ?", (*vals, sid, uid))
+                        await _relink_frozen(db, frozen, old, ids, segs)
                         untagged = [(sid, s) for sid, s in zip(ids, segs) if not s.get("carry") and not s.get("not_person")]
                         if untagged and adult:      # bystander voices: clusters + suggestions in the R34 space, exactly the first pass's machinery
                             await omi_voices.learn(db, uid, [i for i, _ in untagged], [s for _, s in untagged], model_id=MODEL_ID, you_min=LEARN_YOU_MIN)
@@ -845,7 +918,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                     return {"status": "failed", "why": "segments:" + type(exc).__name__, **counts}
                 await db.commit()
                 counts.update(status="replaced", carried=carried)
-            if adult and (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then
+            if m == "on" and adult and (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then. Shadow stores nothing
                 try:
                     pick = propose_wearer(res["windows"])
                     if pick:
@@ -1179,7 +1252,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         async with get_compat_db() as db:
             if wins_ and speech_ >= who.SESSION_MIN_S:
                 mu_by[key_] = who.session_mean([w[2] for w in wins_])
-                if not rehearse:
+                if m == "on":             # shadow (and a rehearsal) keeps the mean in memory only: shadow stores nothing biometric
                     try:
                         from manner_block import eligible as _elig
                         async with erase_gate.writing(uid_, seen.get(uid_, 0)) as live_:        # a member erased while the worker ran keeps no channel mean (it is derived from their voice)
@@ -1196,7 +1269,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         key_ = (uid_, dev_ or "")
         if key_ not in refs_cache:
             async with get_compat_db() as db:
-                refs_cache[key_] = await load_refs(db, uid_, zoe_ref, mu_by.get(key_), loud_by.get(key_), persist=not rehearse)
+                refs_cache[key_] = await load_refs(db, uid_, zoe_ref, mu_by.get(key_), loud_by.get(key_), persist=m == "on")
         return refs_cache[key_]
     chunked = [it for it in ok1 if isinstance(got1[it["id"]].get("chunks"), list)]
 
