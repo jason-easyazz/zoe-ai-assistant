@@ -450,8 +450,8 @@ as live performance.
 
 ### What the gate covers: all of `services/zoe-data/` (2026-11-11)
 
-Owner decision 2026-11-11: **every `services/zoe-data` change (minus its tests) gets a voice replay before
-merge.** `VOICE_PATH_PATTERNS` in `scripts/maintenance/voice_gate_check.py` is the union of
+Owner decision 2026-11-11: **every non-test, non-Markdown `services/zoe-data` change gets a voice replay before
+merge** (the whole `tests/` directory, support modules and fixtures included, is carved out; the closure oracle fails if the replay ever loads another file from it).** `VOICE_PATH_PATTERNS` in `scripts/maintenance/voice_gate_check.py` is the union of
 `VOICE_PATH_NARROW_PATTERNS` (the curated set, each entry reasoned in the source) and
 `VOICE_PATH_WIDE_PATTERNS` (`services/zoe-data/*` minus `tests/*` and `*.md`, plus the replay's closure files
 outside zoe-data). `test_voice_evidence_reuse_closure.py` re-traces the replay's import closure on every run and

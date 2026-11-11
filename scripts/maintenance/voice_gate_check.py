@@ -563,7 +563,10 @@ VOICE_PATH_PATTERNS = VOICE_PATH_NARROW_PATTERNS + VOICE_PATH_WIDE_PATTERNS
 # What the WIDE `services/zoe-data/*` glob does NOT cover (fnmatch's `*` crosses `/`): the
 # co-located tests (the replay imports none of them except tests/replay_samples.py, which the
 # narrow list names) and markdown docs (no zoe-data module reads one of its own *.md). A file
-# here is voice scope only if a NARROW pattern matches it (e.g. replay_samples.py, or a
+# here is voice scope only if a NARROW pattern matches it. The tests/ carve-out is the whole
+# DIRECTORY on purpose (support modules and fixtures are test area; owner: "minus its
+# tests"): the closure oracle fails if the replay ever loads another file from it.
+# (e.g. replay_samples.py, or a
 # *kokoro*-named test, as before). Not mirrored in greptile-gate.yml: Greptile uses the narrow
 # list alone, where these carve-outs do not exist.
 WIDE_NOT_FOR = ("services/zoe-data/tests/*", "services/zoe-data/*.md")

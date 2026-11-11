@@ -221,6 +221,12 @@ def test_zoe_data_scope_negative_controls():
     assert t("services/zoe-data/lexicons_data/en.json")             # runtime data
     assert not t("services/zoe-data/tests/test_lists.py")           # tests are not
     assert not t("services/zoe-data/tests/conftest.py")
+    # the carve-out is the whole tests/ DIRECTORY (support modules + fixtures are test
+    # area, owner: "minus its tests"); the closure oracle proves the replay loads only
+    # replay_samples.py from it, and a NEW test-dir file the replay starts to load fails
+    # test_the_closure_is_fully_covered_by_the_voice_path_patterns until it is gated.
+    assert not t("services/zoe-data/tests/forgotten_support.py")
+    assert not t("services/zoe-data/tests/fixtures/restraint_labelled.json")
     assert t("services/zoe-data/tests/replay_samples.py")           # ...except the replay's
     assert not t("services/zoe-data/AGENTS.md")                     # docs are not
     assert not t("docs/knowledge/voice-pipeline.md")
