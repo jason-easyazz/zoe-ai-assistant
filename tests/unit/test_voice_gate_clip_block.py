@@ -31,9 +31,13 @@ def test_t3_widened_voice_scope(path):
 def test_t3_widening_does_not_sweep_in_neighbours():
     """Literal paths, not globs: the tests, the zoe-auth service and other maintenance scripts stay out."""
     near = ["services/zoe-data/tests/test_intent_router.py", "services/zoe-auth/auth.py",
-            "services/zoe-data/routers/auth.py", "scripts/maintenance/voice_gate_check.py",
+            "scripts/maintenance/voice_gate_check.py",
             "scripts/maintenance/voice_corpus_strata.py", "scripts/perf/measure_speed.py"]
     assert vgc.touched_voice_files(near, vgc.VOICE_PATH_PATTERNS) == []
+    # (services/zoe-data/routers/auth.py is a neighbour of the NARROW literal only: the
+    # full set gates every zoe-data module since 2026-11-11.)
+    assert vgc.touched_voice_files(["services/zoe-data/routers/auth.py"],
+                                   vgc.VOICE_PATH_NARROW_PATTERNS) == []
 
 
 def _clip_art(**over):

@@ -279,9 +279,11 @@ jobs:
               // Three ways in: the `greptile-request` label (an explicit ask), a changed
               // file under a load-bearing path, or a diff at pr-hygiene's warn ceiling.
               const REQUEST_LABEL = 'greptile-request';
-              // The voice path is the repo's canonical definition, MIRRORED from
-              // scripts/maintenance/voice_gate_check.py VOICE_PATH_PATTERNS (fnmatch → regex);
-              // tests/unit/test_greptile_gate_workflow.py fails if the two drift.
+              // The curated load-bearing voice set, MIRRORED from
+              // scripts/maintenance/voice_gate_check.py VOICE_PATH_NARROW_PATTERNS (fnmatch →
+              // regex); tests/unit/test_greptile_gate_workflow.py fails if the two drift. NOT the
+              // wider VOICE_PATH_PATTERNS the replay gate uses (all of services/zoe-data): Greptile
+              // is billed per review and stays for big / load-bearing work only.
               const VOICE_PATH = [
                 /^services\/zoe-data\/routers\/voice_tts\.py$/,
                 /^services\/zoe-data\/zoe_core_client\.py$/,

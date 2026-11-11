@@ -65,7 +65,8 @@ passes the same binding. (Before this, merging a voice-path change auto-deployed
 with the mandatory gate never running — a gate that can silently not-run is not a gate.)
 
 - **What blocks:** an incoming diff that touches the voice runtime path (STT/brain/TTS — see
-  `VOICE_PATH_PATTERNS` in `voice_gate_check.py`, incl. `*kokoro*`/`*moonshine*`, the LIVE
+  `VOICE_PATH_PATTERNS` in `voice_gate_check.py` — since 2026-11-11 **every non-test, non-`*.md`
+  `services/zoe-data/**` file** plus the rest of the replay's import closure (see *Scope* below) — incl. `*kokoro*`/`*moonshine*`, the LIVE
   `ZOE_BRAIN_BACKEND=flue` lane, and the whole two-stage router — its model directory
   `services/zoe-data/models/*`, its `functiongemma-router.service` serving unit, and its
   `router_two_stage.py` + `semantic_router.py` decision modules — plus the **LiveKit/WebRTC ingest
@@ -239,7 +240,7 @@ not trusted either**: the rule is about trees, so a change that only the update'
 (an "evil merge") is in the diff like any other.
 
 **What "voice-relevant for reuse" means, and why it is WIDER than `VOICE_PATH_PATTERNS`.** The patterns
-decide which diffs need evidence at all — a deliberate cost/forcing-function subset. Reuse asks a
+decide which diffs need evidence at all (since 2026-11-11 they cover the whole closure, below). Reuse asks a
 different question: *would a fresh probe of H measure anything the probe of P did not?* So it must be at
 least as strict as everything the probe's measurement can depend on from the tree. Measured 2026-11-11
 by a static AST walk of the probe's exercised path (seeds: `services/zoe-data/tests/replay_samples.py`,
@@ -248,8 +249,8 @@ the probe, `voice_clip_checks.py`, `scripts/perf/measure_voice.py`, `measure_col
 `import_module`/`__import__`, resolved the way each process resolves it, plus the seven
 `spec_from_file_location` path-loads followed by hand):
 
-- **448 files** in the closure; `VOICE_PATH_PATTERNS` matches **28**. The other **420 are the gap**,
-  among them modules that run on every voice turn: `voice_stt_stream.py` (the in-process Moonshine
+- **448 files** in the closure; the old (now `VOICE_PATH_NARROW_PATTERNS`) set matched **28** of them. The other
+  **420 were the gap**, closed 2026-11-11 (*Scope* below), among them modules that run on every voice turn: `voice_stt_stream.py` (the in-process Moonshine
   STT the replay uses), `stt_wake_strip.py`, `self_model.py` (a fast_tiers tier), `db_pool.py`,
   `recall_every_turn.py`, `persona_layer.py`, `live_voice_gate.py`, `session_status.py`,
   `named_guest_clips.py`.
@@ -285,10 +286,23 @@ probe of H and of P would hit the same LIVE container. Add a directory there onl
 required `validate` lane if any file in it (or a new path-load) is not voice-relevant for reuse — the
 closure is pinned, not remembered.
 
-**Decision: widen the REUSE set, do not widen `VOICE_PATH_PATTERNS`.** Closing the 420-file gap in the
-patterns would put nearly every zoe-data PR behind a 20-30 min probe at PR and deploy time — an owner-level
-cost decision this change does not make. The gap is recorded in `docs/knowledge/open-problems.md`. Reuse
-being stricter than the deploy scope only ever costs a re-probe, never lets a change through.
+**Scope: every zoe-data change is replay-gated (owner decision 2026-11-11, supersedes "widen the REUSE set, do
+not widen `VOICE_PATH_PATTERNS`").** `VOICE_PATH_PATTERNS` = `VOICE_PATH_NARROW_PATTERNS` (the curated set the
+gate used to be) + `VOICE_PATH_WIDE_PATTERNS`: `services/zoe-data/*` minus `services/zoe-data/tests/*` and
+`services/zoe-data/*.md` (carved out in `touched_voice_files`; `replay_samples.py` stays voice through the
+narrow list), plus the closure files outside zoe-data (`scripts/lib/service_dir.py`,
+`scripts/maintenance/harness_quiet.py` + `zoe_crash_loop_watch.py`, `scripts/night/jobs/glinerel_worker.py`,
+`scripts/perf/measure_cold_first_turn.py`, `scripts/setup/zoe_speaker_resnet34.py`, `tools/audit/flag_inventory.py`,
+`services/zoe-core/SOUL.md`). `test_voice_evidence_reuse_closure.py::test_the_closure_is_fully_covered_by_the_voice_path_patterns`
+re-traces the closure each run and requires **zero** ungated files, so a new import out of the probe's roots fails
+`validate` until gated. **Consequence: every PR that touches a zoe-data module is voice-path.** At PR time the
+verdict is VOICE; `autoland.sh` queues it in `voice-pending.txt` and it lands through the voice loop
+(`land_voice_pr.sh` probe, or evidence reuse when the later diff is voice-free); at deploy, a range with any zoe-data
+non-test change needs a fresh passing artifact for that tree. Docs and test-only PRs are unaffected. The
+classifiers (`autoland.sh`, `docs_merge_chain.sh`, `deploy.yml`, `deploy_live.sh`, the lander) all call
+`voice_gate_check.py`, so none keeps its own list. **Greptile does NOT follow this widening:** `greptile-gate.yml`
+mirrors only `VOICE_PATH_NARROW_PATTERNS` (drift-pinned), so a plain zoe-data PR is not Greptile-eligible on its
+own. Remember the base-ref rule: the widening is in force for PRs and deploys after the one that carries it.
 
 **Trust model (PR gate).** The PR is still DATA: the self-hosted job now also fetches the PR head's and the
 probed commit's git OBJECTS (`git fetch --no-tags --no-write-fetch-head --depth=100` into

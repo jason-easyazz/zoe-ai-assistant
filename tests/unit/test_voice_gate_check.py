@@ -1145,8 +1145,9 @@ def test_offline_router_artifacts_and_tooling_do_not_gate(path):
     "labs/models/head.joblib",
 ])
 def test_router_head_glob_is_the_live_service_model_dir_only(near_miss):
-    """Prefix-exactness: a sibling directory must not inherit the glob."""
-    pats = vgc.voice_path_patterns()
+    """Prefix-exactness: a sibling directory must not inherit the glob. Pinned on the NARROW
+    list (the curated globs); the full set also covers every zoe-data file (2026-11-11)."""
+    pats = vgc.VOICE_PATH_NARROW_PATTERNS
     assert vgc.touched_voice_files([near_miss], pats) == []
     needs, hits, _ = vgc.scope_verdict([near_miss], pats)
     assert needs is False and hits == []
@@ -1323,7 +1324,9 @@ def test_livekit_lane_is_voice_path(path):
     "docs/knowledge/livekit-notes.md",
 ])
 def test_livekit_non_runtime_paths_do_not_gate(path):
-    pats = vgc.voice_path_patterns()
+    # NARROW list: literal-path exactness of the curated globs (the zoe-data near-misses
+    # are voice scope under the full set since 2026-11-11, covered in the closure test).
+    pats = vgc.VOICE_PATH_NARROW_PATTERNS
     assert vgc.touched_voice_files([path], pats) == []
     needs, hits, _ = vgc.scope_verdict([path], pats)
     assert needs is False and hits == []
@@ -1536,4 +1539,5 @@ def test_vad_modules_and_model_material_are_voice_path(path):
     "services/zoe-data/voice_turns.py",
 ])
 def test_vad_non_runtime_paths_do_not_gate(path):
-    assert vgc.touched_voice_files([path], vgc.voice_path_patterns()) == []
+    # NARROW list; see test_livekit_non_runtime_paths_do_not_gate.
+    assert vgc.touched_voice_files([path], vgc.VOICE_PATH_NARROW_PATTERNS) == []

@@ -272,8 +272,10 @@ is dashboard-filtered to PRs carrying the `greptile` label, and the workflow app
 label only once a PR is settled (up to date, no unresolved threads) **and eligible**, then
 summons once. **Eligible = load-bearing or big** (operator decision 2026-10-09, "only use
 Greptile for the big things, it costs per run"; before that every settled PR was handed off,
-12 of the last 12): a changed file under a load-bearing path (the voice path — MIRRORED from
-`scripts/maintenance/voice_gate_check.py` `VOICE_PATH_PATTERNS`, drift-pinned — `auth.py`,
+12 of the last 12): a changed file under a load-bearing path (the curated voice set — MIRRORED from
+`scripts/maintenance/voice_gate_check.py` `VOICE_PATH_NARROW_PATTERNS`, drift-pinned; **not** the wider
+`VOICE_PATH_PATTERNS`, which since 2026-11-11 covers all of `services/zoe-data/` minus tests for the replay gate
+but must not buy Greptile reviews — `auth.py`,
 `main.py`, `db_pool.py`, zoe-auth, `services/zoe-data/alembic/`, workflows, nginx, compose,
 systemd units, panel auth / UI actions), or a diff at pr-hygiene's warn ceiling (≥10 files or
 ≥400 lines, generated files excluded exactly as pr-hygiene excludes them), or the explicit
