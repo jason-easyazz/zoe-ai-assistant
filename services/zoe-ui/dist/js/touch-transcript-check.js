@@ -337,146 +337,24 @@
       paint(box);
     }
 
-    // ---- one item ------------------------------------------------------------------------------------------------
-    function showItem() {
-      view = 'item'; busy = false;
-      touch(); progress();
-      var it = queue[0];
-      if (it.kind === 'who') { showWho(it); return; }
-      var box = el('div', 'tcwrap');
-      var cvf = el('div', 'cvf');            // the live-caption component: `.cvf .cvl` is Zoe's speech as written on the Ask surface
-      var sentence = el('div', 'cvl');
-      cvf.appendChild(sentence);
-      sentence.setAttribute('data-id', it.id);
-      var chips = el('div', 'tcchips');
-      var acts = el('div', 'tcacts');
-      var sub = el('div', 'tcsub');
-
-      function line(spanText, chosen) {
-        clear(sentence);
-        if (it.before) sentence.appendChild(el('span', 'tcb', it.before + ' '));
-        var w = button('tcw' + (chosen ? ' chosen' : ''), spanText || '…', 'Uncertain word: ' + (spanText || 'missing'));
-        w.setAttribute('data-act', 'word');
-        w.addEventListener('click', function () { openChips(); });
-        sentence.appendChild(w);
-        if (it.after) sentence.appendChild(el('span', 'tca', ' ' + it.after));
-      }
-      line(it.span, false);
-
-      function openChips() {
-        if (busy) return;
-        clear(chips); clear(acts); clear(sub);
-        (it.alts || []).forEach(function (a) {
-          var c = button('tcchip', a.word, 'Use: ' + a.word);
-          c.setAttribute('data-alt', String(a.i));
-          if (a.word === it.pick) c.className += ' pick';
-          c.addEventListener('click', function () { choose(a); });
-          chips.appendChild(c);
-        });
-        [['play', 'Play it'], ['none', 'None of these'], ['skip', 'Skip']].forEach(function (p) {
-          var b = button('tcbtn', p[1]);
-          b.setAttribute('data-act', p[0]);
-          b.addEventListener('click', function () { act(p[0]); });
-          acts.appendChild(b);
-        });
-        touch();
-      }
-
-      function choose(a) {
-        if (busy) return;
-        busy = true;
-        line(a.word, true);
-        request('POST', BASE + '/' + encodeURIComponent(it.id) + '/answer', { alt: a.i }).then(function (r) {
-          if (!r) return;
-          if (r.status === 200 || r.status === 409) { next(); return; }
-          if (r.status === 410 || r.status === 404) { say('That one has gone.'); next(); return; }
-          busy = false; line(it.span, false); say('That didn’t save. Try again.');
-        });
-      }
-
-      function act(what) {
-        if (busy) return;
-        touch();
-        if (what === 'play') {
-          deps.blob(BASE + '/' + encodeURIComponent(it.id) + '/clip').then(function (b) {
-            if (!live()) return;
-            if (!b) { say('I don’t have that audio any more.'); return; }
-            if (deps.play) deps.play(b);
-          });
-        } else if (what === 'skip') {
-          busy = true;
-          request('POST', BASE + '/' + encodeURIComponent(it.id) + '/skip').then(function (r) {
-            if (!r) return;
-            if (r.status === 200 || r.status === 409) { next(); return; }
-            busy = false; say('That didn’t save. Try again.');
-          });
-        } else if (what === 'none') {
-          clear(sub);
-          var s = button('tcbtn primary', 'Say it');
-          s.setAttribute('data-act', 'sayit');
-          s.addEventListener('click', function () { sayIt(); });
-          sub.appendChild(s);
-        }
-      }
-
-      function sayIt() {
-        clear(sub);
-        sub.appendChild(el('div', 'tcnote', 'Listening - just say the word.'));
-        request('POST', BASE + '/' + encodeURIComponent(it.id) + '/listen').then(function (r) {
-          if (!r) return;
-          if (r.status !== 200) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I can’t listen from here. Skip this one for now.')); return; }
-          poll(0);
-        });
-        function poll(elapsed) {
-          pollT = timers.set(function () {
-            pollT = null;
-            if (!live() || view !== 'item' || queue[0] !== it) return;
-            request('GET', BASE + '/' + encodeURIComponent(it.id) + '/state').then(function (r) {
-              if (!r || !live() || queue[0] !== it) return;
-              if (r.json && r.json.status === 'answered') { line(r.json.answer || '…', true); next(); return; }
-              if (elapsed + LISTEN_POLL_MS >= LISTEN_MAX_MS) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I didn’t catch it. Tap None of these to try again.')); return; }
-              poll(elapsed + LISTEN_POLL_MS);
-            });
-          }, LISTEN_POLL_MS);
-        }
-      }
-
-      function phone() {
-        deps.blob(BASE + '/phone-qr').then(function (b) {
-          if (!live() || !b) return;
-          clear(sub);
-          var img = root.document.createElement('img');
-          img.className = 'tcqr';
-          img.alt = 'Scan with your phone';
-          img.src = deps.objectUrl ? deps.objectUrl(b) : '';
-          sub.appendChild(img);
-          sub.appendChild(el('div', 'tcnote', 'Scan this to type the word on your phone. I’ll update when you do.'));
-          sub.appendChild(poller());
-        });
-      }
-      // the phone answers through the same route; the panel just watches the item
-      function poller() {
-        var holder = el('span', 'tcwatch');
-        (function loop(elapsed) {
-          pollT = timers.set(function () {
-            pollT = null;
-            if (!live() || queue[0] !== it) return;
-            request('GET', BASE + '/' + encodeURIComponent(it.id) + '/state').then(function (r) {
-              if (!r || !live() || queue[0] !== it) return;
-              if (r.json && r.json.status !== 'open') { next(); return; }
-              if (elapsed < 300000) loop(elapsed + 3000);
-            });
-          }, 3000);
-        })(0);
-        return holder;
-      }
-
-      box.appendChild(cvf); box.appendChild(chips); box.appendChild(acts); box.appendChild(sub);
-      paint(box);
-    }
-
     load();
   }
 
-  root.ZoeTranscriptCheck = { mount: mount, unmount: unmount };
+  // The voice session this screen's private rows belong to. A close, or a DIFFERENT member, drops everything at once: the DOM, the cached alternatives (they live in
+  // the mount's closure and die with it), the privacy timer and any in-flight read. A touch cannot extend a timer that no longer exists; seeing items again needs a
+  // fresh authorised read (``mount`` -> ``load``).
+  var sessionMember = null;
+  function onVoiceSession(d) {
+    d = d || {};
+    var state = d.state, member = d.member_id || null;
+    if (state === 'closed') { sessionMember = null; unmount(); return true; }
+    if (state === 'open' || state === 'renewed') {
+      var changed = sessionMember !== null && member !== sessionMember;
+      sessionMember = member;
+      if (changed) { unmount(); return true; }
+    }
+    return false;
+  }
+
+  root.ZoeTranscriptCheck = { mount: mount, unmount: unmount, onVoiceSession: onVoiceSession };
 })(typeof window !== 'undefined' ? window : globalThis);

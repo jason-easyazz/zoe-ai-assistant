@@ -547,7 +547,7 @@ async def _apply_text(db, row: Any, new: str) -> bool:
     for sg in segs:
         out = _plan(sg["text"], row, variants, new)
         if out is not None:
-            writes.append(("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected' WHERE id = ? AND user_id = ?", (out, sg["id"], uid)))
+            writes.append(("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected', clean_text = '', clean_how = '' WHERE id = ? AND user_id = ?", (out, sg["id"], uid)))
     if segs and not writes:
         return False
     recs = await _fetch(db, "SELECT transcript FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, uid))
@@ -782,8 +782,9 @@ async def redact(db, user_id: str, rx: "re.Pattern[str]") -> int:
     """A forgotten name: every item of the member that names it is deleted (its words are the sentence, so they cannot be redacted in place)."""
     n = 0
     try:
-        for r in await _fetch(db, "SELECT id, before_text, span_text, after_text, alts FROM omi_check_items WHERE user_id = ?", (user_id,)):
-            if rx.search(" ".join([r["before_text"], r["span_text"], r["after_text"], r["alts"] or ""])):
+        for r in await _fetch(db, "SELECT id, before_text, span_text, after_text, alts, answer FROM omi_check_items WHERE user_id = ?", (user_id,)):
+            # ``answer`` too, on ANSWERED rows: an owner-supplied name was never in the original sentence, so only the answer column holds it
+            if rx.search(" ".join([r["before_text"], r["span_text"], r["after_text"], r["alts"] or "", r["answer"] or ""])):
                 await db.execute("DELETE FROM omi_check_items WHERE id = ?", (r["id"],))
                 n += 1
     except Exception as exc:  # noqa: BLE001

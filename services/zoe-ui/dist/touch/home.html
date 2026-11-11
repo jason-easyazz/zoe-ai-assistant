@@ -3803,6 +3803,10 @@
       .then(function(d){c.classList.toggle('on',!!(d&&d.open>0&&_cur==='home'));}).catch(function(){c.classList.remove('on');});
   }
   // A voice "yes" to Zoe's ask: the server pushes a private voice_card naming the screen and a token for this panel's open voice session.
+  // The voice session closing, or a different member taking it, drops the screen's private rows and the card token: nothing outlives the session that authorised it.
+  window.addEventListener('zoe:voice-session',function(e){var d=e&&e.detail||{};
+    if(window.ZoeTranscriptCheck&&window.ZoeTranscriptCheck.onVoiceSession(d)){_tcToken='';_tcTokenAt=0;}
+    else if(d.state==='closed'){_tcToken='';_tcTokenAt=0;}});
   window.addEventListener('zoe:voice-card',function(e){var d=e&&e.detail||{};
     if(d.kind==='transcript_check'&&d.open==='checks'&&d.card_token){_tcToken=String(d.card_token);_tcTokenAt=Date.now();show('checks');}});
 

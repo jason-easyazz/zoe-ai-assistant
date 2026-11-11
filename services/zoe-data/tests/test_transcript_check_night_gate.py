@@ -120,3 +120,46 @@ def test_a_forgotten_person_is_not_offered_from_a_who_turn(wenv, monkeypatch, tm
     run(rp.run_night(budget_s=600, runner=_one_shot(res, rid, [])))
     who = [r for r in items(wenv) if r["kind"] == "who"]
     assert not any("Example" in a["word"] for r in who for a in json.loads(r["alts"]))      # the forgotten names are not offered (the turn itself may still ask "someone new")
+
+
+# ── erasure reaches the owner's ANSWER; a correction clears the cleaned twin ────────────────────────────────────────────────────────────
+def _forget_entity(name):
+    import memory_forgotten
+    import omi_voices
+    rx = memory_forgotten.name_pattern(name)
+
+    async def go():
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            return await omi_voices.redact(db, OWNER, rx, "[forgotten]")
+    return run(go())
+
+
+def test_an_owner_supplied_name_that_is_later_forgotten_leaves_no_answered_row(queued):
+    env, rid = queued
+    iid = items(env)[0]["id"]
+    run(tc.answer(OWNER, iid, word="Zebulon", via="voice"))                             # a name that was never in the original sentence
+    assert items(env)[0]["answer"] == "Zebulon" and items(env)[0]["status"] == "answered"
+    _forget_entity("Zebulon")
+    assert items(env) == []                                                             # the answered row is gone, answer column included
+    with pytest.raises(tc.CheckError) as e:                                             # and the state route has nothing to return
+        run(tc.answer(OWNER, iid, word="Other"))
+    assert e.value.status == 404
+
+
+def test_control_forgetting_an_unrelated_name_keeps_the_answered_row(queued):
+    env, rid = queued
+    run(tc.answer(OWNER, items(env)[0]["id"], word="Zebulon", via="voice"))
+    _forget_entity("Quillfeather")
+    assert len(items(env)) == 1 and items(env)[0]["answer"] == "Zebulon"
+
+
+def test_a_correction_clears_the_cleaned_twin_so_the_book_shows_the_corrected_verbatim(queued):
+    env, rid = queued
+    env.db.conn.execute("UPDATE omi_segments SET clean_text = 'Tell Marisol to meet me at seven.', clean_how = 'llm' WHERE recording_id = ?", (rid,))
+    env.db.conn.commit()
+    assert env.db.rows("SELECT clean_how FROM omi_segments WHERE recording_id = ?", (rid,))[0]["clean_how"] == "llm"
+    run(tc.answer(OWNER, items(env)[0]["id"], alt=1))
+    segs = env.db.rows("SELECT text, clean_text, clean_how FROM omi_segments WHERE recording_id = ?", (rid,))
+    changed = [s for s in segs if "eleven" in s["text"]]
+    assert changed and all(s["clean_text"] == "" and s["clean_how"] == "" for s in changed)   # the cleaner regenerates it from the corrected text

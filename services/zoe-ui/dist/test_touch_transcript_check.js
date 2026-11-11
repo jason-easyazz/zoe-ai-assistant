@@ -162,6 +162,21 @@ function boot(opts) {
     const u = boot(); u.mount(); u.Z.unmount(); await settle();
     eq(u.host.textContent, '', 'unmount empties the host and drops the late response');
   }
+  // the voice session closing / another member taking it drops the private rows at once
+  {
+    const c = boot(); c.mount(); await settle();
+    ok(c.host.textContent.includes('Marisol'), 'an item is on screen');
+    c.Z.onVoiceSession({ state: 'open', member_id: 'm1' });
+    ok(c.host.textContent.includes('Marisol'), 'the same member renewing keeps it');
+    eq(c.Z.onVoiceSession({ state: 'closed' }), true, 'a closed session unmounts');
+    eq(c.host.textContent, '', 'the body is empty: no sentence, no alternatives');
+    (c.host.listeners.pointerdown || []).forEach((fn) => fn({})); c.clock.advance(500000); await settle();
+    eq(c.host.textContent, '', 'a touch cannot extend or revive it: nothing repaints without a fresh read');
+    const d = boot(); d.mount(); await settle();
+    d.Z.onVoiceSession({ state: 'open', member_id: 'm1' });
+    eq(d.Z.onVoiceSession({ state: 'renewed', member_id: 'm2' }), true, 'a different member unmounts');
+    eq(d.host.textContent, '', 'and the previous member\u2019s rows are gone');
+  }
   // who said this?
   {
     const W = [{ id: 'w1', kind: 'who', before: '', span: 'put the garden things away on Sunday', after: '', pick: 'Quinn', alts: [{ i: 0, word: 'Quinn', votes: 61 }, { i: 2, word: 'Voice 1', votes: 40, cluster: true }] }];
