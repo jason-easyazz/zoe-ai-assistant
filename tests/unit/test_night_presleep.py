@@ -168,6 +168,12 @@ def test_control_the_catchup_proceeds_when_the_window_is_not_running(tmp_path):
     host2.files[str(cfg2.marker)] = json.dumps({"pid": 424242, "run_id": "r", "mode": "night"})
     nw.run_presleep(cfg2, host2, host2.log, catchup=True)
     assert len(started(host2)) == 2
+    w3, host3, cfg3 = make(tmp_path / "reused", start=at(2, 40))                      # the pid now belongs to another pre-sleep process, not the window
+    host3.files[str(cfg3.marker)] = json.dumps({"pid": 424242, "run_id": "r", "mode": "night"})
+    host3.present.add("/proc/424242")
+    host3.files["/proc/424242/cmdline"] = "python3\0night_window.py\0--presleep\0--catchup\0"
+    nw.run_presleep(cfg3, host3, host3.log, catchup=True)
+    assert len(started(host3)) == 2
 
 
 def test_the_windows_own_presleep_is_not_blocked_by_its_own_unit(tmp_path):

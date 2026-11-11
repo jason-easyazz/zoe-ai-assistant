@@ -932,8 +932,13 @@ def window_running(cfg: NightCfg, host: "bk.Host") -> str:
         pid = _json(host.read(str(cfg.marker)) or "{}").get("pid")
     except (ValueError, OSError):
         pid = None
-    if isinstance(pid, int) and pid != os.getpid() and host.exists(f"/proc/{pid}") and "night_window" in host.read(f"/proc/{pid}/cmdline"):
-        return f"{cfg.marker.name} names the running window (pid {pid})"
+    if isinstance(pid, int) and pid != os.getpid() and host.exists(f"/proc/{pid}"):
+        try:
+            cmd = host.read(f"/proc/{pid}/cmdline")
+        except OSError:                                   # the process exited between the two reads: a stale marker, not a window
+            return ""
+        if "night_window" in cmd and "--presleep" not in cmd and "--restore-only" not in cmd:     # a pre-sleep / restore process that reuses the pid is not the window
+            return f"{cfg.marker.name} names the running window (pid {pid})"
     return ""
 
 
