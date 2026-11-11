@@ -954,6 +954,18 @@ def test_the_anchor_is_the_segment_the_plan_replaces_not_the_larger_neighbour_th
     assert rows(env)[0]["transcript"] == "meet me at eleven meet me at eleven"
 
 
+def test_confirming_the_heard_word_across_an_unrelated_neighbour_still_succeeds(queued):
+    """Review finding: the owner selects the word as heard (a no-change plan) while the padded range also overlaps an unrelated turn; that is a verified match, not a retry."""
+    env, rid = queued
+    _adjacent_turns(env, second="meet me at seven")
+    env.db.conn.execute("UPDATE omi_segments SET text = 'please bring tea' WHERE id = 'sg0'")
+    env.db.conn.execute("UPDATE omi_recordings SET transcript = 'please bring tea meet me at seven'")
+    env.db.conn.commit()
+    alts = json.loads(items(env)[0]["alts"])
+    assert run(tc.answer(OWNER, items(env)[0]["id"], alt=[i for i, a in enumerate(alts) if a["word"] == "seven"][0]))["applied"] is True
+    assert rows(env)[0]["transcript"] == "please bring tea meet me at seven" and items(env)[0]["status"] != "open"
+
+
 def test_no_segment_that_replaces_the_span_refuses_the_answer(queued):
     """The second turn no longer holds the span: only a neighbour that already has the new word is left, so nothing is replaced and nothing is closed as corrected."""
     env, rid = queued

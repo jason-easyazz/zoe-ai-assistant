@@ -570,7 +570,7 @@ async def _apply_text(db, row: Any, new: str) -> bool:
             lost = True
             continue
         share = min(int(sg["end_ms"]), int(row["end_ms"])) - max(int(sg["start_ms"]), int(row["start_ms"]))
-        if out != sg["text"]:
+        if out != sg["text"] or any(_swap(sg["text"], row["before_text"], v, row["after_text"], new)[1] for v in variants):     # the span really is here (also when the owner confirms the word as heard)
             if share > hit_share:
                 hit_seg, hit_share = sg["id"], share
         elif share > kept_share:
