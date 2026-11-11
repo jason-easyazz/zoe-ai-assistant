@@ -558,15 +558,16 @@ async def _apply_text(db, row: Any, new: str) -> bool:
     old = row["span_text"]
     rid, uid = row["recording_id"], row["user_id"]
     variants = [old + LOW_CONFIDENCE_MARK, old] if row["kind"] == "chunk" else [old]
-    segs = await _fetch(db, "SELECT id, text FROM omi_segments WHERE recording_id = ? AND user_id = ? AND start_ms <= ? AND end_ms >= ? ORDER BY seq",
+    segs = await _fetch(db, "SELECT id, text, start_ms, end_ms FROM omi_segments WHERE recording_id = ? AND user_id = ? AND start_ms < ? AND end_ms > ? ORDER BY seq",
                         (rid, uid, int(row["end_ms"]), int(row["start_ms"])))
     writes = []
-    hit_seg = None                                # the first segment that held the span: the transcript is corrected at THAT segment's occurrence
+    hit_seg, hit_share = None, -1                 # the segment that holds the span with the most overlap: the transcript is corrected at THAT segment's occurrence
     for sg in segs:
         out = _plan(sg["text"], row, variants, new)
         if out is not None:
-            if hit_seg is None:
-                hit_seg = sg["id"]
+            share = min(int(sg["end_ms"]), int(row["end_ms"])) - max(int(sg["start_ms"]), int(row["start_ms"]))
+            if share > hit_share:
+                hit_seg, hit_share = sg["id"], share
             writes.append(("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected', clean_text = '', clean_how = '' WHERE id = ? AND user_id = ?", (out, sg["id"], uid)))
     if segs and not writes:
         return False
@@ -581,6 +582,8 @@ async def _apply_text(db, row: Any, new: str) -> bool:
             a, b = window
             part = _plan(transcript[a:b], row, variants, new)
             out = None if part is None else transcript[:a] + part + transcript[b:]
+        elif segs and old and transcript.count(old) > 1:
+            return False                          # the segments no longer line up with the transcript and the words repeat: which one is unknowable, so write nothing
         else:
             out = _plan(transcript, row, variants, new)
         if out is None:

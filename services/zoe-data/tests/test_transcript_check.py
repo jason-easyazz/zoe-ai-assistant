@@ -966,3 +966,27 @@ def test_say_it_is_not_eaten_by_speech_at_another_panel(queued):
     verified_turn(session="s1", panel="panel-1")
     r = run(tc.tier("it's eight", OWNER, "s1", channel="voice", allow_writes=True))
     assert r.reply == tc.HEARD_REPLY and OWNER not in tc._LISTEN and items(env)[0]["answer"] == "eight"
+
+
+def test_a_touching_neighbour_segment_is_not_rewritten(queued):
+    """Cross-review: contiguous segments (one ends where the selected one starts) must not count as overlapping."""
+    env, rid = queued
+    _two_identical_turns(env)
+    env.db.conn.execute("UPDATE omi_segments SET end_ms = 2000 WHERE id = 'sg0'")
+    env.db.conn.commit()
+    alts = json.loads(items(env)[0]["alts"])
+    run(tc.answer(OWNER, items(env)[0]["id"], alt=[i for i, a in enumerate(alts) if a["word"] == "eleven"][0]))
+    assert [r["text"] for r in env.db.rows("SELECT text FROM omi_segments ORDER BY seq")] == ["meet me at seven", "meet me at eleven"]
+    assert rows(env)[0]["transcript"] == "meet me at seven meet me at eleven"
+
+
+def test_misaligned_segments_with_a_repeated_phrase_write_nothing(queued):
+    """Cross-review: when the segments cannot be located in the transcript and the words repeat, refuse rather than guess the first match."""
+    env, rid = queued
+    _two_identical_turns(env)
+    env.db.conn.execute("UPDATE omi_recordings SET transcript = 'Meet me at seven Meet me at seven'")
+    env.db.conn.commit()
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, items(env)[0]["id"], alt=1))
+    assert e.value.code == "text_moved" and rows(env)[0]["transcript"] == "Meet me at seven Meet me at seven"
+    assert [r["text"] for r in env.db.rows("SELECT text FROM omi_segments ORDER BY seq")] == ["meet me at seven", "meet me at seven"]
