@@ -982,7 +982,7 @@ def classify_outcome(outcome: str, rc: int, jobs: "list[dict[str, Any]]", failin
         return f"failed: job(s) {', '.join(failing)}"
     if rc != EXIT_OK:
         return f"failed: exit {rc}"
-    degraded = [f"{j['name']}@{j['backend']}" for j in jobs if j.get("status") == "degraded"]
+    degraded = [f"{j['name']}@{j['backend']}" for j in jobs if j.get("preflight_skip") or j.get("status") not in (*OK_JOB_STATUSES, "skipped")]   # covered, best-effort timeout / no time, a preflight skip
     if degraded:
         return f"degraded: {', '.join(degraded)}"
     return outcome
@@ -2048,12 +2048,14 @@ class NightWindow(bk.Window):
         process reach its database? A rehearsal has nothing else to do, so it is REFUSED (exit 2, nothing stopped). A real night SKIPS the omi_repass slot, loudly,
         and the other jobs proceed. With the flag off (night only) the pre-job is a no-op and needs no runtime."""
         cfg = self.cfg
-        if "omi_repass" not in cfg.pre_jobs or not cfg.repass_preflight or self.dry or not cfg.omi_repass_script.exists():
+        if "omi_repass" not in cfg.pre_jobs or not cfg.repass_preflight or self.dry:
             return
         if not cfg.rehearse and os.environ.get("ZOE_OMI_NIGHT_REPASS", "off").strip().lower() in ("", "off", "0", "false"):
             return
         why = ""
-        if not cfg.repass_setup_script.exists():
+        if not cfg.omi_repass_script.exists():
+            why = f"{cfg.omi_repass_script.name} not found"
+        elif not cfg.repass_setup_script.exists():
             why = f"{cfg.repass_setup_script.name} not found"
         else:
             r = self.host.run(["bash", str(cfg.repass_setup_script), "--check"], timeout=cfg.repass_check_timeout_s, mutating=False)
@@ -2074,7 +2076,7 @@ class NightWindow(bk.Window):
         self.event(f"omi_repass SKIPPED before any stop: {why}")
         self.rec["notes"].append(f"omi_repass SKIPPED (nothing was stopped for it): {why}")
         self.jobs.append({"name": "omi_repass", "backend": "pre", "status": "skipped", "rc": None, "wall_s": None, "tokens_prompt": None, "tokens_predicted": None,
-                          "mem_low_mib": None, "notes": [why], "best_effort": True})
+                          "mem_low_mib": None, "notes": [why], "best_effort": True, "preflight_skip": True})
         cfg.pre_jobs = tuple(j for j in cfg.pre_jobs if j != "omi_repass")
 
     def run_pre_jobs(self) -> bool:

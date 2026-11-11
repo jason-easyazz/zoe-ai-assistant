@@ -225,3 +225,28 @@ def test_init_pool_failure_reports_a_redacted_message_not_just_the_class(monkeyp
     rc, summary = asyncio.run(mod.amain([]))
     assert rc == 1 and summary["setup_error"] == "RuntimeError" and "connect failed" in summary["setup_message"]
     assert "Sup3rS3cretPw" not in json.dumps(summary)
+
+
+def test_a_missing_repass_entry_point_is_a_preflight_failure_before_any_stop(tmp_path):
+    kw = preflight_cfg(tmp_path)
+    kw["omi_repass_script"] = tmp_path / "absent" / "zoe-omi-repass.py"
+    w, host, _ = make(tmp_path, argv=ARGV, cfg_kw=kw, start=at(11, 0))
+    idle_box(host)
+    assert w.run() == nw.EXIT_REFUSED and host.count("--user stop") == 0 and not host.jobs_run
+    assert any("zoe-omi-repass.py not found" in e["msg"] for e in w.rec["events"])
+
+
+def test_a_best_effort_timeout_or_a_preflight_skip_is_degraded_never_ok():
+    timed_out = {"name": "omi_repass", "backend": "pre", "status": "timeout", "best_effort": True}
+    assert nw.classify_outcome("ok", nw.EXIT_OK, [timed_out], []).startswith("degraded")
+    assert nw.classify_outcome("ok", nw.EXIT_OK, [{"name": "omi_repass", "backend": "pre", "status": "skipped", "preflight_skip": True}], []).startswith("degraded")
+    assert nw.classify_outcome("ok", nw.EXIT_OK, [{"name": "digest", "backend": "12B", "status": "skipped"}, {"name": "x", "backend": "12B", "status": "idle"}], []) == "ok"
+
+
+def test_redaction_catches_quoted_and_space_delimited_secrets_that_are_not_in_the_environment(monkeypatch):
+    mod = _repass_script()
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    out = mod.redact_message("FATAL: authentication failed for password 'hunter2hunter2'; token abc123 rejected; pwd is \"zz9top\"")
+    for leak in ("hunter2", "abc123", "zz9top"):
+        assert leak not in out, (leak, out)
+    assert "authentication failed" in out and "rejected" in out

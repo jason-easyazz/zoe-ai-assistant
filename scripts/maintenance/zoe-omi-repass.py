@@ -49,6 +49,8 @@ def redact_message(text: str, limit: int = 240) -> str:
                 out = out.replace(m.group(1), "<redacted>")
     out = re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://\S+", "<url>", out)                                                           # any DSN / URL
     out = re.sub(r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey|authorization)\b(\s*[=:]\s*)(\S+)", r"\1\2<redacted>", out)
+    out = re.sub(r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey)\b(\s+(?:is\s+|for\s+)?)(['\"])[^'\"]*\3", r"\1\2<redacted>", out)      # password 'x'
+    out = re.sub(r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey)\b(\s+)(?=\S*[\d_/+=.-])(\S{4,})", r"\1\2<redacted>", out)             # token abc123
     out = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <redacted>", out)
     out = re.sub(r"\b[A-Za-z0-9_\-]{32,}\b", "<redacted>", out)                                                         # a long opaque run is a key, not a sentence
     return re.sub(r"\s+", " ", out).strip()[:limit]
