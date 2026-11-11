@@ -245,3 +245,88 @@ def test_pr_time_recipe_in_voice_gate_yml_copies_the_env():
     the head-bound probe errors and the check can never go green."""
     text = (REPO / ".github" / "workflows" / "voice-gate.yml").read_text()
     _assert_env_copied_before_probe(text, "~/.worktrees/voice-gate")
+
+
+# ---- evidence REUSE at deploy (2026-11-11) ------------------------------------------
+# The probed PR head P was updated with main (strict) by a merge, then squashed: the
+# deploy target's tree is P's tree PLUS whatever came in from main. The strict tree
+# binding refuses that; --allow-reuse accepts it only when what came in is voice-free.
+
+def _updated_landing(tmp_path: Path, main_file: str) -> tuple[Path, dict[str, str]]:
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    repo, s = _squash_landing(tmp_path, CHECKER.read_text())
+    prev = s["prev"]
+    _git(repo, "checkout", "-q", "-b", "mainline", prev)
+    path = repo / main_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("came in from main\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "main moves", env=env)
+    m1 = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "pr")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "update branch", m1, env=env)
+    updated = _git(repo, "rev-parse", "HEAD")
+    squash = _git(repo, "commit-tree", f"{updated}^{{tree}}", "-p", m1, "-m", "squash", env=env)
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "reset", "-q", "--hard", prev)
+    _git(repo, "update-ref", "refs/zoe-deploy/main", squash)
+    return repo, {**s, "updated": updated, "squash": squash}
+
+
+def test_deploy_step_reuses_the_probed_head_across_a_non_voice_update(tmp_path):
+    _need_git()
+    repo, s = _updated_landing(tmp_path, "services/zoe-auth/requirements.txt")
+    r = _run_gate(repo, _artifact(tmp_path, repo, s["head"]), tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "evidence reuse ACCEPTED" in r.stdout and "REUSED evidence for" in r.stdout
+
+
+def test_deploy_step_refuses_reuse_across_a_voice_update(tmp_path):
+    _need_git()
+    repo, s = _updated_landing(tmp_path, "services/zoe-data/new_module.py")
+    r = _run_gate(repo, _artifact(tmp_path, repo, s["head"]), tmp_path)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "evidence reuse REFUSED" in r.stdout and "new_module.py" in r.stdout
+    assert "REFUSING TO DEPLOY" in r.stdout
+
+
+def _stub_reuse_checker(argv_log: Path) -> str:
+    return ("# supports --expect-tree-of and --allow-reuse\n"
+            "import json, sys\n"
+            f"json.dump(sys.argv[1:], open({str(argv_log)!r}, 'w'))\n")
+
+
+def test_a_checker_that_knows_reuse_gets_the_flag_and_an_older_one_does_not(tmp_path):
+    """Bootstrap safety, the same shape as --expect-tree-of: the live checker at $prev
+    decides. A copy without --allow-reuse must never be handed it (it would reject the
+    unknown flag and wedge every deploy)."""
+    _need_git()
+    argv_log = tmp_path / "argv.json"
+    repo, s = _squash_landing(tmp_path, _stub_reuse_checker(argv_log))
+    r = _run_gate(repo, tmp_path / "unused.json", tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    argv = json.loads(argv_log.read_text())
+    assert argv[-3:] == ["--expect-tree-of", s["merge"], "--allow-reuse"], argv
+    older = tmp_path / "older"
+    older.mkdir()
+    argv_log2 = older / "argv.json"
+    repo2, _ = _squash_landing(older, _stub_checker(argv_log2, knows_tree_flag=True))
+    assert _run_gate(repo2, older / "unused.json", older).returncode == 0
+    assert "--allow-reuse" not in json.loads(argv_log2.read_text())
+
+
+def test_reuse_is_never_paired_with_the_commit_fallback():
+    """An old checker on the --expect-revision fallback never gets --allow-reuse (the
+    deploy's reuse is tree-based; the PR gate's ancestor rule would refuse a squash)."""
+    for text in (_pull_step_run(), DEPLOY_LIVE.read_text()):
+        code = _executed(text)
+        guard = next(ln for ln in code if "--allow-reuse" in ln and ln.startswith("if "))
+        assert '"$bind_flag" = "--expect-tree-of"' in guard, guard
+
+
+def test_deploy_live_sh_passes_reuse_the_same_way():
+    lines = _executed(DEPLOY_LIVE.read_text())
+    calls = [i for i, ln in enumerate(lines) if 'python3 "$SCRIPT_DIR/voice_gate_check.py"' in ln]
+    call = " ".join(lines[calls[0]:calls[0] + 2])
+    assert '${reuse_flag:+"$reuse_flag"}' in call, call

@@ -159,8 +159,10 @@ requirement was removed rather than the regex hardened.
    artifact must be for that exact commit, or a clean run whose recorded tree is
    byte-identical to it. A squash merge mints a new sha, so the tree match is what lets the
    PR-head artifact land — and only when the squash is tree-identical (branch up to date)
-   and nothing merged after it before its deploy ran. Otherwise re-run the probe against a
-   checkout of the merged commit and re-run the deploy. Landing recipe:
+   and nothing merged after it before its deploy ran — or (`--allow-reuse`, 2026-11-11) when
+   the tree diff from the probed commit to the deployed one touches nothing voice-relevant
+   (a set WIDER than the gate's patterns; see *Reusing replay evidence*). Otherwise re-run the
+   probe against a checkout of the merged commit and re-run the deploy. Landing recipe:
    [merge-and-deploy.md](docs/knowledge/merge-and-deploy.md) → *Landing a voice-path PR*.
 2. **The visible PR-time result**, plus mandatory multi-agent review and
    `required_conversation_resolution`.
@@ -181,11 +183,17 @@ than no check, because a green one gets believed):
   passes `--expect-revision <PR head sha>`, so an artifact for any other commit (or from a
   dirty worktree, which cannot be attributed to a commit at all) is refused. Practical
   consequence, and it is the correct fail-closed cost: a voice-path PR needs the probe run
-  against a **checkout of that PR's head**, and re-run after every push to it.
+  against a **checkout of that PR's head**, and re-run after every push to it — unless that
+  push or `strict` update is provably voice-free: then the probed ANCESTOR's evidence is
+  reused (`--allow-reuse`; same rule in the PR gate, the deploy gate and the lander's re-arm,
+  offline, fail-closed — [merge-and-deploy.md](docs/knowledge/merge-and-deploy.md) →
+  *Reusing replay evidence*).
 - **The PR is DATA, never code — and it does not get to define its own gate.** A pull
   request is untrusted input, and the evidence job runs on the Jetson, the box that also
   runs the live voice brain. Two rules hold the line. (1) Every checkout pins `base.sha`;
-  the PR enters only as an API-supplied changed-file list plus a 40-hex head sha. Running
+  the PR enters only as an API-supplied changed-file list plus a 40-hex head sha (and, for
+  evidence reuse, the head's git OBJECTS, read by the base checker's `diff-tree`/`merge-base`
+  only — never checked out or run). Running
   the PR's own copy of the checker allowed both a **bypass** (edit it to report no voice
   files) and **arbitrary code execution on the Jetson**. (2) The workflow triggers on
   **`pull_request_target`**, so its *definition* comes from the base ref — on a plain
