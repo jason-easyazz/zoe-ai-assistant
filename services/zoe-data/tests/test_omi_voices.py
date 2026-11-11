@@ -1537,3 +1537,28 @@ def test_merged_replacement_line_fuses_the_frozen_contributions_instead_of_dropp
     assert [r[0] for r in rows_] == ["merged"]
     got = rp._unit(rp._vec(rows_[0][1]))
     assert abs(float(got @ rp._unit(a + b)) - 1.0) < 1e-4 and abs(float(got @ a) - 1.0) > 0.1
+
+
+def test_three_colliding_frozen_contributions_fuse_with_equal_weight(env, monkeypatch):
+    """Review: pairwise ``unit(unit(a+b)+c)`` over-weights the last sample. Equal weight: the result is ``unit(a+b+c)``."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    old = [dict(zip(("id", "start_ms", "end_ms", "tagged_person_id"), r)) for r in env.db.q(
+        "SELECT id, start_ms, end_ms, tagged_person_id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    vp, rec = env.db.q("SELECT voiceprint_id, recording_id FROM learned_voiceprint_segments")[0]
+    old.append({"id": "third-old", "start_ms": old[0]["start_ms"], "end_ms": old[0]["end_ms"], "tagged_person_id": pid})
+    env.db.conn.execute("INSERT INTO learned_voiceprint_segments (voiceprint_id, segment_id, recording_id, embedding, added_at) VALUES (?, 'third-old', ?, ?, '2026-11-10T00:00:00Z')",
+                        (vp, rec, rp._blob(np.zeros(256))))
+    env.db.conn.commit()
+    frozen = run(rp._frozen_contributions(env.db, A, [o["id"] for o in old]))
+    assert len(frozen) == 3
+    vs = [np.eye(256)[0], np.eye(256)[1], np.eye(256)[2]]
+    for (v_, sid), v in zip(sorted(frozen, key=lambda x: x[1]), vs):
+        env.db.conn.execute("UPDATE learned_voiceprint_segments SET embedding = ? WHERE voiceprint_id = ? AND segment_id = ?", (rp._blob(v), v_, sid))
+    env.db.conn.commit()
+    run(rp._relink_frozen(env.db, frozen, old, ["merged"], [{"start_ms": 0, "end_ms": 10000, "carry": {"tagged_person_id": pid}}]))
+    (row,) = env.db.q("SELECT embedding FROM learned_voiceprint_segments")
+    assert abs(float(rp._unit(rp._vec(row[0])) @ rp._unit(sum(vs))) - 1.0) < 1e-4

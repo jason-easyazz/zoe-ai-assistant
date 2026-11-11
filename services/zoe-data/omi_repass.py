@@ -704,6 +704,7 @@ async def _relink_frozen(db, frozen: list[tuple], old: list[dict], new_ids: list
     import omi_voices
     by_old = {o["id"]: o for o in old}
     touched: set = set()
+    fused_sum: dict = {}
     for vp, osid in frozen:
         o = by_old.get(osid)
         best, best_ov = None, 0
@@ -721,7 +722,12 @@ async def _relink_frozen(db, frozen: list[tuple], old: list[dict], new_ids: list
             # one row instead of the later being discarded - a stopped print cannot be re-taught, so dropping a sample would lose it for good
             mine = await _all(db, "SELECT embedding FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
             if mine:
-                fused = _unit(_unit(_vec(held[0][0])) + _unit(_vec(mine[0][0])))
+                total = fused_sum.get((vp, best))
+                if total is None:
+                    total = _unit(_vec(held[0][0]))
+                total = total + _unit(_vec(mine[0][0]))      # the running UNNORMALISED sum: every merged sample weighs the same however many collide
+                fused_sum[(vp, best)] = total
+                fused = _unit(total)
                 await db.execute("UPDATE learned_voiceprint_segments SET embedding = ? WHERE voiceprint_id = ? AND segment_id = ?", (_blob(fused), vp, best))
             await db.execute("DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
             touched.add(vp)
