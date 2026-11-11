@@ -659,13 +659,13 @@ def test_teardown_is_unproven_while_capture_is_in_flight_or_unknown(monkeypatch,
 @pytest.mark.parametrize("packets, marker", [
     (lambda i: None, "packet count unreadable"),          # never readable
     (lambda i: i, "never stabilised"),                     # keeps changing for every poll
-    (lambda i: None if i % 2 else 0, "never stabilised"),  # readable but never twice in a row
+    (lambda i: None if i % 2 else 0, "packet count"),      # readable but never twice in a row (last poll may be either)
 ])
 def test_teardown_is_unproven_when_the_packet_count_never_stabilises(monkeypatch, packets, marker):
     monkeypatch.setattr(sb.time, "sleep", lambda s: None)
     live = _FakeLive(export_counts=[0, 0], packets=packets)  # in_flight is 0 throughout
     out = sb.teardown(live, [A], ["bar-x-1"])
-    assert live.polls >= 24  # the wait was exhausted
+    assert live.polls >= 24  # the wait was exhausted (budget = QUIESCE_TIMEOUT_S / poll)
     assert not out["proven"] and any(marker in p and A in p for p in out["problems"])
     assert out["quiesce"][A]["stable"] < 2 and out["quiesce"][A]["in_flight"] == 0
 
@@ -1000,12 +1000,15 @@ class _ScriptedLive(sb.Live):
             return "Noted — I'll remember that."
         if tag == "s11-repeat":
             return "I've already got that one."
+        if tag == "s11-target":
+            self.s11_rows.append("my spare key is under the blue flowerpot")
+            return "Noted — I'll remember that."
         if tag == "s11-fresh-ask":
             return "Your favourite tea is lapsang souchong."
         if tag == "s11-recall-q":
             return "You asked me to remember: my favourite tea is lapsang souchong; and I can't stand coriander."
-        self.s11_rows = [r for r in self.s11_rows if "coriander" not in r]   # "Forget that." retracts the newest
-        return 'Done — I forgot: "I can\'t stand coriander".'
+        self.s11_rows = [r for r in self.s11_rows if "flowerpot" not in r]   # "Forget that." retracts the PREVIOUS turn
+        return 'Done — I forgot: "my spare key is under the blue flowerpot".'
 
     def packet_count(self, user):
         return 5 + len(self.s11_rows)
@@ -1023,7 +1026,7 @@ class _ScriptedLive(sb.Live):
     def packet(self, user, message):
         if user == B:
             return ""
-        if "tea" in message or "coriander" in message:
+        if "tea" in message or "coriander" in message or "flowerpot" in message:
             return "\n".join(f"- {r}" for r in self.s11_rows)
         if "Odalys" in message:
             return "- User's neighbour Odalys keeps bees on her roof"
@@ -1585,11 +1588,12 @@ def _s11_turns(**over):
     t = {"say_tea": "Got it — I'll remember that.", "say_keep": "Noted — I'll remember that.",
          "packet_after_say": "- my favourite tea is lapsang souchong",
          "packet_after_keep": "- I can't stand coriander\n- my favourite tea is lapsang souchong",
+         "packet_after_target": "- my spare key is under the blue flowerpot",
          "count_once": 7, "count_repeat": 7, "repeat_reply": "I've already got that one.",
          "tea_reply": "Your favourite tea is lapsang souchong.",
          "recall_reply": "You asked me to remember: my favourite tea is lapsang souchong; and I can't stand coriander.",
-         "forget_reply": 'Done — I forgot: "I can\'t stand coriander".',
-         "packet_final": "- my favourite tea is lapsang souchong"}
+         "forget_reply": 'Done — I forgot: "my spare key is under the blue flowerpot".',
+         "packet_final": "- my favourite tea is lapsang souchong\n- I can't stand coriander"}
     t.update(over)
     return t
 
@@ -1616,8 +1620,11 @@ def test_s11_passes_the_whole_contract():
     ({"tea_reply": "I don't know your favourite tea."}, "fresh session"),
     ({"recall_reply": "You asked me to remember: my favourite tea is lapsang souchong."}, "give both back"),
     # retraction
-    ({"packet_final": "- I can't stand coriander\n- my favourite tea is lapsang souchong"}, "left the coriander"),
-    ({"packet_final": ""}, "also removed the tea"),
+    ({"packet_after_target": "- something else"}, "no row"),
+    ({"packet_final": "- I can't stand coriander\n- lapsang\n- my spare key is under the blue flowerpot"},
+     "left the flowerpot"),
+    ({"packet_final": ""}, "also removed an earlier ask"),
+    ({"packet_final": "- my favourite tea is lapsang souchong"}, "also removed an earlier ask"),
     ({"forget_reply": "Okay."}, "did not say it forgot"),
 ])
 def test_s11_fails_each_broken_part(over, why):
@@ -1625,7 +1632,7 @@ def test_s11_fails_each_broken_part(over, why):
     assert v == "FAIL" and why in ev["why"], ev
 
 
-@pytest.mark.parametrize("key", ["packet_after_say", "packet_after_keep", "packet_final"])
+@pytest.mark.parametrize("key", ["packet_after_say", "packet_after_keep", "packet_after_target", "packet_final"])
 def test_s11_unread_packet_is_error_never_pass(key):
     assert sb.score_s11(_s11_turns(**{key: None}))[0] == "ERROR"
 
@@ -1634,7 +1641,7 @@ def test_s11_in_the_run_passes_and_negative_control_is_red(monkeypatch):
     live, res = _drive(monkeypatch)                      # the tier answers: PASS, a verdict not a target
     assert res["S11"]["verdict"] == "PASS" and "expected" not in res["S11"]
     assert [c for c in live.chats if c.startswith("s11-")] == [
-        "s11-say", "s11-keep", "s11-repeat", "s11-fresh-ask", "s11-recall-q", "s11-forget"]
+        "s11-say", "s11-keep", "s11-repeat", "s11-fresh-ask", "s11-recall-q", "s11-target", "s11-forget"]
     live, res = _drive(monkeypatch, s11="off")            # ZOE_ASK_TO_REMEMBER off: the brain says it will, stores nothing
     assert res["S11"]["verdict"] == "FAIL" and "no row" in res["S11"]["evidence"]["why"]
 
@@ -1956,3 +1963,43 @@ def test_prompt_size_p95_is_nearest_rank_not_the_next_order_statistic():
     assert sb.prompt_size_summary(live)["chars_p95"] == 95
     live.packet_chars = [7]
     assert sb.prompt_size_summary(live)["chars_p95"] == 7
+
+
+def test_drain_waits_for_slow_captures_past_the_old_two_minute_wait(monkeypatch):
+    """Regression: 6 captures still in flight at the old 24-poll limit made every run `error`."""
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    monkeypatch.delenv("ZOE_BAR_QUIESCE_TIMEOUT_S", raising=False)
+
+    class _Slow:
+        def __init__(self):
+            self.n = 0
+
+        def packet_count(self, u):
+            return 3
+
+        def capture_status(self, u):
+            self.n += 1
+            return {"in_flight": 6 if self.n <= 40 else 0}
+
+    live = _Slow()
+    out = sb.drain_captures(live, A)
+    assert out["in_flight"] == 0 and out["packet"] == 3 and out["stable"] >= 2 and live.n > 24
+
+
+def test_drain_is_bounded_and_honours_the_env_budget(monkeypatch):
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", "20")
+
+    class _Stuck:
+        n = 0
+
+        def packet_count(self, u):
+            return 3
+
+        def capture_status(self, u):
+            self.n += 1
+            return {"in_flight": 6}
+
+    live = _Stuck()
+    out = sb.drain_captures(live, A)
+    assert out["in_flight"] == 6 and live.n == 5   # 20 s / 5 s poll + the final look
