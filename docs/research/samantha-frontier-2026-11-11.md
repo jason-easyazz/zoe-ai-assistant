@@ -51,7 +51,7 @@ Full table with window, n and method per row: [lane-1](samantha-frontier-2026-11
 **Where exactly the break is now:**
 
 - **Supply.** Nothing new is being learned from the panel (lane 7 A1), and what the pendant learns is held in shadow (A2). Calendar: 0 upcoming events, no external calendar. People: 0 birthdays. Presence: 190 observations, all `unknown`.
-- **Matching.** Injection is decided per turn by a relevance test that needs a capitalised name, two rare keys or a clock time. Real speech is oblique ("what should I get her"). In the synthetic lab (lane 7 B) the production test found the needed fact on 18 of 20 direct turns and 2 of 20 oblique ones; these rows are scored on shared words, never on similarity, and one shared rare word scores 1.5 against a 2.0 threshold. Lowering the threshold to 1.5 lifts oblique hits to 8 of 20 and injects on 10 of 20 irrelevant turns, so the threshold is not the fix.
+- **Matching.** Injection is decided per turn by a relevance test that needs a capitalised name, two rare keys or a clock time. Real speech is oblique (an invented example, not a household utterance: "what should I get her"). In the synthetic lab (lane 7 B) the production test found the needed fact on 18 of 20 direct turns and 2 of 20 oblique ones; these rows are scored on shared words, never on similarity, and one shared rare word scores 1.5 against a 2.0 threshold. Lowering the threshold to 1.5 lifts oblique hits to 8 of 20 and injects on 10 of 20 irrelevant turns, so the threshold is not the fix.
 - **Readers that never fire.** Night mind writes threads nightly; no reader has raised one, and no marker records a serve, so the serve path is unobservable.
 
 ## 2. What landed since 11-03, and whether it runs (deliver 2)

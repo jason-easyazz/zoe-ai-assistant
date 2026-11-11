@@ -80,7 +80,8 @@ number below therefore covers **3 to 3.5 days**, not 7.
 4. **The outcome edge is live but has measured no outcome.** 5 member edges in 3 days, none with an outcome; the dated-loop
    follow-through number cannot be computed yet (n=0 outcomes). The commitments ledger, in shadow, records that 31 of 33
    reminder promises Zoe made since 10-28 were not backed by a reminder (`commitments.py:27-30`: `missed` = a breach she would
-   have acted on) [Proven count; Experimental meaning]. That is the first real follow-through number, and it is 0%.
+   have acted on) [Proven count; contradicted as a household number]. Corrected (see the note at the top and lane 7): all 33 rows are
+   replay-harness artifacts, so this is not a follow-through number; real household promises recorded are zero.
 5. **Of the four new wires, only the manner block executes on real turns.** Manner: 30 of 30. Member register: 0 of 16 member turns;
    the table is empty, so the only line it renders is the late-night situational line (`member_register.py:138-145`), seen only on
    overnight KV warms. Now card and conversation notes: off.
