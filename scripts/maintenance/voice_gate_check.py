@@ -81,7 +81,16 @@ DEFAULT_BASELINE = Path.home() / ".cache" / "zoe" / "voice_regression_baseline.j
 # before deploy — mirrors the mandate in the root AGENTS.md / CLAUDE.md. Matched
 # with fnmatch against repo-relative paths; override via ZOE_VOICE_GATE_PATHS
 # (a ':'-separated glob list).
-VOICE_PATH_PATTERNS = (
+#
+# TWO LISTS, ONE UNION (2026-11-11, owner decision: every services/zoe-data change minus its
+# tests gets a voice replay before merge). VOICE_PATH_NARROW_PATTERNS is the curated set the
+# gate used to be, each entry with its own reasoning below; VOICE_PATH_WIDE_PATTERNS adds the
+# rest of the replay probe's measured import closure. VOICE_PATH_PATTERNS is their union and is
+# what the PR gate, deploy gate and lander classify with. Greptile eligibility
+# (.github/workflows/greptile-gate.yml) mirrors ONLY the NARROW list: it is billed per review
+# and the owner wants it for big or load-bearing work, so widening the replay gate must not
+# widen it. Drift-pinned by tests/unit/test_greptile_gate_workflow.py.
+VOICE_PATH_NARROW_PATTERNS = (
     "services/zoe-data/routers/voice_tts.py",
     "services/zoe-data/zoe_core_client.py",
     "services/zoe-data/fast_tiers.py",
@@ -527,6 +536,40 @@ VOICE_PATH_PATTERNS = (
     "scripts/maintenance/voice_clip_checks.py",
     "scripts/perf/measure_voice.py",
 )
+# THE REST OF THE REPLAY'S IMPORT CLOSURE. Measured 2026-11-11 (static AST closure of the
+# probe chain, 449 files incl. path-loads) the narrow list matched 28 of them; this
+# covers the remaining ones, pinned at ZERO ungated by
+# tests/unit/test_voice_evidence_reuse_closure.py (a new import out of the probe's roots turns
+# the required `validate` lane red until it is gated here).
+VOICE_PATH_WIDE_PATTERNS = (
+    # the whole voice service: 438 of its 551 non-test modules are in the closure and the
+    # runtime data it reads (lexicons_data/, voice_phrases.json, models/, ...) is invisible to
+    # an AST walk, so the only defensible boundary is the service tree. Its tests/ and its
+    # *.md docs are carved out in touched_voice_files (WIDE_NOT_FOR below).
+    "services/zoe-data/*",
+    # loaded by FILE PATH from the closure, or sys.path'd helpers of the probe chain
+    "scripts/lib/service_dir.py",
+    "scripts/maintenance/harness_quiet.py",
+    "scripts/maintenance/zoe_crash_loop_watch.py",
+    "scripts/night/jobs/glinerel_worker.py",
+    "scripts/perf/measure_cold_first_turn.py",
+    "scripts/setup/zoe_speaker_resnet34.py",
+    # self_model.py (every voice turn) reads the flag inventory this generator rebuilds, and
+    # zoe_core_client.py reads the persona file on every brain turn
+    "tools/audit/flag_inventory.py",
+    "services/zoe-core/SOUL.md",
+)
+VOICE_PATH_PATTERNS = VOICE_PATH_NARROW_PATTERNS + VOICE_PATH_WIDE_PATTERNS
+# What the WIDE `services/zoe-data/*` glob does NOT cover (fnmatch's `*` crosses `/`): the
+# co-located tests (the replay imports none of them except tests/replay_samples.py, which the
+# narrow list names) and markdown docs (no zoe-data module reads one of its own *.md). A file
+# here is voice scope only if a NARROW pattern matches it. The tests/ carve-out is the whole
+# DIRECTORY on purpose (support modules and fixtures are test area; owner: "minus its
+# tests"): the closure oracle fails if the replay ever loads another file from it.
+# (e.g. replay_samples.py, or a
+# *kokoro*-named test, as before). Not mirrored in greptile-gate.yml: Greptile uses the narrow
+# list alone, where these carve-outs do not exist.
+WIDE_NOT_FOR = ("services/zoe-data/tests/*", "services/zoe-data/*.md")
 # Paths that are NEVER voice scope, whatever the globs above say. `*kokoro*`,
 # `*moonshine*` and `*silero*` are substring globs and fnmatch's `*` crosses `/`, so
 # they also match DOCUMENTATION about those components. Incident 2026-10-11: a docs-only
@@ -574,15 +617,16 @@ def voice_path_patterns() -> tuple[str, ...]:
 # lander, always opt-in (`--allow-reuse`); the strict exact-commit / exact-tree bindings
 # are unchanged and are tried first.
 #
-# "Voice-relevant" for REUSE is deliberately WIDER than VOICE_PATH_PATTERNS. The patterns
-# decide which diffs need evidence at all (a cost/forcing-function trade-off, see above);
-# reuse asks a different question - "would a fresh probe of H measure anything different
+# "Voice-relevant" for REUSE is deliberately WIDER than VOICE_PATH_PATTERNS (the patterns
+# now cover the whole import closure, but reuse also vetoes manifests, brain lanes and
+# whole script dirs the patterns do not name, and refuses on doubt). The patterns
+# decide which diffs need evidence at all; reuse asks a different question - "would a fresh probe of H measure anything different
 # from the probe of P?" - and must be at least as strict as everything the probe's
 # measurement can depend on from the tree. Measured 2026-11-11 (static AST import closure
 # of the probe's exercised path: replay_samples.py, the probe, measure_voice.py,
 # measure_cold_first_turn.py, voice_clip_checks.py, voice_vad.py; method in
 # docs/knowledge/merge-and-deploy.md "Reusing replay evidence"): 448 files, of which the
-# patterns match only 28. 438 of the 551 non-test zoe-data modules are in it (plus runtime
+# the narrow patterns matched only 28 (the wide set now closes that). 438 of the 551 non-test zoe-data modules are in it (plus runtime
 # data files the AST cannot see: lexicons_data/, voice_phrases.json, models/, ...), so the
 # only defensible boundary is the WHOLE service tree, not a module list. Pinned by
 # tests/unit/test_voice_evidence_reuse_closure.py: every file in the recomputed closure
@@ -881,7 +925,9 @@ def touched_voice_files(changed: list[str], patterns: tuple[str, ...]) -> list[s
     for f in changed:
         if any(fnmatch.fnmatch(f, ex) for ex in VOICE_PATH_EXCLUDES):
             continue
-        if any(fnmatch.fnmatch(f, pat) for pat in patterns):
+        carved = any(fnmatch.fnmatch(f, c) for c in WIDE_NOT_FOR)
+        if any(fnmatch.fnmatch(f, pat) for pat in patterns
+               if not (carved and pat in VOICE_PATH_WIDE_PATTERNS)):
             hits.append(f)
     return hits
 
