@@ -535,3 +535,22 @@ def test_entity_erase_rewrites_hypotheses_inside_the_gate_so_a_write_in_flight_c
         await er
     run(scenario())
     assert "Dana" not in f.read_text() and "[forgotten]" in f.read_text()
+
+
+def test_shadow_mode_stores_no_wearer_proposal_but_on_mode_does(renv, monkeypatch):
+    """Review: shadow "stores nothing and logs counts", yet the heuristic wearer proposal (biometric windows) was written in shadow too. Negative control: ``on`` still proposes."""
+    def eight(rid):
+        r = result_for(rid)
+        r["windows"] = [[i * 0.75, i * 0.75 + 1.5, vec(0), 0.2] for i in range(8)]
+        return r
+    counts = {}
+    for mode in ("shadow", "on"):
+        monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", mode)
+        renv.db.conn.execute("DELETE FROM omi_wearer_samples")
+        renv.db.conn.execute("DELETE FROM omi_recordings")
+        renv.db.conn.commit()
+        transcribe(first_pass(renv) and renv, monkeypatch, "moonshine text")
+        rid = rows(renv)[0]["id"]
+        run(rp.run_night(budget_s=600, runner=fake_runner({rid: eight(rid)})))
+        counts[mode] = renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples")[0]["n"]
+    assert counts["shadow"] == 0 and counts["on"] > 0, counts

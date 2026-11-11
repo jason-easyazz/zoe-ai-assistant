@@ -902,7 +902,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                     return {"status": "failed", "why": "segments:" + type(exc).__name__, **counts}
                 await db.commit()
                 counts.update(status="replaced", carried=carried)
-            if adult and (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then
+            if m == "on" and adult and (refs.you is None or refs.you_panel_only) and res["windows"]:           # a proposal for the owner to confirm; never used until then. Shadow stores nothing
                 try:
                     pick = propose_wearer(res["windows"])
                     if pick:
