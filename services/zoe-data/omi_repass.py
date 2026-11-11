@@ -1309,6 +1309,10 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     complete = bool(chunked) and bool(vgot) and all(all(it["id"] in vgot.get(e, {}) for it in chunked) for e in [x for x in (second, third) if x]) and len(vgot) == len([x for x in (second, third) if x])
     evals = [e for e in evals if e not in voters] if complete else []             # the evaluation sample runs only when every recording got every voter
     res["engines"], res["eval_engines"] = voters, evals
+    miss = {e: skipped.get(e) or "no_result" for e in (second, third) if e and not vgot.get(e)}          # an expected voter that did not vote is NAMED with its reason, never silent
+    if second and thirds and not third:
+        miss["third"] = "no_budget"
+    res["missing_voters"] = miss or None
 
     # ── fusion: ROVER per chunk over the voters that finished that recording ──
     fusion = env_str("ZOE_OMI_REPASS_FUSION", "rover")

@@ -573,3 +573,31 @@ def test_shadow_mode_stores_no_channel_mean_but_on_mode_does(renv, monkeypatch):
         run(rp.run_night(budget_s=600, runner=fake_runner({rid: long_result(rid)})))
         counts[mode] = renv.db.rows("SELECT COUNT(*) AS n FROM omi_channel_means")[0]["n"]
     assert counts["shadow"] == 0 and counts["on"] > 0, counts
+
+
+def test_a_worker_load_failure_names_the_engine_and_a_redacted_reason(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("omi_repass_worker_loud", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    secret = "a" * 40
+
+    def boom(t, g):
+        raise RuntimeError(f"This CTranslate2 package was not compiled with CUDA support at {Path.home()}/x token={secret}")
+    monkeypatch.setitem(w.ASR, "whisper-gpu:large-v3", boom)
+    rc = w.run({"asr": "whisper-gpu:large-v3", "diar": "none", "items": []}, str(tmp_path / "out.jsonl"))
+    err = capsys.readouterr().err
+    assert rc == 3 and "whisper-gpu:large-v3" in err and "RuntimeError" in err and "compiled with CUDA" in err
+    assert secret not in err and str(Path.home()) not in err
+
+
+def test_worker_redaction_withholds_household_text_and_short_secrets_and_keeps_setup_reasons():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("omi_repass_worker_red", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    assert w.redact_exc(RuntimeError("failed /srv/family/Alice-medical-notes password is hunter2")) == "(message withheld)"      # negative control: household text + a short secret
+    assert w.redact_exc(RuntimeError("Alice said call Bob at the clinic")) == "(message withheld)"
+    out = w.redact_exc(OSError("libcudart.so.12: cannot open shared object file /opt/x/lib https://u:pw@h/x"))
+    assert "cannot open shared object" in out and "/opt" not in out and "pw@" not in out
+    assert "compiled with CUDA" in w.redact_exc(RuntimeError("This CTranslate2 package was not compiled with CUDA support"))                # control: the real reason survives

@@ -31,6 +31,31 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "services" / "zoe-data"))
 
 
+import os
+import re
+
+_SECRET_ENV = re.compile(r"(PASS|PASSWORD|SECRET|TOKEN|KEY|DSN|URL|CREDENTIAL)", re.I)
+
+
+def redact_message(text: str, limit: int = 240) -> str:
+    """An exception's text with every DSN / URL, password, token and secret-looking value scrubbed: the setup error must say WHAT failed (a missing variable, a refused
+    connection) without ever echoing a credential into the journal or the morning report."""
+    out = str(text)
+    for k, v in os.environ.items():                      # the literal value of any secret-named variable, and the password inside a DSN-shaped one
+        if v and len(v) >= 6 and _SECRET_ENV.search(k):
+            out = out.replace(v, "<redacted>")
+            m = re.match(r"[A-Za-z][A-Za-z0-9+.-]*://[^:/@\s]*:([^@\s]+)@", v)
+            if m and len(m.group(1)) >= 3:
+                out = out.replace(m.group(1), "<redacted>")
+    out = re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://\S+", "<url>", out)                                                           # any DSN / URL
+    out = re.sub(r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey|authorization)\b(\s*[=:]\s*)(\S+)", r"\1\2<redacted>", out)
+    out = re.sub(r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey)\b(\s+(?:is\s+|for\s+)?)(['\"])[^'\"]*\3", r"\1\2<redacted>", out)      # password 'x'
+    out = re.sub(r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey)\b(\s+)(?=\S*[\d_/+=.-])(\S{4,})", r"\1\2<redacted>", out)             # token abc123
+    out = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <redacted>", out)
+    out = re.sub(r"\b[A-Za-z0-9_\-]{32,}\b", "<redacted>", out)                                                         # a long opaque run is a key, not a sentence
+    return re.sub(r"\s+", " ", out).strip()[:limit]
+
+
 async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--budget-s", type=float, default=1500.0)
@@ -76,7 +101,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     try:
         await init_pool()
     except Exception as exc:  # noqa: BLE001
-        return 1, {"status": "error", "setup_error": type(exc).__name__}
+        return 1, {"status": "error", "setup_error": type(exc).__name__, "setup_message": redact_message(str(exc))}
     try:
         if a.requeue_failed:
             return 0, {"status": "ok", "requeued": await rp.requeue_failed(a.user or None)}
@@ -104,13 +129,16 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
 
 def main() -> int:
     rc, summary = asyncio.run(amain())
-    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device", "worker_rtf", "peak_rss_mb", "gpu_peak_mb", "engines", "low_conf_chunks", "sample_speech_s", "speech_min", "fused3_min", "fused2_min", "qwen_only_min", "carried_min")
+    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device", "worker_rtf", "peak_rss_mb", "gpu_peak_mb", "engines", "missing_voters", "skipped", "low_conf_chunks", "sample_speech_s", "speech_min", "fused3_min", "fused2_min", "qwen_only_min", "carried_min")
     print("NIGHT_JOB omi_repass " + " ".join(f"{k}={summary[k]}" for k in keys if k in summary), file=sys.stderr)
     if summary.get("contenders"):
         print("NIGHT_JOB omi_repass_contenders " + str(summary["contenders"])[:260], file=sys.stderr)
     print(json.dumps(summary, sort_keys=True))
     if summary.get("status") == "model_missing":
         return 3
+    if summary.get("missing_voters") and summary.get("status") in ("ok", "rehearsal_ok"):
+        print(f"NIGHT_JOB omi_repass DEGRADED: expected voter(s) did not vote: {summary['missing_voters']}", file=sys.stderr)
+        return 3                                  # the window reads exit 3 as `degraded`: a missing voter is in the headline, never a green night with two voters
     if summary.get("rehearse") and summary.get("status") != "rehearsal_ok":
         return 4                                  # a rehearsal that did not pass must fail loudly (the window reports exit 5); it never ends "ok" on an idle / flag / memory refusal
     return rc

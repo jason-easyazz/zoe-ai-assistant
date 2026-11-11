@@ -844,7 +844,8 @@ def _provenance_begin(user_id: str) -> tuple:
         return (0, 0.0)
 
 
-def _provenance_commit(user_id: str, reply: str, message: str, session_id: str, token: tuple, tools: tuple = ()) -> None:
+def _provenance_commit(user_id: str, reply: str, message: str, session_id: str, token: tuple, tools: tuple = (),
+                       replay: bool = False) -> None:
     """The reply ended: record what it stood on (``memory_provenance``, persisted by ``reply_ledger``) and the timed promises it made
     (``commitments``). Both are background bookkeeping - neither waits, neither can change the reply."""
     try:
@@ -861,6 +862,8 @@ def _provenance_commit(user_id: str, reply: str, message: str, session_id: str, 
 
         rec = _mp.commit_brain_reply(user_id, reply, message, session_id, token=token, tools=tools) if _mp.enabled() else None
         try:
+            if replay:      # the replay harness is the member under test, not the member: its promises are artifacts, never a ledger row
+                return
             import commitments as _cm
 
             _cm.schedule_record(user_id, session_id, rec.reply_id if rec is not None else "", reply, message, tools)
@@ -870,7 +873,8 @@ def _provenance_commit(user_id: str, reply: str, message: str, session_id: str, 
         return
 
 
-def _provenance_tracked_stream(inner: AsyncIterator[str], message: str, session_id: str, user_id: str) -> AsyncIterator[str]:
+def _provenance_tracked_stream(inner: AsyncIterator[str], message: str, session_id: str, user_id: str,
+                               replay: bool = False) -> AsyncIterator[str]:
     """``inner`` unchanged when both bookkeepers are off or there is no user; else a pass-through that commits the reply on the way out."""
     try:
         import commitments as _cm
@@ -880,10 +884,11 @@ def _provenance_tracked_stream(inner: AsyncIterator[str], message: str, session_
             return inner
     except Exception:  # noqa: BLE001
         return inner
-    return _tracked_stream(inner, message, session_id, user_id)
+    return _tracked_stream(inner, message, session_id, user_id, replay)
 
 
-async def _tracked_stream(inner: AsyncIterator[str], message: str, session_id: str, user_id: str) -> AsyncIterator[str]:
+async def _tracked_stream(inner: AsyncIterator[str], message: str, session_id: str, user_id: str,
+                          replay: bool = False) -> AsyncIterator[str]:
     token = _provenance_begin(user_id)
     parts: list[str] = []
     sentinels: list[str] = []
@@ -904,7 +909,7 @@ async def _tracked_stream(inner: AsyncIterator[str], message: str, session_id: s
             tools = _rl.tool_names(sentinels)
         except Exception:  # noqa: BLE001
             tools = ()
-        _provenance_commit(user_id, "".join(parts), message, session_id, token, tools)
+        _provenance_commit(user_id, "".join(parts), message, session_id, token, tools, replay)
 
 
 def _claim_guarded(inner: AsyncIterator[str], message: str, user_id: str, kwargs: dict[str, Any],
@@ -1016,15 +1021,15 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
         if failover_enabled():
             return _provenance_tracked_stream(_claim_guarded(
                 _flue_streaming_with_failover(message, session_id, user_id, **kwargs), message, user_id, kwargs, session_id),
-                message, session_id, user_id)
+                message, session_id, user_id, bool(kwargs.get("replay_isolation")))
         return _provenance_tracked_stream(_claim_guarded(
             _flue_streaming_labeled(message, session_id, user_id, **kwargs), message, user_id, kwargs, session_id),
-            message, session_id, user_id)
+            message, session_id, user_id, bool(kwargs.get("replay_isolation")))
     lane = _fallback_lane()
     _log_lane(attempted=lane, served=lane, outcome="dispatched", session_id=session_id)
     return _provenance_tracked_stream(_claim_guarded(
         _fallback_streaming(message, session_id, user_id, **kwargs), message, user_id, kwargs, session_id),
-        message, session_id, user_id)
+        message, session_id, user_id, bool(kwargs.get("replay_isolation")))
 
 
 async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> str:
@@ -1051,4 +1056,4 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
         reply = _claim_guarded_text(reply, message, user_id, started, kwargs, implied, session_id)
         return reply
     finally:
-        _provenance_commit(user_id, reply, message, session_id, token)
+        _provenance_commit(user_id, reply, message, session_id, token, replay=bool(kwargs.get("replay_isolation")))
