@@ -23,6 +23,8 @@
 # 20 days this way).
 [Unit]
 Description=Nightly Serena restart after the voice replay gate (frees the leak)
+# Ordering, not just the clock: if the replay is still waiting (wait_for_quiet_box, up to 45 min) or queued on the harness lock at 04:50, this restart waits for it
+After=zoe-voice-regression.service
 
 [Service]
 Type=oneshot

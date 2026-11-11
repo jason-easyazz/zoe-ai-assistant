@@ -106,3 +106,13 @@ def test_serena_restart_is_after_the_voice_gate_not_inside_its_slot():
     # .gitignore walk's CPU/disk load into the STT timing (STT per audio-second ~250 ms vs ~168 at every other hour, 2026-11)
     assert serena >= gate + 15, "the Serena restart must fire after the nightly voice replay has finished"
     assert serena - gate <= 120, "keep the restart in the same quiet night slot, not in the morning"
+
+
+def test_serena_restart_is_ordered_after_the_replay_unit():
+    # a replay still waiting for a quiet box (up to 45 min) or on the harness lock at 04:50 must finish before the restart starts
+    assert re.search(r"^After=.*zoe-voice-regression\.service", (SYSTEMD / "zoe-serena-pregate-restart.service").read_text(), re.M)
+
+
+def test_lander_does_not_rerun_without_a_baseline_attempt():
+    s = (REPO / "scripts" / "landing" / "land_voice_pr.sh").read_text()
+    assert 'if [ -z "$ATT0" ]' in s and "ATT0=0" not in s

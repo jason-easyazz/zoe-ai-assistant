@@ -113,8 +113,10 @@ case "$PROBE_STATUS" in pass*) :;; *) mkdir -p "$LANDING_ARTIFACT_DIR"; cp -f "$
 # rerun the PR's latest voice-gate run so the verdict reads the fresh head-bound artifact
 RUN=$(gh run list --workflow voice-gate.yml --limit 30 --json databaseId,headSha --jq ".[]|select(.headSha==\"$HEAD_SHA\")|.databaseId" | head -1)
 if [ -n "$RUN" ]; then
-  ATT0=$(gh run view "$RUN" --json attempt --jq .attempt 2>/dev/null); case "$ATT0" in ''|*[!0-9]*) ATT0=0;; esac
-  if gh run rerun "$RUN" >/dev/null 2>&1; then
+  ATT0=$(gh run view "$RUN" --json attempt --jq .attempt 2>/dev/null); case "$ATT0" in ''|*[!0-9]*) ATT0=;; esac
+  # no baseline attempt = nothing to tell the new attempt from the old one: do not rerun and report a possibly stale verdict (codex review, #2415)
+  if [ -z "$ATT0" ]; then log "gate attempt unreadable - not rerunning; the recorded verdict is NOT this probe's (informational; the deploy gate is the block)"
+  elif gh run rerun "$RUN" >/dev/null 2>&1; then
     log "gate rerun $RUN (was attempt $ATT0)"; st=pending/
     # wait for the NEW attempt (landing_gate_state): the previous attempt's conclusion is not this verdict (2026-11-11, #2408)
     for i in $(seq 1 60); do st=$(landing_gate_state "$RUN" "$ATT0"); case "$st" in completed/*) break;; esac; [ "$(left)" -gt 120 ] || break; sleep 10; done
