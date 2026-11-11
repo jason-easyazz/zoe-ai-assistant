@@ -120,6 +120,13 @@ def rover(hyps: dict, pivot: str = PIVOT, lexicon: Iterable[str] = ()) -> dict:
     n = len(P)
     base = {"text": " ".join(s for _, s in P), "words": pw, "sources": [{pivot}] * n, "slots": [], "voters": [pivot], "low_conf": False}
     others = [m for m in sorted(hyps) if m != pivot and (hyps[m] or "").strip()]
+    if not P and len(others) >= 2:
+        # The pivot heard NOTHING but two+ other engines recognised speech: never drop it silently. Keep the voters' medoid text (closest to the rest) and flag the chunk
+        # ``low_conf`` so it reaches the transcript-check queue (a whole-chunk candidate). One lone engine (a likely hallucination on silence) still yields empty.
+        toks = {m: [w for w, _ in _rtoks(hyps[m])] for m in others}
+        best = min(others, key=lambda m: (sum(_edit(toks[m], toks[o]) for o in others if o != m), m))
+        surf = " ".join(s for _, s in _rtoks(hyps[best]))
+        return {**base, "text": surf, "words": toks[best], "sources": [{m for m in others if w in toks[m]} for w in toks[best]], "voters": [pivot] + others, "low_conf": True}
     if not P or len(others) < 2:
         base["voters"] = [pivot] + others
         return base

@@ -957,6 +957,8 @@ async def drop_recording(db, rid: str) -> None:
         await _run(db, "DELETE FROM omi_segments WHERE recording_id = ?", (rid,))
         for cid in clusters:
             await rebuild_cluster(db, cid)
+        import transcript_check
+        await transcript_check.drop_recording(db, rid)          # the morning check's items for this audio (0076)
         try:          # the night pass's wearer-print windows (0075) go with the audio they came from; a box without 0075 has none
             await _run(db, "DELETE FROM omi_wearer_samples WHERE recording_id = ?", (rid,))
         except Exception as exc:  # noqa: BLE001
@@ -988,6 +990,8 @@ async def redact(db, user_id: str, rx: "re.Pattern[str]", mark: str) -> int:
     for sid, text in await _all(db, "SELECT id, text FROM omi_segments WHERE user_id = ?", (user_id,)):
         if text and rx.search(text):
             n += await _run(db, "UPDATE omi_segments SET text = ? WHERE id = ?", (rx.sub(mark, text), sid))
+    import transcript_check
+    n += await transcript_check.redact(db, user_id, rx)            # a check item IS a sentence: one naming the forgotten entity is deleted
     try:                                        # the clean-read twin (0075) names the same people: it is forgotten with the verbatim
         for sid, text in await _all(db, "SELECT id, clean_text FROM omi_segments WHERE user_id = ? AND clean_text != ''", (user_id,)):
             if text and rx.search(text):
@@ -1001,6 +1005,8 @@ async def redact(db, user_id: str, rx: "re.Pattern[str]", mark: str) -> int:
 async def forget_user(db, user_id: str) -> int:
     """The member is erased: every row of theirs in every voice table."""
     n = 0
+    import transcript_check
+    n += await transcript_check.forget_user(db, user_id)            # 0075: the check queue and the ask lock (first: independent of the voice tables)
     try:
         for (vp,) in await _all(db, "SELECT id FROM learned_voiceprints WHERE owner_user_id = ?", (user_id,)):
             n += await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))

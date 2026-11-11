@@ -558,13 +558,13 @@ async def pending_recordings(db, *, now: Optional[datetime] = None, limit: int =
     cannot all be re-read in one night, so the ones most likely to hold speech are done first and the rest carry): first-pass done (or empty) rows whose WAV is still on disk, inside retention, not yet
     passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
     stamp = _iso(now or _now())
-    rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts, device_id FROM omi_recordings "
+    rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts, device_id, audio_expires_at FROM omi_recordings "
                           f"WHERE status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < ? "
                           "AND (audio_expires_at IS NULL OR audio_expires_at > ?) ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at LIMIT ?",
                       (MAX_PASS_ATTEMPTS, stamp, limit))
     out = []
     for r in rows:
-        d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts", "device_id")}
+        d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts", "device_id", "audio_expires_at")}
         if d["audio_path"] and os.path.exists(d["audio_path"]):
             out.append(d)
     return out
@@ -809,6 +809,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
     import omi_voices
     from db_compat import get_compat_db
     rid, uid = r["id"], r["user_id"]
+    who_text: dict = {}            # seg_id -> the turn text (kept out of ``who_items``: that row is stored without words)
     spans, anchors, by_log = await panel_evidence_for(uid, rid)
     lines = build_lines(res["words"], res["windows"], refs, zoe_spans=spans, anchors=anchors, zoe_by_log=by_log)   # the panel's record first (Zoe's sayings, known speakers), then the voices
     segs = []
@@ -901,6 +902,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                             if adult and sg.get("mark") and not sg.get("carry") and not sg.get("not_person") and sg.get("embedding") is not None:
                                 await db.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, ?) "
                                                  "ON CONFLICT (segment_id) DO NOTHING", (sid, uid, MODEL_ID, _blob(sg["embedding"]), ttl))
+                                who_text[sid] = sg["text"]
                                 who_items.append({"seg_id": sid, "t0": round(sg["start_ms"] / 1000.0, 3), "t1": round(sg["end_ms"] / 1000.0, 3),
                                                   "mark": "lean" if sg.get("lean") else "unknown",
                                                   "cands": sg["cands"]})
@@ -927,6 +929,27 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         counts["proposed"] = len(pick)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("OMI_REPASS_PROPOSAL_FAILED reason=%s", type(exc).__name__)
+    if counts.get("status") in ("replaced", "shadow"):
+        # the morning transcript check (ZOE_TRANSCRIPT_CHECK, default off = nothing): the ROVER fusion's contested chunks (``eu.is_contested``: a slot with no
+        # strict majority, or low_conf - the SAME rows ``eu.check_queue`` reads back from the hyps store) and the "who said this?" turns become ranked check items BEFORE
+        # the release below, so an open item keeps its snippet's WAV (the hyps file is written only after every recording is finished, i.e. after that release).
+        # Inside the ORIGINAL generation's erase gate (a member erased since the job started stores nothing); ``enqueue`` filters the forget ledger fail-closed. Never fails the pass.
+        import transcript_check
+        if transcript_check.enabled():
+            try:
+                async with erase_gate.writing(uid, seen.get(uid, 0)) as live_q:
+                    if live_q:
+                        who_rows = []
+                        if counts.get("who_items"):
+                            async with get_compat_db() as db_q:
+                                people = {p["id"]: p["name"] for p in await omi_voices.own_people(db_q, uid)}
+                            who_rows = [transcript_check.who_row_from_item(wi, who_text.get(wi.get("seg_id"), ""), people) for wi in counts["who_items"]]
+                        cands = [c for row in res.get("check_rows") or [] for c in transcript_check.candidates_from_row(row)]
+                        cands += [c for row in who_rows for c in transcript_check.candidates_from_who(row)]
+                        if cands:
+                            counts["check"] = (await transcript_check.enqueue(uid, r, cands, names=names)).get("stored", 0)
+            except Exception as exc:  # noqa: BLE001 - the check queue never fails the night pass
+                logger.warning("OMI_TRANSCRIPT_CHECK_NOT_QUEUED reason=%s", type(exc).__name__)
     await omi.release_tagged_audio(uid)            # the pass has seen it: the WAV goes unless the owner keeps it or a line still needs a name
     return counts
 
@@ -1370,6 +1393,9 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
             tally["carried" if carry else "failed"] += 1
             continue
         refs = await refs_for(r["user_id"], r.get("device_id") or "")
+        contested = [{k: v for k, v in x.items() if k != "_fz"} for x in chunk_rows.get(rid, []) if eu.is_contested(x)]
+        if contested:
+            o["check_rows"] = contested
         c = await finish_one(r, o, refs=refs, names=names_by_user.get(r["user_id"], []), model_label=model_label, seen=seen, m=m, now=now)
         s = c["status"]
         tally[s] = tally.get(s, 0) + 1

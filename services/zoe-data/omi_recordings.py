@@ -1416,7 +1416,11 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
             if omi_repass.holds_audio():          # a recording the night pass still owes a look is never released here (retention still bounds it)
                 sql += " AND repass_state NOT IN ('pending', 'failed')"      # 'failed' keeps the WAV to retention so a fixed pass can be re-run on it
             rows = await _fetch(db, sql + (" AND user_id = ?" if user_id else ""), (user_id,) if user_id else ())
+            import transcript_check
+            check_held = await transcript_check.open_recording_ids(user_id)      # an OPEN transcript-check item still needs its snippet (retention still bounds it)
             for r in rows:
+                if r["id"] in check_held:
+                    continue
                 if keep_for_tagging():
                     try:
                         left = await _fetch(db, f"SELECT COUNT(*) AS n FROM omi_segments WHERE recording_id = ? AND user_id = ? AND {_NEEDS_NAME_SQL}",
@@ -1465,6 +1469,41 @@ async def segment_lines(user_id: str, segment_ids: Iterable[str]) -> dict[str, d
         logger.debug("omi_recordings: segment_lines unavailable (%s)", type(exc).__name__)
         return {}
     return {r["id"]: {"offset_ms": max(0, int(r["start_ms"] or 0)), "audio_kept": r["id"] in held} for r in rows}
+
+
+async def span_clip(user_id: str, rid: str, start_ms: int, end_ms: int, *, max_s: float = CLIP_MAX_S) -> Optional[bytes]:
+    """A short WAV of ``[start_ms, end_ms]`` (at most ``max_s``) of the member's OWN still-held recording; None when it is not theirs or no
+    audio is held. The transcript check's snippet route (``transcript_check.clip``); same held/retention/path rules as ``segment_clip``."""
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        rows = await _fetch(db, f"SELECT r.audio_path FROM omi_recordings r WHERE r.id = ? AND r.user_id = ? AND {_CLIP_HELD}", (rid, user_id, _iso(_now())))
+    if not rows:
+        return None
+    path = Path(rows[0]["audio_path"])
+    try:
+        path.resolve().relative_to(audio_dir().resolve())
+    except (ValueError, OSError):
+        logger.warning("OMI_CLIP_REFUSED reason=outside_audio_dir")
+        return None
+    start = max(0, int(start_ms))
+    return await asyncio.to_thread(_cut_wav, path, start, max(start, min(int(end_ms), start + int(max_s * 1000))))
+
+
+def _cut_wav(path: Path, start: int, end: int) -> Optional[bytes]:
+    try:
+        with wave.open(str(path)) as w:
+            rate, width, ch = w.getframerate(), w.getsampwidth(), w.getnchannels()
+            w.setpos(min(w.getnframes(), start * rate // 1000))
+            pcm = w.readframes(max(0, (end - start) * rate // 1000))
+    except (OSError, EOFError, wave.Error):
+        return None
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as o:
+        o.setnchannels(ch)
+        o.setsampwidth(width)
+        o.setframerate(rate)
+        o.writeframes(pcm)
+    return buf.getvalue()
 
 
 async def segment_clip(user_id: str, segment_id: str, *, max_s: float = CLIP_MAX_S) -> Optional[bytes]:

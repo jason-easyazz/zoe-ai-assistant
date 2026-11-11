@@ -2795,6 +2795,12 @@ async def run_flue_brain_streaming(
 
     turn = clean_goodbye.filter_stream(turn, message, passthrough=(_FALLBACK_TEXT,),
                                        owed=lambda: _owed_questions(user_id))
+    # The morning transcript check (ZOE_TRANSCRIPT_CHECK=on, default off = not even wrapped): once a day, on the owner's first VERIFIED
+    # voice turn after 06:00, ONE line follows a reply that has finished with real text. Never on an emotional turn or one that ends in a question.
+    import transcript_check
+
+    if transcript_check.live() and not emotional_hold and not kwargs.get("replay_isolation"):
+        turn = transcript_check.append_stream(turn, _spoken, user_id, session_id, skip=(_FALLBACK_TEXT,))
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     emitted = False  # real reply text went out (never a sentinel or the fallback)

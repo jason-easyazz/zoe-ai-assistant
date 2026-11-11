@@ -865,6 +865,9 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_repass_clean
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller
            "omi_day_review.py",
+           # the morning transcript check corrects the TEXT of the member's own ``omi_segments`` (owner_corrected) and reads no voice table,
+           # embedding, print or cluster; the voice routes are not touched
+           "transcript_check.py",
            # the forget-reach inventory (A6) lists the voice tables as store keys; it imports and opens nothing
            "forget_reach.py",
            # the panel day review card lists / tags unknown voices ONLY by calling the owner-checked ``routers/omi_voices`` handlers

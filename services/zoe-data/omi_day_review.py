@@ -1827,6 +1827,41 @@ async def forget_user(user_id: str) -> int:
         raise
 
 
+async def reopen_recording_in(db, user_id: str, rid: str) -> int:
+    """The owner corrected a word of this recording (the transcript check): PENDING candidates that cite it were read off the old words, so
+    they are deleted and the recording is marked un-analysed - the next review of its day (night or day lane) reads the corrected text.
+    An approved / dismissed candidate is a decision and stays. Runs INSIDE the caller's transaction (it does not commit) so the correction and
+    this either both land or neither does. Returns the candidates deleted; 0 when nothing rested on it (or the review tables are not migrated)."""
+    try:
+        rows = await _fetch(db, "SELECT id, recording_ids FROM omi_day_candidates WHERE user_id = ? AND status = 'pending' AND recording_ids LIKE ?",
+                            (user_id, f'%"{rid}"%'))
+    except Exception as exc:  # noqa: BLE001
+        import memory_forget_cascade
+        if memory_forget_cascade._store_missing(exc):
+            return 0
+        raise
+    n = 0
+    for r in rows:
+        try:
+            if rid not in json.loads(r["recording_ids"] or "[]"):
+                continue
+        except ValueError:
+            continue
+        await db.execute("DELETE FROM omi_day_candidates WHERE id = ?", (r["id"],))
+        n += 1
+    if n:
+        await db.execute("UPDATE omi_recordings SET day_review_id = NULL WHERE id = ? AND user_id = ?", (rid, user_id))
+    return n
+
+
+async def reopen_recording(user_id: str, rid: str) -> int:
+    """``reopen_recording_in`` in its own transaction."""
+    async with _db() as db:
+        n = await reopen_recording_in(db, user_id, rid)
+        await db.commit()
+        return n
+
+
 async def forget_recording(user_id: str, rid: str) -> int:
     """A deleted recording takes its words with it (``omi_recordings.delete_recording`` calls this BEFORE its tombstone, so a failure
     here leaves the recording in place for a retry). Candidates resting on it are deleted; one already approved (or being approved)
