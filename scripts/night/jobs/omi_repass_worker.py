@@ -23,6 +23,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import resource
 import sys
 import time
@@ -361,6 +362,22 @@ def zoe_reference(emb: Embedder, clips: list):
     return (m / (np.linalg.norm(m) or 1.0)).tolist()
 
 
+_SAFE_REASON = re.compile(r"cuda|ctranslate2|out of memory|no such file|not found|cannot open|shared object|symbol|unsupported|driver|compiled|no module named|incompatible|version|invalid (?:model|device)", re.I)
+
+
+def redact_exc(exc: BaseException, limit: int = 160) -> str:
+    """An exception's message made safe for a log line: ALLOWLIST, not blocklist. Paths and URLs become <path>/<url>, key=value pairs and long runs go, and the message is kept only when it
+    reads like an environment/setup reason (CUDA, missing library, OOM...); anything else is withheld (the class name is always logged by the caller). One line, capped."""
+    t = " ".join(str(exc).split())
+    t = re.sub(r"\b[a-z][a-z0-9+.-]*://\S+", "<url>", t, flags=re.I)
+    t = re.sub(r"(?:~|\.{0,2})?/[^\s'\"]*", "<path>", t)
+    t = re.sub(r"(?i)\b\w*(token|secret|passw\w*|key|authorization|bearer|credential)\w*\b\s*[=:]?\s*\S+", "<redacted>", t)
+    t = re.sub(r"\b[A-Za-z0-9+/_-]{24,}\b", "<redacted>", t)
+    if not _SAFE_REASON.search(t):
+        return "(message withheld)"
+    return t[:limit]
+
+
 def run(manifest: dict, out_path: str) -> int:
     name = manifest.get("asr", "qwen3-asr")
     global MODELS_DIR, CHUNK_MAX_S, R34_DIR
@@ -380,7 +397,7 @@ def run(manifest: dict, out_path: str) -> int:
         asr.load()
         emb = DIAR[diar](threads) if diar != "none" else None          # a later voter / contender needs the pivot's chunks only: no speaker units (and no R34 session in memory)
     except Exception as exc:  # noqa: BLE001 - a model that is not in the cache is a setup problem, not a data one
-        print(f"model unavailable: {type(exc).__name__}", file=sys.stderr)
+        print(f"model unavailable: {name}: {type(exc).__name__}: {redact_exc(exc)}", file=sys.stderr)          # the ENGINE and the real reason (2026-11-11: a bare "RuntimeError" hid a missing CUDA CTranslate2)
         return 3
     load_s = time.time() - t0
     done = carried = failed = 0
