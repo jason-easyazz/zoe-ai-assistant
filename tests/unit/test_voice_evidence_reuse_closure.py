@@ -181,7 +181,16 @@ def test_every_file_the_probe_can_load_is_reuse_relevant():
 
 
 def test_negative_control_the_pin_sees_a_narrowed_rule(monkeypatch):
-    """Drop the whole-service-tree prefix: the pin must go red (the closure escapes)."""
+    """Drop the whole-service-tree veto AND allowlist the tree (the realistic mistake: the
+    allowlist fallback alone would still refuse it): the pin must go red."""
     monkeypatch.setattr(vgc, "REUSE_EXTRA_PREFIXES",
                         tuple(p for p in vgc.REUSE_EXTRA_PREFIXES if p != "services/zoe-data/"))
+    monkeypatch.setattr(vgc, "REUSE_SAFE_PREFIXES", vgc.REUSE_SAFE_PREFIXES + ("services/zoe-data/",))
     assert any(not vgc.reuse_relevance(f) for f in CLOSURE)
+
+
+def test_no_allowlisted_area_contains_a_closure_file_unless_vetoed():
+    """The allowlist must never be what clears a file the probe loads."""
+    for f in CLOSURE:
+        if f.startswith(vgc.REUSE_SAFE_PREFIXES):
+            assert vgc.reuse_relevance(f), f"{f} is allowlisted and nothing vetoes it"

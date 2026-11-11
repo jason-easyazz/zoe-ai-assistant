@@ -275,6 +275,12 @@ today is only `services/zoe-auth/`. That exception is evidenced, not assumed: co
 its own dir, its `requirements.txt` is read only by its own Dockerfile and its own CI job, zoe-data reaches
 it only over HTTP (`auth.py` → `ZOE_AUTH_URL`), and the replay runs in-process as a fixed member id, so a
 probe of H and of P would hit the same LIVE container. Add a directory there only with the same evidence.
+**And then an ALLOWLIST** (Codex cross-review round 2: a catalogue of file kinds can never be complete -
+`Package.swift`, `*.weights`, `MODULE.bazel` ...): a path no veto names is reusable over ONLY if it lies in
+`REUSE_SAFE_PREFIXES` (`docs/`, `tests/`, `services/zoe-data/tests/`, `services/zoe-auth/`, `services/zoe-ui/`,
+`.github/`, `scripts/maintenance|landing|night/`, `tools/`, `labs/`, `skills/`, agent configs) or is a root
+`*.md` / a short list of root config files. Anything else - a new top-level dir, `scripts/voice/`, `modules/`,
+`homeassistant/`, an unknown root file - is doubt, and refuses. The vetoes still apply inside allowlisted areas.
 `tests/unit/test_voice_evidence_reuse_closure.py` recomputes the closure on every run and fails the
 required `validate` lane if any file in it (or a new path-load) is not voice-relevant for reuse — the
 closure is pinned, not remembered.

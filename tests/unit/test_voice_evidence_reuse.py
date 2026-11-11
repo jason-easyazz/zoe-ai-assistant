@@ -257,6 +257,12 @@ REFUSED = {
     "a conda environment": edit("environment.yml", "name: x\n"),
     "checkout control (.gitattributes)": edit(".gitattributes", "*.py text eol=crlf\n"),
     "submodule config (.gitmodules)": edit(".gitmodules", "[submodule \"x\"]\n"),
+    # the ALLOWLIST: an unknown kind outside the known voice-irrelevant areas is doubt
+    "unknown manifest kind at the root (Package.swift)": edit("Package.swift", "// swift\n"),
+    "unknown weights kind in an unlisted dir": edit("vendor/net.weights", "w\n"),
+    "a new top-level directory": edit("newthing/app.py", "X = 1\n"),
+    "an unlisted scripts dir (scripts/voice)": edit("scripts/voice/daemon.py", "X = 1\n"),
+    "an add-on module": edit("modules/x/app.py", "X = 1\n"),
     "voice file renamed OUT of the voice path": _rename("services/zoe-data/voice_delivery.py", "tools/voice_delivery.py"),
     "file renamed INTO the voice tree": _rename("tools/helper.py", "services/zoe-data/helper.py"),
     "voice file deleted": _delete("services/zoe-data/voice_delivery.py"),
@@ -322,12 +328,12 @@ def test_a_symlink_anywhere_is_refused(rig, monkeypatch):
 
 def test_a_submodule_anywhere_is_refused(rig, monkeypatch):
     git(rig.repo, "checkout", "-q", "main")
-    git(rig.repo, "update-index", "--add", "--cacheinfo", f"160000,{rig.m0},vendor/sub")
+    git(rig.repo, "update-index", "--add", "--cacheinfo", f"160000,{rig.m0},tools/sub")
     git(rig.repo, "commit", "-q", "-m", "main gains a submodule")   # no `add -A`: it would drop the gitlink
     m1 = git(rig.repo, "rev-parse", "HEAD")
     git(rig.repo, "checkout", "-q", "pr")
     h = rig.update_branch(m1)
-    assert "160000" in git(rig.repo, "ls-tree", h, "vendor/sub")
+    assert "160000" in git(rig.repo, "ls-tree", h, "tools/sub")
     rc, out = rig.pr_gate(h)
     assert rc == 1 and "submodule" in out, out
     monkeypatch.setattr(vgc, "_SPECIAL_MODES", {})
@@ -470,6 +476,12 @@ def test_print_artifact_commit(rig):
     ("scripts/setup/systemd/zoe-data.service", True),
     ("scripts/maintenance/greploop_guard.py", False),
     ("go.sum", True),
+    ("Package.swift", True),
+    ("MODULE.bazel", True),
+    ("homeassistant/configuration.yaml", True),
+    ("CHANGELOG.md", False),
+    (".gitignore", False),
+    ("skills/x/SKILL.md", False),
     ("labs/x/Gemfile", True),
     ("services/zoe-ui/.gitattributes", True),
     ("../escape.py", True),

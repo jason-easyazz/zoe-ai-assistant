@@ -634,6 +634,25 @@ REUSE_EXTRA_FILES = (
 # the service or the replay (the closure pin proves it for the replay), EXCEPT the files
 # VOICE_PATH_PATTERNS already names (replay_samples.py), which stay relevant through them.
 REUSE_TEST_CARVEOUT = "services/zoe-data/tests/"
+# THE ALLOWLIST (Codex cross-review round 2: a denylist of file kinds can never be complete -
+# Package.swift, *.weights, MODULE.bazel ...). A changed path that no rule above vetoes may
+# still be reused over ONLY if it lies in one of these areas, each outside the probe's tree
+# dependence (the closure pin proves no file the probe loads is here unless a veto names
+# it): documentation, tests, separately-built or browser-side services, CI definitions,
+# operator/landing/night tooling, audit tools, isolated labs, skill docs, agent configs.
+# Anything else - a new top-level dir, scripts/voice/, modules/, homeassistant/, root config,
+# an unknown file kind at the root - is DOUBT, and doubt counts as voice. The vetoes above
+# still apply inside these areas (a Dockerfile under services/zoe-ui/, the flag-inventory
+# generator under tools/, the brain lane under labs/, *kokoro* anywhere ...).
+REUSE_SAFE_PREFIXES = (
+    "docs/", "tests/", REUSE_TEST_CARVEOUT, "services/zoe-auth/", "services/zoe-ui/",
+    ".github/", "scripts/maintenance/", "scripts/landing/", "scripts/night/", "tools/",
+    "labs/", "skills/", ".cursor/", ".codex/", ".greptile/", ".serena/", ".zoe/",
+)
+REUSE_SAFE_ROOT_FILES = frozenset({
+    ".gitignore", "pytest.ini", ".pre-commit-config.yaml", "LICENSE", "VERSION",
+    ".cursorrules", ".mcp.json", "scripts/AGENTS.md", "services/AGENTS.md",
+})
 # Separately-built services whose dependency/build files install ONLY into their own
 # image, never into the voice service's interpreter, and which the probe never runs from
 # the tree. Evidence for zoe-auth (2026-11-11): docker-compose.yml builds it from
@@ -706,7 +725,10 @@ def reuse_relevance(path: str, patterns: tuple[str, ...] | None = None) -> str:
         rule = _manifest_rule(path)
         if rule:
             return rule
-    return ""
+    if path.startswith(REUSE_SAFE_PREFIXES) or path in REUSE_SAFE_ROOT_FILES or (
+            "/" not in path and path.endswith(".md")):
+        return ""
+    return "outside the known voice-irrelevant areas (REUSE_SAFE_PREFIXES; doubt counts as voice)"
 
 
 def _git_run(repo: Path, *args: str) -> subprocess.CompletedProcess:
