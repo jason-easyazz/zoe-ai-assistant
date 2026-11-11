@@ -373,3 +373,54 @@ def test_kill_grace_covers_bar_teardown_but_lands_before_the_window():
     assert m, "record_bench_baselines.sh lost its hard deadline wrapper"
     margin = inspect.signature(hq.deadline_s).parameters["margin_s"].default
     assert 30 <= int(m.group(1)) < margin
+
+
+# ── model-load: a lab that loads a model takes the landing's brain-window lock ───────────────────────────────────
+
+
+def _ok(name, **kw):
+    return hq.Verdict(True, "ok")
+
+
+def test_model_load_runs_holds_the_brain_lock_and_releases_it(tmp_path):
+    import fcntl
+
+    lock = str(tmp_path / "brain.lock")
+    seen = {}
+
+    def runner(cmd):
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            seen["free_during_run"] = True
+        except OSError:
+            seen["free_during_run"] = False          # the lab holds it: a lander / the night window cannot take it
+        finally:
+            os.close(fd)
+        return 7
+
+    assert hq.run_model_load("lab", ["x"], lock_path=lock, verdict=_ok, runner=runner, now=NOON) == 7
+    assert seen["free_during_run"] is False
+    fd = os.open(lock, os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released afterwards
+    os.close(fd)
+
+
+def test_model_load_refuses_a_held_lock_and_a_closed_gate_without_running(tmp_path):
+    import fcntl
+
+    lock = str(tmp_path / "brain.lock")
+    ran = []
+    held = os.open(lock, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    try:
+        assert hq.run_model_load("lab", ["x"], lock_path=lock, verdict=_ok, runner=ran.append, sleep=lambda s: None,
+                                 budget_min=45, poll_s=100000, now=NOON) == hq.EXIT_REFUSED
+    finally:
+        os.close(held)
+
+    def closed(name, **kw):
+        return hq.Verdict(False, "paused", "brain-window")
+
+    assert hq.run_model_load("lab", ["x"], lock_path=lock, verdict=closed, runner=ran.append, now=NOON) == hq.EXIT_REFUSED
+    assert ran == [], "a refused lab must never start"

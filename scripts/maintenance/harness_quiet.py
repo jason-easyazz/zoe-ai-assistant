@@ -254,9 +254,54 @@ def deadline_s(*, margin_s: int = 120, now: Optional[dt.datetime] = None) -> int
     return int(max(0, (w_start - t0).total_seconds() - max(0, int(margin_s))))
 
 
+BRAIN_LOCK = "/tmp/zoe-brain-window.lock"
+
+
+def run_model_load(name: str, cmd: list[str], *, budget_min: int = 45, lock_path: str = BRAIN_LOCK,
+                   verdict: Optional[Callable[..., Verdict]] = None, poll_s: float = 5.0,
+                   sleep: Callable[[float], None] = time.sleep, runner: Callable[..., int] = lambda c: subprocess.call(c),
+                   now: Optional[dt.datetime] = None) -> int:
+    """Run ``cmd`` (a lab / probe that LOADS a model: the brain, Kokoro, a 12B...) under the same coordination as a landing.
+
+    1. ``night_pause_verdict`` (night_busy.sh voice, else the fixed window): refuse outside the gate or when the run would
+       still be alive at 01:50. ``ZOE_HARNESS_FORCE`` does not reach it.
+    2. take ``/tmp/zoe-brain-window.lock`` (flock, the lock a lander / the bake-off / the night window use), waiting at most
+       ``lock_wait_s`` (never past the window), and HOLD it for the whole run - so the night window sees it and waits or refuses,
+       and a landing's probe never loads on top of it.
+    Exit ``EXIT_REFUSED`` (3) when refused or the lock was not won; else the command's own code."""
+    import fcntl
+
+    v = (verdict or night_pause_verdict)(name, budget_min=budget_min, now=now)
+    if not v.allowed:
+        print(v.reason)
+        return EXIT_REFUSED
+    wait = lock_wait_s(budget_min, now=now)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+    try:
+        waited = 0.0
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if waited >= wait:
+                    print(f"{name}: {lock_path} is held (a landing, the bar, the bake-off or the night window has the brain); "
+                          f"waited {int(waited)}s - not loading a model on top of it")
+                    return EXIT_REFUSED
+                sleep(poll_s)
+                waited += poll_s
+        return int(runner(cmd))
+    finally:
+        os.close(fd)           # closing the descriptor drops the flock
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+    m = sub.add_parser("model-load", help="run a model-loading lab under the landing coordination: model-load NAME [--budget-min N] -- CMD...")
+    m.add_argument("name")
+    m.add_argument("--budget-min", type=int, default=45)
+    m.add_argument("rest", nargs=argparse.REMAINDER, help="-- then the command")
     c = sub.add_parser("check", help="may this harness start now? exit 0 yes, 3 no")
     c.add_argument("name")
     c.add_argument("--landing", action="store_true", help="the landing loop's replay probe (exempt from the hours)")
@@ -276,6 +321,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "panel-quiet":
         return 0 if panel_quiet() else 1
+    if args.cmd == "model-load":
+        cmd = args.rest[1:] if args.rest[:1] == ["--"] else args.rest
+        if not cmd:
+            ap.error("model-load needs a command after --")
+        return run_model_load(args.name, cmd, budget_min=args.budget_min)
     if args.cmd == "brain-window-wait":
         print(lock_wait_s(args.budget_min, cap_s=args.cap_s,
                           now=dt.datetime.fromisoformat(args.now) if args.now else None))
