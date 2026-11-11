@@ -114,6 +114,17 @@ landing_evidence_reusable(){
   return "${PIPESTATUS[0]}"
 }
 
+# landing_gate_state <run-id> <prev-attempt>: "<status>/<conclusion>" of the run's CURRENT attempt, or "pending/" until a rerun has registered.
+# A rerun request returns before the new attempt exists, so an immediate run view still shows the PREVIOUS attempt as completed - 2026-11-11, #2408:
+# the lander logged "gate: completed/failure" two seconds after a rerun that went on to succeed (the check on the head was success). The attempt
+# number only increases once the rerun is real, so a state is believed only when attempt > <prev-attempt>. Unreadable = "unreadable/".
+landing_gate_state(){
+  local out att
+  out=$(gh run view "$1" --json attempt,status,conclusion --jq '"\(.attempt) \(.status)/\(.conclusion)"' 2>/dev/null) || { echo "unreadable/"; return 0; }
+  att=${out%% *}
+  case "$att" in ''|*[!0-9]*) echo "unreadable/";; *) if [ "$att" -gt "${2:-0}" ]; then echo "${out#* }"; else echo "pending/"; fi;; esac
+}
+
 # landing_artifact_fresh <artifact> <t0-epoch>: 0 only if the artifact file was (re)written at or after <t0> - i.e. by THIS probe attempt.
 landing_artifact_fresh(){ [ "$(stat -c %Y "$1" 2>/dev/null || echo 0)" -ge "$2" ]; }
 
@@ -126,7 +137,9 @@ landing_running(){
   local p c a0 i skip=" $$ $PPID " n b
   for p in /proc/[0-9]*; do
     p=${p#/proc/}; case "$skip" in *" $p "*) continue;; esac
-    c=(); mapfile -d '' -t c < "/proc/$p/cmdline" 2>/dev/null || continue
+    # brace group, not a trailing 2>/dev/null: a redirection that fails to OPEN is reported by the shell BEFORE a later 2>/dev/null applies
+    # (a pid that died between the glob and here printed "/proc/<pid>/cmdline: No such file or directory" into every lander log)
+    c=(); { mapfile -d '' -t c < "/proc/$p/cmdline"; } 2>/dev/null || continue
     [ "${#c[@]}" -gt 0 ] || continue
     a0=${c[0]##*/}; b=
     case "$a0" in

@@ -1,5 +1,9 @@
-# Restart the shared Serena MCP server nightly, fifteen minutes BEFORE the voice
-# replay gate's 04:30 run.
+# Restart the shared Serena MCP server nightly at 04:50, AFTER the voice replay gate's
+# 04:30 run (moved 2026-11-12 from 04:15). Its start-up walks every .gitignore under the
+# repo for 40-85+ minutes (325 worktrees) and that CPU/disk load made the gate's STT
+# timing ~1.5x slow on 12 of 14 nights; see zoe-serena-pregate-restart.timer.
+#
+# (The text below is the original 2026-07-28 reasoning for restarting at all.)
 #
 # WHY (measured 2026-07-28, the gate's first autonomous night): the box idles
 # overnight at ~558MB available — below the gate's 700MB remote-mode floor — so
@@ -18,7 +22,7 @@
 # changes, re-copy and daemon-reload (the voice-regression unit went stale for
 # 20 days this way).
 [Unit]
-Description=Nightly Serena restart before the voice replay gate (frees the leak)
+Description=Nightly Serena restart after the voice replay gate (frees the leak)
 
 [Service]
 Type=oneshot

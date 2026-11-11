@@ -112,7 +112,15 @@ case "$PROBE_STATUS" in *" ${HEAD_SHA:0:8}") :;; *) log "probe artifact is not f
 case "$PROBE_STATUS" in pass*) :;; *) mkdir -p "$LANDING_ARTIFACT_DIR"; cp -f "$LANDING_VOICE_ARTIFACT" "$LANDING_ARTIFACT_DIR/$PR.json" 2>/dev/null; log "PROBE NOT PASS - not arming auto-merge; leaving #$PR for triage"; exit 4;; esac
 # rerun the PR's latest voice-gate run so the verdict reads the fresh head-bound artifact
 RUN=$(gh run list --workflow voice-gate.yml --limit 30 --json databaseId,headSha --jq ".[]|select(.headSha==\"$HEAD_SHA\")|.databaseId" | head -1)
-if [ -n "$RUN" ]; then gh run rerun "$RUN" >/dev/null 2>&1 && log "gate rerun $RUN"; for i in $(seq 1 60); do st=$(gh run view "$RUN" --json status,conclusion --jq '"\(.status)/\(.conclusion)"'); case "$st" in completed/*) break;; esac; [ "$(left)" -gt 120 ] || break; sleep 10; done; log "gate: $st"; else log "no voice-gate run for this head yet (not a voice-path PR?)"; fi
+if [ -n "$RUN" ]; then
+  ATT0=$(gh run view "$RUN" --json attempt --jq .attempt 2>/dev/null); case "$ATT0" in ''|*[!0-9]*) ATT0=0;; esac
+  if gh run rerun "$RUN" >/dev/null 2>&1; then
+    log "gate rerun $RUN (was attempt $ATT0)"; st=pending/
+    # wait for the NEW attempt (landing_gate_state): the previous attempt's conclusion is not this verdict (2026-11-11, #2408)
+    for i in $(seq 1 60); do st=$(landing_gate_state "$RUN" "$ATT0"); case "$st" in completed/*) break;; esac; [ "$(left)" -gt 120 ] || break; sleep 10; done
+    log "gate: $st"
+  else log "gate rerun of $RUN could not be started - the recorded verdict is the previous attempt's, not this probe's (informational; the deploy gate is the block)"; fi
+else log "no voice-gate run for this head yet (not a voice-path PR?)"; fi
 # EVIDENCE REUSE (2026-11-11): the probe's evidence is for PROBED_SHA. When the head moves after the probe - `strict` makes the PR go BEHIND
 # when anything else merges, or someone pushes - the lander MAY carry on at the new head instead of re-probing, but ONLY when
 # landing_evidence_reusable says so (landing_lib.sh -> voice_gate_check.py --allow-reuse: the probed commit is an ancestor of the new head and
