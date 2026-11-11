@@ -250,3 +250,22 @@ def test_redaction_catches_quoted_and_space_delimited_secrets_that_are_not_in_th
     for leak in ("hunter2", "abc123", "zz9top"):
         assert leak not in out, (leak, out)
     assert "authentication failed" in out and "rejected" in out
+
+
+def test_a_slow_preflight_check_that_makes_the_box_busy_stops_nothing(tmp_path, monkeypatch):
+    """Codex P1 on #2407: the check takes minutes; the quiet / busy clearance must come AFTER it, immediately before the first stop."""
+    monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "on")
+    monkeypatch.setenv("POSTGRES_URL", "postgresql://u:pw@127.0.0.1:5432/db")
+    monkeypatch.setattr(nw, "tcp_reachable", lambda url, timeout_s=3.0: True)
+    w, host, _ = make(tmp_path, argv=["--pre-jobs", "omi_repass"], cfg_kw=preflight_cfg(tmp_path))
+    orig = host.run
+
+    def run(argv, timeout=60.0, mutating=True, env=None):
+        if "--check" in argv:
+            host.t += 200.0                         # the slow check ...
+            host.panel_busy = True                  # ... during which a voice turn starts and a timer job begins
+            host.busy.add("zoe-backup.service")
+        return orig(argv, timeout, mutating, env)
+    host.run = run
+    assert w.run() == nw.EXIT_REFUSED
+    assert host.count("--user stop") == 0 and not host.jobs_run

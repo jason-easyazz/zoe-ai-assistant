@@ -1456,6 +1456,7 @@ class NightWindow(bk.Window):
         if not self.contiguous_ok(frag=frag0) and not have_sudo:
             self.refuse("physical memory is fragmented and passwordless sudo is not available, so the window cannot compact it: the 12B would die on cudaMalloc / NvMap error 12. "
                         f"Run, then start again: {bk.operator_compact_command(cfg.drop_caches)}")
+        self.repass_preflight()      # BEFORE the first stop, and BEFORE the idle / quiet clearance: the check is slow (up to 300 s), so a voice turn or a busy gate that starts during it must still be waited out
         with self.capped_waits(need_min):
             waiting = self.wait_until_idle() or waiting
         with self.capped_waits(need_min):                  # a fresh cap per wait: the remaining room shrinks as the first one spends it
@@ -2715,7 +2716,6 @@ class NightWindow(bk.Window):
         try:
             self.note_presleep()                 # BEFORE the preflight: a REFUSED window's report carries a failed backup too
             self.preflight()
-            self.repass_preflight()                 # BEFORE the first stop: a missing runtime must cost nothing, not 70 s of silence
             if self.cfg.trial:
                 self.cfg.live_unit_text = self.host.run(["systemctl", "--user", "cat", BRAIN], mutating=False).out
             self.opened = True
