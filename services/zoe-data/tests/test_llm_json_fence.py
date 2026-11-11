@@ -50,7 +50,7 @@ def _run(md, monkeypatch, content):
 
 
 def test_digest_parses_fenced_unfenced_truncated_and_rejects_garbage(monkeypatch):
-    md = pytest.importorskip("memory_digest")
+    import memory_digest as md
 
     assert _run(md, monkeypatch, "```json\n[" + FACT + "]\n```")[0]["fact"] == "Dad is Neil"
     assert _run(md, monkeypatch, "```\n[" + FACT + "]\n```")[0]["fact"] == "Dad is Neil"
