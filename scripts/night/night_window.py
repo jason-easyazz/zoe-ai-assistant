@@ -2814,7 +2814,8 @@ class NightWindow(bk.Window):
                     self.event(f"job {j['name']}: SILENT NO-OP on the 12B (exit 0, zero tokens, no sign of idleness); the 4B fallback finished it - still reported degraded")
                     self.rec["notes"].append(f"{j['name']}: SILENT NO-OP on the 12B, covered by the 4B fallback")
             failing = [j["name"] for j in self.jobs if j["status"] not in (*OK_JOB_STATUSES, "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j))
-                       and not (j.get("best_effort") and j["status"] in ("no time", "timeout"))]
+                       and not (j.get("best_effort") and j["status"] in ("no time", "timeout"))
+                       and not (j["backend"] == "pre" and j["status"] == "degraded" and not self.cfg.rehearse and any(n.startswith("NIGHT_JOB omi_repass DEGRADED") for n in j["notes"]))]          # a re-pass that ran with a voter MISSING keeps the night green but reads `degraded` in the headline (a missing RUNTIME, exit 3 without that line, still fails); a rehearsal must be whole
             if rc == EXIT_OK and failing:
                 rc = EXIT_JOBS_FAILED
             self.outcome = classify_outcome(self.outcome, rc, self.jobs, failing)
