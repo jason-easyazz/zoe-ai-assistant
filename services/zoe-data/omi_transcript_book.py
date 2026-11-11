@@ -92,8 +92,9 @@ def render(turns: list, *, title: str = "", tz: Any = None, note: str = "") -> s
 async def load_day(db, user_id: str, day: dt.date, tz: Any) -> list:
     """The household day's turns from the store (verbatim + clean twin + resolved names), oldest first. Zoe's lines are kept (she is part of the conversation);
     other non-person lines (media) are left out."""
+    nxt = day + dt.timedelta(days=1)                       # the NEXT local midnight, built in the zone: +24 h after the UTC conversion is wrong on a 23 / 25 hour (DST) day
     a = dt.datetime(day.year, day.month, day.day, tzinfo=tz).astimezone(dt.timezone.utc)
-    b = a + dt.timedelta(days=1)
+    b = dt.datetime(nxt.year, nxt.month, nxt.day, tzinfo=tz).astimezone(dt.timezone.utc)
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     try:
         rows = await _all(db, "SELECT s.recording_id, s.start_ms, s.end_ms, s.text, s.clean_text, s.clean_how, s.speaker, s.owner_label, s.not_person, s.tagged_person_id, "
