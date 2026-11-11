@@ -16,7 +16,8 @@ anywhere. Labels: [Proven] = a test or the bench printed it on this box; [Experi
   tombstoned, quarantined or missing -> `Forgotten` (checked inside the same `BEGIN IMMEDIATE` as the edge insert, so a racing
   forget always sees the edges). A payload whose normalised hash is ledgered -> `Forgotten` (same transaction; one two-connection test holds the
   write lock, commits a forget while a writer waits, and checks the writer is refused - that single interleave is all that is tested).
-- `forget_phase1(sid)` (atomic): ledger the hash, tombstone the id, delete the source row and its FTS row (by rowid), compute the
+- `forget_phase1(sid)` (atomic): ledger the hash (and the hash of every derived payload in the closure, so the derived text
+  cannot be re-admitted either; exact-text match after normalisation only, a paraphrase is not caught), tombstone the id, delete the source row and its FTS row (by rowid), compute the
   transitive closure of derived artifacts with one recursive CTE, mark them `quarantined`.
 - `forget_phase2()`: queue a rebuild of each quarantined artifact from its surviving parents (ids only), drop the artifacts and their
   edges, then `optimize` the FTS index.

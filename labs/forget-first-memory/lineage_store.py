@@ -121,6 +121,10 @@ class LineageStore:
         self.db.execute("INSERT OR IGNORE INTO tombstones VALUES (?)", (sid,))
         self.db.execute("DELETE FROM sources WHERE id = ?", (sid,))
         closure = [r[0] for r in self.db.execute(CLOSURE, (sid,))]
+        for a in closure:  # derived text is forgotten too: ledger it, so the same bytes cannot come back by any writer
+            got = self.db.execute("SELECT payload FROM artifacts WHERE id = ?", (a,)).fetchone()
+            if got and got[0] is not None:
+                self.db.execute("INSERT OR IGNORE INTO forget_ledger VALUES (?)", (self._h(got[0]),))
         self.db.executemany("UPDATE artifacts SET state = 'quarantined' WHERE id = ?", [(a,) for a in closure])
         self.db.execute("COMMIT")
         return closure

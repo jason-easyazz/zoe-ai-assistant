@@ -74,8 +74,14 @@ def test_serve_walls_a_missed_quarantine(seed):
     v = rng.choice(sorted(markers))
     s.write_derived("wall_probe", "Lx", f"probe summary of {s._payload(v)}", [v])
     assert [a for a, p in s.serve() if markers[v] in p], "positive control: the marker is served before forget"
+    probe_text = f"probe summary of {s._payload(v)}"
     closure = s.forget_phase1(v)
     assert "wall_probe" in closure
+    keep = next(x for x in sorted(markers) if x != v)
+    with pytest.raises(Forgotten):  # the forgotten DERIVED text cannot be re-admitted as a new source ...
+        s.ingest("derived_back", probe_text)
+    with pytest.raises(Forgotten):  # ... nor as a derived write under an unrelated live parent
+        s.write_derived("derived_back", "Lx", probe_text, [keep])
     s.db.executemany("UPDATE artifacts SET state = 'live' WHERE id = ?", [(a,) for a in closure])  # the bug
     assert not [a for a, p in s.serve() if markers[v] in p]
 
