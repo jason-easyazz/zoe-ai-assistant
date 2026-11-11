@@ -68,7 +68,7 @@ Same queue, same ask, same cap (the ~10 a day is shared with the word items), sa
 
 Flags: `ZOE_TRANSCRIPT_CHECK`, `ZOE_TRANSCRIPT_CHECK_MAX_ITEMS` (10), `ZOE_TRANSCRIPT_CHECK_ASK_FROM_HOUR` (6).
 
-**Flip prerequisites.** The hardening PR (`feature/transcript-check-hardening`) must land before `ZOE_TRANSCRIPT_CHECK` leaves `off`. It reads the forget ledger under the erase gate (an answer cannot race an entity forget), anchors a correction to the selected segment's occurrence (a repeated phrase), lets a signed-in session name its panel (`X-Panel-Id`, honoured only for a member bound to it) so "Say it" works on the physical panel, and binds a pending "say it" to the panel it started on.
+**Anchoring a correction.** The hardening PR landed (forget ledger read under the erase gate, per-occurrence swap, session panel id, panel-bound "say it"). The transcript is corrected at the occurrence of the segment whose plan REPLACES the span (most overlap first), never at a larger-overlap neighbour that already holds the new word; when no overlapping turn replaces the span (and another one lost it) the answer is refused (`text_moved`) and nothing is written.
 
 ## Contracts with other work
 

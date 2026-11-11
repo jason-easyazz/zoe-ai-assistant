@@ -143,6 +143,46 @@ def test_the_boot_catchup_runs_only_when_no_backup_succeeded_in_the_last_day(tmp
     assert nw.presleep_is_stale(cfg, host) is True                           # 30 h later it is stale again
 
 
+def test_the_catchup_starts_nothing_while_the_window_is_running(tmp_path):
+    """The boot catch-up (boot just before 02:30 + no backup in 26 h) must not run the backup / export inside a running night window."""
+    w, host, cfg = make(tmp_path, start=at(2, 40), active={nw.WINDOW_UNIT: True})
+    assert nw.presleep_is_stale(cfg, host) is True                                 # the catch-up would otherwise go
+    st = nw.run_presleep(cfg, host, host.log, catchup=True)
+    assert started(host) == [] and st == {}
+
+
+def test_the_catchup_defers_to_a_live_marker_owner_even_when_the_unit_reads_inactive(tmp_path):
+    w, host, cfg = make(tmp_path, start=at(2, 40))
+    host.files[str(cfg.marker)] = json.dumps({"pid": 424242, "run_id": "r", "mode": "night"})
+    host.present.add("/proc/424242")
+    host.files["/proc/424242/cmdline"] = "python3\0scripts/night/night_window.py\0"
+    nw.run_presleep(cfg, host, host.log, catchup=True)
+    assert started(host) == []
+
+
+def test_control_the_catchup_proceeds_when_the_window_is_not_running(tmp_path):
+    w, host, cfg = make(tmp_path, start=at(2, 40))
+    nw.run_presleep(cfg, host, host.log, catchup=True)
+    assert len(started(host)) == 2
+    w2, host2, cfg2 = make(tmp_path / "stale", start=at(2, 40))                      # a marker whose writer is gone (a crashed window) is not a running window
+    host2.files[str(cfg2.marker)] = json.dumps({"pid": 424242, "run_id": "r", "mode": "night"})
+    nw.run_presleep(cfg2, host2, host2.log, catchup=True)
+    assert len(started(host2)) == 2
+    w3, host3, cfg3 = make(tmp_path / "reused", start=at(2, 40))                      # the pid now belongs to another pre-sleep process, not the window
+    host3.files[str(cfg3.marker)] = json.dumps({"pid": 424242, "run_id": "r", "mode": "night"})
+    host3.present.add("/proc/424242")
+    host3.files["/proc/424242/cmdline"] = "python3\0night_window.py\0--presleep\0--catchup\0"
+    nw.run_presleep(cfg3, host3, host3.log, catchup=True)
+    assert len(started(host3)) == 2
+
+
+def test_the_windows_own_presleep_is_not_blocked_by_its_own_unit(tmp_path):
+    """Only the catch-up defers: the window's ExecStartPre --presleep runs while its unit is 'activating', and must still take the backup."""
+    w, host, cfg = make(tmp_path, start=at(2, 40), active={nw.WINDOW_UNIT: True})
+    nw.run_presleep(cfg, host, host.log)
+    assert len(started(host)) == 2
+
+
 def test_the_catchup_units_exist_and_are_installed_with_the_window():
     svc = (SYSTEMD / "zoe-night-presleep-catchup.service").read_text()
     tim = (SYSTEMD / "zoe-night-presleep-catchup.timer").read_text()
