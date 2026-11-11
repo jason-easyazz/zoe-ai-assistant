@@ -1511,3 +1511,29 @@ def test_replacement_keeps_contributions_when_the_member_or_the_global_learning_
     assert len(run(rp._release_or_freeze(env.db, A, ids))) == 2 and count() == 2
     monkeypatch.setenv("ZOE_OMI_LEARN_VOICES", "1")                                  # control: learning on -> released for the re-teach
     assert run(rp._release_or_freeze(env.db, A, ids)) == [] and count() == 0
+
+
+def test_merged_replacement_line_fuses_the_frozen_contributions_instead_of_dropping_one(env, monkeypatch):
+    """Review: two first-pass lines of one person merged into one replacement line; the second frozen contribution hit the existing-row branch and was DELETED. Now the two embeddings
+    are fused (unit mean) into the one row. Negative control: the stored embedding is neither original (the old code left the first, unchanged)."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    pid = env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"}).json()["person_id"]
+    env.db.conn.execute("UPDATE learned_voiceprints SET learning_enabled = 0")
+    env.db.conn.commit()
+    old = [dict(zip(("id", "start_ms", "end_ms", "tagged_person_id"), r)) for r in env.db.q(
+        "SELECT id, start_ms, end_ms, tagged_person_id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    frozen = run(rp._frozen_contributions(env.db, A, [o["id"] for o in old]))
+    a = np.zeros(256)
+    a[0] = 1.0
+    b = np.zeros(256)
+    b[1] = 1.0
+    for (vp, sid), v in zip(sorted(frozen, key=lambda x: x[1]), (a, b)):
+        env.db.conn.execute("UPDATE learned_voiceprint_segments SET embedding = ? WHERE voiceprint_id = ? AND segment_id = ?", (rp._blob(v), vp, sid))
+    env.db.conn.commit()
+    segs = [{"start_ms": 0, "end_ms": 10000, "carry": {"tagged_person_id": pid}}]
+    run(rp._relink_frozen(env.db, frozen, old, ["merged"], segs))
+    rows_ = env.db.q("SELECT segment_id, embedding FROM learned_voiceprint_segments")
+    assert [r[0] for r in rows_] == ["merged"]
+    got = rp._unit(rp._vec(rows_[0][1]))
+    assert abs(float(got @ rp._unit(a + b)) - 1.0) < 1e-4 and abs(float(got @ a) - 1.0) > 0.1

@@ -713,8 +713,18 @@ async def _relink_frozen(db, frozen: list[tuple], old: list[dict], new_ids: list
             ov = min(sg["end_ms"], o["end_ms"]) - max(sg["start_ms"], o["start_ms"])
             if ov > best_ov:
                 best, best_ov = nid, ov
-        if best is not None and not await _all(db, "SELECT 1 FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, best)):
+        held = await _all(db, "SELECT embedding FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, best)) if best is not None else []
+        if best is not None and not held:
             await db.execute("UPDATE learned_voiceprint_segments SET segment_id = ? WHERE voiceprint_id = ? AND segment_id = ?", (best, vp, osid))
+        elif best is not None:
+            # two first-pass lines of the same person merged into ONE replacement line: a contribution is keyed (print, segment), so the two embeddings are FUSED (unit mean) into the
+            # one row instead of the later being discarded - a stopped print cannot be re-taught, so dropping a sample would lose it for good
+            mine = await _all(db, "SELECT embedding FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
+            if mine:
+                fused = _unit(_unit(_vec(held[0][0])) + _unit(_vec(mine[0][0])))
+                await db.execute("UPDATE learned_voiceprint_segments SET embedding = ? WHERE voiceprint_id = ? AND segment_id = ?", (_blob(fused), vp, best))
+            await db.execute("DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
+            touched.add(vp)
         else:
             await db.execute("DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, osid))
             touched.add(vp)
@@ -1227,7 +1237,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         async with get_compat_db() as db:
             if wins_ and speech_ >= who.SESSION_MIN_S:
                 mu_by[key_] = who.session_mean([w[2] for w in wins_])
-                if not rehearse:
+                if m == "on":             # shadow (and a rehearsal) keeps the mean in memory only: shadow stores nothing biometric
                     try:
                         from manner_block import eligible as _elig
                         async with erase_gate.writing(uid_, seen.get(uid_, 0)) as live_:        # a member erased while the worker ran keeps no channel mean (it is derived from their voice)
@@ -1244,7 +1254,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         key_ = (uid_, dev_ or "")
         if key_ not in refs_cache:
             async with get_compat_db() as db:
-                refs_cache[key_] = await load_refs(db, uid_, zoe_ref, mu_by.get(key_), loud_by.get(key_), persist=not rehearse)
+                refs_cache[key_] = await load_refs(db, uid_, zoe_ref, mu_by.get(key_), loud_by.get(key_), persist=m == "on")
         return refs_cache[key_]
     chunked = [it for it in ok1 if isinstance(got1[it["id"]].get("chunks"), list)]
 
