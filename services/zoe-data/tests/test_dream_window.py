@@ -183,3 +183,12 @@ def test_an_invalid_write_is_a_422_with_every_reason_and_stores_nothing(tmp_path
     r = client("admin", db).put("/api/settings/dream-window", json={"earliest": "03:00", "latest": "02:00", "awake_by": "04:30", "quiet_min": 30})
     assert r.status_code == 422 and len(r.json()["detail"]["errors"]) >= 2 and db.writes == [] and not (tmp_path / "dream-window.json").exists()
     assert client("admin", db).put("/api/settings/dream-window", json={"earliest": "01:00"}).status_code == 422       # all four fields are required
+
+
+def test_an_anonymous_guest_cannot_read_the_household_schedule_but_a_member_can():
+    guest = client("guest", FakeDb(GOOD))
+    from auth import get_current_user as _g
+    guest.app.dependency_overrides[_g] = lambda: {"user_id": "guest", "role": "guest"}      # what a credential-less LAN request resolves to
+    assert guest.get("/api/settings/dream-window").status_code in (401, 403)
+    assert client("member", FakeDb(GOOD)).get("/api/settings/dream-window").status_code == 200
+    assert guest.put("/api/settings/dream-window", json=GOOD).status_code in (401, 403)       # the sibling write was already admin-only

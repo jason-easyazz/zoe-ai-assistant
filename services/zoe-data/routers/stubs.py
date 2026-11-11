@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
-from auth import get_current_user, require_admin
+from auth import get_current_user, require_admin, require_signed_in
 from db_pool import get_db
 
 logger = logging.getLogger(__name__)
@@ -110,9 +110,9 @@ async def get_settings(user: dict = Depends(get_current_user), db=Depends(get_db
 
 
 @router.get("/api/settings/dream-window")
-async def get_dream_window(user: dict = Depends(get_current_user), db=Depends(get_db)):
+async def get_dream_window(user: dict = Depends(require_signed_in), db=Depends(get_db)):
     """The household's dreaming window (``dream_window.py``): when Zoe may start her night session, the quiet minutes before it, and when she is awake again. Any signed-in
-    member may read it; ``can_change`` says whether THIS caller may change it. An invalid stored value is reported with the defaults in force."""
+    member may read it (``require_signed_in``: a credential-less LAN guest gets 401/403, not the household's schedule); ``can_change`` says whether THIS caller may change it. An invalid stored value is reported with the defaults in force."""
     import dream_window as dw
     stored = None
     try:
