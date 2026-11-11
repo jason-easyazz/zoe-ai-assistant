@@ -519,6 +519,12 @@ class NightCfg(bk.Cfg):
     dream_errors: "list[str]" = dataclasses.field(default_factory=list)
     dream_source: str = "default"
     omi_repass_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-repass.py"
+    #: the re-pass runtime check, run BEFORE anything is stopped (``setup_omi_repass.sh --check``: venv, pinned packages, GPU, models) plus the database credential and reachability
+    repass_setup_script: Path = REPO / "scripts" / "setup" / "setup_omi_repass.sh"
+    repass_preflight: bool = True
+    repass_check_timeout_s: float = 300.0
+    #: the env file the night unit loads (``EnvironmentFile=``); a hand-run ``--rehearse-repass`` loads it too so the rehearsal reproduces the night
+    unit_env_file: Path = REPO / "services" / "zoe-data" / ".env"
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
     night_mind_script: Path = REPO / "scripts" / "maintenance" / "zoe-night-mind.py"
@@ -924,6 +930,62 @@ def presleep_is_stale(cfg: NightCfg, host: "bk.Host") -> bool:
             except (KeyError, ValueError):
                 continue
     return True
+
+
+def load_unit_env(path: Path, environ: "Optional[dict]" = None) -> "list[str]":
+    """Load ``KEY=VALUE`` lines of the unit's ``EnvironmentFile`` into ``environ`` (default ``os.environ``) the way systemd does (no ``export``, no shell expansion,
+    one pair of surrounding quotes stripped, ``#`` comment lines). The file wins over the shell, as it does for the unit. Returns the NAMES loaded; never a value."""
+    env = os.environ if environ is None else environ
+    names: "list[str]" = []
+    try:
+        text = Path(path).read_text()
+    except OSError:
+        return names
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")) or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        env[key] = val
+        names.append(key)
+    return names
+
+
+def tcp_reachable(url: str, timeout_s: float = 3.0) -> bool:
+    """True when the host:port of a database URL accepts a TCP connection. Never raises, never logs the URL."""
+    import socket
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url)
+        with socket.create_connection((u.hostname or "localhost", u.port or 5432), timeout=timeout_s):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
+REPASS_NOT_INSTALLED = "re-pass runtime not installed: run scripts/setup/setup_omi_repass.sh"
+
+
+def classify_outcome(outcome: str, rc: int, jobs: "list[dict[str, Any]]", failing: "list[str]") -> str:
+    """The headline of the report. ``outcome`` is what the run itself concluded (``ok`` means no exception reached the top); a non-zero exit, a failed job or a
+    degraded one must never read ``ok`` (2026-11-11: a rehearsal headline said ``ok - exit 5`` with its job failed)."""
+    if outcome != "ok":
+        return outcome
+    if rc == EXIT_RESTORE_FAILED:
+        return "failed: the restore did not complete"
+    if failing:
+        return f"failed: job(s) {', '.join(failing)}"
+    if rc != EXIT_OK:
+        return f"failed: exit {rc}"
+    degraded = [f"{j['name']}@{j['backend']}" for j in jobs if j.get("status") == "degraded"]
+    if degraded:
+        return f"degraded: {', '.join(degraded)}"
+    return outcome
 
 
 def build_pre_jobs(cfg: NightCfg) -> "list[JobSpec]":
@@ -1981,6 +2043,40 @@ class NightWindow(bk.Window):
         for unit, r in sorted(st.items()):
             self.rec["notes"].append(f"presleep {unit}: " + ("ok" if r.get("rc") == 0 else f"FAILED rc {r.get('rc')}") + f" in {r.get('wall_s')}s")
 
+    def repass_preflight(self) -> None:
+        """Before any service is stopped: is the pendant re-pass runtime there (venv + pinned models, as ``setup_omi_repass.sh --check`` defines them) and can the
+        process reach its database? A rehearsal has nothing else to do, so it is REFUSED (exit 2, nothing stopped). A real night SKIPS the omi_repass slot, loudly,
+        and the other jobs proceed. With the flag off (night only) the pre-job is a no-op and needs no runtime."""
+        cfg = self.cfg
+        if "omi_repass" not in cfg.pre_jobs or not cfg.repass_preflight or self.dry or not cfg.omi_repass_script.exists():
+            return
+        if not cfg.rehearse and os.environ.get("ZOE_OMI_NIGHT_REPASS", "off").strip().lower() in ("", "off", "0", "false"):
+            return
+        why = ""
+        if not cfg.repass_setup_script.exists():
+            why = f"{cfg.repass_setup_script.name} not found"
+        else:
+            r = self.host.run(["bash", str(cfg.repass_setup_script), "--check"], timeout=cfg.repass_check_timeout_s, mutating=False)
+            if r.rc != 0:
+                bad = [ln.strip()[:120] for ln in r.out.splitlines() if re.match(r"\s*(venv|package|gpu|imports|speaker|model)\s+(MISSING|DRIFT|NO|FAILED|MISMATCH)", ln)]
+                why = f"{REPASS_NOT_INSTALLED} (check rc {r.rc}" + (f": {'; '.join(bad[:3])}" if bad else "") + ")"
+        if not why:
+            url = os.environ.get("POSTGRES_URL", "")
+            if not url:
+                why = "re-pass cannot reach its database: POSTGRES_URL is not set in this process's environment (the unit's EnvironmentFile: services/zoe-data/.env)"
+            elif not tcp_reachable(url):
+                why = "re-pass cannot reach its database: the POSTGRES_URL host does not accept connections"
+        if not why:
+            self.event("omi_repass preflight: runtime and database credential present")
+            return
+        if cfg.rehearse:
+            self.refuse(why)
+        self.event(f"omi_repass SKIPPED before any stop: {why}")
+        self.rec["notes"].append(f"omi_repass SKIPPED (nothing was stopped for it): {why}")
+        self.jobs.append({"name": "omi_repass", "backend": "pre", "status": "skipped", "rc": None, "wall_s": None, "tokens_prompt": None, "tokens_predicted": None,
+                          "mem_low_mib": None, "notes": [why], "best_effort": True})
+        cfg.pre_jobs = tuple(j for j in cfg.pre_jobs if j != "omi_repass")
+
     def run_pre_jobs(self) -> bool:
         """The pre-jobs, after the stops and before the choice of levers. True when one did real work (> 20 s): the box is then re-settled (compaction + a fresh
         MemAvailable / MemFree) before the 12B's arithmetic, because the levers are chosen on what is free NOW, not on what was free before the pass."""
@@ -2617,6 +2713,7 @@ class NightWindow(bk.Window):
         try:
             self.note_presleep()                 # BEFORE the preflight: a REFUSED window's report carries a failed backup too
             self.preflight()
+            self.repass_preflight()                 # BEFORE the first stop: a missing runtime must cost nothing, not 70 s of silence
             if self.cfg.trial:
                 self.cfg.live_unit_text = self.host.run(["systemctl", "--user", "cat", BRAIN], mutating=False).out
             self.opened = True
@@ -2675,9 +2772,11 @@ class NightWindow(bk.Window):
                 if j["status"] == "degraded" and j["backend"] == "12B" and self.fallback_covered(j) and any("SILENT NO-OP" in n for n in j["notes"]):
                     self.event(f"job {j['name']}: SILENT NO-OP on the 12B (exit 0, zero tokens, no sign of idleness); the 4B fallback finished it - still reported degraded")
                     self.rec["notes"].append(f"{j['name']}: SILENT NO-OP on the 12B, covered by the 4B fallback")
-            if rc == EXIT_OK and any(j["status"] not in (*OK_JOB_STATUSES, "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j))
-                                     and not (j.get("best_effort") and j["status"] in ("no time", "timeout")) for j in self.jobs):
+            failing = [j["name"] for j in self.jobs if j["status"] not in (*OK_JOB_STATUSES, "skipped") and not (j["backend"] == "12B" and self.fallback_covered(j))
+                       and not (j.get("best_effort") and j["status"] in ("no time", "timeout"))]
+            if rc == EXIT_OK and failing:
                 rc = EXIT_JOBS_FAILED
+            self.outcome = classify_outcome(self.outcome, rc, self.jobs, failing)
             self.release_lock()
             self.write_report(rc)
         return rc
@@ -3032,6 +3131,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     if args.rehearse_repass:
         cfg.rehearse = True
         cfg.pre_jobs = ("omi_repass",)
+        load_unit_env(cfg.unit_env_file)             # a hand-run rehearsal gets the unit's EnvironmentFile (names only, never printed): it must reproduce the night
         cfg.cap_min = min(cfg.cap_min, 25.0)
         cfg.reserve_min = 10.0
     if cfg.exploratory:

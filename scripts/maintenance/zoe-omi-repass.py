@@ -31,6 +31,29 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "services" / "zoe-data"))
 
 
+import os
+import re
+
+_SECRET_ENV = re.compile(r"(PASS|PASSWORD|SECRET|TOKEN|KEY|DSN|URL|CREDENTIAL)", re.I)
+
+
+def redact_message(text: str, limit: int = 240) -> str:
+    """An exception's text with every DSN / URL, password, token and secret-looking value scrubbed: the setup error must say WHAT failed (a missing variable, a refused
+    connection) without ever echoing a credential into the journal or the morning report."""
+    out = str(text)
+    for k, v in os.environ.items():                      # the literal value of any secret-named variable, and the password inside a DSN-shaped one
+        if v and len(v) >= 6 and _SECRET_ENV.search(k):
+            out = out.replace(v, "<redacted>")
+            m = re.match(r"[A-Za-z][A-Za-z0-9+.-]*://[^:/@\s]*:([^@\s]+)@", v)
+            if m and len(m.group(1)) >= 3:
+                out = out.replace(m.group(1), "<redacted>")
+    out = re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://\S+", "<url>", out)                                                           # any DSN / URL
+    out = re.sub(r"(?i)\b(password|passwd|pwd|passphrase|secret|token|api[_-]?key|apikey|authorization)\b(\s*[=:]\s*)(\S+)", r"\1\2<redacted>", out)
+    out = re.sub(r"(?i)\bBearer\s+\S+", "Bearer <redacted>", out)
+    out = re.sub(r"\b[A-Za-z0-9_\-]{32,}\b", "<redacted>", out)                                                         # a long opaque run is a key, not a sentence
+    return re.sub(r"\s+", " ", out).strip()[:limit]
+
+
 async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--budget-s", type=float, default=1500.0)
@@ -76,7 +99,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     try:
         await init_pool()
     except Exception as exc:  # noqa: BLE001
-        return 1, {"status": "error", "setup_error": type(exc).__name__}
+        return 1, {"status": "error", "setup_error": type(exc).__name__, "setup_message": redact_message(str(exc))}
     try:
         if a.requeue_failed:
             return 0, {"status": "ok", "requeued": await rp.requeue_failed(a.user or None)}
