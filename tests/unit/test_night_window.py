@@ -1789,9 +1789,9 @@ def test_the_service_template_survives_a_long_night_and_always_restores():
 def test_the_timer_template_never_fires_in_the_daytime_and_starts_after_the_other_nightly_jobs():
     text = (SYSTEMD / "zoe-night-window.timer").read_text()
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
-    assert "OnCalendar=*-*-* 02:50:00" in body and "Persistent=false" in body and "Persistent=true" not in body
+    assert "OnCalendar=*-*-* 02:30:00" in body and "Persistent=false" in body and "Persistent=true" not in body
     h, m = re.search(r"OnCalendar=\*-\*-\* (\d+):(\d+)", body).groups()
-    assert (int(h) * 60 + int(m)) > 2 * 60 + 40 + 5                       # after the 02:40 (+5 min) memory export
+    assert (int(h) * 60 + int(m)) >= 2 * 60 + 30                          # the window starts at 02:30: it runs the backup and the memory export itself (--presleep), no longer after their timers
     latest = int(h) * 60 + int(m) + 2                                      # RandomizedDelaySec=120
     assert nw.NightCfg().end_by - latest >= 35 + nw.NightCfg().reserve_min   # even the latest start leaves a usable window before 03:55 (the cap shrinks to fit)
 
@@ -1837,11 +1837,12 @@ def test_the_timer_slot_is_the_documented_slot_and_the_window_fits_inside_it():
     assert end_by == _exec_start_args()[_exec_start_args().index("--end-by") + 1]
     h, m = (int(x) for x in on_calendar.split()[1].split(":")[:2])
     start, latest = h * 60 + m, h * 60 + m + delay // 60
-    assert start >= 2 * 60 + 41 + 5                                               # after the 02:41 memory export (+ its 5 min random delay): the export keeps its 'copy before the digest' promise
+    assert start >= 2 * 60 + 30                                                    # the window's own clock now: --presleep runs the backup, then the export (a copy before the digest), BEFORE it sleeps Zoe
     cfg = nw.NightCfg()
     assert cfg.night_hours[0] <= start <= cfg.night_hours[1]                       # inside the hours the script itself accepts without --anytime
     assert cfg.end_by - latest >= 35 + cfg.reserve_min                              # even the latest start leaves a usable window
-    assert cfg.end_by - start == cfg.cap_min                                       # the nominal start gets exactly the default 65-minute cap: nothing shrinks it
+    presleep_allowance = 20                                                        # backup (measured up to ~10 min) + export (~5) + margin, before the window proper starts
+    assert cfg.end_by - (start + presleep_allowance) >= cfg.cap_min                # the window proper (ExecStart) still gets the whole default 65-minute cap: nothing shrinks it
 
 
 def test_the_service_guards_memory_restores_on_every_exit_and_writes_one_journal_line():
@@ -1874,7 +1875,7 @@ def test_the_installer_adds_two_units_absorbs_dreaming_and_the_uninstaller_undoe
     assert dry.returncode == 0 and "DRY-RUN: systemctl --user disable --now zoe-dreaming.timer" in dry.stdout and not (tmp_path / "units").exists() and not (tmp_path / "nd" / "INSTALLED").exists()
     inst = subprocess.run(["bash", script], capture_output=True, text=True, env=env, timeout=60)
     assert inst.returncode == 0, inst.stderr
-    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-window-restore-retry.service", "zoe-night-window-restore-retry.timer", "zoe-night-window.service", "zoe-night-window.timer"]
+    assert sorted(p.name for p in (tmp_path / "units").iterdir()) == ["zoe-night-presleep-catchup.service", "zoe-night-presleep-catchup.timer", "zoe-night-window-restore-retry.service", "zoe-night-window-restore-retry.timer", "zoe-night-window.service", "zoe-night-window.timer"]
     calls = (tmp_path / "calls").read_text()
     assert "disable --now zoe-dreaming.timer" in calls and "enable --now zoe-night-window.timer" in calls and calls.index("daemon-reload") < calls.index("enable --now zoe-night-window")
     assert "dreaming_timer_was=enabled" in (tmp_path / "nd" / "INSTALLED").read_text()
@@ -2551,8 +2552,8 @@ def delay_of(body):
 def test_the_timer_retries_after_the_first_attempt_inside_the_window_that_can_still_fit():
     body = _unit_body("zoe-night-window.timer")
     slots = sorted(int(h) * 60 + int(m) for h, m in re.findall(r"OnCalendar=\*-\*-\* (\d+):(\d+)", body))
-    assert slots == [2 * 60 + 50, 3 * 60 + 5, 3 * 60 + 15], "02:50 plus the 03:05 and 03:15 retries"
-    assert slots[0] == 2 * 60 + 50 and len(slots) >= 3, "the 02:50 start plus at least two retries"
+    assert slots == [2 * 60 + 30, 3 * 60 + 5, 3 * 60 + 15], "02:30 plus the 03:05 and 03:15 retries"
+    assert slots[0] == 2 * 60 + 30 and len(slots) >= 3, "the 02:30 start plus at least two retries"
     cfg, delay = nw.NightCfg(), delay_of(body)
     assert cfg.end_by - (slots[0] + delay) >= 35 + cfg.reserve_min, "the first start keeps the full usable window (35 min + the restore reserve)"
     for slot in slots:

@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, Request
-from auth import get_current_user
+from auth import get_current_user, require_admin, require_signed_in
 from db_pool import get_db
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,59 @@ async def get_settings(user: dict = Depends(get_current_user), db=Depends(get_db
         return _visible_settings(_add_env_settings(settings), user)
     # Expose HA bridge URL for widgets that need it
     return _visible_settings(_add_env_settings(settings), user)
+
+
+@router.get("/api/settings/dream-window")
+async def get_dream_window(user: dict = Depends(require_signed_in), db=Depends(get_db)):
+    """The household's dreaming window (``dream_window.py``): when Zoe may start her night session, the quiet minutes before it, and when she is awake again. Any signed-in
+    member may read it (``require_signed_in``: a credential-less LAN guest gets 401/403, not the household's schedule); ``can_change`` says whether THIS caller may change it. An invalid stored value is reported with the defaults in force."""
+    import dream_window as dw
+    stored = None
+    try:
+        rows = await db.execute_fetchall("SELECT value FROM system_preferences WHERE key = ?", (dw.KEY,))
+        if rows and rows[0]["value"]:
+            stored = json.loads(rows[0]["value"])
+    except Exception:
+        logger.exception("Failed to load the dreaming window")
+        return {"status": "degraded", "error": "settings_storage_unavailable", "window": dw.env_defaults(), "errors": [], "source": "default", "can_change": False}
+    window, errors = dw.validate(stored) if stored is not None else (dw.env_defaults(), [])
+    return {"window": window, "errors": errors, "source": "stored" if stored is not None and not errors else "default", "can_change": dw.may_change(user.get("role")),
+            "rules": {"min_window_min": dw.MIN_WINDOW_MIN, "min_chain_min": dw.MIN_CHAIN_MIN, "voice_check_slot": "04:10-04:52"}}
+
+
+@router.put("/api/settings/dream-window")
+async def save_dream_window(request: Request, user: dict = Depends(require_admin), db=Depends(get_db)):
+    """Change the household's dreaming window. Adult household admins only (``require_admin``: never a guest or a child). The body is validated whole
+    (``dream_window.validate``); an invalid window is a 422 with every reason and nothing is stored. A valid one is stored and mirrored to the file the night session reads."""
+    import dream_window as dw
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail={"errors": ["expected an object"]})
+    missing = [k for k in (*dw.FIELDS, "quiet_min") if k not in body]
+    if missing:
+        raise HTTPException(status_code=422, detail={"errors": [f"send {k}" for k in missing]})
+    window, errors = dw.validate({k: body[k] for k in (*dw.FIELDS, "quiet_min")}, fallback=False)
+    if errors:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+    try:
+        await db.execute(
+            """INSERT INTO system_preferences (key, value, updated_by, updated_at)
+               VALUES (?, ?, ?, NOW()::text)
+               ON CONFLICT (key) DO UPDATE SET
+                   value = EXCLUDED.value,
+                   updated_by = EXCLUDED.updated_by,
+                   updated_at = EXCLUDED.updated_at""",
+            (dw.KEY, json.dumps(window), user["user_id"]),
+        )
+        await db.commit()
+    except Exception as exc:
+        logger.warning("save_dream_window failed - NOT persisted: %s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Failed to save the dreaming window") from exc
+    try:
+        dw.save_mirror(window)              # what the night session and night_busy.sh read each night
+    except OSError as exc:
+        logger.warning("dreaming window stored but the mirror file could not be written: %s", type(exc).__name__)
+    return {"status": "ok", "window": window}
 
 
 @router.get("/api/settings/intelligence")

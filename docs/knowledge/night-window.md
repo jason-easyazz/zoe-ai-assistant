@@ -49,10 +49,10 @@ After a restart zoe-data's digest loop sleeps until the NEXT 03:00 and its in-pr
 | Time (local) | What | Notes |
 |---|---|---|
 | 02:00 (+0-5 min) | `zoe-training` | LoRA is off (`ZOE_ENABLE_LORA_TRAINING=false`): about 20 s of data prep. With LoRA on it stops the brain and zoe-data itself; the window refuses while its lock file's pid is alive |
-| 02:30 (+0-10 min) | `zoe-backup` | Postgres first, then the palace tarball |
+| 02:30 (+0-2 min) | **`zoe-night-window --presleep`** (`ExecStartPre=-`) | **one clock since 2026-11-09**: starts `zoe-backup.service` (Postgres first, then the palace tarball), waits for it, then `zoe-memory-export.service`; the installer switches `zoe-backup.timer` / `zoe-memory-export.timer` OFF. Section 19 |
 | 02:32 | `zoe-dreaming` | **absorbed**: the installer disables `zoe-dreaming.timer`; the window runs `zoe-nightly-dreaming.py` itself (12B first, then the 4B if the 12B could not). Two runs would double the work and race for the model |
-| 02:40 (+0-5 min) | `zoe-memory-export` | its own header wants "a copy BEFORE the digest mutates the store"; the window starts after it, so the export is now a copy before EVERYTHING mutates |
-| **02:50 (+0-2 min)** | **`zoe-night-window`** | waits (up to 20 min) for training / backup / export / dreaming to be inactive, up to 30 min for the panel to be quiet (10 min since the last household voice turn: zoe-data's `/health` `last_voice_turn_age_s` first, the panel log over ssh when that is null; neither readable = busy for up to 10 min, then it proceeds and logs it). The unit runs `night_window.sh --jobs digest,extract_prepass,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55` (section 14) |
+| 02:40-02:45 | (the memory export, inside the pre-sleep phase) | its own header wants "a copy BEFORE the digest mutates the store"; the pre-sleep phase runs it before ANY stop, so the export is still a copy before EVERYTHING mutates |
+| **~02:50 (after the pre-sleep phase)** | **`zoe-night-window` (the window proper)** | waits (up to 20 min) for training / backup / export / dreaming to be inactive, up to 30 min for the panel to be quiet (10 min since the last household voice turn: zoe-data's `/health` `last_voice_turn_age_s` first, the panel log over ssh when that is null; neither readable = busy for up to 10 min, then it proceeds and logs it). The unit runs `night_window.sh --jobs digest,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55` (section 14) |
 | 03:00 | (zoe-data's digest loop) | not alive: stopped (the window runs the body) |
 | **03:55** | **the window must be over** | hard cap 65 min, shrunk to fit; zoe-data must be back before the Sunday 04:00 consolidation loop and the voice gate |
 | 04:10-04:52 | voice gate (Serena restart 04:15, gate 04:30) | a blackout: the window never overlaps it, and a 4B fallback job is cut at 04:10 |
@@ -320,7 +320,7 @@ Tests: `test_a_short_first_probe_is_followed_by_a_steady_one_and_the_steady_figu
 **The command** (`scripts/night/systemd/zoe-night-window.service`, a test parses it and checks it against the code's defaults):
 
 ```
-TIMER_SLOT OnCalendar=*-*-* 02:50:00 RandomizedDelaySec=120 END_BY 03:55
+TIMER_SLOT OnCalendar=*-*-* 02:30:00 RandomizedDelaySec=120 END_BY 03:55
 ExecStart=%h/assistant/scripts/night/night_window.sh --jobs digest,extract_prepass,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55
 ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only          # every way out
 ExecStopPost=-... night_window.sh --summary | systemd-cat -t zoe-night-window    # ONE journal line
@@ -485,3 +485,58 @@ Changes: (1) up to **3 start attempts** (`LOAD_MAX_ATTEMPTS`), the last with 6 f
 - **Report**: the job appears in the jobs table with backend `pre`.
 - Tests: `tests/unit/test_night_repass_window.py` (order against the stops and the 12B start, the budget clip, timeout / missing runtime / killed window all restore, the control without `--pre-jobs`).
 - **Rehearsal**: `night_window.sh --rehearse-repass` (daytime, owner-approved via `voice-day-ok`) runs the same stops -> compact -> the real job on ONE recording (writes nothing) -> compact -> the night's restore order. Refuses 01:50-04:55 and a busy `night_busy.sh voice`. Tests: `tests/unit/test_night_repass_rehearsal.py`.
+
+## 19. One orchestrator: the pre-sleep phase, and what stays on its own clock (2026-11-09)
+
+**Folded in.** The timer's first slot is now **02:30** (retries 03:05 / 03:15 unchanged). `ExecStartPre=-night_window.sh --presleep` runs `zoe-backup.service` and then `zoe-memory-export.service` with `systemctl --user start --wait`, BEFORE the window's preflight and before anything is stopped. Properties (tests: `tests/unit/test_night_presleep.py`):
+
+- **Independent of the window.** It is its own invocation and the `-` ignores its exit status, so a window that refuses (a lander held the lock, the panel never went quiet, RAM does not fit) still leaves tonight's backup and export taken - the one thing a fold must never break.
+- **Sequenced, idempotent per day.** Backup first, then the export; a unit that already succeeded today (`~/.zoe/night-window/presleep-<date>.json`) is not started again by the 03:05 / 03:15 slots; a FAILED unit is not stamped, so the next slot retries it. A failure never blocks the sleep; it is in the report notes (`presleep <unit>: FAILED rc N`).
+- **Timeline**: 02:30 backup (measured up to ~10 min) -> export (~5 min) -> the window's preflight/sleep at about 02:50, exactly where it started before, so the 12B stage and the pendant re-pass keep their time. The window is still over by 03:55.
+- `night_busy.sh` follows the clock: `deadline` (landers gone by) 02:40 -> **02:20**, deploys pause from 02:45 -> **02:25**, "finished tonight" is measured from 02:25. Voice landings were already paused from 01:55.
+- **Installer** (`install_night_window.sh`): disables `zoe-backup.timer` and `zoe-memory-export.timer` (their services stay), records their ORIGINAL state once (a reinstall keeps it), installs the boot catch-up, `--uninstall` re-enables what it switched off. The two timer templates are removed from the repo and listed in `unit_inventory.RETIRED`.
+
+**What replaced `Persistent=true`.** The two removed timers made up a night the box was down at the next boot; the window timer is `Persistent=false` ON PURPOSE (it must never put Zoe to sleep at boot). So `zoe-night-presleep-catchup.timer` (25 min after each boot) runs `night_window.sh --presleep --catchup`: the backup and export, at any hour, ONLY when no backup succeeded in the last 26 h (read from the pre-sleep records). It stops and starts nothing else. Installing it on a box with no record yet runs one backup straight away (nothing recorded = stale). The weekly `zoe-backup-verify` and the off-box backup are unchanged.
+
+**Bounds.** The pre-sleep phase leaves the window proper 47 minutes before `end-by` (35 a window needs + the 12 min restore reserve): each unit's wait is clipped to that, and nothing is started after ~03:08 (so a 03:05 / 03:15 retry slot never delays the window past 03:55). Each unit is CHECKPOINTED (atomic write) before the next starts, so a kill between them loses nothing. `TimeoutStartSec` is 7200 s because `ExecStartPre` counts against it.
+
+**NOT folded, and why.**
+
+| unit | stays separate because |
+|---|---|
+| `zoe-serena-pregate-restart` 04:15, `zoe-voice-regression` 04:30 | they are pinned to the clock, not to the window: they must run on the nights the window refused or failed, and the voice gate's artifact slot is the deploy gate's evidence. Folding them would make the window a process that sits alive through 04:55 holding the night (the landing rules forbid anything alive in 01:50-04:55 except the window itself, which is over by 03:55), and a window crash would silently skip the gate. They already run after the wake. |
+| `zoe-opensrc-refresh`, `zoe-backup-verify` (Sunday 05:30) | weekly, after the window and the gate, on a different cadence; nothing to sequence. |
+| `zoe-offbox-backup` | its own clock and its own failure domain (it exists so the on-box copy is not the only copy). |
+| zoe-data's own 03:00 digest loop | the fallback for a window that did not run; unchanged. |
+
+
+## 20. One dreaming session: the household's window, the planner, and what is NOT built yet (2026-11-09)
+
+Owner: "wouldn't it be smarter to make one night time window, with each tool calling the next, like a dreaming session?" and "not everyone will be the same" and "shouldn't we include the nightly
+self-training loop in the dream cycle?". The design below is the target; **this PR ships the household setting, the planner and the report; the chain rework is a follow-up** (it replaces the
+timer-driven start, `night_busy.sh` and the POST timers, and must not land half-done).
+
+**Target chain (each stage starts when the previous one finishes; no fixed reserves).** PRE (Zoe awake): backup, then memory export. SLEEP: zoe-data, the router, Kokoro, the 4B, then compact. LISTEN: the
+Omi re-pass (Qwen3 on all audio, then Parakeet and the third voter on the important recordings; each GPU model alone with a compact between; ROVER, speaker tagging with panel anchors, the check queue).
+THINK (12B loaded once): digest, the VAGO extract, dreaming, night mind, struggle proposals, self-review, conversation notes, the clean read, then the Omi day review LAST (it reads the clean outputs); **LEARN-LABEL**
+(mine the router's shadow-log misses, the 12B labels them as the independent oracle, two-source agreement only - `scripts/maintenance/router_selftrain.py`, `docs/knowledge/router-selftrain-loop.md`, flag
+`ZOE_ROUTER_SELFTRAIN`). LEARN-TRAIN: after the 12B unloads and a compact, before WAKE - GPU first (the compact is what got torch onto the Jetson GPU), CPU only if the remaining budget allows, else the labelled data
+carries; weekly or on >= N new labelled examples, never `runs/<gen>/merged` deleted, warm start from `ZOE_ROUTER_WARM_START`. WAKE: the safe order, health-checked. POST: the voice regression probe, the candidate
+router's replay check beside it, then the Serena restart; PROMOTE only through the existing ratchet (no accuracy regression back-to-back on the same rig, chat-FP == 0, p50 < 600 ms, frozen corpus intact AND the voice
+replay gate; no override; auto-rollback stays). A failed stage is logged, what depends on it is skipped, the chain continues; **restore always runs**; ONE morning report with failures first, and a LEARN line (mined /
+labelled, trained or why not, candidate vs incumbent, promoted or not). `--rehearse` runs the whole chain on a tiny input with dry-run jobs (LEARN included, dry-run promote) and must pass before the timer switches.
+
+**The household picks its own window (built).** `services/zoe-data/dream_window.py`: earliest start (default 00:30), latest start (02:30), awake-by (05:15), quiet minutes before starting (30). Stored in
+`system_preferences` key `dream_window` through `GET/PUT /api/settings/dream-window` (read: any signed-in member; write: `require_admin` only - never a guest or child), mirrored to `~/.zoe/dream-window.json`, which the
+night session reads EACH run (`night_window.load_dream_window`); the `ZOE_DREAM_*` env is only the fallback default when nothing valid is stored. Validation: times 21:00-08:00; earliest <= latest; awake-by - earliest
+>= 90 min; awake-by >= latest + 150 min (the chain); awake-by not inside the 04:10-04:52 voice-check slot; quiet 10-180 min. An invalid stored value falls back to the defaults and the morning report opens with
+`**ALERT (dreaming window):`. Spoken: `dream_window.apply_spoken` ("do your dreaming between 1 and 5" sets earliest 01:00 / awake-by 05:00 and trims the latest start to keep the chain; "when do you dream?"
+answers) - a change needs an adult admin with a VERIFIED voice and Zoe reads the new window back; anyone may ask. `start_gate` is the pure "may the session start now" rule (too early / too late / wait for quiet / go).
+
+**The planner (built, not yet driving the chain).** `scripts/night/night_plan.py`: from the seconds to awake-by and the rolling median (last 7 nights, x1.25) of each stage, it protects WAKE/POST/PRE/SLEEP and the
+essential THINK jobs (digest, self-review, day review), admits optional THINK jobs in priority order only while LISTEN keeps its 10-minute floor, gives LISTEN the rest, and returns what carries (reported).
+
+**Not built in this PR (follow-ups, in this order):** (1) the chain itself - one program, `night_busy.sh` and the voice-landing pause reading the window (today they still use the fixed 02:20 / 02:25 / 01:55 values; do
+NOT point them at the setting until the chain starts the session by quiet, or deploys would pause from 00:25 for no reason), the POST stage (probe + Serena) with the old timers kept as a fallback, and `--rehearse` for the
+whole chain; (2) LEARN (label in THINK, train after unload, promote through the ratchet, the LEARN report line); (3) the panel chooser (big time chips, read-only display + tap-to-change) and registering the spoken
+intent with the voice router (`apply_spoken` is ready and tested); (4) the desktop settings page control.

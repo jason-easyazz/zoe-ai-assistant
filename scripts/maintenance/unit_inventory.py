@@ -36,6 +36,8 @@ RETIRED: dict[str, str] = {
     "openclaw-gateway.service": "OpenClaw retired 2026-07-22 (B3 / cleanup_dead_units.py)",
     "flue-zoe-brain.service": "Flue 1.x brain, superseded by flue-zoe-brain-2x 2026-08-10",
     "zoe-dreaming.service": "the night window runs dreaming itself",
+    "zoe-backup.timer": "the night window starts zoe-backup.service itself in its pre-sleep phase (one orchestrator, 2026-11-09)",
+    "zoe-memory-export.timer": "the night window starts zoe-memory-export.service itself in its pre-sleep phase (one orchestrator, 2026-11-09)",
     "zoe-dreaming.timer": "the night window runs dreaming itself",
     "zoe-keepwarm.service": "warmed the retired Hermes agent pool",
     "zoe-keepwarm.timer": "warmed the retired Hermes agent pool",

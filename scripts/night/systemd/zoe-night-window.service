@@ -31,6 +31,9 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 #   --skip-if-done                      the 03:05 / 03:15 retry slots of the timer exit 0 at once on a night whose window already RAN (only a REFUSED one is retried)
 #   --end-by 03:55                      zoe-data and the voice stack are back before the Sunday 04:00 consolidation loop and the 04:10 voice-gate blackout; the household wakes after
 # The hard cap (65 min), the batch sizes (512 / 128), UMA and mlock are the code's measured defaults.
+# ONE ORCHESTRATOR for the night (docs/knowledge/night-window.md section 19): the backup and the memory export run FIRST, sequenced by the same program, before the window's own preflight.
+# The leading "-" makes them independent of the window: a refused or failed window still leaves tonight's backup taken, and a failed backup never blocks the sleep (it is in the report).
+ExecStartPre=-%h/assistant/scripts/night/night_window.sh --presleep
 ExecStart=%h/assistant/scripts/night/night_window.sh --pre-jobs omi_repass --jobs digest,extract_prepass,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review --ngl 34 --ctx 8192 --kv q8_0 --end-by 03:55 --skip-if-done
 # Restore on EVERY way out first (success, failure, timeout, kill), then ONE journal line about the night (`journalctl --user -t zoe-night-window`; priority err when the unit failed).
 ExecStopPost=%h/assistant/scripts/night/night_window.sh --restore-only
@@ -39,7 +42,8 @@ ExecStopPost=-/bin/sh -c 'p=info; [ "$$SERVICE_RESULT" = success ] || p=err; %h/
 # with MemorySwapMax=0 and LimitMEMLOCK=infinity; this covers the job processes (the digest, dreaming and night-mind runners). No MemoryMax: a hard ceiling plus no swap would
 # turn a RAM spike into a kill of a job that the script's own 1,200 MiB MemAvailable floor handles more gracefully.
 MemorySwapMax=0
-TimeoutStartSec=6000
+# ExecStartPre (the pre-sleep phase, clipped so the window proper can begin by end-by minus 47 min) counts against this too: 02:30 to end-by 03:55 is 85 min, plus slack
+TimeoutStartSec=7200
 TimeoutStopSec=900
 StandardOutput=append:%h/.zoe-logs/night-window.log
 StandardError=append:%h/.zoe-logs/night-window.log

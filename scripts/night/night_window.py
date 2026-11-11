@@ -498,6 +498,14 @@ class NightCfg(bk.Cfg):
     #: PRE-JOBS run after the stops and BEFORE the 12B loads, while the box is at its emptiest (the 4B, Kokoro, the router and zoe-data all stopped): CPU work in its own capped
     #: scope that must not sit beside the 12B (MemAvailable floor). Default none; the unit passes ``--pre-jobs omi_repass`` (docs/knowledge/omi-night-repass.md).
     pre_jobs: tuple = ()
+    #: PRE-SLEEP units (``--presleep``): the nightly backup and the memory export, SEQUENCED by this program (backup first, then the export - "a copy BEFORE the digest mutates
+    #: the store") while Zoe is still awake. Started with ``systemctl --user start --wait`` so the units' own Nice/IO class and logs are unchanged. docs/knowledge/night-window.md section 19.
+    presleep_units: tuple = ("zoe-backup.service", "zoe-memory-export.service")
+    presleep_timeout_s: float = float(os.environ.get("NIGHT_PRESLEEP_TIMEOUT_S", "1500"))
+    #: pre-sleep work must leave the window proper this many minutes before ``end_by`` (35 a window needs + the 12 min restore reserve): past that the units are not started, and a unit's wait is clipped to it
+    presleep_leave_min: float = 47.0
+    #: ``--catchup`` (the boot timer): run the units unless one succeeded within this many hours
+    catchup_fresh_h: float = 26.0
     #: ``--rehearse-repass``: the DAYTIME REHEARSAL of the pre-job (owner rule 2026-11-09: no night job's first run is unattended at night). The real stops, compaction and restore order,
     #: the real ``omi_repass`` job on ONE recording writing nothing, then the restore. Refuses 01:50-04:55 and while ``night_busy.sh voice`` says voice work must pause.
     rehearse: bool = False
@@ -505,6 +513,11 @@ class NightCfg(bk.Cfg):
     #: minutes the pre-jobs must leave for everything after them (the 12B load + probe, the 12B jobs, a margin). 12 by default - the 12B jobs used 7 of the 28 minutes once reserved on
     #: 2026-11-08 - and ``configure`` replaces it with ``measured_keep_min`` (the last 7 nights' job wall times, floor 10) unless ``NIGHT_PRE_KEEP_MIN`` is a number.
     pre_keep_min: float = 12.0
+    #: the HOUSEHOLD's dreaming window (services/zoe-data/dream_window.py; the mirror file ~/.zoe/dream-window.json, written by the settings API / a verified adult's voice): read each
+    #: run by ``configure``, never from the env. ``dream_errors`` = why a stored value was rejected (the defaults are then in force); the morning report prints them at the top.
+    dream_window: "dict[str, Any]" = dataclasses.field(default_factory=dict)
+    dream_errors: "list[str]" = dataclasses.field(default_factory=list)
+    dream_source: str = "default"
     omi_repass_script: Path = REPO / "scripts" / "maintenance" / "zoe-omi-repass.py"
     night_mind_cmd: str = os.environ.get("NIGHT_MIND_CMD", "")
     #: the night-mind pass's standalone entry point (its contract: the docstring of ``zoe-night-mind.py`` on feat/night-mind-v1-reflection-pass): used by default as soon as the file exists
@@ -812,6 +825,105 @@ def build_jobs(cfg: NightCfg, ctx_tokens: int = 16384, decode_tps: "Optional[flo
                                      best_effort=True, budget_flag="--budget-s",
                                      skip_reason="" if cfg.omi_day_review_script.exists() else f"{cfg.omi_day_review_script.name} not found")
     return [jobs[j] for j in cfg.jobs if j in jobs]
+
+
+def presleep_path(cfg: NightCfg, host: "bk.Host") -> Path:
+    return cfg.night_dir / f"presleep-{dt.datetime.fromtimestamp(host.now()):%Y-%m-%d}.json"
+
+
+def run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", catchup: bool = False) -> "dict[str, Any]":
+    """Serialised across processes (the window's ExecStartPre and the boot catch-up are separate units): one holder at a time, the second waits then re-reads the checkpoint."""
+    lock_fd = None
+    try:
+        cfg.night_dir.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(str(cfg.night_dir / "presleep.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    except OSError as exc:
+        log(f"presleep: could not take the pre-sleep lock ({exc}); going on without it")
+    try:
+        return _run_presleep(cfg, host, log, catchup)
+    finally:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+
+
+def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", catchup: bool = False) -> "dict[str, Any]":
+    """The night's first phase, BEFORE the window's preflight: the backup, then the memory export, one after the other. It is a SEPARATE invocation (the unit's
+    ``ExecStartPre=-``), so the backup never depends on the window being able to run: a refused or failed window still leaves tonight's backup taken. Idempotent per day (a unit
+    that already succeeded today is not started again by the 03:05 / 03:15 retry slots). A failed unit is logged LOUDLY and recorded for the report; it never blocks the sleep
+    (a backup that failed once is tonight's alarm, not a reason to skip the night's thinking). Never raises."""
+    path = presleep_path(cfg, host)
+    state: "dict[str, Any]" = {}
+    try:
+        state = json.loads(host.read(str(path)) or "{}")
+    except (ValueError, OSError):
+        state = {}
+    t_now = dt.datetime.fromtimestamp(host.now())
+    midnight = t_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    latest_epoch = midnight + (cfg.end_by - cfg.presleep_leave_min) * 60.0         # the window proper must be able to begin by here
+    for unit in cfg.presleep_units:
+        if state.get(unit, {}).get("rc") == 0:
+            log(f"presleep: {unit} already succeeded today; not started again")
+            continue
+        left_s = float("inf") if catchup else latest_epoch - host.now()
+        if left_s < 300:
+            log(f"presleep: {unit} NOT started - only {max(0, left_s) / 60:.0f} min before the window proper must begin (end-by {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d}); the next night's pre-sleep takes it")
+            continue
+        t0 = host.mono()
+        halt = ""
+        timed_out = False
+        try:
+            res = host.run(["systemctl", "--user", "start", "--wait", unit], timeout=min(cfg.presleep_timeout_s, left_s), mutating=True)
+            rc = res.rc
+            timed_out = rc == 124                    # the real host (bk.Host.run) turns a TimeoutExpired into Result(124), it does not raise
+        except Exception as exc:  # noqa: BLE001 - a hung or missing unit must not stop the night
+            rc = 255
+            timed_out = True
+            log(f"presleep: {unit} could not be run ({type(exc).__name__})")
+        if timed_out:
+            try:      # `start --wait` timing out only ends the CLIENT: stop the unit so the next one never overlaps a still-running backup
+                stopped = host.run(["systemctl", "--user", "stop", unit], timeout=120.0, mutating=True).rc == 0
+            except Exception:  # noqa: BLE001
+                stopped = False
+            if not stopped:
+                halt = f"{unit} may still be running (its stop failed)"
+        state[unit] = {"rc": rc, "wall_s": round(host.mono() - t0), "at": dt.datetime.fromtimestamp(host.now()).isoformat(timespec="seconds")}
+        log(f"presleep: {unit} {'ok' if rc == 0 else f'FAILED rc {rc} - see its journal / log; the night goes on'} in {state[unit]['wall_s']}s")
+        try:      # a CHECKPOINT after each unit, atomically: a kill between the backup and the export must not make the next slot take the backup again
+            cfg.night_dir.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, sort_keys=True))
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except OSError as exc:
+            log(f"presleep: could not record the result ({exc})")
+            halt = f"{unit}'s result could not be checkpointed"
+        if halt:
+            log(f"presleep: STOPPING the sequence: {halt}; the later units wait for the next slot rather than overlap it or repeat a finished one. The night goes on.")
+            break
+    return state
+
+
+def presleep_is_stale(cfg: NightCfg, host: "bk.Host") -> bool:
+    """For the boot catch-up: True unless the backup succeeded within ``catchup_fresh_h`` hours (today's or yesterday's pre-sleep record)."""
+    now = host.now()
+    for back in (0, 1):
+        day = dt.datetime.fromtimestamp(now - back * 86400)
+        try:
+            st = json.loads(host.read(str(cfg.night_dir / f"presleep-{day:%Y-%m-%d}.json")) or "{}")
+        except (ValueError, OSError):
+            continue
+        r = st.get(cfg.presleep_units[0], {})
+        if r.get("rc") == 0:
+            try:
+                if now - dt.datetime.fromisoformat(r["at"]).timestamp() < cfg.catchup_fresh_h * 3600:
+                    return False
+            except (KeyError, ValueError):
+                continue
+    return True
 
 
 def build_pre_jobs(cfg: NightCfg) -> "list[JobSpec]":
@@ -1860,6 +1972,15 @@ class NightWindow(bk.Window):
                    + (f" ({why})" if why else ""))
         return rec
 
+    def note_presleep(self) -> None:
+        """Tonight's pre-sleep result (written by ``--presleep`` before this process started) goes into the report, so a failed backup is in the morning's page."""
+        try:
+            st = json.loads(self.host.read(str(presleep_path(self.cfg, self.host))) or "{}")
+        except (ValueError, OSError):
+            return
+        for unit, r in sorted(st.items()):
+            self.rec["notes"].append(f"presleep {unit}: " + ("ok" if r.get("rc") == 0 else f"FAILED rc {r.get('rc')}") + f" in {r.get('wall_s')}s")
+
     def run_pre_jobs(self) -> bool:
         """The pre-jobs, after the stops and before the choice of levers. True when one did real work (> 20 s): the box is then re-settled (compaction + a fresh
         MemAvailable / MemFree) before the 12B's arithmetic, because the levers are chosen on what is free NOW, not on what was free before the pass."""
@@ -2494,6 +2615,7 @@ class NightWindow(bk.Window):
             return self.run_dry()
         rc = EXIT_OK
         try:
+            self.note_presleep()                 # BEFORE the preflight: a REFUSED window's report carries a failed backup too
             self.preflight()
             if self.cfg.trial:
                 self.cfg.live_unit_text = self.host.run(["systemctl", "--user", "cat", BRAIN], mutating=False).out
@@ -2590,6 +2712,11 @@ class NightWindow(bk.Window):
         r = self.rec
         L = [f"# Night window {self.started_iso[:10]} ({self.mode}{', ' + self.cfg.trial_mode if self.cfg.trial else ''})", "",
              f"**Outcome: {self.outcome}** · exit {rc} · started {self.started_iso[11:]} · {self.elapsed_min():.1f} min of a {self.cap_min:.0f}-minute cap · restore: {getattr(self, 'restore_status', 'not needed')}", ""]
+        for e in self.cfg.dream_errors:        # a rejected household setting is loud, and the defaults that replaced it are named
+            L += [f"**ALERT (dreaming window):** {e[:240]} (using the defaults)", ""]
+        if self.cfg.dream_window:
+            w = self.cfg.dream_window
+            L += [f"Dreaming window ({self.cfg.dream_source}): start {w.get('earliest')}-{w.get('latest')} once quiet {w.get('quiet_min')} min, awake by {w.get('awake_by')}.", ""]
         for j in self.jobs:                    # an ALERT in any job's own NIGHT_JOB line is surfaced at the top (the clean read's guard-violation rate)
             for n in j["notes"]:
                 if "ALERT" in n:
@@ -2818,6 +2945,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--kv", choices=KV_OPTIONS, default=None, help="pin the KV cache type (default: q8_0, the measured winner: q4_0 OOMs at -ngl 38; NIGHT_KV)")
     ap.add_argument("--cap-min", type=float, default=None, help="hard cap in minutes (default 65; never past --end-by)")
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
+    ap.add_argument("--catchup", action="store_true", help="with --presleep, any hour: the boot timer's catch-up for the removed Persistent=true backup / export timers - runs only if no backup succeeded in the last 26 h")
+    ap.add_argument("--presleep", action="store_true", help="run the pre-sleep phase only (backup, then memory export, sequenced; idempotent per day) and exit 0; the unit's ExecStartPre=-")
     ap.add_argument("--rehearse-repass", action="store_true", help="DAYTIME REHEARSAL of the pendant re-pass: the real stops / compaction / restore order and the real omi_repass job on ONE recording, writing nothing (refuses 01:50-04:55 and while night_busy.sh voice is busy)")
     ap.add_argument("--pre-jobs", default=None, help="comma list of jobs that run after the stops and BEFORE the 12B loads (omi_repass; default none)")
     ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,extract_prepass,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review)")
@@ -2842,8 +2971,19 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def load_dream_window(path: "Optional[Path]" = None) -> "tuple[dict, list, str]":
+    """(window, errors, source) from the household setting's mirror file (``dream_window.load_mirror``). Never raises: a missing module or file is the defaults."""
+    try:
+        sys.path.insert(0, str(REPO / "services" / "zoe-data"))
+        import dream_window as dw
+        return dw.load_mirror(path)
+    except Exception as exc:  # noqa: BLE001
+        return {"earliest": "00:30", "latest": "02:30", "awake_by": "05:15", "quiet_min": 30}, [f"the dreaming window could not be read ({type(exc).__name__}); using the defaults"], "default"
+
+
 def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> NightCfg:
     cfg = cfg or NightCfg()
+    cfg.dream_window, cfg.dream_errors, cfg.dream_source = load_dream_window()
     raw_keep = os.environ.get("NIGHT_PRE_KEEP_MIN", "auto").strip().lower()
     try:
         cfg.pre_keep_min = float(raw_keep)
@@ -2932,6 +3072,20 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
         return EXIT_REFUSED
     if args.summary:
         print(latest_night_summary(cfg.report_dir))
+        return EXIT_OK
+    if args.presleep:
+        if cfg.night_only and not args.anytime and not args.catchup and not (60 <= (lambda n: n.hour * 60 + n.minute)(dt.datetime.now()) < cfg.end_by):
+            print("presleep: outside the night hours; not started (pass --anytime to force)", file=sys.stderr)
+            return EXIT_OK
+        lg = bk.Logger(None)
+        if args.dry_run:
+            lg("DRY-RUN presleep: would run, in order: " + ", ".join(cfg.presleep_units))
+            return EXIT_OK
+        ph = (host_factory or (lambda l: NightHost(l)))(lg)
+        if args.catchup and not presleep_is_stale(cfg, ph):
+            lg("presleep catch-up: a backup succeeded within the last 26 h; nothing to make up")
+            return EXIT_OK
+        run_presleep(cfg, ph, lg, catchup=args.catchup)
         return EXIT_OK
     if args.skip_if_done and not args.dry_run and not args.restore_only:
         go, why = retry_decision(cfg.report_dir, dt.datetime.now())

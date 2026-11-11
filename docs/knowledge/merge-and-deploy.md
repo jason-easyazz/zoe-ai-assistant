@@ -368,11 +368,11 @@ The rule itself lives in [scripts/AGENTS.md](../../scripts/AGENTS.md) ("Brain-wi
 - voice landings and harnesses (including `land_voice_pr.sh`) do not START from 01:55 until tonight's window has
   finished (fallback: paused until 03:30 if the window never ran), nor in 04:00-04:55 (the nightly 04:30 voice
   regression owns the single voice-gate artifact slot);
-- deploys (merges that trigger `deploy.yml`) pause from 02:45 until the window has finished (same 03:30 fallback);
+- deploys (merges that trigger `deploy.yml`) pause from 02:25 (the window starts its pre-sleep phase at 02:30) until the window has finished (same 03:30 fallback);
 - agent test runs pause while the night window or `zoe-backup.service` is active;
 - any work at all pauses while `zoe-night-window.service` is active;
 - unchanged: nothing may hold `/tmp/zoe-brain-window.lock` or be a live lander past the window's 20-min busy grace
-  (gone by 03:10). Since 2026-10-27 the lander enforces this itself against `night_busy.sh deadline` (the next 02:40):
+  (gone by 03:10). Since 2026-10-27 the lander enforces this itself against `night_busy.sh deadline` (the next 02:20):
   gate first, every wait deadline-bounded, no probe start with under 25 min left, lock held only for the probe, post-probe
   CI wait bounded. The window waits for a held lock instead of refusing, and retries at 03:05 / 03:15 (see
   [night-window.md](night-window.md) section 16).
@@ -386,11 +386,11 @@ hour, over by 03:55" the 2026-10-13 span was sized for. The owner asked "doesn't
 minutes", and the answer was yes, so the pause now tracks the window (`ExecMainExitTimestamp` after 02:45 means
 tonight's has finished) with a 03:30 fallback instead of idling the box for 3 h 5 min.
 
-The 12B night window (`scripts/night/night_window.py`, timer 02:50 +0-2 min; see [night-window.md](night-window.md))
+The 12B night window (`scripts/night/night_window.py`, timer 02:30 +0-2 min - backup + export first, sleep at about 02:50; see [night-window.md](night-window.md))
 takes the **brain**. On 2026-10-13 a lander that was sleeping (waiting, but still a live `land_voice_pr.sh`
 process) at 02:50 made the window wait and then refuse, and the 12B night was lost. That incident is why a voice
 lander must not start from 01:55 (a lander holds the brain-window lock for up to ~45 min) and why a deploy, whose
-`zoe-data` restart collides with the window's stops, pauses from 02:45. The 04:00-04:55 voice pause is the
+`zoe-data` restart collides with the window's stops, pauses from 02:25. The 04:00-04:55 voice pause is the
 nightly voice regression, not the window.
 
 What the window does about it (read-only facts, pinned by `tests/unit/test_night_window_landing_contract.py`):

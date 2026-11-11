@@ -1,0 +1,11 @@
+# zoe-night-presleep-catchup.timer - READY TO INSTALL (scripts/night/install_night_window.sh). 25 minutes after each boot (the box has settled); the service does nothing
+# unless the last 26 h had no successful backup. Not Persistent: it is about BOOTS, not clock times.
+[Unit]
+Description=Zoe backup catch-up after boot (25 min)
+
+[Timer]
+OnBootSec=25min
+Unit=zoe-night-presleep-catchup.service
+
+[Install]
+WantedBy=timers.target

@@ -136,8 +136,8 @@ def test_voice_paused_while_the_regression_service_is_active(rig):
 # ---- deploy / test ----------------------------------------------------------------------------------------------
 
 def test_deploy_windows(rig):
-    assert busy(rig, "deploy", "02:44") == RUN
-    assert busy(rig, "deploy", "02:45") == PAUSE
+    assert busy(rig, "deploy", "02:24") == RUN
+    assert busy(rig, "deploy", "02:25") == PAUSE
     assert busy(rig, "deploy", "03:29") == PAUSE
     assert busy(rig, "deploy", "03:30") == RUN
     assert busy(rig, "deploy", "12:00") == RUN
@@ -163,24 +163,24 @@ def deadline(rig, hhmm, day=DAY):
     return int(r.stdout.strip())
 
 
-def test_deadline_is_the_next_0240(rig):
-    assert deadline(rig, "12:00") == epoch("2026-10-30", "02:40")
-    assert deadline(rig, "23:59") == epoch("2026-10-30", "02:40")
-    assert deadline(rig, "00:05") == epoch(DAY, "02:40")
-    assert deadline(rig, "01:50") == epoch(DAY, "02:40")
+def test_deadline_is_the_next_0220(rig):
+    assert deadline(rig, "12:00") == epoch("2026-10-30", "02:20")
+    assert deadline(rig, "23:59") == epoch("2026-10-30", "02:20")
+    assert deadline(rig, "00:05") == epoch(DAY, "02:20")
+    assert deadline(rig, "01:50") == epoch(DAY, "02:20")
 
 
-def test_deadline_rolls_to_tomorrow_at_exactly_0240(rig):
-    assert deadline(rig, "02:39") == epoch(DAY, "02:40")
-    assert deadline(rig, "02:40") == epoch("2026-10-30", "02:40")
+def test_deadline_rolls_to_tomorrow_at_exactly_0220(rig):
+    assert deadline(rig, "02:19") == epoch(DAY, "02:20")
+    assert deadline(rig, "02:20") == epoch("2026-10-30", "02:20")
 
 
 def test_deadline_crosses_month_end(rig):
-    assert deadline(rig, "12:00", day="2026-10-31") == epoch("2026-11-01", "02:40")
+    assert deadline(rig, "12:00", day="2026-10-31") == epoch("2026-11-01", "02:20")
 
 
 def test_deadline_ignores_an_active_night_window(rig):
     # `deadline` answers before the busy checks - a lander computing its deadline must always get a number
     r = rig.run("night_busy.sh", "deadline", ZOE_LANDING_NOW_EPOCH=str(epoch(DAY, "02:55")),
                 FAKE_ACTIVE="zoe-night-window.service")
-    assert r.returncode == 0 and r.stdout.strip() == str(epoch("2026-10-30", "02:40"))
+    assert r.returncode == 0 and r.stdout.strip() == str(epoch("2026-10-30", "02:20"))
