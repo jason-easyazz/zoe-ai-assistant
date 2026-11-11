@@ -4,7 +4,10 @@ Run: flock -x -w 3600 /tmp/zoe-test-lane.lock python3 -m pytest -q labs/forget-f
 """
 import os
 import random
+import sqlite3
 import sys
+import threading
+import time
 
 import pytest
 
@@ -37,7 +40,7 @@ def test_property_forget_leaves_no_residue_anywhere(seed):
     payloads = {v: s._payload(v) for v in victims}
     for v in victims:  # every victim has at least one derived artifact, so no closure below is empty
         s.write_derived(f"probe_{v}", "Lx", f"probe summary of {payloads[v]}", [v])
-    untouched_before = {a for a, _ in s.serve()}
+    untouched_before = dict(s.serve())
     closures = set()
     for v in victims:
         assert s.residue(markers[v]), "positive control: the instrument must see the planted marker"
@@ -55,12 +58,14 @@ def test_property_forget_leaves_no_residue_anywhere(seed):
     for v in victims:
         assert_forgotten(s, markers[v], payloads[v])
     # no collateral: every artifact outside the closures is still served, byte for byte
-    assert untouched_before - closures <= {a for a, _ in s.serve()}
+    served = dict(s.serve())
+    assert all(served.get(a) == p for a, p in untouched_before.items() if a not in closures)
     s.rebuild(concat)
     for v in victims:
         assert_forgotten(s, markers[v], payloads[v])
     survivors = set(markers) - set(victims)
-    assert all(s.residue(markers[x]) for x in survivors), "over-deletion: a surviving source vanished"
+    assert all(s.db.execute("SELECT 1 FROM sources WHERE id = ? AND payload = ?", (x, s._payload(x))).fetchone()
+               and s._payload(x) is not None for x in survivors), "over-deletion: a surviving source row vanished"
 
 
 @pytest.mark.parametrize("seed", range(20))
@@ -105,3 +110,39 @@ def test_raw_file_residue(tmp_path, secure, compact, expect_clean):
     s.forget(v)
     s.close()
     assert file_residue(path, markers[v]) is (not expect_clean)
+
+
+@pytest.mark.parametrize("writer", ["ingest", "write_derived"])
+def test_forget_committed_while_a_writer_waits_for_the_lock(tmp_path, writer):
+    """Real interleave on two connections: the writer is already inside its call, blocked on the write lock, when the
+    forget ledger row commits. It must re-check under the lock and refuse (a check made before BEGIN would let it through)."""
+    path = str(tmp_path / "race.db")
+    s = LineageStore(path)
+    s.ingest("keep", "a harmless surviving note")
+    secret = "the forgotten sentence zq91"
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")  # the forgetter holds the write lock
+    result = {}
+
+    def late_writer():
+        w = LineageStore(path)
+        try:
+            if writer == "ingest":
+                w.ingest("late", secret)
+            else:
+                w.write_derived("late", "Lx", secret, ["keep"])
+            result["outcome"] = "written"
+        except Forgotten:
+            result["outcome"] = "refused"
+        finally:
+            w.close()
+
+    t = threading.Thread(target=late_writer)
+    t.start()
+    time.sleep(0.5)  # the writer is now waiting on BEGIN IMMEDIATE
+    assert t.is_alive(), "positive control: the writer must be blocked behind the lock"
+    holder.execute("INSERT INTO forget_ledger VALUES (?)", (s._h(secret),))
+    holder.execute("COMMIT")
+    t.join(10)
+    assert result == {"outcome": "refused"}
+    assert s.residue("zq91") == []

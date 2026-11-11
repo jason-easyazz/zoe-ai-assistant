@@ -89,10 +89,10 @@ class LineageStore:
         """THE choke-point: no lineage, no write; a forgotten parent or forgotten text, no write."""
         if not parents:
             raise LineageRequired(f"{layer}:{aid} has no lineage")
-        if self.db.execute("SELECT 1 FROM forget_ledger WHERE h = ?", (self._h(payload),)).fetchone():
-            raise Forgotten("derived text equals forgotten content")
-        self.db.execute("BEGIN IMMEDIATE")  # parent check + edges in one txn: a racing forget sees the edges
+        self.db.execute("BEGIN IMMEDIATE")  # ledger + parent checks + edges in one txn: a racing forget cannot slip between
         try:
+            if self.db.execute("SELECT 1 FROM forget_ledger WHERE h = ?", (self._h(payload),)).fetchone():
+                raise Forgotten("derived text equals forgotten content")
             for p in parents:
                 live = self.db.execute("SELECT 1 FROM sources WHERE id = ? UNION ALL SELECT 1 FROM artifacts "
                                        "WHERE id = ? AND state = 'live'", (p, p)).fetchone()

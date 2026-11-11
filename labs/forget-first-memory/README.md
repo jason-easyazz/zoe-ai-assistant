@@ -14,7 +14,8 @@ anywhere. Labels: [Proven] = a test or the bench printed it on this box; [Experi
   payload is in `forget_ledger` (re-ingest block) or the id is tombstoned.
 - `write_derived(aid, layer, payload, parents)`: **the choke-point.** No parents -> `LineageRequired`. A parent that is
   tombstoned, quarantined or missing -> `Forgotten` (checked inside the same `BEGIN IMMEDIATE` as the edge insert, so a racing
-  forget always sees the edges). A payload whose normalised hash is ledgered -> `Forgotten`.
+  forget always sees the edges). A payload whose normalised hash is ledgered -> `Forgotten` (same transaction; one two-connection test holds the
+  write lock, commits a forget while a writer waits, and checks the writer is refused - that single interleave is all that is tested).
 - `forget_phase1(sid)` (atomic): ledger the hash, tombstone the id, delete the source row and its FTS row (by rowid), compute the
   transitive closure of derived artifacts with one recursive CTE, mark them `quarantined`.
 - `forget_phase2()`: queue a rebuild of each quarantined artifact from its surviving parents (ids only), drop the artifacts and their
@@ -26,13 +27,13 @@ anywhere. Labels: [Proven] = a test or the bench printed it on this box; [Experi
   the raw db/journal/wal bytes for the needle's tail (FTS5 prefix-compresses terms, so the head of a term may not be contiguous).
 - `write_legacy()`: a deliberately lineage-less write path, used only as the negative control.
 
-`test_lineage_store.py` (103 cases, seeded `random`, no `hypothesis` installed): random DAGs of 8-40 sources, depth 1-4,
+`test_lineage_store.py` (105 cases, seeded `random`, no `hypothesis` installed): random DAGs of 8-40 sources, depth 1-4,
 5-30 artifacts per layer, fan-in 1-3, derivation = verbatim concatenation of parents (worst case: every derived row copies its
 sources). `bench.py`: forget latency + fan-out grid and an on-disk residue comparison.
 
 ## Results (this box, Jetson Orin, sqlite 3.37.2, 2026-11-11 22:38 AWST)
 
-**Property tests [Proven, on synthetic DAGs]:** `103 passed in 2.71s` (rc 0), under `flock -x /tmp/zoe-test-lane.lock`, no xdist.
+**Property tests [Proven, on synthetic DAGs]:** `105 passed` (rc 0), under `flock -x /tmp/zoe-test-lane.lock`, no xdist.
 Over 60 random DAGs, after forgetting 1-3 sources: zero residue in any table/column/FTS shadow table or FTS `MATCH`, nothing
 served (mid-forget, after purge and after rebuild), re-ingest refused (exact and case/whitespace variant), late derived writes onto a
 quarantined parent refused, no collateral (every artifact outside the closures still served), no over-deletion (every surviving
