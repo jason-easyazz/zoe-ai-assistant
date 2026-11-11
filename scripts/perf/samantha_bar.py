@@ -92,6 +92,7 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -2063,6 +2064,8 @@ def drain_captures(live: Any, user: str, *, timeout_s: float | None = None,
         try:
             timeout_s = float(os.environ.get("ZOE_BAR_QUIESCE_TIMEOUT_S", QUIESCE_TIMEOUT_S))
         except ValueError:
+            timeout_s = QUIESCE_TIMEOUT_S
+        if not math.isfinite(timeout_s) or timeout_s < 0:   # nan / inf would make the wait unbounded
             timeout_s = QUIESCE_TIMEOUT_S
     waited = 0.0   # budget counted in polls (sleep is looked up at call time), not wall-clock
     last, stable, in_flight = None, 0, None

@@ -2003,3 +2003,24 @@ def test_drain_is_bounded_and_honours_the_env_budget(monkeypatch):
     live = _Stuck()
     out = sb.drain_captures(live, A)
     assert out["in_flight"] == 6 and live.n == 5   # 20 s / 5 s poll + the final look
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-5", "abc"])
+def test_drain_ignores_an_unusable_env_budget_and_stays_bounded(monkeypatch, bad):
+    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", bad)
+
+    class _Stuck:
+        n = 0
+
+        def packet_count(self, u):
+            return 3
+
+        def capture_status(self, u):
+            self.n += 1
+            assert self.n < 1000, "unbounded wait"
+            return {"in_flight": 6}
+
+    live = _Stuck()
+    out = sb.drain_captures(live, A)
+    assert out["in_flight"] == 6 and live.n == int(sb.QUIESCE_TIMEOUT_S / sb.QUIESCE_POLL_S) + 1
