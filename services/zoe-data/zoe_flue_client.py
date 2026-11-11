@@ -1112,6 +1112,19 @@ async def _pending_offer_block(user_id: str, message: str = "") -> str:
     return f"{_OFFER_BLOCK_OPEN}\n" + "\n".join(lines) + f"\n{_OFFER_BLOCK_CLOSE}"
 
 
+async def _list_share_block(user_id: str) -> str:
+    """The one-time "X has shared a list with you" directive for this member, or "". Fail-open: a turn never breaks on it."""
+    if not user_id or user_id in ("guest", "voice-guest"):
+        return ""
+    try:
+        import list_sharing
+
+        return await list_sharing.heads_up_block(user_id, open_line=_OFFER_BLOCK_OPEN, close_line=_OFFER_BLOCK_CLOSE)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("list share heads-up skipped: %s", exc)
+        return ""
+
+
 def _recall_inject_enabled() -> bool:
     """Per-call env read (matches the module's other env lookups) so the
     operator can flip the flag with a restart, no code change."""
@@ -2967,6 +2980,10 @@ async def _run_flue_brain_streaming_turn(
             logger.info("SEAM_OFFER user=%s deferred=1 reason=emotional", uid)
     elif "[pending-contact]" not in recall_block and not verify_block:
         offer_block = await _pending_offer_block(uid, message)
+        if not offer_block and not kwargs.get("replay_isolation"):      # a replay must never consume a real member's heads-up
+            # "<sharer> has shared a list with you" - said once, in the recipient's next turn no other block claimed (list_sharing.py;
+            # ZOE_LIST_SHARE_HEADSUP). Same block delimiters as the contact offer, so the sidecar elides it from older turns.
+            offer_block = await _list_share_block(uid)
     # Risk cue (ZOE_RISK_CUES, default OFF): the problem in an adult's announced plan, named by code (risk_cues.py). Exclusive with every
     # other block that asks the 4B for one job - one block per turn - and "" (no work at all) with the flag off.
     risk_block = ""

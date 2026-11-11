@@ -836,32 +836,138 @@ def _list_type_for_name(name: str, explicit_type: str = "") -> str:
     return "personal"
 
 
+_LIST_TYPE_WORD = r"(?:(?:shopping|grocery|groceries|personal|work|task|todo|tasks|todos)\s+)?"
+_CREATE_VERB = r"(?:new|create|make|add|start|begin|build|set\s*up)"
+# "create a list ..." / "make me a list ..." / "start a new work list ...": the shapes that open a list-creating sentence.
+_LIST_CREATE_OPEN_RE = re.compile(
+    rf"\b{_CREATE_VERB}\s+(?:me\s+|us\s+)?(?:a\s+|an\s+|my\s+|our\s+)?(?:new\s+)?{_LIST_TYPE_WORD}\s*list\b"
+    r"|\b(?:want|need|like)\s+(?:a|an)\s+(?:new\s+)?list\s+(?:called|named)\b",
+    re.IGNORECASE,
+)
+# "start a Bunnings list", "make me a camping list": the name sits between the verb and "list". Not "add" (that is "add milk to
+# my shopping list") and not bare "new" ("show my new work list").
+_LIST_CREATE_NAMED_RE = re.compile(
+    r"\b(?:start|create|make|begin|build|set\s*up)\s+(?:me\s+|us\s+)?(?:a\s+|an\s+|my\s+|our\s+)?(?:new\s+)?"
+    r"(?P<name>[a-z0-9][a-z0-9'&-]*(?:\s+[a-z0-9'&-]+){0,3}?)\s+list\b(?!\s+(?:of|for)\b)",
+    re.IGNORECASE,
+)
+_NOT_A_LIST_NAME = frozenset({"the", "a", "an", "this", "that", "my", "your", "our", "new", "another", "same", "whole", "long", "short", "me", "us"})
+# The words that end the "create the list" half of a compound and begin its "add these" half: "... and add tent, tarp on it".
+_LIST_CREATE_TAIL_RE = re.compile(r"(?:,\s*|\s+)(?:(?:and|then)\s+)?(?:also\s+)?(?:add|put)\s+(?=\S)(?P<items>.+)$", re.IGNORECASE)
+_LIST_CREATE_WITH_RE = re.compile(r"\s+with\s+(?P<items>\S.*)$", re.IGNORECASE)
+_ITEMS_DESTINATION_RE = re.compile(
+    r"\s+(?:to|on|onto|in|into)\s+(?:it|that|there|this|them|(?:the\s+|that\s+|this\s+|my\s+)?(?:new\s+)?(?:[a-z0-9'&-]+\s+){0,3}list)\s*$",
+    re.IGNORECASE,
+)
+
+
 def _list_create_from_text(message: str, context: dict[str, Any] | None = None) -> tuple[str, str] | None:
+    """``(name, list_type)`` of a spoken "create a list ..." - the list half of :func:`_list_create_parts`."""
+    parts = _list_create_parts(message, context)
+    return (parts[0], parts[1]) if parts else None
+
+
+def _list_create_parts(message: str, context: dict[str, Any] | None = None) -> tuple[str, str, str] | None:
+    """``(name, list_type, items_text)`` of a spoken list creation; ``items_text`` is what the same sentence asked to put ON it
+    ("create a list called Camping Supplies and add tent, tarp and bug spray to it"), "" when it asked for none."""
     if _context_domain(context) == "lists" and _context_action(context) == "create_list":
         candidate = _clean_action_text(message)
         if re.fullmatch(r"[a-z0-9][a-z0-9 '&-]{1,48}", candidate, flags=re.IGNORECASE):
-            return candidate[:48].strip(), _list_type_for_name(candidate, _context_list_type(context))
-    if not re.search(r"\b(?:new|create|make|add)\s+(?:a\s+|my\s+)?(?:new\s+)?(?:shopping|grocery|groceries|personal|work|task|todo|tasks|todos)?\s*list\b", message, re.IGNORECASE):
+            return candidate[:48].strip(), _list_type_for_name(candidate, _context_list_type(context)), ""
+    head, items = message, ""
+    list_word = re.search(r"\blist\b", message, re.IGNORECASE)
+    if list_word and (_LIST_CREATE_OPEN_RE.search(message) or _LIST_CREATE_NAMED_RE.search(message)):
+        tail = _LIST_CREATE_TAIL_RE.search(message, list_word.end())
+        if tail is None and re.search(r"\b(?:called|named)\b", message[:list_word.end() + 40], re.IGNORECASE):
+            tail = _LIST_CREATE_WITH_RE.search(message, list_word.end())
+        if tail is not None:
+            head = message[:tail.start()]
+            items = _ITEMS_DESTINATION_RE.sub("", tail.group("items").strip(" .!?,;")).strip(" .!?,;")
+    head_parsed = _list_create_head(head, context)
+    if head_parsed is None:
+        return None
+    return head_parsed[0], head_parsed[1], items
+
+
+def _list_create_head(message: str, context: dict[str, Any] | None = None) -> tuple[str, str] | None:
+    if not (_LIST_CREATE_OPEN_RE.search(message) or _LIST_CREATE_NAMED_RE.search(message)):
         if _context_domain(context) != "lists" or not re.search(r"\b(?:call|name)\s+(?:it\s+)?", message, re.IGNORECASE):
             return None
     list_type = _list_type_from_text(f" {message.lower()} ")
     name = ""
     patterns = (
         r"\b(?:called|named|name it|call it)\s+(?P<name>[a-z0-9][a-z0-9 '&-]{1,48})\b",
-        r"\b(?:new|create|make|add)\s+(?:a\s+|my\s+)?(?:new\s+)?(?P<name>[a-z0-9][a-z0-9 '&-]{1,48})\s+list\b",
+        r"\b(?:new|create|make|add)\s+(?:me\s+|us\s+)?(?:a\s+|my\s+)?(?:new\s+)?(?P<name>[a-z0-9][a-z0-9 '&-]{1,48})\s+list\b",
     )
     for pattern in patterns:
         match = re.search(pattern, message, re.IGNORECASE)
         if match:
             name = _clean_action_text(match.group("name"))
             break
+    if not name:
+        match = _LIST_CREATE_NAMED_RE.search(message)
+        if match:
+            candidate = _clean_action_text(match.group("name"))
+            if candidate and candidate.lower() not in _NOT_A_LIST_NAME:
+                name = candidate
+    name = re.sub(r"\s+list$", "", name, flags=re.IGNORECASE).strip()
     if name.lower() in {"shopping", "grocery", "groceries", "personal", "work", "task", "tasks", "todo", "todos", "new"}:
         name = _default_list_name(_list_type_for_name(name, list_type))
-    if not name and re.search(r"\b(?:new|create|make|add)\b", message, re.IGNORECASE):
+    if not name and re.search(r"\b(?:new|create|make|add|start|begin|build)\b", message, re.IGNORECASE):
         return "", list_type or "personal"
     if not name:
         return None
     return name[:48].strip(), _list_type_for_name(name, list_type)
+
+
+_SHARE_AUDIENCE = (
+    r"(?:the\s+)?(?:whole\s+)?(?:house|household|family|home)|everyone(?:\s+else)?(?:\s+in\s+the\s+(?:house|family))?|everybody|"
+    r"all\s+of\s+us|us\s+all|the\s+(?:others|rest\s+of\s+(?:us|the\s+(?:house|family)))"
+)
+_SHARE_PRONOUN = r"(?:it|this|that|this\s+list|that\s+list|the\s+list|my\s+list|the\s+new\s+list)"
+_SHARE_NAMED = r"(?:the\s+|my\s+|our\s+)?(?P<name>[a-z0-9][a-z0-9 '&-]{0,48}?)\s+list"
+_SHARE_TARGET = rf"(?:(?P<pronoun>{_SHARE_PRONOUN})|{_SHARE_NAMED})"
+_SHARE_RES = (
+    # "share it to the house" / "share the Camping Supplies list with everyone" (an audience is REQUIRED: "share it with Sam" is
+    # not the household, and "share this song" is no list command)
+    re.compile(rf"^share\s+{_SHARE_TARGET}\s+(?:to|with|for|across|among|between|in)\s+(?:{_SHARE_AUDIENCE})$", re.IGNORECASE),
+    re.compile(rf"^make\s+{_SHARE_TARGET}\s+(?:a\s+)?(?:shared|public|visible|available)(?:\s+list)?"
+               rf"(?:\s+(?:to|for|with)\s+(?:{_SHARE_AUDIENCE}))?$", re.IGNORECASE),
+)
+_UNSHARE_RES = (
+    re.compile(rf"^unshare\s+{_SHARE_TARGET}(?:\s+(?:from|with)\s+(?:{_SHARE_AUDIENCE}))?$", re.IGNORECASE),
+    re.compile(rf"^stop\s+sharing\s+{_SHARE_TARGET}(?:\s+(?:to|with|from)\s+(?:{_SHARE_AUDIENCE}))?$", re.IGNORECASE),
+    re.compile(rf"^(?:make|keep|set)\s+{_SHARE_TARGET}\s+(?:private|personal|just\s+mine|only\s+mine|to\s+myself|for\s+me)$",
+               re.IGNORECASE),
+)
+
+
+def _list_share_from_text(message: str, context: dict[str, Any] | None = None) -> SkybridgeIntent | None:
+    """"share it to the house" / "share the Camping Supplies list with everyone" -> ``lists/share_list``; "make it private" /
+    "stop sharing the Camping Supplies list" -> ``lists/unshare_list``. ``list_name`` is the list a name picked out, "" for a bare
+    "it" (the resolver finds the list in play). Only ever the HOUSEHOLD as audience: a named person is no match."""
+    try:
+        from list_sharing import share_enabled
+
+        if not share_enabled():
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    command = _command_shaped(message, r"share|unshare|stop\s+sharing|make|keep|set")
+    if command is None:
+        return None
+    text = re.sub(r"[.!?,;:]+$", "", message[command.start():].strip())
+    text = re.sub(r"\s+(?:please|thanks|thank you)$", "", text, flags=re.IGNORECASE)
+    for action, patterns in (("share_list", _SHARE_RES), ("unshare_list", _UNSHARE_RES)):
+        for pattern in patterns:
+            m = pattern.match(text)
+            if not m:
+                continue
+            name = _clean_action_text(m.groupdict().get("name") or "") if not m.groupdict().get("pronoun") else ""
+            if not m.groupdict().get("pronoun") and (not name or name.lower() in _NOT_A_LIST_NAME):
+                continue
+            return SkybridgeIntent(domain="lists", action=action, list_name=name, query="" if name else "it")
+    return None
 
 
 def _context_domain(context: dict[str, Any] | None) -> str:
@@ -2149,10 +2255,14 @@ def classify_skybridge_intent(
     calendar_delete = _calendar_delete_from_text(raw_message, context)
     if calendar_delete:
         return SkybridgeIntent(domain="calendar", action="delete_event", target_text=calendar_delete)
-    list_create = _list_create_from_text(raw_message, context)
+    list_share = _list_share_from_text(raw_message, context)
+    if list_share:
+        return list_share
+    list_create = _list_create_parts(raw_message, context)
     if list_create:
-        list_name, list_type = list_create
-        return SkybridgeIntent(domain="lists", action="create_list", list_name=list_name, list_type=list_type)
+        list_name, list_type, list_items = list_create
+        return SkybridgeIntent(domain="lists", action="create_list", list_name=list_name, list_type=list_type,
+                               item_text=list_items)
     contextual_list_add = _contextual_list_add_from_text(raw_message, context)
     if contextual_list_add:
         item, list_type = contextual_list_add
@@ -2369,7 +2479,7 @@ def _looks_like_list_name(message: str) -> bool:
 
 _READ_ACTIONS = frozenset({"show", "overview", "forecast", "current", "today"})
 _WRITE_ACTIONS = frozenset({"add_item", "remove_item", "complete_item", "edit_item", "rename_item", "correct_last_item",
-                            "create_list", "create_event", "update_time", "edit_event", "delete_event", "remember_fact", "create"})
+                            "create_list", "share_list", "unshare_list", "create_event", "update_time", "edit_event", "delete_event", "remember_fact", "create"})
 # Domains holding the household's personal data: the only ones the unsure floor applies to (music / smart-home / timers
 # keep the garbled-STT recovery - their worst case is a wrong song, not a wrong record).
 _UNSURE_FLOOR_DOMAINS = frozenset({"calendar", "lists", "people"})
@@ -3299,6 +3409,8 @@ async def _resolve_with_db(intent: SkybridgeIntent, user_id: str, db: Any, *, co
             return await _resolve_list_edit_item(intent, user_id, db, context)
         if intent.action == "create_list":
             return await _resolve_list_create(intent, user_id, db)
+        if intent.action in ("share_list", "unshare_list"):
+            return await _resolve_list_share(intent, user_id, db, context)
         return await _resolve_lists(intent, user_id, db)
     if intent.domain == "people":
         if intent.action == "identity":
@@ -4189,8 +4301,8 @@ async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
         item = dict(row)
         if household and item.get("visibility") != "family":
             continue  # belt and braces: the query already filters, a panel guest must never be handed a private list
-        if item.get("user_id") != user_id and item.get("list_type") != "shopping" and not household:
-            continue
+        if not household and item.get("user_id") != user_id and item.get("visibility") != "family":
+            continue  # the query already filters; only the caller's own lists and FAMILY-visible ones (a shared list) are ever read
         key = (str(item.get("list_type") or ""), str(item.get("name") or "").strip().lower())
         if key in seen:
             # ONE list per name: a fuller duplicate replaces an emptier one already kept (never the reverse), so the
@@ -4258,6 +4370,10 @@ def _new_list_prompt_card(list_type: str) -> dict[str, Any]:
     }
 
 
+def _join_names(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -> dict[str, Any]:
     if not intent.list_name:
         return {
@@ -4279,28 +4395,130 @@ async def _resolve_list_create(intent: SkybridgeIntent, user_id: str, db: Any) -
         user_id,
         intent.list_name,
     )
+    if not existing and list_type == "shopping" and intent.list_name.strip().lower() == "shopping":
+        # "make a shopping list": the household has ONE (a fridge list, family-visible by definition). Never a private twin of it.
+        from list_service import household_lists_sql, pick_household_list
+
+        household = pick_household_list(await db.fetch(household_lists_sql("$1"), "shopping"), intent.list_name)
+        if household:
+            existing = [household]
     created = False
+    list_id = str(dict(existing[0])["id"]) if existing else ""
+    if existing:
+        # An existing list keeps ITS type (an existing work list "Projects" is a to-do list: "call mum and dad" is one task there),
+        # whatever type the spoken name suggested.
+        list_type = str(dict(existing[0]).get("list_type") or list_type)
     if not existing:
+        list_id = str(uuid.uuid4())
         status = await db.execute(
             """
             INSERT INTO lists (id, user_id, name, list_type, description, visibility)
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (user_id, lower(name)) WHERE deleted = 0 DO NOTHING
             """,
-            str(uuid.uuid4()),
+            list_id,
             user_id,
             intent.list_name,
             list_type,
             "",
-            "personal" if list_type in {"work", "personal", "tasks"} else "family",
+            # A list made by voice is PRIVATE to whoever made it - on the shared panel too, whatever its type. It becomes
+            # household-visible only on an explicit "share it to the house" (list_sharing.py), never from the device or channel.
+            # (A guest never reaches here - they own no list - and a guest-started SHOPPING list stays family: list_service.)
+            "personal",
         )
         created = _affected_rows(status) == 1
         await _maybe_commit(db)
+        if not created:
+            raced = await db.fetch(
+                "SELECT id FROM lists WHERE user_id = $1 AND deleted = 0 AND lower(name) = lower($2) LIMIT 1", user_id, intent.list_name)
+            list_id = str(dict(raced[0])["id"]) if raced else ""
+    added: list[str] = []
+    already: list[str] = []
+    if list_id and intent.item_text:
+        added, already, _new_ids, _first = await _add_spoken_items(db, user_id, list_id, list_type, intent.list_name, intent.item_text)
+        await _maybe_commit(db)
+    if list_id:
+        from list_service import note_focus_list
+
+        note_focus_list(user_id, list_id)       # "share it" in the next breath means THIS list
     result = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type, list_name=intent.list_name), user_id, db)
-    result["intent"] = {"domain": "lists", "action": "create_list", "list_type": list_type, "list_name": intent.list_name}
-    result["spoken_summary"] = f"Created {intent.list_name}." if created else f"You already have a {intent.list_name} list."
-    result["actions"] = [{"type": "created" if created else "existing", "domain": "lists", "list_name": intent.list_name, "list_type": list_type}]
+    result["intent"] = {"domain": "lists", "action": "create_list", "list_type": list_type, "list_name": intent.list_name,
+                        "list_id": list_id}
+    name = intent.list_name
+    if created:
+        said = f"Created your {name} list" + (f" with {_join_names(added + already)}." if added or already else ".")
+    elif already and not added:
+        said = f"You already have a {name} list with {_join_names(already)} on it."
+    else:
+        said = f"You already have a {name} list" + (f", and I've put {_join_names(added)} on it." if added else ".")
+    result["spoken_summary"] = said
+    result["actions"] = [{"type": "created" if created else "existing", "domain": "lists", "list_name": name, "list_type": list_type,
+                          "list_id": list_id, "items": added}]
     return result
+
+
+def _share_card(title: str, body: str, status: str) -> dict[str, Any]:
+    return {"component": "status", "props": {"title": title, "body": body, "status": status, "tone": "hero", "wide": True}}
+
+
+async def _notify_lists_changed(action: str, list_id: str) -> None:
+    """Best-effort UI push so every open Lists page / panel re-reads who can see what. Never raises."""
+    try:
+        from mcp_server import _notify_ui
+
+        await _notify_ui("lists", "list_updated", {"action": action, "list_id": list_id})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("lists UI notify skipped: %s", exc)
+
+
+async def _resolve_list_share(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    """"share it to the house" / "make it private": flips ONE list's visibility for its OWNER (``list_sharing``). "It" is the list in
+    play: the one on screen (the card's id), else the one this member just created or added to. With no such list the words are not
+    ours to answer (``handled`` False), so "share it" about anything else reaches the brain untouched."""
+    import list_sharing
+    from list_service import focus_list
+
+    share = intent.action == "share_list"
+    if _is_guest_user(user_id) or panel_principal.is_guest_id(user_id) or user_id == panel_principal.HOUSEHOLD_VIEWER:
+        return _attach_skybridge_context(_auth_required_result(intent))
+    list_id = ""
+    if intent.list_name:
+        rows = await db.fetch(
+            "SELECT id FROM lists WHERE deleted = 0 AND (lower(name) = lower($1) OR lower(name) = lower($1) || ' list') "
+            "AND (visibility = 'family' OR user_id = $2) ORDER BY CASE WHEN user_id = $2 THEN 0 ELSE 1 END, updated_at DESC LIMIT 1",
+            intent.list_name, user_id)
+        if not rows:
+            return {"handled": True, "intent": _intent_dict(intent), "cards": [], "actions": [],
+                    "spoken_summary": f"I couldn't find a list called {intent.list_name}."}
+        list_id = str(dict(rows[0])["id"])
+    else:
+        list_id = _context_list_hint(context)[0] or focus_list(user_id) or ""
+        if not list_id:
+            return _not_a_list_command()
+    outcome = await list_sharing.set_list_visibility(db, list_id=list_id, user_id=user_id, share=share)
+    await _maybe_commit(db)
+    status, name = outcome["status"], outcome["name"]
+    if status == "not_found" and not intent.list_name:
+        return _not_a_list_command()
+    said = {
+        "shared": f"Done - {name} is shared with the house now. Everyone can see and add to it.",
+        "already": (f"{name} is already shared with the house." if share else f"{name} is already private."),
+        "unshared": f"{name} is private again - only you can see it.",
+        "not_owner": f"{name} isn't yours to {'share' if share else 'make private'}. Only the person who made it can.",
+        "locked": "The shopping list belongs to the house, so it stays shared.",
+        "not_found": "I couldn't find that list.",
+        "guest": "Sign in first and I'll share it.",
+    }[status]
+    if status in {"shared", "unshared"}:
+        await _notify_lists_changed("list_shared" if share else "list_unshared", list_id)
+        write_receipts.record(user_id, "list", list_id, f"skybridge:{intent.action}")
+    return {
+        "handled": True,
+        "intent": {**_intent_dict(intent), "list_id": list_id, "list_name": name or intent.list_name},
+        "spoken_summary": said,
+        "cards": [_share_card(name or "List", said, "Shared" if status == "shared" else "Private" if status == "unshared" else "Lists")],
+        "actions": [{"type": status, "domain": "lists", "list_id": list_id, "list_name": name}],
+    }
 
 
 async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> tuple[str, str] | None:
@@ -4377,34 +4595,11 @@ async def _find_or_create_list(intent: SkybridgeIntent, user_id: str, db: Any, c
     return list_id, list_type
 
 
-async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
-    if user_id in {"guest", "voice-guest"}:
-        return {
-            "handled": True,
-            "intent": _intent_dict(intent),
-            "spoken_summary": "List changes are not available for guest sessions.",
-            "cards": [_status_card("Sign in to change lists", "Zoe needs to know who is speaking before editing list items.")],
-            "actions": [],
-        }
-    if not intent.item_text:
-        return {
-            "handled": True,
-            "intent": _intent_dict(intent),
-            "spoken_summary": "I did not catch the list item.",
-            "cards": [_status_card("What should I add?", "Say the item and the list, for example: add bread to the shopping list.")],
-            "actions": [],
-        }
-    await _ensure_default_lists(user_id, db)
-    list_target = await _find_or_create_list(intent, user_id, db, context)
-    if not list_target:
-        return {
-            "handled": True,
-            "intent": _intent_dict(intent),
-            "spoken_summary": "I could not find that list anymore.",
-            "cards": [_status_card("Which list should I use?", "The list from the visible card is no longer available. Show your lists again or name the list to update.")],
-            "actions": [],
-        }
-    list_id, list_type = list_target
+async def _add_spoken_items(db: Any, user_id: str, list_id: str, list_type: str, list_name: str,
+                            item_text: str) -> tuple[list[str], list[str], list[str], str]:
+    """Add what one spoken add named to the list ``list_id`` (already resolved and visible to ``user_id``): several items when the
+    list is a list of THINGS (``list_service.splits_items``), one when it is a to-do list. Returns ``(added, already, new_ids,
+    item_id)``: the texts put on, the texts that were already open there, the new row ids, and the id the reply should point at."""
     # Retry idempotency: the voice daemon (and any HTTP retry layer) can
     # re-submit a turn the server already processed — live 2026-07-07 every
     # barge-aborted voice add landed twice ~1.5-2.5s apart. An identical
@@ -4415,7 +4610,7 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     # text > timestamp` on Postgres and breaks the skybridge fast path.
     # An item ALREADY open on the list (case-, plural- and punctuation-insensitive) is never added twice: it is named in the
     # reply instead ("Milk's already on the shopping list."). A spoken add may name several items ("eggs and milk").
-    from list_service import add_reply, find_matching_item, normalize_item_text, split_items
+    from list_service import find_matching_item, normalize_item_text, split_items, splits_items
 
     added: list[str] = []
     already: list[str] = []
@@ -4428,7 +4623,7 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
     async with list_write_txn(db, list_id):
         open_rows = [dict(r) for r in await db.fetch(
             "SELECT id, text FROM list_items WHERE list_id = $1 AND deleted = 0 AND (completed IS NULL OR completed = 0)", list_id)]
-        for part in (split_items(intent.item_text) if list_type == "shopping" else [normalize_item_text(intent.item_text)]) or [intent.item_text]:
+        for part in (split_items(item_text) if splits_items(list_type, list_name) else [normalize_item_text(item_text)]) or [item_text]:
             recent_dup = await db.fetchrow(
                 """
                 SELECT id FROM list_items
@@ -4480,6 +4675,46 @@ async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any,
         write_receipts.record("guest" if user_id == panel_principal.HOUSEHOLD_VIEWER else user_id, "list", _rid, "skybridge:add_item")
         if _rid in new_ids:
             _audit_list_item("add", user_id, list_id, _rid)
+    return added, already, new_ids, item_id
+
+
+async def _list_name_of(db: Any, list_id: str) -> str:
+    rows = await db.fetch("SELECT name FROM lists WHERE id = $1 AND deleted = 0", list_id)
+    return str(dict(rows[0]).get("name") or "") if rows else ""
+
+
+async def _resolve_list_add_item(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
+    if user_id in {"guest", "voice-guest"}:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "List changes are not available for guest sessions.",
+            "cards": [_status_card("Sign in to change lists", "Zoe needs to know who is speaking before editing list items.")],
+            "actions": [],
+        }
+    if not intent.item_text:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I did not catch the list item.",
+            "cards": [_status_card("What should I add?", "Say the item and the list, for example: add bread to the shopping list.")],
+            "actions": [],
+        }
+    await _ensure_default_lists(user_id, db)
+    list_target = await _find_or_create_list(intent, user_id, db, context)
+    if not list_target:
+        return {
+            "handled": True,
+            "intent": _intent_dict(intent),
+            "spoken_summary": "I could not find that list anymore.",
+            "cards": [_status_card("Which list should I use?", "The list from the visible card is no longer available. Show your lists again or name the list to update.")],
+            "actions": [],
+        }
+    list_id, list_type = list_target
+    list_name = await _list_name_of(db, list_id)
+    from list_service import add_reply
+
+    added, already, new_ids, item_id = await _add_spoken_items(db, user_id, list_id, list_type, list_name, intent.item_text)
     refreshed = await _resolve_lists(SkybridgeIntent(domain="lists", action="show", list_type=list_type), user_id, db)
     card_content = refreshed.get("cards", [{}])[0].get("content", {}) if refreshed.get("cards") else {}
     items = card_content.get("items")
