@@ -244,3 +244,27 @@ def test_an_install_that_cannot_switch_a_legacy_timer_off_fails_and_restores_the
     assert r.returncode != 0, "a legacy timer left enabled would run the backup / export twice beside the window: that must not report success"
     assert "enable --now zoe-backup.timer" in log.read_text() and not (off / "zoe-backup.timer").exists()      # the one it had switched off is back
     assert "enable --now zoe-night-window.timer" not in log.read_text()
+
+
+def test_the_sequence_stops_when_a_timed_out_unit_cannot_be_stopped(tmp_path):
+    w, host, cfg = make(tmp_path)
+    real = host.run
+
+    def run(argv, timeout=60.0, mutating=True, env=None):
+        if argv[-1] == "zoe-backup.service" and "start" in argv:
+            host.cmds.append((list(argv), mutating))
+            raise subprocess.TimeoutExpired(argv, timeout)
+        if argv[-1] == "zoe-backup.service" and "stop" in argv:
+            host.cmds.append((list(argv), mutating))
+            return nw.bk.Result(1, "stop failed")                    # the backup may still be running
+        return real(argv, timeout=timeout, mutating=mutating, env=env)
+    host.run = run
+    nw.run_presleep(cfg, host, host.log)
+    assert not [c for c in host.joined() if "start --wait zoe-memory-export.service" in c], "the export must not overlap a backup that could not be stopped"
+
+
+def test_the_sequence_stops_when_a_result_cannot_be_checkpointed(tmp_path, monkeypatch):
+    w, host, cfg = make(tmp_path)
+    monkeypatch.setattr(nw.os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("read-only filesystem")))
+    nw.run_presleep(cfg, host, host.log)
+    assert [c.split()[-1] for c in started(host)] == ["zoe-backup.service"], "an unrecorded backup must not be followed by more work (the next slot would repeat it)"

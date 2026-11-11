@@ -873,6 +873,7 @@ def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", 
             log(f"presleep: {unit} NOT started - only {max(0, left_s) / 60:.0f} min before the window proper must begin (end-by {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d}); the next night's pre-sleep takes it")
             continue
         t0 = host.mono()
+        halt = ""
         try:
             res = host.run(["systemctl", "--user", "start", "--wait", unit], timeout=min(cfg.presleep_timeout_s, left_s), mutating=True)
             rc = res.rc
@@ -880,9 +881,11 @@ def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", 
             rc = 255
             log(f"presleep: {unit} could not be run ({type(exc).__name__})")
             try:      # `start --wait` timing out only ends the CLIENT: stop the unit so the next one never overlaps a still-running backup
-                host.run(["systemctl", "--user", "stop", unit], timeout=120.0, mutating=True)
+                stopped = host.run(["systemctl", "--user", "stop", unit], timeout=120.0, mutating=True).rc == 0
             except Exception:  # noqa: BLE001
-                pass
+                stopped = False
+            if not stopped:
+                halt = f"{unit} may still be running (its stop failed)"
         state[unit] = {"rc": rc, "wall_s": round(host.mono() - t0), "at": dt.datetime.fromtimestamp(host.now()).isoformat(timespec="seconds")}
         log(f"presleep: {unit} {'ok' if rc == 0 else f'FAILED rc {rc} - see its journal / log; the night goes on'} in {state[unit]['wall_s']}s")
         try:      # a CHECKPOINT after each unit, atomically: a kill between the backup and the export must not make the next slot take the backup again
@@ -893,6 +896,10 @@ def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", 
             os.replace(tmp, path)
         except OSError as exc:
             log(f"presleep: could not record the result ({exc})")
+            halt = f"{unit}'s result could not be checkpointed"
+        if halt:
+            log(f"presleep: STOPPING the sequence: {halt}; the later units wait for the next slot rather than overlap it or repeat a finished one. The night goes on.")
+            break
     return state
 
 
