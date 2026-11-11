@@ -33,7 +33,7 @@ from typing import Any, Iterable, Optional
 import numpy as np
 
 from person_age import CHILD_WORDS, person_may_be_child  # noqa: F401  (re-exported: omi_day_review + tests use these names)
-from typed_env import env_bool, env_float, env_int
+from typed_env import env_bool, env_float, env_int, env_str
 
 logger = logging.getLogger(__name__)
 
@@ -172,20 +172,185 @@ async def store_segments(db, user_id: str, rid: str, segs: list, *, model_id: Op
     return ids
 
 
-async def zoe_spoken_spans(db, user_id: str, rid: str) -> list[tuple[int, int]]:
-    """THE SEAM for "the pendant heard Zoe" (gap audit P1-5): spans (ms into recording ``rid``) when a panel was speaking a reply
-    to this member, so those lines are marked ``not_person='zoe'``. Returns [] today: no store logs TTS playback with wall-clock
-    times yet, and only a ``device`` / ``corrected`` recording clock may be aligned to one. Fill this, not the callers."""
-    return []
+_PANEL_CACHE: dict = {}          # (first bucket, last bucket) -> the panel turns of the WHOLE buckets (+ margin); the night job asks per recording, the Pi is read once
+_PANEL_BUCKET_S, _PANEL_MARGIN_S = 600, 120
+
+
+def _panel_turns(t0: float, t1: float) -> list:
+    """The wall panel's voice turns around [t0, t1] (epoch s) from its voice.log - a local copy (``ZOE_OMI_ANCHOR_PANEL_LOG``) or one bounded ssh read. [] on any failure.
+    The cache holds every turn of the buckets the key names and each call filters to ITS OWN interval, so a later recording in the same bucket is not served the first one's slice."""
+    import os
+    import sys
+    key = (int(t0 // _PANEL_BUCKET_S), int(t1 // _PANEL_BUCKET_S))
+    lo, hi = t0 - _PANEL_MARGIN_S, t1 + _PANEL_MARGIN_S
+    if key not in _PANEL_CACHE:
+        wide_lo, wide_hi = key[0] * _PANEL_BUCKET_S - _PANEL_MARGIN_S, (key[1] + 1) * _PANEL_BUCKET_S + _PANEL_MARGIN_S
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "lib"))
+            import panel_voice_log as pvl
+            lines = pvl.fetch_lines(env_str("ZOE_OMI_ANCHOR_PANEL_LOG", "") or None, timeout_s=20)
+            tns = [t for t in pvl.turns(pvl.events(lines)) if t.recorded_ts is not None and wide_lo <= t.recorded_ts.timestamp() <= wide_hi]
+            try:
+                for i, c in pvl.match_clips(tns, pvl.corpus_index()).items():
+                    tns[i].clip = c.path
+            except Exception:  # noqa: BLE001 - clips are optional: the offset then rests on the text alone
+                pass
+        except Exception as exc:  # noqa: BLE001
+            logger.info("OMI_ANCHOR panel log unreadable: %s", type(exc).__name__)
+            tns = []
+        _PANEL_CACHE.clear()
+        _PANEL_CACHE[key] = tns
+    return [t for t in _PANEL_CACHE[key] if lo <= t.recorded_ts.timestamp() <= hi]
+
+
+def _read_wav(path: str) -> Optional[tuple]:
+    import wave
+    try:
+        with wave.open(path, "rb") as w:
+            if w.getsampwidth() != 2:
+                return None
+            ch, sr = w.getnchannels(), w.getframerate()
+            x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float64) / 32768.0
+        return (x.reshape(-1, ch).mean(axis=1) if ch > 1 else x), sr
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def measure_shifts(audio_path: str, t0: float, turns: list, *, max_clips: int = 8) -> list:
+    """Per-clip clock shifts (panel_time - pendant_time, s) by log-mel correlation of the panel's saved clips against the recording's audio, searched +-60 s
+    around the nominal offset (``ZOE_OMI_ANCHOR_PRIOR_S``, 88). A clip that does not stand out is skipped. [] when nothing can be measured."""
+    import os
+    import omi_panel_anchor as pa
+    pend = _read_wav(audio_path) if audio_path and os.path.exists(audio_path) else None
+    if not pend:
+        return []
+    prior = env_float("ZOE_OMI_ANCHOR_PRIOR_S", 88.0)
+    out = []
+    for t in [x for x in turns if getattr(x, "clip", None)][:max_clips]:
+        clip = _read_wav(t.clip)
+        if not clip or clip[1] != pend[1]:
+            continue
+        panel_t = t.recorded_ts.timestamp()
+        hit = pa.correlate_shift(pend[0], clip[0], pend[1], predicted_s=panel_t - prior - t0)
+        if hit:
+            out.append(panel_t - (t0 + hit[0]))
+    return out
+
+
+def anchor_mode() -> str:
+    """``ZOE_OMI_PANEL_ANCHORS``: ``off`` (default - nothing reads the panel), ``night`` (the night re-pass only; one bounded ssh read of the panel log) or ``on``
+    (the first pass too - a network read in the upload path, so not recommended)."""
+    from typed_env import env_str
+    v = env_str("ZOE_OMI_PANEL_ANCHORS", "off").strip().lower()
+    return v if v in ("night", "on") else "off"
+
+
+async def _accepted_member(t) -> Optional[str]:
+    """The member a panel clip's speaker claim identifies once the SERVER accepts it: the same gate as ``routers/voice_tts._accepted_voice_claim``
+    (the acting model's threshold, the member's live consent). The voice.log carries the daemon's raw best match - it is logged even when its
+    own decision was ``accept=False`` - so it is never trusted on its own. Not established (no claim, rejected, gate unavailable) -> None: the
+    speaker stays unknown and the pendant's voice match decides."""
+    user, score = getattr(t, "claim_user", None), getattr(t, "claim_score", None)
+    if not user or score is None:
+        return None
+    try:
+        import speaker_models
+        from routers import voice_tts as vt
+        payload = {"voice_user_id": user, "voice_score": score, "voice_model_id": speaker_models.acting_model()}     # the log's claim is the ACTING model's
+        return await vt._accepted_voice_claim(payload, {"source": "device"})
+    except Exception as exc:  # noqa: BLE001 - cannot establish acceptance: unknown, never "you"
+        logger.info("OMI_ANCHOR claim acceptance unavailable: %s", type(exc).__name__)
+        return None
+
+
+async def panel_evidence(db, user_id: str, rid: str, *, night: bool = False, segs: Optional[list] = None, said: Optional[list] = None, turns: Optional[list] = None,
+                         shifts: Optional[list] = None, guest_verdict: Any = None, greeting: Optional[str] = None) -> Optional[tuple]:
+    """(Evidence, recording start epoch s, first-pass segments) for one recording, or None when the panel's account cannot be trusted against it.
+    None unless the recording clock is ``device`` / ``corrected`` (an ``estimated`` clock cannot be aligned) and the Flue store AND the panel log were
+    readable. ``said``/``turns``/``shifts`` are injection points (tests, and the log-mel offset measurement); ``guest_verdict(turn)`` -> person key for a
+    named guest the panel recognised (the voice.log carries the member claim only). The offset is 0.0 with ``offset_clips`` 0 until shifts fix it, and
+    then ``covered`` stays False: an unaligned clock must not decide who is Zoe."""
+    import omi_panel_anchor as pa
+    mode = anchor_mode()
+    if mode == "off" or (mode == "night" and not night):
+        return None
+    rows = await _all(db, "SELECT started_at, duration_s, time_quality FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
+    if not rows or rows[0][2] not in ("device", "corrected"):
+        return None
+    try:
+        t0 = datetime.strptime(rows[0][0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+    t1 = t0 + float(rows[0][1] or 0)
+    if segs is None:
+        segs = [{"start_ms": r[0], "end_ms": r[1], "text": r[2] or ""} for r in await _all(
+            db, "SELECT start_ms, end_ms, text FROM omi_segments WHERE recording_id = ? AND user_id = ? ORDER BY seq", (rid, user_id))]
+    sd = said if said is not None else pa.flue_said(t0, t1)
+    tn = turns if turns is not None else _panel_turns(t0, t1)
+    if sd is None or not tn:
+        return None
+    accepted = {id(t): await _accepted_member(t) for t in tn}          # the server's own acceptance of each clip's claim, not the raw claim
+
+    def resolve(t):
+        g = guest_verdict(t) if guest_verdict else None
+        if g:
+            return "guest", g
+        who = accepted.get(id(t))
+        return ("member", "you") if who and who == user_id else ("member", None) if who else ("unknown", None)
+    zs = [s for s in sd if s.kind == "zoe"]
+    if greeting and zs:                 # the logged voice_greeting ("Good evening ...") is spoken before the first reply's own words
+        zs[0].text = greeting.strip() + " " + zs[0].text
+    sayings = zs + pa.join_verdicts([s for s in sd if s.kind == "person"], tn, resolve)
+    if shifts is None:
+        arow = await _all(db, "SELECT audio_path FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, user_id))
+        import asyncio
+        shifts = await asyncio.to_thread(measure_shifts, (arow[0][0] if arow else "") or "", t0, tn)
+    est = pa.estimate_offset(shifts) if shifts else None
+    ev = pa.Evidence(said=sayings, offset_s=est[0] if est else 0.0, offset_clips=est[1] if est else 0, covered=est is not None)
+    return ev, t0, segs
+
+
+async def zoe_spoken_spans(db, user_id: str, rid: str, **kw) -> list[tuple[int, int]]:
+    """THE SEAM for "the pendant heard Zoe": spans (ms into recording ``rid``) of the first-pass segments that MATCH something Zoe actually said, within the
+    clock jitter (``omi_panel_anchor.zoe_spans``) - text and time, never her voice print alone, and never a line that names her. [] when the panel's
+    account cannot be aligned (no device/corrected clock, no readable store/log, no night offset): the caller then keeps its print fallback."""
+    import omi_panel_anchor as pa
+    got = await panel_evidence(db, user_id, rid, **kw)
+    if not got or not got[0].covered:
+        return []
+    ev, t0, segs = got
+    return pa.zoe_spans(segs, ev, t0)
+
+
+async def panel_spans(db, user_id: str, rid: str, **kw) -> tuple:
+    """(Zoe spans, person anchors, covered) from ONE evidence read - the re-pass's single call."""
+    import omi_panel_anchor as pa
+    got = await panel_evidence(db, user_id, rid, night=True, **kw)
+    if not got or not got[0].covered:
+        return [], [], False
+    ev, t0, segs = got
+    return pa.zoe_spans(segs, ev, t0), pa.person_anchors(segs, ev, t0), True
+
+
+async def panel_anchors(db, user_id: str, rid: str, **kw) -> list[dict]:
+    """Strong anchors from panel utterances with a KNOWN per-clip speaker (``omi_panel_anchor.person_anchors``): [{start_ms, end_ms, key, speaker}]. [] when
+    unaligned or when every panel verdict was unknown."""
+    import omi_panel_anchor as pa
+    got = await panel_evidence(db, user_id, rid, **kw)
+    if not got or not got[0].covered:
+        return []
+    ev, t0, segs = got
+    return pa.person_anchors(segs, ev, t0)
 
 
 def mark_overlaps(segs: list, spans: list, kind: str = "zoe", min_share: float = 0.5) -> int:
-    """Mark each segment at least ``min_share`` inside the given spans as not a person. Pure; returns how many."""
+    """Mark each segment at least ``min_share`` inside the given spans as not a person. Pure; returns how many. A line carrying a HUMAN decision (``carry``: a tag, "me" or not-person from the
+    owner) is never overridden: the owner's word wins over the panel's guess."""
     n = 0
     for s in segs:
         dur = max(1, int(s["end_ms"]) - int(s["start_ms"]))
         cover = sum(max(0, min(int(s["end_ms"]), b) - max(int(s["start_ms"]), a)) for a, b in spans)
-        if cover / dur >= min_share and not s.get("not_person"):
+        if cover / dur >= min_share and not s.get("not_person") and not s.get("carry"):
             s["not_person"] = kind
             n += 1
     return n
@@ -369,6 +534,23 @@ async def recordings_with_segments(db, user_id: str, recording_ids: list[str]) -
     return {str(r[0]) for r in rows}
 
 
+async def _withdraw_wearer_samples(db, user_id: str, seg_ids: list[str]) -> int:
+    """The owner corrected these lines AWAY from "me" (other / a named person / not a person): the wearer-print windows a first-pass "you" decision taught from inside them
+    (``omi_wearer_samples``, source owner_label, keyed by recording + time) are withdrawn, so ``wearer_print`` stops identifying that voice as the wearer. A window belongs to a line when
+    its midpoint lies inside it. A box without the table (0075 not applied) has nothing to withdraw."""
+    if not seg_ids:
+        return 0
+    n = 0
+    try:
+        for rid, a, b in await _all(db, f"SELECT recording_id, start_ms, end_ms FROM omi_segments WHERE user_id = ? AND id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids)):
+            n += await _run(db, "DELETE FROM omi_wearer_samples WHERE user_id = ? AND recording_id = ? AND source = 'owner_label' AND status = 'confirmed' "
+                                "AND (start_ms + end_ms) / 2 >= ? AND (start_ms + end_ms) / 2 < ?", (user_id, rid, int(a), int(b)))
+    except Exception as exc:  # noqa: BLE001
+        if not _missing(exc):
+            raise
+    return n
+
+
 async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str]) -> bool:
     if value not in (None, "you", "other"):
         raise VoiceError("owner_label is you, other or null")
@@ -376,6 +558,8 @@ async def set_owner_label(db, user_id: str, segment_id: str, value: Optional[str
                                            "AND voice_cluster_id IS NOT NULL", (segment_id, user_id))]
     n = await _run(db, "UPDATE omi_segments SET owner_label = ?, owner_labelled_at = ? WHERE id = ? AND user_id = ?",
                    (value, _iso(_now()) if value else None, segment_id, user_id))
+    if n and value != "you":
+        await _withdraw_wearer_samples(db, user_id, [segment_id])
     if n and value == "you":          # "that was me": the wearer's own voice is never held as a bystander's - the embedding goes too
         await _run(db, "DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (segment_id, user_id))
         await _release_contributions(db, user_id, [segment_id])       # tagged as a person before: that print un-learns the wearer's voice
@@ -458,22 +642,29 @@ async def _resolve_person(db, user_id: str, person_id: Optional[str], name: Opti
     return {"id": pid, "name": clean, "birthday": None, "relationship": None, "created": True}
 
 
-async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_person: Optional[str] = None) -> list[tuple]:
+async def _release_contributions(db, user_id: str, seg_ids: list[str], *, keep_person: Optional[str] = None, keep_empty: bool = False, skip_frozen: bool = False) -> list[tuple]:
     """Take these segments' contributions out of the member's voiceprints (all of them, or all but ``keep_person``'s) and REBUILD
     each voiceprint that lost one - the print goes when none is left. A re-tag or a "not a person" correction must un-learn what
     the first tag taught. Returns ``(segment_id, model_id, embedding)`` of what was released so a re-tag can hand it to the new
-    person (the held embedding was deleted at the first tag, so the contribution is the only copy)."""
+    person (the held embedding was deleted at the first tag, so the contribution is the only copy). ``keep_empty``: a print left with no
+    contribution stays as an EMPTY row (its learning opt-out, status and rejections intact) instead of going - for a caller that is about to
+    re-teach it (the night re-pass replacing a recording's segments). ``skip_frozen``: a print whose learning was stopped keeps its contributions (the re-pass could
+    not re-teach it, so releasing would shrink or zero a print the owner froze). No segment ids -> nothing to do (``IN ()`` is a syntax error on Postgres)."""
+    if not seg_ids:
+        return []
     sql = ("SELECT c.voiceprint_id, c.segment_id, v.model_id, c.embedding FROM learned_voiceprint_segments c "
            "JOIN learned_voiceprints v ON v.id = c.voiceprint_id WHERE v.owner_user_id = ? "
            f"AND c.segment_id IN ({_qs(len(seg_ids))})")
     params: list = [user_id, *seg_ids]
     if keep_person:
         sql, params = sql + " AND v.people_id != ?", params + [keep_person]
+    if skip_frozen:
+        sql += " AND v.learning_enabled = 1"
     rows = await _all(db, sql, tuple(params))
     for vp, sid, _model, _blob_ in rows:
         await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ? AND segment_id = ?", (vp, sid))
     for vp in sorted({r[0] for r in rows}):
-        await rebuild(db, vp)
+        await rebuild(db, vp, keep_empty=keep_empty)
     return [(r[1], r[2], r[3]) for r in rows]
 
 
@@ -505,6 +696,7 @@ async def tag(db, user_id: str, *, person_id: Optional[str] = None, name: Option
     now = _iso(_now())
     former = [r[0] for r in await _all(db, f"SELECT DISTINCT voice_cluster_id FROM omi_segments WHERE user_id = ? AND voice_cluster_id IS NOT NULL "
                                            f"AND id IN ({_qs(len(seg_ids))})", (user_id, *seg_ids))]
+    await _withdraw_wearer_samples(db, user_id, seg_ids)                                         # a person is not the wearer: any "me" window taught from these lines goes
     moved = await _release_contributions(db, user_id, seg_ids, keep_person=person["id"])         # a RE-tag: the old person un-learns it
     await _run(db, f"UPDATE omi_segments SET tagged_person_id = ?, tag_source = ?, tagged_at = ?, suggested_person_id = NULL, "
                    f"suggested_score = NULL, voice_cluster_id = NULL WHERE user_id = ? AND id IN ({_qs(len(seg_ids))})",
@@ -595,6 +787,7 @@ async def mark_not_a_person(db, user_id: str, *, kind: str, cluster_id: Optional
     if kind is not None:                         # a tagged line the member now calls TV / Zoe / media: untag it and un-learn it
         tagged = [r[0] for r in await _all(db, f"SELECT id FROM omi_segments WHERE user_id = ? AND {where} AND tagged_person_id IS NOT NULL",
                                            (user_id, key))]
+        await _withdraw_wearer_samples(db, user_id, [r[0] for r in await _all(db, f"SELECT id FROM omi_segments WHERE user_id = ? AND {where}", (user_id, key))])
         if tagged:
             await _release_contributions(db, user_id, tagged)
         clear_tag = ", tagged_person_id = NULL, tag_source = NULL, tagged_at = NULL" + (", voice_cluster_id = NULL" if segment_id else "")
@@ -641,9 +834,14 @@ def loo_mean(E: np.ndarray, tau: float = LOO_TAU) -> tuple[Optional[np.ndarray],
     return _unit(E[keep].mean(axis=0)), sorted(dropped)
 
 
-async def rebuild(db, vp_id: str) -> bool:
-    """Recompute a voiceprint from its contributions (un-learning). None left = the voiceprint goes. Returns True if it remains."""
+async def rebuild(db, vp_id: str, *, keep_empty: bool = False) -> bool:
+    """Recompute a voiceprint from its contributions (un-learning). None left = the voiceprint goes (``keep_empty``: it stays as a zeroed row with its
+    settings). Returns True if it remains."""
     rows = await _all(db, "SELECT embedding, recording_id FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp_id,))
+    if not rows and keep_empty:
+        await _run(db, "UPDATE learned_voiceprints SET embedding = ?, n_segments = 0, n_recordings = 0, updated_at = ? WHERE id = ?",
+                   (_blob(np.zeros(256)), _iso(_now()), vp_id))
+        return True
     if not rows:
         await _run(db, "DELETE FROM learned_voiceprints WHERE id = ?", (vp_id,))
         return False
@@ -759,6 +957,11 @@ async def drop_recording(db, rid: str) -> None:
         await _run(db, "DELETE FROM omi_segments WHERE recording_id = ?", (rid,))
         for cid in clusters:
             await rebuild_cluster(db, cid)
+        try:          # the night pass's wearer-print windows (0075) go with the audio they came from; a box without 0075 has none
+            await _run(db, "DELETE FROM omi_wearer_samples WHERE recording_id = ?", (rid,))
+        except Exception as exc:  # noqa: BLE001
+            if not _missing(exc):
+                raise
     except Exception as exc:  # noqa: BLE001
         if not _missing(exc):
             raise
@@ -785,6 +988,13 @@ async def redact(db, user_id: str, rx: "re.Pattern[str]", mark: str) -> int:
     for sid, text in await _all(db, "SELECT id, text FROM omi_segments WHERE user_id = ?", (user_id,)):
         if text and rx.search(text):
             n += await _run(db, "UPDATE omi_segments SET text = ? WHERE id = ?", (rx.sub(mark, text), sid))
+    try:                                        # the clean-read twin (0075) names the same people: it is forgotten with the verbatim
+        for sid, text in await _all(db, "SELECT id, clean_text FROM omi_segments WHERE user_id = ? AND clean_text != ''", (user_id,)):
+            if text and rx.search(text):
+                n += await _run(db, "UPDATE omi_segments SET clean_text = ? WHERE id = ?", (rx.sub(mark, text), sid))
+    except Exception as exc:  # noqa: BLE001
+        if not (_missing(exc) or type(exc).__name__ == "UndefinedColumnError" or "no such column" in str(exc).lower()):      # pre-0075: no twin to redact
+            raise
     return n
 
 
@@ -797,6 +1007,12 @@ async def forget_user(db, user_id: str) -> int:
         n += await _run(db, "DELETE FROM learned_voiceprints WHERE owner_user_id = ?", (user_id,))
         for table in ("omi_segment_embeddings", "omi_segments", "omi_voice_clusters", "omi_voice_settings"):
             n += await _run(db, f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+        try:
+            n += await _run(db, "DELETE FROM omi_wearer_samples WHERE user_id = ?", (user_id,))      # 0075; the other tables must still be erased on a box without it
+            n += await _run(db, "DELETE FROM omi_channel_means WHERE user_id = ?", (user_id,))
+        except Exception as exc:  # noqa: BLE001
+            if not _missing(exc):
+                raise
     except Exception as exc:  # noqa: BLE001
         if not _missing(exc):
             raise

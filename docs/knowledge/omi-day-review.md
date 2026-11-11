@@ -44,3 +44,7 @@ Then restart zoe-data (the digest loop starts at boot only when the flag is on).
 4. **People learning with approval.** `person` / `person_fact` candidates already exist; needs the owner to tag voices (see `omi-voice-tagging.md`) and the digest to surface them. Small once tagging is used.
 5. **Per-day summary on request** ("what did I do Tuesday?") from the same chunks, counts first. Needs a second 12B prompt per day; night budget permitting.
 6. **Carry skipped chunks instead of trimming** (re-queue only the dropped chunks next night). Needs a per-chunk ledger on `omi_day_reviews`; only worth it if `chunks_skipped` WARNINGs still appear at the new ceiling.
+
+## Reads the clean text (night re-pass, 2026-11-09)
+
+With `ZOE_OMI_NIGHT_REPASS=on` the review skips a recording whose WAV is still waiting for the night re-pass (`omi_repass.PENDING_SQL`) and reads the re-passed transcript and segments the night after, never the Moonshine text. Off / shadow: unchanged. See [omi-night-repass.md](omi-night-repass.md).

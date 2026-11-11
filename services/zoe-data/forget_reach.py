@@ -82,6 +82,8 @@ TABLES: tuple[Store, ...] = (
     _t("omi_segment_embeddings", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_clusters", BIOMETRIC, REACHED, member=_OMI_M),
     _t("omi_voice_settings", CONFIG, REACHED, member=_OMI_M),
+    _t("omi_channel_means", BIOMETRIC, REACHED, member=_OMI_M),        # the speaker step's per-channel mean offset (0075): omi_voices.forget_user
+    _t("omi_wearer_samples", BIOMETRIC, REACHED, member=_OMI_M),       # the night re-pass's wearer-print windows (0075): omi_voices.forget_user + drop_recording
     _t("omi_devices", METADATA, REACHED, member=_OMI_M),
     _t("omi_device_health", METADATA, REACHED, member=_OMI_M),         # omi_health.forget_user, called from omi_recordings.forget_user
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
@@ -218,6 +220,20 @@ OTHER: tuple[Store, ...] = (
     Store("voice_sample_corpus", "corpus", BIOMETRIC, GAP, "~/.zoe-voice-samples: the owner's permanent regression corpus (real WAVs of whoever spoke at the "
           "panel, ZOE_VOICE_SAVE_AUDIO). Owner-designated and never erased by forget; a member's clips cannot be located by member. A named guest's clips go with the guest, and guest / unknown clips expire after 30 days (voice_clips.py).",
           markers=(".zoe-voice-samples", "ZOE_VOICE_SAVE_AUDIO")),
+    Store("flue_session_store", "db", WORDS, OUT_OF_SCOPE, "labs/flue-zoe-brain-2x/data/zoe-brain.db: the Flue brain's own session store (Zoe's replies and the panel turns' STT text). The pendant "
+          "panel-anchor step (omi_panel_anchor.py) only READS it, read-only, and returns text to the caller in memory: nothing is copied out of it. Its retention and erasure are the brain's own.",
+          markers=("zoe-brain.db",)),
+    Store("omi_repass_work", "file", WORDS, REACHED, "The pendant night re-pass's per-run work files (~/.zoe/omi-repass/work/<id>.manifest.json + <id>.out.jsonl, 0600) hold the audio PATHS and the "
+          "recognised WORDS of the recordings in one night run; the run deletes them in a finally block as soon as the results are applied (minutes). A member erase, "
+          "an entity erase or a recording delete deletes EVERY work file whatever its age (they name no member, so none can be proven clean; a run that loses one retries), "
+          "and a mid-run erase is caught at the write (user_erase_gate.writing) and the recording tombstoned. state.json (measured speeds, Zoe's own voice reference) and "
+          "shadow.jsonl (counts only: no word, no name) hold nothing of a member.",
+          member="omi_recordings.forget_user", markers=(".out.jsonl", ".manifest.json", "shadow.jsonl")),
+    Store("omi_repass_hyps", "file", WORDS, REACHED, "The night re-pass's per-chunk hypotheses (~/.zoe/omi-repass/hyps/hyps-<night>.jsonl, 0600): every engine's text for each chunk, the ROVER pick and the "
+          "vote counts, kept 7 days (the audio's own retention; pruned each run) for the contender ledger, the morning transcript check and owner-correction scoring. A member erase rewrites the files "
+          "without that member's lines; an entity forget replaces the name with [forgotten] in every hypothesis (omi_repass_eval.forget_user / erase_entity, called from omi_recordings.forget_user / "
+          "erase_entity). The contender ledger (ledger.jsonl) holds counts only.",
+          member="omi_recordings.forget_user", entity="omi_recordings.erase_entity", markers=("hyps-", "ledger.jsonl")),
     Store("router_retrain_texts", "file", WORDS, REACHED, "The struggle-fed router retrain run's work dir (~/.zoe/router_retrain/work/<stamp>/*.texts.jsonl) "
           "holds the failed turns' words for one run; forget tombstones the examples and deletes any leftover text files "
           "(router_retrain_ledger.forget, via struggle_proposals.forget_user / forget_events). The ledger itself holds hashes only.",
