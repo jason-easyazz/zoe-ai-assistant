@@ -1481,6 +1481,10 @@ def test_frozen_print_contributions_are_relinked_to_the_replacement_line_so_a_co
     assert len(old) == 2
     frozen = run(rp._frozen_contributions(env.db, A, [o["id"] for o in old]))
     assert len(frozen) == 2
+    env.db.conn.execute("PRAGMA foreign_keys = ON")
+    env.db.conn.execute("DELETE FROM omi_segments")                      # what store_segments does to the old lines: contributions carry no FK to them, so they survive (review claim checked)
+    env.db.conn.commit()
+    assert env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(2,)]
     # the replacement lines: one covering the first old line with the carried tag, nothing for the second
     new_id = "replacement-line-1"
     segs = [{"start_ms": old[0]["start_ms"], "end_ms": old[0]["end_ms"], "carry": {"tagged_person_id": pid}}]
@@ -1489,3 +1493,21 @@ def test_frozen_print_contributions_are_relinked_to_the_replacement_line_so_a_co
     assert env.db.q("SELECT segment_id FROM learned_voiceprint_segments") == [(new_id,)]            # the unmatched contribution was dropped, the matched one re-keyed
     released = run(ov._release_contributions(env.db, A, [new_id], keep_empty=True))
     assert [r[0] for r in released] == [new_id] and env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments") == [(0,)]
+
+
+def test_replacement_keeps_contributions_when_the_member_or_the_global_learning_switch_is_off(env, monkeypatch):
+    """Review (re-pass): ``set_member_learning(False)`` writes only omi_voice_settings and the flag is global; neither flips a print's own ``learning_enabled``. Nothing re-teaches
+    then, so a replacement must KEEP the contributions (and return them to be relinked). Negative control: with learning on they are released."""
+    import omi_repass as rp
+    cid = _sam_cluster(env, monkeypatch, n=2)
+    env.client.post(f"/api/omi/voices/unknown/{cid}/tag", json={"name": "Sam"})
+    ids = [r[0] for r in env.db.q("SELECT id FROM omi_segments WHERE tagged_person_id IS NOT NULL ORDER BY id")]
+    count = lambda: env.db.q("SELECT COUNT(*) FROM learned_voiceprint_segments")[0][0]      # noqa: E731
+    assert count() == 2 and env.db.q("SELECT learning_enabled FROM learned_voiceprints") == [(1,)]
+    run(ov.set_member_learning(env.db, A, False))                                    # member-wide off: the print's own switch stays 1
+    assert len(run(rp._release_or_freeze(env.db, A, ids))) == 2 and count() == 2
+    run(ov.set_member_learning(env.db, A, True))
+    monkeypatch.setenv("ZOE_OMI_LEARN_VOICES", "0")                                  # global flag off
+    assert len(run(rp._release_or_freeze(env.db, A, ids))) == 2 and count() == 2
+    monkeypatch.setenv("ZOE_OMI_LEARN_VOICES", "1")                                  # control: learning on -> released for the re-teach
+    assert run(rp._release_or_freeze(env.db, A, ids)) == [] and count() == 0

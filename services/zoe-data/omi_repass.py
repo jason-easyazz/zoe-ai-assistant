@@ -667,14 +667,27 @@ async def _add_wearer_samples(db, user_id: str, rid: str, windows: list, spans: 
     return n
 
 
-async def _frozen_contributions(db, user_id: str, seg_ids: list[str]) -> list[tuple]:
-    """[(voiceprint_id, old_segment_id)] of the contributions a STOPPED (learning_enabled = 0) print holds for these first-pass segments."""
+async def _release_or_freeze(db, uid: str, tagged_old: list[str]) -> list[tuple]:
+    """The first-pass lines are about to be replaced. Where the re-pass WILL re-teach (``omi_voices.may_learn``: flag on, the member's switch on, an adult) the old contributions are
+    released (a print's own stopped switch still protects it); where learning is stopped (the print's own switch, the member's, or the global flag) NOTHING re-teaches, so the
+    contributions are kept and returned [(voiceprint_id, old_segment_id)] to be relinked to the new line ids."""
+    import omi_voices
+    no_learning = not await omi_voices.may_learn(db, uid)
+    frozen = await _frozen_contributions(db, uid, tagged_old, all_prints=no_learning)
+    if not no_learning:
+        await omi_voices._release_contributions(db, uid, tagged_old, keep_empty=True, skip_frozen=True)
+    return frozen
+
+
+async def _frozen_contributions(db, user_id: str, seg_ids: list[str], *, all_prints: bool = False) -> list[tuple]:
+    """[(voiceprint_id, old_segment_id)] of the contributions a STOPPED (learning_enabled = 0) print holds for these first-pass segments; ``all_prints`` (the member or the global
+    learning switch is off) counts every print as stopped."""
     if not seg_ids:
         return []
     import omi_voices
     try:
         rows = await _all(db, "SELECT c.voiceprint_id, c.segment_id FROM learned_voiceprint_segments c JOIN learned_voiceprints v ON v.id = c.voiceprint_id "
-                              f"WHERE v.owner_user_id = ? AND v.learning_enabled = 0 AND c.segment_id IN ({','.join('?' * len(seg_ids))})", (user_id, *seg_ids))
+                              f"WHERE v.owner_user_id = ?{'' if all_prints else ' AND v.learning_enabled = 0'} AND c.segment_id IN ({','.join('?' * len(seg_ids))})", (user_id, *seg_ids))
     except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has none
         if not omi_voices._missing(exc):
             raise
@@ -840,8 +853,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         try:
                             tagged_old = [o["id"] for o in old if o.get("tagged_person_id")]
                             if tagged_old:
-                                frozen = await _frozen_contributions(db, uid, tagged_old)         # a stopped print keeps these: relinked to the new line ids below
-                                await omi_voices._release_contributions(db, uid, tagged_old, keep_empty=True, skip_frozen=True)
+                                frozen = await _release_or_freeze(db, uid, tagged_old)
                         except Exception as exc:  # noqa: BLE001 - a box without the voiceprint tables has nothing to release
                             if not omi_voices._missing(exc):
                                 raise
