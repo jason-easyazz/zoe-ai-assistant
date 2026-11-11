@@ -66,6 +66,9 @@ Runbook with every command: `docs/knowledge/panel-away-p1.md`. None of this is o
 - `zoe-kiosk.desktop` -> `/home/zoe/.config/autostart/zoe-kiosk.desktop`
 - `display-rotation.desktop` -> `/home/zoe/.config/autostart/display-rotation.desktop`
 - `force-rotate.desktop` -> `/home/zoe/.config/autostart/force-rotate.desktop`
+- `prepare-pi-fresh.sh` — run from the Jetson against a fresh Pi OS panel (`--host <PANEL_IP>` or `ZOE_PANEL_HOST`); installs packages, copies this bundle to `/opt/TouchKio/`, wires systemd + LightDM autologin, and clears the provisioned flags so the next boot runs first-boot provisioning.
+- `openbox-autostart.sh` -> `~/.config/openbox/autostart` (installed by `prepare-pi-fresh.sh`); picks `first-boot.sh` until `/opt/TouchKio/.provisioned` exists, else `start-kiosk.sh`.
+- `first-boot.sh` -> `/opt/TouchKio/first-boot.sh`; WiFi hotspot setup, network wait, apt upgrade, then QR provisioning.
 
 ## Deploy to touchscreen
 

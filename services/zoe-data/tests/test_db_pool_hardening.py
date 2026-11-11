@@ -75,7 +75,8 @@ def test_acquire_timeout_raises_clear_error(monkeypatch):
             await db_pool._acquire(fp)
         msg = str(ei.value)
         assert "db pool exhausted" in msg, "error must name the condition for log grep"
-        assert "connection leak" in msg
+        assert "size=10" in msg and "free=3" in msg
+        assert "leak" not in msg
 
     asyncio.run(_run())
 
