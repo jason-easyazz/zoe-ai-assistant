@@ -505,3 +505,26 @@ def test_rover_and_clean_read_keys_keep_non_latin_letters_and_accents():
     assert eu.norm_keep("\u738b\u660e said r\u00e9sum\u00e9, ok") == ["\u738b\u660e", "said", "r\u00e9sum\u00e9", "ok"]
     assert oc.keys("Anna \u738b\u660e called") == ["anna", "\u738b\u660e", "called"]
     assert not oc.guard("Anna \u738b\u660e called me", "Anna \u674e\u534e called me").ok
+
+
+# ── a voter that cannot load is NAMED, never silent (2026-11-11: the whisper third voter lacked the CUDA CTranslate2 and the night passed on two) ──
+
+def test_a_third_voter_that_cannot_load_is_named_with_its_reason_in_the_result(renv, monkeypatch):
+    on(monkeypatch)
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+
+    def no_load(manifest, out, timeout_s, mem_max="", threads=4):          # the worker's exit 3 with nothing written = "model unavailable"
+        man = json.loads(Path(manifest).read_text())
+        if man["asr"] == DIS:
+            return 3
+        return multi_runner(TEXTS, [])(manifest, out, timeout_s, mem_max, threads)
+    out = run(rp.run_night(budget_s=3000, runner=no_load))
+    assert out["engines"] == [PIV, PAR]
+    assert out["missing_voters"] == {DIS: "model_unavailable"} and out["skipped"][DIS] == "model_unavailable"
+
+
+def test_control_when_every_voter_loads_nothing_is_missing(renv, monkeypatch):
+    on(monkeypatch)
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [])))
+    assert out["engines"] == [PIV, PAR, DIS] and out["missing_voters"] is None
