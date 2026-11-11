@@ -511,3 +511,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `flock /tmp/zoe-test-lane.lock` (watchdog cap 15 min), releasing the lane between pieces; refuses while
   `night_busy.sh test|deploy` says pause and 02:05-02:45, waits for `MemAvailable` >= 2000 MB, asserts its teardown.
   Unit net for the broker: `tests/unit/test_zoe_vaultd.py` (ci_safe). README is the record.
+- `forget-first-memory/` — **lineage-enforced forget, lab only** (2026-11-11): a stdlib sqlite3 store whose derived-write
+  choke-point refuses any artifact without lineage, a two-phase generic forget (tombstone + quarantine the closure, then purge,
+  rebuild from survivors, FTS optimize), a fail-closed serve wall, and a salted re-ingest ledger. Seeded property tests with a
+  lineage-less negative control (hand-run, never CI-wired, scratch temp-dir data only) + `bench.py` (forget latency, fan-out,
+  on-disk residue per strategy). README is the record, including a writer-lineage table read from `services/zoe-data`.
