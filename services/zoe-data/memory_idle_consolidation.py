@@ -280,6 +280,38 @@ async def _write_watermark(conn, session_id: str, user_id: str,
     )
 
 
+# Consecutive all-zero passes this process has seen (reset by any pass that touched a fact).
+_zero_streak = 0
+
+
+def _warn_if_all_zero(session_id: str, user_id: str, turns: int, user_in: int, user_kept: int,
+                      user_chars: int, facts: int, stored: int, rejected: int, skipped: int,
+                      dropped: int, failed: int) -> None:
+    """A pass over N>0 turns that stored / rejected / skipped / dropped / failed NOTHING is logged as a WARNING that names
+    WHY, with a running streak. A row of zeros looked like "nothing to extract" for ten days (2026-11-01..11) with no way
+    to tell that from "the session never reached the extractor". Counts only: never turn text. Never raises."""
+    global _zero_streak
+    try:
+        if stored or rejected or skipped or dropped or failed or turns <= 0:
+            _zero_streak = 0
+            return
+        if user_in == 0:
+            reason = "no_user_turns"            # only assistant rows: nothing of the owner's to read
+        elif user_kept == 0:
+            reason = "all_user_turns_filtered"  # own_words (pasted / quoted) or the forget ledger took every turn
+        elif facts == 0:
+            reason = "extractor_returned_no_facts"   # the model read the owner's words and stated none
+        else:
+            reason = "facts_without_text"       # the model answered but every item had an empty fact
+        _zero_streak += 1
+        logger.warning(
+            "MEMORY_IDLE_ALLZERO session=%s user=%s reason=%s turns=%d user_turns=%d->%d user_chars=%d "
+            "extracted=%d zero_streak=%d",
+            session_id, user_id, reason, turns, user_in, user_kept, user_chars, facts, _zero_streak)
+    except Exception:  # noqa: BLE001 - observability must never cost the pass
+        pass
+
+
 async def consolidate_session(session_id: str, user_id: str,
                               since: Optional[Any] = None,
                               *, get_ctx=None) -> int:
@@ -317,6 +349,7 @@ async def consolidate_session(session_id: str, user_id: str,
     # a fact the assistant SAID became a fact about the user (memory fidelity audit V5).
     user_turn_list = [str(r["content"]) for r in rows
                       if r["content"] and str(r["role"]) == "user"]
+    user_rows_in = len(user_turn_list)   # for the all-zero reason (below)
     # Pasted content / another person's quoted speech is not the owner's own voice: only the owner's part of each
     # turn is mined (own_words; ZMB I1/I2/I4).
     try:
@@ -336,6 +369,7 @@ async def consolidate_session(session_id: str, user_id: str,
         return 0
     user_turns = "\n".join(user_turn_list)
     transcript = user_turns
+    user_turns_kept = len(user_turn_list)
 
     # ── Step 2: NO pooled connection held across Gemma extraction + ingest ─────
     try:
@@ -404,6 +438,8 @@ async def consolidate_session(session_id: str, user_id: str,
     last_at = rows[-1]["at"]
     async with get_ctx() as conn:
         await _write_watermark(conn, session_id, user_id, last_at, len(rows))
+    _warn_if_all_zero(session_id, user_id, len(rows), user_rows_in, user_turns_kept,
+                      len(user_turns), len(facts or []), stored, rejected, skipped, dropped, failed)
     logger.info("MEMORY_IDLE_CONSOLIDATE session=%s user=%s turns=%d stored=%d "
                 "rejected=%d skipped=%d dropped=%d failed=%d",
                 session_id, user_id, len(rows), stored, rejected, skipped, dropped, failed)
@@ -458,5 +494,6 @@ async def start_idle_consolidation_loop() -> None:
             if res.get("sessions"):
                 logger.info("idle consolidation sweep: %s", res)
         except Exception as exc:
-            logger.warning("idle consolidation sweep failed (non-fatal): %s", exc)
+            # type name first: a bare TimeoutError / CancelledError has an EMPTY str() (21 of 55 live lines were blank)
+            logger.warning("idle consolidation sweep failed (non-fatal): %s: %s", type(exc).__name__, exc)
         await asyncio.sleep(CHECK_INTERVAL)

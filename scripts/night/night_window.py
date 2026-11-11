@@ -874,6 +874,9 @@ def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", 
         if state.get(unit, {}).get("rc") == 0:
             log(f"presleep: {unit} already succeeded today; not started again")
             continue
+        if catchup and (why := window_running(cfg, host)):     # the boot catch-up never runs the backup / export inside a running night window (the window's own pre-sleep already took its turn)
+            log(f"presleep catch-up: {why}; {unit} NOT started - the window's own pre-sleep owns tonight, the next slot takes anything missing")
+            break
         left_s = float("inf") if catchup else latest_epoch - host.now()
         if left_s < 300:
             log(f"presleep: {unit} NOT started - only {max(0, left_s) / 60:.0f} min before the window proper must begin (end-by {cfg.end_by // 60:02d}:{cfg.end_by % 60:02d}); the next night's pre-sleep takes it")
@@ -911,6 +914,32 @@ def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", 
             log(f"presleep: STOPPING the sequence: {halt}; the later units wait for the next slot rather than overlap it or repeat a finished one. The night goes on.")
             break
     return state
+
+
+WINDOW_UNIT = "zoe-night-window.service"
+
+
+def window_running(cfg: NightCfg, host: "bk.Host") -> str:
+    """Why the night window is running right now, or "" when it is not: its systemd unit is active / activating (it covers the window's own pre-sleep phase and the waits
+    before the marker exists), or the WINDOW_OPEN marker names a live night_window process other than this one. A stale marker (its writer is gone) does not count."""
+    try:
+        state = host.run(["systemctl", "--user", "is-active", WINDOW_UNIT], mutating=False).out.strip()
+    except Exception:  # noqa: BLE001 - an unreadable unit state falls through to the marker check
+        state = ""
+    if state in ("active", "activating", "reloading"):
+        return f"{WINDOW_UNIT} is {state}"
+    try:
+        pid = _json(host.read(str(cfg.marker)) or "{}").get("pid")
+    except (ValueError, OSError):
+        pid = None
+    if isinstance(pid, int) and pid != os.getpid() and host.exists(f"/proc/{pid}"):
+        try:
+            cmd = host.read(f"/proc/{pid}/cmdline")
+        except OSError:                                   # the process exited between the two reads: a stale marker, not a window
+            return ""
+        if "night_window" in cmd and "--presleep" not in cmd and "--restore-only" not in cmd:     # a pre-sleep / restore process that reuses the pid is not the window
+            return f"{cfg.marker.name} names the running window (pid {pid})"
+    return ""
 
 
 def presleep_is_stale(cfg: NightCfg, host: "bk.Host") -> bool:
