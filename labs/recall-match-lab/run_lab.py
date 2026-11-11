@@ -14,13 +14,14 @@ import argparse
 import dataclasses
 import json
 import os
+import statistics
 import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "services", "zoe-data"))
-os.environ.setdefault("HF_HUB_OFFLINE", "1")          # never download a model
+os.environ["HF_HUB_OFFLINE"] = "1"                    # never download a model, whatever the caller exported
 os.environ.setdefault("ZOE_RECALL_GATE", "shadow")
 
 from fixtures import FACTS, TURNS  # noqa: E402
@@ -170,7 +171,7 @@ def main():
     out["cosine_rank_of_needed"] = ranks
     rel = [max(sims[i][ids.index(f)] for f in need) for i, (_k, _u, need) in enumerate(TURNS) if need]
     irr = [float(max(sims[i])) for i, (k, _u, _n) in enumerate(TURNS) if k == "irrelevant"]
-    out["cos_needed_median"], out["cos_irrelevant_top1_median"] = sorted(rel)[len(rel) // 2], sorted(irr)[len(irr) // 2]
+    out["cos_needed_median"], out["cos_irrelevant_top1_median"] = float(statistics.median(rel)), float(statistics.median(irr))
 
     print("| method | direct hit | oblique hit | irrelevant turns injected | relevant turns, wrong rows only |")
     print("|---|---|---|---|---|")

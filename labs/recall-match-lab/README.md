@@ -20,6 +20,10 @@ Run (heavier than a few seconds: under the test-lane lock, one at a time, ~130 M
 
     flock -x -w 3600 /tmp/zoe-test-lane.lock nice python3 labs/recall-match-lab/run_lab.py --json /tmp/out.json
 
+Reproducibility: the script forces `HF_HUB_OFFLINE=1` and never downloads. The cosine rows need `BAAI/bge-small-en-v1.5`
+already in the local fastembed cache (as on the Zoe box); the numbers below were produced with fastembed 0.8.0 and are tied to
+that model artifact. The production-gate and standing-card rows need no model.
+
 ## Results (2026-11-11, origin/main 1ddb70951) [Experimental, synthetic]
 
 | method | direct hit | oblique hit | irrelevant turns injected | relevant turns, wrong rows only |
@@ -34,7 +38,7 @@ Run (heavier than a few seconds: under the test-lane lock, one at a time, ~130 M
 | (iv) union, held-out odd turns only | 10/10 | 2/10 | 10/10 | 8/20 |
 
 Cosine rank of the needed fact: direct top-1 20/20; oblique top-1 12/20, top-3 14/20, top-5 16/20. Median cosine of the needed fact
-0.665 vs 0.552 for the best fact on an irrelevant turn - but the distributions overlap:
+0.661 vs 0.536 for the best fact on an irrelevant turn - but the distributions overlap:
 
 | cosine threshold (top-3) | 0.50 | 0.54 | 0.56 | 0.58 | 0.60 | 0.62 | 0.64 | 0.66 | 0.68 |
 |---|---|---|---|---|---|---|---|---|---|
