@@ -152,3 +152,39 @@ def test_forget_committed_while_a_writer_waits_for_the_lock(tmp_path, writer):
     t.join(10)
     assert result == {"outcome": "refused"}
     assert s.residue("zq91") == []
+
+
+def test_missed_descendant_stays_walled_after_the_purge():
+    """source -> a -> b; the quarantine 'misses' b. Purging a must not cut b's path to a tombstone."""
+    s = LineageStore(":memory:")
+    s.ingest("src", "the forgotten sentence kq77")
+    s.write_derived("a", "L1", "summary of the forgotten sentence kq77", ["src"])
+    s.write_derived("b", "L2", "digest of summary of the forgotten sentence kq77", ["a"])
+    assert {"a", "b"} <= {i for i, _ in s.serve()}, "positive control: both are served before forget"
+    s.forget_phase1("src")
+    s.db.execute("UPDATE artifacts SET state = 'live' WHERE id = 'b'")  # the bug
+    s.forget_phase2()
+    assert not [i for i, p in s.serve() if "kq77" in p]
+
+
+def test_interrupted_rebuild_keeps_descendants_on_retry():
+    """derive() fails after the first level is rebuilt; the retry must still rebuild the second level."""
+    s = LineageStore(":memory:")
+    s.ingest("gone", "forgotten note xj55")
+    s.ingest("keep", "a surviving note")
+    s.write_derived("a", "L1", "forgotten note xj55 | a surviving note", ["gone", "keep"], depth=1)
+    s.write_derived("b", "L2", "digest: forgotten note xj55 | a surviving note", ["a"], depth=2)
+    s.forget("gone")
+    calls = []
+
+    def flaky(layer, payloads):
+        calls.append(layer)
+        if len(calls) == 2:
+            raise RuntimeError("derive failed mid-rebuild")
+        return concat(layer, payloads)
+
+    with pytest.raises(RuntimeError):
+        s.rebuild(flaky)
+    assert s.rebuild(concat) == 1, "the second level is rebuilt on retry, from the already-rebuilt first level"
+    served = dict(s.serve())
+    assert len(served) == 2 and all("a surviving note" in p and "xj55" not in p for p in served.values())

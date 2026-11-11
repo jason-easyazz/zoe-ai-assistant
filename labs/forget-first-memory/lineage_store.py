@@ -142,6 +142,8 @@ class LineageStore:
                                 (aid, layer, depth, json.dumps(keep)))
         self.db.executemany("DELETE FROM lineage WHERE artifact_id = ?", [(a,) for a in dead])
         self.db.executemany("DELETE FROM artifacts WHERE id = ?", [(a,) for a in dead])
+        # a purged artifact stays a tombstone: a descendant the quarantine missed still has a forgotten ancestor for serve()
+        self.db.executemany("INSERT OR IGNORE INTO tombstones VALUES (?)", [(a,) for a in dead])
         self.db.execute("COMMIT")
         if self.fts_compact:  # FTS5 (sqlite < 3.42 has no 'secure-delete') keeps old terms in segments until merged
             self.db.execute("INSERT INTO sources_fts (sources_fts) VALUES ('optimize')")
@@ -160,7 +162,7 @@ class LineageStore:
         renamed: dict[str, str] = {}
         built = 0
         for n, old, layer, depth, parents in jobs:
-            ps = [renamed.get(p, p) for p in json.loads(parents)]
+            ps = [renamed.get(p) or self._rebuilt_id(p) or p for p in json.loads(parents)]
             ps = [p for p in ps if self._payload(p) is not None]
             if ps:
                 new = f"{old}~r{n}"
@@ -169,6 +171,12 @@ class LineageStore:
                 built += 1
             self.db.execute("DELETE FROM rebuild_queue WHERE n = ?", (n,))
         return built
+
+    def _rebuilt_id(self, old: str):
+        """A parent rebuilt by an EARLIER (interrupted) rebuild(): its queue row is gone, its new id is `old~r<n>`."""
+        row = self.db.execute("SELECT id FROM artifacts WHERE state = 'live' AND substr(id, 1, ?) = ?",
+                              (len(old) + 2, old + "~r")).fetchone()
+        return row[0] if row else None
 
     # -- reads --------------------------------------------------------------------------------------
     def _payload(self, pid: str):
