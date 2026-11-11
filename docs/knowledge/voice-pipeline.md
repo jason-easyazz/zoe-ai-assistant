@@ -523,7 +523,9 @@ generalized lesson is a **result artifact + a checker**, mirroring the router se
   **passing** artifact **matching the current baseline** and **bound to the deployed tree**
   (`--expect-tree-of <target>`: that exact commit, or a clean run on a byte-identical tree — the
   PR head of an up-to-date squash merge; since the 2026-09-28 incident, see
-  [merge-and-deploy.md](merge-and-deploy.md) → *Landing a voice-path PR*) before the restart — else it fails loudly
+  [merge-and-deploy.md](merge-and-deploy.md) → *Landing a voice-path PR* — or, with `--allow-reuse`
+  since 2026-11-11, an earlier commit whose tree differs from the target's in no voice-relevant path,
+  *Reusing replay evidence*) before the restart — else it fails loudly
   (non-zero exit) and the deploy is refused. Non-voice deploys are a no-op pass. **It never runs the
   heavy Kokoro harness** (that would OOM the box under flock) — it only reads the artifact the gate
   produced. Standing rule: *any mandatory loop/gate/job must emit a heartbeat that something checks.*

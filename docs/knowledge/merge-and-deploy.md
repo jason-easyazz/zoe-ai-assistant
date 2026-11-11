@@ -50,7 +50,9 @@ until the probe is run.
 
 Two things make it evidence rather than ceremony, and both cost something:
 **the artifact must be BOUND to the PR head** (`--expect-revision`), so the probe has to be run
-against a checkout of that commit and re-run after every push to it; and **the whole workflow runs
+against a checkout of that commit and re-run after every push to it — unless the push or update
+brought in nothing voice-relevant, when the evidence for the probed ancestor is reused
+(`--allow-reuse`, *Reusing replay evidence* below); and **the whole workflow runs
 trusted code only** (see *The gate's own trust model* below). Unblock a red one with the
 `git worktree add <head>` + probe recipe the check's output prints.
 
@@ -177,7 +179,8 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
 1. **Serialise.** Drop `--auto` on every other open PR before starting; nothing may merge between
    this PR's merge and its deploy (a second merge changes the target tree and the head-bound artifact
    stops matching). Bring the branch up to date (`gh pr update-branch`) **first** — every update is a
-   new head and needs a new probe. `land_voice_pr.sh` automates this step (2026-11-10, the *voice hold*
+   new head, and needs a new probe UNLESS the evidence may be reused there (*Reusing replay evidence*
+   below: the update brought in nothing voice-relevant). `land_voice_pr.sh` automates this step (2026-11-10, the *voice hold*
    in `docs/knowledge/landing-tooling.md`): it drops other PRs' `--auto` before update-branch and again
    before arming, holds the docs chain, and re-arms them bound to their same head when it exits.
 2. **Probe the final head.** On the Jetson, in a clean worktree at the PR head sha, first copy the
@@ -188,12 +191,13 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
    `systemctl --user start kokoro-tts`; afterwards `curl http://localhost:10201/health` must show `pipeline_loaded: true` AND `device: cuda`, and `/readyz`
    `dependencies.tts` must name the `kokoro-sidecar` provider (`tts.ok` alone is not enough: it also goes green on the espeak/edge fallback or a CPU-mode Kokoro).
    The window frees ~2 GB; hold the other PRs (drop `auto-merge`) while a voice PR lands, or it goes behind again. The PR's `voice-gate` check re-runs green
-   (`--expect-revision <head>`).
+   (`--expect-revision <head> --allow-reuse`).
 3. **Nothing may overwrite the artifact** before the deploy reads it — it is a single shared slot
    (`~/.cache/zoe/voice_regression_last.json`): no other PR's probe, and not the nightly
    `zoe-voice-regression.timer` (04:30), which replays the LIVE checkout and replaces it.
 4. **Merge** (squash, never `--admin`). The deploy log should read
-   `voice-gate: OK — voice replay-gate PASS (… tree-identical to <merge-sha> …)`.
+   `voice-gate: OK — voice replay-gate PASS (… tree-identical to <merge-sha> …)`, or, when the evidence
+   is for an earlier head of the PR, `… REUSED evidence for <probed> at <merge-sha>: N path(s) differ …`.
 5. **If the deploy is refused** anyway (branch was behind, another merge landed, artifact
    overwritten), use the unwedge recipe above against the **merged** commit it names, then
    `gh run rerun <id>`. That is the `land_voice_pr` path: evidence produced after merge, for the
@@ -202,6 +206,115 @@ and is still the deploy's `target` — i.e. nothing merged after it before its d
 - The runner resets to the **gate-checked `$target`**, not a re-read `FETCH_HEAD` — a concurrent fetch
   on the shared `.git` could otherwise advance the tree to a commit pushed *after* the gate ran, a
   silent bypass. (Same fix as #1344 on the manual path.)
+
+### Reusing replay evidence across a voice-free update (since 2026-11-11)
+
+**The problem.** A voice PR's probe passes for head P; then any other PR merges, `strict` forces an
+update, and the new head H no longer matches the evidence at any of the three places that read it — the
+PR gate (`--expect-revision <head>`), the deploy gate (`--expect-tree-of <target>`) and the lander's arm
+(`--match-head-commit <probed head>`). So a 20-30 min re-probe ran even when what came in from `main` was,
+say, two zoe-auth files (#2402 after #2403).
+
+**The rule.** Evidence for P may stand for H when the **tree** diff `P^{tree} -> H^{tree}` touches nothing
+*voice-relevant for reuse*. One helper decides it, offline, for all three consumers:
+`voice_gate_check.reusable_evidence(repo, P, H, require_ancestor=…)` behind the opt-in `--allow-reuse`
+flag. The strict binding is always tried first; reuse only runs after it fails on an otherwise
+attributable artifact, and every other check (status pass, freshness, current baseline, clean + verified
+tree, VAD, per-clip) still applies. Each decision is logged: `voice-gate: evidence reuse ACCEPTED|REFUSED
+— <why, with the changed paths>`.
+
+| consumer | call | extra binding |
+|---|---|---|
+| PR gate (`voice-gate.yml` `replay-evidence`) | `--require --expect-revision <head> --allow-reuse` | P must be an ancestor of the head (evidence from THIS PR's history) |
+| deploy gate (`deploy.yml`, `deploy_live.sh`) | `--diff prev..target --expect-tree-of <target> --allow-reuse` (feature-detected, like `--expect-tree-of`) | none beyond the tree rule: a squash never descends from the PR head, and the deploy binding was already tree-based |
+| lander (`land_voice_pr.sh` → `landing_evidence_reusable`) | `--require --expect-revision <new head> --allow-reuse`, after checking the shared slot still records ITS probe | ancestor, as the PR gate; at most `ZOE_LANDING_REBIND_MAX` (3) rebinds per landing |
+
+Anything uncertain refuses (= re-probe): P or H not a full sha or not resolvable in the repo (not fetched,
+pruned); the artifact's recorded `revision.tree` missing or not equal to `P^{tree}`; ancestry unknowable
+(shallow history); a diff that cannot be read or parsed; any **symlink** or **submodule** (gitlink) entry,
+any type change or unknown status, an undecodable or unnormalised path. Renames are read with
+`--no-renames`, so both the old and the new path are classified (a voice file renamed out, or anything
+renamed in, refuses); deletions and mode changes are classified by path like edits. **The merge commit is
+not trusted either**: the rule is about trees, so a change that only the update's merge commit carries
+(an "evil merge") is in the diff like any other.
+
+**What "voice-relevant for reuse" means, and why it is WIDER than `VOICE_PATH_PATTERNS`.** The patterns
+decide which diffs need evidence at all — a deliberate cost/forcing-function subset. Reuse asks a
+different question: *would a fresh probe of H measure anything the probe of P did not?* So it must be at
+least as strict as everything the probe's measurement can depend on from the tree. Measured 2026-11-11
+by a static AST walk of the probe's exercised path (seeds: `services/zoe-data/tests/replay_samples.py`,
+the probe, `voice_clip_checks.py`, `scripts/perf/measure_voice.py`, `measure_cold_first_turn.py`,
+`voice_vad.py`; every `import` anywhere in a file incl. function-level and `try`, literal
+`import_module`/`__import__`, resolved the way each process resolves it, plus the seven
+`spec_from_file_location` path-loads followed by hand):
+
+- **448 files** in the closure; `VOICE_PATH_PATTERNS` matches **28**. The other **420 are the gap**,
+  among them modules that run on every voice turn: `voice_stt_stream.py` (the in-process Moonshine
+  STT the replay uses), `stt_wake_strip.py`, `self_model.py` (a fast_tiers tier), `db_pool.py`,
+  `recall_every_turn.py`, `persona_layer.py`, `live_voice_gate.py`, `session_status.py`,
+  `named_guest_clips.py`.
+- **438 of the 551 non-test zoe-data modules** are in it, plus runtime data files an AST walk cannot see
+  (`lexicons_data/`, `voice_phrases.json`, `authority_table.json`, `models/`, …) and dynamic imports
+  (`auth_handoff.py` `import_module(mod)`, `forget_redact.py` `__import__(mod)`). So the only defensible
+  boundary is the **whole `services/zoe-data/` tree** (its `tests/` carved out, except
+  `replay_samples.py`, which the patterns name).
+- Path-loads out of zoe-data: `scripts/maintenance/harness_quiet.py` (probe, replay, cold stage),
+  `scripts/maintenance/zoe_crash_loop_watch.py` (`kv_miss_alert.py`), `scripts/setup/zoe_speaker_resnet34.py`
+  (`omi_diarize.py`); a subprocess: `scripts/night/jobs/glinerel_worker.py` (`night_extract.py`).
+- **One `docs/` file is read at runtime**: `self_model.py` reads `docs/knowledge/flag-inventory.json` for
+  flag defaults — contradicting the `VOICE_PATH_EXCLUDES` note that no docs/ file is. It is gitignored
+  since 2026-11-10 (the deploy regenerates it with `tools/audit/flag_inventory.py`), so no diff carries it;
+  reuse counts it and its generator.
+
+So `reuse_relevance(path)` = `VOICE_PATH_PATTERNS` ∪ `REUSE_EXTRA_PREFIXES` (`services/zoe-data/` minus
+its tests, `labs/flue-zoe-brain-2x/` and `services/zoe-core/` whole, `services/livekit/`, `scripts/lib|perf|
+deploy|setup/`, `config/`) ∪ `REUSE_EXTRA_FILES` (the path-loads above, the flag inventory + generator,
+`deploy.yml`, `deploy_live.sh`) ∪ **every dependency manifest, lockfile, Dockerfile, compose file, env file,
+systemd unit/drop-in and model/weights file anywhere** — except inside `REUSE_ISOLATED_SERVICE_DIRS`, which
+today is only `services/zoe-auth/`. That exception is evidenced, not assumed: compose builds zoe-auth from
+its own dir, its `requirements.txt` is read only by its own Dockerfile and its own CI job, zoe-data reaches
+it only over HTTP (`auth.py` → `ZOE_AUTH_URL`), and the replay runs in-process as a fixed member id, so a
+probe of H and of P would hit the same LIVE container. Add a directory there only with the same evidence.
+`tests/unit/test_voice_evidence_reuse_closure.py` recomputes the closure on every run and fails the
+required `validate` lane if any file in it (or a new path-load) is not voice-relevant for reuse — the
+closure is pinned, not remembered.
+
+**Decision: widen the REUSE set, do not widen `VOICE_PATH_PATTERNS`.** Closing the 420-file gap in the
+patterns would put nearly every zoe-data PR behind a 20-30 min probe at PR and deploy time — an owner-level
+cost decision this change does not make. The gap is recorded in `docs/knowledge/open-problems.md`. Reuse
+being stricter than the deploy scope only ever costs a re-probe, never lets a change through.
+
+**Trust model (PR gate).** The PR is still DATA: the self-hosted job now also fetches the PR head's and the
+probed commit's git OBJECTS (`git fetch --no-tags --no-write-fetch-head --depth=100` into
+`refs/voice-gate/*`; the probed sha comes only from the checker's validated `--print-artifact-commit`).
+They are read by the BASE checker with `git diff-tree --raw` (tree entries only — no blob is read, no
+textconv or external diff can run) and `git merge-base --is-ancestor`; nothing is checked out, merged,
+built or executed, and a fetch runs no hook. A failed fetch leaves a commit unresolvable, which refuses.
+Pinned by `test_voice_gate_reuse_reads_pr_objects_as_data_only` in `tests/unit/test_required_gate_workflows.py`.
+The deploy gate and the lander read the box's own `/home/zoe/assistant` object store (the probe worktree
+is created from it, so P is there). The rule itself takes effect the usual way: the PR gate reads the
+BASE's checker (in force for PRs opened after this merges); the deploy gate runs the LIVE checker at
+`prev`, so the first deploy carrying this change still uses the strict binding.
+
+**Residuals, stated.** (1) A static closure cannot see a subprocess-run script or a data file read through
+a computed path; the directory-level roots cover zoe-data, the brain lanes and the deploy/venv scripts,
+and anything else would have to be added by hand. (2) As with every pattern edit, the rule a PR is judged
+by is the base's: a PR that widens the reuse set is not protected by its own widening. (3) Reuse is
+evidence-equivalence, not more: the probe still measures the LIVE brain sidecar and STT over HTTP and
+never installs a dependency, so what an artifact proves is unchanged by reusing it. (4) The probe's
+worktree has no `flag-inventory.json` (gitignored), so `self_model.py` runs its no-inventory fallbacks
+inside every replay — a probe-fidelity gap, also in open-problems.
+
+Tests (all `ci_safe`, synthetic temp repos): `tests/unit/test_voice_evidence_reuse.py` (accept the pure
+non-voice update; refuse each of: voice file, manifests/lockfile/Dockerfile/compose/env/unit/model,
+rename out, rename in, delete, mode change, new file in a voice dir, closure module outside the patterns,
+the flag-inventory generator, symlink, submodule, type change, undecodable path, unresolvable P, dirty or
+unverified probe, failed/skipped probe, stale, baseline drift, recorded-tree mismatch, an unrelated PR's
+evidence, a rebased PR, an evil merge — each with a monkeypatched negative control),
+`test_voice_evidence_reuse_closure.py`, `test_deploy_voice_gate_binding.py` (the real deploy.yml snippet,
+reuse accepted/refused, bootstrap feature-detection) and `test_landing_evidence_reuse.py` (the real
+post-probe section of `land_voice_pr.sh`: rebind + arm at the updated head, refuse a voice update,
+overwritten artifact slot, rebind cap).
 
 ### Manual deploy + the shared lock
 

@@ -37,6 +37,13 @@ on the CD path is fail-closed and keeps blocking until the probe is re-run; the
 unwedge procedure is in docs/knowledge/merge-and-deploy.md. See
 docs/knowledge/voice-pipeline.md for the artifact contract.
 
+EVIDENCE REUSE (`--allow-reuse`, 2026-11-11): all three consumers — the PR gate, the
+deploy gate and the voice lander's re-arm — may accept a passing artifact for commit P at
+a later commit H when the TREE diff P -> H touches nothing voice-relevant (a WIDER set than
+VOICE_PATH_PATTERNS: see reusable_evidence / reuse_relevance). The strict binding is
+always tried first; reuse runs offline over local git objects only, and anything it
+cannot establish refuses (re-probe).
+
 Exit codes: 0 = allowed (fresh pass, or no voice-path change); 1 = blocked.
 `--scope-only` is mostly the exception: it classifies and exits 0 regardless of
 the verdict (VOICE or CLEAR) — EXCEPT when it cannot publish that verdict to
@@ -52,6 +59,8 @@ Examples:
     voice_gate_check.py --scope-only --diff origin/main...HEAD
     # force the assertion regardless of any diff
     voice_gate_check.py --require
+    # PR gate / lander: evidence for this head, or reused from an ancestor probe
+    voice_gate_check.py --require --expect-revision "$head" --allow-reuse
 """
 from __future__ import annotations
 
@@ -527,9 +536,13 @@ VOICE_PATH_PATTERNS = (
 #
 # Deliberately `docs/` and not every `*.md`: markdown can be RUNTIME on this path (the
 # persona services/zoe-core/SOUL.md is read by zoe_core_client.py on every brain turn,
-# and the Flue brain embeds a copy). None of those lives under docs/, and no code reads
-# a docs/ file at runtime (checked 2026-10-12: the `docs/...` strings in services/zoe-data
-# are evidence_refs labels, not loads). Mirrored in .github/workflows/greptile-gate.yml
+# and the Flue brain embeds a copy). None of those lives under docs/. ONE docs/ file IS
+# read at runtime (2026-11-11 evidence-reuse deep dive): self_model.py (the fast_tiers
+# self-model tier, on every voice turn) reads docs/knowledge/flag-inventory.json for flag
+# defaults. It is gitignored since 2026-11-10 - a build product the DEPLOY regenerates from
+# the tree with tools/audit/flag_inventory.py - so no diff carries it; the evidence-REUSE
+# rule below counts both it and its generator as voice-relevant (REUSE_EXTRA_FILES).
+# Mirrored in .github/workflows/greptile-gate.yml
 # (VOICE_PATH_EXCLUDE) and drift-pinned by tests/unit/test_greptile_gate_workflow.py.
 # Like every edit to this file it is in force for the deploy that FOLLOWS the one that
 # carries it (the deploy gate runs the currently deployed copy).
@@ -550,6 +563,278 @@ def voice_path_patterns() -> tuple[str, ...]:
     if override:
         return tuple(p for p in override.split(":") if p)
     return VOICE_PATH_PATTERNS
+
+
+# ===================== EVIDENCE REUSE (2026-11-11) =====================================
+# A passing probe for commit P may stand as evidence for a later commit H when the change
+# from P's TREE to H's TREE touches nothing voice-relevant. The case it exists for: a probed
+# voice PR goes BEHIND when an unrelated PR merges, branch protection's `strict` forces an
+# update, and the new head no longer matches the evidence, so a 20-30 min re-probe ran for a
+# merge of (say) two zoe-auth files. Used by the PR gate, the deploy gate and the voice
+# lander, always opt-in (`--allow-reuse`); the strict exact-commit / exact-tree bindings
+# are unchanged and are tried first.
+#
+# "Voice-relevant" for REUSE is deliberately WIDER than VOICE_PATH_PATTERNS. The patterns
+# decide which diffs need evidence at all (a cost/forcing-function trade-off, see above);
+# reuse asks a different question - "would a fresh probe of H measure anything different
+# from the probe of P?" - and must be at least as strict as everything the probe's
+# measurement can depend on from the tree. Measured 2026-11-11 (static AST import closure
+# of the probe's exercised path: replay_samples.py, the probe, measure_voice.py,
+# measure_cold_first_turn.py, voice_clip_checks.py, voice_vad.py; method in
+# docs/knowledge/merge-and-deploy.md "Reusing replay evidence"): 448 files, of which the
+# patterns match only 28. 438 of the 551 non-test zoe-data modules are in it (plus runtime
+# data files the AST cannot see: lexicons_data/, voice_phrases.json, models/, ...), so the
+# only defensible boundary is the WHOLE service tree, not a module list. Pinned by
+# tests/unit/test_voice_evidence_reuse_closure.py: every file in the recomputed closure
+# must classify as voice-relevant here, so a new import out of these roots turns the
+# required `validate` lane red.
+#
+# Any doubt counts as voice: symlinks, submodules (gitlinks), type changes, an unknown diff
+# status or an undecodable path all refuse reuse, independent of the path.
+REUSE_EXTRA_PREFIXES = (
+    # the voice service: import-closure superset + its runtime data files and manifests.
+    # Its tests/ are carved out below - none is loaded by the probe except
+    # tests/replay_samples.py, which VOICE_PATH_PATTERNS already names.
+    "services/zoe-data/",
+    # the brain lanes (LIVE Flue sidecar + the dormant zoe-core fallback whose SOUL.md
+    # zoe_core_client.py reads) - WHOLE trees, not just the deployed-input globs above
+    "labs/flue-zoe-brain-2x/",
+    "services/zoe-core/",
+    # the WebRTC lane's serving config
+    "services/livekit/",
+    # the probe's own helper modules and interpreter ladder (sys.path'd by the probe and
+    # measure_voice.py), the perf harnesses the probe shells out to, the deploy/venv/unit
+    # scripts that decide what interpreter + deps + units the voice service runs
+    # (incl. scripts/setup/zoe_speaker_resnet34.py, loaded by path from omi_diarize.py)
+    "scripts/lib/",
+    "scripts/perf/",
+    "scripts/deploy/",
+    "scripts/setup/",
+    # deployment configuration (key-material locations, service config)
+    "config/",
+)
+REUSE_EXTRA_FILES = (
+    # read at runtime by self_model.py (fast_tiers tier, every voice turn), and the
+    # generator the deploy rebuilds it with - see the VOICE_PATH_EXCLUDES note
+    "docs/knowledge/flag-inventory.json",
+    "tools/audit/flag_inventory.py",
+    # loaded BY FILE PATH from the closure (spec_from_file_location / subprocess), so the
+    # AST import graph cannot see them: the probe's + replay's quiet-hours guard,
+    # kv_miss_alert.py's ops sender, night_extract.py's worker
+    "scripts/maintenance/harness_quiet.py",
+    "scripts/maintenance/zoe_crash_loop_watch.py",
+    "scripts/night/jobs/glinerel_worker.py",
+    # the deploy paths themselves: they decide what is installed and restarted
+    ".github/workflows/deploy.yml",
+    "scripts/maintenance/deploy_live.sh",
+    # the probe's other sibling, loaded by path (voice_clip_checks.py is in the patterns)
+    "scripts/maintenance/voice_regression_probe.py",
+)
+# Carved out of the services/zoe-data/ prefix: the co-located tests are never imported by
+# the service or the replay (the closure pin proves it for the replay), EXCEPT the files
+# VOICE_PATH_PATTERNS already names (replay_samples.py), which stay relevant through them.
+REUSE_TEST_CARVEOUT = "services/zoe-data/tests/"
+# Separately-built services whose dependency/build files install ONLY into their own
+# image, never into the voice service's interpreter, and which the probe never runs from
+# the tree. Evidence for zoe-auth (2026-11-11): docker-compose.yml builds it from
+# ./services/zoe-auth; its requirements.txt is read only by its own Dockerfile and its
+# own CI job (validate.yml `zoe-auth`); zoe-data reaches it only over HTTP
+# (auth.py -> ZOE_AUTH_URL), and the replay runs in-process as a fixed member id, so a
+# probe of H and of P would hit the same LIVE container. Add a directory here only with
+# the same evidence; everything else gets the manifest rule.
+REUSE_ISOLATED_SERVICE_DIRS = ("services/zoe-auth/",)
+# Dependency / build / deploy / env / model files: voice-relevant ANYWHERE outside the
+# isolated service dirs above (owner rule: manifests, lockfiles, Dockerfiles, compose,
+# env defaults and model config always count).
+_MANIFEST_NAMES = frozenset({
+    "package.json", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml",
+    "pyproject.toml", "setup.py", "setup.cfg", "pipfile", "pipfile.lock", "poetry.lock",
+    "uv.lock", "constraints.txt", ".npmrc", ".nvmrc", ".python-version", ".tool-versions",
+    "tsconfig.json", ".dockerignore", "makefile",
+})
+_UNIT_SUFFIXES = (".service", ".timer", ".socket", ".path", ".mount", ".target")
+_MODEL_SUFFIXES = (".onnx", ".gguf", ".npy", ".npz", ".joblib", ".pt", ".pth", ".bin",
+                   ".safetensors", ".tflite", ".ort", ".ckpt", ".h5", ".pkl", ".pickle")
+_SPECIAL_MODES = {"120000": "symlink", "160000": "submodule (gitlink)"}
+
+
+def _manifest_rule(path: str) -> str:
+    """Why `path` is a dependency/build/deploy/env/model file, or "" when it is not."""
+    parts = path.split("/")
+    base = parts[-1].lower()
+    if base.startswith("requirements") and base.endswith((".txt", ".in")):
+        return "dependency manifest"
+    if base in _MANIFEST_NAMES or base.endswith(".lock"):
+        return "dependency/build manifest or lockfile"
+    if base.startswith("dockerfile") or base.endswith(".dockerfile"):
+        return "Dockerfile"
+    if "compose" in base and base.endswith((".yml", ".yaml")):
+        return "compose file"
+    if base == ".env" or base.startswith(".env.") or base.endswith(".env"):
+        return "env file"
+    if base.endswith(_UNIT_SUFFIXES) or any(p.endswith(".service.d") for p in parts[:-1]):
+        return "systemd unit or drop-in"
+    if base.endswith(_MODEL_SUFFIXES):
+        return "model / weights file"
+    return ""
+
+
+def reuse_relevance(path: str, patterns: tuple[str, ...] | None = None) -> str:
+    """Why a changed `path` makes replay evidence NON-reusable across it, or "" when the
+    path is provably outside everything the probe measures. Pure; see the block above."""
+    if patterns is None:
+        patterns = voice_path_patterns()
+    if not path or path.startswith("/") or "\\" in path or any(
+            seg in ("", ".", "..") for seg in path.split("/")):
+        return "unnormalised path (doubt counts as voice)"
+    if touched_voice_files([path], patterns):
+        return "VOICE_PATH_PATTERNS"
+    if path in REUSE_EXTRA_FILES:
+        return "runtime file loaded outside the import graph"
+    if path.startswith(REUSE_EXTRA_PREFIXES) and not path.startswith(REUSE_TEST_CARVEOUT):
+        return "voice runtime tree (import-closure superset)"
+    if not path.startswith(REUSE_ISOLATED_SERVICE_DIRS):
+        rule = _manifest_rule(path)
+        if rule:
+            return rule
+    return ""
+
+
+def _git_run(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    """git with no pager, no external diff/textconv, no optional locks, bounded. The
+    objects it reads may come from a pull request: it must never execute anything."""
+    return subprocess.run(
+        ["git", "-C", str(repo), "-c", "core.fsmonitor=false", "--no-pager", *args],
+        capture_output=True, timeout=60,
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
+             "GIT_NO_REPLACE_OBJECTS": "1"})
+
+
+def _is_sha(value: Any) -> bool:
+    return (isinstance(value, str) and len(value) == 40
+            and all(c in "0123456789abcdef" for c in value))
+
+
+def _resolve(repo: Path, rev: str) -> str | None:
+    try:
+        proc = _git_run(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", rev)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = proc.stdout.decode("ascii", "replace").strip()
+    return out if proc.returncode == 0 and _is_sha(out) else None
+
+
+def tree_changes(repo: Path, old: str, new: str) -> list[tuple[str, str, str, str]]:
+    """Every path whose tree entry differs between two commits, as
+    (status, old_mode, new_mode, path). Raises RuntimeError when the diff cannot be read.
+
+    `diff-tree --raw` compares tree entries only (no blob content is read, so a partial or
+    shallow object set is enough and nothing like a textconv driver can run); `--no-renames`
+    so a rename is reported as a delete of the old path AND an add of the new one, and both
+    are classified; `-z` so no path is quoted or split."""
+    try:
+        proc = _git_run(repo, "diff-tree", "-r", "-z", "--raw", "--no-renames",
+                        "--no-ext-diff", "--no-textconv", "--no-commit-id", old, new)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"git diff-tree failed: {exc}") from exc
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip() or "git diff-tree failed")
+    fields = proc.stdout.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    out: list[tuple[str, str, str, str]] = []
+    if len(fields) % 2:
+        raise RuntimeError("unparseable git diff-tree output (odd field count)")
+    for i in range(0, len(fields), 2):
+        meta = fields[i].decode("ascii", "strict") if fields[i].isascii() else ""
+        bits = meta.split(" ")
+        if len(bits) != 5 or not bits[0].startswith(":"):
+            raise RuntimeError(f"unparseable git diff-tree record {fields[i][:80]!r}")
+        try:
+            path = fields[i + 1].decode("utf-8", "strict")
+        except UnicodeDecodeError:
+            path = "\0undecodable:" + fields[i + 1].decode("utf-8", "replace")
+        out.append((bits[4], bits[0][1:], bits[1], path))
+    return out
+
+
+def reusable_evidence(repo: Path, probed_sha: str, target_sha: str, *,
+                      require_ancestor: bool, recorded_tree: str | None = None,
+                      patterns: tuple[str, ...] | None = None) -> tuple[bool, str, list[str]]:
+    """May passing evidence for commit `probed_sha` stand as evidence for `target_sha`?
+    Returns (ok, reason, voice_relevant_changes). Deterministic, offline: reads git objects
+    in `repo` only, never the network. Anything uncertain refuses.
+
+      - both shas must be full 40-hex and resolve to commits in `repo` (an unfetched or
+        pruned probe commit is refused, not guessed at)
+      - `recorded_tree` (the artifact's revision.tree) must be present and equal
+        probed^{tree}: evidence whose own record disagrees with git is not evidence
+      - `require_ancestor` (PR gate + lander): the probed commit must be the target or an
+        ancestor of it - evidence from THIS PR's history, never a sibling branch. The
+        deploy gate passes False: a squash merge is never a descendant of the PR head, and
+        the deploy binding was already tree-based (tree_matches)
+      - then the TREE diff probed^{tree} -> target^{tree} (whatever commits, merges or
+        authors produced it) must contain no voice-relevant path (reuse_relevance), no
+        symlink, no submodule, no type change and no unknown status."""
+    probed = (probed_sha or "").strip().lower()
+    target = (target_sha or "").strip().lower()
+    if not _is_sha(probed) or not _is_sha(target):
+        return False, (f"not a pair of full 40-hex commit shas ({probed_sha!r}, {target_sha!r}) "
+                       "- reuse refused"), []
+    p_commit = _resolve(repo, f"{probed}^{{commit}}")
+    if p_commit != probed:
+        return False, (f"the probed commit {probed[:8]} cannot be resolved in {repo} (not "
+                       "fetched, or pruned) - reuse refused, re-probe"), []
+    t_commit = _resolve(repo, f"{target}^{{commit}}")
+    if t_commit != target:
+        return False, (f"the target commit {target[:8]} cannot be resolved in {repo} - reuse "
+                       "refused"), []
+    p_tree = _resolve(repo, f"{probed}^{{tree}}")
+    if not p_tree or not _is_sha(recorded_tree) or recorded_tree != p_tree:
+        return False, (f"the artifact's recorded tree ({str(recorded_tree)[:8] or 'none'}) does "
+                       f"not match {probed[:8]}^{{tree}} ({str(p_tree)[:8]}) - the evidence's own "
+                       "record disagrees with git; reuse refused"), []
+    if require_ancestor and probed != target:
+        try:
+            anc = _git_run(repo, "merge-base", "--is-ancestor", probed, target).returncode
+        except (OSError, subprocess.SubprocessError):
+            anc = -1
+        if anc == 1:
+            return False, (f"the probed commit {probed[:8]} is not an ancestor of {target[:8]} - "
+                           "that evidence is not from this PR's history (a rebase, or another "
+                           "branch); reuse refused, re-probe"), []
+        if anc != 0:
+            return False, (f"could not establish whether {probed[:8]} is an ancestor of "
+                           f"{target[:8]} (shallow or missing history?) - reuse refused"), []
+    try:
+        changes = tree_changes(repo, probed, target)
+    except RuntimeError as exc:
+        return False, f"could not diff {probed[:8]}..{target[:8]} ({exc}) - reuse refused", []
+    if patterns is None:
+        patterns = voice_path_patterns()
+    blocking: list[str] = []
+    for status, old_mode, new_mode, path in changes:
+        if path.startswith("\0undecodable:"):
+            blocking.append(f"{path[13:]} (undecodable path)")
+            continue
+        special = _SPECIAL_MODES.get(old_mode) or _SPECIAL_MODES.get(new_mode)
+        if special:
+            blocking.append(f"{path} ({special})")
+        elif status not in ("A", "D", "M"):
+            blocking.append(f"{path} (diff status {status}: type change or unknown)")
+        else:
+            why = reuse_relevance(path, patterns)
+            if why:
+                blocking.append(f"{path} ({why})")
+    if blocking:
+        shown = "; ".join(blocking[:12]) + (f"; +{len(blocking) - 12} more" if len(blocking) > 12 else "")
+        return False, (f"{len(blocking)} voice-relevant change(s) between {probed[:8]} and "
+                       f"{target[:8]}: {shown} - reuse refused, re-probe"), blocking
+    sample = ", ".join(c[3] for c in changes[:8]) + (f", +{len(changes) - 8} more" if len(changes) > 8 else "")
+    return True, (f"REUSED evidence for {probed[:8]} at {target[:8]}"
+                  f"{' (ancestor)' if require_ancestor and probed != target else ''}: "
+                  f"{len(changes)} path(s) differ between their trees, none voice-relevant"
+                  f"{(' [' + sample + ']') if changes else ''}"), []
 
 
 def touched_voice_files(changed: list[str], patterns: tuple[str, ...]) -> list[str]:
@@ -610,7 +895,22 @@ def _attribution_problem(rev: Any, target: str) -> str:
     return ""
 
 
-def revision_matches(artifact: dict[str, Any], expect_revision: str | None) -> tuple[bool, str]:
+# A reuse callback: (probed_commit, recorded_tree) -> (ok, reason, voice_relevant_changes).
+# main() builds it from reusable_evidence() for the target commit; evaluate() and the two
+# binding checks below call it ONLY after the strict binding failed on an otherwise
+# attributable (recorded, clean) revision.
+ReuseCheck = Any
+
+
+def _try_reuse(rev: dict[str, Any], reuse: ReuseCheck, strict_refusal: str) -> tuple[bool, str]:
+    ok, why, _ = reuse(str(rev.get("commit")), rev.get("tree"))
+    if ok:
+        return True, why
+    return False, f"{strict_refusal} Evidence reuse was tried and REFUSED: {why}"
+
+
+def revision_matches(artifact: dict[str, Any], expect_revision: str | None,
+                     reuse: ReuseCheck = None) -> tuple[bool, str]:
     """The gate result must come from exercising THIS revision.
 
     Freshness + status do not bind an artifact to the code under review. A passing
@@ -630,14 +930,18 @@ def revision_matches(artifact: dict[str, Any], expect_revision: str | None) -> t
         return False, problem
     got = str(rev.get("commit"))
     if got != expect_revision:
-        return False, (f"voice replay-gate ran against commit {got[:8]}, but this PR's head "
-                       f"is {expect_revision[:8]} — that artifact is evidence for DIFFERENT "
-                       "code. Re-run the probe against a checkout of this PR's head.")
+        refusal = (f"voice replay-gate ran against commit {got[:8]}, but this PR's head "
+                   f"is {expect_revision[:8]} — that artifact is evidence for DIFFERENT "
+                   "code. Re-run the probe against a checkout of this PR's head.")
+        if reuse is not None:
+            return _try_reuse(rev, reuse, refusal)
+        return False, refusal
     return True, ""
 
 
 def tree_matches(artifact: dict[str, Any],
-                 expect_tree_of: tuple[str, str | None] | None) -> tuple[bool, str]:
+                 expect_tree_of: tuple[str, str | None] | None,
+                 reuse: ReuseCheck = None) -> tuple[bool, str]:
     """The DEPLOY gate's binding: the artifact must be evidence for the TREE about
     to go live. Returns (ok, note).
 
@@ -681,11 +985,14 @@ def tree_matches(artifact: dict[str, Any],
     if isinstance(got_tree, str) and got_tree and got_tree == target_tree:
         return True, (f"tree-identical to {target[:8]} (tree {target_tree[:8]}; artifact "
                       f"from {got[:8]})")
-    return False, (f"voice replay-gate ran against commit {got[:8]} (tree "
-                   f"{str(got_tree)[:8] if got_tree else 'unrecorded'}), but the deploy "
-                   f"target is {target[:8]} (tree {target_tree[:8]}) — that artifact is "
-                   "evidence for DIFFERENT code. Re-run the probe against a checkout of "
-                   f"{target[:8]}.")
+    refusal = (f"voice replay-gate ran against commit {got[:8]} (tree "
+               f"{str(got_tree)[:8] if got_tree else 'unrecorded'}), but the deploy "
+               f"target is {target[:8]} (tree {target_tree[:8]}) — that artifact is "
+               "evidence for DIFFERENT code. Re-run the probe against a checkout of "
+               f"{target[:8]}.")
+    if reuse is not None:
+        return _try_reuse(rev, reuse, refusal)
+    return False, refusal
 
 
 def resolve_tree(repo: Path, commit: str) -> str | None:
@@ -818,7 +1125,8 @@ def clip_block_ok(artifact: dict[str, Any]) -> tuple[bool, str]:
 def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: float,
              baseline: dict[str, Any] | None = None,
              expect_revision: str | None = None,
-             expect_tree_of: tuple[str, str | None] | None = None) -> tuple[bool, str]:
+             expect_tree_of: tuple[str, str | None] | None = None,
+             reuse: ReuseCheck = None) -> tuple[bool, str]:
     """The heartbeat check, pure and unit-testable. Returns (allowed, reason).
 
     Blocks unless the artifact exists, has status == "pass", is fresh (within
@@ -826,7 +1134,12 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     exercising `expect_revision` when one is given (PR gate: exact commit), was
     produced against the tree of `expect_tree_of` when one is given (deploy gate:
     same commit or byte-identical tree — tree_matches), and — when it claims the
-    VAD stage — carries a passing (or skipped) VAD block (vad_block_ok)."""
+    VAD stage — carries a passing (or skipped) VAD block (vad_block_ok).
+
+    `reuse` (opt-in, `--allow-reuse`): when the strict revision/tree binding fails on a
+    recorded, CLEAN revision, the evidence may still stand if `reuse(commit, tree)` says
+    the tree diff to the target is voice-free (reusable_evidence). Every other check —
+    status, freshness, baseline, attribution, VAD, per-clip — applies unchanged."""
     if artifact is None:
         return False, ("no voice replay-gate result artifact — the gate never ran "
                        "(a missing artifact is NOT a pass)")
@@ -850,10 +1163,10 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
     ok, why = baseline_matches(artifact, baseline)
     if not ok:
         return False, why
-    ok, why = revision_matches(artifact, expect_revision)
+    ok, rev_note = revision_matches(artifact, expect_revision, reuse)
     if not ok:
-        return False, why
-    ok, tree_note = tree_matches(artifact, expect_tree_of)
+        return False, rev_note
+    ok, tree_note = tree_matches(artifact, expect_tree_of, reuse)
     if not ok:
         return False, tree_note
     ok, vad_note = vad_block_ok(artifact)
@@ -864,7 +1177,7 @@ def evaluate(artifact: dict[str, Any] | None, *, now_epoch: float, max_age_s: fl
         return False, clip_note
     bound = ""
     if expect_revision:
-        bound = f", bound to {expect_revision[:8]}"
+        bound = f", {rev_note}" if rev_note else f", bound to {expect_revision[:8]}"
     elif tree_note:
         bound = f", {tree_note}"
     vad_part = f", {vad_note}" if vad_note else ""
@@ -1059,7 +1372,29 @@ def main(argv: list[str] | None = None) -> int:
                            "commit: the same commit, or a clean run whose recorded tree "
                            "equals this commit's tree (a squash merge of an up-to-date "
                            "branch). The deploy gates pass the sha being deployed.")
+    ap.add_argument("--allow-reuse", action="store_true",
+                    help="when the strict --expect-revision / --expect-tree-of binding fails, "
+                         "accept the artifact if the tree diff from its probed commit to the "
+                         "target touches nothing voice-relevant (reusable_evidence; with "
+                         "--expect-revision the probed commit must also be an ancestor of "
+                         "the target). Offline: reads git objects in --repo only.")
+    ap.add_argument("--print-artifact-commit", action="store_true",
+                    help="print the artifact's recorded revision.commit (validated 40-hex) "
+                         "and exit 0, or exit 1 with nothing printed. The PR gate uses it to "
+                         "know which commit's objects to make available before --allow-reuse.")
     args = ap.parse_args(argv)
+
+    if args.print_artifact_commit:
+        rec = load_json(args.artifact)
+        commit = ((rec or {}).get("revision") or {}).get("commit") if isinstance(rec, dict) else None
+        if isinstance(commit, str) and _is_sha(commit.strip().lower()):
+            print(commit.strip().lower())
+            return 0
+        return 1
+    if args.allow_reuse and not (args.expect_revision or args.expect_tree_of):
+        print("voice-gate: --allow-reuse needs --expect-revision or --expect-tree-of (the "
+              "commit the evidence is to be reused AT)", file=sys.stderr)
+        return 1
 
     # A revision is an opaque identifier that only ever gets COMPARED, but pin the
     # shape anyway: a malformed value should fail loudly here rather than silently
@@ -1112,10 +1447,25 @@ def main(argv: list[str] | None = None) -> int:
         # Resolved only here, once the gate is actually required: a non-voice
         # deploy never needs the target's tree.
         expect_tree_of = (args.expect_tree_of, resolve_tree(args.repo, args.expect_tree_of))
+    reuse = None
+    if args.allow_reuse:
+        target = args.expect_revision or args.expect_tree_of
+        # PR gate (--expect-revision): the evidence must come from THIS PR's history, so
+        # the probed commit must be an ancestor of the head. Deploy gate (--expect-tree-of):
+        # a squash merge never descends from the PR head; the binding is tree-based.
+        require_ancestor = bool(args.expect_revision)
+
+        def reuse(probed: str, recorded_tree: Any) -> tuple[bool, str, list[str]]:
+            ok, why, hits = reusable_evidence(args.repo, probed, target,
+                                              require_ancestor=require_ancestor,
+                                              recorded_tree=recorded_tree)
+            print(f"voice-gate: evidence reuse {'ACCEPTED' if ok else 'REFUSED'} — {why}")
+            return ok, why, hits
+
     allowed, reason = evaluate(
         artifact, now_epoch=time.time(),
         max_age_s=args.max_age_hours * 3600.0, baseline=baseline,
-        expect_revision=args.expect_revision, expect_tree_of=expect_tree_of)
+        expect_revision=args.expect_revision, expect_tree_of=expect_tree_of, reuse=reuse)
 
     if allowed:
         print(f"voice-gate: OK — {reason}  (artifact: {args.artifact})")
