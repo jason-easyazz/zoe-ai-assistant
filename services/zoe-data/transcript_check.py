@@ -561,16 +561,25 @@ async def _apply_text(db, row: Any, new: str) -> bool:
     segs = await _fetch(db, "SELECT id, text, start_ms, end_ms FROM omi_segments WHERE recording_id = ? AND user_id = ? AND start_ms < ? AND end_ms > ? ORDER BY seq",
                         (rid, uid, int(row["end_ms"]), int(row["start_ms"])))
     writes = []
-    hit_seg, hit_share = None, -1                 # the segment that holds the span with the most overlap: the transcript is corrected at THAT segment's occurrence
+    hit_seg, hit_share = None, -1                 # the segment whose plan REPLACES the span (most overlap first): the transcript is corrected at THAT segment's occurrence
+    kept_seg, kept_share = None, -1               # a segment that already holds the new word (a retry): the anchor only when NO segment replaces and none lost the span
+    lost = False
     for sg in segs:
         out = _plan(sg["text"], row, variants, new)
-        if out is not None:
-            share = min(int(sg["end_ms"]), int(row["end_ms"])) - max(int(sg["start_ms"]), int(row["start_ms"]))
+        if out is None:
+            lost = True
+            continue
+        share = min(int(sg["end_ms"]), int(row["end_ms"])) - max(int(sg["start_ms"]), int(row["start_ms"]))
+        if out != sg["text"]:
             if share > hit_share:
                 hit_seg, hit_share = sg["id"], share
-            writes.append(("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected', clean_text = '', clean_how = '' WHERE id = ? AND user_id = ?", (out, sg["id"], uid)))
-    if segs and not writes:
-        return False
+        elif share > kept_share:
+            kept_seg, kept_share = sg["id"], share
+        writes.append(("UPDATE omi_segments SET text = ?, text_provenance = 'owner_corrected', clean_text = '', clean_how = '' WHERE id = ? AND user_id = ?", (out, sg["id"], uid)))
+    if segs and (not writes or (hit_seg is None and lost)):
+        return False                              # nothing replaces the span (a neighbour that already says the new word does not count): refuse, never close the item
+    if hit_seg is None:
+        hit_seg = kept_seg
     recs = await _fetch(db, "SELECT transcript FROM omi_recordings WHERE id = ? AND user_id = ?", (rid, uid))
     if recs and (recs[0]["transcript"] or "").strip():
         transcript = recs[0]["transcript"]

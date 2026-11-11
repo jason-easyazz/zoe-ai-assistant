@@ -927,6 +927,44 @@ def test_control_correcting_the_first_occurrence_leaves_the_second(queued):
     assert rows(env)[0]["transcript"] == "meet me at eleven meet me at seven"
 
 
+def _adjacent_turns(env, second="meet me at seven"):
+    """Two adjacent turns; the item's padded range overlaps BOTH, and the first (which already says 'eleven') overlaps it the most."""
+    c = env.db.conn
+    c.execute("DELETE FROM omi_segments")
+    for seq, (a, b, t) in enumerate(((0, 1500, "meet me at eleven"), (1500, 2200, second))):
+        c.execute("INSERT INTO omi_segments (id, recording_id, user_id, seq, start_ms, end_ms, text, speaker, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                  (f"sg{seq}", rows(env)[0]["id"], OWNER, seq, a, b, t, "you", "2026-10-10T00:00:00Z"))
+    c.execute("UPDATE omi_recordings SET transcript = ?", (f"meet me at eleven {second}",))
+    c.execute("UPDATE omi_check_items SET start_ms = 800, end_ms = 1900, before_text = 'meet me at', after_text = ''")
+    c.commit()
+
+
+def _eleven(env):
+    alts = json.loads(items(env)[0]["alts"])
+    return [i for i, a in enumerate(alts) if a["word"] == "eleven"][0]
+
+
+def test_the_anchor_is_the_segment_the_plan_replaces_not_the_larger_neighbour_that_already_has_the_word(queued):
+    """Deferred from the hardening PR: the larger-overlap neighbour already holds 'eleven' (a no-op plan); the transcript must still be corrected at the
+    segment that really changes, and the answer must not report success over an untouched transcript."""
+    env, rid = queued
+    _adjacent_turns(env)
+    assert run(tc.answer(OWNER, items(env)[0]["id"], alt=_eleven(env)))["applied"] is True
+    assert [r["text"] for r in env.db.rows("SELECT text FROM omi_segments ORDER BY seq")] == ["meet me at eleven", "meet me at eleven"]
+    assert rows(env)[0]["transcript"] == "meet me at eleven meet me at eleven"
+
+
+def test_no_segment_that_replaces_the_span_refuses_the_answer(queued):
+    """The second turn no longer holds the span: only a neighbour that already has the new word is left, so nothing is replaced and nothing is closed as corrected."""
+    env, rid = queued
+    _adjacent_turns(env, second="meet me at nine")
+    before = rows(env)[0]["transcript"]
+    with pytest.raises(tc.CheckError) as e:
+        run(tc.answer(OWNER, items(env)[0]["id"], alt=_eleven(env)))
+    assert e.value.code == "text_moved"
+    assert rows(env)[0]["transcript"] == before and items(env)[0]["status"] == "expired" and tc.ledger() == {}
+
+
 def _bind(env, panel, member=OWNER):
     c = env.db.conn
     c.execute("CREATE TABLE IF NOT EXISTS panel_user_bindings (panel_id TEXT, user_id TEXT, binding_type TEXT)")
