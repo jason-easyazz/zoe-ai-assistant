@@ -134,12 +134,17 @@ landing_artifact_fresh(){ [ "$(stat -c %Y "$1" 2>/dev/null || echo 0)" -ge "$2" 
 # A match = argv[0] is the script itself, or argv[0] is a shell and the first non-option argument is the script; `bash -c <text>`
 # is never a match. The calling shell and its parent are skipped (a lander must not see itself as "another" one).
 landing_running(){
-  local p c a0 i skip=" $$ $PPID " n b
-  for p in /proc/[0-9]*; do
-    p=${p#/proc/}; case "$skip" in *" $p "*) continue;; esac
-    # brace group, not a trailing 2>/dev/null: a redirection that fails to OPEN is reported by the shell BEFORE a later 2>/dev/null applies
-    # (a pid that died between the glob and here printed "/proc/<pid>/cmdline: No such file or directory" into every lander log)
-    c=(); { mapfile -d '' -t c < "/proc/$p/cmdline"; } 2>/dev/null || continue
+  local p c a0 i skip=" $$ $PPID " n b root=${LANDING_PROC_ROOT:-/proc} errf err
+  errf=$(mktemp 2>/dev/null) || errf=/dev/null
+  for p in "$root"/[0-9]*; do
+    p=${p#"$root"/}; case "$skip" in *" $p "*) continue;; esac
+    # stderr goes to a file through a brace group (a redirection that fails to OPEN is reported by the shell before a later 2>/dev/null applies); ONLY the
+    # vanished-pid ENOENT is dropped - any other read error (EACCES, EISDIR, ...) is re-emitted, so it is not hidden along with the race
+    c=()
+    if ! { mapfile -d '' -t c < "$root/$p/cmdline"; } 2>"$errf"; then
+      [ "$errf" = /dev/null ] || { err=$(grep -v 'No such file or directory' "$errf"); [ -z "$err" ] || printf '%s\n' "$err" >&2; }
+      continue
+    fi
     [ "${#c[@]}" -gt 0 ] || continue
     a0=${c[0]##*/}; b=
     case "$a0" in
@@ -150,8 +155,9 @@ landing_running(){
         done;;
       *) b=$a0;;
     esac
-    for n in "$@"; do [ "$b" = "$n" ] && return 0; done
+    for n in "$@"; do [ "$b" = "$n" ] && { [ "$errf" = /dev/null ] || rm -f "$errf"; return 0; }; done
   done
+  [ "$errf" = /dev/null ] || rm -f "$errf"
   return 1
 }
 

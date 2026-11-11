@@ -93,6 +93,31 @@ def test_proc_cmdline_read_has_no_bare_redirect():
     assert not re.search(r'mapfile[^\n]*< "/proc/\$p/cmdline" 2>/dev/null', s)
 
 
+def _fake_proc_run(tmp_path):
+    return subprocess.run(["bash", "-c", f'. "{LANDING}/landing_lib.sh"; landing_running lander_xyz.sh; echo rc=$?'],
+                          capture_output=True, text=True, env={**os.environ, "LANDING_PROC_ROOT": str(tmp_path)})
+
+
+@needs_bash
+def test_non_enoent_cmdline_errors_still_surface(tmp_path):
+    # fake /proc: pid 4242's cmdline is a self-referencing symlink (ELOOP, not the vanished-pid ENOENT); pid 4243 is a readable lander
+    (tmp_path / "4242").mkdir()
+    (tmp_path / "4242" / "cmdline").symlink_to("cmdline")  # self-loop: ELOOP
+    (tmp_path / "4243").mkdir()
+    (tmp_path / "4243" / "cmdline").write_bytes(b"/bin/bash\0lander_xyz.sh\0")
+    r = _fake_proc_run(tmp_path)
+    assert "rc=0" in r.stdout  # the readable process is still found
+    assert "Too many levels" in r.stderr, r.stderr  # the non-ENOENT error is NOT swallowed
+    assert "No such file" not in r.stderr
+
+
+@needs_bash
+def test_vanished_pid_enoent_is_dropped(tmp_path):
+    (tmp_path / "4242").mkdir()  # no cmdline file at all: ENOENT, the dead-pid race
+    r = _fake_proc_run(tmp_path)
+    assert "rc=1" in r.stdout and r.stderr == ""
+
+
 def _calendar_minutes(path):
     m = re.search(r"^OnCalendar=\*-\*-\* (\d\d):(\d\d):00", path.read_text(), re.M)
     assert m, path
