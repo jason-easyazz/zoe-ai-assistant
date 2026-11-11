@@ -134,6 +134,4 @@ if __name__ == "__main__":
         t0 = time.time()
         res = dict(residue=residue_strategies(tmp), choke=choke_point_cost(tmp), grid=latency_grid(tmp))
         res["wall_s"] = round(time.time() - t0, 1)
-        print(json.dumps({"wall_s": res["wall_s"]}))
-        with open(os.path.join(os.path.dirname(__file__), "bench_results.json"), "w") as fh:
-            json.dump(res, fh, indent=1)
+        print(json.dumps(res, indent=1))  # stdout only: nothing is written outside the temp dir

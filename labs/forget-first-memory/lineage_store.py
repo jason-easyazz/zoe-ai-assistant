@@ -72,13 +72,17 @@ class LineageStore:
         return hmac.new(self.salt, normalise(text).encode(), hashlib.sha256).hexdigest()
 
     def ingest(self, sid: str, payload: str) -> None:
-        if self.db.execute("SELECT 1 FROM forget_ledger WHERE h = ?", (self._h(payload),)).fetchone():
-            raise Forgotten("re-ingest of forgotten content")
-        if self.db.execute("SELECT 1 FROM tombstones WHERE id = ?", (sid,)).fetchone():
-            raise Forgotten("source id was forgotten")
-        self.db.execute("BEGIN IMMEDIATE")
-        rid = self.db.execute("INSERT INTO sources VALUES (?, ?)", (sid, payload)).lastrowid
-        self.db.execute("INSERT INTO sources_fts (rowid, id, payload) VALUES (?, ?, ?)", (rid, sid, payload))
+        self.db.execute("BEGIN IMMEDIATE")  # ledger + tombstone checks share the insert's txn: a racing forget cannot slip between
+        try:
+            if self.db.execute("SELECT 1 FROM forget_ledger WHERE h = ?", (self._h(payload),)).fetchone():
+                raise Forgotten("re-ingest of forgotten content")
+            if self.db.execute("SELECT 1 FROM tombstones WHERE id = ?", (sid,)).fetchone():
+                raise Forgotten("source id was forgotten")
+            rid = self.db.execute("INSERT INTO sources VALUES (?, ?)", (sid, payload)).lastrowid
+            self.db.execute("INSERT INTO sources_fts (rowid, id, payload) VALUES (?, ?, ?)", (rid, sid, payload))
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
         self.db.execute("COMMIT")
 
     def write_derived(self, aid: str, layer: str, payload: str, parents: list[str], *, depth: int = 1) -> None:

@@ -89,7 +89,7 @@ optimize timed separately; serve = all L1 artifacts with the ancestry re-walk):
 | 1e5 | 3 | 150000 | 4.5 / 9 / 9 | 3.27 (4.01) | 18.77 | 61.7 | - | 43.5 |
 | 1e5 | 4 | 200000 | 5.5 / 22 / 28 | 3.27 (4.93) | 24.10 | 61.0 | - | 52.9 |
 
-All 12 rows are in `bench_results.json` (written locally, gitignored by the repo's `*.json` rule); whole bench wall 37.3 s. Phase 1 (the part that makes forget take effect) stays ~2-3 ms to
+All 12 rows are printed as JSON on stdout (nothing is written outside the temp dir); whole bench wall 37.3 s. Phase 1 (the part that makes forget take effect) stays ~2-3 ms to
 1e5 sources. Phase 2 grows roughly with table size (cause not profiled). The FTS optimize is the dominant cost at 1e5 (~61 ms) and
 is O(index), not O(closure). The serve ancestry re-walk costs ~50 us per artifact: fine for a per-turn packet, expensive for bulk.
 A first version deleted the FTS row by an UNINDEXED `id` column: a full scan, 40 ms phase 1 at 1e5; fixed by deleting by rowid.
@@ -155,5 +155,5 @@ pointer is recorded, NOT that forget uses it: entity forget still matches names.
 
 ```
 flock -x -w 3600 /tmp/zoe-test-lane.lock python3 -m pytest -q -p no:cacheprovider labs/forget-first-memory/test_lineage_store.py
-flock -x -w 3600 /tmp/zoe-test-lane.lock python3 labs/forget-first-memory/bench.py   # ~40 s, writes bench_results.json
+flock -x -w 3600 /tmp/zoe-test-lane.lock python3 labs/forget-first-memory/bench.py   # ~40 s, prints the results as JSON
 ```
