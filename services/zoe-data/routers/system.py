@@ -720,10 +720,10 @@ def _build_agent_card() -> dict:
         mcp_tool_count = len(_mcp_tools)
     except Exception:
         # Fall back to CAPABILITIES.md line count if mcp_server is unavailable
-        capabilities_md = _Path("/home/zoe/assistant/CAPABILITIES.md")
-        if capabilities_md.exists():
+        if True:
             try:
-                content = capabilities_md.read_text()
+                from agent_sync import read_capabilities_snapshot as _read_caps
+                content = _read_caps()
                 import re as _re
                 tool_lines = [l for l in content.splitlines() if l.startswith("- `")]
                 mcp_tool_count = len(tool_lines)
