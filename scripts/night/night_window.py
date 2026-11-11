@@ -874,12 +874,16 @@ def _run_presleep(cfg: NightCfg, host: "bk.Host", log: "Callable[[str], None]", 
             continue
         t0 = host.mono()
         halt = ""
+        timed_out = False
         try:
             res = host.run(["systemctl", "--user", "start", "--wait", unit], timeout=min(cfg.presleep_timeout_s, left_s), mutating=True)
             rc = res.rc
+            timed_out = rc == 124                    # the real host (bk.Host.run) turns a TimeoutExpired into Result(124), it does not raise
         except Exception as exc:  # noqa: BLE001 - a hung or missing unit must not stop the night
             rc = 255
+            timed_out = True
             log(f"presleep: {unit} could not be run ({type(exc).__name__})")
+        if timed_out:
             try:      # `start --wait` timing out only ends the CLIENT: stop the unit so the next one never overlaps a still-running backup
                 stopped = host.run(["systemctl", "--user", "stop", unit], timeout=120.0, mutating=True).rc == 0
             except Exception:  # noqa: BLE001

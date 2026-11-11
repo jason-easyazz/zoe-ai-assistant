@@ -193,7 +193,7 @@ def test_a_timed_out_unit_is_stopped_before_the_next_one_starts(tmp_path):
     def run(argv, timeout=60.0, mutating=True, env=None):
         if argv[-1] == "zoe-backup.service" and "start" in argv:
             host.cmds.append((list(argv), mutating))
-            raise subprocess.TimeoutExpired(argv, timeout)           # `start --wait` ends the CLIENT only; the unit keeps running
+            return nw.bk.Result(124, "timed out")                    # what the real host returns: `start --wait` ends the CLIENT only; the unit keeps running
         return real(argv, timeout=timeout, mutating=mutating, env=env)
     host.run = run
     nw.run_presleep(cfg, host, host.log)
@@ -253,7 +253,7 @@ def test_the_sequence_stops_when_a_timed_out_unit_cannot_be_stopped(tmp_path):
     def run(argv, timeout=60.0, mutating=True, env=None):
         if argv[-1] == "zoe-backup.service" and "start" in argv:
             host.cmds.append((list(argv), mutating))
-            raise subprocess.TimeoutExpired(argv, timeout)
+            return nw.bk.Result(124, "timed out")
         if argv[-1] == "zoe-backup.service" and "stop" in argv:
             host.cmds.append((list(argv), mutating))
             return nw.bk.Result(1, "stop failed")                    # the backup may still be running
