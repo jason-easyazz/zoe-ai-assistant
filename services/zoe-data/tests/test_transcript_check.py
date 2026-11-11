@@ -775,7 +775,7 @@ def test_a_who_item_whose_turn_has_gone_corrects_nothing(who):
 
 def test_heard_name_takes_only_a_name():
     assert tc.heard_name("that's quinn") == "Quinn" and tc.heard_name("it's Quinn Hart.") == "Quinn Hart"
-    assert tc.heard_name("this is a really long sentence about nothing") != "" and len(tc.heard_name("this is a really long sentence").split()) <= 2
+    assert tc.heard_name("this is a really long sentence about nothing") == "" and tc.heard_name("could you play some music please") == ""      # speech that is not a name
     assert tc.heard_name("123 !!") == ""
 
 

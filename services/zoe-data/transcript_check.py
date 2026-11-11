@@ -976,7 +976,10 @@ _NAMED = re.compile(r"^\W*(?:(?:that's|that is|it's|it is|this is|his name is|he
 def heard_name(text: str) -> str:
     """The name from "that's Quinn" / "it's Quinn Hart": at most 2 words, letters only, capitalised. '' when it is not a name."""
     t = _NAMED.sub("", (text or "").strip()).strip(" .,!?\"'")
-    ws = [w for w in t.split() if re.fullmatch(r"[A-Za-z][A-Za-z'\-]{0,24}", w)][:2]
+    toks = t.split()
+    ws = [w for w in toks if re.fullmatch(r"[A-Za-z][A-Za-z'\-]{0,24}", w)]
+    if len(toks) > 2 or len(ws) != len(toks):       # a sentence is not a name: only "Quinn" / "Quinn Hart" (the prefix is already stripped)
+        return ""
     return " ".join(w[:1].upper() + w[1:] for w in ws)
 
 
