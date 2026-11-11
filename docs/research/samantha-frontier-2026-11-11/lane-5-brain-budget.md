@@ -15,6 +15,9 @@ Labels: [Proven]/[Experimental]/[Speculative] x [code]/[live]/[record]/[contradi
 
 ## 0. Answer first
 
+Reference note: every `src/...`, `server-context.cpp` and `server-task.cpp` file:line in this lane is third-party llama.cpp source
+(the installed b11982 checkout), not a file in this repository.
+
 1. **Daytime 4B outside a turn is real, small, and measurably costly.** Since #2296 went live
    (first `BRAIN_SCHED` line 2026-11-07 02:57) the choke point logged **273 `would_defer` calls**: 263
    `memory_digest._facts_call` and 10 `proactive.composer.compose_message`. After a daytime idle call, the
