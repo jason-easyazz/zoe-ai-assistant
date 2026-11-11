@@ -98,6 +98,7 @@ import re
 import secrets
 import signal
 import subprocess
+import importlib.util
 import sys
 import time
 import urllib.error
@@ -2051,6 +2052,23 @@ def teardown_verdict(store: dict[str, dict], db: dict[str, Any] | None) -> tuple
 
 QUIESCE_TIMEOUT_S = 300.0   # bounded drain of in-flight captures before the leak check
 QUIESCE_POLL_S = 5.0
+QUIESCE_TIMEOUT_MAX_S = 3600.0   # upper clamp: a typo'd budget must not park the harness lock for hours
+
+
+def _quiesce_budget() -> float:
+    """ZOE_BAR_QUIESCE_TIMEOUT_S via typed_env (loaded by FILE PATH, stdlib-only), clamped to [0, QUIESCE_TIMEOUT_MAX_S];
+    nan / inf fall back to the default (either would make the wait unbounded)."""
+    mod = sys.modules.get("typed_env")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            "typed_env", Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "typed_env.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["typed_env"] = mod
+        spec.loader.exec_module(mod)
+    v = mod.env_float("ZOE_BAR_QUIESCE_TIMEOUT_S", QUIESCE_TIMEOUT_S)
+    if not math.isfinite(v):
+        return QUIESCE_TIMEOUT_S
+    return min(max(v, 0.0), QUIESCE_TIMEOUT_MAX_S)
 
 
 def drain_captures(live: Any, user: str, *, timeout_s: float | None = None,
@@ -2061,12 +2079,7 @@ def drain_captures(live: Any, user: str, *, timeout_s: float | None = None,
     fixed 2-minute wait expired with ~6 captures still running and every full run read
     ``error``. A wait that still expires reports the leftover in_flight (unproven teardown)."""
     if timeout_s is None:
-        try:
-            timeout_s = float(os.environ.get("ZOE_BAR_QUIESCE_TIMEOUT_S", QUIESCE_TIMEOUT_S))
-        except ValueError:
-            timeout_s = QUIESCE_TIMEOUT_S
-        if not math.isfinite(timeout_s) or timeout_s < 0:   # nan / inf would make the wait unbounded
-            timeout_s = QUIESCE_TIMEOUT_S
+        timeout_s = _quiesce_budget()
     waited = 0.0   # budget counted in polls (sleep is looked up at call time), not wall-clock
     last, stable, in_flight = None, 0, None
     while True:

@@ -2005,7 +2005,7 @@ def test_drain_is_bounded_and_honours_the_env_budget(monkeypatch):
     assert out["in_flight"] == 6 and live.n == 5   # 20 s / 5 s poll + the final look
 
 
-@pytest.mark.parametrize("bad", ["nan", "inf", "-5", "abc"])
+@pytest.mark.parametrize("bad", ["nan", "inf", "abc"])
 def test_drain_ignores_an_unusable_env_budget_and_stays_bounded(monkeypatch, bad):
     monkeypatch.setattr(sb.time, "sleep", lambda s: None)
     monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", bad)
@@ -2024,3 +2024,9 @@ def test_drain_ignores_an_unusable_env_budget_and_stays_bounded(monkeypatch, bad
     live = _Stuck()
     out = sb.drain_captures(live, A)
     assert out["in_flight"] == 6 and live.n == int(sb.QUIESCE_TIMEOUT_S / sb.QUIESCE_POLL_S) + 1
+
+
+@pytest.mark.parametrize("raw, want", [("99999", 3600.0), ("-5", 0.0), ("20", 20.0), ("nan", 300.0), ("inf", 300.0)])
+def test_quiesce_budget_is_clamped(monkeypatch, raw, want):
+    monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", raw)
+    assert sb._quiesce_budget() == want
