@@ -24,6 +24,17 @@ Code: `services/zoe-data/recall_every_turn.py`, wired in `zoe_flue_client._run_f
 * **One memory block per turn.** It is injected only when no recall, verify, continuity, hop, offer, risk, raise or brief block fired.
 * **Cost on the voice path.** The member's pool is featurised once into a cached index (TTL 120 s, refreshed in the background, built off the event loop; the wake warm prewarms the likely speaker). A turn never waits for a cold build: with no index yet it carries no block (`skipped=warming`) and the build finishes for the next turn. Per turn: set intersections plus one by-id re-read of at most nine picks (`MemoryService.recheck_durable`), so a correction or a forget is honoured on the very next turn. The cache can omit a just-written row until its refresh; it can never resurrect a retired one.
 
+## Similar rows (`ZOE_RECALL_SIMILAR` = off | shadow | on, default off)
+
+The lexical gate needs the turn to share a name, a rare word or a clock time with the row. Oblique speech shares none, so the row it needs is never met: in the synthetic lab (`labs/recall-match-lab`) the gate found the needed fact on 18 of 20 direct turns and 2 of 20 oblique ones. With this flag on, a turn whose words trigger fewer than `MAX_ROWS` rows is topped up with the member's nearest durable rows by embedding similarity.
+
+* **Same rows, same walls.** The candidates are the cached durable pool (the member's own approved, owner-stated rows); each pick goes through the same by-id recheck, private-class and restraint walls, mutes, forgotten check and token budget as a lexical pick. Lexical rows come first and keep the budget.
+* **Same space as the store.** Rows and the turn are embedded with the palace's own MiniLM session (`memory_service._drawers_embedding_function`). Row vectors are computed when the index is built (off the event loop) and reused across refreshes; a turn costs one embed (median about 60 ms on the Orin CPU, dropped after `EMBED_TIMEOUT_S` = 200 ms) and one matrix product. No HNSW query.
+* **Floor.** `ZOE_RECALL_SIMILAR_FLOOR` (cosine, default 0.30). Synthetic lab with MiniLM, 2026-11-12, needed fact in the top three / a row offered on an irrelevant turn: 0.20 = 15 of 20 oblique, 13 of 20 irrelevant; 0.30 = 9 of 20, 2 of 20; 0.40 = 2 of 20, 2 of 20 (direct turns 19 or 20 of 20 throughout). The default is the conservative end. Synthetic, so [Experimental]: the Samantha bar and the shadow line decide the live value.
+* **Honest wording.** A block that carries a similar row opens with "MAY relate ... ignore any that do not", not "bear on".
+* **Shadow.** Computes and logs (`sim`, `sim_top`), injects nothing: the live distribution on household turns before anything rides.
+* **Fails to nothing.** No vectors, a slow or failed embed, or any error: the turn carries exactly what the lexical gate alone would.
+
 ## Why not just `ZOE_RECALL_GATE`
 
 This is the recall gate's scoring on a new surface. The gate itself cannot serve every turn: it runs only inside `/for-prompt` and the hop, which are reached only when a trigger already claimed the turn (hence 0 served live). Its packet path also embeds and searches and re-reads the whole pool per call (100 to 250 ms at 400 to 1,000 rows), and its sticky / cooldown / delay / filler state is tuned for a packet that is being sent anyway. Its own shadow-to-enforce decision is unchanged and separate.
@@ -32,7 +43,9 @@ This is the recall gate's scoring on a new surface. The gate itself cannot serve
 
 In shadow and on, every eligible household brain turn logs one line (ids, counts, sizes; never text):
 
-`RECALL_EVERY_TURN user=<id> mode=<shadow|on> rows=<n> ids=<8-char ids> tokens=<n> pool=<n> ms=<gate ms> claimed=<recall,hop,...|-> injected=<0|1> skipped=<reason|->`
+`RECALL_EVERY_TURN user=<id> mode=<shadow|on> rows=<n> ids=<8-char ids> tokens=<n> pool=<n> ms=<gate ms> claimed=<recall,hop,...|-> injected=<0|1> skipped=<reason|-> similar=<off|shadow|on> sim=<n> sim_in=<n> sim_top=<cosine>`
+
+`sim` = similar rows at or above the floor this turn (before the walls; counted in shadow too); `sim_in` = rows in the block that came from similarity; `sim_top` = the best similar row's cosine.
 
 `rows` = stored facts the turn's words touch (relevant memory existed); `claimed` = which other block fired; `injected` = this block rode. `rows>0 claimed=-` is the gap this closes. Whether the reply then used the memory is not visible to zoe-data.
 
