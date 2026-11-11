@@ -225,13 +225,15 @@ _INDEX: "dict[str, _Index]" = {}
 _BUILDS: "dict[str, asyncio.Task]" = {}
 
 
-_VECS: "dict[str, tuple[int, Any]]" = {}
+_VECS: "dict[tuple, tuple[int, Any]]" = {}      # (member, row id) -> (text hash, unit vector): never shared across members
+_QUERY_EMBEDS = {"inflight": 0}                  # turn embeds still running in a worker thread (a timeout does not stop one)
 
 
 def _reset_state() -> None:
     _INDEX.clear()
     _BUILDS.clear()
     _VECS.clear()
+    _QUERY_EMBEDS["inflight"] = 0
 
 
 def _embed(texts: list) -> Any:
@@ -246,30 +248,38 @@ def _embed(texts: list) -> Any:
     return v / n
 
 
-def _row_vectors(rows: list) -> Any:
-    """The pool's vectors, embedding only the rows not seen before (by id and text). None on any failure: no similar arm."""
+def _row_vectors(uid: str, rows: list) -> Any:
+    """The pool's vectors, embedding only the rows not seen before for THIS member (by row id and text). Each row's vector is taken
+    from this call's own work or from a cache entry whose text hash matches, never re-read by key later, so a concurrent build for
+    another member (or a rewritten row) cannot hand this index a vector of some other text. None on any failure: no similar arm."""
     try:
         import numpy as np
 
         if not rows:
             return None
-        todo = [(c.id, c.text) for c, _f in rows if _VECS.get(c.id, (None, None))[0] != hash(c.text)]
+        vecs, todo = {}, []
+        for c, _f in rows:
+            hit = _VECS.get((uid, c.id))
+            if hit is not None and hit[0] == hash(c.text):
+                vecs[c.id] = hit[1]
+            else:
+                todo.append((c.id, c.text))
         for i in range(0, len(todo), 64):
             part = todo[i:i + 64]
             for (rid, text), vec in zip(part, _embed([t for _i, t in part])):
-                _VECS[rid] = (hash(text), vec)
-        out = np.stack([_VECS[c.id][1] for c, _f in rows])
+                vecs[rid] = vec
+                _VECS[(uid, rid)] = (hash(text), vec)
         if len(_VECS) > VEC_CACHE_MAX:
-            keep = {c.id for c, _f in rows}
-            for k in [k for k in _VECS if k not in keep][: len(_VECS) - VEC_CACHE_MAX]:
+            keep = {(uid, c.id) for c, _f in rows}
+            for k in [k for k in list(_VECS) if k not in keep][: len(_VECS) - VEC_CACHE_MAX]:
                 _VECS.pop(k, None)
-        return out
+        return np.stack([vecs[c.id] for c, _f in rows])
     except Exception as exc:  # noqa: BLE001
         logger.debug("recall_every_turn: row vectors unavailable (%s)", type(exc).__name__)
         return None
 
 
-def _featurise(pool: list) -> "tuple[list, dict, Any]":
+def _featurise(pool: list, uid: str = "") -> "tuple[list, dict, Any]":
     """(Cand, Feat) per row, the key rarity table, and (similar arm on) the rows' vectors. Pure CPU (a regex pass per unstamped row): run in a worker thread so a
     refresh never stalls the event loop that is streaming a reply."""
     import recall_gate
@@ -281,12 +291,12 @@ def _featurise(pool: list) -> "tuple[list, dict, Any]":
         rows.append((c, f))
         for k in set(f.keys):
             df[k] = df.get(k, 0) + 1
-    return rows, df, (_row_vectors(rows) if similar_mode() != "off" else None)
+    return rows, df, (_row_vectors(uid, rows) if similar_mode() != "off" else None)
 
 
 async def _build(uid: str, svc: Any) -> _Index:
     pool = await svc.load_durable_for_hop(uid)
-    rows, df, vecs = await asyncio.to_thread(_featurise, pool)
+    rows, df, vecs = await asyncio.to_thread(_featurise, pool, uid)
     ix = _Index(time.monotonic(), rows, df, vecs)
     _INDEX.pop(uid, None)
     _INDEX[uid] = ix
@@ -353,23 +363,36 @@ def _ranked(ix: _Index, message: str) -> list:
     return [c for _o, c in out]
 
 
+def _nearest(vecs: Any, message: str, k: int) -> list:
+    """(row index, cosine) for the ``k`` rows nearest ``message``, best first. Runs in a worker thread: the embed, the product and
+    the sort all stay off the event loop."""
+    import numpy as np
+
+    try:
+        sims = vecs @ _embed([message])[0]
+        top = np.argsort(-sims)[:k]
+        return [(int(j), float(sims[j])) for j in top]
+    finally:
+        _QUERY_EMBEDS["inflight"] -= 1
+
+
 async def _similar(ix: _Index, message: str, taken: set) -> list:
     """(cosine, Cand) for the member's rows nearest the turn's words, best first, at or above the floor, not already ``taken``.
-    [] when the index has no vectors, the embed is slow or anything fails: the similar arm can only ever add nothing."""
+    [] when the index has no vectors, the embed is slow or anything fails: the similar arm can only ever add nothing. One turn
+    embed at a time: a timeout cannot stop its worker thread, so while one is still running the next turn skips the arm instead
+    of starting another (work never piles up behind a slow model)."""
     try:
-        if ix.vecs is None or not ix.rows:
+        if ix.vecs is None or not ix.rows or _QUERY_EMBEDS["inflight"] > 0:
             return []
-        import numpy as np
-
-        q = (await asyncio.wait_for(asyncio.to_thread(_embed, [message]), timeout=EMBED_TIMEOUT_S))[0]
-        sims = ix.vecs @ q
+        _QUERY_EMBEDS["inflight"] += 1          # released by the worker itself, whenever it finishes
+        try:
+            job = asyncio.to_thread(_nearest, ix.vecs, message, MAX_ROWS * 3)
+        except BaseException:
+            _QUERY_EMBEDS["inflight"] -= 1
+            raise
+        near = await asyncio.wait_for(job, timeout=EMBED_TIMEOUT_S)
         floor = similar_floor()
-        out = []
-        for j in np.argsort(-sims)[: MAX_ROWS * 3]:
-            c = ix.rows[int(j)][0]
-            if float(sims[j]) >= floor and c.id not in taken:
-                out.append((float(sims[j]), c))
-        return out
+        return [(sim, ix.rows[j][0]) for j, sim in near if sim >= floor and ix.rows[j][0].id not in taken]
     except Exception as exc:  # noqa: BLE001 - a timeout included
         logger.debug("recall_every_turn: similar arm skipped (%s)", type(exc).__name__)
         return []

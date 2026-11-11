@@ -94,7 +94,10 @@ _QUESTION_OPENER_RE = re.compile(
 # "It seems…", "These statements…". These are model commentary, never a fact.
 _META_OPENER_RE = re.compile(
     r"^\s*(?:"
-    r"the\s+(?:provided|context|concept|following|statement|statements|above|user'?s|"
+    # "The user's statement ..." is commentary; "The user's sister lives in ..." is how the extractor writes a relationship fact
+    # (lab 2026-11-12, labs/panel-extraction-split: a bare user'?s rejected every such fact as meta-rambling)
+    r"the\s+(?:provided|context|concept|following|statement|statements|above|"
+    r"user'?s\s+(?:statement|question|message|request|response|input|query|words)\b|"
     r"information|text|passage|conversation|response|key|main|overall)|"
     r"these\s+(?:statements?|facts?|points?|examples?)|"
     r"this\s+(?:statement|passage|text|response|conversation)|"

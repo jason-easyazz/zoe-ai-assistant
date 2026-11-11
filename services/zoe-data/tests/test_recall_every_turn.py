@@ -615,10 +615,14 @@ GIFT = "What should I cook for the visitor on Thursday?"      # no name, rare ke
 def fake_embed(texts):
     import numpy as np
 
+    import zlib
+
     out = []
     for t in texts:
         low = str(t).lower()
-        v = np.array([float(sum(w in low for w in words)) for words in _TOPICS.values()] + [0.05], dtype=np.float32)
+        topics = np.array([float(sum(w in low for w in words)) for words in _TOPICS.values()], dtype=np.float32)
+        own = np.random.default_rng(zlib.crc32(low.encode())).standard_normal(24).astype(np.float32)   # each text's own direction
+        v = np.concatenate([topics, 0.3 * own / np.linalg.norm(own)])
         out.append(v / np.linalg.norm(v))
     return np.stack(out)
 
@@ -653,7 +657,7 @@ def test_similar_off_embeds_nothing_and_changes_nothing(monkeypatch):
 
 def test_similar_on_finds_the_row_an_oblique_turn_needs(similar):
     sel, _ = pick(GIFT, world())
-    assert set(sel.ids) == {"m_sist_0002", "m_fish_0003"} and sel.sim_in == 2 and sel.sim == 2 and sel.sim_top > 0.5
+    assert sel.ids == ("m_fish_0003",) and sel.sim_in == 1 and sel.sim == 2 and sel.sim_top > 0.5   # 2 rows were near; 1 passed the walls
     blk = sel.block()
     assert blk.startswith(rt.BLOCK_OPEN_SIMILAR + "\n- ") and blk.endswith("\n" + rt.BLOCK_CLOSE)
     assert rt.BLOCK_OPEN_SIMILAR.startswith("[MEMORY CONTEXT")     # the sidecar elides it like any memory block
@@ -674,7 +678,7 @@ def test_similar_floor_is_the_gate(similar, monkeypatch):
 def test_similar_shadow_measures_and_injects_nothing(similar, monkeypatch, caplog):
     monkeypatch.setenv("ZOE_RECALL_SIMILAR", "shadow")
     sel, _ = pick(GIFT, world())
-    assert sel.ids == () and sel.sim == 2 and sel.sim_in == 0 and sel.block() == ""
+    assert sel.ids == () and sel.sim == 2 and sel.sim_in == 0 and sel.block() == ""        # the same turn that gets a row when on
     with caplog.at_level(logging.INFO, logger="recall_every_turn"):
         rt._log(UID, sel, "on", 1.0)
     assert "similar=shadow sim=2 sim_in=0" in caplog.text
@@ -694,7 +698,16 @@ def test_similar_rows_meet_the_same_walls(similar, monkeypatch):
         return "pescatarian" in text
     monkeypatch.setattr(memory_forgotten, "matches", forgot)
     sel, _ = pick(GIFT, world())
-    assert "m_fish_0003" not in sel.ids and "m_sist_0002" in sel.ids      # a forgotten row is never offered by similarity
+    assert sel.ids == ()                                                  # a forgotten row is never offered by similarity
+
+
+def test_a_similar_row_about_another_person_needs_the_owners_words(similar):
+    """The sister row is as near the oblique turn as the food row, but a row about another person rides only when the owner's
+    words pull it (the restraint wall every lexical pick meets): similarity alone never volunteers it."""
+    sel, _ = pick(GIFT, world())
+    assert sel.sim == 2 and "m_sist_0002" not in sel.ids
+    sel, _ = pick("Is Marisol a visitor who needs dinner?", world())      # negative control: named, it rides
+    assert "m_sist_0002" in sel.ids
 
 
 def test_similar_never_serves_a_row_rewritten_since_the_index(similar):
@@ -703,10 +716,11 @@ def test_similar_never_serves_a_row_rewritten_since_the_index(similar):
 
     async def go():
         await rt._build(UID, svc)
-        svc.rows = [r if r[0] != "m_sist_0002" else (r[0], "User's sister cancelled the trip.", r[2]) for r in svc.rows]
-        return await rt.select(UID, GIFT, svc=svc)
-    sel = asyncio.run(go())
-    assert "m_sist_0002" not in sel.ids
+        before = await rt.select(UID, GIFT, svc=svc)
+        svc.rows = [r if r[0] != "m_fish_0003" else (r[0], "User now eats everything.", r[2]) for r in svc.rows]
+        return before, await rt.select(UID, GIFT, svc=svc)
+    before, after = asyncio.run(go())
+    assert before.ids == ("m_fish_0003",) and after.ids == ()
 
 
 def test_similar_embed_failure_or_timeout_adds_nothing_and_never_raises(monkeypatch):
@@ -752,3 +766,53 @@ def test_similar_index_reuses_vectors_across_refreshes(similar):
         return first, sum(similar)
     first, second = asyncio.run(go())
     assert first == 6 and second == 6                # the refresh embedded no row again
+
+
+def test_similar_vectors_are_never_shared_across_members(similar):
+    """Two members with the SAME row id and different text: each index holds the vector of its own text."""
+    rt._reset_state()
+    mine = FakeSvc([row("m_same_0001", SISTER)])
+    theirs = FakeSvc([row("m_same_0001", WALK, uid=OTHER)])
+
+    async def go():
+        a = await rt._build(UID, mine)
+        b = await rt._build(OTHER, theirs)
+        return a, b
+    a, b = asyncio.run(go())
+    assert (a.vecs[0] == fake_embed([SISTER])[0]).all() and (b.vecs[0] == fake_embed([WALK])[0]).all()
+    assert not (a.vecs[0] == b.vecs[0]).all()                    # negative control: the two texts do embed differently
+    assert set(rt._VECS) == {(UID, "m_same_0001"), (OTHER, "m_same_0001")}
+
+
+def test_similar_skips_while_an_earlier_turn_embed_is_still_running(monkeypatch):
+    """A timed-out embed keeps its worker thread; the next turn must not start another behind it."""
+    import threading
+
+    monkeypatch.setenv("ZOE_RECALL_SIMILAR", "on")
+    monkeypatch.setattr(rt, "_embed", fake_embed)
+    rt._reset_state()
+    svc = FakeSvc(world())
+    release, started = threading.Event(), []
+
+    def hung(texts):
+        started.append(1)
+        release.wait(5)
+        return fake_embed(texts)
+
+    async def go():
+        await rt._build(UID, svc)
+        monkeypatch.setattr(rt, "_embed", hung)
+        first = await rt.select(UID, GIFT, svc=svc)           # times out; its worker is still inside the embed
+        second = await rt.select(UID, GIFT, svc=svc)          # must not start a second worker
+        n = len(started)
+        release.set()
+        for _ in range(100):
+            if rt._QUERY_EMBEDS["inflight"] == 0:
+                break
+            await asyncio.sleep(0.02)
+        monkeypatch.setattr(rt, "_embed", fake_embed)
+        third = await rt.select(UID, GIFT, svc=svc)           # the worker finished: the arm is back
+        return first, second, n, third
+    first, second, n, third = asyncio.run(go())
+    assert first.ids == () and second.ids == () and n == 1
+    assert third.ids == ("m_fish_0003",)

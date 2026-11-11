@@ -675,3 +675,17 @@ def test_the_chokepoint_judges_by_the_origin_label_too(arm):
     assert dropped is None and kept is not None
     rows = arm.stats()["rows"]
     assert not _has(rows, WORD) and _has(rows, "Hobart", ("approved",))
+
+
+# 'X rang and said, "..."' (lab 2026-11-12): the comma between the verb and the quote let the quoted words through as the owner's.
+@pytest.mark.parametrize("turn", ['Wren rang and said, "I am moving to Halvercombe next month."',
+                                  'Wren rang and said "I am moving to Halvercombe next month."',
+                                  'Wren rang and said,"I am moving to Halvercombe next month."'])
+def test_quoted_speech_after_a_comma_is_not_the_owners(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
+def test_negative_control_the_owners_own_sentence_is_kept():
+    own = own_words.analyze("I am moving to Halvercombe next month.")
+    assert own.reasons == () and "Halvercombe" in own.text

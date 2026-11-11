@@ -149,7 +149,7 @@ _SAY = (r"(?:says?|said|tells?[ \t]+me|told[ \t]+me|texts?[ \t]+me|texted(?:[ \t
 _ATTR_RE = re.compile(
     r"\b(?P<who>" + _WHO + r")[ \t]+" + _SAY + r"\b[ \t]*(?:(?P<sep>[:,])|(?P<q>[\"“]))[ \t]*"
     r"|\b(?P<who2>" + _NAME + r")[ \t]*:[ \t]*(?P<q2>(?=[\"“]))"
-    r"|\b(?P<who3>(?!(?:i|we|you)\b)[A-Za-z]+)[ \t]+" + _SAY + r"\b[ \t]*(?P<q3>[\"“])[ \t]*")
+    r"|\b(?P<who3>(?!(?:i|we|you)\b)[A-Za-z]+)[ \t]+" + _SAY + r"\b,?[ \t]*(?P<q3>[\"“])[ \t]*")   # 'rang and said, "..."': the comma too
 #: '"I live in Hobart," said Dana'
 _QATTR_RE = re.compile(
     r"[\"“](?P<q>[^\"”\n]{3,300})[\"”][ \t]*[,.]?[ \t]*"
