@@ -136,7 +136,8 @@ function boot(opts) {
   eq(t.log.meta[t.log.meta.length - 1], '5 of 5', 'progress moved');
   // none -> say it -> poll
   byAct(t.host, 'word')[0].click(); byAct(t.host, 'none')[0].click();
-  eq(byAct(t.host, 'sayit').length + byAct(t.host, 'phone').length, 2, 'say it + fix on phone');
+  eq(byAct(t.host, 'sayit').length, 1, 'say it is offered');
+  eq(byAct(t.host, 'phone').length, 0, 'no fix-on-phone offer until a phone correction surface exists');
   byAct(t.host, 'sayit')[0].click(); await settle();
   ok(t.log.calls.some((c) => /\/listen$/.test(c[1])), 'listen requested');
   t.server.listenState = 'answered'; t.clock.advance(1600); await settle();

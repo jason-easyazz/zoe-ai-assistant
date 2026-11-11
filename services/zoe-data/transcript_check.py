@@ -259,6 +259,40 @@ def candidates_from_who(row: dict) -> list[dict]:
              "pick": alts[0]["word"] if alts else "", "first": bool(row.get("first")), "turns": int(row.get("turns") or 1)}]
 
 
+def who_row_from_item(item: dict, text: str, people: dict) -> dict:
+    """The night pass's REAL ``who_items`` row (``seg_id``, ``t0``/``t1`` seconds, ``mark``, ``cands`` = [[id, score]] best first, id ``"you"`` or a person id) plus the turn's
+    text (resolved by the caller from the segment it was made for) and ``people`` {person_id: name} (his own live people) -> the shape ``candidates_from_who`` reads.
+    A candidate whose id is not one of his people (``"you"``, a deleted person) is not offered here; the owner can still say a name or pick "someone new". Pure."""
+    cands = []
+    for pair in item.get("cands") or []:
+        try:
+            pid, score = str(pair[0]), float(pair[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if pid in people:
+            cands.append({"person_id": pid, "name": people[pid], "score": score})
+    return {"kind": "who_said", "t0": item.get("t0") or 0, "t1": item.get("t1") or 0, "text": text, "candidates": cands, "first": item.get("mark") == "unknown", "turns": 1}
+
+
+async def _drop_forgotten(user_id: str, candidates: list[dict]) -> list[dict]:
+    """Forgotten means forever: a candidate whose context, span, pick or any offered word / name mentions an entity the forget ledger holds is dropped BEFORE it is stored.
+    FAIL CLOSED: an unreadable ledger raises (``enqueue`` then stores nothing)."""
+    import memory_forgotten as mf
+    kept = []
+    for c in candidates:
+        ctx = " ".join(str(c.get(k) or "") for k in ("before", "span", "after", "pick")).strip()
+        if ctx and await mf.spans(user_id, ctx, strict=True):
+            continue                                                  # the words themselves name a forgotten entity: nothing of this stretch is queued
+        alts = []
+        for a in c.get("alts") or []:
+            w = str(a.get("word", "")) if isinstance(a, dict) else ""
+            if w.strip() and await mf.spans(user_id, w, strict=True):
+                continue                                              # an offered word / name that is forgotten is simply not offered
+            alts.append(a)
+        kept.append({**c, "alts": alts})
+    return kept
+
+
 # --------------------------------------------------------------------------------------------------------------- night: queue
 async def _feeds_review(db, user_id: str, rid: str) -> bool:
     """Does a PENDING day-review candidate cite this recording? (Its words may be about to be written somewhere.)"""
@@ -301,6 +335,7 @@ async def enqueue(user_id: str, recording: dict, candidates: list[dict], *, name
         status = "open" if m == "on" else "shadow"
         stored = 0
         by_class: dict[str, int] = {}
+        candidates = await _drop_forgotten(user_id, candidates)          # before any store: an unreadable ledger raises and nothing is queued
         async with _db() as db:
             feeds = await _feeds_review(db, user_id, rid)
             for c in candidates:
@@ -586,18 +621,20 @@ async def answer(user_id: str, item_id: str, *, alt: Optional[int] = None, word:
             fresh = await _item(db, user_id, item_id)
             if fresh is None or fresh["status"] != "open":
                 raise CheckError("already_decided")
-            applied = await _apply_text(db, row, stored)
-            if not applied:           # the words it pointed at are gone (a later pass, an erase): nothing was corrected, so nothing is credited or closed as answered
-                await db.execute("UPDATE omi_check_items SET status = 'expired' WHERE id = ? AND status = 'open'", (row["id"],))
-                await db.commit()
+            moved = False
+            # ONE explicit transaction (asyncpg auto-commits each statement outside one - commit() is a no-op - as omi_repass.finish_one notes): the correction, the pending
+            # day-review candidates that rested on the old words and the status either all land or none do. A failure propagates and the answer can be retried.
+            async with db.transaction():
+                import omi_day_review as dr
+                if not await _apply_text(db, row, stored):
+                    moved = True           # the words it pointed at are gone (a later pass, an erase): nothing was corrected, so nothing is credited or closed as answered
+                    await db.execute("UPDATE omi_check_items SET status = 'expired' WHERE id = ? AND status = 'open'", (row["id"],))
+                else:
+                    reopened = await dr.reopen_recording_in(db, user_id, row["recording_id"])
+                    await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status = 'open'",
+                                     (stored, via, stamp, row["id"]))
+            if moved:
                 raise CheckError("text_moved", 409)
-            # ONE transaction: the correction, the pending day-review candidates that rested on the old words, the ledger and the status either
-            # all land or none do (a failure here propagates; the answer can be retried, and _apply_text is idempotent)
-            import omi_day_review as dr
-            reopened = await dr.reopen_recording_in(db, user_id, row["recording_id"])
-            await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status = 'open'",
-                             (stored, via, stamp, row["id"]))
-            await db.commit()
     # The ledger is an append-only counts file outside the database (``ledger.jsonl``, #2358): it cannot join the transaction, so it is written only AFTER
     # the commit and never blocks it - a missed line is a missed data point (logged), a double line on a retry cannot happen because a decided item is final.
     ledgered = len(_score_owner(row, chosen))
@@ -649,37 +686,37 @@ async def _answer_who(user_id: str, row: Any, alts: list, *, alt, word, new, via
                 await db.execute("UPDATE omi_check_items SET status = 'expired' WHERE id = ? AND status = 'open'", (row["id"],))
                 await db.commit()
                 raise CheckError("text_moved", 409)
-            answer_label = ""
-            try:
-                if alt is not None:
-                    offered = await _offerable(db, user_id, alts)
-                    if not (0 <= int(alt) < len(alts)) or not any(o.get("_i") == int(alt) for o in offered):
-                        raise CheckError("person_gone", 410)
-                    pick = alts[int(alt)]
-                    answer_label = str(pick.get("word", ""))
-                    if pick.get("person_id"):
-                        await omi_voices.tag(db, user_id, person_id=pick["person_id"], segment_id=seg)
+            async with db.transaction():       # explicit: asyncpg auto-commits each statement outside one, so a mid-way failure would leave a half-applied answer
+                answer_label = ""
+                try:
+                    if alt is not None:
+                        offered = await _offerable(db, user_id, alts)
+                        if not (0 <= int(alt) < len(alts)) or not any(o.get("_i") == int(alt) for o in offered):
+                            raise CheckError("person_gone", 410)
+                        pick = alts[int(alt)]
+                        answer_label = str(pick.get("word", ""))
+                        if pick.get("person_id"):
+                            await omi_voices.tag(db, user_id, person_id=pick["person_id"], segment_id=seg)
+                        else:
+                            await _merge_into(db, user_id, seg, pick["cluster_id"])
+                    elif word is not None:
+                        name = " ".join(str(word).split())[:40]
+                        if not name:
+                            raise CheckError("empty", 400)
+                        if await _forgotten(user_id, name):
+                            raise CheckError("forgotten", 410)
+                        answer_label = name
+                        await omi_voices.tag(db, user_id, name=name, segment_id=seg)
+                    elif new:
+                        answer_label = WHO_UNKNOWN
+                        await omi_voices.set_owner_label(db, user_id, seg, "other")
                     else:
-                        await _merge_into(db, user_id, seg, pick["cluster_id"])
-                elif word is not None:
-                    name = " ".join(str(word).split())[:40]
-                    if not name:
-                        raise CheckError("empty", 400)
-                    if await _forgotten(user_id, name):
-                        raise CheckError("forgotten", 410)
-                    answer_label = name
-                    await omi_voices.tag(db, user_id, name=name, segment_id=seg)
-                elif new:
-                    answer_label = WHO_UNKNOWN
-                    await omi_voices.set_owner_label(db, user_id, seg, "other")
-                else:
-                    raise CheckError("bad_choice", 400)
-            except omi_voices.VoiceError as exc:
-                raise CheckError("voice:" + str(exc)[:40], getattr(exc, "status", 400)) from exc
-            reopened = await dr.reopen_recording_in(db, user_id, row["recording_id"])     # the review reads who said what
-            await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status IN ('open', 'answered')",
-                             ("" if answer_label == WHO_UNKNOWN else "set", via, _iso(_now()), row["id"]))
-            await db.commit()
+                        raise CheckError("bad_choice", 400)
+                except omi_voices.VoiceError as exc:
+                    raise CheckError("voice:" + str(exc)[:40], getattr(exc, "status", 400)) from exc
+                reopened = await dr.reopen_recording_in(db, user_id, row["recording_id"])     # the review reads who said what
+                await db.execute("UPDATE omi_check_items SET status = 'answered', answer = ?, answered_via = ?, answered_at = ?, applied = 1 WHERE id = ? AND status IN ('open', 'answered')",
+                                 ("" if answer_label == WHO_UNKNOWN else "set", via, _iso(_now()), row["id"]))
     await _after_decision(user_id)
     logger.info("TRANSCRIPT_CHECK_WHO_ANSWERED via=%s new=%d reopened=%d", via, int(bool(new)), reopened)
     return {"ok": True, "applied": True, "ledger": 0, "reopened": reopened}

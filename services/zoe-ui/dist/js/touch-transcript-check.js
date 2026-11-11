@@ -191,7 +191,7 @@
         clear(sub);
         sub.appendChild(el('div', 'tcnote', 'Listening - say, “that’s Quinn”.'));
         request('POST', BASE + '/' + encodeURIComponent(it.id) + '/listen').then(function (r) {
-          if (!r || r.status !== 200) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I can’t listen from here. You can name them on your phone.')); return; }
+          if (!r || r.status !== 200) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I can’t listen from here. Skip this one for now.')); return; }
           pollName(0);
         });
       }
@@ -307,10 +307,7 @@
           var s = button('tcbtn primary', 'Say it');
           s.setAttribute('data-act', 'sayit');
           s.addEventListener('click', function () { sayIt(); });
-          var p = button('tcbtn', 'Fix on phone');
-          p.setAttribute('data-act', 'phone');
-          p.addEventListener('click', function () { phone(); });
-          sub.appendChild(s); sub.appendChild(p);
+          sub.appendChild(s);
         }
       }
 
@@ -319,7 +316,115 @@
         sub.appendChild(el('div', 'tcnote', 'Listening - just say the word.'));
         request('POST', BASE + '/' + encodeURIComponent(it.id) + '/listen').then(function (r) {
           if (!r) return;
-          if (r.status !== 200) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I can’t listen from here. Try Fix on phone.')); return; }
+          if (r.status !== 200) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I can’t listen from here. Skip this one for now.')); return; }
+          poll(0);
+        });
+        function poll(elapsed) {
+          pollT = timers.set(function () {
+            pollT = null;
+            if (!live() || view !== 'item' || queue[0] !== it) return;
+            request('GET', BASE + '/' + encodeURIComponent(it.id) + '/state').then(function (r) {
+              if (!r || !live() || queue[0] !== it) return;
+              if (r.json && r.json.status === 'answered') { line(r.json.answer || '…', true); next(); return; }
+              if (elapsed + LISTEN_POLL_MS >= LISTEN_MAX_MS) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I didn’t catch it. Tap None of these to try again.')); return; }
+              poll(elapsed + LISTEN_POLL_MS);
+            });
+          }, LISTEN_POLL_MS);
+        }
+      }
+
+      box.appendChild(cvf); box.appendChild(chips); box.appendChild(acts); box.appendChild(sub);
+      paint(box);
+    }
+
+    // ---- one item ------------------------------------------------------------------------------------------------
+    function showItem() {
+      view = 'item'; busy = false;
+      touch(); progress();
+      var it = queue[0];
+      if (it.kind === 'who') { showWho(it); return; }
+      var box = el('div', 'tcwrap');
+      var cvf = el('div', 'cvf');            // the live-caption component: `.cvf .cvl` is Zoe's speech as written on the Ask surface
+      var sentence = el('div', 'cvl');
+      cvf.appendChild(sentence);
+      sentence.setAttribute('data-id', it.id);
+      var chips = el('div', 'tcchips');
+      var acts = el('div', 'tcacts');
+      var sub = el('div', 'tcsub');
+
+      function line(spanText, chosen) {
+        clear(sentence);
+        if (it.before) sentence.appendChild(el('span', 'tcb', it.before + ' '));
+        var w = button('tcw' + (chosen ? ' chosen' : ''), spanText || '…', 'Uncertain word: ' + (spanText || 'missing'));
+        w.setAttribute('data-act', 'word');
+        w.addEventListener('click', function () { openChips(); });
+        sentence.appendChild(w);
+        if (it.after) sentence.appendChild(el('span', 'tca', ' ' + it.after));
+      }
+      line(it.span, false);
+
+      function openChips() {
+        if (busy) return;
+        clear(chips); clear(acts); clear(sub);
+        (it.alts || []).forEach(function (a) {
+          var c = button('tcchip', a.word, 'Use: ' + a.word);
+          c.setAttribute('data-alt', String(a.i));
+          if (a.word === it.pick) c.className += ' pick';
+          c.addEventListener('click', function () { choose(a); });
+          chips.appendChild(c);
+        });
+        [['play', 'Play it'], ['none', 'None of these'], ['skip', 'Skip']].forEach(function (p) {
+          var b = button('tcbtn', p[1]);
+          b.setAttribute('data-act', p[0]);
+          b.addEventListener('click', function () { act(p[0]); });
+          acts.appendChild(b);
+        });
+        touch();
+      }
+
+      function choose(a) {
+        if (busy) return;
+        busy = true;
+        line(a.word, true);
+        request('POST', BASE + '/' + encodeURIComponent(it.id) + '/answer', { alt: a.i }).then(function (r) {
+          if (!r) return;
+          if (r.status === 200 || r.status === 409) { next(); return; }
+          if (r.status === 410 || r.status === 404) { say('That one has gone.'); next(); return; }
+          busy = false; line(it.span, false); say('That didn’t save. Try again.');
+        });
+      }
+
+      function act(what) {
+        if (busy) return;
+        touch();
+        if (what === 'play') {
+          deps.blob(BASE + '/' + encodeURIComponent(it.id) + '/clip').then(function (b) {
+            if (!live()) return;
+            if (!b) { say('I don’t have that audio any more.'); return; }
+            if (deps.play) deps.play(b);
+          });
+        } else if (what === 'skip') {
+          busy = true;
+          request('POST', BASE + '/' + encodeURIComponent(it.id) + '/skip').then(function (r) {
+            if (!r) return;
+            if (r.status === 200 || r.status === 409) { next(); return; }
+            busy = false; say('That didn’t save. Try again.');
+          });
+        } else if (what === 'none') {
+          clear(sub);
+          var s = button('tcbtn primary', 'Say it');
+          s.setAttribute('data-act', 'sayit');
+          s.addEventListener('click', function () { sayIt(); });
+          sub.appendChild(s);
+        }
+      }
+
+      function sayIt() {
+        clear(sub);
+        sub.appendChild(el('div', 'tcnote', 'Listening - just say the word.'));
+        request('POST', BASE + '/' + encodeURIComponent(it.id) + '/listen').then(function (r) {
+          if (!r) return;
+          if (r.status !== 200) { clear(sub); sub.appendChild(el('div', 'tcnote', 'I can’t listen from here. Skip this one for now.')); return; }
           poll(0);
         });
         function poll(elapsed) {
