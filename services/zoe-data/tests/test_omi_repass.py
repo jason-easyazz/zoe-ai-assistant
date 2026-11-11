@@ -589,3 +589,15 @@ def test_a_worker_load_failure_names_the_engine_and_a_redacted_reason(tmp_path, 
     err = capsys.readouterr().err
     assert rc == 3 and "whisper-gpu:large-v3" in err and "RuntimeError" in err and "compiled with CUDA" in err
     assert secret not in err and str(Path.home()) not in err
+
+
+def test_worker_redaction_withholds_household_text_and_short_secrets_and_keeps_setup_reasons():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("omi_repass_worker_red", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")
+    w = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(w)
+    assert w.redact_exc(RuntimeError("failed /srv/family/Alice-medical-notes password is hunter2")) == "(message withheld)"      # negative control: household text + a short secret
+    assert w.redact_exc(RuntimeError("Alice said call Bob at the clinic")) == "(message withheld)"
+    out = w.redact_exc(OSError("libcudart.so.12: cannot open shared object file /opt/x/lib https://u:pw@h/x"))
+    assert "cannot open shared object" in out and "/opt" not in out and "pw@" not in out
+    assert "compiled with CUDA" in w.redact_exc(RuntimeError("This CTranslate2 package was not compiled with CUDA support"))                # control: the real reason survives

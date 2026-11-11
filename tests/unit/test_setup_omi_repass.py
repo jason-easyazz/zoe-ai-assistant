@@ -52,7 +52,9 @@ def test_check_exit_status_is_wired_to_drift_gpu_and_model_integrity():
 
 def test_check_warns_when_the_cuda_ctranslate2_build_is_missing_but_does_not_fail_the_whole_runtime(tmp_path):
     r = run(tmp_path, "--check")
+    assert r.returncode == 1                                                                      # the venv is missing here, so it fails ...
     assert "ct2       WARN" in r.stdout and "ln -s" in r.stdout                                    # named, with the command
     (tmp_path / ".zoe/ct2build/pylib/ctranslate2").mkdir(parents=True)
     (tmp_path / ".zoe/ct2build/install/lib").mkdir(parents=True)
     assert "ct2       ok" in run(tmp_path, "--check").stdout                                       # control
+    assert "ct2" in SCRIPT.read_text().split("local ct2=")[1].split("\n")[1] and "rc=1" not in SCRIPT.read_text().split("local ct2=")[1].split("\n")[1]      # ... and the ct2 line itself never sets rc=1
