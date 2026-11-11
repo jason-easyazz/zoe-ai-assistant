@@ -16,6 +16,7 @@ sys.path.insert(0, str(REPO / "scripts" / "perf"))
 sys.path.insert(0, str(REPO / "scripts" / "night"))
 
 import night_window as nw  # noqa: E402
+from test_night_repass_rehearsal import idle_box  # noqa: E402
 from test_night_window import _private_locks, at, make, wake_order  # noqa: E402,F401 - the window's own doubles and autouse lock fixture
 
 PRE = ["--pre-jobs", "omi_repass"]
@@ -165,3 +166,37 @@ def test_configure_uses_the_measured_reserve_unless_the_operator_pins_a_number(t
     assert nw.configure(nw.build_parser().parse_args([]), cfg).pre_keep_min == round((10.0 + 4.0) * 1.25, 1)
     monkeypatch.setenv("NIGHT_PRE_KEEP_MIN", "20")
     assert nw.configure(nw.build_parser().parse_args([]), nw.NightCfg(report_dir=tmp_path)).pre_keep_min == 20.0
+
+
+def _with_degraded_line(host):
+    """The re-pass's own stderr verdict when a voter did not vote (zoe-omi-repass.py main), appended to the job log the double wrote."""
+    orig = host.run_watched
+
+    def rw(argv, timeout, env, tick, log_path, interval=5.0):
+        res = orig(argv, timeout, env, tick, log_path, interval)
+        if "zoe-omi-repass.py" in " ".join(argv):
+            with open(log_path, "a") as fh:
+                fh.write("NIGHT_JOB omi_repass status=ok engines=['qwen3-asr', 'parakeet-tdt']\nNIGHT_JOB omi_repass DEGRADED: expected voter(s) did not vote: {'whisper-gpu:large-v3': 'model_unavailable'}\n")
+        return res
+    host.run_watched = rw
+
+
+def test_a_night_with_a_missing_voter_reads_degraded_in_the_headline_and_still_restores(tmp_path):
+    w, host, _ = make(tmp_path, argv=PRE, cfg_kw=stand_in(tmp_path), job_rc={"zoe-omi-repass.py": 3})
+    _with_degraded_line(host)
+    assert w.run() == nw.EXIT_OK and w.outcome.startswith("degraded") and "omi_repass" in w.outcome
+    assert wake_order(host) == list(nw.RESTORE_ORDER)
+    assert any("whisper-gpu:large-v3" in n for j in w.jobs if j["name"] == "omi_repass" for n in j["notes"])           # the missing engine is named in the report's note column
+
+
+def test_control_a_missing_runtime_without_the_degraded_line_still_fails_the_night(tmp_path):
+    w, host, _ = make(tmp_path, argv=PRE, cfg_kw=stand_in(tmp_path), job_rc={"zoe-omi-repass.py": 3})
+    assert w.run() == nw.EXIT_JOBS_FAILED and w.outcome.startswith("failed")
+
+
+def test_a_rehearsal_with_a_missing_voter_fails_it_must_be_whole(tmp_path):
+    w, host, _ = make(tmp_path, argv=["--rehearse-repass"], cfg_kw={**stand_in(tmp_path), "repass_preflight": False, "unit_env_file": tmp_path / "absent.env"}, start=at(11, 0), job_rc={"zoe-omi-repass.py": 3})
+    idle_box(host)
+    _with_degraded_line(host)
+    assert w.run() == nw.EXIT_JOBS_FAILED and w.outcome.startswith("failed")
+

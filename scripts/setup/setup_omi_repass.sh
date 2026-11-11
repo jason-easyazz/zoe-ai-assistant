@@ -57,6 +57,8 @@ print(s('$1', revision='$2', local_files_only=True))" 2>/dev/null || true; }
 
 check() {
   local rc=0 spec dir repo rev file sha snap
+  local ct2="${ZOE_OMI_REPASS_CT2_DIR:-$HOME/.zoe/ct2build}"          # the third voter (whisper-gpu:*) needs this hand-built CUDA CTranslate2; the pip wheel has no CUDA (2026-11-11: absent = a silent two-voter night)
+  if [ -d "$ct2/pylib/ctranslate2" ] && [ -d "$ct2/install/lib" ]; then echo "ct2       ok  CUDA CTranslate2 at $ct2"; else echo "ct2       WARN  $ct2/pylib + install/lib missing: the Whisper third voter cannot load and the job reports degraded: ln -s ~/.zoe/lab/omi-retranscribe-r2/ct2build $ct2"; fi
   if [ -x "$VENV/bin/python" ]; then echo "venv      ok  $VENV"; else echo "venv      MISSING  $VENV"; return 1; fi
   ZOE_CHECK_ALLOW_CPU="$ALLOW_CPU" "$VENV/bin/python" - <<'PY' || rc=1
 import importlib.metadata as m, os

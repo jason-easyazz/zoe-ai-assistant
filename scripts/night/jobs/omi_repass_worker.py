@@ -361,6 +361,18 @@ def zoe_reference(emb: Embedder, clips: list):
     return (m / (np.linalg.norm(m) or 1.0)).tolist()
 
 
+def redact_exc(exc: BaseException, limit: int = 160) -> str:
+    """An exception's message made safe for a log line: the home directory shortened, secret-shaped runs (long hex / base64 / key=value) removed, one line, capped."""
+    import re
+    t = " ".join(str(exc).split())
+    home = os.path.expanduser("~")
+    if home and home != "/":
+        t = t.replace(home, "~")
+    t = re.sub(r"(?i)\b(token|secret|password|passwd|key|authorization|bearer)\b\s*[=:]\s*\S+", r"\1=<redacted>", t)
+    t = re.sub(r"\b[A-Za-z0-9+/_-]{32,}\b", "<redacted>", t)
+    return t[:limit]
+
+
 def run(manifest: dict, out_path: str) -> int:
     name = manifest.get("asr", "qwen3-asr")
     global MODELS_DIR, CHUNK_MAX_S, R34_DIR
@@ -380,7 +392,7 @@ def run(manifest: dict, out_path: str) -> int:
         asr.load()
         emb = DIAR[diar](threads) if diar != "none" else None          # a later voter / contender needs the pivot's chunks only: no speaker units (and no R34 session in memory)
     except Exception as exc:  # noqa: BLE001 - a model that is not in the cache is a setup problem, not a data one
-        print(f"model unavailable: {type(exc).__name__}", file=sys.stderr)
+        print(f"model unavailable: {name}: {type(exc).__name__}: {redact_exc(exc)}", file=sys.stderr)          # the ENGINE and the real reason (2026-11-11: a bare "RuntimeError" hid a missing CUDA CTranslate2)
         return 3
     load_s = time.time() - t0
     done = carried = failed = 0
