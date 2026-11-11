@@ -477,6 +477,14 @@ labs/router-90-campaign/results/gen1-lineage.json
 # ~2.1 GB of untracked runtime data that drowned validate_structure.py in
 # 48k phantom orphans (issue #6104). Never tracked, never vendored.
 /.worktrees/
+# Serena's GitignoreParser walks every directory collecting nested .gitignore
+# files and prunes ONLY by .gitignore specs it has already loaded -- the
+# `ignored_paths` list in .serena/project.yml is NOT consulted during that walk
+# (serena-agent 1.7.0, serena/util/file_system.py). Without this root entry a
+# Serena restart reads the .gitignore of every agent worktree (~85 min at ~99% of
+# a core with ~325 of them). `.git/info/exclude` carries the same line locally but
+# Serena never reads it. Pinned by tests/unit/test_serena_project_ignores_worktrees.py.
+/.claude/worktrees/
 /.polly/
 # Same class, missed by the list above and therefore still visible to any
 # `git status --porcelain` on the live checkout (2026-08-02: these four were
