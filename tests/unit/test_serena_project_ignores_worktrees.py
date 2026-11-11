@@ -68,3 +68,17 @@ def test_worktree_root_is_ignored(root):
 def test_worktree_root_is_ignored_recursively(root):
     # The bare path alone does not cover nested occurrences.
     assert f"**/{root}/**" in _ignored(), f"recursive glob for {root!r} missing"
+
+
+def test_root_gitignore_prunes_claude_worktrees():
+    # `ignored_paths` above does NOT stop Serena's start-up walk: its
+    # GitignoreParser prunes directories only by already-loaded .gitignore specs,
+    # so the nested worktree .gitignore files were still read (~85 min, 2026-11-12).
+    # The tracked root .gitignore must name the worktree root (loaded first, so it
+    # prunes the whole subtree). `.git/info/exclude` is not read by Serena.
+    gitignore = (_PROJECT_YML.parents[1] / ".gitignore").read_text(encoding="utf-8")
+    lines = {ln.strip() for ln in gitignore.splitlines()}
+    assert "/.claude/worktrees/" in lines or ".claude/worktrees/" in lines, (
+        "root .gitignore must ignore /.claude/worktrees/ or Serena re-walks every "
+        "agent worktree on restart"
+    )
