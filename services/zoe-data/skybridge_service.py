@@ -4301,8 +4301,8 @@ async def _fetch_list_catalog(user_id: str, db: Any) -> list[dict[str, Any]]:
         item = dict(row)
         if household and item.get("visibility") != "family":
             continue  # belt and braces: the query already filters, a panel guest must never be handed a private list
-        if item.get("user_id") != user_id and item.get("list_type") != "shopping" and not household:
-            continue
+        if not household and item.get("user_id") != user_id and item.get("visibility") != "family":
+            continue  # the query already filters; only the caller's own lists and FAMILY-visible ones (a shared list) are ever read
         key = (str(item.get("list_type") or ""), str(item.get("name") or "").strip().lower())
         if key in seen:
             # ONE list per name: a fuller duplicate replaces an emptier one already kept (never the reverse), so the

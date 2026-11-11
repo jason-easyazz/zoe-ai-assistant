@@ -144,6 +144,8 @@ class ShareDb(FakeDb):
             return sorted(rows, key=lambda r: 0 if r["user_id"] == who else 1)
         if sql.startswith("SELECT role FROM users WHERE id = $1"):
             return [{"role": self.users[args[1]][1]}] if args[1] in self.users else []
+        if "FROM lists WHERE deleted = 0 AND (user_id = $1 OR visibility = 'family')" in sql:         # the voice list catalog
+            return [dict(r) for r in self.lists if not r.get("deleted") and (r["user_id"] == args[1] or r["visibility"] == "family")]
         if sql.startswith("SELECT name FROM users WHERE id = $1"):
             return [{"name": self.users[args[1]][0]}] if args[1] in self.users else []
         if sql.startswith("SELECT id, name, role FROM users"):
@@ -530,3 +532,27 @@ async def test_a_compound_create_on_an_existing_work_list_keeps_its_todo_type_an
                 items_by_list={"w1": []})
     await _say(db, "alex", "create a list called Projects and add call mum and dad to it")
     assert [i["text"] for i in db.items_by_list["w1"]] == ["call mum and dad"]
+
+
+@pytest.mark.asyncio
+async def test_a_shared_list_is_in_the_other_members_voice_catalog_and_readback_until_it_is_unshared():
+    list_service.clear_recent_adds()
+    db = _house()
+    await _create_camping(db)
+
+    async def blair_reads():
+        r = await _say(db, "blair", "show my Camping Supplies list")
+        return str(r.get("cards")) + r.get("spoken_summary", "")
+
+    assert "'tent'" not in await blair_reads()                    # private: invisible to blair
+    assert "Camping Supplies" not in [x["name"] for x in await sky._fetch_list_catalog("blair", db)]
+    await _say(db, "alex", "share it to the house")
+    assert "'tent'" in await blair_reads()                         # shared: blair can read it by voice
+    assert "Camping Supplies" in [x["name"] for x in await sky._fetch_list_catalog("blair", db)]
+    await _say(db, "alex", "make it private")
+    assert "'tent'" not in await blair_reads()
+    assert "Camping Supplies" not in [x["name"] for x in await sky._fetch_list_catalog("blair", db)]
+    # guests' scope is unchanged: a private list of alex's never reaches the panel's household viewer either
+    import panel_principal
+
+    assert "Camping Supplies" not in [x["name"] for x in await sky._fetch_list_catalog(panel_principal.HOUSEHOLD_VIEWER, db)]
