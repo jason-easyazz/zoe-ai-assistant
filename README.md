@@ -435,7 +435,7 @@ The underlying pieces live in `scripts/setup/touchscreen/` and
 | [docs/research/](docs/research/README.md) | Decision records and field research, including the memory bake-off |
 | [docs/knowledge/open-problems.md](docs/knowledge/open-problems.md) | The ledger of known, unfixed problems |
 | [HARDWARE_COMPATIBILITY.md](HARDWARE_COMPATIBILITY.md) | Platform notes (Jetson/Pi/x86) |
-| [CAPABILITIES.md](CAPABILITIES.md) | Generated MCP tool inventory (its agent-tier table is legacy) |
+| [CAPABILITIES.md](CAPABILITIES.md) | Static MCP tool inventory reference (its agent-tier table is legacy); the live snapshot is written to `~/.zoe/CAPABILITIES.md`, never into the checkout |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [AGENTS.md](AGENTS.md) | Conventions for AI coding agents in this repo |
 

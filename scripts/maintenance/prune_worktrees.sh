@@ -21,7 +21,8 @@ Safety guards (all must pass):
   - worktree has no uncommitted changes
   - branch NOT checked out by another worktree (removing one would pull the
     shared branch out from under the other — possibly a live agent session)
-  - branch merged into origin/main, or detached HEAD is ancestor of origin/main
+  - branch merged into origin/main (ancestor), or its tip is the head commit of a
+    squash-MERGED PR (via gh); same rule for a detached HEAD
   - no activity for MIN_AGE_DAYS (default 7) by latest commit timestamp
 
 Environment:
@@ -75,9 +76,27 @@ branch_is_shared() {
   grep -qxF -- "$branch" <<<"$shared_branches"
 }
 
+# Squash-merged PRs: this repo is squash-only, so a merged branch's commits are
+# NEVER ancestors of origin/main and `merge-base --is-ancestor` alone reports every
+# one of them "not merged" (2026-11-12: ~130 merged worktrees skipped that way).
+# A branch counts as merged when its tip is exactly the head commit of a MERGED PR
+# (commits added after the PR head are never swept up). One batched `gh` call; if
+# gh is missing/offline the set is empty and behaviour degrades to the
+# ancestor-only check. ZOE_WORKTREE_MERGED_OIDS=<file> overrides the source (tests).
+MERGED_PR_OIDS=""
+if [[ -n "${ZOE_WORKTREE_MERGED_OIDS:-}" ]]; then
+  [[ -r "$ZOE_WORKTREE_MERGED_OIDS" ]] && MERGED_PR_OIDS="$(cat "$ZOE_WORKTREE_MERGED_OIDS")"
+elif command -v gh >/dev/null 2>&1; then
+  MERGED_PR_OIDS="$(timeout 60 gh pr list --state merged --limit 3000 --json headRefOid --jq '.[].headRefOid' 2>/dev/null || true)"
+fi
+
 is_merged_ref() {
   local ref="$1"
-  git merge-base --is-ancestor "$ref" "$MAIN_REF"
+  git merge-base --is-ancestor "$ref" "$MAIN_REF" && return 0
+  [[ -n "$MERGED_PR_OIDS" ]] || return 1
+  local oid
+  oid="$(git rev-parse "$ref" 2>/dev/null)" || return 1
+  grep -qxF -- "$oid" <<<"$MERGED_PR_OIDS"
 }
 
 worktree_age_seconds() {

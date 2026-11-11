@@ -63,10 +63,12 @@ async def _acquire(pool, timeout_s: float | None = None):
         conn = await asyncio.wait_for(pool.acquire(), timeout=timeout_s)
     except (asyncio.TimeoutError, TimeoutError):
         _update_pool_gauges(pool)
-        msg = (
-            f"db pool exhausted — possible connection leak "
-            f"(acquire timed out after {timeout_s:.1f}s)"
-        )
+        # size=max,free=0 points at a leak; free>0 means the host/DB stalled instead.
+        try:
+            stats = f"size={pool.get_size()}, free={pool.get_idle_size()}"
+        except Exception:
+            stats = "size/free unknown"
+        msg = f"db pool exhausted ({stats}; acquire timed out after {timeout_s:.1f}s)"
         logger.error("db_pool: %s", msg)
         raise PoolExhaustedError(msg) from None
     _update_pool_gauges(pool)

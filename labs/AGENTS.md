@@ -511,3 +511,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `flock /tmp/zoe-test-lane.lock` (watchdog cap 15 min), releasing the lane between pieces; refuses while
   `night_busy.sh test|deploy` says pause and 02:05-02:45, waits for `MemAvailable` >= 2000 MB, asserts its teardown.
   Unit net for the broker: `tests/unit/test_zoe_vaultd.py` (ci_safe). README is the record.
+- `recall-match-lab/` — retrieval-only, offline, SYNTHETIC lab (invented household: 40 facts, 60 direct / oblique /
+  irrelevant turns) scoring which rule puts the needed fact in front of the brain: the production
+  `recall_every_turn._ranked` called as a library on an in-memory index (plus lowered thresholds), bge-small cosine
+  top-3 (fastembed, local cache only, CPU), a 150-token standing card, and their union. Never opens a database, Chroma,
+  the network or the brain. Hand-run under `flock /tmp/zoe-test-lane.lock`; no regression net. README is the record.
