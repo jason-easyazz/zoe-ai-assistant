@@ -289,11 +289,16 @@ def test_the_voice_loop_puts_a_passed_but_overtaken_pr_ahead_of_everything_queue
 
 
 def test_the_lander_exits_12_for_behind_after_a_pass_and_for_an_unmerged_wait():
+    """DIRTY, and BEHIND whose update the probe's evidence cannot be reused at (2026-11-11: rebind,
+    behaviour in test_landing_evidence_reuse.py), still end in exit 12 = a fresh probe at the FRONT."""
     code = (LANDING / "land_voice_pr.sh").read_text()
-    behind = next(ln for ln in code.splitlines() if 'case "$MS" in BEHIND|DIRTY)' in ln)
-    assert "exit 12" in behind
+    lines = code.splitlines()
+    dirty = next(ln for ln in lines if ln.strip().startswith("DIRTY)"))
+    assert "exit 12" in dirty
+    behind = code[code.index("  BEHIND)"):code.index("esac", code.index("  BEHIND)"))]
+    assert 'rebind "$NEW"' in behind and behind.rstrip().endswith("exit 12;;"), behind
     tail = code[code.index("landing_wait_merged \"$PR\" \"$HEAD_SHA\""):]
-    assert tail.rstrip().endswith("exit 12") and "MERGED*) exit 0" in tail
+    assert tail.rstrip().endswith("exit 12\ndone") and "MERGED*) exit 0" in tail
 
 
 # ---- probe vs chat drivers ------------------------------------------------------------------------------------------------------
