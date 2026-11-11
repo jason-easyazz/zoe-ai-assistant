@@ -126,7 +126,7 @@ def rover(hyps: dict, pivot: str = PIVOT, lexicon: Iterable[str] = ()) -> dict:
         toks = {m: [w for w, _ in _rtoks(hyps[m])] for m in others}
         best = min(others, key=lambda m: (sum(_edit(toks[m], toks[o]) for o in others if o != m), m))
         surf = " ".join(s for _, s in _rtoks(hyps[best]))
-        return {**base, "text": surf, "words": toks[best], "sources": [{best}] * len(toks[best]), "voters": [pivot] + others, "low_conf": True}
+        return {**base, "text": surf, "words": toks[best], "sources": [{m for m in others if w in toks[m]} for w in toks[best]], "voters": [pivot] + others, "low_conf": True}
     if not P or len(others) < 2:
         base["voters"] = [pivot] + others
         return base

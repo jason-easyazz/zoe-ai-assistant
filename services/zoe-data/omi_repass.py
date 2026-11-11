@@ -927,14 +927,15 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
                         counts["proposed"] = len(pick)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("OMI_REPASS_PROPOSAL_FAILED reason=%s", type(exc).__name__)
-    if (res.get("check_rows") or res.get("who_rows")) and counts.get("status") in ("replaced", "shadow"):
+    who_rows = [{"kind": "who_said", "u": uid, "rid": rid, **wi} for wi in counts.get("who_items") or []]      # finish_one's own "who said this?" turns (the caller builds the same rows for the hyps store)
+    if (res.get("check_rows") or who_rows) and counts.get("status") in ("replaced", "shadow"):
         # the morning transcript check (ZOE_TRANSCRIPT_CHECK, default off = nothing): the ROVER fusion's contested chunks (``eu.is_contested``: a slot with no
         # strict majority, or low_conf - the SAME rows ``eu.check_queue`` reads back from the hyps store) become ranked check items BEFORE the release below,
         # so an open item keeps its snippet's WAV (the hyps file is written only after every recording is finished, i.e. after that release). Never fails the pass.
         import transcript_check
         if transcript_check.enabled():
             cands = [c for row in res.get("check_rows") or [] for c in transcript_check.candidates_from_row(row)]
-            cands += [c for row in res.get("who_rows") or [] for c in transcript_check.candidates_from_who(row)]      # "who said this?" turns (the re-pass's "?" / "X?" labels)
+            cands += [c for row in who_rows for c in transcript_check.candidates_from_who(row)]      # "who said this?" turns (the re-pass's "?" / "X?" labels)
             counts["check"] = (await transcript_check.enqueue(uid, r, cands, names=names)).get("stored", 0)
     await omi.release_tagged_audio(uid)            # the pass has seen it: the WAV goes unless the owner keeps it or a line still needs a name
     return counts

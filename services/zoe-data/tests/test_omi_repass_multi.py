@@ -52,7 +52,7 @@ def test_fewer_than_three_voters_leave_the_pivot_untouched_and_granites_zoe_is_i
 def test_an_empty_pivot_with_speech_from_the_other_voters_goes_to_review_not_silence():
     said = "we should book the table for friday"
     f = eu.rover({PIV: "", PAR: said, DIS: said})
-    assert f["text"] == said and f["low_conf"] and f["words"] == said.split()          # not silently empty: the chunk is flagged for the check queue
+    assert f["text"] == said and f["low_conf"] and f["words"] == said.split() and all(src == {PAR, DIS} for src in f["sources"])          # not silently empty: the chunk is flagged for the check queue
     assert eu.rover({PIV: "", PAR: "", DIS: ""}) == eu.rover({PIV: "", PAR: " "}) and eu.rover({PIV: "", PAR: "", DIS: ""})["text"] == ""
     assert not eu.rover({PIV: "", PAR: "", DIS: ""})["low_conf"]                         # all-empty stays empty and unflagged
     assert eu.rover({PIV: "", PAR: said})["text"] == ""                                  # one lone engine (likely a hallucination on silence) is not enough
