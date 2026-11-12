@@ -196,7 +196,7 @@ def turns(*spec):
 
 def transcribe(env, monkeypatch, segs, uid=A, state="tagged", **kw):
     async def fake(u, p, now):
-        return segs, state, MID
+        return segs, state, MID, ("panel" if state == "tagged" else None)
     monkeypatch.setattr(omi, "_diarise", fake)
     rid = add_recording(env, uid, **kw)
     assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
@@ -259,6 +259,33 @@ def test_diarise_reads_the_wav_and_cuts_where_the_voice_changes(tmp_path):
     assert 4800 <= segs[0].end_ms <= 5400 and segs[-1].end_ms == 10200
 
 
+def test_the_pendant_print_is_labelled_with_the_pendant_bars_and_the_panel_profile_keeps_todays(tmp_path, monkeypatch):
+    """The real pass over a WAV, one voice at an exact cosine to the wearer reference. Against the CONFIRMED pendant print (PROVISIONAL 0.6 / 0.35): 0.45 is
+    ``unsure`` (not "me"), 0.65 is ``you``, 0.3 is ``other``. Against the panel profile the same scores keep today's labels (0.351 / 0.15). Mutation: ignore
+    ``channel`` in ``diarise`` (or in ``thresholds``) -> the pendant 0.45 line reads "you" and the pendant 0.3 line "unsure"."""
+    for k in ("ZOE_OMI_TAG_YOU_MIN", "ZOE_OMI_TAG_OTHER_MAX", "ZOE_OMI_TAG_PENDANT_YOU_MIN", "ZOE_OMI_TAG_PENDANT_OTHER_MAX"):
+        monkeypatch.delenv(k, raising=False)
+    assert od.thresholds() == od.thresholds("panel") == (0.351, 0.15) and od.thresholds("pendant") == (0.6, 0.35)
+    p = tmp_path / "one.wav"
+    with wave.open(str(p), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes((6000 * np.sin(2 * np.pi * 150 * np.arange(16000 * 6) / 16000)).astype("<i2").tobytes())
+    orth = SAM - float(SAM @ WEARER) * WEARER
+    orth = orth / np.linalg.norm(orth)
+
+    def label_at(c, channel):
+        class Fake:
+            def embed(self, x):
+                return (c * WEARER + np.sqrt(1 - c * c) * orth).astype(np.float32)
+        return [s.speaker for s in run(od.diarise(str(p), Fake(), WEARER, vad_factory=lambda: None, channel=channel))]
+    assert {c: label_at(c, "pendant") for c in (0.3, 0.45, 0.65)} == {0.3: ["other"], 0.45: ["unsure"], 0.65: ["you"]}
+    assert {c: label_at(c, "panel") for c in (0.3, 0.45, 0.65)} == {0.3: ["unsure"], 0.45: ["you"], 0.65: ["you"]}
+    monkeypatch.setenv("ZOE_OMI_TAG_PENDANT_YOU_MIN", "0.4")                                    # overridable by name, the panel bars untouched
+    assert label_at(0.45, "pendant") == ["you"] and od.thresholds("panel") == (0.351, 0.15)
+
+
 def test_the_energy_fallback_does_not_drift_over_a_long_recording(tmp_path):
     """Without Silero the VAD reads one-second blocks; a block is not a whole number of 512-sample hops, so dropping the remainder
     shifted every later turn 8 ms per second (2.4 s five minutes in)."""
@@ -306,6 +333,47 @@ def test_tag_off_writes_no_segments_and_a_tagger_failure_never_costs_the_transcr
     (row,) = env.db.q("SELECT status, transcript, speaker_state FROM omi_recordings WHERE id = ?", (rid,))
     assert row == ("done", "said6s", "untaggable")
     assert [s[0] for s in segs_of(env, rid)] == ["unverified"]                     # chunk-level rows: the review still has lines
+
+
+def test_the_first_pass_uses_the_confirmed_pendant_print_over_the_panel_profile_and_records_the_channel(env, monkeypatch):
+    """The pendant is a different microphone from the panel: once the owner has CONFIRMED a pendant print (``omi_repass.wearer_print``, >= MIN_WEARER_WINDOWS) the first pass labels
+    against it and says so (``profile_channel='pendant'``); without one it keeps the panel profile (``'panel'``). Mutation: drop the ``wearer_print`` lookup in ``_diarise`` -> the
+    pendant case scores against the panel profile and records ``panel``."""
+    import omi_repass as rp
+    _migrate(env.engine, "0075_omi_night_repass.py")
+    panel = unit(77)
+    seen: list = []
+    chans: list = []
+
+    async def wearer_profile(db, uid, mid):
+        return panel
+    monkeypatch.setattr(ov, "wearer_profile", wearer_profile)
+    monkeypatch.setattr(od, "load_embedder", lambda: object())
+
+    async def fake_diarise(path, embedder, profile, gate=None, channel="panel"):
+        seen.append(profile)
+        chans.append(channel)
+        return turns((0, 6, "you", 0.6, WEARER))
+    monkeypatch.setattr(od, "diarise", fake_diarise)
+    rid = add_recording(env)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    assert float(seen[-1] @ panel) > 0.999                                                     # control: no pendant print -> the panel profile, channel recorded as panel
+    assert env.db.q("SELECT profile_channel FROM omi_segments WHERE recording_id = ?", (rid,)) == [("panel",)]
+    for i in range(rp.MIN_WEARER_WINDOWS):                                                    # the owner confirmed a pendant print
+        env.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                            "VALUES (?, ?, 'old', ?, ?, ?, ?, 'heuristic', 'confirmed', '2026-11-12T00:00:00Z')", (f"w{i}", A, MID, i * 1000, i * 1000 + 900, near(WEARER, i).tobytes()))
+    env.db.conn.commit()
+    rid2 = add_recording(env)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    assert float(seen[-1] @ WEARER) > 0.9 and float(seen[-1] @ panel) < 0.5
+    assert env.db.q("SELECT profile_channel FROM omi_segments WHERE recording_id = ?", (rid2,)) == [("pendant",)]
+    assert chans == ["panel", "pendant"]                                                       # and the pass is told which bars to label with
+    assert env.db.q("SELECT speaker_state FROM omi_recordings WHERE id = ?", (rid2,)) == [("tagged",)]
+    env.db.conn.execute("DELETE FROM omi_wearer_samples WHERE id != 'w0'")                     # below MIN_WEARER_WINDOWS is no print: back to the panel profile
+    env.db.conn.commit()
+    rid3 = add_recording(env)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    assert env.db.q("SELECT profile_channel FROM omi_segments WHERE recording_id = ?", (rid3,)) == [("panel",)]
 
 
 # --- learning: what is stored, and for whom ---------------------------------------------------------------------------------

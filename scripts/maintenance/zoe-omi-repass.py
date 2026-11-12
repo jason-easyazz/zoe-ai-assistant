@@ -13,6 +13,8 @@ The OWNER's side of "who is me" (run it yourself; the listing holds what was sai
     zoe-omi-repass.py --wearer-lines --user ID --proposal 2026-11-10    # what was said in a proposal's windows: was that you?
     zoe-omi-repass.py --confirm-wearer 2026-11-10 --user ID             # yes, that was me: those windows become your pendant print
     zoe-omi-repass.py --reject-wearer 2026-11-10 --user ID              # no: delete the proposal
+    zoe-omi-repass.py --propose-wearer-stored --user ID                 # up to 3 candidate voices (stored-DATE-a|b|c) from what the pendant already heard; confirm the one that is you
+    zoe-omi-repass.py --relabel-stored --user ID                        # after confirming: your existing stored lines that match the print read "me" (counts only)
 
 Nothing makes a line "me" until windows are CONFIRMED (here, or by labelling a line "me" in the app). Flag ``ZOE_OMI_NIGHT_REPASS`` = off | shadow | on.
 Output: ONE JSON line (counts only) on stdout and a ``NIGHT_JOB omi_repass ...`` line on stderr. Exit 0 for any data outcome, 3 a model is missing, 1 an error.
@@ -72,6 +74,8 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     ap.add_argument("--proposal", default="")
     ap.add_argument("--confirm-wearer", default="")
     ap.add_argument("--reject-wearer", default="")
+    ap.add_argument("--propose-wearer-stored", action="store_true", help="with --user: propose up to 3 candidate wearer voices from the stored segment embeddings (counts only)")
+    ap.add_argument("--relabel-stored", action="store_true", help="with --user: once the wearer print is confirmed, label the member's matching stored lines 'me' (counts only)")
     ap.add_argument("--user", default="")
     a = ap.parse_args(argv)
     import omi_repass as rp
@@ -105,16 +109,20 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
     try:
         if a.requeue_failed:
             return 0, {"status": "ok", "requeued": await rp.requeue_failed(a.user or None)}
-        owner_cmds = a.wearer_status or a.wearer_lines or a.confirm_wearer or a.reject_wearer
+        owner_cmds = a.wearer_status or a.wearer_lines or a.confirm_wearer or a.reject_wearer or a.propose_wearer_stored or a.relabel_stored
         if owner_cmds:
             if not a.user:
                 raise SystemExit("--user ID is required for the wearer commands")
             from db_compat import get_compat_db
             async with get_compat_db() as db:
                 if a.confirm_wearer:
-                    return 0, {"status": "ok", "confirmed": await rp.confirm_wearer(db, a.user, a.confirm_wearer)}
+                    return 0, await rp.confirm_wearer(db, a.user, a.confirm_wearer)        # {status: confirmed | not_found | not_eligible, confirmed}
                 if a.reject_wearer:
                     return 0, {"status": "ok", "rejected": await rp.reject_wearer(db, a.user, a.reject_wearer)}
+                if a.propose_wearer_stored:
+                    return 0, await rp.propose_wearer_from_stored(db, a.user)
+                if a.relabel_stored:
+                    return 0, await rp.relabel_stored_from_print(db, a.user)
                 if a.wearer_lines:
                     if not a.proposal:
                         raise SystemExit("--wearer-lines needs --proposal ID")

@@ -677,6 +677,8 @@ _ENTRIES = (
     _f('ZOE_OMI_SYNC_ENABLED', 'bool', False, doc='docs/knowledge/omi-pendant-health.md'),
     _f('ZOE_OMI_TAG_MODEL_DIR', 'str', '', doc='docs/knowledge/omi-voice-tagging.md'),
     _f('ZOE_OMI_TAG_OTHER_MAX', 'float', 0.15, doc='docs/architecture/memories-space.md'),
+    _f('ZOE_OMI_TAG_PENDANT_OTHER_MAX', 'float', 0.35, doc='docs/knowledge/omi-night-repass.md', note='PROVISIONAL: re-measure after the owner confirms a pendant print'),
+    _f('ZOE_OMI_TAG_PENDANT_YOU_MIN', 'float', 0.6, doc='docs/knowledge/omi-night-repass.md', note='PROVISIONAL: re-measure after the owner confirms a pendant print'),
     _f('ZOE_OMI_TAG_YOU_MIN', 'float', 0.351, doc='docs/knowledge/omi-voice-tagging.md'),
     _f('ZOE_OMI_VOICEPRINT_IDLE_DAYS', 'int', 0, doc='docs/architecture/memories-space.md'),
     _f('ZOE_OMI_VOICEPRINT_PROVISIONAL_DAYS', 'int', 0, doc='docs/knowledge/omi-voice-tagging.md'),

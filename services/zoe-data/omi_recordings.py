@@ -1146,11 +1146,11 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     seen_chunks: dict = {}
     level: dict = {}
     segs: Optional[list] = None            # the omi_segments rows (only while ZOE_OMI_SPEAKER_TAG is not off)
-    spk_state, model_id = "unverified", None
+    spk_state, model_id, channel = "unverified", None, None
     import omi_repass as _rp
     strict = _rp.mode() != "off"          # flag off: the first pass stays exactly as it was (ledger failure = fail open)
     try:
-        turns, spk_state, model_id = await _diarise(uid, path, now)
+        turns, spk_state, model_id, channel = await _diarise(uid, path, now)
         if turns:
             texts = await transcribe_turns(path, [(t.start_ms, t.end_ms) for t in turns], gate=lambda: _patient_gate(now),
                                            pause_s=pause_s, stats=seen_chunks)
@@ -1218,7 +1218,7 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                 try:
                     omi_voices.mark_overlaps(segs, await omi_voices.zoe_spoken_spans(db, uid, rid, segs=segs))  # Zoe's own replies: not a person
                     seg_ids = await omi_voices.store_segments(db, uid, rid, segs, model_id=model_id,
-                                                              channel="panel" if spk_state == "tagged" else None)
+                                                              channel=channel if spk_state == "tagged" else None)
                 except Exception as exc:  # noqa: BLE001 - a segment-store failure never costs the transcript
                     logger.warning("OMI_SEGMENTS_NOT_STORED id=%s reason=%s - transcript kept untagged", rid, type(exc).__name__)
                     seg_ids, spk_state, segs = [], "untaggable", None
@@ -1240,7 +1240,8 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             if seg_ids and spk_state == "tagged":
                 try:                          # learning is optional; the transcript and its segments are already safe
                     import omi_diarize
-                    learned = await omi_voices.learn(db, uid, seg_ids, segs, model_id=model_id, you_min=omi_diarize.thresholds()[0])
+                    learned = await omi_voices.learn(db, uid, seg_ids, segs, model_id=model_id, you_min=omi_diarize.thresholds()[0])     # the PANEL bar on purpose: under the pendant bars an
+                    # 'unsure' line (0.35-0.6) is never <= 0.251, so only 'other' (< 0.35) is held - the wearer's tail is never kept as a bystander's
                     if learned["stored"]:
                         logger.info("OMI_VOICES_LEARNED id=%s stored=%d suggested=%d", rid, learned["stored"], learned["suggested"])
                 except Exception as exc:  # noqa: BLE001
@@ -1259,33 +1260,38 @@ def _tag_mode() -> str:
     return omi_diarize.mode()
 
 
-async def _diarise(uid: str, path: str, now: Optional[datetime]) -> tuple[Optional[list], str, Optional[str]]:
-    """Speaker turns for the recording, or ``(None, state, model)`` for the untagged path. ``unverified``: tagging is off, the
+async def _diarise(uid: str, path: str, now: Optional[datetime]) -> tuple[Optional[list], str, Optional[str], Optional[str]]:
+    """Speaker turns for the recording, or ``(None, state, model, None)`` for the untagged path. ``unverified``: tagging is off, the
     wearer is not positively an adult (D14: no tagging of a child's pendant) or has no profile in this model (turns are still cut
     by voice, labelled ``unverified``); ``untaggable``: the model refused or the pass failed (the transcript is never lost to it).
+    The wearer reference is the CONFIRMED pendant print when there is one (``omi_repass.wearer_print``: the same microphone, so the same
+    channel), else the consented panel profile; the last element names that channel (``pendant`` | ``panel``) for ``profile_channel``.
     A closing gate is NOT a failure: ``GateClosed`` propagates and the recording goes back to pending."""
     if _tag_mode() == "off":
-        return None, "unverified", None
+        return None, "unverified", None, None
     import manner_block
     import omi_diarize
+    import omi_repass
     import omi_voices
     if not await manner_block.eligible(uid):
-        return None, "unverified", None
+        return None, "unverified", None, None
     embedder = await asyncio.to_thread(omi_diarize.load_embedder)
     if embedder is None:
-        return None, "untaggable", None
+        return None, "untaggable", None, None
     mid = omi_diarize.model_id()
     try:
         from db_compat import get_compat_db
         async with get_compat_db() as db:
-            profile = await omi_voices.wearer_profile(db, uid, mid)
-        turns = await omi_diarize.diarise(path, embedder, profile, gate=lambda: _patient_gate(now))
-        return turns, ("tagged" if profile is not None else "unverified"), mid
+            profile, channel = (await omi_repass.wearer_print(db, uid) if mid == omi_repass.MODEL_ID else None), "pendant"
+            if profile is None:
+                profile, channel = await omi_voices.wearer_profile(db, uid, mid), "panel"
+        turns = await omi_diarize.diarise(path, embedder, profile, gate=lambda: _patient_gate(now), channel=channel)
+        return turns, ("tagged" if profile is not None else "unverified"), mid, (channel if profile is not None else None)
     except GateClosed:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("OMI_TAG_FAILED reason=%s - transcribing untagged", type(exc).__name__)
-        return None, "untaggable", None
+        return None, "untaggable", None, None
     finally:
         del embedder                          # the session is released after every pass (RAM is the scarce resource)
 
