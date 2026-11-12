@@ -255,12 +255,47 @@ def deadline_s(*, margin_s: int = 120, now: Optional[dt.datetime] = None) -> int
 
 
 BRAIN_LOCK = "/tmp/zoe-brain-window.lock"
+KILL_GRACE_S = 20.0
+
+
+def _run_group(cmd: list[str], timeout_s: float, grace_s: float = KILL_GRACE_S) -> int:
+    """Run ``cmd`` in its OWN process group with a hard deadline. On overrun the whole group gets TERM, then KILL after ``grace_s``,
+    and this returns (124) only once the group is gone - so the caller releases the brain lock AFTER the lab's children (a model
+    server it started) have stopped, never while they still hold the GPU."""
+    import signal
+
+    proc = subprocess.Popen(cmd, start_new_session=True)
+    try:
+        return int(proc.wait(timeout=max(0.0, timeout_s)))
+    except subprocess.TimeoutExpired:
+        print(f"model-load: {cmd[0]} ran past its {timeout_s:.0f}s budget - terminating its process group", file=sys.stderr)
+        for sig, wait_s in ((signal.SIGTERM, grace_s), (signal.SIGKILL, 10.0)):
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                break
+            try:
+                proc.wait(timeout=wait_s)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        try:                       # the leader is gone or dead; sweep any survivor of the group before the lock is released
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        return 124
+    except BaseException:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        raise
 
 
 def run_model_load(name: str, cmd: list[str], *, budget_min: int = 45, lock_path: str = BRAIN_LOCK,
                    verdict: Optional[Callable[..., Verdict]] = None, poll_s: float = 5.0,
-                   sleep: Callable[[float], None] = time.sleep, runner: Callable[..., int] = lambda c: subprocess.call(c),
-                   now: Optional[dt.datetime] = None) -> int:
+                   sleep: Callable[[float], None] = time.sleep, runner: Optional[Callable[..., int]] = None,
+                   now: Optional[dt.datetime] = None, timeout_s: Optional[float] = None) -> int:
     """Run ``cmd`` (a lab / probe that LOADS a model: the brain, Kokoro, a 12B...) under the same coordination as a landing.
 
     1. ``night_pause_verdict`` (night_busy.sh voice, else the fixed window): refuse outside the gate or when the run would
@@ -268,6 +303,8 @@ def run_model_load(name: str, cmd: list[str], *, budget_min: int = 45, lock_path
     2. take ``/tmp/zoe-brain-window.lock`` (flock, the lock a lander / the bake-off / the night window use), waiting at most
        ``lock_wait_s`` (never past the window), and HOLD it for the whole run - so the night window sees it and waits or refuses,
        and a landing's probe never loads on top of it.
+    3. the run has a HARD deadline (``budget_min`` unless ``timeout_s``): on overrun its process group is TERMed then KILLed and the lock is
+       released only afterwards (exit 124).
     Exit ``EXIT_REFUSED`` (3) when refused or the lock was not won; else the command's own code."""
     import fcntl
 
@@ -290,7 +327,9 @@ def run_model_load(name: str, cmd: list[str], *, budget_min: int = 45, lock_path
                     return EXIT_REFUSED
                 sleep(poll_s)
                 waited += poll_s
-        return int(runner(cmd))
+        if runner is not None:
+            return int(runner(cmd))
+        return _run_group(cmd, timeout_s if timeout_s is not None else max(0, int(budget_min)) * 60.0)
     finally:
         os.close(fd)           # closing the descriptor drops the flock
 
@@ -301,7 +340,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     m = sub.add_parser("model-load", help="run a model-loading lab under the landing coordination: model-load NAME [--budget-min N] -- CMD...")
     m.add_argument("name")
     m.add_argument("--budget-min", type=int, default=45)
-    m.add_argument("rest", nargs=argparse.REMAINDER, help="-- then the command")
     c = sub.add_parser("check", help="may this harness start now? exit 0 yes, 3 no")
     c.add_argument("name")
     c.add_argument("--landing", action="store_true", help="the landing loop's replay probe (exempt from the hours)")
@@ -318,7 +356,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     d.add_argument("--margin-s", type=int, default=120)
     d.add_argument("--now", help="ISO local time (tests)")
     sub.add_parser("panel-quiet", help="exit 0 when the panel has been quiet 10 min, 1 when in use")
-    args = ap.parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    tail: list[str] = []
+    if "model-load" in raw and "--" in raw[raw.index("model-load"):]:
+        cut = raw.index("--", raw.index("model-load"))      # the command starts after the FIRST `--`: its own flags never reach argparse
+        raw, tail = raw[:cut], raw[cut + 1:]
+    args = ap.parse_args(raw)
+    args.rest = ["--"] + tail if args.cmd == "model-load" and tail else []
     if args.cmd == "panel-quiet":
         return 0 if panel_quiet() else 1
     if args.cmd == "model-load":

@@ -424,3 +424,53 @@ def test_model_load_refuses_a_held_lock_and_a_closed_gate_without_running(tmp_pa
 
     assert hq.run_model_load("lab", ["x"], lock_path=lock, verdict=closed, runner=ran.append, now=NOON) == hq.EXIT_REFUSED
     assert ran == [], "a refused lab must never start"
+
+
+def test_model_load_kills_the_whole_process_group_on_overrun_before_releasing_the_lock(tmp_path):
+    """A sleeping child (and its grandchild) past the budget: TERM the group, return 124, lock freed only afterwards."""
+    import fcntl
+    import signal
+
+    lock = str(tmp_path / "brain.lock")
+    pidfile = tmp_path / "grandchild.pid"
+    code = f"import subprocess,sys,time; g=subprocess.Popen(['sleep','300']); open(r'{pidfile}','w').write(str(g.pid)); time.sleep(300)"
+    rc = hq.run_model_load("lab", [sys.executable, "-c", code], lock_path=lock, verdict=_ok, timeout_s=2, now=NOON)
+    assert rc == 124
+    gpid = int(pidfile.read_text())
+    gone = False
+    for _ in range(50):
+        try:
+            os.kill(gpid, 0)
+        except ProcessLookupError:
+            gone = True
+            break
+        try:
+            if open(f"/proc/{gpid}/stat").read().split()[2] == "Z":     # a reaped-by-init zombie is gone for our purposes
+                gone = True
+                break
+        except OSError:
+            gone = True
+            break
+        import time as _t
+        _t.sleep(0.1)
+    assert gone, "the grandchild outlived the budget"
+    fd = os.open(lock, os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)                      # released (after the kill)
+    os.close(fd)
+
+
+def test_model_load_documented_argv_order_works_end_to_end_through_main(tmp_path, monkeypatch, capsys):
+    """`model-load NAME --budget-min N -- CMD...`: argparse.REMAINDER used to swallow --budget-min into the command."""
+    seen = {}
+
+    def fake(name, cmd, **kw):
+        seen.update(name=name, cmd=cmd, **kw)
+        return 0
+
+    monkeypatch.setattr(hq, "run_model_load", fake)
+    assert hq.main(["model-load", "mylab", "--budget-min", "7", "--", "python3", "-c", "print(1)", "--budget-min", "99"]) == 0
+    assert seen["name"] == "mylab" and seen["budget_min"] == 7
+    assert seen["cmd"] == ["python3", "-c", "print(1)", "--budget-min", "99"]      # the command's own flags are untouched
+    assert hq.main(["model-load", "mylab", "--", "echo", "hi"]) == 0 and seen["budget_min"] == 45 and seen["cmd"] == ["echo", "hi"]
+    with pytest.raises(SystemExit):
+        hq.main(["model-load", "mylab", "--budget-min", "7"])             # no command

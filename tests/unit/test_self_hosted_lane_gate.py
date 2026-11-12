@@ -70,3 +70,33 @@ def test_the_gate_skips_the_night_window_a_held_lane_and_never_runs_the_step_bod
     (tmp_path / "held").mkdir()
     r, summary = _run(tmp_path / "held", 12, hold=True)
     assert r.returncode == 0 and "AFTER_GATE" not in r.stdout and "SKIPPED unit-full" in summary and "stayed held" in summary
+
+
+def test_the_gate_is_rechecked_after_the_lane_wait_and_releases_the_lock(tmp_path):
+    """Clear when the wait began, busy by the time the lock is won (the daytime voice pause comes back mid-wait): skip AND free the lane."""
+    import time
+
+    home = tmp_path / "home"
+    home.mkdir()
+    ok = home / "voice-day-ok"
+    ok.write_text("always\n")
+    lock = tmp_path / "lane.lock"
+    summary = tmp_path / "summary.md"
+    summary.write_text("")
+    now = dt.datetime(2026, 11, 12, 12, 0).timestamp()
+    env = {**os.environ, "ZOE_LANDING_HOME": str(home), "ZOE_TEST_LANE_LOCK": str(lock), "LANE_WAIT_S": "30",
+           "ZOE_LANDING_NOW_EPOCH": str(int(now)), "GITHUB_STEP_SUMMARY": str(summary)}
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    p = subprocess.Popen(["bash", "-e", "-c", f'source "{GATE}" unit-full; echo AFTER_GATE; sleep 5'], env=env, stdout=subprocess.PIPE, text=True)
+    try:
+        time.sleep(2)                                  # the gate passed its first check and is now waiting on the lane
+        ok.unlink()                                    # ... the household-hours pause returns during the wait
+        fcntl.flock(fd, fcntl.LOCK_UN)                 # the lane frees: the gate wins it
+        out, _ = p.communicate(timeout=60)
+    finally:
+        os.close(fd)
+    assert p.returncode == 0 and "AFTER_GATE" not in out and "after the lane wait" in summary.read_text()
+    fd2 = os.open(lock, os.O_RDWR)
+    fcntl.flock(fd2, fcntl.LOCK_EX | fcntl.LOCK_NB)    # the skip released the lane
+    os.close(fd2)
