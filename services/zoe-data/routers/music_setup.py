@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 
 import auth_handoff
@@ -53,8 +53,12 @@ def _setup_url(request: "Request", token: str, provider: str) -> str:
 
 @router.get("/catalogue", dependencies=[Depends(require_member_or_panel)])
 async def setup_catalogue() -> dict[str, Any]:
-    """The 'Add music' list for the panel: which providers are connected is household music state, so a member or the panel."""
-    return {"providers": await music_service.provider_catalogue()}
+    """The 'Add music' list for the panel: which providers are connected is household music state, so a member or the panel.
+    503 ``music_engine_unavailable`` when MA cannot be woken: an unknown state is never shown as "not connected"."""
+    try:
+        return {"providers": await music_service.provider_catalogue()}
+    except music_service.MusicEngineUnavailable:
+        raise HTTPException(status_code=503, detail=music_service.MUSIC_ENGINE_UNAVAILABLE_DETAIL)
 
 
 @router.post("/start")

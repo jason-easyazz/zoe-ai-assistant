@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 STATUSES = ("pending", "awaiting_phone", "completing", "done", "error")
 _RANK = {s: i for i, s in enumerate(STATUSES)}
 _KEEP_S = 24 * 3600  # finished rows are swept after a day
+_EXPIRED_DETAIL = "This link expired — start again."
 
 # ── one-time signed tokens: the ONE copy of the mechanics (was three) ─────────
 # ``music_setup``, ``smart_home_setup`` and ``telegram_link`` each carried their
@@ -253,6 +254,13 @@ async def start(kind: str, *, actor_user: dict, panel_id: str, provider: str,
     now = time.time()
     async with _db_ctx() as db:
         await db.execute("DELETE FROM auth_handoffs WHERE expires_at < ?", (now - _KEEP_S,))
+        # Expire every lapsed, unfinished row now (status() only did it on read, so
+        # an unread `pending` row stayed pending until swept a day later). Same
+        # condition and outcome as status(); no broadcast - nobody is watching it.
+        await db.execute(
+            """UPDATE auth_handoffs SET status = 'error', detail = ?, reason = 'expired', updated_at = ?
+               WHERE status != 'done' AND reason != 'expired' AND expires_at < ?""",
+            (_EXPIRED_DETAIL, now, now))
         await db.execute(
             """INSERT INTO auth_handoffs (id, kind, provider, ref, user_id, panel_id, status,
                    detail, reason, created_at, updated_at, expires_at)
@@ -314,7 +322,7 @@ async def status(handoff_id: str) -> Optional[dict[str, Any]]:
     if row is None:
         return None
     if row["status"] != "done" and (row["reason"] or "") != "expired" and float(row["expires_at"]) < time.time():
-        return await _transition(handoff_id, "error", "This link expired — start again.", "expired") or _view(row)
+        return await _transition(handoff_id, "error", _EXPIRED_DETAIL, "expired") or _view(row)
     return _view(row)
 
 
