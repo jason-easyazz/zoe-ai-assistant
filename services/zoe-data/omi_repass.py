@@ -55,6 +55,10 @@ import omi_repass_who as who                       # noqa: E402
 
 MODEL_ID = speaker_models.RESNET34_MODEL_ID        # the speaker-space tag on every embedding / voiceprint this pass writes: the SAME model as the panel (WeSpeaker R34 int8, c1)
 MAX_PASS_ATTEMPTS = 3
+#: the HOLD (owner, 2026-11-12): a recording still owed its re-pass keeps its WAV past the 7-day retention - leftovers carry to the next window - but never past this many days
+#: from upload, and never while the audio disk is short (``omi_recordings.purge_expired_audio``, which logs every forced delete loudly)
+HOLD_CAP_DAYS = 30
+HOLD_MIN_FREE_MB = 2048
 MIN_WEARER_WINDOWS = 10                           # a wearer print needs this many confirmed 1.5 s windows before any line may read "me"
 #: THE BACKEND SEAM. Each ASR engine the worker can run (``omi_repass_worker.ASR``) is DECLARED here with its budget facts, so the window's RAM / time
 #: arithmetic is per backend and a new engine is one registry entry in the worker plus one row here (the bake-off owns installing models):
@@ -83,11 +87,16 @@ DIAR_BACKENDS = ("resnet34",)                        # the speaker-window engine
 DIAR_RSS_MB = 400                                  # the R34 int8 session + its fbank; no torch
 DEFAULT_RTF = {k: v["rtf"] for k, v in BACKENDS.items()}
 PLAN_MARGIN = 0.85                                # plan to use at most this much of the budget (the estimate is a mean over files of very different density)
+LOAD_S = 40.0                                     # one worker's model load + start, as the plan prices it
+SPEECH_FRAC = 0.35                                # share of a pendant recording that is speech, until a night measures its own (state.json speech_frac; 2026-11-12: 0.354)
 HINT_MAX_NAMES = 30
 PROPOSAL_KEEP_DAYS = 14
 PROPOSAL_MAX = 20
 _NAME_OK = re.compile(r"^[A-Za-z][A-Za-z'\- ]{0,38}$")
 _ST_OK = "('done', 'empty_transcript')"
+#: THE ONE "still owed its re-pass" predicate. ``pending_recordings`` lists these rows and the retention purge / the hourly release HOLD their WAV, from this
+#: same fragment so the two can never drift (an empty first pass keeps the migration default repass_state '' - it is owed all the same).
+OWED_SQL = f"(status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < {MAX_PASS_ATTEMPTS})"
 
 
 # ── flags ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -512,56 +521,41 @@ async def candidate_recording_ids(db, user_id: str) -> set:
 
 
 def rank_important(rows: list, names_by_user: dict, cand_by_user: dict) -> list:
-    """The rows most important first (ties: the first pass found words before it found none, then oldest first). Sets ``row['importance']``."""
+    """The rows most important first, then the one whose audio expires FIRST (so nothing ages out while a newer one is read), then the ones the first pass found
+    words in before the ones it found none in, then oldest first. Sets ``row['importance']``."""
     for r in rows:
         r["importance"] = importance(r.get("transcript") or "", names_by_user.get(r["user_id"], []), candidate=r["id"] in cand_by_user.get(r["user_id"], set()))
-    return sorted(rows, key=lambda r: (-r["importance"], 1 if r.get("status") == "empty_transcript" else 0, r.get("started_at") or ""))
+    return sorted(rows, key=lambda r: (-r["importance"], str(r.get("audio_expires_at") or "~"), 1 if r.get("status") == "empty_transcript" else 0, r.get("started_at") or ""))
 
 
-def plan_voters(durs: list, remaining_s: float, rt: dict, second: str, thirds: Iterable[str], *, overhead_s: float = 40.0, margin: float = PLAN_MARGIN) -> dict:
-    """Which recordings get which extra voter, given the time left AFTER the pivot has read everything. ``durs`` = [(id, seconds of audio)] most important first.
-    The three-voter set is the longest prefix whose Parakeet + third-voter cost fits (the third voter is the first candidate that covers EVERYONE, else the one that covers most);
-    the time left then extends Parakeet alone down the list; the rest keep Qwen3 only. Each voter pass pays one model load (``overhead_s``).
-    -> {second: [ids], third: [ids], third_engine: str}."""
-    out: dict = {"second": [], "third": [], "third_engine": ""}
-    if not second or not durs:
-        return out
-    avail = max(0.0, remaining_s) * margin
-    c2 = rt.get(second, 0.1)
-    n = len(durs)
-    best_k, best_c = 0, ""
-    for cand in thirds:
-        c3 = rt.get(cand, 1.0)
-        budget, acc, k = avail - 2 * overhead_s, 0.0, 0
-        for _rid, d in durs:
-            if acc + d * (c2 + c3) > budget:
-                break
-            acc += d * (c2 + c3)
-            k += 1
-        if k > best_k and best_k != n:
-            best_k, best_c = k, cand
-    left = avail - (2 * overhead_s if best_k else overhead_s) - (sum(d * (c2 + rt.get(best_c, 1.0)) for _r, d in durs[:best_k]) if best_k else 0.0)
-    k2 = best_k
-    for _rid, d in durs[best_k:]:
-        if d * c2 > left:
-            break
-        left -= d * c2
-        k2 += 1
-    out["second"] = [r for r, _ in durs[:k2]]
-    out["third"] = [r for r, _ in durs[:best_k]]
-    out["third_engine"] = best_c if best_k else ""
-    return out
+def plan_window(costs: list, usable_s: float, *, fixed_s: float = 0.0) -> tuple:
+    """THE WINDOW (owner, 2026-11-12: "give it a window and it can only use that amount of time and the left overs go to the next night"). ``costs`` = [(id, seconds the
+    WHOLE pass costs that recording: the pivot and every expected voter)] in processing order. -> (ids to process, ids that could never fit even an empty window).
+    Takes recordings in order while the next one's whole cost still fits; the first that does not stops the plan (it and everything after carry, in order). A recording
+    that alone would overrun the empty window is passed over (counted ``oversize``) so it cannot block every night behind it; a longer window takes it. Pure."""
+    room = max(0.0, usable_s) - fixed_s
+    take: list = []
+    oversize: list = []
+    stopped = False
+    for rid, c in costs:
+        if c > max(0.0, usable_s) - fixed_s:
+            oversize.append(rid)                # counted wherever it sits, so the report is whole
+            continue
+        if stopped or c > room:
+            stopped = True                      # the order holds: nothing after the first that does not fit is taken
+            continue
+        room -= c
+        take.append(rid)
+    return take, oversize
 
 
-async def pending_recordings(db, *, now: Optional[datetime] = None, limit: int = 500) -> list[dict]:
-    """Recordings the night pass owes a look, oldest first (recordings the first pass found NO words in go last: a pendant that records ~12 h a day
-    cannot all be re-read in one night, so the ones most likely to hold speech are done first and the rest carry): first-pass done (or empty) rows whose WAV is still on disk, inside retention, not yet
-    passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
-    stamp = _iso(now or _now())
+async def pending_recordings(db, *, now: Optional[datetime] = None, limit: Optional[int] = None) -> list[dict]:
+    """EVERY recording the night pass owes a look (the window ranks the whole held backlog itself; the hold cap bounds it to 30 days of uploads; ``limit`` is for
+    callers that want a sample): first-pass done (or empty) rows whose WAV is still on disk, inside the hold, not yet passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
     rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts, device_id, audio_expires_at FROM omi_recordings "
-                          f"WHERE status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < ? "
-                          "AND (audio_expires_at IS NULL OR audio_expires_at > ?) ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at LIMIT ?",
-                      (MAX_PASS_ATTEMPTS, stamp, limit))
+                          f"WHERE {OWED_SQL} "
+                          "AND created_at >= ? ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at" + (" LIMIT ?" if limit else ""),
+                      (_iso((now or _now()) - timedelta(days=HOLD_CAP_DAYS)),) + ((limit,) if limit else ()))
     out = []
     for r in rows:
         d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts", "device_id", "audio_expires_at")}
@@ -1144,9 +1138,10 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     """The night job. Plans the engines against ``budget_s``, runs them as SEPARATE worker processes (each GPU model loads alone after a compaction), fuses their chunk texts with ROVER, applies
     each finished recording, and updates the contender ledger. Returns a counts-only summary (the CLI prints it). ``runner(manifest, out, timeout_s, mem_max=, threads=) -> rc`` is injectable.
 
-    PRODUCTION every night: Qwen3-ASR (pivot) on ALL the audio, important recordings first; then Parakeet and a third voter on as many of the IMPORTANT recordings as the time left reaches (``plan_voters``);
-    ROVER over the voters each recording got. A recording the pivot cannot reach
-    keeps that order and carries the rest. EVALUATION: only when production finished with time to spare - Whisper large-v3 and Granite on a rotating SAMPLE of the day's speech
+    PRODUCTION is a fixed WINDOW (owner, 2026-11-12): the pass uses ``budget_s`` and never more. Recordings are taken in order (important first, then the audio that expires first) and
+    EACH one gets the whole pass - the Qwen3-ASR pivot, Parakeet and the best third voter, fused by ROVER - priced before anything starts (``plan_window``), with the voters' time
+    reserved before the pivot runs. The first recording whose whole pass does not fit stops the plan; it and everything after it stay ``pending`` with their WAV and carry to the
+    next window. A recording is only marked passed (``on`` or ``shadow``) when every expected voter ran on it. EVALUATION: only when production finished with time to spare - Whisper large-v3 and Granite on a rotating SAMPLE of the day's speech
     (``ZOE_OMI_REPASS_EVAL_MIN`` minutes), their hypotheses stored and judged in the ledger, never in the stored text.
 
     ``rehearse``: the daytime rehearsal: the REAL path (every engine, the fusion, a small evaluation sample) on ONE recording, whatever the flag says, writing NOTHING (no segments, state,
@@ -1177,33 +1172,44 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     if pref not in BACKENDS or diar_backend() not in DIAR_BACKENDS:
         return {**res, "status": "bad_backend", "asr": pref, "diar": diar_backend(), "known": sorted(BACKENDS)}
     plan = plan_model(audio_s, budget_s, st.get("rtf"), pref)
-    primary = pref if pref == eu.PIVOT else plan["model"]       # the pivot is never swapped for the cheaper engine: an over-budget night runs it oldest-first and CARRIES the rest
+    primary = pref if pref == eu.PIVOT else plan["model"]       # the pivot is never swapped for the cheaper engine
     rt = {**DEFAULT_RTF, **(st.get("rtf") or {})}
     multi = primary == eu.PIVOT
     second = second_backend() if multi else ""
     thirds = [c for c in third_choices() if c not in (primary, second)] if second else []
-    evals = [e for e in eval_backends() if e not in (primary, second)] if multi and second else []
-    voters = [primary] + [x for x in (second, thirds[0] if thirds else "") if x]      # the PLAN before the pivot has run; the voters that really ran are set after the split below
+    third = thirds[0] if thirds else ""                          # the BEST configured third voter: the window buys fewer recordings, never a weaker vote
+    expected = [x for x in (second, third) if x]                 # every recording this window passes gets ALL of these, or it is not marked passed
+    evals = [e for e in eval_backends() if e not in (primary, *expected)] if multi and second else []
+    voters = [primary] + expected
     res.update(pending=len(rows), audio_s=round(audio_s), model=primary, est_s=plan["est_s"], fits=plan["fits"], fallback_model=plan["fallback"], engines=voters, eval_engines=evals,
-               est_voters_s=round(audio_s * sum(rt[v] for v in voters)))
-    if dry_run:                          # the plan if the pivot took its measured time: which voters would reach EVERY recording
-        sim = plan_voters([(r["id"], float(r["duration_s"] or 0)) for r in rows], budget_s - audio_s * rt[primary], rt, second, thirds)
-        full = len(sim["second"]) == len(rows)
-        res["engines"] = [primary] + ([second] if sim["second"] else []) + ([sim["third_engine"]] if sim["third"] else [])
-        res["voter_coverage"] = {"second": len(sim["second"]), "third": len(sim["third"]), "of": len(rows)}
-        res["eval_engines"] = res["eval_engines"] if (sim["third"] and len(sim["third"]) == len(rows) and full) else []
-        return {**res, "status": "dry_run"}
-    threads = env_int("ZOE_OMI_REPASS_THREADS", 4)
-    zoe_ref = st.get("zoe_ref")
+               window_s=round(budget_s))
     items, names_by_user, cand_by_user = [], {}, {}
     async with get_compat_db() as db:
         for r in rows:
             if r["user_id"] not in names_by_user:
                 names_by_user[r["user_id"]] = await household_names(db, r["user_id"])
                 cand_by_user[r["user_id"]] = await candidate_recording_ids(db, r["user_id"])
-    rows = rank_important(rows, names_by_user, cand_by_user)          # the pivot reads EVERYTHING, important recordings first (so an over-long night carries the least important)
+    rows = rank_important(rows, names_by_user, cand_by_user)          # important first, then the audio that expires first
+    # ── THE WINDOW: each recording's WHOLE pass (pivot + every expected voter) is priced before anything starts; the ones that fit run, the rest carry, in order ──
+    deadline = started + max(0.0, budget_s - 45.0)                # the workers' hard edge: 45 s of the window are kept back for the fusion, the DB writes and the release of audio
+    f_speech = float(st.get("speech_frac") or SPEECH_FRAC)
+    c_vote = sum(rt.get(e, 1.0) for e in expected)               # per SPEECH second
+    r_piv = rt.get(primary, 1.0)                                 # per AUDIO second (a night's measured worker rtf; the default is per speech second, so it over-prices: safe)
+    costs = [(r["id"], float(r["duration_s"] or 0) * (r_piv + f_speech * c_vote)) for r in rows]
+    head, oversize = plan_window(costs, (deadline - clock()) * PLAN_MARGIN, fixed_s=LOAD_S * (1 + len(expected)))
+    head_set = set(head)
+    reserve_s = sum(float(r["duration_s"] or 0) * f_speech * c_vote for r in rows if r["id"] in head_set) + LOAD_S * len(expected)
+    res.update(planned=len(head), oversize=len(oversize))
+    if dry_run:
+        return {**res, "status": "dry_run"}
+    if not head:
+        return {**res, "status": "ok", "done": 0, "carried": len(rows), "failed": 0, "used_s": round(clock() - started), "missing_voters": None,
+                "carried_min": round(audio_s / 60.0, 2), "why": "window_too_small"}
+    threads = env_int("ZOE_OMI_REPASS_THREADS", 4)
+    zoe_ref = st.get("zoe_ref")
     for r in rows:
-        items.append({"id": r["id"], "path": r["audio_path"], "hint": name_hint(names_by_user[r["user_id"]])})
+        if r["id"] in head_set:
+            items.append({"id": r["id"], "path": r["audio_path"], "hint": name_hint(names_by_user[r["user_id"]])})
     work = home_dir() / "work"
     work.mkdir(parents=True, exist_ok=True)
     os.chmod(work, 0o700)
@@ -1211,7 +1217,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         eu.sweep_work(home_dir())          # a run SIGKILLed / rebooted mid-flight leaves its worker files: recovered here, and by retention + erasure
     except Exception:  # noqa: BLE001 - housekeeping never stops the night
         pass
-    deadline = started + max(30.0, budget_s - 45.0)               # 45 s kept back for the DB writes and the release of audio
+    pivot_dl = min(deadline, max(clock() + 30.0, deadline - reserve_s))      # the voters' time is RESERVED: a pivot slower than planned stops here, it never eats the voters' share
     skipped: dict = {}
 
     async def one_pass(engine: str, its: list, *, diar: str, dl: float, clips: bool = False) -> dict:
@@ -1224,11 +1230,11 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         stamp = uuid.uuid4().hex[:8]
         man, out = work / f"{stamp}.manifest.json", work / f"{stamp}.out.jsonl"
         man.write_text(json.dumps({"asr": engine, "diar": diar, "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "1") != "0", "models_dir": models_dir(), "r34_dir": env_str("ZOE_OMI_TAG_MODEL_DIR", "").strip() or os.path.expanduser("~/.cache/zoe-speaker-resnet34"),
-                                   "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": dl, "ct2_dir": ct2_dir() if engine.startswith("whisper-gpu") else "",
+                                   "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": min(dl, deadline - 20.0), "ct2_dir": ct2_dir() if engine.startswith("whisper-gpu") else "",
                                    "rtf": rt.get(engine, 1.0), "items": its, "zoe_clips": [] if (zoe_ref or not clips) else zoe_clips()}))
         os.chmod(man, 0o600)
         try:
-            rc = (runner or spawn_worker)(man, out, max(60.0, dl - clock() + 30.0), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
+            rc = (runner or spawn_worker)(man, out, max(1.0, min(dl + 20.0, deadline) - clock()), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
             got, done, zref = read_results(out)
         finally:
             for p in (man, out):
@@ -1242,7 +1248,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         return {"rc": rc, "got": got, "done": done, "zref": zref}
 
     # ── pass 1: the pivot, on all the audio, with the speaker windows ──
-    p1 = await one_pass(primary, items, diar=diar_backend(), dl=deadline, clips=True)          # Qwen3 on ALL of it first: every recording gets at least its text
+    p1 = await one_pass(primary, items, diar=diar_backend(), dl=pivot_dl, clips=True)          # the pivot on the window's recordings, inside its share
     if p1.get("skipped"):
         return {**res, "status": "low_mem" if p1["skipped"].startswith("low_mem") else "model_missing", "why": p1["skipped"], "have_mb": round(mem_available()), "need_mb": need_mb(primary)}
     got1, done1, rc = p1["got"], p1["done"], p1["rc"]
@@ -1291,27 +1297,38 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         want = set(ids)
         its = [{"id": it["id"], "path": it["path"], "chunks": [[c[0], c[1]] for c in got1[it["id"]]["chunks"]]} for it in chunked if it["id"] in want]
         if not its or deadline - clock() < 60:
+            vskip[engine] = "no_time"                      # never started (under a minute left): its recordings carry; reported as ``short_voters``, not as a failure
             return {"got": {}, "done": {}, "rc": None}
         return await one_pass(engine, its, diar="none", dl=deadline)
 
-    # ── passes 2 and 3: the other production voters, on the IMPORTANT recordings first, as far as the time left after the pivot reaches ──
+    # ── passes 2 and 3: EVERY expected voter on the recordings the pivot finished, in order, as far as the time left buys the WHOLE vote ──
     rank_of = {r["id"]: i for i, r in enumerate(rows)}
-    durs = [(it["id"], float(by_id[it["id"]]["duration_s"] or 0)) for it in sorted(chunked, key=lambda it: rank_of[it["id"]])]
-    vplan = plan_voters(durs, deadline - clock(), rt, second, thirds)
-    third = vplan["third_engine"]
+    room, ids3 = (deadline - clock()) * 0.9 - LOAD_S * len(expected), []
+    for it in sorted(chunked, key=lambda x: rank_of[x["id"]]):          # a recording the pivot heard no speech in still gets every voter's (empty) reading: no exemption
+        sp = sum(max(0.0, float(c[1]) - float(c[0])) for c in got1[it["id"]]["chunks"])       # priced on the SPEECH a voter is handed, not the file's length
+        if sp * c_vote > room:
+            break                                                                             # it, and everything after it, carries
+        room -= sp * c_vote
+        ids3.append(it["id"])
     vgot: dict = {}
-    for eng, ids in ((second, vplan["second"]), (third, vplan["third"])):
-        if not eng or not ids:
-            continue
-        pv = await voter_pass(eng, ids)
+    vskip: dict = {}                       # production-voter outcomes, kept apart from ``skipped`` (which the evaluation contenders also write)
+    for eng in expected:
+        if not ids3:
+            break
+        pv = await voter_pass(eng, ids3)
         vgot[eng] = {k: v for k, v in pv["got"].items() if v.get("ok") and len(v.get("chunks") or []) == len(got1[k]["chunks"])}
-    voters = [primary] + [e for e in (second, third) if e and vgot.get(e)]
-    complete = bool(chunked) and bool(vgot) and all(all(it["id"] in vgot.get(e, {}) for it in chunked) for e in [x for x in (second, third) if x]) and len(vgot) == len([x for x in (second, third) if x])
-    evals = [e for e in evals if e not in voters] if complete else []             # the evaluation sample runs only when every recording got every voter
+    if expected:
+        full = {rid for rid in ids3 if all(rid in vgot.get(e, {}) for e in expected)}
+    else:
+        full = {it["id"] for it in chunked}
+    if not expected:
+        full |= {it["id"] for it in ok1 if not isinstance(got1[it["id"]].get("chunks"), list)}   # a single-engine pass without chunk texts IS the whole pass; with voters expected it carries
+    complete = bool(full)
+    voters = [primary] + [e for e in expected if vgot.get(e)]
+    evals = [e for e in evals if e not in voters] if complete else []             # the evaluation sample only when this window passed something whole
     res["engines"], res["eval_engines"] = voters, evals
-    miss = {e: skipped.get(e) or "no_result" for e in (second, third) if e and not vgot.get(e)}          # an expected voter that did not vote is NAMED with its reason, never silent
-    if second and thirds and not third:
-        miss["third"] = "no_budget"
+    miss = {e: skipped.get(e) or "no_result" for e in expected if ids3 and e not in vskip and any(rid not in vgot.get(e, {}) for rid in ids3)}   # a voter that FAILED on a recording it was given
+    res["short_voters"] = vskip or None
     res["missing_voters"] = miss or None
 
     # ── fusion: ROVER per chunk over the voters that finished that recording ──
@@ -1320,6 +1337,8 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     fused_res: dict = {}
     for it in ok1:
         rid, o = it["id"], got1[it["id"]]
+        if rid not in full:
+            continue                       # not passed whole this window: it carries, untouched, with its WAV
         names = names_by_user.get(by_id[rid]["user_id"], [])
         if not isinstance(o.get("chunks"), list):
             fused_res[rid] = o
@@ -1385,6 +1404,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         pv = await preview_one(rows[0], o, refs=refs, names=names_by_user.get(rows[0]["user_id"], []))
         return {**res, "status": "rehearsal_ok", **pv, "worker_rc": rc, "device": done1.get("device"), "worker_rtf": done1.get("rtf"), "peak_rss_mb": done1.get("peak_rss_mb"),
                 "gpu_peak_mb": done1.get("gpu_peak_mb"), "load_s": done1.get("load_s"), "wall_s": round(clock() - started)}
+    ok_ids = {it["id"] for it in ok1}
     tally = {"replaced": 0, "shadow": 0, "erased": 0, "gone": 0, "failed": 0, "carried": 0, "agree_sum": 0.0, "me": 0, "named": 0, "zoe": 0, "proposed": 0}
     who_rows: list = []
     drop_rids: set = set()                  # recordings whose hypotheses are NOT kept: erased mid-job, deleted meanwhile, or never finished
@@ -1392,7 +1412,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         o = fused_res.get(rid)
         raw = got1.get(rid)
         if o is None:
-            carry = (raw is None and rc in (0, 124)) or (raw is not None and raw.get("why") in ("deadline", "backend_failed"))
+            carry = rid not in head_set or rid in ok_ids or (raw is None and rc in (0, 124)) or (raw is not None and raw.get("why") in ("deadline", "backend_failed"))
             await note_failure(rid, carry=carry)
             tally["carried" if carry else "failed"] += 1
             continue
@@ -1422,6 +1442,9 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         nv = 1 + sum(1 for e in vgot if rid in vgot[e])
         cap["fused3_min" if nv >= 3 else "fused2_min" if nv == 2 else "qwen_only_min"] += sp
     cap = {k: round(v, 2) for k, v in cap.items()}
+    meas = [(float(got1[i_]["speech_s"] or 0), float(got1[i_].get("dur_s") or by_id[i_]["duration_s"] or 0)) for i_ in ok_ids if got1[i_].get("speech_s") is not None]
+    if sum(d for _s, d in meas) >= 600:                           # the next window's speech share, measured (>= 10 min of audio)
+        st["speech_frac"] = round(sum(sp for sp, _d in meas) / sum(d for _s, d in meas), 3)
     night = (now or _now()).date().isoformat()
     try:                                                         # the evaluation record: counts in the ledger, the hypotheses (words, private, 7 days) in the hyps store
         home = home_dir()
@@ -1459,6 +1482,6 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     write_state(st)
     res.update(done=done_n, replaced=tally["replaced"], shadow=tally["shadow"], carried=tally["carried"], failed=tally["failed"], erased=tally["erased"],
                agree=round(tally["agree_sum"] / done_n, 3) if done_n else None, me_lines=tally["me"], named_lines=tally["named"], zoe_lines=tally["zoe"],
-               proposed=tally["proposed"], capacity=cap, **cap, worker_rc=rc, device=done1.get("device"), worker_rtf=done1.get("rtf"), peak_rss_mb=done1.get("peak_rss_mb"),
+               proposed=tally["proposed"], capacity=cap, **cap, used_s=round(clock() - started), worker_rc=rc, device=done1.get("device"), worker_rtf=done1.get("rtf"), peak_rss_mb=done1.get("peak_rss_mb"),
                wall_s=round(clock() - started))
     return res
