@@ -331,19 +331,26 @@ async def run(mode: str, variants: list[str], only: list[str] | None) -> dict:
     async def _keep(uid, turns, strict=False, **kw):      # empty forget ledger stand-in
         return list(turns), 0
 
+    def _failed(exc):                 # the production loop swallows an extraction failure and returns 0: keep it HERE, or an
+        seen["extract_error"] = f"{type(exc).__name__}: {exc}"   # outage reads as "the model answered with nothing"
+
     async def _capped_facts_call(transcript, timeout):
-        if calls["n"] >= MODEL_CALL_CAP:
-            raise RuntimeError("lab model-call cap reached")
-        why = preflight()
-        if why:
-            raise RuntimeError(f"model call refused: {why}")
-        calls["n"] += 1
-        t0 = time.monotonic()
-        ALLOW_BRAIN["on"] = True
         try:
-            out = await real_facts_call(transcript, timeout)
-        finally:
-            ALLOW_BRAIN["on"] = False
+            if calls["n"] >= MODEL_CALL_CAP:
+                raise RuntimeError("lab model-call cap reached")
+            why = preflight()
+            if why:
+                raise RuntimeError(f"model call refused: {why}")
+            calls["n"] += 1
+            t0 = time.monotonic()
+            ALLOW_BRAIN["on"] = True
+            try:
+                out = await real_facts_call(transcript, timeout)
+            finally:
+                ALLOW_BRAIN["on"] = False
+        except Exception as exc:  # noqa: BLE001  (a GuardTrip is a BaseException and passes straight through)
+            _failed(exc)
+            raise
         seen["latency_s"] = round(time.monotonic() - t0, 2)
         return out
 
@@ -352,7 +359,11 @@ async def run(mode: str, variants: list[str], only: list[str] | None) -> dict:
         seen["model_sees"] = normalize_numeric_dates(text)
         if mode != "model":
             return []
-        seen["raw"] = await real_extract(text)
+        try:
+            seen["raw"] = await real_extract(text)
+        except Exception as exc:  # noqa: BLE001
+            _failed(exc)
+            raise
         return seen["raw"]
 
     ingested: list = []
@@ -388,6 +399,9 @@ async def run(mode: str, variants: list[str], only: list[str] | None) -> dict:
                                                        get_ctx=_ctx(_FakeConn(rows)))
             except Exception as exc:  # noqa: BLE001  (a GuardTrip is a BaseException and is NOT caught here)
                 err = f"{type(exc).__name__}: {exc}"
+            err = err or seen.get("extract_error")
+            if mode == "model" and not err and model_sees is not None and "raw" not in seen:
+                err = "extraction returned no answer (no model items recorded)"
             model_sees = seen.get("model_sees")
             rec = {
                 "id": s["id"], "group": s["group"], "variant": variant,
@@ -400,7 +414,10 @@ async def run(mode: str, variants: list[str], only: list[str] | None) -> dict:
                                                for e in s["expect"]],
                 "model_sees": model_sees, "error": err,
             }
-            if mode == "model":
+            if mode == "model" and err:               # a failed / refused / capped call is NOT an empty answer: unscored
+                rec.update({"failed": True, "latency_s": seen.get("latency_s"), "model_items": None, "post": [],
+                            "ingested": None, "would_ingest": None, "stored_return": stored, "score": None})
+            elif mode == "model":
                 raw = seen.get("raw") or []
                 post = []
                 for item in raw:
@@ -452,9 +469,12 @@ def rescore(path: str | None) -> dict:
     if not_synthetic:
         raise SystemExit(f"REFUSED: stored quotes not found in fixtures.py for {sorted(set(not_synthetic))}")
     by_id = {s["id"]: s for s in fixtures.SESSIONS}
-    rows, mismatch = [], []
+    rows, mismatch, failed = [], [], []
     for run_ in runs:
         for r in run_["results"]:
+            if r.get("failed") or r.get("error"):        # the model never answered: excluded, never scored as a miss
+                failed.append({"id": r["id"], "variant": r.get("variant"), "error": r.get("error")})
+                continue
             s = by_id[r["id"]]
             items = [{"fact": p["fact"], "quote": p.get("quote")} for p in r.get("post", [])]
             rec_ing = r.get("ingested")                  # recorded on runs made with this version; older runs: derived
@@ -478,7 +498,8 @@ def rescore(path: str | None) -> dict:
             c["raw"] += f["raw"]
             c["gated"] += f["gated"]
             c["ingest"] += f["ingest"]
-    return {"source": source, "sessions": rows, "classes_asr": classes, "ingest_count_mismatch": mismatch}
+    return {"source": source, "sessions": rows, "classes_asr": classes, "ingest_count_mismatch": mismatch,
+            "failed_excluded": failed}
 
 
 def selftest() -> int:
@@ -662,6 +683,7 @@ def _main() -> int:
             print(f"class {g:8} sessions={c['sessions']} with_items={c['with_items']} expected_facts={c['facts']} "
                   f"raw_hit={c['raw']} survive_gates={c['gated']} to_ingest={c['ingest']} wrong_owner={c['wrong_owner']}")
         print(f"ingest_count_mismatch={res['ingest_count_mismatch']}")
+        print(f"failed_excluded={res['failed_excluded']}")
     else:
         mode = "model" if a.model else "gates"
         variants = [v for v in a.variants.split(",") if v]
