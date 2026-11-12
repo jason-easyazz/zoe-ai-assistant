@@ -127,9 +127,28 @@ async def sync_paused(user_id: str) -> bool:
     return bool((await read_uid(user_id))["sync_paused"])
 
 
+def _schema_missing(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return type(exc).__name__ in ("UndefinedTableError", "UndefinedColumnError") or "no such table" in msg or "no such column" in msg
+
+
 async def speaker_tag_on(user_id: str) -> bool:
-    """The member's own switch only; the operator mode is checked by the caller (``_tag_mode``), exactly as before."""
-    return bool((await read_uid(user_id))["speaker_tag_enabled"])
+    """The member's own switch only; the operator mode is checked by the caller (``_tag_mode``), exactly as before.
+    FAILS CLOSED, unlike ``read``: a settings read that errors means do NOT tag (the first pass AND the night re-pass). Only a pre-0077
+    schema (the table / column does not exist yet, so nobody can have turned it off) reads as the default."""
+    try:
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            rows = await _rows(db, "SELECT speaker_tag_enabled FROM omi_voice_settings WHERE user_id = ?", (user_id,))
+    except Exception as exc:  # noqa: BLE001
+        if _schema_missing(exc):
+            return bool(DEFAULTS["speaker_tag_enabled"])
+        logger.warning("omi_member_settings: tag preference unreadable, not tagging (%s)", type(exc).__name__)
+        return False
+    if not rows:
+        return bool(DEFAULTS["speaker_tag_enabled"])
+    v = _get(rows[0], "speaker_tag_enabled")
+    return bool(DEFAULTS["speaker_tag_enabled"] if v is None else v)
 
 
 async def retention_days_for(user_id: str, ceiling: int) -> int:

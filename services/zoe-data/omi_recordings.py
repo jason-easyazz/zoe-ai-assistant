@@ -1151,8 +1151,7 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     spk_state, model_id = "unverified", None
     import omi_repass as _rp
     strict = _rp.mode() != "off"          # flag off: the first pass stays exactly as it was (ledger failure = fail open)
-    import omi_member_settings
-    member_tag = await omi_member_settings.speaker_tag_on(uid)     # "tag voices on my recordings" off = this member is as if the flag were off
+    member_tag = await _rp.member_tags(uid)     # "tag voices on my recordings" off (or unreadable: fail closed) = this member is as if the flag were off
     try:
         turns, spk_state, model_id = await _diarise(uid, path, now) if member_tag else (None, "unverified", None)
         if turns:

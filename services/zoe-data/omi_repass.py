@@ -802,6 +802,16 @@ async def _redact_row(uid: str, row: dict) -> dict:
     return {**row, **{k: await go(row[k]) for k in ("hyps", "rover", "slots") if k in row}}
 
 
+async def member_tags(user_id: str) -> bool:
+    """The member's own "tag voices on my recordings" switch (``omi_member_settings.speaker_tag_on``). FAILS CLOSED: unreadable = do not tag."""
+    try:
+        import omi_member_settings
+        return bool(await omi_member_settings.speaker_tag_on(user_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("OMI_REPASS_TAG_PREF_UNREADABLE reason=%s", type(exc).__name__)
+        return False
+
+
 async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label: str, seen: dict, m: str, now: Optional[datetime] = None) -> dict:
     """Apply one worker result to one recording. ``m`` is the mode the job started in. Returns a counts-only summary dict (``status``: replaced |
     shadow | erased | gone | failed). Never raises for a data problem."""
@@ -810,7 +820,12 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
     from db_compat import get_compat_db
     rid, uid = r["id"], r["user_id"]
     who_text: dict = {}            # seg_id -> the turn text (kept out of ``who_items``: that row is stored without words)
-    spans, anchors, by_log = await panel_evidence_for(uid, rid)
+    tag = await member_tags(uid)   # "tag voices on my recordings" off (or unreadable): text only - no speaker label, no embedding, no voiceprint, no wearer sample
+    if tag:
+        spans, anchors, by_log = await panel_evidence_for(uid, rid)
+    else:
+        refs, spans, anchors, by_log = Refs(), [], [], False
+        res = {**res, "windows": []}
     lines = build_lines(res["words"], res["windows"], refs, zoe_spans=spans, anchors=anchors, zoe_by_log=by_log)   # the panel's record first (Zoe's sayings, known speakers), then the voices
     segs = []
     for ln in lines:
@@ -824,7 +839,7 @@ async def finish_one(r: dict, res: dict, *, refs: Refs, names: list, model_label
     stamp = _iso(now or _now())
     text = ""
     import manner_block
-    adult = await manner_block.eligible(uid)       # D14, fail closed: a child's (or an unverifiable member's) pendant gets TEXT only - no voiceprint, wearer sample or held embedding is retained
+    adult = tag and await manner_block.eligible(uid)       # D14, fail closed: a child's (or an unverifiable, or an opted-out member's) pendant gets TEXT only - no voiceprint, wearer sample or held embedding is retained
     async with erase_gate.writing(uid, seen.get(uid, 0)) as live:
         async with get_compat_db() as db:
             if live:
@@ -1202,8 +1217,9 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                 names_by_user[r["user_id"]] = await household_names(db, r["user_id"])
                 cand_by_user[r["user_id"]] = await candidate_recording_ids(db, r["user_id"])
     rows = rank_important(rows, names_by_user, cand_by_user)          # the pivot reads EVERYTHING, important recordings first (so an over-long night carries the least important)
+    tag_by_user = {u: await member_tags(u) for u in names_by_user}     # a member who turned voice tagging off: the worker computes no speaker windows for their audio
     for r in rows:
-        items.append({"id": r["id"], "path": r["audio_path"], "hint": name_hint(names_by_user[r["user_id"]])})
+        items.append({"id": r["id"], "path": r["audio_path"], "hint": name_hint(names_by_user[r["user_id"]]), "diar": tag_by_user[r["user_id"]]})
     work = home_dir() / "work"
     work.mkdir(parents=True, exist_ok=True)
     os.chmod(work, 0o700)
@@ -1251,6 +1267,9 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     res["aborted"] = done1.get("aborted") or None
     ok1 = [it for it in items if (got1.get(it["id"]) or {}).get("ok")]
     by_id = {r["id"]: r for r in rows}
+    for it in ok1:          # belt and braces (an older worker ignores the per-item switch): an opted-out member's windows never reach a channel mean or a segment
+        if not it["diar"]:
+            got1[it["id"]]["windows"] = []
 
     # ── the pendant channel mean per member: this session's turns (>= 10 min of speech), else the stored per-device mean; and the wearer's loud cut ──
     mu_by: dict = {}

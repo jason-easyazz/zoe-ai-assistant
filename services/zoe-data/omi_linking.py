@@ -119,11 +119,18 @@ def window_saw(panel_id: str, user_id: str, device_id: str, *, now: Optional[flo
     return at is not None and now - at <= CLAIM_GRACE_S
 
 
+def _latest(user_id: str) -> Optional["Window"]:
+    """The member's CURRENT window: a ``searching`` one if any, else the most recently opened (a finished window on another panel
+    never hides the attempt the member just started)."""
+    mine = [w for w in _WINDOWS.values() if w.user_id == user_id]
+    if not mine:
+        return None
+    return max(mine, key=lambda w: (w.state == "searching", w.opened))
+
+
 def status(user_id: str) -> Optional[dict]:
-    for w in _WINDOWS.values():
-        if w.user_id == user_id:
-            return w.public(w.clock())
-    return None
+    w = _latest(user_id)
+    return w.public(w.clock()) if w is not None else None
 
 
 class LinkError(Exception):

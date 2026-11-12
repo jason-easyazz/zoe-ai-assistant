@@ -50,7 +50,7 @@ Voice, at the panel: "Zoe, link my pendant".
    Nothing heard within the window -> "I couldn't find your pendant". A pendant that is already mine but that this panel does not
    remember (an earlier connect failed) is connected again on the retry; only mine AND remembered is "already linked".
 5. Progress is shown with the existing enrolment overlay (`voice_enroll` push frame -> `js/touch-voice-enroll.js`: a step line, three
-   dots, a tick) and each outcome is spoken on that panel (`voice_announce`, trigger `omi_link`).
+   dots, a tick) and each outcome is spoken on that panel (`voice_announce`, trigger `omi_link`, panel-scoped: only that panel's daemon may claim it).
 6. omi-sync on the Pi reads the agent's known-devices store on every step, so the new pendant is synced from its next visit. No env edit,
    no restart.
 
@@ -83,6 +83,9 @@ The operator flag is the master switch and the ceiling; a member can only narrow
 | Learn the voices I name | `learning_enabled` (1, migration 0055) | `ZOE_OMI_LEARN_VOICES` |
 | Keep audio (days) | `keep_audio_days` (empty = the household's) | `ZOE_OMI_AUDIO_RETENTION_DAYS` (ceiling) |
 | Offer me a day review | `day_review_enabled` (1) | `ZOE_OMI_DAY_REVIEW` |
+
+"Tag voices on my recordings" off holds for the night re-pass too: the transcript is still improved, but no speaker is computed or
+stored for that member's audio. If the setting cannot be read, nothing is tagged.
 
 Pausing answers the Pi's upload with the same 409 `device_not_registered` an unassigned pendant gets, so the Pi keeps every byte and
 asks again later; the pendant's own storage still fills while paused. Operator-only (no member setting): `ZOE_OMI_DEVICE_OWNERS`,

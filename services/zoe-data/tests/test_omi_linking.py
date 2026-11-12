@@ -199,6 +199,25 @@ def test_a_pendant_this_panel_did_not_hear_in_my_window_is_refused(link):
     assert owner(link, DEV_A) == "ben"
 
 
+def test_a_second_attempt_at_another_panel_is_what_my_pendant_reports(link):
+    """Review (P2): a finished window stayed in ``_WINDOWS`` and ``status`` returned the member's OLDEST one, so a new attempt at
+    another panel showed the old result and the settings page stopped polling. Negative control: with one window, it is that one."""
+    w1, _ = open_and_drive(link, ANN, [omi_dev(DEV_A, -82)], panel_id="p1")
+    assert w1.state == "failed" and omi_linking.status("ann")["panel_id"] == "p1"
+    link.clock.t += 5
+    Panel(link.broker, "p2", link.clock, [])
+    run(omi_linking.start(ANN, "p2", notice_told=True, broker=link.broker, clock=link.clock, spawn=False))
+    st = omi_linking.status("ann")
+    assert st["panel_id"] == "p2" and st["state"] == "searching"
+    link.as_(ANN)
+    assert link.client.get("/api/omi/my-pendant").json()["window"]["panel_id"] == "p2"
+    # a later FINISHED attempt still beats an older finished one; a searching one beats both
+    omi_linking._WINDOWS["p2"].state = "failed"
+    assert omi_linking.status("ann")["panel_id"] == "p2"
+    omi_linking._WINDOWS["p1"].state = "searching"
+    assert omi_linking.status("ann")["panel_id"] == "p1"
+
+
 def test_a_guest_or_a_panel_token_gets_nothing(link):
     for who in (GST, PANEL_AS_BEN, {"user_id": "", "role": "member"}):
         with pytest.raises(omi_linking.LinkError):
