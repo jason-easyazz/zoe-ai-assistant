@@ -51,18 +51,33 @@ point 2 cannot separate A from B.
    as `routers/chat._save_chat_message` writes them (`metadata={"user_id", "traffic_class"}`). The forget ledger is an
    empty stand-in and `_ingest_or_supersede` is a recorder.
 3. **Fail-closed isolation**, installed before any production import:
-   - The store / DB env names point at a managed temp dir that is removed at exit, or at an invalid DSN. Names only:
+   - Every lab directory (stores, output) is created under the fixed root `/tmp`, passed explicitly, so `TMPDIR` cannot
+     move it. A directory whose resolved path is inside the live checkout, this repository or any git work tree is
+     refused (and removed).
+   - The store / DB env names point at the store dir, which is removed at exit, or at an invalid DSN. Names only:
      `POSTGRES_URL`, `DATABASE_URL`, `ZOE_DATABASE_URL`, `POSTGRES_DSN`, `MEMPALACE_DATA_DIR`, every store path the
      zoe-data test conftest pins, `ZOE_HARNESS=1` and `GEMMA_SERVER_URL`.
    - Guards raise a `BaseException` and record the attempt if anything builds an asyncpg pool or connection, any chromadb
      client, or a sqlite3 file outside the temp dir, or opens any outbound socket (TCP or AF_UNIX). The one exception is
      127.0.0.1:11434, and only inside a model call.
-   - Every run ends by asserting that no guard tripped and that `db_pool._pool`, `memory_service._service_singleton` and
-     `memory_service._AUDIT_CLIENTS` are empty. A failure exits 4.
-   - `--selftest` passes 20/20: every guard trips, including on the production `db_pool.init_pool()` and
-     `memory_service._palace_client()`, and in-memory sqlite still works. It also checks that `--out` refuses paths,
-     `..`, hidden names and an empty name, and that the writer refuses a planted symlink and an existing file.
-   - Every run with the guarded runner (self-test, gates replay, rescore) ended `isolation=clean`. The model stage ran
+   - The isolation check is an EXIT assertion. Every mode runs inside `_run_guarded`, which on every path (normal
+     return, a refusal, an uncaught `GuardTrip`, any other exception) asserts that no guard tripped and that
+     `db_pool._pool`, `memory_service._service_singleton` and `memory_service._AUDIT_CLIENTS` are empty. It prints
+     `exit-isolation=...`, and a failure makes the exit code 4.
+   - `--selftest` passes 29/29:
+     - every guard trips, including on the production `db_pool.init_pool()` and `memory_service._palace_client()`, and
+       in-memory sqlite still works;
+     - `--out` refuses paths, `..`, hidden names and the empty name `""`, and the writer refuses a planted symlink and
+       an existing file;
+     - a managed dir lands in `/tmp` even with `TMPDIR` set to the repo, and the unsafe-dir check refuses the repo, a
+       subdir of it and the live checkout;
+     - the exit assertion returns 4 for a run that swallowed a trip and then crashed, and for an uncaught trip; it
+       keeps a clean refusal's code (3) and passes a clean run (0).
+   - The self-test trips guards on purpose. It resets the trip record after those deliberate trips, and its own final
+     `exit-isolation=clean` covers only what ran after the reset. It is not evidence that the deliberate part was
+     clean.
+   - The gates replay and the rescore each ended `exit-isolation=clean`, and so did a rescore run with `TMPDIR` set to
+     the repo, which still wrote under `/tmp`. The model stage ran
      on 2026-11-12 with the earlier version of this runner, which unset the DSN names and replaced the stores after
      import, without these guards. Its outputs are reused below; they were not re-run.
 4. **Model stage** (`--model`, run once on 2026-11-12):
@@ -91,9 +106,10 @@ point 2 cannot separate A from B.
 
 Run (all under `flock -x -w 3000 /tmp/zoe-test-lane.lock`, interpreter `~/.zoe/venvs/zoe-data-py312/bin/python`):
 `run_split.py --selftest`; `run_split.py --variants asr,lower`; `run_split.py --rescore` (reads `stored_run.py`); the
-model stage adds `--model --only <ids>`. `--out` takes a file NAME, never a path. The JSON goes into a newly created
-`panel-split-out-*` temp directory with an exclusive, no-follow create (it refuses an existing file and a symlink), and
-the script prints where it wrote. `--selftest` covers both refusals.
+model stage adds `--model --only <ids>`. `--out` takes a file NAME, never a path; omitted, a name is generated, and an
+empty name is refused. The JSON goes into a newly created `/tmp/panel-split-out-*` directory with an exclusive,
+no-follow create (it refuses an existing file and a symlink), and the script prints where it wrote. `--selftest` covers
+these refusals.
 
 ## Gates between "turns exist" and "candidate written"
 

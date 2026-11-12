@@ -6,15 +6,17 @@ Drives the REAL `memory_idle_consolidation.consolidate_session` (and, in --model
 `memory_digest._extract_facts_with_gemma` -> `_facts_call`) on the invented sessions in fixtures.py.
 
 ISOLATION IS FAIL-CLOSED. Before ANY production module is imported this script
-  1. creates a managed temp dir (removed at exit) and points every store / DB env name at it or at an invalid value;
+  1. creates a managed store dir under the fixed root /tmp (TMPDIR ignored; refused inside a git work tree or the live
+     checkout; removed at exit) and points every store / DB env name at it or at an invalid value;
   2. installs guards that RAISE `GuardTrip` (a BaseException, so the production code's broad `except Exception` cannot
      swallow it) and RECORD the attempt when anything tries to build: an asyncpg pool or connection, a chromadb client
      (PersistentClient / HttpClient / Client / EphemeralClient / AsyncHttpClient / CloudClient), a sqlite3 file outside the
      managed temp dir, or any outbound socket connection (TCP or AF_UNIX). The ONE allowed connection is the local brain
      at 127.0.0.1:11434, and only inside a model call in --model mode;
-  3. at the end of every run asserts that no guard tripped and that no production store object exists
-     (`db_pool._pool`, `memory_service._service_singleton`, `memory_service._AUDIT_CLIENTS`). A run that fails this check
-     exits 4. `--selftest` proves each guard trips.
+  3. on EVERY exit path (`_run_guarded`: normal return, refusal, uncaught GuardTrip, any exception) asserts that no
+     guard tripped and that no production store object exists (`db_pool._pool`, `memory_service._service_singleton`,
+     `memory_service._AUDIT_CLIENTS`). A run that fails this check exits 4. `--selftest` proves each guard trips, then
+     resets the deliberate trips so its own exit assertion covers only what follows.
 The memory service / ingest step and the forget ledger are replaced by in-memory stand-ins (an ingest RECORDER and an
 empty ledger) after import; the guards are what make that replacement safe rather than merely hopeful.
 
@@ -29,8 +31,8 @@ Modes
                   behind README.md, so the README tables reproduce with no model call.
   --selftest      prove every guard trips; exits 0 only if all do.
 
-Output: `--out` takes a file NAME, never a path. The JSON is written into a NEWLY CREATED managed temp directory
-(`panel-split-out-*`) with O_CREAT|O_EXCL|O_NOFOLLOW, so it can never overwrite an existing file or follow a symlink;
+Output: `--out` takes a file NAME, never a path (omitted: a generated name; empty: refused). The JSON is written into a
+NEWLY CREATED directory `/tmp/panel-split-out-*` with O_CREAT|O_EXCL|O_NOFOLLOW, so it can never overwrite an existing file or follow a symlink;
 a name with a path separator, `..` or a leading dot is refused. The script prints where it wrote.
 Synthetic data only; never reads household content.
 """
@@ -59,8 +61,42 @@ MODEL_CALL_CAP = 20
 LOCK = "/tmp/zoe-voice-harness.lock"
 BRAIN = ("127.0.0.1", 11434)
 
-# ===== 1. managed temp dir + env pins (BEFORE any production import) ==================================================
-_STORE = tempfile.mkdtemp(prefix="panel-split-stores-")
+# ===== 1. managed store dir + env pins (BEFORE any production import) ==================================================
+SAFE_ROOT = "/tmp"                                  # fixed parent for every lab directory; TMPDIR is NOT honoured
+_LIVE_CHECKOUT = os.path.realpath(os.path.expanduser("~/assistant"))
+
+
+def _unsafe_reason(path: str) -> str | None:
+    """Why ``path`` may not hold lab files, or None. Refused: anything inside the live checkout (~/assistant), this
+    repository, or ANY git work tree."""
+    rp = os.path.realpath(path)
+    for root in (_LIVE_CHECKOUT, os.path.realpath(str(REPO))):
+        if rp == root or rp.startswith(root + os.sep):
+            return f"inside {root}"
+    try:
+        probe = subprocess.run(["git", "-C", rp, "rev-parse", "--is-inside-work-tree"],
+                               capture_output=True, text=True, timeout=10)
+        if probe.returncode == 0 and probe.stdout.strip() == "true":
+            return "inside a git work tree"
+    except (OSError, subprocess.SubprocessError):
+        return "could not check for a git work tree"
+    return None
+
+
+def _managed_dir(prefix: str) -> str:
+    """A NEW directory under the fixed SAFE_ROOT (``dir=`` is explicit, so TMPDIR cannot move it), refused - and
+    removed again - if its resolved location is inside a git work tree or the live checkout."""
+    if _unsafe_reason(SAFE_ROOT):
+        raise SystemExit(f"REFUSED: {SAFE_ROOT} is {_unsafe_reason(SAFE_ROOT)}")
+    d = tempfile.mkdtemp(prefix=prefix, dir=SAFE_ROOT)
+    why = _unsafe_reason(d)
+    if why:
+        shutil.rmtree(d, ignore_errors=True)
+        raise SystemExit(f"REFUSED: lab directory would be {why}")
+    return d
+
+
+_STORE = _managed_dir("panel-split-stores-")
 atexit.register(shutil.rmtree, _STORE, ignore_errors=True)
 _INVALID_DSN = "postgresql://lab-guard.invalid:1/no_such_db"
 _FILE_PINS = (
@@ -487,7 +523,7 @@ def selftest() -> int:
     # --out: a name only, into a fresh managed dir; never a path, never over an existing file or through a symlink
     for bad_name in ("../x.json", "/etc/x.json", "a/b.json", "..", ".hidden.json", ""):
         try:
-            _out_name(bad_name if bad_name else "\x00")
+            _out_name(bad_name)
             checks.append((f"--out refuses {bad_name!r}", False, "accepted"))
         except SystemExit:
             checks.append((f"--out refuses {bad_name!r}", True, ""))
@@ -506,8 +542,48 @@ def selftest() -> int:
         checks.append(("write refuses an existing file", False, "overwrote it"))
     except OSError:
         checks.append(("write refuses an existing file", Path(d, "exists.json").read_text() == "old", ""))
+    # lab directories: fixed root, TMPDIR ignored, git work trees and the live checkout refused
+    saved_env, saved_td = os.environ.get("TMPDIR"), tempfile.tempdir
+    try:
+        os.environ["TMPDIR"] = str(REPO)
+        tempfile.tempdir = None
+        d2 = _managed_dir("panel-split-selftest-tmpdir-")
+        checks.append(("managed dir ignores TMPDIR pointed at the repo",
+                       os.path.dirname(os.path.realpath(d2)) == os.path.realpath(SAFE_ROOT), d2))
+        shutil.rmtree(d2, ignore_errors=True)
+    finally:
+        if saved_env is None:
+            os.environ.pop("TMPDIR", None)
+        else:
+            os.environ["TMPDIR"] = saved_env
+        tempfile.tempdir = saved_td
+    for label, path in (("this repository", str(REPO)), ("the live checkout", _LIVE_CHECKOUT),
+                        ("a subdir of this repository", str(HERE))):
+        checks.append((f"unsafe-dir check refuses {label}", bool(_unsafe_reason(path)), str(_unsafe_reason(path))))
+    checks.append(("unsafe-dir check accepts the store dir", _unsafe_reason(_STORE) is None, ""))
+    # the outer exit assertion: every path through _run_guarded ends in the isolation check
     n_trips = len(assert_no_store_constructed())
-    checks.append(("end-of-run check reports every trip", n_trips >= 10, f"reported {n_trips}"))
+    checks.append(("end-of-run check reports every deliberate trip", n_trips >= 10, f"reported {n_trips}"))
+
+    def _trips_then_raises():
+        try:
+            _trip("selftest: deliberate trip inside a failing run")
+        except GuardTrip:
+            pass                                         # a swallowed trip, then an unrelated crash
+        raise RuntimeError("selftest: deliberate crash")
+
+    TRIPS.clear()
+    checks.append(("exit assertion fails a run that swallowed a trip and crashed", _run_guarded(_trips_then_raises) == 4, ""))
+    TRIPS.clear()
+    checks.append(("exit assertion fails a run that raised GuardTrip",
+                   _run_guarded(lambda: _trip("selftest: deliberate uncaught trip")) == 4, ""))
+    TRIPS.clear()
+    checks.append(("exit assertion keeps a clean refusal's code", _run_guarded(lambda: (_ for _ in ()).throw(SystemExit(3))) == 3, ""))
+    checks.append(("exit assertion passes a clean run", _run_guarded(lambda: 0) == 0, ""))
+    # The deliberate trips above are now RESET; main() runs the self-test through _run_guarded, so its final
+    # isolation line asserts that nothing tripped AFTER this point.
+    TRIPS.clear()
+    print(f"selftest: deliberate trips reset; the isolation line below covers everything after the reset")
     for name, ok, note in checks:
         print(f"{'PASS' if ok else 'FAIL'}  {name}  {note}")
     return 0 if all(ok for _n, ok, _x in checks) else 1
@@ -517,8 +593,9 @@ _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 
 
 def _out_name(name: str | None) -> str:
-    """A bare file name, or SystemExit. No separators, no `..`, no leading dot, nothing but [A-Za-z0-9._-]."""
-    n = name if name else f"panel-split-{int(time.time())}.json"
+    """A bare file name, or SystemExit. None = a generated name; an EMPTY name is refused. No separators, no `..`, no
+    leading dot, nothing but [A-Za-z0-9._-]."""
+    n = f"panel-split-{int(time.time())}.json" if name is None else name
     if (os.sep in n or (os.altsep and os.altsep in n) or ".." in n or not _NAME_RE.fullmatch(n)):
         raise SystemExit(f"REFUSED: --out takes a file NAME only (got {n!r})")
     return n
@@ -533,12 +610,40 @@ def _write_new(directory: str, name: str, text: str) -> str:
     return path
 
 
+def _run_guarded(body) -> int:
+    """Run ``body`` and ALWAYS end with the isolation assertion, whatever happened: a normal return, a refusal
+    (SystemExit), a GuardTrip, or any other exception. A tripped guard or a constructed store makes the exit code 4."""
+    import traceback
+    try:
+        rc = body()
+    except SystemExit as exc:
+        code = exc.code
+        if isinstance(code, str):
+            print(code)
+            rc = 1
+        else:
+            rc = int(code or 0)
+    except GuardTrip as exc:
+        print(f"GUARD TRIPPED: {exc}")
+        rc = 4
+    except BaseException:  # noqa: BLE001
+        traceback.print_exc()
+        rc = 1
+    bad = assert_no_store_constructed()
+    print(f"exit-isolation={'clean' if not bad else 'VIOLATED ' + str(bad)} rc={4 if bad else rc}")
+    return 4 if bad else rc
+
+
 def main() -> int:
+    return _run_guarded(_main)
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", action="store_true", help="also call the local brain (see module docstring)")
     ap.add_argument("--variants", default="asr", help="comma list of asr,lower")
     ap.add_argument("--only", default="", help="comma list of session ids")
-    ap.add_argument("--out", default="", help="output file NAME (written into a new managed temp dir; never a path)")
+    ap.add_argument("--out", default=None, help="output file NAME (written into a new managed dir under /tmp; never a path)")
     ap.add_argument("--rescore", nargs="?", const="", default=None,
                     help="re-derive scores (no model); default source: the committed stored_run.py")
     ap.add_argument("--selftest", action="store_true")
@@ -588,7 +693,7 @@ def main() -> int:
         print(f"model_calls={res['model_calls']} brain_connects={res['brain_connects']}")
     bad = assert_no_store_constructed()
     res["isolation"] = {"trips": bad, "clean": not bad}
-    out_dir = tempfile.mkdtemp(prefix="panel-split-out-")   # new, managed, kept for the reader (outside the repo)
+    out_dir = _managed_dir("panel-split-out-")   # new, under /tmp, kept for the reader; never in a work tree
     out = _write_new(out_dir, out_name, json.dumps(res, indent=1, default=str))
     print(f"isolation={'clean' if not bad else 'VIOLATED ' + str(bad)} wrote={out}")
     return 4 if bad else 0
