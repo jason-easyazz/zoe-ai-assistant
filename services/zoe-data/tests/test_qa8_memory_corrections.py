@@ -338,3 +338,15 @@ def test_a_chain_of_corrections_keeps_every_old_value_stale(monkeypatch):
     assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 20th of November") is True
     assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 27th of November") is True
     assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 28th of November") is False
+
+
+def test_a_date_correction_rewrites_the_date_and_never_another_number_of_that_subject():
+    corr = vc.statement(DENTIST_FIX)
+    assert vc.rewrite("User has a dentist appointment that costs 20 dollars", corr) is None
+    assert vc.rewrite("User's dentist appointment is at 20 Example Street", corr) is None
+    assert vc.rewrite("User has a dentist appointment on the 20th of November", corr) == "User has a dentist appointment on the 27th of November"
+    assert vc.rewrite("User has a dentist appointment on 20 November", corr) == "User has a dentist appointment on 27 November"
+    assert vc.rewrite("User has a dentist appointment on November 20", corr) == "User has a dentist appointment on November 27"
+    money = vc.statement("actually my savings is 13.5 thousand not 12 thousand")
+    assert vc.rewrite("User checked their savings on the 12th of May", money) is None        # an amount never rewrites a day
+    assert vc.rewrite("User's savings are 12 thousand dollars", money) == "User's savings are 13.5 thousand dollars"

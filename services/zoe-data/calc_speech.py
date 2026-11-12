@@ -112,6 +112,9 @@ _UNIT_KINDS = (("dollar", "dollar"), ("buck", "dollar"), ("cent", "cent"), ("vol
                ("km", "km"), ("kilomet", "km"), ("met", "metre"), ("kg", "kg"), ("kilo", "kg"), ("gram", "gram"), ("lit", "litre"))
 
 
+_UNIT_FAMILIES = (frozenset({"dollar", "cent"}), frozenset({"km", "metre"}), frozenset({"kg", "gram"}))
+
+
 def _unit_kind(word: str) -> str:
     w = word.strip()
     return next((kind for prefix, kind in _UNIT_KINDS if w.startswith(prefix)), w)
@@ -163,8 +166,11 @@ def _prep(text: str) -> str:
     s = re.sub(r"\bgrand\b", "thousand", s)
     # Adding or subtracting DIFFERENT units is not a sum this can do ("2 dollars plus 50 cents" is not 52, "5 km plus 300 metres" is
     # not 305): the units stay in, the stray word rejects the utterance and the brain answers. A wrong fixed answer is worse than none.
+    # Two sizes of the SAME measure (dollars and cents, km and metres, kg and grams) are wrong under any operator: "5 km divided by
+    # 300 metres" is not 0.0167 and "2 dollars times 50 cents" is not 100. Different measures multiply fine ("240 volts times 10 amps").
     kinds = {_unit_kind(m.group(0)) for m in _UNIT_RE.finditer(s)} | ({"dollar"} if dollar_sign else set())
-    if not (len(kinds) > 1 and _ADDITIVE_RE.search(s)):
+    same_measure = any(len(kinds & fam) > 1 for fam in _UNIT_FAMILIES)
+    if not (same_measure or (len(kinds) > 1 and _ADDITIVE_RE.search(s))):
         s = _UNIT_RE.sub("", s)
     return re.sub(r"\s+", " ", s).strip()
 

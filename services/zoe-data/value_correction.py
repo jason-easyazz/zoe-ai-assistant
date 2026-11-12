@@ -471,6 +471,16 @@ def _render_quantity(new: Quantity, like: Quantity) -> str:
     return txt
 
 
+def _is_day_of_month(text: str, q: Quantity) -> bool:
+    """The number at ``q`` is written as a day of the month: an ordinal ("20th", "twentieth"), or a number with a month name as its
+    neighbour ("20 November", "November 20", "20th of November"). Pure."""
+    if q.ordinal:
+        return True
+    after = re.match(r"\s*(?:of\s+)?([A-Za-z]+)", text[q.end:])
+    before = re.search(r"([A-Za-z]+)\s*$", text[:q.start])
+    return bool((after and _month_of(after.group(1))) or (before and _month_of(before.group(1))))
+
+
 def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     """The quantity half of ``rewrite``: the ONE number after the subject whose value is the old one (any spelling: "20th",
     "twentieth", "12 thousand", "twelve thousand"), replaced by the new one. An old value said without its scale takes the new
@@ -498,7 +508,11 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
             return None
     if any(q.value == qn.value for q in spans) and (not month_new or month_new == row_month):
         return None                 # the row already holds the corrected value
-    hits = [q for q in spans if q.value in want]
+    # the number must be the corrected ATTRIBUTE, not just the same digits: a DATE correction ("the 27th not the 20th") rewrites a
+    # day-of-month (an ordinal, or a number beside a month name), never "costs 20 dollars" or "20 Example Street"; and a correction
+    # that is not a date never rewrites a day-of-month
+    date_corr = bool(qn.ordinal or qo.ordinal or month_new or month_old)
+    hits = [q for q in spans if q.value in want and _is_day_of_month(tail, q) == date_corr]
     if len(hits) != 1:
         return None
     q = hits[0]
