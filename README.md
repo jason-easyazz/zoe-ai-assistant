@@ -213,8 +213,10 @@ lists every default.
   before and 12 of 12 after. [voice-lane-parity.md](docs/knowledge/voice-lane-parity.md)
 - **Distress hand-off (on).** A turn that signals self-harm, abuse or danger
   gets no model reply: a fixed, warm pointer to a trusted person and the local
-  crisis line, the turn is kept out of memory, digests and reflection, and the
-  household contact is told once, with none of the words. Negation and quotation
+  crisis line, the turn is kept out of memory, digests and reflection, and, when
+  a household contact is configured (`ZOE_DISTRESS_CONTACT_USER`), that contact
+  is told once, with none of the words; with no contact set, nobody is notified.
+  Negation and quotation
   guards lower a hand-off to a gentler check-in (that tier is still shadow), and
   only known idioms such as "dying to see it" are ignored. Setup (country,
   contact) is an operator step, and the detector covers English and Spanish.
@@ -231,24 +233,25 @@ lists every default.
   [structural-floors.md](docs/knowledge/structural-floors.md) (the
   language-independent claim-row floors ship in shadow)
 
-### The night brain (in development)
+### The night brain
 
-Not yet running nightly. Two pieces are built and being measured:
+The night window runs nightly from an installed timer. Of the 18 nights from
+2026-10-27 to 2026-11-13, 12 completed, 3 aborted on the memory floor or a 12B
+load failure, 1 was refused for lack of memory, and 2 left no report.
 
 - **The 12B night window.** A nightly window where the live 4B, voice and the
   app go to sleep for about an hour, a bigger model (Gemma 4 12B) runs the night
   jobs at a larger context, and everything is woken again in order with each
-  service's `/health` polled. The window itself runs and has been trialled; the
-  nightly timer is **not installed**, no job has yet completed end to end on the
-  12B, and the box is memory-tight, so this is an owner-gated step.
-  [docs/knowledge/night-window.md](docs/knowledge/night-window.md)
+  service's `/health` polled. The box is memory-tight, so a night can still
+  abort and fall back. [docs/knowledge/night-window.md](docs/knowledge/night-window.md)
 - **The night mind.** A reflection pass that turns each member's day into a few
   cited, pointer-shaped observations (threads in progress, what changed, what
   went quiet, what to raise and what to leave alone) so Zoe can say "you
   mentioned the sore knee on Monday, how is it today?". It is **off by
-  default** (`ZOE_NIGHT_MIND`), some of its measured cells are still red on the
-  small model, and the plan is a shadow week on real days before it serves
-  anything. [docs/knowledge/night-mind.md](docs/knowledge/night-mind.md)
+  default** (`ZOE_NIGHT_MIND`); the window writes its observations in enforce,
+  and a deployment sets `ZOE_NIGHT_MIND=serve` for zoe-data to use them (the
+  reference box does). Some of its measured cells are still red on the small
+  model. [docs/knowledge/night-mind.md](docs/knowledge/night-mind.md)
 
 ## How Zoe is measured
 

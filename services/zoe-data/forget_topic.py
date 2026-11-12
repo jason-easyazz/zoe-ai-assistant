@@ -15,7 +15,8 @@ The contract (forgotten means forever; fails closed):
   retracted (their capture in flight never lands), their words leave the exact-words index, and the saved transcript turn
   is flagged off the record - the same cascade "forget that" runs for one turn.
 * The reply says exactly what happened: how many things went, how many could not be reached, or that nothing matched and
-  nothing was changed. It never says "saved" about a forget, and never "forgotten" while a row is still there.
+  nothing was changed. It never says "saved" about a forget, and never "forgotten" while a row is still there. A topic said
+  in a recent turn but not filed yet (the capture runs minutes behind) IS forgotten: its turn is retracted and the reply says so.
 
 Pure matching (``parse`` / ``topic_groups`` / ``row_matches``) has no I/O; ``forget`` is the only part that touches the store.
 """
@@ -37,6 +38,9 @@ _VERB = (r"(?:forget|delete|remove|erase|scrap|"
          r"(?:do\s*n'?t|do\s+not|stop)\s+(?:keep|keeping|remember|remembering|save|saving|store|storing))")
 _QUANT = (r"(?:everything|anything|all(?:\s+of\s+it)?"
           r"|what(?:ever)?\s+(?:i(?:'?ve)?|we)\s+(?:just\s+)?(?:told\s+you|said|mentioned)"
+          # "forget that I told you about my sister" (QA round 8): with no topic intent it reached the brain, which has no forget
+          # tool, and said "I don't have that noted" while the fact was still on its way to the store
+          r"|that\s+(?:i(?:'?ve)?|we)\s+(?:just\s+)?(?:told\s+you|said|mentioned)"
           r"|what\s+you\s+know|your\s+memories|the\s+memories"
           # "forget the thing about asha and mushrooms", "forget the bit about my brother" (QA round 7): the same instruction in the
           # words people actually use; the noun is REQUIRED (bare "forget about my day" stays a dismissal)
@@ -63,7 +67,7 @@ MIN_CLAUSE_GROUPS = 2
 _STOP = frozenset(
     "my our your his her their the a an of and or to in on at with for about that this these those thing things stuff "
     "i me you we it its is are was were be been am what whatever everything anything all told said mentioned "
-    "just really some any".split())
+    "just really some any being been having".split())     # "about being lonely": the turn said "I've been lonely" (QA round 8)
 
 #: kin words that mean the same person-role: a row saying "mother" is "my mum"
 _SYNONYMS: tuple = (
@@ -184,6 +188,9 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
     retracted = 0
     for turn in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text)):
         turn_forget.retract(user_id, turn)
+        # the saved transcript turn too, whether or not the exact-words index holds it: the nightly readers (digest, idle
+        # consolidation) re-mine chat_messages long after the in-process wall has expired (RAISES: not confirmed if not flagged)
+        await exact_words.forget_transcript(user_id, turn.text)
         turn_forget.mark_forgotten(user_id, turn)
         retracted += 1
     erased = 0
@@ -272,7 +279,8 @@ def reply(res: Result, topic: str) -> str:
                 "Tell me which part (a few more words) and I'll forget just that.")
     if not res.found:
         if res.turns_retracted or res.words_erased:
-            return "I don't have anything saved on that, and I've dropped your words about it too. Nothing else was changed."
+            # it was said but not filed yet (the capture runs minutes behind): it is forgotten, never "nothing saved" (QA round 8)
+            return "Done — I've forgotten what you told me about that, so it won't be kept. Nothing else was changed."
         return "I couldn't find anything saved about that, so nothing was changed."
     if res.failed and not res.forgotten:
         return ("I found it but couldn't remove it just now, so it's still saved. "
