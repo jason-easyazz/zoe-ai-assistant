@@ -13,7 +13,7 @@ import json
 from core.auth import auth_manager
 from core.passcode import passcode_manager
 from core.sessions import session_manager
-from core.rbac import rbac_manager
+from core.rbac import rbac_manager, PermissionResult
 from core.security import rate_limiter
 from core.account_setup import setup_token_manager, DEFAULT_TOKEN_TTL_MINUTES
 from models.database import auth_db, UserRole
@@ -32,6 +32,27 @@ BUILTIN_ROLES = frozenset(r.value for r in UserRole)
 def _valid_role(role: str) -> bool:
     """A built-in household role, or a custom role created through /api/admin/roles."""
     return role in BUILTIN_ROLES or rbac_manager._role_exists(role)
+
+
+# Roles that grant administration. Holding ``users.create`` / ``users.update`` is not enough to hand one out: without this a
+# non-admin role with those permissions could create an admin, or promote itself.
+PRIVILEGED_ROLES = frozenset({"admin", "super_admin"})
+
+
+def _require_may_assign(role: str, current_session) -> None:
+    """403 unless the CALLER may hand out ``role``. Any other role needs nothing beyond the route's own permission; a privileged
+    role needs the caller to be an admin / super_admin themselves, or to hold ``users.assign_role``. Fails closed."""
+    if role not in PRIVILEGED_ROLES:
+        return
+    caller = getattr(current_session, "user_id", None)
+    try:
+        if caller and rbac_manager.get_user_role(caller) in PRIVILEGED_ROLES:
+            return
+        if caller and rbac_manager.check_permission(caller, "users.assign_role").result == PermissionResult.GRANTED:
+            return
+    except Exception as exc:  # noqa: BLE001 - an unreadable role is not a yes
+        logger.warning("role-assign check failed (%s)", type(exc).__name__)
+    raise HTTPException(status_code=403, detail="Only an admin can assign this role")
 
 # Pydantic models
 class UserCreateRequest(BaseModel):
@@ -127,6 +148,7 @@ async def create_user(
     """
     if not _valid_role(request.role):
         raise HTTPException(status_code=400, detail="Invalid role")
+    _require_may_assign(request.role, current_session)
     try:
         success, result = auth_manager.create_user(
             username=request.username,
@@ -179,6 +201,7 @@ async def update_user(
                 # Verify role exists
                 if not _valid_role(request.role):
                     raise HTTPException(status_code=400, detail="Invalid role")
+                _require_may_assign(request.role, current_session)
                 updates.append("role = ?")
                 params.append(request.role)
             

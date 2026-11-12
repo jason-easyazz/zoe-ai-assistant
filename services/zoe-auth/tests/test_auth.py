@@ -1023,12 +1023,52 @@ def _role_of(db_path, user_id):
 @pytest.mark.parametrize("role", ["child", "family_member", "user", "admin", "guest"])
 def test_admin_can_set_a_builtin_role_with_no_custom_roles_table(sqlite_auth_db, monkeypatch, role):
     _seed_user(sqlite_auth_db, user_id="kid1", username="kid1", password=_pw("kidpass"), role="user")
+    _seed_user(sqlite_auth_db, user_id="admin", username="admin", password=_pw("adminpass"), role="admin")   # the caller IS an admin
     _admin_may(monkeypatch, "users.update")
     resp = TestClient(app).put(
         "/api/admin/users/kid1", headers={"X-Session-ID": "admin-sess"}, json={"role": role},
     )
     assert resp.status_code == 200, resp.text
     assert _role_of(sqlite_auth_db, "kid1") == role
+
+
+def _manager_may(db_path, monkeypatch, *perms):
+    """A NON-admin caller who holds the given permissions (a custom role could grant users.create / users.update)."""
+    _seed_user(db_path, user_id="mgr", username="mgr", password=_pw("mgrpass"), role="user")
+    _add_active_session("mgr-sess", "mgr")
+    monkeypatch.setattr(
+        session_manager, "validate_session_permission",
+        lambda session_id, permission, resource=None: permission in perms,
+    )
+
+
+def test_a_non_admin_with_users_update_cannot_promote_anyone_to_admin(sqlite_auth_db, monkeypatch):
+    _seed_user(sqlite_auth_db, user_id="kid1", username="kid1", password=_pw("kidpass"), role="user")
+    _manager_may(sqlite_auth_db, monkeypatch, "users.update")
+    client = TestClient(app)
+    for target in ("kid1", "mgr"):                                        # someone else, and themselves
+        resp = client.put(f"/api/admin/users/{target}", headers={"X-Session-ID": "mgr-sess"}, json={"role": "admin"})
+        assert resp.status_code == 403, resp.text
+        assert _role_of(sqlite_auth_db, target) == "user"
+    # control: the same caller may still set an ordinary role
+    ok = client.put("/api/admin/users/kid1", headers={"X-Session-ID": "mgr-sess"}, json={"role": "child"})
+    assert ok.status_code == 200, ok.text
+    assert _role_of(sqlite_auth_db, "kid1") == "child"
+
+
+def test_a_non_admin_with_users_create_cannot_create_an_admin(sqlite_auth_db, monkeypatch):
+    from core.auth import auth_manager
+    _manager_may(sqlite_auth_db, monkeypatch, "users.create")
+    created = []
+    monkeypatch.setattr(auth_manager, "create_user", lambda **kw: (created.append(kw["role"]) or True, "new1"))
+    monkeypatch.setattr(auth_manager, "get_user_info", lambda uid: {"user_id": uid})
+    client = TestClient(app)
+    body = {"username": "new1", "email": "new1@example.com", "password": _pw("newpass1")}
+    bad = client.post("/api/admin/users", headers={"X-Session-ID": "mgr-sess"}, json={**body, "role": "admin"})
+    assert bad.status_code == 403, bad.text
+    ok = client.post("/api/admin/users", headers={"X-Session-ID": "mgr-sess"}, json={**body, "role": "child"})
+    assert ok.status_code == 200, ok.text
+    assert created == ["child"]                                           # the admin create never reached the writer
 
 
 def test_admin_cannot_set_an_unknown_role(sqlite_auth_db, monkeypatch):
