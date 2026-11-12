@@ -13,9 +13,9 @@ This document is the source of truth for the physical touchscreen device at `<TO
 
 ## What This Device Does
 
-The touchscreen does not host the full Zoe backend stack. It runs Chromium in kiosk mode and loads the touch dashboard from the Zoe server:
+The touchscreen does not host the full Zoe backend stack. It runs Chromium in kiosk mode and loads the estate (the panel UI) from the Zoe server:
 
-- Active URL: `https://<ZOE_SERVER_IP>/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
+- Active URL: `https://<ZOE_SERVER_IP>/touch/home.html?panel_id=zoe-touch-pi&kiosk=1`
 - Purpose:
   - display touch UI
   - send panel actions/events
@@ -40,7 +40,7 @@ Chromium process is launched with the following important arguments:
 - `--user-data-dir=/home/pi/.config/chromium-kiosk`
 - `--touch-events=enabled`
 - `--ignore-certificate-errors`
-- URL target: `https://<ZOE_SERVER_IP>/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1`
+- URL target: `https://<ZOE_SERVER_IP>/touch/home.html?panel_id=zoe-touch-pi&kiosk=1`
 
 ## Files and Configurations that Define this Device
 
@@ -87,7 +87,7 @@ These files are intended to mirror and version-control the runtime config used o
 2. Ensure `zoe-ui` on server is serving updated files.
 3. Force reload kiosk (CDP or browser restart on touchscreen).
 4. Verify:
-   - page loads `touch/dashboard.html`
+   - page loads `touch/home.html`
    - actions acknowledge in panel flow
    - service worker version matches expected
    - kiosk restarts correctly after reboot

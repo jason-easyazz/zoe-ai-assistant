@@ -159,7 +159,6 @@
   "approved_files": [
     "CAPABILITIES.md",
     "services/zoe-ui/dist/js/widgets/core/multica-board.js",
-    "services/zoe-data/proactive/triggers/evolution_weekly_digest.py",
-    "services/zoe-ui/dist/touch/js/timers-global.js"
+    "services/zoe-data/proactive/triggers/evolution_weekly_digest.py"
   ]
 }

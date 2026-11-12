@@ -75,14 +75,6 @@
 | Notes | 📝 | Quick notes | Small |
 | Zoe AI | 🤖 | AI assistant with voice | Large |
 
-### Touch Dashboard
-
-The touch version (`/touch/dashboard.html`) uses the same widgets but optimized for:
-- Larger touch targets (56px minimum)
-- Gesture-based interactions
-- Full-screen mode support
-- Voice interaction with Zoe orb
-
 ## For Developers
 
 ### Quick Widget Creation
