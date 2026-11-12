@@ -287,7 +287,11 @@ def _unit(v: Any) -> np.ndarray:
 
 Refs = who.Refs
 label_window = who.label_window
-LEARN_YOU_MIN = 0.5                                # omi_voices.learn's "this unsure line is far enough from the wearer to learn as a bystander" bar
+#: omi_voices.learn's "this unsure line is far enough from the wearer to learn as a bystander" bar: an ``unsure`` line is held only at <= LEARN_YOU_MIN - LOW_MARGIN (0.10).
+#: Against the confirmed pendant print a turn in [0.35, 0.6) may only LEAN "you?" and is stored ``unsure`` with its wearer score, so the old 0.5 (held at <= 0.40) would keep
+#: 0.35-0.40 wearer-tail lines as a bystander's voice. 0.4499 holds an unsure line only below the pendant ``other`` bar (<= 0.3499, under omi_diarize.PENDANT_OTHER_MAX 0.35):
+#: bystander turns still learn (the measured bulk against a pendant print is 0.2-0.3; a matched person is ``other`` and always learnable). PROVISIONAL with those bars.
+LEARN_YOU_MIN = 0.4499
 
 
 def build_lines(words: list, windows: list, refs: Refs, *, gap_s: float = 2.0, smooth: int = 3, zoe_spans: Iterable = (), anchors: Iterable = (),
