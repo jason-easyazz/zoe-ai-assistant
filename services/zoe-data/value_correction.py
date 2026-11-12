@@ -231,6 +231,9 @@ _QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are|will\s+be)\s+(?:actual
                        rf"(?:and\s+)?not\s+(?P<o>{_QVAL}{{1,30}}?)\s*(?:(?:[;!?]|[.,](?!\d))\s*(?:.*))?$", re.IGNORECASE)
 
 
+_AGE_SUFFIX_RE = re.compile(r"\s+(?:years?[ -]old|yrs?\s+old|yo)\s*$", re.IGNORECASE)
+
+
 def _bare_value(v: str) -> str:
     """"on friday" -> "friday": a value's lead preposition is not part of the value (the stored row says "exam on Thursday")."""
     stripped = _PREP_RE.sub("", v.strip())
@@ -393,8 +396,11 @@ def statement(text: str) -> Optional[Correction]:
             qn, qo = quantity_value(new), quantity_value(old)
             if qn.value == qo.value and (_month_of(new) or "") == (_month_of(old) or ""):
                 continue
-            if value_of(new) is not None and value_of(old) is not None:
-                new, old = _bare_value(new), _bare_value(old)       # a plain age pair: the age path rewrites it
+            # "9 years old not 8 years old" is the plain age pair "9 not 8": with the suffix left on, it missed the age path and the
+            # unrestricted matcher rewrote ANY 8 of that subject ("Eli has 8 dogs" became 9 dogs)
+            bare_n, bare_o = _AGE_SUFFIX_RE.sub("", new), _AGE_SUFFIX_RE.sub("", old)
+            if value_of(bare_n) is not None and value_of(bare_o) is not None:
+                new, old = _bare_value(bare_n), _bare_value(bare_o)       # a plain age pair: the age path rewrites it
             return Correction(subj, new, old, bool((m.group("cue") or "").strip()))
     return None
 
@@ -591,6 +597,16 @@ def _subject_key(subject: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"(?i)^(?:the|my|our)\s+", "", (subject or "").strip())).lower().replace("\u2019", "'")
 
 
+def _same_value(a: Optional[str], b: Optional[str]) -> bool:
+    if not a or not b:
+        return False
+    qa, qb = quantity_value(a), quantity_value(b)
+    if qa is not None and qb is not None:
+        ma, mb = _month_of(a), _month_of(b)            # "the 20th" and "the 20th of november" are the same value: a month only
+        return qa.value == qb.value and (not ma or not mb or ma == mb)      # disagrees when both name one
+    return re.sub(r"\s+", " ", a.strip().lower()) == re.sub(r"\s+", " ", b.strip().lower())
+
+
 def _remember(user_id: str, corr: Correction) -> None:
     import time
 
@@ -598,10 +614,7 @@ def _remember(user_id: str, corr: Correction) -> None:
     if not uid or corr.old is None:
         return
     now = time.time()
-    # the LATEST correction of a subject is the only one that stands: after "the 27th not the 20th" then "the 20th not the 27th", the
-    # older entry would call the now-correct 20th stale and the transcript writers would drop the member's latest fact
-    subj = _subject_key(corr.subject)
-    keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S and _subject_key(c.subject) != subj]
+    keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
     keep.append((now, corr))
     _REMEMBERED[uid] = keep[-16:]
     while len(_REMEMBERED) > _REMEMBER_MAX_USERS:
@@ -616,8 +629,17 @@ def superseded_by_correction(user_id: str, fact: str) -> bool:
     try:
         uid = (user_id or "").strip().lower()
         now = time.time()
-        for t, corr in _REMEMBERED.get(uid, []):
-            if now - t <= REMEMBER_S and rewrite(fact or "", corr) is not None:
+        live = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
+        latest: dict = {}
+        for t, c in live:                               # in order said: the last one per subject is where the value stands now
+            latest[_subject_key(c.subject)] = c
+        for t, corr in live:
+            # EVERY value a subject was corrected away from stays stale (20 -> 27 -> 28: both 20 and 27), except the one the member
+            # corrected BACK to (27 not 20, then 20 not 27: the 20 is the latest fact, only the 27 is stale)
+            last = latest[_subject_key(corr.subject)]
+            if corr is not last and _same_value(corr.old, last.new):
+                continue
+            if rewrite(fact or "", corr) is not None:
                 return True
     except Exception:  # noqa: BLE001
         return False

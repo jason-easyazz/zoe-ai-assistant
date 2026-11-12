@@ -320,3 +320,21 @@ def test_correcting_back_keeps_the_latest_value(monkeypatch):
     _apply(svc, "sorry the dentist appointment is the 20th of november not the 27th", monkeypatch)
     assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 20th of November") is False
     assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 27th of November") is True
+
+
+def test_an_age_correction_with_years_old_never_rewrites_another_number_of_that_person():
+    for text in ("eli is 9 years old not 8 years old, he had his birthday", "eli is 9 years old not 8"):
+        corr = vc.statement(text)
+        assert corr is not None and (corr.new, corr.old) == ("9", "8")
+        assert vc.rewrite("Eli has 8 dogs", corr) is None                    # a count is not his age
+        assert vc.rewrite("Eli is 8 years old", corr) == "Eli is 9 years old"
+
+
+def test_a_chain_of_corrections_keeps_every_old_value_stale(monkeypatch):
+    """20th -> 27th -> 28th: a transcript written before either correction must not refile the 20th OR the 27th."""
+    svc = _Svc("User has a dentist appointment on the 20th of November")
+    _apply(svc, DENTIST_FIX, monkeypatch)
+    _apply(svc, "sorry the dentist appointment is the 28th of november not the 27th", monkeypatch)
+    assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 20th of November") is True
+    assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 27th of November") is True
+    assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 28th of November") is False
