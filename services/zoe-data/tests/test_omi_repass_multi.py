@@ -211,7 +211,7 @@ def multi_runner(texts, calls, fail=(), before=None):
     def runner(manifest, out, timeout_s, mem_max="", threads=4):
         man = json.loads(Path(manifest).read_text())
         eng = man["asr"]
-        calls.append({"dl": man["deadline_epoch"], "asr": eng, "diar": man["diar"], "ct2": man.get("ct2_dir"), "chunks": [it.get("chunks") for it in man["items"]], "ids": [it["id"] for it in man["items"]], "mem_max": mem_max})
+        calls.append({"timeout_s": timeout_s, "dl": man["deadline_epoch"], "asr": eng, "diar": man["diar"], "ct2": man.get("ct2_dir"), "chunks": [it.get("chunks") for it in man["items"]], "ids": [it["id"] for it in man["items"]], "mem_max": mem_max})
         if before:
             before(eng)
         with open(out, "a") as fh:
@@ -311,11 +311,34 @@ def test_the_window_is_never_exceeded_and_the_leftovers_carry_whole(renv, monkey
     out = run(rp.run_night(budget_s=1500, runner=runner, clock=lambda: t[0]))
     assert [c["asr"] for c in calls] == [PIV, PAR, DIS] and all(c["ids"] == [new_important] for c in calls)
     assert all(c["dl"] <= start + 1500 for c in calls) and t[0] - start <= 1500 and out["used_s"] <= out["window_s"] == 1500
+    assert calls[0]["timeout_s"] <= 1500 and all(c["timeout_s"] <= start + 1500 - (start + 500) for c in calls[1:])     # the KILL timeouts stay inside the window too
     assert calls[0]["dl"] < start + 1500 - 45 - 100                                          # the voters' share was RESERVED before the pivot started
     assert out["done"] == 1 and out["carried"] == 1 and out["planned"] == 1 and out["missing_voters"] is None and out["fused3_min"] > 0 and out["qwen_only_min"] == 0
     left = {r["id"]: r for r in rows(renv)}
     assert left[old_boring]["repass_state"] == "pending" and left[old_boring]["audio_path"] and Path(left[old_boring]["audio_path"]).exists()
     assert left[new_important]["repass_state"] != "pending"
+
+
+def test_ties_go_to_the_audio_that_expires_first_even_an_empty_first_pass(renv):
+    rows_ = [{"id": "late", "user_id": "u", "transcript": "words here", "status": "done", "audio_expires_at": "2026-11-19T00:00:00Z", "started_at": "2026-11-12"},
+             {"id": "soon", "user_id": "u", "transcript": "", "status": "empty_transcript", "audio_expires_at": "2026-11-13T00:00:00Z", "started_at": "2026-11-06"},
+             {"id": "key", "user_id": "u", "transcript": "call Sam", "status": "done", "audio_expires_at": "2026-11-19T00:00:00Z", "started_at": "2026-11-12"}]
+    assert [r["id"] for r in rp.rank_important(rows_, {"u": ["Sam"]}, {})] == ["key", "soon", "late"]     # importance first, then expiry, whatever the first pass found
+
+
+def test_a_pivot_reading_without_chunks_is_not_a_whole_pass_when_voters_are_expected(renv, monkeypatch):
+    on(monkeypatch, evals="none")
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+
+    def runner(manifest, out, timeout_s, mem_max="", threads=4):
+        man = json.loads(Path(manifest).read_text())
+        with open(out, "a") as fh:
+            for it in man["items"]:
+                fh.write(json.dumps(result_for(it["id"])) + "\n")                      # words, no chunk texts: no voter can be handed it
+            fh.write(json.dumps({"done": True, "files": 1, "carried": 0, "failed": 0, "rtf": 0.4, "device": "cuda"}) + "\n")
+        return 0
+    out = run(rp.run_night(budget_s=3000, runner=runner))
+    assert out["done"] == 0 and out["carried"] == 1 and rows(renv)[0]["repass_state"] == "pending" and rows(renv)[0]["transcript"] == "moonshine"
 
 
 def test_a_window_too_small_for_one_whole_pass_starts_nothing(renv, monkeypatch):

@@ -49,6 +49,8 @@ def tenv(env, monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(tmp_path / "repass"))
     monkeypatch.setenv("ZOE_OMI_REPASS_ZOE_CLIPS", str(tmp_path / "no-clips"))
     monkeypatch.setenv("ZOE_TRANSCRIPT_CHECK", "on")
+    for k in ("ZOE_OMI_NIGHT_ASR_SECOND", "ZOE_OMI_NIGHT_ASR_THIRD", "ZOE_OMI_NIGHT_ASR_EVAL"):
+        monkeypatch.setenv(k, "none")                       # the single-engine pass: the fake worker's reading IS the whole pass (with voters expected, a reading without chunk texts carries)
     monkeypatch.setattr(tc, "_now", lambda: MORNING)
     tc.reset()
     return env

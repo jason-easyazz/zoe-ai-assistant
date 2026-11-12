@@ -518,11 +518,11 @@ async def candidate_recording_ids(db, user_id: str) -> set:
 
 
 def rank_important(rows: list, names_by_user: dict, cand_by_user: dict) -> list:
-    """The rows most important first (ties: the first pass found words before it found none, then the one whose audio expires FIRST - so nothing ages out
-    while a newer one is read - then oldest first). Sets ``row['importance']``."""
+    """The rows most important first, then the one whose audio expires FIRST (so nothing ages out while a newer one is read), then the ones the first pass found
+    words in before the ones it found none in, then oldest first. Sets ``row['importance']``."""
     for r in rows:
         r["importance"] = importance(r.get("transcript") or "", names_by_user.get(r["user_id"], []), candidate=r["id"] in cand_by_user.get(r["user_id"], set()))
-    return sorted(rows, key=lambda r: (-r["importance"], 1 if r.get("status") == "empty_transcript" else 0, str(r.get("audio_expires_at") or "~"), r.get("started_at") or ""))
+    return sorted(rows, key=lambda r: (-r["importance"], str(r.get("audio_expires_at") or "~"), 1 if r.get("status") == "empty_transcript" else 0, r.get("started_at") or ""))
 
 
 def plan_window(costs: list, usable_s: float, *, fixed_s: float = 0.0) -> tuple:
@@ -1187,7 +1187,8 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                 cand_by_user[r["user_id"]] = await candidate_recording_ids(db, r["user_id"])
     rows = rank_important(rows, names_by_user, cand_by_user)          # important first, then the audio that expires first
     # ── THE WINDOW: each recording's WHOLE pass (pivot + every expected voter) is priced before anything starts; the ones that fit run, the rest carry, in order ──
-    deadline = started + max(30.0, budget_s - 45.0)               # 45 s kept back for the DB writes and the release of audio
+    window_end = started + max(0.0, budget_s)                     # THE hard edge: no worker deadline and no kill timeout reaches past it
+    deadline = started + max(0.0, budget_s - 45.0)                # 45 s kept back for the DB writes and the release of audio
     f_speech = float(st.get("speech_frac") or SPEECH_FRAC)
     c_vote = sum(rt.get(e, 1.0) for e in expected)               # per SPEECH second
     r_piv = rt.get(primary, 1.0)                                 # per AUDIO second (a night's measured worker rtf; the default is per speech second, so it over-prices: safe)
@@ -1213,7 +1214,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         eu.sweep_work(home_dir())          # a run SIGKILLed / rebooted mid-flight leaves its worker files: recovered here, and by retention + erasure
     except Exception:  # noqa: BLE001 - housekeeping never stops the night
         pass
-    pivot_dl = max(clock() + 30.0, deadline - reserve_s)          # the voters' time is RESERVED: a pivot slower than planned stops here, it never eats the voters' share
+    pivot_dl = min(deadline, max(clock() + 30.0, deadline - reserve_s))      # the voters' time is RESERVED: a pivot slower than planned stops here, it never eats the voters' share
     skipped: dict = {}
 
     async def one_pass(engine: str, its: list, *, diar: str, dl: float, clips: bool = False) -> dict:
@@ -1230,7 +1231,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                                    "rtf": rt.get(engine, 1.0), "items": its, "zoe_clips": [] if (zoe_ref or not clips) else zoe_clips()}))
         os.chmod(man, 0o600)
         try:
-            rc = (runner or spawn_worker)(man, out, max(30.0, min(dl + 30.0, deadline + 40.0) - clock()), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
+            rc = (runner or spawn_worker)(man, out, max(1.0, min(dl + 30.0, window_end) - clock()), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
             got, done, zref = read_results(out)
         finally:
             for p in (man, out):
@@ -1293,7 +1294,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         want = set(ids)
         its = [{"id": it["id"], "path": it["path"], "chunks": [[c[0], c[1]] for c in got1[it["id"]]["chunks"]]} for it in chunked if it["id"] in want]
         if not its or deadline - clock() < 60:
-            vskip[engine] = "no_time"                      # the pivot used the night: named as such, not as a voter that ran and returned nothing
+            vskip[engine] = "no_time"                      # never started (under a minute left): its recordings carry; reported as ``short_voters``, not as a failure
             return {"got": {}, "done": {}, "rc": None}
         return await one_pass(engine, its, diar="none", dl=deadline)
 
@@ -1318,12 +1319,14 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         full = speechless | {rid for rid in ids3 if all(rid in vgot.get(e, {}) for e in expected)}
     else:
         full = {it["id"] for it in chunked}
-    full |= {it["id"] for it in ok1 if not isinstance(got1[it["id"]].get("chunks"), list)}       # an engine without chunk texts has nothing to vote on
+    if not expected:
+        full |= {it["id"] for it in ok1 if not isinstance(got1[it["id"]].get("chunks"), list)}   # a single-engine pass without chunk texts IS the whole pass; with voters expected it carries
     complete = bool(full)
     voters = [primary] + [e for e in expected if vgot.get(e)]
     evals = [e for e in evals if e not in voters] if complete else []             # the evaluation sample only when this window passed something whole
     res["engines"], res["eval_engines"] = voters, evals
-    miss = {e: vskip.get(e) or skipped.get(e) or "no_result" for e in expected if ids3 and any(rid not in vgot.get(e, {}) for rid in ids3)}   # a voter that FAILED on a recording it was given
+    miss = {e: skipped.get(e) or "no_result" for e in expected if ids3 and e not in vskip and any(rid not in vgot.get(e, {}) for rid in ids3)}   # a voter that FAILED on a recording it was given
+    res["short_voters"] = vskip or None
     res["missing_voters"] = miss or None
 
     # ── fusion: ROVER per chunk over the voters that finished that recording ──
