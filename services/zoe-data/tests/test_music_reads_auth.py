@@ -180,3 +180,15 @@ def test_negative_control_removing_the_dependency_opens_the_route(ma_calls, monk
     assert _client(music.router, PHONE_IP).get(_url(path)).status_code == 403
     monkeypatch.setattr(route, "dependencies", [])  # what a refactor that drops the dependency looks like
     assert _client(music.router, PHONE_IP).get(_url(path)).status_code == 200, "the guard is what refuses the stranger"
+
+
+def test_the_catalogue_is_503_when_the_music_engine_is_down(ma_calls, monkeypatch):
+    """A sleeping engine that cannot be woken is "unavailable", never an empty "nothing connected" list."""
+    async def down():
+        raise music_service.MusicEngineUnavailable("could not start")
+
+    monkeypatch.setattr(music_service, "provider_catalogue", down)
+    peer, headers = MEMBER[0]
+    r = _client(music_setup_router.router, peer).get(SETUP_READ, headers=headers)
+    assert r.status_code == 503
+    assert r.json()["detail"]["error"] == "music_engine_unavailable"

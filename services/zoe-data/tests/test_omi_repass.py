@@ -52,6 +52,8 @@ def renv(env, monkeypatch, tmp_path):
     async def _adult(uid, db=None):                         # the pass retains voice data only for a positively-adult member; the tests' member is one (a child test overrides this)
         return True
     monkeypatch.setattr(manner_block, "eligible", _adult)
+    env.db.conn.create_function("hashtextextended", 2, lambda key, seed: 0)          # Postgres' per-member advisory lock (``omi_repass._wearer_txn``): a no-op on SQLite,
+    env.db.conn.create_function("pg_advisory_xact_lock", 1, lambda key: None)         # where the test's single connection is already serial
     return env
 
 
@@ -354,6 +356,360 @@ def test_propose_wearer_needs_a_real_cluster():
     loud = [[i, i + 1.5, vec(0), 0.5] for i in range(10)] + [[i, i + 1.5, vec(1), 0.01] for i in range(10)]
     pick = rp.propose_wearer(loud)
     assert pick and all(loud[i][3] == 0.5 for i in pick)
+
+
+# ── the wearer print from STORED samples (synthetic 256-d unit vectors around invented centres) ────────────────────────────────────────
+
+def _centre(seed: int) -> np.ndarray:
+    v = np.random.default_rng(seed).standard_normal(256)
+    return v / np.linalg.norm(v)
+
+
+def _around(c: np.ndarray, seed: int, noise: float = 0.3) -> np.ndarray:
+    n = np.random.default_rng(50_000 + seed).standard_normal(256)
+    v = c + noise * n / np.linalg.norm(n)
+    return (v / np.linalg.norm(v)).astype(np.float32)
+
+
+_SEQ = {"n": 0}
+
+
+def _held(env, centre, recs: int, per_rec: int = 1, *, tag: str = "v", uid: str = OWNER, speaker: str = "other", noise: float = 0.3, vec=None, **cols) -> list[str]:
+    """``recs`` recordings, each with ``per_rec`` first-pass lines of this voice and their held embedding (the shape ``omi_voices.learn`` leaves). Returns the segment ids."""
+    ids = []
+    for r in range(recs):
+        rid = f"{tag}-r{r}"
+        env.db.conn.execute("INSERT OR IGNORE INTO omi_recordings (id, user_id, device_id, recording_key, started_at, status, created_at) VALUES (?, ?, 'dev', ?, ?, 'done', ?)",
+                            (rid, uid, rid, "2026-11-10T01:00:00Z", "2026-11-10T01:00:00Z"))
+        for k in range(per_rec):
+            _SEQ["n"] += 1
+            sid = f"{tag}-s{r}-{k}"
+            seq = int(env.db.conn.execute("SELECT COUNT(*) FROM omi_segments WHERE recording_id = ?", (rid,)).fetchone()[0])
+            env.db.conn.execute("INSERT INTO omi_segments (id, recording_id, user_id, seq, start_ms, end_ms, text, speaker, score, model_id, profile_channel, created_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?, 'words', ?, 0.1, ?, 'panel', ?)", (sid, rid, uid, seq, seq * 3000, seq * 3000 + 2500, speaker, rp.MODEL_ID,
+                                                                                               f"2026-11-10T01:{_SEQ['n'] // 60:02d}:{_SEQ['n'] % 60:02d}Z"))
+            for c, val in cols.items():
+                env.db.conn.execute(f"UPDATE omi_segments SET {c} = ? WHERE id = ?", (val, sid))
+            e = vec if vec is not None else _around(centre, _SEQ["n"], noise)
+            env.db.conn.execute("INSERT INTO omi_segment_embeddings (segment_id, user_id, model_id, embedding, expires_at) VALUES (?, ?, ?, ?, '2999-01-01T00:00:00Z')",
+                                (sid, uid, rp.MODEL_ID, np.asarray(e, dtype=np.float32).tobytes()))
+            ids.append(sid)
+    env.db.conn.commit()
+    return ids
+
+
+NOW = datetime(2026, 11, 12, 9, 0, tzinfo=UTC)
+
+
+def _proposals(env):
+    return {r["proposal_id"]: [np.frombuffer(r["embedding"], dtype=np.float32) for r in env.db.rows(
+        "SELECT embedding FROM omi_wearer_samples WHERE proposal_id = ? AND status = 'proposed'", (r["proposal_id"],))]
+        for r in env.db.rows("SELECT DISTINCT proposal_id FROM omi_wearer_samples WHERE status = 'proposed'")}
+
+
+def test_stored_voices_become_side_by_side_proposals_ranked_by_how_many_recordings_they_are_heard_in(renv):
+    """Mutation: rank by segments (``len(v["m"])``) instead of distinct recordings -> B (12 recordings x 3 lines = 36) outranks A (15 recordings x 1); drop the ``[:STORED_MAX_VOICES]``
+    cut -> D is offered too."""
+    A, B, C, D = _centre(1), _centre(2), _centre(3), _centre(4)
+    _held(renv, A, 15, tag="a")
+    _held(renv, B, 12, 3, tag="b")
+    _held(renv, C, 11, tag="c")
+    _held(renv, D, 10, tag="d")
+    out = run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    rec = {p["id"]: p["recordings"] for p in out["proposals"]}                                      # written counts: A spans 15, C 11, B at least 10 (2 windows per recording, 20 max)
+    assert out["status"] == "proposed" and rec["stored-2026-11-12-a"] == 15 and rec["stored-2026-11-12-c"] == 11 and rec["stored-2026-11-12-b"] >= 10
+    props = _proposals(renv)
+    assert sorted(props) == ["stored-2026-11-12-a", "stored-2026-11-12-b", "stored-2026-11-12-c"]
+    for pid, centre in (("stored-2026-11-12-a", A), ("stored-2026-11-12-b", B), ("stored-2026-11-12-c", C)):
+        assert props[pid] and all(float(e @ centre) > 0.9 for e in props[pid])                   # each candidate is ONE voice
+    assert {r["source"] for r in renv.db.rows("SELECT source FROM omi_wearer_samples")} == {"heuristic"}
+    assert run(rp.wearer_print(renv.db, OWNER)) is None             # a proposal is never used: nobody is "me" yet
+
+
+def test_a_voice_heard_in_fewer_than_ten_recordings_is_not_proposed(renv):
+    """Mutation: drop the ``STORED_MIN_RECORDINGS`` filter -> the 9-recording voice is offered. Control: at 10 it is."""
+    _held(renv, _centre(5), 9, 4, tag="few")
+    out = run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert out["status"] == "no_voice" and renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples")[0]["n"] == 0
+    _held(renv, _centre(5), 1, tag="tenth")
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "proposed"
+
+
+def test_one_recording_gives_a_candidate_at_most_two_windows(renv):
+    """One long conversation must not define a voice. Mutation: drop ``per_group`` in the ``_nearest`` call -> the recording whose eight lines sit nearest the centre fills the proposal."""
+    c = _centre(6)
+    _held(renv, c, 10, 2, tag="spread", noise=0.4)
+    _held(renv, c, 1, 8, tag="close", noise=0.02)
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    per = renv.db.rows("SELECT recording_id, COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'proposed' GROUP BY recording_id")
+    assert per and max(r["n"] for r in per) <= rp.STORED_PER_RECORDING and len(per) >= 10 and "close-r0" in {r["recording_id"] for r in per}
+    assert sum(r["n"] for r in per) <= rp.PROPOSAL_MAX
+
+
+def test_no_new_proposal_with_a_confirmed_print_or_while_proposals_are_open(renv):
+    """Mutation: drop either guard -> a second batch is written over a confirmed print / beside the open one. Control: with neither, it proposes."""
+    _held(renv, _centre(7), 12, tag="w")
+    renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
+                         "VALUES ('open1', ?, 'x', ?, 0, 900, ?, 'heuristic', 'proposed', '2026-11-11', ?)", (OWNER, rp.MODEL_ID, _around(_centre(7), 1).tobytes(), rp._iso(NOW)))
+    renv.db.conn.commit()
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "open_proposals"
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples")[0]["n"] == 1
+    renv.db.conn.execute("UPDATE omi_wearer_samples SET status = 'confirmed'")
+    for i in range(rp.MIN_WEARER_WINDOWS):
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, 'x', ?, ?, ?, ?, 'owner_label', 'confirmed', '2026-11-11T00:00:00Z')", (f"c{i}", OWNER, rp.MODEL_ID, 1000 + i * 1000, 1900 + i * 1000,
+                                                                                                                _around(_centre(7), 100 + i).tobytes()))
+    renv.db.conn.commit()
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "has_print"
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'proposed'")[0]["n"] == 0
+    renv.db.conn.execute("DELETE FROM omi_wearer_samples")
+    renv.db.conn.commit()
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "proposed"
+
+
+def test_a_child_or_unverifiable_members_pendant_gets_no_wearer_proposal(renv, monkeypatch):
+    """D14, the first pass's own rule. Mutation: drop the ``manner_block.eligible`` check -> the child's voices are proposed. Control: an adult's are."""
+    import manner_block
+    _held(renv, _centre(8), 12, tag="k")
+
+    async def child(uid, db=None):
+        return False
+    monkeypatch.setattr(manner_block, "eligible", child)
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "not_eligible"
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "not_eligible"
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples")[0]["n"] == 0
+
+    async def adult(uid, db=None):
+        return True
+    monkeypatch.setattr(manner_block, "eligible", adult)
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "proposed"
+
+
+def test_a_member_erased_while_the_proposal_was_read_has_nothing_written(renv, monkeypatch):
+    """Mutation: write outside ``erase_gate.writing`` -> the erased member's voice is stored as proposals. Control: no erase -> proposed."""
+    import manner_block
+    _held(renv, _centre(9), 12, tag="e")
+
+    async def erased_meanwhile(uid, db=None):
+        async with erase_gate.erasing(uid):
+            pass
+        return True
+    monkeypatch.setattr(manner_block, "eligible", erased_meanwhile)
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "erased"
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples")[0]["n"] == 0
+    renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                         "SELECT 'p' || segment_id, user_id, 'x' || segment_id, model_id, 0, 1, embedding, 'heuristic', 'confirmed', '2026-11-11T00:00:00Z' FROM omi_segment_embeddings")
+    renv.db.conn.commit()
+    before = renv.db.rows("SELECT speaker FROM omi_segments")
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "erased"
+    assert renv.db.rows("SELECT speaker FROM omi_segments") == before
+    renv.db.conn.execute("DELETE FROM omi_wearer_samples")
+    renv.db.conn.commit()
+
+    async def adult(uid, db=None):
+        return True
+    monkeypatch.setattr(manner_block, "eligible", adult)
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "proposed"
+
+
+def test_confirming_one_stored_candidate_withdraws_its_siblings_only(renv):
+    """Mutation: drop the sibling DELETE in ``confirm_wearer`` -> the other two voices stay wearer candidates. A night-heuristic proposal (another batch) is untouched."""
+    for k in range(3):
+        _held(renv, _centre(20 + k), 12 - k, tag=f"s{k}")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
+                         "VALUES ('night', ?, 'x', ?, 0, 900, ?, 'heuristic', 'proposed', '2026-11-11', ?)", (OWNER, rp.MODEL_ID, _around(_centre(30), 1).tobytes(), rp._iso(NOW)))
+    renv.db.conn.commit()
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-b")) == {"status": "confirmed", "confirmed": 11}
+    left = renv.db.rows("SELECT proposal_id, status, COUNT(*) AS n FROM omi_wearer_samples GROUP BY proposal_id, status ORDER BY proposal_id")
+    assert [(r["proposal_id"], r["status"]) for r in left] == [("2026-11-11", "proposed"), ("stored-2026-11-12-b", "confirmed")]
+    you = run(rp.wearer_print(renv.db, OWNER))
+    assert you is not None and float(you @ _centre(21)) > 0.9                                     # the confirmed voice IS the print
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["confirmed"] == 0         # a withdrawn sibling cannot be confirmed afterwards
+
+
+def _between_read_and_write(monkeypatch, act):
+    """Run ``act()`` (synchronous SQL on the test's connection) once, after the proposal's read and clustering and before its write."""
+    real = rp._greedy_voices
+    fired = []
+
+    def wrapped(*a, **k):
+        out = real(*a, **k)
+        if not fired:
+            fired.append(1)
+            act()
+        return out
+    monkeypatch.setattr(rp, "_greedy_voices", wrapped)
+
+
+def test_a_batch_that_landed_after_the_read_stops_a_second_one(renv, monkeypatch):
+    """Two overlapping runs must yield ONE batch. Mutation: drop the open-proposals recheck inside ``_wearer_txn`` -> the second run writes its own batch beside the first."""
+    _held(renv, _centre(60), 12, tag="ov")
+
+    def other_run_committed():
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
+                             "VALUES ('first', ?, 'elsewhere', ?, 0, 900, ?, 'heuristic', 'proposed', 'stored-2026-11-12-a', ?)",
+                             (OWNER, rp.MODEL_ID, _around(_centre(60), 1).tobytes(), rp._iso(NOW)))
+        renv.db.conn.commit()
+    _between_read_and_write(monkeypatch, other_run_committed)
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "open_proposals"
+    assert [r["id"] for r in renv.db.rows("SELECT id FROM omi_wearer_samples")] == ["first"]
+
+
+def test_two_concurrent_runs_write_one_batch_of_at_most_three(renv):
+    """Two real runs at once (every SQLite call yields): one proposes, the other finds that batch open. Mutation: drop the in-lock open-proposals recheck -> two batches."""
+    for k in range(4):
+        _held(renv, _centre(70 + k), 13 - k, tag=f"cc{k}")
+
+    async def both():
+        return await asyncio.gather(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW), rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    outs = run(both())
+    assert sorted(o["status"] for o in outs) == ["open_proposals", "proposed"]
+    ids = {r["proposal_id"] for r in renv.db.rows("SELECT DISTINCT proposal_id FROM omi_wearer_samples")}
+    assert len(ids) <= rp.STORED_MAX_VOICES
+
+
+def test_a_line_decided_between_the_read_and_the_write_is_not_in_the_proposal(renv, monkeypatch):
+    """Mutation: drop the in-transaction decision re-read -> the line the owner just labelled "not me" becomes wearer evidence."""
+    _held(renv, _centre(61), 12, tag="dv")
+
+    def owner_decides():
+        renv.db.conn.execute("UPDATE omi_segments SET owner_label = 'other' WHERE id = 'dv-s0-0'")
+        renv.db.conn.commit()
+    _between_read_and_write(monkeypatch, owner_decides)
+    out = run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert out["status"] == "proposed" and out["decided_since_read"] == 1 and out["proposals"][0]["recordings"] == 11
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE recording_id = 'dv-r0'")[0]["n"] == 0
+
+
+def test_a_candidate_left_under_ten_recordings_by_insert_conflicts_is_removed(renv):
+    """Five of a ten-recording voice's windows are already (unconfirmed-print) samples, so ON CONFLICT drops them. Mutation: drop the written-count check -> a 5-window,
+    5-recording candidate is offered (and reported as the cluster's 10)."""
+    _held(renv, _centre(62), 10, tag="cf")
+    for r in range(5):
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, ?, ?, 0, 2500, ?, 'owner_label', 'confirmed', '2026-11-11T00:00:00Z')",
+                             (f"old{r}", OWNER, f"cf-r{r}", rp.MODEL_ID, _around(_centre(62), 900 + r).tobytes()))
+    renv.db.conn.commit()
+    out = run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert out["status"] == "no_voice" and renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'proposed'")[0]["n"] == 0
+
+
+def test_confirming_after_the_member_became_ineligible_is_refused(renv, monkeypatch):
+    """D14 at confirm time. Mutation: drop the ``manner_block.eligible`` check in ``confirm_wearer`` -> a child's pendant gets a confirmed print. Control: an adult confirms."""
+    import manner_block
+    _held(renv, _centre(63), 12, tag="ce")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+
+    async def child(uid, db=None):
+        return False
+    monkeypatch.setattr(manner_block, "eligible", child)
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a")) == {"status": "not_eligible", "confirmed": 0}
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'confirmed'")[0]["n"] == 0
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "not_eligible"
+
+    async def adult(uid, db=None):
+        return True
+    monkeypatch.setattr(manner_block, "eligible", adult)
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["status"] == "confirmed"
+
+
+def _eligible_then_not(monkeypatch):
+    """``manner_block.eligible`` says yes to the EARLY check and no from then on: the member became ineligible while the call waited for the lock / scored."""
+    import manner_block
+    calls = []
+
+    async def flip(uid, db=None):
+        calls.append(uid)
+        return len(calls) == 1
+    monkeypatch.setattr(manner_block, "eligible", flip)
+    return calls
+
+
+def test_confirm_rechecks_eligibility_under_the_lock_right_before_the_write(renv, monkeypatch):
+    """Mutation: drop the in-lock ``eligible`` recheck in ``confirm_wearer`` -> the early yes is enough and the now-ineligible member gets a confirmed print."""
+    _held(renv, _centre(64), 12, tag="cl")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    calls = _eligible_then_not(monkeypatch)
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a")) == {"status": "not_eligible", "confirmed": 0}
+    assert len(calls) == 2 and renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'confirmed'")[0]["n"] == 0
+
+
+def test_relabel_rechecks_eligibility_under_the_lock_right_before_the_write(renv, monkeypatch):
+    """Mutation: drop the in-lock ``eligible`` recheck in ``relabel_stored_from_print`` -> lines of a now-ineligible member read "me"."""
+    mine = _held(renv, _centre(65), 12, tag="rl")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["status"] == "confirmed"
+    calls = _eligible_then_not(monkeypatch)
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "not_eligible"
+    assert len(calls) == 2 and {r["speaker"] for r in renv.db.rows("SELECT speaker FROM omi_segments")} == {"other"} and mine
+
+
+def test_relabel_rechecks_the_print_under_the_lock(renv, monkeypatch):
+    """The print withdrawn while the relabel scored (the owner corrected its lines away) -> nothing reads "me". Mutation: drop the in-lock ``wearer_print`` recheck."""
+    _held(renv, _centre(66), 12, tag="rp")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))
+    real = rp.wearer_print
+    calls = []
+
+    async def withdrawn_after_first(db, uid):
+        calls.append(uid)
+        if len(calls) > 1:
+            renv.db.conn.execute("DELETE FROM omi_wearer_samples")
+            renv.db.conn.commit()
+        return await real(db, uid)
+    monkeypatch.setattr(rp, "wearer_print", withdrawn_after_first)
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "no_print"
+    assert {r["speaker"] for r in renv.db.rows("SELECT speaker FROM omi_segments")} == {"other"}
+
+
+def test_relabel_compares_the_unrounded_score_with_the_bar(renv):
+    """0.59996 is under 0.6 and must stay as it is; 0.6 reads "me". Mutation: compare the score rounded to 4 places -> 0.59996 becomes 0.6000 and reads "me"."""
+    e = np.zeros(256, dtype=np.float32)
+    e[0] = 1.0
+    for i in range(rp.MIN_WEARER_WINDOWS):                                                          # a confirmed print that is exactly e0
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, 'x', ?, ?, ?, ?, 'owner_label', 'confirmed', '2026-11-11T00:00:00Z')", (f"e{i}", OWNER, rp.MODEL_ID, i * 1000, i * 1000 + 900, e.tobytes()))
+    renv.db.conn.commit()
+
+    def at(c):
+        x = np.zeros(256)
+        x[0], x[1] = c, np.sqrt(1 - c * c)
+        return x
+    under = _held(renv, None, 1, tag="under", vec=at(0.59996))
+    on = _held(renv, None, 1, tag="on", vec=at(0.6))
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["relabelled"] == 1
+    sp = {r["id"]: r["speaker"] for r in renv.db.rows("SELECT id, speaker FROM omi_segments")}
+    assert sp[under[0]] == "other" and sp[on[0]] == "you"
+
+
+def test_relabel_marks_only_undecided_stored_lines_over_the_bar_as_me_and_is_idempotent(renv):
+    """Mutations: drop the owner-label / tag / not-person guards -> those lines turn "me"; lower the bar to 0.4 -> the half-similar line turns "me"; label below the bar ``other`` ->
+    the runner-up's "unsure" line changes. Nothing reads "me" before the print is confirmed."""
+    W, P = _centre(40), _centre(41)
+    mine = _held(renv, W, 12, tag="me")
+    partner = _held(renv, P, 11, tag="pa", speaker="unsure")
+    owner_other = _held(renv, W, 1, tag="lab", owner_label="other")
+    tagged = _held(renv, W, 1, tag="tag", tagged_person_id="person-1")
+    tv = _held(renv, W, 1, tag="tv", not_person="tv")
+    orth = _centre(42) - float(_centre(42) @ W) * W
+    half = 0.5 * W + np.sqrt(0.75) * orth / np.linalg.norm(orth)                                    # cos 0.5 to the voice: the tail, not the shoulder
+    mid = _held(renv, None, 1, tag="mid", vec=half)
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "no_print"               # before the owner confirms: nothing
+    assert {r["speaker"] for r in renv.db.rows("SELECT speaker FROM omi_segments")} == {"other", "unsure"}
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["status"] == "confirmed"
+    out = run(rp.relabel_stored_from_print(renv.db, OWNER))
+    sp = {r["id"]: (r["speaker"], r["profile_channel"]) for r in renv.db.rows("SELECT id, speaker, profile_channel FROM omi_segments")}
+    assert out["status"] == "ok" and out["relabelled"] == len(mine)
+    assert all(sp[s] == ("you", "pendant") for s in mine)
+    assert all(sp[s] == ("unsure", "panel") for s in partner)                                      # never "other" from this, and the runner-up is left as it was
+    assert all(sp[s] == ("other", "panel") for s in owner_other + tagged + tv + mid)
+    held = {r["segment_id"] for r in renv.db.rows("SELECT segment_id FROM omi_segment_embeddings")}
+    assert not held & set(mine) and set(partner + mid) <= held                                     # the wearer's own voice is not held as a bystander's
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["relabelled"] == 0                    # idempotent
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER, min_cos=0.4))["relabelled"] == 1       # control: the bar is what keeps the half-similar line out
 
 
 # ── budget ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -724,3 +1080,28 @@ def test_worker_redaction_withholds_household_text_and_short_secrets_and_keeps_s
     out = w.redact_exc(OSError("libcudart.so.12: cannot open shared object file /opt/x/lib https://u:pw@h/x"))
     assert "cannot open shared object" in out and "/opt" not in out and "pw@" not in out
     assert "compiled with CUDA" in w.redact_exc(RuntimeError("This CTranslate2 package was not compiled with CUDA support"))                # control: the real reason survives
+
+
+def test_relabel_honours_the_configured_pendant_bar(renv, monkeypatch):
+    """Codex on #2427: with ``ZOE_OMI_TAG_PENDANT_YOU_MIN`` raised to 0.8 a 0.7 line is ``unsure`` in both diarisation passes, so the relabel must not call it "me" (and drop its held
+    embedding) at the built-in 0.6. An explicit ``min_cos`` still wins. Mutation: default ``min_cos`` to the constant again -> the 0.7 line reads "me" under the 0.8 override."""
+    e = np.zeros(256, dtype=np.float32)
+    e[0] = 1.0
+    for i in range(rp.MIN_WEARER_WINDOWS):
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, 'x', ?, ?, ?, ?, 'owner_label', 'confirmed', '2026-11-11T00:00:00Z')", (f"e{i}", OWNER, rp.MODEL_ID, i * 1000, i * 1000 + 900, e.tobytes()))
+    renv.db.conn.commit()
+
+    def at(c):
+        x = np.zeros(256)
+        x[0], x[1] = c, np.sqrt(1 - c * c)
+        return x
+    mid = _held(renv, None, 1, tag="mid", vec=at(0.7))
+    high = _held(renv, None, 1, tag="high", vec=at(0.9))
+    monkeypatch.setenv("ZOE_OMI_TAG_PENDANT_YOU_MIN", "0.8")
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["relabelled"] == 1
+    sp = {r["id"]: r["speaker"] for r in renv.db.rows("SELECT id, speaker FROM omi_segments")}
+    assert sp[mid[0]] == "other" and sp[high[0]] == "you"
+    assert renv.db.rows("SELECT 1 AS x FROM omi_segment_embeddings WHERE segment_id = ?", (mid[0],))      # the held embedding of the line below the bar is still there
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER, min_cos=0.6))["relabelled"] == 1              # an explicit bar is the caller's
+

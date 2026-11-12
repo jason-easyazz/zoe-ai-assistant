@@ -3,7 +3,7 @@ type: Reference
 title: App-connection handoff (QR on the panel, finish on the phone)
 description: How connecting an app or account works from the touch panel (B7.5 a+b) — the auth_handoff engine, its status machine and live panel push, the shared authCard, the Telegram "send to my phone" channel, how the music flows report into it, and what is still unverified on a live panel.
 tags: [panel, auth, qr, telegram, music, handoff, b7.5]
-timestamp: 2026-09-28T00:00:00Z
+timestamp: 2026-11-12T00:00:00Z
 ---
 
 # App-connection handoff
@@ -32,7 +32,9 @@ out of scope here.
 
 - Forward only. A phone reload cannot move `completing` back to `awaiting_phone`.
 - `done` is final. An **expiry** (`error`, `reason: expired`, applied when
-  `status()` reads an overdue record) is also final. Any other `error`, such as
+  `status()` reads an overdue record, and to every overdue unfinished record
+  whenever a new handoff is started, so an unread `pending` row does not stay
+  pending) is also final. The start-time sweep sends no push. Any other `error`, such as
   a cancelled YouTube Music sign-in or a rejected cookie, can move on to
   `completing`/`done`, because the person may retry on the phone with the same
   valid link.
@@ -96,7 +98,14 @@ needs the provider token to be valid, and it only works on the home Wi-Fi.
 | `POST /browser/start` (YouTube Music) | `completing`; `ytmusic_signin.watch()` reports the session's end (connected, timeout, error, or `/browser/cancel`), and its `on_progress` re-marks `completing` with a "sign in again" detail when the profile's old sign-in had expired and was cleared (`stale_cookie_cleared`) |
 
 A free provider (Radio Browser, TuneIn) connects at once, with no handoff and no
-QR. Reconnect still happens **in place**: the router and `save_provider` pass
+QR. `POST /start` answers 400 `unknown provider` only for a provider outside
+`music_service._SETUP_CATALOGUE`; a known provider whose setup form cannot be read
+(Music Assistant could not be woken, or did not answer) is 503 with
+`detail.error = "music_engine_unavailable"`. So is a free provider whose save failed
+while MA no longer answers `/info` (`music_service.engine_reachable`); a save that a
+live MA rejected stays 200 `{"ok": false, "immediate": true}`. The panel's `authCard` opens the
+sign-in card only for an auth refusal (401/403); a 503 or its own 12 s deadline
+shows "Music isn't available right now - try again". Reconnect still happens **in place**: the router and `save_provider` pass
 the existing `instance_id`, and the MA 2.10 `reconfigure` flow does not change.
 A token minted by the legacy `POST /api/music/setup/start` has no handoff and
 reports nothing.

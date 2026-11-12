@@ -78,6 +78,16 @@ def _fakes(monkeypatch):
     monkeypatch.setattr(intent_router, "_music_recent_repeat_count", lambda *_a: asyncio.sleep(0, result=0))
     monkeypatch.setattr(asyncio, "sleep", lambda *_a, result=None, **_k: _immediate(result))
 
+    async def _ma_unavailable(_query, _user_id, _room=None):  # these tests pin the HA fallback
+        return "unavailable", None
+
+    monkeypatch.setattr(intent_router, "_music_assistant_play", _ma_unavailable)
+
+    async def _ma_idle(_room=None):  # ...and Zoe's music engine is playing nothing
+        return None
+
+    monkeypatch.setattr(intent_router, "_music_assistant_active_player", _ma_idle)
+
     import database
 
     async def _no_log(**_kwargs):
@@ -249,6 +259,8 @@ async def test_no_available_player_fails_soft_without_posting(intent, caplog):
 
     result = await intent_router._execute_music_intent(intent, "jason")
 
-    assert result == intent_router._NO_PLAYER_MSG
+    # music_play tried Zoe's own music engine first (stubbed unavailable here), so it says so.
+    want = intent_router._MUSIC_ENGINE_DOWN_MSG if intent.name == "music_play" else intent_router._NO_PLAYER_MSG
+    assert result == want
     assert _FakeAsyncClient.posts == []
     assert any("no media_player is available" in r.getMessage() for r in caplog.records)

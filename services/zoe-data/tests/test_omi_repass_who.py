@@ -90,6 +90,41 @@ def test_a_print_is_the_panel_print_until_six_seconds_of_confirmed_pendant_speec
     assert np.allclose(who.fused_print(None, who.unit(pend), 0.0), who.unit(pend))                  # a pendant-only person uses the pendant print
 
 
+def _turn(you_cos, b_cos=0.0):
+    """A unit turn at exact cosines to A_ (the wearer here) and B_, the rest along C_."""
+    return v(you_cos, b_cos, float(np.sqrt(1 - you_cos ** 2 - b_cos ** 2)))
+
+
+def test_the_confirmed_pendant_print_needs_the_absolute_pendant_bar_on_top_of_the_margin(monkeypatch):
+    """Wearer alone (no runner-up: the margin IS the score) - 0.3 not me, 0.45 only "you?", 0.65 "you". Mutation: drop the confirmed-print branch in ``label_window`` -> 0.3 and
+    0.45 read "you" outright (the 0.25 floor decides). With a runner-up the margin still applies on top (0.65 vs 0.62 is not "you"); the panel-only print and a registered person
+    are labelled exactly as before."""
+    for k in ("ZOE_OMI_TAG_PENDANT_YOU_MIN", "ZOE_OMI_TAG_PENDANT_OTHER_MAX"):
+        monkeypatch.delenv(k, raising=False)
+    alone = who.Refs(you=A_)
+    got = {c: who.label_window(_turn(c), alone, dur_s=3.0)["key"] for c in (0.3, 0.45, 0.65)}
+    assert got == {0.3: "?", 0.45: "you?", 0.65: "you"}
+    loud = who.Refs(you=A_, loud_cut=0.1)
+    assert who.label_window(_turn(0.58), loud, dur_s=3.0, rms=0.5)["key"] == "you?"                    # the loudness tie-break never lifts a turn over the bar
+    rival = who.Refs(you=A_, people=[{"person": "B", "v": B_}])
+    assert who.label_window(_turn(0.65, 0.62), rival, dur_s=3.0)["key"] not in ("you", "you?")       # margin 0.03: the bar alone is not enough
+    assert who.label_window(_turn(0.75, 0.2), rival, dur_s=3.0)["key"] == "you"                       # control: bar AND margin -> "me"
+    assert who.label_window(_turn(0.45, 0.2), rival, dur_s=3.0)["key"] == "you?"
+    panel = who.Refs(you=A_, you_panel_only=True)                                                    # unchanged: the panel print can only lean, from the 0.25 floor up
+    assert {c: who.label_window(_turn(c), panel, dur_s=3.0)["key"] for c in (0.3, 0.45, 0.65)} == {0.3: "you?", 0.45: "you?", 0.65: "you?"}
+    people = refs()                                                                                  # unchanged: a registered person is labelled by margin + floor only
+    assert who.label_window(_turn(0.45), people, dur_s=3.0)["key"] == "p:A" and who.label_window(_turn(0.3), people, dur_s=3.0)["key"] == "p:A"
+
+
+def test_night_learning_never_holds_a_wearer_tail_line_as_a_bystander():
+    """A wearer-top turn in [0.35, 0.6) is stored ``unsure`` with its wearer score; ``LEARN_YOU_MIN`` must keep it out of ``omi_voices.learn``. Mutation: LEARN_YOU_MIN back to 0.5
+    -> the 0.38 "you?" line is learnable. Control: a 0.3 bystander line still is."""
+    import omi_voices
+    seg = lambda sc: {"speaker": "unsure", "score": sc, "embedding": np.ones(8), "start_ms": 0, "end_ms": 4000}   # noqa: E731
+    assert not omi_voices.learnable(seg(0.38), rp.LEARN_YOU_MIN) and not omi_voices.learnable(seg(0.35), rp.LEARN_YOU_MIN)
+    assert omi_voices.learnable(seg(0.3), rp.LEARN_YOU_MIN)
+
+
 def test_loudness_is_only_a_tie_breaker_for_the_wearer():
     r = who.Refs(you=A_, people=[{"person": "B", "v": B_}], loud_cut=0.1)
     turn = v(1, 1)                                                                                   # exactly between the wearer and B

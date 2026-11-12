@@ -280,7 +280,9 @@ async def drive(w: Window, *, broker: Any, sleep: Callable = asyncio.sleep, cloc
                 w.remembered = await _remember(broker, w, mine[0], sleep, clock)
                 await _finish(w, "linked", "", "linked" if w.remembered else "linked_not_remembered")
                 break
-            if len(free) == 1:
+            # a claim needs exactly one unowned pendant near and none of the member's own: with their linked pendant ALSO
+            # near there is no telling which one they mean, and a wrong claim would file a stranger's recordings under them
+            if len(free) == 1 and not mine:
                 await _screen(w.panel_id, "accepted", say("screen_title"), say("screen_found"), 2)
                 try:
                     await devices.self_assign(free[0], {"user_id": w.user_id, "role": w.role}, panel_id=w.panel_id)
@@ -296,7 +298,7 @@ async def drive(w: Window, *, broker: Any, sleep: Callable = asyncio.sleep, cloc
                 w.remembered = await _remember(broker, w, free[0], sleep, clock)
                 await _finish(w, "linked", "", "linked" if w.remembered else "linked_not_remembered")
                 break
-            if len(free) > 1 and not told_crowded:
+            if (len(free) > 1 or (free and mine)) and not told_crowded:
                 told_crowded = True
                 await _screen(w.panel_id, "reask", say("screen_title"), say("crowded"), 1)
                 await _speak(w.panel_id, w.user_id, say("crowded"))

@@ -14,6 +14,16 @@ _REAL_MUSIC_DB_HELPERS = (
     intent_router._music_recent_repeat_count,
     intent_router._music_recent_skip_count,
 )
+_REAL_MA_PLAY = intent_router._music_assistant_play
+_REAL_MA_ACTIVE = intent_router._music_assistant_active_player
+
+
+async def _ma_unavailable(_query, _user_id, _room=None):
+    return "unavailable", None
+
+
+async def _ma_idle(_room=None):  # the HA-path tests: the music engine plays nothing
+    return None
 
 
 class _FakeResponse:
@@ -55,6 +65,9 @@ def _music_fakes(monkeypatch):
     monkeypatch.setattr(intent_router, "_music_recent_skip_count", lambda _user_id: asyncio.sleep(0, result=0))
     monkeypatch.setattr(intent_router, "_music_recent_repeat_count", lambda *_args: asyncio.sleep(0, result=0))
     monkeypatch.setattr(asyncio, "sleep", lambda *_args, result=None, **_kwargs: _immediate(result))
+    # The HA-path tests below pin the FALLBACK: Zoe's own music engine played nothing.
+    monkeypatch.setattr(intent_router, "_music_assistant_play", _ma_unavailable)
+    monkeypatch.setattr(intent_router, "_music_assistant_active_player", _ma_idle)
 
     import database
 
@@ -210,3 +223,202 @@ def test_the_favorite_phrase_detects_and_is_voice_admitted():
         assert intent.name in PUBLIC_HOUSEHOLD_INTENTS, (
             f"{phrase!r} detects but the voice fast path would skip it"
         )
+
+
+# ── voice "play X" goes through Zoe's own music engine first (2026-11-12) ─────
+# Live, HA listed no available media_player, so every voice "play X" ended in
+# "I can't find an available speaker" and never reached Music Assistant.
+# Negative control: drop the _music_assistant_play call from the music_play
+# branch and the first test goes red (no search, an HA play_media post instead).
+
+
+@pytest.fixture
+def ma(monkeypatch):
+    """A mocked music_service: nothing here can start playback or wake MA."""
+    import music_service
+
+    state = {"up": True, "players": [{"player_id": "kitchen", "display_name": "Kitchen"}],
+             "hit": {"name": "One More Time", "artist": "Daft Punk"}, "calls": []}
+
+    async def ensure_running():
+        return state["up"]
+
+    async def get_players():
+        return list(state["players"])
+
+    async def search_and_play(query, player_id="", radio_mode=False, zoe_user_id=""):
+        state["calls"].append({"query": query, "player_id": player_id, "user": zoe_user_id})
+        return state["hit"]
+
+    monkeypatch.setattr(intent_router, "_music_assistant_play", _REAL_MA_PLAY)
+    monkeypatch.setattr(music_service, "ensure_running", ensure_running)
+    monkeypatch.setattr(music_service, "get_players", get_players)
+    monkeypatch.setattr(music_service, "search_and_play", search_and_play)
+    monkeypatch.setattr(music_service, "get_preferred_player_id", lambda: "kitchen")
+    return state
+
+
+def _ha_posts():
+    return [p for p in _FakeAsyncClient.posts if p["url"].endswith("/devices/control")]
+
+
+@pytest.mark.asyncio
+async def test_voice_play_uses_the_music_engine_before_home_assistant(ma):
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
+
+    assert result == "Playing One More Time by Daft Punk."
+    assert ma["calls"] == [{"query": "Daft Punk", "player_id": "kitchen", "user": "member-a"}]
+    assert _ha_posts() == []  # Home Assistant is not touched when the engine played it
+
+
+@pytest.mark.asyncio
+async def test_voice_play_names_a_room_the_engine_has(ma):
+    ma["players"] = [{"player_id": "lounge-1", "display_name": "Lounge"},
+                     {"player_id": "kitchen", "display_name": "Kitchen"}]
+    await intent_router._execute_music_intent(Intent("music_play", {"query": "jazz", "room": "lounge"}), "member-a")
+    assert ma["calls"][0]["player_id"] == "lounge-1"
+
+
+@pytest.mark.asyncio
+async def test_nothing_found_and_no_ha_speaker_says_nothing_was_found(ma, monkeypatch):
+    ma["hit"] = None
+
+    async def no_player(_url, room=None):
+        return None
+
+    monkeypatch.setattr(intent_router, "_resolve_media_player_entity", no_player)
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
+
+    assert result == "I couldn't find Daft Punk to play."
+    assert _ha_posts() == []
+
+
+@pytest.mark.asyncio
+async def test_nothing_found_falls_back_to_home_assistant(ma):
+    ma["hit"] = None
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
+
+    assert result == "Playing Daft Punk."  # the HA path's own reply, unchanged
+    assert _ha_posts()[0]["json"]["action"] == "play_media"
+
+
+@pytest.mark.asyncio
+async def test_engine_that_cannot_wake_says_music_is_unavailable(ma, monkeypatch):
+    ma["up"] = False
+
+    async def no_player(_url, room=None):
+        return None
+
+    monkeypatch.setattr(intent_router, "_resolve_media_player_entity", no_player)
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
+
+    assert result == intent_router._MUSIC_ENGINE_DOWN_MSG
+    assert ma["calls"] == []  # never searched a sleeping engine
+
+
+@pytest.mark.asyncio
+async def test_engine_up_with_no_speakers_is_unavailable_not_nothing_found(ma, monkeypatch):
+    ma["hit"], ma["players"] = None, []
+
+    async def no_player(_url, room=None):
+        return None
+
+    monkeypatch.setattr(intent_router, "_resolve_media_player_entity", no_player)
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
+    assert result == intent_router._MUSIC_ENGINE_DOWN_MSG
+
+
+@pytest.mark.asyncio
+async def test_a_refused_turn_never_reaches_the_music_engine(ma, monkeypatch):
+    import panel_principal
+
+    monkeypatch.delenv("ZOE_HA_CONTROL_SCOPE", raising=False)
+    token = panel_principal._home_control_turn.set(False)
+    try:
+        result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "guest")
+    finally:
+        panel_principal._home_control_turn.reset(token)
+
+    assert result == panel_principal.HOME_CONTROL_REFUSAL
+    assert ma["calls"] == []
+
+
+# Follow-up voice commands go to the engine actually playing (Codex P1 on this
+# PR): "play X" played through Music Assistant, so "pause" must reach MA, not an
+# unrelated HA media player, and never claim success MA did not give.
+
+
+@pytest.fixture
+def ma_active(ma, monkeypatch):
+    import music_service
+
+    ma["players"] = [{"player_id": "kitchen", "display_name": "Kitchen", "playback_state": "playing"}]
+    ma["ok"], ma["sent"] = True, []
+
+    async def ma_ok(command, timeout_s=None, **args):
+        ma["sent"].append((command, args))
+        return ma["ok"]
+
+    async def now_playing(player_id=""):
+        return {"player_id": player_id, "state": "playing", "title": "One More Time", "artist": "Daft Punk"}
+
+    monkeypatch.setattr(intent_router, "_music_assistant_active_player", _REAL_MA_ACTIVE)
+    monkeypatch.setattr(music_service, "_ma_ok", ma_ok)
+    monkeypatch.setattr(music_service, "now_playing", now_playing)
+    return ma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cmd", "expected", "sent"), [
+    ("pause", "Paused.", ("player_queues/pause", {"queue_id": "kitchen"})),
+    ("next", "Skipped to next.", ("player_queues/next", {"queue_id": "kitchen"})),
+    ("unmute", "Unmuted.", ("players/cmd/volume_mute", {"player_id": "kitchen", "muted": False})),
+])
+async def test_control_after_an_engine_play_reaches_the_engine(ma_active, cmd, expected, sent):
+    result = await intent_router._execute_music_intent(Intent("music_control", {"command": cmd}), "member-a")
+
+    assert result == expected
+    assert ma_active["sent"] == [sent]
+    assert _ha_posts() == []  # no unrelated HA player is touched
+
+
+@pytest.mark.asyncio
+async def test_volume_after_an_engine_play_reaches_the_engine(ma_active):
+    result = await intent_router._execute_music_intent(Intent("music_volume", {"level": 35}), "member-a")
+
+    assert result == "Volume set to 35%."
+    assert ma_active["sent"] == [("players/cmd/volume_set", {"player_id": "kitchen", "volume_level": 35})]
+    assert _ha_posts() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intent", [
+    Intent("music_control", {"command": "pause"}),
+    Intent("music_volume", {"level": 35}),
+])
+async def test_engine_refusal_is_never_reported_as_success(ma_active, intent):
+    ma_active["ok"] = False
+
+    result = await intent_router._execute_music_intent(intent, "member-a")
+
+    assert result == intent_router._MUSIC_CONTROL_FAILED_MSG
+    assert _ha_posts() == []  # nor "fixed" by pausing a player that is not the one playing
+
+
+@pytest.mark.asyncio
+async def test_now_playing_reads_the_engine_playing(ma_active):
+    result = await intent_router._execute_music_intent(Intent("music_control", {"command": "now_playing"}), "member-a")
+
+    assert result == "Playing One More Time by Daft Punk."
+
+
+@pytest.mark.asyncio
+async def test_idle_engine_leaves_control_to_home_assistant(ma_active):
+    # Negative control: the engine plays nothing, so the HA fallback still runs.
+    ma_active["players"][0]["playback_state"] = "idle"
+
+    result = await intent_router._execute_music_intent(Intent("music_control", {"command": "pause"}), "member-a")
+
+    assert result == "Paused."
+    assert ma_active["sent"] == []
+    assert _ha_posts()[0]["json"]["action"] == "media_pause"

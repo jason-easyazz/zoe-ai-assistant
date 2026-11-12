@@ -165,6 +165,13 @@ def test_two_free_pendants_next_to_the_panel_are_never_guessed(link):
     assert omi_linking.say("crowded") in [s[2] for s in link.said]
 
 
+def test_own_pendant_beside_a_free_one_is_never_guessed(link):
+    register(link, DEV_A, "ann")
+    w, _ = open_and_drive(link, ANN, [omi_dev(DEV_A, -45), omi_dev(DEV_B, -50)])
+    assert w.state == "failed" and owner(link, DEV_B) == "", "the unowned pendant is not claimed while her own is also near"
+    assert omi_linking.say("crowded") in [s[2] for s in link.said]
+
+
 def test_a_pendant_someone_else_owns_is_never_claimed(link):
     register(link, DEV_A, "ben")
     w, _ = open_and_drive(link, ANN, [omi_dev(DEV_A, -45)])
@@ -243,7 +250,7 @@ def test_a_child_cannot_self_link_and_is_still_never_tagged(link, monkeypatch):
     register(link, DEV_C, "kid")
     monkeypatch.setenv("ZOE_OMI_SPEAKER_TAG", "on")
     run(_write("kid", speaker_tag_enabled=1))
-    assert run(omi._diarise("kid", "/nonexistent.wav", None)) == (None, "unverified", None)
+    assert run(omi._diarise("kid", "/nonexistent.wav", None)) == (None, "unverified", None, None)
 
 
 async def _write(uid, **kw):
