@@ -446,7 +446,7 @@ def m_tools(lines, since, until, members: Members) -> dict:
 def m_brain_first_text(lines, since, until, members: Members) -> dict:
     ttft: list[float] = []
     pre_plus: list[float] = []
-    other = bad = 0
+    other = bad = no_token = 0
     for _, line in in_window(lines, since, until, "VOICE TIMING"):
         f = fields(line)
         if is_harness(line, f) or "brain_ttft_ms" not in f:
@@ -460,14 +460,18 @@ def m_brain_first_text(lines, since, until, members: Members) -> dict:
         except Malformed:
             bad += 1
             continue
+        if b < 0:                     # brain_ttft_ms=-1 is the "no token arrived" sentinel (a timed-out / interrupted turn), not a latency
+            no_token += 1
+            continue
         ttft.append(b)
-        if pre is not None:
+        if pre is not None and pre >= 0:
             pre_plus.append(pre + b)
     title = "Brain dispatch to first text (member voice turns)"
     if bad:
         return malformed_metric("brain_first_text", title, bad, since, until)
     if not ttft:
-        return unmeasured("brain_first_text", title, f"no member VOICE TIMING lines in window (other: {other})",
+        return unmeasured("brain_first_text", title,
+                          f"no member VOICE TIMING line with a first token in window (no-token turns: {no_token}, other: {other})",
                           window=wstr(since, until))
     # Each timing stands on its own samples: E+F only from lines carrying BOTH fields, and `unmeasured` when none do.
     ef = (f"pre_brain+brain_ttft p50 {pct(pre_plus, 50) / 1000:.2f} s (n={len(pre_plus)})" if pre_plus
@@ -475,10 +479,11 @@ def m_brain_first_text(lines, since, until, members: Members) -> dict:
     val = f"brain_ttft p50 {pct(ttft, 50) / 1000:.2f} s / p90 {pct(ttft, 90) / 1000:.2f} s; {ef}"
     return metric("brain_first_text", title, val, n=len(ttft), window=wstr(since, until),
                   method=(f"VOICE TIMING brain_ttft_ms on member sessions (lane 1 10b); pre_brain_ms+brain_ttft_ms "
-                          f"is lane 4 E+F; other (guest/unknown) lines excluded: {other}"),
+                          f"is lane 4 E+F; other (guest/unknown) lines excluded: {other}; no-token turns "
+                          f"(brain_ttft_ms=-1) excluded: {no_token}"),
                   data={"brain_ttft_p50_ms": pct(ttft, 50), "brain_ttft_p90_ms": pct(ttft, 90),
                         "pre_plus_ttft_p50_ms": pct(pre_plus, 50), "pre_plus_ttft_p90_ms": pct(pre_plus, 90),
-                        "other": other})
+                        "other": other, "no_token": no_token})
 
 
 def count_raises(logs: LogSet, since, until) -> tuple[int | None, str | None]:
@@ -745,7 +750,8 @@ async def db_collect(dsn: str, long_since: dt.datetime, until: dt.datetime,
                        count(*) FILTER (WHERE status = 'kept'),
                        count(*) FILTER (WHERE status = 'missed'),
                        count(*) FILTER (WHERE status = 'open'),
-                       count(*) FILTER (WHERE status = 'kept' AND session_id NOT LIKE 'replay-%')
+                       count(*) FILTER (WHERE status = 'kept' AND session_id NOT LIKE 'replay-%' AND {real_user_pred('user_id')}
+                                        AND lower(coalesce(session_id, '')) !~ '^(qa|demo|bench|probe|test|bar-)')
                 FROM commitments
                 WHERE created_at::timestamptz >= $1 AND created_at::timestamptz < $2""", ls, un)
             res["commitments"] = dict(zip(("rows", "replay", "household", "kept", "missed", "open", "household_kept"), row))

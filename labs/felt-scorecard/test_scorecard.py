@@ -189,6 +189,24 @@ def test_voice_timing_member_sessions_only():
     assert "pre_brain+brain_ttft unmeasured" in m2["value"] and m2["data"]["brain_ttft_p50_ms"] == 1500.0
     only_guest = sc.m_brain_first_text(parsed([vt(3, "voice-panel-guest", 9000)]), SINCE, UNTIL, MEMBERS)
     assert only_guest["status"] == "unmeasured" and only_guest["value"] == "unmeasured"
+    # brain_ttft_ms=-1 means "no token arrived" (timed out / interrupted): never a latency sample (Codex on #2424)
+    mixed = sc.m_brain_first_text(parsed([vt(0, MSESS, 1000), vt(1, MSESS, -1), vt(2, MSESS, 3000)]), SINCE, UNTIL, MEMBERS)
+    assert mixed["n"] == 2 and mixed["data"]["brain_ttft_p50_ms"] == 2000.0 and mixed["data"]["no_token"] == 1
+    assert mixed["data"]["pre_plus_ttft_p50_ms"] == 2200.0
+    only_dead = sc.m_brain_first_text(parsed([vt(0, MSESS, -1), vt(1, MSESS, -1)]), SINCE, UNTIL, MEMBERS)
+    assert only_dead["status"] == "unmeasured" and "no-token turns: 2" in str(only_dead)
+
+
+def test_household_kept_uses_the_household_predicate():
+    """`household_kept` must be a subset of `household`: the same real-user and harness-session exclusions (Codex on #2424).
+    Mutation: drop either exclusion from the kept filter -> a harness follow-through is attributed to the household."""
+    import inspect
+    import re
+    src = re.sub(r"\s+", " ", inspect.getsource(sc))
+    house = ("session_id NOT LIKE 'replay-%' AND {real_user_pred('user_id')} "
+             "AND lower(coalesce(session_id, '')) !~ '^(qa|demo|bench|probe|test|bar-)')")
+    assert src.count("count(*) FILTER (WHERE " + house) == 1
+    assert src.count("count(*) FILTER (WHERE status = 'kept' AND " + house) == 1
 
 
 def test_candidate_values_skip_harness():
