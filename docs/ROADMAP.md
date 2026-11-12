@@ -1,7 +1,7 @@
 ---
 type: roadmap
 audience: Jason + every agent
-updated: 2026-11-03
+updated: 2026-11-13
 ---
 # Zoe roadmap
 
@@ -30,15 +30,16 @@ Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-pro
 
 1. ~~**Close the unauthenticated surface the deep dive found (A2).**~~ ✅ landed: music writes (#2108) and reads (#2121) need a member or the panel, `GET /api/settings` is an allowlist,
    the Multica webhook secret is checked first, and `services/zoe-data/tests/test_mutating_routes_declare_auth.py` fails a mutating route with no auth dependency. Identity half: #2089, #2097, #2099.
-2. ~~**Stop blocking the event loop in the turn path (A1).**~~ ✅ landed #2117: `semantic_router.route` runs off the loop (`tests/test_router_off_loop.py`), and
-   `zoe_event_loop_lag_seconds` is on `/metrics` (`event_loop_lag.py`).
+2. **Stop blocking the event loop in the turn path (A1).** Partly landed #2117: `semantic_router.route` runs off the loop (`tests/test_router_off_loop.py`), and
+   `zoe_event_loop_lag_seconds` is on `/metrics` (`event_loop_lag.py`). Not done: the single worker still stalls for 1 s or more 4 to 16 times a day (`EVENT_LOOP_LAG`
+   in the app log, 2026-11-07 to 11-12), from blockers not yet attributed. Acceptance: the lag marker names what was running, and the 1 s stalls stop.
 3. **Data safety: backups and forgetting (A5, A6, A7).** Off-box encrypted backups with a restore drill in `zoe-backup-verify` (owner picks the target and key); "forgotten" reaches every
    store that holds household words (router shadow log, training copy, retired agent session stores); delete the retired training timer and its duplicate corpus. Owner: owner decision
    for the target and the deletions, agent for the build. Acceptance: a restore drill that passes; an inventory test of where household text lives. Record: deep dive A5-A7.
 4. **Owner decisions that gate other work.** (a) The household-communications decisions (section 8.5 of the deep dive: the411 RAM and second address, Matrix hybrid or not, PA as
    member-initiated speech, who may ring whom, backup target, a Zoe-owned app or Element X) gate all of D. (b) Night mind: decided (owner, 2026-10-18), it stays in enforce in the window and zoe-data serves what it wrote with `ZOE_NIGHT_MIND=serve` (PR #2122; the owner step is
-   setting it in `services/zoe-data/.env` after a voice replay gate). Live fact as of 2026-10-19, not a code default: the window writes nightly in enforce and zoe-data's readers are
-   still off because the flag is not set in zoe-data's environment (confirm with `scripts/maintenance/zoe_ground_truth.sh`). (c) Which shadow-mode features get flipped to enforce, each after its offline A/B: restraint
+   setting it in `services/zoe-data/.env` after a voice replay gate). Live fact as of 2026-11-13, not a code default: the window writes nightly in enforce and
+   `ZOE_NIGHT_MIND=serve` is set in zoe-data's `.env` and process, so the readers serve it. (c) Which shadow-mode features get flipped to enforce, each after its offline A/B: restraint
    `[default ZOE_RESTRAINT=unset]`, the recall gate `[default ZOE_RECALL_GATE=shadow]`, the struggle detector `[default ZOE_STRUGGLE_DETECT=unset]`, the delivery ledger
    `[default ZOE_DELIVERY_LEDGER=unset]` (for the first, third and fourth, unset means the reader runs `shadow`; see `PLANS.md`). Owner: owner. Record: deep dive section 8.5; [`PLANS.md`](PLANS.md) live flag block.
 5. **Landing the roadmap itself.** This file, `live-state.json`, `research/index.md`, and the open-problems triage
@@ -82,7 +83,7 @@ action agent (research only); music discovery; router self-training `[default ZO
 **Operator steps waiting on the owner** (summarised from the private after-night ledger; no household details here): finish the remaining dependency batches once the age window
 passes and each is replay-probed; re-run the Omnigent container recreate after its pending PR lands; rotate any credential that was ever echoed into a transcript and
 revoke the long-lived tokens named in [`knowledge/open-problems.md`](knowledge/open-problems.md); recreate the HA bridge and database containers so they bind loopback as `main`'s compose already says;
-deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window; the TLS certificate renewal before 2026-11-24; the owner call on the adaptive end-of-speech tail `[default ZOE_VAD_CLEAN_TAIL_MS=0]` (a value of 560 closes a clean stop about 160 ms earlier at a measured 2 percent mid-sentence cut, and a lost command is a bug, so it is Jason's decision).
+deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window; the owner call on the adaptive end-of-speech tail `[default ZOE_VAD_CLEAN_TAIL_MS=0]` (a value of 560 closes a clean stop about 160 ms earlier at a measured 2 percent mid-sentence cut, and a lost command is a bug, so it is Jason's decision).
 
 **Evidence and ledgers.** Open problems: [`knowledge/open-problems.md`](knowledge/open-problems.md) (triaged 2026-10-18; a line is deleted when its fix is verified).
 Ideas: [`IDEAS.md`](IDEAS.md). Research records: [`research/index.md`](research/index.md). Task list this roadmap derives from: deep dive section 10.

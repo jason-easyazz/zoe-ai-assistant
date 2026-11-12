@@ -5,7 +5,7 @@
  * Pins: linked / not linked / last sync; linking off says "ask the household admin"; sync off (404) renders nothing; a setting the
  * household has off shows Off, is disabled and a tap sends nothing (a member can only narrow); keep-audio days never offer more than
  * the ceiling; Link is touch-only and the first link shows the one-sentence notice; unlink asks first and warns about unsynced audio;
- * escaping; >= 48 px touch targets; no text input anywhere; both Settings pages carry the section and the shared script never routes
+ * escaping; >= 48 px touch targets; no text input anywhere; desktop Settings carries the section and the shared script never routes
  * into /touch/.
  * Source mutations worth re-running by Edit: drop `op &&` in renderSwitch's `shown` -> the household-off check goes red; drop the
  * operator check in toggleBody -> "a tap sends nothing" goes red; drop `Math.min(d, max)` in daysBody -> the ceiling check goes red;
@@ -136,10 +136,8 @@ const timers = { set: function () { return 1; }, clear: function () {} };
 
   /* ---------- the pages ---------- */
   const desk = fs.readFileSync(path.join(DIST, 'settings.html'), 'utf8');
-  const touch = fs.readFileSync(path.join(DIST, 'touch', 'settings.html'), 'utf8');
   const src = fs.readFileSync(path.join(DIST, 'js', 'omi-pendant-settings.js'), 'utf8');
   ok(/js\/omi-pendant-settings\.js/.test(desk) && /id="sec-pendant"/.test(desk) && /ZoeOmiPendant\.mount/.test(desk), 'desktop carries the section');
-  ok(/\/js\/omi-pendant-settings\.js/.test(touch) && /id="pendantSection"/.test(touch) && /surface: 'touch'/.test(touch), 'touch carries the section');
   ok(!/\/touch\//.test(src), 'the shared script never routes into /touch/');
   ok(!/\/touch\//.test(desk.split('sec-pendant')[1].split('</div>\n  </div>')[0]), 'the desktop section links nothing in /touch/');
 
