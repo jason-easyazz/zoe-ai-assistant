@@ -53,9 +53,10 @@ Usage:
     ... --only S9a,S9b         # PARTIAL: just the personalisation-hop asks (no card, no hook, no stranger);
                                # status=partial, never complete - the full week is the gate
 
-Exit: 0 every scored ask PASS | 1 an ask FAILED | 2 refused / error (an ask or the run) /
-teardown unproven |
-3 harness lock held. Without ``ZOE_PERF=1``: a skip notice, exit 0, nothing written.
+Exit: 0 every scored ask PASS | 1 an ask FAILED | 2 error (an ask or the run) /
+teardown unproven | 3 harness lock held | 4 REFUSED, the run never started (a gate said no:
+deploy in flight, dirty/unbound checkout, quiet hours, memory floor, pending teardown, ...;
+same code samantha_weekly.sh uses for "not started"; the reason is in the results file and stderr). Without ``ZOE_PERF=1``: a skip notice, exit 0, nothing written.
 """
 from __future__ import annotations
 
@@ -1277,12 +1278,15 @@ def point_log_at_scratch(stack) -> Path:
     return uma.APP_LOG
 
 
+REFUSED_RC = 4   # distinct from 2 (ran and errored) so a wrapper reading rc alone cannot call a refusal green or an error
+
+
 def _refuse(path: Path, reason: str, revision: dict | None, mode: str) -> int:
     print(f"REFUSED: {reason}", file=sys.stderr)
     sb.write_json(path, {"status": "refused", "reason": reason, "mode": mode, "revision": revision,
                          "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
                          "harness_version": HARNESS_VERSION})
-    return 2
+    return REFUSED_RC
 
 
 def _pending(live: DayLive, path: Path, log) -> dict | None:
