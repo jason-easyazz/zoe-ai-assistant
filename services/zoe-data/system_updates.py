@@ -601,11 +601,36 @@ async def install_component(db: Any, user: dict, component: str) -> dict:
     return {"ok": ok, "log": log}
 
 
+async def _deploy_gate() -> tuple[str | None, str]:
+    """deploy.yml's two refusals, for the Install button: origin/main must fast-forward the live HEAD, and a voice-path
+    range needs passing replay evidence bound to the target tree (voice_gate_check.py). Returns (target sha, log); a
+    None target means refuse. Fails closed: an unreadable ref or a checker that cannot run refuses."""
+    rc_prev, prev = await _run_cmd("git", "-C", COMPOSE_PROJECT_DIR, "rev-parse", "HEAD", timeout=5.0)
+    rc_tgt, target = await _run_cmd("git", "-C", COMPOSE_PROJECT_DIR, "rev-parse", "--verify", "origin/main^{commit}", timeout=5.0)
+    prev, target = prev.strip(), target.strip()
+    if rc_prev != 0 or rc_tgt != 0 or not prev or not target:
+        return None, "--- deploy gate: REFUSED (cannot resolve HEAD or origin/main) ---"
+    rc_anc, _ = await _run_cmd("git", "-C", COMPOSE_PROJECT_DIR, "merge-base", "--is-ancestor", prev, target, timeout=10.0)
+    if rc_anc != 0:
+        return None, f"--- deploy gate: REFUSED (origin/main {target[:7]} is not a fast-forward of the live HEAD {prev[:7]}) ---"
+    checker = os.path.join(COMPOSE_PROJECT_DIR, "scripts", "maintenance", "voice_gate_check.py")
+    rc_gate, out_gate = await _run_cmd(
+        "python3", checker, "--repo", COMPOSE_PROJECT_DIR, "--diff", f"{prev}..{target}",
+        "--expect-tree-of", target, "--allow-reuse",
+        timeout=60.0,
+    )
+    if rc_gate != 0:
+        return None, (f"--- deploy gate: REFUSED ---\n{out_gate}\n"
+                      "This update changes the voice path without passing replay evidence for it; "
+                      "it is installed by the deploy pipeline once the replay passes.")
+    return target, f"--- deploy gate: OK ({prev[:7]}..{target[:7]}) ---\n{out_gate}"
+
+
 async def _install_zoe_platform(db: Any, user: dict) -> dict:
     """
     Atomic update for all git-backed Zoe components:
       1. Pre-flight safety checks
-      2. git fetch + merge --ff-only origin/main
+      2. git fetch + the deploy gate (_deploy_gate) + merge --ff-only of the gated commit
       3. docker compose up --build -d for git-backed Docker services
       4. Write VERSION, update_history; return restart_required=True for zoe-data
     """
@@ -664,9 +689,19 @@ async def _install_zoe_platform(db: Any, user: dict) -> dict:
         await _write_update_history(db, "zoe-platform", version_before, None, ok, log, user)
         return {"ok": False, "log": log}
 
+    # ── Deploy gate: the same refusal deploy.yml applies (gap audit 2026-11-13) ──
+    # Without it this button went live with voice-path code the deploy pipeline had
+    # refused for lack of replay evidence. Merge exactly the gated commit, never a ref.
+    target, gate_log = await _deploy_gate()
+    logs.append(gate_log)
+    if target is None:
+        log = "\n".join(logs)[-8000:]
+        await _write_update_history(db, "zoe-platform", version_before, None, False, log, user)
+        return {"ok": False, "log": log}
+
     rc_merge, out_merge = await _run_cmd(
         "git", "-C", COMPOSE_PROJECT_DIR,
-        "merge", "--ff-only", "origin/main",
+        "merge", "--ff-only", target,
         timeout=60.0,
     )
     logs.append(f"--- git merge --ff-only ---\n{out_merge}")
