@@ -2080,6 +2080,9 @@ def drain_captures(live: Any, user: str, *, timeout_s: float | None = None,
     ``error``. A wait that still expires reports the leftover in_flight (unproven teardown)."""
     if timeout_s is None:
         timeout_s = _quiesce_budget()
+    if not math.isfinite(timeout_s):   # an explicit nan/inf must not defeat the bound
+        timeout_s = QUIESCE_TIMEOUT_S
+    timeout_s = min(max(timeout_s, 0.0), QUIESCE_TIMEOUT_MAX_S)
     # Real wall-clock bound: the polls' own HTTP calls count too (a stalled API must not stretch the budget).
     deadline = time.monotonic() + timeout_s
     last, stable, in_flight = None, 0, None

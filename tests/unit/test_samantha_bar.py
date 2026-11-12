@@ -2101,6 +2101,22 @@ def test_drain_sleep_is_capped_after_http_consumed_time(monkeypatch):
     assert clock["t"] - t0 <= 10.0
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_drain_explicit_nonfinite_budget_stays_bounded(monkeypatch, bad):
+    clock = _fake_clock(monkeypatch)
+
+    class _Stuck:
+        def packet_count(self, u, timeout=60):
+            return 3
+
+        def capture_status(self, u, timeout=60):
+            assert clock["t"] < 1000.0 + 4000, "unbounded wait"
+            return {"in_flight": 6}
+
+    out = sb.drain_captures(_Stuck(), A, timeout_s=bad)
+    assert out["in_flight"] == 6 and clock["t"] - 1000.0 <= sb.QUIESCE_TIMEOUT_S
+
+
 def test_drain_zero_budget_makes_no_call_and_is_unproven(monkeypatch):
     _fake_clock(monkeypatch)
 
