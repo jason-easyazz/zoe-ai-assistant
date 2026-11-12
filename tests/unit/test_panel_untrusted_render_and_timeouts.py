@@ -10,6 +10,7 @@ Two classes from the round-4 code sweep, pinned at the source so they cannot dri
 
 The checks are functions over the file text, and the negative control plants each fault into a copy and expects
 the check to turn red - a green here means the check can see the fault, not just that the text is what it is.
+The legacy per-domain touch pages this once also pinned were deleted (2026-11-13); the estate and the executor remain.
 """
 from __future__ import annotations
 
@@ -31,14 +32,6 @@ def _read(rel: str) -> str:
 
 # ── raw render sites: each pattern is one that used to exist and must not come back ──
 RAW_PATTERNS = {
-    "touch/memories.html": [
-        "${(item.content || '').slice(0, 180)}", "${item.content || ''}", "${item.name || ''}", "'${item.id}'",
-        "${notification.message}", "${item.preview.title}",
-    ],
-    "touch/calendar.html": ["${task.text}", 'value="${reminder.message}"', 'value="${item.text}"', "'${task.id}'"],
-    "touch/people.html": ["${r.label}</span>", "openDetail('${r.person_id}')", ".replace(/</g,'&lt;')}", "markBucketDone('${it.id}')"],   # the half-escape (only <), never the helper
-    "touch/chat.html": ["${action.label}", "'${cardId}'", "'${actionId}'", "${JSON.stringify(action.data).replace(", "${JSON.stringify(data).replace(", 'Schedule "${data.title}"'],
-    "touch/settings.html": ['<option value="${u.user_id}">${u.username}'],
     "js/touch-ui-executor.js": ["${u}</li>", "${pkg.query || ''}", "${(r.name || '').toString()}", "${top.name || 'N/A'}</strong>"],
 }
 
@@ -54,8 +47,7 @@ def test_no_raw_render_site_remains(rel):
 
 def test_each_page_defines_and_uses_its_escape_helper():
     for rel, helper, floor in (
-        ("touch/memories.html", "zoeEsc(", 15), ("touch/calendar.html", "zoeEsc(", 3), ("touch/people.html", "zoeEsc(", 10),
-        ("touch/chat.html", "escAttr(", 12), ("touch/settings.html", "escAttr(", 1), ("js/touch-ui-executor.js", "escHtml(", 9),
+        ("js/touch-ui-executor.js", "escHtml(", 9),
     ):
         text = _read(rel)
         assert f"function {helper[:-1]}" in text, rel
@@ -64,9 +56,6 @@ def test_each_page_defines_and_uses_its_escape_helper():
 
 def test_the_escape_helpers_escape_both_quote_kinds():
     # an onclick="f('${x}')" argument breaks out on a single quote; innerHTML serialisation never escapes quotes
-    for rel in ("touch/memories.html", "touch/calendar.html", "touch/people.html"):
-        assert "replace(/'/g,'&#39;')" in _read(rel) and "replace(/\"/g,'&quot;')" in _read(rel), rel
-    assert "replace(/'/g,'&#39;')" in _read("touch/chat.html") and "replace(/'/g,'&#39;')" in _read("touch/settings.html")
     assert "replace(/'/g, '&#39;')" in _read("js/touch-ui-executor.js")
 
 
@@ -113,8 +102,8 @@ def test_telegram_sidecar_fetches_all_carry_a_signal_and_the_download_streams_ca
 
 # ── negative controls: plant each fault, the check must go red ──
 def test_negative_control_raw_site_is_seen():
-    planted = _read("touch/memories.html").replace("${zoeEsc((item.content || '').slice(0, 180))}", "${(item.content || '').slice(0, 180)}", 1)
-    assert raw_sites("touch/memories.html", planted) == ["${(item.content || '').slice(0, 180)}"]
+    planted = _read("js/touch-ui-executor.js").replace("${escHtml(u)}</li>", "${u}</li>", 1)
+    assert raw_sites("js/touch-ui-executor.js", planted) == ["${u}</li>"]
 
 
 def test_negative_control_missing_deadline_is_seen():

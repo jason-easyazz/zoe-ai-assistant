@@ -54,8 +54,10 @@ Voice, at the panel: "Zoe, link my pendant".
 6. omi-sync on the Pi reads the agent's known-devices store on every step, so the new pendant is synced from its next visit. No env edit,
    no restart.
 
-Touch: Settings > My pendant > Link (panel only; it needs the member's fresh PIN sign-in at that panel and shows the notice before the
-first link). Desktop Settings shows the state and the settings, and says to link at the panel.
+Touch: the touch Link button (`js/omi-pendant-settings.js`, `surface: 'touch'`; it needs the member's fresh PIN sign-in at that panel and
+shows the notice before the first link) was hosted only by the legacy `touch/settings.html`, which the estate never linked to and which was
+deleted 2026-11-13. Until the estate's Settings screen hosts it, linking at the panel is by voice. Desktop Settings shows the state and the
+settings, and says to link at the panel.
 
 "Is my pendant linked?" and "Unlink my pendant" are answered the same way, own pendant only.
 
