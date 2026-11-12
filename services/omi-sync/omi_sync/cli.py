@@ -81,7 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     if not s.enabled:
         log.info("OMI_SYNC_ENABLED is off - nothing to do (flag-dark). Exiting.")
         return 0
-    s = _settings_or_exit()
+    if not s.addresses:
+        log.info("no pendant yet (no OMI_PENDANT_ADDRESSES and none remembered at this panel): waiting for one to be linked")
     if not s.device_token:
         print("DEVICE_TOKEN is not set.", file=sys.stderr)
         return 2

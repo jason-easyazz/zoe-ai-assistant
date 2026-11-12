@@ -61,7 +61,7 @@ _DEFAULT_TTL_S = 120
 # The intercom's rows (``intercom.py``: a member's announcement / ring addressed to ONE named panel) are panel-scoped for the same
 # reason - "tell the kitchen" must never be played by whichever daemon polls first.
 PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll",
-                                          "intercom_announce", "intercom_ring", "voice_clip_play")
+                                          "intercom_announce", "intercom_ring", "voice_clip_play", "omi_link")
 
 # ── Panel COMMANDS riding the same lane (Zoe-driven voice enrolment) ──────────────────────────────────────────────────────
 # A row whose trigger is one of these is not speech: its ``message`` is a JSON object the daemon ACTS on, and the claim returns it

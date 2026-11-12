@@ -1119,7 +1119,10 @@ def test_nothing_else_reads_pendant_transcripts():
                # the night re-pass (0075): the SECOND, offline transcript of the same audio; it replaces a transcript the same way the first pass writes it
                "omi_repass.py", "omi_repass_clean.py", "omi_transcript_book.py",
                # the morning transcript check: the OWNER corrects words of their own transcript (owner_corrected); owner-only routes, forgotten spans never shown
-               "transcript_check.py", "routers/transcript_check.py"}
+               "transcript_check.py", "routers/transcript_check.py",
+               # member self-link + "My pendant" settings: they import the module for its FLAGS (enabled, retention ceiling); neither
+               # reads a recording or a transcript
+               "omi_linking.py", "omi_member_settings.py"}
     hits = set()
     for p in SVC.rglob("*.py"):
         rel = str(p.relative_to(SVC))

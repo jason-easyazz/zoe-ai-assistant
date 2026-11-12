@@ -992,6 +992,68 @@ def test_shadow_mode_stores_no_channel_mean_but_on_mode_does(renv, monkeypatch):
     assert counts["shadow"] == 0 and counts["on"] > 0, counts
 
 
+def _night_with_tag_pref(renv, monkeypatch, pref):
+    """One ``on`` night over a long, eight-window recording with the member's "tag voices" switch answering ``pref`` (a bool, or an exception)."""
+    import omi_member_settings
+    def rich(rid):
+        r = result_for(rid)
+        r["windows"] = [[i * 0.75, i * 0.75 + 1.5, vec(0), 0.2] for i in range(8)]
+        r["speech_s"] = 700.0
+        return r
+    for t in ("omi_wearer_samples", "omi_channel_means", "omi_segments", "omi_recordings"):
+        renv.db.conn.execute(f"DELETE FROM {t}")
+    renv.db.conn.commit()
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine text")
+    rid = rows(renv)[0]["id"]
+
+    async def tag_on(uid):
+        if isinstance(pref, Exception):
+            raise pref
+        return pref
+    monkeypatch.setattr(omi_member_settings, "speaker_tag_on", tag_on)
+    seen = []
+    out = run(rp.run_night(budget_s=600, runner=fake_runner({rid: rich(rid)}, seen=seen)))
+    n = {t: renv.db.rows(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] for t in ("omi_wearer_samples", "omi_channel_means")}
+    segs = renv.db.rows("SELECT speaker, score FROM omi_segments")
+    return out, n, segs, seen[0]["items"][0]
+
+
+def test_a_member_who_turned_voice_tagging_off_gets_text_but_no_speaker_data_from_the_night_pass(renv, monkeypatch):
+    """Review (P2): the member switch only reached the first pass; the night pass still diarised and stored speaker data. Negative control: opted in stores it."""
+    out, n, segs, item = _night_with_tag_pref(renv, monkeypatch, False)
+    assert out["replaced"] == 1 and rows(renv)[0]["transcript"] == "Hello there friend"      # transcription itself still proceeds
+    assert item["diar"] is False, "the worker is told not to compute speaker windows for this member"
+    assert n == {"omi_wearer_samples": 0, "omi_channel_means": 0}
+    assert segs and all(s["speaker"] == "unverified" and s["score"] is None for s in segs)
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_segment_embeddings")[0]["n"] == 0
+    out, n, segs, item = _night_with_tag_pref(renv, monkeypatch, True)
+    assert item["diar"] is True and n["omi_wearer_samples"] > 0 and n["omi_channel_means"] > 0, n
+
+
+def test_an_unreadable_tag_preference_fails_closed_in_the_night_pass(renv, monkeypatch):
+    out, n, segs, item = _night_with_tag_pref(renv, monkeypatch, RuntimeError("settings db down"))
+    assert out["replaced"] == 1 and item["diar"] is False and n == {"omi_wearer_samples": 0, "omi_channel_means": 0}
+
+
+def test_the_settings_read_for_tagging_fails_closed_but_a_pre_0077_schema_keeps_the_default(monkeypatch):
+    import contextlib
+    import db_compat
+    import omi_member_settings as ms
+
+    def broken(exc):
+        @contextlib.asynccontextmanager
+        async def cm():
+            class Db:
+                async def execute(self, *a, **k):
+                    raise exc
+            yield Db()
+        return cm
+    monkeypatch.setattr(db_compat, "get_compat_db", broken(RuntimeError("connection refused")))
+    assert run(ms.speaker_tag_on("u1")) is False
+    monkeypatch.setattr(db_compat, "get_compat_db", broken(RuntimeError("no such column: speaker_tag_enabled")))
+    assert run(ms.speaker_tag_on("u1")) is True
+
+
 def test_a_worker_load_failure_names_the_engine_and_a_redacted_reason(tmp_path, monkeypatch, capsys):
     import importlib.util
     spec = importlib.util.spec_from_file_location("omi_repass_worker_loud", Path(__file__).resolve().parents[3] / "scripts/night/jobs/omi_repass_worker.py")

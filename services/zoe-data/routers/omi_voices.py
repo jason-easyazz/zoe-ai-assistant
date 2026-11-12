@@ -37,7 +37,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 import omi_diarize
 import omi_recordings
@@ -173,9 +173,48 @@ async def learned_voices(user: dict = Depends(_require_owner)):
             "speaker_tag": omi_diarize.mode()}
 
 
+class _Settings(BaseModel):
+    """The member's own pendant settings (``omi_member_settings``). Every field optional; only the ones sent change. A member can only
+    NARROW what the operator allows: the effective value is always ``operator AND member`` (or the lower number of days)."""
+    model_config = ConfigDict(extra="forbid")
+    learning_enabled: Optional[bool] = None
+    sync_paused: Optional[bool] = None
+    speaker_tag_enabled: Optional[bool] = None
+    day_review_enabled: Optional[bool] = None
+    keep_audio_days: Optional[int] = Field(None, ge=1, le=3650)
+    keep_audio_default: Optional[bool] = None       # true = forget my own number of days and use the household's
+
+
+async def _settings_view(uid: str) -> dict:
+    import omi_member_settings as ms
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        stored = await ms.read(db, uid)
+    op = ms.operator()
+    return {**{k: stored[k] for k in ms.DEFAULTS}, "operator": op, "effective": ms.effective(stored, op)}
+
+
+@router.get("/voices/settings")
+async def get_voice_settings(user: dict = Depends(_require_owner)):
+    return await _settings_view(user["user_id"])
+
+
 @router.put("/voices/settings")
-async def voice_settings(body: _Learning, user: dict = Depends(_require_owner)):
-    return await _call(voices.set_member_learning, user["user_id"], body.learning_enabled)
+async def voice_settings(body: _Settings, user: dict = Depends(_require_owner)):
+    import omi_member_settings as ms
+    from db_compat import get_compat_db
+    uid = user["user_id"]
+    if body.learning_enabled is not None:          # its own setter: turning it off also lets go of held unknown voices
+        await _call(voices.set_member_learning, uid, body.learning_enabled)
+    changes: dict = {k: (1 if getattr(body, k) else 0) for k in ms.BOOL_FIELDS if getattr(body, k) is not None}
+    if body.keep_audio_default:
+        changes["keep_audio_days"] = None
+    elif body.keep_audio_days is not None:
+        changes["keep_audio_days"] = int(body.keep_audio_days)      # stored as asked; ``clamp_days`` caps it at the ceiling when read
+    if changes:
+        async with get_compat_db() as db:
+            await ms.write(db, uid, **changes)
+    return await _settings_view(uid)
 
 
 @router.patch("/voices/{voice_id}")
