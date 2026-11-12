@@ -42,8 +42,9 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
   So the unauthenticated panel poll gets one boolean, `notify_any`: true when ANY household member (never a guest) has at least
   one unread notification that is not sensitive. It is never a count, never whose, never a title. The trade, stated plainly: anyone
   standing at the panel learns only that "someone here has something waiting" - not who, not how many, not what. Sensitive
-  notifications never light the dot for that poll. Pressing the orb then runs the spoken pull, which is voice-verified, and only
-  that verified member's own card is shown; for anyone else the press behaves exactly as before.
+  notifications never light the dot for that poll. A dot lit ONLY by `notify_any` proves no one, so pressing it never runs the
+  voiceless `/pull` (the server would refuse the guest): it opens the mic ("Say what's up?"), and a verified voice asking runs the
+  pull as that member, so only their own card is shown. A dot lit by the member's own `notify` or proactive count pulls as before.
 - The card is pushed only to the panel the member is at (`voice_session.send_to_panel`, never `all`), only for the turn's
   identified member (`panel_review_cards._member`: the voice session or a fresh PIN), and a tap is honoured only while that
   member's voice session is open there or with their own session.
@@ -79,7 +80,8 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
 ## Adding a creator
 
 Call `await notifications_store.create(user_id, "<type>", title, message, data, dedupe_id=<stable key>, sensitive=<bool>)`.
-Pass `scheduled_at=user_erase_gate.generation(user_id)` from where a background job was scheduled. Keep the title short (it is
+Pass `scheduled_at=user_erase_gate.generation(user_id)` from where a background job was scheduled - BEFORE any awaited read it
+does (`notify_wearer_proposals` takes it before `_wearer_status`), so an erase that completes during the read drops the create. Keep the title short (it is
 read aloud), keep owner-only content OUT of the row (build it into the card at render time, as the wearer creator does), and give
 the type a card action in `notifications_store.card` / `act` only if it needs more than **Done**. A creator that reads another store
 runs from `notifications_store.refresh` (throttled to once per 10 minutes per member).

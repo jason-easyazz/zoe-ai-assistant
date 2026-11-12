@@ -209,12 +209,13 @@ async def notify_wearer_proposals(user_id: str) -> Optional[str]:
     uid = _account(user_id)
     if not enabled() or uid is None:
         return None
+    gen = erase_gate.generation(uid)       # BEFORE the read: an erase that completes during it stales this create
     st = await _wearer_status(uid)
     if not st or int(st.get("confirmed") or 0) >= int(st.get("needed") or 0) or not st.get("proposals"):
         return None
     ids = sorted(str(p["id"]) for p in st["proposals"])
     batch = hashlib.sha256("|".join(ids).encode()).hexdigest()[:16]
-    return await create(uid, WEARER_TYPE, WEARER_TITLE, WEARER_MESSAGE, {"proposals": ids}, dedupe_id=batch)
+    return await create(uid, WEARER_TYPE, WEARER_TITLE, WEARER_MESSAGE, {"proposals": ids}, dedupe_id=batch, scheduled_at=gen)
 
 
 # -- the orb -----------------------------------------------------------------------------------------------------------------------

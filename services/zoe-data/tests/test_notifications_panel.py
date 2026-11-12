@@ -207,8 +207,24 @@ def test_flag_off_the_inbox_is_unchanged(env, monkeypatch):
 
 def test_home_paints_the_existing_dot_for_notify():
     html = (SVC.parents[1] / "services/zoe-ui/dist/touch/home.html").read_text()
-    assert "((d.enabled&&d.count>0)||d.notify>0||d.notify_any===true)" in html
+    assert "var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));" in html
+    assert "paint(mine||!!(d&&!d.quiet&&d.notify_any===true)," in html
     assert "notifications-panel.js" not in html                                       # desktop's bell never loads on the estate
+
+
+def test_a_guest_dot_press_opens_the_mic_never_the_voiceless_pull_and_control():
+    """``notify_any`` alone proves no one: /pull carries no voice, so the server refuses the guest and the dot could never be read.
+    The press must open the mic (a verified voice opens the member's session); only a member's own dot runs orbPull."""
+    html = (SVC.parents[1] / "services/zoe-ui/dist/touch/home.html").read_text()
+    paint = html[html.index("function paint(on,review"):]
+    paint = paint[:paint.index("}")]
+    assert "_dotVoiceOnly=!!(on&&voiceOnly)" in paint                                  # set on every paint, cleared with the dot
+    assert ",!mine);" in html                                                          # voice-only = lit by notify_any, not the member
+    click = html[html.index("orb.addEventListener('click'"):]
+    click = click[:click.index("});")]
+    guest, member = click.index("if(ready&&_dotVoiceOnly)panelVoice("), click.index("else if(ready)orbPull();")
+    assert guest < member                                                              # the guest branch wins before any pull
+    assert click.count("orbPull()") == 1                                               # control: a member's own dot still pulls
 
 
 # -- the card + taps -----------------------------------------------------------------------------------------------------------
@@ -319,6 +335,28 @@ def test_a_member_erase_deletes_their_rows_and_tail_caps_and_control(env):
     assert run(ns.forget_user(MEMBER)) == 2
     assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
     assert env.rows("SELECT COUNT(*) FROM app_settings")[0][0] == 0
+
+
+def test_an_erase_during_the_wearer_read_leaves_no_row_and_control(env, monkeypatch):
+    """The wearer creator's erase generation is taken BEFORE its awaited read: a forget_user that completes during the read stales it."""
+    _fake_repass(monkeypatch)
+    real = ns._wearer_status
+
+    async def control_read(uid):
+        return await real(uid)
+    monkeypatch.setattr(ns, "_wearer_status", control_read)
+    assert run(ns.notify_wearer_proposals(OTHER)) is None                              # OTHER has no proposals: nothing
+    assert run(ns.notify_wearer_proposals(MEMBER))                                     # control: no erase, a row lands
+    run(ns.forget_user(MEMBER))
+    ns.reset()
+
+    async def erasing_read(uid):
+        st = await real(uid)
+        await ns.forget_user(uid)                                                      # the erase completes mid-read
+        return st
+    monkeypatch.setattr(ns, "_wearer_status", erasing_read)
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
 
 
 def test_a_create_scheduled_before_the_erase_stays_erased(env):
