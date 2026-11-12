@@ -347,5 +347,19 @@ def test_a_unit_this_host_lacks_is_skipped(units_rig):
     assert mod.check_units(["not-on-this-host.service"], 5, 1800, False) == 0 and sent == []
 
 
-def test_the_bot_and_the_brain_are_watched():
-    assert {BOT, "llama-server.service", "kokoro-tts.service"} <= set(mod.OTHER_UNITS)
+def test_a_reset_after_a_real_loop_alert_sends_exactly_one_recovery_line(units_rig):
+    """Deliberate: an operator stop/start that ends an ALERTED loop resets the counter, and the owner is told it recovered
+    (once). Without a prior loop alert a reset is silent (the test above)."""
+    props, sent = units_rig
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "active"})
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "40"
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "0"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert len(sent) == 2 and "recovered" in sent[1]
+
+
+def test_the_bot_and_the_brains_are_watched():
+    assert {BOT, "flue-zoe-brain-2x.service", "llama-server.service", "kokoro-tts.service"} <= set(mod.OTHER_UNITS)
