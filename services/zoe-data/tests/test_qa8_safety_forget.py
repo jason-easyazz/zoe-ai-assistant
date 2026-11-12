@@ -226,7 +226,10 @@ def test_the_intercom_phrase_is_offered_only_when_it_would_work(au, monkeypatch)
                                   "I slipped; now I cannot stand up!", "I had a fall, I can't get up off the floor.",
                                   # a physical tail after "get up" is still a fall (the exclusions are non-physical phrases only)
                                   "I fell and I can't get up on my own", "I fell over and can't get up in the bathroom",
-                                  "I fell and I can't get up at all", "I fell and I can't get up the stairs"])
+                                  "I fell and I can't get up at all", "I fell and I can't get up the stairs",
+                                  # where or how they fell is not an idiom: only "fell for / short / out with / through" (a plan) are
+                                  "I fell out of bed and I can't get up", "I fell forward and I can't get up",
+                                  "I fell through the deck and can't get up"])
 def test_a_spoken_fall_with_punctuation_still_gets_the_number(au, text):
     """Speech-to-text transcripts carry commas and full stops between the clauses."""
     assert ms.detect(text).key == "fall" and run(ms.handle(text, "demo-user")).startswith("Ring 000 now.")
@@ -235,7 +238,9 @@ def test_a_spoken_fall_with_punctuation_still_gets_the_number(au, text):
 @pytest.mark.parametrize("text", ["My phone fell over. I can't get up early tomorrow.", "I fell asleep, and I couldn't get up to speed.",
                                   "The stock market fell. I can't get up there.", "I fell behind. I can't get up to date.",
                                   "i fell and cant get up for work", "I fell and I can't get up before nine",
-                                  "I tripped and couldn't get up in time for the bus"])
+                                  "I tripped and couldn't get up in time for the bus",
+                                  "I fell for it and I can't get up the courage", "The deal fell through and I can't get up for work",
+                                  "I fell out with my sister and can't get up the nerve to call"])
 def test_punctuated_talk_that_is_not_a_fall_is_left_alone(text):
     assert ms.detect(text).key != "fall"
 
