@@ -196,6 +196,19 @@ def test_a_repeating_event_offers_for_its_next_occurrence_only():
                                start_time="23:30")], now=NOW, usual_wake=lambda d: None, adult=True) == []
 
 
+def test_a_repeating_event_whose_start_today_has_passed_offers_for_the_one_after():
+    today = NOW.astimezone(ant._tz()).date()
+    anchor = today - timedelta(days=70)
+    weekly = _ev(id="ev-am", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="09:00",
+                 recurring="weekly")                                           # NOW is 22:00: this morning's has been and gone
+    (offer,) = [o for o in ant.candidates([weekly], now=NOW, usual_wake=lambda d: None, adult=True) if o.kind == "leave"]
+    assert offer.slots["start_date"] == (today + timedelta(days=7)).isoformat()
+    daily = _ev(id="ev-d", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="09:00",
+                recurring="daily")
+    (o2,) = [o for o in ant.candidates([daily], now=NOW, usual_wake=lambda d: None, adult=True) if o.kind == "leave"]
+    assert o2.slots["start_date"] == (today + timedelta(days=1)).isoformat()
+
+
 def test_a_repeating_event_is_read_from_the_calendar_and_its_offer_survives_the_recheck(dbpath):
     today = NOW.astimezone(ant._tz()).date()
     anchor = (today - timedelta(days=70)).isoformat()

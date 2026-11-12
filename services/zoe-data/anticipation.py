@@ -178,12 +178,18 @@ def _occurs_on(ev: Event, day: date) -> bool:
     return rule is not None and anchor is not None and rr.occurs_on(rule, anchor, day)
 
 
-def _next_occurrence(ev: Event, today: date) -> Optional[date]:
-    """A repeating event's NEXT date inside the horizon (today included), else None. One occurrence at a time: a daily event is one
-    offer for its next day, never fourteen."""
+def _next_occurrence(ev: Event, now: datetime) -> Optional[date]:
+    """A repeating event's NEXT date inside the horizon that has not started yet (today counts only while its start is still ahead of
+    ``now``), else None. One occurrence at a time: a daily event is one offer for its next day, never fourteen."""
+    today = now.astimezone(_tz()).date()
+    start_m = None if ev.all_day else _hhmm(ev.start_time)
     for i in range(HORIZON_DAYS + 1):
-        if _occurs_on(ev, today + timedelta(days=i)):
-            return today + timedelta(days=i)
+        day = today + timedelta(days=i)
+        if not _occurs_on(ev, day):
+            continue
+        if _at(day, start_m or 0) <= now:            # today's has already begun (or was all day): the offer is for the one after
+            continue
+        return day
     return None
 
 
@@ -202,7 +208,7 @@ def candidates(events: list[Event], *, now: datetime, usual_wake: Callable[[date
             continue
         end_d = _date(ev.end_date)
         if (ev.recurring or "").strip():                 # a repeating event stands for its next occurrence in the horizon
-            nxt = _next_occurrence(ev, today)
+            nxt = _next_occurrence(ev, now)
             if nxt is None:
                 continue
             end_d = end_d + (nxt - start_d) if end_d is not None else None
