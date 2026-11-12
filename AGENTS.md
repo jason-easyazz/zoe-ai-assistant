@@ -448,7 +448,7 @@ The tracked Cursor MCP config intentionally includes only non-secret local serve
 
 ## Engineering agents — who does what
 
-Hermes and OpenClaw are **retired** (operator decisions 2026-07-22, `docs/architecture/multica-executor-migration.md` §5; `~/.hermes` and `~/.openclaw` were deleted live 2026-10-18, bar the `~/.hermes/.env` file that is being migrated out). Route no work to either, extend neither, and treat any doc, skill or code path that still names them as a deletion target (git keeps history). Their skills never executed once — verified; backups live in `docs/knowledge/operator-skills/`. A capability is rebuilt on Pi/Flue only when it is actually needed.
+Hermes and OpenClaw are **retired** (operator decisions 2026-07-22, `docs/architecture/multica-executor-migration.md` §5; their installs and skill directories were deleted live 2026-10-18; residue remains: `~/.openclaw/workspace`, and `~/.hermes` holds `.env` (still loaded by the zoe-data unit, being migrated out) plus one backup of it). Route no work to either, extend neither, and treat any doc, skill or code path that still names them as a deletion target (git keeps history). Their skills never executed once — verified; backups live in `docs/knowledge/operator-skills/`. A capability is rebuilt on Pi/Flue only when it is actually needed.
 
 Engineering work runs on:
 

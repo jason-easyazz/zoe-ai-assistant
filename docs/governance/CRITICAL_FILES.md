@@ -80,19 +80,18 @@ services/zoe-ui/dist/components/
 ### Touch Interface (NEVER DELETE IF USING TOUCH PANEL)
 ```
 services/zoe-ui/dist/touch/
-├── css/
-│   ├── ambient.css              # Touch styling
-│   ├── gestures.css             # Gesture support
-│   └── touch-base.css           # Base touch styles
+├── home.html                    # The estate: the ONLY panel surface - CRITICAL
+├── skybridge.html               # Redirect into the estate for old kiosk URLs
+├── pair.html                    # Phone side of panel pairing (server QR/link)
+├── index.html                   # Sign-in fallback (js/auth.js, executor)
+├── css/                         # skybridge-ds/type + fonts, cards/auth.css (index.html),
+│                                #   cards/compose.css (desktop chat.html)
 └── js/
-    ├── ambient-widgets.js       # Ambient mode
-    ├── biometric-auth.js        # Biometric auth
-    ├── gestures.js              # Touch gestures
-    ├── photo-slideshow.js       # Photo features
-    ├── presence-detection.js    # Presence detection
-    ├── touch-common.js          # Touch utilities
-    └── voice-touch.js           # Voice integration
+    ├── skybridge-theme.js       # index.html theme
+    └── zoe-compose.js           # Shared compose renderer (desktop chat.html)
 ```
+The estate's own scripts live in `services/zoe-ui/dist/js/touch-*.js`. The legacy
+per-domain touch pages and their assets were deleted 2026-11-13.
 
 **Impact if deleted:** Touch panel stops working
 

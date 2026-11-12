@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Alert the operator when zoe-data is crash-looping.
+"""Alert the operator when zoe-data (or another auto-restarting Zoe unit, OTHER_UNITS) is crash-looping.
 
 WHY THIS EXISTS (2026-07-31): zoe-data restarted 37+ times over ~8 minutes with
 a corrupt vector index and nothing told anyone. The outage was discovered by a
@@ -204,6 +204,73 @@ def check(threshold: int, cooldown: int, dry_run: bool) -> int:
     return 2 if looping else 0
 
 
+# The other Restart= units whose silent loop is an outage (gap audit 2026-11-13: flue-zoe-telegram crash-looped 6,418
+# times over ~9 h on 2026-11-07 with no alert, because only zoe-data was watched). They have no /health of their own
+# here, so the signal is the restart counter alone; the threshold already ignores a single deploy or probe restart
+# (a probe's stop/start is not an automatic restart and never moves NRestarts). The alert reaches Telegram's HTTP API
+# directly with the bot's token, so it is delivered even while the bot PROCESS is the one looping.
+OTHER_UNITS = ("flue-zoe-telegram.service", "flue-zoe-brain-2x.service", "llama-server.service",
+               "kokoro-tts.service", "functiongemma-router.service", "github-runner.service")
+
+
+UNIT_WINDOW_S = 900   # restarts are counted over this window, not one tick: llama-server's ~130 s fail-and-restart cycle
+                      # is one restart per 2-min tick and would never reach the threshold within a single tick
+
+
+def check_units(units, threshold: int, cooldown: int, dry_run: bool, window_s: float = UNIT_WINDOW_S) -> int:
+    """Restart-counter loop check for ``units``; per-unit state under ``state["units"]``. A unit this host does not
+    have (no readable NRestarts) is skipped silently. A loop is ``threshold`` automatic restarts within ``window_s``.
+    An alert that Telegram did not take stays PENDING and is retried every tick until delivered, even after the
+    restart rate drops. Returns 2 if any unit is looping, else 0."""
+    state = _load_state()
+    per = state.setdefault("units", {})
+    now = time.time()
+    any_loop = False
+    for unit in units:
+        raw = _systemd_prop(unit, "NRestarts")
+        if not raw.isdigit():
+            continue
+        restarts = int(raw)
+        s = per.setdefault(unit, {})
+        prev = s.get("restarts")
+        if not isinstance(prev, int) or restarts < prev:          # first sight, or a counter reset: not a loop
+            s["hist"] = []
+        delta = restarts - prev if isinstance(prev, int) and restarts >= prev else 0
+        hist = [h for h in s.get("hist", []) if now - h[0] <= window_s] + ([[now, delta]] if delta else [])
+        s["hist"] = hist
+        recent = sum(h[1] for h in hist)
+        active = _systemd_prop(unit, "ActiveState")
+        settled = delta == 0 and active == "active"               # running, and no restart since the last tick
+        looping = recent >= threshold and not settled
+        any_loop = any_loop or looping
+        msg = None
+        if s.get("pending"):
+            msg = s["pending"]                                    # an undelivered loop alert is retried first
+        elif looping and now - s.get("last_alert_ts", 0) >= cooldown:
+            msg = (f"🔴 {unit} is crash-looping: restarted {recent}x in the last {int(window_s // 60)} min "
+                   f"(total {restarts}), ActiveState={active}.\nCheck: journalctl --user -u {unit}")
+        elif s.get("alerted") and settled:
+            msg = f"🟢 {unit} recovered (total restarts {restarts})."
+        if msg:
+            print(msg.replace("\n", " | "))
+            delivered = True if dry_run else _telegram(msg)
+            if not dry_run:
+                if msg.startswith("🔴"):
+                    if delivered:
+                        s["alerted"] = True
+                        s["last_alert_ts"] = now
+                        s.pop("pending", None)
+                    else:
+                        s["pending"] = msg
+                elif delivered:
+                    s["alerted"] = False
+                    s.pop("last_alert_ts", None)
+        s["restarts"] = restarts
+    if not dry_run:
+        _save_state(state)
+    return 2 if any_loop else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD,
@@ -212,11 +279,18 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="evaluate and print, send nothing, persist nothing")
     args = ap.parse_args(argv)
+    rc = 0
     try:
-        return check(args.threshold, args.cooldown, args.dry_run)
+        rc = check(args.threshold, args.cooldown, args.dry_run)
     except Exception as exc:
         print(f"crash-watch FAILED: {exc}", file=sys.stderr)
-        return 1
+        rc = 1
+    try:                    # independent of zoe-data's result: one unit's failure never hides another's loop
+        rc = max(rc, check_units(OTHER_UNITS, args.threshold, args.cooldown, args.dry_run))
+    except Exception as exc:
+        print(f"crash-watch FAILED (other units): {exc}", file=sys.stderr)
+        rc = max(rc, 1)
+    return rc
 
 
 if __name__ == "__main__":
