@@ -1291,7 +1291,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         want = set(ids)
         its = [{"id": it["id"], "path": it["path"], "chunks": [[c[0], c[1]] for c in got1[it["id"]]["chunks"]]} for it in chunked if it["id"] in want]
         if not its or deadline - clock() < 60:
-            skipped.setdefault(engine, "no_time")         # the pivot used the night: named as such, not as a voter that ran and returned nothing
+            vskip[engine] = "no_time"                      # the pivot used the night: named as such, not as a voter that ran and returned nothing
             return {"got": {}, "done": {}, "rc": None}
         return await one_pass(engine, its, diar="none", dl=deadline)
 
@@ -1303,11 +1303,12 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     vplan = plan_voters(durs, deadline - clock(), rt, second, thirds)
     third = vplan["third_engine"]
     vgot: dict = {}
+    vskip: dict = {}                       # production-voter outcomes, kept apart from ``skipped`` (which the evaluation contenders also write)
     for eng, ids in ((second, vplan["second"]), (third, vplan["third"])):
         if not eng:
             continue
         if not ids:
-            skipped.setdefault(eng, "no_time")                # planned onto no recording: the time left after the pivot reached none
+            vskip[eng] = "no_time"                             # planned onto no recording: the time left after the pivot reached none
             continue
         pv = await voter_pass(eng, ids)
         vgot[eng] = {k: v for k, v in pv["got"].items() if v.get("ok") and len(v.get("chunks") or []) == len(got1[k]["chunks"])}
@@ -1315,7 +1316,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
     complete = bool(chunked) and bool(vgot) and all(all(it["id"] in vgot.get(e, {}) for it in chunked) for e in [x for x in (second, third) if x]) and len(vgot) == len([x for x in (second, third) if x])
     evals = [e for e in evals if e not in voters] if complete else []             # the evaluation sample runs only when every recording got every voter
     res["engines"], res["eval_engines"] = voters, evals
-    miss = {e: skipped.get(e) or "no_result" for e in (second, third) if e and not vgot.get(e)}          # an expected voter that did not vote is NAMED with its reason, never silent
+    miss = {e: vskip.get(e) or skipped.get(e) or "no_result" for e in (second, third) if e and not vgot.get(e)}          # an expected voter that did not vote is NAMED with its reason, never silent
     if second and thirds and not third:
         miss["third"] = "no_budget"
     res["missing_voters"] = miss or None
