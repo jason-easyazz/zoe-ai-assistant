@@ -83,6 +83,11 @@ def _fakes(monkeypatch):
 
     monkeypatch.setattr(intent_router, "_music_assistant_play", _ma_unavailable)
 
+    async def _ma_idle(_room=None):  # ...and Zoe's music engine is playing nothing
+        return None
+
+    monkeypatch.setattr(intent_router, "_music_assistant_active_player", _ma_idle)
+
     import database
 
     async def _no_log(**_kwargs):
