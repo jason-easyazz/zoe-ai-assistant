@@ -73,6 +73,9 @@ The owner's answer to "three-voter production covers ~27 min of speech in a ~25 
    on as many of the important recordings as the time left reaches (`plan_voters`: the longest prefix that fits all three voters, then Parakeet alone down the list, the rest keep Qwen3 only; a recording needs the best third
    voter that covers everyone, else the one that covers most). **Important** = first-pass text with a household member's / named guest's name (+3), numbers (+2), times or dates (+2), commitment words (+2), or that feeds a pending
    day-review candidate (+4). Only recordings the pivot cannot reach even once carry to the next night.
+   The voters are costed on the SPEECH they are handed (the pivot's VAD chunks), not on the recording's length: the RTFs are per speech second and a pendant file is mostly silence.
+   A voter that got no time is reported `missing_voters: {<engine>: "no_time"}`; `"no_result"` means it RAN and returned nothing. With a backlog bigger than the night, the pivot uses
+   the whole budget and no voter runs (measured 2026-11-12, 500 pending / ~16 h of audio: 13 recordings, Qwen3 only) - by design under this decision.
 3. **Measured.** Each night the summary (and the NIGHT_JOB line, so the morning report) carries `speech_min`, `fused3_min`, `fused2_min`, `qwen_only_min`, `carried` and `carried_min`; the same numbers are in `state.json` `last.capacity`.
    That is the evidence for a separate pre-window slot later - not built; the owner's call.
 

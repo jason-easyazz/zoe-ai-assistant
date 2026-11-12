@@ -1291,17 +1291,23 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         want = set(ids)
         its = [{"id": it["id"], "path": it["path"], "chunks": [[c[0], c[1]] for c in got1[it["id"]]["chunks"]]} for it in chunked if it["id"] in want]
         if not its or deadline - clock() < 60:
+            skipped.setdefault(engine, "no_time")         # the pivot used the night: named as such, not as a voter that ran and returned nothing
             return {"got": {}, "done": {}, "rc": None}
         return await one_pass(engine, its, diar="none", dl=deadline)
 
     # ── passes 2 and 3: the other production voters, on the IMPORTANT recordings first, as far as the time left after the pivot reaches ──
     rank_of = {r["id"]: i for i, r in enumerate(rows)}
-    durs = [(it["id"], float(by_id[it["id"]]["duration_s"] or 0)) for it in sorted(chunked, key=lambda it: rank_of[it["id"]])]
+    # costed on the SPEECH a voter is handed (the pivot's VAD chunks), not the recording's length: the RTFs are per speech second and a pendant file is mostly
+    # silence (measured 2026-11-12: 22.5 min of speech in 63.5 min of audio), so costing the duration under-planned the voters about 2.8x
+    durs = [(it["id"], sum(max(0.0, float(c[1]) - float(c[0])) for c in got1[it["id"]]["chunks"])) for it in sorted(chunked, key=lambda it: rank_of[it["id"]])]
     vplan = plan_voters(durs, deadline - clock(), rt, second, thirds)
     third = vplan["third_engine"]
     vgot: dict = {}
     for eng, ids in ((second, vplan["second"]), (third, vplan["third"])):
-        if not eng or not ids:
+        if not eng:
+            continue
+        if not ids:
+            skipped.setdefault(eng, "no_time")                # planned onto no recording: the time left after the pivot reached none
             continue
         pv = await voter_pass(eng, ids)
         vgot[eng] = {k: v for k, v in pv["got"].items() if v.get("ok") and len(v.get("chunks") or []) == len(got1[k]["chunks"])}

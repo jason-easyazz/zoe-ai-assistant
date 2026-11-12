@@ -306,10 +306,11 @@ def test_an_over_budget_night_keeps_the_pivot_and_drops_the_other_voters_and_the
 
     def runner(*a, **k):
         rc = inner(*a, **k)
-        t[0] += 1300.0                                                                               # the pivot's pass took its measured time (2600 s x 0.42 = 1092 s plus loads)
+        t[0] += 1420.0                                                                               # the pivot's pass used the night (2600 s of audio, ~0.5 s per second measured with loads): under 60 s left
         return rc
     out = run(rp.run_night(budget_s=1500, runner=runner, clock=lambda: t[0]))
     assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == [] and out["model"] == PIV     # the pivot is never swapped out; no time was left for a voter
+    assert out["missing_voters"] == {PAR: "no_time", "third": "no_budget"}                              # named for what it was - no time left - not "no_result" (a voter that ran and returned nothing)
     assert out["qwen_only_min"] > 0 and out["fused3_min"] == 0 and out["carried_min"] == 0                # ... and the recording still got its Qwen3 text
     assert rows(renv)[0]["transcript"] == "the bat sat on the mat"                                    # the pivot alone
 
@@ -321,6 +322,7 @@ def test_a_missing_second_voter_means_no_vote_no_evaluation_and_the_pivot_text(r
     out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, calls, fail=(PAR,))))
     assert [c["asr"] for c in calls] == [PIV, PAR, DIS]                                              # no evaluation pass: production did not finish
     assert rows(renv)[0]["transcript"] == "the bat sat on the mat" and out["sample_speech_s"] == 0      # two voters (pivot + distil) cannot outvote the pivot
+    assert out["missing_voters"] == {PAR: "no_result"}                                               # it RAN and returned nothing: that one is "no_result"
     led = [json.loads(x) for x in (tmp_path / "repass" / "ledger.jsonl").read_text().splitlines()]
     assert {x["model"] for x in led} == {PIV, DIS}
 
@@ -414,7 +416,9 @@ def _two_recordings(renv, a_text, b_text, dur=1000):
     return ids
 
 
-def test_the_pivot_reads_everything_important_first_and_the_voters_only_what_the_time_left_reaches(renv, monkeypatch):
+def test_the_voters_are_costed_on_the_speech_they_are_handed_not_the_recording_length(renv, monkeypatch):
+    """2026-11-12 real run: a pendant file is mostly silence and the voters only get the pivot's VAD chunks; costing them on duration_s (with per-SPEECH-second RTFs)
+    under-planned them about 2.8x. Two 1000 s recordings holding 4 s of speech each: the 215 s the pivot left covers all three voters on both."""
     on(monkeypatch, evals="none")
     old_boring, new_important = _two_recordings(renv, "uh nothing much going on here", "remind me to call Sam tomorrow at 5:30")
     monkeypatch.setattr(rp, "household_names", lambda db, uid: _async(["Sam"]))
@@ -428,11 +432,13 @@ def test_the_pivot_reads_everything_important_first_and_the_voters_only_what_the
         return rc
     out = run(rp.run_night(budget_s=1100, runner=runner, clock=lambda: t[0]))
     assert calls[0]["asr"] == PIV and calls[0]["ids"] == [new_important, old_boring]                      # Qwen3 reads ALL the audio, the important recording first
-    assert [c["asr"] for c in calls] == [PIV, PAR] and calls[1]["ids"] == [new_important]                 # the time left reaches Parakeet on ONE recording: the important one
-    assert out["done"] == 2 and out["carried"] == 0 and out["engines"] == [PIV, PAR]
-    assert out["fused2_min"] > 0 and out["qwen_only_min"] > 0 and out["fused3_min"] == 0 and out["carried_min"] == 0
-    assert abs(out["speech_min"] - (out["fused2_min"] + out["qwen_only_min"])) < 0.02
-    assert all(r["transcript"] for r in rows(renv))                                                        # nobody is left without Qwen3 text
+    assert [c["asr"] for c in calls] == [PIV, PAR, DIS] and calls[1]["ids"] == [new_important, old_boring] == calls[2]["ids"]
+    assert out["done"] == 2 and out["carried"] == 0 and out["engines"] == [PIV, PAR, DIS] and out["missing_voters"] is None
+    assert out["fused3_min"] > 0 and out["qwen_only_min"] == 0 and out["fused2_min"] == 0
+    # the control: costed on duration (1000 s each) the same 215 s reached Parakeet on the important one only
+    rt = {**rp.DEFAULT_RTF}
+    assert rp.plan_voters([(new_important, 1000.0), (old_boring, 1000.0)], 1100 - 45 - 840, rt, PAR, [DIS])["second"] == [new_important]
+    assert rp.plan_voters([(new_important, 4.0), (old_boring, 4.0)], 1100 - 45 - 840, rt, PAR, [DIS])["third"] == [new_important, old_boring]
 
 
 def test_a_recording_the_pivot_cannot_reach_carries_to_the_next_night_and_the_report_says_how_much(renv, monkeypatch):
