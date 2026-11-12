@@ -226,14 +226,14 @@ _BUILDS: "dict[str, asyncio.Task]" = {}
 
 
 _VECS: "dict[tuple, tuple[int, Any]]" = {}      # (member, row id) -> (text hash, unit vector): never shared across members
-_QUERY_EMBEDS = {"inflight": 0}                  # turn embeds still running in a worker thread (a timeout does not stop one)
+_QUERY_EMBEDS: dict = {"job": None}              # the last turn embed's future: still running = the arm is busy (a timeout does not stop a worker)
 
 
 def _reset_state() -> None:
     _INDEX.clear()
     _BUILDS.clear()
     _VECS.clear()
-    _QUERY_EMBEDS["inflight"] = 0
+    _QUERY_EMBEDS["job"] = None
 
 
 def _embed(texts: list) -> Any:
@@ -368,12 +368,9 @@ def _nearest(vecs: Any, message: str, k: int) -> list:
     the sort all stay off the event loop."""
     import numpy as np
 
-    try:
-        sims = vecs @ _embed([message])[0]
-        top = np.argsort(-sims)[:k]
-        return [(int(j), float(sims[j])) for j in top]
-    finally:
-        _QUERY_EMBEDS["inflight"] -= 1
+    sims = vecs @ _embed([message])[0]
+    top = np.argsort(-sims)[:k]
+    return [(int(j), float(sims[j])) for j in top]
 
 
 async def _similar(ix: _Index, message: str, taken: set) -> list:
@@ -382,15 +379,14 @@ async def _similar(ix: _Index, message: str, taken: set) -> list:
     embed at a time: a timeout cannot stop its worker thread, so while one is still running the next turn skips the arm instead
     of starting another (work never piles up behind a slow model)."""
     try:
-        if ix.vecs is None or not ix.rows or _QUERY_EMBEDS["inflight"] > 0:
+        prev = _QUERY_EMBEDS["job"]
+        if ix.vecs is None or not ix.rows or (prev is not None and not prev.done()):
             return []
-        _QUERY_EMBEDS["inflight"] += 1          # released by the worker itself, whenever it finishes
-        try:
-            job = asyncio.to_thread(_nearest, ix.vecs, message, MAX_ROWS * 3)
-        except BaseException:
-            _QUERY_EMBEDS["inflight"] -= 1
-            raise
-        near = await asyncio.wait_for(job, timeout=EMBED_TIMEOUT_S)
+        # the FUTURE is the busy mark: done when the worker returns, raises, or is cancelled before it ever starts, so nothing
+        # can leave the arm switched off. shield: this turn's timeout (or cancellation) must not cancel the mark itself.
+        job = _QUERY_EMBEDS["job"] = asyncio.get_running_loop().run_in_executor(None, _nearest, ix.vecs, message, MAX_ROWS * 3)
+        job.add_done_callback(lambda f: f.cancelled() or f.exception())      # a late failure is consumed, never "never retrieved"
+        near = await asyncio.wait_for(asyncio.shield(job), timeout=EMBED_TIMEOUT_S)
         floor = similar_floor()
         return [(sim, ix.rows[j][0]) for j, sim in near if sim >= floor and ix.rows[j][0].id not in taken]
     except Exception as exc:  # noqa: BLE001 - a timeout included

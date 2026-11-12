@@ -311,6 +311,11 @@ def _paste_cut(s: str) -> tuple:
     return cut, sigs, kind, structural
 
 
+#: who3 can only see the word before the verb; when that word is a conjunction the real subject opens the sentence
+_CONJ = frozenset({"and", "but", "then", "so", "also", "just"})
+_OWN_SUBJECT_RE = re.compile(r"\s*(?:i|we)\b", re.I)
+
+
 def _speech_spans(head: str) -> list:
     """``(start, end, speaker)`` regions of ``head`` that are someone else's DIRECT speech (or a
     quoted instruction addressed to the assistant, speaker ``pasted_content``)."""
@@ -327,7 +332,9 @@ def _speech_spans(head: str) -> list:
     close_re = re.compile(r"[\"”]")
     stop_re = re.compile(r"[.!?](?=\s|$)|\n")
     for m in _ATTR_RE.finditer(head):
-        who = m.group("who") or m.group("who2") or m.group("who3")
+        who = m.group("who") or m.group("who3") or m.group("who2")
+        if (m.group("who3") or "").lower() in _CONJ and _OWN_SUBJECT_RE.match(head[_sentence_start(head, m.start()): m.start()]):
+            continue                      # 'I rang and said, "..."': the speaker is the owner, the conjunction is not a person
         i = m.end()
         if m.group("q") or m.group("q2") or m.group("q3"):
             close = close_re.search(head, i + (1 if m.group("q2") else 0))

@@ -689,3 +689,11 @@ def test_quoted_speech_after_a_comma_is_not_the_owners(turn):
 def test_negative_control_the_owners_own_sentence_is_kept():
     own = own_words.analyze("I am moving to Halvercombe next month.")
     assert own.reasons == () and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['I rang and said, "I am moving to Halvercombe next month."',
+                                  'I rang and said "I am moving to Halvercombe next month."',
+                                  'We called and said, "We are moving to Halvercombe next month."'])
+def test_the_owners_own_quoted_words_after_a_conjunction_are_kept(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text

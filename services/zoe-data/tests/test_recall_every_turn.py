@@ -660,7 +660,7 @@ def test_similar_on_finds_the_row_an_oblique_turn_needs(similar):
     assert sel.ids == ("m_fish_0003",) and sel.sim_in == 1 and sel.sim == 2 and sel.sim_top > 0.5   # 2 rows were near; 1 passed the walls
     blk = sel.block()
     assert blk.startswith(rt.BLOCK_OPEN_SIMILAR + "\n- ") and blk.endswith("\n" + rt.BLOCK_CLOSE)
-    assert rt.BLOCK_OPEN_SIMILAR.startswith("[MEMORY CONTEXT")     # the sidecar elides it like any memory block
+    assert blk.startswith("[MEMORY CONTEXT") and blk != rt.BLOCK_OPEN + blk[len(rt.BLOCK_OPEN):]   # elidable, and not the lexical opener
     assert similar[-1] == 1                                        # one embed of the turn; the rows came from the index
 
 
@@ -807,7 +807,7 @@ def test_similar_skips_while_an_earlier_turn_embed_is_still_running(monkeypatch)
         n = len(started)
         release.set()
         for _ in range(100):
-            if rt._QUERY_EMBEDS["inflight"] == 0:
+            if rt._QUERY_EMBEDS["job"].done():
                 break
             await asyncio.sleep(0.02)
         monkeypatch.setattr(rt, "_embed", fake_embed)
