@@ -1240,7 +1240,8 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
             if seg_ids and spk_state == "tagged":
                 try:                          # learning is optional; the transcript and its segments are already safe
                     import omi_diarize
-                    learned = await omi_voices.learn(db, uid, seg_ids, segs, model_id=model_id, you_min=omi_diarize.thresholds()[0])
+                    learned = await omi_voices.learn(db, uid, seg_ids, segs, model_id=model_id, you_min=omi_diarize.thresholds()[0])     # the PANEL bar on purpose: under the pendant bars an
+                    # 'unsure' line (0.35-0.6) is never <= 0.251, so only 'other' (< 0.35) is held - the wearer's tail is never kept as a bystander's
                     if learned["stored"]:
                         logger.info("OMI_VOICES_LEARNED id=%s stored=%d suggested=%d", rid, learned["stored"], learned["suggested"])
                 except Exception as exc:  # noqa: BLE001
@@ -1284,7 +1285,7 @@ async def _diarise(uid: str, path: str, now: Optional[datetime]) -> tuple[Option
             profile, channel = (await omi_repass.wearer_print(db, uid) if mid == omi_repass.MODEL_ID else None), "pendant"
             if profile is None:
                 profile, channel = await omi_voices.wearer_profile(db, uid, mid), "panel"
-        turns = await omi_diarize.diarise(path, embedder, profile, gate=lambda: _patient_gate(now))
+        turns = await omi_diarize.diarise(path, embedder, profile, gate=lambda: _patient_gate(now), channel=channel)
         return turns, ("tagged" if profile is not None else "unverified"), mid, (channel if profile is not None else None)
     except GateClosed:
         raise

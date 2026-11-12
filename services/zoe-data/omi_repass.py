@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 MODES = ("off", "shadow", "on")
 import speaker_models                              # noqa: E402 - the panel's own speaker model: ONE speaker space for the panel, named guests, the first pass and this pass
 import omi_repass_who as who                       # noqa: E402
+import omi_diarize                                 # noqa: E402 - the first pass's pendant-channel bars (one shoulder for the first pass and the relabel)
 
 MODEL_ID = speaker_models.RESNET34_MODEL_ID        # the speaker-space tag on every embedding / voiceprint this pass writes: the SAME model as the panel (WeSpeaker R34 int8, c1)
 MAX_PASS_ATTEMPTS = 3
@@ -93,10 +94,9 @@ WEARER_LINK = 0.6                                  # the greedy cosine linkage b
 STORED_MIN_RECORDINGS = 10
 STORED_MAX_VOICES = 3
 STORED_PER_RECORDING = 2
-#: ``relabel_stored_from_print``: a stored segment reads "me" only at this cosine to the CONFIRMED pendant print or above. Measured 2026-11-12 (counts only) - every stored segment against a
-#: print built from the top voice's 20 nearest windows: a continuous distribution with its mode at 0.2-0.3 and a separate shoulder from 0.6 up (251 segments in 102 recordings, 3.7 h of
-#: speech; 391 at >= 0.5, i.e. 0.5-0.6 is still the bulk's tail). 0.6 is the clean shoulder: a false "me" is the worse error, so the line between them stays unlabelled rather than guessed.
-RELABEL_YOU_MIN = 0.6
+#: ``relabel_stored_from_print``: a stored segment reads "me" only at this cosine to the CONFIRMED pendant print or above - the SAME provisional shoulder the first pass uses against
+#: that print (``omi_diarize.PENDANT_YOU_MIN``, measurement in its comment): a false "me" is the worse error, so the band below it stays unlabelled rather than guessed.
+RELABEL_YOU_MIN = omi_diarize.PENDANT_YOU_MIN
 _NAME_OK = re.compile(r"^[A-Za-z][A-Za-z'\- ]{0,38}$")
 _ST_OK = "('done', 'empty_transcript')"
 

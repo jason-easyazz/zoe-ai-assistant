@@ -42,6 +42,12 @@ MODES = ("off", "shadow", "on")
 #: recall over the short-group 0.309 (knowledge doc, cell D). A false ``you`` is the worse error. ``other`` is the design's placeholder.
 #: Both are re-derived on the pendant channel from the owner's per-line corrections.
 YOU_MIN, OTHER_MAX = 0.351, 0.15
+#: PROVISIONAL pendant-channel bars, used ONLY while the turn is scored against the owner's CONFIRMED pendant print (``thresholds("pendant")``); the panel-profile path keeps
+#: the two bars above unchanged. Measured 2026-11-12 on the live box (counts only), every stored segment against a print built from the top stored voice: the bulk of all
+#: 2,156 sits at 0.2-0.3 with a tail to 0.4; 819 segments score >= 0.35 (173 recordings, 8.1 h), 486 >= 0.45, 391 >= 0.5, 305 >= 0.55, 251 >= 0.6 (102 recordings, 3.7 h). The
+#: panel 0.351 would mark ~3x too many lines as the wearer, so "you" starts at the clean shoulder (0.6) and "other" below the tail (0.35); between is "unsure". PROVISIONAL because
+#: that top voice was not yet confirmed as the wearer: re-measure once the owner has confirmed a print (the confirmed windows and owner-labelled lines are then ground truth).
+PENDANT_YOU_MIN, PENDANT_OTHER_MAX = 0.6, 0.35
 WINDOW_S, HOP_S = 2.0, 1.0
 MIN_EMBED_S = 1.0                  # a speech region shorter than this gets no window
 MIN_ON_S, MIN_OFF_S = 0.3, 0.5     # sherpa-onnx defaults: drop blips, bridge short pauses
@@ -59,7 +65,10 @@ def mode() -> str:
     return raw if raw in MODES else "off"
 
 
-def thresholds() -> tuple[float, float]:
+def thresholds(channel: str = "panel") -> tuple[float, float]:
+    """(you_min, other_max) for the wearer reference's channel: ``pendant`` = the confirmed pendant print (PROVISIONAL bars above), anything else = the panel profile."""
+    if channel == "pendant":
+        return env_float("ZOE_OMI_TAG_PENDANT_YOU_MIN", PENDANT_YOU_MIN), env_float("ZOE_OMI_TAG_PENDANT_OTHER_MAX", PENDANT_OTHER_MAX)
     return env_float("ZOE_OMI_TAG_YOU_MIN", YOU_MIN), env_float("ZOE_OMI_TAG_OTHER_MAX", OTHER_MAX)
 
 
@@ -303,15 +312,16 @@ def _quietest(w: Any, t: float, lo: float, hi: float, span: float = SNAP_S) -> f
 
 
 async def diarise(path: str, embedder: Any, profile: Optional[np.ndarray], *, gate: Optional[Callable] = None,
-                  vad_factory: Optional[Callable] = None) -> list[Segment]:
+                  vad_factory: Optional[Callable] = None, channel: str = "panel") -> list[Segment]:
     """The pass over one WAV (streamed: one second for VAD, one window for an embedding - never the whole file). ``profile`` is
-    the wearer's centred unit vector in the SAME model (None: every segment is ``unverified``). ``gate()`` (sync or async) is
+    the wearer's centred unit vector in the SAME model (None: every segment is ``unverified``); ``channel`` is where it came from
+    (``pendant`` = the confirmed pendant print, labelled with the pendant bars). ``gate()`` (sync or async) is
     asked before each batch of windows; a closed gate raises the transcriber's ``GateClosed``."""
     from omi_recordings import GateClosed
 
     if vad_factory is None:
         vad_factory = own_vad
-    you_min, other_max = thresholds()
+    you_min, other_max = thresholds(channel)
     with wave.open(path) as w:
         dur = w.getnframes() / RATE
         vad = vad_factory()
