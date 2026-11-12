@@ -124,8 +124,15 @@ def fields(line: str) -> dict[str, str]:
     return out
 
 
+#: logging_setup.TrafficClassFormatter suffixes every line written in a NON-household context with its class
+#: (harness, probe, ci, ...). Any class but an explicit household one is not the household's traffic.
+_TRAFFIC_RE = re.compile(r"(?:^|\s)traffic=([A-Za-z_-]+)")
+_HOUSEHOLD_TRAFFIC = frozenset({"household"})
+
+
 def is_harness(line: str, f: dict[str, str]) -> bool:
-    if "traffic=harness" in line:
+    m = _TRAFFIC_RE.search(line)
+    if m and m.group(1).lower() not in _HOUSEHOLD_TRAFFIC:
         return True
     user = f.get("user")
     if user is not None and SYNTHETIC_USER_RE.match(user.strip()):
@@ -845,17 +852,25 @@ def durable_groups(palace: str, since: dt.datetime, until: dt.datetime) -> list[
         con.close()
 
 
+#: Pendant writers land in the same collection (omi_review_apply, the day review). They are the PENDANT supply channel
+#: and are counted apart, so better pendant harvesting never reads as better panel/chat extraction.
+PENDANT_SOURCES = frozenset({"omi_review", "omi_day_review"})
+
+
 def summarise_durable(groups, member_users: set[str]) -> dict:
-    n = approved = 0
+    n = approved = pendant = 0
     by_source: dict[str, int] = {}
     for uid, source, status, cnt in groups:
         if uid not in member_users:
+            continue
+        if source in PENDANT_SOURCES:
+            pendant += cnt
             continue
         n += cnt
         approved += cnt if status == "approved" else 0
         label = source if source in SOURCE_ALLOWLIST else "other"
         by_source[label] = by_source.get(label, 0) + cnt
-    return {"rows": n, "approved": approved, "by_source": by_source}
+    return {"rows": n, "approved": approved, "by_source": by_source, "pendant_rows_excluded": pendant}
 
 
 # ---------------------------------------------------------------------------
@@ -941,7 +956,8 @@ def build(args) -> dict:
                           f"{rate(d7['rows'], short_days)} over last {short_days:.1f} d ({d7['rows']} rows)",
                           n=d30["rows"], window=lw,
                           method=(f"MemPalace mempalace_drawers, one GROUP BY (user_id, source, status), member user_id, "
-                                  f"added_ts/added_at in window; by source: {src or 'none'}"),
+                                  f"added_ts/added_at in window; pendant writers ({', '.join(sorted(PENDANT_SOURCES))}) excluded: "
+                                  f"{d30['pendant_rows_excluded']}; by source: {src or 'none'}"),
                           data={"long": d30, "short": d7}))
 
     if db:

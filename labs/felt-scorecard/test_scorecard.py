@@ -49,6 +49,11 @@ def test_parse_ts_with_offset_and_window():
 
 def test_harness_split_follows_lane1_rule():
     assert sc.is_harness("FLUE_TOOLS session=x traffic=harness", {"session": "x"})
+    # probe and CI turns can run as a real member with no replay session prefix: the class tag is the only signal (Codex on #2424)
+    assert sc.is_harness("PROVENANCE_REPLY user=realmember served=1 traffic=probe", {"user": "realmember"})
+    assert sc.is_harness("PROVENANCE_REPLY user=realmember served=1 traffic=ci", {"user": "realmember"})
+    assert not sc.is_harness("PROVENANCE_REPLY user=realmember served=1 traffic=household", {"user": "realmember"})
+    assert not sc.is_harness("PROVENANCE_REPLY user=realmember served=1 nottraffic=probe", {"user": "realmember"})
     assert sc.is_harness("x", {"user": "demo_bar_abc123"})
     assert sc.is_harness("x", {"session": "qa-sweep-1"})
     assert sc.is_harness("x", {"session": "replay-ab12"})
@@ -493,3 +498,14 @@ def test_empty_or_negative_window_exits_2_before_any_read(argv, monkeypatch):
         sc.main(argv)
     assert exc.value.code == 2
     assert sc.rate(5, 0) == "unmeasured (empty window)"
+
+
+def test_pendant_writers_are_not_panel_supply():
+    """A pendant fact approved into the same collection (omi_review / omi_day_review) is the pendant channel's row: it must not
+    raise the panel/chat total or hide under `other` (Codex on #2424)."""
+    groups = [(MEMBER, "digest", "approved", 2), (MEMBER, "omi_review", "approved", 5), (MEMBER, "omi_day_review", "approved", 1),
+              (MEMBER, "something_new", "pending", 1)]
+    d = sc.summarise_durable(groups, {MEMBER})
+    assert d["rows"] == 3 and d["approved"] == 2 and d["pendant_rows_excluded"] == 6
+    assert d["by_source"] == {"digest": 2, "other": 1}
+
