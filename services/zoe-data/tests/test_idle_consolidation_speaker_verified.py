@@ -66,7 +66,21 @@ def test_speaker_rejected_turn_is_never_mined_as_the_members_words(monkeypatch):
     stored, seen, conn = _case(monkeypatch, turns)
     assert stored == 0 and seen["ingest"] == []
     assert all("Neil" not in t for t in seen["extract"])
-    assert conn.executed, "the watermark still advances: a rejected turn is not retried forever"
+    wm = [a for q, a in conn.executed if "memory_consolidation_state" in q]
+    assert wm and wm[0][0] == "sess-sv" and wm[0][3] == 3, "the watermark still advances over all rows"
+
+
+def test_transcript_query_projects_metadata_so_the_gate_mark_reaches_the_filter():
+    """The filter reads r['metadata']; the real row query must select it (a fake conn would hide its absence)."""
+    seen = {}
+
+    class _C:
+        async def fetch(self, q, *a):
+            seen["q"] = q
+            return []
+
+    asyncio.run(mic._fetch_transcript_rows(_C(), "s", None))
+    assert "metadata" in seen["q"].split("FROM")[0]
 
 
 def test_verified_or_unmarked_turn_still_becomes_a_fact(monkeypatch):
