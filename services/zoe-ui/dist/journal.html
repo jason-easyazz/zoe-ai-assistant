@@ -2120,7 +2120,7 @@
                 // Deprecated: use journal-api.js loader instead
                 const session = window.zoeAuth?.getCurrentSession?.();
                 const userId = session?.user_info?.user_id || session?.user_id;
-                const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+                const qs = '';
                 const response = await fetch(`/api/journal/entries${qs}`, {
                     method: 'GET',
                     headers: { 'Accept': 'application/json' }
@@ -2374,7 +2374,7 @@
             try {
                 const session = window.zoeAuth?.getCurrentSession?.();
                 const userId = session?.user_info?.user_id || session?.user_id;
-                const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+                const qs = '';
                 const response = await fetch(`/api/journal/${window.currentEntry.id}${qs}`, {
                     method: 'DELETE'
                 });
@@ -2706,7 +2706,6 @@
         })();
     </script>
     <!-- Mini Player for persistent music playback -->
-    <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor -->
 </body>
 </html>

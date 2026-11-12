@@ -4721,7 +4721,31 @@
                 appContainer.classList.add('month-view-active');
             }
             updateView();
+            openDeepLinkedEvent();
         });
+
+        // Phone hand-off: `calendar.html?event=<id>` opens that event's editor. The id is looked up through the
+        // API (GET /api/calendar/events/{id}, scoped to the signed-in member), the calendar moves to its date, and
+        // the editor opens on the event as the page knows it. An id that is not found just leaves the month view.
+        async function openDeepLinkedEvent() {
+            let id = null;
+            try { id = new URLSearchParams(window.location.search).get('event'); } catch (_) { /* no query */ }
+            if (!id) return;
+            const find = () => events.find(e => String(e.id) === String(id));
+            if (!find()) {
+                try {
+                    const one = await authedApiRequest(`/calendar/events/${encodeURIComponent(id)}`);
+                    const ev = (one && one.event) || one;
+                    if (ev && ev.start_date) {
+                        currentDate = parseEventDate(ev);
+                        selectedMonthDay = new Date(currentDate);
+                        await loadEvents();
+                    }
+                } catch (_) { /* not found or not yours: stay on the month view */ }
+            }
+            const hit = find();
+            if (hit) openEventPanel(hit);
+        }
     </script>
     
         <!-- Load Zoe Orb Component -->
@@ -4753,7 +4777,6 @@
         document.head.appendChild(orbScript);
     </script>
     <!-- Mini Player for persistent music playback -->
-    <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor -->
 </body>
 </html>

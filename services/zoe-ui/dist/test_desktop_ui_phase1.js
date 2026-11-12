@@ -136,16 +136,15 @@ function chatAgents() {
   // 6. Chat cannot force a turn into a retired runtime.
   const chat = read('chat.html');
   for (const id of ['agentPillHermes', 'agentPillOpenclaw']) assert(!chat.includes('id=' + JSON.stringify(id)), 'chat.html still renders ' + id);
-  const pre = 'let selectedAgent = ' + JSON.stringify('auto') + ';\n';
-  const post = '\n; selectAgent(' + JSON.stringify('hermes') + '); const a = selectedAgent; selectAgent(' + JSON.stringify('openclaw') + '); ({ a, b: selectedAgent })';
-  const sel = vm.runInNewContext(pre + extractFunction(chat, 'selectAgent') + post, { document: { getElementById: () => null } });
-  assert.deepStrictEqual({ a: sel.a, b: sel.b }, { a: 'auto', b: 'auto' });
+  // The agent picker itself is gone (2026-11-13): no selectAgent / selectedAgent and no retired-runtime label.
+  assert(!/function\s+selectAgent\s*\(/.test(chat) && !/\bselectedAgent\b/.test(chat), 'chat.html still carries the agent picker');
+  assert(!/>OpenClaw<|'OpenClaw'|'Hermes Agent'|Escalating to OpenClaw/.test(chat), 'chat.html still shows a retired runtime name');
   // ...and the request body carries no lane override at all (the server dropped force_openclaw / force_agent).
   for (const page of ['chat.html', 'touch/chat.html']) {
     const src = read(page);
     for (const dead of ['force_openclaw', 'force_agent', 'forceOpenClawMode', 'tryPromptWithOpenClaw']) assert(!src.includes(dead), page + ' still carries ' + dead);
   }
-  ok('chat shows no Hermes/OpenClaw pill, selectAgent() maps any agent to Zoe, and no page sends a lane override');
+  ok('chat shows no Hermes/OpenClaw pill or label, has no agent picker, and no page sends a lane override');
 }
 
 function calendarAndJournal() {
@@ -165,9 +164,116 @@ function calendarAndJournal() {
   ok('journal makes no /api/journeys call and ships no fake entries');
 }
 
+// ── Gap audit 2026-11-13 (lane B): controls that always failed, or said "saved" for a no-op ──────────────────
+async function auditFixes() {
+  const settings = read('settings.html');
+  const sysPy = fs.readFileSync(path.join(root, '..', '..', 'zoe-data', 'routers', 'system.py'), 'utf8');
+
+  // 9. Members can be marked as a child (zoe-auth's built-in roles), with a plain confirmation.
+  for (const sel of ['new-user-role', 'edit-user-role']) {
+    const m = new RegExp('<select id="' + sel + '">([\\s\\S]*?)</select>').exec(settings);
+    assert(m, 'missing select ' + sel);
+    for (const role of ['user', 'family_member', 'child', 'admin', 'guest']) {
+      assert(m[1].includes('value="' + role + '"'), sel + ' does not offer role ' + role);
+    }
+  }
+  const asked = [];
+  const env = { confirm: (msg) => { asked.push(msg); return true; }, roleLabel: (r) => r };
+  const crc = vm.runInNewContext(extractFunction(settings, 'confirmRoleChange') + '; confirmRoleChange', env);
+  assert.strictEqual(crc('Sam', 'user', 'user'), true); assert.strictEqual(asked.length, 0, 'an unchanged role must not ask');
+  crc('Sam', 'user', 'child'); assert(/child-safety/.test(asked[0] || ''), 'marking a child must explain the child-safety rules');
+  crc('Sam', 'child', 'user'); assert(/stop applying/.test(asked[1] || ''), 'un-marking a child must say the rules stop');
+  // saveUser sends a role ONLY when it changed (a legacy role is never rewritten by an unrelated edit).
+  const puts = [];
+  const fields = { 'edit-user-id': { value: 'u1' }, 'edit-user-role': { value: 'user' }, 'edit-user-email': { value: '' }, 'edit-user-active': { value: 'true' } };
+  const sEnv = {
+    document: { getElementById: (id) => fields[id] }, usersById: { u1: { user_id: 'u1', username: 'Sam', role: 'user' } },
+    confirmRoleChange: () => true, apiCall: async (m, u, b) => { puts.push({ m, u, b }); return {}; },
+    toast() {}, closeModal() {}, loadUsers() {}, encodeURIComponent,
+  };
+  const saveUser = vm.runInNewContext(extractFunction(settings, 'saveUser') + '; saveUser', sEnv);
+  await saveUser();
+  assert(!('role' in puts[0].b) && puts[0].b.email === undefined, 'unchanged role / empty email must not be sent');
+  fields['edit-user-role'].value = 'child';
+  await saveUser();
+  assert.strictEqual(puts[1].b.role, 'child');
+  ok('Settings > Users offers Child and Family member, confirms a child-role change in plain words, and sends a role only when it changed');
+
+  // 10. Settings > Display reads and writes the API's own field names, per panel, and shows what the server stored.
+  const keys = vm.runInNewContext(/const DISPLAY_FIELDS = (\[[\s\S]*?\]);/.exec(settings)[1] + '.map(f => f.key)', {});
+  const defaults = /_DEFAULT_DISPLAY_PREFS = \{([\s\S]*?)\n\}/.exec(sysPy)[1];
+  for (const k of keys) assert(defaults.includes('"' + k + '"'), 'display field ' + k + ' is not an API preference');
+  for (const dead of ['auto_dim_seconds', 'displayPrefs.brightness', 'displayPrefs.screensaver']) assert(!settings.includes(dead), 'Settings still uses the placebo field ' + dead);
+  const sent = [];
+  const els = { 'display-fields': {} };
+  for (const k of keys) els['disp-' + k] = { value: /night_(start|end)/.test(k) ? '22:00' : '30', checked: true };
+  const dEnv = {
+    document: { getElementById: (id) => els[id] || null }, DISPLAY_FIELDS: vm.runInNewContext(/const DISPLAY_FIELDS = (\[[\s\S]*?\]);/.exec(settings)[1], {}),
+    displayDevice: 'panel-a', apiCall: async (m, u, b) => { sent.push({ m, u, b }); return { preferences: { day_brightness: 30 } }; },
+    renderDisplayFields: (p) => { dEnv.rendered = p; }, toast: (msg, t) => { dEnv.toasted = [msg, t]; }, parseInt,
+  };
+  const saveDisplay = vm.runInNewContext(extractFunction(settings, 'saveDisplayPrefs') + '; saveDisplayPrefs', dEnv);
+  await saveDisplay();
+  assert.strictEqual(sent[0].u, '/api/system/display/preferences');
+  assert.strictEqual(sent[0].b.device_id, 'panel-a');
+  assert.strictEqual(sent[0].b.preferences.day_brightness, 30);
+  assert.deepStrictEqual(dEnv.rendered, { day_brightness: 30 }, 'the page must show what the server stored');
+  dEnv.apiCall = async () => { throw new Error('HTTP 500'); };
+  await saveDisplay();
+  assert.strictEqual(dEnv.toasted[1], 'error', 'a failed save must say so');
+  ok('Settings > Display uses the API field names, saves per panel, shows the stored values and reports a failure');
+
+  // 11. Settings > System reads the fields the API returns (no more rows of dashes).
+  const card = { innerHTML: '' };
+  const yEnv = {
+    document: { getElementById: () => card }, escHtml: (x) => String(x),
+    apiCall: async (m, u) => (u === '/api/system/platform'
+      ? { platform: 'zoe-data', version: '1.0.0', engine: 'flue', architecture: 'aarch64' }
+      : { cpu: { percent: 12.5 }, memory: { percent: 40, total_bytes: 16 * 1073741824 }, disk: { percent: 61, total_bytes: 1073741824 },
+          uptime_seconds: 90061, services: [{ id: 'db', name: 'Database', status: 'ok' }] }),
+  };
+  await vm.runInNewContext(extractFunction(settings, 'loadSystemInfo') + '; loadSystemInfo', yEnv)();
+  for (const want of ['aarch64', 'flue', '12.5%', '40% of 16.0 GB', '1d 1h', 'Database', 'ok']) assert(card.innerHTML.includes(want), 'System card is missing ' + want);
+  assert(!/llm_endpoint|python_version|status\.uptime/.test(settings), 'System card still reads field names the API does not return');
+  ok('Settings > System shows platform, CPU, memory, disk, uptime and service health from the real API fields');
+
+  // 12. Settings > Music setup goes through the gated proxy path, never the engine's raw port.
+  const opened = []; const posted = [];
+  const win = { location: { href: '' }, close() {} };
+  const mEnv = {
+    window: { open: (...a) => { opened.push(a); return win; }, location: { origin: 'https://zoe.example', href: '' } },
+    apiCall: async (m, u) => { posted.push(u); return {}; }, toast() {},
+  };
+  await vm.runInNewContext(extractFunction(settings, 'openMASetup') + '; openMASetup', mEnv)();
+  assert.deepStrictEqual(posted, ['/api/music/ma-ui/session']);
+  assert.strictEqual(win.location.href, 'https://zoe.example/modules/music-assistant/');
+  assert(!settings.includes(':8095'), 'Settings still opens the raw Music Assistant port');
+  ok('Settings > Music "Open Setup" trades the session for the gate cookie and opens /modules/music-assistant/');
+
+  // 13. No desktop page offers an action whose route does not exist.
+  const memories = read('memories.html');
+  assert(!memories.includes('/api/tiles') && !/fetch\('\/api\/collections',\s*\{\s*method:\s*'POST'/.test(memories) && !memories.includes('fabButton'),
+    'memories.html still offers a collection/tile write the server answers 405/404');
+  assert(!/api\/user\/profile'[\s\S]{0,80}method:\s*'PUT'/.test(read('people.html')), 'people.html still PUTs /api/user/profile (GET-only)');
+  assert(!read('voice.html').includes('/api/chat/confirm'), 'voice.html still posts to the non-existent /api/chat/confirm');
+  const music = read('music.html');
+  const search = extractFunction(music, 'doSearch');
+  assert(search.includes('/api/music/search') && !search.includes('/api/chat/'), 'music search must call /api/music/search, not post a chat turn');
+  assert(extractFunction(music, 'playResult').includes('/api/music/play_media'), 'search results must play through /api/music/play_media');
+  for (const page of ['dashboard.html', 'lists.html']) assert(!/marketplace/i.test(read(page)), page + ' still shows the empty Marketplace tab');
+  for (const page of desktopPages) assert(!read(page).includes('js/mini-player.js'), page + ' still loads the dead mini-player');
+  ok('memories/people/voice/music/dashboard/lists offer no control that always fails, and desktop music search shows results');
+
+  // 14. Phone hand-off: calendar.html?event=<id> opens that event.
+  const deep = extractFunction(read('calendar.html'), 'openDeepLinkedEvent');
+  assert(/URLSearchParams[\s\S]*get\('event'\)/.test(deep) && deep.includes('openEventPanel(hit)'), 'calendar.html ignores ?event=');
+  ok('calendar.html?event=<id> opens that event (the phone hand-off lands on the event, not the month)');
+}
+
 (async () => {
   await pairing();
   chatAgents();
   calendarAndJournal();
+  await auditFixes();
   console.log('desktop UI phase 1: ' + n + ' checks passed');
 })().catch(e => { console.error(e); process.exit(1); });

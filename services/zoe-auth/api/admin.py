@@ -16,12 +16,22 @@ from core.sessions import session_manager
 from core.rbac import rbac_manager
 from core.security import rate_limiter
 from core.account_setup import setup_token_manager, DEFAULT_TOKEN_TTL_MINUTES
-from models.database import auth_db
+from models.database import auth_db, UserRole
 from api.dependencies import require_permission, require_admin, get_current_session
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+# The household roles zoe-auth itself defines (UserRole). They are valid without a row in the
+# custom ``roles`` table, which is empty on a fresh install - checking only that table refused
+# EVERY role change, so an admin could not mark a member as a child from Settings.
+BUILTIN_ROLES = frozenset(r.value for r in UserRole)
+
+
+def _valid_role(role: str) -> bool:
+    """A built-in household role, or a custom role created through /api/admin/roles."""
+    return role in BUILTIN_ROLES or rbac_manager._role_exists(role)
 
 # Pydantic models
 class UserCreateRequest(BaseModel):
@@ -115,6 +125,8 @@ async def create_user(
     Returns:
         Created user information
     """
+    if not _valid_role(request.role):
+        raise HTTPException(status_code=400, detail="Invalid role")
     try:
         success, result = auth_manager.create_user(
             username=request.username,
@@ -165,7 +177,7 @@ async def update_user(
             
             if request.role is not None:
                 # Verify role exists
-                if not rbac_manager._role_exists(request.role):
+                if not _valid_role(request.role):
                     raise HTTPException(status_code=400, detail="Invalid role")
                 updates.append("role = ?")
                 params.append(request.role)

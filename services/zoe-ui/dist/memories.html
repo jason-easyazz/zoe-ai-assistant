@@ -1263,7 +1263,7 @@
     <div class="main-layout">
         <div class="insights-sidebar">
             <div class="insights-header">
-                <h2 class="insights-title">Memory Collections</h2>
+                <h2 class="insights-title">Memories</h2>
                 <button type="button" id="aboutMeOpen" class="about-me-open" hidden>What Zoe knows about me</button>
                 <button type="button" id="curationOpen" class="about-me-open" hidden>Family memories</button>
             </div>
@@ -1287,7 +1287,6 @@
                 <div class="control-btn" onclick="zoomOut()" title="Zoom Out">−</div>
             </div>
             <div class="canvas-legend" id="canvasLegend"></div>
-            <button class="fab" id="fabButton" onclick="showNewItemDialog()">+</button>
         </div>
     </div>
     
@@ -1298,34 +1297,6 @@
     <!-- Family memories (js/memories-curation.js, flag-dark ZOE_MEMORIES_CURATORS): hidden until the server offers it -->
     <section id="curation" class="about-me" hidden aria-label="Family memories"></section>
     
-    <div class="modal-overlay" id="newCollectionModal">
-        <div class="modal">
-            <div class="modal-title">New Collection</div>
-            <div class="modal-field">
-                <label class="modal-label">Name</label>
-                <input type="text" class="modal-input" id="collectionName" placeholder="Enter collection name">
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Color</label>
-                <div class="color-picker">
-                    <div class="color-option selected" style="background: #3b82f6;" onclick="selectColor('#3b82f6')"></div>
-                    <div class="color-option" style="background: #10b981;" onclick="selectColor('#10b981')"></div>
-                    <div class="color-option" style="background: #8b5cf6;" onclick="selectColor('#8b5cf6')"></div>
-                    <div class="color-option" style="background: #06b6d4;" onclick="selectColor('#06b6d4')"></div>
-                    <div class="color-option" style="background: #f59e0b;" onclick="selectColor('#f59e0b')"></div>
-                    <div class="color-option" style="background: #ef4444;" onclick="selectColor('#ef4444')"></div>
-                    <div class="color-option" style="background: #ec4899;" onclick="selectColor('#ec4899')"></div>
-                    <div class="color-option" style="background: #6366f1;" onclick="selectColor('#6366f1')"></div>
-                    <div class="color-option" style="background: #14b8a6;" onclick="selectColor('#14b8a6')"></div>
-                    <div class="color-option" style="background: #a855f7;" onclick="selectColor('#a855f7')"></div>
-                </div>
-            </div>
-            <div class="modal-actions">
-                <button class="modal-btn modal-btn-secondary" onclick="closeNewCollectionModal()">Cancel</button>
-                <button class="modal-btn modal-btn-primary" onclick="createCollection()">Create</button>
-            </div>
-        </div>
-    </div>
 
     
     <div class="detail-panel" id="detailPanel">
@@ -1483,187 +1454,11 @@
         let breathePhase = 0;
         let mouseDownTime = 0;
         let mouseDownItem = null;
-        let selectedColor = '#3b82f6';
         let openTiles = [];
         const DRAG_THRESHOLD = 200;
         
         let collections = [];
         let currentUser = null;
-        
-        // Paste event listener
-        document.addEventListener('paste', async (e) => {
-            console.log('Paste event triggered, currentCollection:', currentCollection);
-            if (!currentCollection) {
-                console.log('No current collection, paste ignored');
-                return;
-            }
-            
-            e.preventDefault();
-            
-            // Check for images first
-            const items = e.clipboardData.items;
-            let imageHandled = false;
-            
-            console.log('Clipboard items:', items.length);
-            for (let i = 0; i < items.length; i++) {
-                console.log('Item type:', items[i].type);
-                if (items[i].type.indexOf('image') !== -1) {
-                    console.log('Image detected, processing...');
-                    const blob = items[i].getAsFile();
-                    const reader = new FileReader();
-                    
-                    reader.onload = async (event) => {
-                        try {
-                            const col = collections.find(c => c.id === currentCollection);
-                            if (!col) return;
-                            
-                            const collectionId = col.id.replace('c', '');
-                            console.log("Creating tile in collection via nginx proxy:", collectionId);
-                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify({
-                                    collection_id: parseInt(collectionId),
-                                    name: "",
-                                    x: Math.random() * 300 - 150,
-                                    y: Math.random() * 300 - 150,
-                                    size: 50,
-                                    content: "",
-                                    preview_type: 'image',
-                                    preview_data: {
-                                        type: 'image',
-                                        image: event.target.result,
-                                        title: "Pasted Image",
-                                        description: "Image from clipboard"
-                                    }
-                                })
-                            });
-                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                            const data = await response.json();
-
-                            const newTile = {
-                                id: `t${data.tile.id}`,
-                                type: 'tile',
-                                name: "",
-                                x: Math.random() * 300 - 150,
-                                y: Math.random() * 300 - 150,
-                                size: 50,
-                                content: "",
-                                preview: {
-                                    type: 'image',
-                                    image: event.target.result,
-                                    title: "Pasted Image",
-                                    description: "Image from clipboard"
-                                },
-                                dbId: data.tile.id // Store the actual database ID
-                            };
-                            
-                            col.items.push(newTile);
-                            setTimeout(() => openTile(newTile), 100);
-                        } catch (error) {
-                console.error("Error loading people:", error);
-                            console.error('Failed to create tile from image paste:', error);
-                        }
-                    };
-                    
-                    reader.readAsDataURL(blob);
-                    imageHandled = true;
-                    break;
-                }
-            }
-            
-            // If no image, handle text
-            if (!imageHandled) {
-                console.log('No image found, checking for text...');
-                const text = e.clipboardData.getData('text');
-                console.log('Text data:', text);
-                
-                if (text.trim()) {
-                    console.log('Text paste detected, creating tile...');
-                    // Create tile in database first
-                    try {
-                        const col = collections.find(c => c.id === currentCollection);
-                        if (!col) return;
-                        
-                        const collectionId = col.id.replace('c', '');
-                        console.log("Adding tile to collection via nginx proxy:", collectionId);
-                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({
-                                collection_id: parseInt(collectionId),
-                                name: "",
-                                x: Math.random() * 300 - 150,
-                                y: Math.random() * 300 - 150,
-                                size: 50,
-                                content: text
-                            })
-                        });
-                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                        const data = await response.json();
-
-                        const newTile = {
-                            id: `t${data.tile.id}`,
-                            type: 'tile',
-                            name: "",
-                            x: Math.random() * 300 - 150,
-                            y: Math.random() * 300 - 150,
-                            size: 50,
-                            content: text,
-                            preview: null,
-                            dbId: data.tile.id // Store the actual database ID
-                        };
-                        
-                        // Auto-detect URLs and fetch preview
-                        const urlRegex = /(https?:\/\/[^\s]+)/g;
-                        const urls = text.match(urlRegex);
-                        if (urls && urls.length > 0) {
-                            newTile.preview = await fetchLinkPreview(urls[0]);
-                        }
-                        
-                        col.items.push(newTile);
-                        setTimeout(() => openTile(newTile), 100);
-                    } catch (error) {
-                console.error("Error loading people:", error);
-                        console.error('Failed to create tile from paste:', error);
-                    }
-                }
-            }
-        });
-        
-        async function fetchLinkPreview(url) {
-            try {
-                console.log("Fetching link preview via nginx proxy");
-                const response = await fetch('/api/memories/link-preview', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ url: url })
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                return await response.json();
-            } catch (error) {
-                console.error("Error loading people:", error);
-                console.error('Failed to fetch link preview:', error);
-                const urlObj = new URL(url);
-                return {
-                    url: url,
-                    title: `${urlObj.hostname.replace('www.', '')} Preview`,
-                    description: "This is a preview of the pasted link. In production, this would fetch real metadata.",
-                    image: "🔗"
-                };
-            }
-        }
-        
         
         async function loadCollections() {
             try {
@@ -1730,129 +1525,10 @@
             ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
             centerX = width / 2;
             centerY = height / 2;
-            updateFabVisibility();
         }
         
-        function updateFabVisibility() {
-            const fab = document.getElementById('fabButton');
-            if (currentCollection) {
-                fab.classList.add('show');
-            } else {
-                fab.classList.remove('show');
-            }
-        }
-        
-        function showNewItemDialog() {
-            if (currentCollection) {
-                createNewTile();
-            } else {
-                document.getElementById('newCollectionModal').classList.add('show');
-            }
-        }
-        
-        function selectColor(color) {
-            selectedColor = color;
-            document.querySelectorAll('.color-option').forEach(opt => {
-                opt.classList.remove('selected');
-            });
-            event.target.classList.add('selected');
-        }
-        
-        function closeNewCollectionModal() {
-            document.getElementById('newCollectionModal').classList.remove('show');
-            document.getElementById('collectionName').value = '';
-        }
-
         // openAddPersonModal / closeAddPersonModal removed: the addPersonModal DOM
         // no longer lives on this page (people management has its own page).
-        
-        async function createCollection() {
-            const name = document.getElementById('collectionName').value.trim();
-            if (!name) return;
-            
-            try {
-                console.log("Creating collection via nginx proxy");
-                const response = await fetch('/api/collections', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        name: name,
-                        icon: "📁",
-                        x: Math.random() * 400 - 200,
-                        y: Math.random() * 400 - 200,
-                        size: 60,
-                        color: selectedColor
-                    })
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-
-                const newCol = {
-                    id: `c${data.collection.id}`,
-                    type: 'collection',
-                    name: name,
-                    icon: "📁",
-                    x: Math.random() * 400 - 200,
-                    y: Math.random() * 400 - 200,
-                    size: 60,
-                    color: selectedColor,
-                    items: []
-                };
-                collections.push(newCol);
-                closeNewCollectionModal();
-            } catch (error) {
-                console.error("Error loading people:", error);
-                console.error('Failed to create collection:', error);
-                alert('Failed to create collection');
-            }
-        }
-
-        
-        async function createNewTile() {
-            const col = collections.find(c => c.id === currentCollection);
-            if (!col) return;
-            
-            try {
-                const collectionId = col.id.replace('c', '');
-                console.log("Creating tile in collection via nginx proxy:", collectionId);
-                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        collection_id: parseInt(collectionId),
-                        name: "",
-                        x: Math.random() * 300 - 150,
-                        y: Math.random() * 300 - 150,
-                        size: 50,
-                        content: ""
-                    })
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const data = await response.json();
-
-                const newTile = {
-                    id: `t${data.tile.id}`,
-                    type: 'tile',
-                    name: "",
-                    x: Math.random() * 300 - 150,
-                    y: Math.random() * 300 - 150,
-                    size: 50,
-                    content: "",
-                    preview: null,
-                    dbId: data.tile.id // Store the actual database ID
-                };
-                col.items.push(newTile);
-                setTimeout(() => openTile(newTile), 100);
-            } catch (error) {
-                console.error("Error loading people:", error);
-                console.error('Failed to create tile:', error);
-                alert('Failed to create tile');
-            }
-        }
         
         function openTile(item) {
             if (openTiles.includes(item.id)) return;
@@ -1892,7 +1568,7 @@
             titleInput.className = 'tile-title';
             titleInput.placeholder = isPhotoTile ? 'Add a title...' : 'Untitled';
             titleInput.value = item.name || '';
-            titleInput.addEventListener('input', () => updateTileName(item.id, titleInput.value));
+            titleInput.readOnly = true;   // tiles are read-only: the collections backend has no write routes
             const closeBtn = document.createElement('button');
             closeBtn.className = 'tile-close';
             closeBtn.textContent = '×';
@@ -1904,7 +1580,7 @@
             editor.className = isPhotoTile ? 'tile-editor photo-notes' : 'tile-editor';
             editor.placeholder = isPhotoTile ? 'Add notes (optional)...' : 'Type notes or paste a link...';
             editor.value = item.content || '';
-            editor.addEventListener('input', () => updateTileContent(item.id, editor.value));
+            editor.readOnly = true;
 
             const content = memDiv(isPhotoTile ? 'tile-content photo-content' : 'tile-content');
             if (isPhotoTile) {
@@ -1929,18 +1605,7 @@
                 }
             }
 
-            // Toolbar.
-            const toolbar = memDiv('tile-toolbar');
-            [['tile-tool-btn', '✏️ Edit', () => editTile(item.id)],
-             ['tile-tool-btn delete', '🗑️ Delete', () => deleteTile(item.id)]].forEach(([cls, label, fn]) => {
-                const b = document.createElement('button');
-                b.className = cls;
-                b.textContent = label;
-                b.addEventListener('click', fn);
-                toolbar.appendChild(b);
-            });
-
-            tile.replaceChildren(header, content, toolbar);
+            tile.replaceChildren(header, content);
             document.getElementById('tilesContainer').appendChild(tile);
         }
         
@@ -2016,97 +1681,6 @@
             }
             document.removeEventListener('mousemove', resizeImage);
             document.removeEventListener('mouseup', stopImageResize);
-        }
-        
-        async function updateTileName(itemId, name) {
-            const col = collections.find(c => c.id === currentCollection);
-            const item = col?.items.find(i => i.id === itemId);
-            if (item) {
-                item.name = name;
-                await saveTile(item);
-            }
-        }
-        
-        async function updateTileContent(itemId, content) {
-            const col = collections.find(c => c.id === currentCollection);
-            const item = col?.items.find(i => i.id === itemId);
-            if (item) {
-                item.content = content;
-                
-                const urlRegex = /(https?:\/\/[^\s]+)/g;
-                const urls = content.match(urlRegex);
-                if (urls && urls.length > 0 && !item.preview) {
-                    item.preview = await fetchLinkPreview(urls[0]);
-                    closeTile(itemId);
-                    setTimeout(() => openTile(item), 50);
-                }
-                
-                await saveTile(item);
-            }
-        }
-        
-        async function saveTile(item) {
-            try {
-                const tileId = item.dbId || item.id.replace('t', '');
-                await fetch(`/api/tiles/${tileId}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        collection_id: parseInt(currentCollection.replace('c', '')),
-                        name: item.name,
-                        content: item.content,
-                        preview_type: item.preview?.type || null,
-                        preview_data: item.preview || null,
-                        x: item.x,
-                        y: item.y,
-                        size: item.size,
-                        tile_x: item.tileX,
-                        tile_y: item.tileY,
-                        tile_width: item.tileWidth
-                    })
-                });
-            } catch (error) {
-                console.error("Error loading people:", error);
-                console.error('Failed to save tile:', error);
-            }
-        }
-        
-        function findItemById(itemId) {
-            for (const col of collections) {
-                const item = col.items.find(i => i.id === itemId);
-                if (item) return item;
-            }
-            return null;
-        }
-        
-        function editTile(itemId) {
-            const tile = document.getElementById(`tile-${itemId}`);
-            tile.querySelector('.tile-editor').focus();
-        }
-        
-        async function deleteTile(itemId) {
-            if (!confirm('Delete this tile?')) return;
-            
-            try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const item = findItemById(itemId);
-                const tileId = item?.dbId || itemId.replace('t', '');
-                await fetch(`/api/tiles/${tileId}`, {
-                    method: 'DELETE'
-                });
-                
-                const col = collections.find(c => c.id === currentCollection);
-                if (col) {
-                    col.items = col.items.filter(i => i.id !== itemId);
-                }
-                closeTile(itemId);
-            } catch (error) {
-                console.error("Error loading people:", error);
-                console.error('Failed to delete tile:', error);
-                alert('Failed to delete tile');
-            }
         }
         
         function closeTile(itemId) {
@@ -2310,7 +1884,6 @@
             document.getElementById('backBtn').style.display = 'flex';
             updateSidebar();
             updateLegend();
-            updateFabVisibility();
         }
         
         function navigateBack() {
@@ -2326,7 +1899,6 @@
             }
             updateSidebar();
             updateLegend();
-            updateFabVisibility();
         }
         
         function updateBreadcrumb() {
@@ -2384,7 +1956,7 @@
 
             if (!reviewQueue.length) {
                 const card = memDiv('person-card');
-                card.appendChild(memDiv('person-text', 'No pending memories. OpenClaw-learned facts will appear here for review.'));
+                card.appendChild(memDiv('person-text', 'No memories waiting for review. Facts Zoe picks up in conversation appear here for you to check.'));
                 list.appendChild(card);
                 return;
             }
@@ -2688,7 +2260,6 @@
     </script>
     <script src="/js/websocket-sync.js?v=estate-10-heal"></script>
     <!-- Mini Player for persistent music playback -->
-    <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor -->
 </body>
 </html>

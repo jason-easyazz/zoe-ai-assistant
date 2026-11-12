@@ -999,3 +999,58 @@ def test_setup_rolls_back_and_keeps_token_when_durable_record_fails(sqlite_auth_
     )
     assert resp2.status_code == 200
     assert _password_hash_of(sqlite_auth_db) not in (None, "SETUP_REQUIRED")
+
+
+# -- Built-in household roles are assignable (desktop Settings > Users, 2026-11-13) ------------------------------------
+# The custom ``roles`` table is empty on a real install, so validating a role ONLY against it refused every role change:
+# an admin could not mark a member as a child. The built-in UserRole values are valid on their own.
+
+def _admin_may(monkeypatch, *perms):
+    _add_active_session("admin-sess", "admin")
+    monkeypatch.setattr(
+        session_manager, "validate_session_permission",
+        lambda session_id, permission, resource=None: permission in perms,
+    )
+
+
+def _role_of(db_path, user_id):
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT role FROM auth_users WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+@pytest.mark.parametrize("role", ["child", "family_member", "user", "admin", "guest"])
+def test_admin_can_set_a_builtin_role_with_no_custom_roles_table(sqlite_auth_db, monkeypatch, role):
+    _seed_user(sqlite_auth_db, user_id="kid1", username="kid1", password=_pw("kidpass"), role="user")
+    _admin_may(monkeypatch, "users.update")
+    resp = TestClient(app).put(
+        "/api/admin/users/kid1", headers={"X-Session-ID": "admin-sess"}, json={"role": role},
+    )
+    assert resp.status_code == 200, resp.text
+    assert _role_of(sqlite_auth_db, "kid1") == role
+
+
+def test_admin_cannot_set_an_unknown_role(sqlite_auth_db, monkeypatch):
+    _seed_user(sqlite_auth_db, user_id="kid1", username="kid1", password=_pw("kidpass"), role="user")
+    _admin_may(monkeypatch, "users.update")
+    resp = TestClient(app).put(
+        "/api/admin/users/kid1", headers={"X-Session-ID": "admin-sess"}, json={"role": "overlord"},
+    )
+    assert resp.status_code == 400
+    assert _role_of(sqlite_auth_db, "kid1") == "user"
+
+
+def test_admin_create_user_validates_the_role(sqlite_auth_db, monkeypatch):
+    from core.auth import auth_manager
+    _admin_may(monkeypatch, "users.create")
+    created = []
+    monkeypatch.setattr(auth_manager, "create_user", lambda **kw: (created.append(kw["role"]) or True, "kid2"))
+    monkeypatch.setattr(auth_manager, "get_user_info", lambda uid: {"user_id": uid})
+    client = TestClient(app)
+    body = {"username": "kid2", "email": "kid2@example.com", "password": _pw("kidpass2")}
+    ok = client.post("/api/admin/users", headers={"X-Session-ID": "admin-sess"}, json={**body, "role": "child"})
+    assert ok.status_code == 200, ok.text
+    bad = client.post("/api/admin/users", headers={"X-Session-ID": "admin-sess"}, json={**body, "role": "overlord"})
+    assert bad.status_code == 400
+    assert created == ["child"]
