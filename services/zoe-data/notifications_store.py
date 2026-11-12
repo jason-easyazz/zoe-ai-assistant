@@ -375,20 +375,18 @@ async def pull_addendum(user_id: str, channel: str, extra_ctx: Optional[dict], *
     try:
         ctx = extra_ctx or {}
         panel_id = str(ctx.get("panel_id") or "")
-        if not enabled() or channel != "voice" or not panel_id:
-            return ""
+        if not enabled() or dry or channel != "voice" or not panel_id:
+            return ""                              # a dry run (a replayed pull) says nothing about notifications at all
         import panel_review_cards as prc
 
         member = prc._member(user_id, channel, ctx)
         if not member:
             return ""
-        if not dry:
-            await refresh(member)
+        await refresh(member)
         rows = await unread(member, limit=50)
-        if not rows or (not dry and not await push_card(panel_id, member)):
+        if not rows or not await push_card(panel_id, member):
             return ""
-        if not dry:
-            ANNOUNCED.setdefault(member, set()).update(r["id"] for r in rows)
+        ANNOUNCED.setdefault(member, set()).update(r["id"] for r in rows)
         return f"You have {count_words(len(rows))} on the screen." if alone else f"And {count_words(len(rows))} on the screen."
     except Exception as exc:  # noqa: BLE001
         logger.debug("notifications: pull addendum skipped (%s)", exc.__class__.__name__)

@@ -351,3 +351,29 @@ def test_the_card_holds_eight_rows_after_wearer_expansion(env, monkeypatch):
     frame = run(ns.card(PANEL, MEMBER))
     assert len(frame["items"]) == ns.MAX_CARD and frame["more"] == 2 and frame["more_label"] == "And 2 more."
     assert set(prc._CARDS[frame["card_token"]].items) == {it["id"] for it in frame["items"]}   # a hidden row cannot be acted on
+
+
+def test_a_minted_card_is_dead_once_the_flag_is_off_and_control(env, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import notifications as rn
+    seed(1)
+    frame = run(ns.card(PANEL, MEMBER))
+    app = FastAPI()
+    assert rn.register(app) is True                                                    # mounted while on
+    app.dependency_overrides[rn._caller] = lambda: {"user_id": MEMBER, "role": "user"}
+    c = TestClient(app)
+    h = {"X-Panel-Card": frame["card_token"]}
+    monkeypatch.setenv("ZOE_NOTIFICATIONS", "off")                                     # turned off after the card was minted
+    assert c.post("/api/panel/notifications/act", json={"item": "n1", "action": "done"}, headers=h).status_code == 404
+    assert env.rows("SELECT delivered FROM notifications")[0][0] == 0                  # nothing was marked read
+    monkeypatch.setenv("ZOE_NOTIFICATIONS", "on")                                      # control: the same tap, flag on
+    assert c.post("/api/panel/notifications/act", json={"item": "n1", "action": "done"}, headers=h).json()["ok"] is True
+
+
+def test_a_dry_pull_says_nothing_about_notifications_and_control(env):
+    seed(2)
+    ctx = {"scope_user": MEMBER, "panel_id": PANEL}
+    assert run(ns.pull_addendum(MEMBER, "voice", ctx, alone=True, dry=True)) == ""
+    assert env.pushed == [] and ns.ANNOUNCED == {}
+    assert run(ns.pull_addendum(MEMBER, "voice", ctx, alone=True)) == "You have two notifications on the screen."   # control

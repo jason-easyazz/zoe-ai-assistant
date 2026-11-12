@@ -182,6 +182,8 @@ async def _caller(request: Request):
 
 
 async def _require_card(request: Request, caller=Depends(_caller)) -> _prc.Card:
+    if not _store.enabled():                         # the flag is read per call: off = as if unmounted, whatever token was minted
+        raise HTTPException(status_code=404, detail="Not Found")
     try:
         card = _prc.authorize(request.headers.get("X-Panel-Card", ""), caller)
     except _prc.CardError as exc:
