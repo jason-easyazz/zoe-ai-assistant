@@ -137,19 +137,21 @@ _CHATML_RE = re.compile(r"(?i)<[|]im_start[|]>|<[|]system[|]>|\[/?INST\]|<<SYS>>
 _REL = (r"(?:wife|husband|partner|girlfriend|boyfriend|son|daughter|kid|child|brother|sister|mom|mum|dad|father|"
         r"mother|grandma|grandpa|grandmother|grandfather|aunt|uncle|cousin|niece|nephew|friend|neighbou?r|boss|"
         r"colleague|coworker|co-worker|flatmate|roommate|housemate|landlord|teacher|doctor|dentist|manager|mate|buddy)")
-_NAME = r"[A-Z][a-z]{1,20}(?:[ \t]+[A-Z][a-z]{1,20})?"
+_NAME = r"(?!We\b)[A-Z][a-z]{1,20}(?:[ \t]+[A-Z][a-z]{1,20})?"       # a sentence-initial "We" is the owner, not a name
 _WHO = ("(?:" + _NAME + r"['\u2019]s[ \t]+(?:\w+[ \t]+)?" + _REL
         + r"|" + _NAME + r"|(?:[Mm]y|[Hh]is|[Hh]er|[Tt]heir|[Oo]ur|[Tt]he)[ \t]+(?:\w+[ \t]+)?" + _REL
         + r"|[Hh]e|[Ss]he|[Tt]hey|[Ss]omeone|[Ss]omebody|[Ee]veryone)")
 _SAY = (r"(?:says?|said|tells?[ \t]+me|told[ \t]+me|texts?[ \t]+me|texted(?:[ \t]+me)?|wrote|writes|messaged|replied|"
         r"replies|mentioned|claims?|claimed|announced|shouted|whispered|added|explains?|explained|insists?|"
         r"insisted|posted|tweeted|typed|answered|responds?|responded)")
+#: an adverb or two between the verb and the quote ('Wren said softly, "..."') does not make the words the owner's
+_ADV = r"(?:[ \t]+[a-z]+ly){0,2}"
 #: "Dana says:", "my sister said, ", 'Dana wrote "', 'Dana: "'  - DIRECT speech only: the verb is
 #: followed by a colon, a comma or an opening quote ("Dana says I live in Hobart" is indirect)
 _ATTR_RE = re.compile(
-    r"\b(?P<who>" + _WHO + r")[ \t]+" + _SAY + r"\b[ \t]*(?:(?P<sep>[:,])|(?P<q>[\"“]))[ \t]*"
+    r"\b(?P<who>" + _WHO + r")[ \t]+" + _SAY + r"\b" + _ADV + r"[ \t]*(?:(?P<sep>[:,])|(?P<q>[\"“]))[ \t]*"
     r"|\b(?P<who2>" + _NAME + r")[ \t]*:[ \t]*(?P<q2>(?=[\"“]))"
-    r"|\b(?P<who3>(?!(?:i|we|you)\b)[A-Za-z]+)[ \t]+" + _SAY + r"\b[ \t]*(?P<q3>[\"“])[ \t]*")
+    r"|\b(?P<who3>(?!(?:[Ii]|[Ww]e|you)\b)[A-Za-z]+)[ \t]+" + _SAY + r"\b" + _ADV + r",?[ \t]*(?P<q3>[\"“])[ \t]*")   # 'rang and said, "..."': the comma too
 #: '"I live in Hobart," said Dana'
 _QATTR_RE = re.compile(
     r"[\"“](?P<q>[^\"”\n]{3,300})[\"”][ \t]*[,.]?[ \t]*"
@@ -311,6 +313,26 @@ def _paste_cut(s: str) -> tuple:
     return cut, sigs, kind, structural
 
 
+#: who3 can only see the word before the verb; when that word is a conjunction the real subject opens the sentence
+_CONJ = frozenset({"and", "but", "then", "so", "also", "just"})
+#: ...and it is the OWNER only when the whole lead-in is "I/we", optionally ONE plain lowercase verb and one of a few
+#: adverbs ("I rang and said", "We called back and said", "I just said"). Anything longer can hide another speaker in a plain
+#: lowercase word ("I heard dad call and said, ...") and stays third-person speech (fail closed: an ambiguous quote is
+#: never stored as the owner's own claim).
+_OWN_SUBJECT_RE = re.compile(
+    r"\s*(?:I|[Ww]e)(?:[ \t]+(?!(?:he|she|they|it|my|his|her|their|our|the|a|an|someone|somebody|everyone|when|while|because|after|"
+    r"before|that|who|as|if|until|since)\b)[a-z']+(?:[ \t]+(?:back|again|up|over|round|around|home|in))?)?[ \t]*$")
+#: ...or an auxiliary / plain adverb between the owner and the verb ('I have said, "..."', 'I already said, "..."', "I've said"):
+#: the same own-subject lead-in rule decides, so 'Wren would have said, "..."' is still Wren's. A negation ("never", "not") is
+#: deliberately absent: a denied quote is not the owner's claim.
+_OWN_AUX = frozenset({"have", "had", "already", "once", "always", "often", "definitely", "actually", "really", "literally",
+                      "clearly", "simply", "only", "even", "still", "probably", "certainly", "originally", "previously"})
+_OWN_CONTRACTION_RE = re.compile(r"\s*(?:I|[Ww]e)['\u2019]$")
+#: a negation ANYWHERE in the lead-in ("I never actually said", "I haven't always said", "I did not just say") makes the quote a DENIED
+#: one: it is never exempted as the owner's own claim (fail closed)
+_LEAD_NEGATION_RE = re.compile(r"(?i)\b(?:never|not|no|nor|hardly|barely|rarely|seldom|[a-z]+n['\u2019]?t)\b")
+
+
 def _speech_spans(head: str) -> list:
     """``(start, end, speaker)`` regions of ``head`` that are someone else's DIRECT speech (or a
     quoted instruction addressed to the assistant, speaker ``pasted_content``)."""
@@ -327,7 +349,16 @@ def _speech_spans(head: str) -> list:
     close_re = re.compile(r"[\"”]")
     stop_re = re.compile(r"[.!?](?=\s|$)|\n")
     for m in _ATTR_RE.finditer(head):
-        who = m.group("who") or m.group("who2") or m.group("who3")
+        who = m.group("who") or m.group("who3") or m.group("who2")
+        w3 = (m.group("who3") or "").lower()
+        if w3:
+            lead = head[_sentence_start(head, m.start()): m.start()]
+            if _LEAD_NEGATION_RE.search(lead + " " + w3):
+                pass                      # a denied quote: third-person treatment below removes it
+            elif (w3 in _CONJ or w3 in _OWN_AUX) and _OWN_SUBJECT_RE.match(lead):
+                continue                  # 'I rang and said, "..."' / 'I have said, "..."': the speaker is the owner, the lead-in word is not a person
+            elif w3 in ("ve", "d") and _OWN_CONTRACTION_RE.match(lead):
+                continue                  # "I've said, ..." - who3 saw only the contraction's tail
         i = m.end()
         if m.group("q") or m.group("q2") or m.group("q3"):
             close = close_re.search(head, i + (1 if m.group("q2") else 0))

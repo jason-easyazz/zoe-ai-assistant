@@ -527,8 +527,8 @@ async def _finish_connect(session: dict[str, Any], header: str) -> None:
     """Login detected + cookie harvested: derive the username, save the provider
     into MA, and mark connected. Teardown happens in the watcher's finally."""
     username = await _derive_username(session.get("context")) or _stored_username() or "YouTube Music"
-    logger.info("ytmusic sign-in: harvested cookie %s — saving provider (user=%s)",
-                _redact(header), username)
+    # Never the account identifier: log that a sign-in happened, not who.
+    logger.info("ytmusic sign-in: harvested cookie %s — saving provider", _redact(header))
     # Reuse the existing instance if one is configured (re-connect replaces it in
     # place) rather than minting a duplicate ytmusic provider.
     instance_id = await music_service.provider_instance_id(music_service._YTMUSIC_DOMAIN)
@@ -859,6 +859,6 @@ async def refresh_now() -> dict[str, Any]:
     saved = await music_service.save_provider(
         music_service._YTMUSIC_DOMAIN, {"username": username, "cookie": header},
         instance_id=instance_id)
-    logger.info("ytmusic refresh: re-saved cookie %s (user=%s, instance=%s) -> %s",
-                _redact(header), username, instance_id or "new", "ok" if saved else "rejected")
+    # Never an account identifier (username, instance id): that a refresh happened, and its outcome.
+    logger.info("ytmusic refresh: re-saved cookie %s -> %s", _redact(header), "ok" if saved else "rejected")
     return {"ok": bool(saved)}

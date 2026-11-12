@@ -675,3 +675,83 @@ def test_the_chokepoint_judges_by_the_origin_label_too(arm):
     assert dropped is None and kept is not None
     rows = arm.stats()["rows"]
     assert not _has(rows, WORD) and _has(rows, "Hobart", ("approved",))
+
+
+# 'X rang and said, "..."' (lab 2026-11-12): the comma between the verb and the quote let the quoted words through as the owner's.
+@pytest.mark.parametrize("turn", ['Wren rang and said, "I am moving to Halvercombe next month."',
+                                  'Wren rang and said "I am moving to Halvercombe next month."',
+                                  'Wren rang and said,"I am moving to Halvercombe next month."'])
+def test_quoted_speech_after_a_comma_is_not_the_owners(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
+def test_negative_control_the_owners_own_sentence_is_kept():
+    own = own_words.analyze("I am moving to Halvercombe next month.")
+    assert own.reasons == () and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['I rang and said, "I am moving to Halvercombe next month."',
+                                  'I rang and said "I am moving to Halvercombe next month."',
+                                  'We called and said, "We are moving to Halvercombe next month."',
+                                  'I rang back and said, "I am moving to Halvercombe next month."',
+                                  'I just said, "I am moving to Halvercombe next month."',
+                                  'I then said "I am moving to Halvercombe next month."'])
+def test_the_owners_own_quoted_words_after_a_conjunction_are_kept(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['I have said, "I am moving to Halvercombe next month."',
+                                  'I already said, "I am moving to Halvercombe next month."',
+                                  'I have already said, "I am moving to Halvercombe next month."',
+                                  'I\'ve said, "I am moving to Halvercombe next month."',
+                                  'We had said "We are moving to Halvercombe next month."'])
+def test_the_owners_own_quoted_words_after_an_auxiliary_or_adverb_are_kept(turn):
+    """Codex on #2423: the accepted comma made who3 read "have" / "already" as another speaker and the owner's quoted fact was dropped."""
+    own = own_words.analyze(turn)
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['Wren would have said, "I am moving to Halvercombe next month."',
+                                  'I think dad already said, "I am moving to Halvercombe next month."',
+                                  'I know she had said, "I am moving to Halvercombe next month."',
+                                  'I never said, "I am moving to Halvercombe next month."',
+                                  'I never actually said "I am moving to Halvercombe next month."',
+                                  'I never just said, "I am moving to Halvercombe next month."',
+                                  'I haven\'t always said "I am moving to Halvercombe next month."',
+                                  'I didn\'t then said, "I am moving to Halvercombe next month."',
+                                  'We have not already said "We are moving to Halvercombe next month."'])
+def test_an_auxiliary_does_not_make_another_speakers_or_a_denied_quote_the_owners(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
+@pytest.mark.parametrize("turn", ['I was there when Wren rang and said, "I am moving to Halvercombe next month."',
+                                  'I heard my sister call and said, "I am moving to Halvercombe next month."',
+                                  'I think she rang and said, "I am moving to Halvercombe next month."',
+                                  'We were out when Wren rang and said "I am moving to Halvercombe next month."',
+                                  'I heard dad call and said, "I am moving to Halvercombe next month."',
+                                  'I let mum in and said, "I am moving to Halvercombe next month."'])
+def test_another_speaker_inside_an_i_sentence_is_still_third_person(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
+@pytest.mark.parametrize("turn", ['Wren said softly, "I am moving to Halvercombe next month."',
+                                  'My sister replied quickly "I am moving to Halvercombe next month."'])
+def test_an_adverb_between_the_verb_and_the_quote_is_still_third_person(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
+def test_the_owner_speaking_softly_is_still_the_owner():
+    own = own_words.analyze('I said softly, "I am moving to Halvercombe next month."')
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['I said "I am moving to Halvercombe next month."', 'I said, "I am moving to Halvercombe next month."',
+                                  'We said, "We are moving to Halvercombe next month."'])
+def test_the_owner_quoting_themself_directly_is_the_owner(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
