@@ -24,10 +24,13 @@ guesses an owner.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -186,8 +189,9 @@ def reset_for_tests() -> None:
 
 
 # --- writes (admin-only at the route; audited fail-closed here) ---------------------------------------------------------------------
-async def assign(device_id: str, user_id: str, *, label: Optional[str], actor: dict) -> dict:
-    """Assign (or reassign) a pendant to a household member. Moves NO recordings. Raises ``DeviceError``."""
+async def assign(device_id: str, user_id: str, *, label: Optional[str], actor: dict, claim_only: bool = False) -> dict:
+    """Assign (or reassign) a pendant to a household member. Moves NO recordings. Raises ``DeviceError``. ``claim_only`` (the member's
+    own self-link): a pendant someone else owns is refused INSIDE the device lock, so it can never be taken over by a race."""
     if not DEVICE_ID_RX.match(device_id or ""):
         raise DeviceError(400, "bad_device_id", "That is not a pendant id.")
     from db_compat import get_compat_db
@@ -201,7 +205,12 @@ async def assign(device_id: str, user_id: str, *, label: Optional[str], actor: d
                 raise DeviceError(400, "not_a_member", "Pick a household member (guests cannot own a pendant).")
             before = await _fetch(db, "SELECT * FROM omi_devices WHERE device_id = ?", (device_id,))
             prev = (before[0]["user_id"] if before and before[0]["active"] else "") or ""
+            if claim_only and prev and prev != user_id:
+                raise DeviceError(409, "owned_by_someone_else", "That pendant is linked to someone else. They unlink it first, or the "
+                                                                "household admin moves it.")
             action = "assign" if not prev else ("reassign" if prev != user_id else "relabel")
+            if claim_only:
+                action = "self_link" if prev != user_id else "relabel"
             if not audit({"phase": "requested", "action": action, "device_id": device_id, "from_user": prev or None, "to_user": user_id,
                           "actor": actor.get("user_id"), "role": actor.get("role")}):
                 raise DeviceError(503, "audit_unavailable", "The audit log is unavailable, so nothing was changed.")
@@ -221,8 +230,9 @@ async def assign(device_id: str, user_id: str, *, label: Optional[str], actor: d
     return out
 
 
-async def unassign(device_id: str, *, actor: dict) -> bool:
-    """Unassign: the pendant keeps its row (so the seed never re-runs) but nobody owns it; its next upload is refused and kept on the Pi."""
+async def unassign(device_id: str, *, actor: dict, only_owner: Optional[str] = None) -> bool:
+    """Unassign: the pendant keeps its row (so the seed never re-runs) but nobody owns it; its next upload is refused and kept on the Pi.
+    ``only_owner`` (the member's self-unlink): refused unless that member owns it NOW, checked inside the device lock."""
     if not DEVICE_ID_RX.match(device_id or ""):
         raise DeviceError(400, "bad_device_id", "That is not a pendant id.")
     from db_compat import get_compat_db
@@ -231,13 +241,125 @@ async def unassign(device_id: str, *, actor: dict) -> bool:
         if not before:
             return False
         prev = before[0]["user_id"] if before[0]["active"] else ""
+        if only_owner is not None and prev != only_owner:
+            raise DeviceError(404, "not_yours", "You don't have that pendant linked.")
+        extra = {k: True for k in ("self", "forced_pending") if actor.get(k)}     # a member's own unlink / "unlink anyway"
         if not audit({"phase": "requested", "action": "unassign", "device_id": device_id, "from_user": prev or None,
-                      "actor": actor.get("user_id"), "role": actor.get("role")}):
+                      "actor": actor.get("user_id"), "role": actor.get("role"), **extra}):
             raise DeviceError(503, "audit_unavailable", "The audit log is unavailable, so nothing was changed.")
         await db.execute("UPDATE omi_devices SET user_id = '', label = '', active = 0, updated_at = ? WHERE device_id = ?", (_now(), device_id))
         await db.commit()
-    audit({"phase": "finished", "action": "unassign", "device_id": device_id, "actor": actor.get("user_id"), "ok": True})
+    audit({"phase": "finished", "action": "unassign", "device_id": device_id, "actor": actor.get("user_id"), "ok": True,
+           **{k: True for k in ("self", "forced_pending") if actor.get(k)}})
     return True
+
+
+# --- the member's OWN pendant (self-link / self-unlink; docs/knowledge/omi-linking.md) --------------------------------------------
+async def owned_by(user_id: str) -> list[dict]:
+    """The pendants this member owns now (metadata only)."""
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        rows = await _fetch(db, "SELECT * FROM omi_devices WHERE user_id = ? AND active = 1 ORDER BY registered_at, device_id", (user_id,))
+    return [_public(r) for r in rows]
+
+
+#: per-process key for the member-facing pendant HANDLE: a member's screen never carries the device id. A restart changes every
+#: handle, which only means the page re-reads its list (handles are never stored).
+_HANDLE_KEY = secrets.token_bytes(32)
+
+
+def handle_for(user_id: str, device_id: str) -> str:
+    """An opaque, member-scoped name for one of the member's pendants (HMAC of member + device; not the device id, not reversible)."""
+    return hmac.new(_HANDLE_KEY, f"{user_id}\x00{device_id}".encode(), hashlib.sha256).hexdigest()[:24]
+
+
+async def resolve_handle(user_id: str, handle: str) -> str:
+    """The device id behind ``handle`` - searched among the CALLER's own pendants only; '' when it names none of them."""
+    if not re.fullmatch(r"[0-9a-f]{24}", handle or ""):
+        return ""
+    for d in await owned_by(user_id):
+        if hmac.compare_digest(handle_for(user_id, d["device_id"]), handle):
+            return d["device_id"]
+    return ""
+
+
+def member_only(member: dict) -> str:
+    """The caller's OWN id, or a refusal: a guest, a panel/device token or an anonymous caller never self-links or self-unlinks."""
+    uid = str(member.get("user_id") or "").strip()
+    if (not uid or uid == "guest" or member.get("role") in _GUEST_ROLES or "device_token_role" in member
+            or str(member.get("username", "")).startswith("panel:")):
+        raise DeviceError(403, "not_a_member", "Only a household member can link a pendant, for themselves.")
+    return uid
+
+
+async def self_assign(device_id: str, member: dict, *, panel_id: str, label: Optional[str] = None) -> dict:
+    """A member links a pendant to THEMSELF. Allowed only when (1) the member is positively an adult (a child's pendant is the admin's
+    assign, never a self-link), (2) THIS panel saw the pendant inside the pairing window THIS member opened (``omi_linking``: physical
+    possession), and (3) nobody else owns it (checked again inside the device lock by ``assign(claim_only=True)``). The actor and the
+    target are the same person, always: there is no parameter that names anyone else."""
+    uid = member_only(member)
+    if not DEVICE_ID_RX.match(device_id or ""):
+        raise DeviceError(400, "bad_device_id", "That is not a pendant id.")
+    import manner_block
+    if not await manner_block.is_adult(uid):
+        raise DeviceError(403, "adult_only", "A grown-up in the house links a child's pendant in Settings.")
+    import omi_linking
+    if not omi_linking.window_saw(panel_id, uid, device_id):
+        raise DeviceError(409, "not_seen_here", "I did not find that pendant at this panel just now. Hold it next to the panel and try again.")
+    return await assign(device_id, uid, label=label, actor={"user_id": uid, "role": member.get("role"), "panel_id": panel_id},
+                        claim_only=True)
+
+
+async def pending_audio_known(device_id: str) -> Optional[bool]:
+    """True when the pendant's last health report says it still holds audio Zoe has not confirmed (ring bytes > 0), False when it says
+    it holds none, None when nobody knows (no report, legacy firmware, table missing). Never raises."""
+    try:
+        from db_compat import get_compat_db
+        async with get_compat_db() as db:
+            rows = await _fetch(db, "SELECT ring_stored_bytes FROM omi_device_health WHERE device_id = ?", (device_id,))
+    except Exception:  # noqa: BLE001
+        return None
+    if not rows or rows[0]["ring_stored_bytes"] is None:
+        return None
+    return int(rows[0]["ring_stored_bytes"]) > 0
+
+
+#: how long an "unlink anyway" may follow the pending-audio warning it answers
+UNLINK_CONFIRM_S = 120.0
+_UNLINK_WARNED: dict[tuple[str, str], float] = {}
+
+
+def reset_unlink_warnings() -> None:
+    _UNLINK_WARNED.clear()
+
+
+async def self_unassign(device_id: str, member: dict, *, confirm_pending: bool = False, clock=None) -> dict:
+    """A member unlinks THEIR OWN pendant. Someone else's pendant is 404 (indistinguishable from no such pendant). While the pendant is
+    KNOWN to hold unsynced audio the first request is refused with the warning (that audio will go to whoever links it next) and
+    remembered; a SECOND, explicit request (``confirm_pending``) within ``UNLINK_CONFIRM_S`` of that warning unlinks anyway, audited
+    as ``forced_pending``. A confirmation with no warning before it does nothing. When pending audio is unknown the answer says so
+    (``pending_audio: None``) and the caller speaks the warning."""
+    import time as _time
+    clock = clock or _time.monotonic
+    uid = member_only(member)
+    if not DEVICE_ID_RX.match(device_id or ""):
+        raise DeviceError(400, "bad_device_id", "That is not a pendant id.")
+    if await owner_of(device_id) != uid:
+        raise DeviceError(404, "not_yours", "You don't have that pendant linked.")
+    pending = await pending_audio_known(device_id)
+    key = (uid, device_id)
+    warned_at = _UNLINK_WARNED.pop(key, None)
+    confirmed = bool(confirm_pending and warned_at is not None and clock() - warned_at <= UNLINK_CONFIRM_S)
+    if confirm_pending and not confirmed:
+        raise DeviceError(409, "no_warning_to_confirm", "There is nothing to confirm. Ask me to unlink your pendant first.")
+    if pending and not confirmed:
+        _UNLINK_WARNED[key] = clock()
+        raise DeviceError(409, "audio_pending", "Your pendant still has recordings that haven't synced. If you unlink it now, they will "
+                                                "go to whoever links it next. Unlink anyway to do it, or leave it near the panel until "
+                                                "they finish.")
+    await unassign(device_id, actor={"user_id": uid, "role": member.get("role"), "self": True, "forced_pending": bool(confirmed)},
+                   only_owner=uid)
+    return {"ok": True, "pending_audio": pending, "forced": bool(confirmed)}
 
 
 async def forget_user(db, user_id: str) -> int:

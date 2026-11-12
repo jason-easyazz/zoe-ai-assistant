@@ -497,6 +497,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   rebuild from survivors, FTS optimize), a fail-closed serve wall, and a salted re-ingest ledger. Seeded property tests with a
   lineage-less negative control (hand-run, never CI-wired, scratch temp-dir data only) + `bench.py` (forget latency, fan-out,
   on-disk residue per strategy). README is the record, including a writer-lineage table read from `services/zoe-data`.
+- `panel-extraction-split/` - **idle consolidation on panel-style turns, synthetic split** (samantha frontier 2026-11-11, lane 7 E1): 20 invented panel-style sessions (`fixtures.py`) replayed through the REAL `memory_idle_consolidation.consolidate_session` with in-memory stand-ins for every store (`run_split.py`; default = deterministic gates only, no model; `--model` = at most 20 local-brain calls under `/tmp/zoe-voice-harness.lock`, refused while `night_busy.sh voice` exits 0 or a `land_voice_pr.sh` runs). Fail-closed isolation: store/DB env names set to invalid temp values before import, DB pool / Chroma / MemPalace constructors and outbound clients raise if built, `--selftest` proves the guard trips. Never writes a live store; `--out` refuses paths inside the repo. README is the record.
 - `p0-deroot/` — **P0 de-root lab** (`docs/architecture/p0-deroot.md` section 6): one
   no-network container booting systemd 249 (not `--privileged`) with the deliverables
   of `scripts/setup/p0-deroot/` installed verbatim, three stand-in services probing

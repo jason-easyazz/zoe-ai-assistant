@@ -987,3 +987,60 @@ async def test_browser_start_wires_the_stale_notice_to_the_handoff(monkeypatch):
     assert r["ok"] is True and registered["sid"] == "sid"
     await registered["on_progress"](ys.STALE_DETAIL)
     assert marks[-1] == ("music", "completing", ys.STALE_DETAIL)
+
+
+# ── the account identifier never reaches the log (2026-11-12) ────────────────
+# Both save paths logged `user=<YouTube account>` at INFO into the app log.
+# Negative control: put `username` or `instance_id` back into either log call and these go red.
+
+_ACCOUNT = "someone@example.com"
+_INSTANCE = "ytmusic--abc123"
+_COOKIE_VALUE = "secretval"
+
+
+def _leaks(records):
+    """Every log line that names the account: email/username, provider instance id, or cookie value."""
+    return [r.getMessage() for r in records
+            if any(x in r.getMessage() for x in (_ACCOUNT, "someone", _INSTANCE, "abc123", _COOKIE_VALUE))]
+
+
+async def _save_ok(domain, values, instance_id=None):
+    return {"name": "YouTube Music"}
+
+
+async def _instance(_prov):
+    return _INSTANCE
+
+
+async def test_connect_logs_that_a_signin_happened_not_who(monkeypatch, caplog, tmp_path):
+    caplog.set_level("DEBUG", logger=ys.logger.name)
+
+    async def derive(_ctx):
+        return _ACCOUNT
+
+    monkeypatch.setattr(ys, "_derive_username", derive)
+    monkeypatch.setattr(ys, "_store_username", lambda _u: None)
+    monkeypatch.setattr(music_service, "save_provider", _save_ok)
+    monkeypatch.setattr(music_service, "provider_instance_id", _instance)
+    session = {"context": None}
+    await ys._finish_connect(session, "__Secure-3PAPISID=secretval")
+    assert session["state"] == "connected"
+    assert any("harvested cookie" in r.getMessage() for r in caplog.records)
+    assert _leaks(caplog.records) == []
+
+
+async def test_refresh_logs_no_account_identifier(monkeypatch, caplog, tmp_path):
+    caplog.set_level("DEBUG", logger=ys.logger.name)
+    monkeypatch.setattr(ys, "_launch_browser", lambda headless=False: _ready(_FakeContext(GOOD_COOKIES)))
+    monkeypatch.setattr(ys, "PROFILE_DIR", tmp_path)
+    monkeypatch.setattr(ys, "_stored_username", lambda: _ACCOUNT)
+    _validator(monkeypatch, True)
+    monkeypatch.setattr(music_service, "save_provider", _save_ok)
+    monkeypatch.setattr(music_service, "provider_instance_id", _instance)
+    assert (await ys.refresh_now())["ok"] is True
+    assert any("re-saved cookie" in r.getMessage() for r in caplog.records)
+    assert _leaks(caplog.records) == []
+
+
+async def _ready(value):
+    return value

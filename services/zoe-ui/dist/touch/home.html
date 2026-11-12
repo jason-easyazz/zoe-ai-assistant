@@ -2574,7 +2574,9 @@
           host.innerHTML='<div class="srcnote">Sign in to manage music services.'
             +'<button class="srcbtn" id="srcSignin">Sign in</button></div>';
           var b=document.getElementById('srcSignin');if(b)b.onclick=function(){if(window.__showAuthCard)window.__showAuthCard();};
-        } else host.innerHTML=_qempty('Couldn’t load music services — tap Sources again to retry.');
+        } else host.innerHTML=_qempty(e&&e.message==='http 503'
+          ? 'Music isn’t available right now — tap Sources again to retry.'
+          : 'Couldn’t load music services — tap Sources again to retry.');
       });return;}
   }
   function _srcRow(p){
@@ -2614,9 +2616,13 @@
   function authCard(o){
     _acStart(o).then(function(r){
       if(r&&r.immediate){toast(r.ok?'Connected':'Couldn’t connect');if(o.onDone)o.onDone();return;}
-      if(!(r&&r.ok&&r.qr_path)){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();return;}
+      if(!(r&&r.ok&&r.qr_path)){toast('Music isn’t available right now — try again');return;}
       _acOpen(r,o);
-    }).catch(function(){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();});
+    }).catch(function(e){
+      // Only an auth refusal opens the sign-in card; a down or slow music engine
+      // (503, the 12 s deadline) is not a sign-in problem.
+      if(e&&e.message==='auth'){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();}
+      else toast('Music isn’t available right now — try again');});
   }
   function _acStop(){if(_acT){clearInterval(_acT);_acT=null;}_ac=null;}
   function _acLive(){var m=document.getElementById('estModal');return !!(_ac&&m&&m.classList.contains('on')&&m.querySelector('.acst[data-h="'+_ac.id+'"]'));}
@@ -5069,7 +5075,9 @@
   // "what's up?" turn (spoken, same pipeline + identity rules as saying it - a tap proves no voice, so private
   // items stay pending). No dot = listen, as ever. Same no-cors + fallback pattern as /activate; a daemon that
   // predates /pull answers 404 (still opaque here), so the busy state is only a timeout-bounded cue.
-  var _pullT=null;
+  // `notify_any` alone (the guest kiosk) lights the dot but proves no one: /pull carries no voice, so the server would refuse the
+  // guest. That press opens the mic instead - a verified voice asking "what's up?" opens the member's own short session.
+  var _pullT=null,_dotVoiceOnly=false;
   function orbPull(){
     if(_convLive||_orbBusy)return;
     _orbBusy=true;
@@ -5089,19 +5097,24 @@
       .then(function(){_orbBusy=false;});
   }
   orb.addEventListener('click',function(){
-    if(orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening'))orbPull();
+    var ready=orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening');
+    if(ready&&_dotVoiceOnly)panelVoice('Say "what\'s up?" - I\'ll check it\'s you');
+    else if(ready)orbPull();
     else panelVoice('Listening — ask Zoe anything');
   });
   // pull, not push: the orb's quiet "I have something" dot. GET /api/proactive/inbox answers a COUNT and a
   // coarse class - never what is pending - and only for a signed-in member (guest, empty, quiet hours and the
   // flag off all read "no dot"). Asking ("what's up?") is how it clears; nothing here speaks or toasts.
+  // `notify` (ZOE_NOTIFICATIONS) is the member's unread household notifications: the same dot; the press shows them as a card.
+  // `notify_any` (the kiosk poll) is a bare boolean: someone in the house has a non-private one waiting - never a count or whose.
   (function(){
-    function paint(on,review){orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
+    function paint(on,review,voiceOnly){_dotVoiceOnly=!!(on&&voiceOnly);orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
       var s=sid();if(!s){paint(false,false);return;}
       fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
-        .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet),!!(d&&d.review===true&&!d.quiet));})
+        .then(function(d){var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));
+          paint(mine||!!(d&&!d.quiet&&d.notify_any===true),!!(d&&d.review===true&&!d.quiet),!mine);})
         .catch(function(){});
     }
     poll();setInterval(poll,60000);

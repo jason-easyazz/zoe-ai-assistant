@@ -24,7 +24,8 @@ Code: `services/zoe-data/omi_diarize.py`, `omi_voices.py`, `routers/omi_voices.p
    - Centroid-linkage clustering cut at 0.45.
    - Each turn is labelled against the wearer's consented panel profile in that model: `you` at 0.351 or above, `other` below
      0.15, `unsure` between, `mixed` when a quarter of the windows say each of you and other. With no profile the label is
-     `unverified`.
+     `unverified`. Once the owner has confirmed a PENDANT wearer print, that print is used instead and the line records
+     `profile_channel='pendant'` (see `docs/knowledge/omi-night-repass.md` "The wearer print from stored samples").
 2. **Text.** Moonshine is unchanged. It transcribes each turn on its own, splitting a long turn at its quietest points, so the
    text lines up with speakers without word times. The turns cover the whole recording, so no audio goes untranscribed.
 3. **Unknown voices** (`ZOE_OMI_LEARN_VOICES`).
