@@ -299,3 +299,53 @@ def test_a_nonempty_env_recipient_still_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append((req.full_url, req.data or b"")) or _Resp())
     assert mod._telegram("x") is True
     assert "/bot123:abc/" in sent[0][0] and b"chat_id=77" in sent[0][1]
+
+
+# ── the other auto-restarting units (gap audit 2026-11-13: the Telegram bot looped ~9 h unannounced) ──
+
+@pytest.fixture
+def units_rig(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
+    sent: list[str] = []
+    monkeypatch.setattr(mod, "_telegram", lambda text: sent.append(text) or True)
+    props: dict = {}
+    monkeypatch.setattr(mod, "_systemd_prop", lambda unit, prop: props.get((unit, prop), ""))
+    return props, sent
+
+
+BOT = "flue-zoe-telegram.service"
+
+
+def test_other_unit_loop_alerts_once_then_recovers(units_rig):
+    props, sent = units_rig
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "active"})
+    assert mod.check_units([BOT], 5, 1800, False) == 0 and sent == []
+    props[(BOT, "NRestarts")] = "40"
+    props[(BOT, "ActiveState")] = "activating"
+    assert mod.check_units([BOT], 5, 1800, False) == 2
+    assert len(sent) == 1 and BOT in sent[0] and "crash-looping" in sent[0]
+    props[(BOT, "NRestarts")] = "80"
+    assert mod.check_units([BOT], 5, 1800, False) == 2 and len(sent) == 1      # cooldown: no re-alert
+    props[(BOT, "ActiveState")] = "active"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert len(sent) == 2 and "recovered" in sent[1]
+
+
+def test_other_unit_single_restart_and_counter_reset_stay_silent(units_rig):
+    props, sent = units_rig
+    props.update({(BOT, "NRestarts"): "3", (BOT, "ActiveState"): "active"})
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "4"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    props[(BOT, "NRestarts")] = "0"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert sent == []
+
+
+def test_a_unit_this_host_lacks_is_skipped(units_rig):
+    props, sent = units_rig
+    assert mod.check_units(["not-on-this-host.service"], 5, 1800, False) == 0 and sent == []
+
+
+def test_the_bot_and_the_brain_are_watched():
+    assert {BOT, "llama-server.service", "kokoro-tts.service"} <= set(mod.OTHER_UNITS)
