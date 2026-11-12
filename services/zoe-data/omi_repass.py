@@ -28,6 +28,7 @@ Invariants (each has a negative control in ``tests/test_omi_repass.py``):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import difflib
 import hashlib
@@ -1056,17 +1057,36 @@ async def proposal_lines(db, user_id: str, proposal_id: str, limit: int = 6) -> 
     return out
 
 
-async def confirm_wearer(db, user_id: str, proposal_id: str) -> int:
+@contextlib.asynccontextmanager
+async def _wearer_txn(db, user_id: str):
+    """ONE transaction holding a per-member advisory lock (``list_service.list_write_txn``'s pattern), so two wearer-print writers for one member - in this process or another (the
+    owner's CLI beside zoe-data) - serialise on their "is a batch already open / a print already confirmed?" checks and write all-or-nothing. A DB shim without ``transaction`` runs
+    unwrapped."""
+    txn = getattr(db, "transaction", None)
+    if not callable(txn):
+        yield
+        return
+    async with txn():
+        await db.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"omi_wearer|{user_id}",))
+        yield
+
+
+async def confirm_wearer(db, user_id: str, proposal_id: str) -> dict:
     """THE owner's word that a proposal's windows are their own voice: they join the wearer print (and only then does a line read "me"). A ``stored-...`` candidate is one of up to three
-    voices offered side by side (``propose_wearer_from_stored``): confirming one withdraws its siblings from the same batch - they are someone else (nothing is learned of them)."""
-    cur = await db.execute("UPDATE omi_wearer_samples SET status = 'confirmed' WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id = ?",
-                           (user_id, MODEL_ID, proposal_id))
-    n = int(getattr(cur, "rowcount", 0) or 0)
-    if n and proposal_id.startswith("stored-"):
-        await db.execute("DELETE FROM omi_wearer_samples WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id LIKE ? AND proposal_id != ?",
-                         (user_id, MODEL_ID, proposal_id.rsplit("-", 1)[0] + "-%", proposal_id))
+    voices offered side by side (``propose_wearer_from_stored``): confirming one withdraws its siblings from the same batch - they are someone else (nothing is learned of them).
+    Refused (``not_eligible``) for a member who is not positively an adult NOW (D14): a proposal made while they were may never become a print. -> {status, confirmed}."""
+    import manner_block
+    if not await manner_block.eligible(user_id):
+        return {"status": "not_eligible", "confirmed": 0}
+    async with _wearer_txn(db, user_id):
+        cur = await db.execute("UPDATE omi_wearer_samples SET status = 'confirmed' WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id = ?",
+                               (user_id, MODEL_ID, proposal_id))
+        n = int(getattr(cur, "rowcount", 0) or 0)
+        if n and proposal_id.startswith("stored-"):
+            await db.execute("DELETE FROM omi_wearer_samples WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id LIKE ? AND proposal_id != ?",
+                             (user_id, MODEL_ID, proposal_id.rsplit("-", 1)[0] + "-%", proposal_id))
     await db.commit()
-    return n
+    return {"status": "confirmed" if n else "not_found", "confirmed": n}
 
 
 async def reject_wearer(db, user_id: str, proposal_id: str) -> int:
@@ -1092,7 +1112,10 @@ async def propose_wearer_from_stored(db, user_id: str, *, now: Optional[datetime
     ``STORED_MIN_RECORDINGS`` recordings written as side-by-side PROPOSALS (``stored-YYYY-MM-DD-a|b|c``; at most ``PROPOSAL_MAX`` windows nearest the voice's centre, at most
     ``STORED_PER_RECORDING`` from one recording). The top voice is probably the wearer but may be a partner, the TV or Zoe's own speaker, so nothing is "me" until the owner confirms ONE
     (``confirm_wearer``). Lines the owner already decided (a label, a tag, not-a-person) are not evidence. No-op (``status`` says why) with a confirmed print, open proposals, a member
-    not positively an adult (D14, the first pass's own ``manner_block.eligible``), no voice big enough, or an erase since the read. Counts only."""
+    not positively an adult (D14, the first pass's own ``manner_block.eligible``), no voice big enough, or an erase since the read. Those checks are REPEATED inside the erase gate and the
+    member's wearer transaction (``_wearer_txn``) together with the writes, and each selected line's decision is re-read there (a line decided since the read is dropped), so a second
+    run that overlapped this one, or a decision taken meanwhile, cannot add a batch or a decided line. A candidate is kept only if what was actually WRITTEN (an existing sample can
+    conflict) still spans ``STORED_MIN_RECORDINGS`` recordings and ``MIN_WEARER_WINDOWS`` windows; the response reports written counts only."""
     import manner_block
     g = erase_gate.generation(user_id)
     if not await manner_block.eligible(user_id):
@@ -1113,21 +1136,44 @@ async def propose_wearer_from_stored(db, user_id: str, *, now: Optional[datetime
     out = {"segments": len(rows), "voices": len(voices)}
     if not big:
         return {"status": "no_voice", **out}
-    props = []
+    picks = [(f"stored-{stamp.strftime('%Y-%m-%d')}-{'abc'[k]}", _nearest(v, embs, PROPOSAL_MAX, group=recs, per_group=STORED_PER_RECORDING)) for k, v in enumerate(big)]
+    props, dropped = [], 0
     async with erase_gate.writing(user_id, g) as live:
         if not live:                               # the member was erased while this read: nothing of their voice is written
             return {"status": "erased", **out}
-        for k, v in enumerate(big):
-            pid = f"stored-{stamp.strftime('%Y-%m-%d')}-{'abc'[k]}"
-            n = 0
-            for i in _nearest(v, embs, PROPOSAL_MAX, group=recs, per_group=STORED_PER_RECORDING):
-                cur = await db.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
-                                       "VALUES (?, ?, ?, ?, ?, ?, ?, 'heuristic', 'proposed', ?, ?) ON CONFLICT (recording_id, start_ms, end_ms, model_id) DO NOTHING",
-                                       (str(uuid.uuid4()), user_id, rows[i][1], MODEL_ID, int(rows[i][2]), int(rows[i][3]), _blob(_unit(embs[i])), pid, _iso(stamp)))
-                n += int(getattr(cur, "rowcount", 1) or 0)
-            props.append({"id": pid, "windows": n, "recordings": v["recs"], "segments": len(v["m"])})
+        async with _wearer_txn(db, user_id):
+            # the invariants again, UNDER the member's lock and in the same transaction as the writes: another run (or a confirmation) may have landed since the read
+            if not await manner_block.eligible(user_id):
+                return {"status": "not_eligible", **out}
+            await drop_stale_proposals(db, now=now)
+            if await wearer_print(db, user_id) is not None:
+                return {"status": "has_print", **out}
+            if await _all(db, "SELECT 1 FROM omi_wearer_samples WHERE user_id = ? AND model_id = ? AND status = 'proposed' LIMIT 1", (user_id, MODEL_ID)):
+                return {"status": "open_proposals", **out}
+            sel = [rows[i][0] for _, idx in picks for i in idx]
+            undecided = {r[0] for r in await _all(db, "SELECT s.id FROM omi_segments s JOIN omi_segment_embeddings e ON e.segment_id = s.id WHERE s.user_id = ? "
+                                                      f"AND s.id IN ({','.join('?' * len(sel))}) AND s.owner_label IS NULL AND s.tagged_person_id IS NULL "
+                                                      "AND s.not_person IS NULL", (user_id, *sel))} if sel else set()
+            for pid, idx in picks:
+                for i in idx:
+                    if rows[i][0] not in undecided:    # the owner decided this line (or it went) since the read: it is not evidence
+                        dropped += 1
+                        continue
+                    await db.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
+                                     "VALUES (?, ?, ?, ?, ?, ?, ?, 'heuristic', 'proposed', ?, ?) ON CONFLICT (recording_id, start_ms, end_ms, model_id) DO NOTHING",
+                                     (str(uuid.uuid4()), user_id, rows[i][1], MODEL_ID, int(rows[i][2]), int(rows[i][3]), _blob(_unit(embs[i])), pid, _iso(stamp)))
+                got = await _all(db, "SELECT COUNT(*), COUNT(DISTINCT recording_id) FROM omi_wearer_samples WHERE user_id = ? AND model_id = ? AND status = 'proposed' "
+                                     "AND proposal_id = ?", (user_id, MODEL_ID, pid))
+                n, nrec = (int(got[0][0]), int(got[0][1])) if got else (0, 0)
+                if nrec < STORED_MIN_RECORDINGS or n < MIN_WEARER_WINDOWS:     # conflicts / decisions left too little: not a candidate the owner could confirm
+                    await db.execute("DELETE FROM omi_wearer_samples WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id = ?", (user_id, MODEL_ID, pid))
+                    continue
+                props.append({"id": pid, "windows": n, "recordings": nrec})
         await db.commit()
-    logger.info("OMI_WEARER_PROPOSED_FROM_STORED voices=%d proposals=%d", len(voices), len(props))
+    out["decided_since_read"] = dropped
+    logger.info("OMI_WEARER_PROPOSED_FROM_STORED voices=%d proposals=%d dropped=%d", len(voices), len(props), dropped)
+    if not props:
+        return {"status": "no_voice", **out}
     return {"status": "proposed", "proposals": props, **out}
 
 
@@ -1145,8 +1191,8 @@ async def relabel_stored_from_print(db, user_id: str, *, min_cos: float = RELABE
         return {"status": "no_print"}
     you = _unit(you)
     rows = await _all(db, _STORED_SQL + " AND s.speaker IN ('other', 'unsure')", (user_id, user_id, MODEL_ID, _iso(_now())))
-    hits = [(r[0], r[4], round(float(_unit(_vec(r[5])) @ you), 4)) for r in rows]
-    hits = [h for h in hits if h[2] >= min_cos]
+    hits = [(r[0], r[4], float(_unit(_vec(r[5])) @ you)) for r in rows]
+    hits = [h for h in hits if h[2] >= min_cos]               # the UNROUNDED score against the bar (0.59996 is below 0.6); only the stored copy is rounded
     n, touched = 0, set()
     async with erase_gate.writing(user_id, g) as live:
         if not live:
@@ -1154,7 +1200,7 @@ async def relabel_stored_from_print(db, user_id: str, *, min_cos: float = RELABE
         for sid, cid, score in hits:
             cur = await db.execute("UPDATE omi_segments SET speaker = 'you', score = ?, profile_channel = 'pendant', voice_cluster_id = NULL, suggested_person_id = NULL, "
                                    "suggested_score = NULL WHERE id = ? AND user_id = ? AND owner_label IS NULL AND tagged_person_id IS NULL AND not_person IS NULL",
-                                   (score, sid, user_id))
+                                   (round(score, 4), sid, user_id))
             if int(getattr(cur, "rowcount", 0) or 0):
                 await db.execute("DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (sid, user_id))
                 n += 1

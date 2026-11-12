@@ -116,7 +116,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
             from db_compat import get_compat_db
             async with get_compat_db() as db:
                 if a.confirm_wearer:
-                    return 0, {"status": "ok", "confirmed": await rp.confirm_wearer(db, a.user, a.confirm_wearer)}
+                    return 0, await rp.confirm_wearer(db, a.user, a.confirm_wearer)        # {status: confirmed | not_found | not_eligible, confirmed}
                 if a.reject_wearer:
                     return 0, {"status": "ok", "rejected": await rp.reject_wearer(db, a.user, a.reject_wearer)}
                 if a.propose_wearer_stored:

@@ -52,6 +52,8 @@ def renv(env, monkeypatch, tmp_path):
     async def _adult(uid, db=None):                         # the pass retains voice data only for a positively-adult member; the tests' member is one (a child test overrides this)
         return True
     monkeypatch.setattr(manner_block, "eligible", _adult)
+    env.db.conn.create_function("hashtextextended", 2, lambda key, seed: 0)          # Postgres' per-member advisory lock (``omi_repass._wearer_txn``): a no-op on SQLite,
+    env.db.conn.create_function("pg_advisory_xact_lock", 1, lambda key: None)         # where the test's single connection is already serial
     return env
 
 
@@ -354,7 +356,8 @@ def test_stored_voices_become_side_by_side_proposals_ranked_by_how_many_recordin
     _held(renv, C, 11, tag="c")
     _held(renv, D, 10, tag="d")
     out = run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
-    assert out["status"] == "proposed" and [p["recordings"] for p in out["proposals"]] == [15, 12, 11]
+    rec = {p["id"]: p["recordings"] for p in out["proposals"]}                                      # written counts: A spans 15, C 11, B at least 10 (2 windows per recording, 20 max)
+    assert out["status"] == "proposed" and rec["stored-2026-11-12-a"] == 15 and rec["stored-2026-11-12-c"] == 11 and rec["stored-2026-11-12-b"] >= 10
     props = _proposals(renv)
     assert sorted(props) == ["stored-2026-11-12-a", "stored-2026-11-12-b", "stored-2026-11-12-c"]
     for pid, centre in (("stored-2026-11-12-a", A), ("stored-2026-11-12-b", B), ("stored-2026-11-12-c", C)):
@@ -457,12 +460,118 @@ def test_confirming_one_stored_candidate_withdraws_its_siblings_only(renv):
     renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
                          "VALUES ('night', ?, 'x', ?, 0, 900, ?, 'heuristic', 'proposed', '2026-11-11', ?)", (OWNER, rp.MODEL_ID, _around(_centre(30), 1).tobytes(), rp._iso(NOW)))
     renv.db.conn.commit()
-    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-b")) == 11
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-b")) == {"status": "confirmed", "confirmed": 11}
     left = renv.db.rows("SELECT proposal_id, status, COUNT(*) AS n FROM omi_wearer_samples GROUP BY proposal_id, status ORDER BY proposal_id")
     assert [(r["proposal_id"], r["status"]) for r in left] == [("2026-11-11", "proposed"), ("stored-2026-11-12-b", "confirmed")]
     you = run(rp.wearer_print(renv.db, OWNER))
     assert you is not None and float(you @ _centre(21)) > 0.9                                     # the confirmed voice IS the print
-    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a")) == 0                     # a withdrawn sibling cannot be confirmed afterwards
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["confirmed"] == 0         # a withdrawn sibling cannot be confirmed afterwards
+
+
+def _between_read_and_write(monkeypatch, act):
+    """Run ``act()`` (synchronous SQL on the test's connection) once, after the proposal's read and clustering and before its write."""
+    real = rp._greedy_voices
+    fired = []
+
+    def wrapped(*a, **k):
+        out = real(*a, **k)
+        if not fired:
+            fired.append(1)
+            act()
+        return out
+    monkeypatch.setattr(rp, "_greedy_voices", wrapped)
+
+
+def test_a_batch_that_landed_after_the_read_stops_a_second_one(renv, monkeypatch):
+    """Two overlapping runs must yield ONE batch. Mutation: drop the open-proposals recheck inside ``_wearer_txn`` -> the second run writes its own batch beside the first."""
+    _held(renv, _centre(60), 12, tag="ov")
+
+    def other_run_committed():
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
+                             "VALUES ('first', ?, 'elsewhere', ?, 0, 900, ?, 'heuristic', 'proposed', 'stored-2026-11-12-a', ?)",
+                             (OWNER, rp.MODEL_ID, _around(_centre(60), 1).tobytes(), rp._iso(NOW)))
+        renv.db.conn.commit()
+    _between_read_and_write(monkeypatch, other_run_committed)
+    assert run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))["status"] == "open_proposals"
+    assert [r["id"] for r in renv.db.rows("SELECT id FROM omi_wearer_samples")] == ["first"]
+
+
+def test_two_concurrent_runs_write_one_batch_of_at_most_three(renv):
+    """Two real runs at once (every SQLite call yields): one proposes, the other finds that batch open. Mutation: drop the in-lock open-proposals recheck -> two batches."""
+    for k in range(4):
+        _held(renv, _centre(70 + k), 13 - k, tag=f"cc{k}")
+
+    async def both():
+        return await asyncio.gather(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW), rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    outs = run(both())
+    assert sorted(o["status"] for o in outs) == ["open_proposals", "proposed"]
+    ids = {r["proposal_id"] for r in renv.db.rows("SELECT DISTINCT proposal_id FROM omi_wearer_samples")}
+    assert len(ids) <= rp.STORED_MAX_VOICES
+
+
+def test_a_line_decided_between_the_read_and_the_write_is_not_in_the_proposal(renv, monkeypatch):
+    """Mutation: drop the in-transaction decision re-read -> the line the owner just labelled "not me" becomes wearer evidence."""
+    _held(renv, _centre(61), 12, tag="dv")
+
+    def owner_decides():
+        renv.db.conn.execute("UPDATE omi_segments SET owner_label = 'other' WHERE id = 'dv-s0-0'")
+        renv.db.conn.commit()
+    _between_read_and_write(monkeypatch, owner_decides)
+    out = run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert out["status"] == "proposed" and out["decided_since_read"] == 1 and out["proposals"][0]["recordings"] == 11
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE recording_id = 'dv-r0'")[0]["n"] == 0
+
+
+def test_a_candidate_left_under_ten_recordings_by_insert_conflicts_is_removed(renv):
+    """Five of a ten-recording voice's windows are already (unconfirmed-print) samples, so ON CONFLICT drops them. Mutation: drop the written-count check -> a 5-window,
+    5-recording candidate is offered (and reported as the cluster's 10)."""
+    _held(renv, _centre(62), 10, tag="cf")
+    for r in range(5):
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, ?, ?, 0, 2500, ?, 'owner_label', 'confirmed', '2026-11-11T00:00:00Z')",
+                             (f"old{r}", OWNER, f"cf-r{r}", rp.MODEL_ID, _around(_centre(62), 900 + r).tobytes()))
+    renv.db.conn.commit()
+    out = run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert out["status"] == "no_voice" and renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'proposed'")[0]["n"] == 0
+
+
+def test_confirming_after_the_member_became_ineligible_is_refused(renv, monkeypatch):
+    """D14 at confirm time. Mutation: drop the ``manner_block.eligible`` check in ``confirm_wearer`` -> a child's pendant gets a confirmed print. Control: an adult confirms."""
+    import manner_block
+    _held(renv, _centre(63), 12, tag="ce")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+
+    async def child(uid, db=None):
+        return False
+    monkeypatch.setattr(manner_block, "eligible", child)
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a")) == {"status": "not_eligible", "confirmed": 0}
+    assert renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'confirmed'")[0]["n"] == 0
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "not_eligible"
+
+    async def adult(uid, db=None):
+        return True
+    monkeypatch.setattr(manner_block, "eligible", adult)
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["status"] == "confirmed"
+
+
+def test_relabel_compares_the_unrounded_score_with_the_bar(renv):
+    """0.59996 is under 0.6 and must stay as it is; 0.6 reads "me". Mutation: compare the score rounded to 4 places -> 0.59996 becomes 0.6000 and reads "me"."""
+    e = np.zeros(256, dtype=np.float32)
+    e[0] = 1.0
+    for i in range(rp.MIN_WEARER_WINDOWS):                                                          # a confirmed print that is exactly e0
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, 'x', ?, ?, ?, ?, 'owner_label', 'confirmed', '2026-11-11T00:00:00Z')", (f"e{i}", OWNER, rp.MODEL_ID, i * 1000, i * 1000 + 900, e.tobytes()))
+    renv.db.conn.commit()
+
+    def at(c):
+        x = np.zeros(256)
+        x[0], x[1] = c, np.sqrt(1 - c * c)
+        return x
+    under = _held(renv, None, 1, tag="under", vec=at(0.59996))
+    on = _held(renv, None, 1, tag="on", vec=at(0.6))
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["relabelled"] == 1
+    sp = {r["id"]: r["speaker"] for r in renv.db.rows("SELECT id, speaker FROM omi_segments")}
+    assert sp[under[0]] == "other" and sp[on[0]] == "you"
 
 
 def test_relabel_marks_only_undecided_stored_lines_over_the_bar_as_me_and_is_idempotent(renv):
@@ -480,7 +589,7 @@ def test_relabel_marks_only_undecided_stored_lines_over_the_bar_as_me_and_is_ide
     assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "no_print"               # before the owner confirms: nothing
     assert {r["speaker"] for r in renv.db.rows("SELECT speaker FROM omi_segments")} == {"other", "unsure"}
     run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
-    run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["status"] == "confirmed"
     out = run(rp.relabel_stored_from_print(renv.db, OWNER))
     sp = {r["id"]: (r["speaker"], r["profile_channel"]) for r in renv.db.rows("SELECT id, speaker, profile_channel FROM omi_segments")}
     assert out["status"] == "ok" and out["relabelled"] == len(mine)
