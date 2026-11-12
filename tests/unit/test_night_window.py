@@ -179,6 +179,8 @@ class FakeHost(nw.NightHost):
         if any(f in line for f in self.fail_run):
             return bk.Result(1, "injected failure")
         prog = argv[0]
+        if str(prog).endswith("night_busy.sh"):                   # the exploratory gate (trial / sweep / rehearsal): rc 1 = may run, rc 0 = pause (set busy_gate)
+            return bk.Result(0 if getattr(self, "busy_gate", False) else 1, "")
         if prog == "sudo":
             if argv[1:] == ["-n", "true"]:
                 return bk.Result(0 if self.sudo else 1, "")
@@ -1590,6 +1592,16 @@ def test_trial_keeps_its_behaviour_and_cells_only_is_a_trial_that_cannot_be_comb
     assert nw.configure(nw.build_parser().parse_args(["--trial"])).trial_mode == "full"
     with pytest.raises(nw.Refused):
         nw.configure(nw.build_parser().parse_args(["--cells-only", "--speed-sweep"]))
+
+
+def test_a_trial_or_sweep_is_gated_like_a_landing_and_stops_nothing_when_night_busy_says_pause(tmp_path):
+    for argv in (["--trial"], ["--speed-sweep"]):
+        w, host, cfg = make(tmp_path, argv=argv, start=at(11, 0))
+        host.busy_gate = True
+        assert w.run() == nw.EXIT_REFUSED and "night_busy.sh voice" in w.outcome
+        assert not any(c[1] and c[0][:2] == ["systemctl", "--user"] and "stop" in c[0] for c in host.cmds), "nothing may be stopped"
+        w, host, cfg = make(tmp_path, argv=argv, start=at(11, 0))          # negative control: the gate open, it gets past preflight
+        assert "night_busy.sh voice" not in (w.run() and w.outcome or "")
 
 
 def test_the_12b_default_is_ngl_34_because_38_was_refused_twice_and_38_stays_selectable(tmp_path):
