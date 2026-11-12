@@ -361,5 +361,50 @@ def test_a_reset_after_a_real_loop_alert_sends_exactly_one_recovery_line(units_r
     assert len(sent) == 2 and "recovered" in sent[1]
 
 
+def test_a_slow_one_restart_per_tick_loop_still_alerts_within_the_window(units_rig, monkeypatch):
+    """llama-server fails its ~120 s startup probe and restarts: one restart per 2-min tick. Five within 15 min is a loop."""
+    props, sent = units_rig
+    clock = [1_000_000.0]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "activating"})
+    mod.check_units([BOT], 5, 1800, False)
+    for n in range(1, 6):
+        clock[0] += 120
+        props[(BOT, "NRestarts")] = str(n)
+        rc = mod.check_units([BOT], 5, 1800, False)
+    assert rc == 2 and len(sent) == 1 and "5x in the last 15 min" in sent[0]
+
+
+def test_restarts_older_than_the_window_do_not_add_up(units_rig, monkeypatch):
+    props, sent = units_rig
+    clock = [1_000_000.0]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "active"})
+    mod.check_units([BOT], 5, 1800, False)
+    for n in range(1, 6):
+        clock[0] += 3600                                   # one restart an hour: never a loop
+        props[(BOT, "NRestarts")] = str(n)
+        assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert sent == []
+
+
+def test_an_undelivered_alert_is_retried_until_telegram_takes_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
+    attempts: list[str] = []
+    up = [False]
+    monkeypatch.setattr(mod, "_telegram", lambda text: attempts.append(text) or up[0])
+    props = {(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "activating"}
+    monkeypatch.setattr(mod, "_systemd_prop", lambda unit, prop: props.get((unit, prop), ""))
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "40"
+    mod.check_units([BOT], 5, 1800, False)                # detected; Telegram down
+    mod.check_units([BOT], 5, 1800, False)                # counter flat: still retried
+    up[0] = True
+    mod.check_units([BOT], 5, 1800, False)                # delivered
+    mod.check_units([BOT], 5, 1800, False)                # nothing pending any more
+    loop_attempts = [a for a in attempts if a.startswith("🔴")]
+    assert len(loop_attempts) == 3
+
+
 def test_the_bot_and_the_brains_are_watched():
     assert {BOT, "flue-zoe-brain-2x.service", "llama-server.service", "kokoro-tts.service"} <= set(mod.OTHER_UNITS)

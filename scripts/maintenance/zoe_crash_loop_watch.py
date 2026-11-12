@@ -213,9 +213,15 @@ OTHER_UNITS = ("flue-zoe-telegram.service", "flue-zoe-brain-2x.service", "llama-
                "kokoro-tts.service", "functiongemma-router.service", "github-runner.service")
 
 
-def check_units(units, threshold: int, cooldown: int, dry_run: bool) -> int:
+UNIT_WINDOW_S = 900   # restarts are counted over this window, not one tick: llama-server's ~130 s fail-and-restart cycle
+                      # is one restart per 2-min tick and would never reach the threshold within a single tick
+
+
+def check_units(units, threshold: int, cooldown: int, dry_run: bool, window_s: float = UNIT_WINDOW_S) -> int:
     """Restart-counter loop check for ``units``; per-unit state under ``state["units"]``. A unit this host does not
-    have (no readable NRestarts) is skipped silently. Returns 2 if any unit is looping, else 0."""
+    have (no readable NRestarts) is skipped silently. A loop is ``threshold`` automatic restarts within ``window_s``.
+    An alert that Telegram did not take stays PENDING and is retried every tick until delivered, even after the
+    restart rate drops. Returns 2 if any unit is looping, else 0."""
     state = _load_state()
     per = state.setdefault("units", {})
     now = time.time()
@@ -227,25 +233,36 @@ def check_units(units, threshold: int, cooldown: int, dry_run: bool) -> int:
         restarts = int(raw)
         s = per.setdefault(unit, {})
         prev = s.get("restarts")
-        delta = restarts - prev if isinstance(prev, int) and restarts >= prev else 0   # a counter reset is not a loop
-        looping = delta >= threshold
+        if not isinstance(prev, int) or restarts < prev:          # first sight, or a counter reset: not a loop
+            s["hist"] = []
+        delta = restarts - prev if isinstance(prev, int) and restarts >= prev else 0
+        hist = [h for h in s.get("hist", []) if now - h[0] <= window_s] + ([[now, delta]] if delta else [])
+        s["hist"] = hist
+        recent = sum(h[1] for h in hist)
+        active = _systemd_prop(unit, "ActiveState")
+        settled = delta == 0 and active == "active"               # running, and no restart since the last tick
+        looping = recent >= threshold and not settled
         any_loop = any_loop or looping
         msg = None
-        if looping and now - s.get("last_alert_ts", 0) >= cooldown:
-            active = _systemd_prop(unit, "ActiveState")
-            msg = (f"🔴 {unit} is crash-looping: restarted {delta}x since the last check (total {restarts}), "
-                   f"ActiveState={active}.\nCheck: journalctl --user -u {unit}")
-        elif s.get("alerted") and delta == 0 and _systemd_prop(unit, "ActiveState") == "active":
+        if s.get("pending"):
+            msg = s["pending"]                                    # an undelivered loop alert is retried first
+        elif looping and now - s.get("last_alert_ts", 0) >= cooldown:
+            msg = (f"🔴 {unit} is crash-looping: restarted {recent}x in the last {int(window_s // 60)} min "
+                   f"(total {restarts}), ActiveState={active}.\nCheck: journalctl --user -u {unit}")
+        elif s.get("alerted") and settled:
             msg = f"🟢 {unit} recovered (total restarts {restarts})."
         if msg:
             print(msg.replace("\n", " | "))
             delivered = True if dry_run else _telegram(msg)
             if not dry_run:
-                if looping:
-                    s["alerted"] = bool(delivered) or s.get("alerted", False)
+                if msg.startswith("🔴"):
                     if delivered:
+                        s["alerted"] = True
                         s["last_alert_ts"] = now
-                else:
+                        s.pop("pending", None)
+                    else:
+                        s["pending"] = msg
+                elif delivered:
                     s["alerted"] = False
                     s.pop("last_alert_ts", None)
         s["restarts"] = restarts
