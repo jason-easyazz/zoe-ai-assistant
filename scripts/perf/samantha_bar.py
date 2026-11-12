@@ -1653,13 +1653,13 @@ class Live:
         self.packet_chars.append(len(packet))
         return packet
 
-    def capture_status(self, user: str) -> dict[str, Any] | None:
+    def capture_status(self, user: str, timeout: float = 60) -> dict[str, Any] | None:
         """Per-user post-turn capture counters (/capture-status, internal). None
         when the endpoint is unavailable (old server / token refused)."""
         assert_demo_user(user)
         q = urllib.parse.urlencode({"user_id": user})
         code, body = self._req("GET", f"{DATA_BASE}/api/memories/capture-status?{q}",
-                               {"X-Internal-Token": self.token})
+                               {"X-Internal-Token": self.token}, timeout=timeout)
         if code != 200 or not isinstance(body, dict) or "completed" not in body:
             return None
         return body
@@ -1696,10 +1696,10 @@ class Live:
                                f"in_flight={st.get('in_flight')})"}
             time.sleep(3)
 
-    def packet_count(self, user: str) -> int | None:
+    def packet_count(self, user: str, timeout: float = 60) -> int | None:
         q = urllib.parse.urlencode({"user_id": user, "message": "", "limit": 40})
         code, body = self._req("GET", f"{DATA_BASE}/api/memories/for-prompt?{q}",
-                               {"X-Internal-Token": self.token})
+                               {"X-Internal-Token": self.token}, timeout=timeout)
         return int((body or {}).get("count") or 0) if code == 200 else None
 
     @property
@@ -2080,20 +2080,23 @@ def drain_captures(live: Any, user: str, *, timeout_s: float | None = None,
     ``error``. A wait that still expires reports the leftover in_flight (unproven teardown)."""
     if timeout_s is None:
         timeout_s = _quiesce_budget()
-    waited = 0.0   # budget counted in polls (sleep is looked up at call time), not wall-clock
+    # Real wall-clock bound: the polls' own HTTP calls count too (a stalled API must not stretch the budget).
+    deadline = time.monotonic() + timeout_s
     last, stable, in_flight = None, 0, None
     while True:
-        c = live.packet_count(user)
-        st = live.capture_status(user)
+        http_t = max(min(60.0, deadline - time.monotonic()), 0.1)
+        c = live.packet_count(user, timeout=http_t)
+        http_t = max(min(60.0, deadline - time.monotonic()), 0.1)
+        st = live.capture_status(user, timeout=http_t)
         in_flight = int(st.get("in_flight") or 0) if st else None
         stable = stable + 1 if (c is not None and c == last) else 0
         last = c
         if stable >= 2 and in_flight == 0:
             break
-        if waited >= timeout_s:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             break
-        time.sleep(poll_s)
-        waited += poll_s
+        time.sleep(min(poll_s, remaining))
     # Both signals are recorded; BOTH must have been observed for a proof.
     return {"in_flight": in_flight, "packet": last, "stable": stable}
 
