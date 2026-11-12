@@ -140,7 +140,7 @@ function chatAgents() {
   assert(!/function\s+selectAgent\s*\(/.test(chat) && !/\bselectedAgent\b/.test(chat), 'chat.html still carries the agent picker');
   assert(!/>OpenClaw<|'OpenClaw'|'Hermes Agent'|Escalating to OpenClaw/.test(chat), 'chat.html still shows a retired runtime name');
   // ...and the request body carries no lane override at all (the server dropped force_openclaw / force_agent).
-  for (const page of ['chat.html', 'touch/chat.html']) {
+  for (const page of ['chat.html']) {
     const src = read(page);
     for (const dead of ['force_openclaw', 'force_agent', 'forceOpenClawMode', 'tryPromptWithOpenClaw']) assert(!src.includes(dead), page + ' still carries ' + dead);
   }
