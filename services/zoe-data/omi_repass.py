@@ -544,14 +544,13 @@ def plan_window(costs: list, usable_s: float, *, fixed_s: float = 0.0) -> tuple:
     return take, oversize
 
 
-async def pending_recordings(db, *, now: Optional[datetime] = None, limit: int = 5000) -> list[dict]:   # all of the held backlog (<= 30 days): the window ranks it globally
-    """Recordings the night pass owes a look, oldest first (recordings the first pass found NO words in go last: a pendant that records ~12 h a day
-    cannot all be re-read in one night, so the ones most likely to hold speech are done first and the rest carry): first-pass done (or empty) rows whose WAV is still on disk, inside retention, not yet
-    passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
+async def pending_recordings(db, *, now: Optional[datetime] = None, limit: Optional[int] = None) -> list[dict]:
+    """EVERY recording the night pass owes a look (the window ranks the whole held backlog itself; the hold cap bounds it to 30 days of uploads; ``limit`` is for
+    callers that want a sample): first-pass done (or empty) rows whose WAV is still on disk, inside the hold, not yet passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
     rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts, device_id, audio_expires_at FROM omi_recordings "
                           f"WHERE status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < ? "
-                          "AND created_at >= ? ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at LIMIT ?",
-                      (MAX_PASS_ATTEMPTS, _iso((now or _now()) - timedelta(days=HOLD_CAP_DAYS)), limit))
+                          "AND created_at >= ? ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at" + (" LIMIT ?" if limit else ""),
+                      (MAX_PASS_ATTEMPTS, _iso((now or _now()) - timedelta(days=HOLD_CAP_DAYS))) + ((limit,) if limit else ()))
     out = []
     for r in rows:
         d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts", "device_id", "audio_expires_at")}
