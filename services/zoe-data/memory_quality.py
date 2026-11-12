@@ -97,7 +97,7 @@ _META_OPENER_RE = re.compile(
     # "The user's statement ..." is commentary; "The user's sister lives in ..." is how the extractor writes a relationship fact
     # (lab 2026-11-12, labs/panel-extraction-split: a bare user'?s rejected every such fact as meta-rambling)
     r"the\s+(?:provided|context|concept|following|statement|statements|above|"
-    r"user'?s\s+(?:statement|question|message|request|response|input|query|words)\b|"
+    r"user'?s\s+(?:statements?|questions?|messages?|requests?|responses?|inputs?|quer(?:y|ies)|words|turns?|utterances?)\b|"
     r"information|text|passage|conversation|response|key|main|overall)|"
     r"these\s+(?:statements?|facts?|points?|examples?)|"
     r"this\s+(?:statement|passage|text|response|conversation)|"

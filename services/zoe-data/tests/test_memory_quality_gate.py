@@ -488,6 +488,7 @@ def test_a_fact_that_opens_with_the_users_is_stored(text):
 
 
 @pytest.mark.parametrize("text", ["The user's statement indicates a preference.", "The user's question is about the weather.",
-                                  "The user's message contains no facts."])
+                                  "The user's message contains no facts.", "The user's statements indicate a preference.",
+                                  "The user's queries are about music."])
 def test_commentary_about_the_users_turn_is_still_meta(text):
     assert is_storable_fact(text) == (False, "meta_rambling")

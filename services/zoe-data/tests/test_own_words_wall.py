@@ -693,7 +693,10 @@ def test_negative_control_the_owners_own_sentence_is_kept():
 
 @pytest.mark.parametrize("turn", ['I rang and said, "I am moving to Halvercombe next month."',
                                   'I rang and said "I am moving to Halvercombe next month."',
-                                  'We called and said, "We are moving to Halvercombe next month."'])
+                                  'We called and said, "We are moving to Halvercombe next month."',
+                                  'I rang back and said, "I am moving to Halvercombe next month."',
+                                  'I just said, "I am moving to Halvercombe next month."',
+                                  'I then said "I am moving to Halvercombe next month."'])
 def test_the_owners_own_quoted_words_after_a_conjunction_are_kept(turn):
     own = own_words.analyze(turn)
     assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
@@ -702,7 +705,9 @@ def test_the_owners_own_quoted_words_after_a_conjunction_are_kept(turn):
 @pytest.mark.parametrize("turn", ['I was there when Wren rang and said, "I am moving to Halvercombe next month."',
                                   'I heard my sister call and said, "I am moving to Halvercombe next month."',
                                   'I think she rang and said, "I am moving to Halvercombe next month."',
-                                  'We were out when Wren rang and said "I am moving to Halvercombe next month."'])
+                                  'We were out when Wren rang and said "I am moving to Halvercombe next month."',
+                                  'I heard dad call and said, "I am moving to Halvercombe next month."',
+                                  'I let mum in and said, "I am moving to Halvercombe next month."'])
 def test_another_speaker_inside_an_i_sentence_is_still_third_person(turn):
     own = own_words.analyze(turn)
     assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
