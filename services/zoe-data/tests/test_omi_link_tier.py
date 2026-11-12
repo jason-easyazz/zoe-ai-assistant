@@ -10,6 +10,7 @@ Negative controls - remove the guard by Edit and the named test turns red:
   ``allow_writes is False`` return                                      -> test_a_dry_run_changes_nothing
   ``self_unassign`` owning check (via ``owned_by``)                      -> test_unlink_by_voice_is_my_own_pendant_only
   "unlink it anyway" accepted without the warning                       -> test_unlink_it_anyway_by_voice_only_after_the_warning
+  ``_speculation_barrier`` before ``_unlink`` / ``_link``                -> test_a_speculative_*_waits_for_the_verdict[cancel]
 
 Synthetic data only.
 """
@@ -144,3 +145,54 @@ def test_unlink_it_anyway_by_voice_only_after_the_warning(tier_env):
     assert first == omi_linking.say("unlink_pending") and "go to whoever links it next" in first and owner(tier_env, DEV_A) == "ann"
     assert say("unlink it anyway", verified=False) == omi_linking.say("unverified") and owner(tier_env, DEV_A) == "ann"
     assert say("unlink it anyway") == omi_linking.say("unlink_forced") and owner(tier_env, DEV_A) == ""
+
+
+# -- a SPECULATIVE voice turn: the ownership change waits for the daemon's verdict, runs once on commit, never on cancel --
+
+async def _speculative(text: str, verdict: str, observe):
+    """Fire the tier inside a bound speculative gate, record ``observe()`` BEFORE the verdict, deliver it, settle."""
+    import voice_speculation as vs
+    gate = vs.open_gate(f"omi-link-{verdict}-{len(text)}")
+    token = vs.bind(gate)
+    try:
+        task = asyncio.ensure_future(olt.tier(text, "ann", "s1", channel="voice", speaker_verified=True, panel_id="p1"))
+    finally:
+        vs.unbind(token)
+    await asyncio.sleep(0.05)
+    before = observe()
+    if asyncio.iscoroutine(before):
+        before = await before
+    gate.resolve(verdict)
+    try:
+        res = await task
+        outcome = ("ok", res)
+    except asyncio.CancelledError:
+        outcome = ("cancelled", None)
+    await asyncio.sleep(0.05)
+    vs.close_gate(gate)
+    return before, outcome
+
+
+@pytest.mark.parametrize("verdict", ["commit", "cancel"])
+def test_a_speculative_unlink_waits_for_the_verdict(tier_env, verdict):
+    import omi_devices
+    register(tier_env, DEV_A, "ann")
+    before, outcome = asyncio.run(_speculative("unlink my pendant", verdict, lambda: omi_devices.owner_of(DEV_A)))
+    assert before == "ann", "the unlink ran BEFORE the verdict"
+    if verdict == "commit":
+        assert outcome[0] == "ok" and outcome[1].reply == omi_linking.say("unlink_done_warn")
+        assert owner(tier_env, DEV_A) == ""
+    else:
+        assert outcome[0] == "cancelled", "a cancelled speculative turn ends cancelled, never falls through to another tier"
+        assert owner(tier_env, DEV_A) == "ann", "a cancelled speculative prefix unlinked the pendant"
+
+
+@pytest.mark.parametrize("verdict", ["commit", "cancel"])
+def test_a_speculative_link_waits_for_the_verdict(tier_env, verdict):
+    before, outcome = asyncio.run(_speculative("link my pendant", verdict, lambda: list(tier_env.started)))
+    assert before == [], "the pairing window opened BEFORE the verdict"
+    if verdict == "commit":
+        assert outcome[0] == "ok" and tier_env.started == [("p1", "ann")], "commit opens the window exactly once"
+    else:
+        assert outcome[0] == "cancelled"
+        assert tier_env.started == [] and omi_linking.status("ann") is None, "a cancelled speculative prefix opened a pairing window"

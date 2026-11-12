@@ -106,6 +106,18 @@ async def _unlink(uid: str, role: str, *, confirm: bool = False) -> str:
     return omi_linking.say("unlink_done_warn" if out.get("pending_audio") is None else "unlink_done")
 
 
+async def _speculation_barrier(kind: str) -> None:
+    """An ownership change on a SPECULATIVE voice turn waits for the daemon's verdict (dropped on cancel) - the rule every other
+    write on the voice path follows (``expert_dispatch.dispatch``, ``ask_to_remember``). A no-op when nothing is bound. On cancel it
+    raises ``SpeculativeTurnCancelled`` (a ``CancelledError``), which ``tier`` re-raises: no unlink, no pairing window."""
+    try:
+        import voice_speculation as _vs
+    except Exception:  # noqa: BLE001 - in-tree; a missing module means no speculation exists
+        return
+    if _vs.bound_gate() is not None:
+        await _vs.await_commit(f"omi_link:{kind}")
+
+
 async def _link(member: dict, panel_id: str) -> str:
     import omi_member_settings as ms
     uid = member["user_id"]
@@ -142,12 +154,14 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
         elif allow_writes is False:
             return None
         elif kind in ("unlink", "unlink_force"):
+            await _speculation_barrier(kind)
             reply = await _unlink(uid, audience, confirm=kind == "unlink_force")
         else:
             import manner_block
             if not await manner_block.is_adult(uid):
                 reply = omi_linking.say("child")
             else:
+                await _speculation_barrier(kind)
                 reply = await _link({"user_id": uid, "role": "member"}, pid)
         logger.info("OMI_LINK tier kind=%s audience=%s verified=%s", kind, audience, speaker_verified)
         import expert_dispatch as _xd
