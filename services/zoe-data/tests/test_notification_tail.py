@@ -242,3 +242,25 @@ def test_the_days_count_survives_a_restart(tenv):
         nt.reset()                                                                     # a restart between each one
     verified("s9")
     assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s9")) == "Done."     # still 3 a day
+
+
+def test_closing_the_consumer_closes_the_inner_turn_and_adds_no_tail(tenv):
+    seed(1)
+    verified()
+    closed = {}
+
+    async def brain():
+        try:
+            yield "The kettle "
+            yield "is on."
+        finally:
+            closed["inner"] = True
+
+    async def stop_early():
+        out = nt.append_stream(brain(), "kettle", MEMBER, "s1")
+        first = await out.__anext__()
+        await out.aclose()                                    # barge-in: the consumer stops after the first delta
+        return first
+    assert run(stop_early()) == "The kettle "
+    assert closed == {"inner": True}                          # the inner turn was closed, not left suspended
+    assert nt._LAST == {} and nt._PENDING == {}               # and no tail was said or counted

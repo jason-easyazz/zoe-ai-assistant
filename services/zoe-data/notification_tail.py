@@ -196,14 +196,21 @@ async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, 
     """Wrap the brain's reply stream: the reply goes out untouched; only when it finished with real text may ONE line follow. A consumer
     that stops early (barge-in) gets no line and nothing is counted."""
     reply: list[str] = []
-    async for d in turn:
-        if not d.startswith(("__TOOL__:", "__THINKING__:")) and d.strip() and d not in skip:
-            reply.append(d)
-        yield d
-    text = "".join(reply)
-    got = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
-    if got and await confirm_tail(got[1], session_id, got[2]):      # counted (and saved) first: an unsaved line is never said
-        yield " " + got[0]
+    try:
+        async for d in turn:
+            if not d.startswith(("__TOOL__:", "__THINKING__:")) and d.strip() and d not in skip:
+                reply.append(d)
+            yield d
+        text = "".join(reply)
+        got = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
+        if got and await confirm_tail(got[1], session_id, got[2]):      # counted (and saved) first: an unsaved line is never said
+            yield " " + got[0]
+    finally:
+        # A consumer that stops early (barge-in, disconnect, cancel) closes THIS generator: the inner turn is closed deterministically, as
+        # every wrapper in the chain does (clean_goodbye, reply_polish), so the Flue submission is aborted and its logs run.
+        aclose = getattr(turn, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: str, *, replay: bool = False, dry: bool = False) -> str:
