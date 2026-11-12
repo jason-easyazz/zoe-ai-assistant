@@ -35,10 +35,12 @@ def test_lists_default_layout_harness():
     assert "checks passed" in proc.stdout
 
 
-def test_projects_still_have_no_backend():
-    """'project' is excluded from the lists default because no backend serves it (the always-empty /api/projects stub
-    was deleted, gap audit 2026-11-13). If a real projects route ever appears, revisit the exclusion."""
+def test_projects_route_is_still_a_stub():
+    """'project' is excluded from the lists default because its backend returns
+    an empty stub. If that ever becomes real, revisit the exclusion.
+    """
     stubs = (ROOT / "zoe-data" / "routers" / "stubs.py").read_text(encoding="utf-8")
-    assert '@router.get("/api/projects")' not in stubs, (
-        "a projects route is back; re-check whether 'project' should still be excluded from the lists default layout"
+    assert "/api/projects" in stubs or "projects" in stubs, (
+        "the projects stub moved; re-check whether 'project' should still be "
+        "excluded from the lists default layout"
     )

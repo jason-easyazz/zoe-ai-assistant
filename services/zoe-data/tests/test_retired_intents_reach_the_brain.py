@@ -56,10 +56,11 @@ def test_ordinary_commands_beside_the_guards_still_match():
     assert detect_intent("add eggs to the shopping list").name == "list_add"
 
 
-@pytest.mark.parametrize("name", ["recipe_search", "ha_full_setup", "build_widget", "build_page", "self_improve",
-                                  "a2a_federation_status"])
+@pytest.mark.parametrize("name", ["recipe_search", "a2a_federation_status"])
 def test_the_executor_has_no_branch_for_a_retired_intent(name):
-    # Unknown to execute_intent: it declines (None) rather than claiming work.
+    # Only the two that HAD an executor branch: unknown to execute_intent now, it declines (None) rather than claiming work. The
+    # builder / self-improve / HA-setup intents never had one (chat expanded them into a message), so the detector cases above and
+    # the expansion check below are what pin them.
     assert asyncio.run(intent_router.execute_intent(intent_router.Intent(name, {"query": "scones"}), "member_1")) is None
 
 
