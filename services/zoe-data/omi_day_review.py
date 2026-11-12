@@ -1396,9 +1396,11 @@ async def members_with_recordings() -> list[str]:
         rows = await _fetch(db, "SELECT DISTINCT user_id FROM omi_recordings WHERE status = 'done' AND day_review_id IS NULL")
     try:
         from user_filters import drop_synthetic_users
-        return drop_synthetic_users([r["user_id"] for r in rows], pass_name="omi_day_review", log=None)
+        uids = drop_synthetic_users([r["user_id"] for r in rows], pass_name="omi_day_review", log=None)
     except Exception:  # noqa: BLE001
-        return [r["user_id"] for r in rows]
+        uids = [r["user_id"] for r in rows]
+    import omi_member_settings            # the member's own "offer me a day review" (default on) can only narrow ZOE_OMI_DAY_REVIEW
+    return [u for u in uids if await omi_member_settings.day_review_on(u)]
 
 
 async def _claim(db, user_id: str, day: str, cfg: Config, now: datetime) -> Optional[tuple[str, int]]:

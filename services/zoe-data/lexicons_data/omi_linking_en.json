@@ -1,0 +1,61 @@
+{
+  "lang": "en",
+  "enabled": true,
+  "_note": "Strings for omi_linking.py (the pairing window) and omi_link_tier.py (the spoken ask). Cues are regexes over the lowercased utterance with ?!.,;: dropped and a leading 'hey zoe' / politeness stripped; they must match the WHOLE utterance. A cue only ROUTES a turn. 'notice' is the one plain sentence a member hears the first time they link; keep legal wording out of it.",
+  "strip_lead": [
+    "(?:hey|hi|ok|okay|so|um|right)[\\s]+",
+    "zoe[\\s]+",
+    "(?:can you|could you|please|would you|will you|can i|could i|i want to|i'd like to|i would like to|let's|lets)[\\s]+"
+  ],
+  "cues": {
+    "unlink": [
+      "(?:unlink|disconnect|remove|unpair|forget) my (?:omi|pendant|omi pendant)(?: from (?:you|zoe|me))?(?: please)?",
+      "(?:take|remove) my (?:omi|pendant|omi pendant) off (?:my account|me)(?: please)?"
+    ],
+    "link": [
+      "(?:link|connect|pair|set up|setup|add|register) my (?:omi|pendant|omi pendant|new pendant|new omi)(?: to (?:you|zoe|me|my account))?(?: please)?",
+      "(?:link|connect|pair) (?:this|my) (?:omi|pendant) (?:to|with) (?:you|zoe|me)(?: please)?",
+      "this is my (?:omi|pendant)(?: link it| please link it)?"
+    ],
+    "status": [
+      "is my (?:omi|pendant|omi pendant) (?:linked|connected|set up|paired|syncing)",
+      "(?:have i|did i) (?:linked|link|connected|connect|set up) my (?:omi|pendant)",
+      "is my (?:omi|pendant) (?:linked|connected) to (?:you|zoe|me)"
+    ]
+  },
+  "say": {
+    "notice": "Just so you know, your pendant records the people around you as well as you, and you can pause its syncing any time in Settings under My pendant.",
+    "start": "Okay. Hold your pendant right next to the panel for a moment.",
+    "start_with_notice": "{notice} Now hold your pendant right next to the panel for a moment.",
+    "screen_title": "Linking your pendant",
+    "screen_hold": "Hold your pendant right next to the panel",
+    "screen_found": "Found it",
+    "screen_remember": "Saving it on this panel",
+    "linked": "Done. Your pendant is linked to you, and it will sync whenever it's near the panel.",
+    "linked_not_remembered": "Your pendant is linked to you, but the panel couldn't hold on to it just now. Keep it close and say link my pendant again.",
+    "already": "That pendant is already linked to you.",
+    "crowded": "I can hear more than one pendant here. Keep only yours next to the panel.",
+    "taken": "That pendant is linked to someone else. They need to unlink it first, or the household admin can move it.",
+    "not_found": "I couldn't find your pendant next to the panel. Make sure it's switched on, hold it close, and ask me again.",
+    "claim_failed": "I found your pendant but couldn't link it just now. Please ask me again.",
+    "unverified": "I'm not sure who's asking, so I can't link a pendant. Sign in with your PIN first and ask me again.",
+    "guest": "Only someone who lives here can link a pendant, and only to themselves.",
+    "child": "A grown-up in the house links a child's pendant in Settings.",
+    "no_panel": "I can only link a pendant at the panel, with it in your hand.",
+    "panel_offline": "The panel's Bluetooth isn't answering just now, so I can't link a pendant. Try again in a minute.",
+    "panel_busy": "Someone else is linking a pendant at this panel right now. Try again in a minute.",
+    "off_sync_off": "Pendant syncing isn't turned on here yet. Ask the household admin to turn it on.",
+    "off_linking_off": "Pendant linking isn't turned on here yet. Ask the household admin to turn on pendant linking.",
+    "off_bluetooth_off": "The panel's Bluetooth controls aren't turned on yet. Ask the household admin to turn them on.",
+    "status_none": "You don't have a pendant linked yet. Say link my pendant with it in your hand at the panel.",
+    "status_linked": "Yes, your pendant is linked to you.",
+    "status_linked_synced": "Yes, your pendant is linked to you. It last synced {ago}.",
+    "status_paused": "Your pendant is linked to you, but you've paused its syncing in Settings.",
+    "unlink_none": "You don't have a pendant linked.",
+    "unlink_many": "You have more than one pendant linked. Unlink the right one in Settings under My pendant.",
+    "unlink_done": "Done. Your pendant is unlinked. Anything still on it will go to whoever links it next, so let it finish syncing first next time.",
+    "unlink_done_warn": "Done. Your pendant is unlinked. If anything was still on it that hadn't synced, it will go to whoever links it next.",
+    "unlink_pending": "Your pendant still has recordings that haven't synced. Leave it near the panel until they finish, then ask me again.",
+    "unlink_fail": "Something went wrong and I couldn't unlink your pendant just now. Please ask me again."
+  }
+}

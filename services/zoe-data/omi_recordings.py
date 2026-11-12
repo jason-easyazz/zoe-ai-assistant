@@ -639,6 +639,8 @@ async def store_recording(user_id: str, *, device_id: str, key: str, sha256: str
     if start > _now() + timedelta(days=1):
         raise StoreError(422, "started_at is in the future")
     dur = float(duration_s)
+    import omi_member_settings
+    keep_days = await omi_member_settings.retention_days_for(user_id, retention_days())   # the member may only shorten the ceiling
 
     from db_compat import get_compat_db
     gen = erase_gate.generation(user_id) if scheduled_at is None else scheduled_at
@@ -667,7 +669,7 @@ async def store_recording(user_id: str, *, device_id: str, key: str, sha256: str
                 logger.error("omi_recordings: audio not written (%s)", type(exc).__name__)
                 raise StoreError(503, "storage unavailable") from exc
             now = _now()
-            expires = _iso(now + timedelta(days=retention_days()))
+            expires = _iso(now + timedelta(days=keep_days))
             try:
                 await db.execute(
                     "INSERT INTO omi_recordings (id, user_id, source, provenance, device_id, recording_key, sha256, started_at, ended_at, "
@@ -1149,8 +1151,10 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
     spk_state, model_id = "unverified", None
     import omi_repass as _rp
     strict = _rp.mode() != "off"          # flag off: the first pass stays exactly as it was (ledger failure = fail open)
+    import omi_member_settings
+    member_tag = await omi_member_settings.speaker_tag_on(uid)     # "tag voices on my recordings" off = this member is as if the flag were off
     try:
-        turns, spk_state, model_id = await _diarise(uid, path, now)
+        turns, spk_state, model_id = await _diarise(uid, path, now) if member_tag else (None, "unverified", None)
         if turns:
             texts = await transcribe_turns(path, [(t.start_ms, t.end_ms) for t in turns], gate=lambda: _patient_gate(now),
                                            pause_s=pause_s, stats=seen_chunks)
@@ -1158,7 +1162,7 @@ async def _transcribe_one(r: Any, seen: dict, now: Optional[datetime], pause_s: 
                      "embedding": t.embedding, "text": await _redact_forgotten(uid, x, strict=strict)} for t, x in zip(turns, texts)]
             text = " ".join(x["text"] for x in segs if x["text"].strip())
         else:
-            spans: Optional[list] = [] if _tag_mode() != "off" else None
+            spans: Optional[list] = [] if (_tag_mode() != "off" and member_tag) else None
             text = await transcribe_audio_file(path, gate=lambda: _patient_gate(now), pause_s=pause_s, stats=seen_chunks, spans=spans)
             text = await _redact_forgotten(uid, text, strict=strict)
             if spans is not None:

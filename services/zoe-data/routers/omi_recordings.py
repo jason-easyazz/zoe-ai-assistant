@@ -119,6 +119,11 @@ async def upload_recording(request: Request, device: dict = Depends(_require_dev
     h = request.headers
     device_id = (h.get("X-Omi-Device") or "").strip()
     owner, refusal = await _upload_owner(device_id)          # the registry (or the legacy config) - never the panel's session
+    if refusal is None:
+        import omi_member_settings
+        if await omi_member_settings.sync_paused(owner):
+            # the owner paused syncing: the SAME answer as an unassigned pendant, so the Pi keeps every byte and asks again later
+            refusal = _error(409, "device_not_registered", held="paused")
     if refusal is not None and refusal.status_code != 409:
         return refusal
     declared = request.headers.get("content-length")
@@ -271,6 +276,90 @@ async def unassign_device(device_id: str, admin: dict = Depends(_require_human_a
     if not found:
         raise HTTPException(status_code=404, detail="no such pendant")
     return {"ok": True}
+
+
+# --- MY pendant: a member links / unlinks their OWN pendant (omi_linking.py, docs/knowledge/omi-linking.md) ---------------------------
+async def _require_member(user: dict = Depends(require_signed_in)) -> dict:
+    """A signed-in household member PERSON acting for THEMSELF (a guest or a device token is refused). Every route below acts on
+    ``user["user_id"]`` and nothing else: there is no field that names another member."""
+    try:
+        devices.member_only(user)
+    except devices.DeviceError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    return user
+
+
+async def _my_pendants(uid: str) -> list[dict]:
+    try:
+        sync = {p["device_id"]: p for p in await health.list_for(uid)}
+    except Exception:  # noqa: BLE001 - no health table yet = no "last sync", not a 500
+        sync = {}
+    return [{"device_id": d["device_id"], "label": d["label"] or "", "linked_at": d["registered_at"],
+             "last_sync_at": (sync.get(d["device_id"]) or {}).get("last_sync_at")} for d in await devices.owned_by(uid)]
+
+
+@router.get("/my-pendant")
+async def my_pendant(user: dict = Depends(_require_member)):
+    """Everything "My pendant" in Settings shows: whether linking is on (and if not, why, in a sentence), my pendants, a window in
+    progress, my settings with what the operator allows (the ceiling), and whether I have heard the notice."""
+    import omi_linking
+    import omi_member_settings as ms
+    uid = user["user_id"]
+    ok, why = omi_linking.available()
+    from db_compat import get_compat_db
+    async with get_compat_db() as db:
+        stored = await ms.read(db, uid)
+    op = ms.operator()
+    return {"linking": {"enabled": ok, "reason": why or None, "message": "" if ok else omi_linking.say("off_" + why)},
+            "pendants": await _my_pendants(uid) if devices.enabled() else [],
+            "window": omi_linking.status(uid), "notice": omi_linking.notice(), "notice_ack_at": stored["notice_ack_at"],
+            "settings": {k: stored[k] for k in ms.DEFAULTS if k != "notice_ack_at"}, "operator": op, "effective": ms.effective(stored, op)}
+
+
+class _Link(BaseModel):
+    model_config = ConfigDict(extra="forbid")       # no field may name another member: a stray ``user_id`` is a 422, not ignored
+    panel_id: str = Field(max_length=64)
+    notice_ack: bool = False
+
+
+@router.post("/my-pendant/link")
+async def link_my_pendant(body: _Link, user: dict = Depends(_require_member)):
+    """Open the pairing window on THIS panel. Proof of WHO = this member's FRESH PIN sign-in at that panel (the touch path; the voice
+    path proves it with a verified voice in ``omi_link_tier``). A desktop session is not at a panel, so it is refused."""
+    import biometric_scope
+    import omi_linking
+    panel_id = body.panel_id.strip()
+    try:
+        here = await biometric_scope._fresh_panel_member(panel_id)
+    except Exception:  # noqa: BLE001 - unknown = not proven
+        here = None
+    if not panel_id or here != user["user_id"]:
+        raise HTTPException(status_code=403, detail=omi_linking.say("unverified"))
+    try:
+        w = await omi_linking.start(user, panel_id, notice_told=body.notice_ack)
+    except omi_linking.LinkError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    return {"ok": True, "window": w.public(w.clock()), "say": omi_linking.say("start")}
+
+
+@router.get("/my-pendant/link")
+async def my_link_window(user: dict = Depends(_require_member)):
+    import omi_linking
+    return {"window": omi_linking.status(user["user_id"])}
+
+
+@router.delete("/my-pendant/{device_id}")
+async def unlink_my_pendant(device_id: str, user: dict = Depends(_require_member)):
+    """Unlink MY pendant (someone else's is 404). Refused while it is known to hold unsynced audio; otherwise the answer carries the
+    warning that anything still on it goes to whoever links it next."""
+    import omi_linking
+    _registry_on()
+    try:
+        out = await devices.self_unassign(device_id, user)
+    except devices.DeviceError as exc:
+        _device_error(exc)
+    out["note"] = omi_linking.say("unlink_done_warn" if out.get("pending_audio") is None else "unlink_done")
+    return out
 
 
 @router.get("/recordings")

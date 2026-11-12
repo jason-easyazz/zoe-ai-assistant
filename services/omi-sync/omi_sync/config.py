@@ -1,6 +1,7 @@
 """Environment-driven configuration. The feature is flag-dark: ``OMI_SYNC_ENABLED`` unset/0 = the service exits at start."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -27,6 +28,41 @@ def _addresses(multi: str, single: str) -> tuple:
     for raw in re.split(r"[,;\s]+", multi or single or ""):
         a = raw.strip()
         if a and a.lower() not in seen:
+            seen.add(a.lower())
+            out.append(a)
+    return tuple(out)
+
+
+_ADDR_RX = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+#: the panel Bluetooth agent's driver name for an Omi pendant (``panel_bt/drivers/omi.py``: ``name = "omi"``)
+OMI_DRIVER = "omi"
+
+
+def known_omi_addresses(path: Optional[Path]) -> tuple:
+    """The Omi pendants the panel's Bluetooth agent remembers (its ``KnownStore`` file, ``known.json``: ``{device_id: {"address",
+    "driver", ...}}``), in a stable order. READ-ONLY, and the reader is a deliberate copy of that format (two venvs, no import). A
+    missing, unreadable or malformed file is simply no pendants - never an error, never a guess."""
+    if path is None:
+        return ()
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(doc, dict):
+        return ()
+    out = []
+    for _did, v in sorted(doc.items(), key=lambda kv: str(kv[0])):
+        if isinstance(v, dict) and v.get("driver") == OMI_DRIVER and _ADDR_RX.match(str(v.get("address", ""))):
+            out.append(str(v["address"]))
+    return tuple(out)
+
+
+def union_addresses(configured: tuple, known: tuple) -> tuple:
+    """The env list first (its order is the visiting order), then every remembered pendant it does not already name (case-insensitive)."""
+    seen = {a.lower() for a in configured}
+    out = list(configured)
+    for a in known:
+        if a.lower() not in seen:
             seen.add(a.lower())
             out.append(a)
     return tuple(out)
@@ -74,6 +110,14 @@ class Settings:
     health_heartbeat_s: float    # ... at least this often when nothing changed
     require_bond: tuple = ()     # phase-2 firmware: pendants that must be bonded + encrypted ('*' = every pendant); default none
     bluez_adapter: str = "hci0"  # the adapter whose BlueZ bond the check reads
+    configured: Optional[tuple] = None  # the env list alone (OMI_PENDANT_ADDRESSES / OMI_PENDANT_ADDRESS); None = use ``addresses``
+    known_path: Optional[Path] = None   # the panel Bluetooth agent's remembered devices (read-only); None = not read
+
+    def current_addresses(self) -> tuple:
+        """The pendants to sync NOW: the env list unioned with the Omi pendants the panel remembers (re-read on every call, so a
+        pendant a member just linked at the panel is picked up without a restart or an env edit)."""
+        base = self.addresses if self.configured is None else self.configured
+        return union_addresses(tuple(base), known_omi_addresses(self.known_path))
 
     def requires_bond(self, address: str) -> bool:
         """True when ``address`` is listed in ``OMI_SYNC_REQUIRE_BOND`` (or it says ``all``). Once true, never an open link."""
@@ -88,13 +132,27 @@ class Settings:
         return self.state_dir / "outbox"
 
 
+def _known_path(get) -> Optional[Path]:
+    """``OMI_SYNC_KNOWN_DEVICES`` (a path; ``0``/``off`` = do not read it) else the agent's own default, ``$PANEL_BT_DIR/known.json``
+    (``~/.zoe-bluetooth/known.json``)."""
+    raw = get("OMI_SYNC_KNOWN_DEVICES").strip()
+    if raw.lower() in ("0", "off", "false", "no"):
+        return None
+    if raw:
+        return Path(raw).expanduser()
+    return Path(get("PANEL_BT_DIR") or Path.home() / ".zoe-bluetooth").expanduser() / "known.json"
+
+
 def load(env: dict | None = None) -> Settings:
     e = os.environ if env is None else env
     get = lambda k, d="": (e.get(k) or d)  # noqa: E731
+    configured = _addresses(get("OMI_PENDANT_ADDRESSES"), get("OMI_PENDANT_ADDRESS"))
+    known_path = _known_path(get)
+    addresses = union_addresses(configured, known_omi_addresses(known_path))
     return Settings(
         enabled=_truthy(get("OMI_SYNC_ENABLED", "0")),
-        address=(_addresses(get("OMI_PENDANT_ADDRESSES"), get("OMI_PENDANT_ADDRESS")) or ("",))[0],
-        addresses=_addresses(get("OMI_PENDANT_ADDRESSES"), get("OMI_PENDANT_ADDRESS")),
+        address=(addresses or ("",))[0],
+        addresses=addresses,
         addr_type="public" if get("OMI_PENDANT_ADDR_TYPE", "random").strip().lower() == "public" else "random",
         zoe_url=get("ZOE_URL", "https://zoe.local").strip(),
         device_token=get("DEVICE_TOKEN").strip(),
@@ -115,4 +173,6 @@ def load(env: dict | None = None) -> Settings:
         health_heartbeat_s=max(60.0, _float("OMI_SYNC_HEALTH_HEARTBEAT_S", 900.0, e)),
         require_bond=_require_bond(get("OMI_SYNC_REQUIRE_BOND")),
         bluez_adapter=get("OMI_SYNC_BLUEZ_ADAPTER", "hci0").strip() or "hci0",
+        configured=configured,
+        known_path=known_path,
     )

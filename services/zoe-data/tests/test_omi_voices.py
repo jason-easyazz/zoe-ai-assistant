@@ -603,7 +603,7 @@ def test_forget_voice_keeps_the_person_and_tags_and_stop_learning_lets_go(env, m
     assert env.db.q("SELECT COUNT(*) FROM omi_segments WHERE tagged_person_id IS NOT NULL") == [(2,)]
     transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
     assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings") == [(1,)]
-    assert env.client.put("/api/omi/voices/settings", json={"learning_enabled": False}).json() == {"learning_enabled": False}
+    assert env.client.put("/api/omi/voices/settings", json={"learning_enabled": False}).json()["learning_enabled"] is False
     assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings") == [(0,)] and env.db.q("SELECT COUNT(*) FROM omi_voice_clusters") == [(0,)]
     transcribe(env, monkeypatch, turns((0, 6, "other", 0.0, TV)))
     assert env.db.q("SELECT COUNT(*) FROM omi_segment_embeddings") == [(0,)]          # stopped stays stopped
@@ -865,6 +865,9 @@ ALLOWED = {"omi_voices.py", "omi_diarize.py", "omi_repass.py", "omi_repass_clean
            # the day review names the ``omi_segments`` vocabulary in its seam (``lines_for_day(segments=)``); it never touches a
            # voice table - its input is ``review_segments`` output (confirmed labels, no suggestions) handed in by the caller
            "omi_day_review.py",
+           # the member's own pendant switches (0077) on the ``omi_voice_settings`` row: booleans, a day count and a notice time - never a
+           # print, an embedding, a segment or a cluster, and nothing an identity or session path reads
+           "omi_member_settings.py",
            # the morning transcript check corrects the TEXT of the member's own ``omi_segments`` (owner_corrected) and reads no voice table,
            # embedding, print or cluster; the voice routes are not touched
            "transcript_check.py",

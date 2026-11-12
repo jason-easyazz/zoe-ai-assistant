@@ -45,6 +45,19 @@ class Rotation:
         self.targets = [Target(a, device_hash(a)) for a in addresses]
         self._last = -1
 
+    def refresh(self, addresses: Sequence[str]) -> bool:
+        """Follow the current pendant list: a new address joins (due now), a removed one leaves; every kept target keeps its state
+        (next visit, misses). True when the list changed."""
+        want = {device_hash(a): a for a in addresses}
+        have = {t.device_id for t in self.targets}
+        if set(want) == have:
+            return False
+        kept = [t for t in self.targets if t.device_id in want]
+        kept += [Target(a, d) for d, a in want.items() if d not in have]
+        self.targets = kept
+        self._last = min(self._last, len(kept) - 1)
+        return True
+
     def next_due(self, now: float) -> Optional[Target]:
         n = len(self.targets)
         for step in range(1, n + 1):
@@ -175,6 +188,13 @@ class Runner:
 
     async def step(self) -> float:
         """Visit the next due pendant, if any. Returns how long the caller should sleep before the next ``step``."""
+        current = getattr(self.s, "current_addresses", None)
+        if current is not None:
+            try:
+                if self.rotation.refresh(current()):
+                    log.info("pendants now: %s", ", ".join(t.device_id for t in self.rotation.targets) or "none")
+            except Exception as exc:  # noqa: BLE001 - an unreadable list keeps the current rotation
+                log.warning("pendant list not refreshed: %s", type(exc).__name__)
         now = self.clock()
         t = self.rotation.next_due(now)
         if t is None:
