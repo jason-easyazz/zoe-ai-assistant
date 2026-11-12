@@ -277,7 +277,7 @@ def test_script_end_to_end(tmp_path):
     out.write_text("stale")
     os.chmod(out, 0o644)                  # a pre-existing world-readable report must be tightened, not just new ones
     rc = sc.main(["--app-log", str(app), "--shadow-log", str(tmp_path / "none.jsonl"), "--misses", str(tmp_path / "none2.jsonl"),
-                  "--stt-log", str(stt), "--out", str(out), "--public-out", str(pub), "--days", "7"])
+                  "--stt-log", str(stt), "--self-review-dir", str(tmp_path / "no-self-review"), "--out", str(out), "--public-out", str(pub), "--days", "7"])
     assert rc == 0
     assert stat.S_IMODE(os.stat(out).st_mode) == 0o600
     priv = out.read_text()
@@ -289,7 +289,7 @@ def test_script_end_to_end(tmp_path):
 def test_script_exit_2_when_nothing_readable(tmp_path):
     sc = _script()
     missing = tmp_path / "missing"
-    assert sc.main(["--app-log", str(missing), "--shadow-log", str(missing), "--misses", str(missing), "--stt-log", str(missing),
+    assert sc.main(["--app-log", str(missing), "--shadow-log", str(missing), "--misses", str(missing), "--stt-log", str(missing), "--self-review-dir", str(tmp_path / "no-self-review"),
                     "--out", str(tmp_path / "o.md")]) == 2
     assert not (tmp_path / "o.md").exists()
 
@@ -315,12 +315,12 @@ def test_script_exit_2_when_every_existing_source_is_unreadable(tmp_path):
     missing = tmp_path / "missing"
     d = tmp_path / "adir"
     d.mkdir()
-    assert sc.main(["--app-log", str(d), "--shadow-log", str(missing), "--misses", str(missing), "--stt-log", str(missing),
+    assert sc.main(["--app-log", str(d), "--shadow-log", str(missing), "--misses", str(missing), "--stt-log", str(missing), "--self-review-dir", str(tmp_path / "no-self-review"),
                     "--out", str(tmp_path / "o.md")]) == 2
     assert not (tmp_path / "o.md").exists()
     ok = tmp_path / "app.log"
     ok.write_text(L(datetime.now().timestamp() - 60, "intent_router: intent_miss: Add pancakes to the list") + "\n")
-    assert sc.main(["--app-log", str(ok), "--shadow-log", str(missing), "--misses", str(d), "--stt-log", str(missing),
+    assert sc.main(["--app-log", str(ok), "--shadow-log", str(missing), "--misses", str(d), "--stt-log", str(missing), "--self-review-dir", str(tmp_path / "no-self-review"),
                     "--out", str(tmp_path / "o2.md")]) == 0                      # negative control: one readable source is enough
 
 
