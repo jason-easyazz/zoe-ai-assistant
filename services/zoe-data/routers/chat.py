@@ -1573,7 +1573,7 @@ async def chat_stream_generator(
                 return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             try:
-                caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
+                caps_text = __import__("agent_sync").read_capabilities_snapshot(12000)
             except Exception:
                 caps_text = "Zoe's tools include calendar, lists, reminders, notes, memory, music and smart home."
             capabilities_text = f"Zoe capabilities:\n\n{caps_text}"
@@ -2475,7 +2475,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                     }
             if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
                 try:
-                    caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()[:12000]
+                    caps_text = __import__("agent_sync").read_capabilities_snapshot(12000)
                 except Exception:
                     caps_text = "Zoe's tools include calendar, lists, reminders, notes, memory, music and smart home."
                 capabilities_text = "Zoe capabilities:\n\n" + caps_text
@@ -2781,7 +2781,7 @@ async def delete_session(session_id: str, user: dict = Depends(get_current_user)
 @router.get("/capabilities")
 async def chat_capabilities(user: dict = Depends(get_current_user)):
     try:
-        caps_text = Path("/home/zoe/assistant/CAPABILITIES.md").read_text()
+        caps_text = __import__("agent_sync").read_capabilities_snapshot()
     except Exception:
         caps_text = ""
     return {"ok": True, "agent": "zoe", "capabilities_markdown": caps_text}
