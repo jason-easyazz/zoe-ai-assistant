@@ -94,6 +94,8 @@ const run = (box, code) => vm.runInContext(code, box);
       const stat = t.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<style[\s\S]*?<\/style>/g, '');
       (stat.match(/<input(?![^>]*type="range")[^>]*>|<textarea[^>]*>|contenteditable/g) || []).forEach((x) => bad.push('static: ' + x));
       if (!/^\s*if\(!window\.__kiosk\)cmdbar\.innerHTML=/m.test(mainScript(t))) bad.push('the Ask bar is not built off-kiosk only');
+      // a phone hand-off must land on a page that can do the job: no members page edits a reminder's words, so the reminder dialog has none
+      if (/phoneQrHtml\('\/calendar\.html'/.test(near(mainScript(t), 'function editReminder(', 900))) bad.push('reminder edit hands off to a page that cannot edit it');
       if (/createElement\('input'\)/.test(s)) bad.push("createElement('input')");
       return bad;
     },
@@ -114,6 +116,11 @@ const run = (box, code) => vm.runInContext(code, box);
       if ((t.match(/speechSynthesis\.speak\(/g) || []).length !== 1 || !near(t, 'function _timerSayBrowser(', 220).includes('speechSynthesis.speak(')) bad.push('browser speech outside the fallback');
       const ts = near(t, 'function timerSay(', 1100);
       if (!ts.includes('if(!sid()){fb();return;}')) bad.push('no session = silent');
+      // Dismiss must silence a line that is pending or playing: the handler calls timerHush, and every late path checks the generation
+      if (!/tmrAlarmX'\)\.onclick=function\(\)\{ov\.classList\.remove\('on'\);timerHush\(\);/.test(t)) bad.push('Dismiss does not hush the timer voice');
+      if (!ts.includes('if(gen!==_tSay.gen)return;') || !near(t, 'function _timerSayBrowser(', 80).includes('if(gen!==_tSay.gen)return;')) bad.push('late speech is not generation-checked');
+      const th = near(t, 'function timerHush(', 320);
+      if (!(th.includes('_tSay.gen++') && th.includes('.pause()') && th.includes('speechSynthesis.cancel()'))) bad.push('timerHush does not stop audio and browser speech');
       if (!ts.includes("if(!j||!j.audio_base64){fb();return;}")) bad.push('no audio = silent');
       if (!ts.includes('.catch(fb)')) bad.push('a refused speak = silent');
       if (!/timerSay\(\(label\|\|'Timer'\)\+' timer is done'\)/.test(near(t, 'function timerAlarm(', 2400))) bad.push('timerAlarm does not speak via timerSay');
@@ -158,6 +165,8 @@ const run = (box, code) => vm.runInContext(code, box);
     "el.classList.add('fire');haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).then(zok)\n        .then(function(){")));
   check('control: browser speech for the timer is seen', () => red('timerVoice', plant("timerSay((label||'Timer')+' timer is done');", "speechSynthesis.speak(new SpeechSynthesisUtterance('x'));")));
   check('control: a static text field is seen', () => red('typingFields', plant('<div id="cmdbar"></div>', '<div id="cmdbar"><input id="cmdin" type="text"></div>')));
+  check('control: a Dismiss that leaves speech pending is seen', () => red('timerVoice', plant("ov.classList.remove('on');timerHush();", "ov.classList.remove('on');")));
+  check('control: a reminder hand-off to a page that cannot edit it is seen', () => red('typingFields', plant("To change the words, delete this one and say the new reminder.", "x'+phoneQrHtml('/calendar.html','scan')+'")));
   check('control: a silent guest timer is seen', () => red('timerVoice', plant('if(!sid()){fb();return;}', 'if(!sid())return;')));
   check('control: an ignored person arrival is seen', () => red('personArrival', plant("if(wi>=0)openContact(ps[wi],wi);", "")));
   check('control: a chat without session id is seen', () => red('chatSession', plant('if(th)cb.session_id=th;', '')));

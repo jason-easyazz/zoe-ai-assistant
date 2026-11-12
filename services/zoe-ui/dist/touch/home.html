@@ -3566,7 +3566,7 @@
     estOpen('<h3>Edit reminder</h3>'
       +'<label>Reminder</label><div class="remttl" style="font-size:22px;margin:4px 0 6px">'+esc(rem.title||'Reminder')+'</div>'
       +'<label>When</label>'+_dtHtml()
-      +phoneQrHtml('/calendar.html','To change the words, scan to finish on your phone')
+      +'<div class="remhint" style="font-size:18px;color:var(--ink-dim);margin:10px 0 2px">To change the words, delete this one and say the new reminder.</div>'
       +'<div class="btns"><button class="del" data-x="del">Delete</button><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
     var m=document.getElementById('estModal');_dtWire(m);phoneQrDraw(m);
     m.querySelector('[data-x="cancel"]').onclick=estClose;
@@ -4709,13 +4709,20 @@
   // "Timer is done" is ALWAYS heard: Zoe's own voice (the server's TTS) when this page has a member or device session, and when it
   // has none (the guest kiosk), the server refuses, sends no audio or the audio will not play, the browser's voice says it instead.
   // A second voice is better than a timer that ends unspoken; the chime and the card ring either way.
-  function _timerSayBrowser(text){try{if(window.speechSynthesis){var u=new SpeechSynthesisUtterance(text);u.rate=.96;speechSynthesis.cancel();speechSynthesis.speak(u);}}catch(e){}}
-  function timerSay(text){var done=false,fb=function(){if(done)return;done=true;_timerSayBrowser(text);};
+  // A spoken line belongs to ONE alarm: Dismiss (timerHush) bumps the generation, stops any playing audio and cancels browser
+  // speech, so neither a late server reply nor the fallback can speak after the card is gone. (The request is left to finish and
+  // its answer ignored: aborting it would read as "Zoe unreachable".)
+  var _tSay={gen:0,audio:null};
+  function timerHush(){_tSay.gen++;
+    try{if(_tSay.audio){_tSay.audio.pause();_tSay.audio.src='';}}catch(e){}_tSay.audio=null;
+    try{if(window.speechSynthesis)speechSynthesis.cancel();}catch(e){}}
+  function _timerSayBrowser(text,gen){if(gen!==_tSay.gen)return;try{if(window.speechSynthesis){var u=new SpeechSynthesisUtterance(text);u.rate=.96;speechSynthesis.cancel();speechSynthesis.speak(u);}}catch(e){}}
+  function timerSay(text){timerHush();var gen=_tSay.gen,done=false,fb=function(){if(done||gen!==_tSay.gen)return;done=true;_timerSayBrowser(text,gen);};
     if(!sid()){fb();return;}
     zfetch('/api/voice/speak',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({text:text})},15000)
       .then(function(r){return r.ok?r.json():null;})
-      .then(function(j){if(!j||!j.audio_base64){fb();return;}var bin=atob(j.audio_base64),u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
-        var url=URL.createObjectURL(new Blob([u8],{type:j.content_type||'audio/wav'})),au=new Audio(url);au.onended=function(){URL.revokeObjectURL(url);};
+      .then(function(j){if(gen!==_tSay.gen)return;if(!j||!j.audio_base64){fb();return;}var bin=atob(j.audio_base64),u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+        var url=URL.createObjectURL(new Blob([u8],{type:j.content_type||'audio/wav'})),au=new Audio(url);_tSay.audio=au;au.onended=function(){URL.revokeObjectURL(url);};
         au.onerror=function(){URL.revokeObjectURL(url);fb();};
         var pp=au.play();if(pp&&pp.catch)pp.catch(function(){URL.revokeObjectURL(url);fb();});})
       .catch(fb);}
@@ -4733,7 +4740,7 @@
     // Dismiss = the ACK: the server keeps a finished timer listed ("ringing") until it is cancelled or a grace
     // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
     // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
-    document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');
+    document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');timerHush();
       var acked=Object.keys(_tAlarm.pending||{});_tAlarm.pending={};
       // Persist the ack BEFORE sending it and drop it only once the server confirms: a failed cancel (restart, network)
       // is retried by every poll, and survives a page reload, so a dismissed alarm never sounds again inside the grace.
