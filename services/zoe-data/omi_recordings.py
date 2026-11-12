@@ -1384,19 +1384,42 @@ async def requeue_after_pipeline_change() -> int:
 
 
 async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
-    """Delete WAVs past ``audio_expires_at`` (kept ones included - the flag keeps audio for the retention window, not forever)."""
+    """Delete WAVs past ``audio_expires_at`` (kept ones included - the flag keeps audio for the retention window, not forever).
+
+    THE RE-PASS HOLD (owner, 2026-11-12): while the night re-pass is on (shadow or on), a recording still OWED its pass (``repass_state = 'pending'``) keeps its WAV past
+    the retention so a window's leftovers reach the next window - bounded by ``omi_repass.HOLD_CAP_DAYS`` from upload and by ``omi_repass.HOLD_MIN_FREE_MB`` free on
+    the audio disk. Either bound forcing a delete is logged loudly (``OMI_REPASS_HOLD_CAP``, counts only)."""
     n = 0
     try:
+        import shutil
+
+        import omi_repass
         from db_compat import get_compat_db
-        stamp = _iso(now or _now())
+        when = now or _now()
+        stamp = _iso(when)
+        held = omi_repass.holds_audio()
+        cap_stamp = _iso(when - timedelta(days=omi_repass.HOLD_CAP_DAYS))
+        try:
+            disk_ok = shutil.disk_usage(audio_dir()).free / 1e6 >= omi_repass.HOLD_MIN_FREE_MB
+        except OSError:
+            disk_ok = False                                        # unknown disk: no hold (fail toward deleting, the privacy-safe side)
+        forced = {"cap": 0, "disk": 0}
         async with get_compat_db() as db:
-            rows = await _fetch(db, "SELECT id, audio_path FROM omi_recordings WHERE audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at < ?", (stamp,))
+            rows = await _fetch(db, "SELECT id, audio_path, status, created_at" + (", repass_state" if held else "") + " FROM omi_recordings "
+                                    "WHERE audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at < ?", (stamp,))
             for r in rows:
+                if held and r["repass_state"] == "pending" and r["status"] in ("done", "empty_transcript"):
+                    if str(r["created_at"] or "") > cap_stamp and disk_ok:
+                        continue                                   # still owed its re-pass: held for the next window
+                    forced["cap" if disk_ok else "disk"] += 1
                 _unlink(r["audio_path"])
                 await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL, keep_audio = 0 WHERE id = ?", (r["id"],))
                 n += 1
             if n:
                 await db.commit()
+        if forced["cap"] or forced["disk"]:
+            logger.warning("OMI_REPASS_HOLD_CAP deleted %d WAV(s) still owed their re-pass: %d past the %d-day cap, %d for disk under %d MB free",
+                           forced["cap"] + forced["disk"], forced["cap"], omi_repass.HOLD_CAP_DAYS, forced["disk"], omi_repass.HOLD_MIN_FREE_MB)
     except Exception as exc:  # noqa: BLE001
         logger.warning("omi_recordings: audio retention purge failed (%s)", type(exc).__name__)
     return n

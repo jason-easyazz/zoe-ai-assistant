@@ -14,6 +14,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import omi_recordings as omi
 import omi_repass as rp
 import omi_repass_eval as eu
 import user_erase_gate as erase_gate
@@ -210,7 +211,7 @@ def multi_runner(texts, calls, fail=(), before=None):
     def runner(manifest, out, timeout_s, mem_max="", threads=4):
         man = json.loads(Path(manifest).read_text())
         eng = man["asr"]
-        calls.append({"asr": eng, "diar": man["diar"], "ct2": man.get("ct2_dir"), "chunks": [it.get("chunks") for it in man["items"]], "ids": [it["id"] for it in man["items"]], "mem_max": mem_max})
+        calls.append({"dl": man["deadline_epoch"], "asr": eng, "diar": man["diar"], "ct2": man.get("ct2_dir"), "chunks": [it.get("chunks") for it in man["items"]], "ids": [it["id"] for it in man["items"]], "mem_max": mem_max})
         if before:
             before(eng)
         with open(out, "a") as fh:
@@ -258,28 +259,25 @@ def test_production_runs_qwen_then_parakeet_then_the_third_voter_then_the_evalua
     assert "ledger" not in json.dumps(out) and out["contributions"][PIV]["invented"] >= 1             # the summary is counts; the pivot's "bat" is its invented word
 
 
-def test_the_third_voter_is_whisper_large_v3_when_the_night_has_room_else_distil_else_none(renv, monkeypatch):
+def test_the_window_always_votes_with_the_best_third_voter_and_plans_whole_passes(renv, monkeypatch):
+    """Owner 2026-11-12: the window buys FEWER recordings, never a weaker vote - the third voter is the first configured (large-v3), whatever the budget."""
     monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
     monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
     monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_EVAL", "none")
     transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
-    for dur, budget, want in ((1500, 3000, WH), (1500, 2000, DIS), (1500, 1450, None)):
-        renv.db.conn.execute("UPDATE omi_recordings SET duration_s = ?, repass_state = 'pending'", (dur,))
+    for budget, planned in ((3000, 1), (2000, 1), (600, 0)):
+        renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 1000, repass_state = 'pending'")
         renv.db.conn.commit()
         out = run(rp.run_night(budget_s=budget, runner=multi_runner(TEXTS, []), dry_run=True))
-        assert out["engines"] == [PIV, PAR] + ([want] if want else []), (dur, budget, out["engines"])
+        assert out["engines"] == [PIV, PAR, WH] and out["planned"] == planned and out["window_s"] == budget, (budget, out)
 
 
-def test_the_evaluation_samples_the_whisper_that_did_not_vote_when_the_third_voter_fell_back_to_distil(renv, monkeypatch):
-    """Review #2: the eval set used to drop thirds[:1] (large-v3) up front, so a night whose third voter was distil evaluated neither whisper."""
+def test_the_evaluation_samples_the_whisper_that_did_not_vote_when_distil_is_the_configured_third(renv, monkeypatch):
+    """Review #2: the eval set used to drop large-v3 up front, so a night whose third voter was distil evaluated neither whisper."""
     monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_SECOND", PAR)
-    monkeypatch.delenv("ZOE_OMI_NIGHT_ASR_THIRD")
+    monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_THIRD", f"{DIS},{WH}")
     monkeypatch.setenv("ZOE_OMI_NIGHT_ASR_EVAL", f"{WH},{DIS},{GR}")
     transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
-    renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 1500")
-    renv.db.conn.commit()
-    real = rp.plan_voters
-    monkeypatch.setattr(rp, "plan_voters", lambda durs, rem, rt, second, thirds, **k: {**real(durs, rem, rt, second, [DIS], **k)})    # the budget picks distil
     out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [])))
     assert out["engines"] == [PIV, PAR, DIS], out["engines"]
     assert out["eval_engines"] == [WH, GR], out["eval_engines"]
@@ -295,24 +293,38 @@ def test_granite_never_votes_in_production_even_when_the_config_asks_for_it(renv
     assert rp.third_choices() == [WH, DIS] and rp.second_backend() == PAR
 
 
-def test_an_over_budget_night_keeps_the_pivot_and_drops_the_other_voters_and_the_evaluation(renv, monkeypatch):
-    on(monkeypatch)
-    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
-    renv.db.conn.execute("UPDATE omi_recordings SET duration_s = 2600")
-    renv.db.conn.commit()
+def test_the_window_is_never_exceeded_and_the_leftovers_carry_whole(renv, monkeypatch):
+    """Owner 2026-11-12: "give it a window and it can only use that amount of time and the left overs go to the next night". Two 1000 s recordings, a 1500 s window:
+    one recording's WHOLE pass fits, so only it is started; the other is not touched and stays owed with its WAV."""
+    on(monkeypatch, evals="none")
+    old_boring, new_important = _two_recordings(renv, "uh nothing much going on here", "remind me to call Sam tomorrow at 5:30")
+    monkeypatch.setattr(rp, "household_names", lambda db, uid: _async(["Sam"]))
     calls: list = []
-    t = [1000.0]
+    start = 1000.0
+    t = [start]
     inner = multi_runner(TEXTS, calls)
 
     def runner(*a, **k):
         rc = inner(*a, **k)
-        t[0] += 1420.0                                                                               # the pivot's pass used the night (2600 s of audio, ~0.5 s per second measured with loads): under 60 s left
+        t[0] = min(calls[-1]["dl"], t[0] + (500.0 if len(calls) == 1 else 150.0))       # a worker never runs past the deadline it was handed
         return rc
     out = run(rp.run_night(budget_s=1500, runner=runner, clock=lambda: t[0]))
-    assert [c["asr"] for c in calls] == [PIV] and out["engines"] == [PIV] and out["eval_engines"] == [] and out["model"] == PIV     # the pivot is never swapped out; no time was left for a voter
-    assert out["missing_voters"] == {PAR: "no_time", "third": "no_budget"}                              # named for what it was - no time left - not "no_result" (a voter that ran and returned nothing)
-    assert out["qwen_only_min"] > 0 and out["fused3_min"] == 0 and out["carried_min"] == 0                # ... and the recording still got its Qwen3 text
-    assert rows(renv)[0]["transcript"] == "the bat sat on the mat"                                    # the pivot alone
+    assert [c["asr"] for c in calls] == [PIV, PAR, DIS] and all(c["ids"] == [new_important] for c in calls)
+    assert all(c["dl"] <= start + 1500 for c in calls) and t[0] - start <= 1500 and out["used_s"] <= out["window_s"] == 1500
+    assert calls[0]["dl"] < start + 1500 - 45 - 100                                          # the voters' share was RESERVED before the pivot started
+    assert out["done"] == 1 and out["carried"] == 1 and out["planned"] == 1 and out["missing_voters"] is None and out["fused3_min"] > 0 and out["qwen_only_min"] == 0
+    left = {r["id"]: r for r in rows(renv)}
+    assert left[old_boring]["repass_state"] == "pending" and left[old_boring]["audio_path"] and Path(left[old_boring]["audio_path"]).exists()
+    assert left[new_important]["repass_state"] != "pending"
+
+
+def test_a_window_too_small_for_one_whole_pass_starts_nothing(renv, monkeypatch):
+    on(monkeypatch, evals="none")
+    _two_recordings(renv, "a", "b", dur=600)
+    calls: list = []
+    out = run(rp.run_night(budget_s=600, runner=multi_runner(TEXTS, calls)))
+    assert calls == [] and out["done"] == 0 and out["carried"] == 2 and out["why"] == "window_too_small"
+    assert {r["repass_state"] for r in rows(renv)} == {"pending"}
 
 
 def test_a_missing_second_voter_means_no_vote_no_evaluation_and_the_pivot_text(renv, monkeypatch, tmp_path):
@@ -321,10 +333,24 @@ def test_a_missing_second_voter_means_no_vote_no_evaluation_and_the_pivot_text(r
     calls: list = []
     out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, calls, fail=(PAR,))))
     assert [c["asr"] for c in calls] == [PIV, PAR, DIS]                                              # no evaluation pass: production did not finish
-    assert rows(renv)[0]["transcript"] == "the bat sat on the mat" and out["sample_speech_s"] == 0      # two voters (pivot + distil) cannot outvote the pivot
+    r = rows(renv)[0]
+    assert r["transcript"] == "moonshine" and r["repass_state"] == "pending" and out["sample_speech_s"] == 0      # NOT passed without every voter: it stays owed, untouched
+    assert out["done"] == 0 and out["carried"] == 1 and Path(r["audio_path"]).exists()
     assert out["missing_voters"] == {PAR: "no_result"}                                               # it RAN and returned nothing: that one is "no_result"
-    led = [json.loads(x) for x in (tmp_path / "repass" / "ledger.jsonl").read_text().splitlines()]
-    assert {x["model"] for x in led} == {PIV, DIS}
+    assert not (tmp_path / "repass" / "ledger.jsonl").exists()                                      # nothing was passed, so nothing is judged
+
+
+def test_shadow_keeps_the_wav_of_a_recording_that_did_not_get_every_voter(renv, monkeypatch):
+    on(monkeypatch, evals="none")
+    monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "shadow")
+    transcribe(first_pass(renv) and renv, monkeypatch, "moonshine")
+    out = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [], fail=(DIS,))))
+    r = rows(renv)[0]
+    assert out["shadow"] == 0 and out["carried"] == 1 and r["repass_state"] == "pending"
+    run(omi.release_tagged_audio(OWNER))                                                           # the hourly release must not take a recording still owed
+    assert rows(renv)[0]["audio_path"] and Path(rows(renv)[0]["audio_path"]).exists()
+    ok = run(rp.run_night(budget_s=3000, runner=multi_runner(TEXTS, [])))                         # control: next night every voter runs and it is passed
+    assert ok["shadow"] == 1 and rows(renv)[0]["repass_state"] == "shadow"
 
 
 def test_a_member_erased_after_the_recording_was_applied_still_leaves_no_hypotheses(renv, monkeypatch, tmp_path):
@@ -391,18 +417,12 @@ def test_importance_scores_names_numbers_times_commitments_and_pending_candidate
     assert rp.importance("Samantha is here", names) == 0                                          # whole words only
 
 
-def test_plan_voters_gives_the_important_recordings_all_three_voters_then_two_and_the_rest_keep_qwen3_only():
-    rt = {PIV: 0.42, PAR: 0.08, WH: 0.74, DIS: 0.44}
-    durs = [("a", 1000.0), ("b", 1000.0), ("c", 1000.0)]
-    full = rp.plan_voters(durs, 10000, rt, PAR, [WH, DIS])
-    assert full == {"second": ["a", "b", "c"], "third": ["a", "b", "c"], "third_engine": WH}               # room for everyone: the best third voter
-    tight = rp.plan_voters(durs, 1500, rt, PAR, [WH, DIS])
-    assert tight["third_engine"] == DIS and tight["third"] == ["a", "b"] and tight["second"] == ["a", "b", "c"]   # distil covers more recordings than large-v3 would
-    none = rp.plan_voters(durs, 300, rt, PAR, [WH, DIS])
-    assert none["third"] == [] and none["third_engine"] == "" and none["second"] == ["a", "b"]
-    nothing = rp.plan_voters(durs, 30, rt, PAR, [WH, DIS])
-    assert nothing == {"second": [], "third": [], "third_engine": ""}                                       # no time after the pivot: Qwen3 only
-    assert rp.plan_voters(durs, 10000, rt, "", [WH]) == {"second": [], "third": [], "third_engine": ""}
+def test_plan_window_takes_whole_passes_in_order_stops_at_the_first_that_does_not_fit_and_passes_over_the_oversize():
+    costs = [("a", 300.0), ("b", 300.0), ("c", 100.0), ("d", 50.0)]
+    assert rp.plan_window(costs, 1000, fixed_s=120) == (["a", "b", "c", "d"], [])
+    assert rp.plan_window(costs, 800, fixed_s=120) == (["a", "b"], [])                     # "c" would fit the 80 s left, but the order holds: c and d carry
+    assert rp.plan_window([("big", 900.0), ("a", 300.0)], 800, fixed_s=120) == (["a"], ["big"])       # one that could never fit this window does not block the rest
+    assert rp.plan_window(costs, 100, fixed_s=120) == ([], ["a", "b", "c", "d"])
 
 
 def _two_recordings(renv, a_text, b_text, dur=1000):
@@ -417,8 +437,8 @@ def _two_recordings(renv, a_text, b_text, dur=1000):
 
 
 def test_the_voters_are_costed_on_the_speech_they_are_handed_not_the_recording_length(renv, monkeypatch):
-    """2026-11-12 real run: a pendant file is mostly silence and the voters only get the pivot's VAD chunks; costing them on duration_s (with per-SPEECH-second RTFs)
-    under-planned them about 2.8x. Two 1000 s recordings holding 4 s of speech each: the 215 s the pivot left covers all three voters on both."""
+    """Two 1000 s recordings holding 4 s of speech each; the pivot ran slower than planned. Priced on duration the 955 s left would buy the vote for one;
+    priced on the speech each voter is handed, both get every voter."""
     on(monkeypatch, evals="none")
     old_boring, new_important = _two_recordings(renv, "uh nothing much going on here", "remind me to call Sam tomorrow at 5:30")
     monkeypatch.setattr(rp, "household_names", lambda db, uid: _async(["Sam"]))
@@ -428,17 +448,11 @@ def test_the_voters_are_costed_on_the_speech_they_are_handed_not_the_recording_l
 
     def runner(*a, **k):
         rc = inner(*a, **k)
-        t[0] += 840.0 if len(calls) == 1 else 0.0                                                          # the pivot used 840 s of the 1100 s night
+        t[0] += 2000.0 if len(calls) == 1 else 0.0
         return rc
-    out = run(rp.run_night(budget_s=1100, runner=runner, clock=lambda: t[0]))
-    assert calls[0]["asr"] == PIV and calls[0]["ids"] == [new_important, old_boring]                      # Qwen3 reads ALL the audio, the important recording first
+    out = run(rp.run_night(budget_s=3000, runner=runner, clock=lambda: t[0]))
     assert [c["asr"] for c in calls] == [PIV, PAR, DIS] and calls[1]["ids"] == [new_important, old_boring] == calls[2]["ids"]
     assert out["done"] == 2 and out["carried"] == 0 and out["engines"] == [PIV, PAR, DIS] and out["missing_voters"] is None
-    assert out["fused3_min"] > 0 and out["qwen_only_min"] == 0 and out["fused2_min"] == 0
-    # the control: costed on duration (1000 s each) the same 215 s reached Parakeet on the important one only
-    rt = {**rp.DEFAULT_RTF}
-    assert rp.plan_voters([(new_important, 1000.0), (old_boring, 1000.0)], 1100 - 45 - 840, rt, PAR, [DIS])["second"] == [new_important]
-    assert rp.plan_voters([(new_important, 4.0), (old_boring, 4.0)], 1100 - 45 - 840, rt, PAR, [DIS])["third"] == [new_important, old_boring]
 
 
 def test_a_recording_the_pivot_cannot_reach_carries_to_the_next_night_and_the_report_says_how_much(renv, monkeypatch):

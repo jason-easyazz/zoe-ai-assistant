@@ -129,7 +129,7 @@ async def amain(argv: "list[str] | None" = None) -> "tuple[int, dict]":
 
 def main() -> int:
     rc, summary = asyncio.run(amain())
-    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device", "worker_rtf", "peak_rss_mb", "gpu_peak_mb", "engines", "missing_voters", "skipped", "low_conf_chunks", "sample_speech_s", "speech_min", "fused3_min", "fused2_min", "qwen_only_min", "carried_min")
+    keys = ("status", "mode", "model", "pending", "done", "replaced", "shadow", "carried", "failed", "agree", "fits", "device", "worker_rtf", "peak_rss_mb", "gpu_peak_mb", "engines", "missing_voters", "skipped", "low_conf_chunks", "sample_speech_s", "speech_min", "fused3_min", "fused2_min", "qwen_only_min", "carried_min", "window_s", "used_s", "planned", "oversize", "why")
     print("NIGHT_JOB omi_repass " + " ".join(f"{k}={summary[k]}" for k in keys if k in summary), file=sys.stderr)
     if summary.get("contenders"):
         print("NIGHT_JOB omi_repass_contenders " + str(summary["contenders"])[:260], file=sys.stderr)
