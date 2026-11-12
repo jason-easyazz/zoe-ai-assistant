@@ -554,6 +554,56 @@ def test_confirming_after_the_member_became_ineligible_is_refused(renv, monkeypa
     assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["status"] == "confirmed"
 
 
+def _eligible_then_not(monkeypatch):
+    """``manner_block.eligible`` says yes to the EARLY check and no from then on: the member became ineligible while the call waited for the lock / scored."""
+    import manner_block
+    calls = []
+
+    async def flip(uid, db=None):
+        calls.append(uid)
+        return len(calls) == 1
+    monkeypatch.setattr(manner_block, "eligible", flip)
+    return calls
+
+
+def test_confirm_rechecks_eligibility_under_the_lock_right_before_the_write(renv, monkeypatch):
+    """Mutation: drop the in-lock ``eligible`` recheck in ``confirm_wearer`` -> the early yes is enough and the now-ineligible member gets a confirmed print."""
+    _held(renv, _centre(64), 12, tag="cl")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    calls = _eligible_then_not(monkeypatch)
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a")) == {"status": "not_eligible", "confirmed": 0}
+    assert len(calls) == 2 and renv.db.rows("SELECT COUNT(*) AS n FROM omi_wearer_samples WHERE status = 'confirmed'")[0]["n"] == 0
+
+
+def test_relabel_rechecks_eligibility_under_the_lock_right_before_the_write(renv, monkeypatch):
+    """Mutation: drop the in-lock ``eligible`` recheck in ``relabel_stored_from_print`` -> lines of a now-ineligible member read "me"."""
+    mine = _held(renv, _centre(65), 12, tag="rl")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    assert run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))["status"] == "confirmed"
+    calls = _eligible_then_not(monkeypatch)
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "not_eligible"
+    assert len(calls) == 2 and {r["speaker"] for r in renv.db.rows("SELECT speaker FROM omi_segments")} == {"other"} and mine
+
+
+def test_relabel_rechecks_the_print_under_the_lock(renv, monkeypatch):
+    """The print withdrawn while the relabel scored (the owner corrected its lines away) -> nothing reads "me". Mutation: drop the in-lock ``wearer_print`` recheck."""
+    _held(renv, _centre(66), 12, tag="rp")
+    run(rp.propose_wearer_from_stored(renv.db, OWNER, now=NOW))
+    run(rp.confirm_wearer(renv.db, OWNER, "stored-2026-11-12-a"))
+    real = rp.wearer_print
+    calls = []
+
+    async def withdrawn_after_first(db, uid):
+        calls.append(uid)
+        if len(calls) > 1:
+            renv.db.conn.execute("DELETE FROM omi_wearer_samples")
+            renv.db.conn.commit()
+        return await real(db, uid)
+    monkeypatch.setattr(rp, "wearer_print", withdrawn_after_first)
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["status"] == "no_print"
+    assert {r["speaker"] for r in renv.db.rows("SELECT speaker FROM omi_segments")} == {"other"}
+
+
 def test_relabel_compares_the_unrounded_score_with_the_bar(renv):
     """0.59996 is under 0.6 and must stay as it is; 0.6 reads "me". Mutation: compare the score rounded to 4 places -> 0.59996 becomes 0.6000 and reads "me"."""
     e = np.zeros(256, dtype=np.float32)

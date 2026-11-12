@@ -1076,9 +1076,11 @@ async def confirm_wearer(db, user_id: str, proposal_id: str) -> dict:
     voices offered side by side (``propose_wearer_from_stored``): confirming one withdraws its siblings from the same batch - they are someone else (nothing is learned of them).
     Refused (``not_eligible``) for a member who is not positively an adult NOW (D14): a proposal made while they were may never become a print. -> {status, confirmed}."""
     import manner_block
-    if not await manner_block.eligible(user_id):
+    if not await manner_block.eligible(user_id):                 # the cheap exit; repeated under the lock right before the write
         return {"status": "not_eligible", "confirmed": 0}
     async with _wearer_txn(db, user_id):
+        if not await manner_block.eligible(user_id):             # eligibility can change while this waited for the member's lock
+            return {"status": "not_eligible", "confirmed": 0}
         cur = await db.execute("UPDATE omi_wearer_samples SET status = 'confirmed' WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id = ?",
                                (user_id, MODEL_ID, proposal_id))
         n = int(getattr(cur, "rowcount", 0) or 0)
@@ -1197,17 +1199,23 @@ async def relabel_stored_from_print(db, user_id: str, *, min_cos: float = RELABE
     async with erase_gate.writing(user_id, g) as live:
         if not live:
             return {"status": "erased", "checked": len(rows)}
-        for sid, cid, score in hits:
-            cur = await db.execute("UPDATE omi_segments SET speaker = 'you', score = ?, profile_channel = 'pendant', voice_cluster_id = NULL, suggested_person_id = NULL, "
-                                   "suggested_score = NULL WHERE id = ? AND user_id = ? AND owner_label IS NULL AND tagged_person_id IS NULL AND not_person IS NULL",
-                                   (round(score, 4), sid, user_id))
-            if int(getattr(cur, "rowcount", 0) or 0):
-                await db.execute("DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (sid, user_id))
-                n += 1
-                if cid:
-                    touched.add(cid)
-        for cid in sorted(touched):
-            await omi_voices.rebuild_cluster(db, cid)
+        async with _wearer_txn(db, user_id):
+            # the early checks again, under the member's lock and right before the write: eligibility may have changed, or the print been withdrawn, while this scored
+            if not await manner_block.eligible(user_id):
+                return {"status": "not_eligible", "checked": len(rows)}
+            if await wearer_print(db, user_id) is None:
+                return {"status": "no_print", "checked": len(rows)}
+            for sid, cid, score in hits:
+                cur = await db.execute("UPDATE omi_segments SET speaker = 'you', score = ?, profile_channel = 'pendant', voice_cluster_id = NULL, suggested_person_id = NULL, "
+                                       "suggested_score = NULL WHERE id = ? AND user_id = ? AND owner_label IS NULL AND tagged_person_id IS NULL AND not_person IS NULL",
+                                       (round(score, 4), sid, user_id))
+                if int(getattr(cur, "rowcount", 0) or 0):
+                    await db.execute("DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (sid, user_id))
+                    n += 1
+                    if cid:
+                        touched.add(cid)
+            for cid in sorted(touched):
+                await omi_voices.rebuild_cluster(db, cid)
         await db.commit()
     logger.info("OMI_WEARER_RELABELLED checked=%d relabelled=%d", len(rows), n)
     return {"status": "ok", "checked": len(rows), "relabelled": n, "unchanged": len(rows) - n}
