@@ -9,11 +9,10 @@ Validated against the real pre-fix file from origin/main: the harness fails 10
 of its 13 checks there, including every behavioural XSS check, so this is not a
 synthetic guard.
 
-The escape helper must live INSIDE journal-api.js. That file is loaded by both
-zoe-ui/dist/journal.html and zoe-ui/dist/touch/journal.html, and only the former
-defines a page-level escapeHtml(); borrowing it would throw ReferenceError on
-the touch panel and break journal rendering on the live kiosk. The harness
-asserts the helper is reachable from journal-api.js's own scope.
+The escape helper must live INSIDE journal-api.js: a page that loads it without
+defining a page-level escapeHtml() would throw ReferenceError and break journal
+rendering. The harness asserts the helper is reachable from journal-api.js's own
+scope.
 """
 import os
 import shutil
@@ -53,10 +52,10 @@ def test_journal_render_escaping_node_harness():
 
 
 def test_escape_helper_is_local_to_journal_api():
-    """The kiosk ReferenceError guard, asserted independently of node.
+    """journal-api.js carries its own escape helper, asserted independently of node.
 
-    touch/journal.html defines no escapeHtml(), so journal-api.js must not
-    reference one.
+    It must not borrow a page-level escapeHtml(): a page that loads it without
+    defining one would throw a ReferenceError on render.
     """
     src = (ROOT / "zoe-ui" / "dist" / "js" / "journal-api.js").read_text(encoding="utf-8")
     # Strip comments so this file's own explanatory prose cannot satisfy the match.
@@ -65,13 +64,6 @@ def test_escape_helper_is_local_to_journal_api():
     )
     assert "function escapeJournalHtml(" in code, (
         "journal-api.js must define its own escape helper"
-    )
-
-    touch = (ROOT / "zoe-ui" / "dist" / "touch" / "journal.html").read_text(encoding="utf-8")
-    assert "journal-api.js" in touch, "touch/journal.html is a consumer of journal-api.js"
-    assert "function escapeHtml(" not in touch, (
-        "touch/journal.html defines no escapeHtml -- this is the ReferenceError risk "
-        "that forces the helper to be local"
     )
 
 

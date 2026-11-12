@@ -141,7 +141,7 @@ function chatAgents() {
   const sel = vm.runInNewContext(pre + extractFunction(chat, 'selectAgent') + post, { document: { getElementById: () => null } });
   assert.deepStrictEqual({ a: sel.a, b: sel.b }, { a: 'auto', b: 'auto' });
   // ...and the request body carries no lane override at all (the server dropped force_openclaw / force_agent).
-  for (const page of ['chat.html', 'touch/chat.html']) {
+  for (const page of ['chat.html']) {
     const src = read(page);
     for (const dead of ['force_openclaw', 'force_agent', 'forceOpenClawMode', 'tryPromptWithOpenClaw']) assert(!src.includes(dead), page + ' still carries ' + dead);
   }

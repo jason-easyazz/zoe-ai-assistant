@@ -5,7 +5,7 @@
  * Pins: every state the household sees (scanning, connecting, connected, updating with progress, failed WITH the reason); XSS
  * escaping of anything a panel supplies; the firmware update cannot be started without the safety acknowledgement and a ready
  * checklist; the "do not move or unplug for 2 minutes" and "cannot be undone" warnings; no cancel once the install is ordered;
- * finger targets >= 48 px on the touch surface; flag-off renders nothing; both Settings pages carry the section behind their gates;
+ * finger targets >= 48 px on the touch surface; flag-off renders nothing; desktop Settings carries the section behind its gate;
  * the shared script never routes into /touch/; the Omi "Assigned to" control (members, assign / reassign / unassign, hidden when the registry
  * is off, only a listed household member can be chosen, escaped names, NO recording is ever fetched or rendered, 48 px on touch).
  * Source mutations worth re-running by Edit: drop esc() in renderDevice -> the XSS check goes red; drop `!ack` in canStartUpdate ->
@@ -378,12 +378,9 @@ const flush = () => new Promise((r) => setImmediate(r));
 
   /* ---------- the pages that host it ---------- */
   const desktop = fs.readFileSync(path.join(DIST, 'settings.html'), 'utf8');
-  const touch = fs.readFileSync(path.join(DIST, 'touch', 'settings.html'), 'utf8');
   const shared = fs.readFileSync(path.join(DIST, 'js', 'bluetooth-settings.js'), 'utf8');
   ok(/<script src="js\/bluetooth-settings\.js\?v=\d+"><\/script>/.test(desktop) && /id="sec-bluetooth"/.test(desktop) && /bluetooth:\s+loadBluetooth/.test(desktop), 'desktop Settings hosts the section');
   ok(/feature: 'bluetooth'/.test(desktop) && /if \(item\.feature && !FEATURES\[item\.feature\]\) continue;/.test(desktop) && /'\/api\/bluetooth\/config'/.test(desktop), 'desktop nav item is hidden unless the server confirms the feature');
-  ok(/id="bluetoothSection"[^>]*display: none/.test(touch) && /toggleSection\('bluetooth'\)/.test(touch) && /id="btRoot"/.test(touch) && /bluetooth-settings\.js\?v=\d+/.test(touch), 'touch Settings hosts the section, hidden by default');
-  ok(/surface: 'touch'/.test(touch) && /zoeResolveIsAdmin/.test(touch) && /onUnavailable[^}]*display = 'none'/.test(touch), 'touch section is admin-gated and hides itself when the feature is off');
   ok(!/\/touch\//.test(shared), 'the shared component never routes into /touch/ (desktop is desktop, touch is touch)');
   ok(!/confirm\(|alert\(|prompt\(/.test(shared), 'no browser dialogs (the kiosk suppresses them)');
   console.log('bluetooth settings UI: ' + checks + ' checks passed');

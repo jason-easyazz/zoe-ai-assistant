@@ -61,7 +61,7 @@ Say or type any of:
 
 Zoe will:
 1. Create or find the person in the `people` table
-2. Navigate the touch panel to `/touch/people.html?person=<id>&intro=1`
+2. Navigate the touch panel to `/touch/home.html?domain=person&person=<id>&intro=1` (the estate's Contacts screen)
 3. Reply: *"Hi Alice, I'm Zoe. So nice to meet you! What do you do for work, or what are you passionate about?"*
 4. Store any follow-up answers as `person_activities` and MemPalace facts
 
