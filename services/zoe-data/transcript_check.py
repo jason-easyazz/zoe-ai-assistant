@@ -1004,19 +1004,25 @@ async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, 
     """Wrap the brain's reply stream: the reply goes out untouched; only when it finished with real text does ONE line follow. Off = the
     stream is passed through (callers do not even wrap it). A consumer that stops early (barge-in) gets no line and releases nothing it held."""
     reply: list[str] = []
-    async for d in turn:
-        if not d.startswith(("__TOOL__:", "__THINKING__:")) and d.strip() and d not in skip:
-            reply.append(d)
-        yield d
-    text = "".join(reply)
-    tail = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
-    if tail:
-        try:
-            yield " " + tail
-        except GeneratorExit:
-            await release_tail(user_id, session_id)
-            raise
-        await confirm_tail(user_id, session_id)
+    try:
+        async for d in turn:
+            if not d.startswith(("__TOOL__:", "__THINKING__:")) and d.strip() and d not in skip:
+                reply.append(d)
+            yield d
+        text = "".join(reply)
+        tail = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
+        if tail:
+            try:
+                yield " " + tail
+            except GeneratorExit:
+                await release_tail(user_id, session_id)
+                raise
+            await confirm_tail(user_id, session_id)
+    finally:
+        # closing this closes the inner turn (Flue abort, tools log, brief settle) however the consumer stopped
+        aclose = getattr(turn, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: str) -> str:
