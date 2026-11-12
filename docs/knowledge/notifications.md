@@ -24,7 +24,7 @@ reply and the brain stream are what they were before this feature (the stream is
 | piece | where | what it does |
 |---|---|---|
 | store | `services/zoe-data/notifications_store.py` | `create` (deterministic id, `ON CONFLICT DO NOTHING`), `unread`, `unread_count`, `mark_read`; sensitivity rides in the row's `data` JSON (`{"sensitive": true}`), so no migration |
-| dot | `routers/proactive.py` `/api/proactive/inbox` | adds `notify`: the unread count of the request's OWN member; `dist/touch/home.html` paints the existing dot when the proactive count OR `notify` is above 0 |
+| dot | `routers/proactive.py` `/api/proactive/inbox` | a member session gets `notify` (its OWN unread count); any other caller (the kiosk guest panel, a device token, a degraded session) gets only `notify_any`, a bare boolean; `dist/touch/home.html` paints the existing dot when the proactive count, `notify` or `notify_any` says so |
 | card | `notifications_store.card` / `push_card` | a private `voice_card` of kind `notifications`, minted with `panel_review_cards.mint`, drawn by the existing `js/touch-review-cards.js`; taps go to `POST /api/panel/notifications/act` (`routers/notifications.py`, `X-Panel-Card` header, `panel_review_cards.authorize`) |
 | orb press | `fast_tiers._pull_tier` -> `notifications_store.pull_addendum` | the press runs today's spoken "what's up" pull; when the turn's member has unread notifications the card goes to that panel and one sentence follows ("And three notifications on the screen.") |
 | tail | `services/zoe-data/notification_tail.py` | `note_voice_turn` (voice lane), `append_stream` (brain stream, `zoe_flue_client.py`), `append_to_reply` (deterministic tiers, `routers/voice_tts.py`), `tier` ("read them" / "later") |
@@ -36,8 +36,14 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
 
 ## Privacy rules
 
-- The dot's count is the request's own member session; a guest, a device token or a degraded session reads 0. Another member's
-  session reads that member's own rows only.
+- The dot's count (`notify`) is for the request's own member session only. Another member's session reads that member's own rows.
+  A guest, a device token or a degraded session never gets a count.
+- **The kiosk dot - the privacy trade.** The household uses the panel by voice on the kiosk guest session; a PIN sign-in is rare.
+  So the unauthenticated panel poll gets one boolean, `notify_any`: true when ANY household member (never a guest) has at least
+  one unread notification that is not sensitive. It is never a count, never whose, never a title. The trade, stated plainly: anyone
+  standing at the panel learns only that "someone here has something waiting" - not who, not how many, not what. Sensitive
+  notifications never light the dot for that poll. Pressing the orb then runs the spoken pull, which is voice-verified, and only
+  that verified member's own card is shown; for anyone else the press behaves exactly as before.
 - The card is pushed only to the panel the member is at (`voice_session.send_to_panel`, never `all`), only for the turn's
   identified member (`panel_review_cards._member`: the voice session or a fresh PIN), and a tap is honoured only while that
   member's voice session is open there or with their own session.
@@ -47,6 +53,9 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
   logged, never in any other push frame. Logs carry counts and types only.
 - A member erased since the creator was scheduled (`user_erase_gate`), or words naming a forgotten entity (tombstone / forget
   ledger), get nothing created.
+- Forgotten means forever: `MemoryService.delete_user` calls `notifications_store.forget_user` (fail closed), which deletes EVERY
+  notification row of the member, whoever wrote it, plus their tail-caps row, under the member's erase gate. `forget_reach` lists
+  the table as reached. The entity forget ("forget Dana") does not scan notification titles.
 
 ## Do not overwhelm
 
@@ -54,7 +63,9 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
   question; never on an emotional turn, in quiet hours, under `replay_isolation`, or on the pull's own reply.
 - One appended line per reply across all tails: the transcript check goes first and wins.
 - At most once every 4 hours and 3 times a household day per member, and only when an unread notification has not been announced
-  yet (the orb press counts as announcing). These caps live in memory: a restart can allow one more tail, never an unprompted one.
+  yet (the orb press counts as announcing). The last-tail time and the day's count persist in one `app_settings` row per member
+  (key `notification_tail:<member>`, no migration), so a restart does not reset them; the "already announced" set is in memory,
+  so after a restart the same set may be announced once more, still inside the caps.
 - "Read them" reads at most 3 titles, then "And N more on the panel." "Later" or silence leaves them on the panel.
 - The card shows at most 8 rows.
 
@@ -69,5 +80,4 @@ runs from `notifications_store.refresh` (throttled to once per 10 minutes per me
 ## Not in this version
 
 - The other hand-rolled writers of the table (`transcript_check._notify` and older ones) are not migrated to `create`.
-- A member-wide erase does not yet delete notification rows (`forget_reach` lists the table as a gap); the rows this feature writes
-  hold no words of what was said.
+- The entity forget does not reach notification titles (the member erase does).

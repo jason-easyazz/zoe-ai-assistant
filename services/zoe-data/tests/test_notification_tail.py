@@ -104,6 +104,7 @@ def test_frequency_caps_and_nothing_new_nothing_said(tenv):
         tenv.clock.t += 4 * 3600 + 1
     assert said == nt.TAIL_MAX_PER_DAY                                                  # 3 a day, however many 4 h gaps
     nt.reset()
+    tenv.conn.execute("DELETE FROM app_settings")                                       # a fresh member state (caps persist otherwise)
     verified("t1")
     assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "t1")) != "Done."
     tenv.clock.t += 4 * 3600 + 1
@@ -165,3 +166,29 @@ def test_read_them_from_someone_else_is_private_and_later_leaves_them(tenv):
     assert run(nt.tier("later", MEMBER, "s1", channel="voice")).reply == nt.LATER_REPLY
     assert run(ns.unread_count(MEMBER)) == 3
     assert run(nt.tier("read them", MEMBER, "s1", channel="voice")) is None            # the window closed with the answer
+
+
+def test_the_caps_survive_a_restart_and_control(tenv):
+    seed(1)
+    verified()
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) != "Done."
+    run(ns.create(MEMBER, "note", "New", "M", dedupe_id="new"))                       # something new, so only the 4 h cap can refuse
+    nt.reset()                                                                         # a restart: every in-memory cap is gone
+    verified("s2")
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s2")) == "Done."     # the persisted last-tail time still holds
+    tenv.conn.execute("DELETE FROM app_settings")                                      # control: without the row it would fire
+    nt.reset()
+    verified("s3")
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s3")) != "Done."
+
+
+def test_the_days_count_survives_a_restart(tenv):
+    seed(1)
+    for i in range(3):
+        verified(f"s{i}")
+        assert run(nt.append_to_reply("Done.", "lights on", MEMBER, f"s{i}")) != "Done."
+        run(ns.create(MEMBER, "note", f"N{i}", "M", dedupe_id=f"n{i}"))
+        tenv.clock.t += 4 * 3600 + 1
+        nt.reset()                                                                     # a restart between each one
+    verified("s9")
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s9")) == "Done."     # still 3 a day

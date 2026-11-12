@@ -54,6 +54,7 @@ def env(monkeypatch, tmp_path):
     db = _Sqlite(str(tmp_path / "zoe.db"))
     db.conn.execute("CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT, message TEXT, "
                     "data TEXT, delivered INTEGER DEFAULT 0, action_taken TEXT, created_at TEXT)")
+    db.conn.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT)")
 
     @contextlib.asynccontextmanager
     async def fake_db():
@@ -133,11 +134,41 @@ def test_the_dot_counts_only_the_callers_own_rows(env):
     seed(2)
     me = run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))
     assert me["notify"] == 2 and "Title" not in str(me)                               # a count, never words
+    assert "notify_any" not in me                                                      # a member gets their own count only
     assert run(r.pending_inbox({"user_id": OTHER, "role": "user"}))["notify"] == 0    # another member
-    assert run(r.pending_inbox({"user_id": "guest", "role": "guest"}))["notify"] == 0
-    dev = {"user_id": MEMBER, "role": "user", "device_token_role": "panel"}
-    assert run(r.pending_inbox(dev))["notify"] == 0                                   # a panel device token is not the member
-    assert run(r.pending_inbox({"user_id": MEMBER, "role": "user", "auth_degraded": True}))["notify"] == 0
+    for caller in ({"user_id": "guest", "role": "guest"}, {"user_id": MEMBER, "role": "user", "device_token_role": "panel"},
+                   {"user_id": MEMBER, "role": "user", "auth_degraded": True}):
+        out = run(r.pending_inbox(caller))
+        assert "notify" not in out and out["notify_any"] is True                       # not the member: a bare boolean, no count
+
+
+def test_the_kiosk_boolean_says_only_someone_has_something(env):
+    from routers import proactive as r
+    guest = {"user_id": "guest", "role": "guest"}
+    assert run(r.pending_inbox(guest))["notify_any"] is False                         # nothing waiting
+    seed(1)
+    out = run(r.pending_inbox(guest))
+    assert out["notify_any"] is True
+    assert MEMBER not in str(out) and "Title" not in str(out) and "notify" not in out  # never whose, never words, never a count
+
+
+def test_a_guests_own_rows_never_light_the_kiosk_dot_and_control(env):
+    from routers import proactive as r
+    guest = {"user_id": "guest", "role": "guest"}
+    env.conn.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered) VALUES ('g', 'guest', 'note', 'T', 'M', '{}', 0)")
+    assert run(r.pending_inbox(guest))["notify_any"] is False
+    env.conn.execute("UPDATE notifications SET user_id = ? WHERE id = 'g'", (MEMBER,))   # control: the same row, a member's
+    assert run(r.pending_inbox(guest))["notify_any"] is True
+
+
+def test_only_sensitive_unread_never_lights_the_kiosk_dot_and_control(env):
+    from routers import proactive as r
+    guest = {"user_id": "guest", "role": "guest"}
+    assert run(ns.create(MEMBER, "note", "Private", "M", dedupe_id="s", sensitive=True))
+    assert run(r.pending_inbox(guest))["notify_any"] is False
+    assert run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))["notify"] == 1   # the member still sees their own
+    assert run(ns.create(MEMBER, "note", "Plain", "M", dedupe_id="p"))                 # control: a non-sensitive one
+    assert run(r.pending_inbox(guest))["notify_any"] is True
 
 
 def test_flag_off_the_inbox_is_unchanged(env, monkeypatch):
@@ -148,11 +179,15 @@ def test_flag_off_the_inbox_is_unchanged(env, monkeypatch):
     off = run(r.pending_inbox({"user_id": MEMBER, "role": "user"}))
     assert "notify" in on and "notify" not in off
     assert off == {k: v for k, v in on.items() if k != "notify"}
+    guest = {"user_id": "guest", "role": "guest"}
+    assert "notify_any" not in run(r.pending_inbox(guest))                            # the kiosk boolean is absent too
+    monkeypatch.setenv("ZOE_NOTIFICATIONS", "on")
+    assert "notify_any" in run(r.pending_inbox(guest))
 
 
 def test_home_paints_the_existing_dot_for_notify():
     html = (SVC.parents[1] / "services/zoe-ui/dist/touch/home.html").read_text()
-    assert "((d.enabled&&d.count>0)||d.notify>0)" in html
+    assert "((d.enabled&&d.count>0)||d.notify>0||d.notify_any===true)" in html
     assert "notifications-panel.js" not in html                                       # desktop's bell never loads on the estate
 
 
@@ -252,3 +287,23 @@ def test_flag_off_the_orb_press_says_and_pushes_nothing(env, monkeypatch):
     monkeypatch.setenv("ZOE_NOTIFICATIONS", "off")
     assert run(ns.pull_addendum(MEMBER, "voice", {"scope_user": MEMBER, "panel_id": PANEL}, alone=True)) == ""
     assert env.pushed == []
+
+
+# -- forget ----------------------------------------------------------------------------------------------------------------------
+def test_a_member_erase_deletes_their_rows_and_tail_caps_and_control(env):
+    seed(2)
+    seed(1, member=OTHER)
+    env.conn.execute("INSERT INTO app_settings (key, value) VALUES (?, '{}'), (?, '{}')", (ns.tail_key(MEMBER), ns.tail_key(OTHER)))
+    assert run(ns.forget_user(OTHER)) == 1                                             # control: another member's erase leaves ours
+    assert run(ns.unread_count(MEMBER)) == 2
+    assert run(ns.forget_user(MEMBER)) == 2
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
+    assert env.rows("SELECT COUNT(*) FROM app_settings")[0][0] == 0
+
+
+def test_a_create_scheduled_before_the_erase_stays_erased(env):
+    gen = erase_gate.generation(MEMBER)
+    run(ns.forget_user(MEMBER))
+    assert run(ns.create(MEMBER, "note", "T", "M", dedupe_id="late", scheduled_at=gen)) is None
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
+

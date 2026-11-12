@@ -212,14 +212,11 @@ async def notify_wearer_proposals(user_id: str) -> Optional[str]:
 
 # -- the orb -----------------------------------------------------------------------------------------------------------------------
 async def orb_count(caller: Optional[dict]) -> Optional[int]:
-    """The inbox's ``notify`` field: the request's OWN member's unread count. None = off (the key is left out, the response is what it
-    always was). A guest, a device token or a degraded session reads 0."""
-    if not enabled():
+    """The inbox's ``notify`` field: the request's OWN member's unread count. None = the key is left out: the flag is off, or the caller is
+    not a member session (a guest, a device token, a degraded session - they get only ``orb_any``'s boolean)."""
+    if not enabled() or not _member_session(caller):
         return None
-    c = caller or {}
-    uid = _account(str(c.get("user_id") or ""))
-    if uid is None or "device_token_role" in c or c.get("auth_degraded"):
-        return 0
+    uid = str(_account(str((caller or {}).get("user_id") or "")))
     try:
         from proactive.pull import _member
 
@@ -229,6 +226,51 @@ async def orb_count(caller: Optional[dict]) -> Optional[int]:
         return 0
     await refresh(uid)
     return await unread_count(uid)
+
+
+_HOUSEHOLD_REFRESHED = [-REFRESH_EVERY_S]
+
+
+async def _refresh_household() -> None:
+    """The creators for every member the pendant has proposals for, at most once per ``REFRESH_EVERY_S`` (the kiosk poll has no member
+    to refresh for). Never raises."""
+    from typed_env import env_bool
+
+    now = time.monotonic()
+    if now - _HOUSEHOLD_REFRESHED[0] < REFRESH_EVERY_S or not env_bool("ZOE_OMI_SYNC_ENABLED", False):
+        return
+    _HOUSEHOLD_REFRESHED[0] = now
+    try:
+        async with _db() as db:
+            cur = await db.execute("SELECT DISTINCT user_id FROM omi_wearer_samples WHERE status = 'proposed'")
+            uids = [str(r[0]) for r in await cur.fetchall()]
+    except Exception:  # noqa: BLE001 - no pendant tables: nothing to create
+        return
+    for uid in uids:
+        await refresh(uid)
+
+
+def _member_session(caller: Optional[dict]) -> bool:
+    c = caller or {}
+    return _account(str(c.get("user_id") or "")) is not None and "device_token_role" not in c and not c.get("auth_degraded")
+
+
+async def orb_any(caller: Optional[dict]) -> Optional[bool]:
+    """The inbox's ``notify_any`` for a caller that is NOT a member session (the kiosk guest panel): True when ANY household member
+    (never a guest) has an unread NON-sensitive notification. A bare boolean - never a count, never whose. None = the key is left out:
+    the flag is off, or the caller is a member (they get their own ``notify`` count instead)."""
+    if not enabled() or _member_session(caller):
+        return None
+    await _refresh_household()
+    try:
+        from proactive.pull import _member
+
+        async with _db() as db:
+            cur = await db.execute("SELECT user_id, data FROM notifications WHERE delivered = 0 ORDER BY created_at DESC LIMIT 500")
+            rows = await cur.fetchall()
+        return any(_account(str(r[0])) and _member(str(r[0])) and not _parse(r[1]).get("sensitive") for r in rows)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # -- the card ----------------------------------------------------------------------------------------------------------------------
@@ -307,6 +349,11 @@ _WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "se
 ANNOUNCED: dict[str, set] = {}     # member -> notification ids already told (the orb press, the spoken tail): never told twice
 
 
+def tail_key(member: str) -> str:
+    """The ``app_settings`` row that persists the member's spoken-tail caps (last time, the day's count). Erased with the member."""
+    return f"notification_tail:{member}"
+
+
 def count_words(n: int) -> str:
     return "a notification" if n == 1 else f"{_WORDS.get(n, str(n))} notifications"
 
@@ -368,6 +415,38 @@ async def act(member: str, item: dict, action: str) -> dict:
     raise ActError(404, "not on this card")
 
 
+# -- forget ---------------------------------------------------------------------------------------------------------------------------
+async def forget_user(user_id: str) -> int:
+    """Right to be forgotten (``MemoryService.delete_user``): EVERY notification row of the member goes, whoever wrote it, whatever the flag
+    says. Takes the member's erase gate, so a create already in flight lands before and is removed, and one scheduled before is dropped.
+    Raises on a DB error (the caller fails closed)."""
+    uid = str(user_id or "").strip()
+    if not uid:
+        return 0
+    try:
+        async with erase_gate.erasing(uid):
+            async with _db() as db:
+                cur = await db.execute("DELETE FROM notifications WHERE user_id = ?", (uid,))
+                n = int(getattr(cur, "rowcount", 0) or 0)
+                try:
+                    await db.execute("DELETE FROM app_settings WHERE key = ?", (tail_key(uid),))
+                except Exception as exc:  # noqa: BLE001 - only timestamps live there; the rows above are what matter
+                    logger.debug("NOTIFY forget: tail caps not erased (%s)", exc.__class__.__name__)
+                await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        from conversation_notes import _no_store       # the one "nothing stored to erase" rule (a lost pool still raises)
+
+        if _no_store(exc):
+            return 0
+        logger.error("NOTIFY forget failed (%s): rows NOT erased", exc.__class__.__name__)
+        raise
+    ANNOUNCED.pop(uid, None)
+    _REFRESHED.pop(uid, None)
+    logger.info("NOTIFY forget rows=%d", n)
+    return n
+
+
 def reset() -> None:
     _REFRESHED.clear()
+    _HOUSEHOLD_REFRESHED[0] = -REFRESH_EVERY_S
     ANNOUNCED.clear()

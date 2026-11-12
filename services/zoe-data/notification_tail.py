@@ -8,11 +8,13 @@ The tail copies the transcript-check contract (``transcript_check.prepare_tail``
     finished with real text that does not end in a question, never on an emotional turn, never in quiet hours;
   * at most ONE appended line per reply across all tails: the transcript check goes first and wins (its pending ask blocks ours);
   * at most once per ``TAIL_EVERY_S`` (4 h) and ``TAIL_MAX_PER_DAY`` (3) a household day per member, and only when at least one unread
-    notification has not been announced yet (the same set is never announced twice). The caps are in memory: a restart may allow
-    one more tail, never an unprompted one.
+    notification has not been announced yet (the same set is never announced twice). The time and the day's count persist in one
+    ``app_settings`` row per member (``notifications_store.tail_key``), so a restart does not reset them; the "already announced" set
+    is in memory (after a restart the same set may be announced once more, still within the caps).
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -42,12 +44,13 @@ class _Turn:
 
 _TURNS: dict[str, _Turn] = {}
 _PENDING: dict[str, tuple[str, float]] = {}       # session -> (member, asked_at): "read them" in the next ASK_TTL_S answers the tail
-_LAST: dict[str, float] = {}                       # member -> monotonic time of the last tail
-_DAY: dict[str, tuple[str, int]] = {}              # member -> (household day, tails said that day)
+_LAST: dict[str, float] = {}                       # member -> time of the last tail (persisted, see _load / _save)
+_DAY: dict[str, tuple[str, int]] = {}              # member -> (household day, tails said that day) (persisted)
+_LOADED: set = set()                               # members whose persisted caps were read in this process
 
 
 def _clock() -> float:
-    return time.monotonic()
+    return time.time()             # wall clock: the caps persist across a restart (``app_settings``), so they need a shared time base
 
 
 def _now() -> datetime:
@@ -119,6 +122,7 @@ async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text
             return None
         if transcript_check.classify_reply(user_text) or str(session_id) in _PENDING or _other_tail_pending(session_id):
             return None
+        await _load(member)
         if _clock() - _LAST.get(member, -TAIL_EVERY_S) < TAIL_EVERY_S:
             return None
         day = _now().date().isoformat()
@@ -136,7 +140,38 @@ async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text
         return None
 
 
-def confirm_tail(member: str, session_id: str, ids: list) -> None:
+async def _load(member: str) -> None:
+    """The member's persisted caps (one ``app_settings`` row, ``notifications_store.tail_key``), read once per process. A missing or
+    unreadable row = no tail yet. Never raises."""
+    if member in _LOADED:
+        return
+    _LOADED.add(member)
+    try:
+        async with store._db() as db:
+            cur = await db.execute("SELECT value FROM app_settings WHERE key = ?", (store.tail_key(member),))
+            row = await cur.fetchone()
+        v = json.loads(row[0]) if row else {}
+        if v.get("at"):
+            _LAST[member] = max(_LAST.get(member, 0.0), float(v["at"]))
+        if v.get("day") and member not in _DAY:
+            _DAY[member] = (str(v["day"]), int(v.get("said") or 0))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("notification_tail: caps unreadable (%s)", exc.__class__.__name__)
+
+
+async def _save(member: str) -> None:
+    day, said = _DAY.get(member, ("", 0))
+    value = json.dumps({"at": _LAST.get(member, 0.0), "day": day, "said": said})
+    try:
+        async with store._db() as db:
+            await db.execute("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
+                             "value = excluded.value, updated_at = excluded.updated_at", (store.tail_key(member), value, _now().isoformat()))
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 - the in-memory caps still hold for this process
+        logger.debug("notification_tail: caps not saved (%s)", exc.__class__.__name__)
+
+
+async def confirm_tail(member: str, session_id: str, ids: list) -> None:
     """The line was said: count it against the caps and open the "read them" window."""
     now = _clock()
     _LAST[member] = now
@@ -146,6 +181,7 @@ def confirm_tail(member: str, session_id: str, ids: list) -> None:
     store.ANNOUNCED.setdefault(member, set()).update(ids)
     _PENDING[str(session_id)] = (member, now)
     logger.info("NOTIFY tail=1 count=%d", len(ids))
+    await _save(member)
 
 
 async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, session_id: str, *, skip: tuple = ()) -> AsyncIterator[str]:
@@ -160,7 +196,7 @@ async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, 
     got = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
     if got:
         yield " " + got[0]
-        confirm_tail(got[1], session_id, got[2])
+        await confirm_tail(got[1], session_id, got[2])
 
 
 async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: str) -> str:
@@ -170,7 +206,7 @@ async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: 
     got = await prepare_tail(user_id, session_id, user_text, reply or "")
     if not got:
         return reply
-    confirm_tail(got[1], session_id, got[2])
+    await confirm_tail(got[1], session_id, got[2])
     return f"{reply.rstrip()} {got[0]}"
 
 
@@ -237,5 +273,5 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
 
 
 def reset() -> None:
-    for d in (_TURNS, _PENDING, _LAST, _DAY, store.ANNOUNCED):
+    for d in (_TURNS, _PENDING, _LAST, _DAY, _LOADED, store.ANNOUNCED):
         d.clear()

@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-127 stores: 51 reached, 32 out of scope, 44 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+127 stores: 52 reached, 32 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -180,7 +180,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `calendars` | pg_table | metadata | out_of_scope | - | Calendar containers: a name and a colour, no event content (events are listed separately). |
 | `event_alarms` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `ambient_memory` | pg_table | words | gap | - | Ambient captured memory text; neither path reaches it. |
-| `notifications` | pg_table | words | gap | - | Delivered notification titles/messages; neither path reaches them. |
+| `notifications` | pg_table | words | reached | member: `notifications_store.forget_user` | - |
 | `music_listening_events` | pg_table | metadata | out_of_scope | - | Listening history: titles/artists, no household words; the music journal has its own controls. |
 | `proactive_deliveries` | pg_table | derived | gap | - | Delivery ledger rows keyed by candidate; text is in the candidate, not here. |
 | `proactive_outcome_edges` | pg_table | derived | reached | member: `outcome_edges.erase_user` | - |
