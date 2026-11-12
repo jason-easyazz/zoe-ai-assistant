@@ -213,3 +213,7 @@ Rollback: set the flag `off` (held WAVs are released by the normal rules; replac
 ## Files
 
 `services/zoe-data/omi_repass.py` (decisions, planner, DB), `scripts/night/jobs/omi_repass_worker.py` (the model process), `scripts/maintenance/zoe-omi-repass.py` (the job + owner CLI), `services/zoe-data/omi_repass_eval.py` (ROVER, the ledger, the verdicts, the hypothesis store, the check queue), `scripts/setup/setup_omi_repass.sh` + `omi_repass_requirements.lock.txt` + `omi_repass_constraints.txt`, migration `0075_omi_night_repass.py`, `night_window.py` (`--pre-jobs`, `--rehearse-repass`, `build_pre_jobs`, `run_pre_jobs`, `resettle`). Private state: `~/.zoe/omi-repass/` (0600: `state.json` = measured RTF + the Zoe voice reference; `shadow.jsonl` = counts only).
+
+## Real daytime run: `--repass-only`
+
+`night_window.sh --repass-only` runs the real pre-job by day (ZOE_OMI_NIGHT_REPASS=shadow|on honoured, unit env loaded like `--rehearse-repass`), under the night's stops/compaction/restore order, capped ~25 min, never loading the 12B. It refuses 01:50-04:55 and while `night_busy.sh voice|deploy|test` is busy, and is refused while the flag is off. Use it once the rehearsal is green to prove the real writes before the night does.
