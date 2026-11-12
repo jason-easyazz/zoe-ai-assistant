@@ -92,11 +92,13 @@ import asyncio
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
 import signal
 import subprocess
+import importlib.util
 import sys
 import time
 import urllib.error
@@ -201,7 +203,12 @@ SAY_REMEMBER = "Remember that my favourite tea is lapsang souchong."
 SAY_KEEP_IN_MIND = "Keep in mind that I can't stand coriander."
 ASK_TEA = "What's my favourite tea?"
 ASK_REMEMBERED = "Do you remember what I asked you to remember?"
+# "Forget that." retracts the owner's PREVIOUS TURN (turn_forget, 2026-11-07), not "the newest ask": the forget leg therefore
+# gets its OWN ask directly before it (SAY_FORGET_TARGET). Said after the recall turns, a bare "Forget that." pointed at the
+# recall question - nothing to retract - and S11 read FAIL for a correct forget path (instrument bug, 2026-11-12).
+SAY_FORGET_TARGET = "Remember that my spare key is under the blue flowerpot."
 SAY_FORGET_THAT = "Forget that."
+S11_FORGET_NEEDLE = "flowerpot"
 S11_NEEDLES = ("lapsang", "coriander")
 S11_NARRATION = ("let me", "one moment", "hold on", "i'll check", "i will check", "checking", "saving that",
                  "let me save", "give me a second", "bear with me")
@@ -828,11 +835,11 @@ def short_confirmation(reply: str) -> dict:
 def score_s11(t: dict) -> tuple[str, dict]:
     """The whole ask-to-remember contract from the turns' replies and the recall packets:
 
-    ``t`` keys - say_tea / say_keep (replies), packet_after_say / packet_after_keep / packet_final (recall
+    ``t`` keys - say_tea / say_keep (replies), packet_after_say / packet_after_keep / packet_after_target / packet_final (recall
     packets, None = the read failed), count_once / count_repeat (rows in the packet after the ask / after the
     repeat), repeat_reply, tea_reply (a FRESH session's answer), recall_reply, forget_reply.
     ERROR when a packet could not be read (a store that was not inspected is never certified)."""
-    for k in ("packet_after_say", "packet_after_keep", "packet_final"):
+    for k in ("packet_after_say", "packet_after_keep", "packet_after_target", "packet_final"):
         if t.get(k) is None:
             return "ERROR", {"method": "deterministic", "why": f"recall packet read failed ({k})"}
     conf_tea, conf_keep = short_confirmation(t["say_tea"]), short_confirmation(t["say_keep"])
@@ -855,11 +862,13 @@ def score_s11(t: dict) -> tuple[str, dict]:
         why.append("a fresh session does not recall the tea")
     if len(found_needles(t["recall_reply"], S11_NEEDLES)) < len(S11_NEEDLES):
         why.append("'do you remember what I asked you to remember?' did not give both back")
+    if S11_FORGET_NEEDLE not in normalize(t.get("packet_after_target") or ""):
+        why.append("'I'll remember' with no row: the flowerpot ask is not in the recall packet")
     final = normalize(t["packet_final"])
-    if "coriander" in final:
-        why.append("'Forget that' left the coriander in the recall packet")
-    if "lapsang" not in final:
-        why.append("'Forget that' also removed the tea (it must retract only the newest)")
+    if S11_FORGET_NEEDLE in final:
+        why.append("'Forget that' left the flowerpot ask in the recall packet")
+    if "lapsang" not in final or "coriander" not in final:
+        why.append("'Forget that' also removed an earlier ask (it must retract only the previous turn)")
     if not contains_any(t["forget_reply"], ("forgot", "forgotten")):
         why.append("'Forget that' did not say it forgot")
     ev = {"method": "deterministic", "confirm_tea": conf_tea, "confirm_keep": conf_keep,
@@ -1644,13 +1653,13 @@ class Live:
         self.packet_chars.append(len(packet))
         return packet
 
-    def capture_status(self, user: str) -> dict[str, Any] | None:
+    def capture_status(self, user: str, timeout: float = 60) -> dict[str, Any] | None:
         """Per-user post-turn capture counters (/capture-status, internal). None
         when the endpoint is unavailable (old server / token refused)."""
         assert_demo_user(user)
         q = urllib.parse.urlencode({"user_id": user})
         code, body = self._req("GET", f"{DATA_BASE}/api/memories/capture-status?{q}",
-                               {"X-Internal-Token": self.token})
+                               {"X-Internal-Token": self.token}, timeout=timeout)
         if code != 200 or not isinstance(body, dict) or "completed" not in body:
             return None
         return body
@@ -1687,10 +1696,10 @@ class Live:
                                f"in_flight={st.get('in_flight')})"}
             time.sleep(3)
 
-    def packet_count(self, user: str) -> int | None:
+    def packet_count(self, user: str, timeout: float = 60) -> int | None:
         q = urllib.parse.urlencode({"user_id": user, "message": "", "limit": 40})
         code, body = self._req("GET", f"{DATA_BASE}/api/memories/for-prompt?{q}",
-                               {"X-Internal-Token": self.token})
+                               {"X-Internal-Token": self.token}, timeout=timeout)
         return int((body or {}).get("count") or 0) if code == 200 else None
 
     @property
@@ -2041,6 +2050,68 @@ def teardown_verdict(store: dict[str, dict], db: dict[str, Any] | None) -> tuple
     return (not problems), problems
 
 
+QUIESCE_TIMEOUT_S = 300.0   # bounded drain of in-flight captures before the leak check
+QUIESCE_POLL_S = 5.0
+QUIESCE_TIMEOUT_MAX_S = 3600.0   # upper clamp: a typo'd budget must not park the harness lock for hours
+
+
+def _quiesce_budget() -> float:
+    """ZOE_BAR_QUIESCE_TIMEOUT_S via typed_env (loaded by FILE PATH, stdlib-only), clamped to [0, QUIESCE_TIMEOUT_MAX_S];
+    nan / inf fall back to the default (either would make the wait unbounded)."""
+    mod = sys.modules.get("typed_env")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location(
+            "typed_env", Path(__file__).resolve().parents[2] / "services" / "zoe-data" / "typed_env.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["typed_env"] = mod
+        spec.loader.exec_module(mod)
+    v = mod.env_float("ZOE_BAR_QUIESCE_TIMEOUT_S", QUIESCE_TIMEOUT_S)
+    if not math.isfinite(v):
+        return QUIESCE_TIMEOUT_S
+    return min(max(v, 0.0), QUIESCE_TIMEOUT_MAX_S)
+
+
+def drain_captures(live: Any, user: str, *, timeout_s: float | None = None,
+                   poll_s: float = QUIESCE_POLL_S) -> dict[str, Any]:
+    """Await one user's post-turn captures: packet count stable for two polls AND
+    ``in_flight == 0``, within a wall-clock budget (``ZOE_BAR_QUIESCE_TIMEOUT_S`` or
+    QUIESCE_TIMEOUT_S). The latent-suggestion writer awaits the brain, so under load a
+    fixed 2-minute wait expired with ~6 captures still running and every full run read
+    ``error``. A wait that still expires reports the leftover in_flight (unproven teardown)."""
+    if timeout_s is None:
+        timeout_s = _quiesce_budget()
+    if not math.isfinite(timeout_s):   # an explicit nan/inf must not defeat the bound
+        timeout_s = QUIESCE_TIMEOUT_S
+    timeout_s = min(max(timeout_s, 0.0), QUIESCE_TIMEOUT_MAX_S)
+    # Real wall-clock bound: the polls' own HTTP calls count too (a stalled API must not stretch the budget).
+    deadline = time.monotonic() + timeout_s
+    last, stable, in_flight = None, 0, None
+    while True:
+        # Each HTTP call's timeout is the remainder (<= 60 s), so no call outlives the deadline, and a spent
+        # budget (including a 0 s one) starts none: the last observed values stand (a nonzero or unknown
+        # in_flight is then an unproven teardown).
+        rem = deadline - time.monotonic()
+        if rem <= 0:
+            break
+        c = live.packet_count(user, timeout=min(60.0, rem))
+        rem = deadline - time.monotonic()
+        if rem <= 0:
+            in_flight = None   # budget spent mid-look: this look is incomplete, so unproven
+            break
+        st = live.capture_status(user, timeout=min(60.0, rem))
+        in_flight = int(st.get("in_flight") or 0) if st else None
+        stable = stable + 1 if (c is not None and c == last) else 0
+        last = c
+        if stable >= 2 and in_flight == 0:
+            break
+        rem = deadline - time.monotonic()   # the HTTP calls above consumed time
+        if rem <= 0:
+            break
+        time.sleep(min(poll_s, rem))
+    # Both signals are recorded; BOTH must have been observed for a proof.
+    return {"in_flight": in_flight, "packet": last, "stable": stable}
+
+
 def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any]:
     """Quiesce, forget, delete, then prove it — twice (a late turn-digest write
     can land after the first forget)."""
@@ -2053,18 +2124,7 @@ def teardown(live: Live, users: list[str], sessions: list[str]) -> dict[str, Any
     # nonzero after the wait = the teardown cannot be proven.
     quiesce: dict[str, dict[str, Any]] = {}
     for u in users:
-        last, stable, in_flight = None, 0, None
-        for _ in range(24):
-            c = live.packet_count(u)
-            st = live.capture_status(u)
-            in_flight = int(st.get("in_flight") or 0) if st else None
-            stable = stable + 1 if (c is not None and c == last) else 0
-            last = c
-            if stable >= 2 and in_flight == 0:
-                break
-            time.sleep(5)
-        # Both signals are recorded; BOTH must have been observed for a proof.
-        quiesce[u] = {"in_flight": in_flight, "packet": last, "stable": stable}
+        quiesce[u] = drain_captures(live, u)
     quiesce_problems: list[str] = []
     for u, q in quiesce.items():
         if q["in_flight"] is None:
@@ -2272,11 +2332,16 @@ def run_scenarios(live: Live, a: str, b: str, samples: int, backdate: bool,
         r4 = say(a, "s11-fresh-ask", ASK_TEA)          # a different session: the row, not the context, answers
         r5 = say(a, "s11-recall-q", ASK_REMEMBERED)
         t["tea_reply"], t["recall_reply"] = r4["reply"], r5["reply"]
+        cap = live.capture_status(a)
+        r7 = say(a, "s11-target", SAY_FORGET_TARGET)   # the turn "Forget that." must point at (it is the PREVIOUS turn)
+        w7 = live.wait_captured(a, cap)
+        t["say_target"] = r7["reply"]
+        t["packet_after_target"] = live.packet(a, S11_FORGET_NEEDLE)
         r6 = say(a, "s11-forget", SAY_FORGET_THAT)
         t["forget_reply"] = r6["reply"]
-        t["packet_final"] = live.packet(a, ASK_TEA + " coriander")
-        errs = [x for x in (r1, r2, r3, r4, r5, r6) if x["error"]]
-        waits = {"after_say": w1, "after_keep": w2, "after_repeat": w3}
+        t["packet_final"] = live.packet(a, ASK_TEA + " coriander " + S11_FORGET_NEEDLE)
+        errs = [x for x in (r1, r2, r3, r4, r5, r6, r7) if x["error"]]
+        waits = {"after_say": w1, "after_keep": w2, "after_repeat": w3, "after_target": w7}
         unseen = [k for k, w in waits.items() if not (w or {}).get("landed")]
         if errs:
             put("S11", "ERROR", why="a turn failed: " + "; ".join(e["error"] for e in errs), waits=waits)

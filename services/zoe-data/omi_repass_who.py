@@ -126,6 +126,17 @@ def label_window(e: Any, refs: Refs, dur_s: float = 2.0, rms: Optional[float] = 
     conf = "sure" if m >= need else "lean" if m >= lean() else "none"
     if top_id == "you" and refs.you_panel_only and conf == "sure":
         conf = "lean"                                            # the owner's PANEL print never makes a pendant turn "me" outright
+    elif top_id == "you" and not refs.you_panel_only:
+        # the CONFIRMED pendant print also needs an ABSOLUTE bar, on top of the margin: with no runner-up the margin IS the score, and the 0.25 floor alone would make
+        # every turn at >= 0.35 "me" (819 of 2,156 stored segments, 2026-11-12). The first pass's PROVISIONAL pendant bars (``omi_diarize``, measurement there): outright
+        # only at >= PENDANT_YOU_MIN, at most leaning in [PENDANT_OTHER_MAX, PENDANT_YOU_MIN), and below that never the wearer at all.
+        import omi_diarize
+        you_min, other_max = omi_diarize.thresholds("pendant")
+        s_you = float(refs.you @ v)                              # the bare score: the loudness tie-break orders candidates, it never lifts a turn over a bar
+        if s_you < other_max:
+            conf = "none"
+        elif s_you < you_min and conf == "sure":
+            conf = "lean"
     if conf == "none":
         return {**out, "key": "?", "conf": "none"}
     base = "you" if top_id == "you" else f"p:{top_id}"

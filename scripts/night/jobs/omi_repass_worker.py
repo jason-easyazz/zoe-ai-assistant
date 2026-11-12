@@ -9,7 +9,7 @@ the database, members, names or labels - the parent (``services/zoe-data/omi_rep
     omi_repass_worker.py --probe-gpu                            print what the GPU path could do on this stack (one JSON line), change nothing
 
 Manifest: {"asr": "qwen3-asr"|"parakeet-tdt"|"faster-whisper:large-v3"|... (ASR registry), "diar": "resnet34"|"none" (DIAR registry), "threads": 4, "gpu": true, "models_dir": "...", "chunk_s": 14,
-           "hint": "Names: ..." (only faster-whisper uses it: the transformers engines are NOT prompt-biased, the parent normalises names afterwards), "deadline_epoch": 1.7e9, "rtf": 1.0, "zoe_clips": [paths], "items": [{"id": "...", "path": "...", "hint": "(optional, per item)"}]}
+           "hint": "Names: ..." (only faster-whisper uses it: the transformers engines are NOT prompt-biased, the parent normalises names afterwards), "deadline_epoch": 1.7e9, "rtf": 1.0, "zoe_clips": [paths], "items": [{"id": "...", "path": "...", "hint": "(optional, per item)", "diar": false (optional: no speaker windows for this item)}]}
 Output lines: {"zoe_ref": [...]} once (when zoe_clips were given), then per item {"id", "ok": true, "dur_s", "speech_s", "asr_s", "emb_s",
            "words": [[w, t0, t1, p]...], "windows": [[t0, t1, [192 floats], rms]...]} or {"id", "ok": false, "why"}, then {"done": true, ...}.
 An item is never half-written: if the deadline passes mid-file the item is reported ``why: "deadline"`` and the parent carries it to the next night.
@@ -432,7 +432,7 @@ def run(manifest: dict, out_path: str) -> int:
                     continue
                 asr_s = time.time() - ta
                 te = time.time()
-                if emb is not None:
+                if emb is not None and item.get("diar", True) is not False:       # per item: the member turned "tag voices on my recordings" off
                     turns = [(c[0], c[1]) for c in asr.last] if asr.last else vad_chunks(x)          # the ASR's own VAD turns: one segmentation for words and speakers
                     wins = emb.units(x, turns)
                     speech_s = round(sum(b - a for a, b in turns), 2)

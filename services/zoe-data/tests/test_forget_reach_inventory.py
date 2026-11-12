@@ -343,3 +343,11 @@ def test_the_docs_page_carries_the_generated_inventory_and_the_policy():
     doc = (REPO / "docs" / "knowledge" / "forget-reach.md").read_text(encoding="utf-8")
     assert fr.render_markdown() in doc, "docs/knowledge/forget-reach.md is stale: python3 services/zoe-data/forget_reach.py --write docs/knowledge/forget-reach.md"
     assert f"{fr.BACKUP_MAX_AGE_DAYS} days" in doc and f"{fr.ADHOC_BACKUP_MAX_AGE_DAYS} days" in doc
+
+
+def test_notifications_are_reached_by_the_member_erase():
+    """Household notifications (``notifications_store``) were a gap until 2026-11-12: the member erase now deletes every row of the member."""
+    (s,) = [s for s in fr.STORES if s.key == "notifications"]
+    assert s.status == fr.REACHED and s.member == "notifications_store.forget_user"
+    assert _called_from(s.member, (MEMBER_SITE,), "delete_user")
+    assert "notifications" not in fr.GAPS

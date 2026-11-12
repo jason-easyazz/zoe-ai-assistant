@@ -72,7 +72,8 @@ class FakeSvc(MemoryService):
 def clean(monkeypatch):
     for k in ("ZOE_RECALL_EVERY_TURN", "ZOE_RISK_CUES", "ZOE_MANNER_BLOCK", "ZOE_PERSONA_LAYER", "ZOE_FLUE_WIRE",
               "ZOE_FLUE_STREAM_ENABLED", "ZOE_SEAM_RECALL_INJECT", "ZOE_VERIFY_ON_CHALLENGE", "ZOE_TRIVIA_HEDGE",
-              "ZOE_TRAFFIC_CLASS", "ZOE_RESTRAINT", "ZOE_RECALL_EVERY_TURN_HARNESS"):
+              "ZOE_TRAFFIC_CLASS", "ZOE_RESTRAINT", "ZOE_RECALL_EVERY_TURN_HARNESS", "ZOE_RECALL_SIMILAR",
+              "ZOE_RECALL_SIMILAR_FLOOR"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("ZOE_SEAM_CONTINUITY_INJECT", "0")
     monkeypatch.setenv("ZOE_IDENTITY_BLOCK", "0")
@@ -599,3 +600,251 @@ def test_the_harness_switch_admits_harness_ids_only(monkeypatch, uid, admitted):
     assert pick(ASK, rows, uid=uid)[0].ids == ()                      # default: never
     monkeypatch.setenv("ZOE_RECALL_EVERY_TURN_HARNESS", "1")
     assert (pick(ASK, rows, uid=uid)[0].ids == ("m_walk_0001",)) is admitted
+
+
+# ── the similar arm (ZOE_RECALL_SIMILAR) ───────────────────────────────────────────
+#
+# A deterministic stand-in for MiniLM: each text becomes a unit vector over a few invented TOPICS (a row and a turn that share a
+# topic are near, with no word in common), so the tests exercise the real selection, walls and budget without loading a model.
+
+_TOPICS = {"dog": ("juniper", "kelpie", "walks", "pup", "her lead", "the vet"), "sister": ("marisol", "sister", "visitor", "guest room"),
+           "food": ("pescatarian", "meat", "cook", "dinner", "recipe"), "health": ("insulin", "diabetes", "injection")}
+GIFT = "What should I cook for the visitor on Thursday?"      # no name, rare key or clock time a row carries: lexical finds nothing
+
+
+def fake_embed(texts):
+    import numpy as np
+
+    import zlib
+
+    out = []
+    for t in texts:
+        low = str(t).lower()
+        topics = np.array([float(sum(w in low for w in words)) for words in _TOPICS.values()], dtype=np.float32)
+        own = np.random.default_rng(zlib.crc32(low.encode())).standard_normal(24).astype(np.float32)   # each text's own direction
+        v = np.concatenate([topics, 0.3 * own / np.linalg.norm(own)])
+        out.append(v / np.linalg.norm(v))
+    return np.stack(out)
+
+
+@pytest.fixture
+def similar(monkeypatch):
+    calls = []
+
+    def embed(texts):
+        calls.append(len(texts))
+        return fake_embed(texts)
+    monkeypatch.setattr(rt, "_embed", embed)
+    monkeypatch.setenv("ZOE_RECALL_SIMILAR", "on")
+    return calls
+
+
+@pytest.mark.parametrize("raw,want", [(None, "off"), ("off", "off"), ("bogus", "off"), ("shadow", "shadow"), ("on", "on"), ("1", "on")])
+def test_similar_mode_default_off(monkeypatch, raw, want):
+    if raw is not None:
+        monkeypatch.setenv("ZOE_RECALL_SIMILAR", raw)
+    assert rt.similar_mode() == want
+
+
+def test_similar_off_embeds_nothing_and_changes_nothing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rt, "_embed", lambda texts: calls.append(1) or fake_embed(texts))
+    sel, _ = pick(GIFT, world())
+    assert sel.ids == () and sel.sim == 0 and calls == []       # the lexical gate alone: an oblique turn gets nothing
+    sel, _ = pick("How is Juniper getting on?", world())
+    assert sel.ids == ("m_walk_0001",) and sel.block().startswith(rt.BLOCK_OPEN + "\n") and calls == []
+
+
+def test_similar_on_finds_the_row_an_oblique_turn_needs(similar):
+    sel, _ = pick(GIFT, world())
+    assert sel.ids == ("m_fish_0003",) and sel.sim_in == 1 and sel.sim == 2 and sel.sim_top > 0.5   # 2 rows were near; 1 passed the walls
+    blk = sel.block()
+    assert blk.startswith(rt.BLOCK_OPEN_SIMILAR + "\n- ") and blk.endswith("\n" + rt.BLOCK_CLOSE)
+    assert blk.startswith("[MEMORY CONTEXT") and blk != rt.BLOCK_OPEN + blk[len(rt.BLOCK_OPEN):]   # elidable, and not the lexical opener
+    assert similar[-1] == 1                                        # one embed of the turn; the rows came from the index
+
+
+def test_similar_negative_control_a_turn_near_nothing_gets_nothing(similar):
+    sel, _ = pick("Set a timer for ten minutes", world())
+    assert sel.ids == () and sel.sim == 0 and sel.block() == ""
+
+
+def test_similar_floor_is_the_gate(similar, monkeypatch):
+    monkeypatch.setenv("ZOE_RECALL_SIMILAR_FLOOR", "0.99")
+    sel, _ = pick(GIFT, world())
+    assert sel.ids == () and sel.sim == 0
+
+
+def test_similar_shadow_measures_and_injects_nothing(similar, monkeypatch, caplog):
+    monkeypatch.setenv("ZOE_RECALL_SIMILAR", "shadow")
+    sel, _ = pick(GIFT, world())
+    assert sel.ids == () and sel.sim == 2 and sel.sim_in == 0 and sel.block() == ""        # the same turn that gets a row when on
+    with caplog.at_level(logging.INFO, logger="recall_every_turn"):
+        rt._log(UID, sel, "on", 1.0)
+    assert "similar=shadow sim=2 sim_in=0" in caplog.text
+
+
+def test_lexical_rows_come_first_and_similar_only_tops_up(similar):
+    sel, _ = pick("Is Marisol a visitor who needs dinner?", world())
+    assert sel.ids[0] == "m_sist_0002" and sel.sim_in == len(sel.ids) - 1 and "m_fish_0003" in sel.ids
+
+
+def test_similar_rows_meet_the_same_walls(similar, monkeypatch):
+    rows = world() + [row("m_heal_0009", HEALTH)]
+    sel, _ = pick("Do I need the injection before I cook?", rows)
+    assert "m_heal_0009" not in sel.ids and "m_fish_0003" in sel.ids      # health never rides; the food row beside it does
+
+    async def forgot(_uid, text, **_k):
+        return "pescatarian" in text
+    monkeypatch.setattr(memory_forgotten, "matches", forgot)
+    sel, _ = pick(GIFT, world())
+    assert sel.ids == ()                                                  # a forgotten row is never offered by similarity
+
+
+def test_a_similar_row_about_another_person_needs_the_owners_words(similar):
+    """The sister row is as near the oblique turn as the food row, but a row about another person rides only when the owner's
+    words pull it (the restraint wall every lexical pick meets): similarity alone never volunteers it."""
+    sel, _ = pick(GIFT, world())
+    assert sel.sim == 2 and "m_sist_0002" not in sel.ids
+    sel, _ = pick("Is Marisol a visitor who needs dinner?", world())      # negative control: named, it rides
+    assert "m_sist_0002" in sel.ids
+
+
+def test_similar_never_serves_a_row_rewritten_since_the_index(similar):
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        before = await rt.select(UID, GIFT, svc=svc)
+        svc.rows = [r if r[0] != "m_fish_0003" else (r[0], "User now eats everything.", r[2]) for r in svc.rows]
+        return before, await rt.select(UID, GIFT, svc=svc)
+    before, after = asyncio.run(go())
+    assert before.ids == ("m_fish_0003",) and after.ids == ()
+
+
+def test_similar_embed_failure_or_timeout_adds_nothing_and_never_raises(monkeypatch):
+    monkeypatch.setenv("ZOE_RECALL_SIMILAR", "on")
+    state = {"fail": False}
+
+    def embed(texts):
+        if state["fail"]:
+            raise RuntimeError("onnx session gone")
+        return fake_embed(texts)
+    monkeypatch.setattr(rt, "_embed", embed)
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        state["fail"] = True
+        return await rt.select(UID, GIFT, svc=svc), await rt.select(UID, "How is Juniper getting on?", svc=svc)
+    oblique, named = asyncio.run(go())
+    assert oblique.ids == () and oblique.skipped == "" and named.ids == ("m_walk_0001",)
+
+    def slow(texts):
+        time.sleep(rt.EMBED_TIMEOUT_S + 0.2)
+        return fake_embed(texts)
+    state["fail"] = False
+    rt._reset_state()
+
+    async def go2():
+        await rt._build(UID, svc)
+        monkeypatch.setattr(rt, "_embed", slow)
+        return await rt.select(UID, GIFT, svc=svc)
+    assert asyncio.run(go2()).ids == ()
+
+
+def test_similar_index_reuses_vectors_across_refreshes(similar):
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        first = sum(similar)
+        await rt._build(UID, svc)
+        return first, sum(similar)
+    first, second = asyncio.run(go())
+    assert first == 6 and second == 6                # the refresh embedded no row again
+
+
+def test_similar_vectors_are_never_shared_across_members(similar):
+    """Two members with the SAME row id and different text: each index holds the vector of its own text."""
+    rt._reset_state()
+    mine = FakeSvc([row("m_same_0001", SISTER)])
+    theirs = FakeSvc([row("m_same_0001", WALK, uid=OTHER)])
+
+    async def go():
+        a = await rt._build(UID, mine)
+        b = await rt._build(OTHER, theirs)
+        return a, b
+    a, b = asyncio.run(go())
+    assert (a.vecs[0] == fake_embed([SISTER])[0]).all() and (b.vecs[0] == fake_embed([WALK])[0]).all()
+    assert not (a.vecs[0] == b.vecs[0]).all()                    # negative control: the two texts do embed differently
+    assert set(rt._VECS) == {(UID, "m_same_0001"), (OTHER, "m_same_0001")}
+
+
+def test_similar_skips_while_an_earlier_turn_embed_is_still_running(monkeypatch):
+    """A timed-out embed keeps its worker thread; the next turn must not start another behind it."""
+    import threading
+
+    monkeypatch.setenv("ZOE_RECALL_SIMILAR", "on")
+    monkeypatch.setattr(rt, "_embed", fake_embed)
+    rt._reset_state()
+    svc = FakeSvc(world())
+    release, started = threading.Event(), []
+
+    def hung(texts):
+        started.append(1)
+        release.wait(5)
+        return fake_embed(texts)
+
+    async def go():
+        await rt._build(UID, svc)
+        monkeypatch.setattr(rt, "_embed", hung)
+        first = await rt.select(UID, GIFT, svc=svc)           # times out; its worker is still inside the embed
+        second = await rt.select(UID, GIFT, svc=svc)          # must not start a second worker
+        n = len(started)
+        release.set()
+        for _ in range(100):
+            if rt._QUERY_EMBEDS["job"].done():
+                break
+            await asyncio.sleep(0.02)
+        monkeypatch.setattr(rt, "_embed", fake_embed)
+        third = await rt.select(UID, GIFT, svc=svc)           # the worker finished: the arm is back
+        return first, second, n, third
+    first, second, n, third = asyncio.run(go())
+    assert first.ids == () and second.ids == () and n == 1
+    assert third.ids == ("m_fish_0003",)
+
+
+def test_only_one_embed_runs_at_a_time_across_builds_and_turns(monkeypatch):
+    """Two members' index builds and a turn all embed through one lock: the model never sees two calls at once."""
+    import threading
+
+    state = {"now": 0, "peak": 0}
+    gate = threading.Lock()
+
+    def raw(texts):
+        with gate:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        time.sleep(0.05)
+        with gate:
+            state["now"] -= 1
+        return fake_embed(texts)
+    monkeypatch.setattr(rt, "_embed_raw", raw)
+    threads = [threading.Thread(target=rt._embed, args=([f"text {i}"],)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert state["peak"] == 1
+    monkeypatch.setattr(rt, "_EMBED_LOCK", type("NoLock", (), {"__enter__": lambda s: None, "__exit__": lambda s, *a: False})())
+    state["peak"] = 0                                    # negative control: without the lock the calls do overlap
+    threads = [threading.Thread(target=rt._embed, args=([f"text {i}"],)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert state["peak"] > 1

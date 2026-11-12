@@ -43,7 +43,10 @@ provider setup/reconfigure/save. Every mutating service entry point
 (transport, seek, transfer, group/ungroup, play, queue edits, playlist add,
 favourite add/remove, don't-stop, `resolve_music` for every action but `status`,
 and `_ma_api_for_write()` — the credential-write funnel) calls `ensure_running()`
-first. The wake: touch `activity` + `inflight` → under the shared `flock` (the one
+first. So does `provider_catalogue()` (the Sources tab, voice "set up music" and the
+setup resolver; all user actions, none a poll, pinned by
+`tests/test_music_setup_reply.py`), which raises `MusicEngineUnavailable` when MA cannot
+be started rather than report every provider as not connected. The wake: touch `activity` + `inflight` → under the shared `flock` (the one
 the reaper holds across stamp+stop): honour a cached "MA answered" only if one EXISTS
 (the empty `0.0` cache is never "recent": `monotonic()` counts from boot, so within
 30 s of boot the bare TTL compare read an empty cache as fresh and the first wake

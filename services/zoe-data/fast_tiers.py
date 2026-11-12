@@ -504,7 +504,7 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
         res = await _pl.pull(user_id, session_id, channel=lane,
                              speaker_verified=(extra_ctx or {}).get("speaker_verified"), commit=not dry)
         if res is None:
-            return None
+            return await _notifications_only_pull(user_id, lane, extra_ctx, dry=dry)
         # The pendant day review (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = ""): one counts-only sentence when it is
         # waiting, for the identified member only and never in a crowded room. Read-only.
         import day_review_raise as _drr
@@ -512,11 +512,37 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
         _extra = await _drr.pull_addendum(user_id, lane, extra_ctx, dry=dry)
         if _extra:
             res.reply = _extra if res.reply == _pl.EMPTY_REPLY else f"{res.reply} {_extra}"
+        # Household notifications (ZOE_NOTIFICATIONS; off = ""): the card goes to this panel and ONE counts-only sentence follows.
+        import notifications_store as _nstore
+
+        _notes = await _nstore.pull_addendum(user_id, lane, extra_ctx, alone=res.reply == _pl.EMPTY_REPLY, dry=dry)
+        if _notes:
+            res.reply = _notes if res.reply == _pl.EMPTY_REPLY else f"{res.reply} {_notes}"
         return _xd.DispatchResult(domain="proactive", reply=res.reply, intent="pull",
                                   ui=res.ui, tier="pull", meta={"delivered": res.delivered})
     except Exception as exc:  # never let the tier break a turn
         logger.warning("fast_tiers pull tier failed (non-fatal): %s", exc)
         return None
+
+
+async def _notifications_only_pull(user_id: str, lane: str, extra_ctx: Optional[dict], *, dry: bool = False):
+    """"What's up?" while the proactive selector is off (``ZOE_PROACTIVE_SELECTOR``, its default): ``proactive.pull`` answers None,
+    yet the household notifications (``ZOE_NOTIFICATIONS``) still light the orb, so they answer the pull on their own. A VERIFIED
+    member's own voice turn only (never a guest or an unverified voice); a dry replay says and pushes nothing (``pull_addendum``).
+    With the selector ON, its None stays final: it means a guest, a brief about to speak or a lost race, and must not be masked."""
+    from proactive.selector import selector_enabled
+    import proactive.pull as _pl
+
+    if dry or selector_enabled() or (extra_ctx or {}).get("speaker_verified") is not True or not _pl._member(user_id):
+        return None
+    import notifications_store as _nstore
+
+    notes = await _nstore.pull_addendum(user_id, lane, extra_ctx, alone=True, dry=dry)
+    if not notes:
+        return None
+    import expert_dispatch as _xd
+
+    return _xd.DispatchResult(domain="proactive", reply=notes, intent="pull", ui={"kind": "pull"}, tier="pull", meta={"delivered": 0})
 
 
 async def _identity_tier(text: str, user_id: str):
@@ -1007,6 +1033,19 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
             answered = None
         if answered is not None:
             return answered
+        # omi_link (no flag of its own; ZOE_OMI_DEVICE_OWNERS off = it says linking is off): "link my pendant" / "unlink my pendant" /
+        # "is my pendant linked?" from a verified member at the panel. A whole-utterance cue only; every other turn gets None.
+        try:
+            import omi_link_tier as _olt
+
+            _ctx = kwargs.get("extra_ctx") or {}
+            answered = await _olt.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       speaker_verified=_ctx.get("speaker_verified"), panel_id=_ctx.get("panel_id"),
+                                       allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
         # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
         try:
@@ -1048,6 +1087,17 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
 
             answered = await _tcheck.tier(text, user_id, session_id, channel=kwargs.get("channel"),
                                           extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
+        # household notifications (ZOE_NOTIFICATIONS; off = returns before any work): takes a turn ONLY when it answers the one
+        # "you also have 3 notifications" line Zoe just said ("read them" reads the titles, "later" leaves them on the panel).
+        try:
+            import notification_tail as _ntail
+
+            answered = await _ntail.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                         extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
         except Exception:  # noqa: BLE001 - the tier never breaks a turn
             answered = None
         if answered is not None:

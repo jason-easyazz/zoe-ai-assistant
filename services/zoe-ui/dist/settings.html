@@ -527,6 +527,7 @@ html.light-mode .topbar { background: rgba(244,244,248,0.90); }
      before any settings fetch runs — this page was ungated until 2026-10-08) -->
 <script src="js/auth.js"></script>
 <script src="js/bluetooth-settings.js?v=2"></script>
+<script src="js/omi-pendant-settings.js?v=1"></script>
 <script>
 'use strict';
 
@@ -588,6 +589,8 @@ const NAV = [
   ]},
   { group: 'Voice', items: [
     { id: 'voice',      icon: '🎙️', label: 'Speaker Identity' },
+    // Shown only when GET /api/omi/my-pendant answers (404 = pendant sync is off for the household).
+    { id: 'pendant',    icon: '📿', label: 'My pendant', feature: 'pendant' },
   ]},
   { group: 'Notifications', items: [
     { id: 'push',       icon: '🔔', label: 'Push Notifications' },
@@ -608,7 +611,7 @@ const NAV = [
     { id: 'bluetooth',  icon: '🔵', label: 'Bluetooth devices', feature: 'bluetooth' },
   ]},
 ];
-const FEATURES = { bluetooth: false };
+const FEATURES = { bluetooth: false, pendant: false };
 
 let activeSection = 'profile';
 
@@ -1024,6 +1027,13 @@ function buildSections() {
     <div class="card"><div id="bt-root" style="padding:12px"><div class="empty"><span class="spinner"></span></div></div></div>
   </div>
 
+  <!-- My pendant (the member's OWN Omi pendant; shared component js/omi-pendant-settings.js; 404 = pendant sync off) -->
+  <div class="section" id="sec-pendant">
+    <div class="section-title">My pendant</div>
+    <div class="section-desc">Your Omi pendant: whether it is linked to you, when it last synced, and how its recordings are handled. These settings are yours alone.</div>
+    <div class="card"><div id="pendant-root" style="padding:12px"><div class="empty"><span class="spinner"></span></div></div></div>
+  </div>
+
   <!-- Evolution Proposals -->
   <div class="section" id="sec-evolution">
     <div class="section-title">Evolution Proposals</div>
@@ -1059,7 +1069,20 @@ const sectionLoaders = {
   'touch-panels': loadTouchPanels,
   telegram:       loadTelegram,
   bluetooth:      loadBluetooth,
+  pendant:        loadPendant,
 };
+
+/* ── My pendant (shared component: js/omi-pendant-settings.js). Desktop never links (that is done at the panel). ── */
+let _pendantMounted = null;
+function loadPendant() {
+  if (_pendantMounted || !window.ZoeOmiPendant) return;
+  _pendantMounted = ZoeOmiPendant.mount(document.getElementById('pendant-root'), {
+    surface: 'desktop',
+    fetchJson: btFetch,
+    panelId() { return null; },
+    onUnavailable() { document.getElementById('pendant-root').textContent = 'Pendant sync is not switched on for this household.'; }
+  });
+}
 
 /* ── Bluetooth devices (shared component: js/bluetooth-settings.js) ─────────── */
 let _btMounted = null;
@@ -1090,6 +1113,9 @@ function loadBluetooth() {
 }
 /* Is the feature on? 200 for an admin = yes; 404 (flag off) / 403 / anything else = keep the nav item hidden. */
 async function probeFeatures() {
+  if (currentUser && currentUser.role !== 'guest') {
+    try { await btFetch('GET', '/api/omi/my-pendant'); FEATURES.pendant = true; } catch (e) { FEATURES.pendant = false; }
+  }
   if (!currentUser || currentUser.role !== 'admin') return;
   try { await btFetch('GET', '/api/bluetooth/config'); FEATURES.bluetooth = true; } catch (e) { FEATURES.bluetooth = false; }
 }

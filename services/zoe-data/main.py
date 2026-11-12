@@ -2401,6 +2401,10 @@ _omi_dr_router.register(app)
 # ZOE_PANEL_REVIEW_CARDS is on - flag off = 404. The voice side is a fast tier (panel_review_cards.tier).
 from routers import panel_review_cards as _panel_cards_router  # noqa: E402
 _panel_cards_router.register(app)
+# Household notifications (ZOE_NOTIFICATIONS, default on): taps on the notifications card an orb press / "read them" pushes to its
+# panel. Mounted ONLY when the flag is on - off = 404. Spec: docs/knowledge/notifications.md.
+from routers import notifications as _notifications_router  # noqa: E402
+_notifications_router.register(app)
 # Transcript check (flag-dark): the panel screen for the words the night re-pass could not settle. Mounted ONLY when
 # ZOE_TRANSCRIPT_CHECK=on - off/shadow = 404 (shadow shows nothing). The voice side is transcript_check.tier + the appended ask.
 from routers import transcript_check as _transcript_check_router  # noqa: E402
