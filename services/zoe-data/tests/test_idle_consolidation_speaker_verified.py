@@ -65,6 +65,7 @@ def test_speaker_rejected_turn_is_never_mined_as_the_members_words(monkeypatch):
     ]
     stored, seen, conn = _case(monkeypatch, turns)
     assert stored == 0 and seen["ingest"] == []
+    assert seen["extract"], "extraction ran on the remaining turn"
     assert all("Neil" not in t for t in seen["extract"])
     wm = [a for q, a in conn.executed if "memory_consolidation_state" in q]
     assert wm and wm[0][0] == "sess-sv" and wm[0][3] == 3, "the watermark still advances over all rows"
@@ -94,6 +95,7 @@ def test_verified_or_unmarked_turn_still_becomes_a_fact(monkeypatch):
     stored, seen, _ = _case(monkeypatch, turns)
     assert stored == 1
     assert seen["ingest"][0][0] == "My dad's name is Neil"
+    assert "and I like tea" in seen["extract"][0], "the verified turn is still mined"
 
 
 def test_rejected_turn_dropped_but_neighbour_kept(monkeypatch):
