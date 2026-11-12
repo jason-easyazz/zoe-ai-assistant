@@ -15,6 +15,12 @@ facts that the turn's words touch, as one small block after the user's words. Ev
 * **Cost**: the pool's features are cached per member (``_Index``); per turn = set intersections + one by-id RE-READ of the picks
   (``MemoryService.recheck_durable``), so a correction or a forget is honoured on the very next turn.
 
+* **Similar rows** (``ZOE_RECALL_SIMILAR`` = off | shadow | on, default off; docs/knowledge/recall-every-turn.md): the lexical
+  gate needs a shared name, rare word or clock time, so oblique speech ("what should I get her") never meets the row it needs. With
+  this on, a turn whose words trigger fewer than ``MAX_ROWS`` rows is topped up with the member's nearest durable rows by embedding
+  similarity (the palace's own MiniLM, the cached pool, a floor of ``ZOE_RECALL_SIMILAR_FLOOR``). Same rows, same walls, same
+  recheck, same budget; the block's opener then says the rows MAY relate. ``shadow`` computes and logs, injects nothing.
+
 Modes: ``off`` = nothing runs, today's bytes. ``shadow`` = measured in the background, nothing injected. ``on`` = injected (a cold
 index is never waited for) where the hop block rides, behind the system prompt, tools and history: the prompt-cache prefix and the wake
 warm (``prefix_key``) are untouched; the ``[MEMORY CONTEXT`` delimiters let the sidecar elide it from older turns. In shadow and on,
@@ -25,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -43,12 +50,24 @@ BUDGET_TOKENS = 90
 ROW_CHARS = 160
 #: the by-id recheck of the picks: on the voice path the turn never waits longer than this for it
 POOL_TIMEOUT_S = 0.25
+#: the similar arm: one MiniLM embed of the turn's words (median ~60 ms on the Orin CPU, 2026-11-12); a slower one is dropped
+EMBED_TIMEOUT_S = 0.20
+#: cosine floor for a similar row. Synthetic lab with the palace's MiniLM (labs/recall-match-lab, 2026-11-12): at 0.30 the needed
+#: fact is found on 9 of 20 oblique turns (the lexical gate: 2 of 20) and a row is offered on 2 of 20 irrelevant turns; at 0.20 it
+#: is 15 of 20 and 13 of 20. The default is the conservative end; the Samantha bar decides whether it may go lower.
+SIMILAR_FLOOR = 0.30
+#: unit vectors kept per row id (id -> (text hash, vector)); rebuilt indexes reuse them, so a refresh embeds only new rows
+VEC_CACHE_MAX = 4000
 #: a longer message (a paste) is not scanned
 MAX_MESSAGE_CHARS = 512
 
 BLOCK_OPEN = (
     "[MEMORY CONTEXT — things this user told you before that bear on what they just said; "
     "use them only where they help, do not list them, do not mention this block]"
+)
+BLOCK_OPEN_SIMILAR = (
+    "[MEMORY CONTEXT — things this user told you before that MAY relate to what they just said; "
+    "ignore any that do not, do not list them, do not mention this block]"
 )
 BLOCK_CLOSE = "[END MEMORY CONTEXT]"
 
@@ -66,6 +85,22 @@ def mode() -> str:
     return "shadow" if raw == "shadow" else "off"
 
 
+def similar_mode() -> str:
+    """``ZOE_RECALL_SIMILAR`` - ``off`` (default) | ``shadow`` | ``on``. Only read while ``ZOE_RECALL_EVERY_TURN`` is not off."""
+    from typed_env import env_str
+
+    raw = env_str("ZOE_RECALL_SIMILAR", "off").lower()  # literal on purpose: tools/audit/flag_inventory.py greps it
+    if raw in _ON:
+        return "on"
+    return "shadow" if raw == "shadow" else "off"
+
+
+def similar_floor() -> float:
+    from typed_env import env_float
+
+    return min(0.95, max(0.0, env_float("ZOE_RECALL_SIMILAR_FLOOR", SIMILAR_FLOOR)))
+
+
 @dataclass(frozen=True)
 class Selection:
     ids: tuple = ()
@@ -73,11 +108,14 @@ class Selection:
     tokens: int = 0
     pool: int = 0
     skipped: str = ""      # "" | not_household | guest | unverified | off_record | empty | timeout | error
+    sim: int = 0           # similar rows above the floor this turn (candidates, before the walls); shadow counts them too
+    sim_in: int = 0        # of ``ids``, how many came from similarity and not from the lexical gate
+    sim_top: float = 0.0   # the best similar row's cosine
 
     def block(self) -> str:
         if not self.texts:
             return ""
-        lines = [BLOCK_OPEN]
+        lines = [BLOCK_OPEN_SIMILAR if self.sim_in else BLOCK_OPEN]
         for rid, text in zip(self.ids, self.texts):
             safe = text.replace(BLOCK_CLOSE, "[​" + BLOCK_CLOSE[1:])
             lines.append(f"- {safe} [mem:{str(rid)[:8]}]")
@@ -181,19 +219,79 @@ class _Index:
     built: float
     rows: list            # (Cand, Feat), the member's durable pool
     df: dict              # key -> how many of the member's rows carry it (rarity)
+    vecs: Any = None      # one unit vector per row, aligned with ``rows`` (None: the similar arm is off or could not embed)
 
 
 _INDEX: "dict[str, _Index]" = {}
 _BUILDS: "dict[str, asyncio.Task]" = {}
 
 
+_VECS: "dict[tuple, tuple[int, Any]]" = {}      # (member, row id) -> (text hash, unit vector): never shared across members
+_QUERY_EMBEDS: dict = {"job": None}              # the last turn embed's future: still running = the arm is busy (a timeout does not stop a worker)
+
+
 def _reset_state() -> None:
     _INDEX.clear()
     _BUILDS.clear()
+    _VECS.clear()
+    _QUERY_EMBEDS["job"] = None
 
 
-def _featurise(pool: list) -> "tuple[list, dict]":
-    """(Cand, Feat) per row and the key rarity table. Pure CPU (a regex pass per unstamped row): run in a worker thread so a
+_EMBED_LOCK = threading.Lock()
+
+
+def _embed_raw(texts: list) -> Any:
+    import numpy as np
+    from memory_service import _drawers_embedding_function
+
+    v = np.asarray(_drawers_embedding_function()(list(texts)), dtype=np.float32)
+    n = np.linalg.norm(v, axis=1, keepdims=True)
+    n[n == 0.0] = 1.0
+    return v / n
+
+
+def _embed(texts: list) -> Any:
+    """Unit vectors (float32, one per text) from the palace's own embedding function (one MiniLM ONNX session per process:
+    ``memory_service._drawers_embedding_function``), so a row and a turn are compared in the space the rows are stored in.
+    ONE embed at a time in this module, whoever asks (a member's index build, another member's, a turn): a turn that arrives
+    behind a build simply waits out its 200 ms and carries no similar rows, rather than two runs sharing the session and the CPU."""
+    with _EMBED_LOCK:
+        return _embed_raw(texts)
+
+
+def _row_vectors(uid: str, rows: list) -> Any:
+    """The pool's vectors, embedding only the rows not seen before for THIS member (by row id and text). Each row's vector is taken
+    from this call's own work or from a cache entry whose text hash matches, never re-read by key later, so a concurrent build for
+    another member (or a rewritten row) cannot hand this index a vector of some other text. None on any failure: no similar arm."""
+    try:
+        import numpy as np
+
+        if not rows:
+            return None
+        vecs, todo = {}, []
+        for c, _f in rows:
+            hit = _VECS.get((uid, c.id))
+            if hit is not None and hit[0] == hash(c.text):
+                vecs[c.id] = hit[1]
+            else:
+                todo.append((c.id, c.text))
+        for i in range(0, len(todo), 64):
+            part = todo[i:i + 64]
+            for (rid, text), vec in zip(part, _embed([t for _i, t in part])):
+                vecs[rid] = vec
+                _VECS[(uid, rid)] = (hash(text), vec)
+        if len(_VECS) > VEC_CACHE_MAX:
+            keep = {(uid, c.id) for c, _f in rows}
+            for k in [k for k in list(_VECS) if k not in keep][: len(_VECS) - VEC_CACHE_MAX]:
+                _VECS.pop(k, None)
+        return np.stack([vecs[c.id] for c, _f in rows])
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("recall_every_turn: row vectors unavailable (%s)", type(exc).__name__)
+        return None
+
+
+def _featurise(pool: list, uid: str = "") -> "tuple[list, dict, Any]":
+    """(Cand, Feat) per row, the key rarity table, and (similar arm on) the rows' vectors. Pure CPU (a regex pass per unstamped row): run in a worker thread so a
     refresh never stalls the event loop that is streaming a reply."""
     import recall_gate
 
@@ -204,13 +302,13 @@ def _featurise(pool: list) -> "tuple[list, dict]":
         rows.append((c, f))
         for k in set(f.keys):
             df[k] = df.get(k, 0) + 1
-    return rows, df
+    return rows, df, (_row_vectors(uid, rows) if similar_mode() != "off" else None)
 
 
 async def _build(uid: str, svc: Any) -> _Index:
     pool = await svc.load_durable_for_hop(uid)
-    rows, df = await asyncio.to_thread(_featurise, pool)
-    ix = _Index(time.monotonic(), rows, df)
+    rows, df, vecs = await asyncio.to_thread(_featurise, pool, uid)
+    ix = _Index(time.monotonic(), rows, df, vecs)
     _INDEX.pop(uid, None)
     _INDEX[uid] = ix
     while len(_INDEX) > INDEX_MAX_USERS:
@@ -276,6 +374,37 @@ def _ranked(ix: _Index, message: str) -> list:
     return [c for _o, c in out]
 
 
+def _nearest(vecs: Any, message: str, k: int) -> list:
+    """(row index, cosine) for the ``k`` rows nearest ``message``, best first. Runs in a worker thread: the embed, the product and
+    the sort all stay off the event loop."""
+    import numpy as np
+
+    sims = vecs @ _embed([message])[0]
+    top = np.argsort(-sims)[:k]
+    return [(int(j), float(sims[j])) for j in top]
+
+
+async def _similar(ix: _Index, message: str, taken: set) -> list:
+    """(cosine, Cand) for the member's rows nearest the turn's words, best first, at or above the floor, not already ``taken``.
+    [] when the index has no vectors, the embed is slow or anything fails: the similar arm can only ever add nothing. One turn
+    embed at a time: a timeout cannot stop its worker thread, so while one is still running the next turn skips the arm instead
+    of starting another (work never piles up behind a slow model)."""
+    try:
+        prev = _QUERY_EMBEDS["job"]
+        if ix.vecs is None or not ix.rows or (prev is not None and not prev.done()):
+            return []
+        # the FUTURE is the busy mark: done when the worker returns, raises, or is cancelled before it ever starts, so nothing
+        # can leave the arm switched off. shield: this turn's timeout (or cancellation) must not cancel the mark itself.
+        job = _QUERY_EMBEDS["job"] = asyncio.get_running_loop().run_in_executor(None, _nearest, ix.vecs, message, MAX_ROWS * 3)
+        job.add_done_callback(lambda f: f.cancelled() or f.exception())      # a late failure is consumed, never "never retrieved"
+        near = await asyncio.wait_for(asyncio.shield(job), timeout=EMBED_TIMEOUT_S)
+        floor = similar_floor()
+        return [(sim, ix.rows[j][0]) for j, sim in near if sim >= floor and ix.rows[j][0].id not in taken]
+    except Exception as exc:  # noqa: BLE001 - a timeout included
+        logger.debug("recall_every_turn: similar arm skipped (%s)", type(exc).__name__)
+        return []
+
+
 async def select(user_id: str, message: str, *, voice: bool = False, svc: Any = None) -> Selection:
     """The rows this turn would carry. Never raises."""
     try:
@@ -292,8 +421,15 @@ async def select(user_id: str, message: str, *, voice: bool = False, svc: Any = 
         if ix is None:
             return Selection(skipped="warming")
         picks = _ranked(ix, message)[: MAX_ROWS * 3]
+        smode, near = similar_mode(), []
+        if smode != "off" and len(picks) < MAX_ROWS:      # the words triggered too little: look by meaning
+            near = await _similar(ix, message, {c.id for c in picks})
+        sim, sim_top = len(near), (near[0][0] if near else 0.0)
+        from_sim = {c.id for _s, c in near} if smode == "on" else set()
+        if smode == "on":
+            picks = picks + [c for _s, c in near]         # lexical rows first: they keep the budget
         if not picks:
-            return Selection(pool=len(ix.rows))
+            return Selection(pool=len(ix.rows), sim=sim, sim_top=sim_top)
         fresh = {str(r.id): r for r in await asyncio.wait_for(svc.recheck_durable(uid, [c.id for c in picks]),
                                                                 timeout=POOL_TIMEOUT_S)}
         mutes = await restraint.list_mutes(uid)
@@ -314,7 +450,8 @@ async def select(user_id: str, message: str, *, voice: bool = False, svc: Any = 
             tokens += cost
             if len(ids) >= MAX_ROWS:
                 break
-        return Selection(tuple(ids), tuple(texts), tokens, len(ix.rows))
+        return Selection(tuple(ids), tuple(texts), tokens, len(ix.rows), sim=sim, sim_in=sum(1 for i in ids if i in from_sim),
+                         sim_top=sim_top)
     except Exception as exc:  # noqa: BLE001 - recall must never break a turn (a failed recheck included: fail closed)
         logger.debug("recall_every_turn: selection failed (%s)", type(exc).__name__)
         return Selection(skipped="error")
@@ -328,9 +465,10 @@ def _log(user_id: str, sel: Selection, m: str, ms: float, claimed: str = "", inj
         return
     import recall_gate
 
-    logger.info("RECALL_EVERY_TURN user=%s mode=%s rows=%d ids=%s tokens=%d pool=%d ms=%.1f claimed=%s injected=%d skipped=%s",
+    logger.info("RECALL_EVERY_TURN user=%s mode=%s rows=%d ids=%s tokens=%d pool=%d ms=%.1f claimed=%s injected=%d skipped=%s "
+                "similar=%s sim=%d sim_in=%d sim_top=%.2f",
                 user_id, m, len(sel.ids), ",".join(recall_gate.short_id(i) for i in sel.ids) or "-", sel.tokens, sel.pool, ms,
-                claimed or "-", int(injected), sel.skipped or "-")
+                claimed or "-", int(injected), sel.skipped or "-", similar_mode(), sel.sim, sel.sim_in, sel.sim_top)
 
 
 async def _shadow(user_id: str, message: str, svc: Any, m: str = "shadow", claimed: str = "", voice: bool = False) -> None:

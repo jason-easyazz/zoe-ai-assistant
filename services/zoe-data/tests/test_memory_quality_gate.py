@@ -478,3 +478,17 @@ def test_guard_still_protects_third_person_rows():
     assert guard_existing_by_entity(
         "my dad's name is Kevin",
         [("j", "Jessica's name is Neil")], None) == []
+
+
+# "The user's ..." (lab 2026-11-12): the extractor writes relationship facts this way; only commentary ABOUT the turn is meta.
+@pytest.mark.parametrize("text", ["The user's sister lives in Lisbon.", "The user's dog is a kelpie called Juniper.",
+                                  "The users partner works night shifts."])
+def test_a_fact_that_opens_with_the_users_is_stored(text):
+    assert is_storable_fact(text) == (True, "")
+
+
+@pytest.mark.parametrize("text", ["The user's statement indicates a preference.", "The user's question is about the weather.",
+                                  "The user's message contains no facts.", "The user's statements indicate a preference.",
+                                  "The user's queries are about music."])
+def test_commentary_about_the_users_turn_is_still_meta(text):
+    assert is_storable_fact(text) == (False, "meta_rambling")
