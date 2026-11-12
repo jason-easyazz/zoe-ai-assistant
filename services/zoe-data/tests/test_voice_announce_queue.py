@@ -221,6 +221,18 @@ async def test_default_claims_across_panel_aliases(db, monkeypatch):
     assert len(claimed) == 1, "alias mismatch must not strand the announcement"
 
 
+async def test_a_pendant_link_outcome_is_claimed_only_by_the_panel_it_happened_at(db, monkeypatch):
+    """Review (P2): ``omi_link`` was not panel-scoped, so with two panels the other room's daemon could speak the outcome.
+    Negative control: an unscoped row on the same queue IS claimed across panels (the claim-any default)."""
+    monkeypatch.delenv("ZOE_ANNOUNCE_STRICT_PANEL", raising=False)
+    assert "omi_link" in voice_announce.PANEL_SCOPED_TRIGGERS
+    await voice_announce.enqueue_announcement(db, user_id="u", message="linked", panel_id="panel-kitchen", trigger_type="omi_link")
+    assert await voice_announce.claim_announcements(db, panel_id="panel-lounge") == []
+    assert [c["text"] for c in await voice_announce.claim_announcements(db, panel_id="panel-kitchen")] == ["linked"]
+    await voice_announce.enqueue_announcement(db, user_id="u", message="unscoped", panel_id="panel-kitchen")
+    assert [c["text"] for c in await voice_announce.claim_announcements(db, panel_id="panel-lounge")] == ["unscoped"]
+
+
 # ── endpoint auth: device token only ────────────────────────────────────────
 
 def _app(caller_overrides: dict) -> FastAPI:

@@ -1033,6 +1033,19 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
             answered = None
         if answered is not None:
             return answered
+        # omi_link (no flag of its own; ZOE_OMI_DEVICE_OWNERS off = it says linking is off): "link my pendant" / "unlink my pendant" /
+        # "is my pendant linked?" from a verified member at the panel. A whole-utterance cue only; every other turn gets None.
+        try:
+            import omi_link_tier as _olt
+
+            _ctx = kwargs.get("extra_ctx") or {}
+            answered = await _olt.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                       speaker_verified=_ctx.get("speaker_verified"), panel_id=_ctx.get("panel_id"),
+                                       allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # self_model (ZOE_SELF_MODEL, default shadow = a log line and nothing else): "what can you do?", "can you order groceries?",
         # "are you always listening?" are answered from the model GENERATED from the real registries, never from the 4B's imagination.
         try:
