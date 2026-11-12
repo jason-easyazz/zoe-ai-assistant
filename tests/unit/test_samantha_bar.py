@@ -2081,3 +2081,34 @@ def test_drain_final_sleep_is_capped_to_the_remainder(monkeypatch):
     t0 = clock["t"]
     out = sb.drain_captures(_Stuck(), A, timeout_s=12.0, poll_s=5.0)
     assert sleeps == [5.0, 5.0, 2.0] and clock["t"] - t0 == 12.0 and out["in_flight"] == 6
+
+
+def test_drain_sleep_is_capped_after_http_consumed_time(monkeypatch):
+    """HTTP time spent inside a poll shrinks the sleep: the loop ends at the deadline, not past it."""
+    clock = _fake_clock(monkeypatch)
+
+    class _Slow:
+        def packet_count(self, u, timeout=60):
+            clock["t"] += min(2.0, timeout)   # a real call is cut off by its timeout
+            return 3
+
+        def capture_status(self, u, timeout=60):
+            clock["t"] += min(2.0, timeout)   # a real call is cut off by its timeout
+            return {"in_flight": 6}
+
+    t0 = clock["t"]
+    sb.drain_captures(_Slow(), A, timeout_s=10.0, poll_s=5.0)
+    assert clock["t"] - t0 <= 10.0
+
+
+def test_drain_zero_budget_makes_no_call_and_is_unproven(monkeypatch):
+    _fake_clock(monkeypatch)
+
+    class _Boom:
+        def packet_count(self, u, timeout=60):
+            raise AssertionError("no HTTP call once the budget is spent")
+
+        capture_status = packet_count
+
+    out = sb.drain_captures(_Boom(), A, timeout_s=0.0)
+    assert out["in_flight"] is None and out["stable"] == 0
