@@ -117,6 +117,32 @@ def test_health_skips_the_spine_while_the_night_window_is_open():
     assert not any(":" in c.name for c in checks), "the night window stops the spine on purpose"
 
 
+def _timer_run(active, enabled):
+    def run(argv, timeout=5.0):
+        if argv[:3] == ["systemctl", "--user", "is-active"]:
+            return (0 if active == "active" else 3), active
+        if argv[:3] == ["systemctl", "--user", "is-enabled"]:
+            return (0 if enabled.startswith("enabled") else 1), enabled
+        return _fake_run(argv, timeout)
+    return run
+
+
+def test_health_alarms_when_the_night_window_timer_is_not_armed():
+    """One night the timer was left stopped and nothing said so (an inactive timer is not a `failed unit`)."""
+    ok = health.night_timer_check(_timer_run("active", "enabled"))
+    assert ok.ok and ok.name == "night-window timer"
+    for active, enabled in (("inactive", "enabled"), ("active", "disabled"), ("inactive", "disabled"), ("", "")):
+        c = health.night_timer_check(_timer_run(active, enabled))
+        assert not c.ok and "zoe-night-window.timer" in c.detail
+    # it is in the probe even while the window is open, and two failing runs send the existing Telegram alert
+    checks = health.probe(http=lambda port: (True, "x"), run=_timer_run("inactive", "enabled"), night_open=True)
+    bad = [c for c in checks if c.name == "night-window timer"]
+    assert bad and not bad[0].ok
+    _, st = health.transitions(bad, {})
+    lines, _ = health.transitions(bad, st)
+    assert lines and lines[0].startswith("DOWN: night-window timer")
+
+
 def test_health_alerts_on_transitions_only():
     down = [health.Check("zoe-data :8000", False, "URLError")]
     up = [health.Check("zoe-data :8000", True, "HTTP 200")]

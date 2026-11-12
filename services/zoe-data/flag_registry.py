@@ -119,6 +119,8 @@ _ENTRIES = (
     _f('ZOE_BARGE_MIN_MS', 'int', 192, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_BARGE_SPEECH_THRESHOLD', 'float', 0.3, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_BAR_ADMIN_SESSION', 'str', '', doc='docs/knowledge/samantha-bar.md'),
+    _f('ZOE_BAR_QUIESCE_TIMEOUT_S', 'float', 300.0, doc='docs/knowledge/samantha-bar.md',
+       note='bounded wait for in-flight captures before the bar teardown check; clamped to [0, 3600]; nan/inf -> default'),
     _f('ZOE_BAR_BRAIN_URL', 'str', 'http://127.0.0.1:11434', doc='docs/knowledge/samantha-person.md'),
     _f('ZOE_BASE_URL', 'str', 'https://192.168.1.218', doc='docs/knowledge/incident-runbook.md', note='live .env: https://192.168.1.218', divergent_ok={'services/zoe-auth/oidc/startup.py': "separate service with its own env; 'http://zoe.local' is the OIDC issuer fallback", 'services/zoe-data/routers/system.py': "in-process self-URL fallback ('http://localhost:8000') when unset; live .env pins the https base"}),
     _f('ZOE_BENCHMARK_OUTPUT', 'str', ''),

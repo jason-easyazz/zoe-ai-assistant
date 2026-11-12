@@ -62,6 +62,7 @@ def test_the_bars_asks_are_unmistakable_asks_to_the_service_parser(sb, svc_mods)
     atr, _ = svc_mods
     assert atr.parse(sb.SAY_REMEMBER).clause == "my favourite tea is lapsang souchong"
     assert atr.parse(sb.SAY_KEEP_IN_MIND).clause == "I can't stand coriander"
+    assert atr.parse(sb.SAY_FORGET_TARGET).clause == "my spare key is under the blue flowerpot"
     assert atr.parse(sb.ASK_REMEMBERED).kind == "recall"
     assert atr.parse(sb.ASK_TEA) is None and atr.parse(sb.SAY_FORGET_THAT) is None     # not asks: the recall + forget paths
 
@@ -76,10 +77,11 @@ def test_the_services_replies_score_pass(sb, svc_mods):
          "say_keep": atr._confirm("I can't stand coriander"),
          "packet_after_say": "- my favourite tea is lapsang souchong",
          "packet_after_keep": "- I can't stand coriander\n- my favourite tea is lapsang souchong",
+         "packet_after_target": "- my spare key is under the blue flowerpot",
          "count_once": 6, "count_repeat": 6, "repeat_reply": atr.ALREADY,
          "tea_reply": "Your favourite tea is lapsang souchong.", "recall_reply": recall,
-         "forget_reply": 'Done — I forgot: "I can\'t stand coriander".',
-         "packet_final": "- my favourite tea is lapsang souchong"}
+         "forget_reply": 'Done — I forgot: "my spare key is under the blue flowerpot".',
+         "packet_final": "- my favourite tea is lapsang souchong\n- I can't stand coriander"}
     assert sb.score_s11(t)[0] == "PASS"
 
 
@@ -94,7 +96,7 @@ def test_flag_off_the_brain_says_it_will_and_stores_nothing_scores_fail(sb, svc_
     brain = ("Sure thing! I'll remember that your favourite tea is lapsang souchong, a lovely smoky cup. "
              "Anything else you would like me to remember?")
     assert not sb.short_confirmation(brain)["short"]
-    t = {"say_tea": brain, "say_keep": brain, "packet_after_say": "", "packet_after_keep": "",
+    t = {"say_tea": brain, "say_keep": brain, "packet_after_say": "", "packet_after_keep": "", "packet_after_target": "",
          "count_once": 4, "count_repeat": 4, "repeat_reply": brain, "tea_reply": "I don't know.",
          "recall_reply": "I'm not sure.", "forget_reply": "Okay.", "packet_final": ""}
     v, ev = sb.score_s11(t)

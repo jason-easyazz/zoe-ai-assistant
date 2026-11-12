@@ -615,11 +615,11 @@ class _FakeLive:
         self.forgot, self.in_flight = [], in_flight
         self.packets, self.polls = packets, 0  # packets: callable(poll_index) -> count|None
 
-    def packet_count(self, u):
+    def packet_count(self, u, timeout=None):
         self.polls += 1
         return 0 if self.packets is None else self.packets(self.polls)
 
-    def capture_status(self, u):
+    def capture_status(self, u, timeout=None):
         return None if self.in_flight is None else {"completed": 1, "in_flight": self.in_flight}
 
     def forget(self, u):
@@ -634,21 +634,21 @@ class _FakeLive:
 
 
 def test_teardown_retries_a_late_write_then_proves(monkeypatch):
-    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    _fake_clock(monkeypatch)
     live = _FakeLive(export_counts=[1, 0])  # round 1: a digest landed late
     out = sb.teardown(live, [A], ["bar-x-1"])
     assert out["proven"] and len(out["rounds"]) == 2 and live.forgot == [A, A]
 
 
 def test_teardown_reports_unproven(monkeypatch):
-    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    _fake_clock(monkeypatch)
     out = sb.teardown(_FakeLive(export_counts=[0, 0], db_left=1), [A], [])
     assert not out["proven"] and any("row(s) left" in p for p in out["problems"])
 
 
 @pytest.mark.parametrize("in_flight, marker", [(1, "not quiescent"), (None, "unavailable")])
 def test_teardown_is_unproven_while_capture_is_in_flight_or_unknown(monkeypatch, in_flight, marker):
-    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    _fake_clock(monkeypatch)
     live = _FakeLive(export_counts=[0, 0], in_flight=in_flight)
     out = sb.teardown(live, [A], ["bar-x-1"])
     assert live.forgot  # cleanup still ran
@@ -659,19 +659,19 @@ def test_teardown_is_unproven_while_capture_is_in_flight_or_unknown(monkeypatch,
 @pytest.mark.parametrize("packets, marker", [
     (lambda i: None, "packet count unreadable"),          # never readable
     (lambda i: i, "never stabilised"),                     # keeps changing for every poll
-    (lambda i: None if i % 2 else 0, "never stabilised"),  # readable but never twice in a row
+    (lambda i: None if i % 2 else 0, "packet count"),      # readable but never twice in a row (last poll may be either)
 ])
 def test_teardown_is_unproven_when_the_packet_count_never_stabilises(monkeypatch, packets, marker):
-    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    _fake_clock(monkeypatch)
     live = _FakeLive(export_counts=[0, 0], packets=packets)  # in_flight is 0 throughout
     out = sb.teardown(live, [A], ["bar-x-1"])
-    assert live.polls >= 24  # the wait was exhausted
+    assert live.polls >= 24  # the wait was exhausted (budget = QUIESCE_TIMEOUT_S / poll)
     assert not out["proven"] and any(marker in p and A in p for p in out["problems"])
     assert out["quiesce"][A]["stable"] < 2 and out["quiesce"][A]["in_flight"] == 0
 
 
 def test_teardown_quiesce_records_stability_when_proven(monkeypatch):
-    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    _fake_clock(monkeypatch)
     out = sb.teardown(_FakeLive(export_counts=[0, 0]), [A], ["bar-x-1"])
     assert out["proven"] and out["quiesce"][A] == {"in_flight": 0, "packet": 0, "stable": 2}
 
@@ -942,7 +942,7 @@ class _ScriptedLive(sb.Live):
         self.capture_stalls, self.waited_capture = capture_stalls, []
         self.backdate_incomplete, self.backdated = backdate_incomplete, []
 
-    def capture_status(self, user):
+    def capture_status(self, user, timeout=None):
         return {"completed": len(self.chats), "in_flight": 0}
 
     def wait_captured(self, user, before, timeout_s=180):
@@ -1000,14 +1000,17 @@ class _ScriptedLive(sb.Live):
             return "Noted — I'll remember that."
         if tag == "s11-repeat":
             return "I've already got that one."
+        if tag == "s11-target":
+            self.s11_rows.append("my spare key is under the blue flowerpot")
+            return "Noted — I'll remember that."
         if tag == "s11-fresh-ask":
             return "Your favourite tea is lapsang souchong."
         if tag == "s11-recall-q":
             return "You asked me to remember: my favourite tea is lapsang souchong; and I can't stand coriander."
-        self.s11_rows = [r for r in self.s11_rows if "coriander" not in r]   # "Forget that." retracts the newest
-        return 'Done — I forgot: "I can\'t stand coriander".'
+        self.s11_rows = [r for r in self.s11_rows if "flowerpot" not in r]   # "Forget that." retracts the PREVIOUS turn
+        return 'Done — I forgot: "my spare key is under the blue flowerpot".'
 
-    def packet_count(self, user):
+    def packet_count(self, user, timeout=None):
         return 5 + len(self.s11_rows)
 
     def wait_landed(self, user, message, needles, timeout_s=90):
@@ -1023,7 +1026,7 @@ class _ScriptedLive(sb.Live):
     def packet(self, user, message):
         if user == B:
             return ""
-        if "tea" in message or "coriander" in message:
+        if "tea" in message or "coriander" in message or "flowerpot" in message:
             return "\n".join(f"- {r}" for r in self.s11_rows)
         if "Odalys" in message:
             return "- User's neighbour Odalys keeps bees on her roof"
@@ -1069,7 +1072,7 @@ class _ScriptedLive(sb.Live):
 
 def _drive(monkeypatch, backdate=True, selected=None, **live_kw):
     monkeypatch.setattr(sb, "_ask_judged", lambda live, u, tag, q, n, scorer, sid: ("PASS", {}))
-    monkeypatch.setattr(sb.time, "sleep", lambda s: None)
+    _fake_clock(monkeypatch)
     live = _ScriptedLive(**live_kw)
     res = {r["id"]: r for r in sb.run_scenarios(live, A, B, 1, backdate, lambda m: None,
                                                 selected=selected)}
@@ -1585,11 +1588,12 @@ def _s11_turns(**over):
     t = {"say_tea": "Got it — I'll remember that.", "say_keep": "Noted — I'll remember that.",
          "packet_after_say": "- my favourite tea is lapsang souchong",
          "packet_after_keep": "- I can't stand coriander\n- my favourite tea is lapsang souchong",
+         "packet_after_target": "- my spare key is under the blue flowerpot",
          "count_once": 7, "count_repeat": 7, "repeat_reply": "I've already got that one.",
          "tea_reply": "Your favourite tea is lapsang souchong.",
          "recall_reply": "You asked me to remember: my favourite tea is lapsang souchong; and I can't stand coriander.",
-         "forget_reply": 'Done — I forgot: "I can\'t stand coriander".',
-         "packet_final": "- my favourite tea is lapsang souchong"}
+         "forget_reply": 'Done — I forgot: "my spare key is under the blue flowerpot".',
+         "packet_final": "- my favourite tea is lapsang souchong\n- I can't stand coriander"}
     t.update(over)
     return t
 
@@ -1616,8 +1620,11 @@ def test_s11_passes_the_whole_contract():
     ({"tea_reply": "I don't know your favourite tea."}, "fresh session"),
     ({"recall_reply": "You asked me to remember: my favourite tea is lapsang souchong."}, "give both back"),
     # retraction
-    ({"packet_final": "- I can't stand coriander\n- my favourite tea is lapsang souchong"}, "left the coriander"),
-    ({"packet_final": ""}, "also removed the tea"),
+    ({"packet_after_target": "- something else"}, "no row"),
+    ({"packet_final": "- I can't stand coriander\n- lapsang\n- my spare key is under the blue flowerpot"},
+     "left the flowerpot"),
+    ({"packet_final": ""}, "also removed an earlier ask"),
+    ({"packet_final": "- my favourite tea is lapsang souchong"}, "also removed an earlier ask"),
     ({"forget_reply": "Okay."}, "did not say it forgot"),
 ])
 def test_s11_fails_each_broken_part(over, why):
@@ -1625,7 +1632,7 @@ def test_s11_fails_each_broken_part(over, why):
     assert v == "FAIL" and why in ev["why"], ev
 
 
-@pytest.mark.parametrize("key", ["packet_after_say", "packet_after_keep", "packet_final"])
+@pytest.mark.parametrize("key", ["packet_after_say", "packet_after_keep", "packet_after_target", "packet_final"])
 def test_s11_unread_packet_is_error_never_pass(key):
     assert sb.score_s11(_s11_turns(**{key: None}))[0] == "ERROR"
 
@@ -1634,7 +1641,7 @@ def test_s11_in_the_run_passes_and_negative_control_is_red(monkeypatch):
     live, res = _drive(monkeypatch)                      # the tier answers: PASS, a verdict not a target
     assert res["S11"]["verdict"] == "PASS" and "expected" not in res["S11"]
     assert [c for c in live.chats if c.startswith("s11-")] == [
-        "s11-say", "s11-keep", "s11-repeat", "s11-fresh-ask", "s11-recall-q", "s11-forget"]
+        "s11-say", "s11-keep", "s11-repeat", "s11-fresh-ask", "s11-recall-q", "s11-target", "s11-forget"]
     live, res = _drive(monkeypatch, s11="off")            # ZOE_ASK_TO_REMEMBER off: the brain says it will, stores nothing
     assert res["S11"]["verdict"] == "FAIL" and "no row" in res["S11"]["evidence"]["why"]
 
@@ -1956,3 +1963,168 @@ def test_prompt_size_p95_is_nearest_rank_not_the_next_order_statistic():
     assert sb.prompt_size_summary(live)["chars_p95"] == 95
     live.packet_chars = [7]
     assert sb.prompt_size_summary(live)["chars_p95"] == 7
+
+
+def _fake_clock(monkeypatch):
+    """Controllable clock: sleep() advances monotonic(); returns the clock dict."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(sb.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(sb.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    return clock
+
+
+def test_drain_waits_for_slow_captures_past_the_old_two_minute_wait(monkeypatch):
+    """Regression: 6 captures still in flight at the old 24-poll limit made every run `error`."""
+    _fake_clock(monkeypatch)
+    monkeypatch.delenv("ZOE_BAR_QUIESCE_TIMEOUT_S", raising=False)
+
+    class _Slow:
+        def __init__(self):
+            self.n = 0
+
+        def packet_count(self, u, timeout=None):
+            return 3
+
+        def capture_status(self, u, timeout=None):
+            self.n += 1
+            return {"in_flight": 6 if self.n <= 40 else 0}
+
+    live = _Slow()
+    out = sb.drain_captures(live, A)
+    assert out["in_flight"] == 0 and out["packet"] == 3 and out["stable"] >= 2 and live.n > 24
+
+
+def test_drain_is_bounded_and_honours_the_env_budget(monkeypatch):
+    _fake_clock(monkeypatch)
+    monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", "20")
+
+    class _Stuck:
+        n = 0
+
+        def packet_count(self, u, timeout=None):
+            return 3
+
+        def capture_status(self, u, timeout=None):
+            self.n += 1
+            return {"in_flight": 6}
+
+    live = _Stuck()
+    out = sb.drain_captures(live, A)
+    assert out["in_flight"] == 6 and live.n == 4   # looks at 0/5/10/15 s; the deadline itself starts no new HTTP call
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "abc"])
+def test_drain_ignores_an_unusable_env_budget_and_stays_bounded(monkeypatch, bad):
+    _fake_clock(monkeypatch)
+    monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", bad)
+
+    class _Stuck:
+        n = 0
+
+        def packet_count(self, u, timeout=None):
+            return 3
+
+        def capture_status(self, u, timeout=None):
+            self.n += 1
+            assert self.n < 1000, "unbounded wait"
+            return {"in_flight": 6}
+
+    live = _Stuck()
+    out = sb.drain_captures(live, A)
+    assert out["in_flight"] == 6 and live.n == int(sb.QUIESCE_TIMEOUT_S / sb.QUIESCE_POLL_S)
+
+
+@pytest.mark.parametrize("raw, want", [("99999", 3600.0), ("-5", 0.0), ("20", 20.0), ("nan", 300.0), ("inf", 300.0)])
+def test_quiesce_budget_is_clamped(monkeypatch, raw, want):
+    monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", raw)
+    assert sb._quiesce_budget() == want
+
+
+def test_drain_http_stalls_count_toward_the_budget(monkeypatch):
+    """A stalled API (each call burns its whole timeout) must not stretch the wall-clock budget."""
+    clock = _fake_clock(monkeypatch)
+    monkeypatch.setenv("ZOE_BAR_QUIESCE_TIMEOUT_S", "300")
+    seen = []
+
+    class _Stalled:
+        def _stall(self, timeout):
+            seen.append(timeout)
+            clock["t"] += timeout   # the call blocks until its timeout fires
+
+        def packet_count(self, u, timeout=60):
+            self._stall(timeout)
+            return None
+
+        def capture_status(self, u, timeout=60):
+            self._stall(timeout)
+            return None
+
+    t0 = clock["t"]
+    out = sb.drain_captures(_Stalled(), A)
+    assert clock["t"] - t0 <= 300      # strict: no call may outlive the deadline
+    assert max(seen) <= 60 and out["in_flight"] is None
+
+
+def test_drain_final_sleep_is_capped_to_the_remainder(monkeypatch):
+    clock = _fake_clock(monkeypatch)
+    sleeps = []
+    orig = sb.time.sleep
+    monkeypatch.setattr(sb.time, "sleep", lambda s: (sleeps.append(s), orig(s)))
+
+    class _Stuck:
+        def packet_count(self, u, timeout=60):
+            return 3
+
+        def capture_status(self, u, timeout=60):
+            return {"in_flight": 6}
+
+    t0 = clock["t"]
+    out = sb.drain_captures(_Stuck(), A, timeout_s=12.0, poll_s=5.0)
+    assert sleeps == [5.0, 5.0, 2.0] and clock["t"] - t0 == 12.0 and out["in_flight"] == 6
+
+
+def test_drain_sleep_is_capped_after_http_consumed_time(monkeypatch):
+    """HTTP time spent inside a poll shrinks the sleep: the loop ends at the deadline, not past it."""
+    clock = _fake_clock(monkeypatch)
+
+    class _Slow:
+        def packet_count(self, u, timeout=60):
+            clock["t"] += min(2.0, timeout)   # a real call is cut off by its timeout
+            return 3
+
+        def capture_status(self, u, timeout=60):
+            clock["t"] += min(2.0, timeout)   # a real call is cut off by its timeout
+            return {"in_flight": 6}
+
+    t0 = clock["t"]
+    sb.drain_captures(_Slow(), A, timeout_s=10.0, poll_s=5.0)
+    assert clock["t"] - t0 <= 10.0
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_drain_explicit_nonfinite_budget_stays_bounded(monkeypatch, bad):
+    clock = _fake_clock(monkeypatch)
+
+    class _Stuck:
+        def packet_count(self, u, timeout=60):
+            return 3
+
+        def capture_status(self, u, timeout=60):
+            assert clock["t"] < 1000.0 + 4000, "unbounded wait"
+            return {"in_flight": 6}
+
+    out = sb.drain_captures(_Stuck(), A, timeout_s=bad)
+    assert out["in_flight"] == 6 and clock["t"] - 1000.0 <= sb.QUIESCE_TIMEOUT_S
+
+
+def test_drain_zero_budget_makes_no_call_and_is_unproven(monkeypatch):
+    _fake_clock(monkeypatch)
+
+    class _Boom:
+        def packet_count(self, u, timeout=60):
+            raise AssertionError("no HTTP call once the budget is spent")
+
+        capture_status = packet_count
+
+    out = sb.drain_captures(_Boom(), A, timeout_s=0.0)
+    assert out["in_flight"] is None and out["stable"] == 0

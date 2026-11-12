@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -636,3 +637,13 @@ def test_the_log_reader_follows_the_scratch_instance(monkeypatch, tmp_path):
         ds.main([])
     assert ds.uma.APP_LOG == tmp_path / "stack" / "logs" / "zoe-data.app.log"
     assert ds.uma.APP_LOG != live_log
+
+
+def test_a_refusal_has_its_own_nonzero_exit_code(monkeypatch, tmp_path, capsys):
+    """A gate refusal (deploy in flight, ...) must not read as green OR as a run error (rc 2)."""
+    monkeypatch.setenv("ZOE_PERF", "1")
+    r = tmp_path / "r.json"
+    rc = ds._refuse(r, "deploy check: 1 deploy.yml run(s) queued/in progress", {}, "default")
+    assert rc == ds.REFUSED_RC == 4 and rc not in (0, 1, 2, 3)
+    assert json.loads(r.read_text())["status"] == "refused"
+    assert "Exit:" in ds.__doc__ and "4 REFUSED" in ds.__doc__
