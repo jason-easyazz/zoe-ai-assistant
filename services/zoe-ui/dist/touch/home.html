@@ -5075,7 +5075,9 @@
   // "what's up?" turn (spoken, same pipeline + identity rules as saying it - a tap proves no voice, so private
   // items stay pending). No dot = listen, as ever. Same no-cors + fallback pattern as /activate; a daemon that
   // predates /pull answers 404 (still opaque here), so the busy state is only a timeout-bounded cue.
-  var _pullT=null;
+  // `notify_any` alone (the guest kiosk) lights the dot but proves no one: /pull carries no voice, so the server would refuse the
+  // guest. That press opens the mic instead - a verified voice asking "what's up?" opens the member's own short session.
+  var _pullT=null,_dotVoiceOnly=false;
   function orbPull(){
     if(_convLive||_orbBusy)return;
     _orbBusy=true;
@@ -5095,19 +5097,24 @@
       .then(function(){_orbBusy=false;});
   }
   orb.addEventListener('click',function(){
-    if(orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening'))orbPull();
+    var ready=orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening');
+    if(ready&&_dotVoiceOnly)panelVoice('Say "what\'s up?" - I\'ll check it\'s you');
+    else if(ready)orbPull();
     else panelVoice('Listening — ask Zoe anything');
   });
   // pull, not push: the orb's quiet "I have something" dot. GET /api/proactive/inbox answers a COUNT and a
   // coarse class - never what is pending - and only for a signed-in member (guest, empty, quiet hours and the
   // flag off all read "no dot"). Asking ("what's up?") is how it clears; nothing here speaks or toasts.
+  // `notify` (ZOE_NOTIFICATIONS) is the member's unread household notifications: the same dot; the press shows them as a card.
+  // `notify_any` (the kiosk poll) is a bare boolean: someone in the house has a non-private one waiting - never a count or whose.
   (function(){
-    function paint(on,review){orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
+    function paint(on,review,voiceOnly){_dotVoiceOnly=!!(on&&voiceOnly);orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
       var s=sid();if(!s){paint(false,false);return;}
       fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
-        .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet),!!(d&&d.review===true&&!d.quiet));})
+        .then(function(d){var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));
+          paint(mine||!!(d&&!d.quiet&&d.notify_any===true),!!(d&&d.review===true&&!d.quiet),!mine);})
         .catch(function(){});
     }
     poll();setInterval(poll,60000);

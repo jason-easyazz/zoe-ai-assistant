@@ -3932,6 +3932,10 @@ async def voice_command(
     import transcript_check as _transcript_check
 
     _transcript_check.note_voice_turn(session_id, panel_id, scope_user=_scope_identity_user, verdict=_speaker_verified)
+    # Household notifications (ZOE_NOTIFICATIONS; off = returns at once): the same verified-turn note for the end-of-turn line.
+    import notification_tail as _notification_tail
+
+    _notification_tail.note_voice_turn(session_id, panel_id, scope_user=_scope_identity_user, verdict=_speaker_verified)
 
     if _vs_decision is not None and _vs_decision.lock:
         # "lock" / "sign me out": the session is already closed (published above); say so and stop - nothing to store.
@@ -4313,6 +4317,10 @@ async def voice_command(
         reply_text = _xresult.reply
         if getattr(_xresult, "tier", "") != "transcript_check":     # the ask's own answer never carries a second ask
             reply_text = await _transcript_check.append_to_reply(reply_text, text, effective_user, session_id)
+        if getattr(_xresult, "tier", "") not in ("transcript_check", "pull", _notification_tail.TIER):   # one line per reply; the pull says it
+            # never on a replay instrument's turn (the ``replay-`` panel ids the harness uses): the streaming path's replay_isolation rule
+            reply_text = await _notification_tail.append_to_reply(reply_text, text, effective_user, session_id,
+                                                                  replay=_suppress_ui_broadcast(panel_id))
         _ui = (_xresult.ui or {}).get("kind")
         try:
             if _ui == "weather":

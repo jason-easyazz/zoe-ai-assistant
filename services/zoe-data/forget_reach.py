@@ -152,7 +152,7 @@ TABLES: tuple[Store, ...] = (
     _t("calendars", METADATA, OUT_OF_SCOPE, "Calendar containers: a name and a colour, no event content (events are listed separately)."),
     _t("event_alarms", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("ambient_memory", WORDS, GAP, "Ambient captured memory text; neither path reaches it."),
-    _t("notifications", WORDS, GAP, "Delivered notification titles/messages; neither path reaches them."),
+    _t("notifications", WORDS, REACHED, member="notifications_store.forget_user"),   # every row of the member, any writer; no entity eraser
     _t("music_listening_events", METADATA, OUT_OF_SCOPE, "Listening history: titles/artists, no household words; the music journal has its own controls."),
     # --- proactive / voice delivery plumbing ---
     _t("proactive_deliveries", DERIVED, GAP, "Delivery ledger rows keyed by candidate; text is in the candidate, not here."),

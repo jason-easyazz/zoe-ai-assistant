@@ -2110,6 +2110,13 @@ class MemoryService:
             await conversation_notes.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: conversation-notes erasure failed ({type(exc).__name__})") from exc
+        # Household notifications (notifications_store): titles / messages written for the member. Same rule: fail closed. Outside the
+        # memory lock: it takes the member's erase gate, which a notification create holds through its commit.
+        try:
+            import notifications_store
+            await notifications_store.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: notification erasure failed ({type(exc).__name__})") from exc
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.

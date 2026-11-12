@@ -591,7 +591,7 @@ def test_the_orb_shows_a_dot_and_nothing_else():
     assert "#orb.has::after" in html and "/api/proactive/inbox" in html
     # the day review's quiet ring (day_review_raise) shares the painter: a class toggle, no count, no sound
     assert "#orb.review::before" in html and "d.review===true" in html
-    start = html.index("function paint(on,review){orb.classList.toggle('has'")
+    start = html.index("function paint(on,review")
     code = html[start: html.index("visibilitychange", start)]       # the IIFE's code, not its comments
     assert "toast(" not in code and "speak" not in code.lower() and "panelVoice" not in code
     assert "Audio" not in code and "/api/voice" not in code

@@ -5,8 +5,10 @@ Mounted at prefix="/api/notifications" with tag "notifications".
 import json
 import uuid
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
+import notifications_store as _store
+import panel_review_cards as _prc
 from auth import get_current_user
 from database import get_db
 from guest_policy import require_feature_access
@@ -164,3 +166,55 @@ async def delete_notification(
         raise HTTPException(status_code=404, detail="Notification not found")
     await db.commit()
     return {"ok": True, "id": notification_id}
+
+
+# -- the panel card's taps (ZOE_NOTIFICATIONS; mounted via ``register(app)``, off = routes ABSENT) ---------------------------------
+# The card token rides in ``X-Panel-Card``; ``panel_review_cards.authorize`` honours it only while the member's voice session on that
+# panel is open, or with the member's own session. An item is a card-local id; anything not on the card is 404.
+panel_router = APIRouter(prefix=_store.ENDPOINT, tags=["panel"])
+
+
+async def _caller(request: Request):
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return None
+
+
+async def _require_card(request: Request, caller=Depends(_caller)) -> _prc.Card:
+    if not _store.enabled():                         # the flag is read per call: off = as if unmounted, whatever token was minted
+        raise HTTPException(status_code=404, detail="Not Found")
+    try:
+        card = _prc.authorize(request.headers.get("X-Panel-Card", ""), caller)
+    except _prc.CardError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code) from exc
+    if card.kind != _store.CARD_KIND:
+        raise HTTPException(status_code=404, detail="card_gone")
+    return card
+
+
+class _Act(BaseModel):
+    item: str
+    action: str
+    choice: str | None = None
+
+
+@panel_router.post("/act")
+async def panel_act(body: _Act, card: _prc.Card = Depends(_require_card)):
+    it = card.items.get(str(body.item or ""))
+    if it is None:
+        raise HTTPException(status_code=404, detail="not on this card")
+    try:
+        out = await _store.act(card.member_id, it, body.action)
+    except _store.ActError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.code) from exc
+    card.items.pop(body.item, None)                  # one decision per row
+    return out
+
+
+def register(app: FastAPI) -> bool:
+    """Mount the card routes iff ``ZOE_NOTIFICATIONS`` is on. Off = absent (404)."""
+    if not _store.enabled():
+        return False
+    app.include_router(panel_router)
+    return True

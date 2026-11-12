@@ -288,6 +288,16 @@ async def pending_inbox(user: dict = Depends(resolve_acting_user)):
     review = await day_review_raise.orb_review(uid)
     if review is not None:
         state = {**state, "review": bool(review)}
+    # Household notifications (ZOE_NOTIFICATIONS): the caller's OWN unread count for the same dot. Off = the key is absent.
+    import notifications_store
+
+    notify = await notifications_store.orb_count(user)
+    if notify is not None:
+        state = {**state, "notify": int(notify)}
+    # ... and for the kiosk (guest) poll, one content-free boolean: someone in the household has something waiting. Never a count or whose.
+    anyone = await notifications_store.orb_any(user)
+    if anyone is not None:
+        state = {**state, "notify_any": bool(anyone)}
     return state
 
 

@@ -2801,6 +2801,12 @@ async def run_flue_brain_streaming(
 
     if transcript_check.live() and not emotional_hold and not kwargs.get("replay_isolation"):
         turn = transcript_check.append_stream(turn, _spoken, user_id, session_id, skip=(_FALLBACK_TEXT,))
+    # Household notifications (ZOE_NOTIFICATIONS; off = not even wrapped): at most one "you also have N notifications" line, outside the
+    # transcript check's wrap so its ask wins; never on an emotional turn or a replay.
+    import notification_tail
+
+    if notification_tail.store.enabled() and not emotional_hold and not kwargs.get("replay_isolation"):
+        turn = notification_tail.append_stream(turn, _spoken, user_id, session_id, skip=(_FALLBACK_TEXT,))
     debug = await _continuity_debug_uid((user_id or "").strip())
     reply: list[str] = []
     emitted = False  # real reply text went out (never a sentinel or the fallback)
