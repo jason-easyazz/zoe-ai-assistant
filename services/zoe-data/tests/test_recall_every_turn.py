@@ -816,3 +816,35 @@ def test_similar_skips_while_an_earlier_turn_embed_is_still_running(monkeypatch)
     first, second, n, third = asyncio.run(go())
     assert first.ids == () and second.ids == () and n == 1
     assert third.ids == ("m_fish_0003",)
+
+
+def test_only_one_embed_runs_at_a_time_across_builds_and_turns(monkeypatch):
+    """Two members' index builds and a turn all embed through one lock: the model never sees two calls at once."""
+    import threading
+
+    state = {"now": 0, "peak": 0}
+    gate = threading.Lock()
+
+    def raw(texts):
+        with gate:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        time.sleep(0.05)
+        with gate:
+            state["now"] -= 1
+        return fake_embed(texts)
+    monkeypatch.setattr(rt, "_embed_raw", raw)
+    threads = [threading.Thread(target=rt._embed, args=([f"text {i}"],)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert state["peak"] == 1
+    monkeypatch.setattr(rt, "_EMBED_LOCK", type("NoLock", (), {"__enter__": lambda s: None, "__exit__": lambda s, *a: False})())
+    state["peak"] = 0                                    # negative control: without the lock the calls do overlap
+    threads = [threading.Thread(target=rt._embed, args=([f"text {i}"],)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert state["peak"] > 1

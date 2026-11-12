@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -236,9 +237,10 @@ def _reset_state() -> None:
     _QUERY_EMBEDS["job"] = None
 
 
-def _embed(texts: list) -> Any:
-    """Unit vectors (float32, one per text) from the palace's own embedding function (one MiniLM ONNX session per process:
-    ``memory_service._drawers_embedding_function``), so a row and a turn are compared in the space the rows are stored in."""
+_EMBED_LOCK = threading.Lock()
+
+
+def _embed_raw(texts: list) -> Any:
     import numpy as np
     from memory_service import _drawers_embedding_function
 
@@ -246,6 +248,15 @@ def _embed(texts: list) -> Any:
     n = np.linalg.norm(v, axis=1, keepdims=True)
     n[n == 0.0] = 1.0
     return v / n
+
+
+def _embed(texts: list) -> Any:
+    """Unit vectors (float32, one per text) from the palace's own embedding function (one MiniLM ONNX session per process:
+    ``memory_service._drawers_embedding_function``), so a row and a turn are compared in the space the rows are stored in.
+    ONE embed at a time in this module, whoever asks (a member's index build, another member's, a turn): a turn that arrives
+    behind a build simply waits out its 200 ms and carries no similar rows, rather than two runs sharing the session and the CPU."""
+    with _EMBED_LOCK:
+        return _embed_raw(texts)
 
 
 def _row_vectors(uid: str, rows: list) -> Any:
