@@ -991,9 +991,17 @@ async def test_browser_start_wires_the_stale_notice_to_the_handoff(monkeypatch):
 
 # ── the account identifier never reaches the log (2026-11-12) ────────────────
 # Both save paths logged `user=<YouTube account>` at INFO into the app log.
-# Negative control: put `username` back into either log call and these go red.
+# Negative control: put `username` or `instance_id` back into either log call and these go red.
 
 _ACCOUNT = "someone@example.com"
+_INSTANCE = "ytmusic--abc123"
+_COOKIE_VALUE = "secretval"
+
+
+def _leaks(records):
+    """Every log line that names the account: email/username, provider instance id, or cookie value."""
+    return [r.getMessage() for r in records
+            if any(x in r.getMessage() for x in (_ACCOUNT, "someone", _INSTANCE, "abc123", _COOKIE_VALUE))]
 
 
 async def _save_ok(domain, values, instance_id=None):
@@ -1001,7 +1009,7 @@ async def _save_ok(domain, values, instance_id=None):
 
 
 async def _instance(_prov):
-    return "ytmusic--abc123"
+    return _INSTANCE
 
 
 async def test_connect_logs_that_a_signin_happened_not_who(monkeypatch, caplog, tmp_path):
@@ -1018,7 +1026,7 @@ async def test_connect_logs_that_a_signin_happened_not_who(monkeypatch, caplog, 
     await ys._finish_connect(session, "__Secure-3PAPISID=secretval")
     assert session["state"] == "connected"
     assert any("harvested cookie" in r.getMessage() for r in caplog.records)
-    assert all(_ACCOUNT not in r.getMessage() and "secretval" not in r.getMessage() for r in caplog.records)
+    assert _leaks(caplog.records) == []
 
 
 async def test_refresh_logs_no_account_identifier(monkeypatch, caplog, tmp_path):
@@ -1031,7 +1039,7 @@ async def test_refresh_logs_no_account_identifier(monkeypatch, caplog, tmp_path)
     monkeypatch.setattr(music_service, "provider_instance_id", _instance)
     assert (await ys.refresh_now())["ok"] is True
     assert any("re-saved cookie" in r.getMessage() for r in caplog.records)
-    assert all(_ACCOUNT not in r.getMessage() for r in caplog.records)
+    assert _leaks(caplog.records) == []
 
 
 async def _ready(value):

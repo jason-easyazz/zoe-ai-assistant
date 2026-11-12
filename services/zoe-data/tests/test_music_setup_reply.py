@@ -115,7 +115,7 @@ async def test_catalogue_refuses_when_the_engine_does_not_answer(ma_reads):
 
 async def test_voice_setup_says_the_engine_is_unavailable_not_nothing_connected(ma_reads):
     ma_reads["up"] = False
-    reply = await intent_router._execute_music_setup("jason")
+    reply = await intent_router._execute_music_setup("member-a")
     assert music_service.MUSIC_ENGINE_DOWN_SETUP_MSG in reply
     assert "No music services are connected" not in reply
     assert "Browse → Sources" in reply
@@ -140,3 +140,31 @@ def test_every_catalogue_caller_is_a_user_action_not_a_poll():
                        "services/zoe-data/routers/music_setup.py"], callers
     home = (ROOT / "services/zoe-ui/dist/touch/home.html").read_text()
     assert home.count("/api/music/setup/catalogue") == 1  # fetched only when the Sources tab is shown
+
+
+# ── a refused caller never wakes the engine (cross-review 2026-11-12) ────────
+# provider_catalogue now wakes MA, so "set up music" takes the same turn gate as
+# music_play. Negative control: drop the home_control_refused check from either
+# entry point and ma_reads["order"] is no longer empty.
+
+
+@pytest.fixture
+def refused_turn(monkeypatch):
+    import panel_principal
+
+    monkeypatch.delenv("ZOE_HA_CONTROL_SCOPE", raising=False)
+    token = panel_principal._home_control_turn.set(False)
+    yield panel_principal.HOME_CONTROL_REFUSAL
+    panel_principal._home_control_turn.reset(token)
+
+
+async def test_voice_setup_for_a_refused_caller_does_not_wake_the_engine(ma_reads, refused_turn):
+    reply = await intent_router._execute_music_setup("guest")
+    assert reply == refused_turn
+    assert ma_reads["order"] == []  # no wake, no read
+
+
+async def test_setup_resolver_for_a_refused_caller_does_not_wake_the_engine(ma_reads, refused_turn):
+    r = await music_service.resolve_music_setup("spotify")
+    assert r["spoken_summary"] == refused_turn
+    assert ma_reads["order"] == []

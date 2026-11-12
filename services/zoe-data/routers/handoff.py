@@ -57,6 +57,10 @@ async def handoff_start(payload: dict, request: Request,
         raise HTTPException(status_code=503, detail=music_service.MUSIC_ENGINE_UNAVAILABLE_DETAIL)
     if form.get("auth") == "free":  # no account, no phone step (radio)
         saved = await music_service.save_provider(provider, {})
+        # save_provider is None both when MA rejected the save and when MA went away
+        # after the form read; a fresh /info probe tells them apart.
+        if not saved and not await music_service.engine_reachable():
+            raise HTTPException(status_code=503, detail=music_service.MUSIC_ENGINE_UNAVAILABLE_DETAIL)
         return {"ok": bool(saved), "provider": provider, "immediate": True}
     try:
         h = await auth_handoff.start(kind, actor_user=user, panel_id=panel_id, provider=provider,

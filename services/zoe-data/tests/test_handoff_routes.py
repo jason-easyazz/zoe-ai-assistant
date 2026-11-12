@@ -203,3 +203,31 @@ def test_starting_a_handoff_expires_lapsed_pending_rows(client, tmp_path):
     status, reason = con.execute("SELECT status, reason FROM auth_handoffs WHERE id = ?", (old,)).fetchone()
     con.close()
     assert (status, reason) == ("error", "expired")
+
+
+def test_free_provider_save_with_engine_gone_is_503(client, monkeypatch):
+    """MA answered the form read, then went away before the save: 503, not 200 ok:false."""
+    async def none_save(provider, values, instance_id=None):
+        return None
+
+    async def down():
+        return False
+
+    monkeypatch.setattr(music_service, "save_provider", none_save)
+    monkeypatch.setattr(music_service, "engine_reachable", down)
+    r = _start(client, provider="radiobrowser")
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"]["error"] == "music_engine_unavailable"
+
+
+def test_free_provider_save_rejected_by_a_live_engine_stays_ok_false(client, monkeypatch):
+    async def none_save(provider, values, instance_id=None):
+        return None
+
+    async def up():
+        return True
+
+    monkeypatch.setattr(music_service, "save_provider", none_save)
+    monkeypatch.setattr(music_service, "engine_reachable", up)
+    r = _start(client, provider="radiobrowser")
+    assert r.status_code == 200 and r.json() == {"ok": False, "provider": "radiobrowser", "immediate": True}

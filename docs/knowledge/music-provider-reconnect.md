@@ -29,7 +29,9 @@ a few seconds), so the amber **Reconnect** shows even when MA was asleep. Before
 waking it, and every provider showed plain **Connect**. If MA cannot be started, the tab says "Music isn't available right
 now - tap Sources again to retry" and voice "set up music" says the music engine isn't available; neither claims that
 nothing is connected (`music_service.provider_catalogue` raises `MusicEngineUnavailable`, the route answers 503
-`music_engine_unavailable`). Tapping Connect or Reconnect while MA is down shows "Music isn't available right now - try
+`music_engine_unavailable`). Because the catalogue wakes MA, voice "set up music" and the setup resolver take the same
+turn gate as voice play (`panel_principal.home_control_refused`): a refused caller gets the home-control refusal and MA is
+not woken. The HTTP catalogue needs a member or the panel (`require_member_or_panel`); a guest session elsewhere is 403. Tapping Connect or Reconnect while MA is down shows "Music isn't available right now - try
 again"; only an auth refusal opens the sign-in card (`POST /api/handoff/start` answers 503, not 400 "unknown provider"). The credential only touches the provider's own sign-in page; Zoe never sees it. This follows the standing
 rule that connecting an account hands off to the phone. Saying "connect youtube music" by voice answers honestly: a connected provider whose `needs_attention` is set gets "YouTube Music needs signing in again - open Music, then Sources on the panel, and tap Reconnect" (a first connect gets the matching "tap Connect" wording). The returned Skybridge QR card is NOT rendered on a voice turn, so the reply never promises a code. The tap path reconnects the existing instance in place; a free provider needing attention is refreshed in place. A healthy connected provider still answers "already connected". Opening the authCard QR directly from a voice turn is recorded in [open-problems.md](open-problems.md). Pinned by
 `services/zoe-data/tests/test_music_voice_reconnect.py`.
@@ -51,6 +53,6 @@ says "I couldn't find <query> to play." (MA up, nothing found) or "Music isn't a
   defaults - otherwise it resets library-sync and other settings.
 - `catalog_health` reports degraded only when NO streaming catalogue is available (a second healthy provider covers search)
   and only for the catalogue types that were requested (a radio-only search is not degraded).
-- The YouTube account identifier is never logged: `ytmusic_signin` logs that a sign-in or refresh happened (and a redacted
-  cookie length), not who. Pinned by `tests/test_ytmusic_signin.py`.
+- No account identifier is ever logged: `ytmusic_signin` logs that a sign-in or refresh happened and its outcome (and a
+  redacted cookie length), never the username, the provider instance id or a cookie value. Pinned by `tests/test_ytmusic_signin.py`.
 - The backend needs a zoe-data restart for the health flag and the in-place save to take effect.

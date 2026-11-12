@@ -5805,7 +5805,12 @@ async def _execute_music_setup(user_id: str) -> str:  # noqa: ARG001 — dispatc
     offered: list[str] = []
     engine_down = False
     import music_service
+    import panel_principal as _pp
 
+    # The catalogue wakes Music Assistant: apply the same turn gate as music_play
+    # (_execute_music_intent), so a refused caller never wakes the engine.
+    if _pp.home_control_refused("music music_setup"):
+        return _pp.HOME_CONTROL_REFUSAL
     try:
         for p in await music_service.provider_catalogue():
             name = str(p.get("name") or p.get("domain") or "").strip()

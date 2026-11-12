@@ -859,6 +859,6 @@ async def refresh_now() -> dict[str, Any]:
     saved = await music_service.save_provider(
         music_service._YTMUSIC_DOMAIN, {"username": username, "cookie": header},
         instance_id=instance_id)
-    logger.info("ytmusic refresh: re-saved cookie %s (instance=%s) -> %s",
-                _redact(header), instance_id or "new", "ok" if saved else "rejected")
+    # Never an account identifier (username, instance id): that a refresh happened, and its outcome.
+    logger.info("ytmusic refresh: re-saved cookie %s -> %s", _redact(header), "ok" if saved else "rejected")
     return {"ok": bool(saved)}

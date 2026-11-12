@@ -258,10 +258,10 @@ def _ha_posts():
 
 @pytest.mark.asyncio
 async def test_voice_play_uses_the_music_engine_before_home_assistant(ma):
-    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "jason")
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
 
     assert result == "Playing One More Time by Daft Punk."
-    assert ma["calls"] == [{"query": "Daft Punk", "player_id": "kitchen", "user": "jason"}]
+    assert ma["calls"] == [{"query": "Daft Punk", "player_id": "kitchen", "user": "member-a"}]
     assert _ha_posts() == []  # Home Assistant is not touched when the engine played it
 
 
@@ -269,7 +269,7 @@ async def test_voice_play_uses_the_music_engine_before_home_assistant(ma):
 async def test_voice_play_names_a_room_the_engine_has(ma):
     ma["players"] = [{"player_id": "lounge-1", "display_name": "Lounge"},
                      {"player_id": "kitchen", "display_name": "Kitchen"}]
-    await intent_router._execute_music_intent(Intent("music_play", {"query": "jazz", "room": "lounge"}), "jason")
+    await intent_router._execute_music_intent(Intent("music_play", {"query": "jazz", "room": "lounge"}), "member-a")
     assert ma["calls"][0]["player_id"] == "lounge-1"
 
 
@@ -281,7 +281,7 @@ async def test_nothing_found_and_no_ha_speaker_says_nothing_was_found(ma, monkey
         return None
 
     monkeypatch.setattr(intent_router, "_resolve_media_player_entity", no_player)
-    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "jason")
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
 
     assert result == "I couldn't find Daft Punk to play."
     assert _ha_posts() == []
@@ -290,7 +290,7 @@ async def test_nothing_found_and_no_ha_speaker_says_nothing_was_found(ma, monkey
 @pytest.mark.asyncio
 async def test_nothing_found_falls_back_to_home_assistant(ma):
     ma["hit"] = None
-    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "jason")
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
 
     assert result == "Playing Daft Punk."  # the HA path's own reply, unchanged
     assert _ha_posts()[0]["json"]["action"] == "play_media"
@@ -304,7 +304,7 @@ async def test_engine_that_cannot_wake_says_music_is_unavailable(ma, monkeypatch
         return None
 
     monkeypatch.setattr(intent_router, "_resolve_media_player_entity", no_player)
-    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "jason")
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
 
     assert result == intent_router._MUSIC_ENGINE_DOWN_MSG
     assert ma["calls"] == []  # never searched a sleeping engine
@@ -318,7 +318,7 @@ async def test_engine_up_with_no_speakers_is_unavailable_not_nothing_found(ma, m
         return None
 
     monkeypatch.setattr(intent_router, "_resolve_media_player_entity", no_player)
-    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "jason")
+    result = await intent_router._execute_music_intent(Intent("music_play", {"query": "Daft Punk"}), "member-a")
     assert result == intent_router._MUSIC_ENGINE_DOWN_MSG
 
 

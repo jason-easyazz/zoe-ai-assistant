@@ -293,6 +293,12 @@ async def _ma_api_for_write() -> Optional[bool]:
     return ver[:2] >= _MA_FLOW_API_MIN
 
 
+async def engine_reachable() -> bool:
+    """True when MA answers /info right now (a fresh read, no wake). Lets a caller
+    tell "MA rejected that" from "MA is not there" after a write returned None."""
+    return await ma_server_version(fresh=True) is not None
+
+
 async def _ma_is_210_plus(fresh: bool = False) -> bool:
     ver = await ma_server_version(fresh)
     return ver is not None and ver[:2] >= _MA_FLOW_API_MIN
@@ -1816,6 +1822,10 @@ def _qr_card(provider: str, name: str, qr_path: str) -> dict[str, Any]:
 async def resolve_music_setup(provider_query: str) -> dict[str, Any]:
     """Resolve 'add music' / 'connect <provider>' into a catalogue or QR card."""
     import music_setup
+    import panel_principal as _pp
+
+    if _pp.home_control_refused("music setup"):  # the same turn gate music_play uses; never wake MA for a refused caller
+        return _result(_pp.HOME_CONTROL_REFUSAL, _browse_card(), "setup")
     try:
         cat = await provider_catalogue()
     except MusicEngineUnavailable:

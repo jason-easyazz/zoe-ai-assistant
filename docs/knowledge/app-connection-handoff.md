@@ -101,7 +101,9 @@ A free provider (Radio Browser, TuneIn) connects at once, with no handoff and no
 QR. `POST /start` answers 400 `unknown provider` only for a provider outside
 `music_service._SETUP_CATALOGUE`; a known provider whose setup form cannot be read
 (Music Assistant could not be woken, or did not answer) is 503 with
-`detail.error = "music_engine_unavailable"`. The panel's `authCard` opens the
+`detail.error = "music_engine_unavailable"`. So is a free provider whose save failed
+while MA no longer answers `/info` (`music_service.engine_reachable`); a save that a
+live MA rejected stays 200 `{"ok": false, "immediate": true}`. The panel's `authCard` opens the
 sign-in card only for an auth refusal (401/403); a 503 or its own 12 s deadline
 shows "Music isn't available right now - try again". Reconnect still happens **in place**: the router and `save_provider` pass
 the existing `instance_id`, and the MA 2.10 `reconfigure` flow does not change.
