@@ -116,6 +116,118 @@ _BARE_RE = re.compile(_LEAD + rf"(?P<subj>{_WORD})\s+(?P<n>{_NUMH}|{_NUM}){_YEAR
 _PREP_RE = re.compile(r"^(?:on|at|in|by|for|around|about)\s+", re.IGNORECASE)
 
 
+# -- quantity values: a date's day, an amount, an age, written any way (QA round 8, 2026-11-12) -------------------------------------
+# "sorry the dentist appointment is the 27th of november not the 20th" was read by nothing: the pair above takes a value made of
+# letters or a bare 0-120 number, so an ordinal ("27th"), a date ("the 20th of november") or an amount ("12 thousand") never formed a
+# correction, and the stored rows ("... on the 20th of November", "... on the twentieth of November") stayed approved beside the new
+# value. A QUANTITY is compared by its number, whatever its spelling, so ONE correction reaches every phrasing a writer left behind.
+_ORD_ONES = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9,
+             "tenth": 10, "eleventh": 11, "twelfth": 12, "thirteenth": 13, "fourteenth": 14, "fifteenth": 15, "sixteenth": 16,
+             "seventeenth": 17, "eighteenth": 18, "nineteenth": 19}
+_ORD_TENS = {"twentieth": 20, "thirtieth": 30}
+_ORD_WORD = (r"(?:(?:twenty|thirty)[- ](?:" + "|".join(list(_ORD_ONES)[:9]) + r")|"
+             + "|".join(sorted(list(_ORD_ONES) + list(_ORD_TENS), key=len, reverse=True)) + r")")
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december")
+_MONTH_ABBR = {**{m[:3]: m for m in _MONTHS}, "sept": "september"}
+_MONTH_RE = re.compile(r"(?<![A-Za-z])(?:" + "|".join(_MONTHS) + "|" + "|".join(sorted(_MONTH_ABBR, key=len, reverse=True))
+                       + r")(?![A-Za-z])", re.IGNORECASE)
+_SCALE = {"hundred": 100, "thousand": 1000, "grand": 1000, "k": 1000, "million": 1_000_000, "mil": 1_000_000, "m": 1_000_000}
+_QTY_RE = re.compile(
+    r"(?<![A-Za-z0-9:.,])\$?(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|" + _ORD_WORD + "|" + _NUM + r")"
+    r"(?P<ord>st|nd|rd|th)?(?P<half>" + _HALF + r")?"
+    r"(?:\s*(?P<scale>k|m)\b|\s+(?P<scalew>hundred|thousand|grand|million|mil)\b)?(?![A-Za-z0-9:])",
+    re.IGNORECASE)
+#: the words a quantity VALUE may carry besides its number: "the 27th of november", "on the 20th", "12 thousand dollars", "9 years
+#: old". Anything else ("is", "said", a name) makes it a clause, never a value.
+_QTY_VALUE_WORDS = frozenset({"the", "on", "of", "at", "in", "by", "about", "around", "roughly", "like", "dollars", "dollar", "bucks",
+                              "years", "year", "yrs", "old", "yo", "now", "aud", "usd"})
+
+
+class Quantity(NamedTuple):
+    start: int
+    end: int
+    value: float
+    ordinal: bool
+    scale: float
+    text: str
+
+    @property
+    def scaled(self) -> bool:
+        return self.scale != 1
+
+
+def _num_value(raw: str) -> Optional[float]:
+    t = (raw or "").strip().lower().replace(",", "")
+    try:
+        return float(t)
+    except ValueError:
+        pass
+    if t in _ORD_ONES:
+        return float(_ORD_ONES[t])
+    if t in _ORD_TENS:
+        return float(_ORD_TENS[t])
+    parts = t.replace("-", " ").split()
+    if len(parts) == 2 and parts[0] in ("twenty", "thirty") and parts[1] in _ORD_ONES and _ORD_ONES[parts[1]] < 10:
+        return float((20 if parts[0] == "twenty" else 30) + _ORD_ONES[parts[1]])
+    n = number_of(t)
+    return None if n is None else float(n)
+
+
+def quantities(text: str) -> list:
+    """Every number in ``text`` with its value, written any way: "20", "20th", "twentieth", "twenty-seven", "13 and a half
+    thousand", "$12,000", "12k". A time's digits ("10:20") are not a quantity. Pure."""
+    out = []
+    for m in _QTY_RE.finditer(text or ""):
+        raw = m.group("num") or ""
+        base = _num_value(raw)
+        if base is None:
+            continue
+        if m.group("half"):
+            base += 0.5
+        scale = (m.group("scale") or m.group("scalew") or "").lower()
+        if scale in ("k", "m") and not raw[:1].isdigit():
+            continue            # "one m" is not a million
+        mult = float(_SCALE[scale]) if scale else 1.0
+        base *= mult
+        last = raw.lower().replace("-", " ").split()[-1]
+        ordinal = bool(m.group("ord")) or last in _ORD_ONES or last in _ORD_TENS
+        out.append(Quantity(m.start(), m.end(), base, ordinal, mult, m.group(0)))
+    return out
+
+
+def _month_of(text: str) -> Optional[str]:
+    m = _MONTH_RE.search(text or "")
+    if not m:
+        return None
+    w = m.group(0).lower()
+    return w if w in _MONTHS else _MONTH_ABBR.get(w)
+
+
+def quantity_value(value: str) -> Optional[Quantity]:
+    """The ONE quantity a correction value is ("the 27th of november", "12 thousand dollars", "9"), or None: no number, two
+    numbers, or a word that makes it a clause rather than a value. Pure."""
+    qs = quantities(value)
+    if len(qs) != 1:
+        return None
+    q = qs[0]
+    rest = _MONTH_RE.sub(" ", (value[:q.start] + " " + value[q.end:]).lower())
+    if any(w not in _QTY_VALUE_WORDS for w in re.findall(r"[a-z]+", rest)):
+        return None
+    return q
+
+
+def is_quantity_pair(new: str, old: str) -> bool:
+    """Both halves of a correction are one quantity each (and not both plain ages, which the age path reads). Pure."""
+    return quantity_value(new) is not None and quantity_value(old) is not None
+
+
+# "<subject> is <quantity>[,] not <quantity>[, anything after]": the value pair above with quantity values, and a trailing clause
+# allowed after the old value ("actually eli is 9 not 8, he had his birthday last month" - the pair above is anchored at the end
+# of the sentence, so that common shape was never a correction). The values are validated by ``quantity_value``.
+_QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are|will\s+be)\s+(?:actually\s+|really\s+|now\s+)?(?P<n>[^,;.!?]{{1,40}}?)[,;]?\s+"
+                       rf"(?:and\s+)?not\s+(?P<o>[^,;!?]{{1,30}}?)\s*(?:[,;.!?]\s*(?:.*))?$", re.IGNORECASE)
+
+
 def _bare_value(v: str) -> str:
     """"on friday" -> "friday": a value's lead preposition is not part of the value (the stored row says "exam on Thursday")."""
     stripped = _PREP_RE.sub("", v.strip())
@@ -267,6 +379,20 @@ def statement(text: str) -> Optional[Correction]:
             if not cued:
                 continue            # "Oliver is 25" with nothing saying it replaces a number is just a statement
             return Correction(subj, m.group("n").strip(), None, True)
+        m = _QPAIR_RE.match(sentence)
+        if m:
+            # a quantity pair: "the dentist appointment is the 27th of november not the 20th", "eli is 9 not 8, he had his birthday".
+            # Two numbers of the same subject are a correction on their own (as the plain number pair above), no cue needed.
+            subj = m.group("subj").strip()
+            new, old = m.group("n").strip(), m.group("o").strip()
+            if subj.lower() in _NOT_SUBJECT or not is_quantity_pair(new, old):
+                continue
+            qn, qo = quantity_value(new), quantity_value(old)
+            if qn.value == qo.value and (_month_of(new) or "") == (_month_of(old) or ""):
+                continue
+            if value_of(new) is not None and value_of(old) is not None:
+                new, old = _bare_value(new), _bare_value(old)       # a plain age pair: the age path rewrites it
+            return Correction(subj, new, old, bool((m.group("cue") or "").strip()))
     return None
 
 
@@ -321,6 +447,60 @@ def _render_value(v: float, like: str) -> str:
     return number_like(whole, like) + (" and a half" if v - whole else "")
 
 
+def _ordinal_suffix(n: int) -> str:
+    return "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
+def _render_quantity(new: Quantity, like: Quantity) -> str:
+    """The corrected number as the member said it, matched to the row's ordinal / plain form ("twentieth" -> "27th", "20 November"
+    -> "27 November")."""
+    txt = new.text
+    m = re.fullmatch(r"(\d+)(st|nd|rd|th)?", txt, re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        return f"{n}{_ordinal_suffix(n)}" if like.ordinal else str(n)
+    return txt
+
+
+def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
+    """The quantity half of ``rewrite``: the ONE number after the subject whose value is the old one (any spelling: "20th",
+    "twentieth", "12 thousand", "twelve thousand"), replaced by the new one. An old value said without its scale takes the new
+    one's ("13 thousand, not 12"); a month the correction names must not contradict the row's ("the 27th of november not the
+    20th" never touches a row about the 20th of December). Several candidate numbers, or none, change nothing."""
+    qn, qo = quantity_value(corr.new), quantity_value(corr.old)
+    if qn is None or qo is None:
+        return None
+    want = {qo.value}
+    if not qo.scaled and qn.scaled:
+        want.add(qo.value * qn.scale)
+    month_new, month_old = _month_of(corr.new), _month_of(corr.old)
+    row_month = _month_of(tail)
+    ctx = month_old or month_new
+    if ctx and row_month and row_month != ctx:
+        return None
+    spans = quantities(tail)
+    if not spans and len(quantities(head)) == 1:
+        # the subject comes LAST ("User has saved twelve thousand dollars for the caravan fund"): a row holding exactly one
+        # number is read whole; with two or more the number before the subject may be someone else's, so nothing changes
+        head, tail = "", head + tail
+        spans = quantities(tail)
+        row_month = _month_of(tail)
+        if ctx and row_month and row_month != ctx:
+            return None
+    if any(q.value == qn.value for q in spans) and (not month_new or month_new == row_month):
+        return None                 # the row already holds the corrected value
+    hits = [q for q in spans if q.value in want]
+    if len(hits) != 1:
+        return None
+    q = hits[0]
+    new_tail = tail[:q.start] + _render_quantity(qn, q) + tail[q.end:]
+    if month_new and row_month and month_new != row_month:
+        mm = _MONTH_RE.search(new_tail)
+        if mm:
+            new_tail = new_tail[:mm.start()] + month_new.capitalize() + new_tail[mm.end():]
+    return head + new_tail
+
+
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
     """``row_text`` with the corrected value, or None when the row is not the fact being corrected. Pure.
 
@@ -341,6 +521,8 @@ def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[s
                     return (text[:sm.end()] + tail[:am.start("num")] + _render_value(new_n, am.group("num"))
                             + tail[(am.end("half") if am.group("half") else am.end("num")):])
             return None
+        if is_quantity_pair(corr.new, corr.old):
+            return _rewrite_quantity(text[:sm.end()], tail, corr)
         old_re = re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(corr.old)}(?![A-Za-z0-9'’])", re.IGNORECASE)
         if re.search(rf"(?<![A-Za-z0-9'’]){re.escape(corr.new)}(?![A-Za-z0-9'’])", tail, re.IGNORECASE):
             return None
@@ -389,6 +571,51 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
             continue
         return True
     return False
+
+
+# -- a correction outlives the transcripts written before it (QA round 8) -------------------------------------------------------------
+# The idle consolidation re-reads a whole EARLIER session minutes after it went quiet. In the round, the member corrected a date in
+# session 2; session 1 was consolidated a minute later and wrote the corrected-away date again ("... on the 20th of November"),
+# approved, beside the correction. A fact a later transcript writer mines from words said BEFORE the correction is stale when it names
+# the corrected subject and holds the old value: ``superseded_by_correction`` says so and the writer drops it. In process, bounded,
+# for ``REMEMBER_S`` (the consolidation runs within minutes; a restart forgets, the cost is one stale near-duplicate).
+REMEMBER_S = 6 * 3600
+_REMEMBERED: "dict[str, list[tuple[float, Correction]]]" = {}
+_REMEMBER_MAX_USERS = 256
+
+
+def _remember(user_id: str, corr: Correction) -> None:
+    import time
+
+    uid = (user_id or "").strip().lower()
+    if not uid or corr.old is None:
+        return
+    now = time.time()
+    keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
+    keep.append((now, corr))
+    _REMEMBERED[uid] = keep[-16:]
+    while len(_REMEMBERED) > _REMEMBER_MAX_USERS:
+        _REMEMBERED.pop(next(iter(_REMEMBERED)))
+
+
+def superseded_by_correction(user_id: str, fact: str) -> bool:
+    """True when ``fact`` holds a value THIS member corrected away in the last ``REMEMBER_S`` (it names the corrected subject and
+    the old value, so ``rewrite`` would change it). Pure apart from the in-process registry; never raises."""
+    import time
+
+    try:
+        uid = (user_id or "").strip().lower()
+        now = time.time()
+        for t, corr in _REMEMBERED.get(uid, []):
+            if now - t <= REMEMBER_S and rewrite(fact or "", corr) is not None:
+                return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def reset_state() -> None:
+    _REMEMBERED.clear()
 
 
 async def apply(user_message: str, user_id: str, session_id: Optional[str], *, svc=None,
@@ -472,6 +699,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 done += 1
         if done:
             logger.info("VALUE_CORRECTION_APPLIED user=%s rows=%d", user_id, done)
+            _remember(user_id, corr)
         return done
     except Exception as exc:  # noqa: BLE001 - a correction never breaks the turn
         logger.warning("value_correction failed user=%s: %s", user_id, type(exc).__name__)

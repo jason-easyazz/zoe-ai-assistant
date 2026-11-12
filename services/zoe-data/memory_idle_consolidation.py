@@ -431,6 +431,17 @@ async def consolidate_session(session_id: str, user_id: str,
             except Exception:
                 pass
             continue
+        try:
+            import value_correction
+
+            stale = value_correction.superseded_by_correction(user_id, text)
+        except Exception:  # noqa: BLE001 - the check never costs the session its facts
+            stale = False
+        if stale:
+            # the member corrected this value AFTER these turns were said (value_correction): the old value is not re-filed
+            skipped += 1
+            logger.info("VALUE_CORRECTION_STALE lane=idle_consolidation user=%s session=%s", user_id, session_id)
+            continue
         # Stable dedup id so a re-run of the same session before the watermark
         # advances collapses to one row (mirrors the voice path's hash behaviour).
         turn_id = "idle:" + hashlib.sha1(f"{session_id}:{text}".encode("utf-8")).hexdigest()[:16]
