@@ -103,6 +103,7 @@ STORED_MAX_VOICES = 3
 STORED_PER_RECORDING = 2
 #: ``relabel_stored_from_print``: a stored segment reads "me" only at this cosine to the CONFIRMED pendant print or above - the SAME provisional shoulder the first pass uses against
 #: that print (``omi_diarize.PENDANT_YOU_MIN``, measurement in its comment): a false "me" is the worse error, so the band below it stays unlabelled rather than guessed.
+#: This is the DEFAULT only: the relabel resolves the live bar through ``omi_diarize.thresholds("pendant")`` at call time.
 RELABEL_YOU_MIN = omi_diarize.PENDANT_YOU_MIN
 _NAME_OK = re.compile(r"^[A-Za-z][A-Za-z'\- ]{0,38}$")
 _ST_OK = "('done', 'empty_transcript')"
@@ -1173,12 +1174,14 @@ async def propose_wearer_from_stored(db, user_id: str, *, now: Optional[datetime
     return {"status": "proposed", "proposals": props, **out}
 
 
-async def relabel_stored_from_print(db, user_id: str, *, min_cos: float = RELABEL_YOU_MIN) -> dict:
+async def relabel_stored_from_print(db, user_id: str, *, min_cos: Optional[float] = None) -> dict:
     """Once the pendant print is CONFIRMED, the member's EXISTING lines with a held embedding at ``min_cos`` or above read "me" (``speaker='you'``, ``profile_channel='pendant'``). A line
     the owner decided (a label, a tag, not-a-person) is never touched, nothing is ever labelled ``other`` from this, and below the bar a line stays as it is. As with "that was me", the
     wearer's own voice is not held as a bystander's: the relabelled line's embedding, unknown-voice link and person suggestion go (the voice is rebuilt). Idempotent. Counts only."""
     import manner_block
     import omi_voices
+    if min_cos is None:                # the CONFIGURED pendant bar, read at call time: the same one both diarisation passes use (an override must not let the relabel say "me" below it)
+        min_cos = omi_diarize.thresholds("pendant")[0]
     g = erase_gate.generation(user_id)
     if not await manner_block.eligible(user_id):
         return {"status": "not_eligible"}

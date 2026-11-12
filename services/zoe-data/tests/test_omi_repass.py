@@ -1018,3 +1018,28 @@ def test_worker_redaction_withholds_household_text_and_short_secrets_and_keeps_s
     out = w.redact_exc(OSError("libcudart.so.12: cannot open shared object file /opt/x/lib https://u:pw@h/x"))
     assert "cannot open shared object" in out and "/opt" not in out and "pw@" not in out
     assert "compiled with CUDA" in w.redact_exc(RuntimeError("This CTranslate2 package was not compiled with CUDA support"))                # control: the real reason survives
+
+
+def test_relabel_honours_the_configured_pendant_bar(renv, monkeypatch):
+    """Codex on #2427: with ``ZOE_OMI_TAG_PENDANT_YOU_MIN`` raised to 0.8 a 0.7 line is ``unsure`` in both diarisation passes, so the relabel must not call it "me" (and drop its held
+    embedding) at the built-in 0.6. An explicit ``min_cos`` still wins. Mutation: default ``min_cos`` to the constant again -> the 0.7 line reads "me" under the 0.8 override."""
+    e = np.zeros(256, dtype=np.float32)
+    e[0] = 1.0
+    for i in range(rp.MIN_WEARER_WINDOWS):
+        renv.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                             "VALUES (?, ?, 'x', ?, ?, ?, ?, 'owner_label', 'confirmed', '2026-11-11T00:00:00Z')", (f"e{i}", OWNER, rp.MODEL_ID, i * 1000, i * 1000 + 900, e.tobytes()))
+    renv.db.conn.commit()
+
+    def at(c):
+        x = np.zeros(256)
+        x[0], x[1] = c, np.sqrt(1 - c * c)
+        return x
+    mid = _held(renv, None, 1, tag="mid", vec=at(0.7))
+    high = _held(renv, None, 1, tag="high", vec=at(0.9))
+    monkeypatch.setenv("ZOE_OMI_TAG_PENDANT_YOU_MIN", "0.8")
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER))["relabelled"] == 1
+    sp = {r["id"]: r["speaker"] for r in renv.db.rows("SELECT id, speaker FROM omi_segments")}
+    assert sp[mid[0]] == "other" and sp[high[0]] == "you"
+    assert renv.db.rows("SELECT 1 AS x FROM omi_segment_embeddings WHERE segment_id = ?", (mid[0],))      # the held embedding of the line below the bar is still there
+    assert run(rp.relabel_stored_from_print(renv.db, OWNER, min_cos=0.6))["relabelled"] == 1              # an explicit bar is the caller's
+
