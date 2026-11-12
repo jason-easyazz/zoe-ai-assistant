@@ -26,8 +26,8 @@ panel still runs the pre-hardening versions until these are deployed:
   interfaces with `--remote-allow-origins=*` (any LAN device can drive the kiosk browser,
   which auto-grants the mic). Tracked launcher binds `127.0.0.1` and drops the allow-origins
   flag; debug from the host via `ssh -L 9222:127.0.0.1:9222`.
-- **Local fallback URL** — live panel falls back to `zoe.the411.life/touch/dashboard.html`
-  (Cloudflare-blocked from the panel + retired surface); tracked launcher falls back to the
+- **Local fallback URL** — live panel falls back to `zoe.the411.life/touch/home.html`
+  (Cloudflare-blocked from the panel); tracked launcher falls back to the
   local LAN estate URL from `config.json`.
 - **Chromium binary resolution** — `chromium-browser` then `chromium`, loud failure if absent.
 - **Network gating** — unit waits for `network-online.target`; the launcher pings the host

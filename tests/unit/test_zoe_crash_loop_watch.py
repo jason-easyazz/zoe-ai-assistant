@@ -299,3 +299,112 @@ def test_a_nonempty_env_recipient_still_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(mod.urllib.request, "urlopen", lambda req, timeout=None: sent.append((req.full_url, req.data or b"")) or _Resp())
     assert mod._telegram("x") is True
     assert "/bot123:abc/" in sent[0][0] and b"chat_id=77" in sent[0][1]
+
+
+# ── the other auto-restarting units (gap audit 2026-11-13: the Telegram bot looped ~9 h unannounced) ──
+
+@pytest.fixture
+def units_rig(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
+    sent: list[str] = []
+    monkeypatch.setattr(mod, "_telegram", lambda text: sent.append(text) or True)
+    props: dict = {}
+    monkeypatch.setattr(mod, "_systemd_prop", lambda unit, prop: props.get((unit, prop), ""))
+    return props, sent
+
+
+BOT = "flue-zoe-telegram.service"
+
+
+def test_other_unit_loop_alerts_once_then_recovers(units_rig):
+    props, sent = units_rig
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "active"})
+    assert mod.check_units([BOT], 5, 1800, False) == 0 and sent == []
+    props[(BOT, "NRestarts")] = "40"
+    props[(BOT, "ActiveState")] = "activating"
+    assert mod.check_units([BOT], 5, 1800, False) == 2
+    assert len(sent) == 1 and BOT in sent[0] and "crash-looping" in sent[0]
+    props[(BOT, "NRestarts")] = "80"
+    assert mod.check_units([BOT], 5, 1800, False) == 2 and len(sent) == 1      # cooldown: no re-alert
+    props[(BOT, "ActiveState")] = "active"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert len(sent) == 2 and "recovered" in sent[1]
+
+
+def test_other_unit_single_restart_and_counter_reset_stay_silent(units_rig):
+    props, sent = units_rig
+    props.update({(BOT, "NRestarts"): "3", (BOT, "ActiveState"): "active"})
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "4"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    props[(BOT, "NRestarts")] = "0"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert sent == []
+
+
+def test_a_unit_this_host_lacks_is_skipped(units_rig):
+    props, sent = units_rig
+    assert mod.check_units(["not-on-this-host.service"], 5, 1800, False) == 0 and sent == []
+
+
+def test_a_reset_after_a_real_loop_alert_sends_exactly_one_recovery_line(units_rig):
+    """Deliberate: an operator stop/start that ends an ALERTED loop resets the counter, and the owner is told it recovered
+    (once). Without a prior loop alert a reset is silent (the test above)."""
+    props, sent = units_rig
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "active"})
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "40"
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "0"
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert len(sent) == 2 and "recovered" in sent[1]
+
+
+def test_a_slow_one_restart_per_tick_loop_still_alerts_within_the_window(units_rig, monkeypatch):
+    """llama-server fails its ~120 s startup probe and restarts: one restart per 2-min tick. Five within 15 min is a loop."""
+    props, sent = units_rig
+    clock = [1_000_000.0]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "activating"})
+    mod.check_units([BOT], 5, 1800, False)
+    for n in range(1, 6):
+        clock[0] += 120
+        props[(BOT, "NRestarts")] = str(n)
+        rc = mod.check_units([BOT], 5, 1800, False)
+    assert rc == 2 and len(sent) == 1 and "5x in the last 15 min" in sent[0]
+
+
+def test_restarts_older_than_the_window_do_not_add_up(units_rig, monkeypatch):
+    props, sent = units_rig
+    clock = [1_000_000.0]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
+    props.update({(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "active"})
+    mod.check_units([BOT], 5, 1800, False)
+    for n in range(1, 6):
+        clock[0] += 3600                                   # one restart an hour: never a loop
+        props[(BOT, "NRestarts")] = str(n)
+        assert mod.check_units([BOT], 5, 1800, False) == 0
+    assert sent == []
+
+
+def test_an_undelivered_alert_is_retried_until_telegram_takes_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
+    attempts: list[str] = []
+    up = [False]
+    monkeypatch.setattr(mod, "_telegram", lambda text: attempts.append(text) or up[0])
+    props = {(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "activating"}
+    monkeypatch.setattr(mod, "_systemd_prop", lambda unit, prop: props.get((unit, prop), ""))
+    mod.check_units([BOT], 5, 1800, False)
+    props[(BOT, "NRestarts")] = "40"
+    mod.check_units([BOT], 5, 1800, False)                # detected; Telegram down
+    mod.check_units([BOT], 5, 1800, False)                # counter flat: still retried
+    up[0] = True
+    mod.check_units([BOT], 5, 1800, False)                # delivered
+    mod.check_units([BOT], 5, 1800, False)                # nothing pending any more
+    loop_attempts = [a for a in attempts if a.startswith("🔴")]
+    assert len(loop_attempts) == 3
+
+
+def test_the_bot_and_the_brains_are_watched():
+    assert {BOT, "flue-zoe-brain-2x.service", "llama-server.service", "kokoro-tts.service"} <= set(mod.OTHER_UNITS)

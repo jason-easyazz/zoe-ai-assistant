@@ -85,8 +85,8 @@ def test_slots_alias_for_args():
 # ── superset: the one contract validates Skybridge card shapes too ──────────
 
 def test_route_action_accepted():
-    a = validate_component_action({"label": "Open weather", "route": "/touch/weather.html"})
-    assert a == {"label": "Open weather", "kind": "normal", "route": "/touch/weather.html"}
+    a = validate_component_action({"label": "Open weather", "route": "/touch/home.html?domain=weather"})
+    assert a == {"label": "Open weather", "kind": "normal", "route": "/touch/home.html?domain=weather"}
 
 
 def test_action_requires_query_intent_or_route():
@@ -98,9 +98,9 @@ def test_actions_nested_in_props_accepted():
     # Skybridge cards nest actions inside props rather than at the top level.
     out = validate_component({
         "component": "page",
-        "props": {"title": "Weather", "actions": [{"label": "Open", "route": "/touch/weather.html"}]},
+        "props": {"title": "Weather", "actions": [{"label": "Open", "route": "/touch/home.html?domain=weather"}]},
     })
-    assert out["actions"] == [{"label": "Open", "kind": "normal", "route": "/touch/weather.html"}]
+    assert out["actions"] == [{"label": "Open", "kind": "normal", "route": "/touch/home.html?domain=weather"}]
 
 
 def test_top_level_actions_take_precedence_over_props():

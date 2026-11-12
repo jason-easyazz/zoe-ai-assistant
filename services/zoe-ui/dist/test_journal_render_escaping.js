@@ -9,11 +9,9 @@
  * js/journal-api.js and interpolated entry titles, content, tags, people names
  * and photo URLs straight into innerHTML. That is the path this harness covers.
  *
- * The escape helper must be defined INSIDE js/journal-api.js. The file is
- * loaded by both journal.html and touch/journal.html, and only the former
- * defines a page-level escapeHtml(); a cross-file reference would throw
- * ReferenceError on the touch panel and break journal rendering on the kiosk.
- * That is asserted explicitly below.
+ * The escape helper must be defined INSIDE js/journal-api.js: a cross-file
+ * reference to a page-level escapeHtml() would throw ReferenceError on any page
+ * that loads journal-api.js without defining one. That is asserted below.
  *
  * Run: node services/zoe-ui/dist/test_journal_render_escaping.js
  */
@@ -26,7 +24,6 @@ const assert = require('assert');
 const apiPath = path.join(__dirname, 'js', 'journal-api.js');
 const source = fs.readFileSync(apiPath, 'utf8');
 const desktopHtml = fs.readFileSync(path.join(__dirname, 'journal.html'), 'utf8');
-const touchHtml = fs.readFileSync(path.join(__dirname, 'touch', 'journal.html'), 'utf8');
 
 /**
  * Strip block comments and whole-line // comments so that the explanatory prose
@@ -107,18 +104,14 @@ check('escape helper is DEFINED inside journal-api.js (not borrowed cross-file)'
 });
 
 check('journal-api.js never calls the journal.html-only global escapeHtml()', () => {
-    // touch/journal.html defines no escapeHtml -- calling it would throw
-    // ReferenceError on the live kiosk panel and kill journal rendering.
+    // A page without a page-level escapeHtml would throw ReferenceError here.
     const bare = code.match(/(^|[^.\w])escapeHtml\s*\(/g) || [];
     assert.strictEqual(bare.length, 0,
         `journal-api.js must not reference the page-level escapeHtml(); found ${bare.length}`);
 });
 
-check('both consuming pages load journal-api.js (why the helper must be local)', () => {
+check('journal.html loads journal-api.js', () => {
     assert.ok(/journal-api\.js/.test(desktopHtml), 'journal.html loads journal-api.js');
-    assert.ok(/journal-api\.js/.test(touchHtml), 'touch/journal.html loads journal-api.js');
-    assert.ok(!/function\s+escapeHtml\s*\(/.test(touchHtml),
-        'touch/journal.html defines no escapeHtml -- this is the ReferenceError risk');
 });
 
 check('the live renderers really are the journal-api.js ones', () => {
