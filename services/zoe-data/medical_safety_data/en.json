@@ -38,6 +38,7 @@
   {"id": "breathing", "tier": "call", "re": "breathing (?:is |has |got |gets |became |been |was )?(?:very |really |so |quite |getting )?(?:hard|difficult|laboured|fast and shallow|noisy|rattly|wheezy)|(?:cant|cannot|couldnt) (?:breathe|get (?:my |his |her )?breath) (?:properly|right|well|in)|wheezing (?:badly|and struggling)|hard work (?:to )?breath\\w*"},
   {"id": "bleeding", "tier": "call", "re": "(?:wont|will not|cant|cannot) (?:seem to )?stop (?:the )?bleeding|blood (?:wont|will not|keeps?) (?:stop|coming|pouring|gushing)|bleeding (?:a lot|badly|everywhere|profusely)(?! (?:of|money|cash|out))|losing (?:a lot of |so much |lots of )blood|gushing blood|blood everywhere"},
   {"id": "worst_headache", "tier": "call", "re": "worst headache (?:ever|i(?:ve| have) ever had)|headache (?:is |was )?(?:the )?worst (?:ever|of my life)|sudden(?:ly)? (?:severe|explosive|terrible|agonising|excruciating) headache"},
+  {"id": "fall", "tier": "call", "re": "(?:fell|fallen|slipped|tripped|collapsed|had a fall|taken a fall|took a fall)(?! asleep| behind| apart| in love| for| through| short| out)(?: \\w+){0,8} (?:and |but |now )?(?:i |he |she |they |we )?(?:cant|cannot|can not|couldnt|could not|unable to|am unable to|is unable to) (?:(?:get|stand) (?:back )?up|get (?:up )?off the (?:floor|ground)|pick (?:my|him|her|them)self up)(?! (?:to|early|at|in|before|for|on|that|there|here|the))|(?:on|lying on|stuck on) the (?:floor|ground)(?: \\w+){0,4} (?:and )?(?:i |he |she |they )?(?:cant|cannot|couldnt|unable to) (?:get up|stand up|move)|(?:cant|cannot|couldnt|unable to) get (?:up )?off the (?:floor|ground)"},
   {"id": "blood_out", "tier": "soon", "re": "(?:peeing|weeing|pooing|passing|vomiting|spitting) (?:up )?blood|blood (?:when|while|after) (?:i |he |she |they )?(?:wee|pee|poo|go to the toilet)|bloody (?:poo|wee|stool|urine|vomit)|(?:wee|urine|poo|stool|vomit) (?:is |was |has )?(?:bloody|red with blood|full of blood)"}
  ],
  "glucose": {
@@ -61,6 +62,9 @@
   "emergency_number_poison_nolines": " For something swallowed or eaten you can also ring your local poisons information line, but ring {emergency} straight away if the person is unwell.",
   "thread_back": " Ask me again about the rest when you are ready and I will pick it straight back up.",
   "minor_prefix": "Tell a grown-up near you right now. ",
+  "fall": "Ring {emergency} now. After a fall, do not try to get up if anything hurts; stay still and keep warm until help comes.",
+  "alert_intercom": " If you cannot reach a phone, say \"tell everyone I need help\" and I will announce it on the other panels.",
+  "alert_call_out": " If you cannot reach a phone, call out to someone in the house.",
   "heart": "Ring {emergency} now. Chest tightness, especially with an arm that tingles, can be a heart problem, so do not wait to see if it passes. Do not drive yourself; sit down, unlock the door, and have someone stay with you.",
   "stroke": "Ring {emergency} now. Face drooping, slurred speech or sudden weakness can be a stroke, and minutes matter. Note the time it started.",
   "breathing": "Ring {emergency} now. Trouble breathing or swelling in the throat needs help straight away; stay sitting upright.",

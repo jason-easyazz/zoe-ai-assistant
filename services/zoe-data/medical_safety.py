@@ -10,7 +10,8 @@ hard-coded per person; no country = "your local emergency number"). The classes,
   1. ingestion / poisoning (``ate``/``swallowed`` + a harmful substance). HUMAN FIRST: it is an animal ONLY when the words say so (a pet word and no person word).
      Unclear = the Poisons line and the emergency number first, then "if it is an animal, ring your vet". Memory is never consulted, so a wrongly typed pet cannot
      redirect a child's poisoning.
-  2. red-flag symptoms that need the ambulance now (chest tightness, stroke signs, breathing, heavy bleeding, worst headache): the number, plainly, first.
+  2. red-flag symptoms that need the ambulance now (chest tightness, stroke signs, breathing, heavy bleeding, worst headache, a fall and cannot get up): the
+     number, plainly, first, then how to get someone in the house (the intercom phrase when it will work, else "call out"; ``build_reply``).
   3. an emergency-number question ("what number do I ring if <person> collapses"). It pre-empts any thread: the number is the whole reply, plus one line saying
      the earlier question can be asked again.
   4. red-flag symptoms that need a doctor today (blurred vision, blood where it should not be): see a doctor today, the number if it gets worse.
@@ -353,8 +354,23 @@ def _glucose_reply(v: Verdict, r: dict, emergency: str) -> str:
                                             usual=r["glucose_usual_mg" if mg else "glucose_usual_mmol"])
 
 
-def build_reply(v: Verdict, *, minor: bool = False) -> str:
-    """The fixed text for a verdict. Never model text."""
+def _intercom_reachable(user_id: str, voice: bool) -> bool:
+    """Can "tell everyone I need help" actually reach the other panels on the member's next turn? Only through the existing intercom
+    (``intercom.py``): it is on, this is the voice lane it serves, the member is identified, and it is not quiet hours (which hold the
+    intercom). Anything unsure = False, and the reply offers nothing Zoe cannot do. Never raises."""
+    try:
+        import intercom
+        from user_filters import is_unidentified
+
+        return bool(voice and intercom.mode() == "on" and not is_unidentified(user_id) and not intercom._quiet_now())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> str:
+    """The fixed text for a verdict. Never model text. A call-now reply also says how to get someone in the house (QA round 8: a member
+    who has fallen may not reach a phone): the intercom phrase only when ``intercom`` says it will work, else "call out". Zoe never
+    claims to have alerted or rung anyone."""
     r = _data()["replies"]
     emergency, poison = _lines()
     f = dict(emergency=emergency, poison_number=poison or r["poison_number_fallback"])
@@ -370,6 +386,8 @@ def build_reply(v: Verdict, *, minor: bool = False) -> str:
             out += r["thread_back"]
     elif v.cls in {"red_call", "red_soon"}:
         out = r[v.key].format(**f)
+        if v.cls == "red_call":
+            out += r["alert_intercom" if intercom else "alert_call_out"]
         if minor and v.cls == "red_call":
             out = r["minor_prefix"] + out
     elif v.cls == "glucose":
@@ -379,7 +397,7 @@ def build_reply(v: Verdict, *, minor: bool = False) -> str:
     return out
 
 
-async def handle(text: str, user_id: str = "", *, dry: bool = False) -> Optional[str]:
+async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool = False) -> Optional[str]:
     """The seam. The fixed reply when this turn is a medical-safety class in ENFORCE (the caller must NOT ask the brain), else None. NEVER raises."""
     try:
         m = mode()
@@ -396,7 +414,7 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False) -> Optional
             import distress_handoff
 
             minor = await distress_handoff._is_minor((user_id or "").strip())
-        return build_reply(v, minor=minor) or None
+        return build_reply(v, minor=minor, intercom=v.cls == "red_call" and _intercom_reachable(user_id, voice)) or None
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety handle failed (%s)", type(exc).__name__)
         return None
