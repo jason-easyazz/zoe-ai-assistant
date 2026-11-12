@@ -192,17 +192,17 @@ def test_day_sim_compare_refuses_a_baseline_for_another_mode_or_missing_asks(mon
     calls, args = _day_gates(monkeypatch, tmp_path, {})
     bb.write(tmp_path / "db.json", bb.make("samantha_day_sim", "0.1", {a: "PASS" for a in ds.ASK_IDS}, CLEAN,
                                            mode="allowlisted", samples=1, criteria_sha256=ds.CRITERIA_SHA256))
-    assert ds.main(args + ["--compare-baseline"]) == 2 and calls == []
+    assert ds.main(args + ["--compare-baseline"]) == ds.REFUSED_RC and calls == []
     assert "mode" in json.loads((tmp_path / "r.json").read_text())["reason"]
     bb.write(tmp_path / "db.json", bb.make("samantha_day_sim", "0.1", {ds.ASK_IDS[0]: "PASS"}, CLEAN,
                                            mode="default", samples=1, criteria_sha256=ds.CRITERIA_SHA256))
-    assert ds.main(args + ["--compare-baseline"]) == 2 and calls == []
+    assert ds.main(args + ["--compare-baseline"]) == ds.REFUSED_RC and calls == []
     assert "lacks ask(s)" in json.loads((tmp_path / "r.json").read_text())["reason"]
 
 
 def test_day_sim_never_records_a_dirty_or_errored_run(monkeypatch, tmp_path):
     calls, args = _day_gates(monkeypatch, tmp_path, {}, rev=dict(CLEAN, dirty=True))
-    assert ds.main(args + ["--record-baseline"]) == 2 and calls == [] and not (tmp_path / "db.json").exists()
+    assert ds.main(args + ["--record-baseline"]) == ds.REFUSED_RC and calls == [] and not (tmp_path / "db.json").exists()
     calls, args = _day_gates(monkeypatch, tmp_path, {ds.ASK_IDS[2]: "ERROR"})
     ds.main(args + ["--record-baseline"])
     assert calls == ["run"] and not (tmp_path / "db.json").exists()
