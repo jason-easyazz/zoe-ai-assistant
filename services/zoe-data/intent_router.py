@@ -423,12 +423,22 @@ _FORGET_LAST_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: a forget "about being lonely" / "about feeling down" is a TOPIC, never a person named "Being Lonely" (QA round 8: it became a ledger
+#: entry no turn could match, the reply said nothing was saved, and the turn the capture had not filed yet was filed later)
+_FORGET_STATE_LEADS = frozenset({
+    "being", "feeling", "having", "getting", "going", "doing", "becoming", "living", "moving", "losing", "needing", "wanting",
+    "trying", "struggling", "dealing", "worrying", "missing", "hating", "loving", "not",
+})
+
+
 def _is_entity_forget_shape(text: str) -> bool:
     """True when ``text`` is the NAME shape of an entity forget ("forget everything about Dana"): that intent owns it."""
     m = _FORGET_ENTITY_RE.match((text or "").strip())
     if not m:
         return False
     ent = (m.group("entity") or "").strip().rstrip(".!?")
+    if not ent or ent.split()[0].lower() in _FORGET_STATE_LEADS:
+        return False
     try:
         from person_extractor import _looks_like_person_name
         return _looks_like_person_name(ent) and ent.lower() not in {
@@ -897,7 +907,8 @@ def detect_intent(
         }
         try:
             from person_extractor import _looks_like_person_name
-            _namey = (_entity.lower() not in _FORGET_ENTITY_STOP
+            _namey = (_entity.lower() not in _FORGET_ENTITY_STOP and bool(_entity.split())
+                      and _entity.split()[0].lower() not in _FORGET_STATE_LEADS
                       and _looks_like_person_name(_entity))
         except Exception:
             _namey = False  # validator unavailable -> fail closed, never nuke
