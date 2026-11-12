@@ -27,6 +27,7 @@ from typing import Any, Callable
 import brain_slot_guard
 import digest_pack
 import httpx
+from llm_json import strip_code_fence
 import memory_authority
 import own_words
 import trait_challenge
@@ -985,6 +986,7 @@ async def run_turn_digest(
 
         # Parse JSON array from response
         try:
+            raw = strip_code_fence(raw)
             start = raw.find("[")
             end = raw.rfind("]") + 1
             if start == -1 or end == 0:
@@ -1628,6 +1630,7 @@ async def _emotional_call(transcript: str, timeout: float) -> "list | None":
 
     # Parse JSON
     try:
+        raw = strip_code_fence(raw)
         start = raw.find("[")
         end = raw.rfind("]") + 1
         if start == -1 or end == 0:
@@ -2086,10 +2089,17 @@ async def _facts_call(transcript: str, timeout: float) -> list[dict]:
             resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
             resp.raise_for_status()
             raw = resp.json()
-            text = raw["choices"][0]["message"]["content"].strip()
+            text = strip_code_fence(raw["choices"][0]["message"]["content"])
             # Extract JSON array (model may add preamble despite instructions)
             start = text.find("[")
             end = text.rfind("]") + 1
+            if start != -1 and end <= start:
+                # a reply cut by max_tokens (the 2026-11-06/09 NoJSONArray nights all began "[" with no closing bracket):
+                # keep every item that COMPLETED; none completed is still NoJSONArray.
+                salvaged = _salvage_items(text[start:])
+                if salvaged:
+                    logger.warning("memory_digest: reply cut off, salvaged %d complete item(s)", len(salvaged))
+                    return salvaged
             if start == -1 or end == 0:
                 logger.warning("memory_digest: LLM returned no JSON array: %s", text[:200])
                 raise ExtractorError("NoJSONArray", text[:200])
