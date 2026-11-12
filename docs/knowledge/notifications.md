@@ -51,10 +51,13 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
 - A sensitive notification is counted aloud but never read: "One is private, it is on the panel."
 - Proposal lines (what the pendant heard) are read only to build that member's card: never stored in a notification row, never
   logged, never in any other push frame. Logs carry counts and types only.
-- A member erased since the creator was scheduled (`user_erase_gate`), or words naming a forgotten entity (tombstone / forget
-  ledger), get nothing created.
+- `create` refuses, by `omi_devices.assign`'s member rule: a member being erased right now or erased since the creator was scheduled
+  (`user_erase_gate`), and a member whose household account no longer exists or is a guest (read under that gate); also words
+  naming a forgotten entity (tombstone / forget ledger). A member whose memory was wiped but whose account remains is a live member
+  again: new notifications after the erase are allowed, older scheduled ones are not.
 - Forgotten means forever: `MemoryService.delete_user` calls `notifications_store.forget_user` (fail closed), which deletes EVERY
-  notification row of the member, whoever wrote it, plus their tail-caps row, under the member's erase gate. `forget_reach` lists
+  notification row of the member, whoever wrote it, plus their tail-caps row, under the member's erase gate. Both deletes fail
+  closed: only "no such table / no database pool in this process" counts as nothing to erase. `forget_reach` lists
   the table as reached. The entity forget ("forget Dana") does not scan notification titles.
 
 ## Do not overwhelm
@@ -65,9 +68,13 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
 - At most once every 4 hours and 3 times a household day per member, and only when an unread notification has not been announced
   yet (the orb press counts as announcing). The last-tail time and the day's count persist in one `app_settings` row per member
   (key `notification_tail:<member>`, no migration), so a restart does not reset them; the "already announced" set is in memory,
-  so after a restart the same set may be announced once more, still inside the caps.
+  so after a restart the same set may be announced once more, still inside the caps. The caps fail CLOSED: if the row cannot be
+  read there is no tail that turn, and the new caps are saved BEFORE the line is spoken - a line whose save failed is not said.
+- Never on a replay or dry turn: the brain stream is not wrapped under `replay_isolation`, and the deterministic-tier call passes
+  `replay=` (the `replay-` instrument panels) / `dry=`, which return the reply untouched and record nothing.
 - "Read them" reads at most 3 titles, then "And N more on the panel." "Later" or silence leaves them on the panel.
-- The card shows at most 8 rows.
+- The card shows at most 8 rows, counted AFTER a "confirm this voice" notification expands into its proposals; the rest are
+  "And N more." on the card (a row that is not shown cannot be acted on).
 
 ## Adding a creator
 

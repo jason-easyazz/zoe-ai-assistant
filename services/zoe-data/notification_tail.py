@@ -122,7 +122,8 @@ async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text
             return None
         if transcript_check.classify_reply(user_text) or str(session_id) in _PENDING or _other_tail_pending(session_id):
             return None
-        await _load(member)
+        if not await _load(member):
+            return None
         if _clock() - _LAST.get(member, -TAIL_EVERY_S) < TAIL_EVERY_S:
             return None
         day = _now().date().isoformat()
@@ -140,12 +141,11 @@ async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text
         return None
 
 
-async def _load(member: str) -> None:
-    """The member's persisted caps (one ``app_settings`` row, ``notifications_store.tail_key``), read once per process. A missing or
-    unreadable row = no tail yet. Never raises."""
+async def _load(member: str) -> bool:
+    """The member's persisted caps (one ``app_settings`` row, ``notifications_store.tail_key``), read once per process. No row = no tail
+    yet. FAIL CLOSED: an unreadable row returns False (no tail this turn) and is read again next time."""
     if member in _LOADED:
-        return
-    _LOADED.add(member)
+        return True
     try:
         async with store._db() as db:
             cur = await db.execute("SELECT value FROM app_settings WHERE key = ?", (store.tail_key(member),))
@@ -156,32 +156,40 @@ async def _load(member: str) -> None:
         if v.get("day") and member not in _DAY:
             _DAY[member] = (str(v["day"]), int(v.get("said") or 0))
     except Exception as exc:  # noqa: BLE001
-        logger.debug("notification_tail: caps unreadable (%s)", exc.__class__.__name__)
+        logger.info("NOTIFY tail=0 reason=caps_unreadable (%s)", exc.__class__.__name__)
+        return False
+    _LOADED.add(member)
+    return True
 
 
-async def _save(member: str) -> None:
-    day, said = _DAY.get(member, ("", 0))
-    value = json.dumps({"at": _LAST.get(member, 0.0), "day": day, "said": said})
+async def _save(member: str, at: float, day: str, said: int) -> bool:
+    value = json.dumps({"at": at, "day": day, "said": said})
     try:
         async with store._db() as db:
             await db.execute("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
                              "value = excluded.value, updated_at = excluded.updated_at", (store.tail_key(member), value, _now().isoformat()))
             await db.commit()
-    except Exception as exc:  # noqa: BLE001 - the in-memory caps still hold for this process
-        logger.debug("notification_tail: caps not saved (%s)", exc.__class__.__name__)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("NOTIFY tail=0 reason=caps_unsaved (%s)", exc.__class__.__name__)
+        return False
 
 
-async def confirm_tail(member: str, session_id: str, ids: list) -> None:
-    """The line was said: count it against the caps and open the "read them" window."""
+async def confirm_tail(member: str, session_id: str, ids: list) -> bool:
+    """Count the line against the caps BEFORE it is said: the new caps are saved first, and only a saved line may be spoken (False =
+    do not say it). Then the "read them" window opens."""
     now = _clock()
-    _LAST[member] = now
     day = _now().date().isoformat()
     d, said = _DAY.get(member, (day, 0))
-    _DAY[member] = (day, (said if d == day else 0) + 1)
+    said = (said if d == day else 0) + 1
+    if not await _save(member, now, day, said):
+        return False
+    _LAST[member] = now
+    _DAY[member] = (day, said)
     store.ANNOUNCED.setdefault(member, set()).update(ids)
     _PENDING[str(session_id)] = (member, now)
     logger.info("NOTIFY tail=1 count=%d", len(ids))
-    await _save(member)
+    return True
 
 
 async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, session_id: str, *, skip: tuple = ()) -> AsyncIterator[str]:
@@ -194,19 +202,18 @@ async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, 
         yield d
     text = "".join(reply)
     got = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
-    if got:
+    if got and await confirm_tail(got[1], session_id, got[2]):      # counted (and saved) first: an unsaved line is never said
         yield " " + got[0]
-        await confirm_tail(got[1], session_id, got[2])
 
 
-async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: str) -> str:
-    """The non-streaming twin (deterministic tiers)."""
-    if not store.enabled():
+async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: str, *, replay: bool = False, dry: bool = False) -> str:
+    """The non-streaming twin (deterministic tiers). ``replay`` (an instrument / replay turn) or ``dry`` (nothing may be recorded): the
+    reply is returned untouched and nothing is counted, saved or opened - the streaming path's ``replay_isolation`` rule."""
+    if not store.enabled() or replay or dry:
         return reply
     got = await prepare_tail(user_id, session_id, user_text, reply or "")
-    if not got:
+    if not got or not await confirm_tail(got[1], session_id, got[2]):
         return reply
-    await confirm_tail(got[1], session_id, got[2])
     return f"{reply.rstrip()} {got[0]}"
 
 

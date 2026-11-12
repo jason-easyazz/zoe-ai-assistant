@@ -4318,7 +4318,9 @@ async def voice_command(
         if getattr(_xresult, "tier", "") != "transcript_check":     # the ask's own answer never carries a second ask
             reply_text = await _transcript_check.append_to_reply(reply_text, text, effective_user, session_id)
         if getattr(_xresult, "tier", "") not in ("transcript_check", "pull", _notification_tail.TIER):   # one line per reply; the pull says it
-            reply_text = await _notification_tail.append_to_reply(reply_text, text, effective_user, session_id)
+            # never on a replay instrument's turn (the ``replay-`` panel ids the harness uses): the streaming path's replay_isolation rule
+            reply_text = await _notification_tail.append_to_reply(reply_text, text, effective_user, session_id,
+                                                                  replay=_suppress_ui_broadcast(panel_id))
         _ui = (_xresult.ui or {}).get("kind")
         try:
             if _ui == "weather":

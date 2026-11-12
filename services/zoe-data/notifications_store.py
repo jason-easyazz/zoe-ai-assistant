@@ -93,9 +93,11 @@ def is_sensitive(n: dict) -> bool:
 # -- the store ---------------------------------------------------------------------------------------------------------------------
 async def create(user_id: str, type: str, title: str, message: str, data: Optional[dict] = None, *, dedupe_id: Optional[str] = None,
                  sensitive: bool = False, scheduled_at: Optional[int] = None) -> Optional[str]:
-    """One notification for ``user_id``; the id when a row was inserted, else None (off, not a member, erased since scheduled, a
-    forgotten name in the words, a duplicate ``dedupe_id``, a DB error). ``scheduled_at`` = the erase generation when the creator was
-    scheduled (default now). Never raises."""
+    """One notification for ``user_id``; the id when a row was inserted, else None (off, not a member, a member being erased or erased
+    since scheduled, a member with no household account, a forgotten name in the words, a duplicate ``dedupe_id``, a DB error).
+    ``scheduled_at`` = the erase generation when the creator was scheduled (default now). The member rule is ``omi_devices.assign``'s:
+    the erase gate first (an erase in progress or since scheduled refuses), then the account must still exist and not be a guest,
+    read under that gate. Never raises."""
     if not enabled():
         return None
     uid = _account(user_id)
@@ -113,6 +115,11 @@ async def create(user_id: str, type: str, title: str, message: str, data: Option
                 logger.info("NOTIFY event=dropped reason=forgotten type=%s", type)
                 return None
             async with _db() as db:
+                ucur = await db.execute("SELECT role FROM users WHERE id = ?", (uid,))
+                urow = await ucur.fetchone()
+                if urow is None or str(urow[0] or "") in ("guest",):
+                    logger.info("NOTIFY event=dropped reason=no_member type=%s", type)
+                    return None
                 cur = await db.execute("INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at) "
                                        "VALUES (?,?,?,?,?,?,0,NOW()) ON CONFLICT (id) DO NOTHING",
                                        (nid, uid, type, title, message, json.dumps(payload)))
@@ -304,7 +311,7 @@ async def card(panel_id: str, member: str) -> Optional[dict]:
         return None
     reg: dict = {}
     items: list = []
-    for n in await unread(uid):
+    for n in await unread(uid, limit=50):
         if n["type"] == WEARER_TYPE:
             props = await _open_proposals(uid, n)
             if not props:                              # decided elsewhere (the CLI) or expired: nothing left to ask
@@ -324,11 +331,15 @@ async def card(panel_id: str, member: str) -> Optional[dict]:
                           "actions": [{"key": "done", "label": "Done"}]})
     if not items:
         return None
+    more = len(items) - MAX_CARD                       # the cap holds AFTER a wearer notification expands into its proposals
+    items = items[:MAX_CARD]
+    reg = {it["id"]: reg[it["id"]] for it in items}    # a row not on the card cannot be acted on
     import panel_review_cards as prc
 
     tok = prc.mint(panel_id, uid, CARD_KIND, reg)
     return {"panel_id": panel_id, "member_id": uid, "kind": CARD_KIND, "private": True, "title": "Notifications", "subtitle": "",
-            "items": items, "more": 0, "empty": "No new notifications.", "card_token": tok, "endpoint": ENDPOINT}
+            "items": items, "more": max(0, more), "more_label": f"And {more} more." if more > 0 else "", "empty": "No new notifications.",
+            "card_token": tok, "endpoint": ENDPOINT}
 
 
 async def push_card(panel_id: str, member: str) -> int:
@@ -428,11 +439,15 @@ async def forget_user(user_id: str) -> int:
             async with _db() as db:
                 cur = await db.execute("DELETE FROM notifications WHERE user_id = ?", (uid,))
                 n = int(getattr(cur, "rowcount", 0) or 0)
+                await db.commit()
                 try:
                     await db.execute("DELETE FROM app_settings WHERE key = ?", (tail_key(uid),))
-                except Exception as exc:  # noqa: BLE001 - only timestamps live there; the rows above are what matter
-                    logger.debug("NOTIFY forget: tail caps not erased (%s)", exc.__class__.__name__)
-                await db.commit()
+                    await db.commit()
+                except Exception as exc:  # noqa: BLE001 - the tail-state row fails closed too; only "no such table / no pool" is nothing
+                    from conversation_notes import _no_store
+
+                    if not _no_store(exc):
+                        raise
     except Exception as exc:  # noqa: BLE001
         from conversation_notes import _no_store       # the one "nothing stored to erase" rule (a lost pool still raises)
 

@@ -134,8 +134,58 @@ def test_flag_off_changes_nothing_on_the_voice_path(tenv, monkeypatch):
     assert nt._TURNS == {}                                                              # not even noted
     assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) == "Done."
     assert run(nt.tier("read them", MEMBER, "s1", channel="voice")) is None
-    src = (SVC / "zoe_flue_client.py").read_text()
-    assert "if notification_tail.store.enabled() and not emotional_hold and not kwargs.get(\"replay_isolation\"):" in src
+
+
+@pytest.mark.parametrize("flags", [{"replay": True}, {"dry": True}])
+def test_a_replayed_or_dry_deterministic_reply_gets_no_tail_and_records_nothing(tenv, flags):
+    seed(1)
+    verified()
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1", **flags)) == "Done."
+    assert nt._LAST == {} and nt._DAY == {} and nt._PENDING == {} and ns.ANNOUNCED == {}
+    assert tenv.rows("SELECT COUNT(*) FROM app_settings")[0][0] == 0
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) != "Done."     # control: a normal reply
+    assert tenv.rows("SELECT COUNT(*) FROM app_settings")[0][0] == 1
+
+
+def test_the_voice_lane_passes_the_replay_guard():
+    """The deterministic call site really threads it (AST, not a string match): ``replay=`` is a keyword of the call."""
+    import ast
+    tree = ast.parse((SVC / "routers" / "voice_tts.py").read_text())
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "append_to_reply" and getattr(n.func.value, "id", "") == "_notification_tail"]
+    assert calls and all(any(k.arg == "replay" for k in c.keywords) for c in calls)
+
+
+def test_unreadable_caps_mean_no_tail_and_control(tenv, monkeypatch):
+    seed(1)
+    real = tenv.execute
+
+    def unreadable(sql, params=()):                                                      # reads of the cap row fail; saves still work
+        if sql.startswith("SELECT value FROM app_settings"):
+            raise RuntimeError("connection reset")
+        return real(sql, params)
+    monkeypatch.setattr(tenv, "execute", unreadable)
+    verified()
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) == "Done."
+    monkeypatch.setattr(tenv, "execute", real)                                           # control: readable again
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) != "Done."
+
+
+def test_an_unsaved_tail_is_never_said_or_counted_and_control(tenv):
+    seed(1)
+    tenv.conn.execute("CREATE TRIGGER no_save BEFORE INSERT ON app_settings BEGIN SELECT RAISE(ABORT, 'read only'); END")
+    verified()
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) == "Done."
+    assert nt._LAST == {} and nt._DAY == {} and nt._PENDING == {}
+
+    async def brain():
+        yield "Done."
+
+    async def collect():
+        return [d async for d in nt.append_stream(brain(), "lights on", MEMBER, "s1")]
+    assert run(collect()) == ["Done."]                                                   # the stream says nothing either
+    tenv.conn.execute("DROP TRIGGER no_save")                                            # control: the save works
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) != "Done."
 
 
 # -- "read them" ---------------------------------------------------------------------------------------------------------------

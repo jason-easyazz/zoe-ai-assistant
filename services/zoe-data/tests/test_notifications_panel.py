@@ -55,6 +55,8 @@ def env(monkeypatch, tmp_path):
     db.conn.execute("CREATE TABLE notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT, message TEXT, "
                     "data TEXT, delivered INTEGER DEFAULT 0, action_taken TEXT, created_at TEXT)")
     db.conn.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT)")
+    db.conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, role TEXT)")
+    db.conn.executemany("INSERT INTO users VALUES (?, ?, 'member')", [(MEMBER, "A"), (OTHER, "B")])
 
     @contextlib.asynccontextmanager
     async def fake_db():
@@ -113,7 +115,25 @@ def test_an_erased_member_gets_nothing_and_control(env):
     run(erase())
     assert run(ns.create(MEMBER, "note", "T", "M", dedupe_id="a", scheduled_at=gen)) is None        # scheduled before the erase
     assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
-    assert run(ns.create(MEMBER, "note", "T", "M", dedupe_id="a"))                                   # control: scheduled now
+    assert run(ns.create(OTHER, "note", "T", "M", dedupe_id="a"))                                    # control: a live member
+
+
+def test_a_create_during_an_erase_is_refused(env):
+    async def go():
+        async with erase_gate.erasing(MEMBER):
+            task = asyncio.ensure_future(ns.create(MEMBER, "note", "T", "M", dedupe_id="mid"))
+            await asyncio.sleep(0.01)                  # the create is waiting on the erase
+        return await task
+    assert run(go()) is None
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
+
+
+def test_a_member_with_no_account_gets_nothing_and_control(env):
+    env.conn.execute("DELETE FROM users WHERE id = ?", (MEMBER,))                       # the account is gone
+    assert run(ns.create(MEMBER, "note", "T", "M", dedupe_id="a")) is None
+    env.conn.execute("INSERT INTO users VALUES ('member-g', 'G', 'guest')")
+    assert run(ns.create("member-g", "note", "T", "M", dedupe_id="a")) is None          # a guest-role account
+    assert run(ns.create(OTHER, "note", "T", "M", dedupe_id="a"))                        # control: a live member
 
 
 def test_a_forgotten_name_is_never_written_and_control(env, monkeypatch):
@@ -307,3 +327,27 @@ def test_a_create_scheduled_before_the_erase_stays_erased(env):
     assert run(ns.create(MEMBER, "note", "T", "M", dedupe_id="late", scheduled_at=gen)) is None
     assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
 
+
+
+def test_a_failed_tail_state_erase_fails_the_erase_and_control(env, monkeypatch):
+    seed(1)
+    real = env.execute
+
+    def broken(sql, params=()):
+        if sql.startswith("DELETE FROM app_settings"):
+            raise RuntimeError("disk I/O error")
+        return real(sql, params)
+    monkeypatch.setattr(env, "execute", broken)
+    with pytest.raises(RuntimeError):
+        run(ns.forget_user(MEMBER))
+    monkeypatch.setattr(env, "execute", real)                                          # control: the same erase, a healthy store
+    assert run(ns.forget_user(MEMBER)) == 0
+
+
+def test_the_card_holds_eight_rows_after_wearer_expansion(env, monkeypatch):
+    _fake_repass(monkeypatch, props=("p1", "p2", "p3"))
+    run(ns.notify_wearer_proposals(MEMBER))
+    seed(7)
+    frame = run(ns.card(PANEL, MEMBER))
+    assert len(frame["items"]) == ns.MAX_CARD and frame["more"] == 2 and frame["more_label"] == "And 2 more."
+    assert set(prc._CARDS[frame["card_token"]].items) == {it["id"] for it in frame["items"]}   # a hidden row cannot be acted on
