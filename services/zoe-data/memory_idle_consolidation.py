@@ -264,6 +264,20 @@ def _fact_text(item: Any) -> str:
     return str(item or "").strip()
 
 
+def _last_turn_epoch(rows) -> Optional[float]:
+    """Epoch seconds of the newest turn in ``rows`` (the ``at`` column), or None when it cannot be read."""
+    best = None
+    for r in rows or []:
+        try:
+            at = r["at"]
+            ts = at.timestamp() if hasattr(at, "timestamp") else None
+        except Exception:  # noqa: BLE001
+            ts = None
+        if ts is not None and (best is None or ts > best):
+            best = ts
+    return best
+
+
 async def _fetch_transcript_rows(conn, session_id: str, since: Optional[Any]) -> list:
     """Read the session's turns since `since` from a (short-lived) pooled conn."""
     return await conn.fetch(
@@ -434,7 +448,8 @@ async def consolidate_session(session_id: str, user_id: str,
         try:
             import value_correction
 
-            stale = value_correction.superseded_by_correction(user_id, text)
+            # the transcript's LAST turn: a correction made before it cannot make these words stale (they may restate the value)
+            stale = value_correction.superseded_by_correction(user_id, text, said_at=_last_turn_epoch(rows))
         except Exception:  # noqa: BLE001 - the check never costs the session its facts
             stale = False
         if stale:

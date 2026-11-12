@@ -350,3 +350,28 @@ def test_a_date_correction_rewrites_the_date_and_never_another_number_of_that_su
     money = vc.statement("actually my savings is 13.5 thousand not 12 thousand")
     assert vc.rewrite("User checked their savings on the 12th of May", money) is None        # an amount never rewrites a day
     assert vc.rewrite("User's savings are 12 thousand dollars", money) == "User's savings are 13.5 thousand dollars"
+
+
+def test_a_value_restated_after_the_correction_is_a_new_fact_not_the_stale_one(monkeypatch):
+    """12 thousand, corrected to 13.5 thousand; LATER the member says it is 12 thousand again. Words said after the correction
+    are never discarded by it; words said before it still are."""
+    import time
+
+    svc = _Svc("User's savings are 12 thousand dollars")
+    before = time.time() - 60
+    _apply(svc, "actually my savings is 13.5 thousand not 12 thousand", monkeypatch)
+    later = time.time() + 60
+    fact = "User's savings are 12 thousand dollars"
+    assert vc.superseded_by_correction(UID, fact, said_at=before) is True       # mined from words older than the correction
+    assert vc.superseded_by_correction(UID, fact, said_at=later) is False       # said again afterwards: the latest fact
+    assert vc.superseded_by_correction(UID, fact) is True                       # no time known: unchanged behaviour
+
+
+def test_the_consolidation_passes_the_last_turn_time():
+    import datetime as dt
+
+    import memory_idle_consolidation as mic
+
+    rows = [{"at": dt.datetime(2026, 11, 1, 9, 0, tzinfo=dt.timezone.utc)}, {"at": dt.datetime(2026, 11, 1, 9, 5, tzinfo=dt.timezone.utc)}]
+    assert mic._last_turn_epoch(rows) == rows[1]["at"].timestamp()
+    assert mic._last_turn_epoch([]) is None and mic._last_turn_epoch([{"at": "not a time"}]) is None

@@ -635,15 +635,18 @@ def _remember(user_id: str, corr: Correction) -> None:
         _REMEMBERED.pop(next(iter(_REMEMBERED)))
 
 
-def superseded_by_correction(user_id: str, fact: str) -> bool:
+def superseded_by_correction(user_id: str, fact: str, said_at: Optional[float] = None) -> bool:
     """True when ``fact`` holds a value THIS member corrected away in the last ``REMEMBER_S`` (it names the corrected subject and
-    the old value, so ``rewrite`` would change it). Pure apart from the in-process registry; never raises."""
+    the old value, so ``rewrite`` would change it). ``said_at`` (epoch seconds) is when the words the fact was mined from were LAST
+    said: only a correction made AFTER them can make the fact stale. "12k, no 13.5k", then days later "it is 12k again" is a new
+    fact, not the corrected-away one - without the time the newer balance was dropped. Unknown time (None) keeps the old behaviour.
+    Pure apart from the in-process registry; never raises."""
     import time
 
     try:
         uid = (user_id or "").strip().lower()
         now = time.time()
-        live = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
+        live = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S and (said_at is None or t > said_at)]
         latest: dict = {}
         for t, c in live:                               # in order said: the last one per subject is where the value stands now
             latest[_subject_key(c.subject)] = c
