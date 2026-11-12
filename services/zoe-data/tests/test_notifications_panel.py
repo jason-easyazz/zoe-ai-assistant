@@ -274,6 +274,16 @@ def test_the_wearer_creator_makes_one_notification_per_batch(env, monkeypatch):
     assert json.loads(row[0])["proposals"] == ["p2"] and run(ns.unread_count(MEMBER)) == 1
 
 
+def test_an_old_wearer_ask_buried_under_newer_notifications_is_still_the_one_ask(env, monkeypatch):
+    state = _fake_repass(monkeypatch)
+    assert run(ns.notify_wearer_proposals(MEMBER))
+    seed(60)                                                                           # 60 newer unread rows push it out of any newest-50 read
+    state["props"].append("p2")
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None
+    rows = env.rows("SELECT data FROM notifications WHERE type = ?", (ns.WEARER_TYPE,))
+    assert len(rows) == 1 and json.loads(rows[0][0])["proposals"] == ["p1", "p2"]
+
+
 def test_no_wearer_notification_once_the_print_is_confirmed(env, monkeypatch):
     _fake_repass(monkeypatch, confirmed=10)
     assert run(ns.notify_wearer_proposals(MEMBER)) is None

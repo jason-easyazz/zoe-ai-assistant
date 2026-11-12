@@ -224,8 +224,11 @@ def is_quantity_pair(new: str, old: str) -> bool:
 # "<subject> is <quantity>[,] not <quantity>[, anything after]": the value pair above with quantity values, and a trailing clause
 # allowed after the old value ("actually eli is 9 not 8, he had his birthday last month" - the pair above is anchored at the end
 # of the sentence, so that common shape was never a correction). The values are validated by ``quantity_value``.
-_QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are|will\s+be)\s+(?:actually\s+|really\s+|now\s+)?(?P<n>[^,;.!?]{{1,40}}?)[,;]?\s+"
-                       rf"(?:and\s+)?not\s+(?P<o>[^,;!?]{{1,30}}?)\s*(?:[,;.!?]\s*(?:.*))?$", re.IGNORECASE)
+#: one character of a value: anything but sentence punctuation, EXCEPT a point or comma between two digits ("13.5 thousand",
+#: "$13,500" - without it those corrections matched nothing and the old amount stayed stored)
+_QVAL = r"(?:[^,;.!?]|(?<=\d)[.,](?=\d))"
+_QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are|will\s+be)\s+(?:actually\s+|really\s+|now\s+)?(?P<n>{_QVAL}{{1,40}}?)[,;]?\s+"
+                       rf"(?:and\s+)?not\s+(?P<o>{_QVAL}{{1,30}}?)\s*(?:(?:[;!?]|[.,](?!\d))\s*(?:.*))?$", re.IGNORECASE)
 
 
 def _bare_value(v: str) -> str:
@@ -584,6 +587,10 @@ _REMEMBERED: "dict[str, list[tuple[float, Correction]]]" = {}
 _REMEMBER_MAX_USERS = 256
 
 
+def _subject_key(subject: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"(?i)^(?:the|my|our)\s+", "", (subject or "").strip())).lower().replace("\u2019", "'")
+
+
 def _remember(user_id: str, corr: Correction) -> None:
     import time
 
@@ -591,7 +598,10 @@ def _remember(user_id: str, corr: Correction) -> None:
     if not uid or corr.old is None:
         return
     now = time.time()
-    keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
+    # the LATEST correction of a subject is the only one that stands: after "the 27th not the 20th" then "the 20th not the 27th", the
+    # older entry would call the now-correct 20th stale and the transcript writers would drop the member's latest fact
+    subj = _subject_key(corr.subject)
+    keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S and _subject_key(c.subject) != subj]
     keep.append((now, corr))
     _REMEMBERED[uid] = keep[-16:]
     while len(_REMEMBERED) > _REMEMBER_MAX_USERS:

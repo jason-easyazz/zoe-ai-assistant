@@ -107,6 +107,16 @@ _DIGITS_RE = re.compile(r"\d+(?:\.\d+)?|\.\d+")
 
 _UNIT_RE = re.compile(r"(?<=\d)\s*(?:dollars?|bucks|cents|volts?|amps?|watts?|kms?|kilomet(?:re|er)s?|met(?:re|er)s?|kgs?|kilos?"
                       r"|grams?|lit(?:re|er)s?)\b")
+_ADDITIVE_RE = re.compile(r"\b(?:plus|minus|add|added to|less|subtract|take away)\b|[-+]")
+_UNIT_KINDS = (("dollar", "dollar"), ("buck", "dollar"), ("cent", "cent"), ("volt", "volt"), ("amp", "amp"), ("watt", "watt"),
+               ("km", "km"), ("kilomet", "km"), ("met", "metre"), ("kg", "kg"), ("kilo", "kg"), ("gram", "gram"), ("lit", "litre"))
+
+
+def _unit_kind(word: str) -> str:
+    w = word.strip()
+    return next((kind for prefix, kind in _UNIT_KINDS if w.startswith(prefix)), w)
+
+
 _PERIOD = r"(hour|day|night|week|fortnight|month|year)"
 _QTY = r"(\d+(?:\.\d+)?(?: (?:hundred|thousand|million))?)"
 #: "450 a week for 10 weeks" -> "450 * 10": a rate over a count of the SAME period. Mismatched periods are left alone (and so reject).
@@ -147,10 +157,15 @@ def _prep(text: str) -> str:
     s = s.replace(",", " ")
     # Everyday sums carry money slang and units ("12 grand", "$450", "240 volts times 10 amps"; QA round 8: the brain answered
     # 12000 + 450 x 10 as 167,500). A closed unit list after a DIGIT is dropped; any other stray word still rejects the utterance.
+    dollar_sign = bool(re.search(r"\$\s*(?=\d)", s))
     s = re.sub(r"\$\s*(?=\d)", "", s)
     s = re.sub(r"(?<=\d)\s*k\b", " thousand", s)
     s = re.sub(r"\bgrand\b", "thousand", s)
-    s = _UNIT_RE.sub("", s)
+    # Adding or subtracting DIFFERENT units is not a sum this can do ("2 dollars plus 50 cents" is not 52, "5 km plus 300 metres" is
+    # not 305): the units stay in, the stray word rejects the utterance and the brain answers. A wrong fixed answer is worse than none.
+    kinds = {_unit_kind(m.group(0)) for m in _UNIT_RE.finditer(s)} | ({"dollar"} if dollar_sign else set())
+    if not (len(kinds) > 1 and _ADDITIVE_RE.search(s)):
+        s = _UNIT_RE.sub("", s)
     return re.sub(r"\s+", " ", s).strip()
 
 

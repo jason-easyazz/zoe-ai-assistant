@@ -39,7 +39,9 @@ SUMS = [("whats 12000 plus 450 a week for 10 weeks", 16500.0), ("whats 12 grand 
         ("whats 240 volts times 10 amps", 2400.0), ("how much is 13.5k minus 12k", 1500.0), ("12 grand plus $450", 12450.0),
         ("what is 5 km plus 3 km", 8.0)]
 NOT_SUMS = ["450 a week for 10 weeks", "whats 450 a week for 3 months", "what a grand day", "im paying 450 a week for 10 weeks",
-            "10 kilos of spuds plus 2", "the grand final is on at 2"]
+            "10 kilos of spuds plus 2", "the grand final is on at 2",
+            # adding different units is not 52 / 305 / 2050: no fixed answer, the brain takes it
+            "whats 2 dollars plus 50 cents", "what is 5 km plus 300 metres", "$2 plus 50 cents", "2 kg minus 500 grams"]
 
 
 @pytest.mark.parametrize("text,value", SUMS)

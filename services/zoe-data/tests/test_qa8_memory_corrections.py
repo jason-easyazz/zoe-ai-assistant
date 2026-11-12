@@ -302,3 +302,21 @@ def test_the_digest_hands_its_written_rows_to_the_retirement_judge(monkeypatch):
     monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
     run(memory_digest._quote_retire_pass({"new": 1, "written_ids": ["row-new"]}, UID, "ive got 13 thousand now", "turn_digest", None))
     assert seen.get("exclude_ids") == ("row-new",)
+
+
+@pytest.mark.parametrize("text,new,old", [("actually my savings is 13.5 thousand not 12 thousand", "13.5 thousand", "12 thousand"),
+                                          ("my savings is $13,500 not $12,000", "$13,500", "$12,000"),
+                                          ("my savings is $13,500 not $12,000, i checked the app", "$13,500", "$12,000")])
+def test_a_money_correction_with_a_point_or_a_comma_is_a_correction(text, new, old):
+    corr = vc.statement(text)
+    assert corr is not None and (corr.new, corr.old) == (new, old)
+
+
+def test_correcting_back_keeps_the_latest_value(monkeypatch):
+    """the 27th not the 20th, then the 20th not the 27th: only the LATEST correction of a subject stands, so the 20th is not stale."""
+    svc = _Svc("User has a dentist appointment on the 20th of November")
+    _apply(svc, DENTIST_FIX, monkeypatch)
+    assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 20th of November") is True     # control
+    _apply(svc, "sorry the dentist appointment is the 20th of november not the 27th", monkeypatch)
+    assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 20th of November") is False
+    assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 27th of November") is True
