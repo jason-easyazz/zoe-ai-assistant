@@ -115,19 +115,79 @@ def test_control_flag_off_the_first_pass_still_deletes_the_wav(renv, monkeypatch
     assert r["audio_path"] == "" and not Path(path).exists() and r["repass_state"] == ""
 
 
-def test_the_hold_is_bounded_by_the_retention_maximum(renv, monkeypatch):
+def test_an_owed_recording_is_held_past_retention_to_the_cap_and_the_cap_is_loud(renv, monkeypatch, caplog):
+    """Owner 2026-11-12: a window's leftovers carry to the next night - the 7-day retention does not take a WAV still owed its re-pass; the 30-day cap does, loudly."""
     path = first_pass(renv)["audio_path"]
     transcribe(renv, monkeypatch)
     assert Path(path).exists()
-    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1      # past retention it goes whether or not the pass ran
-    assert not Path(path).exists()
-    assert run(_pending(renv)) == []                                                        # and is no longer listed as owed
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 0      # past retention but still owed: HELD
+    assert Path(path).exists() and len(run(_pending(renv, datetime.now(UTC) + timedelta(days=8)))) == 1      # and still listed for the next window
+    with caplog.at_level("WARNING"):
+        assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=rp.HOLD_CAP_DAYS + 1))) == 1
+    assert not Path(path).exists() and "OMI_REPASS_HOLD_CAP" in caplog.text                  # the cap forced it, and said so
+    assert run(_pending(renv)) == []
 
 
-async def _pending(env):
+def test_an_empty_first_pass_is_owed_and_held_like_any_other(renv, monkeypatch, caplog):
+    """Codex #2430: an empty Moonshine transcript leaves repass_state '' (the migration default). The night pass lists it, so the purge must hold it too."""
+    path = first_pass(renv)["audio_path"]
+    transcribe(renv, monkeypatch, text="")
+    r = rows(renv)[0]
+    assert r["status"] == "empty_transcript" and r["repass_state"] == "" and Path(path).exists()
+    later = datetime.now(UTC) + timedelta(days=8)
+    assert [x["id"] for x in run(_pending(renv, later))] == [r["id"]]                          # the planner owes it a look ...
+    assert run(omi.purge_expired_audio(now=later)) == 0 and Path(path).exists()                 # ... so the purge keeps it past the 7 days
+    with caplog.at_level("WARNING"):
+        assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=rp.HOLD_CAP_DAYS + 1))) == 1
+    assert not Path(path).exists() and "OMI_REPASS_HOLD_CAP" in caplog.text
+
+
+def test_a_short_disk_takes_held_audio_one_at_a_time_and_stops_at_the_floor(renv, monkeypatch, caplog):
+    """Codex #2430: the floor was read once, so a sweep that started under it deleted EVERY held WAV. Three held recordings, deleting the
+    oldest-expiring one restores the floor: exactly that one goes, the other two stay held."""
+    import shutil
+    from collections import namedtuple
+    for i, key in enumerate(("r1.0-1", "r1.0-2", "r1.0-3")):           # recorded today (the 30-day cap counts from upload, created_at): only the DISK can force these
+        upload(renv, make_wav(3.0, hz=220 + 60 * i), key=key, started=(datetime.now(UTC) - timedelta(hours=3 - i)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    for _ in range(3):
+        transcribe(renv, monkeypatch)
+    paths = [r["audio_path"] for r in rows(renv, "SELECT * FROM omi_recordings ORDER BY audio_expires_at, created_at")]
+    assert len(paths) == 3 and all(Path(p).exists() for p in paths)
+    du = namedtuple("du", "total used free")
+
+    def disk(_p):                                                   # under the floor until one WAV has gone
+        gone = sum(1 for p in paths if not Path(p).exists())
+        free = (rp.HOLD_MIN_FREE_MB - 1 + gone * 10) * 10**6
+        return du(10**11, 10**11 - free, free)
+    monkeypatch.setattr(shutil, "disk_usage", disk)
+    with caplog.at_level("WARNING"):
+        assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
+    assert [Path(p).exists() for p in paths] == [False, True, True] and "OMI_REPASS_HOLD_CAP" in caplog.text     # the oldest-expiring went, the rest are held
+
+
+def test_the_hold_gives_way_when_the_audio_disk_is_short(renv, monkeypatch, caplog):
+    import shutil
+    from collections import namedtuple
+    path = first_pass(renv)["audio_path"]
+    transcribe(renv, monkeypatch)
+    du = namedtuple("du", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: du(10**10, 10**10 - 10**8, 10**8))      # 100 MB free, under the floor
+    with caplog.at_level("WARNING"):
+        assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
+    assert not Path(path).exists() and "OMI_REPASS_HOLD_CAP" in caplog.text
+
+
+def test_control_with_the_re_pass_off_retention_is_seven_days_as_before(renv, monkeypatch):
+    path = first_pass(renv)["audio_path"]
+    transcribe(renv, monkeypatch)
+    monkeypatch.setenv("ZOE_OMI_NIGHT_REPASS", "off")
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1 and not Path(path).exists()
+
+
+async def _pending(env, now=None):
     from db_compat import get_compat_db
     async with get_compat_db() as db:
-        return await rp.pending_recordings(db)
+        return await rp.pending_recordings(db, now=now)
 
 
 # ── replace / shadow ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -695,7 +755,8 @@ def test_a_crashing_worker_is_counted_and_gives_up_after_three_nights_but_the_au
     run(omi.release_tagged_audio(OWNER))                                                        # a failed pass is NOT a pass that read it: the WAV stays
     assert Path(path).exists() and rows(renv)[0]["audio_path"]
     assert run(rp.requeue_failed(OWNER)) == 1 and rows(renv)[0]["repass_state"] == "pending"      # after a fix it can be re-run on the same audio
-    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1          # and retention still bounds it
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 0          # owed again: held past retention ...
+    assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=rp.HOLD_CAP_DAYS + 1))) == 1          # ... to the cap
     assert not Path(path).exists()
 
 

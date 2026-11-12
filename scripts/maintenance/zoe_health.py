@@ -81,6 +81,20 @@ def _run(argv: list[str], timeout: float = 5.0) -> tuple[int, str]:
         return 124, type(exc).__name__
 
 
+NIGHT_TIMER = "zoe-night-window.timer"
+
+
+def night_timer_check(run: Callable = _run) -> Check:
+    """The night window only happens if its timer is armed. A stopped/disabled timer used to be silent (one night the 12B simply
+    never ran and nothing said so); ``failed units`` cannot see it because an inactive timer is not failed. Not skipped while the
+    window is open: the timer stays active while its service runs."""
+    _, active = run(["systemctl", "--user", "is-active", NIGHT_TIMER])
+    _, enabled = run(["systemctl", "--user", "is-enabled", NIGHT_TIMER])
+    active, enabled = (active or "").strip(), (enabled or "").strip()
+    ok = active == "active" and enabled in ("enabled", "enabled-runtime")
+    return Check("night-window timer", ok, f"{NIGHT_TIMER} is {active or '?'} / {enabled or '?'}" if not ok else "armed")
+
+
 def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _run,
           night_open: Optional[bool] = None) -> list[Check]:
     out: list[Check] = []
@@ -98,6 +112,7 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
     rc, txt = run(["systemctl", "--user", "--failed", "--plain", "--no-legend", "--type=service,timer"])
     failed = sorted(ln.split()[0] for ln in txt.splitlines() if ln.strip()) if rc == 0 else []
     out.append(Check("failed units", not failed, ", ".join(failed) if failed else "none"))
+    out.append(night_timer_check(run))
     du = shutil.disk_usage("/")
     pct = round(100 * du.used / du.total)
     out.append(Check("disk /", pct < DISK_WARN_PCT, f"{pct}% used"))

@@ -509,6 +509,8 @@ class NightCfg(bk.Cfg):
     #: ``--rehearse-repass``: the DAYTIME REHEARSAL of the pre-job (owner rule 2026-11-09: no night job's first run is unattended at night). The real stops, compaction and restore order,
     #: the real ``omi_repass`` job on ONE recording writing nothing, then the restore. Refuses 01:50-04:55 and while ``night_busy.sh voice`` says voice work must pause.
     rehearse: bool = False
+    #: ``--repass-only``: the REAL pendant re-pass by day (honours ZOE_OMI_NIGHT_REPASS, writes what that mode writes): the night's stops / compaction / restore order and the omi_repass pre-job, NO 12B load and no 12B jobs.
+    repass_only: bool = False
     night_busy_script: Path = REPO / "scripts" / "landing" / "night_busy.sh"
     #: minutes the pre-jobs must leave for everything after them (the 12B load + probe, the 12B jobs, a margin). 12 by default - the 12B jobs used 7 of the 28 minutes once reserved on
     #: 2026-11-08 - and ``configure`` replaces it with ``measured_keep_min`` (the last 7 nights' job wall times, floor 10) unless ``NIGHT_PRE_KEEP_MIN`` is a number.
@@ -562,7 +564,7 @@ class NightCfg(bk.Cfg):
     @property
     def exploratory(self) -> bool:
         """A manual measurement run (the trial, the speed sweep): any hour, no jobs, no 4B fallbacks, no load-failure counting."""
-        return self.trial or self.sweep or self.rehearse
+        return self.trial or self.sweep or self.rehearse or self.repass_only
 
     @property
     def sweep_state_path(self) -> Path:
@@ -1023,8 +1025,9 @@ def build_pre_jobs(cfg: NightCfg) -> "list[JobSpec]":
     inside its own kill time) and clipped so the 12B stage keeps ``cfg.pre_keep_min``. A no-op while ``ZOE_OMI_NIGHT_REPASS`` is off."""
     t = cfg.job_timeout_s
     rh = cfg.rehearse
+    ro = cfg.repass_only
     specs = {"omi_repass": JobSpec("omi_repass", ([cfg.py, str(cfg.omi_repass_script)] + (["--rehearse"] if rh else [])) if cfg.omi_repass_script.exists() else [], t.get("omi_repass", 2400.0),
-                                   best_effort=not rh, keep_s=0.0 if rh else cfg.pre_keep_min * 60.0, budget_flag="--budget-s",
+                                   best_effort=not (rh or ro), keep_s=0.0 if (rh or ro) else cfg.pre_keep_min * 60.0, budget_flag="--budget-s",
                                    skip_reason="" if cfg.omi_repass_script.exists() else f"{cfg.omi_repass_script.name} not found")}
     return [specs[j] for j in cfg.pre_jobs if j in specs]
 
@@ -1429,11 +1432,12 @@ class NightWindow(bk.Window):
         cfg, host = self.cfg, self.host
         now = dt.datetime.fromtimestamp(host.now())
         nm = now.hour * 60 + now.minute
-        if cfg.rehearse:
-            if 110 <= nm < 295:
-                self.refuse(f"it is {now:%H:%M}: a rehearsal never runs 01:50-04:55 (the night window and the voice gate own that time)")
-            elif host.run([str(cfg.night_busy_script), "voice"], mutating=False).rc == 0:
-                self.refuse("night_busy.sh voice says voice-sensitive work must pause now (the daytime pause, a lander or the 04:30 replay slot). A daytime rehearsal needs the owner's OK: "
+        if cfg.exploratory:        # a rehearsal, --trial / --cells-only or --speed-sweep: every hand-run model load is gated like a landing (2026-11-12: they collided with landings and the night)
+            kind = "rehearsal" if cfg.rehearse else "repass-only run" if cfg.repass_only else "trial / sweep"
+            if (cfg.rehearse or cfg.repass_only) and 110 <= nm < 295:       # trial / sweep keep their own 03:00-digest refusal; night_busy.sh below follows tonight's real window for them
+                self.refuse(f"it is {now:%H:%M}: a {kind} never runs 01:50-04:55 (the night window and the voice gate own that time)")
+            elif any(host.run([str(cfg.night_busy_script), k], mutating=False).rc == 0 for k in (("voice", "deploy", "test") if cfg.repass_only else ("voice",))):
+                self.refuse(f"night_busy.sh voice/deploy/test says voice-sensitive work must pause now (the daytime pause, a lander or the 04:30 replay slot). A daytime {kind} needs the owner's OK: "
                             "`date +%F > ~/.zoe/agent-tools/voice-day-ok` lifts the daytime pause for today - remove the file afterwards")
         if cfg.night_only and not (cfg.night_hours[0] <= nm <= cfg.night_hours[1]):
             self.fallback_allowed = False
@@ -2090,7 +2094,9 @@ class NightWindow(bk.Window):
         cfg = self.cfg
         if "omi_repass" not in cfg.pre_jobs or not cfg.repass_preflight or self.dry:
             return
-        if not cfg.rehearse and self.repass_flag() in ("", "off", "0", "false"):
+        if cfg.repass_only and self.repass_flag() in ("", "off", "0", "false"):
+            self.refuse("--repass-only needs ZOE_OMI_NIGHT_REPASS=shadow (or on) in the unit's environment: with it off the pre-job is a no-op and nothing would be proven. Nothing was stopped.")
+        if not (cfg.rehearse or cfg.repass_only) and self.repass_flag() in ("", "off", "0", "false"):
             return
         why = ""
         if not cfg.omi_repass_script.exists():
@@ -2111,7 +2117,7 @@ class NightWindow(bk.Window):
         if not why:
             self.event("omi_repass preflight: runtime and database credential present")
             return
-        if cfg.rehearse:
+        if cfg.rehearse or cfg.repass_only:
             self.refuse(why)
         self.event(f"omi_repass SKIPPED before any stop: {why}")
         self.rec["notes"].append(f"omi_repass SKIPPED (nothing was stopped for it): {why}")
@@ -2760,13 +2766,14 @@ class NightWindow(bk.Window):
             self.opened = True
             self.write_marker()
             avail, free = self.sleep_units()
-            if self.cfg.rehearse:
-                self.event("rehearsal: the real pre-job on ONE recording, writing nothing; no 12B is loaded")
+            if self.cfg.rehearse or self.cfg.repass_only:
+                self.event("rehearsal: the real pre-job on ONE recording, writing nothing; no 12B is loaded" if self.cfg.rehearse
+                           else "repass-only: the real omi_repass pre-job under the night's stops; no 12B is loaded and no 12B job runs")
                 self.run_pre_jobs()
                 self.resettle()
             elif self.cfg.pre_jobs and not self.cfg.exploratory and self.run_pre_jobs():
                 avail, free = self.resettle()
-            if self.cfg.rehearse:
+            if self.cfg.rehearse or self.cfg.repass_only:
                 pass
             elif self.cfg.sweep:
                 self.event(f"speed sweep: MemAvailable {avail:.0f} MiB, MemFree {free:.0f} MiB after the stops and the compaction")
@@ -2950,7 +2957,7 @@ class NightWindow(bk.Window):
         try:
             self.cfg.report_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(self.cfg.report_dir, 0o700)
-            base = self.cfg.report_dir / (self.started_iso[:10] + ("-cells" if self.cfg.cells_only else "-trial" if self.cfg.trial else "-sweep" if self.cfg.sweep else "-rehearse" if self.cfg.rehearse else ""))
+            base = self.cfg.report_dir / (self.started_iso[:10] + ("-cells" if self.cfg.cells_only else "-trial" if self.cfg.trial else "-sweep" if self.cfg.sweep else "-rehearse" if self.cfg.rehearse else "-repass-only" if self.cfg.repass_only else ""))
             if base.with_suffix(".md").exists():
                 base = Path(str(base) + "-" + self.started_iso[11:16].replace(":", ""))
             md, js = Path(str(base) + ".md"), Path(str(base) + ".json")
@@ -3088,6 +3095,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--end-by", default=None, help="HH:MM local; the window must be over (zoe-data back) by then (default 03:55)")
     ap.add_argument("--catchup", action="store_true", help="with --presleep, any hour: the boot timer's catch-up for the removed Persistent=true backup / export timers - runs only if no backup succeeded in the last 26 h")
     ap.add_argument("--presleep", action="store_true", help="run the pre-sleep phase only (backup, then memory export, sequenced; idempotent per day) and exit 0; the unit's ExecStartPre=-")
+    ap.add_argument("--repass-only", action="store_true", help="DAYTIME REAL re-pass: the night's stops / compaction / restore order and the real omi_repass pre-job (ZOE_OMI_NIGHT_REPASS=shadow|on, writes what that mode writes), cap ~25 min, NO 12B load and no 12B jobs (refuses 01:50-04:55 and while night_busy.sh voice/deploy/test is busy)")
     ap.add_argument("--rehearse-repass", action="store_true", help="DAYTIME REHEARSAL of the pendant re-pass: the real stops / compaction / restore order and the real omi_repass job on ONE recording, writing nothing (refuses 01:50-04:55 and while night_busy.sh voice is busy)")
     ap.add_argument("--pre-jobs", default=None, help="comma list of jobs that run after the stops and BEFORE the 12B loads (omi_repass; default none)")
     ap.add_argument("--jobs", default=None, help="comma list, in order (default digest,extract_prepass,dreaming,night_mind,struggle_proposals,self_review,omi_cleanread,omi_day_review)")
@@ -3147,7 +3155,7 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     except ValueError as exc:
         raise Refused(str(exc))
     cfg.sweep_fresh = bool(args.sweep_fresh)
-    cfg.night_only = not (args.anytime or cfg.trial or args.speed_sweep or args.rehearse_repass)
+    cfg.night_only = not (args.anytime or cfg.trial or args.speed_sweep or args.rehearse_repass or args.repass_only)
     cfg.stop_zoe_data = not args.keep_zoe_data
     cfg.model_choice = args.model
     cfg.ctx_choice = args.ctx if args.ctx is not None else cfg.ctx_choice          # an absent flag keeps the measured default (ctx 8192, KV q8_0)
@@ -3170,6 +3178,14 @@ def configure(args: argparse.Namespace, cfg: "Optional[NightCfg]" = None) -> Nig
     bad_pre = [j for j in cfg.pre_jobs if j not in ("omi_repass",)]
     if bad_pre:
         raise Refused(f"unknown pre-job(s) {', '.join(bad_pre)} (omi_repass)")
+    if args.repass_only and (args.rehearse_repass or cfg.trial or cfg.sweep):
+        raise Refused("--repass-only is its own run: not with --rehearse-repass, --trial or --speed-sweep")
+    if args.repass_only:
+        cfg.repass_only = True
+        cfg.pre_jobs = ("omi_repass",)
+        load_unit_env(cfg.unit_env_file)             # the unit's EnvironmentFile (names only, never printed): ZOE_OMI_NIGHT_REPASS and the database credential come from it, as at night
+        cfg.cap_min = min(cfg.cap_min, 25.0)
+        cfg.reserve_min = 10.0
     if args.rehearse_repass:
         cfg.rehearse = True
         cfg.pre_jobs = ("omi_repass",)
@@ -3235,7 +3251,7 @@ def main(argv: "Optional[list[str]]" = None, host_factory: "Optional[Callable[[C
             print(f"[{dt.datetime.now():%H:%M:%S}] skip-if-done: {why}; a retry only makes up for a refused night", flush=True)
             return EXIT_OK
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    mode = "restore" if args.restore_only else "trial" if cfg.trial else "sweep" if cfg.sweep else "rehearse" if cfg.rehearse else "night"
+    mode = "restore" if args.restore_only else "trial" if cfg.trial else "sweep" if cfg.sweep else "rehearse" if cfg.rehearse else "repass-only" if cfg.repass_only else "night"
     if not args.dry_run:
         cfg.night_dir.mkdir(parents=True, exist_ok=True)
     log = bk.Logger(None if args.dry_run else cfg.night_dir / f"{'restore' if args.restore_only else 'run'}-{stamp}.log")
