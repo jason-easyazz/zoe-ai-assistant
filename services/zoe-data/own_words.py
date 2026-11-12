@@ -322,6 +322,12 @@ _CONJ = frozenset({"and", "but", "then", "so", "also", "just"})
 _OWN_SUBJECT_RE = re.compile(
     r"\s*(?:I|[Ww]e)(?:[ \t]+(?!(?:he|she|they|it|my|his|her|their|our|the|a|an|someone|somebody|everyone|when|while|because|after|"
     r"before|that|who|as|if|until|since)\b)[a-z']+(?:[ \t]+(?:back|again|up|over|round|around|home|in))?)?[ \t]*$")
+#: ...or an auxiliary / plain adverb between the owner and the verb ('I have said, "..."', 'I already said, "..."', "I've said"):
+#: the same own-subject lead-in rule decides, so 'Wren would have said, "..."' is still Wren's. A negation ("never", "not") is
+#: deliberately absent: a denied quote is not the owner's claim.
+_OWN_AUX = frozenset({"have", "had", "already", "once", "always", "often", "definitely", "actually", "really", "literally",
+                      "clearly", "simply", "only", "even", "still", "probably", "certainly", "originally", "previously"})
+_OWN_CONTRACTION_RE = re.compile(r"\s*(?:I|[Ww]e)['\u2019]$")
 
 
 def _speech_spans(head: str) -> list:
@@ -341,8 +347,13 @@ def _speech_spans(head: str) -> list:
     stop_re = re.compile(r"[.!?](?=\s|$)|\n")
     for m in _ATTR_RE.finditer(head):
         who = m.group("who") or m.group("who3") or m.group("who2")
-        if (m.group("who3") or "").lower() in _CONJ and _OWN_SUBJECT_RE.match(head[_sentence_start(head, m.start()): m.start()]):
-            continue                      # 'I rang and said, "..."': the speaker is the owner, the conjunction is not a person
+        w3 = (m.group("who3") or "").lower()
+        if w3:
+            lead = head[_sentence_start(head, m.start()): m.start()]
+            if (w3 in _CONJ or w3 in _OWN_AUX) and _OWN_SUBJECT_RE.match(lead):
+                continue                  # 'I rang and said, "..."' / 'I have said, "..."': the speaker is the owner, the lead-in word is not a person
+            if w3 in ("ve", "d") and _OWN_CONTRACTION_RE.match(lead):
+                continue                  # "I've said, ..." - who3 saw only the contraction's tail
         i = m.end()
         if m.group("q") or m.group("q2") or m.group("q3"):
             close = close_re.search(head, i + (1 if m.group("q2") else 0))

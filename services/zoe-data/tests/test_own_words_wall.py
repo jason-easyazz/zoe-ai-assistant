@@ -702,6 +702,26 @@ def test_the_owners_own_quoted_words_after_a_conjunction_are_kept(turn):
     assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
 
 
+@pytest.mark.parametrize("turn", ['I have said, "I am moving to Halvercombe next month."',
+                                  'I already said, "I am moving to Halvercombe next month."',
+                                  'I have already said, "I am moving to Halvercombe next month."',
+                                  'I\'ve said, "I am moving to Halvercombe next month."',
+                                  'We had said "We are moving to Halvercombe next month."'])
+def test_the_owners_own_quoted_words_after_an_auxiliary_or_adverb_are_kept(turn):
+    """Codex on #2423: the accepted comma made who3 read "have" / "already" as another speaker and the owner's quoted fact was dropped."""
+    own = own_words.analyze(turn)
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['Wren would have said, "I am moving to Halvercombe next month."',
+                                  'I think dad already said, "I am moving to Halvercombe next month."',
+                                  'I know she had said, "I am moving to Halvercombe next month."',
+                                  'I never said, "I am moving to Halvercombe next month."'])
+def test_an_auxiliary_does_not_make_another_speakers_or_a_denied_quote_the_owners(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
 @pytest.mark.parametrize("turn", ['I was there when Wren rang and said, "I am moving to Halvercombe next month."',
                                   'I heard my sister call and said, "I am moving to Halvercombe next month."',
                                   'I think she rang and said, "I am moving to Halvercombe next month."',
