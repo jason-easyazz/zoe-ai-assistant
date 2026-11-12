@@ -288,6 +288,97 @@ def test_a_barge_in_gets_no_line_and_keeps_the_day(queued):
     assert "s1" not in tc._PENDING
 
 
+class _SpyTurn:
+    """An inner reply stream that counts ``aclose()`` calls (a plain generator would run its finally on exhaustion regardless)."""
+
+    def __init__(self, closed):
+        self._gen = self._reply()
+        self._closed = closed
+
+    @staticmethod
+    async def _reply():
+        yield "Done. "
+        yield "The kettle is on."
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await self._gen.__anext__()
+
+    async def aclose(self):
+        self._closed.append(1)
+        await self._gen.aclose()
+
+
+def _counting_turn(closed):
+    return _SpyTurn(closed)
+
+
+def test_closing_the_wrapper_mid_stream_closes_the_inner_turn_once(queued):
+    env, rid = queued
+    verified_turn()
+    closed = []
+
+    async def go():
+        g = tc.append_stream(_counting_turn(closed), "put the kettle on", OWNER, "s1")
+        assert await g.__anext__() == "Done. "
+        await g.aclose()                                           # barge-in / disconnect before the reply finished
+    run(go())
+    assert closed == [1]
+    assert env.db.rows("SELECT * FROM omi_check_asks") == []       # no tail reserved, nothing yielded after the stop
+
+
+def test_cancelling_the_consumer_closes_the_inner_turn_once(queued):
+    env, rid = queued
+    verified_turn()
+    closed = []
+
+    async def go():
+        started = asyncio.Event()
+
+        async def consume():
+            g = tc.append_stream(_counting_turn(closed), "put the kettle on", OWNER, "s1")
+            try:
+                async for _ in g:
+                    started.set()
+                    await asyncio.sleep(30)
+            finally:
+                await g.aclose()
+        t = asyncio.ensure_future(consume())
+        await started.wait()
+        t.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+    run(go())
+    assert closed == [1]
+
+
+def test_closing_during_the_tail_closes_the_inner_turn_once(queued):
+    env, rid = queued
+    verified_turn()
+    closed = []
+
+    async def go():
+        g = tc.append_stream(_counting_turn(closed), "put the kettle on", OWNER, "s1")
+        for _ in range(3):
+            await g.__anext__()
+        await g.aclose()
+    run(go())
+    assert closed == [1]
+    assert env.db.rows("SELECT * FROM omi_check_asks") == []
+
+
+def test_normal_completion_appends_the_tail_once_and_closes_the_inner_turn_once(queued):
+    env, rid = queued
+    verified_turn()
+    closed = []
+    out = run(_collect(tc.append_stream(_counting_turn(closed), "put the kettle on", OWNER, "s1")))
+    assert len(out) == 3 and "transcripts" in out[2] and sum("transcripts" in d for d in out) == 1
+    assert closed == [1]
+    assert len(env.db.rows("SELECT * FROM omi_check_asks")) == 1
+
+
 def test_non_command_text_in_a_stream_is_not_a_reply(queued):
     env, rid = queued
     verified_turn()
