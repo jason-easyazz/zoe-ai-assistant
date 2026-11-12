@@ -32,7 +32,9 @@ already use). Measured runtime: 1.2-3.0 s (target < 60 s); every line of every r
   the Postgres ordinals, never printed), `source` and `status` (writer and lifecycle labels; `source` is
   mapped through `SOURCE_ALLOWLIST` and anything else prints as `other`; `status` is only tested for
   `approved`), and a count. `added_ts` / `added_at` are used only in the SQL window filter. The document text
-  (`chroma:document`) is never read.
+  (`chroma:document`) is never read. The only log-derived strings that reach the output are fixed vocabularies:
+  `RECALL_EVERY_TURN skipped=` reasons go through `SKIP_REASONS` (the `Selection.skipped` values in
+  `services/zoe-data/recall_every_turn.py`), anything else prints as `other`; night dates are digit-only.
 - **Nothing is printed but counts and timings.** No log line, row, id or env value. The DSN comes from
   `POSTGRES_URL` or the zoe-data service `.env`, through `_resolve_dsn()` in
   `scripts/maintenance/purge_orphaned_test_data.py` (the same resolver `merge_duplicate_lists.py` reuses).
@@ -47,7 +49,11 @@ already use). Measured runtime: 1.2-3.0 s (target < 60 s); every line of every r
   for a window is `unmeasured`, never a partial count, when the retained rotations do not provably cover it:
   the earliest retained line is after the window start; a rotation whose span can touch the window failed to
   read in full (unreadable or truncated, e.g. a cut gzip); or two consecutive rotations are further apart
-  than the largest gap between lines inside any rotation (floor 10 min), which means a rotation is missing.
+  than the largest gap between lines inside any rotation (floor 10 min), which means a rotation is missing;
+  or the latest retained line is earlier than the window end minus that same tolerance (a stale or stopped
+  log). The panel row applies the same two ends to the Pi log (its own largest in-window gap, floor 10 min).
+  A marker whose numeric field is not a number makes its metric `unmeasured` ("malformed marker"), never a
+  crash. An empty or negative window, or `--nights` below 1, is refused at argument parsing (exit 2).
   The pendant funnel's `offered` follows the same rule for the long window. Within brain timing, `brain_ttft`
   and `pre_brain+brain_ttft` each stand on their own samples (the second only from lines carrying both
   fields) and each is `unmeasured` when it has none. A measured count of 0

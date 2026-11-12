@@ -126,7 +126,7 @@ def test_missing_middle_rotation_gap_makes_window_unmeasured(tmp_path):
     reason = sc.coverage_reason(logs, sc.parse_ts(L("01T00:30:00", "")), UNTIL)
     assert reason and "a rotation is missing" in reason
     # a window entirely after the gap is still measurable
-    assert sc.coverage_reason(logs, sc.parse_ts(L("06T00:30:00", "")), UNTIL) is None
+    assert sc.coverage_reason(logs, sc.parse_ts(L("06T00:30:00", "")), sc.parse_ts(L("06T01:00:00", ""))) is None
 
 
 def test_contiguous_rotations_are_covered(tmp_path):
@@ -423,3 +423,55 @@ def test_agg_guard():
         asyncio.run(sc._agg(FakeConn([]), "SELECT 1; DELETE FROM users"))
     pred = sc.real_user_pred("s.user_id")
     assert "guest-%" in pred and "!~*" in pred
+
+
+# --- third pass ------------------------------------------------------------------------------------------
+
+def test_stale_log_end_makes_window_unmeasured(tmp_path):
+    _write_minutes(tmp_path / "zoe-data.app.log", "05", 0, 12)  # lines stop at 11:55
+    logs = sc.load_log_lines([str(tmp_path / "zoe-data.app.log")])
+    since = sc.parse_ts(L("05T01:00:00", ""))
+    assert sc.coverage_reason(logs, since, sc.parse_ts(L("05T12:00:00", ""))) is None
+    reason = sc.coverage_reason(logs, since, sc.parse_ts(L("05T18:00:00", "")))
+    assert reason and "stale or stopped log" in reason
+    assert sc.count_raises(logs, since, sc.parse_ts(L("05T18:00:00", "")))[0] is None
+    out = sc.log_section(logs, since, sc.parse_ts(L("05T18:00:00", "")), MEMBERS)
+    assert all(m["status"] == "unmeasured" for m in out.values())
+
+
+def test_unknown_skip_reason_collapses_to_other():
+    base = f"RECALL_EVERY_TURN user={MEMBER} mode=shadow rows=0 claimed=- injected=0"
+    lines = parsed([L("08T10:00:00", f"{base} skipped=guest"), L("08T10:00:01", f"{base} skipped=somebodys_words")])
+    m = sc.m_recall_every_turn(lines, SINCE, UNTIL, MEMBERS)
+    assert m["data"]["skipped"] == {"guest": 1, "other": 1}
+    assert "somebodys_words" not in m["method"]
+
+
+def test_malformed_marker_is_unmeasured_not_a_crash():
+    bad = parsed([L("06T10:00:00", f"PROVENANCE_REPLY user={MEMBER} seq=1 kind=brain served=abc used=0")])
+    m = sc.m_provenance(bad, SINCE, UNTIL, MEMBERS)
+    assert m["status"] == "unmeasured" and "malformed marker" in m["reason"]
+    bad2 = parsed([L("08T10:00:00", f"RECALL_EVERY_TURN user={MEMBER} rows=x claimed=- injected=0 skipped=-")])
+    assert sc.m_recall_every_turn(bad2, SINCE, UNTIL, MEMBERS)["status"] == "unmeasured"
+    bad3 = parsed([L("06T10:00:00", f"VOICE TIMING session={MSESS} pre_brain_ms=1 brain_ttft_ms=nan_ms")])
+    assert sc.m_brain_first_text(bad3, SINCE, UNTIL, MEMBERS)["status"] == "unmeasured"
+
+
+def test_panel_metric_requires_log_to_reach_window_end():
+    since = dt.datetime(2026, 11, 10, 0, 0, tzinfo=sc.LOCAL_TZ)
+    rows = ["2026-11-09 23:00:00 E", "2026-11-10 05:28:18 C 640", "2026-11-10 05:28:24 T 1.04"]
+    rows += [f"2026-11-10 {h:02d}:00:00 E" for h in range(6, 12)]
+    ok = sc.panel_metric(rows, since, dt.datetime(2026, 11, 10, 12, 0, tzinfo=sc.LOCAL_TZ))
+    assert ok["status"] == "measured" and ok["n"] == 1
+    stale = sc.panel_metric(rows, since, dt.datetime(2026, 11, 10, 20, 0, tzinfo=sc.LOCAL_TZ))
+    assert stale["status"] == "unmeasured" and "stale or stopped log" in stale["reason"]
+
+
+@pytest.mark.parametrize("argv", [["--days", "0"], ["--long-days", "-1"], ["--nights", "0"],
+                                  ["--since", "2026-11-05T00:00", "--until", "2026-11-05T00:00"]])
+def test_empty_or_negative_window_exits_2_before_any_read(argv, monkeypatch):
+    monkeypatch.setattr(sc, "build", lambda a: pytest.fail("build must not run"))
+    with pytest.raises(SystemExit) as exc:
+        sc.main(argv)
+    assert exc.value.code == 2
+    assert sc.rate(5, 0) == "unmeasured (empty window)"

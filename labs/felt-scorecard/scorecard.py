@@ -241,13 +241,22 @@ def coverage_reason(logs: LogSet, since: dt.datetime, until: dt.datetime) -> str
             name = os.path.basename(r.path)
             return f"log rotation {name} could not be read in full ({r.error}); a partial count is not reported"
     timed = [r for r in logs.rotations if r.first is not None]
-    bound = max([MIN_ROTATION_GAP_S] + [r.max_gap_s for r in timed])
+    bound = gap_bound(logs)
     for a, b in zip(timed, timed[1:]):
         gap = (b.first - a.last).total_seconds()
         if gap > bound and a.last < until and b.first > since:
             return (f"gap of {gap / 3600:.1f} h between log rotations ({_fmt(a.last)}..{_fmt(b.first)}) exceeds any gap "
                     f"inside a rotation ({bound / 3600:.1f} h): a rotation is missing; a partial count is not reported")
+    latest = max(r.last for r in timed if r.last is not None)
+    if latest < until - dt.timedelta(seconds=bound):
+        return (f"retained app logs end {_fmt(latest)}, more than {bound / 60:.0f} min before the window end {_fmt(until)} "
+                f"(stale or stopped log); a partial count is not reported")
     return None
+
+
+def gap_bound(logs: LogSet) -> float:
+    """Tolerance in seconds: the largest gap between lines inside any rotation, floor MIN_ROTATION_GAP_S."""
+    return max([MIN_ROTATION_GAP_S] + [r.max_gap_s for r in logs.rotations if r.first is not None])
 
 
 def in_window(lines, since, until, marker):
@@ -289,6 +298,22 @@ def pct(values: list[float], q: float) -> float | None:
     return float(s[lo] + (s[hi] - s[lo]) * (k - lo))
 
 
+def _num(v: str | None, default: str = "0") -> float:
+    """A marker's numeric field; raises Malformed when it is not a number."""
+    try:
+        return float(default if v is None or v == "" else v)
+    except ValueError:
+        raise Malformed() from None
+
+
+class Malformed(Exception):
+    """A marker line whose numeric field is not a number."""
+
+
+def malformed_metric(key: str, title: str, n_bad: int, since, until) -> dict:
+    return unmeasured(key, title, f"malformed marker ({n_bad} line(s) with a non-numeric field)", window=wstr(since, until))
+
+
 def frac(a: int, n: int) -> str:
     return f"{a} of {n}" + (f" ({100.0 * a / n:.1f}%)" if n else "")
 
@@ -317,14 +342,21 @@ def wstr(since: dt.datetime, until: dt.datetime) -> str:
 # ---------------------------------------------------------------------------
 
 def m_provenance(lines, since, until, members: Members) -> dict:
-    n = served = used = 0
+    n = served = used = bad = 0
     for _, line in in_window(lines, since, until, "PROVENANCE_REPLY"):
         f = fields(line)
         if f.get("kind") != "brain" or is_harness(line, f) or f.get("user") not in members.users:
             continue
+        try:
+            sv, us = _num(f.get("served")), _num(f.get("used"))
+        except Malformed:
+            bad += 1
+            continue
         n += 1
-        served += int(f.get("served", "0") or 0) > 0
-        used += int(f.get("used", "0") or 0) > 0
+        served += sv > 0
+        used += us > 0
+    if bad:
+        return malformed_metric("memory_served_used", "Memory served / used per member brain reply", bad, since, until)
     return metric("memory_served_used", "Memory served / used per member brain reply",
                   f"served {frac(served, n)}; used {frac(used, n)}", n=n, window=wstr(since, until),
                   method="PROVENANCE_REPLY kind=brain, member user=, harness excluded; served>0 / used>0",
@@ -332,8 +364,13 @@ def m_provenance(lines, since, until, members: Members) -> dict:
                   data={"n": n, "served": served, "used": used})
 
 
+# Selection.skipped reasons in services/zoe-data/recall_every_turn.py (comment at :75, plus "warming"); anything
+# else is printed as `other`, so no log-derived string becomes an output key or label.
+SKIP_REASONS = frozenset({"not_household", "guest", "unverified", "off_record", "empty", "timeout", "error", "warming"})
+
+
 def m_recall_every_turn(lines, since, until, members: Members) -> dict:
-    n = eligible = found = claimed = injected = 0
+    n = eligible = found = claimed = injected = bad = 0
     skipped: dict[str, int] = {}
     first = None
     for t, line in in_window(lines, since, until, "RECALL_EVERY_TURN"):
@@ -341,16 +378,23 @@ def m_recall_every_turn(lines, since, until, members: Members) -> dict:
         if is_harness(line, f) or f.get("user") not in members.users:
             continue
         first = first or t
-        n += 1
         sk = f.get("skipped", "-")
+        try:
+            rows, inj = _num(f.get("rows")), _num(f.get("injected"))
+        except Malformed:
+            bad += 1
+            continue
+        n += 1
         if sk != "-":
-            sk = sk if re.fullmatch(r"[a-z_]{1,24}", sk) else "other"
+            sk = sk if sk in SKIP_REASONS else "other"
             skipped[sk] = skipped.get(sk, 0) + 1
             continue
         eligible += 1
-        found += int(f.get("rows", "0") or 0) > 0
+        found += rows > 0
         claimed += f.get("claimed", "-") not in ("-", "")
-        injected += int(f.get("injected", "0") or 0) > 0
+        injected += inj > 0
+    if bad:
+        return malformed_metric("recall_every_turn", "Every-turn recall (shadow)", bad, since, until)
     sk_txt = ", ".join(f"{k} {v}" for k, v in sorted(skipped.items())) or "none"
     return metric("recall_every_turn", "Every-turn recall (shadow): relevant row found on eligible member turns",
                   f"found {frac(found, eligible)}; claimed by another block {claimed}; injected {injected}",
@@ -402,24 +446,26 @@ def m_tools(lines, since, until, members: Members) -> dict:
 def m_brain_first_text(lines, since, until, members: Members) -> dict:
     ttft: list[float] = []
     pre_plus: list[float] = []
-    other = 0
+    other = bad = 0
     for _, line in in_window(lines, since, until, "VOICE TIMING"):
         f = fields(line)
-        if is_harness(line, f):
-            continue
-        try:
-            b = float(f["brain_ttft_ms"])
-        except (KeyError, ValueError):
+        if is_harness(line, f) or "brain_ttft_ms" not in f:
             continue
         if f.get("session") not in members.sessions:
             other += 1
             continue
-        ttft.append(b)
         try:
-            pre_plus.append(float(f["pre_brain_ms"]) + b)
-        except (KeyError, ValueError):
-            pass
+            b = _num(f["brain_ttft_ms"])
+            pre = _num(f["pre_brain_ms"]) if "pre_brain_ms" in f else None
+        except Malformed:
+            bad += 1
+            continue
+        ttft.append(b)
+        if pre is not None:
+            pre_plus.append(pre + b)
     title = "Brain dispatch to first text (member voice turns)"
+    if bad:
+        return malformed_metric("brain_first_text", title, bad, since, until)
     if not ttft:
         return unmeasured("brain_first_text", title, f"no member VOICE TIMING lines in window (other: {other})",
                           window=wstr(since, until))
@@ -528,9 +574,11 @@ PANEL_SED = (
     r"s/^" + _PTS + r".*Recorded (command|follow-up): .*tail=(deep|quiet)( .*)?$/\1 Q \3/p",
     "t",
     r"s/^" + _PTS + r".*Recorded (command|follow-up):.*$/\1 R/p",
+    "t",
+    r"s/^" + _PTS + r".*$/\1 E/p",  # any other timestamped line: its timestamp only, to prove how far the log reaches
 )
 PANEL_LOG = "/home/pi/.zoe-voice/voice.log"
-_PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R))$")
+_PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R)|E)$")
 TAIL_FLOOR_MS = {"deep": 640.0, "quiet": 800.0}  # live .env.voice floors per lane 4 (used only when close= is absent)
 
 
@@ -559,11 +607,44 @@ def panel_pairs(reduced_lines: Iterable[str], since: dt.datetime, until: dt.date
             last = (t, TAIL_FLOOR_MS[tail])
         elif rec is not None:
             last = None
-        elif ttfa is not None:
+        elif ttfa is not None:  # E rows (any other line) carry no turn data and leave `last` alone
             if last and 0 <= (t - last[0]).total_seconds() <= 60 and since <= last[0] < until:
                 totals.append(last[1] + float(ttfa) * 1000.0)
             last = None
     return totals
+
+
+def panel_metric(reduced: list[str], since: dt.datetime, until: dt.datetime) -> dict:
+    """The panel row from the allowlist output: `unmeasured` unless the log reaches back to `since` and forward
+    to `until` within the largest gap between its own lines in the window (floor 10 min)."""
+    title = "Speech end to first sound, panel (inferred)"
+    w = wstr(since, until)
+    stamps = []
+    for r in reduced:
+        m = _PANEL_LINE_RE.match(r.strip())
+        if m:
+            stamps.append(dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ))
+    if not stamps:
+        return unmeasured("speech_end_first_sound", title, "panel log returned no timestamped lines", window=w)
+    stamps.sort()
+    if stamps[0] > since:
+        return unmeasured("speech_end_first_sound", title, "panel log does not reach back to the window start", window=w)
+    inside = [t for t in stamps if since <= t < until]
+    tol = max([MIN_ROTATION_GAP_S] + [(b - a).total_seconds() for a, b in zip(inside, inside[1:])])
+    if stamps[-1] < until - dt.timedelta(seconds=tol):
+        return unmeasured("speech_end_first_sound", title,
+                          f"panel log ends {_fmt(stamps[-1])}, more than {tol / 60:.0f} min before the window end (stale or stopped log)",
+                          window=w)
+    totals = panel_pairs(reduced, since, until)
+    if not totals:
+        return unmeasured("speech_end_first_sound", title, "no paired Recorded/TTFA lines in window", window=w)
+    return metric("speech_end_first_sound", title,
+                  f"p50 {pct(totals, 50) / 1000:.2f} s / p90 {pct(totals, 90) / 1000:.2f} s", n=len(totals), window=w,
+                  method=("Pi voice.log via an allowlist extractor: endpoint close (close=..ms, else tail floor 640/800) "
+                          "+ turn_stream TTFA, paired per turn; excludes the Recorded-to-receipt upload (lane 4 stage B, "
+                          "~0.16 s median)"),
+                  label="[Experimental]",
+                  data={"p50_ms": pct(totals, 50), "p90_ms": pct(totals, 90)})
 
 
 def m_panel(host: str, since, until) -> dict:
@@ -575,21 +656,7 @@ def m_panel(host: str, since, until) -> dict:
         return unmeasured("speech_end_first_sound", title, f"ssh to the panel failed ({type(exc).__name__})")
     if p.returncode != 0:
         return unmeasured("speech_end_first_sound", title, f"ssh to the panel failed (rc={p.returncode})")
-    reduced = p.stdout.splitlines()
-    if reduced and reduced[0][:19] > since.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S"):
-        return unmeasured("speech_end_first_sound", title, "panel log does not reach back to the window start",
-                          window=wstr(since, until))
-    totals = panel_pairs(reduced, since, until)
-    if not totals:
-        return unmeasured("speech_end_first_sound", title, "no paired Recorded/TTFA lines in window", window=wstr(since, until))
-    return metric("speech_end_first_sound", title,
-                  f"p50 {pct(totals, 50) / 1000:.2f} s / p90 {pct(totals, 90) / 1000:.2f} s", n=len(totals),
-                  window=wstr(since, until),
-                  method=("Pi voice.log via an allowlist extractor: endpoint close (close=..ms, else tail floor 640/800) "
-                          "+ turn_stream TTFA, paired per turn; excludes the Recorded-to-receipt upload (lane 4 stage B, "
-                          "~0.16 s median)"),
-                  label="[Experimental]",
-                  data={"p50_ms": pct(totals, 50), "p90_ms": pct(totals, 90)})
+    return panel_metric(p.stdout.splitlines(), since, until)
 
 
 # ---------------------------------------------------------------------------
@@ -794,11 +861,27 @@ def parse_local(s: str) -> dt.datetime:
     return t if t.tzinfo else t.replace(tzinfo=LOCAL_TZ)
 
 
-def build(args) -> dict:
-    t_start = time.monotonic()
+def windows(args) -> tuple[dt.datetime, dt.datetime, dt.datetime]:
+    """(since, until, long_since); raises ValueError for an empty or negative window."""
     until = parse_local(args.until) if args.until else dt.datetime.now(LOCAL_TZ)
     since = parse_local(args.since) if args.since else until - dt.timedelta(days=args.days)
     long_since = parse_local(args.long_since) if args.long_since else until - dt.timedelta(days=args.long_days)
+    if not since < until:
+        raise ValueError("the short window is empty or negative (--since/--days must give a start before --until)")
+    if not long_since < until:
+        raise ValueError("the long window is empty or negative (--long-since/--long-days must give a start before --until)")
+    if args.nights < 1:
+        raise ValueError("--nights must be at least 1")
+    return since, until, long_since
+
+
+def rate(count: float, days: float) -> str:
+    return f"{count / days:.2f}/day" if days > 0 else "unmeasured (empty window)"
+
+
+def build(args) -> dict:
+    t_start = time.monotonic()
+    since, until, long_since = windows(args)
     long_days = (until - long_since).total_seconds() / 86400.0
     short_days = (until - since).total_seconds() / 86400.0
     lw = wstr(long_since, until)
@@ -848,8 +931,8 @@ def build(args) -> dict:
         d7 = summarise_durable(groups_short, members.users)
         src = ", ".join(f"{k} {v}" for k, v in sorted(d30["by_source"].items(), key=lambda kv: (-kv[1], kv[0])))
         out.append(metric("durable_rows_panel", "Durable memory rows per day, panel/chat (member)",
-                          f"{d30['rows'] / long_days:.2f}/day over {long_days:.0f} d ({d30['rows']} rows, {d30['approved']} approved); "
-                          f"{d7['rows'] / short_days:.2f}/day over last {short_days:.1f} d ({d7['rows']} rows)",
+                          f"{rate(d30['rows'], long_days)} over {long_days:.0f} d ({d30['rows']} rows, {d30['approved']} approved); "
+                          f"{rate(d7['rows'], short_days)} over last {short_days:.1f} d ({d7['rows']} rows)",
                           n=d30["rows"], window=lw,
                           method=(f"MemPalace mempalace_drawers, one GROUP BY (user_id, source, status), member user_id, "
                                   f"added_ts/added_at in window; by source: {src or 'none'}"),
@@ -860,7 +943,7 @@ def build(args) -> dict:
         raises, raise_reason = count_raises(logset, long_since, until)
         offered_txt = str(raises) if raises is not None else "unmeasured"
         out.append(metric("durable_rows_pendant", "Durable memory rows per day, pendant",
-                          f"{o['written'] / long_days:.2f}/day ({int(o['written'])} written)", n=int(o["candidates"]), window=lw,
+                          f"{rate(o['written'], long_days)} ({int(o['written'])} written)", n=int(o["candidates"]), window=lw,
                           method="omi_day_candidates written_ref set", data={"written": o["written"]}))
         out.append(metric("pendant_funnel", "Pendant funnel",
                           (f"recordings {int(o['recordings'])} ({o['hours']:.1f} h) -> transcripts {int(o['transcribed'])} "
@@ -946,6 +1029,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--panel-host", default="zoe-pi")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    try:
+        windows(args)
+    except ValueError as exc:
+        ap.error(str(exc))  # exit 2, before any log, store or database read
     report = build(args)
     print(json.dumps(report, indent=2, default=str) if args.json else render(report))
     return 0
