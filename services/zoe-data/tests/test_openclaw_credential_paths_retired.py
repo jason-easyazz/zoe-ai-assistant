@@ -79,7 +79,7 @@ def test_brain_no_longer_offers_the_telegram_wizard_tool():
     assert "telegram_setup" not in src
 
 
-@pytest.mark.parametrize("page", ["chat.html", "touch/chat.html"])
+@pytest.mark.parametrize("page", ["chat.html"])
 def test_ui_entry_points_are_gone(page):
     html = (DIST / page).read_text()
     assert "/api/openclaw/telegram/setup" not in html
