@@ -137,6 +137,21 @@ def _exec_user(user_id: str) -> str:
     return user_id if user_id and user_id != "family-admin" else "guest"
 
 
+_ADVICE_RE = re.compile(r"\bshould\s+(?:i|we)\b|\b(?:anything|something|what|whatever)\b[^.?!]*\b(?:i|we)\s+should\b|\b(?:do\s+)?you\s+(?:think|reckon|suggest|recommend)\b", re.IGNORECASE)
+_WEAK_SHOW_RE = re.compile(r"\b(?:do\s+i\s+have|have\s+i\s+got|is\s+there|whats?\s+my)\b", re.IGNORECASE)
+_LISTISH_RE = re.compile(r"\b(?:lists?|shop\w*|grocer\w*|to-?\s?dos?|buy|need|get|pick\s+up|tasks?|bucket)\b", re.IGNORECASE)
+_CLOCK_ONLY_WORDS = frozenset(
+    "a and at can clock could current currently date day do exactly give got have hey hour is it know me moment month now "
+    "of ok on please right show so tell the time today todays um we week what whats year you zoe".split())
+_CLOCK_SUBJECT_WORDS = frozenset("clock date day hour month time today todays year".split())
+
+
+def _is_bare_clock_ask(text: str) -> bool:
+    """True when every word is a clock word or filler and at least one names the clock. Pure."""
+    words = re.findall(r"[a-z]+", (text or "").lower().replace("'", "").replace("\u2019", ""))
+    return bool(words) and len(words) <= 10 and set(words) <= _CLOCK_ONLY_WORDS and bool(set(words) & _CLOCK_SUBJECT_WORDS)
+
+
 def _ui_for(domain: str) -> Optional[dict]:
     return {"calendar": {"kind": "calendar"}, "lists": {"kind": "list"},
             "reminders": {"kind": "reminder"}, "weather": {"kind": "weather"}}.get(domain)
@@ -387,8 +402,14 @@ def _plan(domain: str, text: str):
         if is_event_time_question(text) or is_own_fact_question(text):
             return None
         det = detect_intent(text, log_miss=False)
-        name = det.name if det and det.name in ("time_query", "date_query") else "time_query"
-        return (name, {}, "read")
+        if det and det.name in ("time_query", "date_query"):
+            return (det.name, {}, "read")
+        # The head claims `time` on the words "day"/"when"/"time" alone. The clock may answer only a question that has NO subject
+        # but the clock ("got the time?"); anything that names something else ("what day is bowls" -> "It's 6:05 PM.", QA round 8;
+        # "which day is max at kindy", round 7) is the brain's. One rule for the class, in place of one pattern per phrasing.
+        if _is_bare_clock_ask(text):
+            return ("time_query", {}, "read")
+        return None
     if domain == "memory":
         return ("memory_expert", {}, "expert")
     if domain == "people":
@@ -415,6 +436,11 @@ def _plan(domain: str, text: str):
                 and not re.search(r"\b(?:appointments?|meetings?|events?)\b", text, re.IGNORECASE)):
             return None      # (a generic "what appointments do I have" is still the agenda; a NAMED kind of event is not)
 
+    # A request for ADVICE is never a record read or write: "is there anything you think I should be thinking about this week"
+    # read the reminders ("No reminders set."), "anything I should be getting ready this week" read the calendar ("You've got
+    # nothing on this week.") while memory held an operation two weeks out (QA round 8). The brain answers, with recall.
+    if domain in ("lists", "calendar", "reminders") and _ADVICE_RE.search(text):
+        return None
     # calendar / lists / reminders / timers — disambiguate SHOW (read, safe)
     # from CREATE (write) using a regex hit first, else the create-signal cue.
     det = detect_intent(text, log_miss=False)
@@ -458,6 +484,10 @@ def _plan(domain: str, text: str):
             if show_intent == "calendar_show":
                 slots = {"qualifier": _calendar_qualifier(text)}
             elif show_intent == "list_show":
+                # "what am I saving for and how much have I got" read the shopping list aloud (QA round 8): a bare
+                # possession question is a list read only when the words point at a list or the shops.
+                if _WEAK_SHOW_RE.search(text) and not _LISTISH_RE.search(text):
+                    return None
                 slots = _list_show_slots(text)
                 if slots is None:       # it names a list we cannot read: the brain asks, never the shopping list
                     return None

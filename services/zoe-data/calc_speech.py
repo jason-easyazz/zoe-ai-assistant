@@ -105,6 +105,15 @@ _TOKEN_RE = re.compile(r"\d+(?:\.\d+)?|\.\d+|[a-z]+|[-+*/%^]|\S")
 _DIGITS_RE = re.compile(r"\d+(?:\.\d+)?|\.\d+")
 
 
+_UNIT_RE = re.compile(r"(?<=\d)\s*(?:dollars?|bucks|cents|volts?|amps?|watts?|kms?|kilomet(?:re|er)s?|met(?:re|er)s?|kgs?|kilos?"
+                      r"|grams?|lit(?:re|er)s?)\b")
+_PERIOD = r"(hour|day|night|week|fortnight|month|year)"
+_QTY = r"(\d+(?:\.\d+)?(?: (?:hundred|thousand|million))?)"
+#: "450 a week for 10 weeks" -> "450 * 10": a rate over a count of the SAME period. Mismatched periods are left alone (and so reject).
+_RATE_RE = re.compile(_QTY + r" (?:a|per|each|every) " + _PERIOD + r" for " + _QTY + r" (?P=per)s?\b".replace("(?P=per)", r"\2"))
+_HAS_OP_RE = re.compile(r"\b(?:plus|minus|times|multiplied by|divided by)\b|[-+*/]")
+
+
 class _Reject(Exception):
     """Not (valid) arithmetic - the parser gave up."""
 
@@ -136,6 +145,12 @@ def _prep(text: str) -> str:
     s = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", s)           # twenty-one
     s = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", s)         # 1,000 -> 1000
     s = s.replace(",", " ")
+    # Everyday sums carry money slang and units ("12 grand", "$450", "240 volts times 10 amps"; QA round 8: the brain answered
+    # 12000 + 450 x 10 as 167,500). A closed unit list after a DIGIT is dropped; any other stray word still rejects the utterance.
+    s = re.sub(r"\$\s*(?=\d)", "", s)
+    s = re.sub(r"(?<=\d)\s*k\b", " thousand", s)
+    s = re.sub(r"\bgrand\b", "thousand", s)
+    s = _UNIT_RE.sub("", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -468,6 +483,8 @@ def _parse(text: str, prev: Optional[float]) -> Optional[Calc]:
     s = _TAIL_RE.sub("", s, count=1).strip()
     if not s:
         return None
+    if asked or _HAS_OP_RE.search(s):       # a bare "450 a week for 10 weeks" is an answer to something, not a sum to do
+        s = _RATE_RE.sub(r"\1 * \3", s)
     toks = _map_ops(_tokens(s))
     if not toks or len(toks) > _MAX_TOKENS:
         return None
