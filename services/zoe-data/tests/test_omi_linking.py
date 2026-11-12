@@ -16,6 +16,10 @@ Negative controls - remove the guard by Edit and the named test turns red:
   ``_Link`` ``extra=forbid``                                              -> test_the_member_route_can_never_name_someone_else
   ``unassign(only_owner=...)`` / ``self_unassign``'s owner check          -> test_unlink_is_my_own_pendant_only
   ``pending_audio_known`` refusal                                         -> test_unlink_is_refused_while_audio_is_known_to_be_pending
+  ``self_unassign`` honouring a confirm with no warning before it          -> test_unlink_anyway_needs_the_warning_first_and_is_audited
+  ``resolve_handle`` searching beyond the caller's own pendants / a device id in a member response
+                                                                          -> test_member_screens_never_carry_a_device_id, test_unlink_is_my_own_pendant_only
+  ``drive`` finishing ``already`` for a pendant the panel does not remember -> test_a_pendant_that_was_not_remembered_is_remembered_on_retry
   ``effective`` using ``or`` / ``clamp_days`` using ``max``               -> test_a_member_can_narrow_but_never_widen_an_operator_flag
   the ``sync_paused`` check in ``upload_recording``                       -> test_pausing_holds_my_uploads_on_the_pi
   ``retention_days_for`` in ``store_recording``                           -> test_my_shorter_keep_audio_is_used_and_a_longer_one_is_capped
@@ -76,8 +80,12 @@ class Panel:
         self.clock.t += 1.0
 
 
-def omi_dev(dev: str, rssi: int, driver: str = "omi") -> dict:
-    return {"id": dev, "name": "Omi", "rssi": rssi, "driver": driver}
+def omi_dev(dev: str, rssi: int, driver: str = "omi", remembered: bool = False) -> dict:
+    return {"id": dev, "name": "Omi", "rssi": rssi, "driver": driver, "remembered": remembered}
+
+
+def hnd(uid: str, dev: str) -> str:
+    return omi_devices.handle_for(uid, dev)
 
 
 @pytest.fixture
@@ -106,6 +114,7 @@ def link(env, monkeypatch):
     monkeypatch.setattr(omi_linking, "_speak", speak)
     monkeypatch.setattr(omi_linking, "_screen", screen)
     omi_linking.reset()
+    omi_devices.reset_unlink_warnings()
     clock = Clock()
     broker = bt.Broker(clock=clock)
     env.clock, env.broker, env.said, env.screens = clock, broker, said, screens
@@ -262,9 +271,13 @@ def test_unlink_is_my_own_pendant_only(link):
     register(link, DEV_A, "ann")
     register(link, DEV_B, "ben")
     link.as_(ANN)
-    assert link.client.delete(f"/api/omi/my-pendant/{DEV_B}").status_code == 404 and owner(link, DEV_B) == "ben"
-    r = link.client.delete(f"/api/omi/my-pendant/{DEV_A}")
-    assert r.status_code == 200 and owner(link, DEV_A) == ""
+    for other in (hnd("ann", DEV_B), hnd("ben", DEV_B), DEV_B, DEV_A):   # Ben's pendant by any name, and my own by its raw id
+        assert link.client.delete(f"/api/omi/my-pendant/{other}").status_code == 404
+    assert owner(link, DEV_B) == "ben" and owner(link, DEV_A) == "ann"
+    assert run(omi_devices.resolve_handle("ann", hnd("ann", DEV_B))) == "", "a handle resolves only among the CALLER's own pendants"
+    assert run(omi_devices.resolve_handle("ann", hnd("ann", DEV_A))) == DEV_A
+    r = link.client.delete(f"/api/omi/my-pendant/{hnd('ann', DEV_A)}")
+    assert r.status_code == 200 and owner(link, DEV_A) == "" and DEV_A not in r.text
     assert r.json()["note"] == omi_linking.say("unlink_done_warn"), "nobody knows what is still on it: the member is warned"
     with pytest.raises(omi_devices.DeviceError):
         run(omi_devices.unassign(DEV_B, actor={"user_id": "ann"}, only_owner="ann"))
@@ -276,12 +289,63 @@ def test_unlink_is_refused_while_audio_is_known_to_be_pending(link):
     link.db.conn.execute("INSERT INTO omi_device_health VALUES (?, 'ann', 4096, NULL)", (DEV_A,))
     link.db.conn.commit()
     link.as_(ANN)
-    r = link.client.delete(f"/api/omi/my-pendant/{DEV_A}")
+    url = f"/api/omi/my-pendant/{hnd('ann', DEV_A)}"
+    r = link.client.delete(url)
     assert r.status_code == 409 and owner(link, DEV_A) == "ann"
     link.db.conn.execute("UPDATE omi_device_health SET ring_stored_bytes = 0")
     link.db.conn.commit()
-    r = link.client.delete(f"/api/omi/my-pendant/{DEV_A}")
+    omi_devices.reset_unlink_warnings()
+    r = link.client.delete(url)
     assert r.status_code == 200 and r.json()["pending_audio"] is False and owner(link, DEV_A) == ""
+
+
+def test_unlink_anyway_needs_the_warning_first_and_is_audited(link):
+    register(link, DEV_A, "ann")
+    link.db.conn.execute("INSERT INTO omi_device_health VALUES (?, 'ann', 4096, NULL)", (DEV_A,))
+    link.db.conn.commit()
+    link.as_(ANN)
+    url = f"/api/omi/my-pendant/{hnd('ann', DEV_A)}"
+    r = link.client.delete(url + "?confirm=true")
+    assert r.status_code == 409 and owner(link, DEV_A) == "ann", "a confirmation with no warning before it does nothing"
+    r = link.client.delete(url)
+    assert r.status_code == 409 and "go to whoever links it next" in r.json()["detail"], "first: refused, with the plain warning"
+    assert owner(link, DEV_A) == "ann"
+    r = link.client.delete(url + "?confirm=true")
+    assert r.status_code == 200 and r.json()["forced"] is True and owner(link, DEV_A) == ""
+    assert r.json()["note"] == omi_linking.say("unlink_forced")
+    forced = [a for a in link.audit() if a.get("action") == "unassign" and a.get("forced_pending")]
+    assert {a["phase"] for a in forced} == {"requested", "finished"} and forced[0]["actor"] == "ann"
+    # the warning is single-use and short-lived
+    register(link, DEV_A, "ann")
+    link.as_(ANN)
+    assert link.client.delete(url).status_code == 409
+    # the route uses the real clock; the time bound is pinned here with an injected one
+    c = [100.0]
+    with pytest.raises(omi_devices.DeviceError):
+        run(omi_devices.self_unassign(DEV_A, ANN, clock=lambda: c[0]))                    # warned at t=100
+    c[0] += omi_devices.UNLINK_CONFIRM_S + 1
+    with pytest.raises(omi_devices.DeviceError) as ei:
+        run(omi_devices.self_unassign(DEV_A, ANN, confirm_pending=True, clock=lambda: c[0]))
+    assert ei.value.code == "no_warning_to_confirm" and owner(link, DEV_A) == "ann"
+
+
+def test_member_screens_never_carry_a_device_id(link):
+    register(link, DEV_A, "ann")
+    link.as_(ANN)
+    body = link.client.get("/api/omi/my-pendant")
+    assert body.status_code == 200 and DEV_A not in body.text
+    assert body.json()["pendants"][0]["handle"] == hnd("ann", DEV_A) != hnd("ben", DEV_A), "the handle is member-scoped"
+    w, _ = open_and_drive(link, BEN, [omi_dev(DEV_B, -45)])
+    assert DEV_B not in str(w.public(link.clock())) and DEV_B not in str(omi_linking.status("ben"))
+
+
+def test_a_pendant_that_was_not_remembered_is_remembered_on_retry(link):
+    register(link, DEV_A, "ann")
+    w, panel = open_and_drive(link, ANN, [omi_dev(DEV_A, -45, remembered=False)])
+    assert w.state == "linked" and w.remembered is True and ("connect", DEV_A) in panel.ops, "mine but not remembered here: remember it"
+    omi_linking.reset()
+    w, panel = open_and_drive(link, ANN, [omi_dev(DEV_A, -45, remembered=True)])
+    assert w.state == "already" and not any(op == "connect" for op, _ in panel.ops), "mine AND remembered: nothing to do"
 
 
 # --- settings: narrow, never widen --------------------------------------------------------------------------------------------------

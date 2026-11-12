@@ -31,7 +31,7 @@ _MAX_CHARS = 120
 
 
 def classify(text: str) -> Optional[str]:
-    """``link`` | ``unlink`` | ``status`` for a whole-utterance cue, else None. Pure."""
+    """``link`` | ``unlink`` | ``unlink_force`` | ``status`` for a whole-utterance cue, else None. Pure."""
     lx = omi_linking.lex("en")
     s = re.sub(r"[?!.,;:]+", " ", str(text or "").lower()).strip()
     s = re.sub(r"\s+", " ", s)
@@ -40,7 +40,7 @@ def classify(text: str) -> Optional[str]:
     for _ in range(3):                                     # "hey zoe could you ..." strips in a few passes
         for rx in lx.get("strip_lead") or ():
             s = re.sub("^(?:" + rx + ")", "", s).strip()
-    for kind in ("unlink", "link", "status"):            # unlink first: the more consequential reading of an ambiguous utterance
+    for kind in ("unlink_force", "unlink", "link", "status"):     # the unlink readings first: the more consequential of an ambiguous one
         for rx in (lx.get("cues") or {}).get(kind) or ():
             if re.fullmatch(rx, s):
                 return kind
@@ -89,7 +89,8 @@ async def _status(uid: str) -> str:
     return omi_linking.say("status_linked_synced", ago=ago) if ago else omi_linking.say("status_linked")
 
 
-async def _unlink(uid: str, role: str) -> str:
+async def _unlink(uid: str, role: str, *, confirm: bool = False) -> str:
+    """Unlink the member's one pendant. ``confirm`` ("unlink it anyway") only acts right after the pending-audio warning."""
     import omi_devices
     mine = await omi_devices.owned_by(uid)
     if not mine:
@@ -97,9 +98,11 @@ async def _unlink(uid: str, role: str) -> str:
     if len(mine) > 1:
         return omi_linking.say("unlink_many")
     try:
-        out = await omi_devices.self_unassign(mine[0]["device_id"], {"user_id": uid, "role": role})
+        out = await omi_devices.self_unassign(mine[0]["device_id"], {"user_id": uid, "role": role}, confirm_pending=confirm)
     except omi_devices.DeviceError as exc:
-        return omi_linking.say("unlink_pending" if exc.code == "audio_pending" else "unlink_fail")
+        return omi_linking.say({"audio_pending": "unlink_pending", "no_warning_to_confirm": "unlink_force_none"}.get(exc.code, "unlink_fail"))
+    if out.get("forced"):
+        return omi_linking.say("unlink_forced")
     return omi_linking.say("unlink_done_warn" if out.get("pending_audio") is None else "unlink_done")
 
 
@@ -138,8 +141,8 @@ async def tier(text: str, user_id: str, session_id: str = "", *, channel: Option
             reply = await _status(uid)
         elif allow_writes is False:
             return None
-        elif kind == "unlink":
-            reply = await _unlink(uid, audience)
+        elif kind in ("unlink", "unlink_force"):
+            reply = await _unlink(uid, audience, confirm=kind == "unlink_force")
         else:
             import manner_block
             if not await manner_block.is_adult(uid):

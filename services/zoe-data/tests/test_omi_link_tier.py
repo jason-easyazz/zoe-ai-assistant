@@ -9,6 +9,7 @@ Negative controls - remove the guard by Edit and the named test turns red:
   the VOICE_CHANNELS / panel check                                      -> test_typed_chat_is_told_to_use_the_panel
   ``allow_writes is False`` return                                      -> test_a_dry_run_changes_nothing
   ``self_unassign`` owning check (via ``owned_by``)                      -> test_unlink_by_voice_is_my_own_pendant_only
+  "unlink it anyway" accepted without the warning                       -> test_unlink_it_anyway_by_voice_only_after_the_warning
 
 Synthetic data only.
 """
@@ -128,3 +129,18 @@ def test_unlink_by_voice_is_my_own_pendant_only(tier_env):
     assert say("unlink my pendant") == omi_linking.say("unlink_done_warn")
     assert owner(tier_env, DEV_A) == "" and owner(tier_env, DEV_B) == "ben"
     assert say("unlink my pendant", verified=False) == omi_linking.say("unverified")
+
+
+def test_unlink_it_anyway_by_voice_only_after_the_warning(tier_env):
+    import omi_devices
+    omi_devices.reset_unlink_warnings()
+    register(tier_env, DEV_A, "ann")
+    tier_env.db.conn.execute("INSERT INTO omi_device_health VALUES (?, 'ann', 4096, NULL)", (DEV_A,))
+    tier_env.db.conn.commit()
+    assert olt.classify("unlink it anyway") == "unlink_force" and olt.classify("go ahead anyway") is None
+    assert say("unlink it anyway") == omi_linking.say("unlink_force_none") and owner(tier_env, DEV_A) == "ann", \
+        "a confirmation with no warning before it does nothing"
+    first = say("unlink my pendant")
+    assert first == omi_linking.say("unlink_pending") and "go to whoever links it next" in first and owner(tier_env, DEV_A) == "ann"
+    assert say("unlink it anyway", verified=False) == omi_linking.say("unverified") and owner(tier_env, DEV_A) == "ann"
+    assert say("unlink it anyway") == omi_linking.say("unlink_forced") and owner(tier_env, DEV_A) == ""

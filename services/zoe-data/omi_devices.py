@@ -24,10 +24,13 @@ guesses an owner.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -240,12 +243,14 @@ async def unassign(device_id: str, *, actor: dict, only_owner: Optional[str] = N
         prev = before[0]["user_id"] if before[0]["active"] else ""
         if only_owner is not None and prev != only_owner:
             raise DeviceError(404, "not_yours", "You don't have that pendant linked.")
+        extra = {k: True for k in ("self", "forced_pending") if actor.get(k)}     # a member's own unlink / "unlink anyway"
         if not audit({"phase": "requested", "action": "unassign", "device_id": device_id, "from_user": prev or None,
-                      "actor": actor.get("user_id"), "role": actor.get("role")}):
+                      "actor": actor.get("user_id"), "role": actor.get("role"), **extra}):
             raise DeviceError(503, "audit_unavailable", "The audit log is unavailable, so nothing was changed.")
         await db.execute("UPDATE omi_devices SET user_id = '', label = '', active = 0, updated_at = ? WHERE device_id = ?", (_now(), device_id))
         await db.commit()
-    audit({"phase": "finished", "action": "unassign", "device_id": device_id, "actor": actor.get("user_id"), "ok": True})
+    audit({"phase": "finished", "action": "unassign", "device_id": device_id, "actor": actor.get("user_id"), "ok": True,
+           **{k: True for k in ("self", "forced_pending") if actor.get(k)}})
     return True
 
 
@@ -256,6 +261,26 @@ async def owned_by(user_id: str) -> list[dict]:
     async with get_compat_db() as db:
         rows = await _fetch(db, "SELECT * FROM omi_devices WHERE user_id = ? AND active = 1 ORDER BY registered_at, device_id", (user_id,))
     return [_public(r) for r in rows]
+
+
+#: per-process key for the member-facing pendant HANDLE: a member's screen never carries the device id. A restart changes every
+#: handle, which only means the page re-reads its list (handles are never stored).
+_HANDLE_KEY = secrets.token_bytes(32)
+
+
+def handle_for(user_id: str, device_id: str) -> str:
+    """An opaque, member-scoped name for one of the member's pendants (HMAC of member + device; not the device id, not reversible)."""
+    return hmac.new(_HANDLE_KEY, f"{user_id}\x00{device_id}".encode(), hashlib.sha256).hexdigest()[:24]
+
+
+async def resolve_handle(user_id: str, handle: str) -> str:
+    """The device id behind ``handle`` - searched among the CALLER's own pendants only; '' when it names none of them."""
+    if not re.fullmatch(r"[0-9a-f]{24}", handle or ""):
+        return ""
+    for d in await owned_by(user_id):
+        if hmac.compare_digest(handle_for(user_id, d["device_id"]), handle):
+            return d["device_id"]
+    return ""
 
 
 def member_only(member: dict) -> str:
@@ -299,21 +324,42 @@ async def pending_audio_known(device_id: str) -> Optional[bool]:
     return int(rows[0]["ring_stored_bytes"]) > 0
 
 
-async def self_unassign(device_id: str, member: dict) -> dict:
-    """A member unlinks THEIR OWN pendant. Someone else's pendant is 404 (indistinguishable from no such pendant). Refused while the
-    pendant is KNOWN to hold unsynced audio (it would go to whoever links it next); when that is unknown the answer says so
+#: how long an "unlink anyway" may follow the pending-audio warning it answers
+UNLINK_CONFIRM_S = 120.0
+_UNLINK_WARNED: dict[tuple[str, str], float] = {}
+
+
+def reset_unlink_warnings() -> None:
+    _UNLINK_WARNED.clear()
+
+
+async def self_unassign(device_id: str, member: dict, *, confirm_pending: bool = False, clock=None) -> dict:
+    """A member unlinks THEIR OWN pendant. Someone else's pendant is 404 (indistinguishable from no such pendant). While the pendant is
+    KNOWN to hold unsynced audio the first request is refused with the warning (that audio will go to whoever links it next) and
+    remembered; a SECOND, explicit request (``confirm_pending``) within ``UNLINK_CONFIRM_S`` of that warning unlinks anyway, audited
+    as ``forced_pending``. A confirmation with no warning before it does nothing. When pending audio is unknown the answer says so
     (``pending_audio: None``) and the caller speaks the warning."""
+    import time as _time
+    clock = clock or _time.monotonic
     uid = member_only(member)
     if not DEVICE_ID_RX.match(device_id or ""):
         raise DeviceError(400, "bad_device_id", "That is not a pendant id.")
     if await owner_of(device_id) != uid:
         raise DeviceError(404, "not_yours", "You don't have that pendant linked.")
     pending = await pending_audio_known(device_id)
-    if pending:
-        raise DeviceError(409, "audio_pending", "Your pendant still has recordings that haven't synced. Leave it near the panel until "
-                                                "they finish, then unlink it.")
-    await unassign(device_id, actor={"user_id": uid, "role": member.get("role"), "self": True}, only_owner=uid)
-    return {"ok": True, "device_id": device_id, "pending_audio": pending}
+    key = (uid, device_id)
+    warned_at = _UNLINK_WARNED.pop(key, None)
+    confirmed = bool(confirm_pending and warned_at is not None and clock() - warned_at <= UNLINK_CONFIRM_S)
+    if confirm_pending and not confirmed:
+        raise DeviceError(409, "no_warning_to_confirm", "There is nothing to confirm. Ask me to unlink your pendant first.")
+    if pending and not confirmed:
+        _UNLINK_WARNED[key] = clock()
+        raise DeviceError(409, "audio_pending", "Your pendant still has recordings that haven't synced. If you unlink it now, they will "
+                                                "go to whoever links it next. Unlink anyway to do it, or leave it near the panel until "
+                                                "they finish.")
+    await unassign(device_id, actor={"user_id": uid, "role": member.get("role"), "self": True, "forced_pending": bool(confirmed)},
+                   only_owner=uid)
+    return {"ok": True, "pending_audio": pending, "forced": bool(confirmed)}
 
 
 async def forget_user(db, user_id: str) -> int:

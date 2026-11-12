@@ -8,6 +8,9 @@
     "(?:can you|could you|please|would you|will you|can i|could i|i want to|i'd like to|i would like to|let's|lets)[\\s]+"
   ],
   "cues": {
+    "unlink_force": [
+      "(?:yes )?unlink (?:it|my (?:omi|pendant|omi pendant)) anyway(?: please)?"
+    ],
     "unlink": [
       "(?:unlink|disconnect|remove|unpair|forget) my (?:omi|pendant|omi pendant)(?: from (?:you|zoe|me))?(?: please)?",
       "(?:take|remove) my (?:omi|pendant|omi pendant) off (?:my account|me)(?: please)?"
@@ -55,7 +58,9 @@
     "unlink_many": "You have more than one pendant linked. Unlink the right one in Settings under My pendant.",
     "unlink_done": "Done. Your pendant is unlinked. Anything still on it will go to whoever links it next, so let it finish syncing first next time.",
     "unlink_done_warn": "Done. Your pendant is unlinked. If anything was still on it that hadn't synced, it will go to whoever links it next.",
-    "unlink_pending": "Your pendant still has recordings that haven't synced. Leave it near the panel until they finish, then ask me again.",
-    "unlink_fail": "Something went wrong and I couldn't unlink your pendant just now. Please ask me again."
+    "unlink_pending": "Your pendant still has recordings that haven't synced. If you unlink it now, they will go to whoever links it next. Say unlink it anyway to do it, or leave it near the panel until they finish.",
+    "unlink_fail": "Something went wrong and I couldn't unlink your pendant just now. Please ask me again.",
+    "unlink_forced": "Done. Your pendant is unlinked. The recordings that hadn't synced will go to whoever links it next.",
+    "unlink_force_none": "There's nothing to confirm. Ask me to unlink your pendant first."
   }
 }

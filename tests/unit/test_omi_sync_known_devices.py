@@ -6,6 +6,7 @@ Negative controls (each turns a named test red when the guard is removed by Edit
   ``union_addresses`` without the case-insensitive dedupe                    -> test_only_omi_pendants_from_the_known_store_join_the_env_list
   ``Runner.step`` without ``rotation.refresh``                               -> test_a_pendant_linked_after_start_is_visited_without_a_restart
   ``cli.main`` running the loop before the ``enabled`` check                 -> test_the_flag_still_turns_everything_off_with_remembered_pendants
+  the refresh log listing device ids                                         -> test_the_refresh_log_carries_a_count_never_an_id
   the reader pointed at a different format than ``panel_bt.known.KnownStore`` -> test_the_reader_reads_what_the_agent_writes
 
 Synthetic addresses only. No radio, no network.
@@ -143,3 +144,17 @@ def test_the_flag_still_turns_everything_off_with_remembered_pendants(tmp_path, 
     assert cli.main(["run"]) == 0 and called == [], "OMI_SYNC_ENABLED off: a remembered pendant changes nothing"
     monkeypatch.setenv("OMI_SYNC_ENABLED", "1")       # control: on, the remembered pendant is synced
     assert cli.main(["run"]) == 0 and called == [(B,)]
+
+
+def test_the_refresh_log_carries_a_count_never_an_id(tmp_path, caplog):
+    import logging
+    known = tmp_path / "known.json"
+    s = config.load({"OMI_PENDANT_ADDRESSES": A, "OMI_SYNC_KNOWN_DEVICES": str(known)})
+    r, _seen, _clock = _runner(s)
+    write_known(known, {D: "omi"})
+    with caplog.at_level(logging.INFO, logger="omi_sync"):
+        asyncio.run(r.step())
+    text = "\n".join(r.getMessage() for r in caplog.records if "pendant list" in r.getMessage())
+    assert "2 pendant(s)" in text, "the refresh line (the visit's own sync line is pre-existing and not this guard's)"
+    for ident in (device_hash(A), device_hash(D), device_hash(A)[:6], A, D):
+        assert ident not in text, "no device id or address in the refresh log"

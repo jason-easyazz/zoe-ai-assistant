@@ -84,8 +84,9 @@ class Window:
     clock: Callable[[], float] = field(default=time.monotonic, repr=False)
 
     def public(self, now: float) -> dict:
-        return {"panel_id": self.panel_id, "state": self.state, "reason": self.reason, "device_id": self.device_id or None,
-                "remembered": self.remembered, "seconds_left": max(0, int(self.deadline - now))}
+        # no device id: this goes to the member's screen (the pendant is named by its label + an opaque handle elsewhere)
+        return {"panel_id": self.panel_id, "state": self.state, "reason": self.reason, "remembered": self.remembered,
+                "seconds_left": max(0, int(self.deadline - now))}
 
 
 def reset() -> None:
@@ -221,6 +222,15 @@ async def _run_job(broker: Any, w: Window, op: str, device_id: Optional[str], sl
     return None
 
 
+async def _remember(broker: Any, w: Window, device_id: str, sleep: Callable, clock: Callable) -> bool:
+    """Connect once (audited) so the panel's known-devices store remembers the pendant, then let go. True when it connected."""
+    conn = await _run_job(broker, w, "connect", device_id, sleep, clock)
+    ok = bool(conn is not None and conn.state == "succeeded")
+    if ok:
+        await _run_job(broker, w, "disconnect", device_id, sleep, clock)
+    return ok
+
+
 async def _owner(device_id: str) -> str:
     return await devices.owner_of(device_id)
 
@@ -253,7 +263,15 @@ async def drive(w: Window, *, broker: Any, sleep: Callable = asyncio.sleep, cloc
             free = [i for i, o in owners.items() if not o]
             if mine and not free:
                 w.device_id = mine[0]
-                await _finish(w, "already", "", "already")
+                row = next(d for d in near if d["id"] == mine[0])
+                if row.get("remembered") is True:          # mine AND this panel's known-devices store has it: truly nothing to do
+                    await _finish(w, "already", "", "already")
+                    break
+                # mine but NOT remembered here (an earlier "remember" connect failed): do the remember step again, or omi-sync
+                # would never find it
+                await _screen(w.panel_id, "phrase", say("screen_title"), say("screen_remember"), 3)
+                w.remembered = await _remember(broker, w, mine[0], sleep, clock)
+                await _finish(w, "linked", "", "linked" if w.remembered else "linked_not_remembered")
                 break
             if len(free) == 1:
                 await _screen(w.panel_id, "accepted", say("screen_title"), say("screen_found"), 2)
@@ -268,10 +286,7 @@ async def drive(w: Window, *, broker: Any, sleep: Callable = asyncio.sleep, cloc
                 async with get_compat_db() as db:
                     await ms.acknowledge_notice(db, w.user_id)
                 await _screen(w.panel_id, "phrase", say("screen_title"), say("screen_remember"), 3)
-                conn = await _run_job(broker, w, "connect", free[0], sleep, clock)
-                w.remembered = bool(conn is not None and conn.state == "succeeded")
-                if w.remembered:
-                    await _run_job(broker, w, "disconnect", free[0], sleep, clock)
+                w.remembered = await _remember(broker, w, free[0], sleep, clock)
                 await _finish(w, "linked", "", "linked" if w.remembered else "linked_not_remembered")
                 break
             if len(free) > 1 and not told_crowded:

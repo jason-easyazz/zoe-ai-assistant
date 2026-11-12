@@ -22,7 +22,8 @@ let checks = 0;
 function ok(cond, msg) { assert.ok(cond, msg); checks++; }
 function eq(a, b, msg) { assert.deepStrictEqual(a, b, msg); checks++; }
 
-const DEV = '0123456789abcdef';
+const HND = '0123456789abcdef01234567';     // an opaque member-scoped handle (24 hex), never a device id
+const DEVICE_ID_LIKE = /\b[0-9a-f]{16}\b/;
 const ALL_ON = { sync: true, speaker_tag: true, learn_voices: true, keep_audio_days_max: 7, day_review: true };
 function view(extra) {
   return Object.assign({
@@ -50,7 +51,7 @@ ok(/data-action="link"/.test(h) && /min-height:48px/.test(h), 'touch shows a big
 ok(!/<input|<textarea|contenteditable/i.test(h), 'nothing is typed on the panel');
 h = OP.render(view(), { surface: 'desktop', panelId: null });
 ok(!/data-action="link"/.test(h) && /link my pendant/.test(h), 'desktop never links; it says how to at the panel');
-h = OP.render(view({ pendants: [{ device_id: DEV, label: '<img onerror=x>', last_sync_at: new Date(Date.now() - 3 * 3600000).toISOString() }] }),
+h = OP.render(view({ pendants: [{ handle: HND, label: '<img onerror=x>', last_sync_at: new Date(Date.now() - 3 * 3600000).toISOString() }] }),
   { surface: 'touch', panelId: 'p1' });
 ok(/Linked\. Last synced 3 hours ago/.test(h) && /data-action="unlink"/.test(h), 'linked + last sync + unlink');
 ok(!/<img onerror/.test(h) && /&lt;img onerror=x&gt;/.test(h), 'label escaped');
@@ -75,11 +76,18 @@ function btn(action, attrs) {
   return { target: { getAttribute: function (k) { return a[k] === undefined ? null : a[k]; }, parentNode: null } };
 }
 const calls = [];
-let current = view({ pendants: [{ device_id: DEV, label: '', last_sync_at: null }] });
+let current = view({ pendants: [{ handle: HND, label: '', last_sync_at: null }] });
+let pendingOnce = false;
 function fetchJson(method, url, body) {
   calls.push([method, url, body]);
   if (method === 'GET') return Promise.resolve(current);
   if (url === '/api/omi/my-pendant/link' && !body.notice_ack) { const e = new Error('notice'); e.status = 428; return Promise.reject(e); }
+  if (method === 'DELETE' && pendingOnce && !/confirm=true/.test(url)) {
+    pendingOnce = false;
+    const e = new Error('Your pendant still has recordings that have not synced. If you unlink it now, they will go to whoever links it next.');
+    e.status = 409;
+    return Promise.reject(e);
+  }
   if (method === 'DELETE') return Promise.resolve({ ok: true, note: 'Done. Your pendant is unlinked.' });
   return Promise.resolve({ ok: true });
 }
@@ -94,13 +102,24 @@ const timers = { set: function () { return 1; }, clear: function () {} };
   await m.click(btn('notice-ok'));
   const linkCalls = calls.filter(c => c[1] === '/api/omi/my-pendant/link');
   eq(linkCalls[linkCalls.length - 1][2], { panel_id: 'p1', notice_ack: true }, 'link names only the panel; never another member');
-  await m.click(btn('unlink', { 'data-device': DEV }));
+  ok(!DEVICE_ID_LIKE.test(root.innerHTML.replace(HND, '')), 'the page never shows a device id');
+  await m.click(btn('unlink-force'));
+  ok(!calls.some(c => c[0] === 'DELETE'), 'an "unlink anyway" with no warning before it does nothing');
+  await m.click(btn('unlink', { 'data-handle': HND }));
   ok(/go to whoever links it next/.test(root.innerHTML) && !calls.some(c => c[0] === 'DELETE'), 'unlink asks first, with the warning');
   await m.click(btn('unlink-ok'));
-  ok(calls.some(c => c[0] === 'DELETE' && c[1] === '/api/omi/my-pendant/' + DEV), 'then unlinks my pendant');
-  await m.click(btn('unlink', { 'data-device': '../devices/x' }));
+  ok(calls.some(c => c[0] === 'DELETE' && c[1] === '/api/omi/my-pendant/' + HND), 'then unlinks my pendant, by its handle');
+  await m.click(btn('unlink', { 'data-handle': '../devices/x' }));
   await m.click(btn('unlink-ok'));
-  ok(calls.filter(c => c[0] === 'DELETE').length === 1, 'a malformed id is never sent');
+  ok(calls.filter(c => c[0] === 'DELETE').length === 1, 'a malformed handle is never sent');
+  /* unsynced audio known: the first unlink is refused with the warning, a second explicit tap unlinks anyway */
+  pendingOnce = true;
+  await m.click(btn('unlink', { 'data-handle': HND }));
+  await m.click(btn('unlink-ok'));
+  ok(/Unlink anyway/.test(root.innerHTML) && /go to whoever links it next/.test(root.innerHTML), 'refused: the warning says where the audio goes');
+  await m.click(btn('unlink-force'));
+  const dels = calls.filter(c => c[0] === 'DELETE');
+  eq(dels[dels.length - 1][1], '/api/omi/my-pendant/' + HND + '?confirm=true', 'the second, explicit tap confirms');
   current = view({ operator: Object.assign({}, ALL_ON, { day_review: false }) });
   await m.reload();
   const before = calls.length;

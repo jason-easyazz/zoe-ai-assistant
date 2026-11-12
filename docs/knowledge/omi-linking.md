@@ -26,8 +26,10 @@ password; a child's pendant is never voice-tagged; lists and settings are per me
   it. This replaces the PIN step-up for this one flow only; the step-up policy (`voice_session_policy.json`) is unchanged.
 - No QR for linking (nothing is typed on a phone).
 - Unlink by voice or touch, own pendant only. The member is told plainly that anything still on the pendant goes to whoever links it
-  next. When the pendant's last health report says it still holds unsynced audio, unlink is refused until it has synced; when that is
-  not known (no report, older firmware) the unlink goes ahead with the warning.
+  next. When the pendant's last health report says it still holds unsynced audio, the first unlink is refused with a plain warning
+  that the unsynced audio will go to whoever links the pendant next; a second, explicit "unlink it anyway" (voice) or "Unlink anyway"
+  tap (touch) within two minutes of that warning unlinks, audited as `forced_pending`. A confirmation with no warning before it does
+  nothing. When pending audio is not known (no report, older firmware) the unlink goes ahead with the warning.
 - The notice: the first time a member links, they hear one sentence - the pendant records the people around them as well as them, and
   syncing can be paused in Settings under My pendant. The time is stored per member (`omi_voice_settings.notice_ack_at`). No legal
   wording in the repo beyond that sentence.
@@ -45,7 +47,8 @@ Voice, at the panel: "Zoe, link my pendant".
 4. Exactly one unowned pendant next to the panel -> `omi_devices.self_assign` links it to the member (audited `self_link`, fail-closed),
    the notice acknowledgement is stored, and the panel connects to it once (audited `connect`) so its known-devices store remembers it;
    then it lets go. Two pendants next to the panel -> "keep only yours next to the panel". A pendant someone else owns -> refused.
-   Nothing heard within the window -> "I couldn't find your pendant".
+   Nothing heard within the window -> "I couldn't find your pendant". A pendant that is already mine but that this panel does not
+   remember (an earlier connect failed) is connected again on the retry; only mine AND remembered is "already linked".
 5. Progress is shown with the existing enrolment overlay (`voice_enroll` push frame -> `js/touch-voice-enroll.js`: a step line, three
    dots, a tick) and each outcome is spoken on that panel (`voice_announce`, trigger `omi_link`).
 6. omi-sync on the Pi reads the agent's known-devices store on every step, so the new pendant is synced from its next visit. No env edit,
@@ -59,6 +62,8 @@ first link). Desktop Settings shows the state and the settings, and says to link
 ## Privacy rules
 
 - The pendant's BLE address never leaves the Pi; every message carries the 16-hex device id (`device_hash`).
+- A member's screen never carries a device id: their pendants are a label plus an opaque handle (an HMAC of member + device under a
+  per-process key), resolved only against the caller's own pendants. Logs carry counts and panel ids, never a device id or address.
 - The member routes act only on the caller's own id; the request body cannot name anyone else (`extra=forbid`, a stray field is a 422).
 - A device token, a guest and an anonymous caller are refused. A child cannot self-link, and a child's recordings are still never
   voice-tagged or learned (D14: `_diarise` and `may_learn` require a positive adult; no member setting changes that).
@@ -88,11 +93,11 @@ linking." and the voice says the same.
 
 ## Routes
 
-- `GET /api/omi/my-pendant` - linking on/off (and why), my pendants (label, linked at, last sync), a window in progress, my settings,
+- `GET /api/omi/my-pendant` - linking on/off (and why), my pendants (handle, label, linked at, last sync), a window in progress, my settings,
   the operator ceiling, the effective values, the notice sentence and whether I have heard it.
 - `POST /api/omi/my-pendant/link` `{"panel_id", "notice_ack"}` - open the window (fresh PIN at that panel; 428 until the notice is
   acknowledged once). `GET /api/omi/my-pendant/link` - the window's state.
-- `DELETE /api/omi/my-pendant/{device_id}` - unlink my own pendant.
+- `DELETE /api/omi/my-pendant/{handle}` - unlink my own pendant; `?confirm=true` only right after the pending-audio warning.
 - `GET` / `PUT /api/omi/voices/settings` - the settings above (every field optional).
 
 All are mounted with the Omi router (absent while `ZOE_OMI_SYNC_ENABLED` is off). The admin routes are unchanged.

@@ -294,7 +294,8 @@ async def _my_pendants(uid: str) -> list[dict]:
         sync = {p["device_id"]: p for p in await health.list_for(uid)}
     except Exception:  # noqa: BLE001 - no health table yet = no "last sync", not a 500
         sync = {}
-    return [{"device_id": d["device_id"], "label": d["label"] or "", "linked_at": d["registered_at"],
+    # the member's screen never carries a device id: a label + an opaque member-scoped handle (resolved against the caller's own list)
+    return [{"handle": devices.handle_for(uid, d["device_id"]), "label": d["label"] or "", "linked_at": d["registered_at"],
              "last_sync_at": (sync.get(d["device_id"]) or {}).get("last_sync_at")} for d in await devices.owned_by(uid)]
 
 
@@ -348,17 +349,21 @@ async def my_link_window(user: dict = Depends(_require_member)):
     return {"window": omi_linking.status(user["user_id"])}
 
 
-@router.delete("/my-pendant/{device_id}")
-async def unlink_my_pendant(device_id: str, user: dict = Depends(_require_member)):
-    """Unlink MY pendant (someone else's is 404). Refused while it is known to hold unsynced audio; otherwise the answer carries the
-    warning that anything still on it goes to whoever links it next."""
+@router.delete("/my-pendant/{handle}")
+async def unlink_my_pendant(handle: str, confirm: bool = Query(False), user: dict = Depends(_require_member)):
+    """Unlink MY pendant, named by its handle (anything else - someone else's, a raw device id - is 404). While it is known to hold
+    unsynced audio the first request is a 409 with the warning; ``?confirm=true`` right after that warning unlinks anyway."""
     import omi_linking
     _registry_on()
+    device_id = await devices.resolve_handle(user["user_id"], handle)
+    if not device_id:
+        raise HTTPException(status_code=404, detail="You don't have that pendant linked.")
     try:
-        out = await devices.self_unassign(device_id, user)
+        out = await devices.self_unassign(device_id, user, confirm_pending=confirm)
     except devices.DeviceError as exc:
         _device_error(exc)
-    out["note"] = omi_linking.say("unlink_done_warn" if out.get("pending_audio") is None else "unlink_done")
+    out["note"] = omi_linking.say("unlink_forced" if out.get("forced") else
+                                  "unlink_done_warn" if out.get("pending_audio") is None else "unlink_done")
     return out
 
 

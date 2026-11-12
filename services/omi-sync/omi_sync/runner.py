@@ -192,7 +192,7 @@ class Runner:
         if current is not None:
             try:
                 if self.rotation.refresh(current()):
-                    log.info("pendants now: %s", ", ".join(t.device_id for t in self.rotation.targets) or "none")
+                    log.info("pendant list changed: %d pendant(s)", len(self.rotation.targets))   # a count, never an id
             except Exception as exc:  # noqa: BLE001 - an unreadable list keeps the current rotation
                 log.warning("pendant list not refreshed: %s", type(exc).__name__)
         now = self.clock()

@@ -18,7 +18,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var DEVICE_ID = /^[0-9a-f]{16}$/;
+  var HANDLE = /^[0-9a-f]{24}$/;      // an opaque, member-scoped name for one of MY pendants (never a device id)
   var DAY_CHOICES = [1, 3, 7, 14, 30, 90];
   var POLL_MS = 2000;
 
@@ -87,10 +87,10 @@
     var big = surface === 'touch' ? ' style="min-height:48px"' : '';
     if (!pend.length) return '<div class="op-state" data-state="unlinked">No pendant linked to you yet.</div>';
     return pend.map(function (p) {
-      var id = DEVICE_ID.test(p.device_id || '') ? p.device_id : '';
+      var id = HANDLE.test(p.handle || '') ? p.handle : '';
       return '<div class="op-state" data-state="linked"><div class="op-row-label">' + esc(p.label || 'My pendant') + '</div>' +
         '<div class="op-row-sub">Linked. Last synced ' + esc(ago(p.last_sync_at)) + '.</div>' +
-        (id ? '<button type="button" class="op-unlink" data-action="unlink" data-device="' + id + '"' + big + '>Unlink</button>' : '') +
+        (id ? '<button type="button" class="op-unlink" data-action="unlink" data-handle="' + id + '"' + big + '>Unlink</button>' : '') +
         '</div>';
     }).join('');
   }
@@ -126,7 +126,12 @@
         '<button type="button" data-action="notice-ok" style="min-height:48px">I understand, link it</button>' +
         '<button type="button" data-action="notice-cancel" style="min-height:48px">Not now</button></div>';
     }
-    if (opts.confirmUnlink) {
+    if (opts.confirmUnlink && opts.pendingWarning) {
+      /* the server said unsynced audio is still on it: a SECOND, explicit tap unlinks anyway */
+      html += '<div class="op-confirm" data-step="pending" role="dialog"><div>' + esc(opts.pendingWarning) + '</div>' +
+        '<button type="button" data-action="unlink-force" style="min-height:48px">Unlink anyway</button>' +
+        '<button type="button" data-action="unlink-cancel" style="min-height:48px">Keep it</button></div>';
+    } else if (opts.confirmUnlink) {
       html += '<div class="op-confirm" role="dialog"><div>Anything still on the pendant will go to whoever links it next, so let it ' +
         'finish syncing first.</div><button type="button" data-action="unlink-ok" style="min-height:48px">Unlink</button>' +
         '<button type="button" data-action="unlink-cancel" style="min-height:48px">Keep it</button></div>';
@@ -159,12 +164,13 @@
     cfg = cfg || {};
     var surface = cfg.surface === 'touch' ? 'touch' : 'desktop';
     var timers = cfg.timers || { set: function (f, ms) { return setTimeout(f, ms); }, clear: function (t) { clearTimeout(t); } };
-    var state = { view: null, notice: false, confirmUnlink: '', message: '', poll: null };
+    var state = { view: null, notice: false, confirmUnlink: '', pendingWarning: '', message: '', poll: null };
 
     function panelId() { try { return cfg.panelId ? cfg.panelId() : null; } catch (e) { return null; } }
     function paint() {
       rootEl.innerHTML = render(state.view, { surface: surface, panelId: panelId(), notice: state.notice,
-                                             confirmUnlink: !!state.confirmUnlink, message: state.message });
+                                             confirmUnlink: !!state.confirmUnlink, pendingWarning: state.pendingWarning,
+                                             message: state.message });
     }
     function fail(e) { state.message = (e && e.message) || 'That did not work. Try again.'; paint(); }
     function load() {
@@ -217,21 +223,34 @@
       if (act === 'notice-ok') return startLink(true);
       if (act === 'notice-cancel') { state.notice = false; paint(); return null; }
       if (act === 'unlink') {
-        var dev = t.getAttribute('data-device') || '';
-        if (!DEVICE_ID.test(dev)) return null;
-        state.confirmUnlink = dev;
+        var hd = t.getAttribute('data-handle') || '';
+        if (!HANDLE.test(hd)) return null;
+        state.confirmUnlink = hd;
+        state.pendingWarning = '';
         paint();
         return null;
       }
-      if (act === 'unlink-cancel') { state.confirmUnlink = ''; paint(); return null; }
-      if (act === 'unlink-ok') {
+      if (act === 'unlink-cancel') { state.confirmUnlink = ''; state.pendingWarning = ''; paint(); return null; }
+      if (act === 'unlink-ok' || act === 'unlink-force') {
         var d = state.confirmUnlink;
+        var force = act === 'unlink-force' && !!state.pendingWarning;     // only right after the server's warning
+        if (!HANDLE.test(d) || (act === 'unlink-force' && !force)) return null;
         state.confirmUnlink = '';
-        if (!DEVICE_ID.test(d)) return null;
-        return cfg.fetchJson('DELETE', '/api/omi/my-pendant/' + d).then(function (r) {
+        state.pendingWarning = '';
+        return cfg.fetchJson('DELETE', '/api/omi/my-pendant/' + d + (force ? '?confirm=true' : '')).then(function (r) {
           state.message = (r && r.note) || '';
           return load();
-        }, fail);
+        }, function (e) {
+          if (e && e.status === 409 && !force) {             // unsynced audio is known to be on it: show the warning, ask again
+            state.confirmUnlink = d;
+            state.pendingWarning = (e && e.message) || 'Your pendant still has recordings that have not synced. If you unlink it now, ' +
+              'they will go to whoever links it next.';
+            paint();
+            return null;
+          }
+          fail(e);
+          return null;
+        });
       }
       return null;
     }
