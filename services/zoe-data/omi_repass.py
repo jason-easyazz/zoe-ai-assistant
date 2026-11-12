@@ -94,6 +94,9 @@ PROPOSAL_KEEP_DAYS = 14
 PROPOSAL_MAX = 20
 _NAME_OK = re.compile(r"^[A-Za-z][A-Za-z'\- ]{0,38}$")
 _ST_OK = "('done', 'empty_transcript')"
+#: THE ONE "still owed its re-pass" predicate. ``pending_recordings`` lists these rows and the retention purge / the hourly release HOLD their WAV, from this
+#: same fragment so the two can never drift (an empty first pass keeps the migration default repass_state '' - it is owed all the same).
+OWED_SQL = f"(status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < {MAX_PASS_ATTEMPTS})"
 
 
 # ── flags ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -550,9 +553,9 @@ async def pending_recordings(db, *, now: Optional[datetime] = None, limit: Optio
     """EVERY recording the night pass owes a look (the window ranks the whole held backlog itself; the hold cap bounds it to 30 days of uploads; ``limit`` is for
     callers that want a sample): first-pass done (or empty) rows whose WAV is still on disk, inside the hold, not yet passed. A recording whose file vanished is not listed (nothing to process; ``audio_path`` is cleared by the retention loop)."""
     rows = await _all(db, "SELECT id, user_id, audio_path, duration_s, started_at, status, transcript, repass_attempts, device_id, audio_expires_at FROM omi_recordings "
-                          f"WHERE status IN {_ST_OK} AND audio_path != '' AND repass_state IN ('pending', '') AND repass_attempts < ? "
+                          f"WHERE {OWED_SQL} "
                           "AND created_at >= ? ORDER BY CASE WHEN status = 'empty_transcript' THEN 1 ELSE 0 END, started_at, created_at" + (" LIMIT ?" if limit else ""),
-                      (MAX_PASS_ATTEMPTS, _iso((now or _now()) - timedelta(days=HOLD_CAP_DAYS))) + ((limit,) if limit else ()))
+                      (_iso((now or _now()) - timedelta(days=HOLD_CAP_DAYS)),) + ((limit,) if limit else ()))
     out = []
     for r in rows:
         d = {k: r[k] for k in ("id", "user_id", "audio_path", "duration_s", "started_at", "status", "transcript", "repass_attempts", "device_id", "audio_expires_at")}

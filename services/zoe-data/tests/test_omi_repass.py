@@ -126,6 +126,20 @@ def test_an_owed_recording_is_held_past_retention_to_the_cap_and_the_cap_is_loud
     assert run(_pending(renv)) == []
 
 
+def test_an_empty_first_pass_is_owed_and_held_like_any_other(renv, monkeypatch, caplog):
+    """Codex #2430: an empty Moonshine transcript leaves repass_state '' (the migration default). The night pass lists it, so the purge must hold it too."""
+    path = first_pass(renv)["audio_path"]
+    transcribe(renv, monkeypatch, text="")
+    r = rows(renv)[0]
+    assert r["status"] == "empty_transcript" and r["repass_state"] == "" and Path(path).exists()
+    later = datetime.now(UTC) + timedelta(days=8)
+    assert [x["id"] for x in run(_pending(renv, later))] == [r["id"]]                          # the planner owes it a look ...
+    assert run(omi.purge_expired_audio(now=later)) == 0 and Path(path).exists()                 # ... so the purge keeps it past the 7 days
+    with caplog.at_level("WARNING"):
+        assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=rp.HOLD_CAP_DAYS + 1))) == 1
+    assert not Path(path).exists() and "OMI_REPASS_HOLD_CAP" in caplog.text
+
+
 def test_the_hold_gives_way_when_the_audio_disk_is_short(renv, monkeypatch, caplog):
     import shutil
     from collections import namedtuple

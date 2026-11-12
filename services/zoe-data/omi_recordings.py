@@ -1405,10 +1405,10 @@ async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
             disk_ok = False                                        # unknown disk: no hold (fail toward deleting, the privacy-safe side)
         forced = {"cap": 0, "disk": 0}
         async with get_compat_db() as db:
-            rows = await _fetch(db, "SELECT id, audio_path, status, created_at" + (", repass_state" if held else "") + " FROM omi_recordings "
+            rows = await _fetch(db, "SELECT id, audio_path, status, created_at" + (f", CASE WHEN {omi_repass.OWED_SQL} THEN 1 ELSE 0 END AS owed" if held else "") + " FROM omi_recordings "
                                     "WHERE audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at < ?", (stamp,))
             for r in rows:
-                if held and r["repass_state"] == "pending":
+                if held and int(r["owed"] or 0):             # the SAME predicate the night pass lists by (omi_repass.OWED_SQL)
                     if str(r["created_at"] or "") >= cap_stamp and disk_ok:
                         continue                                   # still owed its re-pass: held for the next window
                     forced["cap" if disk_ok else "disk"] += 1
@@ -1437,7 +1437,7 @@ async def release_tagged_audio(user_id: Optional[str] = None) -> int:
             sql = "SELECT id, user_id, audio_path FROM omi_recordings WHERE status = 'done' AND keep_audio = 0 AND audio_path != ''"
             import omi_repass
             if omi_repass.holds_audio():          # a recording the night pass still owes a look is never released here (retention still bounds it)
-                sql += " AND repass_state NOT IN ('pending', 'failed')"      # 'failed' keeps the WAV to retention so a fixed pass can be re-run on it
+                sql += f" AND repass_state != 'failed' AND NOT {omi_repass.OWED_SQL}"      # owed (the night pass's own predicate) is held; 'failed' keeps the WAV to retention so a fixed pass can be re-run on it
             rows = await _fetch(db, sql + (" AND user_id = ?" if user_id else ""), (user_id,) if user_id else ())
             import transcript_check
             check_held = await transcript_check.open_recording_ids(user_id)      # an OPEN transcript-check item still needs its snippet (retention still bounds it)
