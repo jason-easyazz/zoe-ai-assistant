@@ -286,14 +286,31 @@ def test_a_barge_in_gets_no_line_and_keeps_the_day(queued):
     assert "s1" not in tc._PENDING
 
 
+class _SpyTurn:
+    """An inner reply stream that counts ``aclose()`` calls (a plain generator would run its finally on exhaustion regardless)."""
+
+    def __init__(self, closed):
+        self._gen = self._reply()
+        self._closed = closed
+
+    @staticmethod
+    async def _reply():
+        yield "Done. "
+        yield "The kettle is on."
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await self._gen.__anext__()
+
+    async def aclose(self):
+        self._closed.append(1)
+        await self._gen.aclose()
+
+
 def _counting_turn(closed):
-    async def reply():
-        try:
-            yield "Done. "
-            yield "The kettle is on."
-        finally:
-            closed.append(1)
-    return reply()
+    return _SpyTurn(closed)
 
 
 def test_closing_the_wrapper_mid_stream_closes_the_inner_turn_once(queued):
