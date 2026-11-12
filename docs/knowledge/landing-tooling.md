@@ -16,7 +16,7 @@ Public repo: nothing here names a household member; the only identifiers are the
 
 | script | job |
 |---|---|
-| `land_voice_pr.sh <pr> <wt> <branch> <title>` | voice-gated landing: update-branch, head-bound replay probe (Kokoro paused, brain lock + test lane + harness lock), gate rerun, arm auto-merge bound to the probed head (or to a later head the probe's evidence is REUSABLE at), wait MERGED |
+| `land_voice_pr.sh <pr> <wt> <branch> <title>` | voice-gated landing: update-branch, head-bound replay probe (Kokoro paused, brain lock + test lane + harness lock), gate rerun (waits for the NEW attempt via `landing_gate_state`, never the previous attempt's stale conclusion), arm auto-merge bound to the probed head (or to a later head the probe's evidence is REUSABLE at), wait MERGED |
 | `land_queue.sh <file>` | runs the lander over `pr worktree branch title` lines, one at a time; records every real exit code in `last-results.txt` |
 | `after_voice_more.sh` | the rolling voice loop: batches `voice-pending.txt` into `land_queue.sh`, re-queues what is still open |
 | `docs_merge_chain.sh <pr>...` | update-branch, arm when clean, wait MERGED, for non-voice PRs |
