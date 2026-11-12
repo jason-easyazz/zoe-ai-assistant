@@ -1,16 +1,18 @@
-# 04:15 — fifteen minutes before zoe-voice-regression.timer's 04:30. Measured
-# (2026-07-28): the restart frees ~300MB within seconds and serena's indexing is
-# LAZY (it grows on queries, and nothing queries code-intel at 4am), so five
-# minutes sufficed empirically — but fifteen costs nothing overnight and gives
-# margin even if a cold start ever did re-index eagerly (Codex, #1579).
+# 04:50 - AFTER zoe-voice-regression.timer's 04:30 run, no longer before it (moved 2026-11-12).
+# A restarted shared Serena walks every .gitignore under the live checkout (325 .claude/worktrees
+# checkouts; one walk was still at ~99% of a core 85 minutes after its start). Fired at 04:15 it
+# overlapped the 04:30 speed probe: STT per audio-second 250 ms against ~168 at every other hour
+# (04:xx and 05:xx only), 12 of the last 14 nights red on speed. The restart is still nightly (it
+# frees the leak, ~200 MB measured), it just must not run while the probe times Moonshine:
+# 04:50 leaves 20 min for the ~3 min probe, and the walk then runs 04:50-06:20. The unit and file
+# keep their "pregate" names: the installed copies and test_ops_hygiene_b9's inventory key on them.
 # Persistent=false ON PURPOSE: a catch-up restart at boot or mid-morning would
-# yank code-intel out from under working agents for no gate benefit — if the
-# 04:15 tick was missed, the gate simply takes its chances that night.
+# yank code-intel out from under working agents for no gate benefit.
 [Unit]
-Description=Nightly pre-gate Serena restart timer (04:15, before the 04:30 voice gate)
+Description=Nightly Serena restart timer (04:50, after the 04:30 voice gate)
 
 [Timer]
-OnCalendar=*-*-* 04:15:00
+OnCalendar=*-*-* 04:50:00
 AccuracySec=1min
 Persistent=false
 
