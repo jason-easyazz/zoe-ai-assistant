@@ -111,7 +111,8 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   A/B 2026-10-29: +6% prompt processing, otherwise equal; b11194 kept on disk for rollback
   ([record](knowledge/llama-cpp-bump-b11982-ab.md), [switch runbook](knowledge/llama-cpp-b11982-switch-runbook.md)).
   Flags **applied and live** (measured 2026-10-03/04 from the running process, then on `~/llama.cpp-b11194`,
-  `--spec-type draft-mtp --ctx-size 8192 --cache-type-k/v q8_0 --cache-ram 1024 --swa-full --flash-attn on`; the last two since 2026-10-04);
+  `--spec-type draft-mtp --ctx-size 8192 --cache-type-k/v q8_0 --cache-ram 512 --swa-full --flash-attn on`; the last two since 2026-10-04;
+  `--cache-ram` 1024 -> 512 on 2026-11-08, [ram-audit-voice-2026-11.md](knowledge/ram-audit-voice-2026-11.md); re-read from the running process 2026-11-13);
   the b9733/FA-off build is retired. `ps -o args= -C llama-server` remains the authority for what
   is live. The build and flags can change; the rock does not.
 - **`services/zoe-ui`** — the touch/web UI. The **estate** (`dist/touch/home.html`) is the
@@ -126,8 +127,8 @@ The Pi-as-brain path and the services it depends on. These are real and load-bea
   **Qwen3-ASR-1.7B (the pivot) + Parakeet-TDT-0.6B-v3 + a third voter (Whisper large-v3 when the night has room, else distil-large-v3) fused by ROVER word voting on the GPU, the panel's own ResNet34 speaker step (mean-removed, abstaining), and Whisper large-v3 / Granite on a rotating evaluation sample feeding a contender ledger (the owner decides any drop)**, run in its own
   venv and capped scope by `scripts/night/jobs/omi_repass_worker.py` before the 12B loads. The ASR and diarisation engines are a **pluggable seam**
   (`ZOE_OMI_NIGHT_ASR` / `ZOE_OMI_NIGHT_DIAR`, declared in `omi_repass.BACKENDS`): the model choice here is NOT a rock and may
-  be replaced by a later winner without touching this file's rocks. Flag-dark (`ZOE_OMI_NIGHT_REPASS=off|shadow|on`; a daytime
-  rehearsal must pass before shadow). Spec: [`knowledge/omi-night-repass.md`](knowledge/omi-night-repass.md).
+  be replaced by a later winner without touching this file's rocks. Code default off (`ZOE_OMI_NIGHT_REPASS=off|shadow|on`; a daytime
+  rehearsal must pass before shadow); `shadow` live as of 2026-11-13, with `omi_repass` `ok` in the night reports. Spec: [`knowledge/omi-night-repass.md`](knowledge/omi-night-repass.md).
 
 ## 🧩 Live modules (don't mistake these for dead)
 
