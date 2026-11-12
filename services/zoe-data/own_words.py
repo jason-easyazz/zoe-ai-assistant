@@ -313,7 +313,12 @@ def _paste_cut(s: str) -> tuple:
 
 #: who3 can only see the word before the verb; when that word is a conjunction the real subject opens the sentence
 _CONJ = frozenset({"and", "but", "then", "so", "also", "just"})
-_OWN_SUBJECT_RE = re.compile(r"\s*(?:i|we)\b", re.I)
+#: ...and it is the OWNER only when the whole lead-in is "I/we <a few plain lowercase words>": a capitalised name, another
+#: possible speaker ("my sister", "she") or a subordinate clause ("I was there when Wren rang and said, ...") keeps it
+#: third-person speech (fail closed: an ambiguous quote is never stored as the owner's own claim)
+_OWN_SUBJECT_RE = re.compile(
+    r"\s*(?:I|[Ww]e)(?:[ \t]+(?!(?:he|she|they|it|my|his|her|their|our|the|a|an|someone|somebody|everyone|when|while|because|after|"
+    r"before|that|who|as|if|until|since)\b)[a-z']+){1,4}[ \t]*$")
 
 
 def _speech_spans(head: str) -> list:

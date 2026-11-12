@@ -697,3 +697,12 @@ def test_negative_control_the_owners_own_sentence_is_kept():
 def test_the_owners_own_quoted_words_after_a_conjunction_are_kept(turn):
     own = own_words.analyze(turn)
     assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['I was there when Wren rang and said, "I am moving to Halvercombe next month."',
+                                  'I heard my sister call and said, "I am moving to Halvercombe next month."',
+                                  'I think she rang and said, "I am moving to Halvercombe next month."',
+                                  'We were out when Wren rang and said "I am moving to Halvercombe next month."'])
+def test_another_speaker_inside_an_i_sentence_is_still_third_person(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
