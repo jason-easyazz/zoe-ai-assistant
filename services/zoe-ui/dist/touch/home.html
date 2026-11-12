@@ -5095,13 +5095,14 @@
   // pull, not push: the orb's quiet "I have something" dot. GET /api/proactive/inbox answers a COUNT and a
   // coarse class - never what is pending - and only for a signed-in member (guest, empty, quiet hours and the
   // flag off all read "no dot"). Asking ("what's up?") is how it clears; nothing here speaks or toasts.
+  // `notify` (ZOE_NOTIFICATIONS) is the member's unread household notifications: the same dot; the press shows them as a card.
   (function(){
     function paint(on,review){orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
       var s=sid();if(!s){paint(false,false);return;}
       fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
-        .then(function(d){paint(!!(d&&d.enabled&&d.count>0&&!d.quiet),!!(d&&d.review===true&&!d.quiet));})
+        .then(function(d){paint(!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0)),!!(d&&d.review===true&&!d.quiet));})
         .catch(function(){});
     }
     poll();setInterval(poll,60000);

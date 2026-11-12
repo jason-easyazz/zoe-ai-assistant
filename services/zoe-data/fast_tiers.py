@@ -512,6 +512,12 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
         _extra = await _drr.pull_addendum(user_id, lane, extra_ctx, dry=dry)
         if _extra:
             res.reply = _extra if res.reply == _pl.EMPTY_REPLY else f"{res.reply} {_extra}"
+        # Household notifications (ZOE_NOTIFICATIONS; off = ""): the card goes to this panel and ONE counts-only sentence follows.
+        import notifications_store as _nstore
+
+        _notes = await _nstore.pull_addendum(user_id, lane, extra_ctx, alone=res.reply == _pl.EMPTY_REPLY, dry=dry)
+        if _notes:
+            res.reply = _notes if res.reply == _pl.EMPTY_REPLY else f"{res.reply} {_notes}"
         return _xd.DispatchResult(domain="proactive", reply=res.reply, intent="pull",
                                   ui=res.ui, tier="pull", meta={"delivered": res.delivered})
     except Exception as exc:  # never let the tier break a turn
