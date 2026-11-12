@@ -234,6 +234,7 @@ jobs:
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           cd "${{ github.workspace }}"
+          source scripts/maintenance/self_hosted_lane_gate.sh integration-e2e
           PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" python3 scripts/maintenance/pytest_junit_guard.py \
             --label integration-e2e --min-tests 55 --max-skipped 25 -- \
             "${ZOE_TEST_PYTHON:?the interp step did not set ZOE_TEST_PYTHON}" -m pytest tests/integration tests/e2e -q --continue-on-collection-errors
@@ -270,6 +271,7 @@ jobs:
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           cd "${{ github.workspace }}"
+          source scripts/maintenance/self_hosted_lane_gate.sh zoe-data-full
           PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" python3 scripts/maintenance/pytest_junit_guard.py \
             --label zoe-data-full --min-tests 18000 --max-skipped 100 -- \
             "${ZOE_TEST_PYTHON:?the interp step did not set ZOE_TEST_PYTHON}" -m pytest services/zoe-data/tests -q --continue-on-collection-errors
@@ -283,6 +285,7 @@ jobs:
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: |
           cd "${{ github.workspace }}"
+          source scripts/maintenance/self_hosted_lane_gate.sh unit-full
           PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" python3 scripts/maintenance/pytest_junit_guard.py \
             --label unit-full --min-tests 4300 --max-skipped 150 -- \
             "${ZOE_TEST_PYTHON:?the interp step did not set ZOE_TEST_PYTHON}" -m pytest tests/unit -q --continue-on-collection-errors
@@ -301,6 +304,7 @@ jobs:
           ZOE_LIVE_TESTS: "1"
         run: |
           cd "${{ github.workspace }}"
+          source scripts/maintenance/self_hosted_lane_gate.sh samantha-live
           PYTHONPATH="${ZOE_TEST_OVERLAY}${PYTHONPATH}" "${ZOE_TEST_PYTHON}" -m pytest services/zoe-data/tests/samantha_live -q
 
       # Outcomes in the run summary. These are REAL conclusions now (no step above is
