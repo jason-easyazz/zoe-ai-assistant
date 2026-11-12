@@ -1,0 +1,12 @@
+# TEMPLATE ONLY - never auto-installed or enabled. Operator opt-in; see labs/self-heal/README.md.
+# Daytime only: the runner itself also refuses 01:30-05:00 and while a voice lander / the night window runs.
+[Unit]
+Description=Zoe self-heal loop timer
+
+[Timer]
+OnCalendar=*-*-* 10,14,18:20:00
+RandomizedDelaySec=10m
+Persistent=false
+
+[Install]
+WantedBy=timers.target
