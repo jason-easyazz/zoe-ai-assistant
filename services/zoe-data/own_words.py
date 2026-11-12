@@ -137,19 +137,21 @@ _CHATML_RE = re.compile(r"(?i)<[|]im_start[|]>|<[|]system[|]>|\[/?INST\]|<<SYS>>
 _REL = (r"(?:wife|husband|partner|girlfriend|boyfriend|son|daughter|kid|child|brother|sister|mom|mum|dad|father|"
         r"mother|grandma|grandpa|grandmother|grandfather|aunt|uncle|cousin|niece|nephew|friend|neighbou?r|boss|"
         r"colleague|coworker|co-worker|flatmate|roommate|housemate|landlord|teacher|doctor|dentist|manager|mate|buddy)")
-_NAME = r"[A-Z][a-z]{1,20}(?:[ \t]+[A-Z][a-z]{1,20})?"
+_NAME = r"(?!We\b)[A-Z][a-z]{1,20}(?:[ \t]+[A-Z][a-z]{1,20})?"       # a sentence-initial "We" is the owner, not a name
 _WHO = ("(?:" + _NAME + r"['\u2019]s[ \t]+(?:\w+[ \t]+)?" + _REL
         + r"|" + _NAME + r"|(?:[Mm]y|[Hh]is|[Hh]er|[Tt]heir|[Oo]ur|[Tt]he)[ \t]+(?:\w+[ \t]+)?" + _REL
         + r"|[Hh]e|[Ss]he|[Tt]hey|[Ss]omeone|[Ss]omebody|[Ee]veryone)")
 _SAY = (r"(?:says?|said|tells?[ \t]+me|told[ \t]+me|texts?[ \t]+me|texted(?:[ \t]+me)?|wrote|writes|messaged|replied|"
         r"replies|mentioned|claims?|claimed|announced|shouted|whispered|added|explains?|explained|insists?|"
         r"insisted|posted|tweeted|typed|answered|responds?|responded)")
+#: an adverb or two between the verb and the quote ('Wren said softly, "..."') does not make the words the owner's
+_ADV = r"(?:[ \t]+[a-z]+ly){0,2}"
 #: "Dana says:", "my sister said, ", 'Dana wrote "', 'Dana: "'  - DIRECT speech only: the verb is
 #: followed by a colon, a comma or an opening quote ("Dana says I live in Hobart" is indirect)
 _ATTR_RE = re.compile(
-    r"\b(?P<who>" + _WHO + r")[ \t]+" + _SAY + r"\b[ \t]*(?:(?P<sep>[:,])|(?P<q>[\"“]))[ \t]*"
+    r"\b(?P<who>" + _WHO + r")[ \t]+" + _SAY + r"\b" + _ADV + r"[ \t]*(?:(?P<sep>[:,])|(?P<q>[\"“]))[ \t]*"
     r"|\b(?P<who2>" + _NAME + r")[ \t]*:[ \t]*(?P<q2>(?=[\"“]))"
-    r"|\b(?P<who3>(?!(?:i|we|you)\b)[A-Za-z]+)[ \t]+" + _SAY + r"\b,?[ \t]*(?P<q3>[\"“])[ \t]*")   # 'rang and said, "..."': the comma too
+    r"|\b(?P<who3>(?!(?:[Ii]|[Ww]e|you)\b)[A-Za-z]+)[ \t]+" + _SAY + r"\b" + _ADV + r",?[ \t]*(?P<q3>[\"“])[ \t]*")   # 'rang and said, "..."': the comma too
 #: '"I live in Hobart," said Dana'
 _QATTR_RE = re.compile(
     r"[\"“](?P<q>[^\"”\n]{3,300})[\"”][ \t]*[,.]?[ \t]*"

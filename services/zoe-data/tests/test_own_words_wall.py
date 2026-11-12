@@ -711,3 +711,22 @@ def test_the_owners_own_quoted_words_after_a_conjunction_are_kept(turn):
 def test_another_speaker_inside_an_i_sentence_is_still_third_person(turn):
     own = own_words.analyze(turn)
     assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
+@pytest.mark.parametrize("turn", ['Wren said softly, "I am moving to Halvercombe next month."',
+                                  'My sister replied quickly "I am moving to Halvercombe next month."'])
+def test_an_adverb_between_the_verb_and_the_quote_is_still_third_person(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
+
+
+def test_the_owner_speaking_softly_is_still_the_owner():
+    own = own_words.analyze('I said softly, "I am moving to Halvercombe next month."')
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
+
+
+@pytest.mark.parametrize("turn", ['I said "I am moving to Halvercombe next month."', 'I said, "I am moving to Halvercombe next month."',
+                                  'We said, "We are moving to Halvercombe next month."'])
+def test_the_owner_quoting_themself_directly_is_the_owner(turn):
+    own = own_words.analyze(turn)
+    assert "third_person_speech" not in own.reasons and "Halvercombe" in own.text
