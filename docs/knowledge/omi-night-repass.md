@@ -158,6 +158,30 @@ python3 scripts/maintenance/zoe-omi-repass.py --confirm-wearer 2026-11-10 --user
 ```
 
 - The confirmed pendant print needs **10 confirmed units** (`MIN_WEARER_WINDOWS`); below that every line reads `unverified`. Proposals older than 14 days are dropped. Follow-up (not built): ask the owner in the day review UI instead of the CLI.
+- **The first pass uses it too.** Once the print is confirmed, `omi_recordings._diarise` labels new recordings against the pendant print (same microphone) instead of the panel profile, and the stored lines say so (`omi_segments.profile_channel = 'pendant'`; `'panel'` while there is no print). The first-pass bars (`ZOE_OMI_TAG_YOU_MIN` 0.351 / `_OTHER_MAX` 0.15) are unchanged: they were calibrated panel-to-panel and are still to be re-derived on the pendant channel.
+
+### The wearer print from stored samples
+
+The night proposal needs the night pass to have run; the first pass has already held thousands of pendant-channel segment embeddings (`omi_segment_embeddings`, the `other` / low `unsure` lines). Measured 2026-11-12 (counts only): 2,156 held embeddings over 254 recordings; the panel profile scores the most frequent voice at cos ~0.1, so the panel profile cannot pick the wearer. The owner picks instead:
+
+```bash
+python3 scripts/maintenance/zoe-omi-repass.py --propose-wearer-stored --user <id>   # up to 3 candidate voices: stored-YYYY-MM-DD-a|b|c (counts only)
+python3 scripts/maintenance/zoe-omi-repass.py --wearer-lines --user <id> --proposal stored-2026-11-12-a   # what that voice said (private; never paste)
+python3 scripts/maintenance/zoe-omi-repass.py --confirm-wearer stored-2026-11-12-a --user <id>          # that one is me: the other candidates are withdrawn
+python3 scripts/maintenance/zoe-omi-repass.py --relabel-stored --user <id>                              # my existing matching lines read "me" (counts only)
+```
+
+- `omi_repass.propose_wearer_from_stored`: the night heuristic's greedy linkage (cos 0.6) over the member's held embeddings, minus lines the owner already decided (a label, a tag, not-a-person); voices ranked by **distinct recordings**; up to 3 voices heard in at least 10 recordings (`STORED_MIN_RECORDINGS`) become proposals (`source='heuristic'`, the `stored-` prefix marks the batch), each up to 20 windows nearest its centre with at most 2 per recording (`STORED_PER_RECORDING`), so one conversation cannot define a voice. No-op (it says why) with a confirmed print, open proposals, a member not positively an adult (D14, the first pass's `manner_block.eligible`), no voice big enough, or an erase since the read (`user_erase_gate.writing`). Stale proposals expire as above.
+- `confirm_wearer` on a `stored-` candidate deletes its siblings from the same batch; nothing is learned of them (making them people is a later feature). Rejecting all three and running again offers the same voices: a rejection is not remembered.
+- `omi_repass.relabel_stored_from_print`: with a confirmed print, a held line at cos >= 0.6 (`RELABEL_YOU_MIN`: the measured clean shoulder; the bulk of lines sits at 0.2-0.3 and 0.5-0.6 is still its tail) becomes `speaker='you'`, `profile_channel='pendant'`; like "that was me", its held embedding, unknown-voice link and suggestion go. Lines the owner decided are never touched, nothing becomes `other`, below the bar a line stays as it is. Idempotent.
+
+True when done (owner words):
+
+- Zoe proposes my pendant voice from what she has already heard.
+- I pick which voice is me once.
+- After that my own lines are labelled as mine.
+- Nothing is labelled me before I confirm.
+- A child's pendant is never tagged.
 - Labels: see "Who said it" (margin rules); a taught person is only a **suggestion** (`suggested_person_id`). Names reach the day review only when the owner confirms the suggestion (the existing guardrail: "Sam (you tagged)", never "Sam (suggested)").
 - Family and named-guest prints are the panel's own (named guests' panel prints and the owner-taught pendant prints share this model, so they are USED here); pendant prints grow: they grow from the owner's tags (`omi_voices.tag` already learns per `model_id`; the re-pass also teaches a person's print from a tag carried over from the first pass). Named guests' panel prints are matched (mean-removed per channel) and fuse with a pendant print once the owner has confirmed 6 s of them.
 

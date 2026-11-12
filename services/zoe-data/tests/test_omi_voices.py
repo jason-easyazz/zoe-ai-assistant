@@ -196,7 +196,7 @@ def turns(*spec):
 
 def transcribe(env, monkeypatch, segs, uid=A, state="tagged", **kw):
     async def fake(u, p, now):
-        return segs, state, MID
+        return segs, state, MID, ("panel" if state == "tagged" else None)
     monkeypatch.setattr(omi, "_diarise", fake)
     rid = add_recording(env, uid, **kw)
     assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
@@ -306,6 +306,44 @@ def test_tag_off_writes_no_segments_and_a_tagger_failure_never_costs_the_transcr
     (row,) = env.db.q("SELECT status, transcript, speaker_state FROM omi_recordings WHERE id = ?", (rid,))
     assert row == ("done", "said6s", "untaggable")
     assert [s[0] for s in segs_of(env, rid)] == ["unverified"]                     # chunk-level rows: the review still has lines
+
+
+def test_the_first_pass_uses_the_confirmed_pendant_print_over_the_panel_profile_and_records_the_channel(env, monkeypatch):
+    """The pendant is a different microphone from the panel: once the owner has CONFIRMED a pendant print (``omi_repass.wearer_print``, >= MIN_WEARER_WINDOWS) the first pass labels
+    against it and says so (``profile_channel='pendant'``); without one it keeps the panel profile (``'panel'``). Mutation: drop the ``wearer_print`` lookup in ``_diarise`` -> the
+    pendant case scores against the panel profile and records ``panel``."""
+    import omi_repass as rp
+    _migrate(env.engine, "0075_omi_night_repass.py")
+    panel = unit(77)
+    seen: list = []
+
+    async def wearer_profile(db, uid, mid):
+        return panel
+    monkeypatch.setattr(ov, "wearer_profile", wearer_profile)
+    monkeypatch.setattr(od, "load_embedder", lambda: object())
+
+    async def fake_diarise(path, embedder, profile, gate=None):
+        seen.append(profile)
+        return turns((0, 6, "you", 0.6, WEARER))
+    monkeypatch.setattr(od, "diarise", fake_diarise)
+    rid = add_recording(env)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    assert float(seen[-1] @ panel) > 0.999                                                     # control: no pendant print -> the panel profile, channel recorded as panel
+    assert env.db.q("SELECT profile_channel FROM omi_segments WHERE recording_id = ?", (rid,)) == [("panel",)]
+    for i in range(rp.MIN_WEARER_WINDOWS):                                                    # the owner confirmed a pendant print
+        env.db.conn.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, created_at) "
+                            "VALUES (?, ?, 'old', ?, ?, ?, ?, 'heuristic', 'confirmed', '2026-11-12T00:00:00Z')", (f"w{i}", A, MID, i * 1000, i * 1000 + 900, near(WEARER, i).tobytes()))
+    env.db.conn.commit()
+    rid2 = add_recording(env)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    assert float(seen[-1] @ WEARER) > 0.9 and float(seen[-1] @ panel) < 0.5
+    assert env.db.q("SELECT profile_channel FROM omi_segments WHERE recording_id = ?", (rid2,)) == [("pendant",)]
+    assert env.db.q("SELECT speaker_state FROM omi_recordings WHERE id = ?", (rid2,)) == [("tagged",)]
+    env.db.conn.execute("DELETE FROM omi_wearer_samples WHERE id != 'w0'")                     # below MIN_WEARER_WINDOWS is no print: back to the panel profile
+    env.db.conn.commit()
+    rid3 = add_recording(env)
+    assert run(omi.transcribe_pending(limit=1, pause_s=0)) == 1
+    assert env.db.q("SELECT profile_channel FROM omi_segments WHERE recording_id = ?", (rid3,)) == [("panel",)]
 
 
 # --- learning: what is stored, and for whom ---------------------------------------------------------------------------------

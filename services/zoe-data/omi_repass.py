@@ -86,6 +86,17 @@ PLAN_MARGIN = 0.85                                # plan to use at most this muc
 HINT_MAX_NAMES = 30
 PROPOSAL_KEEP_DAYS = 14
 PROPOSAL_MAX = 20
+WEARER_LINK = 0.6                                  # the greedy cosine linkage both wearer proposals cluster with (the night heuristic and the stored-sample one)
+#: The wearer print FROM STORED SAMPLES (``propose_wearer_from_stored``): a candidate voice must be heard in at least this many DISTINCT recordings, at most this many candidates are
+#: offered side by side, and one recording gives a candidate at most this many windows (so one long conversation cannot define a voice). Measured on the live box 2026-11-12 (counts only):
+#: 2,156 stored segment embeddings over 254 recordings; at link 0.6 the top voice spans 87 recordings (194 segments), the runner-up 65.
+STORED_MIN_RECORDINGS = 10
+STORED_MAX_VOICES = 3
+STORED_PER_RECORDING = 2
+#: ``relabel_stored_from_print``: a stored segment reads "me" only at this cosine to the CONFIRMED pendant print or above. Measured 2026-11-12 (counts only) - every stored segment against a
+#: print built from the top voice's 20 nearest windows: a continuous distribution with its mode at 0.2-0.3 and a separate shoulder from 0.6 up (251 segments in 102 recordings, 3.7 h of
+#: speech; 391 at >= 0.5, i.e. 0.5-0.6 is still the bulk's tail). 0.6 is the clean shoulder: a false "me" is the worse error, so the line between them stays unlabelled rather than guessed.
+RELABEL_YOU_MIN = 0.6
 _NAME_OK = re.compile(r"^[A-Za-z][A-Za-z'\- ]{0,38}$")
 _ST_OK = "('done', 'empty_transcript')"
 
@@ -424,7 +435,36 @@ def carry_labels(new: list[dict], old: list[dict], min_share: float = 0.5) -> in
     return n
 
 
-def propose_wearer(windows: list, *, loud_pct: float = 70.0, link: float = 0.6, min_cluster: int = 6, max_n: int = PROPOSAL_MAX) -> list[int]:
+def _greedy_voices(embs: list, order: Iterable[int], link: float = WEARER_LINK) -> list[dict]:
+    """Greedy cosine clustering in ``order``: each vector joins the nearest running centre at ``link`` or above, else starts a voice. -> [{"c": unit centre, "m": [indices]}]. Pure."""
+    clusters: list[dict] = []
+    for i in order:
+        e = _unit(embs[i])
+        best = max(clusters, key=lambda c: float(c["c"] @ e), default=None)
+        if best is not None and float(best["c"] @ e) >= link:
+            best["m"].append(i)
+            best["c"] = _unit(best["c"] * (len(best["m"]) - 1) + e)
+        else:
+            clusters.append({"c": e, "m": [i]})
+    return clusters
+
+
+def _nearest(cl: dict, embs: list, max_n: int, *, group: Optional[list] = None, per_group: int = 0) -> list[int]:
+    """A voice's members closest to its centre, best first, at most ``max_n`` - and, with ``group``/``per_group``, at most ``per_group`` from any one group (recording). Pure."""
+    out: list[int] = []
+    used: dict = {}
+    for i in sorted(cl["m"], key=lambda i: -float(cl["c"] @ _unit(embs[i]))):
+        if per_group and group is not None:
+            if used.get(group[i], 0) >= per_group:
+                continue
+            used[group[i]] = used.get(group[i], 0) + 1
+        out.append(i)
+        if len(out) >= max_n:
+            break
+    return out
+
+
+def propose_wearer(windows: list, *, loud_pct: float = 70.0, link: float = WEARER_LINK, min_cluster: int = 6, max_n: int = PROPOSAL_MAX) -> list[int]:
     """The loudest-nearest-voice heuristic: among the speech windows at or above the ``loud_pct`` RMS percentile (the wearer's mouth is the nearest
     thing to the pendant), cluster greedily by cosine and return the indices of the largest cluster's windows closest to its centre. A PROPOSAL only:
     nothing here makes anyone "me" - the owner confirms (``confirm_wearer``). [] when no cluster is big enough."""
@@ -432,23 +472,14 @@ def propose_wearer(windows: list, *, loud_pct: float = 70.0, link: float = 0.6, 
         return []
     rms = np.array([float(w[3]) if len(w) > 3 else 0.0 for w in windows])
     cut = float(np.percentile(rms, loud_pct))
-    idx = [i for i in range(len(windows)) if rms[i] >= cut and rms[i] > 0]
-    clusters: list[dict] = []
-    for i in idx:
-        e = _unit(windows[i][2])
-        best = max(clusters, key=lambda c: float(c["c"] @ e), default=None)
-        if best is not None and float(best["c"] @ e) >= link:
-            best["m"].append(i)
-            best["c"] = _unit(best["c"] * (len(best["m"]) - 1) + e)
-        else:
-            clusters.append({"c": e, "m": [i]})
+    embs = [w[2] for w in windows]
+    clusters = _greedy_voices(embs, [i for i in range(len(windows)) if rms[i] >= cut and rms[i] > 0], link)
     if not clusters:
         return []
     top = max(clusters, key=lambda c: len(c["m"]))
     if len(top["m"]) < min_cluster:
         return []
-    ranked = sorted(top["m"], key=lambda i: -float(top["c"] @ _unit(windows[i][2])))
-    return sorted(ranked[:max_n])
+    return sorted(_nearest(top, embs, max_n))
 
 
 # ── the database ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1022,11 +1053,16 @@ async def proposal_lines(db, user_id: str, proposal_id: str, limit: int = 6) -> 
 
 
 async def confirm_wearer(db, user_id: str, proposal_id: str) -> int:
-    """THE owner's word that a proposal's windows are their own voice: they join the wearer print (and only then does a line read "me")."""
+    """THE owner's word that a proposal's windows are their own voice: they join the wearer print (and only then does a line read "me"). A ``stored-...`` candidate is one of up to three
+    voices offered side by side (``propose_wearer_from_stored``): confirming one withdraws its siblings from the same batch - they are someone else (nothing is learned of them)."""
     cur = await db.execute("UPDATE omi_wearer_samples SET status = 'confirmed' WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id = ?",
                            (user_id, MODEL_ID, proposal_id))
+    n = int(getattr(cur, "rowcount", 0) or 0)
+    if n and proposal_id.startswith("stored-"):
+        await db.execute("DELETE FROM omi_wearer_samples WHERE user_id = ? AND model_id = ? AND status = 'proposed' AND proposal_id LIKE ? AND proposal_id != ?",
+                         (user_id, MODEL_ID, proposal_id.rsplit("-", 1)[0] + "-%", proposal_id))
     await db.commit()
-    return int(getattr(cur, "rowcount", 0) or 0)
+    return n
 
 
 async def reject_wearer(db, user_id: str, proposal_id: str) -> int:
@@ -1040,6 +1076,91 @@ async def drop_stale_proposals(db, *, now: Optional[datetime] = None) -> int:
     cut = _iso((now or _now()) - timedelta(days=PROPOSAL_KEEP_DAYS))
     cur = await db.execute("DELETE FROM omi_wearer_samples WHERE status = 'proposed' AND created_at < ?", (cut,))
     return int(getattr(cur, "rowcount", 0) or 0)
+
+
+_STORED_SQL = ("SELECT s.id, s.recording_id, s.start_ms, s.end_ms, s.voice_cluster_id, e.embedding FROM omi_segment_embeddings e JOIN omi_segments s ON s.id = e.segment_id "
+               "WHERE e.user_id = ? AND s.user_id = ? AND e.model_id = ? AND e.expires_at > ? AND s.owner_label IS NULL AND s.tagged_person_id IS NULL AND s.not_person IS NULL")
+
+
+async def propose_wearer_from_stored(db, user_id: str, *, now: Optional[datetime] = None) -> dict:
+    """The wearer print from what the pendant has ALREADY heard: the member's held segment embeddings (``omi_segment_embeddings``, the first pass's pendant-channel units) clustered
+    with the night heuristic's own greedy linkage, voices ranked by the DISTINCT recordings they are heard in, and up to ``STORED_MAX_VOICES`` voices heard in at least
+    ``STORED_MIN_RECORDINGS`` recordings written as side-by-side PROPOSALS (``stored-YYYY-MM-DD-a|b|c``; at most ``PROPOSAL_MAX`` windows nearest the voice's centre, at most
+    ``STORED_PER_RECORDING`` from one recording). The top voice is probably the wearer but may be a partner, the TV or Zoe's own speaker, so nothing is "me" until the owner confirms ONE
+    (``confirm_wearer``). Lines the owner already decided (a label, a tag, not-a-person) are not evidence. No-op (``status`` says why) with a confirmed print, open proposals, a member
+    not positively an adult (D14, the first pass's own ``manner_block.eligible``), no voice big enough, or an erase since the read. Counts only."""
+    import manner_block
+    g = erase_gate.generation(user_id)
+    if not await manner_block.eligible(user_id):
+        return {"status": "not_eligible"}
+    await drop_stale_proposals(db, now=now)
+    if await wearer_print(db, user_id) is not None:
+        return {"status": "has_print"}
+    if await _all(db, "SELECT 1 FROM omi_wearer_samples WHERE user_id = ? AND model_id = ? AND status = 'proposed' LIMIT 1", (user_id, MODEL_ID)):
+        return {"status": "open_proposals"}
+    stamp = now or _now()
+    rows = await _all(db, _STORED_SQL + " ORDER BY s.created_at, s.recording_id, s.seq", (user_id, user_id, MODEL_ID, _iso(stamp)))
+    embs = [_vec(r[5]) for r in rows]
+    recs = [r[1] for r in rows]
+    voices = _greedy_voices(embs, range(len(rows)))
+    for v in voices:
+        v["recs"] = len({recs[i] for i in v["m"]})
+    big = sorted((v for v in voices if v["recs"] >= STORED_MIN_RECORDINGS), key=lambda v: (-v["recs"], -len(v["m"])))[:STORED_MAX_VOICES]
+    out = {"segments": len(rows), "voices": len(voices)}
+    if not big:
+        return {"status": "no_voice", **out}
+    props = []
+    async with erase_gate.writing(user_id, g) as live:
+        if not live:                               # the member was erased while this read: nothing of their voice is written
+            return {"status": "erased", **out}
+        for k, v in enumerate(big):
+            pid = f"stored-{stamp.strftime('%Y-%m-%d')}-{'abc'[k]}"
+            n = 0
+            for i in _nearest(v, embs, PROPOSAL_MAX, group=recs, per_group=STORED_PER_RECORDING):
+                cur = await db.execute("INSERT INTO omi_wearer_samples (id, user_id, recording_id, model_id, start_ms, end_ms, embedding, source, status, proposal_id, created_at) "
+                                       "VALUES (?, ?, ?, ?, ?, ?, ?, 'heuristic', 'proposed', ?, ?) ON CONFLICT (recording_id, start_ms, end_ms, model_id) DO NOTHING",
+                                       (str(uuid.uuid4()), user_id, rows[i][1], MODEL_ID, int(rows[i][2]), int(rows[i][3]), _blob(_unit(embs[i])), pid, _iso(stamp)))
+                n += int(getattr(cur, "rowcount", 1) or 0)
+            props.append({"id": pid, "windows": n, "recordings": v["recs"], "segments": len(v["m"])})
+        await db.commit()
+    logger.info("OMI_WEARER_PROPOSED_FROM_STORED voices=%d proposals=%d", len(voices), len(props))
+    return {"status": "proposed", "proposals": props, **out}
+
+
+async def relabel_stored_from_print(db, user_id: str, *, min_cos: float = RELABEL_YOU_MIN) -> dict:
+    """Once the pendant print is CONFIRMED, the member's EXISTING lines with a held embedding at ``min_cos`` or above read "me" (``speaker='you'``, ``profile_channel='pendant'``). A line
+    the owner decided (a label, a tag, not-a-person) is never touched, nothing is ever labelled ``other`` from this, and below the bar a line stays as it is. As with "that was me", the
+    wearer's own voice is not held as a bystander's: the relabelled line's embedding, unknown-voice link and person suggestion go (the voice is rebuilt). Idempotent. Counts only."""
+    import manner_block
+    import omi_voices
+    g = erase_gate.generation(user_id)
+    if not await manner_block.eligible(user_id):
+        return {"status": "not_eligible"}
+    you = await wearer_print(db, user_id)
+    if you is None:
+        return {"status": "no_print"}
+    you = _unit(you)
+    rows = await _all(db, _STORED_SQL + " AND s.speaker IN ('other', 'unsure')", (user_id, user_id, MODEL_ID, _iso(_now())))
+    hits = [(r[0], r[4], round(float(_unit(_vec(r[5])) @ you), 4)) for r in rows]
+    hits = [h for h in hits if h[2] >= min_cos]
+    n, touched = 0, set()
+    async with erase_gate.writing(user_id, g) as live:
+        if not live:
+            return {"status": "erased", "checked": len(rows)}
+        for sid, cid, score in hits:
+            cur = await db.execute("UPDATE omi_segments SET speaker = 'you', score = ?, profile_channel = 'pendant', voice_cluster_id = NULL, suggested_person_id = NULL, "
+                                   "suggested_score = NULL WHERE id = ? AND user_id = ? AND owner_label IS NULL AND tagged_person_id IS NULL AND not_person IS NULL",
+                                   (score, sid, user_id))
+            if int(getattr(cur, "rowcount", 0) or 0):
+                await db.execute("DELETE FROM omi_segment_embeddings WHERE segment_id = ? AND user_id = ?", (sid, user_id))
+                n += 1
+                if cid:
+                    touched.add(cid)
+        for cid in sorted(touched):
+            await omi_voices.rebuild_cluster(db, cid)
+        await db.commit()
+    logger.info("OMI_WEARER_RELABELLED checked=%d relabelled=%d", len(rows), n)
+    return {"status": "ok", "checked": len(rows), "relabelled": n, "unchanged": len(rows) - n}
 
 
 # ── the night job ───────────────────────────────────────────────────────────────────────────────────────────────────────
