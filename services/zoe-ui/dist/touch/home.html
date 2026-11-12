@@ -1260,7 +1260,7 @@
   <div id="cardwrap"><div id="host"></div></div>
   <div class="launch" id="launch"><div class="lgrid" id="lgrid"></div></div>
   <div id="authov"><div class="acard"><div class="colL"><h2>Who’s here?</h2><div class="sub">Tap your name to sign in</div><div id="auList"></div><button class="aback" id="auBack" type="button">Not now</button></div><div class="colR"><div class="alead" id="auLead">Pick your name</div><div class="apin" id="auPin"><div class="adots" id="auDots"><span class="adot"></span><span class="adot"></span><span class="adot"></span><span class="adot"></span></div><div class="apad" id="auPad"></div></div></div></div></div>
-  <div id="cmdbar"><input id="cmdin" type="text" placeholder="Ask Zoe…" autocomplete="off"><button id="cmdgo" title="Send" aria-label="Send">➤</button></div>
+  <div id="cmdbar"></div>
   <div id="saytoast"></div>
   <div id="zoeOff" role="status" aria-live="polite">Can’t reach Zoe — trying again</div>
   <div class="estmodal" id="estModal"></div>
@@ -4706,13 +4706,19 @@
   function _acksGet(){try{return JSON.parse(localStorage.getItem(_ACK_KEY)||'{}')||{};}catch(e){return {};}}
   function _acksSet(o){try{localStorage.setItem(_ACK_KEY,JSON.stringify(o));}catch(e){}}
   function _ackSend(id){return apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).then(function(){var a=_acksGet();delete a[id];_acksSet(a);}).catch(function(){});}
-  function timerSay(text){if(!sid())return;
+  // "Timer is done" is ALWAYS heard: Zoe's own voice (the server's TTS) when this page has a member or device session, and when it
+  // has none (the guest kiosk), the server refuses, sends no audio or the audio will not play, the browser's voice says it instead.
+  // A second voice is better than a timer that ends unspoken; the chime and the card ring either way.
+  function _timerSayBrowser(text){try{if(window.speechSynthesis){var u=new SpeechSynthesisUtterance(text);u.rate=.96;speechSynthesis.cancel();speechSynthesis.speak(u);}}catch(e){}}
+  function timerSay(text){var done=false,fb=function(){if(done)return;done=true;_timerSayBrowser(text);};
+    if(!sid()){fb();return;}
     zfetch('/api/voice/speak',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({text:text})},15000)
       .then(function(r){return r.ok?r.json():null;})
-      .then(function(j){if(!j||!j.audio_base64)return;var bin=atob(j.audio_base64),u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+      .then(function(j){if(!j||!j.audio_base64){fb();return;}var bin=atob(j.audio_base64),u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
         var url=URL.createObjectURL(new Blob([u8],{type:j.content_type||'audio/wav'})),au=new Audio(url);au.onended=function(){URL.revokeObjectURL(url);};
-        var pp=au.play();if(pp&&pp.catch)pp.catch(function(){URL.revokeObjectURL(url);});})
-      .catch(function(){});}   // the chime and the card already carry it
+        au.onerror=function(){URL.revokeObjectURL(url);fb();};
+        var pp=au.play();if(pp&&pp.catch)pp.catch(function(){URL.revokeObjectURL(url);fb();});})
+      .catch(fb);}
   function timerAlarm(label,ids){
     // Cumulative: a second timer ending before Dismiss must not drop the first one's id, or the first stays
     // "ringing" on the server and re-rings after the next voice-turn reload inside the grace window.
@@ -4722,9 +4728,7 @@
     ov.innerHTML='<div class="tab"><div class="tak">⏱ Timer done</div><div class="tal">'+esc(label||'Timer')+'</div><button class="tad" id="tmrAlarmX">Dismiss</button></div>';
     ov.classList.add('on');
     _beep();if(_tAlarm.chime)clearInterval(_tAlarm.chime);_tAlarm.chime=setInterval(_beep,2200);
-    // Spoken in Zoe's own voice (A8): the server's TTS played here, never the browser's speech engine (a second,
-    // robotic voice). /api/voice/speak answers a member or device session only, so on the guest kiosk this stays
-    // silent and the chime + this card are the fallback.
+    // Spoken in Zoe's own voice (A8) when the server will speak for this session; the browser's voice otherwise (timerSay).
     timerSay((label||'Timer')+' timer is done');
     // Dismiss = the ACK: the server keeps a finished timer listed ("ringing") until it is cancelled or a grace
     // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
@@ -4745,7 +4749,11 @@
   // Same resolver the voice pipeline uses, so typed and spoken commands behave
   // identically; voice-pushed server actions are handled by touch-ui-executor.js.
   var DOMAIN_SCREEN={smart_home:'rooms',calendar:'day',lists:'list',weather:'weather',music:'music',reminders:'reminder',timers:'timer',chat:'ask'};
-  var cmdbar=document.getElementById('cmdbar'),cmdin=document.getElementById('cmdin'),orb=document.getElementById('orb'),toastEl=document.getElementById('saytoast'),_toastT=null;
+  // The typed "Ask Zoe" bar is a DESKTOP-BROWSER fallback only (voice needs the panel's own daemon). On the kiosk the field is never
+  // built: the wall panel has no keyboard, so its page holds no text field at all - a failed voice pull says so instead.
+  var cmdbar=document.getElementById('cmdbar');
+  if(!window.__kiosk)cmdbar.innerHTML='<input id="cmdin" type="text" placeholder="Ask Zoe…" autocomplete="off"><button id="cmdgo" title="Send" aria-label="Send">➤</button>';
+  var cmdin=document.getElementById('cmdin'),orb=document.getElementById('orb'),toastEl=document.getElementById('saytoast'),_toastT=null;
   function toast(t){if(!t)return;toastEl.textContent=t;toastEl.classList.remove('act');toastEl.classList.add('on');if(_toastT)clearTimeout(_toastT);_toastT=setTimeout(function(){toastEl.classList.remove('on');},6000);}
   // A toast that can be acted on. Used for undoing a queue removal — the
   // removal itself is deferred for exactly this window, so Undo is a local
@@ -4779,7 +4787,7 @@
   function sendCmd(q){
     q=(q||'').trim();if(!q||_sending)return;   // in-flight guard: cleared when the resolve completes
     _sending=true;
-    cmdbar.classList.remove('on');cmdin.value='';orb.classList.add('busy');
+    cmdbar.classList.remove('on');if(cmdin)cmdin.value='';orb.classList.add('busy');
     zfetch('/api/skybridge/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q,context:{panel_id:(localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'')}})},30000)
       .then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json();})
       .then(function(d){orb.classList.remove('busy');_sending=false;
@@ -5138,7 +5146,7 @@
         // fetch, so every orb tap on the real panel landed here.)
         if(window.__kiosk){toast('Voice isn’t available right now');return;}
         cmdbar.classList.add('on');
-        setTimeout(function(){cmdin.focus();},50);
+        setTimeout(function(){if(cmdin)cmdin.focus();},50);
       })
       // Trailing .then runs after EITHER branch — the guard must clear on the
       // fallback path too, or one unreachable daemon would wedge the orb.
@@ -5165,7 +5173,7 @@
         orb.classList.remove('busy');
         if(window.__kiosk){toast('Voice isn’t available right now');return;}
         cmdbar.classList.add('on');
-        setTimeout(function(){cmdin.focus();},50);
+        setTimeout(function(){if(cmdin)cmdin.focus();},50);
       })
       .then(function(){_orbBusy=false;});
   }
@@ -5193,8 +5201,10 @@
     poll();setInterval(poll,60000);
     document.addEventListener('visibilitychange',function(){if(!document.hidden)poll();});
   })();
-  cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
-  document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
+  if(cmdin){
+    cmdin.addEventListener('keydown',function(e){if(e.key==='Enter')sendCmd(cmdin.value);if(e.key==='Escape')cmdbar.classList.remove('on');});
+    document.getElementById('cmdgo').addEventListener('click',function(){sendCmd(cmdin.value);});
+  }
 
   // ---- estate-native who + PIN unlock (replaces the old login page) ----
   // The card can be shown and HIDDEN many times per page life. It used to be

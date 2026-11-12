@@ -87,8 +87,13 @@ const run = (box, code) => vm.runInContext(code, box);
         "function musicPost(body){return zfetch('/api/music/control'"].filter((s) => !t.includes(s));
     },
     typingFields(t) {
-      const s = mainScript(t).replace(/^\s*\/\/.*$/gm, ''), bad = [];   // comments may NAME an input
+      // the desktop-browser Ask bar is the ONE text field, and only in the statement that builds it when this is not the kiosk
+      const s = mainScript(t).replace(/^\s*\/\/.*$/gm, '').replace(/^\s*if\(!window\.__kiosk\)cmdbar\.innerHTML=.*$/m, ''), bad = [];
       (s.match(/<input(?![^>]*type="range")[^>]*>/g) || []).forEach((x) => bad.push(x));
+      // the STATIC page too: markup outside the scripts is on the kiosk whatever the code does
+      const stat = t.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<style[\s\S]*?<\/style>/g, '');
+      (stat.match(/<input(?![^>]*type="range")[^>]*>|<textarea[^>]*>|contenteditable/g) || []).forEach((x) => bad.push('static: ' + x));
+      if (!/^\s*if\(!window\.__kiosk\)cmdbar\.innerHTML=/m.test(mainScript(t))) bad.push('the Ask bar is not built off-kiosk only');
       if (/createElement\('input'\)/.test(s)) bad.push("createElement('input')");
       return bad;
     },
@@ -105,7 +110,12 @@ const run = (box, code) => vm.runInContext(code, box);
     },
     timerVoice(t) {
       const bad = [];
-      if (/speechSynthesis/.test(t)) bad.push('browser speechSynthesis');
+      // the browser's voice is the FALLBACK only: named once, inside _timerSayBrowser, and timerSay reaches it on every failure path
+      if ((t.match(/speechSynthesis\.speak\(/g) || []).length !== 1 || !near(t, 'function _timerSayBrowser(', 220).includes('speechSynthesis.speak(')) bad.push('browser speech outside the fallback');
+      const ts = near(t, 'function timerSay(', 1100);
+      if (!ts.includes('if(!sid()){fb();return;}')) bad.push('no session = silent');
+      if (!ts.includes("if(!j||!j.audio_base64){fb();return;}")) bad.push('no audio = silent');
+      if (!ts.includes('.catch(fb)')) bad.push('a refused speak = silent');
       if (!/timerSay\(\(label\|\|'Timer'\)\+' timer is done'\)/.test(near(t, 'function timerAlarm(', 2400))) bad.push('timerAlarm does not speak via timerSay');
       if (!near(t, 'function timerSay(', 300).includes("'/api/voice/speak'")) bad.push('timerSay is not the server TTS');
       return bad;
@@ -147,6 +157,8 @@ const run = (box, code) => vm.runInContext(code, box);
   check('control: a flash before the 2xx is seen', () => red('silentTaps', plant("haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).then(zok)\n        .then(function(){el.classList.add('fire');",
     "el.classList.add('fire');haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).then(zok)\n        .then(function(){")));
   check('control: browser speech for the timer is seen', () => red('timerVoice', plant("timerSay((label||'Timer')+' timer is done');", "speechSynthesis.speak(new SpeechSynthesisUtterance('x'));")));
+  check('control: a static text field is seen', () => red('typingFields', plant('<div id="cmdbar"></div>', '<div id="cmdbar"><input id="cmdin" type="text"></div>')));
+  check('control: a silent guest timer is seen', () => red('timerVoice', plant('if(!sid()){fb();return;}', 'if(!sid())return;')));
   check('control: an ignored person arrival is seen', () => red('personArrival', plant("if(wi>=0)openContact(ps[wi],wi);", "")));
   check('control: a chat without session id is seen', () => red('chatSession', plant('if(th)cb.session_id=th;', '')));
   check('control: a dead agenda row is seen', () => red('agendaTap', plant("show('day');editEvent(e)", "show('day')")));
