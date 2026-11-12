@@ -354,15 +354,23 @@ def _glucose_reply(v: Verdict, r: dict, emergency: str) -> str:
                                             usual=r["glucose_usual_mg" if mg else "glucose_usual_mmol"])
 
 
-def _intercom_reachable(user_id: str, voice: bool) -> bool:
-    """Can "tell everyone I need help" actually reach the other panels on the member's next turn? Only through the existing intercom
-    (``intercom.py``): it is on, this is the voice lane it serves, the member is identified, and it is not quiet hours (which hold the
-    intercom). Anything unsure = False, and the reply offers nothing Zoe cannot do. Never raises."""
+async def _intercom_reachable(user_id: str, voice: bool) -> bool:
+    """Can "tell everyone I need help" actually reach ANOTHER panel on the member's next turn? Only through the existing intercom
+    (``intercom.py``): it is on, this is the voice lane it serves, the member is identified, it is not quiet hours (which hold the
+    intercom), and at least TWO panels hold a live voice daemon - the intercom never targets the panel you are at, and this floor
+    does not know which panel that is, so two is the least that leaves one to hear it. In a one-panel house the offer would be a
+    false promise in an emergency. Anything unsure = False, and the reply offers nothing Zoe cannot do. Never raises."""
     try:
         import intercom
         from user_filters import is_unidentified
 
-        return bool(voice and intercom.mode() == "on" and not is_unidentified(user_id) and not intercom._quiet_now())
+        if not (voice and intercom.mode() == "on" and not is_unidentified(user_id) and not intercom._quiet_now()):
+            return False
+        from db_compat import get_compat_db
+
+        async with get_compat_db() as db:
+            panels = await intercom._speaker_panels(db)
+        return len({str(p.get("panel_id") or "") for p in panels} - {""}) >= 2
     except Exception:  # noqa: BLE001
         return False
 
@@ -414,7 +422,7 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool
             import distress_handoff
 
             minor = await distress_handoff._is_minor((user_id or "").strip())
-        return build_reply(v, minor=minor, intercom=v.cls == "red_call" and _intercom_reachable(user_id, voice)) or None
+        return build_reply(v, minor=minor, intercom=v.cls == "red_call" and await _intercom_reachable(user_id, voice)) or None
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety handle failed (%s)", type(exc).__name__)
         return None

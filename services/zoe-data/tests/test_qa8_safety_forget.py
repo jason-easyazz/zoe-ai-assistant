@@ -191,6 +191,21 @@ def test_the_intercom_phrase_is_offered_only_when_it_would_work(au, monkeypatch)
     import intercom
 
     monkeypatch.setattr(intercom, "_quiet_now", lambda now=None: False)
+    panels = [{"panel_id": "p-kitchen"}, {"panel_id": "p-hall"}]
+
+    async def speaker_panels(db):
+        return list(panels)
+
+    monkeypatch.setattr(intercom, "_speaker_panels", speaker_panels)
+    import contextlib
+
+    import db_compat
+
+    @contextlib.asynccontextmanager
+    async def no_db():
+        yield None
+
+    monkeypatch.setattr(db_compat, "get_compat_db", no_db)
     text = "i fell over in the kitchen and i can't get up"
     assert "tell everyone I need help" not in run(ms.handle(text, "demo-user", voice=True))        # intercom off (default)
     monkeypatch.setenv("ZOE_INTERCOM", "on")
@@ -201,6 +216,23 @@ def test_the_intercom_phrase_is_offered_only_when_it_would_work(au, monkeypatch)
     assert "tell everyone" not in run(ms.handle(text, "guest", voice=True))                       # guests can't use it
     monkeypatch.setattr(intercom, "_quiet_now", lambda now=None: True)
     assert "tell everyone" not in run(ms.handle(text, "demo-user", voice=True))                   # quiet hours hold the intercom
+    monkeypatch.setattr(intercom, "_quiet_now", lambda now=None: False)
+    del panels[1]                                                                                  # a one-panel house: no OTHER panel
+    alone = run(ms.handle(text, "demo-user", voice=True))
+    assert "tell everyone" not in alone and alone.endswith("call out to someone in the house.")   # never a promise nothing can keep
+
+
+@pytest.mark.parametrize("text", ["I've fallen, and I can't get up", "I fell over in the kitchen. I can't get up.",
+                                  "I slipped; now I cannot stand up!", "I had a fall, I can't get up off the floor."])
+def test_a_spoken_fall_with_punctuation_still_gets_the_number(au, text):
+    """Speech-to-text transcripts carry commas and full stops between the clauses."""
+    assert ms.detect(text).key == "fall" and run(ms.handle(text, "demo-user")).startswith("Ring 000 now.")
+
+
+@pytest.mark.parametrize("text", ["My phone fell over. I can't get up early tomorrow.", "I fell asleep, and I couldn't get up to speed.",
+                                  "The stock market fell. I can't get up there.", "I fell behind. I can't get up to date."])
+def test_punctuated_talk_that_is_not_a_fall_is_left_alone(text):
+    assert ms.detect(text).key != "fall"
 
 
 def test_a_child_still_gets_the_grown_up_line_first(au, monkeypatch):
