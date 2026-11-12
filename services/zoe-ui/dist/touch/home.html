@@ -94,6 +94,19 @@
   #cmdbar button:active{transform:scale(.94)}
   #saytoast{position:absolute;left:50%;top:54px;transform:translateX(-50%);max-width:820px;background:rgba(14,16,26,.72);border:1px solid rgba(255,255,255,.14);border-radius:16px;backdrop-filter:blur(16px);padding:14px 26px;font-size:22px;z-index:56;opacity:0;pointer-events:none;transition:opacity .3s}
   #saytoast.on{opacity:1}
+  /* "Can't reach Zoe": the ONE offline line (zfetch sets it, the next answer clears it) */
+  #zoeOff{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:57;display:none;padding:8px 22px;border-radius:14px;background:rgba(14,16,26,.82);border:1px solid var(--amber);color:var(--ink);font-size:20px;pointer-events:none}
+  #zoeOff.on{display:block}
+  /* a screen that could not load: readable ink, never the faintest (A9) */
+  .lderr{color:var(--ink-soft);font-size:20px}
+  /* phone hand-off code inside an estate dialog (no keyboard on the panel) */
+  .phqr{display:flex;align-items:center;gap:18px;margin:10px 0 4px}
+  .phqr canvas{width:150px;height:150px;flex:none;background:#fff;border-radius:12px;padding:8px}
+  .phqr .phcap{font-size:19px;line-height:1.3;color:var(--ink-soft)}
+  .saysay{font-size:19px;line-height:1.35;color:var(--ink-soft);margin:10px 0 0}
+  .estmc .pchips{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0 4px}
+  .estmc .pchips button{min-height:56px;padding:0 20px;border-radius:14px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.06);color:var(--ink);font:inherit;font-size:20px;cursor:pointer}
+  .estmc .pchips button.on{background:var(--accent);border-color:var(--accent);color:#fff}
   /* the toast is pointer-transparent by default; an actionable one (Undo) has
      to take taps, so it opts in. */
   #saytoast.act{pointer-events:auto}
@@ -270,17 +283,17 @@
   .calmonth::-webkit-scrollbar{width:0}
   /* The weekday strip stays put while the weeks scroll under it — without it a
      scrolled month is seven unlabelled columns. */
-  .calmonth .cmh{position:sticky;top:0;z-index:2;background:#0a0d14;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);text-align:center;padding:4px 0 6px}
+  .calmonth .cmh{position:sticky;top:0;z-index:2;background:#0a0d14;font-size:16px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);text-align:center;padding:4px 0 6px}
   .cmd{min-width:0;min-height:0;overflow:hidden;border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.07);padding:7px 9px;font-size:15px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}
   .cmd.dim{opacity:.3}
   .cmd.today{border-color:rgba(123,150,255,.65);background:linear-gradient(180deg,rgba(123,150,255,.18),rgba(123,150,255,.08));box-shadow:0 0 22px rgba(123,150,255,.18),inset 0 1px 0 rgba(255,255,255,.1)}
   .cmd.today .dn{color:#fff;font-weight:600}
   .cmd{scroll-snap-align:start}
-  .cmd .dn{font-size:14px;color:var(--ink-soft)}
-  .cmd .cev{font-size:12px;color:var(--ink);border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 20%,transparent);border-radius:5px;padding:2px 7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cmd .dn{font-size:16px;color:var(--ink-soft)}
+  .cmd .cev{font-size:16px;color:var(--ink);border-left:3px solid var(--c,var(--accent));background:color-mix(in srgb,var(--c,var(--accent)) 20%,transparent);border-radius:5px;padding:2px 7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* Once today is no longer implied by "leftmost"/"first row", it has to SAY so:
      scroll two weeks out and the accent alone reads as just another tinted cell. */
-  .cmd.today .dn::after,.cwc.today h5::after{content:'TODAY';margin-left:7px;font-size:10px;letter-spacing:.12em;font-weight:700;color:#0a0d14;background:#7b96ff;border-radius:4px;padding:1px 5px;vertical-align:middle}
+  .cmd.today .dn::after,.cwc.today h5::after{content:'TODAY';margin-left:7px;font-size:16px;letter-spacing:.06em;font-weight:700;color:#0a0d14;background:#7b96ff;border-radius:4px;padding:1px 5px;vertical-align:middle}
   .calweek{display:grid;grid-auto-flow:column;grid-auto-columns:calc((100% - 30px)/4);gap:10px;height:100%;
            overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}
   .calweek::-webkit-scrollbar{height:0}
@@ -903,7 +916,7 @@
   .hdock .hpc svg{width:26px;height:26px}
   .hdock .hpc.on{background:radial-gradient(circle at 40% 30%,rgba(255,214,140,.92),rgba(255,180,90,.3));color:#3a2a10;border-color:rgba(255,205,125,.5);box-shadow:0 0 26px rgba(255,190,100,.5)}
   .hdock .hpc .tv{font-size:19px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
-  .hdock .hpc .tl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55);margin-top:2px}
+  .hdock .hpc .tl{font-size:16px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);margin-top:2px;line-height:1}
 
   /* SLEEP — a dim night clock, orb, and big easy named controls to wake to */
   .slp .sclock{position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);display:flex;gap:14px;color:rgba(255,255,255,.72);font-weight:200;font-size:300px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;text-shadow:0 0 40px rgba(120,150,220,.15)}
@@ -926,11 +939,11 @@
   .slp .sc.scene.fire{background:rgba(123,150,255,.9);border-color:rgba(123,150,255,.6);color:#fff;box-shadow:0 0 34px rgba(123,150,255,.5)}
   .slp .sc.scene.fire svg{color:#fff}
   .slp .sc.temp{position:relative;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:16px 26px}
-  .slp .sc.temp .nm{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5)}
+  .slp .sc.temp .nm{font-size:16px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5)}
   .slp .sc.temp .tpop{position:absolute;bottom:100%;margin-bottom:18px;left:50%;transform:translateX(-50%) translateY(10px);width:140px;height:250px;padding:20px 0 18px;border-radius:22px;background:rgba(18,16,30,.82);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.6);opacity:0;pointer-events:none;transition:.28s;display:flex;flex-direction:column;align-items:center;gap:14px;z-index:50}
   .slp .sc.temp.open .tpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
   .slp .sc.temp .tpv{font-size:27px;font-weight:700;color:#ff9d6e;font-variant-numeric:tabular-nums}
-  .slp .sc.temp .tpl{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)}
+  .slp .sc.temp .tpl{font-size:16px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)}
   /* wider than the dock's 15px: this is dragged half-asleep in the dark */
   .slp .sc.temp .tsl{position:relative;width:20px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
   .slp .sc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
@@ -1087,11 +1100,11 @@
   #dock .pc.on{background:radial-gradient(circle at 30% 30%,rgba(255,214,140,.9),rgba(255,180,90,.28));color:#3a2a10;border-color:rgba(255,205,125,.5);box-shadow:0 0 26px rgba(255,190,100,.45)}
   #dock .pc.temp{position:relative;flex-direction:column;justify-content:center;gap:2px;padding:0 20px}
   #dock .pc.temp .tv{font-size:19px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
-  #dock .pc.temp .tl{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.55);line-height:1}
+  #dock .pc.temp .tl{font-size:16px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);line-height:1}
   #dock .pc.temp .tpop{position:absolute;bottom:64px;left:50%;transform:translateX(-50%) translateY(10px);width:112px;height:200px;padding:16px 0 14px;border-radius:18px;background:rgba(18,16,30,.74);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(16px);box-shadow:0 20px 50px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:.28s;display:flex;flex-direction:column;align-items:center;gap:12px;z-index:50}
   #dock .pc.temp.open .tpop{opacity:1;transform:translateX(-50%);pointer-events:auto}
   #dock .pc.temp .tpv{font-size:22px;font-weight:700;color:#ff9d6e;font-variant-numeric:tabular-nums}
-  #dock .pc.temp .tpl{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)}
+  #dock .pc.temp .tpl{font-size:16px;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.6)}
   #dock .pc.temp .tsl{position:relative;width:15px;flex:1;border-radius:999px;background:rgba(255,255,255,.18);cursor:pointer;touch-action:none}
   #dock .pc.temp .tff{position:absolute;left:0;right:0;bottom:0;border-radius:999px;background:linear-gradient(180deg,#ffb07a,#ff8a5a)}
   #dock .pc.temp .tkn{position:absolute;left:50%;transform:translate(-50%,50%);width:30px;height:30px;border-radius:50%;background:#fff;box-shadow:0 3px 10px rgba(0,0,0,.4)}
@@ -1249,6 +1262,7 @@
   <div id="authov"><div class="acard"><div class="colL"><h2>Who’s here?</h2><div class="sub">Tap your name to sign in</div><div id="auList"></div><button class="aback" id="auBack" type="button">Not now</button></div><div class="colR"><div class="alead" id="auLead">Pick your name</div><div class="apin" id="auPin"><div class="adots" id="auDots"><span class="adot"></span><span class="adot"></span><span class="adot"></span><span class="adot"></span></div><div class="apad" id="auPad"></div></div></div></div></div>
   <div id="cmdbar"><input id="cmdin" type="text" placeholder="Ask Zoe…" autocomplete="off"><button id="cmdgo" title="Send" aria-label="Send">➤</button></div>
   <div id="saytoast"></div>
+  <div id="zoeOff" role="status" aria-live="polite">Can’t reach Zoe — trying again</div>
   <div class="estmodal" id="estModal"></div>
   <div id="dock"><div class="pc apps" id="apps" title="All screens"><span class="g"><i></i><i></i><i></i><i></i></span></div><div class="ddiv"></div><div id="dbody"></div></div>
 </div>
@@ -1676,11 +1690,12 @@
       var chip=document.createElement('div');chip.className='pc dnp';
       chip.innerHTML='<span class="da">'+art+'</span><span class="dnm">'+esc(np.title)+'</span><button class="dprev" title="Previous">'+PREV_I+'</button><button class="dpp" title="Play/Pause">'+(playing?PAUSE_I:PLAY_I)+'</button><button class="dnext" title="Next">'+NEXT_I+'</button>';
       dbody.insertBefore(chip,dbody.firstChild);
-      function _dockCtl(action){fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:np.player_id})}).then(function(){setTimeout(paintDockMusic,450);if(_cur==='music')setTimeout(loadMusic,450);}).catch(function(){});}
+      function _dockCtl(action){musicPost({action:action,player_id:np.player_id}).then(function(){setTimeout(paintDockMusic,450);if(_cur==='music')setTimeout(loadMusic,450);}).catch(function(){actFail('The music didn’t change');});}
       chip.querySelector('.dpp').onclick=function(e){e.stopPropagation();
         var b=chip.querySelector('.dpp'),now=b.dataset.pl!=='0';   // optimistic flip
         b.dataset.pl=now?'0':'1';b.innerHTML=now?PLAY_I:PAUSE_I;
-        fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:now?'pause':'play',player_id:np.player_id})}).then(function(){if(_cur==='music')setTimeout(loadMusic,450);}).catch(function(){});};
+        musicPost({action:now?'pause':'play',player_id:np.player_id}).then(function(){if(_cur==='music')setTimeout(loadMusic,450);})
+          .catch(function(){b.dataset.pl=now?'1':'0';b.innerHTML=now?PAUSE_I:PLAY_I;actFail('The music didn’t change');});};
       chip.querySelector('.dpp').dataset.pl=playing?'1':'0';
       chip.querySelector('.dprev').onclick=function(e){e.stopPropagation();_dockCtl('previous');};
       chip.querySelector('.dnext').onclick=function(e){e.stopPropagation();_dockCtl('next');};
@@ -1807,7 +1822,7 @@
     }).catch(unknown);
   }
   var _ha={loaded:false,ok:false,lights:[],climate:null,scenes:[]};
-  function haControl(body){return fetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body),signal:reqSig(12000)});}
+  function haControl(body){return zfetch('/api/ha/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body),signal:reqSig(12000)});}
   // One in-flight entity load at a time, and a response younger than HA_MEMO_MS
   // is reused: the dock's refreshHA (30 s), the Rooms surface (30 s) and the Sleep
   // surface (30 s) all used to fetch /api/ha/entities independently.
@@ -1902,7 +1917,7 @@
       // {temperature}`. The old code sent set_temperature unconditionally.
       var params=(act==='set_temperature')?{temperature:tv}:{value:tv};
       haControl({entity_id:eid,action:act,params:params})
-        .then(function(r){if(!r.ok)refreshHA();}).catch(function(){refreshHA();});});
+        .then(zok).catch(function(){refreshHA();actFail('The temperature didn’t change');});});
   }
 
   function wireDock(){
@@ -1914,14 +1929,14 @@
     dbody.querySelectorAll('.pc.light[data-eid]').forEach(function(el){el.onclick=function(){
       var on=el.classList.toggle('on');
       haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'})
-        .then(function(r){if(!r.ok)throw new Error('http '+r.status);})
-        .catch(function(){el.classList.toggle('on');});};});
+        .then(zok)
+        .catch(function(){el.classList.toggle('on');actFail('That didn’t switch');});};});
     dbody.querySelectorAll('.pc.scene[data-eid]').forEach(function(el){el.onclick=function(){
-      // Fire-and-forget: flash regardless of outcome. There is no state to
-      // revert to, and a silently-failed scene is indistinguishable from a
-      // working one — acceptable, and better than faking reconciliation.
-      el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},900);
-      haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).catch(function(){});};});
+      // No state to revert to, so the flash IS the success signal: it plays only on a 2xx, and a
+      // failure says so plainly (A3, 2026-11-13: it used to flash first and fail silently).
+      haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).then(zok)
+        .then(function(){el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},900);})
+        .catch(function(){actFail('That scene didn’t run');});};});
     dbody.querySelectorAll('.pc.temp').forEach(wireTempTile);
   }
 
@@ -2112,7 +2127,22 @@
   }
   // every request helper carries a deadline; guarded because the touch harness (and an old WebView) has no AbortSignal
   function reqSig(ms){return (typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')?AbortSignal.timeout(ms):undefined;}
-  function apiGet(url){return fetch(url,{headers:{'X-Session-ID':sid()},credentials:'include',signal:reqSig(12000)}).then(function(r){
+  // ZFETCH-BEGIN - every request to Zoe goes through zfetch: a deadline on each one, and ONE on-screen "Can't reach Zoe"
+  // line (#zoeOff) while they fail - a network error, a timeout, or the proxy's 502/503/504 - cleared by the next answer
+  // of any kind (the 15 s timer poll keeps asking, so it clears on its own). The panel daemon (localhost:7777) is not
+  // Zoe and stays outside it. actFail() is the plain failure line for a tap that did not go through.
+  var _zoeDown=false;
+  function zoeReach(ok){if(ok!==_zoeDown)return;_zoeDown=!ok;var el=document.getElementById('zoeOff');if(el)el.classList.toggle('on',_zoeDown);}
+  function zfetch(url,opts,ms){opts=opts||{};if(!opts.signal)opts.signal=reqSig(ms||12000);
+    return fetch(url,opts).then(function(r){zoeReach(!(r.status===502||r.status===503||r.status===504));return r;},function(e){zoeReach(false);throw e;});}
+  function musicPost(body){return zfetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(body)}).then(zok);}
+  function zok(r){if(!r||!r.ok)throw new Error('http '+(r&&r.status));return r;}
+  function actFail(msg){toast((msg||'That didn’t go through')+(_zoeDown?' — Zoe can’t be reached right now.':'.'));}
+  // One wording for a screen that could not load (Day, Calendar, Reminders, Lists, Contacts, Timers): a refused read
+  // (apiGet/apiJson throw 'auth' on 401/403) is private, not broken; anything else is a failure, said plainly.
+  function loadErr(what,e){if(e&&e.message==='auth')return 'Sign in to see your '+what+'.';return 'Couldn’t load your '+what+(_zoeDown?' — Zoe can’t be reached right now.':'.');}
+  // ZFETCH-END
+  function apiGet(url){return zfetch(url,{headers:{'X-Session-ID':sid()},credentials:'include',signal:reqSig(12000)}).then(function(r){
     // Server is authoritative on session validity: an expired/invalid session
     // 401/403s here — clear it and return to login (the presence guard alone
     // can't detect server-side expiry).
@@ -2166,8 +2196,10 @@
       if(_cur!=='home')return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55;grid-template-columns:1fr"><span class="tn">Nothing scheduled today</span></div>';return;}
-      host.innerHTML=evs.slice(0,4).map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
-    }).catch(function(){host.innerHTML='<div class="tr" style="opacity:.55"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn">Couldn’t load your day</span></div>';});}
+      host.innerHTML=evs.slice(0,4).map(function(e,i){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr" data-i="'+i+'" style="cursor:pointer"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
+      // A tapped agenda row opens that event in the Day view (its sheet), like a tapped Day row.
+      host.onclick=function(ev){var row=ev.target.closest('.tr[data-i]');if(!row)return;var e=evs[+row.getAttribute('data-i')];if(!e)return;show('day');editEvent(e);};
+    }).catch(function(e){host.onclick=null;host.innerHTML='<div class="tr"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn lderr">'+esc(loadErr('day',e))+'</span></div>';});}
   function initHome(){tickClock();_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();loadCheckCard();
     _wxTick=setInterval(function(){if(_cur==='home'){loadWeather();loadToday();loadCheckCard();}},600000);}
 
@@ -2389,8 +2421,7 @@
       if(vv)vv.textContent=v.value+'%';
       if(vt)clearTimeout(vt);
       vt=setTimeout(function(){
-        fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',
-          body:JSON.stringify({action:'volume_set',player_id:_music.player_id||'',value:+v.value})}).catch(function(){});
+        musicPost({action:'volume_set',player_id:_music.player_id||'',value:+v.value}).catch(function(){actFail('The volume didn’t change');});
       },250);};
   }
   // ---- Volume popover: the thermostat pill's pattern, on the transport -----
@@ -2455,8 +2486,7 @@
         if(vv)vv.textContent=v.value+'%';
         if(vt)clearTimeout(vt);
         vt=setTimeout(function(){
-          fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',
-            body:JSON.stringify({action:'volume_set',player_id:v.getAttribute('data-pid'),value:+v.value})}).catch(function(){});
+          musicPost({action:'volume_set',player_id:v.getAttribute('data-pid'),value:+v.value}).catch(function(){actFail('The volume didn’t change');});
         },250);};
     });
   }
@@ -2515,7 +2545,7 @@
     sc.addEventListener('pointercancel',function(e){release(e,false);});
   }
   function musicSet(action,value){if(!_music.player_id)return;
-    fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id,value:value})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
+    musicPost({action:action,player_id:_music.player_id,value:value}).then(function(){setTimeout(loadMusic,350);}).catch(function(){actFail('The music didn’t change');});}
   var _qtab='recent';
   // One-shot tab for the NEXT Browse render — set by a server navigation
   // (?domain=music_sources, the "set up music" intent) to land on Sources.
@@ -3124,7 +3154,7 @@
       if(d.browsing){cfGlide(Math.round(_cf.focus));cfArmHome();}else cfLayout();});
   }
   function musicControl(action){if(!_music.player_id)return;
-    fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:action,player_id:_music.player_id})}).then(function(){setTimeout(loadMusic,350);}).catch(function(){});}
+    musicPost({action:action,player_id:_music.player_id}).then(function(){setTimeout(loadMusic,350);}).catch(function(){actFail('The music didn’t change');});}
   // Browse surface: Recent + Playlists, plus the two queue actions that used to
   // be crammed into the overlay's header (they act on the PLAYER's queue, which
   // outlives this surface — _music.player_id is kept fresh by whichever
@@ -3138,9 +3168,11 @@
       _qtab=b.getAttribute('data-qt');tabs.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});loadQueue();};
     var qs=document.getElementById('mQSave');
     if(qs)qs.onclick=function(){if(!_qHasPlayer())return;
-      estOpen('<h3>Save queue as playlist</h3><label>Name</label><input data-f="nm" placeholder="My playlist"><div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+      // No keyboard: the playlist is named from the date and time it was saved.
+      var nd=new Date(),nm='Queue '+nd.toLocaleDateString(undefined,{day:'numeric',month:'short'})+' '+fmt12(two(nd.getHours())+':'+two(nd.getMinutes()));
+      estOpen('<h3>Save queue as playlist</h3><div class="phint">It will be saved as “'+esc(nm)+'”.</div><div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
       var m=document.getElementById('estModal');m.querySelector('[data-x="cancel"]').onclick=estClose;
-      m.querySelector('[data-x="save"]').onclick=function(){var nm=m.querySelector('[data-f="nm"]').value.trim();if(!nm){toast('Give it a name');return;}
+      m.querySelector('[data-x="save"]').onclick=function(){
         _qpost('queue/save',{queue_id:_music.player_id,name:nm}).then(function(r){estClose();toast(r&&r.ok?'Saved “'+nm+'”':'Couldn’t save');}).catch(function(){toast('Couldn’t save');});};};
     var qc=document.getElementById('mQClear');
     if(qc)qc.onclick=function(){if(!_qHasPlayer())return;
@@ -3318,8 +3350,7 @@
             if(!playing){
               _music.player_id=pid;_music.chosenName=nm;estClose();
               var sn0=document.querySelector('#mSpk .spkname');if(sn0)sn0.textContent=nm;
-              apiJson('POST','/api/music/preferred-player',{player_id:pid}).catch(function(){});
-              toast('Music will play on '+nm);
+              apiJson('POST','/api/music/preferred-player',{player_id:pid}).then(function(){toast('Music will play on '+nm);}).catch(function(){actFail('The speaker didn’t change');});
             }else{
               apiJson('POST','/api/music/transfer',{target_player_id:pid,source_player_id:leader||undefined})
                 .then(function(){estClose();var sn1=document.querySelector('#mSpk .spkname');if(sn1)sn1.textContent=nm;loadMusic();})
@@ -3358,12 +3389,12 @@
       // the server resolves for pinned tiles. A bulb for every toggle drew a bulb on
       // the fan and the TV.
       host.innerHTML=toggles.map(function(e){return '<div class="rlt'+(isOn(e)?' on':'')+'" data-eid="'+esc(e.entity_id)+'"><div class="ri">'+mdi((e.attributes&&e.attributes.icon)||'mdi:lightbulb-outline')+'</div><div><div class="rn">'+esc(friendly(e))+'</div><div class="rs">'+(isOn(e)?'On':'Off')+'</div></div></div>';}).join('')
-        ||('<div style="color:var(--ink-faint);font-size:20px;padding:20px">'+(_ha.ok?'No devices yet':'Couldn’t reach Home Assistant')+'</div>');
+        ||(_ha.ok?'<div style="color:var(--ink-faint);font-size:20px;padding:20px">No devices yet</div>':'<div class="lderr" style="padding:20px">Couldn’t reach Home Assistant.</div>');
       host.querySelectorAll('.rlt[data-eid]').forEach(function(el){el.onclick=function(){
         var on=el.classList.toggle('on');var rs=el.querySelector('.rs');if(rs)rs.textContent=on?'On':'Off';
-        haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(function(r){if(!r.ok)throw 0;}).catch(function(){el.classList.toggle('on');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';});};});
+        haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'}).then(zok).catch(function(){el.classList.toggle('on');if(rs)rs.textContent=el.classList.contains('on')?'On':'Off';actFail('That didn’t switch');});};});
       if(sc){sc.innerHTML=(_ha.scenes||[]).slice(0,4).map(function(e){return '<span class="rchip" data-eid="'+esc(e.entity_id)+'">'+esc(friendly(e))+'</span>';}).join('');
-        sc.querySelectorAll('.rchip[data-eid]').forEach(function(ch){ch.onclick=function(){ch.classList.add('on');haControl({entity_id:ch.getAttribute('data-eid'),action:'turn_on'}).catch(function(){}).then(function(){setTimeout(function(){ch.classList.remove('on');},900);});};});}
+        sc.querySelectorAll('.rchip[data-eid]').forEach(function(ch){ch.onclick=function(){haControl({entity_id:ch.getAttribute('data-eid'),action:'turn_on'}).then(zok).then(function(){ch.classList.add('on');setTimeout(function(){ch.classList.remove('on');},900);}).catch(function(){actFail('That scene didn’t run');});};});}
     }
     if(_ha.loaded)paint();else loadHA(paint);
     // now-playing hero (same source as the Music screen)
@@ -3381,7 +3412,7 @@
       if(rv&&!rv.dataset.wired){rv.dataset.wired='1';var _vt=null;
         rv.oninput=function(){if(rvv)rvv.textContent=rv.value+'%';
           if(_vt)clearTimeout(_vt);
-          _vt=setTimeout(function(){fetch('/api/music/control',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({action:'volume_set',player_id:_music.player_id||'',value:+rv.value})}).catch(function(){});},250);};}
+          _vt=setTimeout(function(){musicPost({action:'volume_set',player_id:_music.player_id||'',value:+rv.value}).catch(function(){actFail('The volume didn’t change');});},250);};}
     }).catch(function(){});
     _wxTick=setInterval(function(){if(_cur==='rooms')loadHA(paint);},30000);
   }
@@ -3434,12 +3465,12 @@
       host.querySelectorAll('.sc[data-k="toggle"][data-eid]').forEach(function(el){el.onclick=function(){
         var on=el.classList.toggle('on');
         haControl({entity_id:el.getAttribute('data-eid'),action:on?'turn_on':'turn_off'})
-          .then(function(r){if(!r.ok)throw new Error('http '+r.status);})
-          .catch(function(){el.classList.toggle('on');});};});
+          .then(zok)
+          .catch(function(){el.classList.toggle('on');actFail('That didn’t switch');});};});
       host.querySelectorAll('.sc.scene[data-eid]').forEach(function(el){el.onclick=function(){
-        el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},420);
-        haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'})
-          .catch(function(){});};});
+        haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).then(zok)
+          .then(function(){el.classList.add('fire');setTimeout(function(){el.classList.remove('fire');},420);})
+          .catch(function(){actFail('That scene didn’t run');});};});
       host.querySelectorAll('.sc.temp').forEach(wireTempTile);
     }
     function paint(){if(_cur!=='sleep')return;var host=document.getElementById('slDock');if(!host)return;
@@ -3493,7 +3524,7 @@
           if(act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(rem.title||'this reminder')+'”?',function(){
             apiJson('DELETE','/api/reminders/'+encodeURIComponent(rid)).then(function(){wireReminder();}).catch(function(){toast('Couldn’t delete');});});return;}
           editReminder(rem);};}
-    }).catch(function(){if(ttl)ttl.textContent='Couldn’t load reminders';});
+    }).catch(function(e){if(_cur!=='reminder')return;if(ttl)ttl.textContent='';if(host)host.innerHTML='<div class="lderr">'+esc(loadErr('reminders',e))+'</div>';});
   }
   // Touch-friendly date+time stepper (native <input type=date> is a poor fit on
   // the kiosk — tiny native pickers). Big ▲/▼ steppers for day/mon/yr/hr/min.
@@ -3533,15 +3564,15 @@
   function editReminder(rem){
     _dtInit(rem.due_date,rem.due_time);
     estOpen('<h3>Edit reminder</h3>'
-      +'<label>Reminder</label><input data-f="title" value="'+esc(rem.title||'')+'">'
+      +'<label>Reminder</label><div class="remttl" style="font-size:22px;margin:4px 0 6px">'+esc(rem.title||'Reminder')+'</div>'
       +'<label>When</label>'+_dtHtml()
+      +phoneQrHtml('/calendar.html','To change the words, scan to finish on your phone')
       +'<div class="btns"><button class="del" data-x="del">Delete</button><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
-    var m=document.getElementById('estModal');_dtWire(m);
+    var m=document.getElementById('estModal');_dtWire(m);phoneQrDraw(m);
     m.querySelector('[data-x="cancel"]').onclick=estClose;
     m.querySelector('[data-x="del"]').onclick=function(){estConfirm('Delete “'+(rem.title||'this reminder')+'”?',function(){
       apiJson('DELETE','/api/reminders/'+encodeURIComponent(rem.id)).then(function(){estClose();wireReminder();}).catch(function(){toast('Couldn’t delete');});});};
-    m.querySelector('[data-x="save"]').onclick=function(){var title=(m.querySelector('input[data-f="title"]').value||'').trim();
-      if(!title){toast('The reminder needs a name');return;}
+    m.querySelector('[data-x="save"]').onclick=function(){var title=rem.title||'';   // the words change on the phone; the panel moves the time
       var dt=_dtGet();
       apiJson('PUT','/api/reminders/'+encodeURIComponent(rem.id),{title:title,due_date:dt.date,due_time:dt.time}).then(function(){estClose();if(_cur==='reminder')wireReminder();else if(_cur==='day')wireDay();}).catch(function(){toast('Couldn’t save reminder');});};
   }
@@ -3549,13 +3580,34 @@
   // ---- Lists: full multi-column board (all lists, toggle, add, create) ----
   var LIST_TYPES=['shopping','work_todos','personal_todos','bucket','tasks'];
   // ---- shared modal + confirm ----
+  // NO-KEYBOARD (A1, 2026-11-13): the panel has no keyboard, so no estate dialog takes typed text. A name is PICKED
+  // (pickChips), a spoken value goes through the orb's listen path (a dialog's Say it -> panelVoice), and a real edit finishes on
+  // the phone: phoneQrHtml is a code for a members-only page - the same non-secret pattern as the event sheet's
+  // "Edit on your phone" (secret-bearing hand-offs use authCard instead).
+  var ROOM_NAMES=['Kitchen','Living room','Lounge','Family room','Dining room','Bedroom','Main bedroom','Kids’ room','Guest room','Bathroom','Office','Study','Laundry','Garage','Hallway','Outside'];
+  function pickChips(names,cur){return '<div class="pchips">'+names.map(function(n){return '<button type="button" data-nm="'+esc(n)+'"'+(n===cur?' class="on"':'')+'>'+esc(n)+'</button>';}).join('')+'</div>';}
+  function wirePickChips(m,onPick){var h=m&&m.querySelector('.pchips');if(!h)return;h.onclick=function(e){var b=e.target.closest('button[data-nm]');if(!b)return;
+    h.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b);});if(onPick)onPick(b.getAttribute('data-nm'));};}
+  function pickedChip(m){var b=m&&m.querySelector('.pchips button.on');return b?b.getAttribute('data-nm'):'';}
+  function phoneQrHtml(path,cap){var o=String(location.origin||'').replace(/\/+$/,'');
+    if(!/^https?:\/\/[^\s"'<>]+$/i.test(o))return '';
+    return '<div class="phqr"><canvas width="150" height="150" data-qr="'+esc(o+path)+'"></canvas><div class="phcap">'+esc(cap)+'</div></div>';}
+  function phoneQrDraw(m){function draw(){(m||document).querySelectorAll('.phqr canvas[data-qr]').forEach(function(cv){try{QRCode.toCanvas(cv,cv.getAttribute('data-qr'),{width:150,margin:0,errorCorrectionLevel:'M'});}catch(e){}});}
+    if(window.QRCode)draw();else{var sc=document.createElement('script');sc.src='/lib/qrcode/qrcode.min.js';sc.onload=draw;document.head.appendChild(sc);}}
+  // A phone-or-voice edit dialog: the code, a "say it like this" line, and Say it (closes, opens the mic).
+  function handoffDialog(title,path,cap,sayLine,listenCue){
+    estOpen('<h3>'+esc(title)+'</h3>'+phoneQrHtml(path,cap)+(sayLine?'<div class="saysay">'+esc(sayLine)+'</div>':'')
+      +'<div class="btns"><button data-x="cancel">Close</button>'+(sayLine?'<button class="save" data-x="say">Say it</button>':'')+'</div>');
+    var m=document.getElementById('estModal');m.querySelector('[data-x="cancel"]').onclick=estClose;
+    var sb=m.querySelector('[data-x="say"]');if(sb)sb.onclick=function(){estClose();panelVoice(listenCue||'Listening — tell Zoe the change');};
+    phoneQrDraw(m);return m;}
   function estClose(){var m=document.getElementById('estModal');if(m){m.classList.remove('on');m.innerHTML='';}}
   function estOpen(html){var m=document.getElementById('estModal');if(!m)return;m.innerHTML='<div class="estmc">'+html+'</div>';m.classList.add('on');
     m.onclick=function(e){if(e.target===m)estClose();};}
   function estConfirm(msg,onYes){estOpen('<h3>'+esc(msg)+'</h3><div class="btns"><button data-x="no">Cancel</button><button class="del" data-x="yes">Delete</button></div>');
     document.querySelector('#estModal').querySelector('[data-x="no"]').onclick=estClose;
     document.querySelector('#estModal').querySelector('[data-x="yes"]').onclick=function(){estClose();onYes();};}
-  function apiJson(method,url,body){return fetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined,signal:reqSig(12000)}).then(function(r){
+  function apiJson(method,url,body){return zfetch(url,{method:method,headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:body?JSON.stringify(body):undefined,signal:reqSig(12000)}).then(function(r){
     if(r.status===401||r.status===403){
       if(window.__kiosk){kioskAuthFail(r.status);}else{estateAuthFail(r.status);}
       throw new Error('auth');}
@@ -3581,7 +3633,7 @@
         if(_lst.sel&&!_lst.lists.some(function(l){return l.id===_lst.sel;}))_lst.sel=null;
         if(!_lst.sel&&_lst.lists.length)_lst.sel=_lst.lists[0].id;
         paintListTabs();paintListBody();
-      }).catch(function(){if(_cur==='list')tabs.innerHTML='<span class="ltab">Couldn’t load lists</span>';});
+      }).catch(function(e){if(_cur==='list')tabs.innerHTML='<span class="ltab lderr">'+esc(loadErr('lists',e))+'</span>';});
   }
   // Pure: per-type results → the board to show. Pinned by dist/test_touch_resilience.js.
   function mergeListGroups(results,prev){
@@ -3614,16 +3666,15 @@
         if(act){var a=act.getAttribute('data-act');
           if(a==='del'){estConfirm('Delete “'+(row.querySelector('.tx2')?row.querySelector('.tx2').textContent:'this item')+'”?',function(){
             apiJson('DELETE',base+iid).then(paintListBody).catch(function(){toast('Couldn’t delete');});});return;}
-          if(a==='edit'){var span=row.querySelector('.tx2'),cur=span.textContent;
-            var inp=document.createElement('input');inp.className='edit';inp.value=cur;span.replaceWith(inp);inp.focus();inp.select();
-            var done=false;function commit(){if(done)return;done=true;var v=(inp.value||'').trim();if(!v||v===cur){paintListBody();return;}apiJson('PUT',base+iid,{text:v}).then(paintListBody).catch(function(){toast('Couldn’t save');paintListBody();});}
-            inp.onkeydown=function(ev){if(ev.key==='Enter')commit();if(ev.key==='Escape')paintListBody();};inp.onblur=commit;return;}}
+          if(a==='edit'){var cur=row.querySelector('.tx2')?row.querySelector('.tx2').textContent:'this item';
+            handoffDialog('Change “'+cur+'”','/lists.html','Scan to change it on your phone',
+              'Or say: “take '+cur+' off the list”, then add the new one.','Listening — tell Zoe what to change');return;}}
         // otherwise: toggle completion
         var now=row.getAttribute('data-done')!=='1';
         row.classList.toggle('done',now);row.setAttribute('data-done',now?1:0);row.querySelector('.bx').innerHTML=now?CHK:'';
         apiJson('PUT',base+iid,{completed:now?1:0})
           .catch(function(e2){row.classList.toggle('done');row.setAttribute('data-done',now?0:1);row.querySelector('.bx').innerHTML=now?'':CHK;if(String(e2&&e2.message)==='auth')toast('Sign in to change lists');});};
-    }).catch(function(){items.innerHTML='<div style="color:var(--ink-faint)">Couldn’t load this list.</div>';});
+    }).catch(function(e){if(_cur==='list')items.innerHTML='<div class="lderr">'+esc(loadErr('list',e))+'</div>';});
   }
 
   // ---- Timers: live countdowns + cancel (server-authoritative) ----
@@ -3657,15 +3708,17 @@
       tick();_homeTick=setInterval(tick,1000);
       var host=document.querySelector('.tfull');
       if(host)host.onclick=function(e){var b=e.target.closest('button[data-tid]');if(!b)return;
-        apiJson('POST','/api/skybridge/timers/cancel',{timer_id:b.getAttribute('data-tid')}).then(function(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}paint();renderDock();}).catch(function(){});};
-    }).catch(function(){});}
+        apiJson('POST','/api/skybridge/timers/cancel',{timer_id:b.getAttribute('data-tid')}).then(function(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}paint();renderDock();}).catch(function(){actFail('The timer didn’t stop');});};
+    }).catch(function(e){var rings=document.getElementById('tmRings');if(_cur==='timer'&&rings&&!rings.querySelector('.tunit'))rings.innerHTML='<div class="tsub lderr" style="width:100%;text-align:center">'+esc(loadErr('timers',e))+'</div>';});}
     paint();_wxTick=setInterval(function(){if(_cur==='timer')paint();},15000);
   }
 
   // ---- Contacts: full-screen tile grid → tap for detail ----
   var PAVC=['#7b96ff','#66d6a3','#f5b13c','#ff7a90','#5ec8f0','#9aa6bd'];
+  var _openPerson=null;   // {id,intro} from a voice 'introduce' arrival, consumed by the next wireContacts load
   function wireContacts(){
     var grid=document.getElementById('ctGrid'),det=document.getElementById('ctDetail'),az=document.getElementById('ctAZ');
+    var want=_openPerson;_openPerson=null;
     apiJson('GET','/api/people/').then(function(d){if(_cur!=='person')return;
       var ps=(d.people||[]).slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));});
       var have={};
@@ -3710,15 +3763,18 @@
                 .then(function(){openContact(pn,idx);}).catch(function(){toast('Couldn’t unlink');});});return;}
             var oid=chip.getAttribute('data-oid');var other=ps.filter(function(x){return String(x.id)===oid;})[0];
             if(other)openContact(other,ps.indexOf(other));
-            else apiJson('GET','/api/people/'+encodeURIComponent(oid)).then(function(pp){openContact(pp.person||pp,0);}).catch(function(){});
+            else apiJson('GET','/api/people/'+encodeURIComponent(oid)).then(function(pp){openContact(pp.person||pp,0);}).catch(function(){actFail('Couldn’t open that person');});
           };
-        }).catch(function(){var host=document.getElementById('ctRels');if(host)host.innerHTML='<span style="color:var(--ink-faint);font-size:16px">Couldn’t load links.</span>';});
+        }).catch(function(){var host=document.getElementById('ctRels');if(host)host.innerHTML='<span class="lderr">Couldn’t load links.</span>';});
         det.onclick=function(ev){if(ev.target===det||ev.target.closest('[data-x="close"]'))det.classList.remove('on');
           if(ev.target.closest('[data-x="del"]')){det.classList.remove('on');estConfirm('Delete '+(pn.name||'this contact')+'?',function(){
             apiJson('DELETE','/api/people/'+encodeURIComponent(pn.id)).then(function(){wireContacts();}).catch(function(){toast('Couldn’t delete');});});}
           if(ev.target.closest('[data-x="edit"]')){editContact(pn);}
           if(ev.target.closest('[data-x="link"]')){linkPerson(pn,function(){openContact(pn,idx);});}};
       }
+      if(want){var wi=-1;ps.forEach(function(x,i){if(String(x.id)===want.id)wi=i;});
+        if(wi>=0)openContact(ps[wi],wi);
+        else apiJson('GET','/api/people/'+encodeURIComponent(want.id)).then(function(pp){if(_cur==='person')openContact(pp.person||pp,0);}).catch(function(){});}   // not in the list: the grid stays, as before
       grid.onclick=function(e){var t=e.target.closest('.cttile');if(!t)return;var i=+t.getAttribute('data-i');var pn=ps[i];if(pn)openContact(pn,i);};
       // "＋ Link person": link an existing contact OR create a new (sub-)contact
       // by name — create_partial makes the person row + the typed edge in one call.
@@ -3728,18 +3784,18 @@
           var opts=flat.map(function(t2){return '<option value="'+esc(t2.key)+'">'+esc(t2.label_b||t2.key)+' of '+esc(pn.name||'them')+'</option>';}).join('');
           var existing=ps.filter(function(x){return x.id!==pn.id;}).map(function(x){return '<option value="'+esc(String(x.id))+'">'+esc(x.name||'?')+'</option>';}).join('');
           estOpen('<h3>Link a person to '+esc(pn.name||'')+'</h3>'
-            +'<label>Who</label><select data-f="oid"><option value="">— New person —</option>'+existing+'</select>'
-            +'<label>New person’s name</label><input data-f="nname" placeholder="Only for a new person">'
+            +'<label>Who</label><select data-f="oid"><option value="">— Pick a person —</option>'+existing+'</select>'
             +'<label>They are the…</label><select data-f="rel">'+opts+'</select>'
-            +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Link</button></div>');
+            +'<div class="saysay">Someone new? Tap Say it: “Sam is '+esc(pn.name||'their')+'’s friend.”</div>'
+            +'<div class="btns"><button data-x="cancel">Cancel</button><button data-x="say">Say it</button><button class="save" data-x="save">Link</button></div>');
           var m=document.getElementById('estModal');
           m.querySelector('[data-x="cancel"]').onclick=estClose;
+          m.querySelector('[data-x="say"]').onclick=function(){estClose();panelVoice('Listening — who is new?');};
           m.querySelector('[data-x="save"]').onclick=function(){
-            var oid=m.querySelector('[data-f="oid"]').value,nname=m.querySelector('[data-f="nname"]').value.trim(),rel=m.querySelector('[data-f="rel"]').value;
+            var oid=m.querySelector('[data-f="oid"]').value,rel=m.querySelector('[data-f="rel"]').value;
             var body={rel_type:rel};
             if(oid)body.other_person_id=oid;
-            else if(nname){body.other_person_name=nname;body.create_partial=true;}
-            else{toast('Pick a person or type a name');return;}
+            else{toast('Pick a person — or tap Say it for someone new');return;}
             apiJson('POST','/api/people/'+encodeURIComponent(pn.id)+'/relationships',body)
               .then(function(){estClose();wireContacts();if(done)done();})
               .catch(function(){toast('Couldn’t link');});};
@@ -3748,9 +3804,9 @@
     }).catch(function(e){if(!grid)return;
       // 'auth' = the guest is not allowed (a 403); anything else is a FAILED
       // load and must not read as "sign in" (AGENTS.md: empty ≠ failed ≠ unknown).
-      if(e&&e.message==='auth'){grid.innerHTML='<div class="ctsign" style="color:var(--ink-faint);font-size:20px;padding:12px 0;cursor:pointer">Sign in to see your contacts. <span style="color:var(--accent);text-decoration:underline">Tap to sign in</span></div>';
+      if(e&&e.message==='auth'){grid.innerHTML='<div class="ctsign lderr" style="padding:12px 0;cursor:pointer">Sign in to see your contacts. <span style="color:var(--accent);text-decoration:underline">Tap to sign in</span></div>';
         var sg=grid.querySelector('.ctsign');if(sg)sg.onclick=function(){if(window.__showAuthCard)window.__showAuthCard();};}
-      else grid.innerHTML='<div style="color:var(--ink-faint);font-size:20px;padding:12px 0">Couldn’t load your contacts.</div>';});
+      else grid.innerHTML='<div class="lderr" style="padding:12px 0">'+esc(loadErr('contacts',e))+'</div>';});
   }
 
   // ---- Memories: what Zoe knows about the signed-in member ----
@@ -3786,9 +3842,9 @@
     var host=document.getElementById('tcBody'),meta=document.getElementById('tcMeta');
     if(!host||!window.ZoeTranscriptCheck)return;
     window.ZoeTranscriptCheck.mount(host,{
-      request:function(method,path,body){return fetch(path,{method:method,headers:tcHeaders(!!body),credentials:'include',body:body?JSON.stringify(body):undefined,signal:reqSig(12000)})
+      request:function(method,path,body){return zfetch(path,{method:method,headers:tcHeaders(!!body),credentials:'include',body:body?JSON.stringify(body):undefined,signal:reqSig(12000)})
         .then(function(r){return r.json().then(function(j){return {status:r.status,json:j};},function(){return {status:r.status,json:null};});});},
-      blob:function(path){return fetch(path,{headers:tcHeaders(false),credentials:'include'}).then(function(r){return r.ok?r.blob():null;}).catch(function(){return null;});},
+      blob:function(path){return zfetch(path,{headers:tcHeaders(false),credentials:'include'}).then(function(r){return r.ok?r.blob():null;}).catch(function(){return null;});},
       play:function(b){var u=URL.createObjectURL(b),a=new Audio(u);a.onended=function(){URL.revokeObjectURL(u);};a.play().catch(function(){});},
       objectUrl:function(b){return URL.createObjectURL(b);},
       setMeta:function(t){if(meta)meta.textContent=t||'';},
@@ -3805,7 +3861,7 @@
       c.addEventListener('click',function(){show('checks');});
       stage.appendChild(c);}
     if(!sid()&&!_tcToken){c.classList.remove('on');return;}
-    fetch('/api/transcript-check/summary',{headers:tcHeaders(false),credentials:'include'}).then(function(r){return r.ok?r.json():null;})
+    zfetch('/api/transcript-check/summary',{headers:tcHeaders(false),credentials:'include'}).then(function(r){return r.ok?r.json():null;})
       .then(function(d){c.classList.toggle('on',!!(d&&d.open>0&&_cur==='home'));}).catch(function(){c.classList.remove('on');});
   }
   // A voice "yes" to Zoe's ask: the server pushes a private voice_card naming the screen and a token for this panel's open voice session.
@@ -3942,7 +3998,7 @@
       _pcSave({room_id:null},estClose).catch(function(){});};
     _rmLoad(function(){
       var list=m.querySelector('.elist');if(!list)return;
-      if(_rooms===null){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.</div>';return;}
+      if(_rooms===null){list.innerHTML='<div class="lderr">Couldn’t load rooms.</div>';return;}
       if(!_rooms.length){
         list.innerHTML='<div class="phint" style="margin:0">No rooms yet. Create one in “Manage rooms” first.</div>';return;}
       var cur=_pcfg&&_pcfg.room_id;
@@ -3966,7 +4022,7 @@
     m.querySelector('[data-x="add"]').onclick=_rmCreate;
     function paint(){
       var list=m.querySelector('.elist');if(!list)return;
-      if(_rooms===null){list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.</div>';return;}
+      if(_rooms===null){list.innerHTML='<div class="lderr">Couldn’t load rooms.</div>';return;}
       if(!_rooms.length){
         list.innerHTML='<div class="phint" style="margin:0">No rooms yet.</div>';return;}
       list.innerHTML=_rooms.map(function(r){
@@ -3981,17 +4037,17 @@
   }
 
   function _rmCreate(){
+    var have={};(_rooms||[]).forEach(function(r){have[String(r.name||'').toLowerCase()]=1;});
+    var names=ROOM_NAMES.filter(function(n){return !have[n.toLowerCase()];});
     estOpen('<h3>Create a room</h3>'
-      +'<label>Name</label><input data-f="rn" maxlength="40" placeholder="Bedroom">'
-      +'<div class="phint">Spaces are fine — “Living Room” is a normal name.</div>'
+      +(names.length?'<div class="phint">Pick its name.</div>'+pickChips(names,''):'<div class="phint">Every name here is already a room.</div>')
       +'<div class="perr"></div>'
       +'<div class="btns"><button data-x="back">Back</button><button class="save" data-x="save">Create</button></div>');
-    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="rn"]');
-    f.focus();
+    var m=document.getElementById('estModal');wirePickChips(m,function(){_pcErr('');});
     m.querySelector('[data-x="back"]').onclick=_rmList;
     _rmOnce(m.querySelector('[data-x="save"]'), function(){
-      var name=f.value.trim();
-      if(!name){_pcErr('Give the room a name.');return;}
+      var name=pickedChip(m);
+      if(!name){_pcErr('Pick a name for the room.');return;}
       return _rmSave('POST','/api/rooms',{name:name},_rmList).catch(function(){});});
   }
 
@@ -4064,20 +4120,25 @@
         }).catch(function(){toast('Couldn’t add the device');});});});
     }).catch(function(){
       var list=m.querySelector('.elist');
-      if(list)list.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t load devices.</div>';});
+      if(list)list.innerHTML='<div class="lderr">Couldn’t load devices.</div>';});
   }
 
   function _pcLocation(){
+    var cur=_pcfg&&_pcfg.location||'';
+    function names(){var seen={},out=[];[cur].concat((_rooms||[]).map(function(r){return r.name;}),ROOM_NAMES).forEach(function(n){n=String(n||'').trim();
+      if(n&&!seen[n.toLowerCase()]){seen[n.toLowerCase()]=1;out.push(n);}});return out;}
     estOpen('<h3>Where is this panel?</h3>'
-      +'<label>Room</label><input data-f="loc" maxlength="64" placeholder="Bedroom">'
-      +'<div class="phint">Used to give Zoe context about this screen. Free text — it isn’t a dock label.</div>'
+      +'<div class="phint">Used to give Zoe context about this screen. It isn’t a dock label.</div>'
+      +'<div class="pchwrap">'+pickChips(names(),cur)+'</div>'
       +'<div class="perr"></div>'
-      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
-    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="loc"]');
-    f.value=_pcfg&&_pcfg.location||'';f.focus();
+      +'<div class="btns"><button data-x="clear">Not set</button><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
+    var m=document.getElementById('estModal');wirePickChips(m);
+    // Zoe's own rooms join the pick list once loaded (the dialog may have been replaced meanwhile).
+    if(_rooms===undefined||_rooms===null||!_rooms.length)_rmLoad(function(){var w=m.querySelector('.pchwrap');if(w){w.innerHTML=pickChips(names(),pickedChip(m)||cur);wirePickChips(m);}});
     m.querySelector('[data-x="cancel"]').onclick=estClose;
+    m.querySelector('[data-x="clear"]').onclick=function(){_pcSave({location:null},estClose).catch(function(){});};
     m.querySelector('[data-x="save"]').onclick=function(){
-      _pcSave({location:f.value.trim()||null},estClose).catch(function(){});};
+      _pcSave({location:pickedChip(m)||null},estClose).catch(function(){});};
   }
 
   function _pcSpeaker(){
@@ -4095,7 +4156,7 @@
           +'<span class="et">'+esc(p.name||p.player_id)+'<small>'+esc(p.provider||'')+(cur?' · current':'')+'</small></span></button>';}).join('');
       list.querySelectorAll('.eopt').forEach(function(b){b.onclick=function(){
         _pcSave({default_player:b.getAttribute('data-id')},estClose).catch(function(){});};});
-    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t reach Music Assistant.</div>';});
+    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div class="lderr">Couldn’t reach Music Assistant.</div>';});
   }
 
   function _pcPins(){
@@ -4179,7 +4240,7 @@
     if(_pcEnts)paint(_pcEnts);
     else apiGet('/api/ha/entities').then(function(s){
       _pcEnts=Array.isArray(s)?s:((s&&s.entities)||(s&&s.states)||[]);paint(_pcEnts);
-    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div style="color:var(--ink-faint);font-size:18px">Couldn’t reach Home Assistant.</div>';});
+    }).catch(function(){var l=m.querySelector('.elist');if(l)l.innerHTML='<div class="lderr">Couldn’t reach Home Assistant.</div>';});
   }
 
   function _pcPickRead(ent,ents){
@@ -4202,18 +4263,21 @@
 
   function _pcName(ent,readEid){
     var wid=ent.entity_id,fn=(ent.attributes||{}).friendly_name||wid;
+    // One-word labels to pick from: each word of the device's own name, then a few common ones (all pass _pinNameErr).
+    var cands=[];function add(w){w=String(w||'').trim().slice(0,12);if(w&&!_pinNameErr(w)&&cands.indexOf(w)<0)cands.push(w);}
+    add(_oneWord(fn));String(fn).split(/[\s_.]+/).forEach(function(w){add(w.charAt(0).toUpperCase()+w.slice(1));});
+    ['Light','Lamp','Fan','Heat','Bed','Night'].forEach(add);
     estOpen('<h3>Name it</h3>'
-      +'<div class="phint">One word — it sits on the dock, so “'+esc(fn)+'” becomes something like “'+esc(_oneWord(fn)||'Bed')+'”.</div>'
-      +'<label>Dock label</label><input data-f="nm" maxlength="12" placeholder="Bed">'
+      +'<div class="phint">One word — it sits on the dock. Pick a label for “'+esc(fn)+'”.</div>'
+      +pickChips(cands,cands[0])
       +'<div class="perr"></div>'
       +'<div class="btns"><button data-x="back">Back</button><button class="save" data-x="add">Add</button></div>');
-    var m=document.getElementById('estModal'),f=m.querySelector('[data-f="nm"]');
-    f.value=_oneWord(fn);f.focus();f.select();
+    var m=document.getElementById('estModal');wirePickChips(m,function(){_pcErr('');});
     m.querySelector('[data-x="back"]').onclick=_pcPickEntity;
     m.querySelector('[data-x="add"]').onclick=function(){
-      var err=_pinNameErr(f.value);
+      var nm=pickedChip(m),err=_pinNameErr(nm);
       if(err){_pcErr(err);return;}
-      _pcWork.push({read_eid:readEid||wid,write_eid:wid,name:f.value.trim()});
+      _pcWork.push({read_eid:readEid||wid,write_eid:wid,name:nm});
       _pcPinsPaint();};
   }
 
@@ -4328,21 +4392,16 @@
       if(act){var a=act.getAttribute('data-act');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
-        fetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})
+        zfetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})
           .then(function(r){if(!r.ok)throw new Error('http '+r.status);clearLocal();location.reload();})
           .catch(function(){clearLocal();toast('Signed out on this panel — the server couldn’t be reached, so the session will expire on its own.');setTimeout(function(){location.reload();},2600);});}
     };
   }
 
   function editContact(pn){
-    function f(k,lab,val){return '<label>'+lab+'</label><input data-f="'+k+'" value="'+esc(val||'')+'">';}
-    estOpen('<h3>Edit contact</h3>'+f('name','Name',pn.name)+f('relationship','Relationship',pn.relationship)+f('phone','Phone',pn.phone)+f('email','Email',pn.email)
-      +'<div class="btns"><button data-x="cancel">Cancel</button><button class="save" data-x="save">Save</button></div>');
-    var m=document.getElementById('estModal');
-    m.querySelector('[data-x="cancel"]').onclick=estClose;
-    m.querySelector('[data-x="save"]').onclick=function(){var body={};m.querySelectorAll('input[data-f]').forEach(function(i){body[i.getAttribute('data-f')]=i.value.trim();});
-      if(!body.name){toast('Name is required');return;}
-      apiJson('PUT','/api/people/'+encodeURIComponent(pn.id),body).then(function(){estClose();wireContacts();}).catch(function(){toast('Couldn’t save contact');});};
+    var nm=pn.name||'them';
+    handoffDialog('Edit '+nm,'/people.html','Scan to edit '+nm+' on your phone',
+      'Or say it: “'+nm+'’s phone number is …”','Listening — tell Zoe what to change');
   }
 
   // ---- Calendar: day / week / month on real events ----
@@ -4500,7 +4559,7 @@
         },{passive:true});
         calAnchorToday();
       }
-    }).catch(function(){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div style="color:var(--ink-faint);font-size:20px">Couldn’t load the calendar.</div>';});
+    }).catch(function(e){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div class="lderr">'+esc(loadErr('calendar',e))+'</div>';});
   }
 
   // ---- Calendar event sheet (js/touch-event-detail.js) ----
@@ -4595,17 +4654,17 @@
         var act=ev.target.closest('[data-act]');
         if(act&&act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(e.title||'this event')+'”?',function(){apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(e.id)).then(wireDay).catch(function(){toast('Couldn’t delete');});});return;}
         editEvent(e);};
-    }).catch(function(){if(host)host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en">Couldn’t load your day</div></div></div>';});
+    }).catch(function(e){if(host)host.innerHTML='<div class="dev"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en lderr">'+esc(loadErr('day',e))+'</div></div></div>';});
     apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems)return;
       var rs=(d2&&d2.reminders)||[];
-      if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Nothing set</span></div>';return;}
+      if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>No reminders set</span></div>';return;}
       rems.innerHTML=rs.slice(0,6).map(function(r){var when=fmtRemWhen(r);
         return '<div class="drem" data-rid="'+esc(String(r.id))+'"><span class="rt">'+esc(when)+'</span><span class="rtx">'+esc(r.title||'Reminder')+'</span><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('');
       rems.onclick=function(ev){var row=ev.target.closest('.drem[data-rid]');if(!row)return;var r=rs.filter(function(x){return String(x.id)===row.getAttribute('data-rid');})[0];if(!r)return;
         var act=ev.target.closest('[data-act]');
         if(act&&act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(r.title||'this reminder')+'”?',function(){apiJson('DELETE','/api/reminders/'+encodeURIComponent(r.id)).then(wireDay).catch(function(){toast('Couldn’t delete');});});return;}
         editReminder(r);};
-    }).catch(function(){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>Couldn’t load</span></div>';});
+    }).catch(function(e){if(rems)rems.innerHTML='<div class="drem"><span class="rt"></span><span class="lderr">'+esc(loadErr('reminders',e))+'</span></div>';});
     // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
 
@@ -4647,6 +4706,13 @@
   function _acksGet(){try{return JSON.parse(localStorage.getItem(_ACK_KEY)||'{}')||{};}catch(e){return {};}}
   function _acksSet(o){try{localStorage.setItem(_ACK_KEY,JSON.stringify(o));}catch(e){}}
   function _ackSend(id){return apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).then(function(){var a=_acksGet();delete a[id];_acksSet(a);}).catch(function(){});}
+  function timerSay(text){if(!sid())return;
+    zfetch('/api/voice/speak',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({text:text})},15000)
+      .then(function(r){return r.ok?r.json():null;})
+      .then(function(j){if(!j||!j.audio_base64)return;var bin=atob(j.audio_base64),u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
+        var url=URL.createObjectURL(new Blob([u8],{type:j.content_type||'audio/wav'})),au=new Audio(url);au.onended=function(){URL.revokeObjectURL(url);};
+        var pp=au.play();if(pp&&pp.catch)pp.catch(function(){URL.revokeObjectURL(url);});})
+      .catch(function(){});}   // the chime and the card already carry it
   function timerAlarm(label,ids){
     // Cumulative: a second timer ending before Dismiss must not drop the first one's id, or the first stays
     // "ringing" on the server and re-rings after the next voice-turn reload inside the grace window.
@@ -4656,10 +4722,10 @@
     ov.innerHTML='<div class="tab"><div class="tak">⏱ Timer done</div><div class="tal">'+esc(label||'Timer')+'</div><button class="tad" id="tmrAlarmX">Dismiss</button></div>';
     ov.classList.add('on');
     _beep();if(_tAlarm.chime)clearInterval(_tAlarm.chime);_tAlarm.chime=setInterval(_beep,2200);
-    // Spoken announcement (best-effort) so it's noticed even when the panel
-    // isn't in view — browser TTS fallback; a Kokoro-voiced server announce is
-    // the nicer follow-up but this needs no backend.
-    try{if(window.speechSynthesis){var u=new SpeechSynthesisUtterance((label||'Timer')+' timer is done');u.rate=.96;speechSynthesis.cancel();speechSynthesis.speak(u);}}catch(e){}
+    // Spoken in Zoe's own voice (A8): the server's TTS played here, never the browser's speech engine (a second,
+    // robotic voice). /api/voice/speak answers a member or device session only, so on the guest kiosk this stays
+    // silent and the chime + this card are the fallback.
+    timerSay((label||'Timer')+' timer is done');
     // Dismiss = the ACK: the server keeps a finished timer listed ("ringing") until it is cancelled or a grace
     // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
     // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
@@ -4714,7 +4780,7 @@
     q=(q||'').trim();if(!q||_sending)return;   // in-flight guard: cleared when the resolve completes
     _sending=true;
     cmdbar.classList.remove('on');cmdin.value='';orb.classList.add('busy');
-    fetch('/api/skybridge/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q,context:{panel_id:(localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'')}})})
+    zfetch('/api/skybridge/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q,context:{panel_id:(localStorage.getItem('zoe_panel_id')||localStorage.getItem('zoe_touch_panel_id')||'')}})},30000)
       .then(function(r){if(!r.ok)throw new Error('http '+r.status);return r.json();})
       .then(function(d){orb.classList.remove('busy');_sending=false;
         if(!d||d.handled===false){askZoe(q);return;}   // questions fall through to the brain
@@ -4728,11 +4794,17 @@
   }
   // Free-form questions → the brain (/api/chat/ AG-UI stream) → the Ask screen.
   var _askGen=0;
+  // The chat thread this panel is in (RUN_STARTED.threadId), sent back as session_id so a follow-up continues it.
+  // The server only continues an id-less turn for a member (never the shared guest identity), so the guest kiosk
+  // lost every follow-up without this. Kept for the SAME sign-in only, and dropped after 20 quiet minutes.
+  var _askThread={id:'',auth:'',at:0};
+  function askThreadId(){var a=sid();if(!_askThread.id||_askThread.auth!==a||Date.now()-_askThread.at>1200000){_askThread.id='';return '';}return _askThread.id;}
   function askZoe(q){
     var gen=++_askGen;_sending=true;   // stays true until THIS stream finishes
     FULL.ask.html=askShell('<div class="aa" id="askOut">…</div>');
     show('ask');dockHeard(q);orb.classList.add('busy');
-    fetch('/api/chat/',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify({message:q})})
+    var cb={message:q},th=askThreadId();if(th)cb.session_id=th;
+    zfetch('/api/chat/',{method:'POST',headers:{'Content-Type':'application/json','X-Session-ID':sid()},credentials:'include',body:JSON.stringify(cb)},120000)
       .then(function(r){if(!r.ok||!r.body)throw new Error('http '+r.status);
         var rd=r.body.getReader(),dec=new TextDecoder(),buf='',txt='';
         function pump(){return rd.read().then(function(x){
@@ -4742,6 +4814,7 @@
           var lines=buf.split('\n');buf=lines.pop();
           lines.forEach(function(ln){if(ln.lastIndexOf('data: ',0)!==0)return;
             try{var ev=JSON.parse(ln.slice(6));
+              if(ev.type==='RUN_STARTED'&&(ev.threadId||ev.thread_id))_askThread={id:String(ev.threadId||ev.thread_id),auth:sid(),at:Date.now()};
               if((ev.type==='TEXT_MESSAGE_CHUNK'||ev.type==='TEXT_MESSAGE_CONTENT')&&ev.delta){txt+=ev.delta;var o=document.getElementById('askOut');if(o&&_cur==='ask')o.textContent=txt;}
             }catch(e){}});
           return pump();});}
@@ -4861,7 +4934,7 @@
   // failure; the caller still sends the header and the server decides.
   function convEnsureSession(){
     if(sid())return Promise.resolve(sid());
-    return fetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({device_info:{source:'estate-conversation'}})})
+    return zfetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({device_info:{source:'estate-conversation'}})})
       .then(function(r){return r.ok?r.json():null;})
       .then(function(d){
         if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));}catch(e){}return d.session_id;}
@@ -4874,11 +4947,11 @@
   // kiosk sits in. Retry ONCE (bounded — never a loop) with a fresh session.
   function convFetchToken(){
     return convEnsureSession().then(function(s){
-      return fetch('/api/voice/livekit-token',{headers:{'X-Session-ID':s},credentials:'include'}).then(function(r){
+      return zfetch('/api/voice/livekit-token',{headers:{'X-Session-ID':s},credentials:'include'}).then(function(r){
         if(r.status!==401)return r;
         try{localStorage.removeItem('zoe_session');}catch(e){}
         return convEnsureSession().then(function(s2){
-          return fetch('/api/voice/livekit-token',{headers:{'X-Session-ID':s2},credentials:'include'});
+          return zfetch('/api/voice/livekit-token',{headers:{'X-Session-ID':s2},credentials:'include'});
         });
       });
     });
@@ -5111,7 +5184,7 @@
     function paint(on,review,voiceOnly){_dotVoiceOnly=!!(on&&voiceOnly);orb.classList.toggle('has',!!on);orb.classList.toggle('review',!!review);}
     function poll(){
       var s=sid();if(!s){paint(false,false);return;}
-      fetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
+      zfetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
         .then(function(d){var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));
           paint(mine||!!(d&&!d.quiet&&d.notify_any===true),!!(d&&d.review===true&&!d.quiet),!mine);})
@@ -5179,7 +5252,7 @@
       function drop(){try{sessionStorage.removeItem('zoe_panel_auth_challenge');}catch(e){}}
       var hdrs={'Content-Type':'application/json'};
       if(sessionId)hdrs['X-Session-ID']=sessionId;
-      return fetch('/api/panels/auth/pin',{method:'POST',headers:hdrs,
+      return zfetch('/api/panels/auth/pin',{method:'POST',headers:hdrs,
         body:JSON.stringify({challenge_id:pend.challenge_id,pin:pinValue})})
         .then(function(r){
           // 404 gone / 409 already resolved / 410 expired — the challenge can
@@ -5189,7 +5262,7 @@
         .catch(function(){});
     }
     pad.innerHTML=['1','2','3','4','5','6','7','8','9','','0','⌫'].map(function(k){return k===''?'<button class="akey ghost"></button>':'<button class="akey" data-k="'+k+'">'+k+'</button>';}).join('');
-    fetch('/api/auth/profiles').then(function(r){return r.json();}).then(function(ps){
+    zfetch('/api/auth/profiles').then(function(r){return r.json();}).then(function(ps){
       list.innerHTML=(ps||[]).slice(0,6).map(function(p,i){return '<div class="au" data-u="'+esc(p.user_id)+'" data-n="'+esc(p.username)+'"><div class="av" style="background:'+AVC[i%AVC.length]+'">'+esc((p.avatar||p.username||'?').charAt(0).toUpperCase())+'</div><div class="nm2">'+esc(p.username)+'</div></div>';}).join('');
     }).catch(function(){lead.textContent='Sign-in unavailable';});
     if(_au.wired)return;_au.wired=true;
@@ -5212,7 +5285,7 @@
       if(_au.code.length>=4)return;
       _au.code+=k;rdots();
       if(_au.code.length===4){var pc=_au.code,sel=_au.sel;
-        fetch('/api/auth/login/passcode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:sel.username,user_id:sel.user_id,passcode:pc})})
+        zfetch('/api/auth/login/passcode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:sel.username,user_id:sel.user_id,passcode:pc})})
           .then(function(r){return r.json().catch(function(){return {};}).then(function(d){return {ok:r.ok,d:d};});})
           .then(function(x){
             if(x.ok&&x.d&&x.d.success&&x.d.session_id){
@@ -5255,6 +5328,9 @@
     // Domain → screen map first; a literal surface name (?domain=calendar
     // for the full calendar) also works so server navigations can be precise.
     var dest=DOMAIN_SCREEN[dom||'']||(FULL[dom]?dom:'home');
+    // "Introduce a person" (voice_tts panel_navigate: ?domain=person&person=<id>&intro=1) opens THAT person's card
+    // once Contacts has loaded, not the A-Z grid. Read before the URL is trimmed below.
+    if(dest==='person'&&sp.get('person'))_openPerson={id:String(sp.get('person')),intro:sp.get('intro')==='1'};
     // "Set up music" lands on Browse → Sources, where Connect shows the phone QR.
     if(dom==='music_sources'){_qtabNext='sources';dest='browse';}
     show(dest);
