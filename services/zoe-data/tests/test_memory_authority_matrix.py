@@ -77,15 +77,17 @@ def status(svc, mem_id):
 # HAND-WRITTEN policy (review of #1868: a table derived from ma.RANK passes whatever the code
 # says). Writer class -> the target classes it may supersede / archive / contradict.
 _ALL = {"operator", "curated", "user_confirmed", "user_stated", "user_stated_derived", "user_unverified",
-        "model_from_turn", "model_from_transcript"}
+        "model_from_turn", "external_source", "model_from_transcript"}
+_RANK1 = {"model_from_turn", "external_source", "model_from_transcript"}     # rank 1 and below
 OVERRIDES = {
     "operator": _ALL,
     "curated": _ALL,                                          # a curator (memories-space P7): only a curator / operator retires a curated row
     "user_confirmed": _ALL - {"curated"},                     # the review UI / the account - never a curated row (owner D9)
     "user_stated": _ALL - {"operator", "curated"},            # a spoken sentence never undoes an operator's cleanup
-    "user_stated_derived": {"user_stated_derived", "user_unverified", "model_from_turn", "model_from_transcript"},
-    "user_unverified": {"user_unverified", "model_from_turn", "model_from_transcript"},
-    "model_from_turn": {"model_from_turn", "model_from_transcript"},
+    "user_stated_derived": {"user_stated_derived", "user_unverified"} | _RANK1,
+    "user_unverified": {"user_unverified"} | _RANK1,
+    "model_from_turn": _RANK1,
+    "external_source": _RANK1,                                # a provider's fact: never over anything the person said or confirmed
     "model_from_transcript": {"model_from_transcript"},
 }
 
@@ -96,10 +98,10 @@ def allowed(writer_cls, target_cls):
 
 def test_the_numeric_order_and_policy_are_pinned_literally():
     assert ma.RANK == {"operator": 6, "curated": 6, "user_confirmed": 5, "user_stated": 4, "user_stated_derived": 3,
-                       "user_unverified": 2, "model_from_turn": 1, "model_from_transcript": 0}
+                       "user_unverified": 2, "model_from_turn": 1, "external_source": 1, "model_from_transcript": 0}
     assert ma.USER_RANK == 4 and ma.DERIVED_RANK == 3
     assert ma.CLASSES == ("operator", "curated", "user_confirmed", "user_stated", "user_stated_derived",
-                          "user_unverified", "model_from_turn", "model_from_transcript")
+                          "user_unverified", "model_from_turn", "external_source", "model_from_transcript")
     for w in _ALL:                                            # the code agrees with the table, cell by cell
         for t in _ALL:
             assert ma.may_override(ma.RANK[w], t) is allowed(w, t), (w, t)
@@ -107,6 +109,8 @@ def test_the_numeric_order_and_policy_are_pinned_literally():
     assert not allowed("user_stated", "operator") and not allowed("model_from_turn", "user_confirmed")
     assert not allowed("model_from_transcript", "user_stated") and not allowed("user_stated_derived", "user_stated")
     assert not allowed("user_unverified", "user_stated_derived") and allowed("user_stated_derived", "model_from_turn")
+    for protected in ("user_stated", "user_confirmed"):                      # feed plumbing Stage 0: a provider never outranks the person
+        assert not allowed("external_source", protected) and allowed(protected, "external_source")
 
 
 # (label, path, actor, extra kwargs, resulting writer class)
@@ -128,6 +132,7 @@ EDIT_PATHS = [
     ("operator tool", "identity_audit", {}, ma.OPERATOR),
     ("P7 curator (memory_curation)", "curator", {}, ma.CURATED),
     ("unknown writer (fail-closed)", "some_new_writer", {}, ma.MODEL_FROM_TRANSCRIPT),
+    ("feed writer (a provider said so)", "external_source", {}, ma.EXTERNAL_SOURCE),
 ]
 
 
@@ -170,7 +175,7 @@ INGEST_WRITERS = [
     ("brain_tool", ma.MODEL_FROM_TURN), ("mcp", ma.MODEL_FROM_TURN), ("zoe_agent", ma.MODEL_FROM_TURN),
     ("person_extractor_llm", ma.MODEL_FROM_TURN), ("synthesis", ma.MODEL_FROM_TRANSCRIPT),
     ("idle_consolidation", ma.MODEL_FROM_TRANSCRIPT), ("brand_new_lane", ma.MODEL_FROM_TRANSCRIPT),
-    ("curator", ma.CURATED),
+    ("curator", ma.CURATED), ("external_source", ma.EXTERNAL_SOURCE),
 ]
 
 

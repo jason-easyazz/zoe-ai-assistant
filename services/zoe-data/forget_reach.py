@@ -42,7 +42,7 @@ WORDS, BIOMETRIC, DERIVED, METADATA, CONFIG = "words", "biometric", "derived", "
 @dataclass(frozen=True)
 class Store:
     key: str                          # the table name, or a short id for a non-table store
-    kind: str                         # pg_table | palace | chroma | file | corpus | backup
+    kind: str                         # pg_table | palace | chroma | file | corpus | backup | vault
     holds: str                        # WORDS | BIOMETRIC | DERIVED | METADATA | CONFIG
     status: str                       # REACHED | OUT_OF_SCOPE | GAP
     why: str = ""                     # one line; required unless the store is reached by both paths
@@ -121,9 +121,12 @@ TABLES: tuple[Store, ...] = (
        entity="memory_forget_cascade._run"),
     _t("person_relationships", DERIVED, GAP, "Entity forget closes the edges (valid_to); delete_user does not.",
        entity="memory_forget_cascade._run"),
-    _t("event_attendees", WORDS, GAP, "Entity forget anonymises the attendee row; delete_user does not.", entity="memory_forget_cascade._run"),
-    _t("events", WORDS, GAP, "Only legacy metadata.attendees are scrubbed by the entity forget; titles/notes stay and delete_user skips events.",
-       entity="memory_forget_cascade._run"),
+    _t("event_attendees", WORDS, GAP, "Entity forget anonymises the attendee row; delete_user removes the attendees of the member's synced and "
+       "in-calendar events (calendar_forget.forget_user), not of their calendar-less local events (owner decision: household-visible items).",
+       member="calendar_forget.forget_user", entity="memory_forget_cascade._run"),
+    _t("events", WORDS, GAP, "delete_user removes the member's synced events and every event in their calendars (calendar_forget.forget_user); "
+       "their calendar-less local events (household-visible by default) stay until the owner decides delete vs keep for the household. "
+       "The entity forget scrubs only legacy metadata.attendees.", member="calendar_forget.forget_user", entity="memory_forget_cascade._run"),
     _t("memory_forgotten", METADATA, OUT_OF_SCOPE,
        "The forget LEDGER itself: salted hashes, no names. It must survive a forget to keep the forget enforced."),
     # --- the verbatim transcript ---
@@ -149,7 +152,11 @@ TABLES: tuple[Store, ...] = (
     _t("person_bucket_list", WORDS, GAP, "Per-person text; not reached by the entity cascade."),
     _t("person_gift_ideas", WORDS, GAP, "Per-person text; not reached by the entity cascade."),
     _t("person_important_dates", METADATA, GAP, "Dates and labels for a person; not reached by the entity cascade."),
-    _t("calendars", METADATA, OUT_OF_SCOPE, "Calendar containers: a name and a colour, no event content (events are listed separately)."),
+    _t("calendars", WORDS, REACHED, member="calendar_forget.forget_user"),   # name, description, sync cursor, account reference
+    # --- the feed spine (0078): connected accounts, their sync log, the member's own addresses and numbers ---
+    _t("connected_accounts", METADATA, REACHED, member="connected_accounts.forget_user"),   # provider, label, subject hash, status
+    _t("sync_runs", METADATA, REACHED, member="connected_accounts.forget_user"),            # counts, outcome class, opaque cursors
+    _t("member_identities", METADATA, REACHED, member="member_identities.forget_user"),     # the member's own emails / phone numbers
     _t("event_alarms", METADATA, OUT_OF_SCOPE, _NOWORDS),
     _t("ambient_memory", WORDS, GAP, "Ambient captured memory text; neither path reaches it."),
     _t("notifications", WORDS, REACHED, member="notifications_store.forget_user"),   # every row of the member, any writer; no entity eraser
@@ -260,6 +267,9 @@ OTHER: tuple[Store, ...] = (
     Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
           "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
           member="warm_speaker.forget_user", markers=("warm-speaker.json",)),
+    Store("account_secrets", "vault", CONFIG, REACHED, "Connected-account credentials (account_secrets.py seam). No backend is configured yet, so "
+          "nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user.",
+          member="connected_accounts.forget_user", markers=("account_secrets",)),
     Store("omi_audio_files", "file", BIOMETRIC, REACHED, "Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files).",
           member=_OMI_M, entity="omi_recordings.erase_entity", markers=("omi-audit.jsonl",)),
     Store("device_audit_logs", "file", METADATA, OUT_OF_SCOPE, "Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words.",

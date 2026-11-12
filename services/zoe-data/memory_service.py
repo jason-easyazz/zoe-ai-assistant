@@ -2117,6 +2117,17 @@ class MemoryService:
             await notifications_store.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: notification erasure failed ({type(exc).__name__})") from exc
+        # The feed spine (migration 0078) and the calendar store (0052): connected accounts + their secrets and sync runs, the member's
+        # own email addresses / phone numbers, their calendars and synced events. Fail closed; outside the lock (each takes the erase gate).
+        try:
+            import calendar_forget
+            import connected_accounts
+            import member_identities
+            await connected_accounts.forget_user(user_id)
+            await member_identities.forget_user(user_id)
+            await calendar_forget.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: account / calendar erasure failed ({type(exc).__name__})") from exc
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             # The owner's verbatim turns (exact_words) go with the rows: a right-to-be-forgotten leaves no copy of the words.
