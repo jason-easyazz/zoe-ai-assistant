@@ -2010,7 +2010,7 @@ def test_drain_is_bounded_and_honours_the_env_budget(monkeypatch):
 
     live = _Stuck()
     out = sb.drain_captures(live, A)
-    assert out["in_flight"] == 6 and live.n == 5   # 20 s / 5 s poll + the final look
+    assert out["in_flight"] == 6 and live.n == 4   # looks at 0/5/10/15 s; the deadline itself starts no new HTTP call
 
 
 @pytest.mark.parametrize("bad", ["nan", "inf", "abc"])
@@ -2031,7 +2031,7 @@ def test_drain_ignores_an_unusable_env_budget_and_stays_bounded(monkeypatch, bad
 
     live = _Stuck()
     out = sb.drain_captures(live, A)
-    assert out["in_flight"] == 6 and live.n == int(sb.QUIESCE_TIMEOUT_S / sb.QUIESCE_POLL_S) + 1
+    assert out["in_flight"] == 6 and live.n == int(sb.QUIESCE_TIMEOUT_S / sb.QUIESCE_POLL_S)
 
 
 @pytest.mark.parametrize("raw, want", [("99999", 3600.0), ("-5", 0.0), ("20", 20.0), ("nan", 300.0), ("inf", 300.0)])
@@ -2061,7 +2061,7 @@ def test_drain_http_stalls_count_toward_the_budget(monkeypatch):
 
     t0 = clock["t"]
     out = sb.drain_captures(_Stalled(), A)
-    assert clock["t"] - t0 <= 300 + 0.3      # budget + the 0.1 s timeout floors
+    assert clock["t"] - t0 <= 300      # strict: no call may outlive the deadline
     assert max(seen) <= 60 and out["in_flight"] is None
 
 

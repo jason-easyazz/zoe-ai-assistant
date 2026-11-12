@@ -2083,20 +2083,27 @@ def drain_captures(live: Any, user: str, *, timeout_s: float | None = None,
     # Real wall-clock bound: the polls' own HTTP calls count too (a stalled API must not stretch the budget).
     deadline = time.monotonic() + timeout_s
     last, stable, in_flight = None, 0, None
+    first = True
     while True:
-        http_t = max(min(60.0, deadline - time.monotonic()), 0.1)
-        c = live.packet_count(user, timeout=http_t)
-        http_t = max(min(60.0, deadline - time.monotonic()), 0.1)
-        st = live.capture_status(user, timeout=http_t)
+        # Each HTTP call's timeout is the remainder (<= 60 s), so no call outlives the deadline. The very first
+        # look is always made (a 0 s budget still means one look); once the budget is spent the last observed
+        # values stand (a nonzero in_flight is then reported as an unproven teardown).
+        rem = deadline - time.monotonic()
+        if rem <= 0 and not first:
+            break
+        c = live.packet_count(user, timeout=min(60.0, max(rem, 0.1)))
+        first = False
+        rem = deadline - time.monotonic()
+        if rem <= 0:
+            in_flight = None   # budget spent mid-look: this look is incomplete, so unproven
+            break
+        st = live.capture_status(user, timeout=min(60.0, rem))
         in_flight = int(st.get("in_flight") or 0) if st else None
         stable = stable + 1 if (c is not None and c == last) else 0
         last = c
         if stable >= 2 and in_flight == 0:
             break
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        time.sleep(min(poll_s, remaining))
+        time.sleep(min(poll_s, rem))
     # Both signals are recorded; BOTH must have been observed for a proof.
     return {"in_flight": in_flight, "packet": last, "stable": stable}
 
