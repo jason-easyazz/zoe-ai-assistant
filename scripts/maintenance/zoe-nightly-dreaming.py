@@ -62,18 +62,19 @@ async def run_music_digest(db) -> list:
 
 
 def surface_count_logs() -> None:
-    """Print the counts-only ``OPEN_LOOPS user=… extracted=… inserted=…`` line.
+    """Print the counts-only ``OPEN_LOOPS user=… extracted=… inserted=…`` and ``ANTICIPATION mode=… events=… stored=…`` lines.
 
     This runner configures no logging, so Python's last-resort handler shows
-    WARNING+ only. Attach a handler to that ONE logger rather than raising the
+    WARNING+ only. Attach a handler to the counts-only loggers rather than raising the
     root level: memory_digest's other INFO lines carry fact text.
     """
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(message)s"))
-    counts = logging.getLogger("memory_digest.open_loops")
-    counts.setLevel(logging.INFO)
-    counts.addHandler(handler)
-    counts.propagate = False
+    for name in ("memory_digest.open_loops", "anticipation"):      # both log counts and ids only, never a title or a fact
+        counts = logging.getLogger(name)
+        counts.setLevel(logging.INFO)
+        counts.addHandler(handler)
+        counts.propagate = False
 
 
 # ── Weekly drawers-index compaction trigger (flag-dark on the service side) ──────────

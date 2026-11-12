@@ -173,6 +173,47 @@ def test_no_wake_offer_when_the_usual_alarm_is_early_enough_or_unknown():
 
 
 # -- night: store ---------------------------------------------------------------------------------------------------------------
+def test_a_repeating_event_offers_for_its_next_occurrence_only():
+    today = NOW.astimezone(ant._tz()).date()
+    anchor = today - timedelta(days=70)                                   # started ten weeks ago, same weekday as today
+    weekly = _ev(id="ev-rep", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
+                 recurring="weekly")
+    (offer,) = ant.candidates([weekly], now=NOW, usual_wake=lambda d: None, adult=True)
+    assert offer.kind == "leave" and offer.slots["start_date"] == today.isoformat()      # the next one, not the anchor
+    assert offer.key.startswith(f"leave:ev-rep:{today.isoformat()}T")                    # next week's is a new key, a new offer
+    rrule = _ev(id="ev-rr", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
+                recurring="FREQ=WEEKLY;INTERVAL=2")
+    (o2,) = ant.candidates([rrule], now=NOW, usual_wake=lambda d: None, adult=True)
+    assert o2.slots["start_date"] == today.isoformat()                                   # 70 days = five fortnights
+    daily = _ev(id="ev-day", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
+                recurring="daily")
+    assert len(ant.candidates([daily], now=NOW, usual_wake=lambda d: None, adult=True)) == 1   # one offer, never fourteen
+    odd = _ev(id="ev-odd", title="Physio", location="12 Example Street", start_date=anchor.isoformat(), start_time="23:30",
+              recurring="every blue moon")
+    assert ant.candidates([odd], now=NOW, usual_wake=lambda d: None, adult=True) == []        # not understood: no guessed date
+    # control: the same event with no repeat and a start ten weeks ago offers nothing
+    assert ant.candidates([_ev(id="ev-old", title="Physio", location="12 Example Street", start_date=anchor.isoformat(),
+                               start_time="23:30")], now=NOW, usual_wake=lambda d: None, adult=True) == []
+
+
+def test_a_repeating_event_is_read_from_the_calendar_and_its_offer_survives_the_recheck(dbpath):
+    today = NOW.astimezone(ant._tz()).date()
+    anchor = (today - timedelta(days=70)).isoformat()
+
+    async def go(db):
+        await db.execute("INSERT INTO events (id, user_id, title, start_date, start_time, end_date, location, all_day, recurring)"
+                         " VALUES ('ev-rep', ?, 'Physio', ?, '23:30', '', '12 Example Street', 0, 'weekly')", (ANN, anchor))
+        await db.commit()
+        res = await ant.generate_for_user(ANN, now=NOW, db=db)
+        mine = [r for r in await _offers(db) if r["slots"]["event_id"] == "ev-rep"]
+        ev = await ant._event(db, ANN, "ev-rep")
+        return res, mine, ant._event_matches(ev, mine[0]["slots"]), ant._event_matches(ev, {**mine[0]["slots"], "start_date": (today + timedelta(days=1)).isoformat()})
+
+    res, mine, still, wrong_day = run(_with(dbpath, go))
+    assert len(mine) == 1 and mine[0]["kind"] == "leave" and mine[0]["resolved"] == ant.OPEN
+    assert still is True and wrong_day is False            # the offer holds while the rule still lands on its day, and only then
+
+
 def test_generate_stores_once_per_event_and_shadow_stores_nothing(dbpath, monkeypatch):
     async def go(db):
         monkeypatch.setenv("ZOE_ANTICIPATION", "shadow")
