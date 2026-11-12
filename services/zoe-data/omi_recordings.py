@@ -1386,9 +1386,10 @@ async def requeue_after_pipeline_change() -> int:
 async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
     """Delete WAVs past ``audio_expires_at`` (kept ones included - the flag keeps audio for the retention window, not forever).
 
-    THE RE-PASS HOLD (owner, 2026-11-12): while the night re-pass is on (shadow or on), a recording still OWED its pass (``repass_state = 'pending'``) keeps its WAV past
-    the retention so a window's leftovers reach the next window - bounded by ``omi_repass.HOLD_CAP_DAYS`` from upload and by ``omi_repass.HOLD_MIN_FREE_MB`` free on
-    the audio disk. Either bound forcing a delete is logged loudly (``OMI_REPASS_HOLD_CAP``, counts only)."""
+    THE RE-PASS HOLD (owner, 2026-11-12): while the night re-pass is on (shadow or on), a recording still OWED its pass (``omi_repass.OWED_SQL``) keeps its WAV past
+    the retention so a window's leftovers reach the next window - bounded by ``omi_repass.HOLD_CAP_DAYS`` from upload (``created_at``), and by
+    ``omi_repass.HOLD_MIN_FREE_MB`` free on the audio disk: under that floor held WAVs go oldest-expiring first, ONE at a time with the free space re-read after each,
+    stopping as soon as the floor is met. Either bound forcing a delete is logged loudly (``OMI_REPASS_HOLD_CAP``, counts only)."""
     n = 0
     try:
         import shutil
@@ -1399,22 +1400,33 @@ async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
         stamp = _iso(when)
         held = omi_repass.holds_audio()
         cap_stamp = _iso(when - timedelta(days=omi_repass.HOLD_CAP_DAYS))
-        try:
-            disk_ok = shutil.disk_usage(audio_dir()).free / 1e6 >= omi_repass.HOLD_MIN_FREE_MB
-        except OSError:
-            disk_ok = False                                        # unknown disk: no hold (fail toward deleting, the privacy-safe side)
+        def disk_ok() -> bool:                                     # re-read after every disk-forced delete: the floor, not the sweep, decides how many go
+            try:
+                return shutil.disk_usage(audio_dir()).free / 1e6 >= omi_repass.HOLD_MIN_FREE_MB
+            except OSError:
+                return False                                       # unknown disk: no hold (fail toward deleting, the privacy-safe side)
         forced = {"cap": 0, "disk": 0}
         async with get_compat_db() as db:
-            rows = await _fetch(db, "SELECT id, audio_path, status, created_at" + (f", CASE WHEN {omi_repass.OWED_SQL} THEN 1 ELSE 0 END AS owed" if held else "") + " FROM omi_recordings "
-                                    "WHERE audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at < ?", (stamp,))
-            for r in rows:
-                if held and int(r["owed"] or 0):             # the SAME predicate the night pass lists by (omi_repass.OWED_SQL)
-                    if str(r["created_at"] or "") >= cap_stamp and disk_ok:
-                        continue                                   # still owed its re-pass: held for the next window
-                    forced["cap" if disk_ok else "disk"] += 1
+            async def drop(r: Any) -> None:
+                nonlocal n
                 _unlink(r["audio_path"])
                 await db.execute("UPDATE omi_recordings SET audio_path = '', audio_bytes = 0, audio_expires_at = NULL, keep_audio = 0 WHERE id = ?", (r["id"],))
                 n += 1
+            rows = await _fetch(db, "SELECT id, audio_path, status, created_at, audio_expires_at" + (f", CASE WHEN {omi_repass.OWED_SQL} THEN 1 ELSE 0 END AS owed" if held else "") + " FROM omi_recordings "
+                                    "WHERE audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at < ? ORDER BY audio_expires_at, created_at", (stamp,))
+            kept: list = []
+            for r in rows:
+                if held and int(r["owed"] or 0):             # the SAME predicate the night pass lists by (omi_repass.OWED_SQL)
+                    if str(r["created_at"] or "") >= cap_stamp:
+                        kept.append(r)                             # still owed its re-pass: held for the next window (unless the disk needs it, below)
+                        continue
+                    forced["cap"] += 1
+                await drop(r)                                      # the normal retention (and the 30-day cap)
+            for r in kept:                                         # oldest-expiring first, ONE at a time, only while the disk is under its floor
+                if disk_ok():
+                    break
+                forced["disk"] += 1
+                await drop(r)
             if n:
                 await db.commit()
         if forced["cap"] or forced["disk"]:

@@ -140,6 +140,29 @@ def test_an_empty_first_pass_is_owed_and_held_like_any_other(renv, monkeypatch, 
     assert not Path(path).exists() and "OMI_REPASS_HOLD_CAP" in caplog.text
 
 
+def test_a_short_disk_takes_held_audio_one_at_a_time_and_stops_at_the_floor(renv, monkeypatch, caplog):
+    """Codex #2430: the floor was read once, so a sweep that started under it deleted EVERY held WAV. Three held recordings, deleting the
+    oldest-expiring one restores the floor: exactly that one goes, the other two stay held."""
+    import shutil
+    from collections import namedtuple
+    for i, key in enumerate(("r1.0-1", "r1.0-2", "r1.0-3")):           # recorded today (the 30-day cap counts from upload, created_at): only the DISK can force these
+        upload(renv, make_wav(3.0, hz=220 + 60 * i), key=key, started=(datetime.now(UTC) - timedelta(hours=3 - i)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    for _ in range(3):
+        transcribe(renv, monkeypatch)
+    paths = [r["audio_path"] for r in rows(renv, "SELECT * FROM omi_recordings ORDER BY audio_expires_at, created_at")]
+    assert len(paths) == 3 and all(Path(p).exists() for p in paths)
+    du = namedtuple("du", "total used free")
+
+    def disk(_p):                                                   # under the floor until one WAV has gone
+        gone = sum(1 for p in paths if not Path(p).exists())
+        free = (rp.HOLD_MIN_FREE_MB - 1 + gone * 10) * 10**6
+        return du(10**11, 10**11 - free, free)
+    monkeypatch.setattr(shutil, "disk_usage", disk)
+    with caplog.at_level("WARNING"):
+        assert run(omi.purge_expired_audio(now=datetime.now(UTC) + timedelta(days=8))) == 1
+    assert [Path(p).exists() for p in paths] == [False, True, True] and "OMI_REPASS_HOLD_CAP" in caplog.text     # the oldest-expiring went, the rest are held
+
+
 def test_the_hold_gives_way_when_the_audio_disk_is_short(renv, monkeypatch, caplog):
     import shutil
     from collections import namedtuple
