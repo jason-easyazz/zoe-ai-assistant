@@ -50,11 +50,17 @@ async def handoff_start(payload: dict, request: Request,
         raise HTTPException(status_code=400, detail="panel_id required")
     if kind != "music":
         raise HTTPException(status_code=400, detail="unknown kind")
-    form = await music_service.provider_setup_form(provider)
-    if form is None:
+    if not any(p["domain"] == provider for p in music_service._SETUP_CATALOGUE):
         raise HTTPException(status_code=400, detail="unknown provider")
+    form = await music_service.provider_setup_form(provider)
+    if form is None:  # a known provider with no form = MA could not be woken or answered nothing
+        raise HTTPException(status_code=503, detail=music_service.MUSIC_ENGINE_UNAVAILABLE_DETAIL)
     if form.get("auth") == "free":  # no account, no phone step (radio)
         saved = await music_service.save_provider(provider, {})
+        # save_provider is None both when MA rejected the save and when MA went away
+        # after the form read; a fresh /info probe tells them apart.
+        if not saved and not await music_service.engine_reachable():
+            raise HTTPException(status_code=503, detail=music_service.MUSIC_ENGINE_UNAVAILABLE_DETAIL)
         return {"ok": bool(saved), "provider": provider, "immediate": True}
     try:
         h = await auth_handoff.start(kind, actor_user=user, panel_id=panel_id, provider=provider,

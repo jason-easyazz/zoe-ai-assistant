@@ -5803,9 +5803,15 @@ async def _execute_music_setup(user_id: str) -> str:  # noqa: ARG001 — dispatc
     connected: list[str] = []
     attention: list[str] = []
     offered: list[str] = []
-    try:
-        import music_service
+    engine_down = False
+    import music_service
+    import panel_principal as _pp
 
+    # The catalogue wakes Music Assistant: apply the same turn gate as music_play
+    # (_execute_music_intent), so a refused caller never wakes the engine.
+    if _pp.home_control_refused("music music_setup"):
+        return _pp.HOME_CONTROL_REFUSAL
+    try:
         for p in await music_service.provider_catalogue():
             name = str(p.get("name") or p.get("domain") or "").strip()
             if not name:
@@ -5818,9 +5824,12 @@ async def _execute_music_setup(user_id: str) -> str:  # noqa: ARG001 — dispatc
                 offered.append(name)
     except Exception as exc:  # noqa: BLE001 — the reply must never fail on a status read
         logger.debug("music_setup: provider catalogue unavailable: %s", exc)
+        engine_down = True  # unknown state: never say "nothing is connected"
 
     parts = []
-    if connected:
+    if engine_down:
+        parts.append(music_service.MUSIC_ENGINE_DOWN_SETUP_MSG)
+    elif connected:
         parts.append("Connected: **" + "**, **".join(connected) + "**.")
     else:
         parts.append("No music services are connected yet.")
@@ -5999,6 +6008,132 @@ async def _resolve_media_player_entity(ha_url: str, room: object = None) -> str 
     return chosen
 
 
+_MUSIC_NOTHING_FOUND_MSG = "I couldn't find {query} to play."
+_MUSIC_ENGINE_DOWN_MSG = "Music isn't available right now. Try again in a moment."
+
+
+async def _music_assistant_play(query: str, user_id: str, room: object = None) -> tuple[str, Optional[dict]]:
+    """Voice "play X" through Zoe's own music engine (Music Assistant), before HA.
+
+    Returns (status, hit): "playing" + the matched item; "nothing_found" (MA is up
+    with speakers but the search or the play gave nothing); "unavailable" (MA could
+    not be woken or lists no speakers); "skipped" (a named room MA has no speaker
+    for - Home Assistant's room matching decides instead). Never raises."""
+    try:
+        import music_service as _ms
+
+        if not await _ms.ensure_running():
+            return "unavailable", None
+        player_id = _ms.get_preferred_player_id()
+        if room:
+            players = await _ms.get_players()
+            if not players:
+                return "unavailable", None
+            match = _ms._match_player_by_name(players, str(room))
+            if match is None:
+                return "skipped", None
+            player_id = str(match.get("player_id") or "")
+        hit = await _ms.search_and_play(query, player_id=player_id, zoe_user_id=user_id)
+        if hit:
+            return "playing", hit
+        return ("nothing_found" if await _ms.get_players() else "unavailable"), None
+    except Exception as exc:  # noqa: BLE001 - the HA fallback must still run
+        logger.warning("music_play: music engine attempt failed (%s)", type(exc).__name__)
+        return "unavailable", None
+
+
+_MUSIC_CONTROL_FAILED_MSG = "I couldn't do that - the speaker playing the music didn't respond."
+_MA_ACTIVE_STATES = ("playing", "paused")
+
+
+def _ma_player_state(player: dict) -> str:
+    return str(player.get("playback_state") or player.get("state") or "").lower()
+
+
+async def _music_assistant_active_player(room: object = None) -> Optional[dict]:
+    """The Music Assistant speaker that is playing (else paused) right now, or None.
+
+    Follow-up voice transport/volume/now-playing goes here when "play X" went
+    through MA, so "pause" reaches the engine actually playing instead of an
+    unrelated HA media player. Reads only (players/all never wakes a reaped MA:
+    a stopped engine is playing nothing). A named room must be an active MA
+    speaker, else None and Home Assistant's room matching decides. Never raises."""
+    try:
+        import music_service as _ms
+
+        players = [p for p in await _ms.get_players() if _ma_player_state(p) in _MA_ACTIVE_STATES]
+        if not players:
+            return None
+        if room:
+            return _ms._match_player_by_name(players, str(room))
+        for state in _MA_ACTIVE_STATES:
+            for p in players:
+                if _ma_player_state(p) == state:
+                    return p
+    except Exception as exc:  # noqa: BLE001 - the HA fallback must still run
+        logger.debug("music: active MA player lookup failed (%s)", type(exc).__name__)
+    return None
+
+
+def _music_assistant_command(cmd: str, pid: str, value: object = None) -> Optional[tuple[str, dict]]:
+    """Voice music_control/music_volume command -> (MA api command, args), or None
+    when MA has no equivalent. Signatures per the MA server controllers:
+    player_queues/* take queue_id (== player_id for a solo player),
+    players/cmd/volume_mute needs `muted`, volume_set an int 0-100."""
+    queue = {"pause": "player_queues/pause", "stop": "player_queues/stop",
+             "resume": "player_queues/play", "next": "player_queues/next",
+             "previous": "player_queues/previous"}
+    if cmd in queue:
+        return queue[cmd], {"queue_id": pid}
+    if cmd == "shuffle":
+        return "player_queues/shuffle", {"queue_id": pid, "shuffle_enabled": True}
+    if cmd in ("volume_up", "volume_down"):
+        return f"players/cmd/{cmd}", {"player_id": pid}
+    if cmd in ("mute", "unmute"):
+        return "players/cmd/volume_mute", {"player_id": pid, "muted": cmd == "mute"}
+    if cmd == "volume_set" and value is not None:
+        return "players/cmd/volume_set", {"player_id": pid, "volume_level": int(value)}
+    return None
+
+
+async def _music_assistant_control(cmd: str, room: object = None, value: object = None) -> Optional[bool]:
+    """Send a transport/volume command to the active MA speaker.
+
+    None = MA is playing nothing (or has no such command): use Home Assistant.
+    True = MA accepted it (HTTP 200). False = MA is the engine playing but did
+    not accept it - the caller must NOT report success, nor fall back to an HA
+    player that is not the one playing. Never raises."""
+    player = await _music_assistant_active_player(room)
+    if player is None:
+        return None
+    pid = str(player.get("player_id") or "")
+    spec = _music_assistant_command(cmd, pid, value)
+    if not pid or spec is None:
+        return None
+    try:
+        import music_service as _ms
+
+        command, args = spec
+        return bool(await _ms._ma_ok(command, **args))
+    except Exception as exc:  # noqa: BLE001 - reported as a failure, never as success
+        logger.warning("music_control: music engine command failed (%s)", type(exc).__name__)
+        return False
+
+
+async def _music_assistant_now_playing(room: object = None) -> Optional[dict]:
+    """Now-playing from the active MA speaker, or None when MA is playing nothing."""
+    player = await _music_assistant_active_player(room)
+    if player is None:
+        return None
+    try:
+        import music_service as _ms
+
+        return await _ms.now_playing(player_id=str(player.get("player_id") or ""))
+    except Exception as exc:  # noqa: BLE001 - the HA fallback must still run
+        logger.debug("music: MA now-playing failed (%s)", type(exc).__name__)
+        return None
+
+
 async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional[str]:
     import panel_principal as _pp
 
@@ -6016,7 +6151,8 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
 
 
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
-    """Route music intents to HA media_player via zoe-data HA bridge."""
+    """Route music intents: `music_play` tries Music Assistant first, then (like the
+    rest) an HA media_player via the zoe-data HA bridge."""
     if (intent.slots or {}).get("delayed"):
         return command_shapes.DELAYED_COMMAND_REPLY  # nothing plays now, nothing is queued
     if intent.name != "music_favorite":   # favouriting goes through Music Assistant, not the house's media players
@@ -6055,21 +6191,33 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 if not _query:
                     _query = "music"  # final fallback
 
-            target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
-            if target is None:
-                return _NO_PLAYER_MSG
-            payload = {
-                "entity_id": target,
-                "action": "play_media",
-                "data": {
-                    "media_content_id": _query,
-                    "media_content_type": "music",
-                },
-            }
-            async with _httpx.AsyncClient(timeout=8.0) as c:
-                failure = await _post_music_ha_control(c, ha_url, payload)
-                if failure:
-                    return failure
+            # Zoe's own music engine first (search + play, the panel's path);
+            # Home Assistant's media players only when that played nothing.
+            ma_status, ma_hit = await _music_assistant_play(_query, user_id, slots.get("room"))
+            if ma_status == "playing":
+                artist = (ma_hit or {}).get("artist") or ""
+                reply = f"Playing {(ma_hit or {}).get('name') or _query}{' by ' + artist if artist else ''}."
+            else:
+                target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
+                if target is None:
+                    if ma_status == "nothing_found":
+                        return _MUSIC_NOTHING_FOUND_MSG.format(query=_query)
+                    if ma_status == "unavailable":
+                        return _MUSIC_ENGINE_DOWN_MSG
+                    return _NO_PLAYER_MSG
+                payload = {
+                    "entity_id": target,
+                    "action": "play_media",
+                    "data": {
+                        "media_content_id": _query,
+                        "media_content_type": "music",
+                    },
+                }
+                async with _httpx.AsyncClient(timeout=8.0) as c:
+                    failure = await _post_music_ha_control(c, ha_url, payload)
+                    if failure:
+                        return failure
+                reply = f"Playing {_query}."
 
             # Fire-and-forget: 5-signal play event logger
             async def _log_play_event() -> None:
@@ -6179,7 +6327,7 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             except Exception:
                 pass
 
-            return f"Playing {_query}."
+            return reply
 
         elif intent.name == "music_control":
             cmd = slots.get("command", "")
@@ -6196,14 +6344,19 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 "unmute": "volume_mute",
             }
             if cmd == "now_playing":
-                # Fetch state from HA bridge
-                async with _httpx.AsyncClient(timeout=8.0) as c:
-                    r = await c.get(f"{ha_url}/states")
-                    data = r.json() if r.status_code == 200 else {}
-                mp = data.get("media_player", {})
-                for entity, state in mp.items():
-                    title = state.get("attributes", {}).get("media_title")
-                    artist = state.get("attributes", {}).get("media_artist")
+                # The active Music Assistant speaker first (voice "play X" plays
+                # there); the HA bridge's media players only when MA plays nothing.
+                ma_np = await _music_assistant_now_playing(slots.get("room"))
+                if ma_np is not None:
+                    candidates = [(ma_np.get("title"), ma_np.get("artist"))]
+                else:
+                    async with _httpx.AsyncClient(timeout=8.0) as c:
+                        r = await c.get(f"{ha_url}/states")
+                        data = r.json() if r.status_code == 200 else {}
+                    mp = data.get("media_player", {})
+                    candidates = [(s.get("attributes", {}).get("media_title"),
+                                   s.get("attributes", {}).get("media_artist")) for s in mp.values()]
+                for title, artist in candidates:
                     if title:
                         try:
                             import asyncio as _asyncio
@@ -6213,26 +6366,34 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                         except Exception:
                             pass
                         return f"Playing {title}{' by ' + artist if artist else ''}."
+                if ma_np is not None:  # a speaker IS playing/paused; never say "nothing"
+                    return "Something's on, but I can't tell what right now."
                 return "Nothing is playing right now."
 
             svc = service_map.get(cmd)
             if svc:
-                extra = {}
-                if cmd == "shuffle": extra = {"shuffle": True}
-                if cmd == "mute":    extra = {"is_volume_muted": True}
-                if cmd == "unmute":  extra = {"is_volume_muted": False}
-                target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
-                if target is None:
-                    return _NO_PLAYER_MSG
-                payload = {
-                    "entity_id": target,
-                    "action": svc,
-                    "data": extra,
-                }
-                async with _httpx.AsyncClient(timeout=8.0) as c:
-                    failure = await _post_music_ha_control(c, ha_url, payload)
-                    if failure:
-                        return failure
+                # The engine actually playing gets the command: an active Music
+                # Assistant speaker first, Home Assistant only when MA plays nothing.
+                ma_sent = await _music_assistant_control(cmd, room=slots.get("room"))
+                if ma_sent is False:
+                    return _MUSIC_CONTROL_FAILED_MSG
+                if ma_sent is None:
+                    extra = {}
+                    if cmd == "shuffle": extra = {"shuffle": True}
+                    if cmd == "mute":    extra = {"is_volume_muted": True}
+                    if cmd == "unmute":  extra = {"is_volume_muted": False}
+                    target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
+                    if target is None:
+                        return _NO_PLAYER_MSG
+                    payload = {
+                        "entity_id": target,
+                        "action": svc,
+                        "data": extra,
+                    }
+                    async with _httpx.AsyncClient(timeout=8.0) as c:
+                        failure = await _post_music_ha_control(c, ha_url, payload)
+                        if failure:
+                            return failure
 
                 # Log skip/pause events for taste learning
                 _evt_type = None
@@ -6268,18 +6429,23 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
         elif intent.name == "music_volume":
             level = int(slots.get("level", 50))
             vol = max(0, min(100, level)) / 100.0
-            target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
-            if target is None:
-                return _NO_PLAYER_MSG
-            payload = {
-                "entity_id": target,
-                "action": "volume_set",
-                "data": {"volume_level": vol},
-            }
-            async with _httpx.AsyncClient(timeout=8.0) as c:
-                failure = await _post_music_ha_control(c, ha_url, payload)
-                if failure:
-                    return failure
+            ma_sent = await _music_assistant_control("volume_set", room=slots.get("room"),
+                                                     value=max(0, min(100, level)))
+            if ma_sent is False:
+                return _MUSIC_CONTROL_FAILED_MSG
+            if ma_sent is None:  # MA plays nothing: the HA media player
+                target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
+                if target is None:
+                    return _NO_PLAYER_MSG
+                payload = {
+                    "entity_id": target,
+                    "action": "volume_set",
+                    "data": {"volume_level": vol},
+                }
+                async with _httpx.AsyncClient(timeout=8.0) as c:
+                    failure = await _post_music_ha_control(c, ha_url, payload)
+                    if failure:
+                        return failure
             try:
                 import asyncio as _asyncio
                 from database import log_music_event as _log
