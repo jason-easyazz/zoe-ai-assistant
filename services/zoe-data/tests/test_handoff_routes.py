@@ -161,3 +161,45 @@ def test_one_client_qr_library():
     dist = SVC.parent / "zoe-ui/dist"
     assert not (dist / "js/qrcode.min.js").exists(), "the second client QR library came back"
     assert "/js/qrcode.min.js" not in (dist / "touch/home.html").read_text()
+
+
+# ── a down music engine is not "unknown provider", and not "sign in" (2026-11-12) ──
+# provider_setup_form() is None both for an unknown provider AND when MA cannot be
+# woken; the route said 400 "unknown provider" for both, and the panel turned every
+# failure into "Sign in first to connect" + the PIN card, even for a signed-in member.
+
+
+def test_known_provider_with_engine_down_is_503_not_unknown(client, monkeypatch):
+    async def down(_provider):
+        return None  # what provider_setup_form returns when MA is unreachable
+
+    monkeypatch.setattr(music_service, "provider_setup_form", down)
+    r = _start(client)
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"]["error"] == "music_engine_unavailable"
+    assert _start(client, provider="nope").status_code == 400  # a genuinely unknown provider stays 400
+
+
+def test_the_card_opens_sign_in_only_for_an_auth_error():
+    home = (SVC.parent / "zoe-ui/dist/touch/home.html").read_text()
+    card = home[home.index("function authCard("):home.index("function _acStop(")]
+    catch = card[card.index(".catch("):]
+    assert "e.message==='auth'" in catch
+    auth_branch, _, other = catch.partition("else")
+    assert "__showAuthCard" in auth_branch and "Sign in first to connect" in auth_branch
+    assert "__showAuthCard" not in other and "Music isn’t available right now" in other
+    # a 200 without a QR is not an auth problem either
+    ok_branch = card[card.index("if(!(r&&r.ok&&r.qr_path))"):card.index("_acOpen(r,o)")]
+    assert "__showAuthCard" not in ok_branch
+
+
+def test_starting_a_handoff_expires_lapsed_pending_rows(client, tmp_path):
+    """A pending row expired only when status() read it; an unread one stayed pending."""
+    old = _start(client).json()["id"]
+    con = sqlite3.connect(str(tmp_path / "h.db"))
+    con.execute("UPDATE auth_handoffs SET expires_at = expires_at - 3600 WHERE id = ?", (old,))
+    con.commit()
+    _start(client)  # a new handoff is the sweep's hook; nothing read the old row
+    status, reason = con.execute("SELECT status, reason FROM auth_handoffs WHERE id = ?", (old,)).fetchone()
+    con.close()
+    assert (status, reason) == ("error", "expired")

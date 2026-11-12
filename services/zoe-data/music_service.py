@@ -1528,14 +1528,36 @@ _SETUP_CATALOGUE = [
 _HIDDEN_ENTRY_TYPES = {"label", "divider"}
 
 
+class MusicEngineUnavailable(RuntimeError):
+    """Music Assistant could not be woken or did not answer, so its state is unknown."""
+
+
+# The 503 body a panel route returns when MA is down (the panel keys on "error").
+MUSIC_ENGINE_UNAVAILABLE_DETAIL = {"error": "music_engine_unavailable",
+                                   "message": "Music isn't available right now - try again."}
+MUSIC_ENGINE_DOWN_SETUP_MSG = ("The music engine isn't available right now, so I can't check "
+                               "your music services. Try again in a moment.")
+
+
 async def provider_catalogue() -> list[dict[str, Any]]:
     """The 'Add music' catalogue merged with configured + health status.
 
     `connected` = an instance exists in MA. `needs_attention` = that instance is
     enabled but NOT loaded (e.g. YouTube Music failing its Premium check), with
     MA's own `reason` — so the UI can offer "Reconnect" instead of "Connect".
+
+    Wakes a reaped MA first: every caller is a user action (the panel's Sources
+    tab, voice "set up music", the setup resolver), never a poll, and a sleeping
+    MA would otherwise read as "nothing connected". Raises MusicEngineUnavailable
+    when MA cannot be woken or does not answer, so no caller reports an unknown
+    state as "not connected".
     """
-    cfgs = [c for c in (await _ma("config/providers") or []) if isinstance(c, dict)]
+    if not await ensure_running():
+        raise MusicEngineUnavailable("music engine could not be started")
+    raw_cfgs = await _ma("config/providers")
+    if raw_cfgs is None:
+        raise MusicEngineUnavailable("music engine did not answer")
+    cfgs = [c for c in (raw_cfgs or []) if isinstance(c, dict)]
     provs = _as_list(await _ma("providers"))
     configured = {c.get("domain") for c in cfgs}
     available = {p.get("domain") for p in provs if isinstance(p, dict) and p.get("available")}
@@ -1794,7 +1816,10 @@ def _qr_card(provider: str, name: str, qr_path: str) -> dict[str, Any]:
 async def resolve_music_setup(provider_query: str) -> dict[str, Any]:
     """Resolve 'add music' / 'connect <provider>' into a catalogue or QR card."""
     import music_setup
-    cat = await provider_catalogue()
+    try:
+        cat = await provider_catalogue()
+    except MusicEngineUnavailable:
+        return _result(MUSIC_ENGINE_DOWN_SETUP_MSG, _browse_card(), "setup")
     q = (provider_query or "").strip().lower()
     match = next((p for p in cat if p["domain"] == q or p["name"].lower() == q), None)
     if match is None:
@@ -1808,7 +1833,11 @@ async def resolve_music_setup(provider_query: str) -> dict[str, Any]:
         iid = await provider_instance_id(match["domain"]) if reconnect else None
         saved = await save_provider(match["domain"], {}, instance_id=iid)
         msg = f"Added {match['name']}. Ask me to play a station." if saved else "I couldn't add that."
-        return _result(msg, _catalogue_card(await provider_catalogue()), "setup")
+        try:
+            cat = await provider_catalogue()
+        except MusicEngineUnavailable:
+            pass  # keep the list read a moment ago
+        return _result(msg, _catalogue_card(cat), "setup")
     minted = music_setup.mint(match["domain"])
     qr_path = music_setup.qr_path(minted["token"], match["domain"])
     # The phone's save (routers/music_setup.setup_save / music_oauth._run_flow) looks up

@@ -2574,7 +2574,9 @@
           host.innerHTML='<div class="srcnote">Sign in to manage music services.'
             +'<button class="srcbtn" id="srcSignin">Sign in</button></div>';
           var b=document.getElementById('srcSignin');if(b)b.onclick=function(){if(window.__showAuthCard)window.__showAuthCard();};
-        } else host.innerHTML=_qempty('Couldn’t load music services — tap Sources again to retry.');
+        } else host.innerHTML=_qempty(e&&e.message==='http 503'
+          ? 'Music isn’t available right now — tap Sources again to retry.'
+          : 'Couldn’t load music services — tap Sources again to retry.');
       });return;}
   }
   function _srcRow(p){
@@ -2614,9 +2616,13 @@
   function authCard(o){
     _acStart(o).then(function(r){
       if(r&&r.immediate){toast(r.ok?'Connected':'Couldn’t connect');if(o.onDone)o.onDone();return;}
-      if(!(r&&r.ok&&r.qr_path)){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();return;}
+      if(!(r&&r.ok&&r.qr_path)){toast('Music isn’t available right now — try again');return;}
       _acOpen(r,o);
-    }).catch(function(){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();});
+    }).catch(function(e){
+      // Only an auth refusal opens the sign-in card; a down or slow music engine
+      // (503, the 12 s deadline) is not a sign-in problem.
+      if(e&&e.message==='auth'){toast('Sign in first to connect');if(window.__showAuthCard)window.__showAuthCard();}
+      else toast('Music isn’t available right now — try again');});
   }
   function _acStop(){if(_acT){clearInterval(_acT);_acT=null;}_ac=null;}
   function _acLive(){var m=document.getElementById('estModal');return !!(_ac&&m&&m.classList.contains('on')&&m.querySelector('.acst[data-h="'+_ac.id+'"]'));}

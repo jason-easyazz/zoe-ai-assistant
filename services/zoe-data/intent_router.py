@@ -5803,9 +5803,10 @@ async def _execute_music_setup(user_id: str) -> str:  # noqa: ARG001 — dispatc
     connected: list[str] = []
     attention: list[str] = []
     offered: list[str] = []
-    try:
-        import music_service
+    engine_down = False
+    import music_service
 
+    try:
         for p in await music_service.provider_catalogue():
             name = str(p.get("name") or p.get("domain") or "").strip()
             if not name:
@@ -5818,9 +5819,12 @@ async def _execute_music_setup(user_id: str) -> str:  # noqa: ARG001 — dispatc
                 offered.append(name)
     except Exception as exc:  # noqa: BLE001 — the reply must never fail on a status read
         logger.debug("music_setup: provider catalogue unavailable: %s", exc)
+        engine_down = True  # unknown state: never say "nothing is connected"
 
     parts = []
-    if connected:
+    if engine_down:
+        parts.append(music_service.MUSIC_ENGINE_DOWN_SETUP_MSG)
+    elif connected:
         parts.append("Connected: **" + "**, **".join(connected) + "**.")
     else:
         parts.append("No music services are connected yet.")
@@ -5999,6 +6003,40 @@ async def _resolve_media_player_entity(ha_url: str, room: object = None) -> str 
     return chosen
 
 
+_MUSIC_NOTHING_FOUND_MSG = "I couldn't find {query} to play."
+_MUSIC_ENGINE_DOWN_MSG = "Music isn't available right now. Try again in a moment."
+
+
+async def _music_assistant_play(query: str, user_id: str, room: object = None) -> tuple[str, Optional[dict]]:
+    """Voice "play X" through Zoe's own music engine (Music Assistant), before HA.
+
+    Returns (status, hit): "playing" + the matched item; "nothing_found" (MA is up
+    with speakers but the search or the play gave nothing); "unavailable" (MA could
+    not be woken or lists no speakers); "skipped" (a named room MA has no speaker
+    for - Home Assistant's room matching decides instead). Never raises."""
+    try:
+        import music_service as _ms
+
+        if not await _ms.ensure_running():
+            return "unavailable", None
+        player_id = _ms.get_preferred_player_id()
+        if room:
+            players = await _ms.get_players()
+            if not players:
+                return "unavailable", None
+            match = _ms._match_player_by_name(players, str(room))
+            if match is None:
+                return "skipped", None
+            player_id = str(match.get("player_id") or "")
+        hit = await _ms.search_and_play(query, player_id=player_id, zoe_user_id=user_id)
+        if hit:
+            return "playing", hit
+        return ("nothing_found" if await _ms.get_players() else "unavailable"), None
+    except Exception as exc:  # noqa: BLE001 - the HA fallback must still run
+        logger.warning("music_play: music engine attempt failed (%s)", type(exc).__name__)
+        return "unavailable", None
+
+
 async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional[str]:
     import panel_principal as _pp
 
@@ -6016,7 +6054,8 @@ async def _post_music_ha_control(client, ha_url: str, payload: dict) -> Optional
 
 
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
-    """Route music intents to HA media_player via zoe-data HA bridge."""
+    """Route music intents: `music_play` tries Music Assistant first, then (like the
+    rest) an HA media_player via the zoe-data HA bridge."""
     if (intent.slots or {}).get("delayed"):
         return command_shapes.DELAYED_COMMAND_REPLY  # nothing plays now, nothing is queued
     if intent.name != "music_favorite":   # favouriting goes through Music Assistant, not the house's media players
@@ -6055,21 +6094,33 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 if not _query:
                     _query = "music"  # final fallback
 
-            target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
-            if target is None:
-                return _NO_PLAYER_MSG
-            payload = {
-                "entity_id": target,
-                "action": "play_media",
-                "data": {
-                    "media_content_id": _query,
-                    "media_content_type": "music",
-                },
-            }
-            async with _httpx.AsyncClient(timeout=8.0) as c:
-                failure = await _post_music_ha_control(c, ha_url, payload)
-                if failure:
-                    return failure
+            # Zoe's own music engine first (search + play, the panel's path);
+            # Home Assistant's media players only when that played nothing.
+            ma_status, ma_hit = await _music_assistant_play(_query, user_id, slots.get("room"))
+            if ma_status == "playing":
+                artist = (ma_hit or {}).get("artist") or ""
+                reply = f"Playing {(ma_hit or {}).get('name') or _query}{' by ' + artist if artist else ''}."
+            else:
+                target = await _resolve_media_player_entity(ha_url, room=slots.get("room"))
+                if target is None:
+                    if ma_status == "nothing_found":
+                        return _MUSIC_NOTHING_FOUND_MSG.format(query=_query)
+                    if ma_status == "unavailable":
+                        return _MUSIC_ENGINE_DOWN_MSG
+                    return _NO_PLAYER_MSG
+                payload = {
+                    "entity_id": target,
+                    "action": "play_media",
+                    "data": {
+                        "media_content_id": _query,
+                        "media_content_type": "music",
+                    },
+                }
+                async with _httpx.AsyncClient(timeout=8.0) as c:
+                    failure = await _post_music_ha_control(c, ha_url, payload)
+                    if failure:
+                        return failure
+                reply = f"Playing {_query}."
 
             # Fire-and-forget: 5-signal play event logger
             async def _log_play_event() -> None:
@@ -6179,7 +6230,7 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             except Exception:
                 pass
 
-            return f"Playing {_query}."
+            return reply
 
         elif intent.name == "music_control":
             cmd = slots.get("command", "")

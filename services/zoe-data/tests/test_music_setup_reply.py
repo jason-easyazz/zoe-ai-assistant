@@ -63,3 +63,80 @@ def test_panel_chat_navigates_to_the_sources_card():
     assert '"music_setup":       ("/touch/home.html?domain=music_sources", None)' in chat_src
     home = (ROOT / "services/zoe-ui/dist/touch/home.html").read_text()
     assert "dom==='music_sources'" in home and "_qtabNext='sources'" in home
+
+
+# ── a sleeping music engine is not "nothing connected" (2026-11-12) ───────────
+# The idle reaper stops Music Assistant for most of the day, and the catalogue
+# read `config/providers` without waking it, so the Sources tab showed every
+# provider as plain "Connect" and voice said "No music services are connected
+# yet." Negative control: drop the ensure_running() call (or the None check)
+# from provider_catalogue and the wake-order / unavailable tests go red.
+
+
+@pytest.fixture
+def ma_reads(monkeypatch):
+    """provider_catalogue's two MA reads + the wake, faked and ordered (no network, no docker)."""
+    state = {"up": True, "order": [],
+             "config/providers": [{"domain": "ytmusic", "enabled": True, "last_error": "Premium check failed"}],
+             "providers": [{"domain": "radiobrowser", "available": True}]}
+
+    async def ensure_running():
+        state["order"].append("wake")
+        return state["up"]
+
+    async def fake_ma(command, **_args):
+        state["order"].append(command)
+        return state[command]
+
+    monkeypatch.setattr(music_service, "ensure_running", ensure_running)
+    monkeypatch.setattr(music_service, "_ma", fake_ma)
+    return state
+
+
+async def test_catalogue_wakes_the_engine_before_reading(ma_reads):
+    cat = await music_service.provider_catalogue()
+    assert ma_reads["order"] == ["wake", "config/providers", "providers"]
+    yt = next(p for p in cat if p["domain"] == "ytmusic")
+    assert yt["connected"] and yt["needs_attention"]  # the amber Reconnect, not plain Connect
+
+
+async def test_catalogue_refuses_when_the_engine_cannot_wake(ma_reads):
+    ma_reads["up"] = False
+    with pytest.raises(music_service.MusicEngineUnavailable):
+        await music_service.provider_catalogue()
+    assert ma_reads["order"] == ["wake"]  # nothing read from a stopped engine
+
+
+async def test_catalogue_refuses_when_the_engine_does_not_answer(ma_reads):
+    ma_reads["config/providers"] = None  # _ma's "unreachable / non-200"
+    with pytest.raises(music_service.MusicEngineUnavailable):
+        await music_service.provider_catalogue()
+
+
+async def test_voice_setup_says_the_engine_is_unavailable_not_nothing_connected(ma_reads):
+    ma_reads["up"] = False
+    reply = await intent_router._execute_music_setup("jason")
+    assert music_service.MUSIC_ENGINE_DOWN_SETUP_MSG in reply
+    assert "No music services are connected" not in reply
+    assert "Browse → Sources" in reply
+
+
+async def test_setup_resolver_says_the_engine_is_unavailable(ma_reads):
+    ma_reads["up"] = False
+    r = await music_service.resolve_music_setup("spotify")
+    assert r["spoken_summary"] == music_service.MUSIC_ENGINE_DOWN_SETUP_MSG
+
+
+def test_every_catalogue_caller_is_a_user_action_not_a_poll():
+    """provider_catalogue wakes MA, so a poll calling it would undo every idle reap.
+    Pinned callers: the Sources tab GET, voice "set up music", the setup resolver."""
+    import re
+
+    callers = sorted(
+        str(p.relative_to(ROOT)) for p in (ROOT / "services/zoe-data").rglob("*.py")
+        if "/tests/" not in str(p) and re.search(r"\bprovider_catalogue\(\)", p.read_text(errors="ignore"))
+    )
+    assert callers == ["services/zoe-data/intent_router.py", "services/zoe-data/music_service.py",
+                       "services/zoe-data/routers/music_setup.py"], callers
+    home = (ROOT / "services/zoe-ui/dist/touch/home.html").read_text()
+    assert home.count("/api/music/setup/catalogue") == 1  # fetched only when the Sources tab is shown
