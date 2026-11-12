@@ -328,6 +328,9 @@ _OWN_SUBJECT_RE = re.compile(
 _OWN_AUX = frozenset({"have", "had", "already", "once", "always", "often", "definitely", "actually", "really", "literally",
                       "clearly", "simply", "only", "even", "still", "probably", "certainly", "originally", "previously"})
 _OWN_CONTRACTION_RE = re.compile(r"\s*(?:I|[Ww]e)['\u2019]$")
+#: a negation ANYWHERE in the lead-in ("I never actually said", "I haven't always said", "I did not just say") makes the quote a DENIED
+#: one: it is never exempted as the owner's own claim (fail closed)
+_LEAD_NEGATION_RE = re.compile(r"(?i)\b(?:never|not|no|nor|hardly|barely|rarely|seldom|[a-z]+n['\u2019]?t)\b")
 
 
 def _speech_spans(head: str) -> list:
@@ -350,9 +353,11 @@ def _speech_spans(head: str) -> list:
         w3 = (m.group("who3") or "").lower()
         if w3:
             lead = head[_sentence_start(head, m.start()): m.start()]
-            if (w3 in _CONJ or w3 in _OWN_AUX) and _OWN_SUBJECT_RE.match(lead):
+            if _LEAD_NEGATION_RE.search(lead + " " + w3):
+                pass                      # a denied quote: third-person treatment below removes it
+            elif (w3 in _CONJ or w3 in _OWN_AUX) and _OWN_SUBJECT_RE.match(lead):
                 continue                  # 'I rang and said, "..."' / 'I have said, "..."': the speaker is the owner, the lead-in word is not a person
-            if w3 in ("ve", "d") and _OWN_CONTRACTION_RE.match(lead):
+            elif w3 in ("ve", "d") and _OWN_CONTRACTION_RE.match(lead):
                 continue                  # "I've said, ..." - who3 saw only the contraction's tail
         i = m.end()
         if m.group("q") or m.group("q2") or m.group("q3"):

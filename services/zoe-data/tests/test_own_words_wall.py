@@ -716,7 +716,12 @@ def test_the_owners_own_quoted_words_after_an_auxiliary_or_adverb_are_kept(turn)
 @pytest.mark.parametrize("turn", ['Wren would have said, "I am moving to Halvercombe next month."',
                                   'I think dad already said, "I am moving to Halvercombe next month."',
                                   'I know she had said, "I am moving to Halvercombe next month."',
-                                  'I never said, "I am moving to Halvercombe next month."'])
+                                  'I never said, "I am moving to Halvercombe next month."',
+                                  'I never actually said "I am moving to Halvercombe next month."',
+                                  'I never just said, "I am moving to Halvercombe next month."',
+                                  'I haven\'t always said "I am moving to Halvercombe next month."',
+                                  'I didn\'t then said, "I am moving to Halvercombe next month."',
+                                  'We have not already said "We are moving to Halvercombe next month."'])
 def test_an_auxiliary_does_not_make_another_speakers_or_a_denied_quote_the_owners(turn):
     own = own_words.analyze(turn)
     assert "third_person_speech" in own.reasons and "Halvercombe" not in own.text
