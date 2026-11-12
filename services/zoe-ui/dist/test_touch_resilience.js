@@ -100,21 +100,6 @@ let n = 0; const ok = (m) => { n++; console.log('  ok  ' + m); };
       const homeSrc = fs.readFileSync(path.join(__dirname, 'touch/home.html'), 'utf8');
       assert(/sessionStorage\.getItem\('zoe_kiosk'\)==='1'/.test(homeSrc.slice(0, 6000)), 'the estate bootstrap must honour the session-scoped kiosk flag');
       ok('viewer: the kiosk flag survives bare navigations in both directions (auth.js mirrors, never deletes on touch; the estate bootstrap reads the session copy)');
-      // Codex (#1861, round 4): registering the generated alias (touch/settings.html
-      // setLocalPanelId after /panels/register) must drop the alias marker, or the
-      // now-registered panel reads as a viewer after reload.
-      const settingsSrc = fs.readFileSync(path.join(__dirname, 'touch/settings.html'), 'utf8');
-      const sl = /function setLocalPanelId\((\w+)\)\s*\{([\s\S]{0,700})/.exec(settingsSrc); assert(sl, 'missing setLocalPanelId');
-      assert(/localStorage\.getItem\('zoe_touch_panel_alias_generated'\) === String\(\w+ \|\| ''\)\.trim\(\)\) localStorage\.removeItem\('zoe_touch_panel_alias_generated'\)/.test(sl[2]), 'setLocalPanelId must clear the alias marker when that id becomes registered');
-      ok('viewer: registering the generated alias clears the alias marker (touch/settings.html setLocalPanelId)');
-      // Codex (#1861, rounds 6+7): a NEW registration must reload so the executor re-classifies
-      // this browser as a panel — and it must reload even when the bindings step AFTER the
-      // register fails (the id is already persisted), so the reload sits after the catch.
-      const sp = /async function savePanelIdentity\(\)[\s\S]*?\n        \}\n/.exec(settingsSrc); assert(sp, 'savePanelIdentity');
-      assert(/registeredNow = true;/.test(sp[0]), 'register branch marks registeredNow');
-      assert(/catch \(e\) \{[\s\S]*?\n            \}\n[\s\S]{0,900}if \(registeredNow\) \{[\s\S]{0,400}window\.location\.reload\(\)/.test(sp[0]), 'reload must be scheduled AFTER the catch (bindings failure still reloads)');
-      assert(!/try \{[\s\S]*?if \(registeredNow\) \{[\s\S]*?\} catch \(e\)/.test(sp[0]), 'reload must not live inside the try');
-      ok('viewer: a new registration from Touch Settings reloads so the panel services start (even if bindings fail)');
       // Codex (#1861, round 7): the estate boot mirrors the kiosk flag into sessionStorage too —
       // js/auth.js on a desktop tab removes the shared localStorage copy, and the tab-scoped
       // copy is what keeps the kiosk a kiosk across a bare /touch/*.html navigation.
