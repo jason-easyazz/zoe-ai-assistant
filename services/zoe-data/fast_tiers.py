@@ -504,7 +504,7 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
         res = await _pl.pull(user_id, session_id, channel=lane,
                              speaker_verified=(extra_ctx or {}).get("speaker_verified"), commit=not dry)
         if res is None:
-            return None
+            return await _notifications_only_pull(user_id, lane, extra_ctx, dry=dry)
         # The pendant day review (day_review_raise, ZOE_DAY_REVIEW_RAISE, default OFF = ""): one counts-only sentence when it is
         # waiting, for the identified member only and never in a crowded room. Read-only.
         import day_review_raise as _drr
@@ -523,6 +523,26 @@ async def _pull_tier(text: str, user_id: str, session_id: str, channel: Optional
     except Exception as exc:  # never let the tier break a turn
         logger.warning("fast_tiers pull tier failed (non-fatal): %s", exc)
         return None
+
+
+async def _notifications_only_pull(user_id: str, lane: str, extra_ctx: Optional[dict], *, dry: bool = False):
+    """"What's up?" while the proactive selector is off (``ZOE_PROACTIVE_SELECTOR``, its default): ``proactive.pull`` answers None,
+    yet the household notifications (``ZOE_NOTIFICATIONS``) still light the orb, so they answer the pull on their own. A VERIFIED
+    member's own voice turn only (never a guest or an unverified voice); a dry replay says and pushes nothing (``pull_addendum``).
+    With the selector ON, its None stays final: it means a guest, a brief about to speak or a lost race, and must not be masked."""
+    from proactive.selector import selector_enabled
+    import proactive.pull as _pl
+
+    if dry or selector_enabled() or (extra_ctx or {}).get("speaker_verified") is not True or not _pl._member(user_id):
+        return None
+    import notifications_store as _nstore
+
+    notes = await _nstore.pull_addendum(user_id, lane, extra_ctx, alone=True, dry=dry)
+    if not notes:
+        return None
+    import expert_dispatch as _xd
+
+    return _xd.DispatchResult(domain="proactive", reply=notes, intent="pull", ui={"kind": "pull"}, tier="pull", meta={"delivered": 0})
 
 
 async def _identity_tier(text: str, user_id: str):

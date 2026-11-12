@@ -4,6 +4,8 @@ Synthetic ids and text only.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 pytestmark = pytest.mark.ci_safe
@@ -264,3 +266,40 @@ def test_closing_the_consumer_closes_the_inner_turn_and_adds_no_tail(tenv):
     assert run(stop_early()) == "The kettle "
     assert closed == {"inner": True}                          # the inner turn was closed, not left suspended
     assert nt._LAST == {} and nt._PENDING == {}               # and no tail was said or counted
+
+
+# -- races -----------------------------------------------------------------------------------------------------------------------
+def test_an_erase_between_prepare_and_confirm_saves_nothing_and_says_nothing(tenv):
+    seed(2)
+    verified()
+
+    async def race():
+        got = await nt.prepare_tail(MEMBER, "s1", "lights on", "Done.")
+        assert got is not None
+        await ns.forget_user(MEMBER)                                    # the member is forgotten while the turn is in flight
+        return await nt.confirm_tail(got[1], "s1", got[2], got[3])
+    assert run(race()) is False
+    assert tenv.rows("SELECT COUNT(*) FROM app_settings")[0][0] == 0      # the tail-caps row is not recreated
+    assert nt._LAST == {} and nt._DAY == {} and nt._PENDING == {} and ns.ANNOUNCED == {}
+    seed(1)                                                              # control: a live member after the erase gets a tail again
+    assert run(nt.append_to_reply("Done.", "lights on", MEMBER, "s1")) != "Done."
+    assert tenv.rows("SELECT COUNT(*) FROM app_settings")[0][0] == 1
+
+
+def test_two_overlapping_turns_of_one_member_get_one_tail_and_control(tenv, monkeypatch):
+    seed(2)
+    verified("s1")
+    verified("s2", panel="panel-2")
+
+    async def both():
+        return await asyncio.gather(nt.append_to_reply("Done.", "lights on", MEMBER, "s1"),
+                                    nt.append_to_reply("Done.", "lights on", MEMBER, "s2"))
+    assert sum(out != "Done." for out in run(both())) == 1
+    assert nt._DAY[MEMBER][1] == 1
+    # control: without the per-member lock the same race announces twice (the test can see the bug)
+    nt.reset()
+    tenv.conn.execute("DELETE FROM app_settings")
+    verified("s1")
+    verified("s2", panel="panel-2")
+    monkeypatch.setattr(nt, "_member_lock", lambda member: asyncio.Lock())
+    assert sum(out != "Done." for out in run(both())) == 2

@@ -415,3 +415,28 @@ def test_a_dry_pull_says_nothing_about_notifications_and_control(env):
     assert run(ns.pull_addendum(MEMBER, "voice", ctx, alone=True, dry=True)) == ""
     assert env.pushed == [] and ns.ANNOUNCED == {}
     assert run(ns.pull_addendum(MEMBER, "voice", ctx, alone=True)) == "You have two notifications on the screen."   # control
+
+
+# -- the orb press with the proactive selector off ---------------------------------------------------------------------------------
+def test_whats_up_collects_notifications_with_the_selector_off_and_controls(env, monkeypatch):
+    import fast_tiers
+    import proactive.pull as pl
+    monkeypatch.delenv("ZOE_PROACTIVE_SELECTOR", raising=False)                       # its default: pull() answers None
+    monkeypatch.delenv("ZOE_PULL_NOT_PUSH", raising=False)
+    seed(2)
+    ctx = {"scope_user": MEMBER, "panel_id": PANEL, "speaker_verified": True}
+    for who, c in ((MEMBER, {**ctx, "speaker_verified": None}), (MEMBER, {**ctx, "speaker_verified": False}),
+                   ("guest", {"panel_id": PANEL, "speaker_verified": True})):         # unverified voice / guest: nothing
+        assert run(fast_tiers._pull_tier("what's up", who, "s1", "voice", c)) is None
+    assert run(fast_tiers._pull_tier("what's up", MEMBER, "s1", "voice", ctx, dry=True)) is None   # a dry replay: nothing
+    assert env.pushed == [] and ns.ANNOUNCED == {}
+    res = run(fast_tiers._pull_tier("what's up", MEMBER, "s1", "voice", ctx))
+    assert res is not None and res.reply == "You have two notifications on the screen." and res.tier == "pull"
+    assert env.pushed and env.pushed[-1][0] == PANEL
+    # control: with the selector ON its None stays final (a brief about to speak, a guest, a lost race)
+
+    async def declined(*a, **k):
+        return None
+    monkeypatch.setenv("ZOE_PROACTIVE_SELECTOR", "1")
+    monkeypatch.setattr(pl, "pull", declined)
+    assert run(fast_tiers._pull_tier("what's up", MEMBER, "s1", "voice", ctx)) is None

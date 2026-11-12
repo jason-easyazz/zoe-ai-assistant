@@ -14,14 +14,17 @@ The tail copies the transcript-check contract (``transcript_check.prepare_tail``
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 import time
+import weakref
 from datetime import datetime
 from typing import AsyncIterator, Optional
 
 import notifications_store as store
+import user_erase_gate as erase_gate
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,16 @@ _PENDING: dict[str, tuple[str, float]] = {}       # session -> (member, asked_at
 _LAST: dict[str, float] = {}                       # member -> time of the last tail (persisted, see _load / _save)
 _DAY: dict[str, tuple[str, int]] = {}              # member -> (household day, tails said that day) (persisted)
 _LOADED: set = set()                               # members whose persisted caps were read in this process
+#: per-member lock, one table per event loop (an ``asyncio.Lock`` binds to a loop): eligibility check + confirmation are one step
+_LOCKS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _member_lock(member: str) -> asyncio.Lock:
+    table = _LOCKS.setdefault(asyncio.get_running_loop(), {})
+    lock = table.get(member)
+    if lock is None:
+        lock = table[member] = asyncio.Lock()
+    return lock
 
 
 def _clock() -> float:
@@ -104,14 +117,16 @@ def _other_tail_pending(session_id: str) -> bool:
         return False
 
 
-async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text: str) -> Optional[tuple[str, str, list]]:
-    """``(line, member, ids)`` to append, or None. Every refusal is a plain None. Never raises."""
+async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text: str) -> Optional[tuple[str, str, list, int]]:
+    """``(line, member, ids, erase generation)`` to append, or None. The generation is taken BEFORE any read, so ``confirm_tail``
+    drops the line when the member was erased in between. Every refusal is a plain None. Never raises."""
     try:
         if not store.enabled():
             return None
         member = verified_member(session_id)
         if not member:
             return None
+        gen = erase_gate.generation(member)
         if not reply_text.strip() or reply_text.rstrip().endswith("?"):
             return None
         if _quiet():
@@ -135,7 +150,7 @@ async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text
         ids = [r["id"] for r in rows]
         if not rows or not (set(ids) - store.ANNOUNCED.get(member, set())):
             return None
-        return tail_line(len(rows)), member, ids
+        return tail_line(len(rows)), member, ids, gen
     except Exception as exc:  # noqa: BLE001
         logger.debug("notification_tail: skipped (%s)", exc.__class__.__name__)
         return None
@@ -162,27 +177,35 @@ async def _load(member: str) -> bool:
     return True
 
 
-async def _save(member: str, at: float, day: str, said: int) -> bool:
+async def _save(member: str, at: float, day: str, said: int, gen: int) -> bool:
+    """Persist the caps under the member's erase gate (held through the commit): an erase since ``gen`` (taken before the tail's
+    reads) drops the save, so the forgotten member's row is never recreated and nothing is said. Forgotten means forever."""
     value = json.dumps({"at": at, "day": day, "said": said})
     try:
-        async with store._db() as db:
-            await db.execute("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
-                             "value = excluded.value, updated_at = excluded.updated_at", (store.tail_key(member), value, _now().isoformat()))
-            await db.commit()
+        async with erase_gate.writing(member, gen) as live:
+            if not live:
+                logger.info("NOTIFY tail=0 reason=erased_since_prepared")
+                return False
+            async with store._db() as db:
+                await db.execute("INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
+                                 "value = excluded.value, updated_at = excluded.updated_at",
+                                 (store.tail_key(member), value, _now().isoformat()))
+                await db.commit()
         return True
     except Exception as exc:  # noqa: BLE001
         logger.info("NOTIFY tail=0 reason=caps_unsaved (%s)", exc.__class__.__name__)
         return False
 
 
-async def confirm_tail(member: str, session_id: str, ids: list) -> bool:
+async def confirm_tail(member: str, session_id: str, ids: list, gen: int) -> bool:
     """Count the line against the caps BEFORE it is said: the new caps are saved first, and only a saved line may be spoken (False =
-    do not say it). Then the "read them" window opens."""
+    do not say it; also when the member was erased since ``gen``, the generation ``prepare_tail`` took). Then the "read them"
+    window opens."""
     now = _clock()
     day = _now().date().isoformat()
     d, said = _DAY.get(member, (day, 0))
     said = (said if d == day else 0) + 1
-    if not await _save(member, now, day, said):
+    if not await _save(member, now, day, said, gen):
         return False
     _LAST[member] = now
     _DAY[member] = (day, said)
@@ -190,6 +213,22 @@ async def confirm_tail(member: str, session_id: str, ids: list) -> bool:
     _PENDING[str(session_id)] = (member, now)
     logger.info("NOTIFY tail=1 count=%d", len(ids))
     return True
+
+
+async def _tail(user_id: str, session_id: str, user_text: str, reply_text: str) -> Optional[str]:
+    """Prepare + confirm as ONE step per member (``_member_lock``): two overlapping turns of the same member (two panels) cannot both
+    pass the caps before either is counted. The line to say, or None. Never raises."""
+    member = verified_member(session_id)
+    if not member:
+        return None
+    try:
+        async with _member_lock(member):
+            got = await prepare_tail(user_id, session_id, user_text, reply_text)
+            if got and await confirm_tail(got[1], session_id, got[2], got[3]):      # counted (and saved) first: an unsaved line is never said
+                return got[0]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("notification_tail: skipped (%s)", exc.__class__.__name__)
+    return None
 
 
 async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, session_id: str, *, skip: tuple = ()) -> AsyncIterator[str]:
@@ -202,9 +241,9 @@ async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, 
                 reply.append(d)
             yield d
         text = "".join(reply)
-        got = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
-        if got and await confirm_tail(got[1], session_id, got[2]):      # counted (and saved) first: an unsaved line is never said
-            yield " " + got[0]
+        line = await _tail(user_id, session_id, user_text, text) if text.strip() else None
+        if line:
+            yield " " + line
     finally:
         # A consumer that stops early (barge-in, disconnect, cancel) closes THIS generator: the inner turn is closed deterministically, as
         # every wrapper in the chain does (clean_goodbye, reply_polish), so the Flue submission is aborted and its logs run.
@@ -218,10 +257,8 @@ async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: 
     reply is returned untouched and nothing is counted, saved or opened - the streaming path's ``replay_isolation`` rule."""
     if not store.enabled() or replay or dry:
         return reply
-    got = await prepare_tail(user_id, session_id, user_text, reply or "")
-    if not got or not await confirm_tail(got[1], session_id, got[2]):
-        return reply
-    return f"{reply.rstrip()} {got[0]}"
+    line = await _tail(user_id, session_id, user_text, reply or "")
+    return f"{reply.rstrip()} {line}" if line else reply
 
 
 # -- "read them" ---------------------------------------------------------------------------------------------------------------------

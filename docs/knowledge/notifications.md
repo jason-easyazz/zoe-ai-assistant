@@ -26,7 +26,7 @@ reply and the brain stream are what they were before this feature (the stream is
 | store | `services/zoe-data/notifications_store.py` | `create` (deterministic id, `ON CONFLICT DO NOTHING`), `unread`, `unread_count`, `mark_read`; sensitivity rides in the row's `data` JSON (`{"sensitive": true}`), so no migration |
 | dot | `routers/proactive.py` `/api/proactive/inbox` | a member session gets `notify` (its OWN unread count); any other caller (the kiosk guest panel, a device token, a degraded session) gets only `notify_any`, a bare boolean; `dist/touch/home.html` paints the existing dot when the proactive count, `notify` or `notify_any` says so |
 | card | `notifications_store.card` / `push_card` | a private `voice_card` of kind `notifications`, minted with `panel_review_cards.mint`, drawn by the existing `js/touch-review-cards.js`; taps go to `POST /api/panel/notifications/act` (`routers/notifications.py`, `X-Panel-Card` header, `panel_review_cards.authorize`) |
-| orb press | `fast_tiers._pull_tier` -> `notifications_store.pull_addendum` | the press runs today's spoken "what's up" pull; when the turn's member has unread notifications the card goes to that panel and one sentence follows ("And three notifications on the screen.") |
+| orb press | `fast_tiers._pull_tier` -> `notifications_store.pull_addendum` | the press runs today's spoken "what's up" pull; when the turn's member has unread notifications the card goes to that panel and one sentence follows ("And three notifications on the screen."). With `ZOE_PROACTIVE_SELECTOR` off (its default) the pull answers nothing, so a VERIFIED member's voice turn gets the notification sentence alone (`fast_tiers._notifications_only_pull`); never a guest, an unverified voice or a dry replay |
 | tail | `services/zoe-data/notification_tail.py` | `note_voice_turn` (voice lane), `append_stream` (brain stream, `zoe_flue_client.py`), `append_to_reply` (deterministic tiers, `routers/voice_tts.py`), `tier` ("read them" / "later") |
 | first creator | `notifications_store.notify_wearer_proposals` | the pendant's wearer print has open proposals and no confirmed print: one `wearer_confirm` notification per batch of proposals ("Please confirm this voice") |
 
@@ -71,6 +71,9 @@ proposal (at most 3) with up to 3 short lines of what was said there, and **That
   (key `notification_tail:<member>`, no migration), so a restart does not reset them; the "already announced" set is in memory,
   so after a restart the same set may be announced once more, still inside the caps. The caps fail CLOSED: if the row cannot be
   read there is no tail that turn, and the new caps are saved BEFORE the line is spoken - a line whose save failed is not said.
+  The check and the save are ONE step per member (a per-member lock): two overlapping turns on two panels get one line. The save
+  runs under the member's erase gate with the generation taken before the tail's reads: a member erased in between gets no line
+  and no recreated caps row.
 - Never on a replay or dry turn: the brain stream is not wrapped under `replay_isolation`, and the deterministic-tier call passes
   `replay=` (the `replay-` instrument panels) / `dry=`, which return the reply untouched and record nothing.
 - "Read them" reads at most 3 titles, then "And N more on the panel." "Later" or silence leaves them on the panel.
