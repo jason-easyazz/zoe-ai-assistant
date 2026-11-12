@@ -1,0 +1,241 @@
+"""The spoken side of household notifications: one line at the END of a turn the member started, and "read them".
+
+Flag ``ZOE_NOTIFICATIONS`` (``notifications_store.enabled``; default ON). Off = nothing is noted, nothing is appended (the brain
+stream is not even wrapped), the tier returns None before any work. Spec: ``docs/knowledge/notifications.md``.
+
+The tail copies the transcript-check contract (``transcript_check.prepare_tail``) and adds the do-not-overwhelm caps:
+  * only on a turn whose speaker was VERIFIED (never a guest, an unverified voice, a typed or PIN-only turn), after the reply
+    finished with real text that does not end in a question, never on an emotional turn, never in quiet hours;
+  * at most ONE appended line per reply across all tails: the transcript check goes first and wins (its pending ask blocks ours);
+  * at most once per ``TAIL_EVERY_S`` (4 h) and ``TAIL_MAX_PER_DAY`` (3) a household day per member, and only when at least one unread
+    notification has not been announced yet (the same set is never announced twice). The caps are in memory: a restart may allow
+    one more tail, never an unprompted one.
+"""
+from __future__ import annotations
+
+import logging
+import re
+import time
+from datetime import datetime
+from typing import AsyncIterator, Optional
+
+import notifications_store as store
+
+logger = logging.getLogger(__name__)
+
+TIER = "notifications"
+TURN_TTL_S = 180.0
+ASK_TTL_S = 120.0
+TAIL_EVERY_S = 4 * 3600.0
+TAIL_MAX_PER_DAY = 3
+SPOKEN_MAX = 3
+PRIVATE_REPLY = "That's private. Say it again so I know it's you, or unlock with your PIN."
+LATER_REPLY = "Okay, they'll wait on the panel."
+
+
+class _Turn:
+    __slots__ = ("panel_id", "scope_user", "verified", "at")
+
+    def __init__(self, panel_id: str, scope_user: Optional[str], verified: bool, at: float):
+        self.panel_id, self.scope_user, self.verified, self.at = panel_id, scope_user, verified, at
+
+
+_TURNS: dict[str, _Turn] = {}
+_PENDING: dict[str, tuple[str, float]] = {}       # session -> (member, asked_at): "read them" in the next ASK_TTL_S answers the tail
+_LAST: dict[str, float] = {}                       # member -> monotonic time of the last tail
+_DAY: dict[str, tuple[str, int]] = {}              # member -> (household day, tails said that day)
+
+
+def _clock() -> float:
+    return time.monotonic()
+
+
+def _now() -> datetime:
+    from time_utils import zoe_timezone
+
+    return datetime.now(zoe_timezone())
+
+
+def note_voice_turn(session_id: str, panel_id: str, *, scope_user: Optional[str], verdict: Optional[bool]) -> None:
+    """Called by the voice lane once per spoken turn after its identity is resolved. Only verdict True counts as verified. Never raises."""
+    try:
+        if not store.enabled() or not session_id:
+            return
+        now = _clock()
+        _TURNS[str(session_id)] = _Turn(str(panel_id or ""), scope_user or None, verdict is True, now)
+        for s in [s for s, t in _TURNS.items() if now - t.at > TURN_TTL_S]:
+            _TURNS.pop(s, None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def verified_member(session_id: str) -> Optional[str]:
+    t = _TURNS.get(str(session_id or ""))
+    if t is None or not t.verified or not t.scope_user or _clock() - t.at > TURN_TTL_S:
+        return None
+    return store._account(t.scope_user)
+
+
+def tail_line(n: int) -> str:
+    if n == 1:
+        return "You also have a notification. You can check it on the panel, or I can read it to you now."
+    return f"You also have {store.count_words(n)}. You can check them on the panel, or I can read them to you now."
+
+
+def _quiet() -> bool:
+    try:
+        from proactive.pull import _quiet as q
+
+        return q(_now())
+    except Exception:  # noqa: BLE001 - cannot tell = quiet (fail closed)
+        return True
+
+
+def _other_tail_pending(session_id: str) -> bool:
+    """The transcript check asked on this session (or is waiting for its answer): one tail per reply, and it wins."""
+    try:
+        import transcript_check
+
+        return str(session_id) in transcript_check._PENDING
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def prepare_tail(user_id: str, session_id: str, user_text: str, reply_text: str) -> Optional[tuple[str, str, list]]:
+    """``(line, member, ids)`` to append, or None. Every refusal is a plain None. Never raises."""
+    try:
+        if not store.enabled():
+            return None
+        member = verified_member(session_id)
+        if not member:
+            return None
+        if not reply_text.strip() or reply_text.rstrip().endswith("?"):
+            return None
+        if _quiet():
+            return None
+        import transcript_check
+
+        if transcript_check._is_emotional(user_text, member):
+            return None
+        if transcript_check.classify_reply(user_text) or str(session_id) in _PENDING or _other_tail_pending(session_id):
+            return None
+        if _clock() - _LAST.get(member, -TAIL_EVERY_S) < TAIL_EVERY_S:
+            return None
+        day = _now().date().isoformat()
+        d, said = _DAY.get(member, (day, 0))
+        if d == day and said >= TAIL_MAX_PER_DAY:
+            return None
+        await store.refresh(member)
+        rows = await store.unread(member, limit=50)
+        ids = [r["id"] for r in rows]
+        if not rows or not (set(ids) - store.ANNOUNCED.get(member, set())):
+            return None
+        return tail_line(len(rows)), member, ids
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("notification_tail: skipped (%s)", exc.__class__.__name__)
+        return None
+
+
+def confirm_tail(member: str, session_id: str, ids: list) -> None:
+    """The line was said: count it against the caps and open the "read them" window."""
+    now = _clock()
+    _LAST[member] = now
+    day = _now().date().isoformat()
+    d, said = _DAY.get(member, (day, 0))
+    _DAY[member] = (day, (said if d == day else 0) + 1)
+    store.ANNOUNCED.setdefault(member, set()).update(ids)
+    _PENDING[str(session_id)] = (member, now)
+    logger.info("NOTIFY tail=1 count=%d", len(ids))
+
+
+async def append_stream(turn: AsyncIterator[str], user_text: str, user_id: str, session_id: str, *, skip: tuple = ()) -> AsyncIterator[str]:
+    """Wrap the brain's reply stream: the reply goes out untouched; only when it finished with real text may ONE line follow. A consumer
+    that stops early (barge-in) gets no line and nothing is counted."""
+    reply: list[str] = []
+    async for d in turn:
+        if not d.startswith(("__TOOL__:", "__THINKING__:")) and d.strip() and d not in skip:
+            reply.append(d)
+        yield d
+    text = "".join(reply)
+    got = await prepare_tail(user_id, session_id, user_text, text) if text.strip() else None
+    if got:
+        yield " " + got[0]
+        confirm_tail(got[1], session_id, got[2])
+
+
+async def append_to_reply(reply: str, user_text: str, user_id: str, session_id: str) -> str:
+    """The non-streaming twin (deterministic tiers)."""
+    if not store.enabled():
+        return reply
+    got = await prepare_tail(user_id, session_id, user_text, reply or "")
+    if not got:
+        return reply
+    confirm_tail(got[1], session_id, got[2])
+    return f"{reply.rstrip()} {got[0]}"
+
+
+# -- "read them" ---------------------------------------------------------------------------------------------------------------------
+_READ = re.compile(r"^\W*(?:(?:yes|yeah|ok|okay|sure|please|go on|go ahead)[\s,]+)*(?:read|tell)\s+(?:them|it|me)(?:\s+(?:to\s+me|out|now|please))*\W*$",
+                   re.I)
+
+
+def _classify(text: str) -> Optional[str]:
+    if _READ.match((text or "").strip()):
+        return "yes"
+    import transcript_check
+
+    return transcript_check.classify_reply(text)
+
+
+def read_out(rows: list) -> str:
+    """Titles only, at most ``SPOKEN_MAX``; a sensitive one is counted, never read."""
+    public = [r for r in rows if not store.is_sensitive(r)]
+    private = len(rows) - len(public)
+    said = [r["title"].rstrip(". ") for r in public[:SPOKEN_MAX] if r["title"].strip()]
+    parts = []
+    if said:
+        parts.append((said[0] if len(said) == 1 else ", ".join(said[:-1]) + " and " + said[-1]) + ".")
+    more = len(public) - len(said)
+    if more > 0:
+        parts.append(f"And {more} more on the panel.")
+    if private:
+        parts.append("One is private, it is on the panel." if private == 1 else f"{private} are private, they are on the panel.")
+    return " ".join(parts) or "Nothing new now."
+
+
+async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None, extra_ctx: Optional[dict] = None,
+               allow_writes: bool = True):
+    """Fast-tier hook (voice only): takes a turn ONLY when it answers the tail Zoe just said. Never raises."""
+    try:
+        if not store.enabled() or (channel or "").strip().lower() != "voice" or allow_writes is False:
+            return None
+        sid = str(session_id or "")
+        pend = _PENDING.get(sid)
+        if not pend:
+            return None
+        _PENDING.pop(sid, None)
+        if _clock() - pend[1] > ASK_TTL_S:
+            return None
+        kind = _classify(text)
+        if not kind:
+            return None                     # anything else is a new command: the notifications stay on the panel
+        import expert_dispatch as _xd
+
+        member = verified_member(sid)
+        if not member or member != pend[0]:
+            return _xd.DispatchResult(domain="notifications", reply=PRIVATE_REPLY, intent="notifications", tier=TIER)
+        if kind == "later":
+            return _xd.DispatchResult(domain="notifications", reply=LATER_REPLY, intent="notifications", tier=TIER)
+        rows = await store.unread(member, limit=50)
+        t = _TURNS.get(sid)
+        if t is not None and t.panel_id:
+            await store.push_card(t.panel_id, member)
+        return _xd.DispatchResult(domain="notifications", reply=read_out(rows), intent="notifications", tier=TIER)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("notification_tail: tier failed (non-fatal): %s", exc.__class__.__name__)
+        return None
+
+
+def reset() -> None:
+    for d in (_TURNS, _PENDING, _LAST, _DAY, store.ANNOUNCED):
+        d.clear()
