@@ -277,17 +277,17 @@ def test_the_fake_success_stubs_are_gone():
     assert "/api/agent/board/cancel" not in (ROOT / "routers" / "chat.py").read_text()  # the card no longer links it
 
 
-def test_creating_a_project_is_an_honest_501_not_a_200():
-    """POST /api/projects used to answer 200 {"error": "...coming soon"}: a success status for a write that
-    did nothing, which the UI cannot tell from a real create. It is a 501 now; the read stays a truthful empty list."""
+def test_the_always_empty_projects_and_collections_routes_are_gone():
+    """/api/projects and /api/collections* always answered "none" (create = 501) with nothing behind them (gap audit
+    2026-11-13). They are deleted, so a caller gets a 404 rather than a stub that looks like an empty feature."""
     app = FastAPI()
     app.include_router(stubs.router)
-    app.dependency_overrides[auth.get_current_user] = lambda: {"user_id": "jason", "role": "admin"}
+    app.dependency_overrides[auth.get_current_user] = lambda: {"user_id": "member_1", "role": "admin"}
     client = TestClient(app)
-    resp = client.post("/api/projects", json={"name": "Garden", "stages": []})
-    assert resp.status_code == 501
-    assert "not available" in resp.json()["detail"]
-    assert client.get("/api/projects").json() == {"projects": [], "count": 0}
+    for method, path in (("GET", "/api/projects"), ("POST", "/api/projects"), ("GET", "/api/collections"),
+                         ("GET", "/api/collections/1/tiles")):
+        assert client.request(method, path, json={}).status_code == 404, (method, path)
+    assert client.get("/api/user/layout").json() == {"layout": None}
 
 
 def test_the_hardcoded_modules_list_is_gone():

@@ -20,6 +20,11 @@ THE RULE: the class is derived SERVER-SIDE from the principal, never from a clie
   token is never read.
 * A device token is resolved to its panel server-side (``panel_auth.lookup_device_token``); a body
   ``panel_id`` is a client claim and is not read here.
+* A chat SESSION id the harnesses mint (``qa7-...``, ``demo-...``, ``bench_...``, ``probe-...``, ``test_...``; never a
+  shape the household's surfaces mint - ``voice-*``, ``ask_*``, ``web_*``) demotes the turn (``refine_for_session``).
+  It is a client claim, so it may only ever move a turn AWAY from household, exactly like the header. Measured
+  2026-11-13: 60 of 290 "household" user turns in 14 days were a QA run under the shared ``guest`` account in
+  ``qa7-`` sessions (a guest sentinel is household by the rule below, so the user id could not catch it).
 * ``ZOE_TRAFFIC_CLASS`` (harness|probe|ci) is the PROCESS default for scripts that import service
   modules and talk to the brain in-process (``tests/replay_samples.py``). Never set it in the zoe-data
   service's own .env: it would label the household's turns.
@@ -53,6 +58,9 @@ HARNESS_PANEL_PREFIXES: tuple[str, ...] = ("replay", "test", "probe", "ci-", "e2
 
 _PROBE_RE = re.compile(r"^probe[-_]", re.IGNORECASE)
 _CI_RE = re.compile(r"^(?:ci|test|e2e)[-_]", re.IGNORECASE)
+# Session ids our own QA / demo / bench runs mint (``qa``, ``qa7``, ``demo``, ``bench``, ``bar``); probe / ci shapes reuse the
+# user-id patterns above. Anchored on a separator so no word-like id the household surfaces mint can match.
+_HARNESS_SESSION_RE = re.compile(r"^(?:qa\d*|demo|bench|bar)[-_]", re.IGNORECASE)
 
 _current: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("zoe_traffic_class", default=None)
 
@@ -87,6 +95,20 @@ def class_for_user(user_id: Optional[str]) -> Optional[str]:
     if _CI_RE.match(uid):
         return CI
     return HARNESS
+
+
+def class_for_session(session_id: Optional[str]) -> Optional[str]:
+    """The NON-household class a harness-minted session id names, or None (every household session shape)."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    if _PROBE_RE.match(sid):
+        return PROBE
+    if _CI_RE.match(sid):
+        return CI
+    if _HARNESS_SESSION_RE.match(sid):
+        return HARNESS
+    return None
 
 
 def class_for_panel(panel_id: Optional[str]) -> Optional[str]:
@@ -182,6 +204,15 @@ def refine_for_user(user_id: Optional[str]) -> str:
     """Once the route knows its principal: a synthetic id forces its class (only ever AWAY from household).
     Never promotes: a request already marked non-household stays so. Returns the class now in effect."""
     forced = class_for_user(user_id)
+    if forced and current() == HOUSEHOLD:
+        _current.set(forced)
+    return current()
+
+
+def refine_for_session(session_id: Optional[str]) -> str:
+    """Once the route knows its chat session: a harness-minted session id demotes the turn (only ever AWAY from
+    household, never promotes). Returns the class now in effect."""
+    forced = class_for_session(session_id)
     if forced and current() == HOUSEHOLD:
         _current.set(forced)
     return current()

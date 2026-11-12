@@ -144,3 +144,6 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 - 💡 **Mood and energy over time from the affect rows**: nobody in the field ships this. Owner-only, never on the wall, and it needs restraint's affect class settled first (D11).
 - 💡 **Away sync without the Omi app**: a Web Bluetooth page (Chrome on Android) served over the private link home, or a Pi Zero 2 W travel dock, draining the ring under the same custody rule.
 - 💡 **Pendant telemetry on the Memories page**: last synced, battery, how full, minutes lost to overwrite. It makes loss visible (gap audit P0-2).
+
+### A bounded multi-step problem loop ("move my dentist reminder to Friday and add floss to the list") — 💡 pinned
+- **Core:** run a multi-step ask as at most 6 tool steps / 90 s, each step judged by the household authority table first, a step done only when a receipt proves it, ending in a "here's what I tried, here's what I need from you" card. Built 2026-11-05 as `problem_loop.py` but never wired to a turn; deleted in the 2026-11-13 gap audit (git history keeps it; the authority table stays, see [authority-table.md](knowledge/authority-table.md)).

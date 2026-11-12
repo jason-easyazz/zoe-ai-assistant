@@ -263,3 +263,37 @@ def test_cooldown_keys_cannot_collide_across_member_ids(bell):
     run(dh._notify("alice", dh.detect("someone is breaking into the house"), True))
     run(dh._notify("alice:danger", dh.detect("I want to die"), True))                # a different member whose id looks like the old key
     assert execute.await_count == 2
+
+
+_CLAIMS = ("i've told", "i have told", "i told", "i've let", "i let", "notified", "i've sent", "i sent", "i've messaged",
+           "they know", "is on the way", "has been told", "i've alerted", "i alerted")
+
+
+@pytest.mark.parametrize("text", ["I want to die", "someone is breaking into the house", "quiero morirme"])
+def test_with_no_contact_nobody_is_claimed_told_and_the_gap_is_logged_every_time(caplog, text):
+    """Gap audit 2026-11-13: no contact configured = nobody is told. The reply must not imply a notice, and the missing
+    configuration must be visible: one DISTRESS_NO_CONTACT WARNING per hand-off, carrying no word of the turn."""
+    for _ in range(2):
+        with caplog.at_level("WARNING"):
+            reply = run(dh.handle(text, "member_1"))
+        assert reply and not any(c in reply.lower() for c in _CLAIMS), reply
+    lines = [r.getMessage() for r in caplog.records if "DISTRESS_NO_CONTACT" in r.getMessage()]
+    assert len(lines) == 2 and all(r.levelname == "WARNING" for r in caplog.records if "DISTRESS_NO_CONTACT" in r.getMessage())
+    assert not any(w in ln.lower() for ln in lines for w in text.lower().split() if len(w) > 3)
+
+
+def test_a_configured_contact_logs_no_gap_and_the_reply_still_claims_no_notice(bell, caplog):
+    with caplog.at_level("WARNING"):
+        reply = run(dh.handle("I want to die", "member_1"))
+    assert "Sam" in reply and not any(c in reply.lower() for c in _CLAIMS)
+    assert not [r for r in caplog.records if "DISTRESS_NO_CONTACT" in r.getMessage()]
+
+
+def test_no_gap_line_for_the_gentle_tier_a_dry_run_or_a_chosen_notify_off(monkeypatch, caplog):
+    monkeypatch.setenv(dh.ENV_GENTLE, "enforce")
+    with caplog.at_level("WARNING"):
+        run(dh.handle("the film was about suicide", "member_1"))      # gentle: nobody is ever told, by design
+        run(dh.handle("I want to die", "member_1", dry=True))          # the replay harness
+        monkeypatch.setenv("ZOE_DISTRESS_NOTIFY", "off")              # the owner chose no notice
+        run(dh.handle("I want to die", "member_1"))
+    assert not [r for r in caplog.records if "DISTRESS_NO_CONTACT" in r.getMessage()]

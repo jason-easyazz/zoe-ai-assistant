@@ -1,8 +1,8 @@
 """
 Stub reads for frontend surfaces that have no backend yet, plus ``/api/settings``.
 
-A stub may only answer a READ with the truth ("no projects", "no collections"). A write
-to a feature that is not built answers 501 - never a 200 that pretends it worked.
+A stub may only answer a READ with the truth ("no layout"). A write to a feature that is not built
+is absent (405) - never a 200 that pretends it worked.
 """
 import json
 import logging
@@ -15,28 +15,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["stubs"])
 
 
-@router.get("/api/projects")
-@router.get("/api/projects/")
-async def list_projects(user: dict = Depends(get_current_user)):
-    return {"projects": [], "count": 0}
-
-
-@router.post("/api/projects")
-@router.post("/api/projects/")
-async def create_project(user: dict = Depends(get_current_user)):
-    # Was a 200 {"error": "...coming soon"}: a success status for a write that did nothing.
-    raise HTTPException(status_code=501, detail="Projects are not available yet")
-
-
-@router.get("/api/collections")
-@router.get("/api/collections/")
-async def list_collections(user: dict = Depends(get_current_user)):
-    return {"collections": [], "count": 0}
-
-
-@router.get("/api/collections/{collection_id}/tiles")
-async def get_collection_tiles(collection_id: str, user: dict = Depends(get_current_user)):
-    return {"tiles": [], "count": 0}
+# There are no /api/projects or /api/collections routes: they always answered "none" (create = 501) with no backend
+# behind them (gap audit 2026-11-13), so a caller now gets an honest 404.
 
 
 @router.get("/api/user/layout")
