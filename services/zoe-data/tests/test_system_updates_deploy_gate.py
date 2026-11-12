@@ -95,6 +95,8 @@ def test_install_never_merges_when_the_gate_refuses(monkeypatch):
     monkeypatch.setattr(system_updates, "_fetch_github_latest_release", latest)
     monkeypatch.setattr(system_updates, "_read_local_version", lambda: "v1.0.0")
     monkeypatch.setattr(system_updates, "_write_update_history", write_history)
+    # a broken gate must not let this test write the checkout's real VERSION file (seen in the negative control)
+    monkeypatch.setattr(system_updates, "_write_local_version", lambda tag: None)
     res = asyncio.run(system_updates._install_zoe_platform(None, {"user_id": "u"}))
     assert res["ok"] is False and "REFUSED" in res["log"]
     assert not any("merge" in c and "--ff-only" in c for c in calls)
