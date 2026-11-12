@@ -319,6 +319,14 @@ def _clock(monkeypatch, when: dt.datetime):
     monkeypatch.setenv("ZOE_NIGHT_BUSY", "/nonexistent/night_busy.sh")   # no operator gate: fall back to the fixed window
     monkeypatch.setattr(harness_quiet, "brain_window_verdict",
                         lambda name, budget_min=45, now=None: _REAL_BWV(name, budget_min=budget_min, now=when))
+    # night_pause_verdict (gate says "go") reads the wall clock itself for the run-budget check: pin that too, or the test
+    # fails whenever the real time is within the run length of 01:50. Only `.now()` is faked; constructors/timedelta are real.
+    class _PinnedDatetime(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when
+
+    monkeypatch.setattr(harness_quiet, "dt", SimpleNamespace(datetime=_PinnedDatetime, time=dt.time, timedelta=dt.timedelta))
     monkeypatch.setattr(harness_quiet, "check", lambda *a, **k: SimpleNamespace(allowed=True, reason="ok"))
     return harness_quiet
 
