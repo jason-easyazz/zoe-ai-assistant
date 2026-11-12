@@ -317,6 +317,7 @@ def test_the_window_is_never_exceeded_and_the_leftovers_carry_whole(renv, monkey
     assert all(a_ + c["timeout_s"] <= start + 1500 - 45 for a_, c in zip(at, calls))       # the KILL timeouts stay inside the window AND leave its 45 s for the writes
     assert all(c["dl"] <= start + 1500 - 45 - 20 for c in calls)                           # a worker stops itself before it could be killed
     assert calls[0]["dl"] < start + 1500 - 45 - 100                                          # the voters' share was RESERVED before the pivot started
+    assert at[0] + calls[0]["timeout_s"] <= calls[0]["dl"] + 20.5                           # and a pivot that ignored its deadline is KILLED inside its share
     assert out["done"] == 1 and out["carried"] == 1 and out["planned"] == 1 and out["missing_voters"] is None and out["fused3_min"] > 0 and out["qwen_only_min"] == 0
     left = {r["id"]: r for r in rows(renv)}
     assert left[old_boring]["repass_state"] == "pending" and left[old_boring]["audio_path"] and Path(left[old_boring]["audio_path"]).exists()
@@ -450,6 +451,7 @@ def test_plan_window_takes_whole_passes_in_order_stops_at_the_first_that_does_no
     assert rp.plan_window(costs, 800, fixed_s=120) == (["a", "b"], [])                     # "c" would fit the 80 s left, but the order holds: c and d carry
     assert rp.plan_window([("big", 900.0), ("a", 300.0)], 800, fixed_s=120) == (["a"], ["big"])       # one that could never fit this window does not block the rest
     assert rp.plan_window(costs, 100, fixed_s=120) == ([], ["a", "b", "c", "d"])
+    assert rp.plan_window([("a", 300.0), ("b", 600.0), ("big", 900.0)], 800, fixed_s=120) == (["a"], ["big"])     # an oversize one AFTER the stop is still counted
 
 
 def _two_recordings(renv, a_text, b_text, dur=1000):

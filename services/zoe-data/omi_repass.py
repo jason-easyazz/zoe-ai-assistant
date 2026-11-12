@@ -533,12 +533,14 @@ def plan_window(costs: list, usable_s: float, *, fixed_s: float = 0.0) -> tuple:
     room = max(0.0, usable_s) - fixed_s
     take: list = []
     oversize: list = []
+    stopped = False
     for rid, c in costs:
         if c > max(0.0, usable_s) - fixed_s:
-            oversize.append(rid)
+            oversize.append(rid)                # counted wherever it sits, so the report is whole
             continue
-        if c > room:
-            break
+        if stopped or c > room:
+            stopped = True                      # the order holds: nothing after the first that does not fit is taken
+            continue
         room -= c
         take.append(rid)
     return take, oversize
@@ -1229,7 +1231,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                                    "rtf": rt.get(engine, 1.0), "items": its, "zoe_clips": [] if (zoe_ref or not clips) else zoe_clips()}))
         os.chmod(man, 0o600)
         try:
-            rc = (runner or spawn_worker)(man, out, max(1.0, deadline - clock()), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
+            rc = (runner or spawn_worker)(man, out, max(1.0, min(dl + 20.0, deadline) - clock()), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
             got, done, zref = read_results(out)
         finally:
             for p in (man, out):
