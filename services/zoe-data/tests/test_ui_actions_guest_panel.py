@@ -215,7 +215,7 @@ async def test_guest_can_sync_own_panel(monkeypatch):
     db = _PanelSessionDb(session_owner={"user_id": "guest"})
 
     result = await ui_actions.sync_ui_state(
-        {"panel_id": "zoe-touch-pi", "page": "/touch/lists.html"},
+        {"panel_id": "zoe-touch-pi", "page": "/touch/home.html?domain=lists"},
         user=GUEST,
         db=db,
     )
@@ -321,7 +321,7 @@ async def test_guest_cannot_enqueue_to_other_users_panel(monkeypatch):
             {
                 "action_type": "navigate",
                 "panel_id": "zoe-touch-pi",
-                "payload": {"page": "/touch/lists.html"},
+                "payload": {"page": "/touch/home.html?domain=lists"},
             },
             user=GUEST,
             db=db,
