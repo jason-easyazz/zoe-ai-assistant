@@ -36,6 +36,20 @@ def _is_real_user(user_id: Any) -> bool:
     return bool(user_id) and not is_unidentified(user_id)
 
 
+def _speaker_rejected(meta: Any) -> bool:
+    """True when the voice speaker gate REJECTED this turn (``metadata.speaker_verified is false``, written by
+    routers/chat.py). Only a rejection is recorded; no verdict reads as not-rejected. Unparseable metadata is
+    not a rejection (same as self_review / memory_digest)."""
+    if not meta:
+        return False
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except (ValueError, TypeError):
+            return False
+    return isinstance(meta, dict) and meta.get("speaker_verified") is False
+
+
 def _user_from_metadata(meta: Any) -> Optional[str]:
     """Extract a user_id from a chat_messages.metadata value (text JSON or dict)."""
     if not meta:
@@ -347,8 +361,14 @@ async def consolidate_session(session_id: str, user_id: str,
     # USER turns only, to the extractor AND as the anchor: the extraction prompt says "user
     # turns only", and the old "role: content" transcript fed it the assistant's lines too, so
     # a fact the assistant SAID became a fact about the user (memory fidelity audit V5).
-    user_turn_list = [str(r["content"]) for r in rows
-                      if r["content"] and str(r["role"]) == "user"]
+    # A turn the speaker gate REJECTED (someone at the member's panel who is not them) is never the member's own
+    # words: it is left out, never mined as theirs (memory_digest's emotional pass does the same).
+    user_rows_all = [r for r in rows if r["content"] and str(r["role"]) == "user"]
+    user_turn_list = [str(r["content"]) for r in user_rows_all
+                      if not _speaker_rejected(r["metadata"] if "metadata" in r else None)]
+    if len(user_rows_all) != len(user_turn_list):
+        logger.info("idle consolidation: session=%s skipped %d speaker-rejected turn(s)",
+                    session_id, len(user_rows_all) - len(user_turn_list))
     user_rows_in = len(user_turn_list)   # for the all-zero reason (below)
     # Pasted content / another person's quoted speech is not the owner's own voice: only the owner's part of each
     # turn is mined (own_words; ZMB I1/I2/I4).
