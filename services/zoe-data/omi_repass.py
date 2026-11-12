@@ -1187,8 +1187,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
                 cand_by_user[r["user_id"]] = await candidate_recording_ids(db, r["user_id"])
     rows = rank_important(rows, names_by_user, cand_by_user)          # important first, then the audio that expires first
     # ── THE WINDOW: each recording's WHOLE pass (pivot + every expected voter) is priced before anything starts; the ones that fit run, the rest carry, in order ──
-    window_end = started + max(0.0, budget_s)                     # THE hard edge: no worker deadline and no kill timeout reaches past it
-    deadline = started + max(0.0, budget_s - 45.0)                # 45 s kept back for the DB writes and the release of audio
+    deadline = started + max(0.0, budget_s - 45.0)                # the workers' hard edge: 45 s of the window are kept back for the fusion, the DB writes and the release of audio
     f_speech = float(st.get("speech_frac") or SPEECH_FRAC)
     c_vote = sum(rt.get(e, 1.0) for e in expected)               # per SPEECH second
     r_piv = rt.get(primary, 1.0)                                 # per AUDIO second (a night's measured worker rtf; the default is per speech second, so it over-prices: safe)
@@ -1227,11 +1226,11 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         stamp = uuid.uuid4().hex[:8]
         man, out = work / f"{stamp}.manifest.json", work / f"{stamp}.out.jsonl"
         man.write_text(json.dumps({"asr": engine, "diar": diar, "threads": threads, "gpu": env_str("ZOE_OMI_REPASS_GPU", "1") != "0", "models_dir": models_dir(), "r34_dir": env_str("ZOE_OMI_TAG_MODEL_DIR", "").strip() or os.path.expanduser("~/.cache/zoe-speaker-resnet34"),
-                                   "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": dl, "ct2_dir": ct2_dir() if engine.startswith("whisper-gpu") else "",
+                                   "chunk_s": env_float("ZOE_OMI_REPASS_CHUNK_S", 14.0), "deadline_epoch": min(dl, deadline - 20.0), "ct2_dir": ct2_dir() if engine.startswith("whisper-gpu") else "",
                                    "rtf": rt.get(engine, 1.0), "items": its, "zoe_clips": [] if (zoe_ref or not clips) else zoe_clips()}))
         os.chmod(man, 0o600)
         try:
-            rc = (runner or spawn_worker)(man, out, max(1.0, min(dl + 30.0, window_end) - clock()), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
+            rc = (runner or spawn_worker)(man, out, max(1.0, deadline - clock()), mem_max=scope_mem_max(engine, diar != "none"), threads=threads)
             got, done, zref = read_results(out)
         finally:
             for p in (man, out):
@@ -1300,9 +1299,8 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
 
     # ── passes 2 and 3: EVERY expected voter on the recordings the pivot finished, in order, as far as the time left buys the WHOLE vote ──
     rank_of = {r["id"]: i for i, r in enumerate(rows)}
-    speechless = {it["id"] for it in chunked if not got1[it["id"]]["chunks"]}          # nothing to vote on: the pivot's empty reading is the whole pass
     room, ids3 = (deadline - clock()) * 0.9 - LOAD_S * len(expected), []
-    for it in sorted((x for x in chunked if x["id"] not in speechless), key=lambda x: rank_of[x["id"]]):
+    for it in sorted(chunked, key=lambda x: rank_of[x["id"]]):          # a recording the pivot heard no speech in still gets every voter's (empty) reading: no exemption
         sp = sum(max(0.0, float(c[1]) - float(c[0])) for c in got1[it["id"]]["chunks"])       # priced on the SPEECH a voter is handed, not the file's length
         if sp * c_vote > room:
             break                                                                             # it, and everything after it, carries
@@ -1316,7 +1314,7 @@ async def run_night(*, budget_s: float, runner: Optional[Callable[..., int]] = N
         pv = await voter_pass(eng, ids3)
         vgot[eng] = {k: v for k, v in pv["got"].items() if v.get("ok") and len(v.get("chunks") or []) == len(got1[k]["chunks"])}
     if expected:
-        full = speechless | {rid for rid in ids3 if all(rid in vgot.get(e, {}) for e in expected)}
+        full = {rid for rid in ids3 if all(rid in vgot.get(e, {}) for e in expected)}
     else:
         full = {it["id"] for it in chunked}
     if not expected:

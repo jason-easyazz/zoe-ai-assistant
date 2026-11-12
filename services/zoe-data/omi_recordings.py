@@ -1408,7 +1408,7 @@ async def purge_expired_audio(*, now: Optional[datetime] = None) -> int:
             rows = await _fetch(db, "SELECT id, audio_path, status, created_at" + (", repass_state" if held else "") + " FROM omi_recordings "
                                     "WHERE audio_path != '' AND audio_expires_at IS NOT NULL AND audio_expires_at < ?", (stamp,))
             for r in rows:
-                if held and r["repass_state"] == "pending" and r["status"] in ("done", "empty_transcript"):
+                if held and r["repass_state"] == "pending":
                     if str(r["created_at"] or "") > cap_stamp and disk_ok:
                         continue                                   # still owed its re-pass: held for the next window
                     forced["cap" if disk_ok else "disk"] += 1

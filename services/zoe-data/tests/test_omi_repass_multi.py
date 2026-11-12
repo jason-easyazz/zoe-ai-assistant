@@ -304,14 +304,18 @@ def test_the_window_is_never_exceeded_and_the_leftovers_carry_whole(renv, monkey
     t = [start]
     inner = multi_runner(TEXTS, calls)
 
+    at: list = []
+
     def runner(*a, **k):
+        at.append(t[0])
         rc = inner(*a, **k)
         t[0] = min(calls[-1]["dl"], t[0] + (500.0 if len(calls) == 1 else 150.0))       # a worker never runs past the deadline it was handed
         return rc
     out = run(rp.run_night(budget_s=1500, runner=runner, clock=lambda: t[0]))
     assert [c["asr"] for c in calls] == [PIV, PAR, DIS] and all(c["ids"] == [new_important] for c in calls)
     assert all(c["dl"] <= start + 1500 for c in calls) and t[0] - start <= 1500 and out["used_s"] <= out["window_s"] == 1500
-    assert calls[0]["timeout_s"] <= 1500 and all(c["timeout_s"] <= start + 1500 - (start + 500) for c in calls[1:])     # the KILL timeouts stay inside the window too
+    assert all(a_ + c["timeout_s"] <= start + 1500 - 45 for a_, c in zip(at, calls))       # the KILL timeouts stay inside the window AND leave its 45 s for the writes
+    assert all(c["dl"] <= start + 1500 - 45 - 20 for c in calls)                           # a worker stops itself before it could be killed
     assert calls[0]["dl"] < start + 1500 - 45 - 100                                          # the voters' share was RESERVED before the pivot started
     assert out["done"] == 1 and out["carried"] == 1 and out["planned"] == 1 and out["missing_voters"] is None and out["fused3_min"] > 0 and out["qwen_only_min"] == 0
     left = {r["id"]: r for r in rows(renv)}
