@@ -686,6 +686,9 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 note_correction(user_id, session_id, corr.new, corr.old, user_message, list(earlier or []))
             except Exception:  # noqa: BLE001
                 pass
+        # Remembered whether or not a row was rewritten: the corrected-away fact may still be waiting in an earlier session's idle
+        # pass (stated 15 s before the correction, filed minutes after it), and that pass must not store the old value.
+        _remember(user_id, corr)
         if not hits or len(hits) > MAX_ROWS:
             return 0
         excerpt = " ".join(user_message.split())
@@ -699,7 +702,6 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 done += 1
         if done:
             logger.info("VALUE_CORRECTION_APPLIED user=%s rows=%d", user_id, done)
-            _remember(user_id, corr)
         return done
     except Exception as exc:  # noqa: BLE001 - a correction never breaks the turn
         logger.warning("value_correction failed user=%s: %s", user_id, type(exc).__name__)

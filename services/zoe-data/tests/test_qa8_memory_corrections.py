@@ -160,6 +160,15 @@ def test_a_transcript_written_before_the_correction_does_not_file_the_old_value_
     assert vc.superseded_by_correction("demo_qa8_other", stale) is False      # another member's correction is not this one's
 
 
+def test_a_correction_that_arrives_before_the_old_fact_is_filed_still_blocks_it(monkeypatch):
+    # stated 15 s before the correction, filed minutes after it (QA round 8 pace): nothing to rewrite yet, but the later pass must not store it
+    svc = _Svc()
+    assert _apply(svc, "sorry the dentist appointment is the 27th of november not the 20th", monkeypatch) == 0
+    assert vc.superseded_by_correction(UID, "User has a dentist appointment on the 20th of November")
+    assert not vc.superseded_by_correction(UID, "User has a dentist appointment on 27 November")
+    assert not vc.superseded_by_correction("someone-else", "User has a dentist appointment on the 20th of November")
+
+
 def test_idle_consolidation_drops_the_stale_value_and_keeps_the_rest(monkeypatch):
     import expert_dispatch
     import memory_digest
