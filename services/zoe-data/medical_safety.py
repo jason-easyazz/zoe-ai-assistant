@@ -412,6 +412,20 @@ _PAST_RE = re.compile(
     r"december)\b|\bwhen\s+(?:i|he|she|they|we|you)\s+(?:was|were)\b|\bas\s+a\s+(?:kid|child|boy|girl|teenager|baby)\b"
     r"|\b(?:had|has|have)\s+had\b|\bused\s+to\b|\bonce\b|\byesterday\b|\blast\s+night\b|\bhistory\s+of\b|\bprevious(?:ly)?\b",
     re.IGNORECASE)
+#: a CONDITIONAL / hypothetical / instruction: "told to call an ambulance if I have chest pain", "if I ever fall", "what would you
+#: do if". FILING only (the reply still gives the number). Plain "when" is left out on purpose: it is temporal in real present-tense
+#: emergencies ("I can't breathe when I lie down", "when I stood up I fell and can't get up"); only "whenever" counts. "could not"
+#: / "would not" are left out too ("I fell and could not get up", "the bleeding would not stop" are actual).
+_HYPOTHETICAL_RE = re.compile(
+    r"\b(?:if|in\s+case|should|could(?!\s+not)|would(?!\s+not)|might|told\s+(?:me\s+|us\s+|him\s+|her\s+|them\s+)?to|was\s+told|"
+    r"were\s+told|advised|supposed\s+to|in\s+the\s+future|what\s+if|unless|next\s+time|whenever)\b", re.IGNORECASE)
+
+
+def _not_now(text: str) -> bool:
+    """Is this NOT an emergency happening now - a past time or a condition / hypothetical / instruction? (filing only)"""
+    return bool(_PAST_RE.search(text or "") or _HYPOTHETICAL_RE.search(text or ""))
+
+
 _NOT_A_NAME = frozenset({"the", "user", "a", "an", "my", "his", "her", "their", "they", "he", "she", "it", "we", "you", "i", "this",
                          "that", "there", "someone", "somebody", "anyone", "anybody", "everyone", "everybody", "nobody", "people",
                          "one", "both", "all", "some", "each", "family", "household"})
@@ -450,7 +464,8 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     emergency. A whole transcript (several lines) is never read as the turn. Pure apart from the date. Never raises."""
     try:
         one = (said or "").strip()
-        if not one or "\n" in one or _PAST_RE.search(one) or _PAST_RE.search(fact or ""):
+        # one check, "is this happening now to this person": present (no past time), actual (no condition), then one named person
+        if not one or "\n" in one or _not_now(one) or _not_now(fact):
             return None
         v = detect(one)
         if v.cls != "red_call":

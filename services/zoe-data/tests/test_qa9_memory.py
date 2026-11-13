@@ -585,6 +585,45 @@ def test_a_historical_emergency_keeps_its_own_date(fact, said, mem):
     assert [r.text for r in _rows(mem)] == [fact]                               # stored exactly as mined
 
 
+HYPOTHETICAL = [
+    ("User was told to call an ambulance if they have crushing chest pain", "I was told to call an ambulance if I have crushing chest pain"),
+    ("User will call their son if they ever fall and cannot get up", "if I ever fall and can't get up, call my son"),
+    ("User should ring triple zero if their chest hurts", "the doctor said I should ring triple zero if my chest hurts"),
+    ("User asked what to do if they could not breathe", "what would you do if I couldn't breathe"),
+]
+
+
+@pytest.mark.parametrize("flag", ["off", "shadow", "enforce"])
+@pytest.mark.parametrize("fact, said", HYPOTHETICAL)
+def test_a_condition_or_instruction_is_stored_as_mined_and_the_reply_is_unchanged(fact, said, flag, mem, monkeypatch):
+    import distress_handoff
+
+    async def adult(_u):
+        return False
+
+    async def no_intercom(*_a, **_k):
+        return False
+
+    monkeypatch.setattr(distress_handoff, "_is_minor", adult)
+    monkeypatch.setattr(medical_safety, "_intercom_reachable", no_intercom)
+    monkeypatch.setenv("ZOE_MEDICAL_SAFETY", flag)
+    assert medical_safety.emergency_event(fact, said) is None
+    run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
+    assert [r.text for r in _rows(mem)] == [fact]                               # stored exactly as mined
+    v = medical_safety.detect(said)                                             # the reply side is untouched by this rule:
+    reply = run(medical_safety.handle(said, UID))
+    assert reply == (medical_safety.build_reply(v) if v.cls and flag == "enforce" else None)
+
+
+@pytest.mark.parametrize("fact, said", [
+    ("User fell over in the kitchen and cannot get up", FALL),
+    ("User fell and could not get up", "i fell and could not get up"),          # "could not" is actual, not a condition
+    ("User cannot breathe when they lie down", "I can't breathe when I lie down"),   # plain "when" is temporal, kept
+])
+def test_a_present_actual_emergency_still_files_one_event(fact, said):
+    assert medical_safety.emergency_event(fact, said) is not None
+
+
 @pytest.mark.parametrize("flag", ["off", "shadow", "enforce"])
 def test_the_filing_holds_in_every_mode_and_only_the_reply_follows_the_flag(flag, monkeypatch):
     import datetime
