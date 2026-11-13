@@ -937,7 +937,7 @@ async def _redact_forgotten(user_id: str, text: str, *, strict: bool = False) ->
 async def _transcribe_file(path: str) -> str:
     """The seam over the service's Moonshine (capture OFF: nothing enters the panel STT corpus, nothing is broadcast)."""
     from routers.voice_tts import _transcribe_audio
-    return await _transcribe_audio(path, capture=False)
+    return await _transcribe_audio(path, capture=False, src="pendant")
 
 
 def _chunk_wav(pcm: bytes, tmpdir: str, idx: int) -> str:

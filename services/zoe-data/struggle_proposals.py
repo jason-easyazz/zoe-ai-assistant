@@ -645,10 +645,12 @@ async def _live_counts(db, pids: list[str]) -> dict[str, int]:
     return out
 
 
-async def list_proposals(*, status: Optional[str] = None, kind: Optional[str] = None, limit: int = 50) -> list[dict]:
+async def list_proposals(*, status: Optional[str] = None, kind: Optional[str] = None, limit: int = 50,
+                         awake_at: Optional[float] = None) -> list[dict]:
     """Proposals with live evidence only (one whose events are all gone is not shown), best first. The live-evidence test is part of the
     query, BEFORE ``ORDER BY`` / ``LIMIT``: filtering after the limit let evidence-less proposals (events forgotten or retired, not yet
-    reconciled) use up the page and hide live ones that ranked below them."""
+    reconciled) use up the page and hide live ones that ranked below them. ``awake_at`` (the owner's decide page) also leaves out, in
+    the query, a proposal put off ("later") past that time, for the same reason; None (every other caller) keeps them."""
     sql = (f"SELECT {_SEL} FROM {_FROM} WHERE 1 = 1 AND EXISTS ("
            "SELECT 1 FROM struggle_proposal_events pe JOIN struggle_events se ON se.id = pe.event_id WHERE pe.proposal_id = sp.id)")
     params: list[Any] = []
@@ -658,6 +660,9 @@ async def list_proposals(*, status: Optional[str] = None, kind: Optional[str] = 
     if kind:
         sql += " AND sp.kind = ?"
         params.append(kind)
+    if awake_at is not None:
+        sql += " AND (q.next_review_at IS NULL OR q.next_review_at <= ?)"
+        params.append(float(awake_at))
     sql += " ORDER BY sp.confidence DESC, sp.last_seen DESC LIMIT ?"
     params.append(int(max(1, min(500, limit))))
     async with _ctx() as db:

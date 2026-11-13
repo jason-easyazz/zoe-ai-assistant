@@ -135,13 +135,13 @@ const run = (box, code) => vm.runInContext(code, box);
     // a timer the panel daemon speaks itself (spoken_by_panel) is not spoken by the page too: run the REAL poll-learn + tick in a vm
     timerPanelSpoken(t) {
       const s = mainScript(t), bad = [];
-      const learn = /\(\(d&&d\.timers\)\|\|\[\]\)\.forEach\(function\(t\)\{[\s\S]*?\}\);/.exec(near(s, 'function _tAlarmRefresh(', 900));
+      const learn = /\(\(d&&d\.timers\)\|\|\[\]\)\.forEach\(function\(t\)\{[\s\S]*?\}\);/.exec(near(s, 'function _tAlarmRefresh(', 1500));
       const tick = /function _tAlarmTick\(\)\{[\s\S]*?\n {4}if\(due\.length\)[^\n]*\}/.exec(s);
       if (!learn || !tick) return ['timer watcher not found'];
       const run = (timers) => {
         const box = { _tAlarm: { known: {}, fired: {} }, calls: [], timerAlarm(l, ids, say) { box.calls.push({ l, say }); }, _ackSend() {}, Date };
         vm.createContext(box);
-        vm.runInContext('var d={timers:' + JSON.stringify(timers) + '},seen={},now=0,acks={};' + learn[0] + tick[0] + '_tAlarmTick();', box);
+        vm.runInContext('var d={timers:' + JSON.stringify(timers) + '},seen={},now=0,acks={},late=[];function _tUnspoken(){return _tAlarm.unspoken||(_tAlarm.unspoken={});}' + learn[0] + tick[0] + '_tAlarmTick();', box);
         return box.calls[0] || {};
       };
       const both = run([{ timer_id: 'a', label: 'Pasta', expires_at_ms: 1, spoken_by_panel: true }, { timer_id: 'b', label: 'Eggs', expires_at_ms: 1 }]);

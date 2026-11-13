@@ -2356,6 +2356,10 @@ app.include_router(auth_router)
 from routers.struggles import router as struggles_router  # noqa: E402
 app.include_router(struggles_router)
 
+# The owner's decide page over the evolution queue (evolution_inbox; page evolution.html): admin persons only, approving applies nothing.
+from routers.evolution_inbox import router as evolution_inbox_router  # noqa: E402
+app.include_router(evolution_inbox_router)
+
 # Change notices (change_notices, ZOE_CHANGE_NOTICES): the owner's preferences, status and kill switch; admin persons only.
 from routers.change_notices import router as change_notices_router  # noqa: E402
 app.include_router(change_notices_router)

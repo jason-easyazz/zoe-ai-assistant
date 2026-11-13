@@ -1164,6 +1164,16 @@ def _delete_tombstone_body(ids: list[str]) -> dict[str, Any]:
     return {"rows_targeted": len(ids), "id_hashes": hashes, "truncated": len(ids) > len(hashes)}
 
 
+def _kind_flips(new_text: str, old_text: str) -> bool:
+    """Does ``new_text`` give a subject of ``old_text`` a different KIND (``memory_quality.kind_flip``)? Never raises."""
+    try:
+        from memory_quality import kind_flip
+
+        return bool(kind_flip(new_text or "", old_text or ""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _memory_id(user_id: str, text: str, metadata: Mapping[str, Any]) -> str:
     """Stable row id; include durable identity so same text can exist in distinct lanes."""
 
@@ -1584,6 +1594,24 @@ class MemoryService:
         except Exception:  # noqa: BLE001 - the wall must never break a write that is not off the record
             pass
 
+        # A call-now medical emergency ("i fell over and i cant get up") is filed as ONE dated, health-tagged EVENT, never as a
+        # routine / preference / standing fact (QA round 9: a fall was listed under Routines). Same text for every writer of the day.
+        try:
+            import medical_safety as _ms
+
+            _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
+        except Exception:  # noqa: BLE001
+            _event = None
+        _mined = None
+        if _event is not None:
+            logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)
+            # the MINED fact keeps deciding authority and evidence below (resolved on the member's words first, then the
+            # normalised event carries it): the event text alone reads as an unanchored model assertion and was dropped as
+            # unconfirmed from Memories and the health summary (QA round 9 review)
+            _mined = text
+            text, memory_type = _event, "event"
+            tags = list(dict.fromkeys([*(tags or []), "health", "medical"]))
+
         # Identity is an ACCOUNT fact, never a recalled one: an automatic writer (regex,
         # digest, consolidation, person extractor…) must not store "the user's name is X"
         # — it mishears and mis-attributes (a speech-to-text fragment naming a third
@@ -1714,8 +1742,10 @@ class MemoryService:
             # own turn text. An inferred fact that contradicts a protected row becomes a
             # pending candidate (the user's words stay approved; nothing is lost).
             writer = origin or source
+            # an emergency event is resolved on the fact as MINED (its words are what the member's turn supports)
+            auth_text = (scrub_pii(_mined)[0] or scrubbed) if _mined else scrubbed
             resolved = _auth.resolve_write(
-                writer, scrubbed,
+                writer, auth_text,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
                 claimed=authority, user_id=user_id, prompt_text=prompt_text,
                 speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
@@ -1755,7 +1785,7 @@ class MemoryService:
 
             # Provenance (ZMB A3): a row written from a user turn says which words and which turn
             ev_excerpt, ev_turn_id = _auth.turn_evidence(
-                writer, resolved, scrubbed, user_id=user_id,
+                writer, resolved, auth_text, user_id=user_id,
                 anchor_text=anchor_text, source_excerpt=source_excerpt, user_turn_id=user_turn_id)
 
             metadata = self._build_metadata(
@@ -2134,6 +2164,11 @@ class MemoryService:
             await notifications_store.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: notification erasure failed ({type(exc).__name__})") from exc
+        try:   # reminder phone-delivery ledger (reminder_delivery.py: app_settings claim rows, ids only). Fail closed.
+            import reminder_delivery
+            await reminder_delivery.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: reminder delivery ledger erasure failed ({type(exc).__name__})") from exc
         # The feed spine (migration 0078) and the calendar store (0052): connected accounts + their secrets and sync runs, the member's
         # own email addresses / phone numbers, their calendars and synced events. Fail closed; outside the lock (each takes the erase gate).
         try:
@@ -2472,6 +2507,12 @@ class MemoryService:
                         return None
                 except Exception:  # noqa: BLE001
                     pass
+            if actor != user_id and _kind_flips(edits, current.text or ""):
+                # an edit that re-types the row's subject (a son edited into a cat) is never written by a writer (QA round 9
+                # review); the owner's own edit is theirs to make
+                self._bump("kind_flip", actor)
+                logger.info("KIND_FLIP_REFUSED user=%s kept=%s op=edit source=%s", user_id, mem_id, actor)
+                return None
         if (
             decision == "edit"
             and _opt_out_writer(actor, origin)
@@ -2797,6 +2838,9 @@ class MemoryService:
             return False
         if str(old_m.get("status") or "") != "approved":
             return False
+        if _kind_flips(docs.get(new_id, ""), docs.get(old_id, "")):
+            logger.info("KIND_FLIP_REFUSED user=%s kept=%s op=supersede_by", user_id, old_id)
+            return False            # a successor that re-types the old row's subject never retires it
         # Authority: an INFERRED successor can never retire a row the user said. (The
         # implicit-supersede passes pick pairs by topic; they have no user turn in hand
         # when they run nightly, so the rows' own authority decides.)

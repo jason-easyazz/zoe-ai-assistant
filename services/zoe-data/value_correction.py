@@ -105,7 +105,8 @@ _LEAD = rf"^\W*(?:(?:good\s+)?(?:morning|evening|afternoon)[,.\s]+)?(?:(?:and|al
 _PAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are)\s+(?:actually\s+|really\s+)?(?P<n>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}[,;]?\s+"
                       rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}\W*(?:i\s+misspoke\W*)?$", re.IGNORECASE)
 _AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\s+(?:(?P<pre>actually|now)\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}"
-                         rf"(?:\s+(?P<post>now))?\W*$", re.IGNORECASE)
+                         # "actually isla is 6 after all, i got mixed up" (QA round 9: correcting BACK was never read)
+                         rf"(?:\s+(?P<post>now|after\s+all))?(?:\W*$|\s*[,;]\s+(?!not\b)\S.*$)", re.IGNORECASE)
 # "its 76 for margaret, not 78": the value comes first, the subject after "for" (QA 6b)
 _FOR_RE = re.compile(_LEAD + rf"(?:it['’]?s|that['’]?s|thats|it\s+is)\s+(?:actually\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}\s+for\s+{_SUBJ}[,;]?\s+"
                      rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_NUM}){_YEARS}\W*$", re.IGNORECASE)
@@ -227,8 +228,17 @@ def is_quantity_pair(new: str, old: str) -> bool:
 #: one character of a value: anything but sentence punctuation, EXCEPT a point or comma between two digits ("13.5 thousand",
 #: "$13,500" - without it those corrections matched nothing and the old amount stayed stored)
 _QVAL = r"(?:[^,;.!?]|(?<=\d)[.,](?=\d))"
-_QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are|will\s+be)\s+(?:actually\s+|really\s+|now\s+)?(?P<n>{_QVAL}{{1,40}}?)[,;]?\s+"
+# QA round 9: a two-word subject with no determiner ("book club is on the 19th, not the 12th") and a verb word between "is" and the
+# value ("the rego is due on the 21st not the 14th") were read by nothing, so the old date stayed approved beside the new one.
+_SUBJ2 = _SUBJ[:-1] + rf"|{_WORD}\s+{_WORD})"
+_STATE = r"(?:(?:actually|really|now|still|due|booked|scheduled|set|happening|meant\s+to\s+be)\s+)*"
+_QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ2}\s+(?:is|was|are|will\s+be|['’]s)\s+{_STATE}(?P<n>{_QVAL}{{1,40}}?)[,;]?\s+"
                        rf"(?:and\s+)?not\s+(?P<o>{_QVAL}{{1,30}}?)\s*(?:(?:[;!?]|[.,](?!\d))\s*(?:.*))?$", re.IGNORECASE)
+# "book club moved again, its on the 19th of december now" / "the dentist got moved from the 5th to the 12th": a MOVED date. With no
+# old value the subject's one stored date is restated (``rewrite``); a chain (5th -> 12th -> 19th) is the same sentence again.
+_MOVED_RE = re.compile(_LEAD + rf"{_SUBJ2}\s+(?:(?:has|have|got|was|is|been|just)\s+)*(?:moved|changed|rescheduled|shifted|pushed\s+back)"
+                       rf"(?:\s+again)?(?:\s+from\s+(?P<o>{_QVAL}{{1,30}}?)\s+to\s+|[,;]?\s+(?:(?:and\s+)?(?:it['’]?s|its|it\s+is)\s+(?:now\s+)?)?"
+                       rf"(?:(?:to|on|until|till|for)\s+)?)(?P<n>{_QVAL}{{1,40}}?)(?:\s+now)?\s*[.!]*$", re.IGNORECASE)
 
 
 _AGE_SUFFIX_RE = re.compile(r"\s+(?:years?[ -]old|yrs?\s+old|yo)\s*$", re.IGNORECASE)
@@ -391,7 +401,7 @@ def statement(text: str) -> Optional[Correction]:
             # Two numbers of the same subject are a correction on their own (as the plain number pair above), no cue needed.
             subj = m.group("subj").strip()
             new, old = m.group("n").strip(), m.group("o").strip()
-            if subj.lower() in _NOT_SUBJECT or not is_quantity_pair(new, old):
+            if _not_a_subject(subj) or not is_quantity_pair(new, old):
                 continue
             qn, qo = quantity_value(new), quantity_value(old)
             if qn.value == qo.value and (_month_of(new) or "") == (_month_of(old) or ""):
@@ -402,7 +412,26 @@ def statement(text: str) -> Optional[Correction]:
             if value_of(bare_n) is not None and value_of(bare_o) is not None:
                 new, old = _bare_value(bare_n), _bare_value(bare_o)       # a plain age pair: the age path rewrites it
             return Correction(subj, new, old, bool((m.group("cue") or "").strip()))
+        m = _MOVED_RE.match(sentence)
+        if m:
+            subj, new, old = m.group("subj").strip(), m.group("n").strip(), (m.group("o") or "").strip() or None
+            subj = re.sub(r"(?i)\s+(?:has|have|got|was|is|been|just)$", "", subj)     # "my exam got moved": the subject is "my exam"
+            qn = quantity_value(new)
+            if _not_a_subject(subj) or qn is None or not (qn.ordinal or _month_of(new)):
+                continue                    # only a DATE moves; "the meeting moved to friday" is no number
+            if old is not None and (quantity_value(old) is None or _same_value(new, old)):
+                continue
+            return Correction(subj, new, old, True)
     return None
+
+
+def _not_a_subject(subj: str) -> bool:
+    """A subject that is a pronoun / filler ("it", "thats"), or a bare two-word one holding such a word ("so it", "i think")."""
+    words = subj.lower().split()
+    if subj.lower() in _NOT_SUBJECT:
+        return True
+    return len(words) == 2 and words[0] not in ("the", "my", "our") and any(
+        w in _NOT_SUBJECT or w in _BARE_NOT_NAME or w in ("is", "was", "think", "guess", "reckon", "got", "has") for w in words)
 
 
 def _subject_re(subject: str, lazy: bool = False):
@@ -587,12 +616,82 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     if len(hits) != 1 or hits[0] is not own:
         return None
     q = hits[0]
-    new_tail = tail[:q.start] + _render_quantity(qn, q) + tail[q.end:]
-    if month_new and row_month and month_new != row_month:
-        mm = _MONTH_RE.search(new_tail)
-        if mm:
-            new_tail = new_tail[:mm.start()] + month_new.capitalize() + new_tail[mm.end():]
-    return head + new_tail
+    if unit == "date" and (not head or not _date_attached(tail, q)):
+        return None                 # the date may be someone else's ("run by Bea, whose birthday is on the 20th"): unchanged
+    return head + _put_date(tail, q, qn, month_new if unit == "date" else None)
+
+
+_RELATIVE_RE = re.compile(r"\b(?:whose|who|whom|which|her|his|their|its)\b", re.IGNORECASE)
+_KIN_RE = re.compile(rf"\b{_REL}\b", re.IGNORECASE)
+_DAY_NAMES = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"})
+
+
+def _date_attached(tail: str, q: "Quantity") -> bool:
+    """Is the date at ``q`` the corrected SUBJECT's own (``tail`` starts right after the subject mention)? Conservative (QA round 9
+    review: "book club is run by Bea, whose birthday is on the 12th" had Bea's birthday rewritten): no other person (a capitalised
+    name, a kin word) and no relative clause (whose / who / which / her / his / their ...) between the subject and the date. One
+    exception, shown to be the subject's: a comma-bounded aside straight after the subject with no relative word and no number,
+    followed by the subject's own verb ("book club, run by Bea, is on the 12th"). Pure."""
+    between = tail[:q.start]
+    aside = re.match(r"^\s*,\s*([^,]*?)\s*,\s*(?=(?:is|was|are|will\s+be|has\s+been|got|gets)\b)", between, re.IGNORECASE)
+    if aside and not _RELATIVE_RE.search(aside.group(1)) and not re.search(r"\d", aside.group(1)):
+        between = between[aside.end():]
+    if _RELATIVE_RE.search(between) or _KIN_RE.search(between):
+        return False
+    names = [w for w in re.findall(r"\b[A-Z][a-z]+\b", between)
+             if not _MONTH_RE.fullmatch(w) and w.lower() not in _DAY_NAMES and w not in ("User", "I")]
+    return not names
+
+
+def _put_date(tail: str, q: "Quantity", qn: "Quantity", month_new: Optional[str]) -> str:
+    """``tail`` with the number at ``q`` replaced by the new one; a month the correction NAMED replaces the month beside the date
+    ("the 12th of December" / "December 12"), or is added when the row has none ("on the 12th" -> "on the 5th of January", QA round
+    9 review: the stated month was dropped). With no month said, the row's month is kept. Pure."""
+    rendered, before, after = _render_quantity(qn, q), tail[:q.start], tail[q.end:]
+    if month_new:
+        month = month_new.capitalize()
+        ma = re.match(r"(\s*(?:of\s+)?)([A-Za-z]+)", after)
+        mb = re.search(r"([A-Za-z]+)(\s*)$", before)
+        if ma and _MONTH_RE.fullmatch(ma.group(2)):
+            after = after[:ma.start(2)] + month + after[ma.end(2):]
+        elif mb and _MONTH_RE.fullmatch(mb.group(1)):
+            before = before[:mb.start(1)] + month + before[mb.end(1):]
+        else:
+            rendered += f" of {month}"
+    return before + rendered + after
+
+
+def _restate_date(head: str, tail: str, new: str) -> Optional[str]:
+    """A MOVED date with no old value ("book club moved again, its on the 19th of december"): the row's ONE day-of-month after the
+    subject becomes the new one. No date, or two (which one moved?), changes nothing; a row already on the new date is left alone."""
+    qn = quantity_value(new)
+    if qn is None or not (qn.ordinal or _month_of(new)):
+        return None
+    dates = [q for q in quantities(tail) if _unit_at(tail, q) == "date"]
+    if len(dates) != 1:
+        return None
+    q, month_new, row_month = dates[0], _month_of(new), _month_of(tail)
+    if q.value == qn.value and (not month_new or month_new == row_month):
+        return None
+    if not _date_attached(tail, q):
+        return None                 # the one date is not clearly the subject's: unchanged
+    if not _SCHEDULED_BEFORE_RE.search(_date_expr_start(tail, q)):
+        return None                 # "was founded on the 12th": not when it HAPPENS, so a moved date never touches it
+    return head + _put_date(tail, q, qn, month_new)
+
+
+#: the ONLY phrases that introduce a date a "moved to" / restated date may replace (QA round 9 review: "moved to the 19th" rewrote
+#: "was founded on the 12th"); any other verb in front of the date (founded, born, started, since, married, joined, died) leaves it
+_SCHEDULED_BEFORE_RE = re.compile(r"\b(?:is\s+on|is\s+at|meets\s+on|happens\s+on|is\s+scheduled\s+for|moved\s+to|was\s+set\s+for)"
+                                  r"\s+(?:the\s+)?$", re.IGNORECASE)
+
+
+def _date_expr_start(tail: str, q: "Quantity") -> str:
+    """``tail`` up to where the date at ``q`` starts, the month counted as part of the date when it comes first ("on December 12")."""
+    before = re.search(r"([A-Za-z]+)\s+$", tail[:q.start])
+    if before and _MONTH_RE.fullmatch(before.group(1)):
+        return tail[:before.start(1)]
+    return tail[:q.start]
 
 
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
@@ -627,7 +726,7 @@ def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[s
         return text[:sm.end()] + tail[:om.start()] + new + tail[om.end():]
     new_n = value_of(corr.new)
     if new_n is None:
-        return None
+        return _restate_date(text[:sm.end()], tail, corr.new)
     ages = _age_matches(tail)
     if not ages:
         return None
@@ -656,7 +755,9 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
     low = (fact or "").lower()
     subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower()
     if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
-        return False        # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction, not invented
+        # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction - unless it gives the subject
+        # a KIND the member never said: "kit is 10 not 9" is never "User's pet is named Kit" (QA round 9)
+        return invented_kind(fact, user_message)
     if not any(re.search(rf"(?<![A-Za-z0-9]){re.escape(v.lower())}(?![A-Za-z0-9])", low) for v in values):
         return False
     said = {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", (user_message or "").lower().replace("'s", ""))}
@@ -664,6 +765,27 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
         if w in _FILLER or w.rstrip("s") in said:
             continue
         return True
+    return False
+
+
+def invented_kind(fact: str, said_text: str) -> bool:
+    """Does ``fact`` call something an animal ("pet", "cat") with a word ``said_text`` never used? A model's guess about what KIND
+    of thing a name is never becomes a fact. Pure."""
+    from memory_quality import ANIMAL_WORDS
+
+    said = {w.rstrip("s") for w in re.findall(r"[a-z]+", (said_text or "").lower())}
+    return any(w in ANIMAL_WORDS and w.rstrip("s") not in said for w in re.findall(r"[a-z]+", (fact or "").lower()))
+
+
+def kind_guess_on_correction(fact: str, turns: list) -> bool:
+    """The transcript-level ``invented_on_correction_turn`` (idle consolidation re-mines a whole session): ``fact`` names a subject
+    one of ``turns`` corrected, and types it with an animal word none of the turns said. Pure."""
+    low = (fact or "").lower()
+    for t in turns or ():
+        corr = statement(t)
+        subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower() if corr else ""
+        if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+            return invented_kind(fact, "\n".join(turns))
     return False
 
 
@@ -696,8 +818,8 @@ def _remember(user_id: str, corr: Correction) -> None:
     import time
 
     uid = (user_id or "").strip().lower()
-    if not uid or corr.old is None:
-        return
+    if not uid:
+        return                      # a RESTATEMENT (old None) is remembered too: see superseded_by_correction
     now = time.time()
     keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
     keep.append((now, corr))
@@ -727,11 +849,54 @@ def superseded_by_correction(user_id: str, fact: str, said_at: Optional[float] =
             last = latest[_subject_key(corr.subject)]
             if corr is not last and _same_value(corr.old, last.new):
                 continue
+            if corr.old is None and corr is not last:
+                continue            # a restatement ("moved to the 19th") is only ever judged as the subject's LATEST value
             if rewrite(fact or "", corr) is not None:
                 return True
     except Exception:  # noqa: BLE001
         return False
     return False
+
+
+def _displaced(old_text: str, new_text: str) -> Optional[str]:
+    """The words a rewrite REPLACED in a row ("on the 12th of December" -> "on the 19th of December": "12th"; with the month
+    changed too: "12th December"), punctuation stripped, or None. Pure."""
+    import difflib
+
+    a, b = old_text.split(), new_text.split()
+    gone = [w for op, i1, i2, _j1, _j2 in difflib.SequenceMatcher(None, a, b).get_opcodes() if op != "equal" for w in a[i1:i2]]
+    out = " ".join(re.sub(r"[^\w'’-]+$", "", w) for w in gone).strip()
+    return out or None
+
+
+def _displaced_value(old_text: str, new_text: str, corr: Correction) -> Optional[str]:
+    """What a restatement displaced from ``old_text``. A DATE: the WHOLE date expression as the row has it (day, its month and a
+    year when present: "12th of December"), never the word diff - a month-only move ("12th of December" -> "12th of January")
+    diffs to "December" alone, which no stale full-date fact matches (QA round 9 review). Anything else: the word diff. Pure."""
+    qn = quantity_value(corr.new)
+    if qn is None or not (qn.ordinal or _month_of(corr.new)):
+        return _displaced(old_text, new_text)
+    sm = _subject_re(corr.subject).search(old_text or "")
+    if not sm:
+        return None
+    tail = old_text[sm.end():]
+    dates = [q for q in quantities(tail) if _unit_at(tail, q) == "date"]
+    return _date_expr(tail, dates[0]) if len(dates) == 1 else None
+
+
+def _date_expr(text: str, q: "Quantity") -> str:
+    """The date at ``q`` with the month beside it and a year after it, as written ("12th of December 2026", "December 12"). Pure."""
+    start, end = q.start, q.end
+    after = re.match(r"\s*(?:of\s+)?([A-Za-z]+)", text[end:])
+    before = re.search(r"([A-Za-z]+)\s+$", text[:start])
+    if after and _MONTH_RE.fullmatch(after.group(1)):
+        end += after.end()
+    elif before and _MONTH_RE.fullmatch(before.group(1)):
+        start = before.start(1)
+    year = re.match(r",?\s+(\d{4})\b", text[end:])
+    if year:
+        end += year.end()
+    return text[start:end].strip()
 
 
 def reset_state() -> None:
@@ -807,8 +972,14 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             except Exception:  # noqa: BLE001
                 pass
         # Remembered whether or not a row was rewritten: the corrected-away fact may still be waiting in an earlier session's idle
-        # pass (stated 15 s before the correction, filed minutes after it), and that pass must not store the old value.
-        _remember(user_id, corr)
+        # pass (stated 15 s before the correction, filed minutes after it), and that pass must not store the old value. A
+        # RESTATEMENT with no old value ("book club moved to the 19th") is remembered with the value it DISPLACED from each row it
+        # rewrites (QA round 9 review: a late idle pass re-filed the 12th); with nothing rewritten, as a restatement of the subject
+        # (any OTHER value of it, mined from turns older than this, is stale).
+        displaced = ([_displaced_value(r.text or "", t, corr) for r, t in hits]
+                     if corr.old is None and 0 < len(hits) <= MAX_ROWS else [])
+        for old in [d for d in displaced if d] or [None]:
+            _remember(user_id, corr._replace(old=old) if old else corr)
         if not hits or len(hits) > MAX_ROWS:
             return 0
         excerpt = " ".join(user_message.split())

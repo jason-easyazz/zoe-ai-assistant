@@ -565,7 +565,7 @@ def _fake_cli(tmp, name, login_rc):
 
 
 def test_executor_unavailable_falls_back_to_thin_adapter(tmp_path):
-    cfg = Config(state_dir=str(tmp_path), engine="flue_executor", engine_fallbacks=["claude", "codex"],
+    cfg = Config(state_dir=str(tmp_path / "s"), engine="flue_executor", engine_fallbacks=["claude", "codex"],
                  codex_bin=_fake_cli(tmp_path, "codex", 0), claude_bin=_fake_cli(tmp_path, "claude", 0),
                  multica_kill_switch=str(tmp_path / "paused"))
     (tmp_path / "paused").touch()
@@ -600,7 +600,7 @@ def test_engine_env_is_an_allow_list(tmp_path, monkeypatch):
     monkeypatch.setenv("POSTGRES_URL", "x")
     (tmp_path / "bin").mkdir()
     fake = tmp_path / "bin" / "codex"
-    cfg = Config(state_dir=str(tmp_path), codex_bin=str(fake))
+    cfg = Config(state_dir=str(tmp_path / "s"), codex_bin=str(fake))   # a binary under the state dir is refused
     out = tmp_path / "env.txt"
     fake.write_text(f"#!/bin/bash\nenv > {out}\n")
     fake.chmod(0o755)
@@ -614,7 +614,7 @@ def test_engine_env_is_an_allow_list(tmp_path, monkeypatch):
 def test_engine_timeout_kills(tmp_path):
     (tmp_path / "bin").mkdir()
     slow = tmp_path / "bin" / "codex"
-    cfg = Config(state_dir=str(tmp_path), codex_bin=str(slow), engine_timeout_s=1)
+    cfg = Config(state_dir=str(tmp_path / "s"), codex_bin=str(slow), engine_timeout_s=1)
     slow.write_text("#!/bin/bash\nsleep 30\n")
     slow.chmod(0o755)
     r = CodexEngine(cfg).run(ticket(), str(tmp_path))
