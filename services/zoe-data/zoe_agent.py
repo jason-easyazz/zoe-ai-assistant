@@ -3792,8 +3792,8 @@ async def run_zoe_agent(
                 continue
 
             logger.info(
-                "zoe_agent: iter=%d tool=%s arg_keys=%s args=%s",
-                iteration, tool_name, ",".join(sorted(tool_args or {})), _utag(json.dumps(tool_args)),
+                "zoe_agent: iter=%d tool=%s n_args=%d args=%s",
+                iteration, tool_name, len(tool_args or {}), _utag(json.dumps(tool_args)),
             )
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
             logger.debug("zoe_agent: tool_result=%s", _utag(tool_result))
@@ -4256,8 +4256,8 @@ async def run_zoe_agent_streaming(
             # Emit a lightweight thinking marker so chat.py can surface tool activity
             yield f"__THINKING__:{tool_name}"
 
-            logger.info("zoe_agent streaming: iter=%d tool=%s arg_keys=%s args=%s",
-                        iteration, tool_name, ",".join(sorted(tool_args or {})), _utag(json.dumps(tool_args)))
+            logger.info("zoe_agent streaming: iter=%d tool=%s n_args=%d args=%s",
+                        iteration, tool_name, len(tool_args or {}), _utag(json.dumps(tool_args)))
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
 
             # UI component — yield marker so chat.py can emit zoe.ui_component event;

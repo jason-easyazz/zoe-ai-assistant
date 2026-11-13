@@ -151,7 +151,7 @@ PINNED = {
     "stt_snap.py": set(),
     "device_confirm.py": set(),
 }
-SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "len", "type", "bool", "sorted"}
+SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "len", "type", "bool"}   # never ``sorted``/``join``: they keep every string
 LOG_METHODS = {"debug", "info", "warning", "error", "critical", "exception", "log"}
 
 
@@ -215,3 +215,14 @@ def test_scanner_negative_control_flags_the_pre_fix_forms():
     assert leaking_calls(pre_fix, {"text", "name"}) == [1, 2, 3, 4]
     post_fix = 'logger.info("MEMORY_DEDUP_SKIP source=%s kept=%s cand=%s", source, match_id, _utag(text or ""))\n'
     assert leaking_calls(post_fix, {"text"}) == []
+
+
+def test_tool_arg_keys_are_counted_never_logged():
+    """Tool-argument KEYS are model-produced and can carry a name or a fact: both zoe_agent tool lines log a count, and the
+    scanner flags a line that joins or sorts them (review of PR 2455)."""
+    src = (Path(__file__).resolve().parents[1] / "zoe_agent.py").read_text(encoding="utf-8")
+    assert "arg_keys" not in src
+    assert src.count("n_args=%d args=%s") == 2 and src.count("len(tool_args or {}), _utag(json.dumps(tool_args))") == 2
+    planted = 'logger.info("t arg_keys=%s", ",".join(sorted(tool_args or {})))'
+    call = ast.parse(planted).body[0].value
+    assert any(_raw(a, {"tool_args"}) for a in call.args), "the scanner must see keys passed through sorted()/join()"
