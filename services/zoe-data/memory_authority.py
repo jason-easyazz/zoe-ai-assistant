@@ -15,7 +15,9 @@ The rule (enforced at ONE choke point, ``MemoryService``: ``ingest`` / ``review`
 * Every row carries a PROVENANCE CLASS (``authority_class``) from an ALLOW-LIST, ranked:
 
       operator 6 > user_confirmed 5 > user_stated 4 > user_stated_derived 3
-              > user_unverified 2 > model_from_turn 1 > model_from_transcript 0
+              > user_unverified 2 > model_from_turn 1 = external_source 1 > model_from_transcript 0
+
+  (``external_source``: a connected account's provider said it; a pointer back to the feed item, never above the person's word)
 
   plus ``authority`` (the owner's three-way view: user_stated | user_confirmed | inferred),
   ``authority_basis``, ``origin`` (the writer), ``turn_ref`` and ``model`` (LLM writers).
@@ -101,9 +103,14 @@ MODEL_FROM_TRANSCRIPT = "model_from_transcript"
 #: and those of an adult in a category that adult opted in. Only a curator or an operator changes it - not a passing statement of
 #: the member, not their review UI (``may_override``). A released row (the adult opted the category out) is restamped user_stated.
 CURATED = "curated"
+#: "a provider said so" (feed plumbing Stage 0, gap audit 2026-11-13 X5): a fact from a connected account - a contact card, a calendar,
+#: a mail signature. Rank 1: below every user class, so it never supersedes what the person stated or confirmed and is superseded by
+#: it; authority ``inferred``; it becomes ``user_confirmed`` only when the member accepts it (the review UI). Every such row carries a
+#: POINTER to where it came from (``external_source_ref``: kind + account id + external id, never words).
+EXTERNAL_SOURCE = "external_source"
 RANK = {
     OPERATOR: 6, CURATED: 6, USER_CONFIRMED: 5, USER_STATED: 4, USER_STATED_DERIVED: 3, USER_UNVERIFIED: 2,
-    MODEL_FROM_TURN: 1, MODEL_FROM_TRANSCRIPT: 0,
+    MODEL_FROM_TURN: 1, EXTERNAL_SOURCE: 1, MODEL_FROM_TRANSCRIPT: 0,
 }
 CLASSES = tuple(RANK)
 #: a class at or above this is the PERSON speaking DIRECTLY: only these always override. A
@@ -135,6 +142,8 @@ PROVENANCE_KEYS = frozenset({
     "contradicts_id", "authority_blocked", "duplicate_of",
     # the structural-floors claim row is the NEW writer's: an edit never inherits the superseded row's
     "claim", "claim_lexical", "claim_structural", "claim_applied",
+    # an external_source row's pointer is that row's alone
+    "source_ref_kind", "source_ref_account", "source_ref_external_id",
 })
 
 
@@ -230,6 +239,12 @@ USER_STATED_PREFIXES = ("note_", "journal_")   # note_<action>, journal_<action>
 USER_STATED_WRITERS_EXTRA = frozenset({"person_created", "person_updated", "person_deleted"})
 #: Writers fed by the panel / voice lane: their turns can be mis-attributed to the bound member.
 VOICE_LANE_WRITERS = frozenset({"voice_fact", "voice_regex", "voice", "voice_turn_digest"})
+#: Feed writers (a connected account's provider said it): ``external_source``, whatever the text says.
+EXTERNAL_WRITERS = frozenset({"external_source"})
+EXTERNAL_BASIS = "provider_said"
+#: what an ``external_source`` pointer may name
+SOURCE_REF_KINDS = ("calendar_event", "contact_card", "mail_item")
+SOURCE_REF_KEYS = ("source_ref_kind", "source_ref_account", "source_ref_external_id")
 #: Model writers that READ one user turn: user_stated only when that turn supports the fact.
 MODEL_FROM_TURN_WRITERS = frozenset({
     "turn_digest", "voice_turn_digest", "person_extractor_llm", "brain_tool", "mcp",
@@ -283,6 +298,8 @@ def writer_class(writer: str, *, user_id: str = "") -> str:
         return USER_STATED
     if w in MODEL_FROM_TURN_WRITERS:
         return MODEL_FROM_TURN
+    if w in EXTERNAL_WRITERS:
+        return EXTERNAL_SOURCE
     return MODEL_FROM_TRANSCRIPT
 
 
@@ -298,7 +315,7 @@ def is_known_writer(writer: str) -> bool:
     w = (writer or "").strip()
     return (w in OPERATOR_WRITERS or w in CURATOR_WRITERS or w in USER_CONFIRMED_WRITERS or w in USER_STATED_WRITERS
             or w in USER_STATED_WRITERS_EXTRA or w.startswith(USER_STATED_PREFIXES) or w in MODEL_FROM_TURN_WRITERS
-            or w in TRANSCRIPT_WRITERS or w in LLM_WRITERS or w in _automatic_sources())
+            or w in TRANSCRIPT_WRITERS or w in LLM_WRITERS or w in EXTERNAL_WRITERS or w in _automatic_sources())
 
 
 def model_for(writer: str) -> str:
@@ -357,6 +374,10 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
     single turn to quote). No claim row: exactly the lexical decision, in every mode."""
     w = (writer or "").strip()
     base = writer_class(w, user_id=user_id)
+    if base == EXTERNAL_SOURCE:
+        # before ``claimed``: a provider's row is ALWAYS external_source, so it always needs its pointer (never a pointer-less
+        # model_from_transcript row that forget-by-source could not find)
+        return Resolved(EXTERNAL_SOURCE, EXTERNAL_BASIS)
     if claimed == INFERRED:
         return Resolved(MODEL_FROM_TRANSCRIPT, "claimed_inferred")
     if RANK[base] >= USER_RANK:
@@ -520,9 +541,32 @@ def has_standing(power: int, basis: str) -> bool:
     return power >= USER_RANK or str(basis or "") not in NO_STANDING_BASES
 
 
+def external_source_ref(kind: str, account_id: str, external_id: str) -> dict[str, str]:
+    """The pointer an ``external_source`` row must carry (flat, chroma-safe): which feed item said it. ``ValueError`` when incomplete,
+    so a feed writer cannot store a provider fact it cannot trace back (or forget by source)."""
+    k, a, e = (kind or "").strip(), (account_id or "").strip(), (external_id or "").strip()
+    if k not in SOURCE_REF_KINDS or not a or not e:
+        raise ValueError("external_source_ref: kind, account id and external id are all required")
+    return {"source_ref_kind": k, "source_ref_account": a[:128], "source_ref_external_id": e[:256]}
+
+
+def check_source_ref(cls: str, source_ref: Optional[Mapping[str, str]]) -> None:
+    """The pointer rule, for the write choke points (``MemoryService.ingest`` / ``review(edit)`` / candidates) to apply BEFORE
+    they write anything: an ``external_source`` row needs a complete pointer, any other row must not carry one."""
+    if cls == EXTERNAL_SOURCE:
+        if not isinstance(source_ref, Mapping):
+            raise ValueError("an external_source write needs a source_ref (external_source_ref(kind, account_id, external_id))")
+        external_source_ref(*(str(source_ref.get(k) or "") for k in SOURCE_REF_KEYS))
+    elif source_ref is not None:
+        raise ValueError("a source_ref belongs on an external_source row only")
+
+
 def provenance(writer: str, res: Resolved, *, turn_ref: Optional[str] = None,
-               model: Optional[str] = None) -> dict[str, Any]:
-    """The flat metadata a row carries about WHO wrote it (chroma-safe scalars)."""
+               model: Optional[str] = None, source_ref: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
+    """The flat metadata a row carries about WHO wrote it (chroma-safe scalars). An ``external_source`` row also carries its
+    ``source_ref`` pointer (``external_source_ref``) - REQUIRED: without it the row could never be found by its source, so
+    ``ValueError``. Passing one for any other class is refused too."""
+    check_source_ref(res.cls, source_ref)
     out: dict[str, Any] = {
         "authority": res.authority,
         "authority_class": res.cls,
@@ -540,6 +584,9 @@ def provenance(writer: str, res: Resolved, *, turn_ref: Optional[str] = None,
         out["claim_lexical"] = res.lexical_label
         out["claim_structural"] = res.structural_label
         out["claim_applied"] = bool(res.structural_applied)
+    if source_ref is not None:
+        out.update(external_source_ref(source_ref.get("source_ref_kind", ""), source_ref.get("source_ref_account", ""),
+                                       source_ref.get("source_ref_external_id", "")))
     return out
 
 

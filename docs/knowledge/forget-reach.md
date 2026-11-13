@@ -23,7 +23,7 @@ and `services/zoe-data/tests/test_forget_reach_inventory.py` (`ci_safe`) fails w
 
 | path | trigger | entry point | reaches |
 |---|---|---|---|
-| **member** | admin `POST /api/users/{id}/forget` (right to be forgotten) | `MemoryService.delete_user` | the palace + audit trail (physically erased), exact words, night mind, struggle rows, restraint, reply sources, commitments, pendant recordings/voices/devices, day reviews, the contact model and learned voiceprints, and (since A6) the text layer of the local utterance logs |
+| **member** | admin `POST /api/users/{id}/forget` (right to be forgotten) | `MemoryService.delete_user` | the palace + audit trail (physically erased), exact words, night mind, struggle rows, restraint, reply sources, commitments, pendant recordings/voices/devices, day reviews, the contact model and learned voiceprints, connected accounts with their secrets and sync runs, the member's own email addresses / phone numbers, their calendars and synced events (feed plumbing Stage 0, 2026-11-13; calendar-less local events are an owner decision), and (since A6) the text layer of the local utterance logs |
 | **entity** | "forget Dana" | `intent_router.memory_forget_entity` -> `memory_forget_cascade.cascade_forget` (+ `forget_redact.on_forget`) | the same stores by name, plus the derived rows (portrait, card, loops, candidates, people + edges, attendees), the verbatim transcript (redacted in place), the contact model, and the local text logs (cascade step `text_logs`) |
 
 A store can be reached by one path and not the other; that asymmetry is what `status: gap` records.
@@ -110,7 +110,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-127 stores: 52 reached, 32 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+131 stores: 57 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -157,8 +157,8 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `proactive_candidates` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget deletes candidates naming the entity; delete_user does not. |
 | `people` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Entity forget soft-deletes the person row (kept with deleted=1); delete_user does not touch people. |
 | `person_relationships` | pg_table | derived | gap | entity: `memory_forget_cascade._run` | Entity forget closes the edges (valid_to); delete_user does not. |
-| `event_attendees` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Entity forget anonymises the attendee row; delete_user does not. |
-| `events` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Only legacy metadata.attendees are scrubbed by the entity forget; titles/notes stay and delete_user skips events. |
+| `event_attendees` | pg_table | words | gap | member: `calendar_forget.forget_user` / entity: `memory_forget_cascade._run` | Entity forget anonymises the attendee row; delete_user removes the attendees of the member's synced and in-calendar events (calendar_forget.forget_user), not of their calendar-less local events (owner decision: household-visible items). |
+| `events` | pg_table | words | gap | member: `calendar_forget.forget_user` / entity: `memory_forget_cascade._run` | delete_user removes the member's synced events and every event in their calendars (calendar_forget.forget_user); their calendar-less local events (household-visible by default) stay until the owner decides delete vs keep for the household. The entity forget scrubs only legacy metadata.attendees. |
 | `memory_forgotten` | pg_table | metadata | out_of_scope | - | The forget LEDGER itself: salted hashes, no names. It must survive a forget to keep the forget enforced. |
 | `chat_sessions` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts titles in place (forget_redact.on_forget); delete_user does not delete sessions. |
 | `chat_messages` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages. |
@@ -177,7 +177,10 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `person_bucket_list` | pg_table | words | gap | - | Per-person text; not reached by the entity cascade. |
 | `person_gift_ideas` | pg_table | words | gap | - | Per-person text; not reached by the entity cascade. |
 | `person_important_dates` | pg_table | metadata | gap | - | Dates and labels for a person; not reached by the entity cascade. |
-| `calendars` | pg_table | metadata | out_of_scope | - | Calendar containers: a name and a colour, no event content (events are listed separately). |
+| `calendars` | pg_table | words | reached | member: `calendar_forget.forget_user` | - |
+| `connected_accounts` | pg_table | metadata | reached | member: `connected_accounts.forget_user` | - |
+| `sync_runs` | pg_table | metadata | reached | member: `connected_accounts.forget_user` | - |
+| `member_identities` | pg_table | metadata | reached | member: `member_identities.forget_user` | - |
 | `event_alarms` | pg_table | metadata | out_of_scope | - | No words and no biometrics: ids, flags, times or counters only. |
 | `ambient_memory` | pg_table | words | gap | - | Ambient captured memory text; neither path reaches it. |
 | `notifications` | pg_table | words | reached | member: `notifications_store.forget_user` | - |
@@ -231,6 +234,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `night_extract_facts` | file | words | reached | member: `struggle_detector.delete_user` / entity: `night_extract.erase_entity` | ~/.zoe/night-extract/: the SHADOW night pre-pass (night_extract.py, ZOE_NIGHT_EXTRACT). <night>.night-extract.jsonl holds the facts the GLiNEREL extractor PROPOSED from the member's day (person names, ages, places, pet and kin words; 0600, never off-box, never a turn's text) and <night>.night-extract-summary.json counts only. An entity forget drops the member's facts naming it (cascade step night_extract); a member erase (struggle_detector.delete_user calls night_extract.delete_user) drops all of the member's facts and summary line; load_facts re-checks the ledger. |
 | `self_improver_candidates` | file | derived | reached | entity: `self_review.erase_entity` | ~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate. |
 | `warm_speaker_memo` | file | metadata | reached | member: `warm_speaker.forget_user` | ~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker (a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member. |
+| `account_secrets` | vault | config | reached | member: `connected_accounts.forget_user` | Connected-account credentials (account_secrets.py seam). No backend is configured yet, so nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user. |
 | `omi_audio_files` | file | biometric | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files). |
 | `device_audit_logs` | file | metadata | out_of_scope | - | Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words. |
 | `pi_intent_evidence` | file | words | gap | - | ~/.zoe/data/pi-*.jsonl: intent-miss evidence and shadow labels (text with names/emails masked). Flag-gated (ZOE_PI_INTENT_*), outside the cascade, no retention. |
