@@ -1364,6 +1364,18 @@ def kind_flip(candidate: str, existing: str) -> Optional[str]:
     return None
 
 
+def kind_refusal_tag(text: str) -> str:
+    """What a kind refusal may LOG: a code, the candidate's kind, the kind it would overwrite, and an 8-hex sha256 of the fact.
+    Never the fact, a name or a quote (QA round 9 review: the refusal logged the first 60 characters of a personal fact). Pure."""
+    import hashlib
+
+    kinds = set().union(*subject_kinds(text or "").values()) if subject_kinds(text or "") else set()
+    cand = "/".join(sorted(kinds)) or "-"
+    was = {"animal": "person", "person": "animal"}.get(cand, "-")
+    return f"KIND_FLIP_REFUSED code=kind_flip cand_kind={cand} stored_kind={was} " \
+           f"fact={hashlib.sha256((text or '').encode('utf-8')).hexdigest()[:8]}"
+
+
 #: the newest approved rows of the member the kind check reads (one metadata-filtered listing, no similarity search)
 KIND_SCAN_LIMIT = 2000
 

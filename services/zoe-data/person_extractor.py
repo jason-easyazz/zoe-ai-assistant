@@ -776,10 +776,10 @@ async def _ingest_to_mempalace(
         # The KIND guard before ANY reconcile or supersede (QA round 9 review: the entity-keyed supersede below returned before the
         # kind refusal, so a stored son could still be edited into a cat). memory_quality.kind_guard is the one guard every writer
         # path calls first; MemoryService.review(edit) / supersede_by re-check it at the write.
-        from memory_quality import kind_guard
+        from memory_quality import kind_guard, kind_refusal_tag
         refused, _kept = await kind_guard(svc, text, user_id)
         if refused:
-            logger.info("person_extractor: kind refusal cand=%r", text[:60])
+            logger.info("person_extractor: %s", kind_refusal_tag(text))     # a code, the kinds and a hash: never the fact
             return None
         # Entity-keyed reconciliation (QA follow-up 2026-07-13): compact
         # "Name: value" rows ("Delia: March 15") have no parseable attribute, so
@@ -815,7 +815,9 @@ async def _ingest_to_mempalace(
             op, target_id = "add", None
         if op == "refuse":
             # the fact re-types a stored subject (memory_quality.kind_conflict): never written, whatever row it names
-            logger.info("person_extractor: kind refusal cand=%r", text[:60])
+            from memory_quality import kind_refusal_tag
+
+            logger.info("person_extractor: %s", kind_refusal_tag(text))
             return None
         if op in ("skip", "update") and target_id:
             # Linkage guard (Greptile P1): the matched row may have come from

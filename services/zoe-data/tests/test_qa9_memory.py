@@ -886,3 +886,64 @@ def test_a_pet_in_the_people_table_is_not_a_person(make_pet, refused, monkeypatc
             await db.close()
 
     assert (run(scenario())[0] == "refuse") is refused
+
+
+# -- a kind refusal never logs the fact (privacy) -------------------------------------------------------------------------------------
+
+SECRET_NAME, SECRET_FACT = "Quillon", "Quillon is a cat"
+
+
+def _assert_log_is_clean(caplog, *, tagged: bool):
+    import hashlib
+
+    log = caplog.text.lower()
+    for word in ("quillon", "cat"):                     # the planted name and every content word of the fact
+        assert not re.search(rf"\b{word}\b", log), f"{word!r} leaked into the log"
+    if tagged:
+        assert "code=kind_flip" in log and hashlib.sha256(SECRET_FACT.encode()).hexdigest()[:8] in log
+
+
+def test_the_person_extractor_kind_guard_logs_no_fact(monkeypatch, caplog):
+    import logging
+
+    import memory_service
+    import person_extractor as pe
+
+    caplog.set_level(logging.DEBUG)
+    svc = _EntitySvc(f"User's son is named {SECRET_NAME}")
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    assert run(pe._ingest_to_mempalace(SECRET_FACT, UID, SECRET_NAME, "slug:quillon", pattern_type="relationship")) is None
+    _assert_log_is_clean(caplog, tagged=True)
+
+
+def test_the_person_extractor_refuse_branch_logs_no_fact(monkeypatch, caplog):
+    import logging
+
+    import memory_service
+    import person_extractor as pe
+
+    class _SearchOnly:                                  # no listing call: the guard defers, the reconcile's hit check refuses
+        async def search(self, *_a, **_k):
+            return [_Row("r0", f"User's son is named {SECRET_NAME}")]
+
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _SearchOnly())
+    assert run(pe._ingest_to_mempalace(SECRET_FACT, UID, SECRET_NAME, None)) is None
+    _assert_log_is_clean(caplog, tagged=True)
+
+
+def test_the_other_refusal_paths_log_no_fact(mem, monkeypatch, caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    svc = _Svc(f"User's son is named {SECRET_NAME}", hits=set())
+    assert run(ed._ingest_or_supersede(svc, SECRET_FACT, user_id=UID, source="idle_consolidation", session_id="s",
+                                       user_turn_id="t", memory_type="fact", confidence=0.8, tags=[])) == "dropped"
+    _people(monkeypatch, SECRET_NAME)
+    assert run(mq.reconcile_for_ingest(_Svc(hits=set()), SECRET_FACT, UID))[0] == "refuse"
+    son = run(mem.ingest(f"User's son is named {SECRET_NAME}", user_id=UID, source="turn_digest"))
+    cat = run(mem.ingest(SECRET_FACT, user_id="demo_qa9_logcheck_other", source="turn_digest"))
+    caplog.clear()                                      # the ingests above are not refusals
+    assert run(mem.review(son.id, decision="edit", edits=SECRET_FACT, actor="memory_digest")) is None
+    assert run(mem.supersede_by(UID, son.id, cat.id, actor="memory_supersede")) is False
+    _assert_log_is_clean(caplog, tagged=False)
