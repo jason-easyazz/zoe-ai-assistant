@@ -59,17 +59,16 @@ class RefusingBackend:
         return 0
 
 
-_backend: Optional[Backend] = None
-
-
 def backend() -> Backend:
-    return _backend if _backend is not None else RefusingBackend()
+    """Stage 0 has ONE backend and it refuses. There is deliberately no way to install another from code: a seam that any caller
+    could point at its own store would forward the secret to it. The stage that adds the real vault adds its backend HERE, behind
+    the owner's key decision, not through a setter."""
+    return RefusingBackend()
 
 
-def configure(b: Optional[Backend]) -> None:
-    """Install a backend (``None`` = back to refusing). Tests, and the future vault wiring, call this; nothing else does."""
-    global _backend
-    _backend = b
+def configure(b: object = None) -> None:
+    """Refuses: no backend can be installed in Stage 0 (see ``backend``). Kept so a caller gets a clear error, not a silent no-op."""
+    raise SecretsUnavailable("account_secrets: no backend can be configured in this stage")
 
 
 def configured() -> bool:

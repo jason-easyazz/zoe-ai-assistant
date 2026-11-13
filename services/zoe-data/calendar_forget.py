@@ -2,8 +2,11 @@
 
 ``MemoryService.delete_user`` calls ``forget_user``. It hard-deletes, under the member's erase gate:
   * every calendar the member owns (``calendars``: the name, description, sync cursor and account reference),
-  * every event IN those calendars, and every SYNCED event of the member (an ``external_uid`` or a non-local ``source``),
+  * the member's OWN events in those calendars, and every SYNCED event of the member (an ``external_uid`` or a non-local ``source``),
   * the attendees and alarms of those events.
+
+ANOTHER member's event that sits in a calendar the forgotten member owns is never deleted: it is DETACHED (``calendar_id`` set to
+NULL, so it stays that member's own event with its attendees and alarms) before the calendar row goes.
 
 The member's LOCAL events outside a calendar (``calendar_id`` NULL, ``source`` local) are not touched: they default to household
 visibility, and whether a forgotten member's household-visible items are deleted or kept for the household is an owner decision
@@ -18,8 +21,11 @@ from connected_accounts import _no_store
 
 logger = logging.getLogger(__name__)
 
-_EVENTS = ("SELECT id FROM events WHERE calendar_id IN (SELECT id FROM calendars WHERE user_id = ?) "
-           "OR (user_id = ? AND (external_uid IS NOT NULL OR source <> 'local'))")
+# the forgotten member's OWN rows only: an event is erased because it is THEIRS, never because of whose calendar it sits in
+_EVENTS = ("SELECT id FROM events WHERE user_id = ? AND (calendar_id IN (SELECT id FROM calendars WHERE user_id = ?) "
+           "OR external_uid IS NOT NULL OR source <> 'local')")
+_DETACH = ("UPDATE events SET calendar_id = NULL WHERE user_id <> ? "
+           "AND calendar_id IN (SELECT id FROM calendars WHERE user_id = ?)")
 
 
 async def forget_user(user_id: str) -> int:
@@ -38,6 +44,7 @@ async def forget_user(user_id: str) -> int:
                                 f"DELETE FROM events WHERE id IN ({_EVENTS})"):
                         cur = await db.execute(sql, (uid, uid))
                         n += int(getattr(cur, "rowcount", 0) or 0)
+                    await db.execute(_DETACH, (uid, uid))          # someone else's event in my calendar: kept, detached
                     cur = await db.execute("DELETE FROM calendars WHERE user_id = ?", (uid,))
                     n += int(getattr(cur, "rowcount", 0) or 0)
     except Exception as exc:  # noqa: BLE001

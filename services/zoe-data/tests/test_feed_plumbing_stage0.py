@@ -102,10 +102,8 @@ def db(tmp_path, monkeypatch):
         yield d
     monkeypatch.setattr(db_compat, "get_compat_db", fake)
     erase_gate.reset()
-    account_secrets.configure(None)
     yield d
     erase_gate.reset()
-    account_secrets.configure(None)
 
 
 # -- 1. the migration -----------------------------------------------------------------------------------------------------------------
@@ -152,7 +150,6 @@ def test_postgres_render_and_single_head(monkeypatch):
 # -- 2. the secret seam ---------------------------------------------------------------------------------------------------------------
 
 def test_the_secret_seam_fails_closed_without_a_backend():
-    account_secrets.configure(None)
     assert not account_secrets.configured()
     with pytest.raises(account_secrets.SecretsUnavailable):
         run(account_secrets.put("acct_1", user_id="ann", purpose="oauth_refresh", secret=b"not-a-real-token"))
@@ -167,10 +164,14 @@ def test_the_secret_seam_fails_closed_without_a_backend():
 
 
 class _Spy:
+    """Records the seam calls the accounts module makes (patched over the seam's functions; the seam itself takes no backend)."""
     name = "spy"
 
-    def __init__(self):
+    def __init__(self, monkeypatch=None):
         self.calls = []
+        if monkeypatch is not None:
+            monkeypatch.setattr(account_secrets, "remove", self.remove)
+            monkeypatch.setattr(account_secrets, "forget_user", self.forget_user)
 
     async def put(self, *a):
         self.calls.append(("put", a[0]))
@@ -187,6 +188,20 @@ class _Spy:
         return 2
 
 
+def test_no_backend_can_be_installed_and_put_forwards_nothing(monkeypatch):
+    """Stage 0 refuses unconditionally: there is no setter, and a planted backend is never consulted."""
+    spy = _Spy()
+    with pytest.raises(account_secrets.SecretsUnavailable):
+        account_secrets.configure(spy)
+    monkeypatch.setattr(account_secrets, "_backend", spy, raising=False)          # the old module-global: must have no effect
+    assert not account_secrets.configured()
+    with pytest.raises(account_secrets.SecretsUnavailable):
+        run(account_secrets.put("acct_1", user_id="ann", purpose="oauth_refresh", secret=b"not-a-real-token"))
+    with pytest.raises(account_secrets.SecretsUnavailable):
+        run(account_secrets.get("acct_1", user_id="ann", purpose="oauth_refresh"))
+    assert spy.calls == []                                                        # nothing was forwarded anywhere
+
+
 # -- 3. accounts, the sync log and the generation fence ---------------------------------------------------------------------------
 
 def test_create_is_idempotent_and_stores_no_subject(db):
@@ -198,9 +213,8 @@ def test_create_is_idempotent_and_stores_no_subject(db):
         run(ca.create("ann", "Google Inc", "calendar", "x"))
 
 
-def test_a_run_records_counts_and_a_disconnect_fences_the_one_in_flight(db):
-    spy = _Spy()
-    account_secrets.configure(spy)
+def test_a_run_records_counts_and_a_disconnect_fences_the_one_in_flight(db, monkeypatch):
+    spy = _Spy(monkeypatch)
     a = run(ca.create("ann", "google", "calendar", "s1"))
     r = run(ca.start_run(a, "ann", scope="calendar:primary", cursor_before="c0"))
     assert run(ca.finish_run(r, outcome="ok", counts={"seen": 3, "created": 2}, cursor_after="c1"))
@@ -276,9 +290,8 @@ def _seed_calendar(d, uid, tag):
     d.conn.commit()
 
 
-def test_forget_me_reaches_accounts_secrets_runs_identities_and_calendars(db):
-    spy = _Spy()
-    account_secrets.configure(spy)
+def test_forget_me_reaches_accounts_secrets_runs_identities_and_calendars(db, monkeypatch):
+    spy = _Spy(monkeypatch)
     for uid in ("ann", "ben"):
         a = run(ca.create(uid, "google", "calendar", f"{uid}-subject"))
         run(ca.finish_run(run(ca.start_run(a, uid)), outcome="ok"))
@@ -318,3 +331,18 @@ def test_a_write_scheduled_before_the_erase_is_dropped(db):
         await ca.forget_user("ann")
         return await ca.finish_run(r, outcome="ok", counts={"created": 5})
     assert run(in_flight()) is False and db.rows("SELECT COUNT(*) FROM sync_runs")[0][0] == 0
+
+
+def test_forget_never_deletes_another_members_event_in_my_calendar(db):
+    """Ben put an event (with an attendee and an alarm) in a calendar Ann owns. Forgetting Ann removes her calendar and her own
+    events; Ben's event is detached and kept, with its attendee and alarm."""
+    _seed_calendar(db, "ann", "ann")
+    db.conn.execute("INSERT INTO events (id, user_id, title, calendar_id, source) VALUES ('ev-ben-in-ann', 'ben', 'Shared', 'cal-ann', 'local')")
+    db.conn.execute("INSERT INTO event_attendees (id, event_id, user_id, display_name, email, created_at, updated_at) "
+                    "VALUES ('att-ben', 'ev-ben-in-ann', 'ben', 'Guest Example', 'guest@example.org', 'x', 'x')")
+    db.conn.execute("INSERT INTO event_alarms (id, event_id, user_id, created_at) VALUES ('al-ben', 'ev-ben-in-ann', 'ben', 'x')")
+    db.conn.commit()
+    run(calendar_forget.forget_user("ann"))
+    assert db.rows("SELECT user_id, calendar_id FROM events WHERE id = 'ev-ben-in-ann'") == [("ben", None)]
+    assert db.rows("SELECT id FROM event_attendees") == [("att-ben",)] and db.rows("SELECT id FROM event_alarms") == [("al-ben",)]
+    assert db.rows("SELECT id FROM calendars") == [] and {r[0] for r in db.rows("SELECT id FROM events")} == {"ev-local-ann", "ev-ben-in-ann"}
