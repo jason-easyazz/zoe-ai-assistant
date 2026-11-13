@@ -46,6 +46,14 @@ const TODAYS_FULL = { id: 'ev-today', title: 'Sam’s school concert', start_dat
   category: 'family', location: 'Example Primary School hall', all_day: false, recurring: 'weekly',
   metadata: { description: 'Bring the blue folder.\nDoors open at 6.', attendees: [{ person_id: 'p1', name: 'Sam', role: 'participant' }, { person_id: 'p2', name: 'Riley', role: 'participant' }],
     reminders: [{ offset_minutes: 30, message: 'leave soon' }], travel_time: 15 } };
+// The same evening as a ONE-OFF event: the save/move cases below need an event the panel may move (a repeating one
+// is read-only for time and date here - PR 2447 review).
+const TODAYS_ONEOFF = Object.assign({}, TODAYS_FULL, { recurring: null });
+// One OCCURRENCE of a weekly series as GET /api/calendar/events returns it since PR 2447: the series id, this
+// occurrence's date, the series' own start date.
+const OCCURRENCE = { id: 'ev-series', instance_key: 'ev-series@2026-10-29T23:30', title: 'Late shift', start_date: '2026-10-29',
+  start_time: '23:30', end_time: '23:59', category: 'work', all_day: false, is_recurring: true, series_start_date: '2026-10-15',
+  read_only: false, source: 'local' };
 // The richer shape synced calendars will carry (field names are tolerant; see the module header).
 const SYNCED = { id: 'ev-sync', title: 'Quarterly planning', start_date: '2026-10-21', start_time: '10:00', end_time: '11:30',
   category: 'work', location: 'Room 4, Example Tower', all_day: false, status: 'tentative', source: 'google',
@@ -108,6 +116,19 @@ function checkSuite(M) {
     const h = M.renderDetail(SYNCED, OPT);
     lacks(h, 'data-x="edit"'); lacks(h, 'data-x="del"'); lacks(h, 'data-x="phone"');
     has(h, 'Managed in Google Calendar — edit it there.'); has(h, 'data-x="close"');
+  });
+  t('a repeating event opens read-only: no edit, no delete, a plain line, the phone hand-off', () => {
+    for (const ev of [OCCURRENCE, TODAYS_FULL, Object.assign({}, MINIMAL, { series_start_date: '2026-10-06' })]) {
+      const h = M.renderDetail(ev, OPT);
+      lacks(h, 'data-x="edit"'); lacks(h, 'data-x="del"');
+      has(h, 'This event repeats. Change it on your phone or the desktop calendar.'); has(h, 'data-x="phone"');
+      assert(M.repeatingOf(ev), 'repeatingOf: ' + ev.id);
+    }
+    assert(!M.repeatingOf(MINIMAL) && !M.repeatingOf(TODAYS_ONEOFF), 'a one-off event is not repeating');
+  });
+  t('buildUpdate refuses an occurrence-dated update under a series id', () => {
+    assert.throws(() => M.buildUpdate(OCCURRENCE, { category: 'work', date: '2026-10-30', time: '00:15', allDay: false }), /repeats/);
+    assert.throws(() => M.buildUpdate(OCCURRENCE, { category: 'work', date: '2026-10-29', time: '22:00', allDay: false }), /repeats/);
   });
   t('editable events show the edit actions', () => {
     const h = M.renderDetail(MINIMAL, OPT);
@@ -249,16 +270,22 @@ function checkSuite(M) {
     eq(s.calls[0].body, { category: 'work' });
     assert.strictEqual(r.event.category, 'work'); assert.strictEqual(r.event.title, 'Dentist');
   }]);
+  saveCases.push(['a repeating occurrence moved across midnight is refused and nothing is sent', async () => {
+    const s = stub();
+    let refused = false;
+    await M.save(s.api, OCCURRENCE, { category: 'work', date: '2026-10-30', time: '00:15', allDay: false }).catch(() => { refused = true; });
+    assert(refused, 'save must reject'); assert.strictEqual(s.calls.length, 0, 'no PUT under the series id');
+  }]);
   saveCases.push(['an unchanged edit makes no request', async () => {
     const s = stub(); const r = await M.save(s.api, MINIMAL, { category: 'health', date: '2026-10-20', time: '09:00', allDay: false });
     assert.strictEqual(s.calls.length, 0); assert.strictEqual(r.changed, false);
   }]);
   saveCases.push(['never sends title/location/metadata/visibility', async () => {
-    const s = stub(); await M.save(s.api, TODAYS_FULL, { category: 'work', date: '2026-10-23', time: '19:00', allDay: false });
+    const s = stub(); await M.save(s.api, TODAYS_ONEOFF, { category: 'work', date: '2026-10-23', time: '19:00', allDay: false });
     ['title', 'location', 'metadata', 'visibility', 'recurring'].forEach((k) => assert(!(k in s.calls[0].body), k));
   }]);
   saveCases.push(['moving the start keeps the length (end_time / end_date follow)', async () => {
-    const s = stub(); await M.save(s.api, TODAYS_FULL, { category: 'family', date: '2026-10-23', time: '19:00', allDay: false });
+    const s = stub(); await M.save(s.api, TODAYS_ONEOFF, { category: 'family', date: '2026-10-23', time: '19:00', allDay: false });
     eq(s.calls[0].body, { start_date: '2026-10-23', start_time: '19:00', end_time: '20:30' });
     const s2 = stub(); await M.save(s2.api, { id: 'm', start_date: '2026-10-25', end_date: '2026-10-27', start_time: '08:00', end_time: '09:00', category: 'general' },
       { category: 'general', date: '2026-10-26', time: '08:00', allDay: false });
@@ -337,6 +364,76 @@ function staleGuard(region) {
   return /stok=_evd/.test(region) && /if\(_evd!==stok\)return;/.test(region) && /_evd\.ev=r\.event;evdDetailView\(r\.event\)/.test(region)
     && /dtok=_evd/.test(region) && /if\(_evd===dtok\)evdClose\(\);/.test(region);
 }
+// ---- the panel's DELETE sites in touch/home.html, executed (not regex-matched) ------------------------------------
+// Since PR 2447 a repeating event is listed once per occurrence under its SERIES id, so a delete from one row would
+// remove every occurrence. The Day row must offer no delete for it, and both delete handlers must refuse it.
+function extractFn(src, name) {
+  const start = src.indexOf('function ' + name + '(');
+  assert(start >= 0, 'home.html lost function ' + name);
+  let i = src.indexOf('{', start), depth = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+  }
+  throw new Error('unbalanced ' + name);
+}
+const flush = () => new Promise((r) => setImmediate(r));
+async function homeDeleteChecks(M, home) {
+  const fails = [];
+  const t = async (name, fn) => { try { await fn(); } catch (e) { fails.push('home: ' + name + ' :: ' + String(e && e.message || e).split('\n')[0]); } };
+  const ONEOFF = Object.assign({}, MINIMAL, { id: 'ev-once' });
+  function daySandbox(events, withModule) {
+    const els = { dayEvents: { innerHTML: '' }, dayRems: { innerHTML: '' }, dayMeta: {} };
+    const calls = [], opened = [];
+    const ctx = vm.createContext({
+      window: withModule ? { ZoeEventDetail: M } : {}, Array, String, Date, Promise,
+      document: { getElementById: (id) => els[id] || null },
+      apiGet: (url) => Promise.resolve(url.indexOf('/api/calendar/') >= 0 ? { events } : { reminders: [] }),
+      apiJson: (method, url) => { calls.push(method + ' ' + url); return Promise.resolve({}); },
+      estConfirm: (_msg, cb) => cb(), editEvent: (e) => opened.push(e.id), toast() {}, editReminder() {}, fmtRemWhen: () => '',
+      _cur: 'day', CAT: {}, fmt12: (x) => x || '', esc: M.esc, two: (n) => (n < 10 ? '0' : '') + n, loadErr: () => 'err'
+    });
+    vm.runInContext(extractFn(home, 'evRepeating') + '\n' + extractFn(home, 'wireDay'), ctx);
+    return { ctx, els, calls, opened };
+  }
+  const clickRow = (host, id, act) => host.onclick({ target: { closest: (sel) => (sel === '.dev[data-eid]'
+    ? { getAttribute: () => id } : (sel === '[data-act]' && act ? { getAttribute: () => act } : null)) } });
+  for (const withModule of [true, false]) {
+    const tag = withModule ? '' : ' (module not loaded: inline rule)';
+    await t('a repeating Day row renders no delete and its delete makes no API call' + tag, async () => {
+      const d = daySandbox([OCCURRENCE, ONEOFF], withModule);
+      d.ctx.wireDay(); await flush(); await flush();
+      const rows = d.els.dayEvents.innerHTML.split('<div class="dev" ').slice(1);
+      assert.strictEqual(rows.length, 2, 'two rows');
+      const rep = rows.find((r) => r.includes('data-eid="ev-series"')), one = rows.find((r) => r.includes('data-eid="ev-once"'));
+      assert(!rep.includes('data-act="del"'), 'the repeating row has no delete');
+      assert(one.includes('data-act="del"'), 'the one-off row keeps its delete');
+      clickRow(d.els.dayEvents, 'ev-series', 'del'); await flush();
+      assert.deepStrictEqual(d.calls, [], 'no DELETE for the series');
+      assert.deepStrictEqual(d.opened, ['ev-series'], 'the read-only sheet opens instead');
+      clickRow(d.els.dayEvents, 'ev-once', 'del'); await flush();
+      assert.deepStrictEqual(d.calls, ['DELETE /api/calendar/events/ev-once'], 'a one-off row still deletes');
+    });
+  }
+  await t('the sheet refuses del / delyes for a repeating event', async () => {
+    const calls = [], toasts = [];
+    const m = {};
+    const ctx = vm.createContext({
+      window: { ZoeEventDetail: M }, Array, String, document: { getElementById: (id) => (id === 'estModal' ? m : { innerHTML: '' }) },
+      _evd: { ev: OCCURRENCE }, EVD: M, evdTouch() {}, evdClose() {}, evdRefresh() {}, toast: (x) => toasts.push(x),
+      apiJson: (method, url) => { calls.push(method + ' ' + url); return Promise.resolve({}); }
+    });
+    vm.runInContext(extractFn(home, 'evRepeating') + '\n' + extractFn(home, 'evdClick'), ctx);
+    for (const x of ['del', 'delyes']) {
+      const btn = { disabled: false, getAttribute: () => x };
+      ctx.evdClick({ target: { closest: (sel) => (sel === '[data-x]' ? btn : null) } });
+    }
+    await flush();
+    assert.deepStrictEqual(calls, [], 'no DELETE sent'); assert.strictEqual(toasts.length, 2, 'said why, twice');
+  });
+  return fails;
+}
+
 function wiringChecks() {
   const fails = [];
   const t = (name, fn) => { try { fn(); } catch (e) { fails.push(name + ' :: ' + e.message.split('\n')[0]); } };
@@ -390,7 +487,15 @@ function wiringChecks() {
   const real = checkSuite(M);
   const asyncFails = [];
   for (const [name, fn] of real.saveCases) { try { await fn(); } catch (e) { asyncFails.push(name + ' :: ' + String(e.message).split('\n')[0]); } }
-  const failures = real.fails.concat(asyncFails, wiringChecks());
+  const failures = real.fails.concat(asyncFails, wiringChecks(), await homeDeleteChecks(M, HOME));
+  // negative control for the home.html guards: the pre-fix Day row and handlers MUST go red
+  const BROKEN_HOME = HOME.replace(`'+(evRepeating(e)?'':'<button class="del" data-act="del" title="Delete">✕</button>')+'`,
+    `<button class="del" data-act="del" title="Delete">✕</button>`)
+    .replace(`if(act&&act.getAttribute('data-act')==='del'&&evRepeating(e)){editEvent(e);return;}`, '')
+    .replace(`else if((x==='del'||x==='delyes')&&evRepeating(ev)){`, `else if(false){`);
+  assert.notStrictEqual(BROKEN_HOME, HOME, 'home negative control did not apply');
+  const brokenFails = await homeDeleteChecks(M, BROKEN_HOME);
+  if (brokenFails.length < 3) { console.error('NEGATIVE CONTROL NOT RED: home delete guards (' + brokenFails.length + ' red)'); process.exit(1); }
   total += 1;
   if (failures.length) { console.error('FAIL:\n  ' + failures.join('\n  ')); process.exit(1); }
 
@@ -402,6 +507,8 @@ function wiringChecks() {
     'save also sends the title (would blank text the panel cannot edit)': (s) => s.replace(`var body = {};\n    var curCat`, `var body = { title: ev.title };\n    var curCat`),
     'save always PUTs even when nothing changed': (s) => s.replace(`if (!Object.keys(body).length) return`, `if (false) return`),
     'read-only events still offer Delete': (s) => s.replace(`if (n.readOnly) {`, `if (false) {`),
+    'repeating events still offer edit and delete on the panel': (s) => s.replace(`} else if (n.repeating) {`, `} else if (false) {`),
+    'buildUpdate sends an occurrence date under a series id': (s) => s.replace(`if (repeatingOf(ev) && [`, `if (false && [`),
     'empty rows rendered (omission broken)': (s) => s.replace(`if (!n.busy && n.location) rows += row('Where', esc(n.location));`, `rows += row('Where', esc(n.location));`),
     'attendee RSVP dropped': (s) => s.replace(`rsvp: isObj(a) ? rsvpOf(a) : '',\n        organizer: (isObj(a)`, `rsvp: '',\n        organizer: (isObj(a)`),
     'timeless event flipped to all-day on a category save': (s) => s.replace(`var wasAll = !!ev.all_day || !firstStr(ev.start_time)`, `var wasAll = !!ev.all_day`),

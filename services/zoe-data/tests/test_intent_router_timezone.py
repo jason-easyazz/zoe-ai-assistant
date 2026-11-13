@@ -18,14 +18,14 @@ def test_calendar_show_date_arithmetic_uses_zoe_today(monkeypatch):
     monkeypatch.setattr(intent_router, "today_for_zoe_tz", lambda: date(2026, 6, 29))
     seen = []
 
-    class _Cursor:
-        async def fetchall(self):
-            return []
-
     class _Db:
-        async def execute(self, _sql, params):
-            seen.append(params[1:])
-            return _Cursor()
+        pass
+
+    async def window(_db, _uid, start, end, **_kw):     # the shared read path gets the household-date window
+        seen.append((start.isoformat(), end.isoformat()))
+        return []
+
+    monkeypatch.setattr("calendar_read.events_in_window", window)
 
     @contextlib.asynccontextmanager
     async def ctx():

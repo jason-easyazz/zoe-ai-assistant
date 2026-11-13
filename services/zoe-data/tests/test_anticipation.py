@@ -66,7 +66,7 @@ async def _schema(db) -> None:
     for sql in (
         "CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, role TEXT)",
         "CREATE TABLE events (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, end_date TEXT,"
-        " location TEXT, all_day INTEGER DEFAULT 0, recurring TEXT, deleted INTEGER DEFAULT 0)",
+        " location TEXT, all_day INTEGER DEFAULT 0, recurring TEXT, rrule TEXT, status TEXT, deleted INTEGER DEFAULT 0)",
         "CREATE TABLE pending_suggestions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, action_type TEXT"
         " NOT NULL, description TEXT NOT NULL, list_type TEXT, when_hint TEXT, amount_hint TEXT, offer_phrase TEXT NOT NULL,"
         " pre_filled_slots TEXT, created_at TEXT NOT NULL, turns_elapsed INTEGER NOT NULL DEFAULT 0, expire_after_turns INTEGER"
