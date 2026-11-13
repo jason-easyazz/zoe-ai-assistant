@@ -298,6 +298,10 @@ async def detect_and_store(user_message: str, *, user_id: str, session_id: str) 
 
         if _mp.is_off_record(user_id, user_message):
             return 0
+        import turn_forget
+
+        if turn_forget.blocks_write(user_id, user_message):
+            return 0            # a turn the member retracted ("forget that I told you about my sister") offers nothing either
     except Exception:  # noqa: BLE001
         pass
 

@@ -356,7 +356,7 @@ def test_a_matching_number_of_another_kind_does_not_make_the_row_up_to_date():
     """27 dollars is not the 27th: the row still holds the stale DATE and is rewritten; and the mirror for an amount."""
     corr = vc.statement(DENTIST_FIX)
     assert vc.rewrite("User has a dentist appointment on the 20th that costs 27 dollars", corr) == \
-        "User has a dentist appointment on the 27th that costs 27 dollars"
+        "User has a dentist appointment on the 27th of November that costs 27 dollars"     # the month SAID is kept (QA round 9)
     assert vc.rewrite("User has a dentist appointment on the 20th of November that costs 27 dollars", corr) == \
         "User has a dentist appointment on the 27th of November that costs 27 dollars"
     assert vc.rewrite("User has a dentist appointment on the 27th of November", corr) is None      # really up to date
