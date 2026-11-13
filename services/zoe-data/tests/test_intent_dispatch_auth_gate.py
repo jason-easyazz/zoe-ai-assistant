@@ -151,15 +151,15 @@ async def test_flag_read_lazily_not_cached_at_import(monkeypatch):
     await require_intent_dispatch_auth(_Req(host="127.0.0.1"))  # same process, now open
 
 
-# ── the same gate covers BOTH actor-asserting endpoints ──────────────────────
+# ── the actor-asserting endpoint keeps the flag-keyed gate ────────────────────
 
-def test_delegate_sync_uses_the_same_gate():
-    """delegate-sync also takes a body user_id under internal trust — the same
-    impersonation class. Lock in that its dependency IS the flag-keyed gate,
-    so the two endpoints can never silently diverge."""
+def test_intent_dispatch_uses_the_flag_keyed_gate():
+    """intent-dispatch takes a body user_id under internal trust. Lock in that its dependency IS the flag-keyed gate.
+    (delegate-sync, which shared it, was deleted with the retired peer agents - gap audit 2026-11-13.)"""
     import inspect
 
-    from routers.system import delegate_sync, intent_dispatch
+    import routers.system as system_mod
+    from routers.system import intent_dispatch
 
     def _gate_of(fn):
         for p in inspect.signature(fn).parameters.values():
@@ -169,4 +169,4 @@ def test_delegate_sync_uses_the_same_gate():
         return None
 
     assert _gate_of(intent_dispatch) is auth_mod.require_intent_dispatch_auth
-    assert _gate_of(delegate_sync) is auth_mod.require_intent_dispatch_auth
+    assert not hasattr(system_mod, "delegate_sync")

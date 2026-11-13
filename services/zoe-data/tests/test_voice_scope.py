@@ -196,8 +196,8 @@ def test_intent_memory_remember_is_user_scoped() -> None:
     assert d.scope == "user_scoped"
 
 
-def test_intent_build_widget_is_user_scoped() -> None:
-    d = classify("add a moon widget", _FakeIntent("build_widget"))
+def test_intent_extend_capability_is_user_scoped() -> None:
+    d = classify("teach yourself to read my email", _FakeIntent("extend_capability"))
     assert d.scope == "user_scoped"
 
 

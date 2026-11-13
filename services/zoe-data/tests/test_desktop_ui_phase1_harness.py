@@ -5,7 +5,11 @@ no More-menu link, no nginx location), dist/ root holds no stray files, every pa
 page navigates to exists, desktop Settings carries no OpenClaw/Hermes section and pairs a
 panel in place (no /touch/pair.html window), chat cannot force a turn into a retired runtime,
 calendar leaves notifications to the shared panel, and journal makes no /api/journeys call
-and ships no fake entries or third-party images. Fails (not skips) without node on CI.
+and ships no fake entries or third-party images. Gap audit 2026-11-13: Settings can mark a
+member as a child (confirmed), Display/System use the API's real field names, Music setup uses
+the gated proxy path, no desktop page offers a write the server cannot serve, desktop music
+search shows results, and calendar.html?event=<id> opens the event. Fails (not skips) without
+node on CI.
 """
 import os
 import shutil
@@ -33,4 +37,4 @@ def test_desktop_ui_phase1_harness():
     assert HARNESS.is_file(), f"harness missing: {HARNESS}"
     proc = subprocess.run([_node(), str(HARNESS)], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, f"desktop UI phase-1 harness failed:\n{proc.stdout}\n{proc.stderr}"
-    assert "desktop UI phase 1: 8 checks passed" in proc.stdout
+    assert "desktop UI phase 1: 14 checks passed" in proc.stdout

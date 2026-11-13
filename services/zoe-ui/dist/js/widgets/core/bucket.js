@@ -85,7 +85,7 @@ class BucketWidget extends WidgetModule {
     async loadItems() {
         try {
             console.log('🎯 Loading bucket items for user:', this.userId);
-            const response = await apiRequest(`/lists/bucket?user_id=${this.userId}`);
+            const response = await apiRequest(`/lists/bucket`);
             const lists = response.lists || [];
             console.log('🎯 Bucket API returned', lists.length, 'lists');
             
@@ -196,17 +196,17 @@ class BucketWidget extends WidgetModule {
     
     async saveItems() {
         try {
-            const response = await apiRequest(`/lists/bucket?user_id=${this.userId}`);
+            const response = await apiRequest(`/lists/bucket`);
             const existingLists = response.lists || [];
             
             if (existingLists.length > 0) {
                 const listId = existingLists[0].id;
-                await apiRequest(`/lists/bucket/${listId}?user_id=${this.userId}`, {
+                await apiRequest(`/lists/bucket/${listId}`, {
                     method: 'PUT',
                     body: JSON.stringify({ items: this.items })
                 });
             } else {
-                await apiRequest(`/lists/bucket?user_id=${this.userId}`, {
+                await apiRequest(`/lists/bucket`, {
                     method: 'POST',
                     body: JSON.stringify({
                         list_type: 'bucket',

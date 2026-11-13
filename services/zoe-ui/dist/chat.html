@@ -2427,7 +2427,7 @@
                 <div class="agent-panel-title">Active</div>
                 <div class="agent-phase-badge">
                     <span class="agent-phase-dot"></span>
-                    <span class="agent-phase-name" id="agentPhaseName">OpenClaw</span>
+                    <span class="agent-phase-name" id="agentPhaseName">Zoe</span>
                 </div>
                 <div class="agent-steps-list" id="agentStepsList"></div>
             </div>
@@ -2438,7 +2438,6 @@
     <script src="js/common.js?v=9.0&t=1760020000"></script>
     <script src="/js/notifications-panel.js"></script>
         <script src="js/chat-sessions.js?v=2.1"></script>
-        <script src="js/agent-activity.js?v=1.0"></script>
     <script>
         // Cache buster - force browser to reload this script
         console.log('🔄 Chat.html v12 — AG-UI rich components: maps, charts, price tables, action menus, plugin manager, background tasks');
@@ -2518,9 +2517,8 @@
                 web_search: 'Searching the web', browse: 'Reading a page',
                 bash: 'Running a command', ha_control: 'Controlling a device',
                 mempalace_search: 'Checking memory', mempalace_add: 'Saving to memory',
-                escalate_to_openclaw: 'Escalating to OpenClaw',
                 show_map: 'Preparing a map', show_chart: 'Drawing a chart',
-                action_menu: 'Preparing options', list_openclaw_plugins: 'Listing plugins',
+                action_menu: 'Preparing options',
             };
             return verbs[name] || ('Using ' + String(name || 'a tool'));
         }
@@ -2687,7 +2685,7 @@
             if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
                 const v = data.value || {};
                 const msg = String(v.message || '');
-                // Hermes agent-panel activation is handled by the paired STATE_SNAPSHOT.
+                // Agent-panel activation is handled by the paired STATE_SNAPSHOT.
 
                 // Always update the thinking indicator text
                 if (thinkingIndicator && thinkingIndicator.parentNode && msg) {
@@ -2750,8 +2748,7 @@
                         if (detail) {
                             el.textContent = detail;
                         } else if (phase === 'openclaw' || phase === 'hermes' || phase === 'hermes_tool') {
-                            const label = phase === 'openclaw' ? 'OpenClaw' : 'Hermes';
-                            el.textContent = label + ': ' + (snap.model || 'agent') + '…';
+                            el.textContent = 'Zoe is working on it…';
                         } else {
                             el.textContent = 'Zoe is typing… (' + (snap.model || 'AI') + ')';
                         }
@@ -2763,7 +2760,7 @@
                     }
                     const isAgentPhase = snap.phase === 'openclaw' || snap.phase === 'hermes' || snap.phase === 'hermes_tool';
                     if (isAgentPhase) {
-                        showAgentPanel(snap.model || (snap.phase === 'openclaw' ? 'OpenClaw' : 'Hermes Agent'));
+                        showAgentPanel('Zoe');
                         const liveDetail = snap.detail
                             ? String(snap.detail)
                             : 'Zoe is using the agent system to fulfil this request. Complex tasks can take 1–3 minutes. You can cancel at any time.';
@@ -2835,9 +2832,8 @@
                     web_search: '🔍 Searching the web', browse: '🌐 Reading page',
                     bash: '⚡ Running command', ha_control: '🏠 Controlling device',
                     mempalace_search: '🧠 Checking memory', mempalace_add: '💾 Saving memory',
-                    escalate_to_openclaw: '🤖 Escalating to OpenClaw',
                     show_map: '🗺️ Preparing map', show_chart: '📊 Drawing chart',
-                    action_menu: '📋 Preparing options', list_openclaw_plugins: '🔌 Listing plugins',
+                    action_menu: '📋 Preparing options',
                 };
                 const _toolName = data.toolCallName || data.tool_call_name || 'tool';
                 const _toolLabel = _toolLabels[_toolName] || ('🔧 ' + _toolName);
@@ -3160,7 +3156,6 @@
         let currentSessionId = null;
         let messageCount = 0;
         let streamAbortController = null;
-        let selectedAgent = 'auto';     // 'auto' | 'hermes' | 'openclaw'
         let lastSubmittedUserMessage = '';
 
         // Initialize
@@ -3280,7 +3275,7 @@
 
         function initChatBackgroundPush() {
             // The page's ONE push socket (js/auth.js zoePush): it already re-dispatches
-            // every message as a `zoe:push_event` window event for agent-activity.js.
+            // every message as a `zoe:push_event` window event.
             try {
                 if (!window.zoePush) return;
                 window.zoePush.subscribe((msg) => {
@@ -3524,7 +3519,7 @@
                 
                 console.log('💾 Saving message to session:', currentSessionId, 'user:', userId);
                 
-                await apiRequest(`/api/chat/sessions/${currentSessionId}/messages/?user_id=${userId}`, {
+                await apiRequest(`/api/chat/sessions/${currentSessionId}/messages/`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -3593,13 +3588,12 @@
             sendMessage();
         }
 
-        /** Quick Actions: enable full OpenClaw tool path for one send (like terminal). */
         // Agent Activity Panel functions
         function showAgentPanel(phaseName) {
             const panel = document.getElementById('agentPanel');
             const nameEl = document.getElementById('agentPhaseName');
             if (!panel) return;
-            if (nameEl) nameEl.textContent = phaseName || 'OpenClaw';
+            if (nameEl) nameEl.textContent = phaseName || 'Zoe';
             panel.classList.add('visible');
         }
 
@@ -3634,24 +3628,6 @@
                 const list = document.getElementById('agentStepsList');
                 if (list) list.innerHTML = '';
             }, 380);
-        }
-
-        function selectAgent(agent) {
-            // Hermes and OpenClaw are retired runtimes (2026-10-18): a forced turn into
-            // either can only fail, so every agent request is Zoe's own lane.
-            agent = 'auto';
-            selectedAgent = agent;
-            // Update pill active states
-            ['auto', 'hermes', 'openclaw'].forEach(a => {
-                const el = document.getElementById('agentPill' + a.charAt(0).toUpperCase() + a.slice(1));
-                if (el) el.classList.toggle('active', a === agent);
-            });
-            // Update placeholder hint
-            const textarea = document.getElementById('chatInput');
-            if (textarea) {
-                const hints = { auto: 'Ask me anything...', hermes: 'Hermes Agent — agentic reasoning...', openclaw: 'OpenClaw — full tools & builder skills...' };
-                textarea.placeholder = hints[agent] || hints.auto;
-            }
         }
 
         // Message Handling
@@ -3855,7 +3831,7 @@
                     stopBtn.disabled = false;
                 }
 
-                const response = await fetch(`/api/chat/?user_id=${userId}&stream=true`, {
+                const response = await fetch(`/api/chat/?stream=true`, {
                     method: 'POST',
                     cache: 'no-store',
                     signal: streamAbortController.signal,
@@ -5548,7 +5524,7 @@
                     const session = window.zoeAuth?.getCurrentSession();
                     const userId = session?.user_info?.user_id || session?.user_id;
                     
-                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_up&user_id=${userId}`, {
+                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_up`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' }
                     });
@@ -5577,7 +5553,7 @@
                     const session = window.zoeAuth?.getCurrentSession();
                     const userId = session?.user_info?.user_id || session?.user_id;
                     
-                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_down&user_id=${userId}`, {
+                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_down`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' }
                     });
@@ -5610,7 +5586,7 @@
                     const session = window.zoeAuth?.getCurrentSession();
                     const userId = session?.user_info?.user_id || session?.user_id;
                     
-                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=correction&user_id=${userId}`, {
+                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=correction`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -5789,7 +5765,7 @@
                 const userId = session?.user_info?.user_id || session?.user_id;
                 
                 // Add to calendar
-                await apiRequest(`/api/calendar/events?user_id=${userId}`, {
+                await apiRequest(`/api/calendar/events`, {
                     method: 'POST',
                     body: JSON.stringify({
                         title: data.title,
@@ -5841,7 +5817,7 @@
             
             try {
                 if (actionType === 'add_to_calendar') {
-                    await apiRequest(`/api/calendar/events?user_id=${userId}`, {
+                    await apiRequest(`/api/calendar/events`, {
                         method: 'POST',
                         body: JSON.stringify({
                             title: data.title,
@@ -6034,7 +6010,7 @@
                 const [calendarData, todoItems, memoriesData] = await Promise.allSettled([
                     apiRequest(`/api/calendar/events?start_date=${startDate}&end_date=${endDate}`).catch(e => ({events: []})),
                     _fetchTodoItems(),
-                    apiRequest(`/api/people?user_id=${userId}`).catch(e => ({people: []}))
+                    apiRequest(`/api/people`).catch(e => ({people: []}))
                 ]);
                 // Wrap items array in a shape the analysis code below expects
                 const tasksData = { status: todoItems.status, value: { items: todoItems.value || [] } };
@@ -6423,7 +6399,6 @@
 
     <script src="/js/websocket-sync.js?v=estate-10-heal"></script>
     <!-- Mini Player for persistent music playback -->
-    <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor -->
     <!-- Degraded mode banner -->
     <div id="zoe-degraded-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(220,38,38,0.9);color:white;font-size:13px;text-align:center;padding:6px 12px;backdrop-filter:blur(4px);">

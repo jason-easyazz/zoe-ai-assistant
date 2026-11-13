@@ -136,7 +136,6 @@ _INTENT_ROUTER_DOMAINS: dict[str, frozenset[str]] = {
 _INTENT_UNGATED: dict[str, str] = {
     # no router class — the head's 13 labels have nothing to agree with
     "calculate": "maths; no router class",
-    "recipe_search": "recipes; no router class",
     "transaction_create": "money; no router class",
     "transaction_summary": "money; no router class",
     "time_planning_clarification": "asks a clarifying question; no router class",
@@ -154,15 +153,12 @@ _INTENT_UNGATED: dict[str, str] = {
     "people_same_person_reply": "reply to a same-person question (context follow-up)",
     # operator / system / engineering commands: explicit command syntax, no router class
     "status_check": "system command",
-    "self_improve": "system command",
     "extend_capability": "system command",
     "evolution_proposals_review": "system command",
     "user_issue_report": "system command",
     "agent_tasks_status": "system command",
     "board_status": "engineering command",
     "board_heal": "engineering command",
-    "build_page": "engineering command",
-    "build_widget": "engineering command",
     "engineering_dispatch_pause": "engineering command",
     "engineering_dispatch_resume": "engineering command",
     "engineering_task_create": "engineering command",
@@ -170,7 +166,6 @@ _INTENT_UNGATED: dict[str, str] = {
     "engineering_ticket_list": "engineering command",
     "engineering_ticket_move_todo": "engineering command",
     "engineering_ticket_split": "engineering command",
-    "ha_full_setup": "setup flow",
     "panel_setup": "panel command",
     "panel_status": "panel command",
     "panel_list": "panel command",

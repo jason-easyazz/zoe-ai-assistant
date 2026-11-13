@@ -790,9 +790,7 @@ def _build_agent_card() -> dict:
             "a2a_card": "/api/agent/card",
             "a2a_tasks": "/api/agent/tasks",
             "a2a_tasks_stream": "/api/agent/tasks/stream",
-            "registry": "/api/agent/registry",
         },
-        "squads": ["zoe"],
     }
 
 
@@ -1053,133 +1051,9 @@ async def build_engineering_guard_packet(pr_number: int, user: dict = Depends(re
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-# ── A2A Registry + Peer Cards + Squad ────────────────────────────────────────
-
-_AGENTS_REGISTRY_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agents_registry.yml")
-_registry_cache: dict = {}
-_registry_loaded: bool = False
-
-
-def _load_registry() -> dict:
-    global _registry_cache, _registry_loaded
-    if _registry_loaded:
-        return _registry_cache
-    return _reload_registry()
-
-
-def _reload_registry() -> dict:
-    global _registry_cache, _registry_loaded
-    try:
-        import yaml
-        with open(_AGENTS_REGISTRY_PATH) as f:
-            _registry_cache = yaml.safe_load(f) or {}
-        _registry_loaded = True
-        logger.info("Agent registry loaded from %s", _AGENTS_REGISTRY_PATH)
-    except Exception as exc:
-        logger.warning("Failed to load agents_registry.yml: %s", exc)
-        _registry_cache = {"agents": {}, "squads": {}}
-        _registry_loaded = True
-    return _registry_cache
-
-
-@_agent_card_router.get("/registry")
-async def get_agent_registry():
-    """List all registered peer agents with runtime health."""
-    registry = _load_registry()
-    from main import _RUNTIME_HEALTH  # type: ignore[import]
-
-    agents_out = {}
-    for name, info in registry.get("agents", {}).items():
-        health_port = info.get("health_port")
-        is_online = _RUNTIME_HEALTH.get(name, False)
-        agents_out[name] = {
-            "description": info.get("description", ""),
-            "model": info.get("model", ""),
-            "base_url": info.get("base_url", ""),
-            "skills": info.get("skills", []),
-            "status": "online" if is_online else "offline",
-        }
-
-    return {
-        "agents": agents_out,
-        "squads": registry.get("squads", {}),
-    }
-
-
-@_agent_card_router.post("/registry/reload")
-async def reload_agent_registry(user: dict = Depends(require_admin)):
-    """Admin-only: hot-reload agents_registry.yml from disk."""
-    global _registry_loaded
-    _registry_loaded = False
-    registry = _reload_registry()
-    return {"ok": True, "agents": list(registry.get("agents", {}).keys())}
-
-
-@_agent_card_router.post("/delegate")
-async def delegate_to_agent(
-    body: dict,
-    user: dict = Depends(get_a2a_caller),
-):
-    """Delegate a task to a named peer agent via A2A."""
-    # Accept both {agent_name, task} and {agent, goal} parameter styles
-    agent_name = body.get("agent_name") or body.get("agent", "")
-    task = body.get("task") or body.get("goal", "")
-    if not agent_name or not task:
-        raise HTTPException(status_code=400, detail="agent_name (or agent) and task (or goal) are required")
-
-    if agent_name == "openclaw" and not bool(body.get("allow_openclaw", False)):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "OpenClaw is available only as an explicit fallback. "
-                "Set allow_openclaw=true after the user/operator specifically asks for OpenClaw; "
-                "otherwise delegate to Hermes."
-            ),
-        )
-
-    if agent_name == "hermes":
-        # Hermes is retired and nothing may launch it (the old branch queued the task for
-        # `hermes --accept-hooks` with HERMES_YOLO_MODE as the zoe user - deep dive S0-7).
-        raise HTTPException(status_code=410, detail="Hermes is retired; no agent can be launched for this task.")
-
-    registry = _load_registry()
-    agent_info = registry.get("agents", {}).get(agent_name)
-    if not agent_info:
-        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
-
-    from a2a_client import get_a2a_client  # type: ignore[import]
-    client = get_a2a_client()
-    result = await client.submit_task(
-        base_url=agent_info["base_url"],
-        task=task,
-        caller=f"zoe-{user.get('user_id', 'unknown')}",
-        token=agent_info.get("a2a_token", ""),
-    )
-    return {"agent": agent_name, "result": result}
-
-
-@_agent_card_router.get("/squad")
-async def get_squad():
-    """Return the formalized agent squad topology."""
-    registry = _load_registry()
-    from main import _RUNTIME_HEALTH  # type: ignore[import]
-
-    squads = registry.get("squads", {})
-    agents = registry.get("agents", {})
-
-    # Enrich members with live health
-    for squad_name, squad in squads.items():
-        enriched_members = []
-        for member in squad.get("members", []):
-            enriched_members.append({
-                "name": member,
-                "status": "online" if _RUNTIME_HEALTH.get(member) else "offline",
-                "description": agents.get(member, {}).get("description", ""),
-            })
-        squad["members_detail"] = enriched_members
-
-    return {"squads": squads}
-
+# ── Agent runtimes ────────────────────────────────────────────────────────────
+# (The peer-agent registry, /delegate, /squad and /peers/{name}/card are gone: their only peers were the
+# retired Hermes/OpenClaw - root AGENTS.md "Engineering agents".)
 
 @_agent_card_router.get("/runtimes")
 async def get_agent_runtimes():
@@ -1196,54 +1070,6 @@ async def get_agent_runtimes():
             },
         },
     }
-
-
-@_agent_card_router.get("/peers/{name}/card")
-async def get_peer_agent_card(name: str):
-    """Return a live A2A v1.0 proxy card for a peer agent with dynamic skills[]."""
-    registry = _load_registry()
-    agent_info = registry.get("agents", {}).get(name)
-    if not agent_info:
-        raise HTTPException(status_code=404, detail=f"Unknown peer agent: {name}")
-
-    from main import _RUNTIME_HEALTH  # type: ignore[import]
-
-    # Skills come from the registry for every agent. The openclaw/hermes cases
-    # used to call skill_discovery.py, which was deleted: it parsed the two
-    # skill directories into a catalogue whose only consumers were this field
-    # and an unread markdown file, and nothing dispatched on it.
-    #
-    # Entries keep the full A2A v1.0 AgentSkill shape so card consumers can
-    # still negotiate modes and distinguish capabilities. Prose comes from the
-    # registry's `skill_descriptions` map (a parallel map rather than inlined
-    # objects, because four readers treat `skills:` as bare strings — e.g.
-    # zoe_agent_registry.py does ", ".join(...) on it). Falls back to the id
-    # only when a description is genuinely missing.
-    descriptions = agent_info.get("skill_descriptions") or {}
-    skills = [
-        {
-            "id": s,
-            "name": s,
-            "description": descriptions.get(s, s),
-            "inputModes": ["text"],
-            "outputModes": ["text"],
-        }
-        for s in agent_info.get("skills", [])
-    ]
-
-    return {
-        "a2aVersion": "1.0",
-        "name": name,
-        "description": agent_info.get("description", ""),
-        "model": agent_info.get("model", ""),
-        "base_url": agent_info.get("base_url", ""),
-        "status": "online" if _RUNTIME_HEALTH.get(name) else "offline",
-        "skills": skills,
-        "defaultInputModes": ["text"],
-        "defaultOutputModes": ["text"],
-    }
-
-
 
 
 # ── Cost tracking + LLM stats ────────────────────────────────────────────────
@@ -2116,6 +1942,7 @@ def _row_to_prefs(row) -> dict:
 
 @router.get("/display/preferences")
 async def get_display_preferences(
+    request: Request,
     device_id: str = Query("default"),
     db=Depends(get_db),
 ):
@@ -2124,18 +1951,61 @@ async def get_display_preferences(
     Deliberately unauthenticated so the Pi panel agent can poll this without a
     session token. No sensitive data is exposed.
     """
-    cursor = await db.execute(
-        "SELECT * FROM display_preferences WHERE device_id = ?",
-        (device_id,),
-    )
-    row = await cursor.fetchone()
+    row, inherited = await _display_row_or_default(db, device_id, request)
     prefs = _row_to_prefs(row)
-    pi_host = (row["pi_host"] if row and "pi_host" in row.keys() and row["pi_host"] else _DEFAULT_PI_HOST)
+    # a panel's reload host is its OWN: never inherited from the "default" row
+    own = row if not inherited else None
+    pi_host = (own["pi_host"] if own and "pi_host" in own.keys() and own["pi_host"] else _DEFAULT_PI_HOST)
     return {
         "device_id": device_id,
         "pi_host": pi_host,
         "preferences": prefs,
+        "inherited": inherited,
     }
+
+
+async def _panel_at_caller_address(db, request) -> Optional[str]:
+    """The ``panels.panel_id`` registered at the caller's address, when exactly ONE active panel is, else None.
+
+    The panel agent polls with its own device id (``ZOE_DEVICE_ID`` or ``pi-<MAC>``), while Settings > Display and the
+    touch page key a panel's row by ``panel_id``; nothing in the schema links the two ids, so the panel is found the way
+    skybridge proves a panel: the machine at its REGISTERED address (``panel_principal.trusted_client_ip``; a request that
+    crossed the public tunnel is never located). Two panels at one address, or none: no panel, the default applies."""
+    if request is None:
+        return None
+    try:
+        import panel_principal
+
+        if panel_principal._via_public_tunnel(request):
+            return None
+        ip = panel_principal.trusted_client_ip(request)
+        if not ip:
+            return None
+        cursor = await db.execute("SELECT panel_id FROM panels WHERE ip_address = ? AND is_active = 1", (ip,))
+        rows = await cursor.fetchall()
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry is "no panel": the default row still applies
+        logger.debug("display prefs: panel address lookup failed (%s)", type(exc).__name__)
+        return None
+    return rows[0]["panel_id"] if rows and len(rows) == 1 else None
+
+
+async def _display_row_or_default(db, device_id: str, request=None):
+    """(row, inherited): the device's own ``display_preferences`` row, else the row of the panel registered at the caller's
+    address (the panel agent polls with a device id, Settings saves under the panel id), else the saved ``default`` row
+    ("All panels" in Settings), else None. Without the fallback, saving "All panels (default)" wrote a row no panel ever read."""
+    cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", (device_id,))
+    row = await cursor.fetchone()
+    if row is not None or device_id == "default":
+        return row, False
+    panel_id = await _panel_at_caller_address(db, request)
+    if panel_id and panel_id != device_id:
+        cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", (panel_id,))
+        row = await cursor.fetchone()
+        if row is not None:
+            return row, False       # this machine's panel's own setting: its reload host is its own too
+    cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", ("default",))
+    row = await cursor.fetchone()
+    return row, row is not None
 
 
 @router.get("/panel/idle-logout")
@@ -2601,31 +2471,6 @@ async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_disp
             WEB_LOOKUP_ERROR, "none", [], f"timeout: lookup exceeded {WEB_SEARCH_TOOL_DEADLINE_S:g}s deadline"
         )
     return web_search_tool_payload(outcome)
-
-
-class _DelegateSyncBody(BaseModel):
-    user_id: str
-    task: str
-    target: str = "hermes"
-
-
-@router.post("/delegate-sync")
-async def delegate_sync(body: _DelegateSyncBody, _: None = Depends(require_intent_dispatch_auth)):
-    """Synchronous peer-agent delegation for the zoe-core brain: NOT AVAILABLE.
-
-    Its only target was Hermes, which is retired and removed, so there is no peer to
-    hand a task to. The route stays (zoe-core's ``abilities/delegate.ts`` still calls
-    it) and answers 503 honestly after validating the request, instead of a 502 from
-    a dead gateway. Same internal gate as intent-dispatch (body ``user_id``).
-    """
-    if not (body.user_id or "").strip():
-        raise HTTPException(status_code=400, detail="user_id required")
-    if not (body.task or "").strip():
-        raise HTTPException(status_code=400, detail="task required")
-    target = (body.target or "hermes").strip().lower()
-    if target != "hermes":
-        raise HTTPException(status_code=400, detail=f"target not sync-delegatable: {target}")
-    raise HTTPException(status_code=503, detail="delegation is not available: no peer agent is configured")
 
 
 # ─── Telegram account linking (resolve a verified telegram_id → Zoe user) ─────

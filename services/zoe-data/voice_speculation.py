@@ -174,7 +174,7 @@ SPECULATION_SAFE_INTENTS = frozenset({
     "time_query", "date_query", "weather", "calculate", "greeting",
     "acknowledgement", "status_check", "time_planning_clarification",
     "list_show", "calendar_show", "reminder_list", "timer_status",
-    "note_search", "people_search", "recipe_search",
+    "note_search", "people_search",
     "journal_streak", "journal_prompt", "transaction_summary",
 })
 

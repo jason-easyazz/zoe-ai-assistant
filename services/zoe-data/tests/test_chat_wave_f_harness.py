@@ -1,8 +1,8 @@
 """CI wrapper: the Wave-F chat.html repairs (action_menu, add_to_list,
-proactive deep-link, agent-activity reattach).
+proactive deep-link) plus the retirement of the agent-activity feed that
+polled the retired A2A task list (2026-11-13).
 
-Each assertion is validated against the real pre-fix files from origin/main:
-chat.html fails 4 of 6 checks there and agent-activity.js fails the 5th, so
+The repair assertions were validated against the real pre-fix chat.html, so
 this is not a synthetic guard. One assertion is deliberately file-wide — it
 found a SECOND live instance of the broken onclick pattern (renderPriceTable)
 that the audit had not flagged.
@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_chat_wave_f_node_harness():
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
-        # A silent skip on CI means the action-menu / proactive-session /
-        # agent-activity regressions stop being covered while the build still
+        # A silent skip on CI means the action-menu / proactive-session
+        # regressions stop being covered while the build still
         # goes green. Skip is acceptable on a dev box; on CI it is a failure.
         if os.environ.get("CI"):
             pytest.fail("node is required on CI to run the chat UI harness")

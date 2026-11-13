@@ -109,7 +109,7 @@ class JournalWidget extends WidgetModule {
             // Get user_id
             const session = window.zoeAuth?.getCurrentSession?.();
             const userId = session?.user_info?.user_id || session?.user_id;
-            const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+            const qs = '';
             
             const response = await fetch(`/api/journal/entries${qs}`, {
                 method: 'POST',

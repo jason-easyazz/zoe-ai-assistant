@@ -85,19 +85,6 @@ def _active_agents_list() -> list:
     return ["Jetson Agent (Gemma 4 GPU)"]
 
 
-def _load_agents_registry() -> dict:
-    """Load the local peer-agent registry used by delegation tools."""
-    import yaml as _yaml
-
-    reg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents_registry.yml")
-    try:
-        with open(reg_path) as reg_file:
-            return _yaml.safe_load(reg_file) or {}
-    except (FileNotFoundError, _yaml.YAMLError) as exc:
-        _mcp_log.warning("Could not load agents registry at %s: %s", reg_path, exc)
-        return {"agents": {}, "squads": {}}
-
-
 async def _get_weather_default_location(db) -> dict:
     """System-level weather fallback location (admin-configured or env default)."""
     try:
@@ -407,43 +394,6 @@ TOOLS = [
                 "url": {"type": "string", "description": "Full http(s) URL of the page to read"},
             },
             "required": ["url"],
-        },
-    },
-    {
-        "name": "a2a_delegate",
-        "description": (
-            "Delegate a task to a named peer agent via A2A federation. "
-            "Hermes and OpenClaw are retired: delegating to either is refused. "
-            "Only a registered peer agent that is actually running can take a task."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "agent_name": {
-                    "type": "string",
-                    "description": "Name of the peer agent to delegate to",
-                    "enum": ["hermes", "openclaw"],
-                },
-                "task": {
-                    "type": "string",
-                    "description": "Natural-language task description to delegate",
-                },
-                "allow_openclaw": {
-                    "type": "boolean",
-                    "description": "Required true when agent_name is openclaw; prevents accidental non-Hermes delegation.",
-                    "default": False,
-                },
-                "session_id": {
-                    "type": "string",
-                    "description": "Optional Zoe session id to associate with the delegated Hermes task.",
-                },
-                "request_depth": {
-                    "type": "integer",
-                    "description": "Delegation depth guard for nested agent calls.",
-                    "default": 0,
-                },
-            },
-            "required": ["agent_name", "task"],
         },
     },
     {
@@ -2031,40 +1981,6 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             return {"query": query, "raw": result_text}
         except Exception as exc:
             return {"error": f"Web search failed: {exc}", "query": query}
-
-    elif name == "a2a_delegate":
-        agent_name = args.get("agent_name", "")
-        task = args.get("task", "")
-        if not agent_name or not task:
-            return {"error": "agent_name and task are required"}
-        if agent_name == "openclaw" and not bool(args.get("allow_openclaw", False)):
-            return {
-                "error": (
-                    "OpenClaw is available only as an explicit fallback. "
-                    "Set allow_openclaw=true after the user/operator specifically asks for OpenClaw; "
-                    "otherwise delegate to a registered peer agent."
-                )
-            }
-        try:
-            if agent_name == "hermes":
-                # Hermes is retired and nothing may launch it (the old branch queued the task for
-                # `hermes --accept-hooks` with HERMES_YOLO_MODE as the zoe user - deep dive S0-7).
-                return {"error": "Hermes is retired; no agent can be launched for this task."}
-            _reg = _load_agents_registry()
-            _info = _reg.get("agents", {}).get(agent_name)
-            if not _info:
-                return {"error": f"Unknown agent: {agent_name}"}
-            from a2a_client import get_a2a_client  # type: ignore[import]
-            _client = get_a2a_client()
-            result = await _client.submit_task(
-                base_url=_info["base_url"],
-                task=task,
-                caller="zoe-mcp",
-                token=_info.get("a2a_token", ""),
-            )
-            return result
-        except Exception as exc:
-            return {"error": f"Agent delegation failed: {exc}"}
 
     elif name == "greptile_pr_status":
         try:

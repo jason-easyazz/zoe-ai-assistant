@@ -113,10 +113,6 @@ Full env matrix lives in `services/zoe-data/.env.example` and `assistant/.env`.
 
 ## Troubleshooting
 
-### OpenClaw returns generic answer instead of doing the task
-- Check `services/zoe-data/intent_router.py` — the `HA_FULL_SETUP_OPENCLAW_MESSAGE` should expand the phrase.
-- Check `~/.openclaw/workspace/skills/home-assistant/SKILL.md` for the "Shorthand = full bootstrap" section.
-- Run: `systemctl --user restart openclaw-gateway`
 
 ### OpenClaw 401 / token error
 ```bash

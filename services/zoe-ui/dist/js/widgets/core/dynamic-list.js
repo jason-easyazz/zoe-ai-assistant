@@ -75,7 +75,7 @@ class DynamicListWidget extends WidgetModule {
         if (!this.listId) return;
         
         try {
-            const response = await apiRequest(`/lists/${this.listType}?user_id=${this.userId}`);
+            const response = await apiRequest(`/lists/${this.listType}`);
             const lists = response.lists || [];
             
             const thisList = lists.find(l => l.id === this.listId);
@@ -166,7 +166,7 @@ class DynamicListWidget extends WidgetModule {
         if (!this.listId) return;
         
         try {
-            await apiRequest(`/lists/${this.listType}/${this.listId}?user_id=${this.userId}`, {
+            await apiRequest(`/lists/${this.listType}/${this.listId}`, {
                 method: 'PUT',
                 body: JSON.stringify({ items: this.items })
             });

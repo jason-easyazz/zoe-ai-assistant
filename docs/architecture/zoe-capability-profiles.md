@@ -14,7 +14,6 @@ Files:
 - `services/zoe-data/zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/zoe_capability_profile_promotion.py`
 - `services/zoe-data/zoe_capability_profile_promotion_handoff.py`
-- `services/zoe-data/zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/zoe_capability_profile_ticket_gate.py`
 - `services/zoe-data/zoe_capability_profile_ticket_writer.py`
 - `services/zoe-data/zoe_capability_profile_pr_edit_gate.py`
@@ -24,7 +23,6 @@ Files:
 - `services/zoe-data/tests/test_zoe_capability_profile_patch_writer.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_promotion_handoff.py`
-- `services/zoe-data/tests/test_zoe_capability_outcome_profile_handoff.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_ticket_gate.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_ticket_writer.py`
 - `services/zoe-data/tests/test_zoe_capability_profile_pr_edit_gate.py`
@@ -86,13 +84,8 @@ PR/rollback/verification refs, and current source text, then builds the
 promotion manifest, patch plan, and inert Multica handoff packet together. It
 does not create tickets, write files, or mutate profiles.
 
-Capability outcome profile handoff plans compose the retained-outcome path.
-`zoe_capability_outcome_profile_handoff.py` starts with an admitted and retained
-evolution outcome, builds trust-update candidates, applies an explicit trust
-review in memory, then hands the reviewed profile promotion into the same
-manifest, patch, and inert Multica handoff gates. Explicit reviewer, approval,
-PR, rollback, and verification refs are required before any handoff payload can
-be created.
+The capability outcome profile handoff (`zoe_capability_outcome_profile_handoff.py`) was imported by nothing and was
+deleted in the 2026-11-13 gap audit.
 
 Capability profile ticket gates are the final pure guard before any future
 Multica writer. `zoe_capability_profile_ticket_gate.py` accepts only a createable

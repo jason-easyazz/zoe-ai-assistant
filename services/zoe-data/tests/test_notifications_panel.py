@@ -5,6 +5,7 @@ Spec + owner acceptance: docs/knowledge/notifications.md. Each privacy / do-not-
 """
 from __future__ import annotations
 
+import json
 import pytest
 
 pytestmark = pytest.mark.ci_safe
@@ -219,7 +220,9 @@ def test_a_guest_dot_press_opens_the_mic_never_the_voiceless_pull_and_control():
     paint = html[html.index("function paint(on,review"):]
     paint = paint[:paint.index("}")]
     assert "_dotVoiceOnly=!!(on&&voiceOnly)" in paint                                  # set on every paint, cleared with the dot
-    assert ",!mine);" in html                                                          # voice-only = lit by notify_any, not the member
+    assert "var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);" in html and ",!pullable);" in html
+    # voice-only = nothing the proactive selector reports: the guest's notify_any AND a member's notifications-only dot, because
+    # the voiceless /pull is refused for both
     click = html[html.index("orb.addEventListener('click'"):]
     click = click[:click.index("});")]
     guest, member = click.index("if(ready&&_dotVoiceOnly)panelVoice("), click.index("else if(ready)orbPull();")
@@ -228,7 +231,7 @@ def test_a_guest_dot_press_opens_the_mic_never_the_voiceless_pull_and_control():
 
 
 # -- the card + taps -----------------------------------------------------------------------------------------------------------
-def _fake_repass(monkeypatch, *, confirmed=0, props=("p1",)):
+def _fake_repass(monkeypatch, *, confirmed=0, props=("p1",), confirm_status="confirmed"):
     state = {"props": list(props), "confirmed": [], "rejected": []}
 
     async def wearer_status(db, uid):
@@ -238,10 +241,12 @@ def _fake_repass(monkeypatch, *, confirmed=0, props=("p1",)):
     async def proposal_lines(db, uid, pid, limit=6):
         return [{"recording_id": "r", "at_ms": 0, "text": LINE}]
 
-    async def confirm_wearer(db, uid, pid):
+    async def confirm_wearer(db, uid, pid):                       # the real shape: a dict, truthy whatever happened
+        if confirm_status != "confirmed":
+            return {"status": confirm_status, "confirmed": 0}
         state["props"].remove(pid)
         state["confirmed"].append((uid, pid))
-        return 1
+        return {"status": "confirmed", "confirmed": 6}
 
     async def reject_wearer(db, uid, pid):
         state["props"].remove(pid)
@@ -262,7 +267,21 @@ def test_the_wearer_creator_makes_one_notification_per_batch(env, monkeypatch):
     (row,) = env.rows("SELECT title, message, data FROM notifications")
     assert row[0] == ns.WEARER_TITLE and LINE not in "".join(map(str, row))            # the row never holds what was said
     state["props"].append("p2")
-    assert run(ns.notify_wearer_proposals(MEMBER))                                     # a new batch: a new notification
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None                             # the batch grew: the SAME ask, updated in place
+    state["props"].remove("p1")
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None                             # the batch shrank: still no second row
+    (row,) = env.rows("SELECT data FROM notifications")
+    assert json.loads(row[0])["proposals"] == ["p2"] and run(ns.unread_count(MEMBER)) == 1
+
+
+def test_an_old_wearer_ask_buried_under_newer_notifications_is_still_the_one_ask(env, monkeypatch):
+    state = _fake_repass(monkeypatch)
+    assert run(ns.notify_wearer_proposals(MEMBER))
+    seed(60)                                                                           # 60 newer unread rows push it out of any newest-50 read
+    state["props"].append("p2")
+    assert run(ns.notify_wearer_proposals(MEMBER)) is None
+    rows = env.rows("SELECT data FROM notifications WHERE type = ?", (ns.WEARER_TYPE,))
+    assert len(rows) == 1 and json.loads(rows[0][0])["proposals"] == ["p1", "p2"]
 
 
 def test_no_wearer_notification_once_the_print_is_confirmed(env, monkeypatch):
@@ -309,6 +328,17 @@ def test_a_tap_confirms_the_voice_and_clears_the_notification(env, monkeypatch):
     assert c.post("/api/panel/notifications/act", json={"item": "w1", "action": "me"}, headers=h).json()["ok"] is True
     assert state["confirmed"] == [(MEMBER, "p1")]
     assert run(ns.unread_count(MEMBER)) == 0                                            # nothing left to ask: read
+
+
+@pytest.mark.parametrize("status,code", [("not_found", 409), ("not_eligible", 403)])
+def test_a_confirm_that_did_not_happen_never_says_it_did(env, monkeypatch, status, code):
+    state = _fake_repass(monkeypatch, confirm_status=status)
+    run(ns.notify_wearer_proposals(MEMBER))
+    run(ns.card(PANEL, MEMBER))
+    item = {"type": "wearer", "ref": "p1", "nid": "x", "batch": ["p1"]}
+    with pytest.raises(ns.ActError) as ei:
+        run(ns.act(MEMBER, item, "me"))
+    assert ei.value.status == code and state["confirmed"] == [] and run(ns.unread_count(MEMBER)) == 1
 
 
 def test_flag_off_the_card_routes_are_absent(env, monkeypatch):

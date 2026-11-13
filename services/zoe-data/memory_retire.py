@@ -204,8 +204,10 @@ def eligible(meta: dict, text: str, quote: str, user_id: str) -> bool:
     return _auth.may_override(_auth.USER_RANK, _auth.row_class(meta, text))
 
 
-async def candidates(svc: Any, user_id: str, quote: str) -> list:
-    """The owner's top ``N_CANDIDATES`` eligible current rows for ``quote``, best first. Never raises."""
+async def candidates(svc: Any, user_id: str, quote: str, exclude_ids: "Iterable[str]" = ()) -> list:
+    """The owner's top ``N_CANDIDATES`` eligible current rows for ``quote``, best first. ``exclude_ids``: rows the same turn just
+    wrote (its new value) - a statement never retires what it itself says. Never raises."""
+    skip = {str(i) for i in exclude_ids or () if i}
     try:
         rows = await svc.search(quote, user_id=user_id, limit=SEARCH_LIMIT, timeout_s=3.0, history=False)
     except Exception as exc:  # noqa: BLE001 - a lookup failure offers nothing
@@ -213,6 +215,8 @@ async def candidates(svc: Any, user_id: str, quote: str) -> list:
         return []
     out = []
     for r in rows or []:
+        if str(getattr(r, "id", "") or "") in skip:
+            continue
         if eligible(getattr(r, "metadata", None) or {}, getattr(r, "text", "") or "", quote, user_id):
             out.append(r)
         if len(out) >= N_CANDIDATES:
@@ -306,7 +310,7 @@ def turn_ref_for(text: str) -> str:
 
 
 async def prepare(svc: Any, user_id: str, text: str, *, lane: str, speaker_verified: Optional[bool] = None,
-                  mode_override: Optional[str] = None) -> Prepared:
+                  mode_override: Optional[str] = None, exclude_ids: "Iterable[str]" = ()) -> Prepared:
     """The deterministic half: mode, speaker, the owner's own words, the cue, the forgotten ledger, the candidates.
     No model call, no write. A ``Prepared`` whose ``decision`` is set is already over."""
     m = mode_override or mode()
@@ -331,7 +335,7 @@ async def prepare(svc: Any, user_id: str, text: str, *, lane: str, speaker_verif
     quote, cue = picked
     if await _names_forgotten(user_id, quote):
         return end("refused", R_FORGOTTEN, cue=cue)
-    cands = await candidates(svc, user_id, quote)
+    cands = await candidates(svc, user_id, quote, exclude_ids)
     if not cands:
         return end("nothing_to_offer", R_NO_CANDIDATES, cue=cue)
     return Prepared(None, quote=quote, cue=cue, candidates=cands, lane=lane, turn_ref=turn_ref_for(owner_text))
@@ -463,7 +467,7 @@ async def ask_judge(quote: str, rows: list, *, timeout_s: float = 20.0, base_url
 
 async def distill_turn(user_id: str, user_message: str, *, speaker_verified: Optional[bool] = None,
                        judge: "Optional[Callable[[str, list], Awaitable[Optional[int]]]]" = None,
-                       svc: Any = None, lane: str = "voice") -> Decision:
+                       svc: Any = None, lane: str = "voice", exclude_ids: "Iterable[str]" = ()) -> Decision:
     """The off-the-turn judge, called by the per-turn digest after the reply was given. VOICE (``lane="voice"``): the
     only judge a spoken turn has. CHAT (``lane="chat"``): the DETERMINISTIC judge of every typed turn - the brain's
     ``memory_retire`` tool is optional on top of it, because a 4B model does not call a tool on a statement that asks it
@@ -479,7 +483,7 @@ async def distill_turn(user_id: str, user_message: str, *, speaker_verified: Opt
             svc = get_memory_service()
         if ln == "chat" and brain_decided(user_id, user_message):
             return Decision("none", "brain_already_decided", lane=ln, mode=mode())
-        prep = await prepare(svc, user_id, user_message, lane=ln, speaker_verified=speaker_verified)
+        prep = await prepare(svc, user_id, user_message, lane=ln, speaker_verified=speaker_verified, exclude_ids=exclude_ids)
         if prep.decision is not None:
             return prep.decision
         pick = await (judge or ask_judge)(prep.quote, prep.candidates)

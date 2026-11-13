@@ -1,7 +1,7 @@
 """
 Intent-first router: pattern-matches common family data requests and runs each
 through an in-process direct executor, bypassing the LLM for <1 second responses.
-Falls through to the agent path (Hermes by default; OpenClaw only when explicitly enabled).
+Anything no pattern claims falls through to the brain.
 
 Inspired by the original Zoe HassIL intent system (Tier 0/1 classification).
 
@@ -98,66 +98,6 @@ def _spoken_day_ordinal(day: int) -> str:
         31: "thirty-first",
     }
     return ordinals.get(day, str(day))
-
-# Short user phrases → expanded OpenClaw task (see openclaw_user_message in chat router).
-# Imperative: models often answer "setup home automation" with generic menus unless told not to.
-HA_FULL_SETUP_OPENCLAW_MESSAGE = (
-    "[HA_PLATFORM_BOOTSTRAP — execute now, minimal chat]\n"
-    "Do NOT answer with generic smart-home ideas (lighting lists, security options, routines menus, or "
-    "\"what would you like to automate\"). The user asked to set up the Home Assistant platform on this server.\n"
-    "Your FIRST tool action: open the browser to http://localhost:8123 and inspect the page (snapshot). "
-    "If you see onboarding, complete it. Only if the form requires values you do not have, ask ONCE for "
-    "admin username/password; otherwise keep going without extra questions.\n"
-    "Then per the home-assistant skill: long-lived token named zoe-data, "
-    "sed HA_ACCESS_TOKEN into /home/zoe/assistant/.env, docker restart homeassistant-mcp-bridge, "
-    "add http trusted_proxies for the Zoe nginx reverse proxy in homeassistant configuration.yaml, "
-    "docker restart homeassistant, confirm control via browser. "
-    "Reply briefly only with progress/status — not a catalog of automation ideas."
-)
-
-# Zoe self-extension: build a new widget, page, or capability. Admin-gated.
-# openclaw_user_message routes each to the right builder skill. execute_intent
-# returns None so the request falls through to OpenClaw.
-_BUILD_WIDGET_OPENCLAW_MSG = (
-    "[ZOE_SELF_BUILD: widget]\n"
-    "The user asked to build a new dashboard widget. Follow the `zoe-widget-builder` "
-    "skill: check admin role, call zoe_self_capabilities to confirm the widget does "
-    "not already exist, draft a spec, plan-then-confirm with the user, stage via "
-    "scripts/preview/stage_widget.py, and hand off to the zoe-verify skill. Do NOT "
-    "write any file outside services/zoe-ui/dist/_preview/ until verify approves.\n"
-    "\n"
-    "OUTPUT CONTRACT — this is mandatory:\n"
-    "• Your final reply must be ≤2 short sentences (e.g. \"Here's a moon-phase widget — does it look right?\").\n"
-    "• NEVER include code fences (```), JS, HTML, CSS, or any file contents in the chat reply. The user wants to SEE the widget working, not read its source.\n"
-    "• After stage_widget.py prints its preview_url, emit exactly these two blocks at the end of your reply (literal text, no substitutions other than the URL/task_id you got back):\n"
-    "  :::zoe-ui\n  {\"action\":\"navigate\",\"url\":\"<preview_url>\",\"target\":\"iframe\"}\n  :::\n"
-    "  :::zoe-ui\n  {\"action\":\"orb_prompt\",\"prompt\":\"Here's your widget. Does it look right?\",\"auto_mic\":true,\"task_id\":\"<task_id>\"}\n  :::"
-)
-_BUILD_PAGE_OPENCLAW_MSG = (
-    "[ZOE_SELF_BUILD: page]\n"
-    "The user asked to build a new Zoe page. Follow the `zoe-page-builder` skill: "
-    "admin role check, call zoe_self_capabilities to confirm the slug is free, "
-    "plan-then-confirm, stage via scripts/preview/stage_page.py (generates desktop "
-    "+ touch variants), and hand off to zoe-verify. Only promote after approval.\n"
-    "\n"
-    "OUTPUT CONTRACT — this is mandatory:\n"
-    "• Your final reply must be ≤2 short sentences (e.g. \"Here's the page — take a look.\").\n"
-    "• NEVER include code fences (```), HTML, JS, CSS, or any file contents. The preview iframe is the evidence.\n"
-    "• After stage_page.py prints its preview_url, emit exactly these two blocks at the end of your reply:\n"
-    "  :::zoe-ui\n  {\"action\":\"navigate\",\"url\":\"<preview_url>\",\"target\":\"iframe\"}\n  :::\n"
-    "  :::zoe-ui\n  {\"action\":\"orb_prompt\",\"prompt\":\"Here's your page. Does it look right?\",\"auto_mic\":true,\"task_id\":\"<task_id>\"}\n  :::"
-)
-_EXTEND_CAPABILITY_OPENCLAW_MSG = (
-    "[ZOE_SELF_BUILD: capability]\n"
-    "The user asked for a capability Zoe doesn't currently have. Follow the "
-    "`zoe-capability-extender` skill: admin role check, search installed skills + "
-    "openclaw plugins + ClawHub before composing anything new. If composing, stage "
-    "under ~/.openclaw/workspace/_skill_preview/ and run a smoke test before install.\n"
-    "\n"
-    "OUTPUT CONTRACT — this is mandatory:\n"
-    "• Final reply is ≤2 short sentences describing WHAT new capability Zoe now has — not HOW you wired it.\n"
-    "• NEVER include code fences (```) or skill source in the chat reply."
-)
 
 
 SHOPPING_KEYWORDS = {
@@ -270,7 +210,7 @@ def _is_ha_full_setup_message(t: str) -> bool:
         "install home assistant",
         "set up hass",
         "setup hass",
-        # Automation creation within an existing HA instance → OpenClaw browser
+        # Automation creation within an existing HA instance
         "set up a new automation in home assistant",
         "create an automation in home assistant",
         "create a new automation in home assistant",
@@ -305,26 +245,6 @@ class Intent:
     name: str
     slots: dict = field(default_factory=dict)
     confidence: float = 0.9
-
-
-def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
-    """Map intent + user text to the string sent to OpenClaw (expand shorthand tasks)."""
-    if intent is not None:
-        if intent.name == "ha_full_setup":
-            return HA_FULL_SETUP_OPENCLAW_MESSAGE
-        if intent.name == "build_widget":
-            return f"{_BUILD_WIDGET_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
-        if intent.name == "build_page":
-            return f"{_BUILD_PAGE_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
-        if intent.name == "extend_capability":
-            return f"{_EXTEND_CAPABILITY_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
-        if intent.name == "self_improve":
-            return _SELF_IMPROVE_OPENCLAW_MSG
-    # Same phrases when intent fast path is off (e.g. force_openclaw) — still expand.
-    tnorm = _normalize_chat_intent_text(user_text)
-    if _is_ha_full_setup_message(tnorm):
-        return HA_FULL_SETUP_OPENCLAW_MESSAGE
-    return user_text
 
 
 _TIME_QUERY_RE = re.compile(
@@ -395,20 +315,6 @@ _SELF_IMPROVE_RE = re.compile(
     r"|what\s+(?:questions?|requests?)\s+(?:do\s+you|have\s+you)\s+(?:mis(?:s(?:ed)?)?|failed)"
     r")\b",
     re.IGNORECASE,
-)
-
-# Intent-miss self-improvement task for OpenClaw
-_SELF_IMPROVE_OPENCLAW_MSG = (
-    "[ZOE_SELF_IMPROVE: intent-miss review]\n"
-    "Read ~/training/data/intent-misses.jsonl (last 7 days of misses).\n"
-    "Use the self-improvement skill. Analyze the most common miss patterns.\n"
-    "Propose 3-5 new regex patterns for intent_router.py based on what you find.\n"
-    "Format each proposal as:\n"
-    "  Pattern: <regex>\n"
-    "  Intent: <intent_name>\n"
-    "  Example phrases: <2-3 examples it would match>\n"
-    "  Rationale: <why this is worth adding>\n"
-    "Be concise and practical. Only propose patterns with 3+ occurrences in the miss log."
 )
 
 # "forget that" / "never mind what I said" — retract the last memory written.
@@ -852,9 +758,10 @@ def detect_intent(
     if _BARE_NAME_QUERY_RE.match((text or "").strip()):
         return Intent("status_check", {})
 
-    # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
+    # Full Home Assistant / automation setup: no agent runs that flow any more (OpenClaw is retired), so the brain answers it
+    # plainly; returning here keeps "set up an automation" from being read as a list or reminder command below.
     if _is_ha_full_setup_message(t):
-        return Intent("ha_full_setup", {})
+        return None
 
     # Touch panel provisioning / status — chat.py renders AG-UI cards
     if _PANEL_ENTER_CODE_RE.search(t):
@@ -924,19 +831,15 @@ def detect_intent(
     if _KNOW_ABOUT_ME_RE.search(t):
         return Intent("portrait_reveal", {"facts": True})
 
-    # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
-    # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
-    # Empty slots: these are delegation intents with no structured fields to
-    # extract, so they must NOT carry {"raw": text} which would send them through
-    # nlu_extractor and cause detect_and_extract_intent to return None on failure.
-    if _BUILD_WIDGET_RE.match(t) or _WANT_WIDGET_RE.match(t):
-        return Intent("build_widget", {})
-    if _BUILD_PAGE_RE.match(t) or _WANT_PAGE_RE.match(t):
-        return Intent("build_page", {})
+    # "Build a widget / page", "improve yourself": the builder agent these used to expand for is retired, so no
+    # intent - the brain answers. Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
+    # extend_capability keeps its intent (empty slots: no nlu_extractor pass).
+    if _BUILD_WIDGET_RE.match(t) or _WANT_WIDGET_RE.match(t) or _BUILD_PAGE_RE.match(t) or _WANT_PAGE_RE.match(t):
+        return None
     if _EXTEND_CAPABILITY_RE.match(t):
         return Intent("extend_capability", {})
     if _SELF_IMPROVE_RE.search(t):
-        return Intent("self_improve", {})
+        return None
 
     # "Let's talk" → a short spoken yes (the panel's live conversation mode is the Ask card's).
     # Placed before greetings so "let's chat" doesn't become a greeting.
@@ -1428,18 +1331,13 @@ def detect_intent(
             label = label_raw if label_raw else "Timer"
             return Intent("timer_create", {"minutes": mins, "label": label.title()})
 
-    # --- RECIPE SEARCH ---
-    m = re.match(
-        r"^(?:show|find|get|search|look up)(?: me)? (?:a )?recipe (?:for |to make )?(.+)$", t
-    )
-    if m:
-        return Intent("recipe_search", {"query": m.group(1).strip()})
-
-    m = re.match(
-        r"^how (?:do i |can i )?(?:make|cook|bake) (.+)$", t
-    )
-    if m:
-        return Intent("recipe_search", {"query": m.group(1).strip()})
+    # A recipe ask ("find me a recipe for X", "how do I make X") has no fast intent: nothing here searches recipes, so
+    # the brain answers it from its own knowledge (gap audit 2026-11-13). Returning here, in the old recipe intent's
+    # place, keeps "get a recipe for scones" from being read as a list add below.
+    if re.match(r"^(?:show|find|get|search|look up)(?: me)? (?:a )?recipe\b", t) or re.match(
+        r"^how (?:do i |can i )?(?:make|cook|bake) ", t
+    ):
+        return None
 
     # === MUSIC SETUP (checked before list_add so "add music service" doesn't misroute) ===
     _MUSIC_SETUP_EARLY_RE = re.compile(
@@ -1692,22 +1590,6 @@ def detect_intent(
             return Intent("music_volume", {"level": _lvl})
         _up  = re.search(r'\b(up|raise|louder|increase|boost|higher)\b', t, re.IGNORECASE)
         return Intent("music_control", {"command": "volume_up" if _up else "volume_down"})
-
-    # ── A2A Federation ────────────────────────────────────────────────────────
-    _A2A_RE = re.compile(
-        r'\b(?:call|ask|delegate\s+to|send\s+to|route\s+to|use)\b.{0,20}\b(?:agent|hermes|openclaw)\b'
-        r'|which\s+agents?\s+(?:do\s+you|are|can)\b'
-        r'|(?:show|list|what\s+are)\s+(?:my|your|the)?\s*(?:agents?|federation|peers?)\b'
-        r'|(?:agent|federation)\s+(?:status|registry|health|card)\b'
-        r'|what\s+agents?\s+(?:do\s+you\s+know|have\s+you|are\s+available)\b'
-        r'|a2a\s+(?:status|health|check|federation)\b'
-        r'|(?:hermes|openclaw)\s+(?:status|online|running|connected|health)\b'
-        r'|are\s+(?:hermes|openclaw|peer\s+agents?)\s+(?:online|running|connected|available)\b'
-        r'|list\s+(?:connected|registered|known|peer)\s+agents?\b',
-        re.I,
-    )
-    if _A2A_RE.search(t):
-        return Intent("a2a_federation_status", {})
 
     # ── Multica board visibility ───────────────────────────────────────────────
     if re.search(r"\b(?:pause|stop)\s+(?:multica\s+|engineering\s+)?dispatch\b", t, re.I):
@@ -4857,58 +4739,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         write_receipts.record(user_id, "memory", getattr(ref, "id", "") or user_turn_id, "memory_store")
         return "Got it — I'll remember that."
 
-    # ── A2A Federation Status ──────────────────────────────────────────────────
-    if intent.name == "a2a_federation_status":
-        try:
-            import httpx as _httpx
-            async with _httpx.AsyncClient(timeout=5) as _cli:
-                reg_resp, squad_resp, runtime_resp = await asyncio.gather(
-                    _cli.get(_self_url() + "/api/agent/registry"),
-                    _cli.get(_self_url() + "/api/agent/squad"),
-                    _cli.get(_self_url() + "/api/agent/runtimes"),
-                    return_exceptions=True,
-                )
-            reg = reg_resp.json() if not isinstance(reg_resp, Exception) else {}
-            squad = squad_resp.json() if not isinstance(squad_resp, Exception) else {}
-            runtimes = runtime_resp.json() if not isinstance(runtime_resp, Exception) else {}
-
-            agents = reg.get("agents", {})
-            rt = runtimes.get("runtimes", {})
-            last_probed = runtimes.get("last_probed", "")
-
-            lines = ["**Agent Federation**\n"]
-
-            # Per-agent status line using runtimes endpoint for accuracy
-            for name, info in agents.items():
-                rt_entry = rt.get(name, {})
-                online = rt_entry.get("online", info.get("status") == "online")
-                status_label = "online" if online else "offline"
-                desc = info.get("description", "")[:70]
-                lines.append(f"- **{name.title()}** [{status_label}] — {desc}")
-
-            # Squad topology
-            squads = squad.get("squads", {})
-            if squads:
-                lines.append("\n**Squad:**")
-                for sq_name, sq_info in squads.items():
-                    members_detail = sq_info.get("members_detail", [])
-                    member_str = ", ".join(
-                        f"{m['name']} ({m.get('status','?')})" for m in members_detail
-                    ) if members_detail else ", ".join(sq_info.get("members", []))
-                    lines.append(f"- `{sq_name}`: {member_str}")
-
-            if last_probed:
-                lines.append(f"\n_Last health probe: {last_probed[:19].replace('T',' ')} UTC_")
-
-            lines.append(
-                '\nTo delegate: "delegate to hermes: [task]" or "delegate to openclaw: [task]"'
-            )
-            return "\n".join(lines)
-        except Exception as exc:
-            logger.warning("a2a_federation_status: %s", exc)
-            return ("I couldn't reach the agent registry right now. "
-                    "Hermes runs on port 8642, OpenClaw on port 18789.")
-
     # ── Multica Board Status ───────────────────────────────────────────────────
     if intent.name == "agent_tasks_status":
         try:
@@ -5340,8 +5170,8 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
     if intent.name == "set_volume":
         return await _execute_set_volume_intent(intent)
 
-    # Timer and recipe intents need panel navigation — emit a nav action so the cooking
-    # page opens and the timer/recipe widget is pre-filled.  The text response is spoken
+    # Timer intents need panel navigation — emit a nav action so the timers
+    # screen opens and the timer widget is pre-filled.  The text response is spoken
     # by the voice daemon; the panel action is dispatched by _broadcast_intent_nav in chat.py.
     if intent.name == "timer_create":
         # On the touch panel, Skybridge owns timers end-to-end (real countdown
@@ -5364,11 +5194,6 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         except Exception as exc:
             logger.warning("timer_create: failed to register real timer (falling back to spoken-only): %s", exc)
         return f"Starting a {mins} minute timer{named}."
-
-    if intent.name == "recipe_search":
-        query = intent.slots.get("query", "")
-        # Panel nav to cooking page handled by _broadcast_intent_nav in chat.py.
-        return f"Looking up a recipe for {query}."
 
     # Route directly to the weather backend helpers for deterministic voice UX.
     if intent.name == "weather":
