@@ -733,6 +733,9 @@ def alert_crash_loops(path: str, since, until) -> dict:
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+#: a REAL night's report name (write_report: <date>.json, or <date>-HHMM.json for a second run that day); exploratory runs
+#: carry -cells / -trial / -sweep / -rehearse / -repass-only. An unreadable file is placed in a night by this name alone.
+_NIGHT_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-\d{4})?\.json$")
 
 
 def _night_bucket(runs: list[dict]) -> str:
@@ -757,21 +760,27 @@ def alert_nights(report_dir: str, since, until) -> dict:
     except OSError as exc:
         return unmeasured(key, title, f"cannot list the night-reports directory ({type(exc).__name__})")
     runs: dict[str, list[dict]] = {}
-    unreadable = 0
+    unreadable: list[str] = []   # file-name dates of real-night reports that exist but cannot be read (never "missing")
     for name in names:
         if not name.endswith(".json") or not _DATE_RE.match(name[:10]):
             continue
+        real_name = _NIGHT_NAME_RE.match(name)
         try:
             with open(os.path.join(report_dir, name), encoding="utf-8") as fh:
                 d = json.load(fh)
         except (OSError, ValueError):
-            unreadable += 1
+            if real_name:
+                unreadable.append(real_name.group(1))
             continue
-        if not isinstance(d, dict) or d.get("mode") != "night":
+        if not isinstance(d, dict):
+            if real_name:
+                unreadable.append(real_name.group(1))
+            continue
+        if d.get("mode") != "night":
             continue
         day = str(d.get("started", ""))[:10]
-        if not _DATE_RE.match(day):
-            unreadable += 1
+        if not _DATE_RE.match(day) or not isinstance(d.get("outcome"), str):
+            unreadable.append(real_name.group(1) if real_name else name[:10])
             continue
         runs.setdefault(day, []).append(d)
     if not runs:
@@ -790,6 +799,11 @@ def alert_nights(report_dir: str, since, until) -> dict:
     nights = [n for n in nights if n >= first_report]
     if not nights:
         return unmeasured(key, title, f"the night reports start {first_report}, after every night in the window")
+    bad = sum(1 for u in unreadable if u in {n.isoformat() for n in nights})
+    if bad:
+        return unmeasured(key, title, f"{bad} night report(s) in the window exist but cannot be read (corrupt or "
+                                      f"malformed); a night whose report cannot be read is neither missing nor ok",
+                          window=f"nights {nights[0]}..{nights[-1]}")
     c = {"ok": 0, "degraded": 0, "not_ok": 0, "no_report": 0, "alarm": 0, "decode_slow": 0, "restore_failed": 0,
          "night_lost": 0}
     for n in nights:
@@ -817,9 +831,9 @@ def alert_nights(report_dir: str, since, until) -> dict:
                   method=("night-reports/<date>.json mode=night; per night the best run: outcome ok... > degraded... > "
                           "anything else (refused/aborted/failed/noop); alarm = restore_status NOT HEALTHY, night_lost or "
                           "decode_alert (what the ALARM file carries); a night with no report is counted, not skipped; "
-                          f"ALARM file present now: {'yes' if alarm_now else 'no'}; unreadable reports: {unreadable}; "
+                          f"ALARM file present now: {'yes' if alarm_now else 'no'}; unreadable reports outside the window: {len(unreadable)}; "
                           "a 30-day per-night view from the reports, not the night-window.log row above"),
-                  data={**c, "nights": len(nights), "alarm_file_now": alarm_now, "unreadable": unreadable,
+                  data={**c, "nights": len(nights), "alarm_file_now": alarm_now, "unreadable": len(unreadable),
                         "narrowed": narrowed})
 
 
@@ -850,30 +864,37 @@ def alert_backups(log_path: str, state_path: str) -> dict:
             tail = False
         elif s:
             tail = True
+    counted = f"(readable: {alerts} ALERT lines over {runs} runs)"
     try:
         last_write = dt.datetime.fromtimestamp(os.stat(log_path).st_mtime, LOCAL_TZ)
-    except OSError:
-        last_write = None
-    last_run, last_ok = "unreadable", None
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot stat {os.path.basename(log_path)} ({type(exc).__name__}) {counted}",
+                          window="whole log")
     try:
         with open(state_path, encoding="utf-8") as fh:
             st = json.load(fh)
-        t = parse_local(str(st.get("time", "")))
+        t = parse_local(str(st["time"]))
+        last_ok = st["ok"]
+        if not isinstance(last_ok, bool):
+            raise ValueError("ok is not a boolean")
         last_run = _fmt(t)
-        last_ok = st.get("ok") if isinstance(st.get("ok"), bool) else None
-    except (OSError, ValueError, TypeError, AttributeError):
-        pass
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot read the drill state file {os.path.basename(state_path)} "
+                                      f"({type(exc).__name__}) {counted}", window="whole log")
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return unmeasured(key, title, f"the drill state file {os.path.basename(state_path)} is malformed "
+                                      f"({type(exc).__name__}) {counted}", window="whole log")
     kinds_txt = ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) or "none"
     return metric(key, title,
                   (f"{alerts} ALERT lines over {runs} runs ({problem_runs} with problems); by kind: {kinds_txt}; "
-                   f"last write {_fmt(last_write) if last_write else 'unknown'}"),
+                   f"last write {_fmt(last_write)}"),
                   n=runs, window="whole log (undated: the count is all-time, not the long window)",
                   method=("backup-verify.log ALERT: lines (zoe_offbox.alert, used by the on-box and off-box drills); runs "
                           "end at the script's last line; the log has no per-line timestamps, so no date is guessed; "
                           f"alert not delivered: {undelivered}; unterminated last run: {'yes' if tail else 'no'}; last drill "
-                          f"run (state file): {last_run}, passed: {'unknown' if last_ok is None else 'yes' if last_ok else 'no'}"),
+                          f"run (state file): {last_run}, passed: {'yes' if last_ok else 'no'}"),
                   data={"alerts": alerts, "runs": runs, "problem_runs": problem_runs, "by_kind": kinds,
-                        "undelivered": undelivered, "last_write": last_write.isoformat() if last_write else None,
+                        "undelivered": undelivered, "last_write": last_write.isoformat(),
                         "last_drill_ok": last_ok})
 
 
@@ -895,6 +916,8 @@ def alert_health(path: str, since, until) -> dict:
         try:
             t = dt.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=LOCAL_TZ)
         except ValueError:
+            if "] ALERT " in line:   # an alert that cannot be dated cannot be placed in or out of the window
+                return unmeasured(key, title, "malformed marker (an ALERT line with an invalid timestamp)", window=w)
             continue
         stamps.append(t)
         a = _HEALTH_ALERT_RE.match(line)
@@ -966,8 +989,9 @@ def perf_panel_kv_miss(logs: LogSet, since, until) -> dict:
         kinds[k] += 1
         if k == "first":
             first_days.add(t.astimezone(LOCAL_TZ).date().isoformat())
-    for _ in in_window(logs.lines, since, until, "kv_miss_alert: alert not delivered"):
-        undelivered += 1
+    for _, line in in_window(logs.lines, since, until, "kv_miss_alert: alert not delivered"):
+        if not is_harness(line, fields(line)):
+            undelivered += 1
     n = sum(kinds.values())
     return metric(key, title,
                   (f"misses {n}: first {kinds['first']}, warm {kinds['warm']}"

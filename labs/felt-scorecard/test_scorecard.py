@@ -646,7 +646,8 @@ def test_nights_buckets_alarms_and_missing(tmp_path):
     _report(tmp_path, "2026-11-06")
     _report(tmp_path, "2026-11-06-rehearse", mode="rehearse", outcome="failed: x")   # not a real night
     # 2026-11-07 and 2026-11-08 have no report
-    (tmp_path / "2026-11-08.json").write_text("{not json")
+    (tmp_path / "2026-10-31.json").write_text("{not json")                 # corrupt, but outside the window
+    (tmp_path / "2026-11-07-rehearse.json").write_text("{not json")        # corrupt, but not a real-night report
     m = sc.alert_nights(str(tmp_path), since, until)
     d = m["data"]
     assert m["status"] == "measured" and m["n"] == 7 and m["window"] == "nights 2026-11-02..2026-11-08"
@@ -654,6 +655,18 @@ def test_nights_buckets_alarms_and_missing(tmp_path):
     assert (d["alarm"], d["decode_slow"], d["restore_failed"], d["night_lost"]) == (3, 1, 1, 1)
     assert d["unreadable"] == 1 and d["alarm_file_now"] is False
     assert "x" not in m["value"] and "did not load" not in str(m)
+
+
+@pytest.mark.parametrize("name,body", [("2026-11-04.json", "{not json"), ("2026-11-04-1530.json", "[1, 2]"),
+                                       ("2026-11-04.json", '{"mode": "night", "started": "2026-11-04T02:50:00"}'),
+                                       ("2026-11-04.json", '{"mode": "night", "outcome": "ok", "started": "garbage"}')])
+def test_nights_unreadable_report_in_window_is_unmeasured_not_missing(tmp_path, name, body):
+    since, until = dt.datetime(2026, 11, 1, 12, tzinfo=sc.LOCAL_TZ), dt.datetime(2026, 11, 8, 12, tzinfo=sc.LOCAL_TZ)
+    _report(tmp_path, "2026-10-30")
+    _report(tmp_path, "2026-11-03")
+    (tmp_path / name).write_text(body)
+    m = sc.alert_nights(str(tmp_path), since, until)
+    assert m["status"] == "unmeasured" and "1 night report(s) in the window exist but cannot be read" in m["reason"]
 
 
 def test_nights_missing_dir_and_narrowed_window(tmp_path):
@@ -689,16 +702,30 @@ def test_backups_whole_log_counts_and_kinds(tmp_path):
     assert (d["alerts"], d["runs"], d["problem_runs"], d["undelivered"], d["last_drill_ok"]) == (3, 3, 2, 1, False)
     assert d["by_kind"] == {"drill_refused": 1, "drill_failed": 1, "other": 1}
     assert "private" not in str(m) and "secret" not in str(m)
-    assert "2026-11-08 05:31" in m["method"]
+    assert "2026-11-08 05:31" in m["method"] and "passed: no" in m["method"]
+
+
+@pytest.mark.parametrize("state_body", [None, "{not json", '{"ok": true}', '{"time": "2026-11-08T05:31:52+08:00", "ok": "yes"}',
+                                        '{"time": "not a time", "ok": true}', "[1]"])
+def test_backups_unreadable_or_malformed_state_is_unmeasured(tmp_path, state_body):
+    log, state = tmp_path / "backup-verify.log", tmp_path / "state.json"
+    log.write_text(BACKUP_LOG)
+    if state_body is not None:
+        state.write_text(state_body)
+    m = sc.alert_backups(str(log), str(state))
+    assert m["status"] == "unmeasured" and "drill state file" in m["reason"]
+    assert "(readable: 3 ALERT lines over 3 runs)" in m["reason"] and "private" not in str(m)
 
 
 def test_backups_missing_log_and_state(tmp_path):
     assert sc.alert_backups(str(tmp_path / "nope.log"), str(tmp_path / "s.json"))["status"] == "unmeasured"
     log = tmp_path / "backup-verify.log"
     log.write_text("ALERT: weekly restore drill FAILED (1): x\n")  # a run cut before its last line
-    m = sc.alert_backups(str(log), str(tmp_path / "missing.json"))
+    state = tmp_path / "state.json"
+    state.write_text('{"time": "2026-11-08T05:31:52+08:00", "ok": true}')
+    m = sc.alert_backups(str(log), str(state))
     assert m["data"]["runs"] == 0 and m["data"]["alerts"] == 1 and "unterminated last run: yes" in m["method"]
-    assert "state file): unreadable" in m["method"]
+    assert sc.alert_backups(str(log), str(tmp_path / "missing.json"))["status"] == "unmeasured"
 
 
 def _health_log(path, extra, start=dt.datetime(2026, 10, 15, tzinfo=TZ8), step=dt.timedelta(minutes=5)):
@@ -733,6 +760,10 @@ def test_health_missing_and_uncovered(tmp_path):
     log = tmp_path / "health.log"
     _health_log(log, [], step=dt.timedelta(hours=1))      # a writer that runs hourly leaves 1 h holes
     assert "silent" in sc.alert_health(str(log), LONG_SINCE, UNTIL)["reason"]
+    _health_log(log, [])
+    log.write_text(log.read_text() + "[2026-11-31T25:00:00] ALERT DOWN: postgres (x)\n")   # an ALERT that cannot be dated
+    m = sc.alert_health(str(log), LONG_SINCE, UNTIL)
+    assert m["status"] == "unmeasured" and "invalid timestamp" in m["reason"]
 
 
 def test_distress_and_kv_miss_from_app_log():
@@ -744,6 +775,8 @@ def test_distress_and_kv_miss_from_app_log():
         L("07T10:02:00", "PANEL_KV_MISS session=voice-panel-a kind=first first_prompt_n=900 first_cache_n=0 since_prev_s=-"),
         L("07T10:03:00", "PANEL_KV_MISS session=voice-panel-a kind=weird_private first_prompt_n=900 first_cache_n=0"),
         L("07T10:04:00", "kv_miss_alert: alert not delivered (attempt 1/3): http_401"),
+        L("07T10:05:00", "kv_miss_alert: alert not delivered (attempt 2/3): http_401 traffic=harness"),
+        L("07T10:06:00", "kv_miss_alert: alert not delivered (attempt 3/3): http_401 traffic=ci"),
         L("01T10:00:00", "PANEL_KV_MISS session=voice-panel-a kind=first first_prompt_n=900 first_cache_n=0"),  # outside
     ])
     logs = _logset(lines, sc.parse_ts(L("01T00:00:00", "")))
