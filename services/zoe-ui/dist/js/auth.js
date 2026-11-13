@@ -10,22 +10,8 @@
         sessionKey: 'zoe_session',
         authBaseUrl: '/api/auth'  // Use relative URL for nginx proxy
     };
+    // The estate (home.html) gates itself; skybridge.html is the only other touch page with a page id (it redirects into the estate).
     const TOUCH_PATH_TO_PAGE_ID = {
-        '/touch/dashboard.html': 'dashboard',
-        '/touch/calendar.html': 'calendar',
-        '/touch/lists.html': 'lists',
-        '/touch/chat.html': 'chat',
-        '/touch/weather.html': 'weather',
-        '/touch/smarthome.html': 'smarthome',
-        '/touch/smart-home.html': 'smarthome',
-        '/touch/timers.html': 'timers',
-        '/touch/music.html': 'music',
-        '/touch/notes.html': 'notes',
-        '/touch/journal.html': 'journal',
-        '/touch/people.html': 'people',
-        '/touch/memories.html': 'memories',
-        '/touch/settings.html': 'settings',
-        '/touch/updates.html': 'updates',
         '/touch/skybridge.html': 'skybridge',
     };
     let _capabilityMatrix = null;
@@ -356,7 +342,7 @@
         const search = window.location.search || '';
         if (window.__zoeAuthRedirecting) return;   // the synchronous desktop gate already sent us to login
         // Persist kiosk mode in sessionStorage so navigations within the touch UI
-        // don't lose it (voice commands navigate to /touch/calendar.html etc. without query params).
+        // don't lose it (a voice turn reloads the estate without query params).
         // sessionStorage is tab-scoped and cleared when the browser tab closes, preventing
         // the kiosk bypass from bleeding into non-kiosk sessions.
         // Also clear any stale localStorage kiosk key left by older code.

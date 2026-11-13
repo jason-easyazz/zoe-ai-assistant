@@ -4,7 +4,7 @@ Runs dist/test_touch_home_honest_panel.js: the REAL ZFETCH block of touch/home.h
 request, one "Can't reach Zoe" line while requests fail, cleared by the next answer; plain failure lines; one
 load-failure wording), plus page checks with planted-fault negative controls (no typing dialogs, no silent taps,
 the person-introduce arrival, the timer-done line in Zoe's voice, wall-readable sizes, chat session id, tappable
-agenda rows). No browser, no network.
+agenda rows, and the Settings screen's Voice ID / Pendant / Notifications rows and guest state). No browser, no network.
 """
 import shutil
 import subprocess

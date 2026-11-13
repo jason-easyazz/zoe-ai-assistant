@@ -309,7 +309,7 @@
         .api-indicator.connecting::before { background: #3b82f6; }
         .main-layout { display: flex; height: calc(100vh - 60px); margin-top: 60px; }
         .insights-sidebar {
-            width: 360px; background: var(--glass-bg);
+            flex: 1; max-width: 760px; margin: 0 auto; background: var(--glass-bg);
             backdrop-filter: blur(40px);
             border-right: 1px solid var(--glass-border);
             padding: 24px; overflow-y: auto;
@@ -391,33 +391,6 @@
         }
         .insight-text { font-size: 14px; color: var(--text-primary); line-height: 1.5; }
         .insight-action { margin-top: 8px; font-size: 13px; color: var(--purple); font-weight: 500; }
-        .canvas-container { flex: 1; position: relative; overflow: hidden; }
-        #memoryCanvas { width: 100%; height: 100%; cursor: grab; }
-        #memoryCanvas.dragging { cursor: grabbing; }
-        .canvas-legend {
-            position: absolute; bottom: 24px; left: 24px;
-            background: var(--glass-bg); backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border); border-radius: 12px;
-            padding: 16px; box-shadow: var(--shadow-md);
-        }
-        .legend-title {
-            font-size: 12px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 12px;
-        }
-        .legend-item { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 13px; }
-        .legend-circle { width: 16px; height: 16px; border-radius: 50%; border: 2px solid; }
-        .canvas-controls { position: absolute; top: 24px; right: 24px; display: flex; gap: 8px; }
-        .control-btn {
-            width: 40px; height: 40px; background: var(--glass-bg);
-            backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
-            border-radius: 10px; display: flex; align-items: center;
-            justify-content: center; cursor: pointer; transition: all 0.2s;
-            font-size: 18px; color: var(--text-primary);
-        }
-        .control-btn:hover {
-            background: rgba(255, 255, 255, 0.9);
-            transform: translateY(-2px); box-shadow: var(--shadow-md);
-        }
         
         .tile {
             position: absolute;
@@ -1274,23 +1247,10 @@
             </div>
             
             <div id="filterChips" class="filter-chips"></div>
-            <div id="breadcrumb" class="breadcrumb" style="display: none;"></div>
             <div id="insightsList"></div>
-        </div>
-        <div class="canvas-container">
-            <canvas id="memoryCanvas"></canvas>
-            
-            <div class="canvas-controls">
-                <div class="control-btn" id="backBtn" onclick="navigateBack()" style="display: none;" title="Back">←</div>
-                <div class="control-btn" onclick="resetView()" title="Reset View">⟲</div>
-                <div class="control-btn" onclick="zoomIn()" title="Zoom In">+</div>
-                <div class="control-btn" onclick="zoomOut()" title="Zoom Out">−</div>
-            </div>
-            <div class="canvas-legend" id="canvasLegend"></div>
         </div>
     </div>
     
-    <div id="tilesContainer"></div>
 
     <!-- "What Zoe knows about you" (js/memories-about-me.js, flag-dark ZOE_MEMORIES_VOICE): hidden until the server offers it -->
     <section id="aboutMe" class="about-me" hidden aria-label="What Zoe knows about you"></section>
@@ -1389,7 +1349,6 @@
         </div>
     </div>
     
-    <div class="tooltip" id="tooltip"></div>
     
     <script src="js/auth.js"></script>
     <script src="js/common.js"></script>
@@ -1412,7 +1371,7 @@
     </script>
     <script>
         /* ── Render-safety helpers ──
-           Memory content, collection names and canvas tiles originate from
+           Memory content and notification text originate from
            conversations, ingest and pasted data, so every field below is
            untrusted. The renderers in this file build DOM nodes (textContent +
            addEventListener) instead of concatenating HTML strings: untrusted
@@ -1424,504 +1383,6 @@
             if (text !== undefined) d.textContent = text;
             return d;
         }
-        function sanitizeTileUrl(value) {
-            const raw = String(value ?? '').trim();
-            if (!raw) return '';
-            // Browsers ignore control chars and whitespace when parsing the
-            // scheme, so strip them before testing ("java\tscript:" bypasses).
-            const collapsed = raw.replace(/[\u0000-\u0020]/g, '').toLowerCase();
-            if (/^(javascript|vbscript|file):/.test(collapsed)) return '';
-            // Allow only inert raster types. data:image/svg+xml is an ACTIVE
-            // document format: script in it stays dormant under <img>, but the
-            // URL persists in tile preview data and would execute if that data
-            // is ever rendered in a scripted context (object/iframe/direct
-            // navigation). The [;,] delimiter matters -- a data URL may carry
-            // no parameters at all ("data:image/png,<data>").
-            if (collapsed.startsWith('data:')
-                && !/^data:image\/(?:png|jpe?g|gif|webp|avif)[;,]/.test(collapsed)) return '';
-            return raw;
-        }
-
-        const canvas = document.getElementById('memoryCanvas');
-        const ctx = canvas.getContext('2d');
-        let width, height, centerX, centerY;
-        let scale = 1, offsetX = 0, offsetY = 0;
-        let isDragging = false, dragStartX = 0, dragStartY = 0;
-        let draggedItem = null, hoveredItem = null;
-        let currentCollection = null;
-        let navigationPath = [];
-        let animationFrame;
-        let breathePhase = 0;
-        let mouseDownTime = 0;
-        let mouseDownItem = null;
-        let openTiles = [];
-        const DRAG_THRESHOLD = 200;
-        
-        let collections = [];
-        let currentUser = null;
-        
-        async function loadCollections() {
-            try {
-                // Use relative URL through nginx proxy to collections service
-                console.log("Making API request to collections-service via nginx proxy");
-                const data = await apiRequest('/collections');
-                collections = data.collections.map(collection => ({
-                    id: `c${collection.id}`,
-                    type: 'collection',
-                    name: collection.name,
-                    icon: collection.icon,
-                    x: collection.x,
-                    y: collection.y,
-                    size: collection.size,
-                    color: collection.color,
-                    items: []
-                }));
-                
-                // Load tiles for each collection
-                for (let collection of collections) {
-                    const collectionId = collection.id.replace('c', '');
-                    try {
-                        // Use nginx proxy for tiles
-                        const tilesData = await apiRequest(`/collections/${collectionId}/tiles`);
-                        
-                        collection.items = tilesData.tiles.map(tile => ({
-                            id: `t${tile.id}`,
-                            type: 'tile',
-                            name: tile.name,
-                            x: tile.x,
-                            y: tile.y,
-                            size: tile.size,
-                            content: tile.content,
-                            preview: tile.preview_data,
-                            tileX: tile.tile_x,
-                            tileY: tile.tile_y,
-                            tileWidth: tile.tile_width,
-                            dbId: tile.id // Store the actual database ID
-                        }));
-                    } catch (error) {
-                        console.error("Error loading tiles for collection:", collectionId, error);
-                        console.error(`Failed to load tiles for collection ${collectionId}:`, error);
-                        collection.items = [];
-                    }
-                }
-            } catch (error) {
-                console.error("Error loading people:", error);
-                console.error('Failed to load collections:', error);
-                collections = [];
-            }
-        }
-        
-        
-        function resizeCanvas() {
-            width = canvas.parentElement.clientWidth;
-            height = canvas.parentElement.clientHeight;
-            canvas.width = width * window.devicePixelRatio;
-            canvas.height = height * window.devicePixelRatio;
-            canvas.style.width = width + 'px';
-            canvas.style.height = height + 'px';
-            // Reset any previous transform before applying DPR scale so repeated
-            // resizes do not compound the scale.
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-            centerX = width / 2;
-            centerY = height / 2;
-        }
-        
-        // openAddPersonModal / closeAddPersonModal removed: the addPersonModal DOM
-        // no longer lives on this page (people management has its own page).
-        
-        function openTile(item) {
-            if (openTiles.includes(item.id)) return;
-            
-            openTiles.push(item.id);
-            
-            const tile = document.createElement('div');
-            tile.className = 'tile show';
-            tile.id = `tile-${item.id}`;
-            
-            const isPhotoTile = item.preview?.type === 'image';
-            if (isPhotoTile) {
-                tile.classList.add('photo-tile');
-            }
-            
-            // Use saved position if exists, otherwise center
-            if (item.tileX && item.tileY) {
-                tile.style.left = item.tileX + 'px';
-                tile.style.top = item.tileY + 'px';
-                tile.style.transform = 'none';
-            } else {
-                tile.style.left = '50%';
-                tile.style.top = '50%';
-                tile.style.transform = 'translate(-50%, -50%)';
-            }
-            
-            // Use saved width if exists
-            if (item.tileWidth) {
-                tile.style.width = item.tileWidth + 'px';
-            }
-            
-            // Header: title input + close button.
-            const header = memDiv(isPhotoTile ? 'tile-header photo-header' : 'tile-header');
-            header.addEventListener('mousedown', e => startTileDrag(e, item.id));
-            const titleInput = document.createElement('input');
-            titleInput.type = 'text';
-            titleInput.className = 'tile-title';
-            titleInput.placeholder = isPhotoTile ? 'Add a title...' : 'Untitled';
-            titleInput.value = item.name || '';
-            titleInput.readOnly = true;   // tiles are read-only: the collections backend has no write routes
-            const closeBtn = document.createElement('button');
-            closeBtn.className = 'tile-close';
-            closeBtn.textContent = '×';
-            closeBtn.addEventListener('click', () => closeTile(item.id));
-            header.append(titleInput, closeBtn);
-
-            // Body.
-            const editor = document.createElement('textarea');
-            editor.className = isPhotoTile ? 'tile-editor photo-notes' : 'tile-editor';
-            editor.placeholder = isPhotoTile ? 'Add notes (optional)...' : 'Type notes or paste a link...';
-            editor.value = item.content || '';
-            editor.readOnly = true;
-
-            const content = memDiv(isPhotoTile ? 'tile-content photo-content' : 'tile-content');
-            if (isPhotoTile) {
-                const photoMain = memDiv('tile-photo-main');
-                const img = document.createElement('img');
-                // Assigning .src still honours javascript:/data: schemes, so screen them.
-                img.src = sanitizeTileUrl(item.preview.image);
-                img.alt = 'Photo';
-                const handle = memDiv('tile-resize-handle', '⇲');
-                handle.addEventListener('mousedown', e => startImageResize(e, item.id));
-                photoMain.append(img, handle);
-                content.append(photoMain, editor);
-            } else {
-                content.appendChild(editor);
-                if (item.preview) {
-                    const preview = memDiv('tile-preview');
-                    preview.appendChild(memDiv('tile-preview-image', item.preview.image || ''));
-                    preview.appendChild(memDiv('tile-preview-title', item.preview.title || ''));
-                    preview.appendChild(memDiv('tile-preview-description', item.preview.description || ''));
-                    preview.appendChild(memDiv('tile-preview-url', item.preview.url || ''));
-                    content.appendChild(preview);
-                }
-            }
-
-            tile.replaceChildren(header, content);
-            document.getElementById('tilesContainer').appendChild(tile);
-        }
-        
-        let draggedTile = null, tileDragStartX = 0, tileDragStartY = 0;
-        let resizingTile = null, resizeStartWidth = 0, resizeStartX = 0;
-        
-        function startTileDrag(e, tileId) {
-            draggedTile = document.getElementById(`tile-${tileId}`);
-            const rect = draggedTile.getBoundingClientRect();
-            tileDragStartX = e.clientX - rect.left;
-            tileDragStartY = e.clientY - rect.top;
-            draggedTile.classList.add('dragging');
-            
-            document.addEventListener('mousemove', moveTile);
-            document.addEventListener('mouseup', stopTileDrag);
-        }
-        
-        function moveTile(e) {
-            if (!draggedTile) return;
-            const newX = e.clientX - tileDragStartX;
-            const newY = e.clientY - tileDragStartY;
-            draggedTile.style.left = newX + 'px';
-            draggedTile.style.top = newY + 'px';
-            draggedTile.style.transform = 'none';
-        }
-        
-        function stopTileDrag() {
-            if (draggedTile) {
-                // Save position to item
-                const tileId = draggedTile.id.replace('tile-', '');
-                const col = collections.find(c => c.id === currentCollection);
-                const item = col?.items.find(i => i.id === tileId);
-                if (item) {
-                    item.tileX = parseInt(draggedTile.style.left);
-                    item.tileY = parseInt(draggedTile.style.top);
-                }
-                
-                draggedTile.classList.remove('dragging');
-                draggedTile = null;
-            }
-            document.removeEventListener('mousemove', moveTile);
-            document.removeEventListener('mouseup', stopTileDrag);
-        }
-        
-        function startImageResize(e, tileId) {
-            e.stopPropagation();
-            resizingTile = document.getElementById(`tile-${tileId}`);
-            resizeStartWidth = resizingTile.offsetWidth;
-            resizeStartX = e.clientX;
-            
-            document.addEventListener('mousemove', resizeImage);
-            document.addEventListener('mouseup', stopImageResize);
-        }
-        
-        function resizeImage(e) {
-            if (!resizingTile) return;
-            const delta = e.clientX - resizeStartX;
-            const newWidth = Math.max(320, Math.min(800, resizeStartWidth + delta));
-            resizingTile.style.width = newWidth + 'px';
-        }
-        
-        function stopImageResize() {
-            if (resizingTile) {
-                // Save width to item
-                const tileId = resizingTile.id.replace('tile-', '');
-                const col = collections.find(c => c.id === currentCollection);
-                const item = col?.items.find(i => i.id === tileId);
-                if (item) {
-                    item.tileWidth = resizingTile.offsetWidth;
-                }
-                
-                resizingTile = null;
-            }
-            document.removeEventListener('mousemove', resizeImage);
-            document.removeEventListener('mouseup', stopImageResize);
-        }
-        
-        function closeTile(itemId) {
-            const tile = document.getElementById(`tile-${itemId}`);
-            if (tile) tile.remove();
-            openTiles = openTiles.filter(id => id !== itemId);
-        }
-        
-        function animate() {
-            breathePhase += 0.02;
-            draw();
-            animationFrame = requestAnimationFrame(animate);
-        }
-        
-        function draw() {
-            const isDark = document.documentElement.classList.contains('dark-mode');
-            const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-            if (isDark) {
-                bgGradient.addColorStop(0, '#0a0a14');
-                bgGradient.addColorStop(1, '#12121f');
-            } else {
-                bgGradient.addColorStop(0, '#fafbfc');
-                bgGradient.addColorStop(1, '#f1f3f6');
-            }
-            ctx.fillStyle = bgGradient;
-            ctx.fillRect(0, 0, width, height);
-            
-            ctx.save();
-            ctx.translate(centerX + offsetX, centerY + offsetY);
-            ctx.scale(scale, scale);
-            
-            if (currentCollection) {
-                drawCollectionCanvas();
-            } else {
-                drawCollectionsCanvas();
-            }
-            
-            ctx.restore();
-        }
-        
-        
-        function drawCollectionsCanvas() {
-            collections.forEach((col, index) => {
-                const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase + index) * 5 : 0;
-                const floatingCol = {...col, y: col.y + floatOffset};
-                drawCanvasItem(floatingCol, draggedItem?.id === col.id, hoveredItem?.id === col.id);
-            });
-        }
-        
-        function drawCollectionCanvas() {
-            const col = collections.find(c => c.id === currentCollection);
-            if (!col) return;
-            col.items.forEach((item, index) => {
-                if (openTiles.includes(item.id)) return;
-                
-                const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase + index * 0.5) * 3 : 0;
-                const floatingItem = {...item, y: item.y + floatOffset};
-                drawCanvasItem(floatingItem, draggedItem?.id === item.id, hoveredItem?.id === item.id);
-            });
-        }
-        
-        function drawCanvasItem(item, isDragged, isHovered) {
-            const isDark = document.documentElement.classList.contains('dark-mode');
-            const color = item.color || '#7c3aed';
-            const r = (item.size || 50) / 2;
-            const scale = isDragged ? 1.1 : isHovered ? 1.05 : 1;
-            
-            ctx.save();
-            ctx.translate(item.x, item.y);
-            ctx.scale(scale, scale);
-            ctx.globalAlpha = isDragged ? 0.7 : 1;
-            
-            ctx.fillStyle = isDark ? '#1b1b2e' : 'white';
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(0, 0, r, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            
-            ctx.fillStyle = color;
-            ctx.font = `${r * 0.8}px var(--font-text)`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(item.icon || '📝', 0, 0);
-            
-            ctx.restore();
-            
-            ctx.fillStyle = isDark ? '#e5e7eb' : '#1f2937';
-            ctx.font = '600 12px var(--font-text)';
-            ctx.textAlign = 'center';
-            ctx.shadowColor = isDark ? 'rgba(0, 0, 0, 0.6)' : 'rgba(255, 255, 255, 0.9)';
-            ctx.shadowBlur = 4;
-            ctx.fillText(item.name || 'Untitled', item.x, item.y + r * scale + 16);
-            ctx.shadowBlur = 0;
-        }
-        
-        
-        canvas.addEventListener('mousedown', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            const item = getItemAtPosition(mx, my);
-            
-            mouseDownTime = Date.now();
-            mouseDownItem = item;
-            
-            if (item && currentCollection) {
-                // Wait to see if drag
-            } else {
-                isDragging = true;
-                dragStartX = e.clientX - offsetX;
-                dragStartY = e.clientY - offsetY;
-            }
-        });
-        
-        canvas.addEventListener('mousemove', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            
-            if (mouseDownItem && !draggedItem && (Date.now() - mouseDownTime > DRAG_THRESHOLD)) {
-                draggedItem = mouseDownItem;
-                isDragging = false;
-            }
-            
-            if (draggedItem && currentCollection) {
-                draggedItem.x = mx;
-                draggedItem.y = my;
-            } else if (isDragging) {
-                offsetX = e.clientX - dragStartX;
-                offsetY = e.clientY - dragStartY;
-            } else {
-                const item = getItemAtPosition(mx, my);
-                if (item !== hoveredItem) {
-                    hoveredItem = item;
-                    if (item) {
-                        showTooltip(e.clientX, e.clientY, item.name);
-                    } else hideTooltip();
-                }
-            }
-        });
-        
-        canvas.addEventListener('mouseup', e => {
-            const clickDuration = Date.now() - mouseDownTime;
-            
-            if (mouseDownItem && clickDuration < DRAG_THRESHOLD && !draggedItem) {
-                if (mouseDownItem.type === 'collection') {
-                    openCollection(mouseDownItem.id);
-                } else if (mouseDownItem.type === 'tile') {
-                    openTile(mouseDownItem);
-                }
-            } else if (!mouseDownItem && clickDuration < DRAG_THRESHOLD) {
-                // Click on blank space
-                const panel = document.getElementById('detailPanel');
-                if (panel.classList.contains('open')) {
-                    // Close detail panel if open
-                    closeDetail();
-                } else if (currentCollection) {
-                    // Navigate back
-                    navigateBack();
-                }
-            }
-            
-            isDragging = false;
-            draggedItem = null;
-            mouseDownItem = null;
-        });
-        
-        canvas.addEventListener('mouseleave', () => {
-            isDragging = false;
-            draggedItem = null;
-            hoveredItem = null;
-            mouseDownItem = null;
-            hideTooltip();
-        });
-        
-        function getItemAtPosition(mx, my) {
-            if (currentCollection) {
-                const col = collections.find(c => c.id === currentCollection);
-                if (col?.items) {
-                    for (const item of col.items) {
-                        if (openTiles.includes(item.id)) continue;
-                        const r = (item.size || 50) / 2;
-                        if (Math.sqrt(Math.pow(mx - item.x, 2) + Math.pow(my - item.y, 2)) < r) return item;
-                    }
-                }
-            } else {
-                for (const col of collections) {
-                    const r = (col.size || 60) / 2;
-                    if (Math.sqrt(Math.pow(mx - col.x, 2) + Math.pow(my - col.y, 2)) < r) return col;
-                }
-            }
-            return null;
-        }
-        
-        function openCollection(id) {
-            navigationPath.push(currentCollection);
-            currentCollection = id;
-            updateBreadcrumb();
-            document.getElementById('backBtn').style.display = 'flex';
-            updateSidebar();
-            updateLegend();
-        }
-        
-        function navigateBack() {
-            if (navigationPath.length > 0) {
-                currentCollection = navigationPath.pop();
-            } else {
-                currentCollection = null;
-            }
-            updateBreadcrumb();
-            if (!currentCollection) {
-                document.getElementById('breadcrumb').style.display = 'none';
-                document.getElementById('backBtn').style.display = 'none';
-            }
-            updateSidebar();
-            updateLegend();
-        }
-        
-        function updateBreadcrumb() {
-            const breadcrumb = document.getElementById('breadcrumb');
-            if (currentCollection) {
-                breadcrumb.style.display = 'flex';
-                const col = collections.find(c => c.id === currentCollection);
-                const link = document.createElement('span');
-                link.className = 'breadcrumb-link';
-                link.textContent = 'Collections';
-                link.addEventListener('click', () => navigateBack());
-                const sep = document.createElement('span');
-                sep.className = 'breadcrumb-separator';
-                sep.textContent = '›';
-                const name = document.createElement('span');
-                name.textContent = col ? (col.name || '') : '';
-                breadcrumb.replaceChildren(link, sep, name);
-            } else {
-                breadcrumb.style.display = 'none';
-            }
-        }
-        
-        
         let reviewQueue = [];
 
         async function loadMemoryReviewQueue() {
@@ -1982,31 +1443,7 @@
         }
         
         
-        function updateLegend() {
-            const legend = document.getElementById('canvasLegend');
-            legend.innerHTML = `
-                <div class="legend-title">Canvas</div>
-                <div class="legend-item">
-                    <span>Paste to add content</span>
-                </div>
-                <div class="legend-item">
-                    <span>Click blank to go back</span>
-                </div>
-            `;
-        }
-        
         function closeDetail() { document.getElementById('detailPanel').classList.remove('open'); }
-        function showTooltip(x, y, t) { 
-            const el = document.getElementById('tooltip'); 
-            el.textContent = t; 
-            el.style.left = x + 'px'; 
-            el.style.top = (y - 40) + 'px'; 
-            el.classList.add('show'); 
-        }
-        function hideTooltip() { document.getElementById('tooltip').classList.remove('show'); }
-        function resetView() { scale = 1; offsetX = 0; offsetY = 0; }
-        function zoomIn() { scale = Math.min(2, scale * 1.2); }
-        function zoomOut() { scale = Math.max(0.5, scale / 1.2); }
         async function searchMemories(q) {
             if (!q || q.length < 2) {
                 await loadMemoryReviewQueue();
@@ -2036,11 +1473,7 @@
             }
         }
         
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
         loadMemoryReviewQueue().then(updateSidebar);
-        updateLegend();
-        animate();
         
         // Authentication and notification functions
 
@@ -2202,12 +1635,7 @@
             // Update API status
             updateAPIStatus();
             
-            // Load initial data
-            await loadCollections();
-            
-            // Update UI
             updateSidebar();
-            updateLegend();
             
             updateNavTime();
             setInterval(updateNavTime, 30000);

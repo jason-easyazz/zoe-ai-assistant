@@ -6,7 +6,8 @@
  *      the plain failure line for a tap; one wording for a screen that could not load (refused read = sign in).
  *   2. checks over the page text, each a function returning its violations, so the negative controls at the end plant
  *      every fault into a copy and expect the check to go red (A1 no typing dialogs, A2/A3 no silent taps, A7 person
- *      arrival, A8 timer done in Zoe's voice, A9 wall-readable sizes, chat session id, tappable agenda rows).
+ *      arrival, A8 timer done in Zoe's voice, A9 wall-readable sizes, chat session id, tappable agenda rows, the Settings screen:
+ *      Voice ID / Pendant / Notifications rows through zfetch, no text field, nothing off the estate, a guest sees two sections).
  * Run: node services/zoe-ui/dist/test_touch_home_honest_panel.js   (SRC=<copy of home.html> to point it elsewhere)
  */
 const fs = require('fs');
@@ -127,8 +128,27 @@ const run = (box, code) => vm.runInContext(code, box);
       if (!(th.includes('_tSay.gen++') && th.includes('.pause()') && th.includes('speechSynthesis.cancel()'))) bad.push('timerHush does not stop audio and browser speech');
       if (!ts.includes("if(!j||!j.audio_base64){fb();return;}")) bad.push('no audio = silent');
       if (!ts.includes('.catch(fb)')) bad.push('a refused speak = silent');
-      if (!/timerSay\(\(label\|\|'Timer'\)\+' timer is done'\)/.test(near(t, 'function timerAlarm(', 2400))) bad.push('timerAlarm does not speak via timerSay');
+      if (!/if\(say\)timerSay\(say\+' timer is done'\)/.test(near(t, 'function timerAlarm(', 2600))) bad.push('timerAlarm does not speak via timerSay');
       if (!near(t, 'function timerSay(', 300).includes("'/api/voice/speak'")) bad.push('timerSay is not the server TTS');
+      return bad;
+    },
+    // a timer the panel daemon speaks itself (spoken_by_panel) is not spoken by the page too: run the REAL poll-learn + tick in a vm
+    timerPanelSpoken(t) {
+      const s = mainScript(t), bad = [];
+      const learn = /\(\(d&&d\.timers\)\|\|\[\]\)\.forEach\(function\(t\)\{[\s\S]*?\}\);/.exec(near(s, 'function _tAlarmRefresh(', 900));
+      const tick = /function _tAlarmTick\(\)\{[\s\S]*?\n {4}if\(due\.length\)[^\n]*\}/.exec(s);
+      if (!learn || !tick) return ['timer watcher not found'];
+      const run = (timers) => {
+        const box = { _tAlarm: { known: {}, fired: {} }, calls: [], timerAlarm(l, ids, say) { box.calls.push({ l, say }); }, _ackSend() {}, Date };
+        vm.createContext(box);
+        vm.runInContext('var d={timers:' + JSON.stringify(timers) + '},seen={},now=0,acks={};' + learn[0] + tick[0] + '_tAlarmTick();', box);
+        return box.calls[0] || {};
+      };
+      const both = run([{ timer_id: 'a', label: 'Pasta', expires_at_ms: 1, spoken_by_panel: true }, { timer_id: 'b', label: 'Eggs', expires_at_ms: 1 }]);
+      if (both.l !== 'Pasta / Eggs' || both.say !== 'Eggs') bad.push('mixed batch: card ' + both.l + ', spoken ' + both.say);
+      if (run([{ timer_id: 'a', label: 'Pasta', expires_at_ms: 1, spoken_by_panel: true }]).say !== '') bad.push('the page speaks a timer the panel already speaks');
+      if (run([{ timer_id: 'a', label: 'Pasta', expires_at_ms: 1, spoken_by_panel: false }]).say !== 'Pasta') bad.push('an unflagged timer is not spoken');
+      if (!near(s, 'function timerAlarm(', 1400).includes("if(say)timerSay(say+' timer is done');")) bad.push('timerAlarm ignores say');
       return bad;
     },
     personArrival(t) {
@@ -145,6 +165,25 @@ const run = (box, code) => vm.runInContext(code, box);
       return bad;
     },
     agendaTap(t) { return near(t, 'function loadToday(', 2200).includes("show('day');editEvent(e)") ? [] : ['home agenda rows are not tappable']; },
+    // Settings (W2): Voice ID, Pendant and Notifications rows; no text field, no bare fetch, no route off the estate, a guest sees two sections
+    settingsScreen(t) {
+      const s = mainScript(t), bad = [];
+      const a = s.indexOf('// SETGUEST-BEGIN'), b = s.indexOf('function editContact(');
+      if (a < 0 || b < a) return ['settings block not found'];
+      const blk = s.slice(a, b);
+      if (/<input(?![^>]*type="range")|<textarea|contenteditable|createElement\('input'\)/.test(blk)) bad.push('a text field in Settings');
+      if (/(?<![\w.])fetch\(/.test(blk)) bad.push('a fetch in Settings that skips zfetch');
+      if (/location\.(href|assign|replace)|window\.open|data-go|\.html['"?#]/.test(blk)) bad.push('Settings routes off the estate');
+      ["apiGet('/api/enrollment/state')", "apiGet('/api/omi/my-pendant')", "apiGet('/api/omi/health')", "apiGet('/api/notifications/pending')",
+        "zfetch('/sw.js'", "if(a==='pendlink')panelVoice(", "if(a==='notecard')orbPress(", "Pendant sync isn’t switched on.",
+        "Say: “Zoe, learn my voice”"].forEach((x) => { if (!blk.includes(x)) bad.push('missing: ' + x); });
+      if (!/if\(guest\)\{wireSetSys\(\);return host\.onclick=setClick;\}\s*wireSetVoiceId\(\);/.test(blk)) bad.push('a guest is not stopped before the member rows');
+      if (!/var secs=guest\?\[\s*\{t:'This panel'[^\n]*\n\s*\{t:'System'[^\n]*\n\s*\{t:'Everything else'[^\n]*sign in for the rest[^\n]*\n\s*\]:/.test(blk)) bad.push('guest sections are not exactly panel, system, how to get the rest');
+      if (!near(s, 'function wirePanelSettings(){', 900).includes('if(_setGuest()){')) bad.push('the panel rows are editable for a guest');
+      if (/ink-faint[^'"]*["'][^>]*>[^<]*(Couldn’t|unavailable|Loading)/.test(blk)) bad.push('faint state copy in Settings');
+      if (!/function orbPress\(idlePrompt\)[\s\S]{0,400}orb\.addEventListener\('click',function\(\)\{orbPress\(\);\}\)/.test(s)) bad.push('the orb and Settings do not share one press path');
+      return bad;
+    },
     smallWallText(t) {
       const c = css(t), bad = [];
       ['.hdock .hpc .tl{', '#dock .pc.temp .tl{', '#dock .pc.temp .tpl{', '.cmd .cev{', '.cmd .dn{', '.calmonth .cmh{', '.slp .sc.temp .nm{', '.slp .sc.temp .tpl{'].forEach((sel) => {
@@ -167,16 +206,37 @@ const run = (box, code) => vm.runInContext(code, box);
   check('control: a silent scene tap is seen', () => red('silentTaps', plant(".catch(function(){actFail('That scene didn’t run');});};});\n    dbody", ".catch(function(){});};});\n    dbody")));
   check('control: a flash before the 2xx is seen', () => red('silentTaps', plant("haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).then(zok)\n        .then(function(){el.classList.add('fire');",
     "el.classList.add('fire');haControl({entity_id:el.getAttribute('data-eid'),action:el.getAttribute('data-act')||'turn_on'}).then(zok)\n        .then(function(){")));
-  check('control: browser speech for the timer is seen', () => red('timerVoice', plant("timerSay((label||'Timer')+' timer is done');", "speechSynthesis.speak(new SpeechSynthesisUtterance('x'));")));
+  check('control: browser speech for the timer is seen', () => red('timerVoice', plant("if(say)timerSay(say+' timer is done');", "speechSynthesis.speak(new SpeechSynthesisUtterance('x'));")));
   check('control: a static text field is seen', () => red('typingFields', plant('<div id="cmdbar"></div>', '<div id="cmdbar"><input id="cmdin" type="text"></div>')));
   check('control: a Dismiss that leaves speech pending is seen', () => red('timerVoice', plant("ov.classList.remove('on');timerHush();", "ov.classList.remove('on');")));
   check('control: a reminder hand-off to a page that cannot edit it is seen', () => red('typingFields', plant("To change the words, delete this one and say the new reminder.", "x'+phoneQrHtml('/calendar.html','scan')+'")));
   check('control: a list-item hand-off to a page that cannot rename it is seen', () => red('typingFields', plant("handoffDialog('Change “'+cur+'”','',''", "handoffDialog('Change “'+cur+'”','/lists.html','Scan'")));
   check('control: a list-item dialog that hides what works is seen', () => red('typingFields', plant('To change the words, take it off the list and add the new one.', 'Edit it.')));
+  check('control: the page speaking a timer the panel already speaks is seen', () => red('timerPanelSpoken', plant('if(!t.panel)say.push(t.label);', 'say.push(t.label);')));
+  check('control: a dropped spoken_by_panel flag is seen', () => red('timerPanelSpoken', plant('panel:t.spoken_by_panel===true', 'panel:false')));
   check('control: a silent guest timer is seen', () => red('timerVoice', plant('if(!sid()){fb();return;}', 'if(!sid())return;')));
   check('control: an ignored person arrival is seen', () => red('personArrival', plant("if(wi>=0)openContact(ps[wi],wi);", "")));
   check('control: a chat without session id is seen', () => red('chatSession', plant('if(th)cb.session_id=th;', '')));
   check('control: a dead agenda row is seen', () => red('agendaTap', plant("show('day');editEvent(e)", "show('day')")));
+  check('control: a typed field in Settings is seen', () => red('settingsScreen', plant("'<div class=\"srow2\"><span>No pendant linked to you yet</span></div>'", "'<input type=\"text\" id=\"pendCode\">'")));
+  check('control: a bare fetch in Settings is seen', () => red('settingsScreen', plant("apiGet('/api/omi/health')", "fetch('/api/omi/health').then(function(r){return r.json();})")));
+  check('control: a Settings link to a desktop page is seen', () => red('settingsScreen', plant("if(a==='contacts')show('person');", "if(a==='contacts')location.href='/people.html';")));
+  check('control: a typed pendant link instead of the voice path is seen', () => red('settingsScreen', plant("if(a==='pendlink')panelVoice(", "if(a==='pendlink')phoneForm(")));
+  check('control: a guest reaching the member rows is seen', () => red('settingsScreen', plant('if(guest){wireSetSys();return host.onclick=setClick;}', '')));
+  check('control: editable panel rows for a guest are seen', () => red('settingsScreen', plant('if(_setGuest()){el.innerHTML=', 'if(false){el.innerHTML=')));
+  check('control: a silent pendant flag-off is seen', () => red('settingsScreen', plant("_setLine('setPend','<div class=\"srow2\"><span class=\"lderr\">Pendant sync isn’t switched on.</span></div>')", "_setLine('setPend','')")));
+  check('control: a second orb press path is seen', () => red('settingsScreen', plant("orb.addEventListener('click',function(){orbPress();});", "orb.addEventListener('click',function(){panelVoice();});")));
+  {
+    const g = /\/\/ SETGUEST-BEGIN[\s\S]*?\/\/ SETGUEST-END/.exec(HOME);
+    const guestOf = (sess, live) => { const box = { localStorage: { getItem: () => (sess ? JSON.stringify(sess) : null) }, sid: () => (live ? 'S' : ''), JSON };
+      vm.createContext(box); vm.runInContext(g[0], box); return vm.runInContext('_setGuest()', box); };
+    check('Settings: a guest session, a stale session or none reads as guest; a member does not', () => {
+      assert.strictEqual(guestOf({ session_id: 'S', role: 'guest', user_id: 'guest' }, true), true);
+      assert.strictEqual(guestOf({ session_id: 'S', role: 'user', user_id: 'member-a' }, false), true);
+      assert.strictEqual(guestOf(null, false), true);
+      assert.strictEqual(guestOf({ session_id: 'S', role: 'user', user_id: 'member-a' }, true), false);
+    });
+  }
   check('control: a 9px dock label is seen', () => red('smallWallText', plant('#dock .pc.temp .tl{font-size:16px', '#dock .pc.temp .tl{font-size:9px')));
   check('control: faint error copy is seen', () => red('smallWallText', plant('<div class="lderr">Couldn’t load rooms.', '<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.')));
 

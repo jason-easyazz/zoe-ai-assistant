@@ -3918,8 +3918,11 @@
     var el=document.getElementById('setPanel');if(!el)return;
     function paint(){
       var el=document.getElementById('setPanel');if(!el)return;
-      if(!_pcfg){el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Panel settings unavailable</span></div>';return;}
+      if(!_pcfg){el.innerHTML='<div class="srow2"><span class="lderr">'+esc(loadErr('panel settings'))+'</span></div>';return;}
       var loc=_pcfg.location||'Not set';
+      // A guest reads where this panel is; changing it needs a member (the writes would be refused).
+      if(_setGuest()){el.innerHTML='<div class="srow2"><span>Room</span><span class="sv" style="margin-left:auto">'+esc(_pcfg.room_name||'Not set')+'</span></div>'
+        +'<div class="srow2"><span>Location label</span><span class="sv" style="margin-left:auto">'+esc(loc)+'</span></div>';return;}
       var spk=_pcfg.default_player||'Not set';
       // default_player_source says whether this panel chose its own speaker or
       // is riding the household default — surface it rather than making the
@@ -4283,20 +4286,82 @@
       _pcPinsPaint();};
   }
 
+  // SETGUEST-BEGIN - a guest kiosk (or no live session) sees only This panel (read-only) and System, plus how to get the rest.
+  function _setGuest(){var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
+    return !sid()||!u||String(u.role||'').toLowerCase()==='guest'||String(u.user_id||'').toLowerCase()==='guest';}
+  // SETGUEST-END
+  function _setLine(id,html){var el=document.getElementById(id);if(el&&_cur==='settings')el.innerHTML=html;}
+  function _setErr(id,what,e){_setLine(id,'<div class="srow2"><span class="lderr">'+esc(loadErr(what,e))+'</span></div>');}
+  function _setAgo(iso){var t=Date.parse(iso||'');if(!isFinite(t))return 'not yet';var m=Math.max(0,Math.floor((Date.now()-t)/60000));
+    return m<2?'just now':m<90?m+' minutes ago':m<2160?Math.round(m/60)+' hours ago':Math.round(m/1440)+' days ago';}
+  // Voice ID: the signed-in member's OWN enrolment state (GET /api/enrollment/state). Enrolling is by voice only.
+  function wireSetVoiceId(){
+    apiGet('/api/enrollment/state').then(function(d){
+      var on=!!(d&&d.voice&&d.voice.enrolled);
+      _setLine('setVid',on?'<div class="srow2"><span>Your voice is enrolled</span><span class="sv">Zoe knows it’s you</span></div>'
+        :'<div class="srow2"><span>Your voice isn’t enrolled yet</span></div><div class="srow2"><span class="lderr">Say: “Zoe, learn my voice”</span></div>');
+    }).catch(function(e){_setErr('setVid','voice ID',e);});
+  }
+  // Pendant: GET /api/omi/my-pendant (404 = pendant sync not switched on, ZOE_OMI_SYNC_ENABLED) + its health line (GET /api/omi/health).
+  // Linking is by voice at this panel ("Zoe, link my pendant"): proof is a verified voice + the pendant in the hand, never a form.
+  function wireSetPendant(){
+    apiGet('/api/omi/my-pendant').then(function(v){
+      var lk=(v&&v.linking)||{},ps=(v&&v.pendants)||[];
+      if(!lk.enabled){_setLine('setPend','<div class="srow2"><span class="lderr">'+esc(lk.message||'Pendant linking isn’t switched on here yet.')+'</span></div>');return;}
+      _setLine('setPend',(ps.length?ps.map(function(p){return '<div class="srow2"><span>'+esc(p.label||'My pendant')+'</span><span class="sv">Linked · synced '+esc(_setAgo(p.last_sync_at))+'</span></div>';}).join('')
+          :'<div class="srow2"><span>No pendant linked to you yet</span></div>')
+        +'<div id="setPendH"></div><div class="srow2"><span>Hold it next to the panel</span><button class="sbtn" data-act="pendlink">Link my pendant</button></div>');
+      if(!ps.length)return;
+      apiGet('/api/omi/health').then(function(h){
+        _setLine('setPendH',((h&&h.pendants)||[]).map(function(p){var b=['last report '+_setAgo(p.reported_at)];
+          if(p.battery&&p.battery.pct!=null)b.push('battery '+p.battery.pct+'%');
+          if(p.ring&&p.ring.fill_pct!=null)b.push('storage '+p.ring.fill_pct+'% full');
+          return '<div class="srow2"><span class="sv" style="margin-left:0;text-align:left">'+esc((p.label||'Pendant')+': '+b.join(' · '))+'</span></div>'
+            +(p.warnings||[]).map(function(w){return '<div class="srow2"><span class="lderr">'+esc(w.text||w.kind)+'</span></div>';}).join('');}).join(''));
+      }).catch(function(e){_setErr('setPendH','pendant health',e);});
+    }).catch(function(e){if(e&&e.message==='http 404')_setLine('setPend','<div class="srow2"><span class="lderr">Pendant sync isn’t switched on.</span></div>');else _setErr('setPend','pendant',e);});
+  }
+  // Notifications: the member's unread rows (GET /api/notifications/pending), words only. Their Done / That's me buttons live on the
+  // ONE notifications card (js/touch-review-cards.js), which the orb press / "what's up?" pushes to this panel - opened from here the same way.
+  function wireSetNotes(){
+    Promise.all([apiGet('/api/notifications/pending'),apiGet('/api/proactive/inbox').catch(function(){return null;})]).then(function(r){
+      var ns=(r[0]&&r[0].notifications)||[],card=!!(r[1]&&('notify' in r[1]));
+      if(!ns.length){_setLine('setNote','<div class="srow2"><span>No new notifications</span></div>');return;}
+      _setLine('setNote',ns.map(function(n){return '<div class="srow2"><span>'+esc(n.title||'Notification')
+          +(n.message?' <small style="color:var(--ink-soft)">'+esc(String(n.message).slice(0,120))+'</small>':'')+'</span></div>';}).join('')
+        +(card?'<div class="srow2"><span>Done, That’s me and the rest are on the card</span><button class="sbtn" data-act="notecard">Show the card</button></div>'
+          :'<div class="srow2"><span class="lderr">The notifications card isn’t switched on here.</span></div>'));
+    }).catch(function(e){_setErr('setNote','notifications',e);});
+  }
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
     var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
-    var who=(u&&(u.username||u.user_id))||'Guest';
-    host.innerHTML=[
+    var who=(u&&(u.username||u.user_id))||'Guest',guest=_setGuest();
+    var LOAD='<div class="srow2"><span class="lderr">Loading…</span></div>';
+    var secs=guest?[
+      {t:'This panel',b:'<div id="setPanel">'+LOAD+'</div>'},
+      {t:'System',b:'<div id="setSys">'+LOAD+'</div><div class="srow2" id="setVer"><span>Software</span><span class="sv" style="min-width:0">…</span></div>'},
+      {t:'Everything else',b:'<div class="srow2"><span>Say “what’s up?” or sign in for the rest</span><button class="sbtn" data-act="switch">Sign in</button></div>'}
+    ]:[
       {t:'Account',b:'<div class="srow2"><span>Signed in as <b>'+esc(who)+'</b></span></div><div class="srow2"><span>Log out when idle</span><select id="setIdleLogout" class="sset"><option value="">…</option></select></div><div class="srow2" data-act="switch"><span>Switch user</span><span class="chev2">›</span></div><button class="sout" id="setOut">Sign out</button>'},
-      {t:'This panel',b:'<div id="setPanel"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
-      {t:'Display',b:'<div id="setDisp"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
-      {t:'Voice',b:'<div id="setVoice"><div class="srow2"><span style="color:var(--ink-faint)">Loading…</span></div></div>'},
-      {t:'System',b:'<div id="setSys"><div class="srow2"><span style="color:var(--ink-faint)">Checking…</span></div></div>'},
+      {t:'This panel',b:'<div id="setPanel">'+LOAD+'</div>'},
+      {t:'Display',b:'<div id="setDisp">'+LOAD+'</div>'},
+      {t:'Voice',b:'<div id="setVoice">'+LOAD+'</div>'},
+      {t:'Voice ID',b:'<div id="setVid">'+LOAD+'</div>'},
+      {t:'Pendant',b:'<div id="setPend">'+LOAD+'</div>'},
+      {t:'Notifications',b:'<div id="setNote">'+LOAD+'</div>'},
+      {t:'System',b:'<div id="setSys">'+LOAD+'</div><div class="srow2" id="setVer"><span>Software</span><span class="sv" style="min-width:0">…</span></div>'},
       {t:'Household',b:'<div class="srow2" data-act="contacts"><span>Contacts</span><span class="chev2">›</span></div><div class="srow2" data-act="rooms"><span>Rooms & devices</span><span class="chev2">›</span></div>'}
-    ].map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
+    ];
+    host.innerHTML=secs.map(function(sec,i){return '<div class="setsec"><div class="sh">'+esc(sec.t)+'<span class="caret">›</span></div><div class="sbody"><div class="inner">'+sec.b+'</div></div></div>';}).join('');
 
     wirePanelSettings();
+    // Software: the build this page was served with (the service worker's version line); nginx serves it, so it shows even signed out.
+    zfetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
+      var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v)v.textContent=m?'v'+m[1]:'unknown';})
+      .catch(function(){var v=document.querySelector('#setVer .sv');if(v)v.textContent='couldn’t check';});
+    if(guest){wireSetSys();return host.onclick=setClick;}
+    wireSetVoiceId();wireSetPendant();wireSetNotes();
 
     // Display: the panel's real brightness/night/idle prefs, live-wired.
     apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
@@ -4316,25 +4381,16 @@
         var patch={};patch[r.getAttribute('data-pref')]=+r.value;_savePrefs(patch);};});
       el.querySelectorAll('.sw[data-pref-t]').forEach(function(sw){sw.onclick=function(){
         var on=sw.classList.toggle('on');var patch={};patch[sw.getAttribute('data-pref-t')]=on;_savePrefs(patch);};});
-    }).catch(function(){var el=document.getElementById('setDisp');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Display settings unavailable</span></div>';});
+    }).catch(function(e){_setErr('setDisp','display settings',e);});
 
-    // System: live health of the pieces that matter + software version.
-    apiGet('/api/system/status').then(function(st){
-      if(_cur!=='settings')return;var el=document.getElementById('setSys');if(!el)return;
-      function ok(v){return typeof v==='string'&&v.indexOf('ok')===0||v==='connected'||v==='healthy';}
-      var rows=[['Zoe brain',st.llama_server],['Home Assistant',st.ha_bridge],['Database',st.database]];
-      el.innerHTML=rows.map(function(r){return '<div class="srow2"><span>'+esc(r[0])+'</span><span style="display:flex;align-items:center;gap:10px"><span class="stat '+(ok(r[1])?'ok':'bad')+'"></span><span style="color:var(--ink-soft);font-size:17px">'+esc(String(r[1]||'unreachable'))+'</span></span></div>';}).join('')
-        +'<div class="srow2" id="setVer"><span>Software</span><span class="sv" style="min-width:0">…</span></div>';
-      fetch('/sw.js',{cache:'no-store'}).then(function(r){return r.text();}).then(function(t){
-        var m=/SW_VERSION = '([^']+)'/.exec(t);var v=document.querySelector('#setVer .sv');if(v&&m)v.textContent='v'+m[1];}).catch(function(){});
-    }).catch(function(){var el=document.getElementById('setSys');if(el)el.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">Status unavailable</span></div>';});
+    wireSetSys();
 
     // Voice: the voice Zoe speaks with (household-wide). Same endpoints as the
     // "change your voice" card — this just makes it reachable from Settings, which
     // is where people look for it.
     (function(){
       var vhost=document.getElementById('setVoice');if(!vhost)return;
-      function unavailable(msg){vhost.innerHTML='<div class="srow2"><span style="color:var(--ink-faint)">'+esc(msg)+'</span></div>';}
+      function unavailable(msg){vhost.innerHTML='<div class="srow2"><span class="lderr">'+esc(msg)+'</span></div>';}
       apiGet('/api/voice/voices').then(function(d){
         if(_cur!=='settings')return;
         var voices=(d&&d.voices)||[],cur=(d&&d.current)||'';
@@ -4367,7 +4423,7 @@
           }).catch(function(){toast('Preview unavailable');})
             .then(function(){pv.disabled=false;},function(){pv.disabled=false;});
         };
-      }).catch(function(){unavailable('Voice settings unavailable');});
+      }).catch(function(e){_setErr('setVoice','voice settings',e);});
     })();
 
     // Idle-logout: how long with no voice/touch before the panel session lapses.
@@ -4385,19 +4441,29 @@
       }).catch(function(){sel.innerHTML='<option value="">unavailable</option>';});
     })();
 
-    host.onclick=function(e){
+    host.onclick=setClick;
+  }
+  // System: live health of the pieces that matter (the Software row beside it is filled from /sw.js).
+  function wireSetSys(){
+    apiGet('/api/system/status').then(function(st){
+      function ok(v){return typeof v==='string'&&v.indexOf('ok')===0||v==='connected'||v==='healthy';}
+      var rows=[['Zoe brain',st.llama_server],['Home Assistant',st.ha_bridge],['Database',st.database]];
+      _setLine('setSys',rows.map(function(r){return '<div class="srow2"><span>'+esc(r[0])+'</span><span style="display:flex;align-items:center;gap:10px"><span class="stat '+(ok(r[1])?'ok':'bad')+'"></span><span style="color:var(--ink-soft);font-size:17px">'+esc(String(r[1]||'unreachable'))+'</span></span></div>';}).join(''));
+    }).catch(function(e){_setErr('setSys','system status',e);});
+  }
+  function setClick(e){
       var sh=e.target.closest('.sh');
       if(sh){var sec=sh.parentElement;sec.classList.toggle('open');return;}
-      var row=e.target.closest('.srow2[data-go]');
-      if(row){location.href=row.getAttribute('data-go');return;}
-      var act=e.target.closest('.srow2[data-act]');
-      if(act){var a=act.getAttribute('data-act');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();return;}
+      var act=e.target.closest('[data-act]');
+      if(act){var a=act.getAttribute('data-act');if(a==='contacts')show('person');if(a==='rooms')show('rooms');if(a==='switch'&&window.__showAuthCard)window.__showAuthCard();
+        if(a==='pendlink')panelVoice('Say “Zoe, link my pendant” with it in your hand');
+        if(a==='notecard')orbPress('Say “what’s up?” and I’ll show them here');
+        return;}
       if(e.target.closest('#setOut')){var out=e.target.closest('#setOut');out.disabled=true;
         function clearLocal(){try{localStorage.removeItem('zoe_session');localStorage.removeItem('zoe_guest_mode');}catch(e2){}try{sessionStorage.removeItem('zoe_gb');}catch(e2){}}
         zfetch('/api/auth/logout',{method:'POST',headers:{'X-Session-ID':sid()},credentials:'include'})
           .then(function(r){if(!r.ok)throw new Error('http '+r.status);clearLocal();location.reload();})
           .catch(function(){clearLocal();toast('Signed out on this panel — the server couldn’t be reached, so the session will expire on its own.');setTimeout(function(){location.reload();},2600);});}
-    };
   }
 
   function editContact(pn){
@@ -4624,7 +4690,7 @@
     if(x==='close')evdClose();
     else if(x==='edit')evdEditView();
     else if(x==='back'||x==='keep')evdDetailView(ev);
-    else if(x==='phone')evdQr('phone',EVD.phoneEditUrl(location.origin));
+    else if(x==='phone')evdQr('phone',EVD.phoneEditUrl(location.origin,ev&&ev.id));
     else if(x==='meeturl')evdQr('meeting',b.getAttribute('data-url'));
     else if(x==='del'){var f=document.getElementById('evfoot');if(f)f.innerHTML=EVD.renderDeleteConfirm(ev);}
     else if(x==='delyes'){b.disabled=true;var dtok=_evd;   // the sheet SESSION this delete belongs to (editEvent makes a new one per open)
@@ -4686,19 +4752,20 @@
     var seen={},now=Date.now(),acks=_acksGet();
     ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
       if(acks[id]){_ackSend(id);return;}  // dismissed but the cancel never landed: retry it, never ring it again
-      if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer'};});
+      // spoken_by_panel: the panel's voice daemon says "timer is done" for this one itself, so the page must not say it too
+      if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer',panel:t.spoken_by_panel===true};});
     Object.keys(acks).forEach(function(id){if(!seen[id]){delete acks[id];}});_acksSet(acks);  // server forgot it: nothing to retry
     Object.keys(_tAlarm.known).forEach(function(id){if(!seen[id]&&_tAlarm.known[id].exp>now+1500)delete _tAlarm.known[id];});
     // Bound `fired` on a long-lived kiosk: drop ids fired >6h ago (their timers
     // are long gone, so they can never re-appear and re-fire).
     Object.keys(_tAlarm.fired).forEach(function(id){if(_tAlarm.fired[id]<now-21600000)delete _tAlarm.fired[id];});
   }).catch(function(){});}
-  function _tAlarmTick(){var now=Date.now(),due=[],ids=[];
+  function _tAlarmTick(){var now=Date.now(),due=[],ids=[],say=[];
     Object.keys(_tAlarm.known).forEach(function(id){var t=_tAlarm.known[id];
-      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);ids.push(id);}});
+      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);ids.push(id);if(!t.panel)say.push(t.label);}});
     // Batch same-tick expiries into ONE alarm ("Pasta / Eggs") so a second
     // timer finishing doesn't overwrite the first's label + speech.
-    if(due.length)timerAlarm(due.join(' / '),ids);}
+    if(due.length)timerAlarm(due.join(' / '),ids,say.join(' / '));}
   function _beep(){try{if(!_tAlarm.ctx)_tAlarm.ctx=new (window.AudioContext||window.webkitAudioContext)();var c=_tAlarm.ctx;
     if(c.state==='suspended')c.resume();
     function ping(t0){var o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=880;o.connect(g);g.connect(c.destination);
@@ -4728,7 +4795,7 @@
         au.onerror=function(){URL.revokeObjectURL(url);fb();};
         var pp=au.play();if(pp&&pp.catch)pp.catch(function(){URL.revokeObjectURL(url);fb();});})
       .catch(fb);}
-  function timerAlarm(label,ids){
+  function timerAlarm(label,ids,say){
     // Cumulative: a second timer ending before Dismiss must not drop the first one's id, or the first stays
     // "ringing" on the server and re-rings after the next voice-turn reload inside the grace window.
     _tAlarm.pending=_tAlarm.pending||{};(ids||[]).forEach(function(id){_tAlarm.pending[id]=1;});
@@ -4738,7 +4805,8 @@
     ov.classList.add('on');
     _beep();if(_tAlarm.chime)clearInterval(_tAlarm.chime);_tAlarm.chime=setInterval(_beep,2200);
     // Spoken in Zoe's own voice (A8) when the server will speak for this session; the browser's voice otherwise (timerSay).
-    timerSay((label||'Timer')+' timer is done');
+    // Only the timers the panel daemon does NOT speak itself (`say`, from spoken_by_panel); all spoken there = the page is silent.
+    if(say)timerSay(say+' timer is done');
     // Dismiss = the ACK: the server keeps a finished timer listed ("ringing") until it is cancelled or a grace
     // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
     // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
@@ -5188,12 +5256,14 @@
       })
       .then(function(){_orbBusy=false;});
   }
-  orb.addEventListener('click',function(){
+  // ONE press path: the orb, and Settings › Notifications "Show the card" (with its own prompt when there is no dot to collect).
+  function orbPress(idlePrompt){
     var ready=orb.classList.contains('has')&&!orb.classList.contains('busy')&&!orb.classList.contains('listening');
     if(ready&&_dotVoiceOnly)panelVoice('Say "what\'s up?" - I\'ll check it\'s you');
     else if(ready)orbPull();
-    else panelVoice('Listening — ask Zoe anything');
-  });
+    else panelVoice(idlePrompt||'Listening — ask Zoe anything');
+  }
+  orb.addEventListener('click',function(){orbPress();});
   // pull, not push: the orb's quiet "I have something" dot. GET /api/proactive/inbox answers a COUNT and a
   // coarse class - never what is pending - and only for a signed-in member (guest, empty, quiet hours and the
   // flag off all read "no dot"). Asking ("what's up?") is how it clears; nothing here speaks or toasts.
@@ -5386,7 +5456,7 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
-<script src="/js/touch-event-detail.js?v=ed-1"></script>
+<script src="/js/touch-event-detail.js?v=ed-2"></script>
 <script src="/js/touch-voice-session.js?v=vs-2"></script>
 <script src="/js/touch-review-cards.js?v=rc-2"></script>
 <script src="/js/touch-voice-enroll.js?v=ve-1"></script>
