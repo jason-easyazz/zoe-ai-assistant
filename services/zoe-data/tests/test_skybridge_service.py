@@ -7,6 +7,7 @@ import sys
 from datetime import date, timedelta
 
 import pytest
+from time_utils import today_for_zoe_tz  # the clock the code under test uses (CI runs in UTC, Zoe does not)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -483,7 +484,7 @@ async def test_calendar_request_returns_real_event_card():
         "id": "event-1",
         "user_id": "family-admin",
         "title": "Dentist",
-        "start_date": date.today().isoformat(),
+        "start_date": today_for_zoe_tz().isoformat(),
         "start_time": "09:00",
         "end_time": "09:30",
         "location": "Clinic",
@@ -1550,7 +1551,7 @@ async def test_calendar_edit_opens_event_editor_card():
         "id": "event-1",
         "user_id": "family-admin",
         "title": "Dentist",
-        "start_date": date.today().isoformat(),
+        "start_date": today_for_zoe_tz().isoformat(),
         "start_time": "15:00",
         "end_time": "15:30",
         "location": "Clinic",
@@ -1561,7 +1562,7 @@ async def test_calendar_edit_opens_event_editor_card():
     db = FakeDb(events=[event])
     context = {
         "intent": {"domain": "calendar", "action": "show"},
-        "cards": [{"content": {"source": "calendar_show", "start_date": date.today().isoformat(), "events": [event]}}],
+        "cards": [{"content": {"source": "calendar_show", "start_date": today_for_zoe_tz().isoformat(), "events": [event]}}],
     }
 
     result = await resolve_skybridge_request("edit Dentist at 15:00", "family-admin", context=context, db=db)
@@ -1583,7 +1584,7 @@ async def test_calendar_delete_event_removes_and_refreshes():
         "id": "event-1",
         "user_id": "family-admin",
         "title": "Dentist",
-        "start_date": date.today().isoformat(),
+        "start_date": today_for_zoe_tz().isoformat(),
         "start_time": "15:00",
         "end_time": "15:30",
         "visibility": "family",
@@ -1592,7 +1593,7 @@ async def test_calendar_delete_event_removes_and_refreshes():
     db = FakeDb(events=[event])
     context = {
         "intent": {"domain": "calendar", "action": "show"},
-        "cards": [{"content": {"source": "calendar_show", "start_date": date.today().isoformat(), "events": [event]}}],
+        "cards": [{"content": {"source": "calendar_show", "start_date": today_for_zoe_tz().isoformat(), "events": [event]}}],
     }
 
     result = await resolve_skybridge_request("delete Dentist from my calendar", "family-admin", context=context, db=db)
