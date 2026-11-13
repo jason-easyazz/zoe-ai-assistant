@@ -105,7 +105,8 @@ _LEAD = rf"^\W*(?:(?:good\s+)?(?:morning|evening|afternoon)[,.\s]+)?(?:(?:and|al
 _PAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are)\s+(?:actually\s+|really\s+)?(?P<n>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}[,;]?\s+"
                       rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_WORD}(?:\s+{_WORD}){{0,2}}|{_NUM}){_YEARS}\W*(?:i\s+misspoke\W*)?$", re.IGNORECASE)
 _AGE_NOW_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|just\s+turned|turned|turns)\s+(?:(?P<pre>actually|now)\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}"
-                         rf"(?:\s+(?P<post>now))?\W*$", re.IGNORECASE)
+                         # "actually isla is 6 after all, i got mixed up" (QA round 9: correcting BACK was never read)
+                         rf"(?:\s+(?P<post>now|after\s+all))?(?:\W*$|\s*[,;]\s+(?!not\b)\S.*$)", re.IGNORECASE)
 # "its 76 for margaret, not 78": the value comes first, the subject after "for" (QA 6b)
 _FOR_RE = re.compile(_LEAD + rf"(?:it['’]?s|that['’]?s|thats|it\s+is)\s+(?:actually\s+)?(?P<n>{_NUMH}|{_NUM}){_YEARS}\s+for\s+{_SUBJ}[,;]?\s+"
                      rf"(?:and\s+)?not\s+(?P<o>{_NUMH}|{_NUM}){_YEARS}\W*$", re.IGNORECASE)
@@ -227,8 +228,17 @@ def is_quantity_pair(new: str, old: str) -> bool:
 #: one character of a value: anything but sentence punctuation, EXCEPT a point or comma between two digits ("13.5 thousand",
 #: "$13,500" - without it those corrections matched nothing and the old amount stayed stored)
 _QVAL = r"(?:[^,;.!?]|(?<=\d)[.,](?=\d))"
-_QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ}\s+(?:is|was|are|will\s+be)\s+(?:actually\s+|really\s+|now\s+)?(?P<n>{_QVAL}{{1,40}}?)[,;]?\s+"
+# QA round 9: a two-word subject with no determiner ("book club is on the 19th, not the 12th") and a verb word between "is" and the
+# value ("the rego is due on the 21st not the 14th") were read by nothing, so the old date stayed approved beside the new one.
+_SUBJ2 = _SUBJ[:-1] + rf"|{_WORD}\s+{_WORD})"
+_STATE = r"(?:(?:actually|really|now|still|due|booked|scheduled|set|happening|meant\s+to\s+be)\s+)*"
+_QPAIR_RE = re.compile(_LEAD + rf"{_SUBJ2}\s+(?:is|was|are|will\s+be|['’]s)\s+{_STATE}(?P<n>{_QVAL}{{1,40}}?)[,;]?\s+"
                        rf"(?:and\s+)?not\s+(?P<o>{_QVAL}{{1,30}}?)\s*(?:(?:[;!?]|[.,](?!\d))\s*(?:.*))?$", re.IGNORECASE)
+# "book club moved again, its on the 19th of december now" / "the dentist got moved from the 5th to the 12th": a MOVED date. With no
+# old value the subject's one stored date is restated (``rewrite``); a chain (5th -> 12th -> 19th) is the same sentence again.
+_MOVED_RE = re.compile(_LEAD + rf"{_SUBJ2}\s+(?:(?:has|have|got|was|is|been|just)\s+)*(?:moved|changed|rescheduled|shifted|pushed\s+back)"
+                       rf"(?:\s+again)?(?:\s+from\s+(?P<o>{_QVAL}{{1,30}}?)\s+to\s+|[,;]?\s+(?:(?:and\s+)?(?:it['’]?s|its|it\s+is)\s+(?:now\s+)?)?"
+                       rf"(?:(?:to|on|until|till|for)\s+)?)(?P<n>{_QVAL}{{1,40}}?)(?:\s+now)?\s*[.!]*$", re.IGNORECASE)
 
 
 _AGE_SUFFIX_RE = re.compile(r"\s+(?:years?[ -]old|yrs?\s+old|yo)\s*$", re.IGNORECASE)
@@ -391,7 +401,7 @@ def statement(text: str) -> Optional[Correction]:
             # Two numbers of the same subject are a correction on their own (as the plain number pair above), no cue needed.
             subj = m.group("subj").strip()
             new, old = m.group("n").strip(), m.group("o").strip()
-            if subj.lower() in _NOT_SUBJECT or not is_quantity_pair(new, old):
+            if _not_a_subject(subj) or not is_quantity_pair(new, old):
                 continue
             qn, qo = quantity_value(new), quantity_value(old)
             if qn.value == qo.value and (_month_of(new) or "") == (_month_of(old) or ""):
@@ -402,7 +412,26 @@ def statement(text: str) -> Optional[Correction]:
             if value_of(bare_n) is not None and value_of(bare_o) is not None:
                 new, old = _bare_value(bare_n), _bare_value(bare_o)       # a plain age pair: the age path rewrites it
             return Correction(subj, new, old, bool((m.group("cue") or "").strip()))
+        m = _MOVED_RE.match(sentence)
+        if m:
+            subj, new, old = m.group("subj").strip(), m.group("n").strip(), (m.group("o") or "").strip() or None
+            subj = re.sub(r"(?i)\s+(?:has|have|got|was|is|been|just)$", "", subj)     # "my exam got moved": the subject is "my exam"
+            qn = quantity_value(new)
+            if _not_a_subject(subj) or qn is None or not (qn.ordinal or _month_of(new)):
+                continue                    # only a DATE moves; "the meeting moved to friday" is no number
+            if old is not None and (quantity_value(old) is None or _same_value(new, old)):
+                continue
+            return Correction(subj, new, old, True)
     return None
+
+
+def _not_a_subject(subj: str) -> bool:
+    """A subject that is a pronoun / filler ("it", "thats"), or a bare two-word one holding such a word ("so it", "i think")."""
+    words = subj.lower().split()
+    if subj.lower() in _NOT_SUBJECT:
+        return True
+    return len(words) == 2 and words[0] not in ("the", "my", "our") and any(
+        w in _NOT_SUBJECT or w in _BARE_NOT_NAME or w in ("is", "was", "think", "guess", "reckon", "got", "has") for w in words)
 
 
 def _subject_re(subject: str, lazy: bool = False):
@@ -595,6 +624,26 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     return head + new_tail
 
 
+def _restate_date(head: str, tail: str, new: str) -> Optional[str]:
+    """A MOVED date with no old value ("book club moved again, its on the 19th of december"): the row's ONE day-of-month after the
+    subject becomes the new one. No date, or two (which one moved?), changes nothing; a row already on the new date is left alone."""
+    qn = quantity_value(new)
+    if qn is None or not (qn.ordinal or _month_of(new)):
+        return None
+    dates = [q for q in quantities(tail) if _unit_at(tail, q) == "date"]
+    if len(dates) != 1:
+        return None
+    q, month_new, row_month = dates[0], _month_of(new), _month_of(tail)
+    if q.value == qn.value and (not month_new or month_new == row_month):
+        return None
+    new_tail = tail[:q.start] + _render_quantity(qn, q) + tail[q.end:]
+    if month_new and row_month and month_new != row_month:
+        mm = _MONTH_RE.search(new_tail)
+        if mm:
+            new_tail = new_tail[:mm.start()] + month_new.capitalize() + new_tail[mm.end():]
+    return head + new_tail
+
+
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
     """``row_text`` with the corrected value, or None when the row is not the fact being corrected. Pure.
 
@@ -627,7 +676,7 @@ def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[s
         return text[:sm.end()] + tail[:om.start()] + new + tail[om.end():]
     new_n = value_of(corr.new)
     if new_n is None:
-        return None
+        return _restate_date(text[:sm.end()], tail, corr.new)
     ages = _age_matches(tail)
     if not ages:
         return None
@@ -656,7 +705,9 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
     low = (fact or "").lower()
     subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower()
     if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
-        return False        # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction, not invented
+        # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction - unless it gives the subject
+        # a KIND the member never said: "kit is 10 not 9" is never "User's pet is named Kit" (QA round 9)
+        return invented_kind(fact, user_message)
     if not any(re.search(rf"(?<![A-Za-z0-9]){re.escape(v.lower())}(?![A-Za-z0-9])", low) for v in values):
         return False
     said = {w.rstrip("s") for w in re.findall(r"[a-z0-9]+", (user_message or "").lower().replace("'s", ""))}
@@ -664,6 +715,27 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
         if w in _FILLER or w.rstrip("s") in said:
             continue
         return True
+    return False
+
+
+def invented_kind(fact: str, said_text: str) -> bool:
+    """Does ``fact`` call something an animal ("pet", "cat") with a word ``said_text`` never used? A model's guess about what KIND
+    of thing a name is never becomes a fact. Pure."""
+    from memory_quality import ANIMAL_WORDS
+
+    said = {w.rstrip("s") for w in re.findall(r"[a-z]+", (said_text or "").lower())}
+    return any(w in ANIMAL_WORDS and w.rstrip("s") not in said for w in re.findall(r"[a-z]+", (fact or "").lower()))
+
+
+def kind_guess_on_correction(fact: str, turns: list) -> bool:
+    """The transcript-level ``invented_on_correction_turn`` (idle consolidation re-mines a whole session): ``fact`` names a subject
+    one of ``turns`` corrected, and types it with an animal word none of the turns said. Pure."""
+    low = (fact or "").lower()
+    for t in turns or ():
+        corr = statement(t)
+        subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower() if corr else ""
+        if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+            return invented_kind(fact, "\n".join(turns))
     return False
 
 

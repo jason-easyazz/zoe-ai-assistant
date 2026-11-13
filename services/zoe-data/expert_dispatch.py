@@ -138,6 +138,18 @@ def _exec_user(user_id: str) -> str:
 
 
 _ADVICE_RE = re.compile(r"\bshould\s+(?:i|we)\b|\b(?:anything|something|what|whatever)\b[^.?!]*\b(?:i|we)\s+should\b|\b(?:do\s+)?you\s+(?:think|reckon|suggest|recommend)\b", re.IGNORECASE)
+
+
+def _is_value_correction(text: str) -> bool:
+    """Is ``text`` a spoken correction of a stored value (``value_correction.statement``)? Never raises."""
+    try:
+        import value_correction
+
+        return value_correction.statement(text) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 _WEAK_SHOW_RE = re.compile(r"\b(?:do\s+i\s+have|have\s+i\s+got|is\s+there|whats?\s+my)\b", re.IGNORECASE)
 _LISTISH_RE = re.compile(r"\b(?:lists?|shop\w*|grocer\w*|to-?\s?dos?|buy|need|get|pick\s+up|tasks?|bucket)\b", re.IGNORECASE)
 _CLOCK_ONLY_WORDS = frozenset(
@@ -440,6 +452,11 @@ def _plan(domain: str, text: str):
     # read the reminders ("No reminders set."), "anything I should be getting ready this week" read the calendar ("You've got
     # nothing on this week.") while memory held an operation two weeks out (QA round 8). The brain answers, with recall.
     if domain in ("lists", "calendar", "reminders") and _ADVICE_RE.search(text):
+        return None
+    # A CORRECTION of something the member told Zoe ("sorry the rego is due on the 21st not the 14th") is never a record read: the
+    # calendar expert answered it "You've got nothing on today." and the correction was never applied (QA round 9). The brain takes
+    # it; the post-turn correction path (value_correction.apply) fixes the stored row.
+    if domain in ("lists", "calendar", "reminders") and _is_value_correction(text):
         return None
     # calendar / lists / reminders / timers — disambiguate SHOW (read, safe)
     # from CREATE (write) using a regex hit first, else the create-signal cue.

@@ -337,6 +337,17 @@ _CONVERSATION_META_RE = re.compile(
 )
 
 
+_QUESTION_REPORT_RE = re.compile(
+    r"^\W*(?:the\s+)?user\s+(?:"
+    r"(?:is|was)\s+(?:asking|wondering|curious|enquiring|inquiring|checking)\b"
+    r"|(?:asked|asks|wondered|wonders|enquired|inquired|queried)\s+(?:(?:me|zoe|you)\s+)?(?:if|whether|about|what|when|where|who|how|why|which)\b"
+    r"|(?:wants|wanted|would\s+like)\s+to\s+know\b"
+    r"|(?:wants|wanted|would\s+like|requested|asked\s+for|needs)\s+(?:a|an|some|the)\s+(?:\w+\s+)?"
+    r"(?:recipe|recipes|joke|jokes|story|suggestion|suggestions|idea|ideas|recommendation|recommendations|tip|tips)\b)",
+    re.IGNORECASE,
+)
+
+
 def is_conversation_meta(text: str) -> bool:
     """True when ``text`` talks about the conversation or about Zoe rather than stating a fact about the person."""
     return bool(_CONVERSATION_META_RE.search(_straight(text)))
@@ -527,6 +538,10 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
             # the shapes a speech-to-text transcript has instead of a "?": "tell me who ...",
             # "remember who ...", "hey zoe do you remember ..."
             return False, "recall_question"
+        if _QUESTION_REPORT_RE.match(raw):
+            # the extractor's REPORT of a question or a request ("User is asking if they have a sister", "The user wants a recipe
+            # for scones", QA round 9): what the member asked is not a fact about them
+            return False, "question_report"
 
     # A place fact whose value is only a discourse tail ("User lives in these days") is a fragment of a sentence, not a fact.
     if place_fragment(raw):
@@ -1258,6 +1273,51 @@ def _guard_name_tokens(t: str) -> set[str]:
     return {w for w in (caps | poss) if w not in _GUARD_CAL_WORDS} - only_values
 
 
+# -- the KIND of a named subject: a person (a relation word) or an animal (QA round 9) ------------------------------------------------
+# "kit is 10 years old now, not 9" was re-mined into "User's pet is named Kit and is ten years old" and the grandson row was replaced
+# by it; "User has a cat named Theo" was filed about the member's son. A model's guess must never change what KIND of thing a named
+# subject is: a candidate that types a name as an animal where a stored row types it as a person (or the reverse) is not written.
+ANIMAL_WORDS = frozenset({"pet", "pets", "cat", "cats", "kitten", "kitty", "dog", "dogs", "puppy", "pup", "fish", "goldfish", "bird",
+                          "budgie", "parrot", "rabbit", "bunny", "horse", "pony", "hamster", "tortoise", "turtle", "lizard", "snake",
+                          "chook", "chicken", "ferret", "guinea", "rat", "mouse", "tabby", "kelpie", "labrador", "terrier", "spaniel"})
+PERSON_WORDS = frozenset({"son", "daughter", "grandson", "granddaughter", "grandchild", "grandkid", "child", "kid", "boy", "girl",
+                          "baby", "wife", "husband", "partner", "girlfriend", "boyfriend", "fiance", "fiancee", "sister", "brother",
+                          "mum", "mom", "mother", "dad", "father", "nan", "nana", "grandma", "grandmother", "grandpa", "grandfather",
+                          "aunt", "auntie", "uncle", "cousin", "niece", "nephew", "friend", "boss", "stepson", "stepdaughter",
+                          "colleague", "neighbour", "neighbor", "teacher"})
+_KIND_GAP = r"(?:\s+(?:is|was)\s+|\s*,\s*|\s+)(?:(?:named|called)\s+)?"
+
+
+def _kind_of(word: str) -> Optional[str]:
+    w = word.lower()
+    return "animal" if w in ANIMAL_WORDS else "person" if w in PERSON_WORDS else None
+
+
+def subject_kinds(text: str) -> dict:
+    """``{name_lower: {"person"|"animal"}}`` for every capitalised name a kind word sits right beside ("grandson Kit", "pet is
+    named Kit", "cat called Pickle", "Theo is a cat", "Kit, the user's grandson"). Pure."""
+    out: dict = {}
+    t = text or ""
+    for m in re.finditer(rf"\b([A-Za-z]+){_KIND_GAP}([A-Z][a-z]+)\b", t):
+        k = _kind_of(m.group(1))
+        if k and m.group(2).lower() not in ("user", "the"):
+            out.setdefault(m.group(2).lower(), set()).add(k)
+    for m in re.finditer(r"\b([A-Z][a-z]+)(?:\s+is|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my)\s+(?:[a-z]+\s+)?([a-z]+)\b", t):
+        k = _kind_of(m.group(2))
+        if k and m.group(1).lower() not in ("user", "the"):
+            out.setdefault(m.group(1).lower(), set()).add(k)
+    return out
+
+
+def kind_flip(candidate: str, existing: str) -> Optional[str]:
+    """The name a candidate gives a DIFFERENT kind (person vs animal) from the one ``existing`` gives it, else None. Pure."""
+    a, b = subject_kinds(candidate), subject_kinds(existing)
+    for name, kinds in a.items():
+        if len(kinds) == 1 and len(b.get(name, ())) == 1 and kinds != b[name]:
+            return name
+    return None
+
+
 def guard_existing_by_entity(
     text: str,
     existing: list[tuple[str, str]],
@@ -1372,6 +1432,11 @@ async def reconcile_for_ingest(
             for h in (hits or [])
             if getattr(h, "text", None)
         ]
+        for mem_id, mem_text in existing:
+            if mem_id and kind_flip(text, mem_text):
+                # the candidate re-types a stored person as an animal (or the reverse): the stored row stands, nothing is written
+                logger.info("KIND_FLIP_SKIP user=%s kept=%s", user_id, mem_id)
+                return "skip", mem_id
         existing = guard_existing_by_entity(text, existing, title)
         decision = classify_against_existing(text, existing)
         if decision[0] == "add" and extend_supersedes:

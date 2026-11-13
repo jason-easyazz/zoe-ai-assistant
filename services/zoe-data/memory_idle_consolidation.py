@@ -486,8 +486,14 @@ async def consolidate_session(session_id: str, user_id: str,
 
             # the time of the turns that SUPPORT this fact (the first turn when none can be told): see _fact_said_at
             stale = value_correction.superseded_by_correction(user_id, text, said_at=_fact_said_at(item, text, rows))
+            # a corrected subject re-typed by the model ("kit is 10 not 9" -> "User's pet is named Kit"): a guess, never filed
+            guessed = value_correction.kind_guess_on_correction(text, user_turn_list)
         except Exception:  # noqa: BLE001 - the check never costs the session its facts
-            stale = False
+            stale = guessed = False
+        if guessed:
+            rejected += 1
+            logger.info("VALUE_CORRECTION_KIND_GUESS lane=idle_consolidation user=%s session=%s", user_id, session_id)
+            continue
         if stale:
             # the member corrected this value AFTER these turns were said (value_correction): the old value is not re-filed
             skipped += 1

@@ -24,8 +24,9 @@ in either order ("tight feeling in my chest", "my chest feels tight", "pressure 
 shirt, a blurry photo). Still deterministic, still stdlib, still no model.
 A non-emergency question in a thread ("how long should it rest", "what number is the vet") matches nothing and stays with the brain.
 
-FLAG ``ZOE_MEDICAL_SAFETY`` off | shadow | enforce (DEFAULT enforce; a typo enforces). shadow logs the class only. Logs carry the class id, never the words. The turn is
-NOT marked off the record (unlike a distress turn): a symptom the member mentions is still recallable. Doc: docs/knowledge/medical-safety.md. Stdlib only. NEVER raises.
+FLAG ``ZOE_MEDICAL_SAFETY`` off | shadow | enforce (DEFAULT enforce; a typo enforces). shadow logs the class only. Logs carry the class id, never the words. A CALL-NOW
+(``red_call``) turn is kept out of every memory writer like a distress turn (``guarded_text``, QA round 9: a fall was filed under
+Routines); every other class is not: a symptom the member mentions is still recallable. Doc: docs/knowledge/medical-safety.md. Stdlib only. NEVER raises.
 """
 from __future__ import annotations
 
@@ -403,6 +404,16 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
     else:
         return ""
     return out
+
+
+def guarded_text(text: str) -> bool:
+    """Must this turn stay out of every memory writer? A CALL-NOW emergency in enforce ("i fell over and i cant get up"): the moment
+    is not a durable fact - all four fall turns of QA round 9 were filed, one under Routines. Other classes (a symptom, a reading)
+    stay recallable. Stateless; the same seam the distress hand-off uses (``memory_provenance``). Never raises."""
+    try:
+        return mode() == "enforce" and detect(text).cls == "red_call"
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool = False) -> Optional[str]:

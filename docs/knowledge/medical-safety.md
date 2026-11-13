@@ -60,7 +60,7 @@ Guards (from review): an animal counts only as the SUBJECT (before the verb), a 
 
 Numbers: `distress_data/crisis_lines.json` per country, `emergency` plus a `poison` entry (AU 13 11 26, US 1-800-222-1222, GB NHS 111). OPERATOR: verify each before relying on it; a country with no entry gets "your local ..." wording.
 
-Not marked off the record: unlike a distress turn, a symptom the member states stays recallable.
+A call-now (`red_call`) turn is kept out of every memory writer like a distress turn (`medical_safety.guarded_text`; QA round 9 filed a fall under Routines). Every other class is not marked off the record: a symptom the member states stays recallable.
 
 ## Limits (stated, not hidden)
 
