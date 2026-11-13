@@ -227,7 +227,7 @@ const store = {}; const localStorage = {getItem:k => (k in store ? store[k] : nu
 const cancelled = [];
 const apiJson = (m, url, b) => { cancelled.push(b.timer_id); return Promise.resolve({}); };
 const _tAlarm = {known:{}, fired:{}, chime:null}, _tmMemo = {p:1}, _cur = 'home', window = {};
-const esc = x => x, _beep = () => {}, setInterval = () => 1, clearInterval = () => {};
+const esc = x => x, sid = () => '', _beep = () => {}, setInterval = () => 1, clearInterval = () => {};
 eval(body);
 timerAlarm('Pasta', ['t1']);
 timerAlarm('Eggs', ['t2']);            // a second timer ends before the first alarm is dismissed
@@ -287,7 +287,7 @@ function page(serverUp, listed) {                  // one page load: fresh in-me
   const apiJson = (m, url, b) => serverUp ? (cancelled.push(b.timer_id), Promise.resolve({})) : Promise.reject(new Error('down'));
   const timersGet = () => Promise.resolve({timers: listed.map(id => ({timer_id: id, expires_at_ms: Date.now() - 1000, label: id}))});
   const _tAlarm = {known:{}, fired:{}, chime:null}, _tmMemo = {p:1}, _cur = 'home', window = {};
-  const esc = x => x, _beep = () => {}, setInterval = () => 1, clearInterval = () => {};
+  const esc = x => x, sid = () => '', _beep = () => {}, setInterval = () => 1, clearInterval = () => {};
   eval(alarmBody + refreshBody + '; globalThis.__p = {timerAlarm, _tAlarmRefresh, _tAlarm, els, cancelled};');
   return globalThis.__p;
 }
