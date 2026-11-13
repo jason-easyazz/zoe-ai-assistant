@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -178,6 +179,20 @@ async def _owned_rows(svc: Any, user_id: str, groups: list) -> list:
     return out
 
 
+async def _index_hits(user_id: str, groups: list) -> dict:
+    """``{turn_id: text}``: the member's PERSISTED exact-words entries that hold the whole topic (the index outlives a restart
+    and the in-process recent turns). RAISES when the index cannot be read."""
+    import exact_words
+
+    backend = exact_words.get_backend()
+    hits: dict = {}
+    for needle in sorted(min(groups, key=len)):     # the narrowest group: "heart", not the eight spellings of "mum"
+        for tid, text in await backend.rows_matching(user_id, needle):
+            if row_matches(groups, text or ""):
+                hits[tid] = text
+    return hits
+
+
 async def _erase_words(user_id: str, groups: list) -> tuple:
     """The owner's words about the topic: the in-process recent turns (retracted, so a capture in flight never lands) and the
     exact-words index entries (deleted), plus the saved transcript turn of each (flagged off the record). RAISES when the index
@@ -194,13 +209,8 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
         turn_forget.mark_forgotten(user_id, turn)
         retracted += 1
     erased = 0
-    group = min(groups, key=len)                    # the narrowest group: "heart", not the eight spellings of "mum"
     backend = exact_words.get_backend()
-    hits: dict = {}
-    for needle in sorted(group):
-        for tid, text in await backend.rows_matching(user_id, needle):
-            if row_matches(groups, text or ""):
-                hits[tid] = text
+    hits = await _index_hits(user_id, groups)
     if hits:
         erased = int(await backend.delete(user_id, list(hits)) or 0)
         for text in hits.values():
@@ -209,6 +219,47 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
             except Exception as exc:  # noqa: BLE001 - the index row is gone; the transcript flag is the second line
                 logger.warning("forget_topic: transcript flag failed (%s)", type(exc).__name__)
     return retracted, erased
+
+
+def fold_name_text(text: str) -> str:
+    """ONE fold for both sides of a name comparison: JSON / unicode escapes undone, accents stripped, NFKC, casefold, and every
+    apostrophe / hyphen variant made the plain one ("Zo\\u00eb" / "Zoë" / "zoe", "O’Neil" / "O'Neil", "Anne‑Marie"). Pure."""
+    t = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), str(text or "")).replace('\\"', '"')
+    t = "".join(c for c in unicodedata.normalize("NFKD", t) if not unicodedata.combining(c))
+    t = unicodedata.normalize("NFKC", t).casefold()
+    return re.sub(r"[\u2010-\u2015\u2212]", "-", re.sub(r"[\u2018\u2019\u02bc`\u00b4]", "'", t))
+
+
+def name_keys(text: str) -> set:
+    """Every way a name in ``text`` can be matched: each whole word ("anne-marie", "o'neil"), its joined form ("annemarie",
+    "oneil") and its hyphen / apostrophe parts of two letters or more ("anne", "marie", "neil"), on ``fold_name_text``. Pure."""
+    out: set = set()
+    for w in re.findall(r"[a-z0-9]+(?:['-][a-z0-9]+)*", fold_name_text(text)):
+        out.add(w)
+        out.add(re.sub(r"['-]", "", w))
+        out.update(p for p in re.split(r"['-]", w) if len(p) >= 2)
+    return out
+
+
+async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) -> int:
+    """The pending offers about the topic go with it (QA round 9: "forget that I told you about my sister" left "add Bea (your
+    sister) as a contact?" pending, and it was offered twice more): an offer holding the topic words, or one whose proposed name
+    was said in a forgotten turn / row. RAISES when the offers could not be read or deleted: the forget is then NOT confirmed
+    (``store_down``, the same honest outcome as a failed notes erase) and the member's repeat runs it again."""
+    import pending_suggestions
+
+    said = set().union(*(name_keys(t) for t in forgotten_texts)) if forgotten_texts else set()
+
+    def matches(text: str) -> bool:
+        # the proposed name, read from the stored slots as written (JSON-escaped: "Zo\u00eb", "O\"Neil"), compared on ONE fold:
+        # ANY whole name or part the forgotten words hold withdraws the offer (over-withdrawing is harmless, a survivor is not)
+        names = re.findall(r'"name":\s*"((?:[^"\\]|\\.)*)"', text or "")
+        return row_matches(groups, text) or any(name_keys(n) & said for n in names)
+
+    gone = await pending_suggestions.withdraw_matching(user_id, matches)
+    if gone:
+        logger.info("forget_topic: user=%s offers_withdrawn=%d", user_id, gone)
+    return gone
 
 
 async def forget(svc: Any, user_id: str, topic: str) -> Result:
@@ -226,6 +277,28 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     res.found = len(rows)
     if len(rows) > MAX_ROWS:
         res.too_many = True            # nothing is touched - rows AND words: ask which part
+        return res
+    import turn_forget
+
+    said = [t.text for t in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text))]
+    # the pending offers FIRST: a failure leaves the forget not confirmed with nothing half-done, so the member's repeat sees the
+    # same turns and rows (and so the same names) again
+    try:
+        # the names come from every place the words still are: the recent turns, the rows, and the PERSISTED exact-words index
+        # (after a restart the turn "my sister Bea lives in Hobart" may be nowhere else; QA round 9 review). An unreadable index
+        # raises here: not confirmed.
+        indexed = list((await _index_hits(user_id, groups)).values())
+        await _withdraw_offers(user_id, groups, said + indexed + [getattr(r, "text", "") or "" for r in rows])
+    except Exception as exc:  # noqa: BLE001 - not confirmed: an offer about the topic may still be pending
+        logger.warning("forget_topic: pending offers not withdrawn (%s) - not confirmed", type(exc).__name__)
+        try:        # "I won't bring it up meanwhile": the offer reads (pending_suggestions) withhold what a tombstone names
+            import memory_tombstones
+
+            for word in min(groups, key=len):
+                memory_tombstones.add(user_id, word)       # in-process and short (the durable answer is the honest reply)
+        except Exception:  # noqa: BLE001
+            pass
+        res.store_down = True
         return res
     try:
         # the words before the rows, like every forget: the in-flight capture of those turns cannot land

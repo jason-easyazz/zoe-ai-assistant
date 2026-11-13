@@ -139,6 +139,18 @@ def _exec_user(user_id: str) -> str:
 
 
 _ADVICE_RE = re.compile(r"\bshould\s+(?:i|we)\b|\b(?:anything|something|what|whatever)\b[^.?!]*\b(?:i|we)\s+should\b|\b(?:do\s+)?you\s+(?:think|reckon|suggest|recommend)\b", re.IGNORECASE)
+
+
+def _is_value_correction(text: str) -> bool:
+    """Is ``text`` a spoken correction of a stored value (``value_correction.statement``)? Never raises."""
+    try:
+        import value_correction
+
+        return value_correction.statement(text) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 _WEAK_SHOW_RE = re.compile(r"\b(?:do\s+i\s+have|have\s+i\s+got|is\s+there|whats?\s+my)\b", re.IGNORECASE)
 _LISTISH_RE = re.compile(r"\b(?:lists?|shop\w*|grocer\w*|to-?\s?dos?|buy|need|get|pick\s+up|tasks?|bucket)\b", re.IGNORECASE)
 _CLOCK_ONLY_WORDS = frozenset(
@@ -442,6 +454,11 @@ def _plan(domain: str, text: str):
     # nothing on this week.") while memory held an operation two weeks out (QA round 8). The brain answers, with recall.
     if domain in ("lists", "calendar", "reminders") and _ADVICE_RE.search(text):
         return None
+    # A CORRECTION of something the member told Zoe ("sorry the rego is due on the 21st not the 14th") is never a record read: the
+    # calendar expert answered it "You've got nothing on today." and the correction was never applied (QA round 9). The brain takes
+    # it; the post-turn correction path (value_correction.apply) fixes the stored row.
+    if domain in ("lists", "calendar", "reminders") and _is_value_correction(text):
+        return None
     # calendar / lists / reminders / timers — disambiguate SHOW (read, safe)
     # from CREATE (write) using a regex hit first, else the create-signal cue.
     det = detect_intent(text, log_miss=False)
@@ -603,6 +620,10 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         # lacked — a Jessica correction can no longer supersede Karen's row.
         from memory_quality import reconcile_for_ingest
         action, match_id = await reconcile_for_ingest(svc, text, user_id)
+        if action == "refuse":
+            # the fact re-types a stored subject, or the kind check could not be made: NOT stored, and the caller says so
+            logger.info("MEMORY_STORE_DROPPED source=%s reason=kind_conflict", source)
+            return "dropped"
         if action == "skip" and match_id:
             # The existing row is at least as good — don't write a duplicate.
             try:

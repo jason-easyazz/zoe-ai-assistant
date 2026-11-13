@@ -368,6 +368,8 @@ async def _ingest_user_fact(fact: str, user_id: str, source: str, session_id, ex
         return None
     svc = get_memory_service()
     op, target = await reconcile_for_ingest(svc, fact, user_id)
+    if op == "refuse":
+        return None             # the fact re-types a stored subject (memory_quality.kind_conflict): never written
     if op == "skip" and target:
         return target
     if op == "update" and target:
