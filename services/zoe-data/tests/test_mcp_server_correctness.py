@@ -160,7 +160,8 @@ async def test_calendar_today_uses_zoe_timezone_date(monkeypatch):
     assert result == {"date": "2026-06-29", "events": []}
     sql, params = next(call for call in db.calls if "FROM events" in call[0])
     assert "FROM events" in sql
-    assert params == ("2026-06-29", "jason")
+    # calendar_read pads the household window by a day each side (a zoned event's own date) and filters exactly after
+    assert params == ("jason", "2026-06-30", "2026-06-28")
 
 
 @pytest.mark.asyncio

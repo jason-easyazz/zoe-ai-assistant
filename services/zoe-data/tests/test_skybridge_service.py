@@ -647,8 +647,9 @@ async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
 
     assert result["handled"] is True
     assert result["intent"]["range"] == "17 June 2026"
-    assert db.fetch_args[2] == "2026-06-17"
-    assert db.fetch_args[3] == "2026-06-17"
+    # calendar_read pads the household window a day each side (a zoned event's own date), then filters exactly
+    assert db.fetch_args[2] == "2026-06-18"
+    assert db.fetch_args[3] == "2026-06-16"
     content = result["cards"][0]["content"]
     assert content["qualifier"] == "17 June 2026"
     assert content["date"] == "2026-06-17"
@@ -665,8 +666,8 @@ async def test_calendar_happening_this_week_queries_range(monkeypatch):
 
     assert result["handled"] is True
     assert result["intent"]["range"] == "this week"
-    assert db.fetch_args[2] == "2026-06-11"
-    assert db.fetch_args[3] == (date(2026, 6, 11) + timedelta(days=7)).isoformat()
+    assert db.fetch_args[2] == (date(2026, 6, 11) + timedelta(days=8)).isoformat()      # window end + the 1-day pad
+    assert db.fetch_args[3] == "2026-06-10"                                             # window start - the 1-day pad
     content = result["cards"][0]["content"]
     assert content["start_date"] == "2026-06-11"
     assert content["end_date"] == "2026-06-18"

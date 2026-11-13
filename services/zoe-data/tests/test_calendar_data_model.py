@@ -182,7 +182,7 @@ def _u(user_id: str) -> dict:
 
 
 async def _list(db, user_id, **kw):
-    args = {"start_date": None, "end_date": None, "category": None, "include_cancelled": False}
+    args = {"start_date": "2026-01-01", "end_date": "2027-01-31", "category": None, "include_cancelled": False}
     args.update(kw)
     return (await calendar_router.list_events(**args, user=_u(user_id), db=db))["events"]
 

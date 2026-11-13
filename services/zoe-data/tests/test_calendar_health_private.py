@@ -44,7 +44,7 @@ class _Sqlite:
         self.conn.execute(
             "CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, "
             "end_date TEXT, end_time TEXT, duration INTEGER, category TEXT, location TEXT, "
-            "all_day INTEGER, recurring TEXT, metadata TEXT, visibility TEXT, deleted INTEGER)"
+            "all_day INTEGER, recurring TEXT, metadata TEXT, visibility TEXT, deleted INTEGER, rrule TEXT, recurrence_id TEXT)"
         )
 
     async def execute(self, sql, params=()):

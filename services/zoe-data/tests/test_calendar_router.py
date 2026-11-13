@@ -35,6 +35,9 @@ class FakeCursor:
     async def fetchone(self):
         return self._rows[0] if self._rows else None
 
+    async def fetchall(self):
+        return list(self._rows)
+
 
 class FakeDB:
     def __init__(self, rows: list[dict]):
@@ -55,6 +58,7 @@ async def test_list_today_events_applies_calendar_read_gate_and_policy(monkeypat
         access_calls.append((db, user, feature, action))
 
     monkeypatch.setattr(calendar_router, "require_feature_access", fake_require_feature_access)
+    monkeypatch.setattr(calendar_router, "today_for_zoe_tz", date.today)
 
     db = FakeDB(
         [
@@ -75,7 +79,7 @@ async def test_list_today_events_applies_calendar_read_gate_and_policy(monkeypat
 
     assert access_calls == [(db, user, "calendar", "read")]
     assert result["events"][0]["id"] == "evt-1"
-    assert db.calls and db.calls[0][1] == ["u-1", date.today().isoformat()]
+    assert db.calls and db.calls[0][1][0] == "u-1" and "FROM events" in db.calls[0][0]
 
 
 @pytest.mark.asyncio
@@ -119,6 +123,7 @@ async def test_list_today_events_allows_guest_when_policy_allows(monkeypatch):
         access_calls.append((db, user, feature, action))
 
     monkeypatch.setattr(calendar_router, "require_feature_access", fake_require_feature_access)
+    monkeypatch.setattr(calendar_router, "today_for_zoe_tz", date.today)
 
     db = FakeDB(
         [
@@ -139,7 +144,7 @@ async def test_list_today_events_allows_guest_when_policy_allows(monkeypatch):
 
     assert access_calls == [(db, user, "calendar", "read")]
     assert result["events"][0]["id"] == "evt-guest"
-    assert db.calls and db.calls[0][1] == ["guest-1", date.today().isoformat()]
+    assert db.calls and db.calls[0][1][0] == "guest-1" and "FROM events" in db.calls[0][0]
 
 
 @pytest.mark.asyncio

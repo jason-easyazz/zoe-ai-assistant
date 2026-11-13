@@ -19,11 +19,12 @@ auth-outage principal and the ``ZOE_UNAUTHENTICATED_ROLE`` header-less promotion
 the household (owner ``family-admin``) and never sees, edits or creates a private event.
 """
 import json
-from datetime import date
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+import calendar_read
 import calendar_service as cal
 import panel_principal
 from auth import get_current_user
@@ -34,6 +35,7 @@ from guest_policy import require_feature_access
 from models import EventCreate, EventUpdate
 from panel_principal import require_member_or_panel
 from push import broadcaster
+from time_utils import today_for_zoe_tz
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
@@ -196,6 +198,30 @@ async def _enforce_calendar_read_access(db, user: dict) -> str:
     return user["user_id"]
 
 
+#: A list request with no end date reads this many days from its start (no start = today, household time).
+DEFAULT_LIST_DAYS = 90
+
+
+async def _list_window(db, user_id: str, start, end, *, include_cancelled: bool, category: Optional[str]) -> list:
+    """The window through the ONE read path (``calendar_read``): overlapping multi-day events, repeats expanded,
+    cancelled hidden unless asked. Each item is the presented event plus ``occurrence_date`` / ``occurrence_start_time``
+    (household time), ``is_recurring``, ``read_only`` and ``source`` / ``source_label``."""
+    occurrences = await calendar_read.events_in_window(db, user_id, start, end, include_cancelled=include_cancelled,
+                                                       include_busy=True, category=category)
+    unique = {o["event_id"]: o["event"] for o in occurrences}     # present (and load children for) each event once
+    presented = {e["id"]: e for e in await _present_all(db, list(unique.values()), user_id)}
+    events = []
+    for occ in occurrences:
+        event = {**presented[occ["event_id"]], "start_date": occ["event"]["start_date"],
+                 "end_date": occ["event"]["end_date"]}
+        events.append(event)
+        event.update({"occurrence_date": occ["date"], "occurrence_start_time": occ["start_time"],
+                      "is_recurring": occ["is_recurring"], "read_only": occ["read_only"]})
+        if not event.get("busy_only"):
+            event.update({"source": occ["source"], "source_label": occ["source_label"]})
+    return events
+
+
 @router.get("/events", response_model=dict)
 async def list_events(
     start_date: Optional[str] = Query(None),
@@ -205,29 +231,13 @@ async def list_events(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """List events with optional start_date, end_date, category filters. Cancelled events only on request."""
+    """Events overlapping [start_date, end_date] (default: today and the next DEFAULT_LIST_DAYS days; at most
+    calendar_read.MAX_WINDOW_DAYS), one item per occurrence. Cancelled events only on request."""
     user_id = await _enforce_calendar_read_access(db, user)
-    conditions = [_read_filter_sql()]
-    params: list = [user_id]
-
-    if start_date:
-        conditions.append("start_date >= ?")
-        params.append(start_date)
-    if end_date:
-        conditions.append("start_date <= ?")
-        params.append(end_date)
-    if category:
-        # a category filter never reaches another member's busy-only event (its category is hidden)
-        conditions.append("category = ? AND (visibility <> 'busy' OR user_id = ?)")
-        params.extend([category, user_id])
-    if include_cancelled is not True:
-        conditions.append("status <> 'cancelled'")
-
-    where = " AND ".join(conditions)
-    sql = f"SELECT * FROM events WHERE {where} ORDER BY start_date, start_time"
-    cursor = await db.execute(sql, params)
-    rows = [row async for row in cursor]
-    return {"events": await _present_all(db, rows, user_id)}
+    start = cal.parse_date(start_date) or today_for_zoe_tz()
+    end = cal.parse_date(end_date) or start + timedelta(days=DEFAULT_LIST_DAYS)
+    events = await _list_window(db, user_id, start, end, include_cancelled=include_cancelled is True, category=category)
+    return {"events": events}
 
 
 @router.get("/events/today", response_model=dict)
@@ -235,14 +245,10 @@ async def list_today_events(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Get today's events."""
+    """Get today's events (household time)."""
     user_id = await _enforce_calendar_read_access(db, user)
-    today = date.today().isoformat()
-    sql = (f"SELECT * FROM events WHERE {_read_filter_sql()} AND status <> 'cancelled' AND start_date = ? "
-           "ORDER BY start_time")
-    cursor = await db.execute(sql, [user_id, today])
-    rows = [row async for row in cursor]
-    return {"events": await _present_all(db, rows, user_id)}
+    today = today_for_zoe_tz()
+    return {"events": await _list_window(db, user_id, today, today, include_cancelled=False, category=None)}
 
 
 @router.get("/events/{event_id}", response_model=dict)
@@ -344,9 +350,9 @@ async def update_event(
     if row is None:
         raise HTTPException(status_code=404, detail="Event not found")
     current = dict(row)
-    if current.get("read_only"):
-        # an externally-owned event (a synced calendar Zoe may not write): the change belongs at its source
-        raise HTTPException(status_code=409, detail="This event comes from a read-only calendar")
+    if not calendar_read.is_writable(current):
+        # an externally-owned event (read-only, or a provider's copy with no write-back): the change belongs at its source
+        raise HTTPException(status_code=409, detail=calendar_read.refusal(current))
     # Household model: a family-visible event is editable by any signed-in
     # household member (the visibility filter above already scopes the lookup
     # to family-or-own). This mirrors the people router — the panel is a
@@ -451,8 +457,8 @@ async def delete_event(
     row = await cursor.fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Event not found")
-    if dict(row).get("read_only"):
-        raise HTTPException(status_code=409, detail="This event comes from a read-only calendar")
+    if not calendar_read.is_writable(dict(row)):
+        raise HTTPException(status_code=409, detail=calendar_read.refusal(dict(row)))
     # Household model: family-visible events are deletable by any signed-in
     # household member — same rationale as update_event above (soft delete,
     # reversible; mirrors the people router's family-or-own semantics).
