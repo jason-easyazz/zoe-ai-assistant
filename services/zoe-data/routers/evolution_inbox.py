@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 
 from auth import require_admin
 
-router = APIRouter(prefix="/api/system/evolution", tags=["evolution"])
+# require_admin on the ROUTER (every route, declared where the auth scan sees it); ``_owner`` below then refuses the admin roles that are
+# not a signed-in person (a panel token, the unauthenticated-role promotion). FastAPI resolves require_admin once per request.
+router = APIRouter(prefix="/api/system/evolution", tags=["evolution"], dependencies=[Depends(require_admin)])
 
 
 async def _owner(user: dict = Depends(require_admin)) -> dict:
