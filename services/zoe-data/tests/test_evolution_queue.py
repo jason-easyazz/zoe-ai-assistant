@@ -302,7 +302,9 @@ def test_a_legacy_writer_lands_in_the_queue(db, monkeypatch):
     row = rows[0]
     assert (row["status"], row["decision"], row["change_class"], row["risk_tier"], row["component"], row["source"]) == (
         "proposed", "", "code", 3, "chat", "evolution_notice:user_issue_report")
-    assert json.loads(row["evidence_json"]) == {"signal": {"kind": "user_issue_report"}}       # counts only: the words stay in the legacy column
+    sig = json.loads(row["evidence_json"])["signal"]                                          # counts only: the words stay in the legacy column
+    assert sig["kind"] == "user_issue_report" and sig["seen_count"] == 2 and isinstance(sig["last_seen"], float)   # the repeat recurred
+    assert set(json.loads(row["evidence_json"])) == {"signal"} and set(sig) == {"kind", "seen_count", "last_seen"}
     assert json.loads(row["evidence"])["signal"]["source"] == "evolution_notice:user_issue_report"
     assert [h["to_status"] for h in db.rows("SELECT to_status FROM evolution_proposal_history")] == ["proposed"]
     walk(db, row["id"], ["rejected"])
@@ -684,8 +686,7 @@ def test_a_retry_that_is_deployed_again_is_measured_again(db):
 
 
 def test_the_legacy_miss_rate_evaluator_leaves_struggle_proposals_alone(db, monkeypatch):
-    """A struggle proposal has no target_patterns; the no-pattern branch would auto-'keep' it with zero misses, reporting an
-    unmeasured change as validated. Negative control: drop the source filter in run_measure_phase -> red."""
+    """A struggle proposal is measured by its own retrain ledger, not here. Negative control: drop the source filter in run_measure_phase -> red."""
     import evolution_notice
     monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace(
         update_multica_issue_on_proposal_status_change=lambda *a, **k: None))
@@ -700,7 +701,11 @@ def test_the_legacy_miss_rate_evaluator_leaves_struggle_proposals_alone(db, monk
     got = run(evolution_notice.run_measure_phase())
     assert got["evaluated"] == 1
     assert status_of(db, ids["struggle"])["status"] == "applied"
-    assert status_of(db, ids["evolution_notice:intent_miss_cluster"])["status"] == "kept"
+    # no target patterns is NOT a pass (2026-11-13): recorded unmeasured, the row stays applied
+    assert status_of(db, ids["evolution_notice:intent_miss_cluster"])["status"] == "applied"
+    vr = db.rows("SELECT validation_result FROM evolution_proposals WHERE id = ?", (ids["evolution_notice:intent_miss_cluster"],))
+    assert json.loads(vr[0]["validation_result"])["verdict"] == "unmeasured"
+    assert db.rows("SELECT validation_result FROM evolution_proposals WHERE id = ?", (ids["struggle"],))[0]["validation_result"] is None
 
 
 def _tx_client(tmp_path, monkeypatch):

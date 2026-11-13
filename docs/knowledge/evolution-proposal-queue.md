@@ -69,6 +69,47 @@ change proposals - there is no night-mind proposal writer in the repo. **Generat
   reverted) or the new ones, answers the old name in `status` and the new one in `queue_status`, and leaves struggle rows out.
 - The weekly digest counts "pending" = open and undecided, "validated" = kept, struggle rows excluded.
 
+## The owner's decide page (2026-11-13)
+
+`evolution.html` (desktop / phone, linked from Settings > Evolution Proposals; never from a touch page) over `evolution_inbox.py` +
+`routers/evolution_inbox.py`, household admin persons only (a panel token and the `ZOE_UNAUTHENTICATED_ROLE` promotion are refused):
+
+- `GET /api/system/evolution/inbox?stale_days=30`: at most 20 cards. A card groups the UNDECIDED open proposals (not approved, not
+  put off past their review date) with the same component, class, kind and normalised title (or lesson id), ranked by (count + summed
+  signal counts) halved every 14 days of EVIDENCE age (the latest occurrence: `evidence_json.signal.last_seen`, which the NOTICE /
+  frustration / user-report writers set when they see an already-tracked problem again; else `proposed_at`; a decision never
+  refreshes a card). A card carries its count and
+  an opaque group `key` (a hash of those grouping fields), never its ids. A group with no new evidence for `stale_days` is stale. Struggle proposals
+  (live evidence only) and the owner's own failed-turn clusters (counts only, no buttons) are cards too. Open rows with no activity for
+  `stale_days` are only a count; rows put off with "later" are a count. A card carries kind, counts, dates, the proposed change and its
+  risk tier, and what a yes does next; NEVER a title, description or legacy evidence (they can hold a member's words). `decided` lists
+  the last approved, person-rejected (who, when) and measured rows with their measurement (better / no change / worse / not
+  measurable), plus ONE summary line for every "dismiss old" rejection (count and date); a row put off with "later" is in neither list.
+- `POST /api/system/evolution/decide {key | ids (max 500), action: approve | reject | later, reason: code}`: by key the server recomputes
+  the groups and applies the verdict to that group's CURRENT undecided ids (any number, in chunks of 200); approve = the `decision` column, reject = the
+  `rejected` status, later = the legacy defer (`next_review_at` + 7 days, decision withdrawn); a struggle card goes through
+  `struggle_proposals.decide`. Idempotent; the queue history is the audit (actor, time, reason code). Approving applies nothing.
+- `POST /api/system/evolution/dismiss-stale {stale_days}`: rejects the stale bucket (history note `dismissed: stale`).
+
+## MEASURE (`evolution_notice.run_measure_phase`, the night digest)
+
+Only an `applied` row older than 48 h is measured. Today nothing reaches `applied` (the board is paused, the legacy page has no deploy
+button, the struggle retrain is off), which is why every night logged `evaluated: 0`; the result now carries `applied_due`. The
+verdict (`measure_verdict`) compares a RATE: household intent misses similar to the proposal's target patterns per household turn the
+router logged (`local_text_logs.ROUTER_SHADOW`, one record per routed turn), 48 h each side. It first needs PROOF OF COVERAGE: at least
+`MEASURE_MIN_TURNS` (30) household turns in EACH window and at least one miss-log record of any kind inside the after window (the miss
+writer was alive), else `unmeasured` / `no_before_data` or `no_after_coverage`: a log that stopped is never an improvement. Then at
+least `MEASURE_MIN_BEFORE` (5) target misses before (else `sample_too_small`); `validated` at a rate of 0.8x or less, `regressed` at
+1.2x or more (moved to `reverted`; nothing is rolled back automatically), otherwise `no_change`; no target patterns is
+`no_target_signal`. The scan (`scan_windows`) is blocking file work, so the async callers run it through `asyncio.to_thread` (the in-process
+digest loop shares zoe-data's event loop with live voice turns), and it is bounded: a rotated segment last written before the window is
+skipped by mtime, a log stops at the first record past the window, and past `MEASURE_MAX_LINES` / `MEASURE_MAX_BYTES` per log or
+`MEASURE_MAX_COMPARISONS` trigram comparisons it stops; a truncated scan is `unmeasured` / `scan_truncated`. Every outcome is written to `validation_result`
+(`schema: 2`, counts only); a verdict without `schema: 2` is shown as not measurable.
+
+The Multica board mirror of new proposals (and of measured status) is opt-in: `ZOE_EVOLUTION_BOARD_MIRROR` (default off). The NOTICE
+pass runs once a night, in the night digest; the board's "Evolution Nightly Notice" autopilot is a no-op.
+
 ## Migration 0062
 
 Adds the columns and `evolution_proposal_history`; REMAPS every existing row (pending -> proposed, approved -> proposed + decision
@@ -83,6 +124,6 @@ from the live image (the remap, the fold, the 0027 trigger interplay, a round tr
 
 1. Nothing to flip: the queue is live with the deploy that runs 0062 (the struggle proposals stay `shadow`; the legacy writers keep
    writing, now into the queue).
-2. Decide the fate of the 716 legacy `pending` rows (now `proposed`, class code): reject them in bulk, or let Phase 2 delete the
-   writers they came from (design section 9, Phase 2).
+2. Decide the fate of the legacy `pending` rows (now `proposed`, class code): the decide page's "Dismiss old proposals" rejects the
+   stale ones in one go.
 3. Round-1 checklist item 2: stop and delete generation 0 (`zoe-training.timer`, the cron self-review, `~/training/improvement-proposals`).

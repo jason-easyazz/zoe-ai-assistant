@@ -164,7 +164,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `chat_messages` | pg_table | words | gap | entity: `forget_redact.on_forget` | Entity forget redacts the span in place (forget_redact.on_forget); delete_user does not delete messages. |
 | `chat_feedback` | pg_table | words | gap | - | Holds a corrected_response (words); neither path reaches it. |
 | `background_tasks` | pg_table | words | gap | - | Holds the task text and its result; neither path reaches it. |
-| `pending_suggestions` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Offer text naming people can outlive the forget (person offers are withdrawn by name; anticipation offers naming the entity are deleted by the cascade); delete_user does not reach the table. |
+| `pending_suggestions` | pg_table | words | gap | entity: `memory_forget_cascade._run` | Offer text naming people can outlive the forget (person offers are withdrawn by name; anticipation offers naming the entity are deleted by the cascade; a TOPIC forget withdraws the offers holding the topic or a name from the forgotten words: forget_topic._withdraw_offers); delete_user does not reach the table. |
 | `notes` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `journal_entries` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. Holds free text. |
 | `lists` | pg_table | words | gap | - | Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user. List items name people and places. |

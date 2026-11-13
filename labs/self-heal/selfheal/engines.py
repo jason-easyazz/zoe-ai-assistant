@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import signal
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import binaries
 from .config import Config
 from .detectors import Ticket
 
@@ -56,8 +56,12 @@ def engine_env() -> dict:
     return env
 
 
-def _run(argv: list, cwd: str, timeout: int) -> EngineResult:
+def _run(argv: list, cwd: str, timeout: int, exe: str | None = None) -> EngineResult:
+    """`exe`: the resolved absolute engine binary; None = refuse (never the inherited PATH)."""
     t0 = time.monotonic()
+    if not exe:
+        return EngineResult(False, "rc=binary_unresolved", 0.0)
+    argv = [exe, *argv[1:]]
     env = engine_env()
     p = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, text=True, env=env, start_new_session=True)
@@ -119,8 +123,12 @@ def check_claude_argv(argv: list, tools: list) -> None:
         raise UnsafeArgv("claude argv carries a forbidden flag")
 
 
-def _bin_ok(binary: str) -> bool:
-    return bool(shutil.which(binary)) or (os.path.isabs(binary) and os.access(binary, os.X_OK))
+def _bin(cfg: Config, name: str) -> str | None:
+    """The engine CLI's absolute path from the trusted PATH (or the configured absolute path), checked."""
+    try:
+        return binaries.find(getattr(cfg, f"{name}_bin"), cfg)
+    except binaries.UnsafeBinary:
+        return None
 
 
 class CodexEngine:
@@ -132,9 +140,9 @@ class CodexEngine:
         self.cfg = cfg
 
     def available(self) -> tuple[bool, str]:
-        if not _bin_ok(self.cfg.codex_bin):
-            return False, "codex_not_found"
-        r = subprocess.run([self.cfg.codex_bin, "login", "status"], capture_output=True, text=True, timeout=30)
+        if not _bin(self.cfg, "codex"):
+            return False, "codex_not_found_or_unsafe"
+        r = subprocess.run([_bin(self.cfg, "codex"), "login", "status"], capture_output=True, text=True, timeout=30)
         return r.returncode == 0, "logged_in" if r.returncode == 0 else "codex_not_logged_in"
 
     def argv(self, worktree: str, prompt: str) -> list:
@@ -147,7 +155,8 @@ class CodexEngine:
         return a
 
     def run(self, ticket: Ticket, worktree: str) -> EngineResult:
-        return _run(self.argv(worktree, build_prompt(ticket, self.cfg)), worktree, self.cfg.engine_timeout_s)
+        return _run(self.argv(worktree, build_prompt(ticket, self.cfg)), worktree, self.cfg.engine_timeout_s,
+                    _bin(self.cfg, self.name))
 
 
 class ClaudeEngine:
@@ -160,9 +169,9 @@ class ClaudeEngine:
         self.cfg = cfg
 
     def available(self) -> tuple[bool, str]:
-        if not _bin_ok(self.cfg.claude_bin):
-            return False, "claude_not_found"
-        r = subprocess.run([self.cfg.claude_bin, "auth", "status"], capture_output=True, text=True, timeout=30)
+        if not _bin(self.cfg, "claude"):
+            return False, "claude_not_found_or_unsafe"
+        r = subprocess.run([_bin(self.cfg, "claude"), "auth", "status"], capture_output=True, text=True, timeout=30)
         try:
             ok = r.returncode == 0 and json.loads(r.stdout).get("loggedIn") is True
         except ValueError:
@@ -179,7 +188,8 @@ class ClaudeEngine:
         return a
 
     def run(self, ticket: Ticket, worktree: str) -> EngineResult:
-        return _run(self.argv(worktree, build_prompt(ticket, self.cfg)), worktree, self.cfg.engine_timeout_s)
+        return _run(self.argv(worktree, build_prompt(ticket, self.cfg)), worktree, self.cfg.engine_timeout_s,
+                    _bin(self.cfg, self.name))
 
 
 class FlueExecutorEngine:
@@ -200,7 +210,7 @@ class FlueExecutorEngine:
         why = []
         if Path(self.cfg.multica_kill_switch).expanduser().exists():
             why.append("multica_kill_switch_present")
-        r = subprocess.run(["systemctl", "--user", "cat", "flue-executor.service"], capture_output=True, text=True)
+        r = subprocess.run([binaries.which("systemctl"), "--user", "cat", "flue-executor.service"], capture_output=True, text=True)
         if r.returncode != 0:
             why.append("executor_unit_not_installed")
         why.append("heal_enqueue_not_built")
