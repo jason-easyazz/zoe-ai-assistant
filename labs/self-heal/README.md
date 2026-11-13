@@ -160,7 +160,7 @@ Unit tests (fake engine, throwaway repos, no network):
 ```bash
 cd ~/assistant   # or any checkout of this branch
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider labs/self-heal/tests -q
-# 2026-11-13: v1 195 passed in ~74 s; v2 246 passed in ~144 s (gates inside bwrap, baseline pytest run per heal)
+# 2026-11-13: v1 195 passed in ~74 s; v2 250 passed in ~148 s (gates inside bwrap, baseline pytest run per heal)
 ```
 
 Negative controls (each mutation applied, the named tests run, the file restored; every one went red):
@@ -346,7 +346,26 @@ regex stays as an early, cheap refusal. A heal may add or edit tests but never d
 the diff policy refuses any deleted file under `tests/`, `test_*.py`, `*_test.py` or `conftest.py`
 (`test_deleted`; a rename is a delete + an add), and the baseline's file list comes from the BASE
 tree, so a base test file missing after the heal fails the gate even past the policy
-(`test_deleting_or_renaming_a_test_file_is_refused`, `test_gate_baseline_lists_the_base_trees_test_files`). (g) `selfheal/binaries.py` resolves git, gh, systemctl,
+(`test_deleting_or_renaming_a_test_file_is_refused`, `test_gate_baseline_lists_the_base_trees_test_files`).
+Every JUnit report (detector, gate, baseline, verify) goes to a FRESH runner-owned dir OUTSIDE the
+worktree, bound writable into the sandbox for that one run only; it is read only if it exists, is
+newer than a marker written just before the run, and parses; otherwise the step FAILED (exit 0 with
+no fresh report is a failure, `no_report`). The diff policy refuses any added or changed `*.xml`
+that looks like a report by name or by a `<testsuite(s)>` root (`report_planted`). Tests:
+`test_planted_report_is_refused_by_the_diff_policy` (by name, by root),
+`test_exit_zero_without_a_fresh_report_fails_the_gate` (code that `os._exit(0)`s plus passing
+reports planted where v1 read them), `test_stale_report_at_the_real_path_is_refused`.
+
+**Residual, not closed: an in-process forged report.** The code under test runs INSIDE the pytest
+process that writes the report, with the same privileges: it can read the report path from
+`sys.argv`, write a passing report there (or patch pytest's own reporter) and exit 0. A nonce does
+not help, since anything pytest knows, code in the same process can read. Closing it needs the
+verdict to come from OUTSIDE the process that runs the engine's code (e.g. a supervisor that
+collects per-test results over a channel the test process cannot write, or one subprocess per
+node with exit status as the only signal), which is not cheap and is not built. What still stands
+in the way: a forgery must be written into the engine's diff, which the github landing shows a
+non-engine reviewer (draft PR); the `local` landing has no human in the loop, so this is a reason
+not to switch `full` + `local` on without that supervisor. (g) `selfheal/binaries.py` resolves git, gh, systemctl,
 true, false, flock, bwrap, prlimit, pgrep, bash and both engine CLIs to absolute paths from
 `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (an engine CLI elsewhere must be configured with an
 absolute path), records them in the `preflight` audit row, and refuses a group/world-writable or

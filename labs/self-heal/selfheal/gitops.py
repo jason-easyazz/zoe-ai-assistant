@@ -16,7 +16,7 @@ from pathlib import Path
 from . import binaries
 from .config import inside_refused
 from .detectors import node_passed
-from .safety import WEAKEN, DiffReport, is_test_infra, is_test_path, rc_summary
+from .safety import WEAKEN, DiffReport, is_test_infra, is_test_path, looks_like_junit, rc_summary
 
 CMD_LOG: list = []
 JUNK = re.compile(r"(^|/)(__pycache__|\.pytest_cache)(/|$)|\.py[co]$")
@@ -118,6 +118,12 @@ def inspect_worktree(wt: str, base_sha: str) -> DiffReport:
                                if x.startswith("+") and not x.startswith("+++")))
             if WEAKEN.search(added):
                 rep.weakened_tests.append(path)
+    for path in rep.files:   # an engine never ships a test report: it could only be a forgery
+        full = Path(wt) / path
+        if path.lower().endswith(".xml") and full.is_file() and not full.is_symlink():
+            with open(full, "rb") as fh:
+                if looks_like_junit(path, fh.read(65536)):
+                    rep.planted_reports.append(path)
     root = Path(wt).resolve()
     for path in rep.files:
         full = Path(wt) / path
@@ -166,12 +172,11 @@ def run_repro(cfg, repo: str, ref: str, ticket, path: str, lock: list) -> ReproR
     try:
         if ticket.repro_files:
             git(path, "checkout", ticket.base_sha, "--", *ticket.repro_files)
-        junit = Path(path) / ".self-heal-verify.xml"
-        rc, out = Sandbox(cfg).run([*ticket.repro_cmd, f"--junitxml={junit}"], path, cfg.gate_timeout_s, lock)
+        rc, out, xml = Sandbox(cfg).run_report(list(ticket.repro_cmd), path, cfg.gate_timeout_s, lock)
         if rc is None:
             return ReproResult(False, out)   # timeout | worktree_quota
         nodeid = ticket.evidence.get("nodeid", "")
-        verdict = node_passed(junit.read_text(), nodeid) if junit.exists() and nodeid else "no_junit"
+        verdict = node_passed(xml, nodeid) if xml is not None and nodeid else "no_report"
         return ReproResult(rc == 0 and verdict == "passed", f"{rc_summary(rc, out)},node={verdict}")
     finally:
         remove_worktree(repo, path)

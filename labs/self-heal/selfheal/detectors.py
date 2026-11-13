@@ -146,9 +146,4 @@ def run_detector(cfg, checkout: str, lock: list | None = None) -> str | None:
     """Run the configured offline lane (sandboxed) in the base checkout; the junit XML, or None when
     the lane wrote none (timeout, crash): that is `detect_failed`, never "no fault"."""
     from .sandbox import Sandbox   # noqa: PLC0415
-    junit = Path(checkout) / ".self-heal-junit.xml"
-    rc, _ = Sandbox(cfg).run([*cfg.detect_cmd, f"--junitxml={junit}"], checkout, cfg.detect_timeout_s, lock or [])
-    try:
-        return junit.read_text() if rc is not None and junit.exists() else None
-    finally:
-        junit.unlink(missing_ok=True)
+    return Sandbox(cfg).run_report(list(cfg.detect_cmd), checkout, cfg.detect_timeout_s, lock or [])[2]

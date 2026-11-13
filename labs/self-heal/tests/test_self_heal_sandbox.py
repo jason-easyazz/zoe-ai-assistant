@@ -521,3 +521,55 @@ def test_gate_baseline_lists_the_base_trees_test_files(extra_scratch):
                evidence={"nodeid": "tests/test_calc.py::test_add"}, repro_cmd=[], repro_files=["tests/test_calc.py"])
     res = run_gates(cfg, ["relevant_pytest"], str(wt), ["calc.py", "tests/test_extra.py"], t, base_wt=str(base))
     assert res == [{"gate": "relevant_pytest", "status": "fail", "detail": "test_weakened:files_missing=1"}]
+
+
+# --- review round 3: a planted or stale JUnit report is never proof ----------------------------
+
+PASSING_REPORT = ('<testsuites><testsuite><testcase classname="tests.test_calc" name="test_add"/>'
+                  '<testcase classname="tests.test_calc" name="test_zero"/></testsuite></testsuites>')
+EXIT_CALC = "import os\nos._exit(0)\n"   # the tests import it: the process ends 0 before any report
+
+
+@pytest.mark.parametrize("name", [".self-heal-verify.xml", "data/innocent.xml"], ids=["by_name", "by_root"])
+def test_planted_report_is_refused_by_the_diff_policy(local_scratch, name):
+    def plant(wt):
+        (wt / "calc.py").write_text(EXIT_CALC)
+        (wt / name).parent.mkdir(exist_ok=True)
+        (wt / name).write_text(PASSING_REPORT)
+    out = runner(local_scratch.cfg, FakeEngine(plant)).run_once()
+    assert out["outcome"] == "discarded" and out["why"] == "report_planted", out
+
+
+def _exit_worktrees(cfg):
+    base, wt = Path(cfg.worktree_root) / "base", Path(cfg.worktree_root) / "heal"
+    gitops.add_worktree(cfg.repo, str(base), base="main")
+    gitops.add_worktree(cfg.repo, str(wt), base="main")
+    (wt / "calc.py").write_text(EXIT_CALC)
+    for n in (".self-heal-gate.xml", ".self-heal-verify.xml", ".self-heal-junit.xml"):   # where v1 read them
+        (wt / n).write_text(PASSING_REPORT)
+    t = Ticket(id="t", fault_class="failing_test", fault_key="k", summary="s",
+               evidence={"nodeid": "tests/test_calc.py::test_add"}, repro_cmd=[], repro_files=["tests/test_calc.py"])
+    return base, wt, t
+
+
+def test_exit_zero_without_a_fresh_report_fails_the_gate(local_scratch):
+    """Past the diff policy: exit 0, no report written, passing reports planted in the worktree."""
+    cfg = local_scratch.cfg
+    base, wt, t = _exit_worktrees(cfg)
+    res = run_gates(cfg, ["relevant_pytest"], str(wt), ["calc.py"], t, base_wt=str(base))
+    assert res[0]["status"] == "fail" and res[0]["detail"].endswith("rc=0,no_report"), res
+    out = runner(cfg, FakeEngine(lambda w: (w / "calc.py").write_text(EXIT_CALC))).run_once()
+    assert out["outcome"] == "discarded" and out["why"] == "gate_failed", out
+
+
+def test_stale_report_at_the_real_path_is_refused(local_scratch, monkeypatch):
+    cfg = local_scratch.cfg
+    _base, wt, _t = _exit_worktrees(cfg)
+    fixed = local_scratch.root / "reports"
+    fixed.mkdir()
+    (fixed / "report.xml").write_text(PASSING_REPORT)
+    os.utime(fixed / "report.xml", (946684800, 946684800))           # a report from long ago
+    monkeypatch.setattr(sandbox.tempfile, "mkdtemp", lambda prefix="": str(fixed))
+    rc, _out, xml = sandbox.Sandbox(cfg).run_report(
+        [cfg.python, "-m", "pytest", "-p", "no:cacheprovider", "-q", "tests/test_calc.py"], str(wt), 60)
+    assert rc == 0 and xml is None

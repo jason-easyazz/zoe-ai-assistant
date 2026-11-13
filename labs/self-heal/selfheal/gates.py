@@ -55,15 +55,14 @@ def gate_py_compile(cfg, wt, changed, ticket, base_wt=None):
 
 
 def _pytest_nodes(cfg, wt: str, tests: list) -> tuple[bool, str, dict | None]:
-    junit = Path(wt) / ".self-heal-gate.xml"
-    ok, d = _sh(cfg, [cfg.python, "-m", "pytest", "-p", "no:cacheprovider", "-q", *tests, f"--junitxml={junit}"],
-                wt, _lock(cfg))
-    try:
-        return ok, d, (node_statuses(junit.read_text()) if junit.exists() else None)
-    except Exception:   # noqa: BLE001 - an unreadable report is no evidence
-        return ok, d, None
-    finally:
-        junit.unlink(missing_ok=True)
+    """(ok, detail, {node: status}); no fresh, parseable report = NOT ok (detail `no_report`)."""
+    rc, out, xml = Sandbox(cfg).run_report([cfg.python, "-m", "pytest", "-p", "no:cacheprovider", "-q", *tests],
+                                           wt, cfg.gate_timeout_s, _lock(cfg))
+    if rc is None:
+        return False, out, None
+    if xml is None:
+        return False, f"{rc_summary(rc, out)},no_report", None
+    return rc == 0, rc_summary(rc, out), node_statuses(xml)
 
 
 def gate_relevant_pytest(cfg, wt, changed, ticket, base_wt=None):
