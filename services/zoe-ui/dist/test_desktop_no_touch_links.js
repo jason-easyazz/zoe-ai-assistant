@@ -28,14 +28,9 @@ for (const dead of ['cooking.html', 'smart-home.html', 'games.html', 'week_plann
 }
 ok('the desktop stubs and the dead tier are gone from dist/');
 const panel = fs.readFileSync(path.join(root, 'js/notifications-panel.js'), 'utf8');
-const links = [...panel.matchAll(/location\.href = '\/touch\/updates\.html[^']*'/g)];
-assert(links.length === 1, 'expected the one remaining touch deep link (zoe updates) to still exist for touch surfaces');
-for (const m of links) {
-  const before = panel.slice(Math.max(0, m.index - 60), m.index);
-  assert(/if \(IS_TOUCH_SURFACE\) $/.test(before), 'deep link is not gated to touch surfaces: ' + before.trim());
-}
-assert(/const IS_TOUCH_SURFACE = /.test(panel));
-ok('notifications-panel.js deep-links into touch/updates.html only from a touch surface');
+assert(!/\/touch\//.test(panel), 'notifications-panel.js still names a /touch/ path (touch/updates.html was deleted 2026-11-13)');
+assert(!/IS_TOUCH_SURFACE|data-open-zoe-updates/.test(panel), 'the dead touch-updates branch is back');
+ok('notifications-panel.js carries no /touch/ link at all');
 const orb = fs.readFileSync(path.join(root, 'js/orb-loader.js'), 'utf8');
 assert(/document\.addEventListener\('zoe:logout', _purgeOrbOnLogout\)/.test(orb), 'orb purge must listen on document (auth.js dispatches there)');
 ok('orb-loader purges transcripts on the document-level zoe:logout');
