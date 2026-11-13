@@ -257,6 +257,17 @@
     if (m) return 'Repeats ' + REPEAT[m[1].toLowerCase()];
     return 'Repeats: ' + r;
   }
+  // A REPEATING event: the list API returns one row per occurrence under the SERIES id, with that occurrence's date
+  // (series_start_date carries the series' own). Any time/date change from the panel would land under the series id and
+  // re-anchor the whole series (PR 2447 review), so the panel treats a repeating event as read-only for time and date.
+  function repeatingOf(ev) {
+    ev = ev || {};
+    var ss = firstStr(ev.series_start_date);
+    return truthy(ev.is_recurring) || !!recurrenceOf(ev) ||
+      (Array.isArray(ev.rdates) && ev.rdates.length > 0) || (!!ss && ss !== firstStr(ev.start_date));
+  }
+  var REPEATING_LINE = 'This event repeats. Change it on your phone or the desktop calendar.';
+
   // Reminders ON FILE: the API's `alarms[]` (event_alarms rows) plus the desktop's legacy metadata.reminders.
   // Stored only — nothing fires them yet — so the sheet says so and offers no "remind me" on top.
   function remindersOf(ev) {
@@ -328,6 +339,7 @@
       timezone: timezoneNote(ev, o),
       recurrence: recurrenceOf(ev), reminders: remindersOf(ev),
       readOnly: readOnlyOf(ev),
+      repeating: repeatingOf(ev),
       // Someone else's busy-only event: the API sends the time block and nothing else (title is 'Busy').
       busy: truthy(ev.busy_only)
     };
@@ -381,6 +393,11 @@
     } else if (n.readOnly) {
       acts = '<div class="evro">' + esc(n.source ? 'Managed in ' + n.source + ' — edit it there.' : 'This event can’t be edited here.') + '</div>' +
         '<div class="evacts"><button type="button" class="evbtn" data-x="close">Close</button></div>';
+    } else if (n.repeating) {
+      // read-only here: no edit, no delete (a delete would remove every occurrence); the phone hand-off still works
+      acts = '<div class="evro">' + esc(REPEATING_LINE) + '</div>' +
+        '<div class="evacts"><button type="button" class="evbtn" data-x="phone">Edit on your phone</button>' +
+        '<span class="evsp"></span><button type="button" class="evbtn" data-x="close">Close</button></div>';
     } else {
       acts = '<div class="evacts"><button type="button" class="evbtn del" data-x="del">Delete</button>' +
         '<span class="evsp"></span>' +
@@ -487,6 +504,11 @@
       // all-day (or all-day <-> timed): whole days only
       body.end_date = addDays(ev.end_date, dayNum(st.date) - dayNum(oldDate));
     }
+    // Defence in depth: never send an occurrence's date/time under a repeating event's SERIES id (it would re-anchor
+    // every occurrence). Refused even if a caller bypasses the read-only sheet.
+    if (repeatingOf(ev) && ['start_date', 'end_date', 'start_time', 'end_time', 'all_day'].some(function (k) { return k in body; })) {
+      throw new Error(REPEATING_LINE);
+    }
     return body;
   }
   // Minutes since the epoch for a local date + HH:MM wall clock (calendar arithmetic, DST-proof), and back.
@@ -500,7 +522,8 @@
   }
   // api(method,url,body) -> Promise<json>. Resolves {changed:false} without a request when nothing changed.
   function save(api, ev, st) {
-    var body = buildUpdate(ev, st);
+    var body;
+    try { body = buildUpdate(ev, st); } catch (e) { return Promise.reject(e); }
     if (!Object.keys(body).length) return Promise.resolve({ changed: false, event: ev });
     return api('PUT', '/api/calendar/events/' + encodeURIComponent(ev.id), body).then(function (resp) {
       var merged = {};
@@ -531,7 +554,7 @@
     esc: esc, catColor: catColor, chipColors: chipColors, contrast: contrast, mix: mix,
     normalize: normalize, renderDetail: renderDetail, renderEdit: renderEdit,
     renderCategoryChips: renderCategoryChips, renderQr: renderQr, renderDeleteConfirm: renderDeleteConfirm,
-    phoneEditUrl: phoneEditUrl, buildUpdate: buildUpdate, save: save,
+    phoneEditUrl: phoneEditUrl, buildUpdate: buildUpdate, save: save, repeatingOf: repeatingOf,
     swipeShouldClose: swipeShouldClose, isCloseUtterance: isCloseUtterance
   };
 });

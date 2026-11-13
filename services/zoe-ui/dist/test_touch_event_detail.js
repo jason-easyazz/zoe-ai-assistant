@@ -46,6 +46,14 @@ const TODAYS_FULL = { id: 'ev-today', title: 'Sam’s school concert', start_dat
   category: 'family', location: 'Example Primary School hall', all_day: false, recurring: 'weekly',
   metadata: { description: 'Bring the blue folder.\nDoors open at 6.', attendees: [{ person_id: 'p1', name: 'Sam', role: 'participant' }, { person_id: 'p2', name: 'Riley', role: 'participant' }],
     reminders: [{ offset_minutes: 30, message: 'leave soon' }], travel_time: 15 } };
+// The same evening as a ONE-OFF event: the save/move cases below need an event the panel may move (a repeating one
+// is read-only for time and date here - PR 2447 review).
+const TODAYS_ONEOFF = Object.assign({}, TODAYS_FULL, { recurring: null });
+// One OCCURRENCE of a weekly series as GET /api/calendar/events returns it since PR 2447: the series id, this
+// occurrence's date, the series' own start date.
+const OCCURRENCE = { id: 'ev-series', instance_key: 'ev-series@2026-10-29T23:30', title: 'Late shift', start_date: '2026-10-29',
+  start_time: '23:30', end_time: '23:59', category: 'work', all_day: false, is_recurring: true, series_start_date: '2026-10-15',
+  read_only: false, source: 'local' };
 // The richer shape synced calendars will carry (field names are tolerant; see the module header).
 const SYNCED = { id: 'ev-sync', title: 'Quarterly planning', start_date: '2026-10-21', start_time: '10:00', end_time: '11:30',
   category: 'work', location: 'Room 4, Example Tower', all_day: false, status: 'tentative', source: 'google',
@@ -108,6 +116,19 @@ function checkSuite(M) {
     const h = M.renderDetail(SYNCED, OPT);
     lacks(h, 'data-x="edit"'); lacks(h, 'data-x="del"'); lacks(h, 'data-x="phone"');
     has(h, 'Managed in Google Calendar — edit it there.'); has(h, 'data-x="close"');
+  });
+  t('a repeating event opens read-only: no edit, no delete, a plain line, the phone hand-off', () => {
+    for (const ev of [OCCURRENCE, TODAYS_FULL, Object.assign({}, MINIMAL, { series_start_date: '2026-10-06' })]) {
+      const h = M.renderDetail(ev, OPT);
+      lacks(h, 'data-x="edit"'); lacks(h, 'data-x="del"');
+      has(h, 'This event repeats. Change it on your phone or the desktop calendar.'); has(h, 'data-x="phone"');
+      assert(M.repeatingOf(ev), 'repeatingOf: ' + ev.id);
+    }
+    assert(!M.repeatingOf(MINIMAL) && !M.repeatingOf(TODAYS_ONEOFF), 'a one-off event is not repeating');
+  });
+  t('buildUpdate refuses an occurrence-dated update under a series id', () => {
+    assert.throws(() => M.buildUpdate(OCCURRENCE, { category: 'work', date: '2026-10-30', time: '00:15', allDay: false }), /repeats/);
+    assert.throws(() => M.buildUpdate(OCCURRENCE, { category: 'work', date: '2026-10-29', time: '22:00', allDay: false }), /repeats/);
   });
   t('editable events show the edit actions', () => {
     const h = M.renderDetail(MINIMAL, OPT);
@@ -249,16 +270,22 @@ function checkSuite(M) {
     eq(s.calls[0].body, { category: 'work' });
     assert.strictEqual(r.event.category, 'work'); assert.strictEqual(r.event.title, 'Dentist');
   }]);
+  saveCases.push(['a repeating occurrence moved across midnight is refused and nothing is sent', async () => {
+    const s = stub();
+    let refused = false;
+    await M.save(s.api, OCCURRENCE, { category: 'work', date: '2026-10-30', time: '00:15', allDay: false }).catch(() => { refused = true; });
+    assert(refused, 'save must reject'); assert.strictEqual(s.calls.length, 0, 'no PUT under the series id');
+  }]);
   saveCases.push(['an unchanged edit makes no request', async () => {
     const s = stub(); const r = await M.save(s.api, MINIMAL, { category: 'health', date: '2026-10-20', time: '09:00', allDay: false });
     assert.strictEqual(s.calls.length, 0); assert.strictEqual(r.changed, false);
   }]);
   saveCases.push(['never sends title/location/metadata/visibility', async () => {
-    const s = stub(); await M.save(s.api, TODAYS_FULL, { category: 'work', date: '2026-10-23', time: '19:00', allDay: false });
+    const s = stub(); await M.save(s.api, TODAYS_ONEOFF, { category: 'work', date: '2026-10-23', time: '19:00', allDay: false });
     ['title', 'location', 'metadata', 'visibility', 'recurring'].forEach((k) => assert(!(k in s.calls[0].body), k));
   }]);
   saveCases.push(['moving the start keeps the length (end_time / end_date follow)', async () => {
-    const s = stub(); await M.save(s.api, TODAYS_FULL, { category: 'family', date: '2026-10-23', time: '19:00', allDay: false });
+    const s = stub(); await M.save(s.api, TODAYS_ONEOFF, { category: 'family', date: '2026-10-23', time: '19:00', allDay: false });
     eq(s.calls[0].body, { start_date: '2026-10-23', start_time: '19:00', end_time: '20:30' });
     const s2 = stub(); await M.save(s2.api, { id: 'm', start_date: '2026-10-25', end_date: '2026-10-27', start_time: '08:00', end_time: '09:00', category: 'general' },
       { category: 'general', date: '2026-10-26', time: '08:00', allDay: false });
@@ -402,6 +429,8 @@ function wiringChecks() {
     'save also sends the title (would blank text the panel cannot edit)': (s) => s.replace(`var body = {};\n    var curCat`, `var body = { title: ev.title };\n    var curCat`),
     'save always PUTs even when nothing changed': (s) => s.replace(`if (!Object.keys(body).length) return`, `if (false) return`),
     'read-only events still offer Delete': (s) => s.replace(`if (n.readOnly) {`, `if (false) {`),
+    'repeating events still offer edit and delete on the panel': (s) => s.replace(`} else if (n.repeating) {`, `} else if (false) {`),
+    'buildUpdate sends an occurrence date under a series id': (s) => s.replace(`if (repeatingOf(ev) && [`, `if (false && [`),
     'empty rows rendered (omission broken)': (s) => s.replace(`if (!n.busy && n.location) rows += row('Where', esc(n.location));`, `rows += row('Where', esc(n.location));`),
     'attendee RSVP dropped': (s) => s.replace(`rsvp: isObj(a) ? rsvpOf(a) : '',\n        organizer: (isObj(a)`, `rsvp: '',\n        organizer: (isObj(a)`),
     'timeless event flipped to all-day on a category save': (s) => s.replace(`var wasAll = !!ev.all_day || !firstStr(ev.start_time)`, `var wasAll = !!ev.all_day`),
