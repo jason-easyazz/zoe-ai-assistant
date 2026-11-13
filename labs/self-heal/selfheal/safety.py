@@ -15,6 +15,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import binaries
 from .config import (MAX_DAILY_CAP, MAX_DIFF_LINES, MAX_PER_FAULT_CAP, Config, HARD_QUIET,
                      window_minutes)
 
@@ -115,7 +116,7 @@ def check_quiet_hours(cfg: Config, now: dt.datetime) -> None:
 
 def check_busy(cfg: Config, repo_dir: str) -> None:
     """No heal while a voice PR is landing or while the night window owns the box."""
-    r = subprocess.run(["pgrep", "-f", cfg.voice_lander_pattern], capture_output=True, text=True)
+    r = subprocess.run([binaries.which("pgrep"), "-f", cfg.voice_lander_pattern], capture_output=True, text=True)
     if r.returncode == 0:
         raise Refused("voice_lander_running", "pgrep matched")
     if cfg.night_busy_script:
@@ -124,7 +125,7 @@ def check_busy(cfg: Config, repo_dir: str) -> None:
             script = Path(repo_dir) / script
         if not script.exists():
             raise Refused("night_busy_missing", "fail closed")
-        r = subprocess.run(["bash", str(script), "deploy"], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([binaries.which("bash"), str(script), "deploy"], capture_output=True, text=True, timeout=60)
         if r.returncode == 0:   # night_busy.sh: exit 0 = must pause
             raise Refused("night_busy", "night_busy.sh deploy says pause")
 
@@ -137,6 +138,9 @@ class DiffReport:
     added: int = 0
     deleted: int = 0
     escaping_symlinks: list = field(default_factory=list)
+    weakened_tests: list = field(default_factory=list)
+    deleted_tests: list = field(default_factory=list)
+    planted_reports: list = field(default_factory=list)   # JUnit-looking *.xml added or changed   # deleted OR renamed test files / test infra
     engine_committed: bool = False
     index_dirty: bool = False
 
@@ -150,6 +154,25 @@ def is_test_path(p: str) -> bool:
     if not name.endswith(".py"):
         return False
     return "/tests/" in f"/{p}" or bool(re.fullmatch(r"test_.*\.py|.*_test\.py", name))
+
+
+# A skip / xfail added to a test file is test weakening, never a fix.
+WEAKEN = re.compile(r"\bpytest\.(skip|xfail|importorskip)\b|\bmark\.(skip|skipif|xfail)\b|"
+                    r"\bunittest\.(skip|expectedFailure)\b|\b(skipTest|skipIf|skipUnless)\b|__test__\s*=")
+
+
+JUNIT_NAME = re.compile(r"(junit|report|result|self-heal|selfheal|pytest|test)[^/]*\.xml$", re.I)
+JUNIT_ROOT = re.compile(rb"<\s*testsuites?[\s>/]")
+
+
+def looks_like_junit(name: str, head: bytes) -> bool:
+    """A JUnit report by NAME (junit/report/result/test... .xml) or by its <testsuite(s)> root."""
+    return bool(JUNIT_NAME.search(name)) or bool(JUNIT_ROOT.search(head))
+
+
+def is_test_infra(p: str) -> bool:
+    """Any file under a tests/ dir, test_*.py / *_test.py, or a conftest.py."""
+    return is_test_path(p) or "/tests/" in f"/{p}" or p.rsplit("/", 1)[-1] == "conftest.py"
 
 
 def forbidden_hits(cfg: Config, files: list) -> list:
@@ -174,6 +197,12 @@ def check_diff(cfg: Config, report: DiffReport, *, ticket_has_repro_test: bool) 
     hits = forbidden_hits(cfg, report.files)
     if hits:
         raise Refused("forbidden_path", ", ".join(sorted(hits)[:10]))
+    if report.planted_reports:
+        raise Refused("report_planted", ", ".join(report.planted_reports[:10]))
+    if report.deleted_tests:   # a heal may add or edit tests, never remove or rename one
+        raise Refused("test_deleted", ", ".join(report.deleted_tests[:10]))
+    if report.weakened_tests:
+        raise Refused("test_weakened", ", ".join(report.weakened_tests[:10]))
     if report.escaping_symlinks:
         raise Refused("outside_repo", ", ".join(report.escaping_symlinks[:10]))
     cap = min(cfg.diff_line_cap, MAX_DIFF_LINES)

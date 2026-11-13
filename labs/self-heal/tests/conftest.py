@@ -59,6 +59,19 @@ class FakeEngine:
 
 
 @pytest.fixture(autouse=True)
+def test_binaries(monkeypatch):
+    """Test seam: stub binaries live under tmp and are put on the inherited PATH, so for the unit
+    tests the 'trusted' PATH is the test's PATH and temp dirs are not refused. tests/
+    test_self_heal_sandbox.py restores the real rules to test them."""
+    from selfheal import binaries
+    monkeypatch.setattr(binaries, "trusted_path", lambda: os.environ["PATH"])
+    monkeypatch.setattr(binaries, "TEMP_ROOTS", ())
+    binaries.RESOLVED.clear()
+    yield
+    binaries.RESOLVED.clear()
+
+
+@pytest.fixture(autouse=True)
 def isolated_kill_switch(tmp_path, monkeypatch):
     """The built-in kill switch lives under the real $HOME: point it at tmp for unit tests
     (HOME itself stays, so the user-site pytest still resolves)."""
@@ -89,6 +102,8 @@ def make_cfg(tmp: Path, *, repo: Path, live: Path, **kw) -> Config:
         detect_cmd=[sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "tests"],
         offline_lane_cmd=[sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "tests"],
         python=sys.executable, test_lock="", gate_timeout_s=120, detect_timeout_s=120,
+        # never the host's engine CLIs: tests that need one pass a fake (absolute) path
+        codex_bin="/nonexistent/codex", claude_bin="/nonexistent/claude",
     )
     base.update(kw)
     cfg = Config(**base)
