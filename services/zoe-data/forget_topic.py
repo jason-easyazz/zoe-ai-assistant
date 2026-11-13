@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -220,6 +221,26 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
     return retracted, erased
 
 
+def fold_name_text(text: str) -> str:
+    """ONE fold for both sides of a name comparison: JSON / unicode escapes undone, accents stripped, NFKC, casefold, and every
+    apostrophe / hyphen variant made the plain one ("Zo\\u00eb" / "Zoë" / "zoe", "O’Neil" / "O'Neil", "Anne‑Marie"). Pure."""
+    t = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), str(text or "")).replace('\\"', '"')
+    t = "".join(c for c in unicodedata.normalize("NFKD", t) if not unicodedata.combining(c))
+    t = unicodedata.normalize("NFKC", t).casefold()
+    return re.sub(r"[\u2010-\u2015\u2212]", "-", re.sub(r"[\u2018\u2019\u02bc`\u00b4]", "'", t))
+
+
+def name_keys(text: str) -> set:
+    """Every way a name in ``text`` can be matched: each whole word ("anne-marie", "o'neil"), its joined form ("annemarie",
+    "oneil") and its hyphen / apostrophe parts of two letters or more ("anne", "marie", "neil"), on ``fold_name_text``. Pure."""
+    out: set = set()
+    for w in re.findall(r"[a-z0-9]+(?:['-][a-z0-9]+)*", fold_name_text(text)):
+        out.add(w)
+        out.add(re.sub(r"['-]", "", w))
+        out.update(p for p in re.split(r"['-]", w) if len(p) >= 2)
+    return out
+
+
 async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) -> int:
     """The pending offers about the topic go with it (QA round 9: "forget that I told you about my sister" left "add Bea (your
     sister) as a contact?" pending, and it was offered twice more): an offer holding the topic words, or one whose proposed name
@@ -227,11 +248,13 @@ async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) ->
     (``store_down``, the same honest outcome as a failed notes erase) and the member's repeat runs it again."""
     import pending_suggestions
 
-    said = {w for t in forgotten_texts for w in re.findall(r"[a-z]+", (t or "").lower())}
+    said = set().union(*(name_keys(t) for t in forgotten_texts)) if forgotten_texts else set()
 
     def matches(text: str) -> bool:
-        names = {w.lower() for n in re.findall(r'"name":\s*"([^"]+)"', text or "") for w in n.split()}
-        return row_matches(groups, text) or bool(names and names <= said)
+        # the proposed name, read from the stored slots as written (JSON-escaped: "Zo\u00eb", "O\"Neil"), compared on ONE fold:
+        # ANY whole name or part the forgotten words hold withdraws the offer (over-withdrawing is harmless, a survivor is not)
+        names = re.findall(r'"name":\s*"((?:[^"\\]|\\.)*)"', text or "")
+        return row_matches(groups, text) or any(name_keys(n) & said for n in names)
 
     gone = await pending_suggestions.withdraw_matching(user_id, matches)
     if gone:

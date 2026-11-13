@@ -616,7 +616,31 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     if len(hits) != 1 or hits[0] is not own:
         return None
     q = hits[0]
+    if unit == "date" and (not head or not _date_attached(tail, q)):
+        return None                 # the date may be someone else's ("run by Bea, whose birthday is on the 20th"): unchanged
     return head + _put_date(tail, q, qn, month_new if unit == "date" else None)
+
+
+_RELATIVE_RE = re.compile(r"\b(?:whose|who|whom|which|her|his|their|its)\b", re.IGNORECASE)
+_KIN_RE = re.compile(rf"\b{_REL}\b", re.IGNORECASE)
+_DAY_NAMES = frozenset({"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"})
+
+
+def _date_attached(tail: str, q: "Quantity") -> bool:
+    """Is the date at ``q`` the corrected SUBJECT's own (``tail`` starts right after the subject mention)? Conservative (QA round 9
+    review: "book club is run by Bea, whose birthday is on the 12th" had Bea's birthday rewritten): no other person (a capitalised
+    name, a kin word) and no relative clause (whose / who / which / her / his / their ...) between the subject and the date. One
+    exception, shown to be the subject's: a comma-bounded aside straight after the subject with no relative word and no number,
+    followed by the subject's own verb ("book club, run by Bea, is on the 12th"). Pure."""
+    between = tail[:q.start]
+    aside = re.match(r"^\s*,\s*([^,]*?)\s*,\s*(?=(?:is|was|are|will\s+be|has\s+been|got|gets)\b)", between, re.IGNORECASE)
+    if aside and not _RELATIVE_RE.search(aside.group(1)) and not re.search(r"\d", aside.group(1)):
+        between = between[aside.end():]
+    if _RELATIVE_RE.search(between) or _KIN_RE.search(between):
+        return False
+    names = [w for w in re.findall(r"\b[A-Z][a-z]+\b", between)
+             if not _MONTH_RE.fullmatch(w) and w.lower() not in _DAY_NAMES and w not in ("User", "I")]
+    return not names
 
 
 def _put_date(tail: str, q: "Quantity", qn: "Quantity", month_new: Optional[str]) -> str:
@@ -649,6 +673,8 @@ def _restate_date(head: str, tail: str, new: str) -> Optional[str]:
     q, month_new, row_month = dates[0], _month_of(new), _month_of(tail)
     if q.value == qn.value and (not month_new or month_new == row_month):
         return None
+    if not _date_attached(tail, q):
+        return None                 # the one date is not clearly the subject's: unchanged
     return head + _put_date(tail, q, qn, month_new)
 
 

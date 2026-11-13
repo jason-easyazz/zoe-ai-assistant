@@ -255,6 +255,35 @@ def test_a_stated_month_is_kept_and_an_unsaid_one_is_left_alone(row, said, want)
     assert vc.rewrite(row, vc.statement(said)) == want
 
 
+BIRTHDAY = "User's book club is run by Bea, whose birthday is on the 12th of December"
+
+
+@pytest.mark.parametrize("said", ["book club moved to the 5th of january", "book club is on the 19th of december, not the 12th"])
+def test_a_date_inside_someone_elses_clause_is_never_rewritten(said):
+    assert vc.rewrite(BIRTHDAY, vc.statement(said)) is None
+    assert vc.rewrite("User's book club is with User's sister on the 12th of December", vc.statement(said)) is None
+
+
+@pytest.mark.parametrize("row, said, want", [
+    ("User's book club is on the 12th of December, run by Bea", "book club moved to the 5th of january",
+     "User's book club is on the 5th of January, run by Bea"),
+    ("User's book club is on the 12th of December, run by Bea", "book club is on the 19th of december, not the 12th",
+     "User's book club is on the 19th of December, run by Bea"),
+    # a comma-bounded aside with no relative word, then the club's OWN verb: the date is the club's
+    ("User's book club, run by Bea, is on the 12th of December", "book club moved to the 5th of january",
+     "User's book club, run by Bea, is on the 5th of January"),
+    ("User's book club, run by Bea, is on the 12th of December", "book club is on the 19th of december, not the 12th",
+     "User's book club, run by Bea, is on the 19th of December"),
+])
+def test_the_subjects_own_date_is_rewritten(row, said, want):
+    assert vc.rewrite(row, vc.statement(said)) == want
+
+
+def test_an_aside_with_a_relative_word_is_not_the_subjects():
+    assert vc.rewrite("User's book club, whose host is Bea, is on the 12th of December",
+                      vc.statement("book club moved to the 5th of january")) is None
+
+
 @pytest.mark.parametrize("text", ["the meeting moved to friday", "it moved to the 5th", "so it is 5 not 6", "theo is 7, he loves trucks",
                                   "book club moved on"])
 def test_negative_controls_still_no_correction(text):
@@ -404,6 +433,29 @@ def test_an_unreadable_index_does_not_confirm_the_forget(monkeypatch, forget_env
 
     exact_words.set_backend(_Down())
     assert run(forget_topic.forget(_Svc(), UID, "my sister")).store_down
+
+
+@pytest.mark.parametrize("offer_name, forgotten", [
+    ("Anne-Marie", "my sister anne marie lives up north"), ("Anne Marie", "my sister anne-marie lives up north"),
+    ("Anne\u2011Marie", "my sister annemarie lives up north"),
+    ("O'Neil", "my sister oneil lives up north"), ("ONeil", "my sister o\u2019neil lives up north"),
+    ("Zo\u00eb", "my sister zoe lives up north"), ("Zoe", "my sister zo\u00eb lives up north"),
+    ("Ren\u00e9e O\u2019Hara", "my sister renee o'hara lives up north"),
+])
+def test_decorated_names_are_withdrawn_both_ways(offer_name, forgotten, monkeypatch):
+    import contextlib
+
+    import pending_suggestions
+
+    db = _Db([_offer("o1", offer_name), _offer("o2", "Tamsin")])     # slots stored JSON-escaped, as json.dumps writes them
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", ctx)
+    run(forget_topic._withdraw_offers(UID, forget_topic.topic_groups("my sister"), [forgotten]))
+    assert [o["id"] for o in db.offers] == ["o2"]                        # the forgotten person's offer goes; an unrelated one stays
 
 
 def test_a_process_with_no_database_holds_no_offers(monkeypatch):
