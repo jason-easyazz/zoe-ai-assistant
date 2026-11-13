@@ -26,6 +26,7 @@ expert brain. Only `active` + an allow-listed domain actually fulfills.
 from __future__ import annotations
 
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import re
 import voice_phrases
@@ -630,8 +631,8 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                 memory_dedup_skip_count.inc()
             except Exception:
                 pass
-            logger.info("MEMORY_DEDUP_SKIP source=%s kept=%s cand=%r",
-                        source, match_id, text[:80])
+            logger.info("MEMORY_DEDUP_SKIP source=%s kept=%s cand=%s",
+                        source, match_id, _utag(text or ""))
             return "skip"
         if action == "update" and match_id:
             old_id = match_id
@@ -662,7 +663,7 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         except Exception:
             pass  # scrubber unavailable → assume dedup, matching old behaviour
         if outcome == "dropped":
-            logger.info("MEMORY_STORE_DROPPED source=%s text=%r", source, text[:80])
+            logger.info("MEMORY_STORE_DROPPED source=%s text=%s", source, _utag(text or ""))
         return outcome
     # Only archive the old row if the ingest actually wrote a DISTINCT new row.
     # ingest dedups on a text-derived mem_id, so a near-identical value can map to
@@ -697,8 +698,8 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
                 return "stored"
             from memory_metrics import memory_supersede_count
             memory_supersede_count.labels(source=source).inc()
-            logger.info("MEMORY_SUPERSEDE source=%s old=%s new=%r",
-                        source, old_id, text[:80])
+            logger.info("MEMORY_SUPERSEDE source=%s old=%s new=%s",
+                        source, old_id, _utag(text or ""))
         except Exception as exc:
             # New row is already stored; failing to archive the old one just
             # leaves a (harmless) near-dup — don't lose the new fact over it.

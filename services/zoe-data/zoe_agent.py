@@ -26,6 +26,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import re
 import subprocess
@@ -3771,8 +3772,8 @@ async def run_zoe_agent(
             if tool_args and tool_args.get("__parse_error"):
                 raw = tool_args.get("__raw_args", "")
                 logger.warning(
-                    "zoe_agent: iter=%d tool=%s args parse error, raw=%r",
-                    iteration, tool_name, raw,
+                    "zoe_agent: iter=%d tool=%s args parse error, raw=%s",
+                    iteration, tool_name, _utag(raw),
                 )
                 messages.append({
                     "role": "assistant",
@@ -3791,11 +3792,11 @@ async def run_zoe_agent(
                 continue
 
             logger.info(
-                "zoe_agent: iter=%d tool=%s args=%s",
-                iteration, tool_name, json.dumps(tool_args)[:120],
+                "zoe_agent: iter=%d tool=%s n_args=%d args=%s",
+                iteration, tool_name, len(tool_args or {}), _utag(json.dumps(tool_args)),
             )
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
-            logger.debug("zoe_agent: tool_result=%s", tool_result[:200])
+            logger.debug("zoe_agent: tool_result=%s", _utag(tool_result))
 
             # Append tool call + result in OpenAI tool_calls format for context
             messages.append({
@@ -4219,8 +4220,8 @@ async def run_zoe_agent_streaming(
             # Propagate parse errors back to the model instead of running with empty args
             if _tool_args_parse_error:
                 logger.warning(
-                    "zoe_agent streaming: iter=%d tool=%s args parse error, raw=%r",
-                    iteration, tool_name, raw_streaming_args[:200],
+                    "zoe_agent streaming: iter=%d tool=%s args parse error, raw=%s",
+                    iteration, tool_name, _utag(raw_streaming_args),
                 )
                 messages.append({
                     "role": "assistant", "content": collected or None,
@@ -4255,14 +4256,14 @@ async def run_zoe_agent_streaming(
             # Emit a lightweight thinking marker so chat.py can surface tool activity
             yield f"__THINKING__:{tool_name}"
 
-            logger.info("zoe_agent streaming: iter=%d tool=%s args=%s",
-                        iteration, tool_name, json.dumps(tool_args)[:120])
+            logger.info("zoe_agent streaming: iter=%d tool=%s n_args=%d args=%s",
+                        iteration, tool_name, len(tool_args or {}), _utag(json.dumps(tool_args)))
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
 
             # UI component — yield marker so chat.py can emit zoe.ui_component event;
             # fall through to append tool messages and let the model produce follow-up text
             if tool_result.startswith("__UI__:"):
-                logger.info("zoe_agent streaming: UI component — %s", tool_result[7:60])
+                logger.info("zoe_agent streaming: UI component — %s", _utag(tool_result))
                 yield tool_result
 
             if on_tool_end:

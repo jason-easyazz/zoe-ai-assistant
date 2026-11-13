@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import time
 from typing import TYPE_CHECKING, Optional
@@ -116,8 +117,8 @@ async def classify_intent_with_context(
         slots       = data.get("slots") or {}
         return Intent(intent_name, slots, confidence=confidence)
     except asyncio.TimeoutError:
-        logger.debug("intent_classifier_llm: timeout after %.1fs for %r", timeout, text)
+        logger.debug("intent_classifier_llm: timeout after %.1fs for %s", timeout, _utag(text))
         return None
     except Exception as exc:
-        logger.debug("intent_classifier_llm: failed for %r: %s", text, exc)
+        logger.debug("intent_classifier_llm: failed for %s: %s", _utag(text), type(exc).__name__)
         return None
