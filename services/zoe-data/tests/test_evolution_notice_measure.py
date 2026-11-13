@@ -12,6 +12,12 @@ from zoe_evolution_proposal_adapter import dump_legacy_evolution_proposal_contra
 pytestmark = pytest.mark.ci_safe
 
 
+@pytest.fixture(autouse=True)
+def _board_mirror_on(monkeypatch):
+    """These tests pin the board mirror's payload, so they switch the (default off) mirror on."""
+    monkeypatch.setenv(evolution_notice.BOARD_MIRROR_ENV, "1")
+
+
 class _Cur:
     def __init__(self, rows=(), rowcount=None):
         self._rows = list(rows)
@@ -119,17 +125,15 @@ async def test_measure_phase_treats_contract_target_patterns_as_no_patterns(monk
 
     result = await evolution_notice.run_measure_phase()
 
-    assert result == {"evaluated": 1, "validated": 1, "failed": 0}
+    # nothing to measure is NOT a pass (2026-11-13): it is recorded unmeasured and the row stays applied
+    assert result["evaluated"] == 1 and result["unmeasured"] == 1 and result["validated"] == 0
     updates = [(sql, args) for sql, args in db.execute_calls if "validation_result" in sql]
     assert len(updates) == 1
     update_sql, update_args = updates[0]
     validation_result = json.loads(update_args[0])
     moves = [args[0] for sql, args in db.execute_calls if sql.startswith("UPDATE evolution_proposals SET status")]
-    assert len(moves) == 1 and moves[0][0] == "kept", "applied -> kept, through the queue (never a raw status write)"
-    assert any(sql.startswith("INSERT INTO evolution_proposal_history") for sql, _a in db.execute_calls)
-    assert validation_result["miss_before_48h"] == 0
-    assert validation_result["miss_after_48h"] == 0
-    assert validation_result["verdict"] == "validated"
+    assert moves == [], "an unmeasured change is neither kept nor reverted"
+    assert (validation_result["verdict"], validation_result["reason"]) == ("unmeasured", "no_target_signal")
     assert not any("FROM chat_messages" in sql for sql, _args in db.fetch_calls)
 
 
@@ -470,6 +474,7 @@ async def test_the_measured_move_and_its_result_are_one_conditional_transaction(
     monkeypatch.setattr(evolution_notice.time, "time", lambda: 1000.0 + evolution_notice._MEASURE_WINDOW_S + 1)
     monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace(
         update_multica_issue_on_proposal_status_change=lambda *a, **k: None))
+    monkeypatch.setattr(evolution_notice, "measure_verdict", lambda *a, **k: ("validated", "fewer_misses"))   # a move to test
 
     log = []
     db = _tx_db([_measure_row()], log)

@@ -1214,6 +1214,9 @@ async def run_turn_digest(
                     svc, fact, user_id, extend_supersedes=True)
             except Exception:
                 op, target_id = "add", None
+            if op == "refuse":
+                _count_drop("turn_digest", "kind_flip", gate=False)      # re-types a stored subject: never written
+                continue
             if op == "skip":
                 result["skipped_duplicates"] += 1
                 _count_drop("turn_digest", "dedup_reconcile", gate=False)
@@ -1529,6 +1532,9 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     svc, fact, user_id, extend_supersedes=True)
             except Exception:
                 op, target_id = "add", None
+            if op == "refuse":
+                _count_drop("digest", "kind_flip", gate=False)           # re-types a stored subject: never written
+                continue
             if op == "skip":
                 _count_drop("digest", "dedup_reconcile", gate=False)
                 logger.info("memory_digest: dedup-skip kept=%s cand=%r", target_id, fact[:60])

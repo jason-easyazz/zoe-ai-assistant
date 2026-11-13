@@ -1229,7 +1229,7 @@ async def extract_and_ingest(
         except Exception as exc:
             logger.debug("reconciliation unavailable (%s) — plain ingest", exc)
             op, target_id = "add", None
-        if op == "skip":
+        if op in ("skip", "refuse"):          # refuse: the fact re-types a stored subject (memory_quality.kind_conflict)
             continue
         if op == "update" and target_id:
             try:
