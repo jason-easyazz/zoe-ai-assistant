@@ -56,6 +56,9 @@ The loop (and anyone running it) must never:
   systemd units, `scripts/landing/`, `.env*`, alembic, zoe-auth, `docs/CANONICAL.md` and its invariants
   test, the voice gate and every script `deploy.yml` / `voice-gate.yml` call, model files, this lab, any
   path outside the repo); a violation discards the attempt;
+  the list is literal and `tests/test_self_heal_round3.py` fails when a workflow runs a repo script it misses;
+- leave the integration ref advanced after a local landing that did not confirm a heal: every exit,
+  exceptions included, restores the snapshot;
 - run between 01:30 and 05:00, while a voice lander runs, or while `night_busy.sh deploy` says pause;
 - record a missing or failed cross-review as reviewed;
 - remove or bypass `~/.zoe/multica_dispatch_paused` or any other kill switch, or create a board issue in `todo`;

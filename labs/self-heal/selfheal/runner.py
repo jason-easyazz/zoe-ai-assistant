@@ -280,8 +280,11 @@ class Runner:
                        pr=lr.pr_url, **lr.extra)
             if c.landing == "local":
                 keep = False   # landed or rolled back: the integration branch / snapshot ref hold it
-            return self._finish(state, ticket, lr.status, sha=head, branch=branch, pr_url=lr.pr_url,
+            done = self._finish(state, ticket, lr.status, sha=head, branch=branch, pr_url=lr.pr_url,
                                 review=lr.review, why=lr.detail.split(" ")[0], verify=lr.detail)
+            if lr.exc is not None and not isinstance(lr.exc, Exception):
+                raise lr.exc   # Ctrl-C / SystemExit still stop the process, after rollback + record
+            return done
         except (Interrupted, Refused) as e:   # a step's own kill-switch refusal counts too
             keep = False
             cp = getattr(e, "checkpoint", "step")

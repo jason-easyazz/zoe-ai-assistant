@@ -29,6 +29,7 @@ class LandResult:
     pr_url: str = ""
     review: str = ""
     extra: dict = field(default_factory=dict)
+    exc: BaseException | None = None   # re-raised by the runner AFTER recording, if not an Exception
 
 
 # --- second opinion ---------------------------------------------------------------------
@@ -180,18 +181,28 @@ class LocalLanding:
         gitops.git(repo, "update-ref", snap, tip)
         # compare-and-swap fast-forward: the heal commit's parent is the snapshot
         gitops.git(repo, "update-ref", int_ref, ctx.head_sha, tip)
-        self.applier.apply(ctx.head_sha)
-        steps = {"snapshot": snap, "sha": ctx.head_sha, "applied": True}
-        ok, why = self._health(repo, int_ref, ctx.verify_path + "-health")
-        if ok:
-            res = gitops.run_repro(cfg, repo, int_ref, t, ctx.verify_path, ctx.lock)
-            ok, why = res.ok, f"verify:{res.detail}"
+        # From here the integration ref has advanced: ANY exit that is not a confirmed heal
+        # (a failed check, an exception, even KeyboardInterrupt / SystemExit) restores the snapshot.
+        steps = {"snapshot": snap, "sha": ctx.head_sha, "applied": False}
+        ok, why, exc = False, "unknown", None
+        try:
+            self.applier.apply(ctx.head_sha)
+            steps["applied"] = True
+            ok, why = self._health(repo, int_ref, ctx.verify_path + "-health")
+            if ok:
+                res = gitops.run_repro(cfg, repo, int_ref, t, ctx.verify_path, ctx.lock)
+                ok, why = res.ok, f"verify:{res.detail}"
+        except BaseException as e:   # noqa: BLE001 - the rollback below must run for every exit
+            ok, why, exc = False, f"exception:{type(e).__name__}", e   # class only, never the message
         if ok:
             return LandResult("healed", why, review=self.REVIEW, extra=steps)
         gitops.git(repo, "update-ref", int_ref, tip, ctx.head_sha)
-        self.applier.rollback(tip)
+        try:
+            self.applier.rollback(tip)
+        except Exception as e:   # the ref is already restored; record that the live rollback failed
+            why += f",rollback_apply_failed:{type(e).__name__}"
         steps["restored"] = gitops.rev(repo, int_ref) == tip
-        return LandResult("rolled_back", why, review=self.REVIEW, extra=steps)
+        return LandResult("rolled_back", why, review=self.REVIEW, extra=steps, exc=exc)
 
 
 def make_landing(cfg: Config, applier=None):

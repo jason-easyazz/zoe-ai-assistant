@@ -26,7 +26,9 @@ DEFAULT_FORBIDDEN = [
     "services/zoe-auth/*",
     "docs/CANONICAL.md",
     "services/zoe-data/tests/test_canonical_invariants.py",
-    # the voice gate and every script the deploy / voice-gate workflows call
+    # the voice gate and every script the deploy / voice-gate workflows call. A LITERAL list on
+    # purpose: computing it from the workflow at run time would let the workflow (which the engine
+    # must not influence) define the floor. tests/test_self_heal_round3.py keeps it complete.
     "scripts/maintenance/voice_gate_check.py",
     "scripts/maintenance/voice_regression_probe.py",
     "scripts/maintenance/deploy_live.sh",
@@ -35,6 +37,7 @@ DEFAULT_FORBIDDEN = [
     "scripts/deploy/*",
     "scripts/night/night_window.py", "scripts/night/night_window.sh",
     "scripts/setup/build_py312_venv.sh",
+    "tools/audit/flag_inventory.py",
     # model files
     "models/*", "services/zoe-data/models/*", "*.gguf", "*.safetensors", "*.onnx", "*.pt", "*.bin", "*.npy",
     # the loop itself
