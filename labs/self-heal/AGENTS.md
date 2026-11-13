@@ -69,7 +69,12 @@ The loop (and anyone running it) must never:
 - start a second heal for a fault that has an open heal PR or an unlanded local heal branch;
 - delete a remote branch that is not the exact `self-heal/<id>` of a recorded ticket, or one that has a PR;
 - advance the integration ref without a write-ahead `landing_intent`, or clear it before a confirmed heal
-  or a completed rollback;
+  or a VERIFIED rollback (ref read back == snapshot); while a rollback is `rollback_stuck`, run anything
+  (dry included) but the retry;
+- give a sandboxed step a writable `/tmp` or any scratch outside the worktree, or skip the worktree
+  growth cap (`sandbox_disk_mb` may only be lowered);
+- pass a heal whose pytest gate shows, against the base-commit baseline, a previously-run node now
+  skipped / xfailed / deselected / missing, or a reproduction node that did not go failing -> passed;
 - run a binary from the inherited PATH, or one that is group/world-writable, foreign-owned, or under the
   worktrees, the state dir or a temp dir (`selfheal/binaries.py`);
 - run between 01:30 and 05:00, while a voice lander runs, or while `night_busy.sh deploy` says pause;

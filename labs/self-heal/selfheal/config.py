@@ -54,7 +54,7 @@ DEFAULT_FORBIDDEN = [
 # --- HARD FLOOR: config may tighten these, never loosen them (Config.validate refuses) ----------
 HARD_FORBIDDEN = tuple(DEFAULT_FORBIDDEN)
 MAX_DAILY_CAP, MAX_PER_FAULT_CAP, MAX_DIFF_LINES, MAX_PARK_AFTER = 3, 2, 300, 2
-MAX_SANDBOX_MEM_MB, MAX_SANDBOX_PROCS = 2048, 64
+MAX_SANDBOX_MEM_MB, MAX_SANDBOX_PROCS, MAX_SANDBOX_DISK_MB = 2048, 64, 256
 HARD_QUIET = ("01:30", "05:00")
 # The live checkout of THIS box, refused as repo / integration / apply target / worktree parent
 # whatever the config says (`live_checkout` in the config is an ADDITIONAL refused path).
@@ -155,6 +155,7 @@ class Config:
     sandbox: str = "auto"            # auto | bwrap | none  (none is refused while bwrap works here)
     sandbox_mem_mb: int = MAX_SANDBOX_MEM_MB
     sandbox_procs: int = MAX_SANDBOX_PROCS
+    sandbox_disk_mb: int = MAX_SANDBOX_DISK_MB   # max worktree GROWTH per sandboxed step
 
     # gates
     test_lock: str = "/tmp/zoe-test-lane.lock"   # "" = no flock (scratch repos)
@@ -211,7 +212,8 @@ class Config:
             raise ValueError(f"forbidden may only ADD paths; it drops {missing[:5]}")
         for name, cap in (("daily_cap", MAX_DAILY_CAP), ("per_fault_cap", MAX_PER_FAULT_CAP),
                           ("diff_line_cap", MAX_DIFF_LINES), ("not_healed_park_after", MAX_PARK_AFTER),
-                          ("sandbox_mem_mb", MAX_SANDBOX_MEM_MB), ("sandbox_procs", MAX_SANDBOX_PROCS)):
+                          ("sandbox_mem_mb", MAX_SANDBOX_MEM_MB), ("sandbox_procs", MAX_SANDBOX_PROCS),
+                          ("sandbox_disk_mb", MAX_SANDBOX_DISK_MB)):
             v = getattr(self, name)
             if not isinstance(v, int) or v < 0 or v > cap:
                 raise ValueError(f"{name}={v!r}: caps may only be lowered (0..{cap})")

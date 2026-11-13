@@ -237,14 +237,19 @@ class Runner:
             except Interrupted as e:
                 raise Refused(e.rule, "recover") from None
             if intent:
+                f = state.fault(rec["ticket"]["fault_key"])
                 try:
-                    restored = self.landing.rollback_intent(intent)
-                except Exception as e:   # noqa: BLE001 - keep the intent: the next run tries again
-                    self.audit("recover", "rollback_failed", tid, error=type(e).__name__)
-                    raise Refused("rollback_pending", tid) from None
-                rec.update(landing_intent=None, status="rolled_back", restored=restored)
-                state.fault(rec["ticket"]["fault_key"])["parked"] = True
-                self.audit("recover", "rolled_back", tid, restored=restored)
+                    restored, err = self.landing.rollback_intent(intent), ""
+                except Exception as e:   # noqa: BLE001
+                    restored, err = False, type(e).__name__
+                if not restored:   # keep the intent; this run (dry included) does nothing else
+                    rec["status"], f["rollback_stuck"], f["parked"] = "rollback_stuck", True, True
+                    state.save()
+                    self.audit("recover", "rollback_stuck", tid, error=err, fault_key=rec["ticket"]["fault_key"])
+                    raise Refused("rollback_stuck", tid)
+                rec.update(landing_intent=None, status="rolled_back", restored=True)
+                f["rollback_stuck"], f["parked"] = False, True
+                self.audit("recover", "rolled_back", tid, restored=True)
             elif branch:
                 done = self.landing.cleanup_branch(tid, branch)
                 if done.startswith("pr:"):
@@ -262,9 +267,10 @@ class Runner:
         rec["status"] = status
         rec.update(detail)
         f = state.fault(ticket.fault_key)
-        if status in ("not_healed", "rolled_back", "pr_closed"):
+        f["rollback_stuck"] = status == "rollback_stuck"
+        if status in ("not_healed", "rolled_back", "pr_closed", "rollback_stuck"):
             f["not_healed"] += 1
-            if status == "rolled_back" or f["not_healed"] >= self.cfg.not_healed_park_after:
+            if status in ("rolled_back", "rollback_stuck") or f["not_healed"] >= self.cfg.not_healed_park_after:
                 f["parked"] = True
                 self.audit("park", "parked", ticket.id, fault_key=ticket.fault_key)
         state.save()
@@ -308,10 +314,11 @@ class Runner:
 
             self.checkpoint("gates")
             self.step("gates", ticket.id)
-            gates = run_gates(c, self._gate_names(), wt, diff.files, ticket)
+            gates = run_gates(c, self._gate_names(), wt, diff.files, ticket, base_wt=base_wt)
             self.audit("gates", "green" if gates_green(gates) else "red", ticket.id, gates=gates)
             if not gates_green(gates):
-                return self._finish(state, ticket, "discarded", why="gate_failed",
+                weak = any(str(g.get("detail", "")).startswith("test_weakened") for g in gates)
+                return self._finish(state, ticket, "discarded", why="test_weakened" if weak else "gate_failed",
                                     gates=[{"gate": g["gate"], "status": g["status"]} for g in gates])
 
             self.step("commit", ticket.id)

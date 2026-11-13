@@ -209,7 +209,7 @@ class LocalLanding:
         gitops.git(repo, "update-ref", snap, tip)
         # write-ahead intent BEFORE the ref moves; cleared only after a confirmed heal or a completed
         # rollback, so an interrupt anywhere in between (even mid-rollback) is rolled back next run
-        intent = {"ref": int_ref, "from": tip, "to": ctx.head_sha}
+        intent = {"ref": int_ref, "from": tip, "to": ctx.head_sha, "snap": snap}
         ctx.record(landing_intent=intent)
         # compare-and-swap fast-forward: the heal commit's parent is the snapshot
         gitops.git(repo, "update-ref", int_ref, ctx.head_sha, tip)
@@ -229,25 +229,32 @@ class LocalLanding:
         if ok:
             ctx.record(landing_intent=None)
             return LandResult("healed", why, review=self.REVIEW, extra=steps)
+        restored = False
         try:
-            self.rollback_intent(intent)
-            ctx.record(landing_intent=None)
-        except Exception as e:   # the intent stays: the next run re-runs the rollback first
+            restored = self.rollback_intent(intent)
+        except Exception as e:   # noqa: BLE001 - not verified: the intent stays
             why += f",rollback_apply_failed:{type(e).__name__}"
-        steps["restored"] = gitops.rev(repo, int_ref) == tip
+        steps["restored"] = restored
+        if not restored:   # intent KEPT: every later run refuses until a retry verifies the rollback
+            return LandResult("rollback_stuck", why, review=self.REVIEW, extra=steps, exc=exc)
+        ctx.record(landing_intent=None)
         return LandResult("rolled_back", why, review=self.REVIEW, extra=steps, exc=exc)
 
     def rollback_intent(self, intent: dict) -> bool:
-        """Idempotent: restore the ref only if it still points at the heal (CAS), then roll the apply
-        back. A ref moved by someone else is left alone (False)."""
+        """Idempotent: restore the ref only if it still points at the heal (CAS), roll the apply back,
+        then VERIFY by reading the ref back against the snapshot. True only when verified; a ref moved
+        by someone else is left alone (False)."""
         repo, ref, frm, to = self.cfg.repo, intent["ref"], intent["from"], intent["to"]
         cur = gitops.rev(repo, ref)
         if cur == to:
             gitops.git(repo, "update-ref", ref, frm, to)
         elif cur != frm:
             return False
+        if gitops.rev(repo, ref) != frm:
+            return False
         self.applier.rollback(frm)
-        return gitops.rev(repo, ref) == frm
+        snap = intent.get("snap")
+        return gitops.rev(repo, ref) == frm and (not snap or gitops.rev(repo, snap) == frm)
 
     def cleanup_branch(self, tid: str, branch: str) -> str:
         return "absent"   # local landing never pushes

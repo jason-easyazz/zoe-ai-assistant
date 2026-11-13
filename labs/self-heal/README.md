@@ -160,7 +160,7 @@ Unit tests (fake engine, throwaway repos, no network):
 ```bash
 cd ~/assistant   # or any checkout of this branch
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider labs/self-heal/tests -q
-# 2026-11-13: v1 195 passed in ~74 s; v2 230 passed in ~108 s (gates now run inside bwrap)
+# 2026-11-13: v1 195 passed in ~74 s; v2 241 passed in ~141 s (gates inside bwrap, baseline pytest run per heal)
 ```
 
 Negative controls (each mutation applied, the named tests run, the file restored; every one went red):
@@ -290,7 +290,7 @@ checks) runs through `selfheal/sandbox.py`. Backends probed read-only on this bo
 --scope` would put a unit on the live user manager, so it is not used. Chosen: **`bwrap`**:
 new user/pid/net/ipc/uts namespaces, `/` read-only, empty read-only views over `/home`, the real
 home, `/root`, `/run` (user bus, docker and agent sockets), `/mnt`, `/media`, `/srv`, `/var/tmp`,
-the live checkout, the state dir and the heal repo; a private on-disk `/tmp`; `/dev` read-only;
+`/tmp`, the live checkout, the state dir and the heal repo; `/dev` read-only;
 the interpreter's library dirs re-bound read-only; the worktree the ONLY writable path; inside,
 `prlimit` caps address space, processes (per user namespace on 5.15), file size and core dumps;
 the environment is an allow-list (`PATH` = the trusted PATH, `HOME=/tmp`, no tokens). A timeout
@@ -305,10 +305,15 @@ SIGKILLs the process group; the pid namespace dies with bwrap (`--die-with-paren
 | memory / process caps | a 60 MB allocation under an 80 MB cap and 12 forks under an 8-process cap both fail |
 | timeout kills everything | `test_gate_timeout_kills_the_whole_group`: a setsid'd double-forked grandchild is gone (no `pgrep` match) and never writes its marker |
 | failure by class only | the gate reports `files=1,rc=1,failed=1` |
+| no writable `/tmp`; scratch is in the worktree and capped | bwrap 0.6.1 has no `--size`, so a writable tmpfs would be uncapped RAM: `/tmp` is an empty READ-ONLY view (a write there fails), `TMPDIR` / `HOME` point at `<worktree>/.selfheal-tmp` (1 MB written there works; the dir is gone after the run; the host `/tmp` is untouched). `test_worktree_growth_cap`: thirty 100 KB files under a 2 MB cap fail the step `worktree_quota` |
 | fail closed | `sandbox: none` is refused at load while bwrap works; with no working backend, `local` / `full` are refused (`sandbox_unavailable`, reason audited) and only `dry` runs (`test_no_sandbox_refuses_local_and_full_but_dry_plans`); limits may only be lowered; no knob exists for network or writable paths (`test_config_cannot_weaken_the_sandbox`) |
 
-Not enforced by this sandbox (say so before switch-on): disk FILLING inside the worktree / private
-`/tmp` (only a per-file 512 MB cap); CPU time (wall-clock timeout only); kernel attack surface of
+Disk use inside the worktree is bounded by (1) a 512 MB per-file cap (`prlimit --fsize`), and
+(2) a growth cap: the worktree's total size is measured before and after every sandboxed step and
+a step that grew it by more than `sandbox_disk_mb` (floor 256, config may only lower it) fails
+`worktree_quota`. The growth cap is checked AFTER the step, not live: within one step's timeout a
+hostile test can still write up to the free disk before it is stopped. Not enforced by this
+sandbox (say so before switch-on): live disk filling within a step; CPU time (wall-clock timeout only); kernel attack surface of
 unprivileged user namespaces; reading world-readable files outside the hidden dirs (e.g. `/etc`).
 The voice replay inside the sandbox cannot see `~/.zoe-voice-samples` or the models, so a
 voice-path heal fails closed until an owner decides which read-only binds it gets. The engine
@@ -326,8 +331,18 @@ fault. (e) a push is preceded by a write-ahead `pushed_branch`; the next run, th
 deletes that exact `self-heal/<id>` from origin when no PR (any state) has it as head, or records
 the PR it finds (chosen over opening the PR on resume: the interrupt was usually an owner stop, and
 the gates ran against a base that may have moved). (f) a write-ahead `landing_intent` precedes the
-local fast-forward and is cleared only after a confirmed heal or a completed rollback; the next run
-re-runs the idempotent CAS rollback first. (g) `selfheal/binaries.py` resolves git, gh, systemctl,
+local fast-forward and is cleared only after a confirmed heal or a VERIFIED rollback (the ref read
+back equals the snapshot, and the apply rollback did not raise). An unverified rollback keeps the
+intent, marks the fault `rollback_stuck` (audited) and every later run, dry included, does nothing
+but retry it first and refuse (`rollback_stuck`) until the retry verifies
+(`test_unverified_rollback_is_stuck_until_a_retry_verifies`). Test weakening is enforced at RUNTIME:
+the pytest gate also runs its test files at the base commit (sandboxed) and compares node by node;
+any node that ran before (passing or failing) and is now skipped, xfailed, deselected or missing,
+or a reproduction node that did not go failing -> passed, fails the gate `test_weakened`. Import
+aliases, `getattr`, a skipping fixture, an aliased `pytestmark`, a deleted test and a renamed
+reproduction are all refused this way although the regex misses each
+(`test_runtime_comparison_refuses_what_the_regex_misses`); a heal that adds a test passes. The
+regex stays as an early, cheap refusal. (g) `selfheal/binaries.py` resolves git, gh, systemctl,
 true, false, flock, bwrap, prlimit, pgrep, bash and both engine CLIs to absolute paths from
 `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (an engine CLI elsewhere must be configured with an
 absolute path), records them in the `preflight` audit row, and refuses a group/world-writable or

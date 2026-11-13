@@ -9,7 +9,7 @@ import fnmatch
 from pathlib import Path
 
 from .config import Config
-from .detectors import Ticket
+from .detectors import Ticket, node_statuses
 from .safety import is_test_path, rc_summary
 from .sandbox import Sandbox
 
@@ -21,7 +21,7 @@ def _lock(cfg: Config) -> list:
 def _sh(cfg: Config, argv: list, wt: str, lock: list = ()) -> tuple[bool, str]:
     """Every gate runs repo code: inside the sandbox, whole process group killed on timeout."""
     rc, out = Sandbox(cfg).run(argv, wt, cfg.gate_timeout_s, lock)
-    return (False, "timeout") if rc is None else (rc == 0, rc_summary(rc, out))
+    return (False, out) if rc is None else (rc == 0, rc_summary(rc, out))
 
 
 def relevant_tests(wt: str, changed: list, ticket: Ticket) -> list:
@@ -38,7 +38,7 @@ def relevant_tests(wt: str, changed: list, ticket: Ticket) -> list:
     return sorted(found)
 
 
-def gate_validate_structure(cfg, wt, changed, ticket):
+def gate_validate_structure(cfg, wt, changed, ticket, base_wt=None):
     script = Path(wt) / "tools/audit/validate_structure.py"
     if not script.exists():
         return "skip", "no_validator"
@@ -46,7 +46,7 @@ def gate_validate_structure(cfg, wt, changed, ticket):
     return ("pass" if ok else "fail"), d
 
 
-def gate_py_compile(cfg, wt, changed, ticket):
+def gate_py_compile(cfg, wt, changed, ticket, base_wt=None):
     py = [f for f in changed if f.endswith(".py") and (Path(wt) / f).exists()]
     if not py:
         return "skip", "no_changed_python"
@@ -54,22 +54,50 @@ def gate_py_compile(cfg, wt, changed, ticket):
     return ("pass" if ok else "fail"), f"files={len(py)},{d}"
 
 
-def gate_relevant_pytest(cfg, wt, changed, ticket):
+def _pytest_nodes(cfg, wt: str, tests: list) -> tuple[bool, str, dict | None]:
+    junit = Path(wt) / ".self-heal-gate.xml"
+    ok, d = _sh(cfg, [cfg.python, "-m", "pytest", "-p", "no:cacheprovider", "-q", *tests, f"--junitxml={junit}"],
+                wt, _lock(cfg))
+    try:
+        return ok, d, (node_statuses(junit.read_text()) if junit.exists() else None)
+    except Exception:   # noqa: BLE001 - an unreadable report is no evidence
+        return ok, d, None
+    finally:
+        junit.unlink(missing_ok=True)
+
+
+def gate_relevant_pytest(cfg, wt, changed, ticket, base_wt=None):
+    """The gate's test files must pass, AND, node by node against a pre-heal baseline of the same
+    files at the base commit: no test that ran before (passing or failing) may now be skipped,
+    xfailed, deselected or missing, and the reproduction node must go from failing to PASSED.
+    This is the runtime check that no regex can be talked out of; new tests are fine."""
     tests = relevant_tests(wt, changed, ticket)
     if not tests:
         return "fail", "no_relevant_test"   # a heal with nothing to prove it is not a heal
-    ok, d = _sh(cfg, [cfg.python, "-m", "pytest", "-p", "no:cacheprovider", "-q", *tests], wt, _lock(cfg))
-    return ("pass" if ok else "fail"), f"files={len(tests)},{d}"
+    ok, d, after = _pytest_nodes(cfg, wt, tests)
+    if not ok:
+        return "fail", f"files={len(tests)},{d}"
+    base_tests = [t for t in tests if base_wt and (Path(base_wt) / t).is_file()]
+    before = _pytest_nodes(cfg, base_wt, base_tests)[2] if base_tests else ({} if base_wt else None)
+    if after is None or before is None:
+        return "fail", f"files={len(tests)},no_baseline"
+    weakened = [n for n, st in before.items() if after.get(n) != "passed"]
+    repro = ticket.evidence.get("nodeid", "")
+    if repro and not (before.get(repro) in ("failure", "error") and after.get(repro) == "passed"):
+        weakened.append(repro)
+    if weakened:
+        return "fail", f"test_weakened:nodes={len(set(weakened))}"
+    return "pass", f"files={len(tests)},{d},baseline={len(before)}"
 
 
-def gate_offline_lane(cfg, wt, changed, ticket):
+def gate_offline_lane(cfg, wt, changed, ticket, base_wt=None):
     if not cfg.offline_lane_cmd:
         return "fail", "offline_lane_unset"
     ok, d = _sh(cfg, list(cfg.offline_lane_cmd), wt, _lock(cfg))
     return ("pass" if ok else "fail"), d
 
 
-def gate_voice_replay(cfg, wt, changed, ticket):
+def gate_voice_replay(cfg, wt, changed, ticket, base_wt=None):
     voice = [f for f in changed if any(fnmatch.fnmatch(f, p) for p in cfg.voice_paths)]
     if not voice:
         return "skip", "no_voice_path_change"
@@ -88,13 +116,13 @@ GATES = {
 }
 
 
-def run_gates(cfg: Config, names: list, wt: str, changed: list, ticket: Ticket) -> list:
+def run_gates(cfg: Config, names: list, wt: str, changed: list, ticket: Ticket, base_wt: str | None = None) -> list:
     results = []
     for name in names:
         if name not in GATES:
             results.append({"gate": name, "status": "fail", "detail": "unknown"})
             break
-        status, detail = GATES[name](cfg, wt, changed, ticket)
+        status, detail = GATES[name](cfg, wt, changed, ticket, base_wt=base_wt)
         results.append({"gate": name, "status": status, "detail": detail})
         if status == "fail":
             break

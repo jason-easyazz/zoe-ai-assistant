@@ -167,7 +167,7 @@ def run_repro(cfg, repo: str, ref: str, ticket, path: str, lock: list) -> ReproR
         junit = Path(path) / ".self-heal-verify.xml"
         rc, out = Sandbox(cfg).run([*ticket.repro_cmd, f"--junitxml={junit}"], path, cfg.gate_timeout_s, lock)
         if rc is None:
-            return ReproResult(False, "timeout")
+            return ReproResult(False, out)   # timeout | worktree_quota
         nodeid = ticket.evidence.get("nodeid", "")
         verdict = node_passed(junit.read_text(), nodeid) if junit.exists() and nodeid else "no_junit"
         return ReproResult(rc == 0 and verdict == "passed", f"{rc_summary(rc, out)},node={verdict}")

@@ -23,7 +23,6 @@ import signal
 import site
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from . import binaries
@@ -71,16 +70,14 @@ class Sandbox:
         c = self.cfg
         return [*HIDE, str(Path.home()), HARD_LIVE_CHECKOUT, c.live_checkout, c.state_dir, c.repo]
 
-    def env(self, priv_tmp: str) -> dict:
+    def env(self, tmp: str) -> dict:
         env = {k: os.environ[k] for k in ENV_KEEP if k in os.environ}
-        env.update(PATH=binaries.TRUSTED_PATH, HOME="/tmp", TMPDIR="/tmp", PYTHONDONTWRITEBYTECODE="1")
-        if self.backend != "bwrap":
-            env.update(HOME=priv_tmp, TMPDIR=priv_tmp)
+        env.update(PATH=binaries.TRUSTED_PATH, HOME=tmp, TMPDIR=tmp, PYTHONDONTWRITEBYTECODE="1")
         if site.ENABLE_USER_SITE and os.path.isdir(site.getusersitepackages()):
             env["PYTHONUSERBASE"] = site.getuserbase()   # the user-site packages are re-bound read-only
         return env
 
-    def argv(self, cmd: list, wt: str, priv_tmp: str) -> list:
+    def argv(self, cmd: list, wt: str) -> list:
         c, wt = self.cfg, os.path.realpath(wt)
         # prlimit runs INSIDE the sandbox, so by its real path (a symlink under /tmp would be hidden)
         limits = [os.path.realpath(binaries.which("prlimit")), f"--as={c.sandbox_mem_mb << 20}",
@@ -88,38 +85,61 @@ class Sandbox:
                   f"--fsize={FILE_MB << 20}", "--core=0", "--"]
         a = [binaries.which("bwrap"), "--unshare-all", "--die-with-parent", "--new-session",
              "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
-        masked = ["/tmp"]   # covered by the private /tmp bound below
+        # bwrap 0.6.1 has no `--size`, so a writable tmpfs would be RAM with no cap: /tmp is an EMPTY
+        # READ-ONLY view instead, and TMPDIR / HOME point at a scratch dir INSIDE the worktree, whose
+        # growth is capped (`sandbox_disk_mb`, checked after the run) and which is deleted after it
+        a += ["--tmpfs", "/tmp"]
+        masked = ["/tmp"]
         for d in self.hidden():
             d = os.path.realpath(d) if d else ""
             if d and os.path.isdir(d) and d != wt and not any(d == m or d.startswith(m + "/") for m in masked):
                 a += ["--tmpfs", d]
                 masked.append(d)
-        a += ["--bind", priv_tmp, "/tmp"]
         for d in _ro_dirs():
             if any(d.startswith(m + "/") for m in masked):
                 a += ["--ro-bind", d, d]
         a += ["--bind", wt, wt]
-        for d in [*masked[1:], "/dev"]:
+        for d in [*masked, "/dev"]:
             a += ["--remount-ro", d]
         return [*a, "--chdir", wt, "--", *limits, *cmd]
 
     def run(self, cmd: list, wt: str, timeout: int, lock: list = ()) -> tuple[int | None, str]:
-        """(rc, stdout) or (None, '') on timeout. The whole process group is killed on timeout."""
+        """(rc, stdout), or (None, 'timeout' | 'worktree_quota'). On timeout the whole process group
+        is killed; a worktree that GREW by more than `sandbox_disk_mb` fails the step."""
         if self.backend == "none" and self.cfg.dispatch != "dry":
             raise Refused("sandbox_unavailable", self.why)
-        priv = tempfile.mkdtemp(prefix="selfheal-sbx-")
+        tmp = os.path.join(os.path.realpath(wt), TMP_NAME)
+        before = tree_bytes(wt)
+        os.makedirs(tmp, exist_ok=True)
         try:
-            argv = [*lock, *(self.argv(cmd, wt, priv) if self.backend == "bwrap" else cmd)]
+            argv = [*lock, *(self.argv(cmd, wt) if self.backend == "bwrap" else cmd)]
             if argv and argv[0] == "flock":
                 argv[0] = binaries.which("flock")
             p = subprocess.Popen(argv, cwd=wt, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, text=True, env=self.env(priv), start_new_session=True)
+                                 stderr=subprocess.DEVNULL, text=True, env=self.env(tmp), start_new_session=True)
             try:
                 out, _ = p.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
                 os.killpg(p.pid, signal.SIGKILL)
                 p.communicate()
-                return None, ""
+                return None, "timeout"
+            if tree_bytes(wt) - before > self.cfg.sandbox_disk_mb << 20:
+                return None, "worktree_quota"
             return p.returncode, out
         finally:
-            shutil.rmtree(priv, ignore_errors=True)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+TMP_NAME = ".selfheal-tmp"
+
+
+def tree_bytes(root: str) -> int:
+    """Apparent size of every file under `root` (symlinks not followed)."""
+    total = 0
+    for d, _dirs, files in os.walk(root):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(d, f)).st_size
+            except OSError:
+                pass
+    return total

@@ -102,15 +102,18 @@ def test_base_exception_rolls_back_records_then_reraises(full_local, exc):
     assert next(iter(state(cfg)["tickets"].values()))["why"] == f"exception:{type(exc).__name__}"
 
 
-def test_rollback_apply_failure_is_recorded_and_ref_still_restored(full_local):
+def test_rollback_apply_failure_is_recorded_ref_restored_and_stuck(full_local):
     _, cfg, tip = full_local
 
     class Both(RaisingApplier):
         def rollback(self, sha):
             raise OSError("live rollback failed")
     out = Runner(cfg, engine=FakeEngine(fix_calc), applier=Both(cfg, OSError("x")), now=lambda: NOON).run_once()
-    _assert_rolled_back(cfg, tip, out)
+    assert gitops.rev(str(cfg.repo), "refs/heads/main") == tip       # the ref is restored ...
+    assert out["outcome"] == "rollback_stuck"                          # ... but the live rollback is not verified
     assert out["why"] == "exception:OSError,rollback_apply_failed:OSError"
+    rec = next(iter(state(cfg)["tickets"].values()))
+    assert rec["landing_intent"]["from"] == tip                        # kept: the next run retries it
 
 
 # --- 2. the floor covers every repo script the workflows run ----------------------------------

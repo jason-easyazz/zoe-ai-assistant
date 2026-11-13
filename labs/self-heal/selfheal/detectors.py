@@ -94,6 +94,15 @@ def node_passed(xml_text: str, nodeid: str) -> str:
     return "passed"
 
 
+def node_statuses(xml_text: str) -> dict:
+    """{nodeid: passed | failure | error | skipped} for every test that RAN (xfail = skipped)."""
+    out = {}
+    for c in ET.fromstring(xml_text).iter("testcase"):
+        if not _is_collection_error(c):
+            out[_nodeid(c)[1]] = next((t for t in ("failure", "error", "skipped") if c.find(t) is not None), "passed")
+    return out
+
+
 def parse_junit(xml_text: str) -> list[dict]:
     """Failing / erroring test cases from a pytest junit report: [{nodeid, file, message}].
     Collection errors are NOT test failures: see collection_errors()."""

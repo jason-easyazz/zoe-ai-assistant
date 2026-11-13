@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import FakeEngine, fix_calc, make_cfg, seed_repo, sh, stub_bin, wait_for
+from conftest import TEST, FakeEngine, fix_calc, make_cfg, seed_repo, sh, stub_bin, wait_for
 from selfheal import binaries, gitops, sandbox
 from selfheal.config import Config
 from selfheal.detectors import Ticket, collection_errors, node_passed
@@ -61,6 +61,10 @@ def test_escape():
             if os.fork() == 0:
                 time.sleep(2); os._exit(0)
     attempt("fork", fork)
+    attempt("write_host_tmp", lambda: open("/tmp/selfheal-%(token)s", "w").write("x"))
+    tmpdir = os.environ["TMPDIR"]
+    open(os.path.join(tmpdir, "scratch.bin"), "wb").write(b"0" * (1 << 20))   # TMPDIR works (in the worktree)
+    open("tmpdir.json", "w").write(json.dumps([tmpdir, os.path.getsize(os.path.join(tmpdir, "scratch.bin"))]))
     open("escape.json", "w").write(json.dumps(got))
     must(all(got.values()))   # the attacker's success criterion: contained = this test FAILS
 '''
@@ -88,18 +92,23 @@ def test_hostile_gate_is_contained(local_scratch, monkeypatch):
     lst.bind(("127.0.0.1", 0))
     lst.listen(1)
     lst.setblocking(False)
+    token = uuid.uuid4().hex[:12]
     wt = tmp / "worktrees" / "heal-hostile"
     (wt / "tests").mkdir(parents=True)
     (wt / "tests" / "test_hostile.py").write_text(HOSTILE % dict(
         secret=str(fakehome / ".ssh" / "id_test"), home=real_home, live=str(s.live), outside=str(tmp / "outside"),
-        fakehome=str(fakehome), port=lst.getsockname()[1]))
+        fakehome=str(fakehome), port=lst.getsockname()[1], token=token))
     before = _tree(tmp, wt)
     t = Ticket(id="t", fault_class="failing_test", fault_key="k", summary="s", evidence={}, repro_cmd=[])
     res = run_gates(_gate_cfg(s), ["relevant_pytest"], str(wt), ["tests/test_hostile.py"], t)
     got = json.loads((wt / "escape.json").read_text())
     assert set(got) == {"read_secret", "see_real_home", "see_live_checkout", "read_fake_live", "write_outside",
-                        "write_fake_home", "write_usr", "env_token", "network", "memory", "fork"}
+                        "write_fake_home", "write_usr", "env_token", "network", "memory", "fork", "write_host_tmp"}
     assert not any(got.values()), got                                   # every attempt failed inside
+    tmpdir, size = json.loads((wt / "tmpdir.json").read_text())
+    assert tmpdir == str((wt / sandbox.TMP_NAME).resolve()) and size == 1 << 20   # scratch lives IN the worktree
+    assert not (wt / sandbox.TMP_NAME).exists()                         # and is gone after the run
+    assert not Path(f"/tmp/selfheal-{token}").exists()                  # the host /tmp untouched
     assert res == [{"gate": "relevant_pytest", "status": "fail", "detail": "files=1,rc=1,failed=1"}]
     assert _tree(tmp, wt) == before                                     # nothing outside the worktree changed
     with pytest.raises(BlockingIOError):
@@ -174,9 +183,13 @@ def test_node_passed_reads_the_node(child, want):
 
 
 def test_exit_zero_with_the_node_skipped_is_not_healed(local_scratch):
-    """The 'fix' makes the code under test skip at import: pytest exits 0, the node never passed."""
-    def skip_it(wt):   # every test skips at run time: pytest exits 0 and the gate passes
-        (wt / "calc.py").write_text("def add(a, b):\n    import pytest\n    pytest.skip('x')\n")
+    """The code under test skips only for the ORIGINAL test's inputs, and the heal's copy of the test
+    uses other inputs: the gate sees the node pass, the verify (original file) exits 0 with it SKIPPED."""
+    def skip_it(wt):
+        (wt / "calc.py").write_text("def add(a, b):\n    if (a, b) == (2, 3):\n        import pytest\n"
+                                    "        pytest.skip('x')\n    return a + b\n")
+        p = wt / "tests" / "test_calc.py"
+        p.write_text(p.read_text().replace("add(2, 3)", "add(3, 2)"))
     out = runner(local_scratch.cfg, FakeEngine(skip_it)).run_once()
     assert out["outcome"] == "not_healed", out
     assert out["verify"].startswith("rc=0") and out["verify"].endswith("node=skipped")
@@ -351,3 +364,104 @@ def test_unsafe_binary_paths_are_refused(local_scratch, monkeypatch, real_binary
     cfg.codex_bin = str(fake)
     out = runner(cfg).run_once()
     assert out == {"outcome": "refused", "rule": "unsafe_binary"}
+
+
+@needs_bwrap
+def test_worktree_growth_cap(local_scratch):
+    """Many small files or one big one: the worktree may not grow past `sandbox_disk_mb` per step."""
+    s = local_scratch
+    wt = s.root / "worktrees" / "heal-fill"
+    (wt / "tests").mkdir(parents=True)
+    (wt / "tests" / "test_fill.py").write_text(
+        "import os\n\ndef test_fill():\n    for i in range(30):\n"
+        "        open(os.path.join(os.environ['TMPDIR'], f'f{i}'), 'wb').write(b'0' * (100 << 10))\n")
+    t = Ticket(id="t", fault_class="failing_test", fault_key="k", summary="s", evidence={}, repro_cmd=[])
+    res = run_gates(_gate_cfg(s, sandbox_disk_mb=2), ["relevant_pytest"], str(wt), ["tests/test_fill.py"], t)
+    assert res[0]["status"] == "fail" and res[0]["detail"].endswith("worktree_quota")
+    assert not (wt / sandbox.TMP_NAME).exists()
+
+
+def test_disk_cap_may_only_be_lowered(tmp_path):
+    with pytest.raises(ValueError):
+        Config(state_dir=str(tmp_path), sandbox_disk_mb=1024).validate()
+
+
+# --- review round: a rollback that is not VERIFIED keeps the intent and stops everything ------
+
+TWO = TEST + "\n\ndef test_two():\n    assert add(1, 1) == 2\n"
+
+
+def test_unverified_rollback_is_stuck_until_a_retry_verifies(tmp_path, monkeypatch):
+    live = tmp_path / "live"
+    seed_repo(live, test_text=TWO)                                     # two faults: test_add, test_two
+    repo = tmp_path / "repo.git"
+    sh("git", "clone", "-q", "--bare", str(live), str(repo))
+    cfg = make_cfg(tmp_path, repo=repo, live=live, dispatch="full", health_checks=[["false"]])
+    tip = gitops.rev(cfg.repo, "refs/heads/main")
+    real = gitops.git
+
+    def restore_silently_fails(repo_, *args, **kw):                    # the restoring update-ref does nothing
+        if args[:1] == ("update-ref",) and len(args) == 4 and args[2] == tip:
+            return ""
+        return real(repo_, *args, **kw)
+    monkeypatch.setattr(gitops, "git", restore_silently_fails)
+    out = runner(cfg).run_once()
+    assert out["outcome"] == "rollback_stuck", out
+    assert gitops.rev(cfg.repo, "refs/heads/main") != tip
+    rec = state(cfg)["tickets"][out["ticket"]]
+    assert rec["landing_intent"]["from"] == tip                        # NOT forgotten
+    assert any(f.get("rollback_stuck") for f in state(cfg)["faults"].values())
+    for dispatch in ("full", "dry"):                                   # every run refuses; the second fault waits
+        cfg.dispatch = dispatch
+        eng = FakeEngine(fix_calc)
+        assert runner(cfg, eng).run_once() == {"outcome": "refused", "rule": "rollback_stuck"} and eng.calls == 0
+    assert any(a["step"] == "recover" and a["outcome"] == "rollback_stuck" for a in audit(cfg))
+    monkeypatch.setattr(gitops, "git", real)                           # the restore can work again
+    out2 = runner(cfg).run_once()                                      # dry: retry, verify, clear, then plan
+    assert gitops.rev(cfg.repo, "refs/heads/main") == tip
+    rec = state(cfg)["tickets"][out["ticket"]]
+    assert rec["landing_intent"] is None and rec["status"] == "rolled_back"
+    assert out2["outcome"] == "planned" and out2["ticket"] != out["ticket"]   # now the second fault
+
+
+# --- review round: weakening is caught at RUNTIME, node by node, whatever the spelling --------
+
+ZERO_ALIAS = TEST.replace("def test_zero():\n", "def test_zero():\n    s_('x')\n").replace(
+    "from calc import add\n", "from calc import add\nfrom pytest import skip as s_\n")
+ZERO_GETATTR = TEST.replace("def test_zero():\n", "def test_zero():\n    getattr(pytest, 'sk' + 'ip')('x')\n").replace(
+    "from calc import add\n", "import pytest\nfrom calc import add\n")
+FIXTURE = TEST.replace("from calc import add\n", "import pytest\nfrom calc import add\n\n\n@pytest.fixture(autouse=True)\n"
+                       "def _f(request):\n    if request.node.name == 'test_zero':\n        getattr(pytest, 'sk' + 'ip')('x')\n")
+MARK_ALIAS = TEST.replace("from calc import add\n", "import pytest as p_\nfrom calc import add\n"
+                          "pytestmark = [getattr(p_.mark, 'sk' + 'ip')]\n")
+DELETED = TEST.split("\n\n\ndef test_zero")[0] + "\n"
+RENAMED = TEST.replace("def test_add()", "def test_add_fixed()")
+
+
+@pytest.mark.parametrize("text", [ZERO_ALIAS, ZERO_GETATTR, FIXTURE, MARK_ALIAS, DELETED, RENAMED],
+                         ids=["import_alias", "getattr", "fixture_skip", "pytestmark_alias", "deleted_test", "renamed_repro"])
+def test_runtime_comparison_refuses_what_the_regex_misses(local_scratch, text):
+    from selfheal.safety import WEAKEN
+    assert WEAKEN.search(text) is None                                  # the cheap regex does NOT see it
+    out = runner(local_scratch.cfg, FakeEngine(lambda wt: (fix_calc(wt), (wt / "tests" / "test_calc.py").write_text(text)))).run_once()
+    assert out["outcome"] == "discarded" and out["why"] == "test_weakened", out
+
+
+def test_legitimate_heal_that_adds_a_test_passes(local_scratch):
+    def fix_and_add(wt):
+        fix_calc(wt)
+        (wt / "tests" / "test_more.py").write_text("from calc import add\n\n\ndef test_more():\n    assert add(1, 2) == 3\n")
+    out = runner(local_scratch.cfg, FakeEngine(fix_and_add)).run_once()
+    assert out["outcome"] == "healed_local", out
+    gates = [a for a in audit(local_scratch.cfg) if a["step"] == "gates" and "gates" in a][-1]["gates"]
+    assert any(g["gate"] == "relevant_pytest" and "baseline=2" in g["detail"] for g in gates)
+
+
+def test_reproduction_must_go_from_failing_to_passed(local_scratch):
+    """A ticket whose node already PASSES at base (a stale or wrong report) is not a heal, even when
+    every other node is intact."""
+    given = local_scratch.root / "stale.xml"
+    given.write_text('<testsuites><testsuite><testcase classname="tests.test_calc" name="test_zero">'
+                     '<failure message="m"/></testcase></testsuite></testsuites>')
+    out = runner(local_scratch.cfg).run_once(junit=str(given))
+    assert out["outcome"] == "discarded" and out["why"] == "test_weakened", out
