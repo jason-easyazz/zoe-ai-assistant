@@ -39,6 +39,10 @@ LEDGER_PREFIX = "reminder_phone:"
 CHANNEL_TIMEOUT_S = 20.0
 NEUTRAL_TEXT = "You have a reminder."
 SENSITIVE_CATEGORIES = frozenset({"health", "medical", "private"})
+# Raised before any transport call (a wrong argument, a missing module or key): definitely not sent, so the claim is released.
+# Anything else raised by a sender (a transport error mid-send) is "uncertain" and keeps the claim. Both senders already turn
+# their transport outcomes into return values (send_push_to_user counts, telegram_notify.send classifies), so this is the rest.
+PRE_SEND_ERRORS = (TypeError, ImportError, KeyError, AttributeError, NameError)
 
 
 def mode() -> str:
@@ -218,16 +222,22 @@ async def _channel(ch: str, uid: str, gen: int, text: str, url: str, dedupe_id: 
             return "skipped:duplicate", 0
     if erase_gate.generation(uid) != gen:      # erased between the claim and the send: send nothing (the erase took the claim)
         return "skipped:erased", 0
-    if ch == "telegram":
-        outcome = await _send_telegram(tid, text)
-        sent = 1 if outcome == "sent" else 0
-    else:
-        sent = await _send_web_push(uid, "Zoe", text, url)
-        outcome = "sent" if sent else "retry"
+    try:
+        if ch == "telegram":
+            outcome = await _send_telegram(tid, text)
+            sent = 1 if outcome == "sent" else 0
+        else:
+            sent = await _send_web_push(uid, "Zoe", text, url)
+            outcome = "sent" if sent else "retry"
+        result = ("delivered" if sent else f"failed:{outcome}"), sent
+    except PRE_SEND_ERRORS as exc:   # a bad call / missing module / bad key: nothing can have left the box -> release, retry later
+        outcome, result = "retry", (f"failed:{type(exc).__name__}", 0)
+    except Exception as exc:  # noqa: BLE001 - a transport failure mid-send may have reached the phone: keep the claim (at most once)
+        outcome, result = "uncertain", (f"failed:{type(exc).__name__}", 0)
     async with erase_gate.writing(uid, gen) as live:
         if live:
             await _settle(key, outcome)
-    return ("delivered" if sent else f"failed:{outcome}"), sent
+    return result
 
 
 async def forget_user(user_id: str) -> int:

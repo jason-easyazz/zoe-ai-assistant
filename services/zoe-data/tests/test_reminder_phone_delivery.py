@@ -20,6 +20,10 @@ import reminder_delivery
 import telegram_notify
 import user_erase_gate as erase_gate
 
+# The REAL senders, captured before any fixture fakes them (the interface tests below go through these).
+_REAL_WEB_PUSH = reminder_delivery._send_web_push
+_REAL_TG_SEND, _REAL_TG_AVAILABLE = telegram_notify.send, telegram_notify.available
+
 NOON = datetime(2026, 1, 5, 12, 0)
 LATE = datetime(2026, 1, 5, 23, 30)
 
@@ -191,6 +195,108 @@ def test_a_slow_channel_is_bounded(world, monkeypatch):
     monkeypatch.setattr(telegram_notify, "send", hang)
     res = _deliver()
     assert res.outcomes == {"web_push": "delivered", "telegram": "failed:timeout"}
+
+
+def test_a_pre_send_error_releases_the_claim_and_a_retry_delivers_once(world, monkeypatch):
+    calls = []
+
+    async def broken_then_fine(uid, title, body, url):
+        calls.append(uid)
+        if len(calls) == 1:
+            raise TypeError("unexpected keyword argument")   # a bad call: nothing left the box
+        world.web_push.append((uid, body))
+        return 1
+
+    monkeypatch.setattr(reminder_delivery, "_send_web_push", broken_then_fine)
+    assert _deliver().outcomes["web_push"] == "failed:TypeError"
+    assert not any(k.endswith(":web_push") for k in world.ledger)            # released
+    assert _deliver().outcomes["web_push"] == "delivered"                     # the retry of the same fire
+    assert _deliver().outcomes["web_push"] == "skipped:duplicate"
+    assert world.web_push == [("member-a", "Water the ferns")]
+
+
+def test_a_mid_send_transport_error_keeps_the_claim(world):
+    world.push_raises = True                                                  # RuntimeError from the transport: may have arrived
+    assert _deliver().outcomes["web_push"] == "failed:RuntimeError"
+    world.push_raises = False
+    assert _deliver().outcomes["web_push"] == "skipped:duplicate" and world.web_push == []
+
+
+def test_web_push_through_the_real_send_push_to_user(world, monkeypatch):
+    """Only the lowest transport (pywebpush.webpush) and the subscription read are stubbed: a wrong call into
+    routers.push.send_push_to_user fails here."""
+    import json
+    import sys
+    import types
+
+    import routers.push as push
+
+    monkeypatch.setattr(reminder_delivery, "_send_web_push", _REAL_WEB_PUSH)
+    sent = []
+
+    class _Cur:
+        async def fetchall(self):
+            return [{"endpoint": "https://push.invalid/sub-1", "keys_p256dh": "p", "keys_auth": "a"}]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+    class _DB:
+        def execute(self, sql, params=()):
+            assert params == ("member-a",)                                    # the owner's own subscriptions only
+            return _Cur()
+
+    async def fake_get_db():
+        yield _DB()
+
+    def fake_webpush(**kw):
+        sent.append(kw)
+
+    mod = types.ModuleType("pywebpush")
+    mod.webpush, mod.WebPushException = fake_webpush, type("WebPushException", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "pywebpush", mod)
+    monkeypatch.setattr(push, "get_db", fake_get_db)
+    monkeypatch.setattr(push, "_get_vapid_keys", lambda: {"private_key": "k", "public_key": "p"})
+    res = _deliver(sensitive=True)
+    assert res.outcomes["web_push"] == "delivered" and res.web_push_sent == 1
+    assert len(sent) == 1 and sent[0]["subscription_info"]["endpoint"] == "https://push.invalid/sub-1"
+    payload = json.loads(sent[0]["data"])
+    assert payload == {"title": "Zoe", "body": reminder_delivery.NEUTRAL_TEXT, "url": "/"}
+
+
+def test_telegram_through_the_real_telegram_notify(world, monkeypatch):
+    """Only httpx's client is stubbed: the real telegram_notify.send builds the request."""
+    import types
+
+    import httpx
+
+    monkeypatch.setattr(telegram_notify, "send", _REAL_TG_SEND)
+    monkeypatch.setattr(telegram_notify, "available", _REAL_TG_AVAILABLE)
+    monkeypatch.setenv("ZOE_INTERNAL_TOKEN", "test-token")
+    monkeypatch.delenv("ZOE_TELEGRAM_NOTIFY_URL", raising=False)
+    posts = []
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            posts.append((url, json, headers))
+            return types.SimpleNamespace(status_code=200)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    assert _deliver().outcomes["telegram"] == "delivered"
+    assert posts == [(telegram_notify.DEFAULT_NOTIFY_URL, {"telegram_id": "1001", "text": "Water the ferns"},
+                      {"Authorization": "Bearer test-token"})]
 
 
 def test_shadow_sends_and_stores_nothing(world, monkeypatch):

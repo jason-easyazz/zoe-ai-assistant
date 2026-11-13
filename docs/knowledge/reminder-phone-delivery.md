@@ -42,8 +42,9 @@ Rules (all tested in `services/zoe-data/tests/test_reminder_phone_delivery.py`):
 - Sensitive: category `health` / `medical` / `private`, visibility `private`, health words in the title, or an unknown
   reminder = the phone shows "You have a reminder." unless the member set `full_text`.
 - At most once per (reminder fire, channel): a claim row in `app_settings`, key `reminder_phone:<member>:<hash>:<channel>`,
-  value = outcome class, written before the send inside `user_erase_gate.writing`. A definite failure (`retry`) releases
-  the claim; a timeout or an uncertain send keeps it (never a double send). `MemoryService.delete_user` calls
+  value = outcome class, written before the send inside `user_erase_gate.writing`. A definite failure releases the claim:
+  a `retry` outcome, no web push reached, or an error raised before any transport call (`PRE_SEND_ERRORS`: a wrong
+  argument, a missing module or key). A timeout or a transport error mid-send keeps it (never a double send). `MemoryService.delete_user` calls
   `reminder_delivery.forget_user` (inventory: `reminder_phone_ledger` in `forget_reach.py`). Rows are ids only; they grow
   by at most two per fired reminder of an opted-in member and are not pruned yet.
 - Never raises; each channel is bounded (20 s); logs carry channel, outcome class and an 8-char hash, never text or ids.
