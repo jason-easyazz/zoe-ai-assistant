@@ -616,12 +616,25 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     if len(hits) != 1 or hits[0] is not own:
         return None
     q = hits[0]
-    new_tail = tail[:q.start] + _render_quantity(qn, q) + tail[q.end:]
-    if month_new and row_month and month_new != row_month:
-        mm = _MONTH_RE.search(new_tail)
-        if mm:
-            new_tail = new_tail[:mm.start()] + month_new.capitalize() + new_tail[mm.end():]
-    return head + new_tail
+    return head + _put_date(tail, q, qn, month_new if unit == "date" else None)
+
+
+def _put_date(tail: str, q: "Quantity", qn: "Quantity", month_new: Optional[str]) -> str:
+    """``tail`` with the number at ``q`` replaced by the new one; a month the correction NAMED replaces the month beside the date
+    ("the 12th of December" / "December 12"), or is added when the row has none ("on the 12th" -> "on the 5th of January", QA round
+    9 review: the stated month was dropped). With no month said, the row's month is kept. Pure."""
+    rendered, before, after = _render_quantity(qn, q), tail[:q.start], tail[q.end:]
+    if month_new:
+        month = month_new.capitalize()
+        ma = re.match(r"(\s*(?:of\s+)?)([A-Za-z]+)", after)
+        mb = re.search(r"([A-Za-z]+)(\s*)$", before)
+        if ma and _MONTH_RE.fullmatch(ma.group(2)):
+            after = after[:ma.start(2)] + month + after[ma.end(2):]
+        elif mb and _MONTH_RE.fullmatch(mb.group(1)):
+            before = before[:mb.start(1)] + month + before[mb.end(1):]
+        else:
+            rendered += f" of {month}"
+    return before + rendered + after
 
 
 def _restate_date(head: str, tail: str, new: str) -> Optional[str]:
@@ -636,12 +649,7 @@ def _restate_date(head: str, tail: str, new: str) -> Optional[str]:
     q, month_new, row_month = dates[0], _month_of(new), _month_of(tail)
     if q.value == qn.value and (not month_new or month_new == row_month):
         return None
-    new_tail = tail[:q.start] + _render_quantity(qn, q) + tail[q.end:]
-    if month_new and row_month and month_new != row_month:
-        mm = _MONTH_RE.search(new_tail)
-        if mm:
-            new_tail = new_tail[:mm.start()] + month_new.capitalize() + new_tail[mm.end():]
-    return head + new_tail
+    return head + _put_date(tail, q, qn, month_new)
 
 
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:

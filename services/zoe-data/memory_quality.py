@@ -1286,6 +1286,7 @@ PERSON_WORDS = frozenset({"son", "daughter", "grandson", "granddaughter", "grand
                           "aunt", "auntie", "uncle", "cousin", "niece", "nephew", "friend", "boss", "stepson", "stepdaughter",
                           "colleague", "neighbour", "neighbor", "teacher"})
 _KIND_GAP = r"(?:\s+(?:is|was)\s+|\s*,\s*|\s+)(?:(?:named|called)\s+)?"
+_KIND_ALT = "|".join(sorted(ANIMAL_WORDS | PERSON_WORDS, key=len, reverse=True))
 
 
 def _kind_of(word: str) -> Optional[str]:
@@ -1298,11 +1299,14 @@ def subject_kinds(text: str) -> dict:
     named Kit", "cat called Pickle", "Theo is a cat", "Kit, the user's grandson"). Pure."""
     out: dict = {}
     t = text or ""
-    for m in re.finditer(rf"\b([A-Za-z]+){_KIND_GAP}([A-Z][a-z]+)\b", t):
+    # anchored on the KIND VOCABULARY, never on position: an optional word before the kind slot ate the kind ("Fenn is a cat and
+    # is six" captured "and", QA round 9 review), so every slot below is a kind word or nothing
+    for m in re.finditer(rf"(?i:\b({_KIND_ALT})s?){_KIND_GAP}([A-Z][a-z]+)\b", t):
         k = _kind_of(m.group(1))
         if k and m.group(2).lower() not in ("user", "the"):
             out.setdefault(m.group(2).lower(), set()).add(k)
-    for m in re.finditer(r"\b([A-Z][a-z]+)(?:\s+is|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my)\s+(?:[a-z]+\s+)?([a-z]+)\b", t):
+    for m in re.finditer(rf"\b([A-Z][a-z]+)(?i:(?:\s+is|\s+was|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my|our|the)\s+"
+                         rf"(?:[a-z]+\s+){{0,2}}?({_KIND_ALT})s?)\b", t):
         k = _kind_of(m.group(2))
         if k and m.group(1).lower() not in ("user", "the"):
             out.setdefault(m.group(1).lower(), set()).add(k)

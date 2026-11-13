@@ -88,6 +88,23 @@ def test_a_model_guess_never_retypes_a_stored_subject(candidate, stored):
     assert svc.ingested == [] and svc.archived == []          # no new row of another kind, the stored row stands
 
 
+@pytest.mark.parametrize("text, want", [
+    ("Fenn is a cat and is six years old", {"fenn": {"animal"}}),
+    ("Pip, our dog, is six", {"pip": {"animal"}}),
+    ("Rowan is my grandson and is ten", {"rowan": {"person"}}),
+    ("Pip is a lovely cat", {"pip": {"animal"}}),
+    ("Rowan is User's grandson", {"rowan": {"person"}}),
+    ("Fenn is six years old and loves trucks", {}),
+])
+def test_the_kind_is_read_from_the_vocabulary_not_the_position(text, want):
+    assert mq.subject_kinds(text) == want
+
+
+def test_a_kind_after_an_adjective_or_before_and_is_still_refused():
+    svc = _Svc("User's son is named Fenn", hits=set())
+    assert run(mq.reconcile_for_ingest(svc, "Fenn is a cat and is six years old", UID)) == ("refuse", "r0")
+
+
 def test_the_kind_check_reads_every_row_not_the_top_k():
     # the stored son row is deliberately NOT among the similarity hits (only the cat row is): the flip is still refused
     svc = _Svc("User has a cat called Pip", *(f"User likes walk number {i}" for i in range(40)), SON, hits={"r0"})
@@ -161,6 +178,19 @@ def test_a_chain_and_a_correction_back(monkeypatch):
     svc = _Svc("Isla is seven years old")
     _apply(svc, "actually isla is 6 after all", monkeypatch)
     assert svc.edits == [("r0", "Isla is six years old")]
+
+
+@pytest.mark.parametrize("row, said, want", [
+    ("User's book club is on the 12th", "book club moved to the 5th of january", "User's book club is on the 5th of January"),
+    ("User's book club is on the 12th of December.", "book club moved to the 5th of january",
+     "User's book club is on the 5th of January."),
+    ("User's book club is on December 12.", "book club moved to the 5th of january", "User's book club is on January 5."),
+    ("User's book club is on the 12th of December.", "book club moved to the 5th", "User's book club is on the 5th of December."),
+    ("User has a dentist appointment on the 20th that costs 20 dollars", "the dentist is on the 22nd of december, not the 20th",
+     "User has a dentist appointment on the 22nd of December that costs 20 dollars"),
+])
+def test_a_stated_month_is_kept_and_an_unsaid_one_is_left_alone(row, said, want):
+    assert vc.rewrite(row, vc.statement(said)) == want
 
 
 @pytest.mark.parametrize("text", ["the meeting moved to friday", "it moved to the 5th", "so it is 5 not 6", "theo is 7, he loves trucks",
@@ -312,11 +342,49 @@ def test_a_call_now_emergency_is_one_dated_health_event(monkeypatch):
     day = datetime.date(2026, 11, 13)
     want = "User had a fall on 13 November 2026 (a medical emergency)."
     assert {medical_safety.emergency_event(f, FALL, today=day) for f in MINED} == {want}
-    assert medical_safety.emergency_event("User fell in the bathroom and can't get up on their own", "", today=day) == want
+    assert medical_safety.emergency_event("User fell in the bathroom and can't get up on their own",
+                                          "i fell in the bathroom and cant get up on my own", today=day) == want
+    assert medical_safety.emergency_event(MINED[0], "", today=day) is None          # no source turn: not a CURRENT emergency
     for fact, said in [("User fell asleep on the couch", "i fell asleep on the couch"), ("User's phone fell over", "my phone fell over"),
                        ("User plays bowls every Thursday", FALL), ("User cannot get up", FALL + "\nmy son is 7")]:
         assert medical_safety.emergency_event(fact, said, today=day) is None
 
+
+CHEST = "my son fenn has crushing chest pain and cant breathe"
+
+
+@pytest.mark.parametrize("fact, said, want", [
+    ("User fell over in the kitchen and is unable to get up", FALL, "User had a fall"),
+    ("User's son Fenn has crushing chest pain and can't breathe", CHEST, "User's son Fenn had chest pain"),
+    ("User's son has crushing chest pain", "my son has crushing chest pain and cant breathe", "User's son had chest pain"),
+    ("Fenn has crushing chest pain", CHEST, "Fenn had chest pain"),
+])
+def test_the_event_is_about_whoever_it_happened_to(fact, said, want):
+    import datetime
+
+    out = medical_safety.emergency_event(fact, said, today=datetime.date(2026, 11, 13))
+    assert out == f"{want} on 13 November 2026 (a medical emergency)."
+
+
+@pytest.mark.parametrize("fact, said", [
+    ("User has crushing chest pain", CHEST),                       # the model filed the son's emergency on the member
+    ("They have crushing chest pain", CHEST),                       # nobody named
+    ("Someone has crushing chest pain", "someone here has crushing chest pain"),
+])
+def test_an_unclear_subject_is_not_rewritten(fact, said):
+    assert medical_safety.emergency_event(fact, said) is None
+
+
+@pytest.mark.parametrize("fact, said", [
+    ("User had chest pain in 2020", "i had crushing chest pain in 2020"),
+    ("User had crushing chest pain years ago", "i had crushing chest pain years ago"),
+    ("User had a fall and could not get up last year", "last year i fell over and couldnt get up"),
+    ("User fell and could not get up when they were a kid", "when i was a kid i fell over and couldnt get up"),
+])
+def test_a_historical_emergency_keeps_its_own_date(fact, said, mem):
+    assert medical_safety.emergency_event(fact, said) is None
+    run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
+    assert [r.text for r in _rows(mem)] == [fact]                               # stored exactly as mined
 
 
 @pytest.mark.parametrize("flag", ["off", "shadow", "enforce"])

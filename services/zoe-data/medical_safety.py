@@ -390,26 +390,70 @@ def _words(text: str) -> set:
     return {w.rstrip("s") for w in re.findall(r"[a-z]+", _fold(text)) if len(w) > 1 and w not in _EVENT_STOP}
 
 
+# who the emergency happened to, as the MINED FACT says it: the member ("User fell ..."), the member's relative, named or not
+# ("User's son Max has ..."), or a named person ("Max has ..."). Anything else is not rewritten (never filed on the wrong person).
+_REL_WORDS = (r"son|daughter|grandson|granddaughter|grandchild|child|kid|baby|wife|husband|partner|girlfriend|boyfriend|sister|"
+              r"brother|mum|mom|mother|dad|father|nan|nana|grandma|grandmother|grandpa|grandfather|aunt|auntie|uncle|cousin|niece|"
+              r"nephew|friend|neighbou?r|flatmate|housemate")
+_WHO_REL_RE = re.compile(rf"^\s*(?:the\s+)?user['’]s\s+({_REL_WORDS})(?:,?\s+(?:named\s+|called\s+)?(?-i:([A-Z][a-z]+)))?\b", re.IGNORECASE)
+_WHO_USER_RE = re.compile(r"^\s*(?:the\s+)?user\b(?!['’])", re.IGNORECASE)
+_WHO_NAME_RE = re.compile(r"^\s*([A-Z][a-z]+)\b(?!['’])")
+#: a first-person turn: the member is the one it happened to
+_FIRST_PERSON_RE = re.compile(r"\b(?:i|im|i['’]m|ive|i['’]ve|me|myself)\b", re.IGNORECASE)
+#: a PAST time: a year, "last year", "in March", "years ago", "when I was a kid", past perfect, "used to" - a history, not now
+_PAST_RE = re.compile(
+    r"\b(?:1[89]\d\d|20\d\d)\b|\b(?:last|previous)\s+(?:year|month|week|summer|winter|spring|autumn|fall|christmas|time)\b"
+    r"|\bago\b|\b(?:in|back\s+in|during|since)\s+(?:january|february|march|april|may|june|july|august|september|october|november|"
+    r"december)\b|\bwhen\s+(?:i|he|she|they|we|you)\s+(?:was|were)\b|\bas\s+a\s+(?:kid|child|boy|girl|teenager|baby)\b"
+    r"|\b(?:had|has|have)\s+had\b|\bused\s+to\b|\bonce\b|\byesterday\b|\blast\s+night\b|\bhistory\s+of\b|\bprevious(?:ly)?\b",
+    re.IGNORECASE)
+
+
+_NOT_A_NAME = frozenset({"the", "user", "a", "an", "my", "his", "her", "their", "they", "he", "she", "it", "we", "you", "i", "this",
+                         "that", "there", "someone", "somebody", "anyone", "anybody", "everyone", "everybody", "nobody", "people",
+                         "a", "one", "both", "all", "some", "each", "family", "household"})
+
+
+def _who(fact: str, said: str) -> Optional[str]:
+    """The person the emergency happened to, in the row's words, or None when it cannot be told confidently."""
+    m = _WHO_REL_RE.match(fact or "")
+    if m:
+        return f"User's {m.group(1).lower()}" + (f" {m.group(2)}" if m.group(2) else "")
+    if _WHO_USER_RE.match(fact or ""):
+        # the fact says the member; the turn must say so too ("my son has chest pain" filed as "User has chest pain" is not theirs)
+        return "User" if _FIRST_PERSON_RE.search(said) else None
+    m = _WHO_NAME_RE.match(fact or "")
+    if m and m.group(1).lower() not in _NOT_A_NAME:
+        return m.group(1) if re.search(rf"\b{re.escape(m.group(1))}\b", said, re.IGNORECASE) else None
+    return None
+
+
 def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
-    """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency)."),
-    or None for an ordinary fact. A mined fact is the event when it IS a call-now emergency itself, or when ``said`` (the member's
-    one turn it was mined from) is one and the fact restates that turn's words ("User cannot get up"). In EVERY mode: the flag
-    gates the reply, never how memory files an emergency. A whole transcript (several lines) is never read as the turn. Pure apart
-    from the date. Never raises."""
+    """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency).",
+    "User's son Max had chest pain on ..."), or None: the mined fact is then stored exactly as mined. It is an event only when
+    ``said`` (the ONE turn it was mined from) is a call-now emergency said NOW (no past time in the turn or the fact: "chest pain in
+    2020" keeps its date), and the fact IS that emergency or restates the turn's words ("User cannot get up"). The event is about
+    whoever the fact says it happened to - never re-filed on the member (QA round 9 review); an unclear subject is not rewritten. In
+    EVERY mode: the flag gates the reply, never how memory files an emergency. A whole transcript (several lines) is never read as
+    the turn. Pure apart from the date. Never raises."""
     try:
-        v = detect(fact)
+        one = (said or "").strip()
+        if not one or "\n" in one or _PAST_RE.search(one) or _PAST_RE.search(fact or ""):
+            return None
+        v = detect(one)
         if v.cls != "red_call":
-            one = (said or "").strip()
-            if not one or "\n" in one:
-                return None
-            v = detect(one)
+            return None
+        if detect(fact).cls != "red_call":
             fw = _words(fact)
-            if v.cls != "red_call" or not fw or len(fw & _words(one)) * 2 < len(fw):
+            if not fw or len(fw & _words(one)) * 2 < len(fw):
                 return None
+        who = _who(fact, one)
+        if who is None:
+            return None
         import datetime as _dt
 
         d = today or _dt.date.today()
-        return f"User had {_EVENT_WHAT.get(v.key, 'a medical emergency')} on {d.day} {d:%B %Y} (a medical emergency)."
+        return f"{who} had {_EVENT_WHAT.get(v.key, 'a medical emergency')} on {d.day} {d:%B %Y} (a medical emergency)."
     except Exception:  # noqa: BLE001
         return None
 
