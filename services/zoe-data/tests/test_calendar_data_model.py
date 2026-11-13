@@ -430,7 +430,7 @@ async def test_ics_import_store_export_reimport_is_lossless(db):
 
     ids = await calendar_ical.store_parsed(db, first, user_id=A)
     await db.commit()
-    stored = await _list(db, A, include_cancelled=True)
+    stored = await _list(db, A, include_cancelled=True, expand=False)       # the export reads STORED rows, not occurrences
     assert {e["id"] for e in stored} == set(ids)
     override = next(e for e in stored if e.get("recurrence_id"))
     master = next(e for e in stored if e.get("rrule"))

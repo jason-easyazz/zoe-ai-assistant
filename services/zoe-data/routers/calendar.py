@@ -197,13 +197,14 @@ async def _enforce_calendar_read_access(db, user: dict) -> str:
 DEFAULT_LIST_DAYS = 90
 
 
-async def _list_window(db, user_id: str, start, end, *, include_cancelled: bool, category: Optional[str]) -> list:
+async def _list_window(db, user_id: str, start, end, *, include_cancelled: bool, category: Optional[str],
+                       expand: bool = True) -> list:
     """The window through the shared read path (``calendar_read``): overlapping multi-day events, repeats expanded,
     cancelled hidden unless asked. Each item is the presented event plus ``instance_key`` (one occurrence, stable; ``id``
     stays the series id edits act on), ``series_start_date``, ``occurrence_date`` / ``occurrence_start_time`` (household
     time), ``is_recurring``, ``read_only`` and ``source`` / ``source_label``."""
     occurrences = await calendar_read.events_in_window(db, user_id, start, end, include_cancelled=include_cancelled,
-                                                       include_busy=True, category=category)
+                                                       include_busy=True, category=category, expand=expand)
     unique = {o["event_id"]: o["event"] for o in occurrences}     # present (and load children for) each event once
     presented = {e["id"]: e for e in await _present_all(db, list(unique.values()), user_id)}
     events = []
@@ -225,15 +226,18 @@ async def list_events(
     end_date: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     include_cancelled: bool = Query(False),
+    expand: bool = Query(True),
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
     """Events overlapping [start_date, end_date] (default: today and the next DEFAULT_LIST_DAYS days; at most
-    calendar_read.MAX_WINDOW_DAYS), one item per occurrence. Cancelled events only on request."""
+    calendar_read.MAX_WINDOW_DAYS), one item per occurrence. Cancelled events only on request. ``expand=false``: the
+    STORED rows (each master and override once, as stored) - what an export, sync or diff must read."""
     user_id = await _enforce_calendar_read_access(db, user)
     start = cal.parse_date(start_date) or today_for_zoe_tz()
     end = cal.parse_date(end_date) or start + timedelta(days=DEFAULT_LIST_DAYS)
-    events = await _list_window(db, user_id, start, end, include_cancelled=include_cancelled is True, category=category)
+    events = await _list_window(db, user_id, start, end, include_cancelled=include_cancelled is True, category=category,
+                                expand=expand is not False)      # a direct call passes the Query default: expanded
     return {"events": events}
 
 

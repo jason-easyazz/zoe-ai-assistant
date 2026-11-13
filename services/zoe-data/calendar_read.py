@@ -231,7 +231,8 @@ def _visibility_sql(user_id: str, own_only: bool, include_busy: bool) -> "tuple[
 
 async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_cancelled: bool = False,
                            own_only: bool = False, include_busy: bool = False,
-                           category: Optional[str] = None, pg_fetch: bool = False) -> "list[dict]":
+                           category: Optional[str] = None, pg_fetch: bool = False,
+                           expand: bool = True) -> "list[dict]":
     """Occurrences overlapping the household-local dates ``[start, end]`` (inclusive), sorted: per day all-day first,
     then by time. Each is ``{event_id, instance_key, series_start_date, date, start_time, end_date, end_time, title, location, category, all_day,
     is_recurring, read_only, source, source_label, calendar_id, status, event}`` where ``event`` is the full row (its
@@ -239,7 +240,12 @@ async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_ca
 
     Visibility: the household's family events plus the member's own (``own_only``: the member's own only;
     ``include_busy``: also other members' busy-only events, which the caller must project). ``pg_fetch``: ``db`` is a
-    raw asyncpg connection (``$n`` placeholders, ``db.fetch``), as the Skybridge resolvers hold."""
+    raw asyncpg connection (``$n`` placeholders, ``db.fetch``), as the Skybridge resolvers hold.
+
+    ``expand=False``: the STORED rows instead - each master and override row once, unshifted (``event`` is the row as
+    stored, no override suppression), for any caller that exports, syncs, diffs or writes: an expanded occurrence carries
+    the master's rrule / exdates under its own date and must never be written back. Same window, visibility and
+    cancelled rules; a repeating master is included when any of its occurrences falls in the window."""
     w0, w1 = _date(start), _date(end)
     if w0 is None:
         raise ValueError("events_in_window needs a start date")
@@ -273,7 +279,7 @@ async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_ca
             continue
         span = max(0, ((_date(row.get("end_date")) or d0) - d0).days)
         for d in occurrence_dates(row, w0 - timedelta(days=span + 1), w1 + timedelta(days=1)):
-            if is_recurring(row) and (row.get("id"), d) in replaced:
+            if expand and is_recurring(row) and (row.get("id"), d) in replaced:
                 continue
             hd, ht = _household(d, str(row.get("start_time") or ""), row)
             if str(row.get("end_time") or "").strip():
@@ -283,7 +289,8 @@ async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_ca
             if hd > w1 or max(he, hd) < w0:
                 continue
             event = {**row, "start_date": d.isoformat(),
-                     "end_date": (d + timedelta(days=span)).isoformat() if row.get("end_date") else row.get("end_date")}
+                     "end_date": (d + timedelta(days=span)).isoformat() if row.get("end_date") else row.get("end_date")} \
+                if expand else dict(row)
             all_day = _truthy(row.get("all_day"))
             out.append({"event_id": row.get("id"), "instance_key": instance_key(row.get("id"), hd, "" if all_day else ht),
                         "series_start_date": row.get("start_date"),
@@ -294,5 +301,7 @@ async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_ca
                         "source": str(row.get("source") or "local"), "source_label": source_label(row),
                         "calendar_id": row.get("calendar_id"), "status": row.get("status") or "confirmed",
                         "event": event})
+            if not expand:
+                break                                               # stored mode: the row once
     out.sort(key=lambda o: (o["date"], 0 if o["all_day"] else 1, o["start_time"] or "99:99", str(o["title"] or "")))
     return out

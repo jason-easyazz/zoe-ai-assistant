@@ -390,3 +390,18 @@ async def test_each_occurrence_has_a_unique_stable_instance_key(db, monkeypatch)
     monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", actor)
     out = await mcp_server._execute_tool(db, "calendar_list_events", {"start_date": "2026-11-01", "end_date": "2026-11-30"})
     assert [e["instance_key"] for e in out["events"]] == [k for _, k, _ in first]
+
+
+async def test_stored_mode_returns_each_master_and_override_once_as_stored(db):
+    master = await _add(db, "Choir", "2026-10-07", rrule="FREQ=WEEKLY", exdates='["2026-11-11"]')
+    moved = await _add(db, "Choir (moved)", "2026-11-19", series_id=master, recurrence_id="2026-11-18")
+    expanded = await _window(db, "2026-11-01", "2026-11-30")
+    assert len([o for o in expanded if o["event_id"] == master]) == 2           # the 4th and 25th (11th excluded, 18th moved)
+    stored = await _window(db, "2026-11-01", "2026-11-30", expand=False)
+    assert sorted(o["event_id"] for o in stored) == sorted([master, moved])
+    row = next(o["event"] for o in stored if o["event_id"] == master)
+    assert (row["start_date"], row["rrule"], row["exdates"]) == ("2026-10-07", "FREQ=WEEKLY", '["2026-11-11"]')
+    events = (await calendar_router.list_events(start_date="2026-11-01", end_date="2026-11-30", category=None,
+                                                include_cancelled=False, expand=False,
+                                                user={"user_id": A, "role": "user"}, db=db))["events"]
+    assert sorted((e["id"], e["start_date"]) for e in events) == sorted([(master, "2026-10-07"), (moved, "2026-11-19")])
