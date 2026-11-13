@@ -324,6 +324,7 @@ function checkSuite(M) {
   t('phone-edit URL is a plain http(s) calendar link or nothing', () => {
     assert.strictEqual(M.phoneEditUrl('http://192.168.1.20'), 'http://192.168.1.20/calendar.html');
     assert.strictEqual(M.phoneEditUrl('javascript:alert(1)'), ''); assert.strictEqual(M.phoneEditUrl(''), '');
+    assert.strictEqual(M.phoneEditUrl('http://192.168.1.20', 'ev 7&x'), 'http://192.168.1.20/calendar.html?event=ev%207%26x', 'the QR opens that event');
   });
   return { fails, saveCases };
 }

@@ -26,7 +26,6 @@ const TOUCH_WIDGET_DEFAULTS = {
     personal:    { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
     bucket:      { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
     'dynamic-list': { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
-    project:     { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
     'week-planner': { defaultW: 8, defaultH: 4, minW: 6, minH: 3 },
     music:       { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
     'music-player': { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },

@@ -18,7 +18,6 @@ const LIST_WIDGET_TYPES = [
     'work',
     'personal',
     'bucket',
-    'project',
     'reminders',
     'dynamic-list'
 ];
