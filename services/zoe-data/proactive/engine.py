@@ -160,7 +160,15 @@ async def fire_notification(
     )
 
     deep_link = f"/chat.html?p={pid}"
-    subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
+    # Phone delivery (reminder_delivery.py, ZOE_REMINDER_PHONE_DELIVERY, default off = this branch never runs the seam):
+    # "on" moves reminder web push into the seam (owner-only, opt-in, adults, quiet hours, neutral text) and adds Telegram.
+    phone = _reminder_phone_mode() if trigger_type == "reminder" else "off"
+    if phone == "on":
+        subscribers_reached = await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=False)
+    else:
+        subscribers_reached = await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
+        if phone == "shadow":
+            await _deliver_to_phone(user_id, message, item_id, pending_id or pid, deep_link, dry=True)
     in_app_fallback_ok = False
 
     # If no WebSocket subscribers received the push, fall back to an in-app
@@ -364,6 +372,27 @@ async def _maybe_speak_notification(
     except Exception as exc:
         log.warning("PROACTIVE_SPOKEN trigger=%s user=%s outcome=error err=%s",
                     trigger_type, user_id, exc)
+
+
+def _reminder_phone_mode() -> str:
+    try:
+        import reminder_delivery
+        return reminder_delivery.mode()
+    except Exception:  # noqa: BLE001 - cannot read the flag = off
+        return "off"
+
+
+async def _deliver_to_phone(user_id: str, message: str, item_id: str, dedupe_id: str, url: str, *, dry: bool) -> int:
+    """The reminder's phone fan-out; returns the web-push count (the in-app fallback below reads it). Never raises."""
+    try:
+        import reminder_delivery
+        sensitive = await reminder_delivery.reminder_sensitive(item_id)
+        res = await reminder_delivery.deliver(user_id, "reminder", message, "", dedupe_id=dedupe_id, sensitive=sensitive,
+                                              url=url, dry_run=dry)
+        return res.web_push_sent
+    except Exception as exc:  # noqa: BLE001
+        log.error("reminder phone delivery failed (%s)", type(exc).__name__)
+        return 0
 
 
 async def _send_push(user_id: str, message: str, extra: dict | None = None) -> int:

@@ -5,6 +5,7 @@ from collections import Counter
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
+from panel_principal import require_member
 from database import get_db
 from guest_policy import require_feature_access
 import telegram_link
@@ -172,6 +173,32 @@ async def set_telegram_link(
 
     await set_pref(user_id, "telegram_id", tid, db=db)
     return {"telegram_id": tid, "linked": True}
+
+
+# ─── Reminders on my phone (reminder_delivery.py; docs/knowledge/reminder-phone-delivery.md) ───
+@router.get("/reminder-delivery")
+async def get_reminder_delivery(user: dict = Depends(get_current_user), db=Depends(get_db)):
+    """The caller's own phone-delivery choice for reminders; ``channels`` empty = none (the default)."""
+    import reminder_delivery
+
+    await require_feature_access(db, user, feature="user_profile", action="read")
+    prefs = await _read_prefs(db, user["user_id"])
+    doc = reminder_delivery.validate(prefs.get(reminder_delivery.PREF_KEY))
+    return {**doc, "telegram_linked": bool(prefs.get("telegram_id")), "mode": reminder_delivery.mode()}
+
+
+@router.put("/reminder-delivery")
+async def set_reminder_delivery(request: Request, user: dict = Depends(require_member), db=Depends(get_db)):
+    """Body ``{"channels": ["telegram", "web_push"], "full_text": false}``. Own profile only (user_id from the session); adults only."""
+    import reminder_delivery
+    from enrollment_state import audience_of
+
+    await require_feature_access(db, user, feature="user_profile", action="analyze")
+    if await audience_of(user["user_id"]) != "adult":
+        raise HTTPException(status_code=403, detail="phone delivery of reminders is for adult members")
+    doc = reminder_delivery.validate(await request.json())
+    await set_pref(user["user_id"], reminder_delivery.PREF_KEY, doc, db=db)
+    return doc
 
 
 @router.post("/telegram/link-token")
