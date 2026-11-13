@@ -5,8 +5,7 @@
  */
 (function() {
     'use strict';
-    // A desktop page must never route into /touch/* (standing rule, 2026-07-20).
-    const IS_TOUCH_SURFACE = (function () { try { return location.pathname.startsWith('/touch/'); } catch (_) { return false; } })();
+    // A desktop page must never route into the touch panel pages (standing rule, 2026-07-20).
 
     let notificationsOpen = false;
     let notificationsData = [];
@@ -149,29 +148,6 @@
                 font-size: 16px;
             }
             .zoe-np-empty-icon { font-size: 48px; margin-bottom: 12px; }
-            .zoe-notif-item.has-action { border-left-width: 6px; }
-            .zoe-np-action-btn {
-                background: rgba(0,0,0,0.05);
-                color: #333;
-                border: 1px solid rgba(0,0,0,0.08);
-                padding: 10px 16px;
-                border-radius: 10px;
-                cursor: pointer;
-                font-size: 14px;
-                font-weight: 600;
-                margin-top: 8px;
-                width: 100%;
-                display: block;
-                text-align: center;
-                -webkit-tap-highlight-color: transparent;
-                min-height: 40px;
-            }
-            html.dark-mode .zoe-np-action-btn {
-                background: rgba(255,255,255,0.08);
-                color: #eee;
-                border-color: rgba(255,255,255,0.1);
-            }
-            .zoe-np-action-btn:active { opacity: 0.85; transform: scale(0.97); }
         `;
         document.head.appendChild(style);
     }
@@ -217,12 +193,6 @@
             e.preventDefault();
             close();
         });
-    }
-
-    function parseNotifData(n) {
-        if (n.data_parsed) return n.data_parsed;
-        if (n.data) { try { return JSON.parse(n.data); } catch (e) { return null; } }
-        return null;
     }
 
     async function loadNotifications() {
@@ -271,18 +241,14 @@
 
         list.innerHTML = '';
         notificationsData.forEach(function(n) {
-            const dp = parseNotifData(n);
             const item = document.createElement('div');
-            const hasZoeUpdate = dp && dp.kind === 'zoe_update';
-            const hasAction = hasZoeUpdate;
-            item.className = 'zoe-notif-item' + (hasAction ? ' has-action' : '');
+            item.className = 'zoe-notif-item';
             item.style.borderLeftColor = getTypeColor(n.type);
 
             item.innerHTML = `
                 <div class="zoe-notif-text">
                     <div class="zoe-notif-title">${escapeHtmlNotif(n.title || 'Notification')}</div>
                     <div class="zoe-notif-msg">${escapeHtmlNotif(n.message || '')}</div>
-                    ${hasZoeUpdate ? `<button class="zoe-np-action-btn" data-open-zoe-updates="${n.id}">Open Updates Page</button>` : ''}
                     <div class="zoe-notif-time">${formatTime(n.created_at)}</div>
                 </div>
                 <button class="zoe-notif-dismiss-btn" data-nid="${n.id}" aria-label="Dismiss">✕</button>
@@ -292,19 +258,6 @@
                 e.stopPropagation();
                 dismiss(n.id);
             });
-
-            if (hasZoeUpdate) {
-                const openZoeBtn = item.querySelector('[data-open-zoe-updates]');
-                if (openZoeBtn) {
-                    const openZoeHandler = function(e) {
-                        e.stopPropagation();
-                        close();
-                        if (IS_TOUCH_SURFACE) location.href = '/touch/updates.html';
-                    };
-                    openZoeBtn.addEventListener('click', openZoeHandler);
-                    openZoeBtn.addEventListener('touchend', function(e) { e.preventDefault(); openZoeHandler(e); });
-                }
-            }
 
             list.appendChild(item);
         });
