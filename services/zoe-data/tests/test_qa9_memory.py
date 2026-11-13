@@ -836,3 +836,23 @@ def test_the_emergency_event_keeps_the_mined_facts_authority_and_is_listed(mem):
     known = run(pa.gather(UID, svc=mem))
     assert known.unconfirmed == 0
     assert [i.text for i in known.private.get("health", [])] == [row.text]       # listed (private, health), never dropped
+
+
+@pytest.mark.parametrize("said, recorded, stale, kept", [
+    # month-only move: the word diff was "December" alone, which no stale full-date fact matches
+    ("book club moved to the 12th of january", "12th of December",
+     "User's book club is on the 12th of December", "User's book club is on the 12th of January"),
+    # day-only move
+    ("book club moved to the 19th of december", "12th of December",
+     "User's book club is on the 12th of December", "User's book club is on the 19th of December"),
+])
+def test_a_restatement_records_the_whole_displaced_date(said, recorded, stale, kept, monkeypatch):
+    import time
+
+    vc.reset_state()
+    before = time.time() - 60
+    assert _apply_keep(_Svc(CLUB_12), said, monkeypatch) == 1
+    assert [c.old for _t, c in vc._REMEMBERED[UID.lower()]] == [recorded]
+    assert vc.superseded_by_correction(UID, stale, said_at=before) is True
+    assert vc.superseded_by_correction(UID, kept, said_at=before) is False
+    vc.reset_state()

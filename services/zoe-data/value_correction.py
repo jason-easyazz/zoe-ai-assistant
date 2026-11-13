@@ -853,6 +853,36 @@ def _displaced(old_text: str, new_text: str) -> Optional[str]:
     return out or None
 
 
+def _displaced_value(old_text: str, new_text: str, corr: Correction) -> Optional[str]:
+    """What a restatement displaced from ``old_text``. A DATE: the WHOLE date expression as the row has it (day, its month and a
+    year when present: "12th of December"), never the word diff - a month-only move ("12th of December" -> "12th of January")
+    diffs to "December" alone, which no stale full-date fact matches (QA round 9 review). Anything else: the word diff. Pure."""
+    qn = quantity_value(corr.new)
+    if qn is None or not (qn.ordinal or _month_of(corr.new)):
+        return _displaced(old_text, new_text)
+    sm = _subject_re(corr.subject).search(old_text or "")
+    if not sm:
+        return None
+    tail = old_text[sm.end():]
+    dates = [q for q in quantities(tail) if _unit_at(tail, q) == "date"]
+    return _date_expr(tail, dates[0]) if len(dates) == 1 else None
+
+
+def _date_expr(text: str, q: "Quantity") -> str:
+    """The date at ``q`` with the month beside it and a year after it, as written ("12th of December 2026", "December 12"). Pure."""
+    start, end = q.start, q.end
+    after = re.match(r"\s*(?:of\s+)?([A-Za-z]+)", text[end:])
+    before = re.search(r"([A-Za-z]+)\s+$", text[:start])
+    if after and _MONTH_RE.fullmatch(after.group(1)):
+        end += after.end()
+    elif before and _MONTH_RE.fullmatch(before.group(1)):
+        start = before.start(1)
+    year = re.match(r",?\s+(\d{4})\b", text[end:])
+    if year:
+        end += year.end()
+    return text[start:end].strip()
+
+
 def reset_state() -> None:
     _REMEMBERED.clear()
 
@@ -930,7 +960,8 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         # RESTATEMENT with no old value ("book club moved to the 19th") is remembered with the value it DISPLACED from each row it
         # rewrites (QA round 9 review: a late idle pass re-filed the 12th); with nothing rewritten, as a restatement of the subject
         # (any OTHER value of it, mined from turns older than this, is stale).
-        displaced = [_displaced(r.text or "", t) for r, t in hits] if corr.old is None and 0 < len(hits) <= MAX_ROWS else []
+        displaced = ([_displaced_value(r.text or "", t, corr) for r, t in hits]
+                     if corr.old is None and 0 < len(hits) <= MAX_ROWS else [])
         for old in [d for d in displaced if d] or [None]:
             _remember(user_id, corr._replace(old=old) if old else corr)
         if not hits or len(hits) > MAX_ROWS:
