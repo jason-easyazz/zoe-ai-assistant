@@ -30,6 +30,7 @@ every eligible household brain turn writes one ``RECALL_EVERY_TURN`` coverage li
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import threading
 import time
@@ -228,7 +229,7 @@ _BUILDS: "dict[str, asyncio.Task]" = {}
 
 
 _VECS: "dict[tuple, tuple[int, Any]]" = {}      # (member, row id) -> (text hash, unit vector): never shared across members
-#: the last turn embed's future + a hash of its words (never the words): still running = the arm is busy (a timeout does not stop a
+#: the last turn embed's future + a sha256 of its words (never the words): still running = the arm is busy (a timeout does not stop a
 #: worker); the same words again = ``begin`` already started it, so the turn only waits for what is left of it
 _QUERY_EMBEDS: dict = {"job": None, "key": None}
 
@@ -421,7 +422,11 @@ def _rank_vec(vecs: Any, qvec: Any, k: int) -> list:
     import numpy as np
 
     sims = vecs @ qvec
-    top = np.argsort(-sims)[:k]
+    if k < len(sims):      # top-k by partition (O(n)) then a k-element sort: no full sort of a big pool on the event loop
+        top = np.argpartition(-sims, k - 1)[:k]
+        top = top[np.argsort(-sims[top], kind="stable")]
+    else:
+        top = np.argsort(-sims, kind="stable")
     return [(int(j), float(sims[j])) for j in top]
 
 
@@ -429,7 +434,7 @@ def _turn_job(message: str) -> "Optional[asyncio.Future]":
     """The future of THIS turn's embed (shape (1, d)): the one ``begin`` already started for the same words, else a new one, else
     None when an earlier turn's embed is still running (a timeout cannot stop a worker thread: never start another behind it).
     Must be called on the running loop."""
-    key = hash(message)
+    key = hashlib.sha256(message.encode("utf-8", "replace")).digest()      # collision-resistant: never another turn's vector
     prev = _QUERY_EMBEDS["job"]
     if prev is not None and _QUERY_EMBEDS["key"] == key and not prev.cancelled():
         return prev

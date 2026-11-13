@@ -896,9 +896,51 @@ def test_begin_is_a_no_op_unless_it_can_help(monkeypatch, similar):
     assert started is not None and similar[1:] == [1]      # [0] = the index build; then exactly one turn embed
 
 
-def test_begin_never_raises_without_a_running_loop(similar):
-    rt.begin(UID, GIFT)                                       # no loop, no index: silently nothing
+def test_begin_never_raises_without_a_running_loop(monkeypatch, similar):
+    """With a POPULATED index begin() reaches the loop lookup; outside a loop that raises inside, and begin swallows it."""
+    monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "on")
+    rt._reset_state()
+    svc = FakeSvc(world())
+    asyncio.run(rt._build(UID, svc))
+    assert rt._INDEX[UID].vecs is not None                    # the early returns are NOT what keeps this quiet
+    rt.begin(UID, GIFT)                                       # no running loop: no raise, nothing started
     assert rt._QUERY_EMBEDS["job"] is None
+
+    async def inside():                                       # negative control: the same call on a loop does start an embed
+        rt.begin(UID, GIFT)
+        return rt._QUERY_EMBEDS["job"]
+    assert asyncio.run(inside()) is not None
+
+
+def test_turn_embed_is_keyed_by_the_exact_words_not_a_hash(monkeypatch, similar):
+    """Two different messages must never share a vector, even if Python's hash() collided (it is not the key)."""
+    monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "on")
+    monkeypatch.setattr("builtins.hash", lambda _o: 7)       # every message "collides"
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        rt.begin(UID, GIFT)
+        await asyncio.sleep(0.05)
+        first = rt._QUERY_EMBEDS["job"]
+        return first, await rt.select(UID, "How is Juniper getting on?", svc=svc)
+    first, sel = asyncio.run(go())
+    assert sel.ids == ("m_walk_0001",) and rt._QUERY_EMBEDS["job"] is not first
+
+
+def test_rank_vec_partition_equals_a_full_sort():
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    v = rng.standard_normal((400, 24)).astype(np.float32)
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    q = v[17] * 0.9 + 0.1 * v[200]
+    q /= np.linalg.norm(q)
+    sims = v @ q
+    want = [(int(j), float(sims[j])) for j in np.argsort(-sims)[:9]]
+    assert rt._rank_vec(v, q, 9) == want
+    assert [j for j, _s in rt._rank_vec(v[:5], q, 9)] == [int(j) for j in np.argsort(-(v[:5] @ q))]   # k >= n: all rows
 
 
 def test_other_words_after_begin_get_their_own_embed(monkeypatch, similar):
