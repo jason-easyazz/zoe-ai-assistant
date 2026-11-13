@@ -64,9 +64,9 @@ LOCAL_TZ = dt.datetime.now().astimezone().tzinfo
 
 MARKERS = (
     "FLUE_TOOLS", "SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN",
-    "VOICE TIMING", "DAY_REVIEW_RAISE",
+    "VOICE TIMING", "DAY_REVIEW_RAISE", "VALUE_CORRECTION",
 )
-USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE")
+USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE", "VALUE_CORRECTION")
 SESSION_MARKERS = ("FLUE_TOOLS", "VOICE TIMING")
 
 # Lane 1 traffic split: a line is harness when it carries traffic=harness, when
@@ -493,6 +493,38 @@ def m_brain_first_text(lines, since, until, members: Members) -> dict:
                         "other": other, "no_token": no_token})
 
 
+def m_corrections(lines, since, until, members: Members) -> dict:
+    """Corrections a member made that changed stored memory ("it is the 19th, not the 12th"), and the two ways one goes wrong.
+    APPLIED carries rows= (stored rows rewritten); STALE and KIND_GUESS are the idle-consolidation lane's refusals."""
+    applied = rows = stale = kind = bad = 0
+    for _, line in in_window(lines, since, until, "VALUE_CORRECTION"):
+        f = fields(line)
+        if is_harness(line, f) or f.get("user") not in members.users:
+            continue
+        if "VALUE_CORRECTION_APPLIED" in line:
+            try:
+                r = _num(f.get("rows"))
+            except Malformed:
+                bad += 1
+                continue
+            applied += 1
+            rows += int(r)
+        elif "VALUE_CORRECTION_STALE" in line:
+            stale += 1
+        elif "VALUE_CORRECTION_KIND_GUESS" in line:
+            kind += 1
+    title = "Corrections applied to stored memory (member)"
+    if bad:
+        return malformed_metric("value_corrections", title, bad, since, until)
+    return metric("value_corrections", title,
+                  f"applied {applied} ({rows} rows rewritten); stale re-filing stopped {stale}; kind guess stopped {kind}",
+                  n=applied, window=wstr(since, until),
+                  method=("VALUE_CORRECTION_APPLIED lines (rows= summed), VALUE_CORRECTION_STALE and VALUE_CORRECTION_KIND_GUESS "
+                          "lines, member user=, harness excluded; a count of what happened, not a success rate (a correction "
+                          "that matched no stored row writes no line)"),
+                  data={"applied": applied, "rows": rows, "stale": stale, "kind_guess": kind})
+
+
 def count_raises(logs: LogSet, since, until) -> tuple[int | None, str | None]:
     """DAY_REVIEW_RAISE raised=1 lines (non-harness) in window, or (None, reason) when the logs do not cover it."""
     reason = coverage_reason(logs, since, until)
@@ -512,6 +544,7 @@ LOG_METRICS = (
     ("continuity", "Continuity carried", m_continuity),
     ("tool_calls", "Tool calls per member brain turn", m_tools),
     ("brain_first_text", "Brain dispatch to first text", m_brain_first_text),
+    ("value_corrections", "Corrections applied to stored memory", m_corrections),
 )
 
 
@@ -591,6 +624,8 @@ PANEL_SED = (
 )
 PANEL_LOG = "/home/pi/.zoe-voice/voice.log"
 _PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R)|E)$")
+#: The voice lane's bars: a turn "feels answered" when ANY sound starts inside 1 s of speech end; 0.6 s is the reflex bar.
+FIRST_SOUND_BANDS_MS = (1000, 600)
 TAIL_FLOOR_MS = {"deep": 640.0, "quiet": 800.0}  # live .env.voice floors per lane 4 (used only when close= is absent)
 
 
@@ -650,13 +685,17 @@ def panel_metric(reduced: list[str], since: dt.datetime, until: dt.datetime) -> 
     totals = panel_pairs(reduced, since, until)
     if not totals:
         return unmeasured("speech_end_first_sound", title, "no paired Recorded/TTFA lines in window", window=w)
+    under = {ms: sum(1 for x in totals if x < ms) for ms in FIRST_SOUND_BANDS_MS}
     return metric("speech_end_first_sound", title,
-                  f"p50 {pct(totals, 50) / 1000:.2f} s / p90 {pct(totals, 90) / 1000:.2f} s", n=len(totals), window=w,
+                  (f"p50 {pct(totals, 50) / 1000:.2f} s / p90 {pct(totals, 90) / 1000:.2f} s; "
+                   f"under 1 s {frac(under[1000], len(totals))}; under 0.6 s {frac(under[600], len(totals))}"),
+                  n=len(totals), window=w,
                   method=("Pi voice.log via an allowlist extractor: endpoint close (close=..ms, else tail floor 640/800) "
                           "+ turn_stream TTFA, paired per turn; excludes the Recorded-to-receipt upload (lane 4 stage B, "
                           "~0.16 s median)"),
                   label="[Experimental]",
-                  data={"p50_ms": pct(totals, 50), "p90_ms": pct(totals, 90)})
+                  data={"p50_ms": pct(totals, 50), "p90_ms": pct(totals, 90),
+                        "under_1000_ms": under[1000], "under_600_ms": under[600], "turns": len(totals)})
 
 
 def m_panel(host: str, since, until) -> dict:
@@ -934,7 +973,8 @@ def build(args) -> dict:
     members = Members(db["member_users"], db["member_sessions"]) if db else None
 
     logs = log_section(logset, since, until, members, db_err)
-    out += [logs["memory_served_used"], logs["recall_every_turn"], logs["continuity"], logs["tool_calls"]]
+    out += [logs["memory_served_used"], logs["recall_every_turn"], logs["continuity"], logs["tool_calls"],
+            logs["value_corrections"]]
 
     if db:
         nt = db["night_threads"]
