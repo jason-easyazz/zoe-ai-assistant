@@ -465,3 +465,59 @@ def test_reproduction_must_go_from_failing_to_passed(local_scratch):
                      '<failure message="m"/></testcase></testsuite></testsuites>')
     out = runner(local_scratch.cfg).run_once(junit=str(given))
     assert out["outcome"] == "discarded" and out["why"] == "test_weakened", out
+
+
+# --- review round 2: a heal may never delete or rename a test file -------------------------
+
+EXTRA = "from calc import add\n\n\ndef test_extra():\n    assert add(1, 0) == 1\n"
+
+
+@pytest.fixture
+def extra_scratch(tmp_path):
+    """The scratch repo plus an unrelated, PASSING tests/test_extra.py."""
+    live = tmp_path / "live"
+    seed_repo(live)
+    (live / "tests" / "test_extra.py").write_text(EXTRA)
+    sh("git", "add", "-A", cwd=live)
+    sh("git", "commit", "-q", "-m", "extra test", cwd=live)
+    repo = tmp_path / "repo.git"
+    sh("git", "clone", "-q", "--bare", str(live), str(repo))
+    return make_cfg(tmp_path, repo=repo, live=live)
+
+
+def _rename(wt):
+    (wt / "tests" / "test_extra.py").rename(wt / "tests" / "test_extra_renamed.py")
+
+
+@pytest.mark.parametrize("edit,why", [(lambda wt: (wt / "tests" / "test_extra.py").unlink(), "test_deleted"),
+                                      (_rename, "test_deleted"),
+                                      (lambda wt: (wt / "conftest.py").unlink(), "forbidden_path")],
+                         ids=["delete_other_test", "rename_test", "delete_conftest"])
+def test_deleting_or_renaming_a_test_file_is_refused(extra_scratch, edit, why):
+    out = runner(extra_scratch, FakeEngine(lambda wt: (fix_calc(wt), edit(wt)))).run_once()
+    assert out["outcome"] == "discarded" and out["why"] == why, out
+
+
+def test_editing_and_adding_tests_still_heals(extra_scratch):
+    def fix_and_extend(wt):
+        fix_calc(wt)
+        p = wt / "tests" / "test_extra.py"
+        p.write_text(p.read_text() + "\n\ndef test_extra_two():\n    assert add(2, 2) == 4\n")
+        (wt / "tests" / "test_new.py").write_text("from calc import add\n\n\ndef test_new():\n    assert add(5, 5) == 10\n")
+    out = runner(extra_scratch, FakeEngine(fix_and_extend)).run_once()
+    assert out["outcome"] == "healed_local", out
+
+
+def test_gate_baseline_lists_the_base_trees_test_files(extra_scratch):
+    """Even past the diff policy: a test file present at base but gone after fails the gate."""
+    cfg = extra_scratch
+    base = Path(cfg.worktree_root) / "base"
+    wt = Path(cfg.worktree_root) / "heal"
+    gitops.add_worktree(cfg.repo, str(base), base="main")
+    gitops.add_worktree(cfg.repo, str(wt), base="main")
+    fix_calc(wt)
+    (wt / "tests" / "test_extra.py").unlink()
+    t = Ticket(id="t", fault_class="failing_test", fault_key="k", summary="s",
+               evidence={"nodeid": "tests/test_calc.py::test_add"}, repro_cmd=[], repro_files=["tests/test_calc.py"])
+    res = run_gates(cfg, ["relevant_pytest"], str(wt), ["calc.py", "tests/test_extra.py"], t, base_wt=str(base))
+    assert res == [{"gate": "relevant_pytest", "status": "fail", "detail": "test_weakened:files_missing=1"}]

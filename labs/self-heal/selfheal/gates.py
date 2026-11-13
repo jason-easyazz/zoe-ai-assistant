@@ -71,13 +71,18 @@ def gate_relevant_pytest(cfg, wt, changed, ticket, base_wt=None):
     files at the base commit: no test that ran before (passing or failing) may now be skipped,
     xfailed, deselected or missing, and the reproduction node must go from failing to PASSED.
     This is the runtime check that no regex can be talked out of; new tests are fine."""
-    tests = relevant_tests(wt, changed, ticket)
+    # the baseline's file list comes from the BASE commit's tree (a test file the heal deleted is
+    # still listed there); every one of them must still exist and run after the heal
+    base_tests = relevant_tests(base_wt, changed, ticket) if base_wt else []
+    gone = [t for t in base_tests if not (Path(wt) / t).is_file()]
+    if gone:
+        return "fail", f"test_weakened:files_missing={len(gone)}"
+    tests = sorted(set(relevant_tests(wt, changed, ticket)) | set(base_tests))
     if not tests:
         return "fail", "no_relevant_test"   # a heal with nothing to prove it is not a heal
     ok, d, after = _pytest_nodes(cfg, wt, tests)
     if not ok:
         return "fail", f"files={len(tests)},{d}"
-    base_tests = [t for t in tests if base_wt and (Path(base_wt) / t).is_file()]
     before = _pytest_nodes(cfg, base_wt, base_tests)[2] if base_tests else ({} if base_wt else None)
     if after is None or before is None:
         return "fail", f"files={len(tests)},no_baseline"

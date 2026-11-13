@@ -16,7 +16,7 @@ from pathlib import Path
 from . import binaries
 from .config import inside_refused
 from .detectors import node_passed
-from .safety import WEAKEN, DiffReport, is_test_path, rc_summary
+from .safety import WEAKEN, DiffReport, is_test_infra, is_test_path, rc_summary
 
 CMD_LOG: list = []
 JUNK = re.compile(r"(^|/)(__pycache__|\.pytest_cache)(/|$)|\.py[co]$")
@@ -102,6 +102,8 @@ def inspect_worktree(wt: str, base_sha: str) -> DiffReport:
         if JUNK.search(path):
             continue   # interpreter / test-runner caches: never measured, never staged
         rep.files.append(path)
+        if "D" in code and is_test_infra(path):   # with --no-renames a rename is a delete + an add
+            rep.deleted_tests.append(path)
         if code == "??":
             untracked.append(path)
     for line in git(wt, "diff", "--no-renames", "--numstat", base_sha).splitlines():

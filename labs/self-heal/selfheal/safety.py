@@ -139,6 +139,7 @@ class DiffReport:
     deleted: int = 0
     escaping_symlinks: list = field(default_factory=list)
     weakened_tests: list = field(default_factory=list)
+    deleted_tests: list = field(default_factory=list)   # deleted OR renamed test files / test infra
     engine_committed: bool = False
     index_dirty: bool = False
 
@@ -157,6 +158,11 @@ def is_test_path(p: str) -> bool:
 # A skip / xfail added to a test file is test weakening, never a fix.
 WEAKEN = re.compile(r"\bpytest\.(skip|xfail|importorskip)\b|\bmark\.(skip|skipif|xfail)\b|"
                     r"\bunittest\.(skip|expectedFailure)\b|\b(skipTest|skipIf|skipUnless)\b|__test__\s*=")
+
+
+def is_test_infra(p: str) -> bool:
+    """Any file under a tests/ dir, test_*.py / *_test.py, or a conftest.py."""
+    return is_test_path(p) or "/tests/" in f"/{p}" or p.rsplit("/", 1)[-1] == "conftest.py"
 
 
 def forbidden_hits(cfg: Config, files: list) -> list:
@@ -181,6 +187,8 @@ def check_diff(cfg: Config, report: DiffReport, *, ticket_has_repro_test: bool) 
     hits = forbidden_hits(cfg, report.files)
     if hits:
         raise Refused("forbidden_path", ", ".join(sorted(hits)[:10]))
+    if report.deleted_tests:   # a heal may add or edit tests, never remove or rename one
+        raise Refused("test_deleted", ", ".join(report.deleted_tests[:10]))
     if report.weakened_tests:
         raise Refused("test_weakened", ", ".join(report.weakened_tests[:10]))
     if report.escaping_symlinks:

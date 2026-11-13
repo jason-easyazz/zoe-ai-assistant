@@ -73,6 +73,7 @@ The loop (and anyone running it) must never:
   (dry included) but the retry;
 - give a sandboxed step a writable `/tmp` or any scratch outside the worktree, or skip the worktree
   growth cap (`sandbox_disk_mb` may only be lowered);
+- accept a diff that deletes or renames any file under `tests/`, `test_*.py`, `*_test.py` or `conftest.py`;
 - pass a heal whose pytest gate shows, against the base-commit baseline, a previously-run node now
   skipped / xfailed / deselected / missing, or a reproduction node that did not go failing -> passed;
 - run a binary from the inherited PATH, or one that is group/world-writable, foreign-owned, or under the

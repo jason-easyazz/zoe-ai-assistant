@@ -160,7 +160,7 @@ Unit tests (fake engine, throwaway repos, no network):
 ```bash
 cd ~/assistant   # or any checkout of this branch
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider labs/self-heal/tests -q
-# 2026-11-13: v1 195 passed in ~74 s; v2 241 passed in ~141 s (gates inside bwrap, baseline pytest run per heal)
+# 2026-11-13: v1 195 passed in ~74 s; v2 246 passed in ~144 s (gates inside bwrap, baseline pytest run per heal)
 ```
 
 Negative controls (each mutation applied, the named tests run, the file restored; every one went red):
@@ -342,7 +342,11 @@ or a reproduction node that did not go failing -> passed, fails the gate `test_w
 aliases, `getattr`, a skipping fixture, an aliased `pytestmark`, a deleted test and a renamed
 reproduction are all refused this way although the regex misses each
 (`test_runtime_comparison_refuses_what_the_regex_misses`); a heal that adds a test passes. The
-regex stays as an early, cheap refusal. (g) `selfheal/binaries.py` resolves git, gh, systemctl,
+regex stays as an early, cheap refusal. A heal may add or edit tests but never delete or rename one:
+the diff policy refuses any deleted file under `tests/`, `test_*.py`, `*_test.py` or `conftest.py`
+(`test_deleted`; a rename is a delete + an add), and the baseline's file list comes from the BASE
+tree, so a base test file missing after the heal fails the gate even past the policy
+(`test_deleting_or_renaming_a_test_file_is_refused`, `test_gate_baseline_lists_the_base_trees_test_files`). (g) `selfheal/binaries.py` resolves git, gh, systemctl,
 true, false, flock, bwrap, prlimit, pgrep, bash and both engine CLIs to absolute paths from
 `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (an engine CLI elsewhere must be configured with an
 absolute path), records them in the `preflight` audit row, and refuses a group/world-writable or
