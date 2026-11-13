@@ -765,9 +765,14 @@ def test_every_writer_path_is_kind_guarded():
     assert "kind_guard(" in inspect.getsource(mq.reconcile_for_ingest)
     src = inspect.getsource(pe._ingest_to_mempalace)
     assert src.index("kind_guard(") < src.index("_reconcile_same_kind_entity_row(")
-    here = pathlib.Path(mq.__file__).parent
-    writers = sorted(p.name for p in here.rglob("*.py") if "tests" not in p.parts and p.name != "memory_service.py"
+    # the zoe-data directory from THIS file (never the cwd or an imported module's location), and only the path parts BELOW it
+    # decide what is a test: an absolute checkout path that happens to contain "tests" must not exclude everything (CI did)
+    here = pathlib.Path(__file__).resolve().parents[1]
+    sources = [p for p in here.rglob("*.py") if "tests" not in p.relative_to(here).parts]
+    assert len(sources) > 50, f"the module scan found only {len(sources)} sources under {here}: the scan is broken, not the code"
+    writers = sorted(p.name for p in sources if p.name != "memory_service.py"
                      and re.search(r'decision="edit"|\.supersede_by\(', p.read_text(encoding="utf-8")))
+    assert writers, "no writer module found: the scan is broken (never a vacuous pass)"
     assert writers == ["correction_apply.py", "expert_dispatch.py", "hold_the_fact.py", "memory_curation.py", "memory_digest.py",
                        "memory_extractor.py", "memory_supersede.py", "named_relations.py", "person_extractor.py",
                        "value_correction.py"], writers
