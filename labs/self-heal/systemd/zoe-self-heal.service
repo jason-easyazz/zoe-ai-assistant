@@ -13,7 +13,8 @@ Environment=PATH=%h/.nvm/versions/node/v22.23.3/bin:%h/.local/bin:/usr/local/bin
 # Board mirror (optional): a file holding MULTICA_BASE_URL / MULTICA_API_TOKEN / MULTICA_WORKSPACE_ID.
 # The engine never sees these (engine env is an allow-list).
 # EnvironmentFile=%h/.zoe/self-heal/multica.env
-ExecStart=/usr/bin/python3 -m selfheal run --config %h/.zoe/self-heal/config.json
-ExecStartPost=/usr/bin/python3 -m selfheal verify --config %h/.zoe/self-heal/config.json
+# The loop pins every python it runs to THIS interpreter, so start it with the venv the lanes need.
+ExecStart=%h/.zoe/venvs/zoe-data-py312/bin/python -m selfheal run --config %h/.zoe/self-heal/config.json
+ExecStartPost=%h/.zoe/venvs/zoe-data-py312/bin/python -m selfheal verify --config %h/.zoe/self-heal/config.json
 TimeoutStartSec=3h
 Nice=10

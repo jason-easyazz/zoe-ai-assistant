@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sys
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -49,6 +51,16 @@ HARD_LIVE_CHECKOUT = "/home/zoe/assistant"
 NETWORK_BINARIES = {"curl", "wget", "gh", "ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat", "socat",
                     "telnet", "ftp", "git", "docker", "pip", "pip3", "npm", "npx", "node", "bash", "sh",
                     "env", "sudo"}
+
+
+# The ONE interpreter the loop runs: the one running it. Config cannot point "python" elsewhere.
+PINNED_PYTHON = os.path.abspath(sys.executable)
+MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+
+
+def is_pinned_python(p: str) -> bool:
+    return bool(p) and (os.path.abspath(p) == PINNED_PYTHON
+                        or os.path.realpath(p) == os.path.realpath(PINNED_PYTHON))
 
 
 def hard_kill_switch() -> Path:
@@ -101,11 +113,11 @@ class Config:
     engine_fallbacks: list = field(default_factory=list)   # tried in order when `engine` is unavailable
     multica_kill_switch: str = str(HOME / ".zoe" / "multica_dispatch_paused")   # read, never touched
     engine_timeout_s: int = 600
-    codex_bin: str = "codex"
-    codex_args: list = field(default_factory=lambda: ["--ignore-user-config"])
-    claude_bin: str = "claude"
-    claude_args: list = field(default_factory=list)
-    model: str = ""
+    codex_bin: str = "codex"         # basename must be `codex`
+    codex_args: list = field(default_factory=list)    # REFUSED unless empty: no extra engine flags
+    claude_bin: str = "claude"       # basename must be `claude`
+    claude_args: list = field(default_factory=list)   # REFUSED unless empty
+    model: str = ""                  # the one engine option: a bare model name (MODEL_RE)
 
     board: str = "off"               # off | multica  (best-effort mirror; never required)
 
@@ -123,10 +135,10 @@ class Config:
 
     # detection (failing-test detector)
     detect_cmd: list = field(default_factory=lambda: [
-        "python3", "-m", "pytest", "-p", "no:cacheprovider", "-q", "-m", "ci_safe", "tests/unit"])
+        PINNED_PYTHON, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-m", "ci_safe", "tests/unit"])
     detect_timeout_s: int = 1800
     ignore_nodeids: list = field(default_factory=list)
-    python: str = "python3"
+    python: str = PINNED_PYTHON      # must BE the running interpreter; anything else is refused
 
     # gates
     test_lock: str = "/tmp/zoe-test-lane.lock"   # "" = no flock (scratch repos)
@@ -136,7 +148,7 @@ class Config:
     local_gates: list = field(default_factory=lambda: [
         "validate_structure", "py_compile", "relevant_pytest", "offline_lane", "voice_replay"])
     offline_lane_cmd: list = field(default_factory=lambda: [
-        "python3", "-m", "pytest", "-p", "no:cacheprovider", "-q", "-m", "ci_safe",
+        PINNED_PYTHON, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-m", "ci_safe",
         "services/zoe-data/tests", "tests/unit"])
     voice_replay_cmd: list = field(default_factory=list)   # a deployed unit sets its local replay here
     voice_paths: list = field(default_factory=lambda: list(DEFAULT_VOICE_PATHS))
@@ -191,6 +203,22 @@ class Config:
                              f"{HARD_QUIET[0]}-{HARD_QUIET[1]} (they may only widen)")
         if not isinstance(self.kill_switches, list):
             raise ValueError("kill_switches must be a list (the built-in switch is always honoured too)")
+        # the interpreter, the engines and every command the loop runs are pinned
+        if not is_pinned_python(self.python):
+            raise ValueError(f"python must be the running interpreter ({PINNED_PYTHON}); refused {self.python!r}")
+        self.python = PINNED_PYTHON
+        if self.codex_args or self.claude_args:
+            raise ValueError("extra engine arguments (codex_args / claude_args) are refused: "
+                             "the safety flags are built in and cannot be extended")
+        if self.model and not MODEL_RE.match(self.model):
+            raise ValueError(f"model must be a bare model name, not {self.model!r}")
+        for name, want in (("codex_bin", "codex"), ("claude_bin", "claude")):
+            if os.path.basename(getattr(self, name)) != want:
+                raise ValueError(f"{name} must be a `{want}` binary, not {getattr(self, name)!r}")
+        for name in ("detect_cmd", "offline_lane_cmd"):
+            check_pytest_argv(getattr(self, name), name)
+        if self.voice_replay_cmd:
+            check_script_argv(self.voice_replay_cmd, "voice_replay_cmd")
         for argv in self.health_checks:
             check_health_argv(argv, self.python)
 
@@ -201,7 +229,24 @@ class Config:
         return list(dict.fromkeys([*HARD_FORBIDDEN, *self.forbidden]))
 
 
-def check_health_argv(argv, python: str = "python3") -> None:
+def _rel_args_ok(args: list) -> bool:
+    return not any(a.startswith("/") or ".." in a.split("/") or a == "-c" for a in args)
+
+
+def check_pytest_argv(argv, name: str) -> None:
+    """detect / offline lanes: `<pinned python> -m pytest <relative args>`, nothing else."""
+    if not (isinstance(argv, list) and len(argv) >= 3 and all(isinstance(a, str) for a in argv)
+            and is_pinned_python(argv[0]) and argv[1:3] == ["-m", "pytest"] and _rel_args_ok(argv[3:])):
+        raise ValueError(f"{name} must be `<running python> -m pytest <relative args>`: {argv!r}")
+
+
+def check_script_argv(argv, name: str) -> None:
+    if not (isinstance(argv, list) and len(argv) >= 2 and all(isinstance(a, str) for a in argv)
+            and is_pinned_python(argv[0]) and argv[1].endswith(".py") and _rel_args_ok(argv[1:])):
+        raise ValueError(f"{name} must be `<running python> <rel/path.py> ...`: {argv!r}")
+
+
+def check_health_argv(argv, python: str = PINNED_PYTHON) -> None:
     """Local-landing health checks are an ALLOW-LIST, refused at load otherwise. Allowed forms:
       ["true"] / ["false"]                                   (tests, no-ops)
       ["systemctl", "--user", "is-active", "<unit>"]          (read-only unit state)
@@ -219,7 +264,7 @@ def check_health_argv(argv, python: str = "python3") -> None:
         if len(argv) == 4 and argv[1:3] == ["--user", "is-active"] and argv[3].replace("-", "").replace(".", "").replace("@", "").isalnum():
             return
         raise ValueError(f"systemctl health check must be `systemctl --user is-active <unit>`: {argv!r}")
-    if argv[0] in (python, "python3"):
+    if is_pinned_python(argv[0]):
         if len(argv) >= 3 and argv[1] == "-m" and argv[2].replace(".", "").replace("_", "").isalnum():
             rest = argv[3:]
         elif len(argv) >= 2 and argv[1].endswith(".py"):
@@ -230,4 +275,4 @@ def check_health_argv(argv, python: str = "python3") -> None:
             if a.startswith("/") or ".." in a.split("/") or a == "-c":
                 raise ValueError(f"health check argument {a!r} leaves the integration checkout; refused")
         return
-    raise ValueError(f"health check {argv[0]!r} is not on the allow-list")
+    raise ValueError(f"health check {argv[0]!r} is not on the allow-list (python must be the running interpreter)")

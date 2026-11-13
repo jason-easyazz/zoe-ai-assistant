@@ -98,12 +98,14 @@ enters a repo, log, ticket or PR body, and the engine's environment is an allow-
 | quiet hours 01:30-05:00 | `check_quiet_hours` | `test_quiet_hours` (6 boundaries), `test_quiet_hours_end_to_end` |
 | not while a voice lander runs / night_busy says pause / night_busy missing (fail closed) | `check_busy` | `test_refuses_while_voice_lander_runs`, `test_night_busy` x2, `test_night_busy_exit_1_means_may_run` |
 | forbidden paths (incl. `voice_gate_check.py`, every script deploy.yml / voice-gate.yml call, workflows, compose, units, landing, .env, alembic, zoe-auth, CANONICAL + invariants test, models, this lab, outside the repo) | `check_diff` on the staged diff after the engine | `test_forbidden_paths` (24 paths), `test_forbidden_path_discards_attempt_end_to_end` x3 |
-| inspect BEFORE staging: `git status` (untracked included) + symlink check, nothing staged; any violation discards the worktree; then only the checked paths are staged (no `add -A`) and the index is proven to hold exactly them; an engine that commits is discarded | `gitops.inspect_worktree`, `gitops.stage_checked` | `test_escaping_symlink_discarded`, R `test_violation_never_stages_or_commits`, `test_only_checked_paths_are_committed`, `test_stage_checked_refuses_anything_extra`, `test_engine_commit_is_discarded` |
+| inspect BEFORE staging: `git status` (untracked included) + symlink check, nothing staged; any violation discards the worktree; then only the checked paths are staged (no `add -A`) and the index is proven to hold exactly them; an engine that commits OR puts anything in the index (even an allowed file) is discarded: the runner alone stages | `gitops.inspect_worktree`, `gitops.stage_checked` | `test_escaping_symlink_discarded`, R `test_violation_never_stages_or_commits`, `test_only_checked_paths_are_committed`, `test_stage_checked_refuses_anything_extra`, `test_engine_commit_is_discarded`, `test_engine_made_index_or_commit_is_discarded` (stage allowed / stage forbidden / commit) |
 | diff cap (300 changed lines; binary = over cap) | `check_diff` | `test_diff_cap` |
 | must include or update a test | `check_diff` (a failing-test ticket carries its regression test: the reproduction, verified from the ORIGINAL file) | `test_missing_test_rule` |
 | empty diff / engine failure / engine timeout (process group killed) | runner, `engines._run` | `test_empty_diff_discarded`, `test_engine_failure_discards`, `test_engine_timeout_kills` |
 | live checkout never touched: `/home/zoe/assistant` (and its realpath) is HARD-CODED as refused for repo, worktree parent, state dir and apply target, and no command runs in it or with `git -C` into it; `live_checkout` in the config is an ADDITIONAL refused path; HEAD fingerprint around the engine | `config.inside_refused`, `gitops._guard`, `NoopApplier` | `test_config_refuses_paths_inside_live_checkout`, `test_live_checkout_guard`, R `test_live_checkout_refused_through_a_symlink` (4 fields x 2), `test_live_checkout_refused_even_if_config_names_another`, `test_gitops_never_runs_in_the_live_checkout`, `test_apply_target_refused` |
 | engine env is an allow-list (no GH_*, MULTICA_*, DB URL, API keys) | `engines.engine_env` | `test_engine_env_is_an_allow_list` |
+| engine argv is BUILT IN: `codex_args` / `claude_args` must be empty (refused at load), the one option is a bare `model` name, `codex_bin` / `claude_bin` must be named `codex` / `claude`; the final argv is asserted to carry each safety flag exactly once with the built-in value (codex `-C <worktree>`, `-s workspace-write`, `--ignore-user-config`; claude `--permission-mode dontAsk`, the fixed tool list, prompt after `--`) and no bypass / extra-dir / config / `--flag=value` token | `Config.validate`, `engines.check_codex_argv`, `check_claude_argv` | R `test_hostile_engine_config_is_refused` (14 configs), `test_model_name_is_the_one_allowed_option`, `test_final_codex_argv_assertion` (6), `test_final_claude_argv_assertion` (5) |
+| ONE interpreter: `python` must be the running interpreter (`sys.executable`); a python health check, the detect / offline lanes (`<python> -m pytest <relative args>`) and the voice replay (`<python> <rel.py>`) must start with it; anything else is refused at load and never runs | `config.is_pinned_python`, `check_pytest_argv`, `check_script_argv`, `check_health_argv` | R `test_python_override_never_runs` (7 hostile configs, a recording executable that must never run), `test_python_is_pinned_even_if_mutated` |
 | executor unavailable -> thin fallback; nothing linked -> `no_engine`, no code touched, no cap spent | `engines.select_engine`, runner | `test_executor_unavailable_falls_back_to_thin_adapter`, `test_no_engine_linked_does_nothing_to_code` |
 | board mirror: one issue per fault, `backlog`, no assignee, never `todo`; outage harmless; Multica + Omnigent + GitHub all absent still heals | `board.py` | `test_board_mirror_one_issue_per_fault_never_todo`, `test_board_mirror_done_on_heal`, `test_board_outage_is_harmless`, `test_runs_with_multica_omnigent_and_github_all_absent` |
 | local gates (validate_structure, py_compile, relevant pytest under the flock) | `gates.py` | `test_gate_failure_discards` |
@@ -115,7 +117,7 @@ enters a repo, log, ticket or PR body, and the engine's environment is an allow-
 | local landing uses no gh, no GitHub, no network | `LocalLanding` | `test_local_landing_needs_no_gh_and_no_network` (gh shadowed by a failing stub, `socket.connect` raises, command log has no fetch/push/pull/clone/gh) |
 | verify after merge + deploy; not healed twice = parked | `Runner.verify_pending`, `_finish` | `test_verify_after_merge_heals_or_parks`, `test_not_healed_twice_parks` |
 | NO CONTENT in any record: audit keys are an allow-list and every string value must be one whitespace-free token (else `<redacted>`); engine output is never kept (`rc=N` only); gate / verify results are `rc=` + counts; ticket evidence = node id, failure kind, a HASH of the failure text, base sha; the PUBLIC PR body = ticket id, fault class, test node id, engine, changed file names, gate names + pass/fail, review status, marker block; the board gets the same | `Runner.audit`, `safety.rc_summary`, `detectors`, `landing.pr_body` | `test_audit_log_has_every_step_and_no_content`, R `test_no_content_reaches_any_record` (github/local x engine ok/failed, planted token + sentence in the assertion message AND the engine output, scanned in every state-dir file, the PR body, board payloads, gh args and the git command log), `test_gate_failure_output_does_not_leak`, `test_audit_refuses_unknown_keys` |
-| re-checked MID-RUN: kill switch + quiet hours + voice lander + night_busy before the engine, the gates, the landing, the local fast-forward, the push and the PR call; a failure = `interrupted` with the rule, worktree discarded, NO cap spent | `Runner.checkpoint`, `LandCtx.checkpoint` | R `test_interrupted_mid_run` (9 checkpoint x condition cases) |
+| re-checked MID-RUN: kill switch + quiet hours + voice lander + night_busy before the engine, the gates, the landing, the local fast-forward, the push and the PR call, and before EACH pending item in `verify`; a failure = `interrupted` with the rule, worktree discarded, NO cap spent | `Runner.checkpoint`, `LandCtx.checkpoint` | R `test_interrupted_mid_run` (9 checkpoint x condition cases), `test_verify_pending_rechecks_before_each_item` |
 
 Marking a heal PR ready must come from a reviewer that is not the engine. There is no
 `ready_when_green` option: the lander takes every open NON-DRAFT PR with resolved threads and
@@ -156,7 +158,7 @@ Unit tests (fake engine, throwaway repos, no network):
 ```bash
 cd ~/assistant   # or any checkout of this branch
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider labs/self-heal/tests -q
-# 2026-11-13: 152 passed in ~62 s
+# 2026-11-13: 184 passed in ~64 s
 ```
 
 Negative controls (each mutation applied, the named tests run, the file restored; every one went red):
@@ -167,7 +169,11 @@ allowed to rise (5), quiet window allowed to narrow (3), built-in kill switch dr
 live path dropped (6), realpath not resolved (4), blanket `add -A` before the checks (2), no
 staged-set proof (1), health allow-list off at load (18), detector keeps failure text (9), engine
 keeps model output (1), runner audits engine output (4), audit sanitizer off (1), rc_summary keeps
-output (1), no mid-run checkpoints (7), cap spent on interrupt (9). The privacy rule has several
+output (1), no mid-run checkpoints (7), cap spent on interrupt (9). Re-review round 2, 15 mutations: engine args accepted at load (9), model
+not validated (3), engine binary name unchecked (2), codex flag-set check off (1), codex `-s` value
+unchecked (1), claude flag-set check off (1), python not pinned (2), health argv0 not pinned (1),
+lane argv0 not pinned (1), engine-made index accepted (2), verify re-checked once only (1). The codex
+danger-prefix list alone is redundant behind the exact flag-set check (removing only it stays green). The privacy rule has several
 layers (source stripping, then the audit's allow-listed keys and single-token values); each layer
 has its own test and its own negative control.
 
@@ -221,7 +227,7 @@ Each step: run it, then look at what it names before the next. Off switch at any
 2. One dry run by hand:
    ```bash
    rm ~/.zoe/self_heal_paused
-   cd ~/assistant/labs/self-heal && python3 -m selfheal run --config ~/.zoe/self-heal/config.json
+   cd ~/assistant/labs/self-heal && ~/.zoe/venvs/zoe-data-py312/bin/python -m selfheal run --config ~/.zoe/self-heal/config.json
    tail -n 20 ~/.zoe/self-heal/audit.jsonl
    ```
    Look at: outcome `planned` or `no_fault`; the `engine_select` row (expect `flue_executor` skipped

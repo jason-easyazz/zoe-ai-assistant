@@ -84,6 +84,10 @@ def inspect_worktree(wt: str, base_sha: str) -> DiffReport:
     rep = DiffReport()
     if rev(wt, "HEAD") != base_sha:
         rep.engine_committed = True
+    # The runner alone stages, and only after the checks: ANY entry the engine put in the index
+    # (even an allowed file) discards the attempt.
+    if run(["git", "-C", wt, "diff", "--cached", "--quiet", "HEAD"], check=False).returncode != 0:
+        rep.index_dirty = True
     out = run(["git", "-C", wt, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]).stdout
     untracked = []
     for entry in filter(None, out.split("\0")):

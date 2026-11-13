@@ -70,6 +70,55 @@ def _run(argv: list, cwd: str, timeout: int) -> EngineResult:
     return EngineResult(p.returncode == 0, f"rc={p.returncode}", time.monotonic() - t0)
 
 
+# --- final-argv assertions: the safety flags appear exactly once, with the built-in values ------
+
+_DANGER = ("--dangerously", "--add-dir", "--cd", "--config", "--sandbox", "--profile", "--enable",
+           "--disable", "--full-auto", "--approve-for-me", "--worktree", "--oss", "--local-provider",
+           "--permission-prompts", "--disallowedTools", "--disallowed-tools", "--allowed-tools",
+           "--settings", "--mcp-config", "--plugin-dir", "--append-system-prompt", "--system-prompt")
+
+
+class UnsafeArgv(ValueError):
+    pass
+
+
+def _flags(argv: list, stop: int) -> list:
+    return [a for a in argv[1:stop] if a.startswith("-")]
+
+
+def check_codex_argv(argv: list, worktree: str) -> None:
+    body = argv[:-1]                      # the prompt is the single trailing positional
+    flags = _flags(body, len(body))
+    want = ["-C", "-s", "--ephemeral", "--color", "--ignore-user-config"] + (["-m"] if "-m" in flags else [])
+    if argv[1] != "exec" or sorted(flags) != sorted(want):
+        raise UnsafeArgv(f"codex flags {flags} != the built-in set")
+    if body[body.index("-C") + 1] != worktree or body[body.index("-s") + 1] != "workspace-write":
+        raise UnsafeArgv("codex -C / -s must be the heal worktree / workspace-write")
+    if any(a.startswith(_DANGER) or "=" in a and a.startswith("-") for a in argv[1:-1]):
+        raise UnsafeArgv("codex argv carries a forbidden flag")
+    if argv[-1].startswith("-"):
+        raise UnsafeArgv("codex prompt may not look like a flag")
+
+
+def check_claude_argv(argv: list, tools: list) -> None:
+    sep = argv.index("--")
+    if sep != len(argv) - 2:
+        raise UnsafeArgv("claude prompt must be the single argument after `--`")
+    flags = _flags(argv, sep)
+    want = ["-p", "--permission-mode", "--allowedTools", "--no-session-persistence", "--output-format"] + \
+        (["--model"] if "--model" in flags else [])
+    if sorted(flags) != sorted(want):
+        raise UnsafeArgv(f"claude flags {flags} != the built-in set")
+    i = argv.index("--permission-mode")
+    if argv[i + 1] != "dontAsk":
+        raise UnsafeArgv("claude permission mode must be dontAsk")
+    j = argv.index("--allowedTools")
+    if argv[j + 1: j + 1 + len(tools)] != tools:
+        raise UnsafeArgv("claude tool allow-list changed")
+    if any(a.startswith(_DANGER) for a in argv[1:sep]):
+        raise UnsafeArgv("claude argv carries a forbidden flag")
+
+
 def _bin_ok(binary: str) -> bool:
     return bool(shutil.which(binary)) or (os.path.isabs(binary) and os.access(binary, os.X_OK))
 
@@ -90,10 +139,12 @@ class CodexEngine:
 
     def argv(self, worktree: str, prompt: str) -> list:
         a = [self.cfg.codex_bin, "exec", "-C", worktree, "-s", "workspace-write", "--ephemeral",
-             "--color", "never", *self.cfg.codex_args]
+             "--color", "never", "--ignore-user-config"]
         if self.cfg.model:
             a += ["-m", self.cfg.model]
-        return a + [prompt]
+        a.append(prompt)
+        check_codex_argv(a, worktree)
+        return a
 
     def run(self, ticket: Ticket, worktree: str) -> EngineResult:
         return _run(self.argv(worktree, build_prompt(ticket, self.cfg)), worktree, self.cfg.engine_timeout_s)
@@ -120,10 +171,12 @@ class ClaudeEngine:
 
     def argv(self, worktree: str, prompt: str) -> list:
         a = [self.cfg.claude_bin, "-p", "--permission-mode", "dontAsk", "--allowedTools", *self.TOOLS,
-             "--no-session-persistence", "--output-format", "text", *self.cfg.claude_args]
+             "--no-session-persistence", "--output-format", "text"]
         if self.cfg.model:
             a += ["--model", self.cfg.model]
-        return a + ["--", prompt]
+        a += ["--", prompt]
+        check_claude_argv(a, self.TOOLS)
+        return a
 
     def run(self, ticket: Ticket, worktree: str) -> EngineResult:
         return _run(self.argv(worktree, build_prompt(ticket, self.cfg)), worktree, self.cfg.engine_timeout_s)

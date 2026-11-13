@@ -208,7 +208,7 @@ def test_health_check_not_allow_listed_fails_the_load(tmp_path, bad):
 
 
 @pytest.mark.parametrize("good", [["true"], ["false"], ["systemctl", "--user", "is-active", "zoe-data.service"],
-                                  ["python3", "-m", "pytest", "-q", "tests"], ["python3", "scripts/check_health.py"]])
+                                  [sys.executable, "-m", "pytest", "-q", "tests"], [sys.executable, "scripts/check_health.py"]])
 def test_health_check_allowed_forms(good):
     check_health_argv(good)
 
@@ -314,7 +314,7 @@ def test_engine_keeps_no_model_output(tmp_path):
     fake = tmp_path / "codex"
     fake.write_text(f"#!/bin/bash\necho '{PLANTED_SENTENCE}'\necho {PLANTED_TOKEN} >&2\n")
     fake.chmod(0o755)
-    cfg = Config(state_dir=str(tmp_path / "s"), codex_bin=str(fake), codex_args=[])
+    cfg = Config(state_dir=str(tmp_path / "s"), codex_bin=str(fake))
     from conftest import FakeEngine as _F  # noqa: F401
     from selfheal.detectors import Ticket
     t = Ticket(id="t", fault_class="failing_test", fault_key="k", summary="s", evidence={}, repro_cmd=["true"])
@@ -454,6 +454,159 @@ def test_interrupted_mid_run(request, monkeypatch, checkpoint, kind, landing):
     assert worktrees(cfg) == []
     assert gitops.rev(str(cfg.repo), "refs/heads/main") == tip
     assert "self-heal/" not in gitops.git(str(cfg.repo), "branch", "--list")
+
+
+# --- round 2 (re-review): engine args, pinned interpreter, engine-made index, verify re-checks ----
+
+HOSTILE_ENGINE = [
+    {"codex_args": ["--dangerously-bypass-approvals-and-sandbox"]},
+    {"codex_args": ["--add-dir", "/"]},
+    {"codex_args": ["-s", "danger-full-access"]},
+    {"codex_args": ["--sandbox=danger-full-access"]},
+    {"codex_args": ["-C", "/"]},
+    {"codex_args": ["-c", "sandbox_mode=danger-full-access"]},
+    {"claude_args": ["--dangerously-skip-permissions"]},
+    {"claude_args": ["--add-dir=/"]},
+    {"claude_args": ["--permission-mode=bypassPermissions"]},
+    {"model": "--sandbox=danger-full-access"}, {"model": "o3 -s danger-full-access"}, {"model": "-m"},
+    {"codex_bin": "/tmp/codex-wrapper.sh"}, {"claude_bin": "/usr/local/bin/my-claude"},
+]
+
+
+@pytest.mark.parametrize("hostile", HOSTILE_ENGINE, ids=lambda d: json.dumps(d)[:50])
+def test_hostile_engine_config_is_refused(tmp_path, hostile):
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps(hostile))
+    with pytest.raises(ValueError):
+        Config.load(str(f))
+
+
+def test_model_name_is_the_one_allowed_option(tmp_path):
+    from selfheal.engines import ClaudeEngine, CodexEngine
+    cfg = Config(state_dir=str(tmp_path), model="gpt-5.1-codex")
+    cfg.validate()
+    a = CodexEngine(cfg).argv("/wt", "fix it")
+    assert a.count("-s") == 1 and a[a.index("-s") + 1] == "workspace-write"
+    assert a.count("-C") == 1 and a[a.index("-C") + 1] == "/wt" and a[-1] == "fix it"
+    c = ClaudeEngine(cfg).argv("/wt", "fix it")
+    assert c.count("--permission-mode") == 1 and c[c.index("--permission-mode") + 1] == "dontAsk"
+
+
+@pytest.mark.parametrize("tamper", [
+    lambda a: a[:-1] + ["--dangerously-bypass-approvals-and-sandbox", a[-1]],
+    lambda a: a[:-1] + ["-s", "danger-full-access", a[-1]],
+    lambda a: a[:-1] + ["--add-dir", "/", a[-1]],
+    lambda a: a[:-1] + ["--sandbox=danger-full-access", a[-1]],
+    lambda a: [x if x != "workspace-write" else "danger-full-access" for x in a],
+    lambda a: a[:-1] + ["--prompt-as-flag"],
+])
+def test_final_codex_argv_assertion(tamper):
+    from selfheal.engines import UnsafeArgv, check_codex_argv
+    good = ["codex", "exec", "-C", "/wt", "-s", "workspace-write", "--ephemeral", "--color", "never",
+            "--ignore-user-config", "P"]
+    check_codex_argv(good, "/wt")
+    with pytest.raises(UnsafeArgv):
+        check_codex_argv(tamper(list(good)), "/wt")
+
+
+@pytest.mark.parametrize("tamper", [
+    lambda a: a[:-2] + ["--dangerously-skip-permissions"] + a[-2:],
+    lambda a: [x if x != "dontAsk" else "bypassPermissions" for x in a],
+    lambda a: a[:-2] + ["--add-dir", "/"] + a[-2:],
+    lambda a: a[:-2] + ["--permission-mode", "bypassPermissions"] + a[-2:],
+    lambda a: [x if x != "Edit" else "Bash" for x in a],
+])
+def test_final_claude_argv_assertion(tamper):
+    from selfheal.engines import ClaudeEngine, UnsafeArgv, check_claude_argv
+    good = ["claude", "-p", "--permission-mode", "dontAsk", "--allowedTools", *ClaudeEngine.TOOLS,
+            "--no-session-persistence", "--output-format", "text", "--", "P"]
+    check_claude_argv(good, ClaudeEngine.TOOLS)
+    with pytest.raises(UnsafeArgv):
+        check_claude_argv(tamper(list(good)), ClaudeEngine.TOOLS)
+
+
+def _recorder(tmp_path, name="x"):
+    marker = tmp_path / f"{name}-ran"
+    exe = tmp_path / name
+    exe.write_text(f"#!/bin/bash\ntouch {marker}\nexit 0\n")
+    exe.chmod(0o755)
+    return exe, marker
+
+
+def test_python_override_never_runs(tmp_path):
+    exe, marker = _recorder(tmp_path)
+    for hostile in ({"python": str(exe)},
+                    {"health_checks": [[str(exe), "-m", "mod"]]},
+                    {"python": str(exe), "health_checks": [[str(exe), "-m", "mod"]]},
+                    {"detect_cmd": [str(exe), "-m", "pytest"]},
+                    {"offline_lane_cmd": [str(exe), "-m", "pytest", "tests"]},
+                    {"voice_replay_cmd": [str(exe), "replay.py"]},
+                    {"detect_cmd": [sys.executable, "-c", "import os"]}):
+        f = tmp_path / "c.json"
+        f.write_text(json.dumps(hostile))
+        with pytest.raises(ValueError):
+            Config.load(str(f))
+    with pytest.raises(ValueError):
+        check_health_argv([str(exe), "-m", "mod"])
+    assert not marker.exists()
+
+
+def test_python_is_pinned_even_if_mutated(local_scratch, tmp_path):
+    exe, marker = _recorder(tmp_path)
+    cfg = local_scratch.cfg
+    cfg.python = str(exe)
+    with pytest.raises(ValueError):
+        Runner(cfg, engine=FakeEngine(fix_calc))
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("how", ["stage_allowed", "stage_forbidden", "commit"])
+def test_engine_made_index_or_commit_is_discarded(local_scratch, how):
+    cfg = local_scratch.cfg
+
+    def engine(wt):
+        fix_calc(wt)
+        if how == "stage_allowed":
+            sh("git", "-C", str(wt), "add", "calc.py")
+        elif how == "stage_forbidden":
+            (wt / "scripts" / "landing").mkdir(parents=True)
+            (wt / "scripts" / "landing" / "x.sh").write_text("exit 0\n")
+            sh("git", "-C", str(wt), "add", "scripts/landing/x.sh")
+        else:
+            sh("git", "-C", str(wt), "commit", "-qam", "engine commit")
+    gitops.CMD_LOG.clear()
+    out = run(cfg, FakeEngine(engine)).run_once()
+    assert out["outcome"] == "discarded"
+    assert out["why"] == ("engine_committed" if how == "commit" else "engine_staged")
+    assert worktrees(cfg) == [] and "self-heal/" not in gitops.git(cfg.repo, "branch", "--list")
+    assert not [c for c in gitops.CMD_LOG if c[:2] == ["git", "-C"] and len(c) > 3 and c[3] in ("add", "commit")]
+
+
+def test_verify_pending_rechecks_before_each_item(github_scratch, monkeypatch):
+    from selfheal.detectors import Ticket
+    from selfheal.safety import State
+    cfg = github_scratch.cfg
+    st = State(cfg, NOON.date())
+    for i in (1, 2):
+        t = Ticket(id=f"t{i}", fault_class="failing_test", fault_key=f"k{i}", summary="s", evidence={},
+                   repro_cmd=["true"], base_sha="0" * 40)
+        st.data["tickets"][t.id] = {"ticket": t.to_dict(), "status": "pr_open", "pr_url": f"u{i}"}
+    st.save()
+    clock = {"late": False}
+    r = run(cfg, now=lambda: dt.datetime(2026, 11, 13, 2, 0) if clock["late"] else NOON)
+    seen = []
+
+    def merged(url):
+        seen.append(url)
+        clock["late"] = True          # quiet hours begin between the two items
+        return None
+    monkeypatch.setattr(r.landing, "merged_commit", merged)
+    out = r.verify_pending()
+    assert seen == ["u1"]
+    assert out == [{"ticket": "t1", "outcome": "pending"},
+                   {"ticket": "t2", "outcome": "interrupted", "why": "quiet_hours"}]
+    after = state(cfg)
+    assert after["tickets"]["t2"]["status"] == "pr_open" and after["faults"] == {}
 
 
 if __name__ == "__main__":

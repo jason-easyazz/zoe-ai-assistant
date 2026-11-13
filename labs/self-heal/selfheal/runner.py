@@ -302,6 +302,12 @@ class Runner:
             for tid, rec in list(state.data["tickets"].items()):
                 if rec.get("status") != "pr_open":
                     continue
+                try:   # re-check before EACH item; a failure stops the pass cleanly, nothing spent
+                    self.checkpoint("verify")
+                except Interrupted as e:
+                    self.audit("interrupted", e.rule, tid, checkpoint=e.checkpoint, reason=e.rule)
+                    out.append({"ticket": tid, "outcome": "interrupted", "why": e.rule})
+                    break
                 self.step("verify", tid)
                 ticket = Ticket.from_dict(rec["ticket"])
                 sha = self.landing.merged_commit(rec["pr_url"])

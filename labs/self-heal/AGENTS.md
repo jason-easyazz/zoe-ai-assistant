@@ -21,7 +21,7 @@ healed / not healed; a fault that is not healed is parked, not retried forever.
 - Landing `github` (default) only ever opens a DRAFT PR labelled `self-heal`, one finding per PR,
   with the `zoe-self-heal:v1` marker block. Landing `local` makes no `gh`, GitHub or network call.
 - Every step checks the kill switch first and appends a row to `<state_dir>/audit.jsonl` (allow-listed
-  keys, single-token values). Before the engine, gates, landing, push and PR call the run re-checks
+  keys, single-token values). Before the engine, gates, landing, push, PR call and each pending verify item the run re-checks
   kill switch, quiet hours, voice lander and night_busy.
 - Engines are tried in order `[engine, *engine_fallbacks]`; the first available runs. `flue_executor`
   (Multica + Flue executor + Omnigent, the plan of record) reports its blockers until they are lifted;
@@ -42,7 +42,11 @@ The loop (and anyone running it) must never:
   shrink (daily 3, per fault 2, diff 300, park after 2), quiet hours only widen around 01:30-05:00;
   a weaker config is refused at load, never clamped;
 - stage anything before the diff policy passed, stage with `add -A`, or stage a path it did not check;
-- run a health check that is not on the allow-list in `config.check_health_argv`;
+- run a health check that is not on the allow-list in `config.check_health_argv`, or any interpreter but
+  the running one (`python`, lanes, replay and health checks are pinned to `sys.executable`);
+- accept extra engine arguments (`codex_args` / `claude_args` must be empty), a non-`codex` / `claude`
+  engine binary, or a final engine argv whose sandbox / approval / cwd flags differ from the built-ins;
+- accept an index or a commit the engine made (the runner alone stages, after the checks);
 - put failure text, assertion text, tracebacks, model or reviewer output, or diff excerpts into the
   audit log, a ticket, the PR body (public) or the board; ids, classes, counts, durations, file
   names, test node ids and exit codes only;

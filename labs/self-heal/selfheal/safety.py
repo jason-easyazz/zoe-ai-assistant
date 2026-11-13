@@ -138,6 +138,7 @@ class DiffReport:
     deleted: int = 0
     escaping_symlinks: list = field(default_factory=list)
     engine_committed: bool = False
+    index_dirty: bool = False
 
     @property
     def lines(self) -> int:
@@ -166,6 +167,8 @@ def check_diff(cfg: Config, report: DiffReport, *, ticket_has_repro_test: bool) 
     """Raise Refused when the agent's diff breaks policy; the caller discards the attempt."""
     if report.engine_committed:
         raise Refused("engine_committed", "")
+    if report.index_dirty:
+        raise Refused("engine_staged", "")
     if not report.files:
         raise Refused("empty_diff", "the engine changed nothing")
     hits = forbidden_hits(cfg, report.files)

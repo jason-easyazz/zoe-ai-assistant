@@ -597,10 +597,12 @@ def test_engine_env_is_an_allow_list(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "x")
     monkeypatch.setenv("MULTICA_API_TOKEN", "x")
     monkeypatch.setenv("POSTGRES_URL", "x")
-    cfg = Config(state_dir=str(tmp_path), codex_bin=str(tmp_path / "fake-codex"), codex_args=[])
+    (tmp_path / "bin").mkdir()
+    fake = tmp_path / "bin" / "codex"
+    cfg = Config(state_dir=str(tmp_path), codex_bin=str(fake))
     out = tmp_path / "env.txt"
-    (tmp_path / "fake-codex").write_text(f"#!/bin/bash\nenv > {out}\n")
-    (tmp_path / "fake-codex").chmod(0o755)
+    fake.write_text(f"#!/bin/bash\nenv > {out}\n")
+    fake.chmod(0o755)
     CodexEngine(cfg).run(ticket(), str(tmp_path))
     env = out.read_text()
     for name in ("GH_TOKEN", "GITHUB_TOKEN", "MULTICA_API_TOKEN", "POSTGRES_URL"):
@@ -609,9 +611,11 @@ def test_engine_env_is_an_allow_list(tmp_path, monkeypatch):
 
 
 def test_engine_timeout_kills(tmp_path):
-    cfg = Config(state_dir=str(tmp_path), codex_bin=str(tmp_path / "slow"), codex_args=[], engine_timeout_s=1)
-    (tmp_path / "slow").write_text("#!/bin/bash\nsleep 30\n")
-    (tmp_path / "slow").chmod(0o755)
+    (tmp_path / "bin").mkdir()
+    slow = tmp_path / "bin" / "codex"
+    cfg = Config(state_dir=str(tmp_path), codex_bin=str(slow), engine_timeout_s=1)
+    slow.write_text("#!/bin/bash\nsleep 30\n")
+    slow.chmod(0o755)
     r = CodexEngine(cfg).run(ticket(), str(tmp_path))
     assert not r.ok and "timeout" in r.detail and r.seconds < 10
 
