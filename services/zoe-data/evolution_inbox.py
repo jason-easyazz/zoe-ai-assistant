@@ -30,6 +30,7 @@ logger = logging.getLogger("evolution_inbox")
 CARD_CAP = 20
 STALE_DAYS = 30.0
 LATER_DAYS = 7.0
+DISMISS_NOTE = "dismissed: stale"
 SCAN_LIMIT = 5000
 MAX_IDS = 500
 #: decision reasons are CODES (a free-text note could carry a member's words); the same set as ``struggle_proposals.REASONS``
@@ -201,8 +202,14 @@ async def inbox(viewer_id: str, *, stale_days: float = STALE_DAYS, now: Optional
     cutoff = t - stale_days * 86400.0
     async with eq._ctx() as db:
         rows, later = await _backlog(db, t)
-        past = await eq._rows(db, "SELECT id, component, decision, status, validation_result, updated_at FROM evolution_proposals "
-                                  "WHERE decision = 'approved' OR validation_result IS NOT NULL ORDER BY updated_at DESC LIMIT 10")
+        # past decisions: approved, measured, and REJECTED by a person (``transition`` records decided_by / reviewed_at / history; the
+        # ``decision`` column cannot say "rejected": 0062's CHECK allows only '' and 'approved'). A "later" row is still open: not here.
+        past = await eq._rows(
+            db, "SELECT id, component, decision, status, validation_result, COALESCE(reviewed_at, updated_at), decided_by "
+                "FROM evolution_proposals WHERE decision = 'approved' OR validation_result IS NOT NULL OR (status = 'rejected' "
+                "AND COALESCE(decided_by, '') <> '' AND COALESCE(decision_note, '') <> ?) ORDER BY 6 DESC LIMIT 10", (DISMISS_NOTE,))
+        swept = await eq._rows(db, "SELECT COUNT(*), MAX(reviewed_at), MAX(decided_by) FROM evolution_proposals "
+                                   "WHERE status = 'rejected' AND decision_note = ?", (DISMISS_NOTE,))
         snoozed_struggle = {eq._vals(r, 1)[0] for r in await eq._rows(
             db, "SELECT id FROM evolution_proposals WHERE source = 'struggle' AND next_review_at > ?", (t,))}
     groups = _groups(rows)
@@ -212,9 +219,14 @@ async def inbox(viewer_id: str, *, stale_days: float = STALE_DAYS, now: Optional
     cards.sort(key=lambda c: (-c["score"], c["card"]))
     decided = []
     for r in past:
-        pid, component, decision, status, vr, upd = eq._vals(r, 6)
-        decided.append({"id": pid, "component": component, "decision": decision or "", "status": status,
-                        "measured": _measured(vr) if vr else {"result": "not_yet", "reason": "not_applied"}, "at": _date(upd)})
+        pid, component, decision, status, vr, at, who = eq._vals(r, 7)
+        measured = _measured(vr) if vr else None if status == "rejected" else {"result": "not_yet", "reason": "not_applied"}
+        decided.append({"id": pid, "component": component, "decision": decision or "", "status": status, "decided_by": who or "",
+                        "measured": measured, "at": _date(at)})
+    n_swept, swept_at, swept_by = eq._vals(swept[0], 3) if swept else (0, None, None)
+    if n_swept:                                   # "dismiss old" is ONE line, however many rows it rejected
+        decided.append({"id": None, "kind": "dismissed_stale", "count": int(n_swept), "component": f"{int(n_swept)} old proposals",
+                        "decision": "", "status": "dismissed", "decided_by": swept_by or "", "measured": None, "at": _date(swept_at)})
     return {"cards": cards[:CARD_CAP], "more_cards": max(0, len(cards) - CARD_CAP), "open": len(rows),
             "stale": {"count": stale, "days": stale_days}, "later": later + len(snoozed_struggle), "decided": decided,
             "approval_does": _APPROVAL_TODAY}
@@ -318,7 +330,7 @@ async def dismiss_stale(actor: str, *, stale_days: float = STALE_DAYS, now: Opti
                 continue
             for r in members:
                 try:
-                    await eq.transition(db, r["id"], "rejected", actor=who, note="dismissed: stale", now=t)
+                    await eq.transition(db, r["id"], "rejected", actor=who, note=DISMISS_NOTE, now=t)
                     n += 1
                 except (eq.Conflict, eq.IllegalTransition):
                     continue

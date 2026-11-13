@@ -124,8 +124,9 @@
         }
         if (data.later) stale.appendChild(el('p', 'meta', data.later + ' put off for later.'));
         (data.decided || []).forEach(d => {
-            const m = (d.measured && MEASURED[d.measured.result]) || 'not yet measurable';
-            past.appendChild(el('p', 'line', (d.at || '') + ' · ' + (d.component || '') + ' · ' + (d.decision || d.status || '') + ' · ' + m));
+            const m = d.measured ? (MEASURED[d.measured.result] || 'not yet measurable') : '';
+            const parts = [d.at || '', d.component || '', d.decision || d.status || '', m].filter(Boolean);
+            past.appendChild(el('p', 'line', parts.join(' · ')));
         });
         if (!(data.decided || []).length) past.appendChild(el('p', 'empty', 'No decisions yet.'));
         foot.textContent = data.approval_does || 'Today a yes only records your decision.';

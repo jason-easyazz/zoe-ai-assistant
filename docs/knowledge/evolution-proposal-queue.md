@@ -81,7 +81,8 @@ change proposals - there is no night-mind proposal writer in the repo. **Generat
   (live evidence only) and the owner's own failed-turn clusters (counts only, no buttons) are cards too. Open rows with no activity for
   `stale_days` are only a count; rows put off with "later" are a count. A card carries kind, counts, dates, the proposed change and its
   risk tier, and what a yes does next; NEVER a title, description or legacy evidence (they can hold a member's words). `decided` lists
-  the last approved / measured rows with their measurement (better / no change / worse / not measurable).
+  the last approved, person-rejected (who, when) and measured rows with their measurement (better / no change / worse / not
+  measurable), plus ONE summary line for every "dismiss old" rejection (count and date); a row put off with "later" is in neither list.
 - `POST /api/system/evolution/decide {key | ids (max 500), action: approve | reject | later, reason: code}`: by key the server recomputes
   the groups and applies the verdict to that group's CURRENT undecided ids (any number, in chunks of 200); approve = the `decision` column, reject = the
   `rejected` status, later = the legacy defer (`next_review_at` + 7 days, decision withdrawn); a struggle card goes through

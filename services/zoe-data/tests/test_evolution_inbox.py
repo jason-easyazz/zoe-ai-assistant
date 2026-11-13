@@ -11,6 +11,7 @@ Negative controls (run by hand when this was written; each turned the named test
   * drop the ``decision == "approved"`` idempotence branch                -> test_a_verdict_is_recorded_once
   * make ``board_mirror_on`` default true                                  -> test_the_board_mirror_is_off_by_default
   * select approved rows again in ``_backlog``                             -> test_decided_cards_leave_the_list_and_later_comes_back
+  * the old past-decisions query (approved / measured only)              -> test_every_verdict_leaves_a_visible_trail
   * cap the key path at ``MAX_IDS`` (500)                                  -> test_a_big_group_is_decided_by_its_key
 The page's own controls are mutations of ``js/evolution-page.js`` below (test_page_negative_controls_turn_the_harness_red).
 """
@@ -184,7 +185,8 @@ def test_decided_cards_leave_the_list_and_later_comes_back(db, quiet):
     top = {c["key"] for c in first}
     again = run(ei.inbox("admin-1", now=NOW + 60, stale_days=365))
     assert len(again["cards"]) == 10 and not top & {c["key"] for c in again["cards"]}
-    assert again["later"] == 6 and sum(d["decision"] == "approved" for d in again["decided"]) == 7
+    assert again["later"] == 6 and len(again["decided"]) == 10                       # 7 approved + 7 rejected, newest 10 shown
+    assert {d["decision"] or d["status"] for d in again["decided"]} == {"approved", "rejected"}
     back = run(ei.inbox("admin-1", now=NOW + (ei.LATER_DAYS + 1) * DAY, stale_days=365))["cards"]
     later_keys = {c["key"] for n, c in enumerate(first) if n % 3 == 2}
     assert later_keys <= {c["key"] for c in back} and len(back) == 16
@@ -209,6 +211,27 @@ def test_a_big_group_is_decided_by_its_key(client, db):
     bad = client.post("/api/system/evolution/decide", json={"key": "q-' OR 1=1 --", "action": "reject"})
     assert bad.status_code == 422                                                    # a key is a hash, never SQL or free text
     assert client.post("/api/system/evolution/decide", json={"key": "q-" + "0" * 16, "action": "reject"}).json()["changed"] == 0
+
+
+def test_every_verdict_leaves_a_visible_trail(client, db, monkeypatch):
+    """No -> gone from the cards and listed in past decisions as rejected, with who and when; "dismiss old" of 5 rows -> ONE summary
+    line; yes -> listed as approved; later -> neither a card nor a past decision while it is put off. Negative control: restore the
+    old past-decisions query (approved or measured only) -> the rejected row is lost, red."""
+    monkeypatch.setattr(ei.time, "time", lambda: NOW)
+    rej, yes, wait = (add(db, f"Intent gap: '{w}'") for w in ("alpha first", "beta second", "gamma third"))
+    for i in range(5):
+        add(db, f"Intent gap: 'old {chr(97 + i)}x'", age_days=60)
+    key = {i: c["key"] for c in client.get("/api/system/evolution/inbox").json()["cards"] for i in run(ei._resolve(c["key"], NOW))}
+    for pid, action in ((rej, "reject"), (yes, "approve"), (wait, "later")):
+        assert client.post("/api/system/evolution/decide", json={"key": key[pid], "action": action}).json()["changed"] == 1
+    assert client.post("/api/system/evolution/dismiss-stale", json={"stale_days": 30}).json()["dismissed"] == 5
+    out = client.get("/api/system/evolution/inbox").json()
+    assert out["cards"] == [] and out["later"] == 1
+    past = {d["id"]: d for d in out["decided"]}
+    assert past[rej]["status"] == "rejected" and past[rej]["decided_by"] == "admin-1" and past[rej]["at"] and past[rej]["measured"] is None
+    assert past[yes]["decision"] == "approved" and wait not in past
+    (swept,) = [d for d in out["decided"] if d.get("kind") == "dismissed_stale"]
+    assert swept["count"] == 5 and swept["at"] and len(out["decided"]) == 3
 
 
 def test_dismiss_old_rejects_only_the_stale_bucket(client, db, monkeypatch):
