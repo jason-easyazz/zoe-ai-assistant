@@ -151,7 +151,7 @@ PINNED = {
     "stt_snap.py": set(),
     "device_confirm.py": set(),
 }
-SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "len", "type", "bool"}   # never ``sorted``/``join``: they keep every string
+SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "kind_refusal_tag", "len", "type", "bool"}   # never ``sorted``/``join``: they keep every string
 LOG_METHODS = {"debug", "info", "warning", "error", "critical", "exception", "log"}
 
 
@@ -226,3 +226,14 @@ def test_tool_arg_keys_are_counted_never_logged():
     planted = 'logger.info("t arg_keys=%s", ",".join(sorted(tool_args or {})))'
     call = ast.parse(planted).body[0].value
     assert any(_raw(a, {"tool_args"}) for a in call.args), "the scanner must see keys passed through sorted()/join()"
+
+
+def test_kind_refusal_tag_is_a_safe_reducer():
+    """``kind_refusal_tag`` is in SAFE_CALLS because it returns a code, kind labels and a hash: never the fact or a name."""
+    from memory_quality import kind_refusal_tag
+
+    tag = kind_refusal_tag("Quillon is a cat")
+    assert "Quillon" not in tag and "cat" not in tag.replace("cand_kind", "")
+    assert tag.startswith("KIND_FLIP_REFUSED code=kind_flip") and "fact=" in tag
+    src = (Path(__file__).resolve().parents[1] / "person_extractor.py").read_text(encoding="utf-8")
+    assert src.count('logger.info("person_extractor: %s", kind_refusal_tag(text))') == 2
