@@ -337,6 +337,17 @@ _CONVERSATION_META_RE = re.compile(
 )
 
 
+_QUESTION_REPORT_RE = re.compile(
+    r"^\W*(?:the\s+)?user\s+(?:"
+    r"(?:is|was)\s+(?:asking|wondering|curious|enquiring|inquiring|checking)\b"
+    r"|(?:asked|asks|wondered|wonders|enquired|inquired|queried)\s+(?:(?:me|zoe|you)\s+)?(?:if|whether|about|what|when|where|who|how|why|which)\b"
+    r"|(?:wants|wanted|would\s+like)\s+to\s+know\b"
+    r"|(?:wants|wanted|would\s+like|requested|asked\s+for|needs)\s+(?:a|an|some|the)\s+(?:\w+\s+)?"
+    r"(?:recipe|recipes|joke|jokes|story|suggestion|suggestions|idea|ideas|recommendation|recommendations|tip|tips)\b)",
+    re.IGNORECASE,
+)
+
+
 def is_conversation_meta(text: str) -> bool:
     """True when ``text`` talks about the conversation or about Zoe rather than stating a fact about the person."""
     return bool(_CONVERSATION_META_RE.search(_straight(text)))
@@ -527,6 +538,10 @@ def is_storable_fact(text: str) -> tuple[bool, str]:
             # the shapes a speech-to-text transcript has instead of a "?": "tell me who ...",
             # "remember who ...", "hey zoe do you remember ..."
             return False, "recall_question"
+        if _QUESTION_REPORT_RE.match(raw):
+            # the extractor's REPORT of a question or a request ("User is asking if they have a sister", "The user wants a recipe
+            # for scones", QA round 9): what the member asked is not a fact about them
+            return False, "question_report"
 
     # A place fact whose value is only a discourse tail ("User lives in these days") is a fragment of a sentence, not a fact.
     if place_fragment(raw):
@@ -1258,6 +1273,188 @@ def _guard_name_tokens(t: str) -> set[str]:
     return {w for w in (caps | poss) if w not in _GUARD_CAL_WORDS} - only_values
 
 
+# -- the KIND of a named subject: a person (a relation word) or an animal (QA round 9) ------------------------------------------------
+# "kit is 10 years old now, not 9" was re-mined into "User's pet is named Kit and is ten years old" and the grandson row was replaced
+# by it; "User has a cat named Theo" was filed about the member's son. A model's guess must never change what KIND of thing a named
+# subject is: a candidate that types a name as an animal where a stored row types it as a person (or the reverse) is not written.
+ANIMAL_WORDS = frozenset({"pet", "pets", "cat", "cats", "kitten", "kitty", "dog", "dogs", "puppy", "pup", "fish", "goldfish", "bird",
+                          "budgie", "parrot", "rabbit", "bunny", "horse", "pony", "hamster", "tortoise", "turtle", "lizard", "snake",
+                          "chook", "chicken", "ferret", "guinea", "rat", "mouse", "tabby", "kelpie", "labrador", "terrier", "spaniel"})
+PERSON_WORDS = frozenset({"son", "daughter", "grandson", "granddaughter", "grandchild", "grandkid", "child", "kid", "boy", "girl",
+                          "baby", "wife", "husband", "partner", "girlfriend", "boyfriend", "fiance", "fiancee", "sister", "brother",
+                          "mum", "mom", "mother", "dad", "father", "nan", "nana", "grandma", "grandmother", "grandpa", "grandfather",
+                          "aunt", "auntie", "uncle", "cousin", "niece", "nephew", "friend", "boss", "stepson", "stepdaughter",
+                          "colleague", "neighbour", "neighbor", "teacher"})
+_KIND_GAP = r"(?:\s+(?:is|was)\s+|\s*,\s*|\s+)(?:(?:named|called)\s+)?"
+_KIND_ALT = "|".join(sorted(ANIMAL_WORDS | PERSON_WORDS, key=len, reverse=True))
+
+
+def _kind_of(word: str) -> Optional[str]:
+    w = word.lower()
+    return "animal" if w in ANIMAL_WORDS else "person" if w in PERSON_WORDS else None
+
+
+#: a name as written: a first name, or a first name and surname, kept whole; ``kind_flip`` compares them the way the people graph
+#: resolves names (a cat "Oscar Wilde" is not a person "Oscar Smith"; a bare "Fenn" is a stored "Fenn Smith").
+_FULL_NAME = r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+
+
+def subject_kinds(text: str) -> dict:
+    """``{name_lower: {"person"|"animal"}}`` for every capitalised name (first name, or full name) a kind word sits right beside
+    ("grandson Kit", "pet is named Kit", "cat called Oscar Wilde", "Theo is a cat", "Kit, the user's grandson"). Pure."""
+    out: dict = {}
+    t = text or ""
+    # anchored on the KIND VOCABULARY, never on position: an optional word before the kind slot ate the kind ("Fenn is a cat and
+    # is six" captured "and", QA round 9 review), so every slot below is a kind word or nothing
+    # A phrase with TWO kind words ("a baby rabbit called Pip": a person word and an animal word) is AMBIGUOUS: the name gets both
+    # kinds, which ``kind_flip`` never refuses on (the people record decides instead: ``kind_conflict``).
+    for m in re.finditer(rf"(?i:\b({_KIND_ALT})s?){_KIND_GAP}({_FULL_NAME})\b", t):
+        k = _kind_of(m.group(1))
+        if k and m.group(2).lower() not in ("user", "the"):
+            before = re.search(r"([A-Za-z]+)\s+$", t[:m.start()])
+            other = _kind_of(before.group(1)) if before else None
+            out.setdefault(m.group(2).lower(), set()).update({k} | ({other} if other else set()))
+    for m in re.finditer(rf"\b({_FULL_NAME})(?i:(?:\s+is|\s+was|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my|our|the)\s+"
+                         rf"((?:[a-z]+\s+){{0,2}}?)({_KIND_ALT})s?)\b", t):
+        k = _kind_of(m.group(3))
+        nxt = re.match(r"\s+([A-Za-z]+)", t[m.end():])
+        extra = {_kind_of(w) for w in m.group(2).split()} - {None}
+        if nxt and _kind_of(nxt.group(1)):
+            extra.add(_kind_of(nxt.group(1)))           # "Pip is a baby rabbit": two kind words, ambiguous
+        elif _modifies_a_noun(t[m.end():]):
+            continue                    # "Fenn is a dog trainer": the kind word describes the next noun, no kind at all
+        if k and m.group(1).lower() not in ("user", "the"):
+            out.setdefault(m.group(1).lower(), set()).update({k} | extra)
+    return out
+
+
+#: what may FOLLOW an animal word that is the kind itself ("a cat", "a cat and ...", "a cat called Pip"); any other word after it is
+#: the noun it modifies ("a dog trainer", "a cat lover", "a horse vet")
+_KIND_ENDERS = frozenset({"and", "with", "called", "named", "who", "that", "which", "but", "is", "was", "of", "from", "in", "at",
+                          "now", "too", "though", "since", "for", "aged", "so", "or"})
+#: backstop: modified nouns that end a phrase in a hyphenated or run-on form the structural rule cannot see
+_MODIFIED_NOUNS = frozenset({"trainer", "walker", "groomer", "sitter", "breeder", "vet", "lover", "person", "owner", "show", "food",
+                             "park", "whisperer", "handler", "rescue", "shelter"})
+
+
+def _modifies_a_noun(rest: str) -> bool:
+    """Does the text right after an animal word make it a MODIFIER ("dog trainer", "dog-walker") rather than the kind? Pure."""
+    m = re.match(r"\s*(-\s*)?([A-Za-z]+)", rest or "")
+    if not m or (not m.group(1) and re.match(r"\s*[.,;:!?)]", rest)):
+        return False
+    word = m.group(2).lower()
+    if m.group(1) or word in _MODIFIED_NOUNS:
+        return True
+    return word not in _KIND_ENDERS and not m.group(2)[:1].isupper()
+
+
+def kind_flip(candidate: str, existing: str) -> Optional[str]:
+    """The name a candidate gives a DIFFERENT kind (person vs animal) from the one ``existing`` gives it, else None. Names compare
+    the way the people graph resolves them (``people_graph.match_tier``): the same name, or a bare first name against a stored
+    full name it is the first token of ("Fenn is a cat" vs "User's son Fenn Smith": the graph reads "Fenn" as Fenn Smith). A full
+    name never matches a stored bare one ("Oscar Smith" is not the cat "Oscar"), nor a different full name. Pure."""
+    a, b = subject_kinds(candidate), subject_kinds(existing)
+    for name, kinds in a.items():
+        if len(kinds) != 1:
+            continue
+        for stored, skinds in b.items():
+            same = stored == name or (" " not in name and stored.split()[0] == name)
+            if same and len(skinds) == 1 and kinds != skinds:
+                return name
+    return None
+
+
+def kind_refusal_tag(text: str) -> str:
+    """What a kind refusal may LOG: a code, the candidate's kind, the kind it would overwrite, and an 8-hex sha256 of the fact.
+    Never the fact, a name or a quote (QA round 9 review: the refusal logged the first 60 characters of a personal fact). Pure."""
+    import hashlib
+
+    kinds = set().union(*subject_kinds(text or "").values()) if subject_kinds(text or "") else set()
+    cand = "/".join(sorted(kinds)) or "-"
+    was = {"animal": "person", "person": "animal"}.get(cand, "-")
+    return f"KIND_FLIP_REFUSED code=kind_flip cand_kind={cand} stored_kind={was} " \
+           f"fact={hashlib.sha256((text or '').encode('utf-8')).hexdigest()[:8]}"
+
+
+#: the newest approved rows of the member the kind check reads (one metadata-filtered listing, no similarity search)
+KIND_SCAN_LIMIT = 2000
+
+
+async def kind_conflict(svc, text: str, user_id: str) -> tuple[bool, Optional[str]]:
+    """``(refuse, row_id)``: does ``text`` give a named subject a different KIND from ANY approved row of this member naming it?
+    Authoritative, not top-k: the member's own listing (``list_all_by_status_strict``, which raises instead of reading a failure as
+    "no rows"), newest ``KIND_SCAN_LIMIT`` rows. Only a candidate that types a name pays for it. An unreadable store refuses the
+    kind-bearing write (fail closed, ``KIND_CHECK_UNAVAILABLE``); ``row_id`` is then None. A service with NO listing call at all
+    (a test double that only searches) is checked on its search hits by the caller instead. Never raises."""
+    kinds = subject_kinds(text)
+    if not kinds:
+        return False, None
+    lister = getattr(svc, "list_all_by_status_strict", None)
+    if lister is None and not hasattr(svc, "list_by_status"):
+        return False, None
+    try:
+        rows = (await lister(user_id=user_id, status="approved") if lister is not None
+                else await svc.list_by_status(user_id=user_id, status="approved", limit=KIND_SCAN_LIMIT))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("KIND_CHECK_UNAVAILABLE user=%s (%s) - a write that types a name is refused", user_id, type(exc).__name__)
+        return True, None
+    uid = (user_id or "").strip().lower()
+    for r in list(rows or [])[:KIND_SCAN_LIMIT]:
+        meta = getattr(r, "metadata", None) or {}
+        owner = str(meta.get("user_id") or meta.get("wing") or "").strip().lower()
+        if owner and owner != uid:
+            continue
+        stored = getattr(r, "text", "") or ""
+        if any(re.search(rf"\b{re.escape(n)}\b", stored, re.IGNORECASE) for n in kinds) and kind_flip(text, stored):
+            logger.info("KIND_FLIP_REFUSED user=%s kept=%s", user_id, getattr(r, "id", ""))
+            return True, getattr(r, "id", None)
+    # the authoritative PEOPLE record: a name the member's people graph holds as a person is never made an animal, whether the
+    # phrase was clear ("Pip is a rabbit") or ambiguous ("Pip is a baby rabbit")
+    for name, ks in kinds.items():
+        if "animal" in ks and await _person_in_graph(user_id, name):
+            logger.info("KIND_FLIP_REFUSED user=%s kept=people_graph", user_id)
+            return True, None
+    return False, None
+
+
+async def _person_in_graph(user_id: str, name: str) -> bool:
+    """Does this member's people graph hold ``name`` as a person (``people_graph.resolve_person``, exact or whole-token tier, no
+    prefix guesses) that is not a PET (``correction_apply._make_pet`` writes relationship "pet" / "pet <kind>")? One roster read
+    (``SELECT id, name FROM people WHERE user_id = ? AND deleted = 0``) matched in Python, then the matched rows' relationship. A
+    graph that cannot be read answers False: only a POSITIVE person refuses. Never raises."""
+    try:
+        import people_graph
+        import person_extractor
+
+        db, opened = await person_extractor._ensure_db(None)
+        if db is None:
+            return False
+        try:
+            res = await people_graph.resolve_person(db, user_id, name, allow_prefix=False)
+            if res.status not in ("unique", "ambiguous") or res.tier not in ("exact", "token"):
+                return False
+            # pets live in the people table too: correction_apply._make_pet marks them relationship "pet" / "pet <kind>". A
+            # match is a PERSON only when at least one matched row is not a pet (an empty relationship counts as a person)
+            for m in res.matches:
+                rows = await people_graph._all(db, "SELECT relationship FROM people WHERE id = ? AND user_id = ?",
+                                               (m.person_id, user_id))
+                rel = str((rows[0][0] if rows else "") or "").strip().lower()
+                if not (rel == "pet" or rel.startswith("pet ")):
+                    return True
+            return False
+        finally:
+            if opened:
+                await db.close()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+#: THE kind guard every writer path calls FIRST, before any reconcile, supersede or archive keyed by entity or name
+#: (``reconcile_for_ingest`` and ``person_extractor._ingest_to_mempalace``); ``MemoryService.review(edit)`` and ``supersede_by``
+#: re-check the pair they write (``kind_flip``). Pinned by ``tests/test_qa9_memory.py::test_every_writer_path_is_kind_guarded``.
+kind_guard = kind_conflict
+
+
 def guard_existing_by_entity(
     text: str,
     existing: list[tuple[str, str]],
@@ -1327,12 +1524,19 @@ async def reconcile_for_ingest(
     entity guards (namesake protection, third-person-name guards), then asks
     :func:`classify_against_existing` what to do.
 
-    Returns ``("add"|"update"|"skip", mem_id_or_None)``. NEVER raises — any
+    ``("refuse", row_id_or_None)``: the candidate gives a named subject a different KIND from a stored row of this member, or that
+    could not be checked (``kind_conflict``, before the search): EVERY caller writes nothing for it.
+
+    Returns ``("add"|"update"|"skip"|"refuse", mem_id_or_None)``. NEVER raises — any
     failure degrades to ``("add", None)`` so a real fact is never lost because
     reconciliation errored. Every such fail-open ADD is COUNTED (by cause) via
     :func:`memory_metrics.record_reconcile_failopen` so the duplicate-factory
     risk is watchable; the decision itself is unchanged."""
     t0 = time.monotonic()
+    refuse, kept = await kind_guard(svc, text, user_id)
+    if refuse:
+        # the candidate re-types a stored subject (person <-> animal), or the check could not be made: nothing is written
+        return "refuse", kept
     try:
         # Patient search: this is the background WRITE path, not the
         # latency-gated turn path (see _RECONCILE_SEARCH_TIMEOUT_S).
@@ -1372,6 +1576,10 @@ async def reconcile_for_ingest(
             for h in (hits or [])
             if getattr(h, "text", None)
         ]
+        for mem_id, mem_text in existing:
+            if mem_id and kind_flip(text, mem_text):        # the search hits too (all a listing-less service can be checked on)
+                logger.info("KIND_FLIP_REFUSED user=%s kept=%s", user_id, mem_id)
+                return "refuse", mem_id
         existing = guard_existing_by_entity(text, existing, title)
         decision = classify_against_existing(text, existing)
         if decision[0] == "add" and extend_supersedes:
