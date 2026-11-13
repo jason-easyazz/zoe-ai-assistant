@@ -5,7 +5,9 @@ should I wake you up earlier?" - offline, private, never unprompted.
 
 THE LOOP. Night (``memory_digest`` phase 1.65, the dreaming cycle): ``generate_for_user`` reads the member's own events for the next
 ``HORIZON_DAYS`` and, by CODE only (keywords and clock maths, no model, no network), makes at most three kinds of offer per event:
-``wake`` (a one-off earlier alarm), ``leave`` (a leave-by reminder) and ``packing`` (a private packing list). Day: on the member's
+``wake`` (a one-off earlier alarm), ``leave`` (a leave-by reminder) and ``packing`` (a private packing list). A REPEATING event
+(``events.recurring``: an RRULE in ``reminder_recurrence``'s subset or daily / weekly / fortnightly / monthly / yearly) stands for its
+NEXT occurrence in the horizon only (owner decision 2026-11-13); a repeat value that is not understood gets no offer. Day: on the member's
 own chat brain turn, ``pick_for_turn`` returns at most ONE timely offer as a short "By the way - ..." line (and a Yes/No card).
 Answer: a short yes/no that answers the line Zoe just said (``match_reply``) or a card tap (``execute_if_ours`` / ``on_dismissed``)
 runs ``answer``: yes = the real tool (``alarms.create_alarm`` / ``reminder_service.create_reminder_record`` /
@@ -153,6 +155,44 @@ def classify(ev: Event) -> Optional[str]:
     return None
 
 
+_REPEAT_WORDS = {"daily": ("DAILY", 1), "weekly": ("WEEKLY", 1), "fortnightly": ("WEEKLY", 2), "biweekly": ("WEEKLY", 2),
+                 "monthly": ("MONTHLY", 1), "yearly": ("YEARLY", 1), "annually": ("YEARLY", 1), "annual": ("YEARLY", 1)}
+
+
+def _repeat_rule(raw: str) -> Optional[dict]:
+    """``events.recurring`` as a rule: an RFC 5545 RRULE in ``reminder_recurrence``'s subset, or one plain word (daily, weekly,
+    fortnightly, monthly, yearly). None = not understood: that event gets no offer rather than a guessed date."""
+    import reminder_recurrence as rr
+
+    text = (raw or "").strip()
+    word = _REPEAT_WORDS.get(text.lower())
+    if word:
+        return {"freq": word[0], "interval": word[1], "byday": [], "bymonthday": None}
+    return rr.parse_rrule(text)
+
+
+def _occurs_on(ev: Event, day: date) -> bool:
+    import reminder_recurrence as rr
+
+    rule, anchor = _repeat_rule(ev.recurring), _date(ev.start_date)
+    return rule is not None and anchor is not None and rr.occurs_on(rule, anchor, day)
+
+
+def _next_occurrence(ev: Event, now: datetime) -> Optional[date]:
+    """A repeating event's NEXT date inside the horizon that has not started yet (today counts only while its start is still ahead of
+    ``now``), else None. One occurrence at a time: a daily event is one offer for its next day, never fourteen."""
+    today = now.astimezone(_tz()).date()
+    start_m = None if ev.all_day else _hhmm(ev.start_time)
+    for i in range(HORIZON_DAYS + 1):
+        day = today + timedelta(days=i)
+        if not _occurs_on(ev, day):
+            continue
+        if _at(day, start_m or 0) <= now:            # today's has already begun (or was all day): the offer is for the one after
+            continue
+        return day
+    return None
+
+
 def _at(d: date, minutes: int) -> datetime:
     return datetime(d.year, d.month, d.day, minutes // 60, minutes % 60, tzinfo=_tz())
 
@@ -164,8 +204,15 @@ def candidates(events: list[Event], *, now: datetime, usual_wake: Callable[[date
     for ev in events:
         kind = classify(ev)
         start_d = _date(ev.start_date)
-        if kind is None or start_d is None or (ev.recurring or "").strip():
+        if kind is None or start_d is None:
             continue
+        end_d = _date(ev.end_date)
+        if (ev.recurring or "").strip():                 # a repeating event stands for its next occurrence in the horizon
+            nxt = _next_occurrence(ev, now)
+            if nxt is None:
+                continue
+            end_d = end_d + (nxt - start_d) if end_d is not None else None
+            start_d = nxt
         if not (today <= start_d <= today + timedelta(days=HORIZON_DAYS)):
             continue
         start_m = None if ev.all_day else _hhmm(ev.start_time)
@@ -189,7 +236,6 @@ def candidates(events: list[Event], *, now: datetime, usual_wake: Callable[[date
                         out.append(Offer("wake", ev.id, f"wake:{ev.id}:{start_d.isoformat()}T{_fmt_hhmm(start_m)}", ev.title,
                                          ev.location, wake_dt, start_dt - SURFACE_FROM["wake"],
                                          {**base, "wake_time": _fmt_hhmm(wake_m), "usual_time": _fmt_hhmm(usual)}))
-        end_d = _date(ev.end_date)
         if kind in ("flight", "train", "trip") and end_d is not None and end_d > start_d and start_dt > now:
             out.append(Offer("packing", ev.id, f"packing:{ev.id}:{start_d.isoformat()}", ev.title, ev.location, start_dt,
                              start_dt - SURFACE_FROM["packing"], {**base, "end_date": end_d.isoformat()}))
@@ -279,8 +325,9 @@ def _missing(exc: BaseException) -> bool:
 
 async def _events(db: Any, uid: str, today: date) -> list[Event]:
     rows = await _all(db, "SELECT id, user_id, title, start_date, start_time, end_date, location, all_day, recurring FROM events"
-                          " WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL) AND start_date >= ? AND start_date < ?",
-                      (uid, today.isoformat(), (today + timedelta(days=HORIZON_DAYS + 1)).isoformat()))
+                          " WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL) AND start_date < ?"
+                          " AND (start_date >= ? OR (recurring IS NOT NULL AND recurring <> ''))",       # a repeating event may have started long ago
+                      (uid, (today + timedelta(days=HORIZON_DAYS + 1)).isoformat(), today.isoformat()))
     return [Event(str(r[0]), str(r[1]), str(r[2] or ""), str(r[3] or ""), str(r[4] or ""), str(r[5] or ""), str(r[6] or ""),
                   bool(r[7]), str(r[8] or "")) for r in rows]
 
@@ -343,7 +390,9 @@ def _event_matches(ev: Optional[Event], slots: dict) -> bool:
     if ev is None:
         return False
     start_m = None if ev.all_day else _hhmm(ev.start_time)
-    return (str(_date(ev.start_date)) == str(slots.get("start_date"))
+    offered = _date(slots.get("start_date"))
+    same_day = (offered is not None and _occurs_on(ev, offered)) if (ev.recurring or "").strip() else str(_date(ev.start_date)) == str(slots.get("start_date"))
+    return (same_day
             and (_fmt_hhmm(start_m) if start_m is not None else "") == str(slots.get("start_time") or ""))
 
 
