@@ -8,7 +8,7 @@
 
     // Voice pages and chat are full-screen surfaces with their own orb — skip the floating popup
     var _p = window.location.pathname;
-    if (_p.includes('/touch/chat.html') || _p.includes('/touch/voice.html') || _p.includes('/voice.html')) return;
+    if (_p.includes('/voice.html')) return;
 
     if (document.getElementById('zoeOrbContainer')) return;
 

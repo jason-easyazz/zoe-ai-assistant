@@ -13,10 +13,8 @@ if (typeof window.API_BASE === 'undefined') {
 
 // XSS defence for the live journal renderers below.
 //
-// This helper is deliberately LOCAL to this file. journal-api.js is loaded by
-// BOTH services/zoe-ui/dist/journal.html and services/zoe-ui/dist/touch/journal.html.
-// Only the former defines a page-level escapeHtml(); referencing that would throw
-// ReferenceError on the touch panel and break journal rendering on the kiosk.
+// This helper is deliberately LOCAL to this file: a page that loads journal-api.js
+// without defining escapeHtml() must not throw ReferenceError and render nothing.
 // window.zoeEscapeHtml (js/common.js) is likewise not safe to depend on -- see the
 // API_BASE note above, this file is expected to survive pages that omit common.js.
 //
