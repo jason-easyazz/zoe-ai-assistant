@@ -215,16 +215,23 @@ async def withdraw_matching(user_id: str, matches) -> int:
     you about my sister" left "add Bea (your sister) as a contact?" pending, QA round 9). The topic is not a name, so the
     forgotten-entity filter above never saw it. RAISES on a store failure (the forget is then not confirmed)."""
     gone = 0
-    async with get_db_ctx() as db:
-        rows = await db.fetch(
-            "SELECT id, action_type, description, offer_phrase, pre_filled_slots FROM pending_suggestions "
-            "WHERE user_id = $1 AND resolved = 0", user_id)
-        for r in rows:
-            if str(r["action_type"] or "") in _FORGET_EXEMPT:
-                continue
-            if matches("\n".join(str(r[k] or "") for k in ("description", "offer_phrase", "pre_filled_slots"))):
-                await db.execute("DELETE FROM pending_suggestions WHERE id = $1", r["id"])
-                gone += 1
+    try:
+        async with get_db_ctx() as db:
+            rows = await db.fetch(
+                "SELECT id, action_type, description, offer_phrase, pre_filled_slots FROM pending_suggestions "
+                "WHERE user_id = $1 AND resolved = 0", user_id)
+            for r in rows:
+                if str(r["action_type"] or "") in _FORGET_EXEMPT:
+                    continue
+                if matches("\n".join(str(r[k] or "") for k in ("description", "offer_phrase", "pre_filled_slots"))):
+                    await db.execute("DELETE FROM pending_suggestions WHERE id = $1", r["id"])
+                    gone += 1
+    except RuntimeError as exc:
+        from db_pool import pool_ever_initialised
+
+        if "not initialised" in str(exc) and not pool_ever_initialised():
+            return 0            # a process that never had a database (a lab / bare unit run) holds no offers; a LOST pool raises
+        raise
     return gone
 
 

@@ -393,11 +393,10 @@ def _words(text: str) -> set:
 def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency)."),
     or None for an ordinary fact. A mined fact is the event when it IS a call-now emergency itself, or when ``said`` (the member's
-    one turn it was mined from) is one and the fact restates that turn's words ("User cannot get up"). Only what the floor ENFORCES;
-    a whole transcript (several lines) is never read as the turn. Pure apart from the mode and the date. Never raises."""
+    one turn it was mined from) is one and the fact restates that turn's words ("User cannot get up"). In EVERY mode: the flag
+    gates the reply, never how memory files an emergency. A whole transcript (several lines) is never read as the turn. Pure apart
+    from the date. Never raises."""
     try:
-        if mode() != "enforce":
-            return None
         v = detect(fact)
         if v.cls != "red_call":
             one = (said or "").strip()

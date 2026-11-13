@@ -214,23 +214,20 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
 async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) -> int:
     """The pending offers about the topic go with it (QA round 9: "forget that I told you about my sister" left "add Bea (your
     sister) as a contact?" pending, and it was offered twice more): an offer holding the topic words, or one whose proposed name
-    was said in a forgotten turn / row. Best effort: a failure is logged (the offer is then the only trace left; never raises)."""
+    was said in a forgotten turn / row. RAISES when the offers could not be read or deleted: the forget is then NOT confirmed
+    (``store_down``, the same honest outcome as a failed notes erase) and the member's repeat runs it again."""
+    import pending_suggestions
+
     said = {w for t in forgotten_texts for w in re.findall(r"[a-z]+", (t or "").lower())}
 
     def matches(text: str) -> bool:
         names = {w.lower() for n in re.findall(r'"name":\s*"([^"]+)"', text or "") for w in n.split()}
         return row_matches(groups, text) or bool(names and names <= said)
 
-    try:
-        import pending_suggestions
-
-        gone = await pending_suggestions.withdraw_matching(user_id, matches)
-        if gone:
-            logger.info("forget_topic: user=%s offers_withdrawn=%d", user_id, gone)
-        return gone
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("forget_topic: pending offers not withdrawn (%s)", type(exc).__name__)
-        return 0
+    gone = await pending_suggestions.withdraw_matching(user_id, matches)
+    if gone:
+        logger.info("forget_topic: user=%s offers_withdrawn=%d", user_id, gone)
+    return gone
 
 
 async def forget(svc: Any, user_id: str, topic: str) -> Result:
@@ -252,6 +249,21 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     import turn_forget
 
     said = [t.text for t in turn_forget.turns_matching(user_id, lambda text: row_matches(groups, text))]
+    # the pending offers FIRST: a failure leaves the forget not confirmed with nothing half-done, so the member's repeat sees the
+    # same turns and rows (and so the same names) again
+    try:
+        await _withdraw_offers(user_id, groups, said + [getattr(r, "text", "") or "" for r in rows])
+    except Exception as exc:  # noqa: BLE001 - not confirmed: an offer about the topic may still be pending
+        logger.warning("forget_topic: pending offers not withdrawn (%s) - not confirmed", type(exc).__name__)
+        try:        # "I won't bring it up meanwhile": the offer reads (pending_suggestions) withhold what a tombstone names
+            import memory_tombstones
+
+            for word in min(groups, key=len):
+                memory_tombstones.add(user_id, word)       # in-process and short (the durable answer is the honest reply)
+        except Exception:  # noqa: BLE001
+            pass
+        res.store_down = True
+        return res
     try:
         # the words before the rows, like every forget: the in-flight capture of those turns cannot land
         res.turns_retracted, res.words_erased = await _erase_words(user_id, groups)
@@ -267,7 +279,6 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
         logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
-    await _withdraw_offers(user_id, groups, said + [getattr(r, "text", "") or "" for r in rows])
     archived: list = []
     for r in rows:
         try:

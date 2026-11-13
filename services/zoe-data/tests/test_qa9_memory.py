@@ -32,15 +32,16 @@ class _Row:
 
 
 class _Svc:
-    def __init__(self, *texts):
+    def __init__(self, *texts, hits=None):
         self.rows = [_Row(f"r{i}", t) for i, t in enumerate(texts)]
+        self.hits = hits                    # the similarity hits; None = every row
         self.edits, self.ingested, self.archived = [], [], []
 
     async def list_by_status(self, **_k):
         return list(self.rows)
 
     async def search(self, *_a, **_k):
-        return list(self.rows)
+        return list(self.rows) if self.hits is None else [r for r in self.rows if r.id in self.hits]
 
     async def review(self, rid, decision=None, edits=None, actor=None, **_k):
         (self.edits if decision == "edit" else self.archived).append((rid, edits))
@@ -81,10 +82,32 @@ def test_the_age_correction_rewrites_only_the_number(monkeypatch):
 def test_a_model_guess_never_retypes_a_stored_subject(candidate, stored):
     assert mq.kind_flip(candidate, stored)
     svc = _Svc(stored)
-    assert run(mq.reconcile_for_ingest(svc, candidate, UID)) == ("skip", "r0")
+    assert run(mq.reconcile_for_ingest(svc, candidate, UID)) == ("refuse", "r0")
     assert run(ed._ingest_or_supersede(svc, candidate, user_id=UID, source="idle_consolidation", session_id="s", user_turn_id="t",
-                                       memory_type="fact", confidence=0.8, tags=[])) == "skip"
+                                       memory_type="fact", confidence=0.8, tags=[])) == "dropped"      # honest: NOT stored
     assert svc.ingested == [] and svc.archived == []          # no new row of another kind, the stored row stands
+
+
+def test_the_kind_check_reads_every_row_not_the_top_k():
+    # the stored son row is deliberately NOT among the similarity hits (only the cat row is): the flip is still refused
+    svc = _Svc("User has a cat called Pip", *(f"User likes walk number {i}" for i in range(40)), SON, hits={"r0"})
+    assert run(mq.reconcile_for_ingest(svc, "User has a cat named Fenn.", UID)) == ("refuse", "r41")
+    # another member's row with the same name does not block
+    other = _Svc(SON, hits=set())
+    other.rows[0].metadata = {"user_id": "demo_qa9_someone_else"}
+    assert run(mq.reconcile_for_ingest(other, "User has a cat named Fenn.", UID))[0] == "add"
+    # same-kind writes are unaffected
+    assert run(mq.reconcile_for_ingest(_Svc(SON, hits=set()), "User's son Fenn is 7 years old", UID))[0] == "add"
+
+
+def test_an_unreadable_store_refuses_only_a_kind_bearing_write():
+    class _Down(_Svc):
+        async def list_all_by_status_strict(self, **_k):
+            raise RuntimeError("store unreachable")
+
+    svc = _Down(SON, hits=set())
+    assert run(mq.reconcile_for_ingest(svc, "User has a cat named Fenn.", UID)) == ("refuse", None)     # fail closed
+    assert run(mq.reconcile_for_ingest(svc, "User likes long walks", UID))[0] == "add"                  # no kind: no lookup
 
 
 @pytest.mark.parametrize("candidate, stored", [
@@ -209,17 +232,58 @@ def test_a_topic_forget_withdraws_offers_naming_it(monkeypatch):
     assert gone == 2 and [o["id"] for o in db.offers] == ["o3", "o4"]
 
 
-def test_the_withdraw_is_best_effort_and_reaches_the_forget(monkeypatch):
+@pytest.fixture
+def forget_env(monkeypatch):
+    import exact_words
+    import memory_tombstones
+    import turn_forget
+
+    async def flag(_u, _t):
+        return 1
+
+    monkeypatch.setattr(exact_words, "forget_transcript", flag)
+    turn_forget.reset()
+    memory_tombstones.clear_all()
+    exact_words.set_backend(exact_words.MemoryBackend())
+    yield
+    exact_words.set_backend(None)
+    turn_forget.reset()
+    memory_tombstones.clear_all()
+
+
+def test_a_failed_offer_withdrawal_never_confirms_and_the_repeat_finishes(monkeypatch, forget_env):
+    import contextlib
+
+    import memory_tombstones
+    import pending_suggestions
+    import turn_forget
+
+    db = _Db([_offer("o1", "Wynne", "sister"), _offer("o2", "Wynne"), _offer("o3", "Tamsin", "partner")])
+    down = {"on": True}
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        if down["on"]:
+            raise RuntimeError("connection lost")      # a pool that existed and was lost (never a "no database" process)
+        yield db
+
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", ctx)
+    turn_forget.note_user_turn(UID, "my sister wynne lives down south, we talk most sundays")
+    svc = _Svc()
+    res = run(forget_topic.forget(svc, UID, "my sister"))
+    assert res.store_down and "can't say that's forgotten" in forget_topic.reply(res, "my sister")
+    assert len(db.offers) == 3                                                     # nothing withdrawn, and nothing claimed
+    assert memory_tombstones.matching_tombstone(UID, "Add Wynne (your sister) as a contact?")   # withheld meanwhile
+    down["on"] = False                                                             # the member says it again
+    res = run(forget_topic.forget(svc, UID, "my sister"))
+    assert not res.store_down and res.turns_retracted == 1
+    assert [o["id"] for o in db.offers] == ["o3"]
+
+
+def test_a_process_with_no_database_holds_no_offers(monkeypatch):
     import pending_suggestions
 
-    async def down(*_a, **_k):
-        raise RuntimeError("no pool")
-
-    monkeypatch.setattr(pending_suggestions, "withdraw_matching", down)
-    assert run(forget_topic._withdraw_offers(UID, forget_topic.topic_groups("my sister"), [])) == 0
-    import inspect
-
-    assert "_withdraw_offers(" in inspect.getsource(forget_topic.forget)
+    assert run(pending_suggestions.withdraw_matching(UID, lambda _t: True)) == 0    # the bare unit run: never had a pool
 
 
 # -- 5. a question or a call-now emergency is never a fact --------------------------------------------------------------------------
@@ -252,8 +316,28 @@ def test_a_call_now_emergency_is_one_dated_health_event(monkeypatch):
     for fact, said in [("User fell asleep on the couch", "i fell asleep on the couch"), ("User's phone fell over", "my phone fell over"),
                        ("User plays bowls every Thursday", FALL), ("User cannot get up", FALL + "\nmy son is 7")]:
         assert medical_safety.emergency_event(fact, said, today=day) is None
-    monkeypatch.setenv("ZOE_MEDICAL_SAFETY", "shadow")
-    assert medical_safety.emergency_event(MINED[0], FALL, today=day) is None       # only what the floor ENFORCES
+
+
+
+@pytest.mark.parametrize("flag", ["off", "shadow", "enforce"])
+def test_the_filing_holds_in_every_mode_and_only_the_reply_follows_the_flag(flag, monkeypatch):
+    import datetime
+
+    import distress_handoff
+
+    async def adult(_u):
+        return False
+
+    async def no_intercom(*_a, **_k):
+        return False
+
+    monkeypatch.setattr(distress_handoff, "_is_minor", adult)
+    monkeypatch.setattr(medical_safety, "_intercom_reachable", no_intercom)
+    monkeypatch.setenv("ZOE_MEDICAL_SAFETY", flag)
+    day = datetime.date(2026, 11, 13)
+    assert medical_safety.emergency_event(MINED[0], FALL, today=day) == "User had a fall on 13 November 2026 (a medical emergency)."
+    reply = run(medical_safety.handle(FALL, UID))
+    assert (reply is not None) == (flag == "enforce")                            # the flag gates the reply only
 
 
 @pytest.fixture
@@ -283,8 +367,11 @@ def _rows(s):
     return [r for st in ("approved", "pending") for r in run(s.list_by_status(user_id=UID, status=st))]
 
 
-def test_the_fall_turn_files_no_routine_and_stays_recallable(mem):
+@pytest.mark.parametrize("flag", ["off", "shadow", "enforce"])
+def test_the_fall_turn_files_no_routine_and_stays_recallable(mem, flag, monkeypatch):
     import provenance_answers as pa
+
+    monkeypatch.setenv("ZOE_MEDICAL_SAFETY", flag)
 
     assert memory_provenance.is_off_record(UID, FALL) is False                   # the turn itself is NOT off the record
     assert memory_provenance.claim_turn("demo_qa9_00000002", FALL) is False

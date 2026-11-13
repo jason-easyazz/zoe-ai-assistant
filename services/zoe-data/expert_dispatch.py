@@ -619,6 +619,10 @@ async def _ingest_or_supersede(svc, text: str, *, user_id: str, source: str,
         # lacked — a Jessica correction can no longer supersede Karen's row.
         from memory_quality import reconcile_for_ingest
         action, match_id = await reconcile_for_ingest(svc, text, user_id)
+        if action == "refuse":
+            # the fact re-types a stored subject, or the kind check could not be made: NOT stored, and the caller says so
+            logger.info("MEMORY_STORE_DROPPED source=%s reason=kind_conflict", source)
+            return "dropped"
         if action == "skip" and match_id:
             # The existing row is at least as good — don't write a duplicate.
             try:

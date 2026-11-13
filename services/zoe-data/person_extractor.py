@@ -805,6 +805,10 @@ async def _ingest_to_mempalace(
         except Exception as exc:
             logger.debug("person_extractor: reconciliation unavailable (%s) — plain ingest", exc)
             op, target_id = "add", None
+        if op == "refuse":
+            # the fact re-types a stored subject (memory_quality.kind_conflict): never written, whatever row it names
+            logger.info("person_extractor: kind refusal cand=%r", text[:60])
+            return None
         if op in ("skip", "update") and target_id:
             # Linkage guard (Greptile P1): the matched row may have come from
             # another writer (raw voice_fact / digest) and NOT be keyed to this

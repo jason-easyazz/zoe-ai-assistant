@@ -1318,6 +1318,41 @@ def kind_flip(candidate: str, existing: str) -> Optional[str]:
     return None
 
 
+#: the newest approved rows of the member the kind check reads (one metadata-filtered listing, no similarity search)
+KIND_SCAN_LIMIT = 2000
+
+
+async def kind_conflict(svc, text: str, user_id: str) -> tuple[bool, Optional[str]]:
+    """``(refuse, row_id)``: does ``text`` give a named subject a different KIND from ANY approved row of this member naming it?
+    Authoritative, not top-k: the member's own listing (``list_all_by_status_strict``, which raises instead of reading a failure as
+    "no rows"), newest ``KIND_SCAN_LIMIT`` rows. Only a candidate that types a name pays for it. An unreadable store refuses the
+    kind-bearing write (fail closed, ``KIND_CHECK_UNAVAILABLE``); ``row_id`` is then None. A service with NO listing call at all
+    (a test double that only searches) is checked on its search hits by the caller instead. Never raises."""
+    kinds = subject_kinds(text)
+    if not kinds:
+        return False, None
+    lister = getattr(svc, "list_all_by_status_strict", None)
+    if lister is None and not hasattr(svc, "list_by_status"):
+        return False, None
+    try:
+        rows = (await lister(user_id=user_id, status="approved") if lister is not None
+                else await svc.list_by_status(user_id=user_id, status="approved", limit=KIND_SCAN_LIMIT))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("KIND_CHECK_UNAVAILABLE user=%s (%s) - a write that types a name is refused", user_id, type(exc).__name__)
+        return True, None
+    uid = (user_id or "").strip().lower()
+    for r in list(rows or [])[:KIND_SCAN_LIMIT]:
+        meta = getattr(r, "metadata", None) or {}
+        owner = str(meta.get("user_id") or meta.get("wing") or "").strip().lower()
+        if owner and owner != uid:
+            continue
+        stored = getattr(r, "text", "") or ""
+        if any(re.search(rf"\b{re.escape(n)}\b", stored, re.IGNORECASE) for n in kinds) and kind_flip(text, stored):
+            logger.info("KIND_FLIP_REFUSED user=%s kept=%s", user_id, getattr(r, "id", ""))
+            return True, getattr(r, "id", None)
+    return False, None
+
+
 def guard_existing_by_entity(
     text: str,
     existing: list[tuple[str, str]],
@@ -1387,12 +1422,19 @@ async def reconcile_for_ingest(
     entity guards (namesake protection, third-person-name guards), then asks
     :func:`classify_against_existing` what to do.
 
-    Returns ``("add"|"update"|"skip", mem_id_or_None)``. NEVER raises — any
+    ``("refuse", row_id_or_None)``: the candidate gives a named subject a different KIND from a stored row of this member, or that
+    could not be checked (``kind_conflict``, before the search): EVERY caller writes nothing for it.
+
+    Returns ``("add"|"update"|"skip"|"refuse", mem_id_or_None)``. NEVER raises — any
     failure degrades to ``("add", None)`` so a real fact is never lost because
     reconciliation errored. Every such fail-open ADD is COUNTED (by cause) via
     :func:`memory_metrics.record_reconcile_failopen` so the duplicate-factory
     risk is watchable; the decision itself is unchanged."""
     t0 = time.monotonic()
+    refuse, kept = await kind_conflict(svc, text, user_id)
+    if refuse:
+        # the candidate re-types a stored subject (person <-> animal), or the check could not be made: nothing is written
+        return "refuse", kept
     try:
         # Patient search: this is the background WRITE path, not the
         # latency-gated turn path (see _RECONCILE_SEARCH_TIMEOUT_S).
@@ -1433,10 +1475,9 @@ async def reconcile_for_ingest(
             if getattr(h, "text", None)
         ]
         for mem_id, mem_text in existing:
-            if mem_id and kind_flip(text, mem_text):
-                # the candidate re-types a stored person as an animal (or the reverse): the stored row stands, nothing is written
-                logger.info("KIND_FLIP_SKIP user=%s kept=%s", user_id, mem_id)
-                return "skip", mem_id
+            if mem_id and kind_flip(text, mem_text):        # the search hits too (all a listing-less service can be checked on)
+                logger.info("KIND_FLIP_REFUSED user=%s kept=%s", user_id, mem_id)
+                return "refuse", mem_id
         existing = guard_existing_by_entity(text, existing, title)
         decision = classify_against_existing(text, existing)
         if decision[0] == "add" and extend_supersedes:
