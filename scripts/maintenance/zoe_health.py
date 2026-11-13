@@ -97,6 +97,15 @@ def night_timer_check(run: Callable = _run) -> Check:
     return Check("night-window timer", ok, f"{NIGHT_TIMER} is {active or '?'} / {enabled or '?'}" if not ok else "armed")
 
 
+# Desktop-session units (xdg portals, pipewire, gnome-*) fail on a headless login and are not Zoe's: alerting on them
+# would page the owner every boot for nothing. Everything else stays watched, including units this list does not know.
+FOREIGN_UNIT_PREFIXES = ("xdg-", "gnome-", "org.gnome.", "at-spi", "dbus-", "pipewire", "wireplumber", "pulseaudio", "tracker-", "evolution-")
+
+
+def _foreign_unit(unit: str) -> bool:
+    return unit.startswith(FOREIGN_UNIT_PREFIXES)
+
+
 def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _run,
           night_open: Optional[bool] = None) -> list[Check]:
     out: list[Check] = []
@@ -112,7 +121,7 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
     bad = [ln.split("\t")[0] for ln in txt.splitlines() if "(unhealthy)" in ln or "\tRestarting" in ln] if rc == 0 else []
     out.append(Check("containers", rc == 0 and not bad, ", ".join(bad) if bad else f"docker rc={rc}" if rc else "ok"))
     rc, txt = run(["systemctl", "--user", "--failed", "--plain", "--no-legend", "--type=service,timer"])
-    failed = sorted(ln.split()[0] for ln in txt.splitlines() if ln.strip()) if rc == 0 else []
+    failed = sorted(u for u in (ln.split()[0] for ln in txt.splitlines() if ln.strip()) if not _foreign_unit(u)) if rc == 0 else []
     out.append(Check("failed units", not failed, ", ".join(failed) if failed else "none"))
     out.append(night_timer_check(run))
     du = shutil.disk_usage("/")

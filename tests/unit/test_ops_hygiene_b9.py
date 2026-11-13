@@ -112,6 +112,22 @@ def test_health_probe_reports_spine_containers_and_failed_units():
     assert not checks["failed units"].ok and "zoe-backup.service" in checks["failed units"].detail
 
 
+def test_health_ignores_desktop_session_units_but_not_zoe_ones():
+    """xdg portals fail on a headless login and are not Zoe's; a failed Zoe unit beside them still alerts."""
+    def run(argv, timeout=5.0):
+        if argv[:2] == ["docker", "exec"]:
+            return 0, ""
+        if argv[:2] == ["docker", "ps"]:
+            return 0, "zoe-ui\tUp 3 hours"
+        return 0, ("xdg-desktop-portal.service loaded failed failed Portal\n"
+                   "xdg-desktop-portal-gtk.service loaded failed failed Portal\n"
+                   "pipewire.service loaded failed failed PipeWire")
+    checks = {c.name: c for c in health.probe(http=lambda port: (True, "x"), run=run, night_open=False)}
+    assert checks["failed units"].ok and checks["failed units"].detail == "none"
+    checks = {c.name: c for c in health.probe(http=lambda port: (True, "x"), run=_fake_run, night_open=False)}
+    assert not checks["failed units"].ok and "zoe-backup.service" in checks["failed units"].detail
+
+
 def test_health_skips_the_spine_while_the_night_window_is_open():
     checks = health.probe(http=lambda port: (False, "down"), run=_fake_run, night_open=True)
     assert not any(":" in c.name for c in checks), "the night window stops the spine on purpose"
