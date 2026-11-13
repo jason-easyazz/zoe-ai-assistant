@@ -619,7 +619,8 @@ def test_a_condition_or_instruction_is_stored_as_mined_and_the_reply_is_unchange
 @pytest.mark.parametrize("fact, said", [
     ("User fell over in the kitchen and cannot get up", FALL),
     ("User fell and could not get up", "i fell and could not get up"),          # "could not" is actual, not a condition
-    ("User cannot breathe when they lie down", "I can't breathe when I lie down"),   # plain "when" is temporal, kept
+    # plain "when" is temporal, kept (the fact says "lying down": a "they" reference now never converts, see the other-person rule)
+    ("User cannot breathe when lying down", "I can't breathe when I lie down"),
 ])
 def test_a_present_actual_emergency_still_files_one_event(fact, said):
     assert medical_safety.emergency_event(fact, said) is not None
@@ -980,3 +981,27 @@ def test_a_founded_only_store_is_unchanged(row, monkeypatch):
     # the restatement is remembered with no old value: a late re-filing of the founding date is NOT judged stale
     assert vc.superseded_by_correction(UID, row.rstrip("."), said_at=before) is False
     vc.reset_state()
+
+
+AMBULANCE = "i called an ambulance because quinlan has crushing chest pain"
+
+
+@pytest.mark.parametrize("fact, said", [
+    ("User called an ambulance because Quinlan has crushing chest pain", AMBULANCE),     # a synthetic name, in the fact
+    ("User has crushing chest pain", AMBULANCE),                                         # the name only in a lowercase turn
+    ("User has crushing chest pain", "I called an ambulance because Quinlan has crushing chest pain"),
+    ("User called an ambulance because their neighbour has crushing chest pain",
+     "i called an ambulance because my neighbour has crushing chest pain"),             # a kin word
+    ("User has crushing chest pain", "i called an ambulance because he has crushing chest pain"),   # a pronoun
+    ("User has crushing chest pain", "i rang triple zero, she has crushing chest pain"),
+])
+def test_another_person_in_the_turn_never_makes_the_member_an_emergency(fact, said, mem):
+    assert medical_safety.emergency_event(fact, said) is None
+    run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
+    rows = _rows(mem)
+    assert [r.text for r in rows] == [fact] and all(r.metadata.get("memory_type") != "event" for r in rows)
+
+
+def test_the_single_person_fall_still_converts():
+    assert medical_safety.emergency_event(MINED[0], FALL) is not None
+    assert medical_safety.emergency_event(MINED[0], "Help. I fell over in the kitchen and I cant get up") is not None

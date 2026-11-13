@@ -442,6 +442,38 @@ def _subject(fact: str) -> Optional[str]:
     return m.group(1) if m and m.group(1).lower() not in _NOT_A_NAME else None
 
 
+#: a third-person reference ("because HE has chest pain"): someone other than the subject may be the one it happened to
+_THIRD_PERSON_RE = re.compile(r"\b(?:he|she|they|him|her|them)\b", re.IGNORECASE)
+_CALENDAR_WORDS = frozenset({"january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+                             "november", "december", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"})
+
+
+def _names_another(fact: str, said: str, subject: str) -> bool:
+    """Do the fact or the turn name ANY person besides ``subject`` (QA round 9 review: "I called an ambulance because Quinlan has
+    crushing chest pain" was filed as the member's own emergency)? Another capitalised name in the fact, a he / she / they / him /
+    her / them anywhere, or a kin word beyond the subject's own (none for the member). Pure."""
+    said_mid = re.sub(r"(?:^|[.!?;]\s*)[A-Za-z]+", " ", said or "")      # a typed turn's sentence-initial word is no name
+    names = {w for w in re.findall(r"\b[A-Z][a-z]+\b", f"{fact or ''} {said_mid}")
+             if w.lower() not in _NOT_A_NAME and w.lower() not in _CALENDAR_WORDS and w.lower() != subject.lower()}
+    if names or _THIRD_PERSON_RE.search(fact or "") or _THIRD_PERSON_RE.search(said or ""):
+        return True
+    return len(_REL_RE.findall(fact or "")) > (0 if subject == "User" else 1)
+
+
+_CLAUSE_SPLIT_RE = re.compile(r"[;.!?]|\b(?:because|cause|cos|coz|since|while|after|so)\b", re.IGNORECASE)
+
+
+def _clause_is_about(said: str, subject: str) -> bool:
+    """The clause of the turn the detector reads as the emergency must itself name the subject: the member in the first person,
+    or the subject's name ("i called an ambulance because quinlan has crushing chest pain": the emergency clause is quinlan's,
+    a lowercase name the fact-side checks cannot see). No such clause on its own: the whole turn. Pure."""
+    clauses = [c for c in _CLAUSE_SPLIT_RE.split(said) if c and detect(c).cls == "red_call"] or [said]
+    c = clauses[0]
+    if subject == "User":
+        return bool(_FIRST_PERSON_RE.search(c))
+    return bool(re.search(rf"\b{re.escape(subject)}\b", c, re.IGNORECASE))
+
+
 def _only_person(said: str, subject: str) -> bool:
     """Does the turn name exactly ONE affected person, and is it ``subject``? (the rule above). Pure."""
     first, rels = bool(_FIRST_PERSON_RE.search(said)), len(_REL_RE.findall(said))
@@ -474,7 +506,9 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
         if fv.cls != "red_call" or fv.key != v.key:
             return None
         subject = _subject(fact)
-        if subject is None or not _only_person(one, subject):
+        if subject is None or not _only_person(one, subject) or _names_another(fact, one, subject):
+            return None
+        if not _clause_is_about(one, subject):
             return None
         rel = _REL_OF_RE.match(fact or "") if _WHO_REL_RE.match(fact or "") else None
         who = f"User's {rel.group(1).lower()} {subject}" if rel else subject
