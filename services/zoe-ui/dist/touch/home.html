@@ -4654,6 +4654,12 @@
   // the open dropdown was unreadable on the dark kiosk) + the ▲/▼ date-time steppers. Anything typed
   // (title, place, notes, attendees) hands off to the phone via QR. Close: ✕, tap outside, swipe
   // down, the idle timer, or the spoken word "close" (ZoeEstateVoice.transcript -> __evdVoiceClose).
+  // A REPEATING event (one row per occurrence under the SERIES id since PR 2447): a delete would remove every
+  // occurrence, so the panel offers none and refuses one. The module's rule, with the same rule inline if it is not loaded.
+  function evRepeating(e){var M=window.ZoeEventDetail;if(M&&M.repeatingOf)return !!M.repeatingOf(e);
+    e=e||{};var ss=String(e.series_start_date||''),rc=String(e.recurring||'').trim();
+    return e.is_recurring===true||e.is_recurring===1||!!String(e.rrule||'').trim()||(!!rc&&!/^(none|no|false|0)$/i.test(rc))||
+      (Array.isArray(e.rdates)&&e.rdates.length>0)||(!!ss&&ss!==String(e.start_date||''));}
   var EVD=null,_evd=null,EVD_IDLE_MS=120000;   // EVD is resolved at first use: the module's <script> sits AFTER this inline one
   function evdLive(){var m=document.getElementById('estModal');return !!(_evd&&m&&m.classList.contains('on')&&m.querySelector('.evd'));}
   function evdTouch(){if(!_evd)return;if(_evd.idle)clearTimeout(_evd.idle);_evd.idle=setTimeout(function(){if(evdLive())evdClose();},EVD_IDLE_MS);}
@@ -4710,6 +4716,7 @@
     else if(x==='back'||x==='keep')evdDetailView(ev);
     else if(x==='phone')evdQr('phone',EVD.phoneEditUrl(location.origin,ev&&ev.id));
     else if(x==='meeturl')evdQr('meeting',b.getAttribute('data-url'));
+    else if((x==='del'||x==='delyes')&&evRepeating(ev)){toast('This event repeats. Change it on your phone or the desktop calendar.');}
     else if(x==='del'){var f=document.getElementById('evfoot');if(f)f.innerHTML=EVD.renderDeleteConfirm(ev);}
     else if(x==='delyes'){b.disabled=true;var dtok=_evd;   // the sheet SESSION this delete belongs to (editEvent makes a new one per open)
       apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(ev.id)).then(function(){
@@ -4735,9 +4742,10 @@
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host)return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--accent)"></span><div><div class="en">Nothing scheduled today</div></div></div>';return;}
-      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div class="dey"><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div><span class="lact"><button data-act="edit" title="Edit">✎</button><button class="del" data-act="del" title="Delete">✕</button></span></div>';}).join('');
+      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div class="dey"><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div><span class="lact"><button data-act="edit" title="Edit">✎</button>'+(evRepeating(e)?'':'<button class="del" data-act="del" title="Delete">✕</button>')+'</span></div>';}).join('');
       host.onclick=function(ev){var row=ev.target.closest('.dev[data-eid]');if(!row)return;var e=evs.filter(function(x){return String(x.id)===row.getAttribute('data-eid');})[0];if(!e)return;
         var act=ev.target.closest('[data-act]');
+        if(act&&act.getAttribute('data-act')==='del'&&evRepeating(e)){editEvent(e);return;}   // never a series delete from one row: open the read-only sheet
         if(act&&act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(e.title||'this event')+'”?',function(){apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(e.id)).then(wireDay).catch(function(){toast('Couldn’t delete');});});return;}
         editEvent(e);};
     }).catch(function(e){if(host)host.innerHTML='<div class="dev"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en lderr">'+esc(loadErr('day',e))+'</div></div></div>';});
@@ -5482,7 +5490,7 @@
     }).catch(function(){});}catch(e){}
 })();
 </script>
-<script src="/js/touch-event-detail.js?v=ed-2"></script>
+<script src="/js/touch-event-detail.js?v=ed-3"></script>
 <script src="/js/touch-voice-session.js?v=vs-2"></script>
 <script src="/js/touch-review-cards.js?v=rc-2"></script>
 <script src="/js/touch-voice-enroll.js?v=ve-1"></script>

@@ -7,6 +7,7 @@ import sys
 from datetime import date, timedelta
 
 import pytest
+from time_utils import today_for_zoe_tz  # the clock the code under test uses (CI runs in UTC, Zoe does not)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -483,7 +484,7 @@ async def test_calendar_request_returns_real_event_card():
         "id": "event-1",
         "user_id": "family-admin",
         "title": "Dentist",
-        "start_date": date.today().isoformat(),
+        "start_date": today_for_zoe_tz().isoformat(),
         "start_time": "09:00",
         "end_time": "09:30",
         "location": "Clinic",
@@ -647,8 +648,9 @@ async def test_calendar_explicit_date_queries_requested_day(monkeypatch):
 
     assert result["handled"] is True
     assert result["intent"]["range"] == "17 June 2026"
-    assert db.fetch_args[2] == "2026-06-17"
-    assert db.fetch_args[3] == "2026-06-17"
+    # calendar_read pads the household window a day each side (a zoned event's own date), then filters exactly
+    assert db.fetch_args[2] == "2026-06-18"
+    assert db.fetch_args[3] == "2026-06-16"
     content = result["cards"][0]["content"]
     assert content["qualifier"] == "17 June 2026"
     assert content["date"] == "2026-06-17"
@@ -665,8 +667,8 @@ async def test_calendar_happening_this_week_queries_range(monkeypatch):
 
     assert result["handled"] is True
     assert result["intent"]["range"] == "this week"
-    assert db.fetch_args[2] == "2026-06-11"
-    assert db.fetch_args[3] == (date(2026, 6, 11) + timedelta(days=7)).isoformat()
+    assert db.fetch_args[2] == (date(2026, 6, 11) + timedelta(days=8)).isoformat()      # window end + the 1-day pad
+    assert db.fetch_args[3] == "2026-06-10"                                             # window start - the 1-day pad
     content = result["cards"][0]["content"]
     assert content["start_date"] == "2026-06-11"
     assert content["end_date"] == "2026-06-18"
@@ -1549,7 +1551,7 @@ async def test_calendar_edit_opens_event_editor_card():
         "id": "event-1",
         "user_id": "family-admin",
         "title": "Dentist",
-        "start_date": date.today().isoformat(),
+        "start_date": today_for_zoe_tz().isoformat(),
         "start_time": "15:00",
         "end_time": "15:30",
         "location": "Clinic",
@@ -1560,7 +1562,7 @@ async def test_calendar_edit_opens_event_editor_card():
     db = FakeDb(events=[event])
     context = {
         "intent": {"domain": "calendar", "action": "show"},
-        "cards": [{"content": {"source": "calendar_show", "start_date": date.today().isoformat(), "events": [event]}}],
+        "cards": [{"content": {"source": "calendar_show", "start_date": today_for_zoe_tz().isoformat(), "events": [event]}}],
     }
 
     result = await resolve_skybridge_request("edit Dentist at 15:00", "family-admin", context=context, db=db)
@@ -1582,7 +1584,7 @@ async def test_calendar_delete_event_removes_and_refreshes():
         "id": "event-1",
         "user_id": "family-admin",
         "title": "Dentist",
-        "start_date": date.today().isoformat(),
+        "start_date": today_for_zoe_tz().isoformat(),
         "start_time": "15:00",
         "end_time": "15:30",
         "visibility": "family",
@@ -1591,7 +1593,7 @@ async def test_calendar_delete_event_removes_and_refreshes():
     db = FakeDb(events=[event])
     context = {
         "intent": {"domain": "calendar", "action": "show"},
-        "cards": [{"content": {"source": "calendar_show", "start_date": date.today().isoformat(), "events": [event]}}],
+        "cards": [{"content": {"source": "calendar_show", "start_date": today_for_zoe_tz().isoformat(), "events": [event]}}],
     }
 
     result = await resolve_skybridge_request("delete Dentist from my calendar", "family-admin", context=context, db=db)

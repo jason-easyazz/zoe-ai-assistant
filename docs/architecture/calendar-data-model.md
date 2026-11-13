@@ -228,8 +228,12 @@ supports `CREATE_EVENT`).
 
 ### Before a sync engine writes a row (prerequisites, not done here)
 
-1. The voice / MCP / skybridge / proactive readers must filter `status <> 'cancelled'` (today only the router does).
-2. The MCP `calendar_update_event` / `calendar_delete_event` and the skybridge writers must refuse `read_only` rows,
+1. PARTLY DONE 2026-11-13: the router, MCP, intent and Skybridge readers use `calendar_read.events_in_window`
+   (overlap, repeat expansion, `cancelled` hidden). Named follow-up, not on it yet: `anticipation`'s own query (it
+   filters `cancelled` itself), `proactive/triggers/morning_checkin`, `proactive/selector` and `omi_day_review`'s
+   duplicate check.
+2. DONE 2026-11-13 (`calendar_read.load_for_write` - caller-scoped, with the calendar's `writable` flag - plus `is_writable`; MCP update re-derives `start_at`/`end_at` - the Skybridge move does not yet; MCP + Skybridge delete stamp
+   `deleted_at`). Was: the MCP `calendar_update_event` / `calendar_delete_event` and the skybridge writers must refuse `read_only` rows,
    re-derive `start_at` / `end_at` when they move a time, and stamp `deleted_at` on delete (best: one shared
    update / delete in `calendar_service`)
    (today only the router does).

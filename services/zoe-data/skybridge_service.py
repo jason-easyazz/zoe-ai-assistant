@@ -24,6 +24,7 @@ import command_shapes
 import conversation_cues
 import panel_principal
 import write_receipts
+import calendar_service
 from calendar_utils import row_to_event
 from card_contract import CardContractError, validate_component
 from card_service import card_service
@@ -3982,6 +3983,28 @@ def _score_event_for_target(event: dict[str, Any], target: str) -> int:
     return score + sum(1 for token in target_tokens if token in haystack)
 
 
+async def _calendar_refusal(db: Any, user_id: str, event_id: Any, intent: SkybridgeIntent, verb: str) -> dict[str, Any] | None:
+    """None when the member may change the chosen event; else the answer. Read from the stored row through
+    ``calendar_read.load_for_write`` (family-or-own, with its calendar's writable flag) - never from the client's context
+    card. An id the caller cannot see is "not found", with no hint of whose it is or where it came from; a read-only or
+    provider-owned event gets the honest "change it there"."""
+    import calendar_read
+
+    row = await calendar_read.load_for_write(db, user_id, event_id, pg_fetch=True)
+    if row is None:
+        line = f"I could not find a calendar event to {verb}."
+        return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
+                "cards": [_status_card("Which appointment?", line)], "actions": []}
+    if calendar_read.is_writable(row) and not calendar_read.is_repeating_row(row):
+        return None
+    if not calendar_read.is_writable(row):
+        line = calendar_read.refusal(row)
+    else:   # a repeating event: the card lists one occurrence, the write would hit the whole series
+        line = calendar_read.REPEATING_MOVE_LINE if verb == "move" else calendar_read.REPEATING_DELETE_LINE
+    return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
+            "cards": [_status_card(f"I can't {verb} that event", line)], "actions": []}
+
+
 async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, db: Any, context: dict[str, Any] | None) -> dict[str, Any]:
     if user_id in {"guest", "voice-guest"}:
         return {
@@ -4028,6 +4051,9 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
         }
     event = matches[0]
     event_id = event.get("id")
+    refused = await _calendar_refusal(db, user_id, event_id, intent, "move")
+    if refused:
+        return refused
     update_result = await db.execute(
         # Giving an all-day event a time makes it a timed event — clear all_day so
         # the row can't be both (renderers/spoken summaries would disagree).
@@ -4172,10 +4198,14 @@ async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, 
         }
     event = matches[0]
     event_id = event.get("id")
+    refused = await _calendar_refusal(db, user_id, event_id, intent, "delete")
+    if refused:
+        return refused
     delete_result = await db.execute(
-        "UPDATE events SET deleted = 1, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND deleted = 0",
+        "UPDATE events SET deleted = 1, updated_at = NOW(), deleted_at = $3 WHERE id = $1 AND user_id = $2 AND deleted = 0",
         event_id,
         user_id,
+        calendar_service.now_text(),
     )
     if _affected_rows(delete_result) == 0:
         return {
@@ -4199,21 +4229,10 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
     end = intent.end_date or start
     events = []
     if not _is_guest_user(user_id):
-        rows = await db.fetch(
-            """
-            SELECT *
-            FROM events
-            WHERE (visibility = 'family' OR user_id = $1)
-              AND deleted = 0
-              AND start_date >= $2
-              AND start_date <= $3
-            ORDER BY start_date, start_time
-            """,
-            user_id,
-            start.isoformat(),
-            end.isoformat(),
-        )
-        events = [row_to_event(row) for row in rows]
+        import calendar_read
+
+        # the shared read path: multi-day overlap, repeats expanded, cancelled dropped (each row dated to its occurrence)
+        events = [row_to_event(o["event"]) for o in await calendar_read.events_in_window(db, user_id, start, end, pg_fetch=True)]
     qualifier = intent.range_label or start.isoformat()
     event_word = "event" if len(events) == 1 else "events"
     count_line = f"You have {len(events)} {event_word} {qualifier}."

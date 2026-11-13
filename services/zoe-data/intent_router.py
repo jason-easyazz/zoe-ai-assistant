@@ -3308,16 +3308,12 @@ async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optiona
     today_d = today_for_zoe_tz()
     start, end, scope = _calendar_show_scope(qualifier, today_d)
     try:
+        from calendar_read import events_in_window
         from database import get_db_ctx
         async with get_db_ctx() as db:
-            cursor = await db.execute(
-                "SELECT title, start_date, start_time, all_day FROM events"
-                " WHERE (user_id=? OR visibility='family') AND deleted=0"
-                " AND start_date BETWEEN ? AND ?"
-                " ORDER BY start_date, COALESCE(NULLIF(start_time,''),'99:99')",
-                (user_id, start.isoformat(), end.isoformat()),
-            )
-            rows = [dict(r) for r in await cursor.fetchall()]
+            # the shared read path: multi-day overlap, repeats expanded, cancelled dropped, household dates
+            rows = [{"title": o["title"], "start_date": o["date"], "start_time": o["start_time"], "all_day": o["all_day"]}
+                    for o in await events_in_window(db, user_id, start, end)]
     except Exception as exc:
         logger.warning("calendar_show direct execution unavailable: %s", exc)
         return None
@@ -5427,16 +5423,14 @@ async def _daily_briefing_calendar(user_id: str) -> Optional[dict]:
     try:
         from database import get_db_ctx
 
+        from calendar_read import events_in_window
+
         today = today_for_zoe_tz().isoformat()
         async with get_db_ctx() as db:
-            cursor = await db.execute(
-                "SELECT id, title, start_time, end_time, category, location FROM events"
-                " WHERE start_date = ? AND (visibility = 'family' OR user_id = ?) AND deleted = 0"
-                " ORDER BY start_time",
-                (today, user_id),
-            )
-            rows = await cursor.fetchall()
-        return {"date": today, "events": [dict(r) for r in rows]}
+            occurrences = await events_in_window(db, user_id, today, today)
+        return {"date": today, "events": [{"id": o["event_id"], "title": o["title"], "start_time": o["start_time"],
+                                           "end_time": o["end_time"], "category": o["category"], "location": o["location"]}
+                                          for o in occurrences]}
     except Exception as exc:
         logger.warning("daily briefing calendar direct execution unavailable: %s", exc)
     return None

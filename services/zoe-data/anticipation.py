@@ -155,20 +155,12 @@ def classify(ev: Event) -> Optional[str]:
     return None
 
 
-_REPEAT_WORDS = {"daily": ("DAILY", 1), "weekly": ("WEEKLY", 1), "fortnightly": ("WEEKLY", 2), "biweekly": ("WEEKLY", 2),
-                 "monthly": ("MONTHLY", 1), "yearly": ("YEARLY", 1), "annually": ("YEARLY", 1), "annual": ("YEARLY", 1)}
-
-
 def _repeat_rule(raw: str) -> Optional[dict]:
-    """``events.recurring`` as a rule: an RFC 5545 RRULE in ``reminder_recurrence``'s subset, or one plain word (daily, weekly,
-    fortnightly, monthly, yearly). None = not understood: that event gets no offer rather than a guessed date."""
-    import reminder_recurrence as rr
+    """``events.recurring`` as a rule (None = not understood: no offer rather than a guessed date). The ONE parser lives in
+    ``calendar_read.repeat_rule``, shared with every calendar reader."""
+    from calendar_read import repeat_rule
 
-    text = (raw or "").strip()
-    word = _REPEAT_WORDS.get(text.lower())
-    if word:
-        return {"freq": word[0], "interval": word[1], "byday": [], "bymonthday": None}
-    return rr.parse_rrule(text)
+    return repeat_rule(raw)
 
 
 def _occurs_on(ev: Event, day: date) -> bool:
@@ -324,9 +316,10 @@ def _missing(exc: BaseException) -> bool:
 
 
 async def _events(db: Any, uid: str, today: date) -> list[Event]:
-    rows = await _all(db, "SELECT id, user_id, title, start_date, start_time, end_date, location, all_day, recurring FROM events"
+    rows = await _all(db, "SELECT id, user_id, title, start_date, start_time, end_date, location, all_day, COALESCE(NULLIF(rrule, ''), recurring) FROM events"
                           " WHERE user_id = ? AND (deleted = 0 OR deleted IS NULL) AND start_date < ?"
-                          " AND (start_date >= ? OR (recurring IS NOT NULL AND recurring <> ''))",       # a repeating event may have started long ago
+                          " AND COALESCE(status, 'confirmed') <> 'cancelled'"
+                          " AND (start_date >= ? OR COALESCE(recurring, '') <> '' OR COALESCE(rrule, '') <> '')",       # a repeating event may have started long ago
                       (uid, (today + timedelta(days=HORIZON_DAYS + 1)).isoformat(), today.isoformat()))
     return [Event(str(r[0]), str(r[1]), str(r[2] or ""), str(r[3] or ""), str(r[4] or ""), str(r[5] or ""), str(r[6] or ""),
                   bool(r[7]), str(r[8] or "")) for r in rows]
@@ -397,7 +390,7 @@ def _event_matches(ev: Optional[Event], slots: dict) -> bool:
 
 
 async def _event(db: Any, uid: str, event_id: str) -> Optional[Event]:
-    rows = await _all(db, "SELECT id, user_id, title, start_date, start_time, end_date, location, all_day, recurring FROM events"
+    rows = await _all(db, "SELECT id, user_id, title, start_date, start_time, end_date, location, all_day, COALESCE(NULLIF(rrule, ''), recurring) FROM events"
                           " WHERE id = ? AND user_id = ? AND (deleted = 0 OR deleted IS NULL)", (event_id, uid))
     if not rows:
         return None
