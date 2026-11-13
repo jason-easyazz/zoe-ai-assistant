@@ -59,9 +59,11 @@ _DEFAULT_TTL_S = 120
 # must never play it. arrival.py queues it only for a panel that holds a live
 # device token, so the ids match by construction.
 # The intercom's rows (``intercom.py``: a member's announcement / ring addressed to ONE named panel) are panel-scoped for the same
-# reason - "tell the kitchen" must never be played by whichever daemon polls first.
+# reason - "tell the kitchen" must never be played by whichever daemon polls first. ``timer_done``
+# (``skybridge_service._ring_when_done``): a member's timer ending is said only by the panel that set it.
 PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll",
-                                          "intercom_announce", "intercom_ring", "voice_clip_play", "omi_link")
+                                          "intercom_announce", "intercom_ring", "voice_clip_play", "omi_link",
+                                          "timer_done")
 
 # ── Panel COMMANDS riding the same lane (Zoe-driven voice enrolment) ──────────────────────────────────────────────────────
 # A row whose trigger is one of these is not speech: its ``message`` is a JSON object the daemon ACTS on, and the claim returns it

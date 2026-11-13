@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import json
 import logging
 import os
@@ -88,6 +89,17 @@ MAX_TIMER_SECONDS = 24 * 3600
 # kiosk learns timers by polling every 15 s and every voice turn reloads its page, so a timer that ended between polls
 # (or just after a reload) must still ring. Spoken queries ("how long left", "cancel") only ever see running timers.
 TIMER_RING_GRACE_S = 90
+# "Timer is done" in Zoe's own voice: a timer set by a voice turn from a panel's speaker daemon (a validated device token) remembers
+# that panel; when it ends, ONE row of this trigger is queued for THAT panel's daemon (voice_announce, panel-scoped). The device
+# token's panel is bound per request by ``bind_timer_panel`` (routers/voice_tts.py ``_require_voice_auth``); any other caller binds
+# nothing, so its timers stay page-only.
+TIMER_DONE_TRIGGER = "timer_done"
+_timer_panel: contextvars.ContextVar[str] = contextvars.ContextVar("zoe_timer_panel", default="")
+
+
+def bind_timer_panel(panel_id: Any) -> None:
+    """Record, for this request, the device-token panel whose daemon would speak a timer this turn sets."""
+    _timer_panel.set(str(panel_id or "").strip())
 
 
 def _timer_store_path() -> Path:
@@ -108,6 +120,7 @@ class _TimerStore:
         # last submitted state always wins.
         self._writer: "concurrent.futures.ThreadPoolExecutor | None" = None
         self._last_write: "concurrent.futures.Future[None] | None" = None
+        self._rings: dict[str, asyncio.Task] = {}  # timer_id -> the task that announces it when it ends
 
     def _load(self) -> None:
         """Reload the snapshot ONCE per process, on first use (never at import). Expired timers are dropped."""
@@ -128,6 +141,8 @@ class _TimerStore:
                         t["created_at"] = float(t.get("created_at", now))
                         t["label"] = str(t.get("label") or "Timer")
                         t["timer_id"] = str(t["timer_id"])
+                        t["panel_id"] = str(t.get("panel_id") or "")
+                        t["announced"] = bool(t.get("announced"))
                     except (KeyError, TypeError, ValueError):
                         continue
                     if t["expires_at"] > now - TIMER_RING_GRACE_S:
@@ -216,9 +231,12 @@ class _TimerStore:
             "set_seconds": int(seconds),  # the length it was SET for: "the 5 minute timer" still means it after an adjust
             "created_at": now,
             "expires_at": now + int(seconds),
+            "panel_id": _timer_panel.get(),
+            "announced": False,
         }
         self._by_owner.setdefault(owner, []).append(timer)
         self._save()
+        self._arm(timer)
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
@@ -281,6 +299,7 @@ class _TimerStore:
         timer["expires_at"] += int(delta_seconds)
         timer["duration_seconds"] = int(timer["duration_seconds"]) + int(delta_seconds)
         self._save()
+        self._arm(timer)  # a shortened timer must not wait out its old end
         write_receipts.record(owner, "timer", timer["timer_id"], "timer_store")
         return timer
 
@@ -290,18 +309,112 @@ class _TimerStore:
         target = next((t for t in timers if t["timer_id"] == timer_id), None)
         if target is not None:
             timers.remove(target)
+            self._disarm(timer_id)  # cancelled or dismissed: it never speaks
             self._prune(owner)
             self._save()
         return target
+
+    def find_by_id(self, timer_id: str) -> tuple[str, dict[str, Any]] | None:
+        """(owner, timer) for a running or ringing timer, without pruning."""
+        self._load()
+        for owner, timers in self._by_owner.items():
+            for t in timers:
+                if t["timer_id"] == timer_id:
+                    return owner, t
+        return None
+
+    def _arm(self, timer: dict[str, Any]) -> None:
+        """(Re)start the one task that announces this timer when it ends. Needs a panel and a running loop; a no-op otherwise."""
+        if not timer.get("panel_id") or timer.get("announced"):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._disarm(timer["timer_id"])
+        self._rings[timer["timer_id"]] = loop.create_task(_ring_when_done(self, timer["timer_id"]))
+
+    def _disarm(self, timer_id: str) -> None:
+        task = self._rings.pop(timer_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    def arm_restored(self) -> None:
+        """After a restart: re-arm every reloaded timer that still owes its announcement (``_load`` already dropped the
+        ones past the grace)."""
+        for timers in list(self._by_owner.values()):
+            for t in list(timers):
+                self._arm(t)
 
 
 _timers = _TimerStore()
 
 
+def _timer_quiet_now() -> bool:
+    """The household quiet window (``comm_prefs`` / ``ZOE_QUIET_START_HOUR`` / ``_END_HOUR``) - the intercom's rule."""
+    import comm_prefs
+    from time_utils import zoe_timezone
+
+    now = datetime.now(zoe_timezone())
+    return comm_prefs.in_quiet_hours({}, now.hour * 60 + now.minute)
+
+
+async def _ring_when_done(store: _TimerStore, timer_id: str) -> None:
+    """Sleep until the timer ends, then queue ONE spoken "timer is done" for the panel that set it.
+
+    At most once: the timer is marked ``announced`` (and snapshotted) BEFORE the row is queued, so a crash or restart in
+    between loses the line rather than repeating it. A timer cancelled or dismissed first is gone from the store and never
+    speaks; one that ended while the service was down speaks on restore only while it is still inside the ring grace."""
+    try:
+        while True:
+            hit = store.find_by_id(timer_id)
+            if hit is None:
+                return
+            owner, t = hit
+            if t.get("announced") or not t.get("panel_id"):
+                return
+            now = time.time()
+            if t["expires_at"] > now:
+                await asyncio.sleep(t["expires_at"] - now)
+                continue
+            left = t["expires_at"] + TIMER_RING_GRACE_S - now
+            if left <= 0:
+                return
+            t["announced"] = True
+            store._save()
+            outcome = await _queue_timer_done(owner, t, left)
+            logger.info("TIMER_ANNOUNCE outcome=%s", outcome)  # counts only: never the label or the owner
+            return
+    finally:
+        if store._rings.get(timer_id) is asyncio.current_task():
+            store._rings.pop(timer_id, None)
+
+
+async def _queue_timer_done(owner: str, timer: dict[str, Any], left_s: float) -> str:
+    """Queue the line for the timer's own panel; returns the outcome label. Never raises."""
+    try:
+        if _timer_quiet_now():
+            return "quiet_hours"
+        import voice_announce
+        from db_compat import get_compat_db
+
+        label = str(timer.get("label") or "Timer").strip()
+        text = "Your timer is done." if label.lower() == "timer" else f"Your {label} timer is done."
+        async with get_compat_db() as db:
+            await voice_announce.enqueue_announcement(db, user_id=owner, message=text, panel_id=timer["panel_id"],
+                                                      trigger_type=TIMER_DONE_TRIGGER, ttl_s=max(1, int(left_s)))
+        return "queued"
+    except Exception as exc:  # noqa: BLE001 - the panel still shows and chimes the alarm
+        logger.warning("TIMER_ANNOUNCE outcome=failed (%s)", type(exc).__name__)
+        return "failed"
+
+
 async def preload_timers() -> None:
     """Read the timer snapshot on a worker thread (startup, before serving) so the first timer request never does
-    that file read on the event loop. ``_load`` stays the lazy fallback for any caller that runs before this."""
+    that file read on the event loop. ``_load`` stays the lazy fallback for any caller that runs before this. Then
+    re-arm the "timer is done" announcement of every reloaded timer that still owes one."""
     await asyncio.to_thread(_timers._load)
+    _timers.arm_restored()
 
 
 def _parse_timer_duration(text: str) -> int:
@@ -396,6 +509,8 @@ def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, 
             "status": status,
             "duration_seconds": int(timer["duration_seconds"]),
             "expires_at_ms": int(timer["expires_at"] * 1000),
+            # True when the panel's speaker daemon says "timer is done" (server-queued): the page should then not speak it too.
+            "spoken_by_panel": bool(timer.get("panel_id")),
         },
     }
 

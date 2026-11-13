@@ -968,6 +968,13 @@ async def _require_voice_auth(
         # Cloudflare tunnel it is NOT (owner decision 2026-10-19; escape hatch ZOE_PANEL_TOKEN_VIA_CF=panel).
         if panel_principal.device_token_is_panel(request):
             panel_principal.mark_panel_turn()
+            # A timer this turn sets is announced, when it ends, by THIS panel's daemon (skybridge_service, panel-scoped).
+            try:
+                from skybridge_service import bind_timer_panel
+
+                bind_timer_panel(device.get("panel_id"))
+            except Exception as exc:  # noqa: BLE001 - never costs the turn; the page still rings the timer
+                logger.warning("voice auth: timer panel not bound (%s)", type(exc).__name__)
         # Home control (2026-10-18): judged on the validated TOKEN (the panel), so a zoe-auth outage cannot lock the lights.
         await panel_principal.record_turn_home_control(
             request, {"user_id": "guest", "role": "guest", "panel_id": device.get("panel_id")})
