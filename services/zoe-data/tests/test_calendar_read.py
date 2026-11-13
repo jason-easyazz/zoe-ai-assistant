@@ -1,4 +1,4 @@
-"""The ONE calendar read path (``calendar_read``) and the read-only write rule, end to end on SQLite with 0052 applied.
+"""The shared calendar read path (``calendar_read``) and the read-only write rule, end to end on SQLite with 0052 applied.
 
 Gap audit 2026-11-13 (lane D X3/X4, lane A A4): every reader queried ``events`` itself and got the same things wrong.
 Pinned here: a multi-day event that overlaps the window from either edge is listed; repeats expand inside the window
@@ -238,3 +238,132 @@ async def test_another_members_busy_event_keeps_its_projection(db):
     events = (await calendar_router.list_events(start_date="2026-11-11", end_date="2026-11-11", category=None,
                                                 include_cancelled=False, user={"user_id": A, "role": "user"}, db=db))["events"]
     assert [(e["title"], e.get("busy_only"), "source_label" in e) for e in events] == [("Busy", True, False)]
+
+
+# -- review round 1 (PR 2447): overrides by original date, RDATE, write scoping, non-writable calendars ------------------------
+
+async def test_an_occurrence_moved_out_of_the_window_leaves_its_old_date(db):
+    master = await _add(db, "Swim club", "2026-11-02", rrule="FREQ=WEEKLY")
+    await _add(db, "Swim club (moved)", "2026-12-20", series_id=master, recurrence_id="2026-11-16")
+    occ = await _window(db, "2026-11-15", "2026-11-17")
+    assert occ == []                                         # the master's 16th is replaced; the override is outside
+
+
+async def test_an_occurrence_moved_into_the_window_appears_once(db):
+    master = await _add(db, "Tutor", "2026-11-02", rrule="FREQ=WEEKLY")
+    await _add(db, "Tutor (moved)", "2026-11-26", series_id=master, recurrence_id="2026-11-09")
+    occ = await _window(db, "2026-11-25", "2026-11-27")
+    assert [(o["title"], o["date"]) for o in occ] == [("Tutor (moved)", "2026-11-26")]
+
+
+async def test_an_occurrence_moved_within_the_window_appears_once(db):
+    master = await _add(db, "Band", "2026-11-02", rrule="FREQ=WEEKLY")
+    await _add(db, "Band (moved)", "2026-11-18", series_id=master, recurrence_id="2026-11-16")
+    occ = await _window(db, "2026-11-15", "2026-11-19")
+    assert [(o["title"], o["date"]) for o in occ] == [("Band (moved)", "2026-11-18")]
+
+
+async def test_an_rdate_only_series_expands_even_when_its_base_date_is_long_past(db):
+    await _add(db, "Recital", "2026-01-10", rdates='["2026-11-20", "2026-11-27", "2027-03-01"]')
+    occ = await _window(db, "2026-11-15", "2026-11-30")
+    assert _days(occ, "Recital") == ["2026-11-20", "2026-11-27"] and all(o["is_recurring"] for o in occ)
+
+
+async def test_exdate_wins_over_rdate(db):
+    await _add(db, "Market", "2026-11-01", rrule="FREQ=WEEKLY", rdates='["2026-11-18"]', exdates='["2026-11-18", "2026-11-22"]')
+    assert _days(await _window(db, "2026-11-16", "2026-11-23"), "Market") == []
+
+
+class _PgOverSqlite:
+    """The raw-asyncpg surface the Skybridge resolvers use ($n placeholders, ``fetch``, a status string), over the SQLite
+    fixture, so the scoping is proven by real SQL rather than a fake that ignores WHERE clauses."""
+
+    def __init__(self, db):
+        self.db = db
+
+    @staticmethod
+    def _q(sql, args):
+        import re
+
+        order = [int(n) - 1 for n in re.findall(r"\$(\d+)", sql)]
+        return re.sub(r"\$\d+", "?", sql), [args[i] for i in order]
+
+    async def fetch(self, sql, *args):
+        q, p = self._q(sql, args)
+        return await (await self.db.execute(q, p)).fetchall()
+
+    async def execute(self, sql, *args):
+        q, p = self._q(sql, args)
+        cur = await self.db.execute(q, p)
+        return f"UPDATE {cur.rowcount}"
+
+    async def commit(self):
+        await self.db.commit()
+
+
+async def _row(db, event_id):
+    cur = await db.execute("SELECT title, start_time, deleted FROM events WHERE id = ?", (event_id,))
+    return tuple(await cur.fetchone())
+
+
+def _sky_context(event_id, title):
+    return {"intent": {"domain": "calendar"},
+            "cards": [{"content": {"source": "calendar_show", "start_date": "2026-06-11",
+                                   "events": [{"id": event_id, "title": title, "start_date": "2026-06-11",
+                                               "start_time": "15:00"}]}}]}
+
+
+async def test_another_members_private_event_id_is_not_found_everywhere(db, monkeypatch):
+    async def actor(_db, _name, _args, _ctx):
+        return {"user_id": A, "role": "user"}
+
+    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", actor)
+    monkeypatch.setattr(sky, "today_for_zoe_tz", lambda: date(2026, 6, 11))
+    secret = await _add(db, "Dentist", "2026-06-11", user=B, visibility="personal", start_time="15:00", source="google")
+    user = {"user_id": A, "role": "user"}
+    for call in (calendar_router.update_event(secret, EventUpdate(title="x"), user=user, db=db),
+                 calendar_router.delete_event(secret, user=user, db=db)):
+        with pytest.raises(HTTPException) as exc:
+            await call
+        assert exc.value.status_code == 404 and "Google" not in exc.value.detail
+    for name, args in (("calendar_update_event", {"event_id": secret, "title": "x"}), ("calendar_delete_event", {"event_id": secret})):
+        out = await mcp_server._execute_tool(db, name, args)
+        assert "not found" in out["error"] and "Google" not in out["error"]
+    for utterance in ("change my dentist to 9am", "delete Dentist from my calendar"):
+        result = await sky.resolve_skybridge_request(utterance, A, context=_sky_context(secret, "Dentist"), db=_PgOverSqlite(db))
+        assert result["actions"] == [] and "could not find" in result["spoken_summary"], utterance
+        assert "Google" not in str(result)
+    assert await _row(db, secret) == ("Dentist", "15:00", 0)
+
+
+async def test_an_event_in_a_non_writable_calendar_is_refused_and_a_writable_one_edits(db, monkeypatch):
+    async def actor(_db, _name, _args, _ctx):
+        return {"user_id": A, "role": "user"}
+
+    async def quiet(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", actor)
+    monkeypatch.setattr(mcp_server, "_notify_ui", quiet)
+    monkeypatch.setattr(sky, "today_for_zoe_tz", lambda: date(2026, 6, 11))
+    await db.execute("INSERT INTO calendars (id, user_id, name, writable, created_at, updated_at) VALUES "
+                     "('cal-locked', ?, 'School term', 0, 'x', 'x'), ('cal-open', ?, 'Family', 1, 'x', 'x')", (A, A))
+    locked = await _add(db, "Exam", "2026-06-11", start_time="15:00", calendar_id="cal-locked")
+    user = {"user_id": A, "role": "user"}
+    for call in (calendar_router.update_event(locked, EventUpdate(title="x"), user=user, db=db),
+                 calendar_router.delete_event(locked, user=user, db=db)):
+        with pytest.raises(HTTPException) as exc:
+            await call
+        assert exc.value.status_code == 409 and "School term" in exc.value.detail
+    for name, args in (("calendar_update_event", {"event_id": locked, "title": "x"}), ("calendar_delete_event", {"event_id": locked})):
+        assert (await mcp_server._execute_tool(db, name, args)).get("status") == "read_only"
+    for utterance in ("change my exam to 9am", "delete Exam from my calendar"):
+        result = await sky.resolve_skybridge_request(utterance, A, context=_sky_context(locked, "Exam"), db=_PgOverSqlite(db))
+        assert result["actions"] == [] and "read-only calendar" in result["spoken_summary"], utterance
+    assert await _row(db, locked) == ("Exam", "15:00", 0)
+    await db.execute("UPDATE calendars SET writable = 1 WHERE id = 'cal-locked'")
+    await db.commit()
+    assert (await calendar_router.update_event(locked, EventUpdate(title="Exam (room 4)"), user=user, db=db))["title"] == "Exam (room 4)"
+    result = await sky.resolve_skybridge_request("delete Exam from my calendar", A, context=_sky_context(locked, "Exam (room 4)"),
+                                                 db=_PgOverSqlite(db))
+    assert result["actions"][0]["type"] == "deleted" and (await _row(db, locked))[2] == 1

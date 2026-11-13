@@ -1416,15 +1416,14 @@ def _mcp_occurrence(o: dict) -> dict:
 async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict | None, dict | None]":
     """``(row, None)`` when the member may change this event; else ``(None, error)`` (not found, or provider-owned /
     read-only: the change belongs at its source)."""
-    from calendar_read import is_writable, refusal
+    from calendar_read import is_writable, load_for_write, refusal
 
-    cursor = await db.execute("SELECT * FROM events WHERE id=? AND user_id=? AND deleted=0", (event_id, user_id))
-    row = await cursor.fetchone()
-    if not row:
+    row = await load_for_write(db, user_id, event_id, own_only=True)     # the tools write the member's own events only
+    if row is None:
         return None, {"error": f"Event {event_id} not found"}
-    if not is_writable(dict(row)):
-        return None, {"error": refusal(dict(row)), "status": "read_only"}
-    return dict(row), None
+    if not is_writable(row):
+        return None, {"error": refusal(row), "status": "read_only"}
+    return row, None
 
 
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):

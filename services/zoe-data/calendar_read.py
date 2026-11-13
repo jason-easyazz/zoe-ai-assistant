@@ -1,9 +1,13 @@
-"""The ONE read path over the ``events`` table, plus the read-only write rule (gap audit 2026-11-13, lane D X3/X4).
+"""A shared read path over the ``events`` table, plus the write rule for update and delete (gap audit 2026-11-13, lane D X3/X4).
 
-Every reader used to query ``events`` itself and got it wrong the same ways: matched ``start_date`` only (a trip that began
+Readers used to query ``events`` themselves and got it wrong the same ways: matched ``start_date`` only (a trip that began
 before the window vanished), never expanded a repeat (a weekly event showed on its first date only), read ``cancelled``
-events out as real, and let a voice/tool edit change an event its provider owns. ``events_in_window`` fixes all four for
-every caller; ``is_writable`` / ``refusal`` are the one rule for update and delete.
+events out as real, and let a voice/tool edit change an event its provider owns. ``events_in_window`` fixes all four for the
+readers that use it: the calendar list and today routes, the MCP ``calendar_list_events`` / ``calendar_today`` tools, the
+``intent_router`` calendar show and daily briefing, and the Skybridge calendar show. NOT yet on it (named follow-up): the
+anticipation loop's own query (it shares only ``repeat_rule``), ``proactive/triggers/morning_checkin``, ``proactive/selector``
+and the pendant day review's duplicate check (``omi_day_review._on_calendar``). ``load_for_write`` + ``is_writable`` /
+``refusal`` are the rule every update and delete path uses.
 
 Time (docs/architecture/calendar-data-model.md section 5.1): ``start_date`` / ``start_time`` are the wall clock in the
 event's own ``timezone``; no zone = floating (read as household time); all-day = a date (inclusive ``end_date``). An
@@ -12,8 +16,9 @@ matched on; a floating or all-day event's are its own wall clock unchanged.
 
 Repeats: ``rrule`` (0052, RFC 5545) else the legacy ``recurring`` (an RRULE or one plain word: daily, weekly, fortnightly,
 monthly, yearly), evaluated by ``reminder_recurrence`` (its subset, plus UNTIL / COUNT / WKST here). Expanded on read over a
-bounded window, never materialised. An unparseable repeat yields its base occurrence only. EXDATE and RDATE are honoured; a
-RECURRENCE-ID override row replaces its master's instance on that date.
+bounded window, never materialised. An unparseable repeat yields its base occurrence only. RDATE adds dates (an RDATE-only
+event is a series too); EXDATE removes dates and wins over RDATE. A RECURRENCE-ID override row replaces its master's
+instance on its ORIGINAL date, wherever the override itself moved to.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ from typing import Any, Optional
 MAX_WINDOW_DAYS = 400                 # a wider request is clamped to this many days after its start
 MAX_OCCURRENCES_PER_EVENT = 200       # hard cap on one event's expansion inside one window
 _COUNT_SCAN_DAYS = 3660               # a COUNT rule is counted from its anchor; never scan further than this
+_OVERRIDE_PAD_DAYS = 31               # an override's original date this far before the window may still be inside it (multi-day)
 
 #: Sources whose rows are a provider's copy: Zoe has no write-back, so an edit here would silently fork the event.
 PROVIDER_SOURCES = frozenset(("ha", "caldav", "google", "microsoft"))
@@ -97,7 +103,7 @@ def _truthy(value: Any) -> bool:
 
 
 def is_recurring(row: dict) -> bool:
-    return bool(str(row.get("rrule") or "").strip() or str(row.get("recurring") or "").strip())
+    return bool(str(row.get("rrule") or "").strip() or str(row.get("recurring") or "").strip() or _dates(row.get("rdates")))
 
 
 def occurrence_dates(row: dict, first: date, last: date) -> "list[date]":
@@ -110,14 +116,15 @@ def occurrence_dates(row: dict, first: date, last: date) -> "list[date]":
         return []
     raw = str(row.get("rrule") or "").strip() or str(row.get("recurring") or "").strip()
     rule, until, count = _rule_with_bounds(raw) if raw else (None, None, None)
-    if rule is None:
-        return [anchor] if first <= anchor <= last else []
     skip = _dates(row.get("exdates"))
-    stop = min(last, until) if until else last
     out: list = []
+    if rule is None:                                   # no (understood) rule: the base date, plus any RDATEs below
+        if first <= anchor <= last and anchor not in skip:
+            out.append(anchor)
+    stop = min(last, until) if until else last
     seen = 0
     d = anchor if count else max(anchor, first)
-    while d <= stop and len(out) < MAX_OCCURRENCES_PER_EVENT:
+    while rule is not None and d <= stop and len(out) < MAX_OCCURRENCES_PER_EVENT:
         if d == anchor or rr.occurs_on(rule, anchor, d):     # RFC 5545: DTSTART is always the first instance
             seen += 1
             if count and seen > count:
@@ -128,7 +135,7 @@ def occurrence_dates(row: dict, first: date, last: date) -> "list[date]":
         if count and (d - anchor).days > _COUNT_SCAN_DAYS:
             break
     for extra in sorted(_dates(row.get("rdates"))):
-        if first <= extra <= last and extra not in out and len(out) < MAX_OCCURRENCES_PER_EVENT:
+        if first <= extra <= last and extra not in skip and extra not in out and len(out) < MAX_OCCURRENCES_PER_EVENT:
             out.append(extra)
     return sorted(out)
 
@@ -167,15 +174,45 @@ def is_writable(row: Optional[dict]) -> bool:
 
 
 def source_label(row: dict) -> str:
+    """Where an event comes from, for a person: the provider for a synced row, else its calendar's name, else "Zoe"."""
     source = str(row.get("source") or "local").strip().lower()
+    if source in PROVIDER_SOURCES:
+        return SOURCE_LABELS[source]
     return str(row.get("calendar_name") or "") or SOURCE_LABELS.get(source, "another calendar")
 
 
 def refusal(row: dict) -> str:
     """The honest answer when an edit is refused: where the event lives, and that the change belongs there."""
-    if str(row.get("source") or "local").strip().lower() in ("local", "") and not row.get("calendar_name"):
-        return "That one is on a read-only calendar, so I can't change it."
-    return f"That one comes from {source_label(row)}; change it there."
+    source = str(row.get("source") or "local").strip().lower()
+    if source in PROVIDER_SOURCES:
+        return f"That one comes from {SOURCE_LABELS[source]}; change it there."
+    name = str(row.get("calendar_name") or "")
+    return f"That one is on a read-only calendar{f' ({name})' if name else ''}, so I can't change it."
+
+
+async def _fetch(db, sql: str, params: list, pg_fetch: bool) -> "list[dict]":
+    """Rows as dicts from the pooled ``?`` connection, or (``pg_fetch``) a raw asyncpg connection (``$n``, ``db.fetch``)."""
+    if pg_fetch:
+        parts = sql.split("?")
+        sql = parts[0] + "".join(f"${i}{p}" for i, p in enumerate(parts[1:], 1))
+        return [dict(r) for r in await db.fetch(sql, *params)]
+    cur = await db.execute(sql, params)
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def load_for_write(db, user_id: str, event_id: Any, *, own_only: bool = False,
+                         pg_fetch: bool = False) -> Optional[dict]:
+    """The event an update / delete would touch, with its calendar's ``calendar_writable`` and ``calendar_name``, or None.
+
+    Scoped to the caller exactly as the write paths scope it: the member's own events plus household (``family``) ones
+    (``own_only``: own only). An id the caller cannot see is None - "not found", never a hint that it exists or where it
+    came from."""
+    scope = "e.user_id = ?" if own_only else "(e.visibility = 'family' OR e.user_id = ?)"
+    rows = await _fetch(db, "SELECT e.*, c.writable AS calendar_writable, c.name AS calendar_name FROM events e"
+                            " LEFT JOIN calendars c ON c.id = e.calendar_id"
+                            f" WHERE e.id = ? AND {scope} AND COALESCE(e.deleted, 0) = 0",
+                        [event_id, user_id], pg_fetch)
+    return next((r for r in rows if r.get("id") == event_id), None)
 
 
 def _visibility_sql(user_id: str, own_only: bool, include_busy: bool) -> "tuple[str, list]":
@@ -206,20 +243,18 @@ async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_ca
     w1 = min(w1, w0 + timedelta(days=MAX_WINDOW_DAYS))
     vis, params = _visibility_sql(user_id, own_only, include_busy)
     # a zoned event's own-frame date can sit one day either side of the household date: pad, then filter exactly below
-    sql = (f"SELECT * FROM events WHERE {vis} AND COALESCE(deleted, 0) = 0 AND start_date <= ?"
-           " AND (COALESCE(NULLIF(end_date, ''), start_date) >= ? OR COALESCE(recurring, '') <> ''"
-           " OR COALESCE(rrule, '') <> '' OR COALESCE(recurrence_id, '') <> '')")
-    params += [(w1 + timedelta(days=1)).isoformat(), (w0 - timedelta(days=1)).isoformat()]
+    # An override row is fetched by its ORIGINAL date (recurrence_id) too, so one moved out of the window still suppresses
+    # its master's instance there; one whose moved date overlaps the window is fetched like any event.
+    sql = (f"SELECT * FROM events WHERE {vis} AND COALESCE(deleted, 0) = 0 AND ("
+           "(start_date <= ? AND (COALESCE(NULLIF(end_date, ''), start_date) >= ? OR COALESCE(recurring, '') <> ''"
+           " OR COALESCE(rrule, '') <> '' OR COALESCE(rdates, '') NOT IN ('', '[]')))"
+           " OR (COALESCE(recurrence_id, '') <> '' AND substr(recurrence_id, 1, 10) BETWEEN ? AND ?))")
+    params += [(w1 + timedelta(days=1)).isoformat(), (w0 - timedelta(days=1)).isoformat(),
+               (w0 - timedelta(days=_OVERRIDE_PAD_DAYS)).isoformat(), (w1 + timedelta(days=1)).isoformat()]
     if category:
         sql += " AND category = ? AND (visibility <> 'busy' OR user_id = ?)"
         params += [category, user_id]
-    if pg_fetch:
-        parts = sql.split("?")
-        sql = parts[0] + "".join(f"${i}{p}" for i, p in enumerate(parts[1:], 1))
-        rows = [dict(r) for r in await db.fetch(sql, *params)]
-    else:
-        cur = await db.execute(sql, params)
-        rows = [dict(r) for r in await cur.fetchall()]
+    rows = await _fetch(db, sql, params, pg_fetch)
 
     replaced = {(r.get("series_id"), _date(r.get("recurrence_id"))) for r in rows
                 if r.get("series_id") and _date(r.get("recurrence_id"))}

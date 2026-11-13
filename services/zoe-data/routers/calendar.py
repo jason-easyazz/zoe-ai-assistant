@@ -50,11 +50,6 @@ def _row_to_event(row) -> dict:
     return row_to_event(row)
 
 
-def _visibility_filter_sql() -> str:
-    """SQL fragment for WRITES and owner checks: (visibility='family' OR user_id=?) AND deleted=0."""
-    return "(visibility = 'family' OR user_id = ?) AND deleted = 0"
-
-
 def _read_filter_sql() -> str:
     """SQL fragment for READS: also another member's busy-only events (returned as the busy projection)."""
     return "(visibility IN ('family', 'busy') OR user_id = ?) AND deleted = 0"
@@ -203,7 +198,7 @@ DEFAULT_LIST_DAYS = 90
 
 
 async def _list_window(db, user_id: str, start, end, *, include_cancelled: bool, category: Optional[str]) -> list:
-    """The window through the ONE read path (``calendar_read``): overlapping multi-day events, repeats expanded,
+    """The window through the shared read path (``calendar_read``): overlapping multi-day events, repeats expanded,
     cancelled hidden unless asked. Each item is the presented event plus ``occurrence_date`` / ``occurrence_start_time``
     (household time), ``is_recurring``, ``read_only`` and ``source`` / ``source_label``."""
     occurrences = await calendar_read.events_in_window(db, user_id, start, end, include_cancelled=include_cancelled,
@@ -341,15 +336,10 @@ async def update_event(
 ):
     """Update an existing event (a member: family or their own; the panel: family events only)."""
     _panel, user_id = await _calendar_writer(request, user, db, "update")
-    where = f"{_visibility_filter_sql()} AND id = ?"
-    cursor = await db.execute(
-        "SELECT * FROM events WHERE " + where,
-        [user_id, event_id],
-    )
-    row = await cursor.fetchone()
-    if row is None:
+    # family-or-own (the write scope), with its calendar's writable flag; an id the caller cannot see is a plain 404
+    current = await calendar_read.load_for_write(db, user_id, event_id)
+    if current is None:
         raise HTTPException(status_code=404, detail="Event not found")
-    current = dict(row)
     if not calendar_read.is_writable(current):
         # an externally-owned event (read-only, or a provider's copy with no write-back): the change belongs at its source
         raise HTTPException(status_code=409, detail=calendar_read.refusal(current))
@@ -449,16 +439,11 @@ async def delete_event(
 ):
     """Soft delete an event (set deleted=1; ``deleted_at`` is the sync tombstone's time). The panel: family events only."""
     _panel, user_id = await _calendar_writer(request, user, db, "delete")
-    where = f"{_visibility_filter_sql()} AND id = ?"
-    cursor = await db.execute(
-        "SELECT * FROM events WHERE " + where,
-        [user_id, event_id],
-    )
-    row = await cursor.fetchone()
+    row = await calendar_read.load_for_write(db, user_id, event_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Event not found")
-    if not calendar_read.is_writable(dict(row)):
-        raise HTTPException(status_code=409, detail=calendar_read.refusal(dict(row)))
+    if not calendar_read.is_writable(row):
+        raise HTTPException(status_code=409, detail=calendar_read.refusal(row))
     # Household model: family-visible events are deletable by any signed-in
     # household member — same rationale as update_event above (soft delete,
     # reversible; mirrors the people router's family-or-own semantics).
@@ -469,7 +454,7 @@ async def delete_event(
     )
     await db.commit()
 
-    event = _row_to_event(row)
+    event = _row_to_event({k: v for k, v in row.items() if k not in ("calendar_writable", "calendar_name")})
     event["deleted"] = True
 
     await broadcaster.broadcast("calendar", "event_deleted", {"id": event_id, **event},

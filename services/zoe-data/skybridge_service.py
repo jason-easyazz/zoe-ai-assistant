@@ -3814,14 +3814,19 @@ def _score_event_for_target(event: dict[str, Any], target: str) -> int:
     return score + sum(1 for token in target_tokens if token in haystack)
 
 
-async def _calendar_refusal(db: Any, event_id: Any, intent: SkybridgeIntent, verb: str) -> dict[str, Any] | None:
-    """The honest answer when the chosen event is read-only or a provider's copy (``calendar_read.is_writable``), read
-    from the stored row - never from the client's context card. None = the member may change it."""
+async def _calendar_refusal(db: Any, user_id: str, event_id: Any, intent: SkybridgeIntent, verb: str) -> dict[str, Any] | None:
+    """None when the member may change the chosen event; else the answer. Read from the stored row through
+    ``calendar_read.load_for_write`` (family-or-own, with its calendar's writable flag) - never from the client's context
+    card. An id the caller cannot see is "not found", with no hint of whose it is or where it came from; a read-only or
+    provider-owned event gets the honest "change it there"."""
     import calendar_read
 
-    rows = await db.fetch("SELECT id, read_only, source, calendar_id FROM events WHERE id = $1", event_id)
-    row = next((dict(r) for r in rows or [] if dict(r).get("id") == event_id), None)
-    if row is None or calendar_read.is_writable(row):
+    row = await calendar_read.load_for_write(db, user_id, event_id, pg_fetch=True)
+    if row is None:
+        line = f"I could not find a calendar event to {verb}."
+        return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
+                "cards": [_status_card("Which appointment?", line)], "actions": []}
+    if calendar_read.is_writable(row):
         return None
     line = calendar_read.refusal(row)
     return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
@@ -3874,7 +3879,7 @@ async def _resolve_calendar_update_time(intent: SkybridgeIntent, user_id: str, d
         }
     event = matches[0]
     event_id = event.get("id")
-    refused = await _calendar_refusal(db, event_id, intent, "move")
+    refused = await _calendar_refusal(db, user_id, event_id, intent, "move")
     if refused:
         return refused
     update_result = await db.execute(
@@ -4021,7 +4026,7 @@ async def _resolve_calendar_delete_event(intent: SkybridgeIntent, user_id: str, 
         }
     event = matches[0]
     event_id = event.get("id")
-    refused = await _calendar_refusal(db, event_id, intent, "delete")
+    refused = await _calendar_refusal(db, user_id, event_id, intent, "delete")
     if refused:
         return refused
     delete_result = await db.execute(
@@ -4054,7 +4059,7 @@ async def _resolve_calendar(intent: SkybridgeIntent, user_id: str, db: Any) -> d
     if not _is_guest_user(user_id):
         import calendar_read
 
-        # the ONE read path: multi-day overlap, repeats expanded, cancelled dropped (each row dated to its occurrence)
+        # the shared read path: multi-day overlap, repeats expanded, cancelled dropped (each row dated to its occurrence)
         events = [row_to_event(o["event"]) for o in await calendar_read.events_in_window(db, user_id, start, end, pg_fetch=True)]
     qualifier = intent.range_label or start.isoformat()
     event_word = "event" if len(events) == 1 else "events"

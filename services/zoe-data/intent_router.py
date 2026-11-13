@@ -3311,7 +3311,7 @@ async def _execute_calendar_show_direct(intent: Intent, user_id: str) -> Optiona
         from calendar_read import events_in_window
         from database import get_db_ctx
         async with get_db_ctx() as db:
-            # the ONE read path: multi-day overlap, repeats expanded, cancelled dropped, household dates
+            # the shared read path: multi-day overlap, repeats expanded, cancelled dropped, household dates
             rows = [{"title": o["title"], "start_date": o["date"], "start_time": o["start_time"], "all_day": o["all_day"]}
                     for o in await events_in_window(db, user_id, start, end)]
     except Exception as exc:
