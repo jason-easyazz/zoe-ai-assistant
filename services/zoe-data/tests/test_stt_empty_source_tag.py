@@ -110,3 +110,33 @@ def test_every_voice_tts_call_site_names_its_source():
     for i in sites:
         window = " ".join(lines[i:i + 3])
         assert "src=" in window or "_turn_stt_src(" in window, window
+
+
+def test_speculative_resolve_carries_the_turns_trigger(monkeypatch):
+    """The resolve POST carries only audio; the trigger is the one the turn opened its gate with."""
+    seen = {}
+
+    async def stt(path, capture=True, **kw):
+        seen.update(kw)
+        return "same words"
+
+    class Gate:
+        stt_trigger = "followup"
+
+        def resolve(self, action, **kw):
+            pass
+
+        def verdict(self):
+            return "resolve"
+
+    monkeypatch.setattr(vt._speculation, "speculative_turn_enabled", lambda: True)
+    monkeypatch.setattr(vt._speculation, "get_gate", lambda turn_id: Gate())
+    monkeypatch.setattr(vt, "_transcribe_audio", stt)
+    payload = {"turn_id": "t1", "action": "resolve", "audio_base64": "UklGRgAAAAA="}
+    asyncio.run(vt.voice_turn_stream_speculation(payload, caller={"source": "device"}))
+    assert seen == {"src": "panel", "trigger": "followup"}
+
+
+def test_turn_stream_records_the_trigger_on_its_gate():
+    src = inspect.getsource(vt.voice_turn_stream)
+    assert '_spec_gate.stt_trigger = _turn_stt_src(payload, caller).get("trigger", "")' in src

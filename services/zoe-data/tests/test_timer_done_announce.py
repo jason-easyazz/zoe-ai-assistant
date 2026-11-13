@@ -5,7 +5,7 @@ Before: nothing server-side fired at expiry; the guest kiosk page chimed and fel
 queues one panel-scoped ``timer_done`` row on the daemon's announcement lane.
 
 Falsifiable pins: drop the ``announced`` mark and the idempotency/restart tests go red; drop ``timer_done`` from
-PANEL_SCOPED_TRIGGERS and the other-panel claim test goes red; drop the disarm on cancel and the dismiss test goes red.
+PANEL_SCOPED_TRIGGERS and the other-panel claim test goes red; drop the idempotency key and the replay test goes red.
 """
 from __future__ import annotations
 
@@ -117,16 +117,49 @@ async def test_two_timers_each_said_on_its_own_panel(ann_db):
         ("panel-hall", "Your Bath timer is done."), ("panel-kitchen", "Your Eggs timer is done.")]
 
 
-async def test_quiet_hours_hold_the_line_and_it_is_not_said_later(ann_db, monkeypatch):
+async def test_quiet_hours_the_page_speaks_it_instead(ann_db, monkeypatch):
+    t = _set("member-a", "Tea", "panel-kitchen", 0.15)
+    assert sky._timer_card(t)["props"]["spoken_by_panel"] is True  # outside quiet hours the panel will say it
     monkeypatch.setattr(sky, "_timer_quiet_now", lambda: True)
-    t = _set("member-a", "Tea", "panel-kitchen", 0.05)
-    await asyncio.sleep(0.3)
+    assert sky._timer_card(t)["props"]["spoken_by_panel"] is False  # known before the end: the page speaks it
+    await asyncio.sleep(0.4)
     assert await _rows(ann_db) == []
-    assert t["announced"] is True
+    assert not t.get("announced") and t["voice_failed"] is True
     monkeypatch.setattr(sky, "_timer_quiet_now", lambda: False)
+    assert sky._timer_card(t)["props"]["spoken_by_panel"] is False  # still the page's, never both
     sky._timers._arm(t)
     await asyncio.sleep(0.2)
     assert await _rows(ann_db) == []
+
+
+async def test_failed_queue_leaves_it_to_the_page(ann_db, monkeypatch):
+    async def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(voice_announce, "enqueue_announcement", boom)
+    t = _set("member-a", "Tea", "panel-kitchen", 0.05)
+    await asyncio.sleep(0.3)
+    assert not t.get("announced") and t["voice_failed"] is True
+    assert sky._timer_card(t)["props"]["spoken_by_panel"] is False
+
+
+async def test_replay_after_a_crash_before_the_snapshot_adds_no_row(ann_db):
+    """The snapshot write is asynchronous: a crash after the row was queued but before ``announced`` reached disk
+    replays the queue on restore. The row id is keyed on timer id + due time, so the replay is a no-op."""
+    t = _set("member-a", "Bread", "panel-kitchen", 0.05)
+    await asyncio.sleep(0.3)
+    t["announced"] = False  # as if the snapshot never recorded it
+    await sky._queue_timer_done("member-a", t, 60)
+    await sky._queue_timer_done("member-a", t, 60)
+    rows = await _rows(ann_db)
+    assert [r["message"] for r in rows] == ["Your Bread timer is done."]
+
+
+async def test_a_different_due_time_is_a_different_row(ann_db):
+    t = {"timer_id": "t9", "label": "Tea", "expires_at": 1000.0, "panel_id": "panel-kitchen"}
+    await sky._queue_timer_done("member-a", t, 60)
+    await sky._queue_timer_done("member-a", dict(t, expires_at=1060.0), 60)
+    assert len(await _rows(ann_db)) == 2
 
 
 def _snapshot(path: str, ended_ago: float, announced: bool = False) -> None:
@@ -194,7 +227,8 @@ async def test_device_token_voice_auth_binds_the_panel(monkeypatch):
     assert bound == "panel-kitchen"
 
 
-def test_card_tells_the_page_the_panel_speaks_it():
+def test_card_tells_the_page_the_panel_speaks_it(monkeypatch):
+    monkeypatch.setattr(sky, "_timer_quiet_now", lambda: False)
     assert sky._timer_card({"timer_id": "a", "label": "Tea", "duration_seconds": 60, "expires_at": 1.0,
                             "panel_id": "panel-kitchen"})["props"]["spoken_by_panel"] is True
     assert sky._timer_card({"timer_id": "a", "label": "Tea", "duration_seconds": 60,

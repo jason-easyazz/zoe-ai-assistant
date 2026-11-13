@@ -325,7 +325,7 @@ class _TimerStore:
 
     def _arm(self, timer: dict[str, Any]) -> None:
         """(Re)start the one task that announces this timer when it ends. Needs a panel and a running loop; a no-op otherwise."""
-        if not timer.get("panel_id") or timer.get("announced"):
+        if not timer.get("panel_id") or timer.get("announced") or timer.get("voice_failed"):
             return
         try:
             loop = asyncio.get_running_loop()
@@ -362,16 +362,18 @@ def _timer_quiet_now() -> bool:
 async def _ring_when_done(store: _TimerStore, timer_id: str) -> None:
     """Sleep until the timer ends, then queue ONE spoken "timer is done" for the panel that set it.
 
-    At most once: the timer is marked ``announced`` (and snapshotted) BEFORE the row is queued, so a crash or restart in
-    between loses the line rather than repeating it. A timer cancelled or dismissed first is gone from the store and never
-    speaks; one that ended while the service was down speaks on restore only while it is still inside the ring grace."""
+    Once: the row's idempotency key is the timer id + its due time, so a replay (a crash or restart between queueing and
+    the asynchronous snapshot) finds the row already there and adds nothing. ``announced`` is set only after a SUCCESSFUL
+    queue; quiet hours or a failed queue set ``voice_failed`` instead, which turns the card's ``spoken_by_panel`` off so
+    the page speaks it itself. A timer cancelled or dismissed first is gone from the store and never speaks; one that
+    ended while the service was down speaks on restore only while it is still inside the ring grace."""
     try:
         while True:
             hit = store.find_by_id(timer_id)
             if hit is None:
                 return
             owner, t = hit
-            if t.get("announced") or not t.get("panel_id"):
+            if t.get("announced") or t.get("voice_failed") or not t.get("panel_id"):
                 return
             now = time.time()
             if t["expires_at"] > now:
@@ -380,9 +382,12 @@ async def _ring_when_done(store: _TimerStore, timer_id: str) -> None:
             left = t["expires_at"] + TIMER_RING_GRACE_S - now
             if left <= 0:
                 return
-            t["announced"] = True
-            store._save()
             outcome = await _queue_timer_done(owner, t, left)
+            if outcome == "queued":
+                t["announced"] = True
+            else:
+                t["voice_failed"] = True  # final: the page speaks it (spoken_by_panel false); never retried, never twice
+            store._save()
             logger.info("TIMER_ANNOUNCE outcome=%s", outcome)  # counts only: never the label or the owner
             return
     finally:
@@ -402,7 +407,8 @@ async def _queue_timer_done(owner: str, timer: dict[str, Any], left_s: float) ->
         text = "Your timer is done." if label.lower() == "timer" else f"Your {label} timer is done."
         async with get_compat_db() as db:
             await voice_announce.enqueue_announcement(db, user_id=owner, message=text, panel_id=timer["panel_id"],
-                                                      trigger_type=TIMER_DONE_TRIGGER, ttl_s=max(1, int(left_s)))
+                                                      trigger_type=TIMER_DONE_TRIGGER, ttl_s=max(1, int(left_s)),
+                                                      dedupe_key=f"timer_done:{timer['timer_id']}:{timer['expires_at']:.3f}")
         return "queued"
     except Exception as exc:  # noqa: BLE001 - the panel still shows and chimes the alarm
         logger.warning("TIMER_ANNOUNCE outcome=failed (%s)", type(exc).__name__)
@@ -497,6 +503,17 @@ def _format_duration(seconds: float) -> str:
     return " and ".join(parts) if parts else "0 seconds"
 
 
+def _spoken_by_panel(timer: dict[str, Any]) -> bool:
+    if not timer.get("panel_id") or timer.get("voice_failed"):
+        return False
+    if timer.get("announced"):
+        return True
+    try:
+        return not _timer_quiet_now()
+    except Exception:  # noqa: BLE001 - unknown: let the page speak
+        return False
+
+
 def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, Any]:
     return {
         "component": "timer",
@@ -509,8 +526,10 @@ def _timer_card(timer: dict[str, Any], *, status: str = "running") -> dict[str, 
             "status": status,
             "duration_seconds": int(timer["duration_seconds"]),
             "expires_at_ms": int(timer["expires_at"] * 1000),
-            # True when the panel's speaker daemon says "timer is done" (server-queued): the page should then not speak it too.
-            "spoken_by_panel": bool(timer.get("panel_id")),
+            # True when the panel's speaker daemon will say (or has queued) "timer is done": the page should then not speak it
+            # too. Known BEFORE the end (the page decides from its last poll): false with no panel, after quiet hours or a
+            # failed queue, or inside the quiet window now.
+            "spoken_by_panel": _spoken_by_panel(timer),
         },
     }
 

@@ -126,8 +126,13 @@ async def enqueue_announcement(
     trigger_type: str = "",
     ttl_s: int | None = None,
     commit: bool = True,
+    dedupe_key: str = "",
 ) -> str:
     """Insert one pending spoken announcement; returns its id.
+
+    ``dedupe_key``: an idempotency key. The row id is derived from it, and the insert is ``ON CONFLICT (id) DO
+    NOTHING``, so replaying the same key (a crash between queueing and the caller's own bookkeeping) never makes a
+    second row, whether the first is still pending, claimed or played. Empty = a fresh random id, as before.
 
     Raises on bad input or DB failure — the CALLER (the proactive engine's
     never-raise adapter) owns swallowing, so a queue failure is logged there
@@ -138,11 +143,16 @@ async def enqueue_announcement(
         raise ValueError("announcement message is empty")
     ttl = max(1, int(ttl_s)) if ttl_s else _ttl_s()
     now = _now()
-    ann_id = uuid.uuid4().hex[:16]
+    if dedupe_key:
+        import hashlib
+
+        ann_id = "k" + hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()[:15]
+    else:
+        ann_id = uuid.uuid4().hex[:16]
     await db.execute(
         """INSERT INTO voice_announcements
                (id, user_id, panel_id, message, trigger_type, created_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING""",
         (
             ann_id,
             user_id,

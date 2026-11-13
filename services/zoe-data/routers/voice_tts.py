@@ -6341,6 +6341,8 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             raise HTTPException(status_code=400, detail="turn_id is required for a speculative turn")
         try:
             _spec_gate = _speculation.open_gate(_spec_turn_id)
+            # The resolve POST carries only audio: remember this turn's trigger for its STT_EMPTY label.
+            _spec_gate.stt_trigger = _turn_stt_src(payload, caller).get("trigger", "")
         except _speculation.DuplicateTurn:
             raise HTTPException(status_code=409, detail="speculative turn_id is already active")
 
@@ -6981,7 +6983,8 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
                 tmp.write(raw)
                 wav_path = tmp.name
             try:
-                final_transcript = (await _transcribe_audio(wav_path, src=_turn_stt_src(payload, caller)["src"]) or "").strip()
+                final_transcript = (await _transcribe_audio(wav_path, src=_turn_stt_src(payload, caller)["src"],
+                                                            trigger=getattr(gate, "stt_trigger", "")) or "").strip()
             finally:
                 try:
                     os.unlink(wav_path)
