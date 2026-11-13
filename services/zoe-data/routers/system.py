@@ -1942,6 +1942,7 @@ def _row_to_prefs(row) -> dict:
 
 @router.get("/display/preferences")
 async def get_display_preferences(
+    request: Request,
     device_id: str = Query("default"),
     db=Depends(get_db),
 ):
@@ -1950,7 +1951,7 @@ async def get_display_preferences(
     Deliberately unauthenticated so the Pi panel agent can poll this without a
     session token. No sensitive data is exposed.
     """
-    row, inherited = await _display_row_or_default(db, device_id)
+    row, inherited = await _display_row_or_default(db, device_id, request)
     prefs = _row_to_prefs(row)
     # a panel's reload host is its OWN: never inherited from the "default" row
     own = row if not inherited else None
@@ -1963,13 +1964,45 @@ async def get_display_preferences(
     }
 
 
-async def _display_row_or_default(db, device_id: str):
-    """(row, inherited): the device's own ``display_preferences`` row, else the saved ``default`` row ("All panels" in Settings),
-    else None. Without the fallback, saving "All panels (default)" wrote a row no panel ever read."""
+async def _panel_at_caller_address(db, request) -> Optional[str]:
+    """The ``panels.panel_id`` registered at the caller's address, when exactly ONE active panel is, else None.
+
+    The panel agent polls with its own device id (``ZOE_DEVICE_ID`` or ``pi-<MAC>``), while Settings > Display and the
+    touch page key a panel's row by ``panel_id``; nothing in the schema links the two ids, so the panel is found the way
+    skybridge proves a panel: the machine at its REGISTERED address (``panel_principal.trusted_client_ip``; a request that
+    crossed the public tunnel is never located). Two panels at one address, or none: no panel, the default applies."""
+    if request is None:
+        return None
+    try:
+        import panel_principal
+
+        if panel_principal._via_public_tunnel(request):
+            return None
+        ip = panel_principal.trusted_client_ip(request)
+        if not ip:
+            return None
+        cursor = await db.execute("SELECT panel_id FROM panels WHERE ip_address = ? AND is_active = 1", (ip,))
+        rows = await cursor.fetchall()
+    except Exception as exc:  # noqa: BLE001 - an unreadable registry is "no panel": the default row still applies
+        logger.debug("display prefs: panel address lookup failed (%s)", type(exc).__name__)
+        return None
+    return rows[0]["panel_id"] if rows and len(rows) == 1 else None
+
+
+async def _display_row_or_default(db, device_id: str, request=None):
+    """(row, inherited): the device's own ``display_preferences`` row, else the row of the panel registered at the caller's
+    address (the panel agent polls with a device id, Settings saves under the panel id), else the saved ``default`` row
+    ("All panels" in Settings), else None. Without the fallback, saving "All panels (default)" wrote a row no panel ever read."""
     cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", (device_id,))
     row = await cursor.fetchone()
     if row is not None or device_id == "default":
         return row, False
+    panel_id = await _panel_at_caller_address(db, request)
+    if panel_id and panel_id != device_id:
+        cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", (panel_id,))
+        row = await cursor.fetchone()
+        if row is not None:
+            return row, False       # this machine's panel's own setting: its reload host is its own too
     cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", ("default",))
     row = await cursor.fetchone()
     return row, row is not None

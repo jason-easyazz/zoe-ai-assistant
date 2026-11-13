@@ -506,12 +506,14 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
         row_month = _month_of(tail)
         if ctx and row_month and row_month != ctx:
             return None
-    if any(q.value == qn.value for q in spans) and (not month_new or month_new == row_month):
-        return None                 # the row already holds the corrected value
     # the number must be the corrected ATTRIBUTE, not just the same digits: a DATE correction ("the 27th not the 20th") rewrites a
     # day-of-month (an ordinal, or a number beside a month name), never "costs 20 dollars" or "20 Example Street"; and a correction
-    # that is not a date never rewrites a day-of-month
+    # that is not a date never rewrites a day-of-month. The same holds for "already up to date": "on the 20th that costs 27
+    # dollars" does not hold the corrected DATE just because 27 appears in it.
     date_corr = bool(qn.ordinal or qo.ordinal or month_new or month_old)
+    if (any(q.value == qn.value and _is_day_of_month(tail, q) == date_corr for q in spans)
+            and (not month_new or month_new == row_month)):
+        return None                 # the row already holds the corrected value
     hits = [q for q in spans if q.value in want and _is_day_of_month(tail, q) == date_corr]
     if len(hits) != 1:
         return None

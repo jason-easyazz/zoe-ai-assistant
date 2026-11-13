@@ -106,23 +106,36 @@ class _Rows(dict):
 
 
 class _FakeDb:
-    def __init__(self, rows):
+    def __init__(self, rows, panels=None):
         self.rows = rows
+        self.panels = panels or {}      # registered address -> [panel_id, ...] (active panels only)
 
     async def execute(self, sql, params):
-        row = self.rows.get(params[0])
+        if "FROM panels" in sql:
+            found = [_Rows(panel_id=p) for p in self.panels.get(params[0], [])]
+        else:
+            found = [self.rows[params[0]]] if params[0] in self.rows else []
 
         class _Cur:
             async def fetchone(self_inner):
-                return row
+                return found[0] if found else None
+
+            async def fetchall(self_inner):
+                return found
         return _Cur()
 
 
-def _get(db, device_id):
+def _request(peer="192.0.2.10", headers=()):
+    from starlette.requests import Request
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": [(k.encode(), v.encode()) for k, v in headers],
+                    "client": (peer, 40000), "query_string": b""})
+
+
+def _get(db, device_id, request=None):
     import asyncio
 
     from routers import system
-    return asyncio.run(system.get_display_preferences(device_id=device_id, db=db))
+    return asyncio.run(system.get_display_preferences(request=request, device_id=device_id, db=db))
 
 
 def test_a_panel_without_its_own_row_reads_the_saved_default():
@@ -140,3 +153,29 @@ def test_a_panels_own_row_wins_over_the_default_and_no_rows_means_code_defaults(
     none = _get(_FakeDb({}), "panel-kitchen")
     assert none["inherited"] is False and none["preferences"]["off_enabled"] is False     # control: the code default
     assert _get(db, "default")["inherited"] is False
+
+
+# ── a per-panel row reaches the panel AGENT, which polls with its own device id ────────────────────────────────────
+
+def test_the_agent_reads_its_panels_row_by_the_panels_registered_address():
+    """Settings saves a panel's row under the panel id; the agent on that panel polls with ``pi-<MAC>``. The machine at the
+    panel's registered address gets the panel's row, not the default."""
+    db = _FakeDb({"default": _Rows(day_brightness=40), "panel-kitchen": _Rows(day_brightness=75, pi_host="192.0.2.10")},
+                 panels={"192.0.2.10": ["panel-kitchen"]})
+    out = _get(db, "pi-0000000000aa", _request("192.0.2.10"))
+    assert out["inherited"] is False and out["preferences"]["day_brightness"] == 75 and out["pi_host"] == "192.0.2.10"
+    # controls: another address, no request, or the public tunnel get the default; two panels at one address are not guessed
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.99"))["preferences"]["day_brightness"] == 40
+    assert _get(db, "pi-0000000000aa")["preferences"]["day_brightness"] == 40
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.10", [("cf-ray", "x")]))["preferences"]["day_brightness"] == 40
+    db.panels = {"192.0.2.10": ["panel-kitchen", "panel-hall"]}
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.10"))["preferences"]["day_brightness"] == 40
+
+
+def test_the_devices_own_row_still_wins_and_a_panel_without_a_row_falls_to_the_default():
+    db = _FakeDb({"default": _Rows(day_brightness=40), "pi-0000000000aa": _Rows(day_brightness=20),
+                  "panel-kitchen": _Rows(day_brightness=75)}, panels={"192.0.2.10": ["panel-kitchen"]})
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.10"))["preferences"]["day_brightness"] == 20
+    db = _FakeDb({"default": _Rows(day_brightness=40)}, panels={"192.0.2.10": ["panel-kitchen"]})
+    out = _get(db, "pi-0000000000aa", _request("192.0.2.10"))
+    assert out["inherited"] is True and out["preferences"]["day_brightness"] == 40

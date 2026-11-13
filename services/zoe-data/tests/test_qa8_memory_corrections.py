@@ -352,6 +352,19 @@ def test_a_date_correction_rewrites_the_date_and_never_another_number_of_that_su
     assert vc.rewrite("User's savings are 12 thousand dollars", money) == "User's savings are 13.5 thousand dollars"
 
 
+def test_a_matching_number_of_another_kind_does_not_make_the_row_up_to_date():
+    """27 dollars is not the 27th: the row still holds the stale DATE and is rewritten; and the mirror for an amount."""
+    corr = vc.statement(DENTIST_FIX)
+    assert vc.rewrite("User has a dentist appointment on the 20th that costs 27 dollars", corr) == \
+        "User has a dentist appointment on the 27th that costs 27 dollars"
+    assert vc.rewrite("User has a dentist appointment on the 20th of November that costs 27 dollars", corr) == \
+        "User has a dentist appointment on the 27th of November that costs 27 dollars"
+    assert vc.rewrite("User has a dentist appointment on the 27th of November", corr) is None      # really up to date
+    money = vc.statement("actually the gas bill is 27 dollars not 20 dollars")
+    assert vc.rewrite("User's gas bill is 20 dollars, due on the 27th", money) == "User's gas bill is 27 dollars, due on the 27th"
+    assert vc.rewrite("User's gas bill is 27 dollars", money) is None                              # really up to date
+
+
 def test_a_value_restated_after_the_correction_is_a_new_fact_not_the_stale_one(monkeypatch):
     """12 thousand, corrected to 13.5 thousand; LATER the member says it is 12 thousand again. Words said after the correction
     are never discarded by it; words said before it still are."""
@@ -367,11 +380,55 @@ def test_a_value_restated_after_the_correction_is_a_new_fact_not_the_stale_one(m
     assert vc.superseded_by_correction(UID, fact) is True                       # no time known: unchanged behaviour
 
 
-def test_the_consolidation_passes_the_last_turn_time():
+def _session_around_a_correction(monkeypatch, after_text="ok thanks, what is on tomorrow"):
+    """[states the 20th] -> [corrects to the 27th, recorded as a correction at that moment] -> [chats on]. Invented data."""
     import datetime as dt
+    import time
 
+    svc = _Svc("User has a dentist appointment on the 20th of November")
+    now = time.time()
+    _apply(svc, DENTIST_FIX, monkeypatch)                 # the correction is recorded NOW
+    at = lambda off: dt.datetime.fromtimestamp(now + off, tz=dt.timezone.utc)  # noqa: E731
+    return [
+        {"role": "user", "content": "my dentist appointment is on the 20th of november", "at": at(-120)},
+        {"role": "assistant", "content": "Noted.", "at": at(-110)},
+        {"role": "user", "content": DENTIST_FIX, "at": at(0)},
+        {"role": "user", "content": after_text, "at": at(60)},
+    ]
+
+
+def test_a_fact_mined_from_words_before_a_mid_session_correction_is_stale(monkeypatch):
+    """The session chats on after the correction: the session's LAST turn is newer than the correction, but the words the fact
+    came from are older, so the old date is not filed again."""
     import memory_idle_consolidation as mic
 
-    rows = [{"at": dt.datetime(2026, 11, 1, 9, 0, tzinfo=dt.timezone.utc)}, {"at": dt.datetime(2026, 11, 1, 9, 5, tzinfo=dt.timezone.utc)}]
-    assert mic._last_turn_epoch(rows) == rows[1]["at"].timestamp()
-    assert mic._last_turn_epoch([]) is None and mic._last_turn_epoch([{"at": "not a time"}]) is None
+    rows = _session_around_a_correction(monkeypatch)
+    fact = "User has a dentist appointment on the 20th of November"
+    said = mic._fact_said_at({"fact": fact}, fact, rows)
+    assert said == rows[0]["at"].timestamp()                                           # the supporting turn, not the last one
+    assert vc.superseded_by_correction(UID, fact, said_at=said) is True
+    assert vc.superseded_by_correction(UID, fact, said_at=rows[-1]["at"].timestamp()) is False   # control: the old rule kept it
+
+
+def test_a_fact_restated_after_the_correction_is_kept(monkeypatch):
+    import memory_idle_consolidation as mic
+
+    rows = _session_around_a_correction(monkeypatch, after_text="it is the 20th again")
+    fact = "User has a dentist appointment on the 20th of November"
+    said = mic._fact_said_at({"fact": fact, "quote": "it is the 20th again"}, fact, rows)
+    assert said == rows[-1]["at"].timestamp()
+    assert vc.superseded_by_correction(UID, fact, said_at=said) is False
+    rows = _session_around_a_correction(monkeypatch, after_text="my dentist appointment is on the 20th of november")
+    said = mic._fact_said_at({"fact": fact}, fact, rows)                               # no quote: the entailing turn
+    assert said == rows[-1]["at"].timestamp()                                          # the NEWEST supporting turn wins
+
+
+def test_no_supporting_turn_falls_back_to_the_first_turn(monkeypatch):
+    import memory_idle_consolidation as mic
+
+    rows = _session_around_a_correction(monkeypatch)
+    fact = "User has a dentist appointment on the 20th of November"
+    said = mic._fact_said_at({"fact": fact, "quote": "words nobody said"}, fact, rows)
+    assert said == rows[0]["at"].timestamp()
+    assert vc.superseded_by_correction(UID, fact, said_at=said) is True
+    assert mic._first_turn_epoch([]) is None and mic._first_turn_epoch([{"at": "not a time"}]) is None
