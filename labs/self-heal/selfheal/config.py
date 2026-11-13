@@ -38,6 +38,10 @@ DEFAULT_FORBIDDEN = [
     "scripts/night/night_window.py", "scripts/night/night_window.sh",
     "scripts/setup/build_py312_venv.sh",
     "tools/audit/flag_inventory.py",
+    # the live Flue sidecars (the deploy workflow runs their dist/server.mjs): the brain and the Telegram bot
+    "labs/flue-zoe-brain-2x/*", "labs/flue-zoe-telegram-2x/*",
+    # DOX contracts: an autonomous loop never edits an AGENTS.md (root AGENTS.md "Knowledge vs. Records")
+    "AGENTS.md", "*/AGENTS.md", "CLAUDE.md", "*/CLAUDE.md",
     # model files
     "models/*", "services/zoe-data/models/*", "*.gguf", "*.safetensors", "*.onnx", "*.pt", "*.bin", "*.npy",
     # the loop itself

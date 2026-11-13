@@ -260,6 +260,7 @@ FORBIDDEN_SAMPLES = [
     "scripts/maintenance/requirements_drift_check.py", "scripts/maintenance/wait_household_quiet.sh",
     "models/router.gguf", "services/zoe-data/models/head.safetensors", "labs/self-heal/selfheal/safety.py",
     "../outside.py", "/etc/passwd",
+    "AGENTS.md", "services/zoe-data/AGENTS.md", "labs/AGENTS.md", "CLAUDE.md",
 ]
 
 
