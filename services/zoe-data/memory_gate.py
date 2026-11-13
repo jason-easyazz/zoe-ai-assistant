@@ -575,6 +575,38 @@ def person_candidate_names(message: str) -> list[str]:
     return out[:PERSON_FLOOR_MAX_NAMED + 2]
 
 
+#: content words of a caseless question that are never a person's name (question frames, everyday attributes): keeps the caseless
+#: candidate list short. Not load-bearing for safety - a candidate only matters if it IS one of this user's person-fact entities.
+_CASELESS_NOT_A_NAME = frozenset({
+    "old", "age", "birthday", "born", "live", "lives", "work", "works", "job", "school", "doing", "going", "like", "likes",
+    "much", "many", "long", "tall", "favourite", "favorite", "eat", "eats", "allergic", "kids", "children", "name", "called",
+    "know", "tell", "about", "remember", "said", "say", "says", "still", "now", "today", "tomorrow", "yesterday", "again",
+    "he", "him", "his", "her", "hers", "they", "them", "someone", "anyone", "something", "anything",
+})
+
+
+def person_caseless_candidates(sentence: str) -> list[str]:
+    """For a caseless question ("how old is eli", a transcript or a lazily typed line) the capitalised-run rule above finds no
+    name at all, so a person Zoe holds facts about (a ``person_pending`` entity, ``slug:eli``) was never looked up and the
+    brain answered "I don't have any information about Eli" with "Eli: 9" stored (QA round 8, 2026-11-12). The candidates
+    are the content words (and adjacent pairs, for a two-word name) title-cased; the caller keeps only those that ARE one of
+    this user's entities, so a common word costs one exact-key lookup and nothing else. [] for a sentence with capitals. Pure."""
+    if not _is_caseless(sentence):
+        return []
+    toks = [t for t, _cap in _name_tokens(sentence)]
+    ok = [t if (t not in _NOT_A_NAME and t not in _CASELESS_NOT_A_NAME and len(t) >= 2 and t.isalpha()) else "" for t in toks]
+    out: list[str] = []
+    for i, t in enumerate(ok):
+        if t and i + 1 < len(ok) and ok[i + 1]:
+            pair = f"{t.capitalize()} {ok[i + 1].capitalize()}"
+            if pair not in out:
+                out.append(pair)
+    for t in ok:
+        if t and t.capitalize() not in out:
+            out.append(t.capitalize())
+    return out[:8]
+
+
 # "Who's Brannock?" / "Do you know Brannock?" / "Tell me about Brannock": the question IS "what do you have on this name?". When the name is not a
 # contact and has no person-fact entity, nothing above resolves it - and the brain answered "I don't have any information about Brannock"
 # with NO recall pass at all (found in a live review, 2026-10-12: the packet was skipped). A denial of knowing someone must stand on a search of the
