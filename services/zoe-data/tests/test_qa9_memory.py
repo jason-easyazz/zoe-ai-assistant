@@ -856,3 +856,28 @@ def test_a_restatement_records_the_whole_displaced_date(said, recorded, stale, k
     assert vc.superseded_by_correction(UID, stale, said_at=before) is True
     assert vc.superseded_by_correction(UID, kept, said_at=before) is False
     vc.reset_state()
+
+
+@pytest.mark.parametrize("make_pet, refused", [(True, False), (False, True)])
+def test_a_pet_in_the_people_table_is_not_a_person(make_pet, refused, monkeypatch):
+    """Pets live in the people table (correction_apply._make_pet): a graph match that is a pet is no proof of a human."""
+    import correction_apply as ca
+    import person_extractor
+    from test_correction_apply import _people_db
+
+    async def scenario():
+        db = await _people_db()
+        await db.execute("INSERT INTO people (id, user_id, name, relationship) VALUES (?, ?, ?, ?)", ("p1", UID, "Brindle", "friend"))
+        await db.commit()
+        if make_pet:
+            assert await ca._make_pet(db, UID, "p1", "friend", "dog") >= 1
+        async def ensure(_db):
+            return db, False
+
+        monkeypatch.setattr(person_extractor, "_ensure_db", ensure)
+        try:
+            return await mq.reconcile_for_ingest(_Svc(hits=set()), "Brindle is a dog", UID)
+        finally:
+            await db.close()
+
+    assert (run(scenario())[0] == "refuse") is refused

@@ -1407,7 +1407,8 @@ async def kind_conflict(svc, text: str, user_id: str) -> tuple[bool, Optional[st
 
 async def _person_in_graph(user_id: str, name: str) -> bool:
     """Does this member's people graph hold ``name`` as a person (``people_graph.resolve_person``, exact or whole-token tier, no
-    prefix guesses)? One roster read (``SELECT id, name FROM people WHERE user_id = ? AND deleted = 0``) matched in Python. A
+    prefix guesses) that is not a PET (``correction_apply._make_pet`` writes relationship "pet" / "pet <kind>")? One roster read
+    (``SELECT id, name FROM people WHERE user_id = ? AND deleted = 0``) matched in Python, then the matched rows' relationship. A
     graph that cannot be read answers False: only a POSITIVE person refuses. Never raises."""
     try:
         import people_graph
@@ -1418,10 +1419,20 @@ async def _person_in_graph(user_id: str, name: str) -> bool:
             return False
         try:
             res = await people_graph.resolve_person(db, user_id, name, allow_prefix=False)
+            if res.status not in ("unique", "ambiguous") or res.tier not in ("exact", "token"):
+                return False
+            # pets live in the people table too: correction_apply._make_pet marks them relationship "pet" / "pet <kind>". A
+            # match is a PERSON only when at least one matched row is not a pet (an empty relationship counts as a person)
+            for m in res.matches:
+                rows = await people_graph._all(db, "SELECT relationship FROM people WHERE id = ? AND user_id = ?",
+                                               (m.person_id, user_id))
+                rel = str((rows[0][0] if rows else "") or "").strip().lower()
+                if not (rel == "pet" or rel.startswith("pet ")):
+                    return True
+            return False
         finally:
             if opened:
                 await db.close()
-        return res.status in ("unique", "ambiguous") and res.tier in ("exact", "token")
     except Exception:  # noqa: BLE001
         return False
 
