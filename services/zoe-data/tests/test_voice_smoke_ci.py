@@ -122,7 +122,7 @@ def test_stt_intent_tts_round_trip(monkeypatch):
     intent classifier, fake TTS engine. No models, no brain, no network."""
     # 1) STT: fake the Moonshine backend so _transcribe_audio runs the real wrapper
     #    (wake-strip, backend tagging) without loading the ONNX model.
-    async def _fake_moonshine(wav_path):
+    async def _fake_moonshine(wav_path, **_kw):
         return "what time is it"
     monkeypatch.setattr(vt, "_run_moonshine", _fake_moonshine)
 

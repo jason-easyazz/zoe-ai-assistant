@@ -102,7 +102,7 @@ def compat_db(monkeypatch):
 
     monkeypatch.setattr(voice_tts, "_panel_idle_logout_s", _idle_window)
 
-    async def _fake_transcribe(_wav_path: str) -> str:
+    async def _fake_transcribe(_wav_path: str, **_kw) -> str:
         return "we should order pizza on friday"
 
     monkeypatch.setattr(voice_tts, "_transcribe_audio_impl", _fake_transcribe)
