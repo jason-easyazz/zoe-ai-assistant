@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import gitops
-from .config import Config
+from .config import Config, check_health_argv, inside_refused
 
 MARKER = "zoe-self-heal:v1"
 
@@ -36,7 +36,8 @@ class LandResult:
 def cross_review(cfg: Config, base_wt: str, heal_wt: str, base_sha: str, head_sha: str,
                  engine: str) -> str:
     """Run the existing cross_review.sh --local from the BASE checkout (the engine may have
-    edited the heal worktree's copy). Exit 2 / anything non-zero is 'not reviewed', never clean."""
+    edited the heal worktree's copy). Returns a STATUS only: the reviewer's text is model output
+    and never goes into the public PR body or the audit log. Non-zero = 'not reviewed'."""
     script = Path(base_wt) / cfg.cross_review_script
     if not script.exists():
         return "not reviewed: cross_review.sh not found"
@@ -52,28 +53,27 @@ def cross_review(cfg: Config, base_wt: str, heal_wt: str, base_sha: str, head_sh
         return "not reviewed: cross-review unavailable (exit 2)"
     if r.returncode != 0:
         return f"not reviewed: cross-review failed (exit {r.returncode})"
-    note = ("" if engine != "codex" else
-            " NOTE: the engine was codex and cross_review prefers codex, so this may be same-vendor.")
-    report = r.stdout.strip()
-    return f"reviewed (cross_review.sh exit 0).{note}\n\n{report[:6000]}"
+    same = " (engine codex; cross_review prefers codex, so possibly same-vendor)" if engine == "codex" else ""
+    return f"reviewed: cross_review.sh exit 0{same}; run it by hand for the full report"
 
 
-def pr_body(ticket, engine: str, gates: list, review: str, diff, evidence: dict) -> str:
+def pr_body(ticket, engine: str, gates: list, review: str, diff) -> str:
+    """PUBLIC text. Ids, the fault class, file names, the test node id, gate names with pass/fail,
+    the engine name and the marker block. Never failure text, tracebacks, model output or diff."""
+    gates_min = [{"gate": g["gate"], "status": g["status"]} for g in gates]
     marker = {"engine": engine, "ticket": ticket.id, "fault_class": ticket.fault_class,
               "fault_key": ticket.fault_key, "base_sha": ticket.base_sha,
-              "repro_cmd": ticket.repro_cmd, "gates": gates, "evidence": evidence,
-              "review": review.splitlines()[0] if review else "not reviewed"}
-    gate_lines = "\n".join(f"- `{g['gate']}`: **{g['status']}** {g['detail']}" for g in gates)
+              "test": ticket.evidence.get("nodeid", ""), "files": diff.files, "gates": gates_min,
+              "review": review}
     return "\n".join([
         "Opened by Zoe's self-heal loop. ONE finding per PR. This PR stays DRAFT: marking it ready",
         "must come from a reviewer that is not the engine.",
         "",
-        "## Fault signal", f"{ticket.fault_class}: {ticket.summary}",
-        "", "## Evidence", "```", json.dumps(ticket.evidence, indent=1), "```",
-        "", "## Reproduction", f"`{' '.join(ticket.repro_cmd)}` (exit 0 = healed; re-run against the ORIGINAL test file after merge)",
-        "", "## What changed", f"{len(diff.files)} files, +{diff.added}/-{diff.deleted}: " + ", ".join(f"`{f}`" for f in diff.files),
-        "", "## Gates (run locally before push)", gate_lines,
-        "", "## Second opinion", review or "not reviewed",
+        f"- ticket: `{ticket.id}`", f"- fault class: `{ticket.fault_class}`",
+        f"- failing test: `{ticket.evidence.get('nodeid', '')}`", f"- engine: `{engine}`",
+        "- changed files: " + ", ".join(f"`{f}`" for f in diff.files),
+        "- gates: " + ", ".join(f"`{g['gate']}` {g['status']}" for g in gates_min),
+        f"- second opinion: {review or 'not reviewed'}",
         "", f"<!-- {MARKER}", json.dumps(marker, indent=1), "-->",
     ])
 
@@ -89,16 +89,18 @@ class GithubLanding:
     def land(self, ctx) -> LandResult:
         review = cross_review(self.cfg, ctx.base_wt, ctx.heal_wt, ctx.ticket.base_sha, ctx.head_sha, ctx.engine)
         branch = f"self-heal/{ctx.ticket.id}"
+        ctx.checkpoint("push")
         # never --force; a fresh branch name per ticket
         gitops.git(ctx.heal_wt, "push", "origin", f"HEAD:refs/heads/{branch}", timeout=300)
         body_file = Path(self.cfg.state_dir) / f"pr-body-{ctx.ticket.id}.md"
-        body_file.write_text(pr_body(ctx.ticket, ctx.engine, ctx.gates, review, ctx.diff, ctx.evidence))
-        title = f"fix(self-heal): {ctx.ticket.summary}"[:120]
+        body_file.write_text(pr_body(ctx.ticket, ctx.engine, ctx.gates, review, ctx.diff))
+        title = f"fix(self-heal): {ctx.ticket.fault_class} {ctx.ticket.evidence.get('nodeid', ctx.ticket.id)}"[:120]
+        ctx.checkpoint("pr")
         r = gitops.run(["gh", "pr", "create", "--draft", "--base", self.cfg.base_branch, "--head", branch,
                         "--label", self.cfg.pr_label, "--title", title, "--body-file", str(body_file)],
                        cwd=ctx.heal_wt, timeout=120)
         url = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
-        return LandResult("pr_open", "draft PR opened", pr_url=url, review=review.splitlines()[0])
+        return LandResult("pr_open", "draft_pr", pr_url=url, review=review.split(":")[0].replace(" ", "_"))
 
     def merged_commit(self, pr_url: str) -> str | None:
         r = gitops.run(["gh", "pr", "view", pr_url, "--json", "state,mergeCommit"], timeout=60)
@@ -114,68 +116,83 @@ class NoopApplier:
     """Lab apply: records what a deployed unit WOULD do, changes nothing live.
 
     A deployed unit's apply (not built; an owner step) would:
-      1. `git -C <live_checkout> merge --ff-only <integration sha>` (rollback: `git -C <live>
+      1. `git -C <apply_target> merge --ff-only <integration sha>` (rollback: `git -C <target>
          checkout -B <branch> <snapshot sha>`),
       2. restart only the services whose paths changed (`systemctl --user restart <unit>`),
       3. wait for each unit's health endpoint (the zoe_ground_truth.sh checks), then the loop
          runs `health_checks` + the reproduction; any failure -> rollback + restart again.
+    The target is refused when it is this box's live checkout (hard-coded) or `live_checkout`.
     """
 
     def __init__(self, cfg: Config):
+        if cfg.apply_target and inside_refused(cfg.apply_target, cfg.live_checkout):
+            raise ValueError("apply target is the live checkout; refusing")
         self.cfg = cfg
         self.calls: list = []
 
     def apply(self, sha: str) -> str:
         self.calls.append(("apply", sha))
-        return f"noop apply (lab): would fast-forward {self.cfg.live_checkout} to {sha[:12]} and restart affected units"
+        return "noop"
 
     def rollback(self, sha: str) -> str:
         self.calls.append(("rollback", sha))
-        return f"noop rollback (lab): would reset {self.cfg.live_checkout} to {sha[:12]} and restart affected units"
+        return "noop"
 
 
 class LocalLanding:
     name = "local"
-    REVIEW = "not reviewed (single engine)"
+    REVIEW = "not_reviewed_single_engine"   # no second subscription: never "reviewed"
 
     def __init__(self, cfg: Config, applier=None):
         self.cfg = cfg
         self.applier = applier or NoopApplier(cfg)
 
-    def _health(self) -> tuple[bool, str]:
-        for argv in self.cfg.health_checks:
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=self.cfg.gate_timeout_s)
-            if r.returncode != 0:
-                return False, f"health check {argv[0]} rc={r.returncode}"
-        return True, f"{len(self.cfg.health_checks)} health checks ok"
+    def _health(self, repo: str, ref: str, path: str) -> tuple[bool, str]:
+        """Allow-listed argv (checked again here, not only at load), run from a FRESH worktree of
+        the integration tip, never the live checkout, each with its own timeout."""
+        if not self.cfg.health_checks:
+            return True, "health_none"
+        gitops.add_worktree(repo, path, base=ref)
+        try:
+            for argv in self.cfg.health_checks:
+                check_health_argv(argv, self.cfg.python)
+                try:
+                    r = subprocess.run(argv, cwd=path, capture_output=True, text=True,
+                                       timeout=self.cfg.health_timeout_s, stdin=subprocess.DEVNULL)
+                except subprocess.TimeoutExpired:
+                    return False, "health_timeout"
+                if r.returncode != 0:
+                    return False, f"health_failed:rc={r.returncode}"
+            return True, "health_ok"
+        finally:
+            gitops.remove_worktree(repo, path)
 
     def land(self, ctx) -> LandResult:
         cfg, repo, t = self.cfg, self.cfg.repo, ctx.ticket
         int_ref = f"refs/heads/{cfg.integration_branch}"
         if int_ref in gitops.checked_out_branches(repo):
-            return LandResult("failed", f"{int_ref} is checked out in a worktree; refusing to move it", review=self.REVIEW)
+            return LandResult("failed", "integration_checked_out", review=self.REVIEW)
         tip = gitops.rev(repo, int_ref)
         if tip != t.base_sha:
-            return LandResult("failed", f"integration moved since the heal was cut ({tip[:12]} != {t.base_sha[:12]})",
-                              review=self.REVIEW)
+            return LandResult("failed", "integration_moved", review=self.REVIEW)
+        ctx.checkpoint("merge")
         snap = f"refs/self-heal/snapshots/{t.id}"
         gitops.git(repo, "update-ref", snap, tip)
         # compare-and-swap fast-forward: the heal commit's parent is the snapshot
         gitops.git(repo, "update-ref", int_ref, ctx.head_sha, tip)
-        steps = {"snapshot": snap, "merged": ctx.head_sha, "apply": self.applier.apply(ctx.head_sha)}
-        ok, why = self._health()
+        self.applier.apply(ctx.head_sha)
+        steps = {"snapshot": snap, "sha": ctx.head_sha, "applied": True}
+        ok, why = self._health(repo, int_ref, ctx.verify_path + "-health")
         if ok:
             res = gitops.run_repro(cfg, repo, int_ref, t, ctx.verify_path, ctx.lock)
-            ok, why = res.ok, f"verify {res.detail}"
-        steps["check"] = why
+            ok, why = res.ok, f"verify:{res.detail}"
         if ok:
             return LandResult("healed", why, review=self.REVIEW, extra=steps)
         gitops.git(repo, "update-ref", int_ref, tip, ctx.head_sha)
-        steps["rollback"] = self.applier.rollback(tip)
+        self.applier.rollback(tip)
         steps["restored"] = gitops.rev(repo, int_ref) == tip
         return LandResult("rolled_back", why, review=self.REVIEW, extra=steps)
 
 
 def make_landing(cfg: Config, applier=None):
     return GithubLanding(cfg) if cfg.landing == "github" else LocalLanding(cfg, applier)
-

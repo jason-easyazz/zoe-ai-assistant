@@ -22,7 +22,7 @@ class Ticket:
     fault_class: str
     fault_key: str                 # stable across runs: same fault -> same key (for caps / parking)
     summary: str
-    evidence: dict
+    evidence: dict                 # ids, hashes and node ids ONLY: never failure text
     repro_cmd: list                # argv, run from the repo root; exit 0 = healed
     repro_files: list = field(default_factory=list)   # restored from base_sha before verify
     base_sha: str = ""
@@ -72,8 +72,10 @@ def parse_junit(xml_text: str) -> list[dict]:
         if bad is None:
             continue
         file_, nodeid = _nodeid(case)
-        msg = (bad.get("message") or (bad.text or "")).strip().splitlines()
-        out.append({"nodeid": nodeid, "file": file_, "message": (msg[0] if msg else "")[:300]})
+        # The failure TEXT may carry anything (assertion values, user data): only its hash leaves here.
+        text = (bad.get("message") or "") + (bad.text or "")
+        out.append({"nodeid": nodeid, "file": file_, "kind": bad.tag,
+                    "failure_hash": hashlib.sha1(text.encode()).hexdigest()[:12]})
     return out
 
 
@@ -87,7 +89,8 @@ def failing_test_tickets(junit_xml: str, *, base_sha: str, python: str, ignore: 
         tickets.append(Ticket(
             id=new_ticket_id(now, key), fault_class=FAILING_TEST, fault_key=key,
             summary=f"failing test on base: {f['nodeid']}",
-            evidence={"nodeid": f["nodeid"], "first_line": f["message"], "base_sha": base_sha},
+            evidence={"nodeid": f["nodeid"], "kind": f["kind"], "failure_hash": f["failure_hash"],
+                      "base_sha": base_sha},
             repro_cmd=[python, "-m", "pytest", "-p", "no:cacheprovider", "-q", f["nodeid"]],
             repro_files=[f["file"]], base_sha=base_sha, created=now.isoformat(timespec="seconds"),
         ))

@@ -24,7 +24,7 @@ class BoardMirror:
         try:
             return asyncio.run(coro_fn(*a, **k)) or {}
         except Exception as e:  # best effort: a board outage never stops a heal
-            self.audit("board", "error", why=f"{type(e).__name__}: {e}"[:200])
+            self.audit("board", "error", error=type(e).__name__)
             return {}
 
     def on_ticket(self, state, ticket) -> None:
@@ -61,10 +61,10 @@ def make_board(cfg, audit):
     try:
         from multica_client import MULClient
     except Exception as e:
-        audit("board", "absent", why=f"client import failed: {type(e).__name__}")
+        audit("board", "absent", reason="client_import_failed", error=type(e).__name__)
         return None
     client = MULClient()
     if not client.is_configured():
-        audit("board", "absent", why="MULTICA_BASE_URL / token / workspace not set")
+        audit("board", "absent", reason="multica_not_configured")
         return None
     return BoardMirror(client, audit)

@@ -82,7 +82,7 @@ def test_full_local_landing_heals(local_scratch):
     assert gitops.rev(cfg.repo, "refs/heads/main") == out["sha"]     # fast-forwarded
     assert gitops.rev(cfg.repo, f"refs/self-heal/snapshots/{out['ticket']}") == tip
     assert applier.calls == [("apply", out["sha"])]
-    assert out["review"] == "not reviewed (single engine)"
+    assert out["review"] == "not_reviewed_single_engine"
     land = [r for r in audit(cfg) if r["step"] == "gates" and "gates" in r][0]
     assert [g["gate"] for g in land["gates"]] == cfg.local_gates[:len(land["gates"])]
     assert any(g["gate"] == "offline_lane" and g["status"] == "pass" for g in land["gates"])
@@ -142,7 +142,7 @@ def test_local_landing_refuses_when_integration_moved(local_scratch):
     ll = LocalLanding(cfg)
     from selfheal.runner import LandCtx
     r = ll.land(LandCtx(t, "", "", "2" * 40, "fake", [], DiffReport(), {}, ""))
-    assert r.status == "failed" and "moved" in r.detail
+    assert r.status == "failed" and r.detail == "integration_moved"
 
 
 # --- safety envelope ---------------------------------------------------------------------
@@ -152,7 +152,7 @@ def test_kill_switch_refuses_before_anything(local_scratch):
     Path(cfg.kill_switches[0]).touch()
     eng = FakeEngine(fix_calc)
     out = runner(cfg, eng).run_once()
-    assert out == {"outcome": "refused", "rule": "kill_switch", "detail": cfg.kill_switches[0]}
+    assert out == {"outcome": "refused", "rule": "kill_switch"}
     assert eng.calls == 0 and worktrees(cfg) == []
 
 
@@ -163,7 +163,7 @@ def test_kill_switch_checked_before_every_step(local_scratch):
         fix_calc(wt)
         Path(cfg.kill_switches[0]).touch()
     out = runner(cfg, FakeEngine(fix_then_pause)).run_once()
-    assert out["rule"] == "kill_switch"
+    assert out["outcome"] == "interrupted" and out["why"] == "kill_switch"
     refused = [r for r in audit(cfg) if r["outcome"] == "refused" and r["step"] == "diff_policy"]
     assert refused, "the step after the engine must see the switch"
     assert worktrees(cfg) == []                                      # discarded, not committed
@@ -283,7 +283,7 @@ def test_forbidden_path_discards_attempt_end_to_end(local_scratch, path):
         (wt / path).parent.mkdir(parents=True, exist_ok=True)
         (wt / path).write_text("exit 0\n")
     out = runner(cfg, FakeEngine(touch_gate)).run_once()
-    assert out["outcome"] == "discarded" and out["why"].startswith("forbidden_path")
+    assert out["outcome"] == "discarded" and out["why"] == "forbidden_path"
     assert worktrees(cfg) == []
     assert "self-heal/" not in gitops.git(cfg.repo, "branch", "--list")
 
@@ -295,7 +295,7 @@ def test_diff_cap(local_scratch):
         fix_calc(wt)
         (wt / "padding.py").write_text("x = 1\n" * (cfg.diff_line_cap + 1))
     out = runner(cfg, FakeEngine(big)).run_once()
-    assert out["outcome"] == "discarded" and out["why"].startswith("diff_cap")
+    assert out["outcome"] == "discarded" and out["why"] == "diff_cap"
 
 
 def test_missing_test_rule():
@@ -306,7 +306,7 @@ def test_missing_test_rule():
 
 def test_empty_diff_discarded(local_scratch):
     out = runner(local_scratch.cfg, FakeEngine(None)).run_once()
-    assert out["outcome"] == "discarded" and out["why"].startswith("empty_diff")
+    assert out["outcome"] == "discarded" and out["why"] == "empty_diff"
 
 
 def test_escaping_symlink_discarded(local_scratch):
@@ -314,13 +314,13 @@ def test_escaping_symlink_discarded(local_scratch):
         fix_calc(wt)
         os.symlink("/etc/hostname", wt / "leak.txt")
     out = runner(local_scratch.cfg, FakeEngine(link)).run_once()
-    assert out["outcome"] == "discarded" and out["why"].startswith("outside_repo")
+    assert out["outcome"] == "discarded" and out["why"] == "outside_repo"
 
 
 def test_gate_failure_discards(local_scratch):
     cfg = local_scratch.cfg
     out = runner(cfg, FakeEngine(lambda wt: (wt / "calc.py").write_text("def add(a, b):\n    return 0\n"))).run_once()
-    assert out["outcome"] == "discarded" and out["why"] == "gate failed"
+    assert out["outcome"] == "discarded" and out["why"] == "gate_failed"
     gates = [r for r in audit(cfg) if r["step"] == "gates" and "gates" in r][0]["gates"]
     assert gates[-1] == {**gates[-1], "gate": "relevant_pytest", "status": "fail"}
     assert worktrees(cfg) == []
@@ -328,7 +328,7 @@ def test_gate_failure_discards(local_scratch):
 
 def test_engine_failure_discards(local_scratch):
     out = runner(local_scratch.cfg, FakeEngine(fix_calc, ok=False)).run_once()
-    assert out["outcome"] == "discarded" and out["why"].startswith("engine")
+    assert out["outcome"] == "discarded" and out["why"] == "engine_failed"
 
 
 def test_live_checkout_guard(local_scratch):
@@ -338,7 +338,7 @@ def test_live_checkout_guard(local_scratch):
         fix_calc(wt)
         (Path(cfg.live_checkout) / ".git" / "HEAD").write_text("ref: refs/heads/other\n")
     out = runner(cfg, FakeEngine(touch_live)).run_once()
-    assert out["outcome"] == "discarded" and "alarm" in out["why"]
+    assert out["outcome"] == "discarded" and out["why"] == "live_checkout_changed"
 
 
 def test_config_refuses_paths_inside_live_checkout(tmp_path):
@@ -513,7 +513,8 @@ def test_parse_junit():
     got = parse_junit(JUNIT)
     assert [g["nodeid"] for g in got] == ["tests/test_calc.py::test_add", "tests/test_calc.py::TestX::test_y",
                                           "pkg/tests/test_known.py::test_flaky"]
-    assert got[0]["message"] == "assert -1 == 5"
+    assert "message" not in got[0] and len(got[0]["failure_hash"]) == 12
+    assert got[0]["failure_hash"] != got[2]["failure_hash"]
 
 
 def test_failing_test_tickets_ignore_and_stable_key():
@@ -540,7 +541,7 @@ def _empty_junit(root):
 
 def test_engine_adapters_argv(tmp_path):
     cfg = Config(state_dir=str(tmp_path))
-    a = CodexEngine(cfg).argv("/wt", "P", tmp_path / "o")
+    a = CodexEngine(cfg).argv("/wt", "P")
     assert a[:6] == ["codex", "exec", "-C", "/wt", "-s", "workspace-write"] and a[-1] == "P"
     assert not any("dangerously" in x for x in a)
     c = ClaudeEngine(cfg).argv("/wt", "P")
@@ -570,7 +571,7 @@ def test_executor_unavailable_falls_back_to_thin_adapter(tmp_path):
     eng, skipped = select_engine(cfg)
     assert eng.name == "codex"
     assert [s["engine"] for s in skipped] == ["flue_executor", "claude"]
-    assert "kill switch" in skipped[0]["why"] and "not logged in" in skipped[1]["why"]
+    assert "multica_kill_switch_present" in skipped[0]["why"] and skipped[1]["why"] == "claude_not_logged_in"
     assert (tmp_path / "paused").exists()                            # read, never touched
 
 
@@ -582,7 +583,7 @@ def test_no_engine_linked_does_nothing_to_code(local_scratch):
     assert r.engine is None
     tip = gitops.rev(cfg.repo, "refs/heads/main")
     out = r.run_once()
-    assert out["outcome"] == "no_engine" and "no engine linked" in out["why"]
+    assert out["outcome"] == "no_engine" and out["why"] == "no_engine_linked"
     assert worktrees(cfg) == [] and gitops.rev(cfg.repo, "refs/heads/main") == tip
     st = state(cfg)
     assert st["heals_today"] == 0 and st["tickets"][out["ticket"]]["status"] == "no_engine"

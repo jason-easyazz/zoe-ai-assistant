@@ -28,29 +28,44 @@ def sh(*argv, cwd=None):
                           env={**os.environ, **GIT_ENV}).stdout.strip()
 
 
-def seed_repo(path: Path) -> None:
+def seed_repo(path: Path, test_text: str = TEST) -> None:
     path.mkdir(parents=True)
     sh("git", "init", "-q", "-b", "main", str(path))
     (path / "conftest.py").write_text("")
     (path / "calc.py").write_text(BUGGY)
     (path / "tests").mkdir()
-    (path / "tests" / "test_calc.py").write_text(TEST)
+    (path / "tests" / "test_calc.py").write_text(test_text)
     sh("git", "add", "-A", cwd=path)
     sh("git", "commit", "-q", "-m", "seed: a deliberately failing test", cwd=path)
 
 
+# Planted negative controls for the privacy tests: invented, not real.
+PLANTED_TOKEN = "ghp_" + "Zq7Xw2Lr9Kt4Vb8Nm3Hs6Pd1Fy5Gc0Ja2Ue"
+PLANTED_SENTENCE = "the spare key is under the blue flowerpot by the back door"
+
+
 class FakeEngine:
-    """Applies `edit(worktree)` instead of calling a model."""
+    """Applies `edit(worktree)` instead of calling a model; `chatter` is its 'model output'."""
     name = "fake"
 
-    def __init__(self, edit=None, ok=True):
-        self.edit, self.ok, self.calls = edit, ok, 0
+    def __init__(self, edit=None, ok=True, chatter="rc=0"):
+        self.edit, self.ok, self.calls, self.chatter = edit, ok, 0, chatter
 
     def run(self, ticket, wt):
         self.calls += 1
         if self.edit:
             self.edit(Path(wt))
-        return EngineResult(self.ok, "rc=0 fake edit", 0.01)
+        return EngineResult(self.ok, self.chatter, 0.01)
+
+
+@pytest.fixture(autouse=True)
+def isolated_kill_switch(tmp_path, monkeypatch):
+    """The built-in kill switch lives under the real $HOME: point it at tmp for unit tests
+    (HOME itself stays, so the user-site pytest still resolves)."""
+    import selfheal.config as config_mod
+    p = tmp_path / "home" / ".zoe" / "self_heal_paused"
+    monkeypatch.setattr(config_mod, "hard_kill_switch", lambda: p)
+    return p
 
 
 def fix_calc(wt: Path):

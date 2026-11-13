@@ -90,31 +90,32 @@ enters a repo, log, ticket or PR body, and the engine's environment is an allow-
 
 ## Safety envelope (all in code, all tested with a fake engine)
 
-| rule | where | test(s) in `tests/test_self_heal.py` |
+| rule | where | test(s) in `tests/test_self_heal.py` / `tests/test_self_heal_review.py` (R) |
 |---|---|---|
-| kill switch before every step (`~/.zoe/self_heal_paused`) | `Runner.step` | `test_kill_switch_refuses_before_anything`, `test_kill_switch_checked_before_every_step` |
+| kill switch before every step; the built-in `~/.zoe/self_heal_paused` is always honoured, config can only ADD switches | `Runner.step`, `Config.all_kill_switches` | `test_kill_switch_refuses_before_anything`, `test_kill_switch_checked_before_every_step`, R `test_builtin_kill_switch_cannot_be_configured_away` |
 | one heal at a time | `HealLock` (flock on `state_dir/heal.lock`) | `test_one_heal_at_a_time` |
-| daily cap (3) / per-fault cap (2) / parked faults skipped | `State.check_caps` | `test_daily_cap`, `test_daily_cap_resets_next_day`, `test_per_fault_retry_cap`, rollback test |
+| HARD FLOOR: daily cap <= 3, per-fault cap <= 2, diff cap <= 300, park-after <= 2; forbidden list may only grow; quiet window always includes 01:30-05:00. A weaker config is REFUSED at load (not clamped), and the limits are re-applied at use | `Config.validate`, `State.check_caps`, `check_diff`, `check_quiet_hours` | R `test_config_cannot_weaken_the_floor` (10 configs), `test_config_may_tighten`, `test_floor_holds_even_when_mutated_after_load`, `test_builtin_quiet_window_applies_whatever_the_config`, `test_daily_cap`, `test_per_fault_retry_cap` |
 | quiet hours 01:30-05:00 | `check_quiet_hours` | `test_quiet_hours` (6 boundaries), `test_quiet_hours_end_to_end` |
 | not while a voice lander runs / night_busy says pause / night_busy missing (fail closed) | `check_busy` | `test_refuses_while_voice_lander_runs`, `test_night_busy` x2, `test_night_busy_exit_1_means_may_run` |
 | forbidden paths (incl. `voice_gate_check.py`, every script deploy.yml / voice-gate.yml call, workflows, compose, units, landing, .env, alembic, zoe-auth, CANONICAL + invariants test, models, this lab, outside the repo) | `check_diff` on the staged diff after the engine | `test_forbidden_paths` (24 paths), `test_forbidden_path_discards_attempt_end_to_end` x3 |
-| symlink escaping the repo | `gitops.diff_report` | `test_escaping_symlink_discarded` |
+| inspect BEFORE staging: `git status` (untracked included) + symlink check, nothing staged; any violation discards the worktree; then only the checked paths are staged (no `add -A`) and the index is proven to hold exactly them; an engine that commits is discarded | `gitops.inspect_worktree`, `gitops.stage_checked` | `test_escaping_symlink_discarded`, R `test_violation_never_stages_or_commits`, `test_only_checked_paths_are_committed`, `test_stage_checked_refuses_anything_extra`, `test_engine_commit_is_discarded` |
 | diff cap (300 changed lines; binary = over cap) | `check_diff` | `test_diff_cap` |
 | must include or update a test | `check_diff` (a failing-test ticket carries its regression test: the reproduction, verified from the ORIGINAL file) | `test_missing_test_rule` |
 | empty diff / engine failure / engine timeout (process group killed) | runner, `engines._run` | `test_empty_diff_discarded`, `test_engine_failure_discards`, `test_engine_timeout_kills` |
-| live checkout never touched | `Config.validate` + HEAD fingerprint around the engine | `test_config_refuses_paths_inside_live_checkout`, `test_live_checkout_guard` |
+| live checkout never touched: `/home/zoe/assistant` (and its realpath) is HARD-CODED as refused for repo, worktree parent, state dir and apply target, and no command runs in it or with `git -C` into it; `live_checkout` in the config is an ADDITIONAL refused path; HEAD fingerprint around the engine | `config.inside_refused`, `gitops._guard`, `NoopApplier` | `test_config_refuses_paths_inside_live_checkout`, `test_live_checkout_guard`, R `test_live_checkout_refused_through_a_symlink` (4 fields x 2), `test_live_checkout_refused_even_if_config_names_another`, `test_gitops_never_runs_in_the_live_checkout`, `test_apply_target_refused` |
 | engine env is an allow-list (no GH_*, MULTICA_*, DB URL, API keys) | `engines.engine_env` | `test_engine_env_is_an_allow_list` |
 | executor unavailable -> thin fallback; nothing linked -> `no_engine`, no code touched, no cap spent | `engines.select_engine`, runner | `test_executor_unavailable_falls_back_to_thin_adapter`, `test_no_engine_linked_does_nothing_to_code` |
 | board mirror: one issue per fault, `backlog`, no assignee, never `todo`; outage harmless; Multica + Omnigent + GitHub all absent still heals | `board.py` | `test_board_mirror_one_issue_per_fault_never_todo`, `test_board_mirror_done_on_heal`, `test_board_outage_is_harmless`, `test_runs_with_multica_omnigent_and_github_all_absent` |
 | local gates (validate_structure, py_compile, relevant pytest under the flock) | `gates.py` | `test_gate_failure_discards` |
 | a "fix" that weakens the test is not a heal | `gitops.run_repro` restores the reproducing file from the base commit | `test_full_local_landing_rolls_back_when_fix_only_weakened_the_test` |
 | DRAFT only, label `self-heal`, marker block, one finding per PR, never ready / merge / --admin / --force | `GithubLanding` (no option exists to do otherwise) | `test_github_landing_opens_draft_only` |
-| cross-review unavailable = not reviewed | `landing.cross_review` | `test_cross_review_unavailable_is_not_reviewed` |
+| cross-review unavailable = not reviewed; the PR carries the review STATUS only, never the reviewer's text | `landing.cross_review` | `test_cross_review_unavailable_is_not_reviewed` |
 | dispatch dry / local / full | `Runner` | `test_dry_plans_only`, `test_local_mode_commits_and_verifies_without_landing`, `test_full_local_landing_heals` |
-| local landing: snapshot, CAS fast-forward, apply, health, verify, rollback, park | `LocalLanding` | `test_full_local_landing_heals`, `..._rolls_back_on_failed_health_check`, `..._when_fix_only_weakened_the_test`, `test_local_landing_refuses_when_integration_moved` |
+| local landing: snapshot, CAS fast-forward, apply, health, verify, rollback, park. Health checks are an ALLOW-LIST checked at load and again at run: `true`/`false`, `systemctl --user is-active <unit>`, `<python> -m <module>` or `<python> <rel/path.py>`; no shell strings, no network-capable binary or shell (curl, wget, gh, ssh, scp, rsync, nc, git, docker, bash, sh, env, ...), no absolute/`..` paths, no `python -c`; each runs with its own timeout in a FRESH worktree of the integration tip, never the live checkout | `LocalLanding`, `config.check_health_argv` | `test_full_local_landing_heals`, `..._rolls_back_on_failed_health_check`, `..._when_fix_only_weakened_the_test`, `test_local_landing_refuses_when_integration_moved`, R `test_health_check_not_allow_listed_fails_the_load` (18 argvs), `test_health_check_allowed_forms`, `test_health_check_runs_in_a_fresh_integration_worktree` |
 | local landing uses no gh, no GitHub, no network | `LocalLanding` | `test_local_landing_needs_no_gh_and_no_network` (gh shadowed by a failing stub, `socket.connect` raises, command log has no fetch/push/pull/clone/gh) |
 | verify after merge + deploy; not healed twice = parked | `Runner.verify_pending`, `_finish` | `test_verify_after_merge_heals_or_parks`, `test_not_healed_twice_parks` |
-| audit log: every step, no content | `Runner.audit` | `test_audit_log_has_every_step_and_no_content` |
+| NO CONTENT in any record: audit keys are an allow-list and every string value must be one whitespace-free token (else `<redacted>`); engine output is never kept (`rc=N` only); gate / verify results are `rc=` + counts; ticket evidence = node id, failure kind, a HASH of the failure text, base sha; the PUBLIC PR body = ticket id, fault class, test node id, engine, changed file names, gate names + pass/fail, review status, marker block; the board gets the same | `Runner.audit`, `safety.rc_summary`, `detectors`, `landing.pr_body` | `test_audit_log_has_every_step_and_no_content`, R `test_no_content_reaches_any_record` (github/local x engine ok/failed, planted token + sentence in the assertion message AND the engine output, scanned in every state-dir file, the PR body, board payloads, gh args and the git command log), `test_gate_failure_output_does_not_leak`, `test_audit_refuses_unknown_keys` |
+| re-checked MID-RUN: kill switch + quiet hours + voice lander + night_busy before the engine, the gates, the landing, the local fast-forward, the push and the PR call; a failure = `interrupted` with the rule, worktree discarded, NO cap spent | `Runner.checkpoint`, `LandCtx.checkpoint` | R `test_interrupted_mid_run` (9 checkpoint x condition cases) |
 
 Marking a heal PR ready must come from a reviewer that is not the engine. There is no
 `ready_when_green` option: the lander takes every open NON-DRAFT PR with resolved threads and
@@ -155,18 +156,24 @@ Unit tests (fake engine, throwaway repos, no network):
 ```bash
 cd ~/assistant   # or any checkout of this branch
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider labs/self-heal/tests -q
-# 2026-11-13: 77 passed in ~36 s
+# 2026-11-13: 152 passed in ~62 s
 ```
 
 Negative controls (each mutation applied, the named tests run, the file restored; every one went red):
-`voice_gate_check.py` dropped from the forbidden list -> 2 failed; verify not restoring the original
-test file -> 1 failed (the weakened-test heal would have landed); kill switch not checked per step ->
-2 failed; quiet hours skipped -> 1 failed; local rollback skipped -> 2 failed; PR opened without
-`--draft` -> 1 failed; daily cap off -> 1 failed; diff cap off -> 1 failed.
+v1: `voice_gate_check.py` off the forbidden list, verify not restoring the original test, no per-step
+kill-switch check, quiet hours skipped, local rollback skipped, PR without `--draft`, daily cap off,
+diff cap off. Review round (PR 2443), 16 mutations: forbidden list allowed to shrink (2 red), caps
+allowed to rise (5), quiet window allowed to narrow (3), built-in kill switch dropped (1), hard-coded
+live path dropped (6), realpath not resolved (4), blanket `add -A` before the checks (2), no
+staged-set proof (1), health allow-list off at load (18), detector keeps failure text (9), engine
+keeps model output (1), runner audits engine output (4), audit sanitizer off (1), rc_summary keeps
+output (1), no mid-run checkpoints (7), cap spent on interrupt (9). The privacy rule has several
+layers (source stripping, then the audit's allow-listed keys and single-token values); each layer
+has its own test and its own negative control.
 
 Real engine, synthetic fault (`calc.add` subtracts; `tests/test_calc.py::test_add` fails), throwaway
 repo under `/tmp`, codex-cli 0.163.0 on the owner's ChatGPT login, one attempt, 600 s engine timeout,
-no push, no PR, nothing in the real repo:
+no push, no PR, nothing in the real repo (re-run after the review fixes):
 
 ```bash
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 labs/self-heal/e2e_scratch.py --engine codex --scenario local    --codex-bin "$(command -v codex)"
@@ -176,20 +183,20 @@ flock -x -w 14000 /tmp/zoe-test-lane.lock python3 labs/self-heal/e2e_scratch.py 
 
 | scenario | wall | engine | outcome |
 |---|---|---|---|
-| `local` (dispatch local) | 18 s | 15.4 s, "Changed `add()` to use addition instead of subtraction" | ticket -> worktree -> diff `calc.py` +1/-1 -> gates (structure skip: no validator in the scratch repo; py_compile pass; relevant pytest 2 passed) -> local commit -> verify (original test) `1 passed` -> `healed_local`; integration branch untouched |
-| `land` (full, landing local) | 18 s | 15.0 s | full gate set green -> snapshot `refs/self-heal/snapshots/<id>` -> CAS fast-forward -> noop apply -> verify `1 passed` -> `healed`; integration main = the heal commit; review "not reviewed (single engine)" |
-| `rollback` (full, landing local, health check `false`) | 17 s | 15.1 s | gates green -> snapshot -> fast-forward -> apply -> health check rc=1 -> rollback (integration main back to the snapshot, `restored: true`) -> fault `parked` |
+| `local` (dispatch local) | 20 s | 18.5 s, rc=0 | ticket -> worktree -> inspected `calc.py` (2 lines, nothing staged yet) -> gates (structure skip: no validator in the scratch repo; py_compile pass; relevant pytest 2 passed) -> stage `calc.py` only -> local commit -> verify (original test) `rc=0,passed=1` -> `healed_local`; integration branch untouched |
+| `land` (full, landing local) | 20 s | 17.4 s, rc=0 | full gate set (incl. offline lane) green -> snapshot `refs/self-heal/snapshots/<id>` -> CAS fast-forward -> noop apply -> verify passes -> `healed`; review `not_reviewed_single_engine` |
+| `rollback` (full, landing local, health check `false`) | 18 s | 15.9 s, rc=0 | gates green -> snapshot -> fast-forward -> apply -> `health_failed:rc=1` -> integration main back to the snapshot (`restored: true`) -> fault `parked` |
 
-Audit lines from the `local` run (abridged to the non-`start` rows):
+Audit lines from the `local` run (the non-`start` rows; this is the whole record, no content):
 
 ```
-detect   done        found=1
-ticket   chosen      fault_class=failing_test repro="python3 -m pytest -p no:cacheprovider -q tests/test_calc.py::test_add"
-engine   ok          detail="rc=0 Changed `add()` to use addition instead of subtraction; the specified test passes." seconds=15.4
-diff_policy pass     files=["calc.py"] lines=2
-gates    green       validate_structure skip, py_compile pass, relevant_pytest pass (2 passed)
-commit   done        sha=0922773...
-result   healed_local verify="rc=0 1 passed"
+detect      done          found=1
+ticket      chosen        fault_class=failing_test fault_key=a374bd420177 test=tests/test_calc.py::test_add
+engine      ok            rc=rc=0 seconds=18.5
+diff_policy pass          files=["calc.py"] lines=2
+gates       green         validate_structure skip no_validator | py_compile pass files=1,rc=0 | relevant_pytest pass files=1,rc=0,passed=2
+commit      done          sha=2d14fd0...
+result      healed_local  branch=self-heal/<id> sha=2d14fd0... verify=rc=0,passed=1
 ```
 
 Not run, by design: `full` mode with `landing: github` (no push, no PR from the lab), any run against
@@ -238,7 +245,8 @@ Each step: run it, then look at what it names before the next. Off switch at any
    sed -i 's/"dispatch": "local"/"dispatch": "full"/' ~/.zoe/self-heal/config.json
    gh pr list --label self-heal --draft
    ```
-   Look at: each PR's body (fault, evidence, gates, second opinion, the `zoe-self-heal:v1` block).
+   Look at: each PR's body (ticket id, fault class, test node id, engine, changed file names, gate
+   pass/fail, review status, the `zoe-self-heal:v1` block; no failure text, model output or diff by design).
    A heal PR leaves draft only when a reviewer that is not the engine says so (`gh pr ready <n>`);
    the landers then merge and deploy it, and the timer's `verify` pass records healed / not healed.
 6. Optional board mirror: put `MULTICA_BASE_URL`, `MULTICA_API_TOKEN`, `MULTICA_WORKSPACE_ID` in

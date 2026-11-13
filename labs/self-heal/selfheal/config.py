@@ -6,6 +6,7 @@ ever opens a DRAFT PR), daily cap 3, per-fault cap 2, a 300-line diff cap.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -37,6 +38,46 @@ DEFAULT_FORBIDDEN = [
     # the loop itself
     "labs/self-heal/*",
 ]
+
+# --- HARD FLOOR: config may tighten these, never loosen them (Config.validate refuses) ----------
+HARD_FORBIDDEN = tuple(DEFAULT_FORBIDDEN)
+MAX_DAILY_CAP, MAX_PER_FAULT_CAP, MAX_DIFF_LINES, MAX_PARK_AFTER = 3, 2, 300, 2
+HARD_QUIET = ("01:30", "05:00")
+# The live checkout of THIS box, refused as repo / integration / apply target / worktree parent
+# whatever the config says (`live_checkout` in the config is an ADDITIONAL refused path).
+HARD_LIVE_CHECKOUT = "/home/zoe/assistant"
+NETWORK_BINARIES = {"curl", "wget", "gh", "ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat", "socat",
+                    "telnet", "ftp", "git", "docker", "pip", "pip3", "npm", "npx", "node", "bash", "sh",
+                    "env", "sudo"}
+
+
+def hard_kill_switch() -> Path:
+    """Always honoured, computed at call time (HOME may differ under test)."""
+    return Path.home() / ".zoe" / "self_heal_paused"
+
+
+def refused_roots(extra: str = "") -> list:
+    roots = []
+    for p in (HARD_LIVE_CHECKOUT, extra):
+        if p:
+            roots += [Path(os.path.abspath(p)), Path(os.path.realpath(p))]
+    return roots
+
+
+def inside_refused(path: str, extra: str = "") -> bool:
+    cands = {Path(os.path.abspath(path)), Path(os.path.realpath(path))}
+    return any(c == r or r in c.parents for c in cands for r in refused_roots(extra))
+
+
+def _minutes(hm: str) -> int:
+    h, m = hm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def window_minutes(start: str, end: str) -> set:
+    a, b = _minutes(start), _minutes(end)
+    return set(range(a, b)) if a <= b else set(range(a, 1440)) | set(range(0, b))
+
 
 # A diff touching one of these needs a voice replay gate (fail-closed when none is configured).
 DEFAULT_VOICE_PATHS = [
@@ -109,7 +150,9 @@ class Config:
 
     # local landing
     integration_branch: str = "main"
-    health_checks: list = field(default_factory=list)   # list of argv lists run after apply
+    health_checks: list = field(default_factory=list)   # argv lists, allow-listed (see check_health_argv)
+    health_timeout_s: int = 120
+    apply_target: str = ""                               # lab: none; refused if it is the live checkout
 
     @classmethod
     def load(cls, path: str | None, **overrides) -> "Config":
@@ -130,8 +173,61 @@ class Config:
             raise ValueError(f"landing must be github|local, not {self.landing!r}")
         if self.board not in ("off", "multica"):
             raise ValueError(f"board must be off|multica, not {self.board!r}")
-        live = Path(self.live_checkout).resolve()
-        for name in ("repo", "worktree_root", "state_dir"):
-            p = Path(getattr(self, name)).resolve()
-            if p == live or live in p.parents:
-                raise ValueError(f"{name} ({p}) is the live checkout or inside it; refusing")
+        for name in ("repo", "worktree_root", "state_dir", "apply_target"):
+            v = getattr(self, name)
+            if v and inside_refused(v, self.live_checkout):
+                raise ValueError(f"{name} ({v}) is the live checkout or inside it; refusing")
+        # hard floor: only ever tighter than the built-ins
+        missing = [p for p in HARD_FORBIDDEN if p not in self.forbidden]
+        if missing:
+            raise ValueError(f"forbidden may only ADD paths; it drops {missing[:5]}")
+        for name, cap in (("daily_cap", MAX_DAILY_CAP), ("per_fault_cap", MAX_PER_FAULT_CAP),
+                          ("diff_line_cap", MAX_DIFF_LINES), ("not_healed_park_after", MAX_PARK_AFTER)):
+            v = getattr(self, name)
+            if not isinstance(v, int) or v < 0 or v > cap:
+                raise ValueError(f"{name}={v!r}: caps may only be lowered (0..{cap})")
+        if not window_minutes(*HARD_QUIET) <= window_minutes(self.quiet_start, self.quiet_end):
+            raise ValueError(f"quiet hours {self.quiet_start}-{self.quiet_end} must include "
+                             f"{HARD_QUIET[0]}-{HARD_QUIET[1]} (they may only widen)")
+        if not isinstance(self.kill_switches, list):
+            raise ValueError("kill_switches must be a list (the built-in switch is always honoured too)")
+        for argv in self.health_checks:
+            check_health_argv(argv, self.python)
+
+    def all_kill_switches(self) -> list:
+        return [str(hard_kill_switch()), *self.kill_switches]
+
+    def effective_forbidden(self) -> list:
+        return list(dict.fromkeys([*HARD_FORBIDDEN, *self.forbidden]))
+
+
+def check_health_argv(argv, python: str = "python3") -> None:
+    """Local-landing health checks are an ALLOW-LIST, refused at load otherwise. Allowed forms:
+      ["true"] / ["false"]                                   (tests, no-ops)
+      ["systemctl", "--user", "is-active", "<unit>"]          (read-only unit state)
+      [<python>, "-m", "<module>"] / [<python>, "<rel/path.py>"] run from a fresh worktree of the
+                                                             integration tip (never the live checkout)
+    No shell strings, no network-capable binary, no absolute or `..` paths, no `python -c`."""
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        raise ValueError(f"health check must be an argv list of strings, not {argv!r}")
+    exe = os.path.basename(argv[0])
+    if exe in NETWORK_BINARIES:
+        raise ValueError(f"health check {exe!r} is network-capable or a shell; refused")
+    if argv in (["true"], ["false"]):
+        return
+    if argv[0] == "systemctl":
+        if len(argv) == 4 and argv[1:3] == ["--user", "is-active"] and argv[3].replace("-", "").replace(".", "").replace("@", "").isalnum():
+            return
+        raise ValueError(f"systemctl health check must be `systemctl --user is-active <unit>`: {argv!r}")
+    if argv[0] in (python, "python3"):
+        if len(argv) >= 3 and argv[1] == "-m" and argv[2].replace(".", "").replace("_", "").isalnum():
+            rest = argv[3:]
+        elif len(argv) >= 2 and argv[1].endswith(".py"):
+            rest = argv[1:]
+        else:
+            raise ValueError(f"python health check must be `-m <module>` or `<rel/path.py>`: {argv!r}")
+        for a in rest:
+            if a.startswith("/") or ".." in a.split("/") or a == "-c":
+                raise ValueError(f"health check argument {a!r} leaves the integration checkout; refused")
+        return
+    raise ValueError(f"health check {argv[0]!r} is not on the allow-list")

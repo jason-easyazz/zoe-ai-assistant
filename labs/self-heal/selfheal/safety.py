@@ -15,7 +15,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import Config
+from .config import (MAX_DAILY_CAP, MAX_DIFF_LINES, MAX_PER_FAULT_CAP, Config, HARD_QUIET,
+                     window_minutes)
 
 
 class Refused(Exception):
@@ -30,9 +31,9 @@ class Refused(Exception):
 # --- kill switch -------------------------------------------------------------------------
 
 def check_kill_switch(cfg: Config) -> None:
-    for p in cfg.kill_switches:
+    for p in cfg.all_kill_switches():
         if Path(p).expanduser().exists():
-            raise Refused("kill_switch", str(p))
+            raise Refused("kill_switch", Path(p).name)
 
 
 # --- one heal at a time ------------------------------------------------------------------
@@ -82,12 +83,12 @@ class State:
         return self.data["faults"].setdefault(key, {"attempts": 0, "not_healed": 0, "parked": False})
 
     def check_caps(self, cfg: Config, fault_key: str) -> None:
-        if self.data["heals_today"] >= cfg.daily_cap:
+        if self.data["heals_today"] >= min(cfg.daily_cap, MAX_DAILY_CAP):
             raise Refused("daily_cap", f"{self.data['heals_today']}/{cfg.daily_cap} today")
         f = self.fault(fault_key)
         if f["parked"]:
             raise Refused("parked", fault_key)
-        if f["attempts"] >= cfg.per_fault_cap:
+        if f["attempts"] >= min(cfg.per_fault_cap, MAX_PER_FAULT_CAP):
             raise Refused("per_fault_cap", f"{f['attempts']}/{cfg.per_fault_cap} for {fault_key}")
 
     def count_attempt(self, fault_key: str) -> None:
@@ -95,32 +96,34 @@ class State:
         self.fault(fault_key)["attempts"] += 1
         self.save()
 
+    def refund_attempt(self, fault_key: str) -> None:
+        """An interrupted heal (quiet hours / busy / kill switch mid-run) spends no cap."""
+        self.data["heals_today"] = max(0, self.data["heals_today"] - 1)
+        f = self.fault(fault_key)
+        f["attempts"] = max(0, f["attempts"] - 1)
+        self.save()
+
 
 # --- when we may run ---------------------------------------------------------------------
 
-def _hm(s: str) -> dt.time:
-    h, m = s.split(":")
-    return dt.time(int(h), int(m))
-
-
 def check_quiet_hours(cfg: Config, now: dt.datetime) -> None:
-    start, end, t = _hm(cfg.quiet_start), _hm(cfg.quiet_end), now.time()
-    inside = (start <= t < end) if start <= end else (t >= start or t < end)
-    if inside:
-        raise Refused("quiet_hours", f"{now:%H:%M} is inside {cfg.quiet_start}-{cfg.quiet_end}")
+    """The built-in 01:30-05:00 window always applies; the config can only widen it."""
+    m = now.hour * 60 + now.minute
+    if m in window_minutes(*HARD_QUIET) or m in window_minutes(cfg.quiet_start, cfg.quiet_end):
+        raise Refused("quiet_hours", f"{now:%H:%M}")
 
 
 def check_busy(cfg: Config, repo_dir: str) -> None:
     """No heal while a voice PR is landing or while the night window owns the box."""
     r = subprocess.run(["pgrep", "-f", cfg.voice_lander_pattern], capture_output=True, text=True)
     if r.returncode == 0:
-        raise Refused("voice_lander_running", r.stdout.strip().replace("\n", ","))
+        raise Refused("voice_lander_running", "pgrep matched")
     if cfg.night_busy_script:
         script = Path(cfg.night_busy_script)
         if not script.is_absolute():
             script = Path(repo_dir) / script
         if not script.exists():
-            raise Refused("night_busy_missing", f"{script} not found (fail closed)")
+            raise Refused("night_busy_missing", "fail closed")
         r = subprocess.run(["bash", str(script), "deploy"], capture_output=True, text=True, timeout=60)
         if r.returncode == 0:   # night_busy.sh: exit 0 = must pause
             raise Refused("night_busy", "night_busy.sh deploy says pause")
@@ -134,6 +137,7 @@ class DiffReport:
     added: int = 0
     deleted: int = 0
     escaping_symlinks: list = field(default_factory=list)
+    engine_committed: bool = False
 
     @property
     def lines(self) -> int:
@@ -153,13 +157,15 @@ def forbidden_hits(cfg: Config, files: list) -> list:
         if f.startswith("/") or f.startswith("../") or "/../" in f:
             hits.append(f)
             continue
-        if any(fnmatch.fnmatch(f, pat) for pat in cfg.forbidden):
+        if any(fnmatch.fnmatch(f, pat) for pat in cfg.effective_forbidden()):
             hits.append(f)
     return hits
 
 
 def check_diff(cfg: Config, report: DiffReport, *, ticket_has_repro_test: bool) -> None:
     """Raise Refused when the agent's diff breaks policy; the caller discards the attempt."""
+    if report.engine_committed:
+        raise Refused("engine_committed", "")
     if not report.files:
         raise Refused("empty_diff", "the engine changed nothing")
     hits = forbidden_hits(cfg, report.files)
@@ -167,8 +173,9 @@ def check_diff(cfg: Config, report: DiffReport, *, ticket_has_repro_test: bool) 
         raise Refused("forbidden_path", ", ".join(sorted(hits)[:10]))
     if report.escaping_symlinks:
         raise Refused("outside_repo", ", ".join(report.escaping_symlinks[:10]))
-    if report.lines > cfg.diff_line_cap:
-        raise Refused("diff_cap", f"{report.lines} changed lines > {cfg.diff_line_cap}")
+    cap = min(cfg.diff_line_cap, MAX_DIFF_LINES)
+    if report.lines > cap:
+        raise Refused("diff_cap", f"{report.lines}>{cap}")
     # A failing-test ticket already carries its regression test (the reproduction, which the
     # verify step re-runs from the ORIGINAL file). Any other ticket must add or change a test.
     if not ticket_has_repro_test and not any(is_test_path(f) for f in report.files):
@@ -188,3 +195,12 @@ def live_fingerprint(cfg: Config) -> str:
             text += " " + ref.read_text().strip()
     return text
 
+
+
+_COUNTS = re.compile(r"\b(\d+) (passed|failed|errors?|skipped|xfailed|xpassed|deselected)\b")
+
+
+def rc_summary(rc: int, output: str = "") -> str:
+    """Exit code + pytest-style counts ONLY. Never assertion text, tracebacks or model output."""
+    counts = ",".join(f"{w}={n}" for n, w in _COUNTS.findall(output or ""))
+    return f"rc={rc}" + (f",{counts}" if counts else "")
