@@ -306,6 +306,7 @@ _ENTRIES = (
     _f('ZOE_ESPEAK_PITCH', 'str', ''),
     _f('ZOE_ESPEAK_SPEED', 'str', ''),
     _f('ZOE_ESPEAK_VOLUME', 'str', ''),
+    _f('ZOE_EVOLUTION_BOARD_MIRROR', 'bool', False, doc='docs/knowledge/evolution-proposal-queue.md', note='mirror new evolution proposals onto the Multica board; off while board dispatch is paused'),
     _f('ZOE_EXACT_WORDS', 'bool', True, doc='docs/knowledge/zoe-memory-bench.md'),
     _f('ZOE_EXACT_WORDS_BACKFILL_HOURS', 'int', 36, doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_EXECUTOR_DISPATCH', 'str', 'dry', doc='docs/architecture/multica-executor-migration.md'),

@@ -31,6 +31,29 @@ _MIN_CLUSTER_SIZE = 3
 _AUTO_APPROVE_THRESHOLD = int(os.environ.get("ZOE_AUTO_APPROVE_THRESHOLD", "0"))
 
 
+#: Mirroring proposals onto the Multica engineering board is OPT-IN (default off): the board's dispatch has been paused since
+#: 2026-08-04, so every mirrored issue was a ticket nobody would pick up (462 queue rows carry an issue id). The queue itself is the
+#: owner's surface (``evolution_inbox.py``). Read at call time.
+BOARD_MIRROR_ENV = "ZOE_EVOLUTION_BOARD_MIRROR"
+
+
+def board_mirror_on() -> bool:
+    from typed_env import env_bool
+
+    return env_bool("ZOE_EVOLUTION_BOARD_MIRROR", False)
+
+
+async def _mirror(db, prop_id: str, payload: dict) -> None:
+    """Mirror a NEW proposal onto the board and keep its issue id - only with ``ZOE_EVOLUTION_BOARD_MIRROR`` on."""
+    if not board_mirror_on():
+        return
+    from multica_client import sync_evolution_proposal_to_multica
+
+    multica_id = await sync_evolution_proposal_to_multica(**payload)
+    if multica_id:
+        await db.execute("UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2", multica_id, prop_id)
+
+
 def _load_recent_misses(days: int = _LOOKBACK_DAYS) -> list[str]:
     """Load intent miss texts from the last N days."""
     if not _MISS_PATH.exists():
@@ -54,17 +77,13 @@ def _load_recent_misses(days: int = _LOOKBACK_DAYS) -> list[str]:
 
 def _simple_cluster(texts: list[str]) -> list[tuple[str, list[str]]]:
     """Cluster texts by shared trigrams. Returns (representative, [members]) tuples."""
-    def trigrams(s: str) -> set[str]:
-        s = s.lower().strip()
-        return {s[i:i+3] for i in range(len(s) - 2)} if len(s) >= 3 else {s}
-
     clusters: list[list[str]] = []
     for text in texts:
-        t_grams = trigrams(text)
+        t_grams = _trigrams(text)
         best_idx = None
         best_sim = 0.0
         for i, cluster in enumerate(clusters):
-            rep_grams = trigrams(cluster[0])
+            rep_grams = _trigrams(cluster[0])
             union = len(t_grams | rep_grams)
             if union == 0:
                 continue
@@ -157,7 +176,6 @@ def _attach_notice_trace_to_row(
 async def run_evolution_notice() -> dict:
     """Run the NOTICE phase — returns summary dict."""
     from db_pool import get_db_ctx
-    from multica_client import sync_evolution_proposal_to_multica
     from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
     from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
     from zoe_evolution_proposal_adapter import build_existing_zoe_proposal_candidate
@@ -261,15 +279,7 @@ async def run_evolution_notice() -> dict:
                 logger.info("evolution_notice: auto-approved '%s' (%d hits >= threshold %d)",
                             rep[:60], len(members), _AUTO_APPROVE_THRESHOLD)
 
-            # Sync to Multica board
-            multica_id = await sync_evolution_proposal_to_multica(
-                **dict(intake.multica_payload),
-            )
-            if multica_id:
-                await db.execute(
-                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                    multica_id, prop_id,
-                )
+            await _mirror(db, prop_id, dict(intake.multica_payload))
 
         # ── 2. LLM error rate spike detection ────────────────────────────────
         cutoff_24h = time.time() - 86400
@@ -364,13 +374,7 @@ async def run_evolution_notice() -> dict:
             )
             created += 1
 
-            multica_payload = dict(intake.multica_payload)
-            multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
-            if multica_id:
-                await db.execute(
-                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                    multica_id, row_payload["id"],
-                )
+            await _mirror(db, row_payload["id"], dict(intake.multica_payload))
 
     return {"created": created, "skipped_dedup": skipped, "clusters": len(clusters)}
 
@@ -383,7 +387,6 @@ async def record_frustration_signal(
 ) -> None:
     """Write a user frustration proposal (called from chat.py inline)."""
     from db_pool import get_db_ctx
-    from multica_client import sync_evolution_proposal_to_multica
     from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
     from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
     from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
@@ -483,13 +486,7 @@ async def record_frustration_signal(
             user_id, normalized_message[:60], repeat_count,
         )
 
-        multica_payload = dict(intake.multica_payload)
-        multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
-        if multica_id:
-            await db.execute(
-                "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                multica_id, row["id"],
-            )
+        await _mirror(db, row["id"], dict(intake.multica_payload))
 
 
 async def record_user_issue(message: str, user_id: str) -> None:
@@ -500,7 +497,6 @@ async def record_user_issue(message: str, user_id: str) -> None:
     phrased identically won't create multiple issues.
     """
     from db_pool import get_db_ctx
-    from multica_client import sync_evolution_proposal_to_multica
     from zoe_candidate_scoring import CandidateEvaluation, CandidateScore
     from zoe_evolution_proposal import EvolutionSignal, EvolutionSignalType
     from zoe_evolution_runtime_intake import build_runtime_evolution_proposal_intake
@@ -592,14 +588,7 @@ async def record_user_issue(message: str, user_id: str) -> None:
             user_id, message[:60],
         )
 
-        multica_payload = dict(intake.multica_payload)
-        multica_payload["label_name"] = "user-feedback"
-        multica_id = await sync_evolution_proposal_to_multica(**multica_payload)
-        if multica_id:
-            await db.execute(
-                "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
-                multica_id, row["id"],
-            )
+        await _mirror(db, row["id"], dict(intake.multica_payload, label_name="user-feedback"))
 
 
 # ── MEASURE phase ─────────────────────────────────────────────────────────────
@@ -626,123 +615,178 @@ def _load_target_patterns(raw: str | None) -> list[str]:
     return []
 
 
-async def run_measure_phase() -> dict:
-    """MEASURE: close monitoring window for deployed proposals.
+#: the honest measure (2026-11-13). ``validated`` needs a before / after comparison of the proposal's OWN target signal as a RATE: household
+#: intent misses (``local_text_logs.INTENT_MISSES``) similar to its target patterns, per household turn the router logged
+#: (``local_text_logs.ROUTER_SHADOW``: one record per routed turn, ``ts`` + ``traffic``), 48 h before vs 48 h after it was applied. It
+#: needs PROOF OF COVERAGE: at least ``MEASURE_MIN_TURNS`` household turns in EACH window (there was traffic and the router logged
+#: it), at least one miss-log record of any kind inside the after window (the miss writer was alive), and at least
+#: ``MEASURE_MIN_BEFORE`` target misses before. A log that just stopped is never an improvement: it is ``unmeasured``.
+MEASURE_MIN_BEFORE = 5
+MEASURE_MIN_TURNS = 30
+MEASURE_BETTER = 0.8          # after-rate <= 0.8 x before-rate: validated (misses per turn fell by at least a fifth)
+MEASURE_WORSE = 1.2           # after-rate >= 1.2 x before-rate: regressed
+_SIMILAR = 0.4                # the trigram overlap the NOTICE clustering used to group the misses in the first place
 
-    For each proposal that has been deployed but whose validation_result is null
-    and the deployed_at timestamp is older than _MEASURE_WINDOW_S, evaluate
-    whether the change improved things (simple heuristic: intent miss rate
-    dropped for the targeted patterns). Sets status to 'validated' or 'failed'.
+
+def _trigrams(s: str) -> set[str]:
+    s = s.lower().strip()
+    return {s[i:i + 3] for i in range(len(s) - 2)} if len(s) >= 3 else {s}
+
+
+def _similar(a: str, b: str) -> bool:
+    ta, tb = _trigrams(a), _trigrams(b)
+    union = len(ta | tb)
+    return bool(union) and len(ta & tb) / union > _SIMILAR
+
+
+def measure_verdict(patterns: list, before: int | None, after: int | None, *, turns_before: int | None = None,
+                    turns_after: int | None = None, min_before: int = MEASURE_MIN_BEFORE,
+                    min_turns: int = MEASURE_MIN_TURNS) -> tuple[str, str]:
+    """(verdict, reason). verdict: validated | regressed | no_change | unmeasured. ``None`` = no coverage of that window."""
+    if not patterns:
+        return "unmeasured", "no_target_signal"
+    if before is None or turns_before is None or turns_before < min_turns:
+        return "unmeasured", "no_before_data"
+    if after is None or turns_after is None or turns_after < min_turns:
+        return "unmeasured", "no_after_coverage"
+    if before < min_before:
+        return "unmeasured", "sample_too_small"
+    rate_before, rate_after = before / turns_before, after / turns_after
+    if rate_after <= rate_before * MEASURE_BETTER:
+        return "validated", "fewer_misses_per_turn"
+    if rate_after >= rate_before * MEASURE_WORSE:
+        return "regressed", "more_misses_per_turn"
+    return "no_change", "within_band"
+
+
+def _records(log) -> list[dict]:
+    import local_text_logs as ltl
+
+    try:
+        paths = ltl.segments(log)
+    except Exception:  # noqa: BLE001
+        paths = [ltl.log_path(log)]
+    out: list[dict] = []
+    for path in paths:
+        try:
+            lines = Path(path).read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                row = json.loads(line)
+                row["ts"] = float(row["ts"])
+                out.append(row)
+            except (ValueError, KeyError, TypeError):
+                continue
+    return out
+
+
+def miss_counts(patterns: list, deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> tuple[int | None, int | None]:
+    """Household intent misses similar to a target pattern in the window before / after ``deployed_at``. ``None`` = no coverage:
+    before, the log's oldest line is newer than the window start (swept); after, the log holds NO record of any kind inside the
+    window (the writer may have stopped: zero is then not a measurement)."""
+    import local_text_logs as ltl
+
+    seen = _records(ltl.INTENT_MISSES)
+    if not seen:
+        return None, None
+    oldest = min(r["ts"] for r in seen)
+    before = after = 0
+    alive_after = False
+    for r in seen:
+        ts = r["ts"]
+        if deployed_at <= ts < deployed_at + window_s:
+            alive_after = True
+        text = str(r.get("text") or "") if r.get("traffic_class") in (None, "household") else ""
+        if not text or not any(_similar(text, p) for p in patterns):
+            continue
+        if deployed_at - window_s <= ts < deployed_at:
+            before += 1
+        elif deployed_at <= ts < deployed_at + window_s:
+            after += 1
+    return (before if oldest <= deployed_at - window_s else None), (after if alive_after else None)
+
+
+def household_turns(deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> tuple[int | None, int | None]:
+    """Household turns the router logged in the window before / after ``deployed_at`` (the rate's denominator). ``None`` when the
+    log does not reach back to the before window's start."""
+    import local_text_logs as ltl
+
+    seen = _records(ltl.ROUTER_SHADOW)
+    if not seen:
+        return None, None
+    before = sum(1 for r in seen if r.get("traffic") == "household" and deployed_at - window_s <= r["ts"] < deployed_at)
+    after = sum(1 for r in seen if r.get("traffic") == "household" and deployed_at <= r["ts"] < deployed_at + window_s)
+    return (before if min(r["ts"] for r in seen) <= deployed_at - window_s else None), after
+
+
+async def run_measure_phase() -> dict:
+    """MEASURE: close the monitoring window of each APPLIED proposal (``deployed_at`` older than ``_MEASURE_WINDOW_S``, no result yet).
+
+    Only an intent-gap proposal has a target signal today (its own intent misses); every other kind is recorded ``unmeasured`` /
+    ``no_target_signal``. ``validated`` moves the row applied -> kept, ``regressed`` applied -> reverted (it got worse; nothing is rolled
+    back automatically), ``no_change`` and ``unmeasured`` leave it applied. Every outcome is written to ``validation_result`` (schema 2,
+    counts only) so the owner's decide page can show it. ``applied_due`` is how many rows were waiting: 0 means nothing was ever applied.
     """
     from db_pool import get_db_ctx
-    from multica_client import update_multica_issue_on_proposal_status_change
 
     now = time.time()
-    results: dict = {"evaluated": 0, "validated": 0, "failed": 0}
+    results: dict = {"applied_due": 0, "evaluated": 0, "validated": 0, "regressed": 0, "no_change": 0, "unmeasured": 0}
 
     async with get_db_ctx() as db:
         rows = await db.fetch(
             """SELECT id, type, title, target_patterns, deployed_at
                FROM evolution_proposals
                WHERE status='applied'
-                 AND COALESCE(source, '') <> 'struggle'   -- struggle proposals carry no target_patterns: not this evaluator's
+                 AND COALESCE(source, '') <> 'struggle'   -- struggle proposals are measured by their own retrain ledger
                  AND validation_result IS NULL
                  AND deployed_at IS NOT NULL
                  AND deployed_at < $1""",
             now - _MEASURE_WINDOW_S,
         )
+        results["applied_due"] = len(rows)
 
         for row in rows:
             proposal_id = row["id"]
-            target_patterns = _load_target_patterns(row["target_patterns"])
-
-            # Heuristic: count intent misses for the target patterns in the 48h
-            # BEFORE deploy vs the 48h AFTER deploy. If miss count dropped by
-            # at least 20% or is 0 after deploy, mark as validated.
             deployed_at = row["deployed_at"]
-            miss_before = 0
-            miss_after = 0
-
-            if target_patterns:
-                for pattern in target_patterns[:5]:  # limit to 5 patterns
-                    like = f"%{pattern[:30]}%"
-                    before_rows = await db.fetch(
-                        """SELECT COUNT(*) as cnt FROM chat_messages
-                           WHERE role='user'
-                             AND content ILIKE $1
-                             AND created_at BETWEEN $2 AND $3""",
-                        like,
-                        deployed_at - _MEASURE_WINDOW_S,
-                        deployed_at,
-                    )
-                    after_rows = await db.fetch(
-                        """SELECT COUNT(*) as cnt FROM chat_messages
-                           WHERE role='user'
-                             AND content ILIKE $1
-                             AND created_at BETWEEN $2 AND $3""",
-                        like,
-                        deployed_at,
-                        deployed_at + _MEASURE_WINDOW_S,
-                    )
-                    miss_before += (before_rows[0]["cnt"] if before_rows else 0)
-                    miss_after += (after_rows[0]["cnt"] if after_rows else 0)
-
-            # Default: if no target patterns to measure, validate by time elapsed
-            if not target_patterns:
-                verdict = "validated"
-            elif miss_before == 0:
-                # No data to compare — validate cautiously
-                verdict = "validated"
-            elif miss_after <= miss_before * 0.8:
-                verdict = "validated"  # ≥20% improvement
-            else:
-                verdict = "failed"
-
-            validation_result = {
-                "miss_before_48h": miss_before,
-                "miss_after_48h": miss_after,
-                "verdict": verdict,
-                "measured_at": now,
-            }
-
-            new_status = verdict  # the board word: 'validated' or 'failed'
-            # the status move is the queue (applied -> kept | reverted, the one legal move here) and the measurement are ONE transaction:
-            # a failed result write takes the move back (the row stays `applied` with a NULL result, so the next pass measures it again),
-            # and the row lock the move takes keeps a retry from reopening / redeploying between the two writes. The result write is also
-            # conditional on the deployment it measured, so an old measurement can never overwrite a newer attempt's cleared result.
+            patterns = _load_target_patterns(row["target_patterns"]) if row["type"] == "intent_pattern" else []
+            before, after = miss_counts(patterns[:20], deployed_at) if patterns else (None, None)
+            turns_before, turns_after = household_turns(deployed_at) if patterns else (None, None)
+            verdict, reason = measure_verdict(patterns, before, after, turns_before=turns_before, turns_after=turns_after)
+            validation_result = {"schema": 2, "verdict": verdict, "reason": reason, "misses_before": before, "misses_after": after,
+                                 "turns_before": turns_before, "turns_after": turns_after, "window_h": _MEASURE_WINDOW_S / 3600,
+                                 "min_before": MEASURE_MIN_BEFORE, "min_turns": MEASURE_MIN_TURNS, "measured_at": now}
+            move = {"validated": "kept", "regressed": "reverted"}.get(verdict)
+            # the status move (when there is one) and the result are ONE transaction, and the result write is conditional on the
+            # deployment it measured: a failed write leaves the row applied with no result, so the next pass measures it again
             try:
                 async with evolution_queue.atomic(db):
-                    await evolution_queue.transition(
-                        db, proposal_id, "kept" if verdict == "validated" else "reverted", actor="evolution_notice:measure",
-                        frm="applied", note="measured: " + verdict,
-                        evidence={"before": {"misses_48h": miss_before}, "after": {"misses_48h": miss_after}},
-                    )
+                    if move:
+                        await evolution_queue.transition(
+                            db, proposal_id, move, actor="evolution_notice:measure", frm="applied", note="measured: " + verdict,
+                            evidence={"before": {"misses_48h": before}, "after": {"misses_48h": after}},
+                        )
                     written = await db.execute(
                         "UPDATE evolution_proposals SET validation_result=$1 "
                         "WHERE id=$2 AND validation_result IS NULL AND deployed_at = $3",
-                        json.dumps(validation_result),
-                        proposal_id,
-                        deployed_at,
+                        json.dumps(validation_result), proposal_id, deployed_at,
                     )
                     if int(getattr(written, "rowcount", 0) or 0) < 1:
                         raise evolution_queue.QueueError("the deployment changed while it was measured")
             except evolution_queue.QueueError as exc:
-                logger.warning("evolution_measure: proposal %s not moved: %s", proposal_id, exc)
+                logger.warning("evolution_measure: proposal %s not recorded: %s", proposal_id, exc)
                 continue
             results["evaluated"] += 1
             results[verdict] += 1
-            logger.info(
-                "evolution_measure: proposal %s → %s (before=%d after=%d)",
-                proposal_id, new_status, miss_before, miss_after,
-            )
+            logger.info("evolution_measure: proposal %s -> %s (%s, before=%s after=%s)", proposal_id, verdict, reason, before, after)
 
-            # Sync status change to Multica board if issue is linked
-            multica_id_rows = await db.fetch(
-                "SELECT multica_issue_id FROM evolution_proposals WHERE id=$1",
-                proposal_id,
-            )
-            multica_id = multica_id_rows[0]["multica_issue_id"] if multica_id_rows else None
-            if multica_id:
-                await update_multica_issue_on_proposal_status_change(multica_id, new_status)
+            if move and board_mirror_on():
+                from multica_client import update_multica_issue_on_proposal_status_change
+
+                linked = await db.fetch("SELECT multica_issue_id FROM evolution_proposals WHERE id=$1", proposal_id)
+                if linked and linked[0]["multica_issue_id"]:
+                    await update_multica_issue_on_proposal_status_change(
+                        linked[0]["multica_issue_id"], "validated" if verdict == "validated" else "failed")
 
     return results

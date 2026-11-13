@@ -37,6 +37,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import db_pool
+import evolution_queue as eq
 import struggle_detector as sd
 import struggle_proposals as sp
 import struggle_signals as sig
@@ -1379,3 +1380,32 @@ def test_a_reopen_locks_the_detail_row_before_the_queue_row(env, monkeypatch):
     res = run(sp.run_pass(now=later, days=60))
     assert res["reopened"] == 1
     assert _detail_before_queue(seen), seen
+
+
+def test_the_decide_page_cap_counts_only_proposals_still_waiting(env):
+    """250 proposals, the top 200 decided (100 accepted) or put off (100 "later"): the decide page's list (``awake_at``) still returns the
+    other 50, because the exclusion is IN the query, before the 200 cap. Other callers (no ``awake_at``) keep today's behaviour.
+    Negative control: drop the ``awake_at`` clause from ``list_proposals`` -> red."""
+    import evolution_inbox as ei
+
+    store(*[event(i) for i in range(250)])
+    for i in range(250):
+        pid = f"sp{i:03d}"
+        run(eq.propose(env.db, source=sp.QUEUE_SOURCE, change_class="harness", component="brain", risk_tier=1, title="t", proposal_id=pid,
+                       legacy_type="struggle_answer_quality", now=NOW))
+        env.db.conn.execute(f"INSERT INTO struggle_proposals ({', '.join(sp._DCOLS)}) VALUES ({sp._marks(len(sp._DCOLS))})",
+                            (pid, f"fp{i}", "answer_quality", "unrouted|what:none:none", "", "", "", "{}", 3, 3, 1, 2, NOW - DAY, NOW,
+                             1.0 - i / 1000, "Synthetic answers were too long 3 times", "template", "{}", NOW, NOW, "shadow"))
+        env.db.conn.execute("INSERT INTO struggle_proposal_events (proposal_id, event_id, user_id, ts, signal) VALUES (?, ?, ?, ?, ?)",
+                            (pid, f"e{i}", A, NOW - DAY, "RE_ASK"))
+    env.db.conn.commit()
+    for i in range(200):
+        if i % 2:
+            run(sp.decide(f"sp{i:03d}", "accept", "admin-1"))
+        else:
+            assert run(ei.decide("later", "admin-1", key=f"s-sp{i:03d}", now=NOW))["changed"] == 1
+    got = run(sp.list_proposals(status="proposed", limit=200, awake_at=NOW))
+    assert sorted(p["id"] for p in got) == [f"sp{i:03d}" for i in range(200, 250)]
+    assert len(run(sp.list_proposals(status="proposed", limit=200))) == 150             # without awake_at: the put-off ones too
+    cards = [c for c in run(ei.inbox("admin-1", now=NOW))["cards"] if c["source"] == "struggle"]
+    assert len(cards) == ei.CARD_CAP and all(int(c["key"][4:]) >= 200 for c in cards)
