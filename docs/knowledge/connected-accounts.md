@@ -57,7 +57,7 @@ never words. No ingest path writes such rows yet.
 ## Forget reach
 
 `MemoryService.delete_user` (fail closed) runs `connected_accounts.forget_user` (secrets, sync runs, accounts),
-`member_identities.forget_user` and `calendar_forget.forget_user` (the member's calendars, every event in them, every synced event of the
+`member_identities.forget_user` and `calendar_forget.forget_user` (the member's calendars, their OWN events in them - another member's event there is detached and kept - every synced event of the
 member, their attendees and alarms). Registered in [forget-reach.md](forget-reach.md). Still open (owner decision): the member's
 calendar-less local events, and their reminders, lists, notes, journal and transactions, which default to household visibility.
 
