@@ -1602,8 +1602,13 @@ class MemoryService:
             _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
         except Exception:  # noqa: BLE001
             _event = None
+        _mined = None
         if _event is not None:
             logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)
+            # the MINED fact keeps deciding authority and evidence below (resolved on the member's words first, then the
+            # normalised event carries it): the event text alone reads as an unanchored model assertion and was dropped as
+            # unconfirmed from Memories and the health summary (QA round 9 review)
+            _mined = text
             text, memory_type = _event, "event"
             tags = list(dict.fromkeys([*(tags or []), "health", "medical"]))
 
@@ -1737,8 +1742,10 @@ class MemoryService:
             # own turn text. An inferred fact that contradicts a protected row becomes a
             # pending candidate (the user's words stay approved; nothing is lost).
             writer = origin or source
+            # an emergency event is resolved on the fact as MINED (its words are what the member's turn supports)
+            auth_text = (scrub_pii(_mined)[0] or scrubbed) if _mined else scrubbed
             resolved = _auth.resolve_write(
-                writer, scrubbed,
+                writer, auth_text,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
                 claimed=authority, user_id=user_id, prompt_text=prompt_text,
                 speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
@@ -1778,7 +1785,7 @@ class MemoryService:
 
             # Provenance (ZMB A3): a row written from a user turn says which words and which turn
             ev_excerpt, ev_turn_id = _auth.turn_evidence(
-                writer, resolved, scrubbed, user_id=user_id,
+                writer, resolved, auth_text, user_id=user_id,
                 anchor_text=anchor_text, source_excerpt=source_excerpt, user_turn_id=user_turn_id)
 
             metadata = self._build_metadata(

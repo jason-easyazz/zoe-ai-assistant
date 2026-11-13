@@ -822,3 +822,17 @@ def test_a_chain_of_restatements(monkeypatch):
     assert vc.superseded_by_correction(UID, "User's book club is on the 12th of December", said_at=before) is True
     assert vc.superseded_by_correction(UID, "User's book club is on the 19th of December", said_at=before) is False   # latest wins
     vc.reset_state()
+
+
+def test_the_emergency_event_keeps_the_mined_facts_authority_and_is_listed(mem):
+    """QA round 9 review: the event text was resolved for authority AFTER normalising, read as an unanchored model assertion and
+    dropped as unconfirmed from Memories and the health summary. Authority and evidence come from the fact as MINED."""
+    import provenance_answers as pa
+
+    run(mem.ingest(MINED[0], user_id=UID, source="turn_digest", source_excerpt=FALL, anchor_text=FALL))
+    (row,) = _rows(mem)
+    assert row.text.startswith("User had a fall on ")
+    assert row.metadata.get("authority_class") == "user_stated_derived"
+    known = run(pa.gather(UID, svc=mem))
+    assert known.unconfirmed == 0
+    assert [i.text for i in known.private.get("health", [])] == [row.text]       # listed (private, health), never dropped
