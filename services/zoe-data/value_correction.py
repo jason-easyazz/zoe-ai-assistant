@@ -562,22 +562,29 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     date_corr = bool(qn.ordinal or qo.ordinal or month_new or month_old)
     unit = "date" if date_corr else _correction_unit(corr, qn, qo)
     units = [_unit_at(tail, q) for q in spans]
-    if unit is None:
-        # bare numbers ("9 not 8"): no unit to compare, only day-of-month vs not, as before
-        same = [(q.value == qn.value, q.value in want) for q, u in zip(spans, units) if u != "date"]
-        if any(n for n, _ in same):
-            return None             # the row already holds the corrected value
-        hits = [q for q, u in zip(spans, units) if q.value in want and u != "date"]
+    # The SUBJECT's own number is the first number after the subject mention that COULD be the corrected value: of the
+    # correction's unit, or unitless (never a date for a non-date correction, only a date for a date one); a number of another
+    # unit ("on the 3rd", "a 27 km drive") is not the subject's value and is skipped. Only that number is ever judged:
+    #   - it equals the new value: the row is up to date ("gas bill is 27, with a 20 dollar late fee" - the fee is not touched);
+    #   - it is the old value and the only candidate of the unit: it is rewritten;
+    #   - anything else: nothing changes, even when another number of the unit holds the old value (it may not be the subject's).
+    if unit == "date":
+        fits = lambda u: u == "date"                                    # noqa: E731
+    elif unit is None:
+        fits = lambda u: u != "date"                                    # noqa: E731 - bare numbers ("9 not 8")
     else:
-        # only a number of the correction's UNIT holds the new value ("27 Example Street" never makes "20 dollars" current);
-        # a number with no readable unit never hides a stale value, and is rewritten only as the single candidate. A date is
-        # never a unitless guess ("20 Example Street" is not the 20th).
-        if any(q.value == qn.value and u == unit for q, u in zip(spans, units)) and (not month_new or month_new == row_month):
-            return None             # the row already holds the corrected value
-        hits = [q for q, u in zip(spans, units) if q.value in want and u == unit]
-        if not hits and unit != "date":
-            hits = [q for q, u in zip(spans, units) if q.value in want and u is None]
-    if len(hits) != 1:
+        fits = lambda u: u == unit or u is None                         # noqa: E731
+    own = next((q for q, u in zip(spans, units) if fits(u)), None)
+    if own is None:
+        return None
+    if own.value == qn.value and (not month_new or month_new == row_month):
+        return None                 # the row already holds the corrected value
+    # the candidates: numbers of the correction's unit holding the old value; a unitless number only when none is (never for a
+    # date: "20 Example Street" is not the 20th). Two candidates are never guessed between.
+    hits = [q for q, u in zip(spans, units) if q.value in want and (u == unit if unit is not None else fits(u))]
+    if not hits and unit not in (None, "date"):
+        hits = [q for q, u in zip(spans, units) if q.value in want and u is None]
+    if len(hits) != 1 or hits[0] is not own:
         return None
     q = hits[0]
     new_tail = tail[:q.start] + _render_quantity(qn, q) + tail[q.end:]

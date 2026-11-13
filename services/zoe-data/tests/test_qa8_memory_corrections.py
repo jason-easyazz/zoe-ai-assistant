@@ -439,6 +439,25 @@ def test_a_fact_restated_after_the_correction_is_kept(monkeypatch):
     assert said == rows[-1]["at"].timestamp()                                          # the NEWEST supporting turn wins
 
 
+@pytest.mark.parametrize("row,want", [
+    # (a)/(d) the subject's own amount already holds the new value: the 20 dollar fee is never rewritten
+    ("User's gas bill is 27, with a 20 dollar late fee", None),
+    ("User's gas bill is 27 dollars, with a 20 dollar late fee", None),
+    # (b)/(c) the subject's own amount is the stale one: it is rewritten, the fee left alone
+    ("User's gas bill is 20, with a 27 dollar late fee", "User's gas bill is 27, with a 27 dollar late fee"),
+    ("User's gas bill is 20 dollars, with a 27 dollar late fee", "User's gas bill is 27 dollars, with a 27 dollar late fee"),
+    # the subject's amount is neither value: another number holding the old one is not the subject's
+    ("User's gas bill is 30 dollars, with a 20 dollar late fee", None),
+    # a number of another unit is not the subject's value and is skipped
+    ("User's gas bill due on the 3rd is 20 dollars", "User's gas bill due on the 3rd is 27 dollars"),
+    # undecidable: a unitless number before the amount may be the subject's - left unchanged
+    ("User's gas bill for flat 4 is 20 dollars", None),
+])
+def test_only_the_subjects_own_number_is_judged_and_rewritten(row, want):
+    money = vc.statement("actually the gas bill is 27 dollars not 20 dollars")
+    assert vc.rewrite(row, money) == want
+
+
 def test_a_newer_entailing_restatement_beats_an_older_quoted_turn(monkeypatch):
     """The model quoted the EARLY turn, but the member restated the value after the correction: the fact is as new as the
     restatement, so it is kept. Control: with no restatement the quoted turn's time stands and the fact is stale."""
