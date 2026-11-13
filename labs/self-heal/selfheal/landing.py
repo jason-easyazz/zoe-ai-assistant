@@ -16,8 +16,9 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gitops
-from .config import Config, check_health_argv, inside_refused
+from . import binaries, gitops
+from .config import Config, check_health_argv, inside_refused, is_pinned_python
+from .sandbox import Sandbox
 
 MARKER = "zoe-self-heal:v1"
 
@@ -91,6 +92,7 @@ class GithubLanding:
         review = cross_review(self.cfg, ctx.base_wt, ctx.heal_wt, ctx.ticket.base_sha, ctx.head_sha, ctx.engine)
         branch = f"self-heal/{ctx.ticket.id}"
         ctx.checkpoint("push")
+        ctx.record(pushed_branch=branch)   # write-ahead: a later interrupt is cleaned up next run
         # never --force; a fresh branch name per ticket
         gitops.git(ctx.heal_wt, "push", "origin", f"HEAD:refs/heads/{branch}", timeout=300)
         body_file = Path(self.cfg.state_dir) / f"pr-body-{ctx.ticket.id}.md"
@@ -103,9 +105,30 @@ class GithubLanding:
         url = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
         return LandResult("pr_open", "draft_pr", pr_url=url, review=review.split(":")[0].replace(" ", "_"))
 
+    def cleanup_branch(self, tid: str, branch: str) -> str:
+        """A late interrupt (after the push, before the PR) leaves `self-heal/<id>` on origin with no
+        PR. Deleted on the next run when it is ours (exact name for that recorded ticket) and no PR
+        (any state) has it as head; if a PR exists (the reply was lost), it is recorded instead."""
+        if branch != f"self-heal/{tid}":
+            return "refused:name"
+        r = gitops.run(["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "url", "--limit", "5"],
+                       cwd=self.cfg.repo, timeout=60)
+        prs = json.loads(r.stdout or "[]")
+        if prs:
+            return f"pr:{prs[0]['url']}"
+        if not gitops.git(self.cfg.repo, "ls-remote", "origin", f"refs/heads/{branch}", timeout=120):
+            return "absent"
+        gitops.git(self.cfg.repo, "push", "origin", "--delete", f"refs/heads/{branch}", timeout=120)
+        return "deleted"
+
+    def rollback_intent(self, intent: dict) -> bool:
+        return False   # github landing never advances a ref
+
     def merged_commit(self, pr_url: str) -> str | None:
         r = gitops.run(["gh", "pr", "view", pr_url, "--json", "state,mergeCommit"], timeout=60)
         d = json.loads(r.stdout)
+        if d.get("state") == "CLOSED":
+            return False
         if d.get("state") != "MERGED":
             return None
         return (d.get("mergeCommit") or {}).get("oid")
@@ -157,13 +180,18 @@ class LocalLanding:
         try:
             for argv in self.cfg.health_checks:
                 check_health_argv(argv, self.cfg.python)
-                try:
-                    r = subprocess.run(argv, cwd=path, capture_output=True, text=True,
-                                       timeout=self.cfg.health_timeout_s, stdin=subprocess.DEVNULL)
-                except subprocess.TimeoutExpired:
+                if is_pinned_python(argv[0]):   # repo code: sandboxed like every gate
+                    rc, _ = Sandbox(self.cfg).run(argv, path, self.cfg.health_timeout_s)
+                else:                           # true / false / systemctl: resolved absolute paths
+                    try:
+                        rc = subprocess.run([binaries.which(argv[0]), *argv[1:]], cwd=path, capture_output=True,
+                                            timeout=self.cfg.health_timeout_s, stdin=subprocess.DEVNULL).returncode
+                    except subprocess.TimeoutExpired:
+                        rc = None
+                if rc is None:
                     return False, "health_timeout"
-                if r.returncode != 0:
-                    return False, f"health_failed:rc={r.returncode}"
+                if rc != 0:
+                    return False, f"health_failed:rc={rc}"
             return True, "health_ok"
         finally:
             gitops.remove_worktree(repo, path)
@@ -179,6 +207,10 @@ class LocalLanding:
         ctx.checkpoint("merge")
         snap = f"refs/self-heal/snapshots/{t.id}"
         gitops.git(repo, "update-ref", snap, tip)
+        # write-ahead intent BEFORE the ref moves; cleared only after a confirmed heal or a completed
+        # rollback, so an interrupt anywhere in between (even mid-rollback) is rolled back next run
+        intent = {"ref": int_ref, "from": tip, "to": ctx.head_sha}
+        ctx.record(landing_intent=intent)
         # compare-and-swap fast-forward: the heal commit's parent is the snapshot
         gitops.git(repo, "update-ref", int_ref, ctx.head_sha, tip)
         # From here the integration ref has advanced: ANY exit that is not a confirmed heal
@@ -195,14 +227,30 @@ class LocalLanding:
         except BaseException as e:   # noqa: BLE001 - the rollback below must run for every exit
             ok, why, exc = False, f"exception:{type(e).__name__}", e   # class only, never the message
         if ok:
+            ctx.record(landing_intent=None)
             return LandResult("healed", why, review=self.REVIEW, extra=steps)
-        gitops.git(repo, "update-ref", int_ref, tip, ctx.head_sha)
         try:
-            self.applier.rollback(tip)
-        except Exception as e:   # the ref is already restored; record that the live rollback failed
+            self.rollback_intent(intent)
+            ctx.record(landing_intent=None)
+        except Exception as e:   # the intent stays: the next run re-runs the rollback first
             why += f",rollback_apply_failed:{type(e).__name__}"
         steps["restored"] = gitops.rev(repo, int_ref) == tip
         return LandResult("rolled_back", why, review=self.REVIEW, extra=steps, exc=exc)
+
+    def rollback_intent(self, intent: dict) -> bool:
+        """Idempotent: restore the ref only if it still points at the heal (CAS), then roll the apply
+        back. A ref moved by someone else is left alone (False)."""
+        repo, ref, frm, to = self.cfg.repo, intent["ref"], intent["from"], intent["to"]
+        cur = gitops.rev(repo, ref)
+        if cur == to:
+            gitops.git(repo, "update-ref", ref, frm, to)
+        elif cur != frm:
+            return False
+        self.applier.rollback(frm)
+        return gitops.rev(repo, ref) == frm
+
+    def cleanup_branch(self, tid: str, branch: str) -> str:
+        return "absent"   # local landing never pushes
 
 
 def make_landing(cfg: Config, applier=None):

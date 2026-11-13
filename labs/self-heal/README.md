@@ -1,4 +1,4 @@
-# Zoe self-heal loop (lab, v1)
+# Zoe self-heal loop (lab, v2)
 
 Owner directive (2026-11-13): "if someone buys a zoe and adds in their chatgpt or claude
 subscription then i want zoe to be able to evolve using this, but at the moment this box should
@@ -160,7 +160,7 @@ Unit tests (fake engine, throwaway repos, no network):
 ```bash
 cd ~/assistant   # or any checkout of this branch
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider labs/self-heal/tests -q
-# 2026-11-13: 195 passed in ~74 s
+# 2026-11-13: v1 195 passed in ~74 s; v2 230 passed in ~108 s (gates now run inside bwrap)
 ```
 
 Negative controls (each mutation applied, the named tests run, the file restored; every one went red):
@@ -178,6 +178,18 @@ lane argv0 not pinned (1), engine-made index accepted (2), verify re-checked onc
 danger-prefix list alone is redundant behind the exact flag-set check (removing only it stays green). The privacy rule has several
 layers (source stripping, then the audit's allow-listed keys and single-token values); each layer
 has its own test and its own negative control.
+
+v2 (2026-11-13), 13 mutations, every one red: gates run without the sandbox (2), no pid namespace /
+die-with-parent (1), no prlimit (1), verify on exit code only (1), skip markers allowed (2), pytest
+config allowed (2), collection errors ignored (1), open heals not checked (2), no start-of-run
+recovery (3), binaries from the inherited PATH (1), no binary mode / location check (3), `sandbox:
+none` accepted (1), no runner-level sandbox refusal (1). The first full run also caught a real bug:
+a misplaced comment dropped `--as` / `--nproc` from the prlimit argv, and the hostile test went red.
+
+v2 scratch scenarios: re-run with the FAKE engine only (no real engine runs on this box tonight),
+sandbox `bwrap:ok`: `local` -> `healed_local` (`verify rc=0,passed=1,node=passed`); `land` ->
+`healed` (full local gate set incl. the offline lane, sandboxed); `rollback` -> `rolled_back`
+(`health_failed:rc=1`). The real-codex numbers below are from v1.
 
 Real engine, synthetic fault (`calc.add` subtracts; `tests/test_calc.py::test_add` fails), throwaway
 repo under `/tmp`, codex-cli 0.163.0 on the owner's ChatGPT login, one attempt, 600 s engine timeout,
@@ -268,13 +280,66 @@ Each step: run it, then look at what it names before the next. Off switch at any
 - A readable landing record for the owner ("what changed", undo) - today only the audit log and the snapshot refs.
 - An `offline_lane_cmd` that runs on the sold box's own venv.
 
+## v2: what closed the v1 blockers (`tests/test_self_heal_sandbox.py`)
+
+**Sandbox.** Every step that runs repo code from a heal or base worktree (detector, py_compile,
+validate_structure, relevant pytest, offline lane, voice replay, the verify re-run, python health
+checks) runs through `selfheal/sandbox.py`. Backends probed read-only on this box (Jetson, kernel
+5.15): bubblewrap 0.6.1 at `/usr/bin/bwrap` (not setuid) and unprivileged user namespaces work
+(`unprivileged_userns_clone=1`); `firejail` and `nsjail` are not installed; `systemd-run --user
+--scope` would put a unit on the live user manager, so it is not used. Chosen: **`bwrap`**:
+new user/pid/net/ipc/uts namespaces, `/` read-only, empty read-only views over `/home`, the real
+home, `/root`, `/run` (user bus, docker and agent sockets), `/mnt`, `/media`, `/srv`, `/var/tmp`,
+the live checkout, the state dir and the heal repo; a private on-disk `/tmp`; `/dev` read-only;
+the interpreter's library dirs re-bound read-only; the worktree the ONLY writable path; inside,
+`prlimit` caps address space, processes (per user namespace on 5.15), file size and core dumps;
+the environment is an allow-list (`PATH` = the trusted PATH, `HOME=/tmp`, no tokens). A timeout
+SIGKILLs the process group; the pid namespace dies with bwrap (`--die-with-parent`).
+
+| property | evidence (`test_hostile_gate_is_contained` unless named) |
+|---|---|
+| no network (loopback included) | connect to a host listener fails; the listener never sees a connection |
+| home secrets / live checkout hidden | planted key in a fake home unreadable; real home's `.ssh` / `.zoe` and the live `.git` invisible |
+| read-only outside the worktree | writes to an outside dir, the fake home and `/usr` fail; a host-side snapshot of everything outside the worktree is unchanged |
+| clean environment | a planted env var is absent inside |
+| memory / process caps | a 60 MB allocation under an 80 MB cap and 12 forks under an 8-process cap both fail |
+| timeout kills everything | `test_gate_timeout_kills_the_whole_group`: a setsid'd double-forked grandchild is gone (no `pgrep` match) and never writes its marker |
+| failure by class only | the gate reports `files=1,rc=1,failed=1` |
+| fail closed | `sandbox: none` is refused at load while bwrap works; with no working backend, `local` / `full` are refused (`sandbox_unavailable`, reason audited) and only `dry` runs (`test_no_sandbox_refuses_local_and_full_but_dry_plans`); limits may only be lowered; no knob exists for network or writable paths (`test_config_cannot_weaken_the_sandbox`) |
+
+Not enforced by this sandbox (say so before switch-on): disk FILLING inside the worktree / private
+`/tmp` (only a per-file 512 MB cap); CPU time (wall-clock timeout only); kernel attack surface of
+unprivileged user namespaces; reading world-readable files outside the hidden dirs (e.g. `/etc`).
+The voice replay inside the sandbox cannot see `~/.zoe-voice-samples` or the models, so a
+voice-path heal fails closed until an owner decides which read-only binds it gets. The engine
+itself still runs under its own sandbox (codex `workspace-write`, claude allow-list), not bwrap.
+
+**Review backlog.** (a) healed = the junit report says the reproduction NODE ran and passed (not
+skipped / xfailed / deselected / absent), never just exit 0; skip / xfail markers added to any test
+file, and any edit to `conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg`, `tox.ini`, discard
+the attempt. (b) a detect run with COLLECTION errors records `collection_error` with file names
+only and heals nothing in that run (the lane's picture is incomplete, and the cheap "fix" for an
+unimportable module is to skip or delete it); a detect run with no junit is `detect_failed`, never
+"no fault". (c) a fault with an open heal PR or an unlanded local `self-heal/<id>` branch is skipped
+(`heal_open`); a PR closed unmerged is recorded `pr_closed` (counts toward parking) and frees the
+fault. (e) a push is preceded by a write-ahead `pushed_branch`; the next run, through the re-checks,
+deletes that exact `self-heal/<id>` from origin when no PR (any state) has it as head, or records
+the PR it finds (chosen over opening the PR on resume: the interrupt was usually an owner stop, and
+the gates ran against a base that may have moved). (f) a write-ahead `landing_intent` precedes the
+local fast-forward and is cleared only after a confirmed heal or a completed rollback; the next run
+re-runs the idempotent CAS rollback first. (g) `selfheal/binaries.py` resolves git, gh, systemctl,
+true, false, flock, bwrap, prlimit, pgrep, bash and both engine CLIs to absolute paths from
+`/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (an engine CLI elsewhere must be configured with an
+absolute path), records them in the `preflight` audit row, and refuses a group/world-writable or
+foreign-owned file or one under the worktrees, the state dir or a temp dir (`unsafe_binary`).
+
 ## Known risks before switching on (read these first)
 
-- **Gates execute engine-written code unsandboxed.** The engine is sandboxed (codex `workspace-write`,
-  claude allow-list), but `pytest` in the gates imports the changed code as the `zoe` user with full
-  access. A malicious or confused change runs before any human sees it. Mitigation not built: run
-  the gates inside the same sandbox (e.g. `codex sandbox` or bubblewrap with no network, write
-  access only to the worktree).
+- **The executor path is an owner decision** (above): until it is unblocked the loop rides the thin
+  `codex` / `claude` CLI.
+- **The real lane inside the sandbox is unmeasured.** The 2048 MB address-space and 64-process caps
+  are the ceiling; whether the real `ci_safe` lane fits under them, and its wall time, must be
+  measured in step 2 before `local`.
 - **Same-vendor second opinion.** With `engine: codex`, `cross_review.sh` (codex first) may review
   codex's own work. The PR body says so; the draft rule is what protects `main`.
 - **Detector cost and flakes are unmeasured on the real lane.** A flaky test becomes a ticket; the

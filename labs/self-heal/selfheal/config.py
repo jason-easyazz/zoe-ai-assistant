@@ -46,11 +46,15 @@ DEFAULT_FORBIDDEN = [
     "models/*", "services/zoe-data/models/*", "*.gguf", "*.safetensors", "*.onnx", "*.pt", "*.bin", "*.npy",
     # the loop itself
     "labs/self-heal/*",
+    # test-runner config: a "fix" that reconfigures pytest is not a fix
+    "conftest.py", "*/conftest.py", "pytest.ini", "*/pytest.ini", "pyproject.toml", "*/pyproject.toml",
+    "setup.cfg", "*/setup.cfg", "tox.ini", "*/tox.ini",
 ]
 
 # --- HARD FLOOR: config may tighten these, never loosen them (Config.validate refuses) ----------
 HARD_FORBIDDEN = tuple(DEFAULT_FORBIDDEN)
 MAX_DAILY_CAP, MAX_PER_FAULT_CAP, MAX_DIFF_LINES, MAX_PARK_AFTER = 3, 2, 300, 2
+MAX_SANDBOX_MEM_MB, MAX_SANDBOX_PROCS = 2048, 64
 HARD_QUIET = ("01:30", "05:00")
 # The live checkout of THIS box, refused as repo / integration / apply target / worktree parent
 # whatever the config says (`live_checkout` in the config is an ADDITIONAL refused path).
@@ -147,6 +151,11 @@ class Config:
     ignore_nodeids: list = field(default_factory=list)
     python: str = PINNED_PYTHON      # must BE the running interpreter; anything else is refused
 
+    # sandbox for every gate that runs repo code (selfheal/sandbox.py); limits may only be lowered
+    sandbox: str = "auto"            # auto | bwrap | none  (none is refused while bwrap works here)
+    sandbox_mem_mb: int = MAX_SANDBOX_MEM_MB
+    sandbox_procs: int = MAX_SANDBOX_PROCS
+
     # gates
     test_lock: str = "/tmp/zoe-test-lane.lock"   # "" = no flock (scratch repos)
     test_lock_wait_s: int = 14000
@@ -201,13 +210,19 @@ class Config:
         if missing:
             raise ValueError(f"forbidden may only ADD paths; it drops {missing[:5]}")
         for name, cap in (("daily_cap", MAX_DAILY_CAP), ("per_fault_cap", MAX_PER_FAULT_CAP),
-                          ("diff_line_cap", MAX_DIFF_LINES), ("not_healed_park_after", MAX_PARK_AFTER)):
+                          ("diff_line_cap", MAX_DIFF_LINES), ("not_healed_park_after", MAX_PARK_AFTER),
+                          ("sandbox_mem_mb", MAX_SANDBOX_MEM_MB), ("sandbox_procs", MAX_SANDBOX_PROCS)):
             v = getattr(self, name)
             if not isinstance(v, int) or v < 0 or v > cap:
                 raise ValueError(f"{name}={v!r}: caps may only be lowered (0..{cap})")
         if not window_minutes(*HARD_QUIET) <= window_minutes(self.quiet_start, self.quiet_end):
             raise ValueError(f"quiet hours {self.quiet_start}-{self.quiet_end} must include "
                              f"{HARD_QUIET[0]}-{HARD_QUIET[1]} (they may only widen)")
+        from .sandbox import best_backend   # noqa: PLC0415 (sandbox imports this module)
+        if self.sandbox not in ("auto", "bwrap", "none"):
+            raise ValueError(f"sandbox must be auto|bwrap|none, not {self.sandbox!r}")
+        if self.sandbox == "none" and best_backend()[0] != "none":
+            raise ValueError("sandbox none is weaker than the best backend available here; refused")
         if not isinstance(self.kill_switches, list):
             raise ValueError("kill_switches must be a list (the built-in switch is always honoured too)")
         # the interpreter, the engines and every command the loop runs are pinned

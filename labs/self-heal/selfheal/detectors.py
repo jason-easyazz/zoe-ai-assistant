@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
-import subprocess
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 FAILING_TEST = "failing_test"
+COLLECTION_ERROR = "collection_error"
 
 
 @dataclass
@@ -61,11 +61,47 @@ def _nodeid(case: ET.Element) -> tuple[str, str]:
     return file_, "::".join([file_, *chain, name])
 
 
+def _is_collection_error(case: ET.Element) -> bool:
+    """pytest writes a module that fails to import as a testcase with an EMPTY classname, the
+    dotted module as its name and `<error message="collection failure">`."""
+    err = case.find("error")
+    return err is not None and (case.get("classname", "") == "" or
+                                (err.get("message") or "").startswith("collection failure"))
+
+
+def collection_errors(xml_text: str) -> list[str]:
+    """File names (only) of the modules that failed to COLLECT."""
+    out = []
+    for case in ET.fromstring(xml_text).iter("testcase"):
+        if _is_collection_error(case):
+            name = case.get("file") or case.get("name", "").replace(".", "/") + ".py"
+            out.append(name)
+    return sorted(set(out))
+
+
+def node_passed(xml_text: str, nodeid: str) -> str:
+    """'passed' only when that node RAN and passed: not skipped, xfailed, deselected, absent
+    ('no tests ran') or erroring; otherwise the reason class."""
+    try:
+        cases = [c for c in ET.fromstring(xml_text).iter("testcase") if _nodeid(c)[1] == nodeid]
+    except ET.ParseError:
+        return "junit_unreadable"
+    if len(cases) != 1:
+        return "not_run" if not cases else "ambiguous"
+    for tag in ("failure", "error", "skipped"):
+        if cases[0].find(tag) is not None:
+            return tag   # pytest records xfail as <skipped type="pytest.xfail">
+    return "passed"
+
+
 def parse_junit(xml_text: str) -> list[dict]:
-    """Failing / erroring test cases from a pytest junit report: [{nodeid, file, message}]."""
+    """Failing / erroring test cases from a pytest junit report: [{nodeid, file, message}].
+    Collection errors are NOT test failures: see collection_errors()."""
     out = []
     root = ET.fromstring(xml_text)
     for case in root.iter("testcase"):
+        if _is_collection_error(case):
+            continue
         bad = case.find("failure")
         if bad is None:
             bad = case.find("error")
@@ -97,17 +133,13 @@ def failing_test_tickets(junit_xml: str, *, base_sha: str, python: str, ignore: 
     return tickets
 
 
-def run_failing_test_detector(checkout: str, detect_cmd: list, *, timeout: int, base_sha: str,
-                              python: str, ignore: list, now: dt.datetime,
-                              lock: list | None = None) -> list[Ticket]:
-    """Run the configured offline lane in a read-only base checkout and ticket its failures."""
+def run_detector(cfg, checkout: str, lock: list | None = None) -> str | None:
+    """Run the configured offline lane (sandboxed) in the base checkout; the junit XML, or None when
+    the lane wrote none (timeout, crash): that is `detect_failed`, never "no fault"."""
+    from .sandbox import Sandbox   # noqa: PLC0415
     junit = Path(checkout) / ".self-heal-junit.xml"
-    cmd = [*(lock or []), *detect_cmd, f"--junitxml={junit}"]
-    subprocess.run(cmd, cwd=checkout, capture_output=True, text=True, timeout=timeout)
-    if not junit.exists():
-        return []
+    rc, _ = Sandbox(cfg).run([*cfg.detect_cmd, f"--junitxml={junit}"], checkout, cfg.detect_timeout_s, lock or [])
     try:
-        return failing_test_tickets(junit.read_text(), base_sha=base_sha, python=python,
-                                    ignore=ignore, now=now)
+        return junit.read_text() if rc is not None and junit.exists() else None
     finally:
         junit.unlink(missing_ok=True)

@@ -19,20 +19,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import gitops
+from . import binaries, gitops
 from .board import make_board
 from .config import Config
-from .detectors import Ticket, failing_test_tickets, run_failing_test_detector
+from .detectors import COLLECTION_ERROR, Ticket, collection_errors, failing_test_tickets, run_detector
 from .engines import select_engine
 from .gates import gates_green, run_gates
 from .landing import make_landing
 from .safety import (HealLock, Refused, State, check_busy, check_diff, check_kill_switch,
                      check_quiet_hours, live_fingerprint)
+from .sandbox import Sandbox
 
 AUDIT_KEYS = {"ts", "run", "step", "outcome", "ticket", "dispatch", "landing", "engine",
               "rule", "reason", "found", "skipped", "fault_class", "fault_key", "test", "plan",
               "seconds", "rc", "files", "lines", "gates", "sha", "branch", "pr", "review", "snapshot",
-              "applied", "restored", "verify", "issue", "chosen", "checkpoint", "error"}
+              "applied", "restored", "verify", "issue", "chosen", "checkpoint", "error", "bins", "sandbox"}
 _TOKEN = re.compile(r"^[A-Za-z0-9_./:@+=,#\[\]-]{0,240}$")
 
 
@@ -64,12 +65,18 @@ class LandCtx:
     verify_path: str
     lock: list = field(default_factory=list)
     checkpoint: Callable = lambda name: None
+    record: Callable = lambda **kw: None   # write-ahead facts onto the ticket's state record (saved at once)
 
 
 class Runner:
     def __init__(self, cfg: Config, *, engine=None, applier=None, now=None, board="auto"):
         cfg.validate()   # the hard floor holds even for a Config built in code and then mutated
         self.cfg = cfg
+        try:   # absolute, checked paths from a fixed trusted PATH, before anything runs
+            self.bins, self.bin_error = binaries.resolve_all(cfg), None
+        except binaries.UnsafeBinary as e:
+            self.bins, self.bin_error = {}, e
+        self.sandbox = Sandbox(cfg)
         self.engine_skips: list = []
         if engine is None:
             engine, self.engine_skips = select_engine(cfg)
@@ -121,6 +128,10 @@ class Runner:
     def run_once(self, *, junit: str | None = None) -> dict:
         try:
             self.step("preflight")
+            if self.bin_error:
+                raise Refused("unsafe_binary", f"{self.bin_error.name}:{self.bin_error.why}")
+            self.audit("preflight", "bins", bins=[f"{k}={v}" for k, v in sorted(self.bins.items())],
+                       sandbox=f"{self.sandbox.backend}:{self.sandbox.why}")
             if self.engine_skips:
                 self.audit("engine_select", "fallback" if self.engine else "none",
                            chosen=getattr(self.engine, "name", "none"),
@@ -147,24 +158,30 @@ class Runner:
     def _run_locked(self, now: dt.datetime, junit: str | None) -> dict:
         c = self.cfg
         state = State(c, now.date())
+        self._recover(state)
         self.step("base")
         base_sha = self._base_sha()
         base_wt = self._wt(f"heal-scan-{self.run_id}")
         gitops.add_worktree(c.repo, base_wt, base=base_sha)
         try:
             self.step("detect")
-            if junit:
-                tickets = failing_test_tickets(Path(junit).read_text(), base_sha=base_sha, python=c.python,
-                                               ignore=c.ignore_nodeids, now=now)
-            else:
-                tickets = run_failing_test_detector(base_wt, c.detect_cmd, timeout=c.detect_timeout_s,
-                                                    base_sha=base_sha, python=c.python, ignore=c.ignore_nodeids,
-                                                    now=now, lock=self.lock_argv)
+            xml = Path(junit).read_text() if junit else run_detector(c, base_wt, self.lock_argv)
+            if xml is None:
+                self.audit("detect", "failed", reason="no_junit")
+                return {"outcome": "detect_failed"}
+            # A module that fails to COLLECT hides its tests: the lane's picture is incomplete, and the
+            # cheapest "fix" (skip / delete the module) is test weakening. Record it, heal nothing.
+            broken = collection_errors(xml)
+            if broken:
+                self.audit("detect", "cannot_reproduce", fault_class=COLLECTION_ERROR, files=broken)
+                return {"outcome": COLLECTION_ERROR, "files": broken}
+            tickets = failing_test_tickets(xml, base_sha=base_sha, python=c.python, ignore=c.ignore_nodeids, now=now)
             self.audit("detect", "done", found=len(tickets))
             ticket, skipped = None, []
             for t in tickets:
                 try:
                     state.check_caps(c, t.fault_key)
+                    self._check_not_open(state, t.fault_key)
                     ticket = t
                     break
                 except Refused as e:
@@ -192,9 +209,49 @@ class Runner:
                         "commit", f"then:local=verify,full=land:{c.landing}"]
                 self.audit("plan", "dry", ticket.id, plan=plan)
                 return {"outcome": "planned", "ticket": ticket.id, "plan": plan}
+            if self.sandbox.backend == "none":   # engine code never runs unsandboxed: fail closed
+                self.audit("sandbox", "refused", ticket.id, reason=self.sandbox.why)
+                return {"outcome": "refused", "rule": "sandbox_unavailable", "why": self.sandbox.why}
             return self._heal(state, ticket, base_wt)
         finally:
             gitops.remove_worktree(c.repo, base_wt)
+
+    def _check_not_open(self, state: State, key: str) -> None:
+        """One heal in flight per fault: an open heal PR (github) or an unlanded local heal branch."""
+        heads = gitops.heal_branches(self.cfg.repo)
+        for tid, rec in state.data["tickets"].items():
+            if rec["ticket"]["fault_key"] == key and (rec.get("status") == "pr_open" or (
+                    rec.get("status") == "healed_local" and f"self-heal/{tid}" in heads)):
+                raise Refused("heal_open", tid)
+
+    def _recover(self, state: State) -> None:
+        """Start of every run: finish what an interrupted run left half-done, through the re-checks.
+        (f) a local landing whose write-ahead intent is still set is rolled back (idempotent);
+        (e) a pushed self-heal branch with no PR is deleted from origin (a PR found = record it)."""
+        for tid, rec in list(state.data["tickets"].items()):
+            intent, branch = rec.get("landing_intent"), rec.get("pushed_branch")
+            if not intent and not (branch and rec.get("status") not in ("pr_open", "healed", "not_healed", "pr_closed")):
+                continue
+            try:
+                self.checkpoint("recover")
+            except Interrupted as e:
+                raise Refused(e.rule, "recover") from None
+            if intent:
+                try:
+                    restored = self.landing.rollback_intent(intent)
+                except Exception as e:   # noqa: BLE001 - keep the intent: the next run tries again
+                    self.audit("recover", "rollback_failed", tid, error=type(e).__name__)
+                    raise Refused("rollback_pending", tid) from None
+                rec.update(landing_intent=None, status="rolled_back", restored=restored)
+                state.fault(rec["ticket"]["fault_key"])["parked"] = True
+                self.audit("recover", "rolled_back", tid, restored=restored)
+            elif branch:
+                done = self.landing.cleanup_branch(tid, branch)
+                if done.startswith("pr:"):
+                    rec.update(status="pr_open", pr_url=done[3:])
+                rec["pushed_branch"] = None
+                self.audit("recover", done.split(":")[0], tid, branch=branch)
+            state.save()
 
     def _gate_names(self) -> list:
         c = self.cfg
@@ -205,7 +262,7 @@ class Runner:
         rec["status"] = status
         rec.update(detail)
         f = state.fault(ticket.fault_key)
-        if status in ("not_healed", "rolled_back"):
+        if status in ("not_healed", "rolled_back", "pr_closed"):
             f["not_healed"] += 1
             if status == "rolled_back" or f["not_healed"] >= self.cfg.not_healed_park_after:
                 f["parked"] = True
@@ -273,8 +330,9 @@ class Runner:
 
             self.checkpoint("land")
             self.step("land", ticket.id)
+            rec = state.data["tickets"][ticket.id]
             ctx = LandCtx(ticket, base_wt, wt, head, self.engine.name, gates, diff, verify_path,
-                          self.lock_argv, self.checkpoint)
+                          self.lock_argv, self.checkpoint, lambda **kw: (rec.update(kw), state.save()))
             lr = self.landing.land(ctx)
             self.audit("land", lr.status, ticket.id, reason=lr.detail.split(" ")[0], review=lr.review,
                        pr=lr.pr_url, **lr.extra)
@@ -314,6 +372,9 @@ class Runner:
                 self.step("verify", tid)
                 ticket = Ticket.from_dict(rec["ticket"])
                 sha = self.landing.merged_commit(rec["pr_url"])
+                if sha is False:   # closed unmerged: a reviewer said no; the fault may be retried (caps apply)
+                    out.append(self._finish(state, ticket, "pr_closed"))
+                    continue
                 deployed_ref = f"refs/heads/{c.base_branch}"   # what the deploy fast-forwards
                 if not sha or gitops.run(["git", "-C", c.repo, "merge-base", "--is-ancestor", sha, deployed_ref],
                                          check=False).returncode != 0:

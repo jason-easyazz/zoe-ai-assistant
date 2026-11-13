@@ -73,7 +73,7 @@ def test_health_check_raises_when_systemctl_is_missing(full_local, monkeypatch, 
     cfg.health_checks = [["systemctl", "--user", "is-active", "zoe-data.service"]]
     only = tmp_path / "onlygit"
     only.mkdir()
-    for tool in ("git", "flock", "pgrep"):
+    for tool in ("git", "flock", "pgrep", "bwrap", "prlimit"):
         os.symlink(shutil.which(tool), only / tool)
     monkeypatch.setenv("PATH", str(only))                             # no systemctl: FileNotFoundError
     out = Runner(cfg, engine=FakeEngine(fix_calc), now=lambda: NOON).run_once()

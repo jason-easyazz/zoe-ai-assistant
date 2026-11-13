@@ -6,24 +6,22 @@ A gate returns (name, status, detail) with status pass | fail | skip. Any `fail`
 from __future__ import annotations
 
 import fnmatch
-import subprocess
 from pathlib import Path
 
 from .config import Config
 from .detectors import Ticket
 from .safety import is_test_path, rc_summary
+from .sandbox import Sandbox
 
 
 def _lock(cfg: Config) -> list:
     return ["flock", "-x", "-w", str(cfg.test_lock_wait_s), cfg.test_lock] if cfg.test_lock else []
 
 
-def _sh(argv: list, cwd: str, timeout: int) -> tuple[bool, str]:
-    try:
-        r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return False, "timeout"
-    return r.returncode == 0, rc_summary(r.returncode, r.stdout)
+def _sh(cfg: Config, argv: list, wt: str, lock: list = ()) -> tuple[bool, str]:
+    """Every gate runs repo code: inside the sandbox, whole process group killed on timeout."""
+    rc, out = Sandbox(cfg).run(argv, wt, cfg.gate_timeout_s, lock)
+    return (False, "timeout") if rc is None else (rc == 0, rc_summary(rc, out))
 
 
 def relevant_tests(wt: str, changed: list, ticket: Ticket) -> list:
@@ -44,7 +42,7 @@ def gate_validate_structure(cfg, wt, changed, ticket):
     script = Path(wt) / "tools/audit/validate_structure.py"
     if not script.exists():
         return "skip", "no_validator"
-    ok, d = _sh([cfg.python, str(script)], wt, cfg.gate_timeout_s)
+    ok, d = _sh(cfg, [cfg.python, str(script)], wt)
     return ("pass" if ok else "fail"), d
 
 
@@ -52,7 +50,7 @@ def gate_py_compile(cfg, wt, changed, ticket):
     py = [f for f in changed if f.endswith(".py") and (Path(wt) / f).exists()]
     if not py:
         return "skip", "no_changed_python"
-    ok, d = _sh([cfg.python, "-m", "py_compile", *py], wt, cfg.gate_timeout_s)
+    ok, d = _sh(cfg, [cfg.python, "-m", "py_compile", *py], wt)
     return ("pass" if ok else "fail"), f"files={len(py)},{d}"
 
 
@@ -60,15 +58,14 @@ def gate_relevant_pytest(cfg, wt, changed, ticket):
     tests = relevant_tests(wt, changed, ticket)
     if not tests:
         return "fail", "no_relevant_test"   # a heal with nothing to prove it is not a heal
-    ok, d = _sh([*_lock(cfg), cfg.python, "-m", "pytest", "-p", "no:cacheprovider", "-q", *tests],
-                wt, cfg.gate_timeout_s)
+    ok, d = _sh(cfg, [cfg.python, "-m", "pytest", "-p", "no:cacheprovider", "-q", *tests], wt, _lock(cfg))
     return ("pass" if ok else "fail"), f"files={len(tests)},{d}"
 
 
 def gate_offline_lane(cfg, wt, changed, ticket):
     if not cfg.offline_lane_cmd:
         return "fail", "offline_lane_unset"
-    ok, d = _sh([*_lock(cfg), *cfg.offline_lane_cmd], wt, cfg.gate_timeout_s)
+    ok, d = _sh(cfg, list(cfg.offline_lane_cmd), wt, _lock(cfg))
     return ("pass" if ok else "fail"), d
 
 
@@ -78,7 +75,7 @@ def gate_voice_replay(cfg, wt, changed, ticket):
         return "skip", "no_voice_path_change"
     if not cfg.voice_replay_cmd:
         return "fail", "voice_path_no_replay"
-    ok, d = _sh(list(cfg.voice_replay_cmd), wt, cfg.gate_timeout_s)
+    ok, d = _sh(cfg, list(cfg.voice_replay_cmd), wt)
     return ("pass" if ok else "fail"), d
 
 

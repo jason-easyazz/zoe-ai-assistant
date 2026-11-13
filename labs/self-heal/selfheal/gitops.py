@@ -13,8 +13,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import binaries
 from .config import inside_refused
-from .safety import DiffReport, rc_summary
+from .detectors import node_passed
+from .safety import WEAKEN, DiffReport, is_test_path, rc_summary
 
 CMD_LOG: list = []
 JUNK = re.compile(r"(^|/)(__pycache__|\.pytest_cache)(/|$)|\.py[co]$")
@@ -37,8 +39,8 @@ def _guard(argv: list, cwd: str | None) -> None:
 def run(argv: list, *, cwd: str | None = None, timeout: int = 120, check: bool = True,
         env: dict | None = None) -> subprocess.CompletedProcess:
     _guard(argv, cwd)
-    CMD_LOG.append(list(argv))
-    r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+    CMD_LOG.append(list(argv))   # the logical argv; the process runs the resolved absolute binary
+    r = subprocess.run([binaries.which(argv[0]), *argv[1:]], cwd=cwd, capture_output=True, text=True, timeout=timeout,
                        env={**os.environ, **(env or {})})
     if check and r.returncode != 0:
         raise GitError(f"{os.path.basename(argv[0])} {argv[3] if argv[:2] == ['git', '-C'] and len(argv) > 3 else ''} rc={r.returncode}")
@@ -72,6 +74,11 @@ def remove_worktree(repo: str, path: str, *, branch: str | None = None) -> None:
         git(repo, "branch", "-D", branch, check=False)
 
 
+def heal_branches(repo: str) -> set:
+    out = git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/self-heal/")
+    return set(out.splitlines())
+
+
 def checked_out_branches(repo: str) -> set:
     out = git(repo, "worktree", "list", "--porcelain")
     return {line.split(" ", 1)[1] for line in out.splitlines() if line.startswith("branch ")}
@@ -101,6 +108,14 @@ def inspect_worktree(wt: str, base_sha: str) -> DiffReport:
         a, d, _path = line.split("\t", 2)
         rep.added += int(a) if a != "-" else 10**6   # binary: over any cap
         rep.deleted += int(d) if d != "-" else 0
+    # test weakening: a skip / xfail added to any test file (the reproduction's fixtures live there)
+    for path in rep.files:
+        if is_test_path(path) and (Path(wt) / path).is_file():
+            added = ((Path(wt) / path).read_text(errors="replace") if path in untracked else
+                     "\n".join(x for x in git(wt, "diff", "-U0", base_sha, "--", path).splitlines()
+                               if x.startswith("+") and not x.startswith("+++")))
+            if WEAKEN.search(added):
+                rep.weakened_tests.append(path)
     root = Path(wt).resolve()
     for path in rep.files:
         full = Path(wt) / path
@@ -142,16 +157,19 @@ class ReproResult:
 
 def run_repro(cfg, repo: str, ref: str, ticket, path: str, lock: list) -> ReproResult:
     """The fault's reproduction at `ref`, with the reproducing files restored to how they were
-    when the fault was detected, so a 'fix' that weakened the test does not count as healed."""
+    when the fault was detected, so a 'fix' that weakened the test does not count as healed.
+    Sandboxed. Healed = the junit report says THAT node ran and passed, never just exit code 0."""
+    from .sandbox import Sandbox   # noqa: PLC0415
     add_worktree(repo, path, base=ref)
     try:
         if ticket.repro_files:
             git(path, "checkout", ticket.base_sha, "--", *ticket.repro_files)
-        try:
-            r = subprocess.run([*lock, *ticket.repro_cmd], cwd=path, capture_output=True, text=True,
-                               timeout=cfg.gate_timeout_s)
-        except subprocess.TimeoutExpired:
+        junit = Path(path) / ".self-heal-verify.xml"
+        rc, out = Sandbox(cfg).run([*ticket.repro_cmd, f"--junitxml={junit}"], path, cfg.gate_timeout_s, lock)
+        if rc is None:
             return ReproResult(False, "timeout")
-        return ReproResult(r.returncode == 0, rc_summary(r.returncode, r.stdout))
+        nodeid = ticket.evidence.get("nodeid", "")
+        verdict = node_passed(junit.read_text(), nodeid) if junit.exists() and nodeid else "no_junit"
+        return ReproResult(rc == 0 and verdict == "passed", f"{rc_summary(rc, out)},node={verdict}")
     finally:
         remove_worktree(repo, path)
