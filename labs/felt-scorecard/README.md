@@ -88,6 +88,28 @@ windows the two rules give identical counts.
 | 10 | Brain dispatch to first text | `VOICE TIMING` | member sessions; `brain_ttft_ms` p50/p90 (lane 1 10b) and `pre_brain_ms + brain_ttft_ms` p50 (lane 4 E+F); other lines counted separately |
 | 11 | Night windows completed, last N | `night-window.log` | a night counts when any `NIGHT_WINDOW_SUMMARY` for that run date has `outcome='ok...'`; nights with no summary are not completed |
 | 12 | Members active, days of use, real member turns | `chat_messages` x `chat_sessions` x `users` | `role='user'` rows of `role='member'` accounts, guest and synthetic excluded; days are local (Australia/Perth) calendar days |
+| 13 | Corrections applied to stored memory | `VALUE_CORRECTION_APPLIED` / `_STALE` / `_KIND_GUESS` | member lines, harness excluded; applied lines with `rows=` summed; stale and kind-guess refusals counted. A count, not a rate (a correction that matched no row writes no line) |
+| 9b | Share of turns with first sound under 1 s / 0.6 s | as row 9 | per-turn total strictly under 1000 ms / 600 ms (`FIRST_SOUND_BANDS_MS`) |
+
+### ALERTS and PERFORMANCE (printed after the rows above, one row per source)
+
+"Things that told, or should have told, the owner something is wrong", counted per source over the long window
+(default 30 d) unless the source supports less; each row states its window. A source that cannot be read, or does not
+cover the window, prints `unmeasured` with the reason. Unit and check names pass through fixed allowlists taken from
+the writer scripts; any other name prints as `other`.
+
+| key | source (writer) | counts |
+|---|---|---|
+| `alerts_crash_loops` | `~/.zoe-logs/crash-loop-watch.log` (`scripts/maintenance/zoe_crash_loop_watch.py`, appended by its unit) | lines starting with the red circle (alert) / green circle (recovery); per unit from `CRASH_UNITS` (zoe-data + `OTHER_UNITS`). The writer prints messages as one line WITHOUT a timestamp; only its status lines (at least hourly) carry one, so an alert counts when the stamps around it lie in the window, one straddling an edge is reported apart. A silence over 2 h between stamps makes the row `unmeasured`. Delivery failures (stderr) counted. Alerts are lines: an undelivered unit alert is re-printed each tick |
+| `alerts_night` | `~/.zoe/night-reports/<date>.json` (`scripts/night/night_window.py` `write_report`, the twin of `<date>.md`) | per night (D 04:00 local in window), real `mode=night` runs only: best outcome ok / degraded / not ok, or no report (counted); alarm = `restore_status` NOT HEALTHY, `night_lost` or `decode_alert` (what the single `ALARM` file carries; that file is deleted by the next clean window, so it only says "now"). Narrowed, and said so, when the reports start inside the window. Not the same as row 11 (night-window.log, last N) |
+| `alerts_backups` | `~/.zoe-logs/backup-verify.log` (`zoe-backup-verify.sh`; `ALERT:` lines from `zoe_offbox.alert`) | the log has NO per-line timestamps, so the count is over the WHOLE log (window "whole log"); runs end at the script's last line; kinds allowlisted; file mtime as last write, and the drill state file's (`~/.local/state/zoe-offbox/last_restore_drill.json`) last run time and pass flag |
+| `alerts_health` | `~/.zoe-logs/health.log` (`scripts/maintenance/zoe_health.py`, the repo `zoe-health.service`) | `ALERT DOWN:` / `ALERT recovered:` lines, incl. the night-window timer alarm (#2419); check names allowlisted |
+| `alerts_distress_no_contact` | zoe-data app log, `DISTRESS_NO_CONTACT` (`services/zoe-data/distress_handoff.py`) | lines only, harness excluded. Distress events themselves are household content and are not counted |
+| `perf_panel_kv_miss` | zoe-data app log, `PANEL_KV_MISS kind=first` or `kind=warm` (`zoe_flue_client._panel_kv_alarm`) | a PERFORMANCE row: misses by kind, days with a cold first reply (the days `kv_miss_alert.py` sends its one owner alert), `kv_miss_alert: alert not delivered` lines |
+
+The two app-log rows use the same coverage rules as the rows above; when the only gap is that retention starts after
+the long window start, they report the narrower window from the earliest retained line and say so.
+Paths: `--crash-log`, `--night-reports`, `--backup-log`, `--backup-state`, `--health-log`.
 
 Percentiles interpolate linearly between closest ranks.
 
@@ -199,6 +221,10 @@ rotations is under 3 minutes, so no coverage rule fired. The panel row stays
   relevance against the member's own rows; neither is a judged relevance score.
 - **Household promise follow-through**: the ledger holds 0 household rows, so the rate has no denominator;
   the scorecard prints the counts, never a rate.
+- **Backup alerts by date**: `backup-verify.log` has no per-line timestamps; dating them needs the unit's journal or a
+  timestamp in the script's output.
+- **Health alerts on this host**: the installed `zoe-health.service` may run another script and log elsewhere than the
+  repo unit's `health.log`; the row is then `unmeasured` (file missing), which is the honest answer.
 - **Offered before the log retention start**: `DAY_REVIEW_RAISE` lines older than the oldest rotated app log
   (2026-10-10 on 2026-11-12) are gone, so a window that starts earlier makes `offered`, and every short-window
   log number, `unmeasured`.
