@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import re
 import time
@@ -825,8 +826,8 @@ async def resolve_person_offers_by_name(user_id: str, name: str) -> int:
     except Exception as exc:
         logger.warning(
             "pending_suggestions.resolve_person_offers_by_name failed for "
-            "user=%s name=%r — offers stay unresolved and may re-ask: %s",
-            user_id, name, exc)
+            "user=%s name=%s — offers stay unresolved and may re-ask: %s",
+            user_id, _utag(name), type(exc).__name__)
         return 0
 
 

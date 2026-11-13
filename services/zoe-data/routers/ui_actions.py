@@ -1,5 +1,6 @@
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -813,5 +814,5 @@ async def confirm_action_form(
         except Exception as exc:
             logger.debug("form/confirm state clear failed (non-fatal): %s", exc)
 
-    logger.info("form/confirm panel_type=%s user=%s result=%s", panel_type, user_id, result_text[:120])
+    logger.info("form/confirm panel_type=%s user=%s result=%s", panel_type, user_id, _utag(result_text))
     return {"status": "ok", "panel_type": panel_type, "result": result_text}

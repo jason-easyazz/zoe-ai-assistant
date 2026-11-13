@@ -1069,7 +1069,7 @@ async def run_turn_digest(
                     if resolved is None:
                         result["skipped_low_quality"] += 1
                         _count_drop("turn_digest", "subjectless_pronoun")
-                        logger.info("run_turn_digest: held a subjectless pronoun fact (antecedent not settled): %r", fact[:50])
+                        logger.info("run_turn_digest: held a subjectless pronoun fact (antecedent not settled): %s", _log_redaction.utterance_tag(fact))
                         continue
                     logger.info("run_turn_digest: resolved a pronoun subject from the owner's recent words")
                     fact, validate_text = resolved, "\n".join(recent_texts)
@@ -1121,7 +1121,7 @@ async def run_turn_digest(
                 if verdict_ == "drop":
                     result["skipped_low_quality"] += 1
                     _count_drop("turn_digest", "other_subject")
-                    logger.info("run_turn_digest: dropped a fact about another person filed under the user: %r", fact[:50])
+                    logger.info("run_turn_digest: dropped a fact about another person filed under the user: %s", _log_redaction.utterance_tag(fact))
                     continue
                 if verdict_ == "rewrite":
                     logger.info("run_turn_digest: re-attached a fact to the person the turn is about")
@@ -1178,7 +1178,7 @@ async def run_turn_digest(
                 continue
             if not _passes_quality_gate(fact):
                 result["skipped_low_quality"] += 1
-                logger.debug("run_turn_digest: dropped non-fact: %r", fact[:60])
+                logger.debug("run_turn_digest: dropped non-fact: %s", _log_redaction.utterance_tag(fact))
                 continue
             # Anchor validation: this single-turn LLM guesses "the user" as the
             # relationship anchor when the text doesn't say ("Emily is the wife"
@@ -1189,7 +1189,7 @@ async def run_turn_digest(
                 if user_relationship_claim_unsupported(fact, validate_text):
                     result["skipped_low_quality"] += 1
                     _count_drop("turn_digest", "user_anchor_unsupported")
-                    logger.info("run_turn_digest: dropped unsupported user-anchored relationship: %r", fact[:70])
+                    logger.info("run_turn_digest: dropped unsupported user-anchored relationship: %s", _log_redaction.utterance_tag(fact))
                     continue
             except Exception:
                 pass
@@ -1200,7 +1200,7 @@ async def run_turn_digest(
                 if named_role_claim_unsupported(fact, user_message):
                     result["skipped_low_quality"] += 1
                     _count_drop("turn_digest", "role_claim_unsupported")
-                    logger.info("run_turn_digest: dropped unstated role claim: %r", fact[:70])
+                    logger.info("run_turn_digest: dropped unstated role claim: %s", _log_redaction.utterance_tag(fact))
                     continue
             except Exception:
                 pass
@@ -1217,7 +1217,7 @@ async def run_turn_digest(
             if op == "skip":
                 result["skipped_duplicates"] += 1
                 _count_drop("turn_digest", "dedup_reconcile", gate=False)
-                logger.info("turn_digest: dedup-skip kept=%s cand=%r", target_id, fact[:60])
+                logger.info("turn_digest: dedup-skip kept=%s cand=%s", target_id, _log_redaction.utterance_tag(fact))
                 continue
             if op == "update" and target_id:
                 try:
@@ -1248,7 +1248,7 @@ async def run_turn_digest(
                         result.setdefault("written_ids", []).append(str(getattr(new_ref, "id", "") or ""))
                         stored_claims.append((new_ref, item_claims[idx], fact))
                         log_row("turn_digest", user_id, new_ref, "edited")
-                        logger.info("turn_digest: superseded %s with %r", target_id, fact[:60])
+                        logger.info("turn_digest: superseded %s with %s", target_id, _log_redaction.utterance_tag(fact))
                         if fact_changes:
                             changed_refs.append(new_ref)
                         continue
@@ -1284,7 +1284,7 @@ async def run_turn_digest(
                 elif ref is not None:
                     result["new"] += 1
                     log_row("turn_digest", user_id, ref, "stored")
-                    logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
+                    logger.info("turn_digest: stored for %s: %s", user_id, _log_redaction.utterance_tag(fact))
                     if fact_changes:
                         changed_refs.append(ref)
             except MemoryServiceError as exc:
@@ -1402,7 +1402,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             # name / number / date; one that extends a stored fact supersedes it at reconcile below.
             verdict, _stored = dedup_verdict(fact, existing_text)
             if verdict == "duplicate":
-                logger.debug("memory_digest: dedup skip (duplicate of a stored fact): %s", fact[:60])
+                logger.debug("memory_digest: dedup skip (duplicate of a stored fact): %s", _log_redaction.utterance_tag(fact))
                 result["skipped_duplicates"] += 1
                 _count_drop("digest", "dedup_overlap", gate=False)
                 continue
@@ -1416,7 +1416,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 from memory_quality import user_relationship_claim_unsupported
                 if user_relationship_claim_unsupported(fact, ""):
                     _count_drop("digest", "user_anchor_no_provenance")
-                    logger.info("memory_digest: dropped user-anchored relationship (no turn provenance in nightly batch): %r", fact[:70])
+                    logger.info("memory_digest: dropped user-anchored relationship (no turn provenance in nightly batch): %s", _log_redaction.utterance_tag(fact))
                     continue
             except Exception:
                 pass
@@ -1531,7 +1531,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 op, target_id = "add", None
             if op == "skip":
                 _count_drop("digest", "dedup_reconcile", gate=False)
-                logger.info("memory_digest: dedup-skip kept=%s cand=%r", target_id, fact[:60])
+                logger.info("memory_digest: dedup-skip kept=%s cand=%s", target_id, _log_redaction.utterance_tag(fact))
                 continue
             if op == "update" and target_id:
                 try:
@@ -1548,7 +1548,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     if new_ref is not None:
                         result["superseded"] += 1
                         log_row("digest", user_id, new_ref, "edited")
-                        logger.info("memory_digest: superseded %s with %r", target_id, fact[:60])
+                        logger.info("memory_digest: superseded %s with %s", target_id, _log_redaction.utterance_tag(fact))
                         continue
                 except Exception as exc:
                     logger.warning("memory_digest: supersede failed (%s) — plain ingest", exc)
@@ -1574,7 +1574,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             elif ref is not None:
                 result["new"] += 1
                 log_row("digest", user_id, ref, "stored")
-                logger.info("memory_digest: stored for %s: %s", user_id, fact[:80])
+                logger.info("memory_digest: stored for %s: %s", user_id, _log_redaction.utterance_tag(fact))
 
         # ── Emotional memory pass ──────────────────────────────────────────
         # Runs after fact extraction — separate LLM call that looks for
@@ -2107,7 +2107,7 @@ async def _facts_call(transcript: str, timeout: float) -> list[dict]:
                     logger.warning("memory_digest: reply cut off, salvaged %d complete item(s)", len(salvaged))
                     return salvaged
             if start == -1 or end == 0:
-                logger.warning("memory_digest: LLM returned no JSON array: %s", text[:200])
+                logger.warning("memory_digest: LLM returned no JSON array: %s", _log_redaction.utterance_tag(text))
                 raise ExtractorError("NoJSONArray", text[:200])
             return json.loads(text[start:end])
     except ExtractorError:
@@ -2964,7 +2964,7 @@ async def _synthesis_pass(user_id: str) -> dict:
                 # The synthesis LLM often returns meta-commentary ("The provided
                 # facts illustrate…") instead of a stored-shaped insight — gate it.
                 if not _passes_quality_gate(synthesis_text):
-                    logger.debug("synthesis: dropped non-fact insight: %r", synthesis_text[:60])
+                    logger.debug("synthesis: dropped non-fact insight: %s", _log_redaction.utterance_tag(synthesis_text))
                     continue
 
                 ref = await svc.ingest(
@@ -3647,7 +3647,7 @@ async def run_music_taste_digest(user_id: str) -> dict:
             )
             if ref is not None:
                 result["facts_ingested"] += 1
-                logger.info("music_taste_digest: stored for %s: %s", user_id, fact_text[:80])
+                logger.info("music_taste_digest: stored for %s: %s", user_id, _log_redaction.utterance_tag(fact_text))
         except Exception as exc:
             logger.warning("music_taste_digest: ingest failed for %s: %s", user_id, exc)
 

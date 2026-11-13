@@ -11,6 +11,7 @@ Every write also recalculates health_score and increments notification_count.
 """
 
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import re
 import unicodedata
@@ -313,7 +314,7 @@ async def _resolve_person_uuid(name: str, user_id: str, db) -> Optional[str]:
     try:
         res = await _resolve_person(name, user_id, db)
     except Exception as exc:
-        logger.debug("_resolve_person_uuid failed for %r: %s", name, exc)
+        logger.debug("_resolve_person_uuid failed for %s: %s", _utag(name), type(exc).__name__)
         return None
     if res.ambiguous:
         logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - not guessed", user_id, res.tier, len(res.matches))
@@ -345,8 +346,8 @@ async def _create_partial_person(name: str, user_id: str, db) -> Optional[str]:
         return pid
     except Exception as exc:
         logger.warning(
-            "person_extractor: _create_partial_person failed for name=%r user=%s "
-            "— birthday has no person row to land on: %s", name, user_id, exc)
+            "person_extractor: _create_partial_person failed for name=%s user=%s "
+            "— birthday has no person row to land on: %s", _utag(name), user_id, type(exc).__name__)
         return None
 
 
@@ -767,7 +768,7 @@ async def _ingest_to_mempalace(
         from memory_quality import is_storable_fact
         storable, reason = is_storable_fact(text)
         if not storable:
-            logger.debug("person_extractor: dropped non-fact (%s): %r", reason, text[:60])
+            logger.debug("person_extractor: dropped non-fact (%s): %s", reason, _utag(text))
             from memory_reject_ledger import record_reject
             record_reject("person_extractor", reason)
             return None
@@ -827,7 +828,7 @@ async def _ingest_to_mempalace(
                 op, target_id = "add", None
         if op == "skip" and target_id:
             # Existing row is at least as informative — keep it, write nothing.
-            logger.info("person_extractor: dedup-skip kept=%s cand=%r", target_id, text[:60])
+            logger.info("person_extractor: dedup-skip kept=%s cand=%s", target_id, _utag(text))
             return target_id
         if op == "update" and target_id:
             try:
@@ -842,7 +843,7 @@ async def _ingest_to_mempalace(
                     origin=origin,
                 )
                 if new_ref is not None:
-                    logger.info("person_extractor: superseded %s with %r", target_id, text[:60])
+                    logger.info("person_extractor: superseded %s with %s", target_id, _utag(text))
                     # review(edit) keeps the row's old entity link. If this call
                     # holds a RESOLVED people.id but the matched row is still a
                     # same-name pending slug, promote it (Greptile P1) —
@@ -1159,7 +1160,7 @@ async def _mint_stub(db, user_id: str, name: str, ctx: str) -> Optional[str]:
         await db.commit()
         return pid
     except Exception as exc:
-        logger.warning("person_extractor: stub insert for %r user=%s failed: %s", name, user_id, exc)
+        logger.warning("person_extractor: stub insert for %s user=%s failed: %s", _utag(name), user_id, type(exc).__name__)
         return None
 
 
@@ -1277,8 +1278,8 @@ async def _write_relationship(
     pids = []
     for pid, name in ((pid_a, name_a), (pid_b, name_b)):
         if not pid:
-            logger.warning("person_extractor: _write_relationship could not resolve %r for user=%s - edge %r NOT stored",
-                           name, user_id, rel_type)
+            logger.warning("person_extractor: _write_relationship could not resolve %s for user=%s - edge %r NOT stored",
+                           _utag(name), user_id, rel_type)
             return
         pids.append(pid)
     pid_a, pid_b = pids
@@ -1325,12 +1326,12 @@ async def _write_relationship(
                     (inferred_ctx, pid, user_id),
                 )
         await db.commit()
-        logger.debug("_write_relationship: %s -[%s]- %s", name_a, rel_type, name_b)
+        logger.debug("_write_relationship: %s -[%s]- %s", _utag(name_a), rel_type, _utag(name_b))
     except Exception as exc:
         logger.warning(
             "person_extractor: _write_relationship failed for user=%s "
-            "%r -[%s]- %r — edge NOT stored: %s",
-            user_id, name_a, rel_type, name_b, exc)
+            "%s -[%s]- %s — edge NOT stored: %s",
+            user_id, _utag(name_a), rel_type, _utag(name_b), type(exc).__name__)
 
 
 async def _post_write_hooks(
@@ -1479,7 +1480,7 @@ async def apply_person_fact(
         try:
             res = await _resolve_person(name, user_id, _db)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("apply_person_fact: resolve failed for %r: %s", name, exc)
+            logger.debug("apply_person_fact: resolve failed for %s: %s", _utag(name), type(exc).__name__)
             res = None
             _resolve_failed = True      # a failed lookup is NOT "no such person": the name is never repaired on the strength of it
         # "also kais 21 not 22": a correction turn names its subject and the lazily typed possessive was read as a person called
@@ -1503,8 +1504,8 @@ async def apply_person_fact(
             pass
         if res is not None and res.ambiguous:
             # two people answer to this name: held as a pending candidate, never stored as an approved slug-keyed fact
-            logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %r held, not guessed",
-                        user_id, res.tier, len(res.matches), pattern_type, name)
+            logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %s held, not guessed",
+                        user_id, res.tier, len(res.matches), pattern_type, _utag(name))
             await _hold_fact_belief(user_id, name, fact_text, origin=origin or source, basis="ambiguous_name",
                                     extra={"ambiguous_name": name, "fact_type": pattern_type})
             return False
@@ -1555,7 +1556,7 @@ async def apply_person_fact(
             await _post_write_hooks(person_uuid, user_id, _db)
             return True
         except Exception as exc:
-            logger.debug("apply_person_fact failed for %r: %s", name, exc)
+            logger.debug("apply_person_fact failed for %s: %s", _utag(name), type(exc).__name__)
             return False
     finally:
         if should_close and _db is not None:
@@ -1684,7 +1685,7 @@ async def process_text(
                 # A pronoun / sentence-opener captured as a name ("She is Tom's
                 # sister") would silently mint a junk person node + edge. Drop it.
                 logger.debug(
-                    "person_extractor: skipped non-name relationship %r/%r", name_a, name_b
+                    "person_extractor: skipped non-name relationship %s/%s", _utag(name_a), _utag(name_b)
                 )
 
         # Names listed after a relationship noun ("has two kids, Mika and Biscuit"): kept as
@@ -1706,7 +1707,7 @@ async def process_text(
             try:
                 res_cache[name] = await _resolve_person(name, user_id, _db)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("process_text: resolve failed for %r: %s", name, exc)
+                logger.debug("process_text: resolve failed for %s: %s", _utag(name), type(exc).__name__)
                 res_cache[name] = None
             uuid_cache[name] = res_cache[name].person_id if res_cache[name] is not None else None
 
@@ -1718,7 +1719,7 @@ async def process_text(
             # at the consumption point covers every branch; the pronoun/possessive
             # shapes are handled by memory_extractor's coreference path instead.
             if not _looks_like_person_name(name):
-                logger.debug("person_extractor: skipping non-name %r (%s)", name, pattern_type)
+                logger.debug("person_extractor: skipping non-name %s (%s)", _utag(name), pattern_type)
                 _count_guard_drop("non_name")
                 continue
             person_uuid = uuid_cache.get(name)
@@ -1728,8 +1729,8 @@ async def process_text(
             # settle ("which Tom?"). Every pattern, flag on or off: inference never becomes a settled fact.
             res = res_cache.get(name)
             if res is not None and res.ambiguous:
-                logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %r held, not guessed",
-                            user_id, res.tier, len(res.matches), pattern_type, name)
+                logger.info("PERSON_AMBIGUOUS user=%s tier=%s candidates=%d - %s for %s held, not guessed",
+                            user_id, res.tier, len(res.matches), pattern_type, _utag(name))
                 await _hold_fact_belief(user_id, name, fact_text, origin=source, basis="ambiguous_name",
                                         extra={"ambiguous_name": name, "fact_type": pattern_type})
                 continue

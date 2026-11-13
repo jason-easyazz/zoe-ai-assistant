@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import re
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -647,7 +648,7 @@ async def _resolve_unique_person_uuid(name: str, user_id: str, db) -> Optional[s
             )
         rows = await cur.fetchall()
     except Exception as exc:
-        logger.debug("memory_extractor: unique person resolve failed for %r: %s", name, exc)
+        logger.debug("memory_extractor: unique person resolve failed for %s: %s", _utag(name), type(exc).__name__)
         return None
     if not rows:
         return None
@@ -1246,8 +1247,8 @@ async def extract_and_ingest(
                 if new_ref is not None:
                     saved += 1
                     logger.info(
-                        "memory_extractor: superseded %s with correction %r",
-                        target_id, c.text[:60],
+                        "memory_extractor: superseded %s with correction %s",
+                        target_id, _utag(c.text or ""),
                     )
                     continue
             except Exception as exc:

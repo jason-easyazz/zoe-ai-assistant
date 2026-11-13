@@ -316,7 +316,7 @@ def test_log_line_keeps_a_guests_words_out(caplog):
     guest, member = [r.getMessage() for r in caplog.records if "STT_SNAP" in r.getMessage()]
     assert "two on the light" not in guest and "turn on the light" not in guest
     assert f"from={s.from_hash}" in guest and "to=sky:smart_home/turn_on" in guest and "outcome=acted" in guest
-    assert "two on the light" in member
+    assert "two on the light" not in member and "turn on the light" not in member and "as_len=" in member
 
 
 def test_confirm_question_names_the_snapped_command():
