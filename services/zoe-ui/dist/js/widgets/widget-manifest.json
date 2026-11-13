@@ -248,23 +248,6 @@
       "lists": true
     },
     {
-      "id": "project",
-      "name": "Projects",
-      "description": "Multi-stage project management with automatic stage progression",
-      "category": "core",
-      "path": "/js/widgets/core/project.js",
-      "defaultSize": {
-        "w": 4,
-        "h": 5
-      },
-      "minSize": {
-        "w": 3,
-        "h": 4
-      },
-      "dashboard": true,
-      "lists": true
-    },
-    {
       "id": "music",
       "name": "Music Player",
       "description": "YouTube Music playback with voice control",
