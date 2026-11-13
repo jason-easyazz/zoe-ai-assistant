@@ -382,12 +382,6 @@ async def _intercom_reachable(user_id: str, voice: bool) -> bool:
 # preference or standing fact. ``MemoryService.ingest`` (every writer's chokepoint) files a mined fact through ``emergency_event``.
 _EVENT_WHAT = {"fall": "a fall", "heart": "chest pain", "stroke": "signs of a stroke", "breathing": "trouble breathing",
                "bleeding": "bleeding that would not stop", "worst_headache": "a sudden severe headache"}
-_EVENT_STOP = frozenset({"user", "users", "the", "and", "are", "was", "were", "has", "have", "had", "their", "they", "them", "is",
-                         "his", "her", "own", "with", "that", "this", "from", "into", "onto", "of", "on", "in", "to", "a", "an"})
-
-
-def _words(text: str) -> set:
-    return {w.rstrip("s") for w in re.findall(r"[a-z]+", _fold(text)) if len(w) > 1 and w not in _EVENT_STOP}
 
 
 # who the emergency happened to, as the MINED FACT says it: the member ("User fell ..."), the member's relative, named or not
@@ -414,28 +408,52 @@ _NOT_A_NAME = frozenset({"the", "user", "a", "an", "my", "his", "her", "their", 
                          "a", "one", "both", "all", "some", "each", "family", "household"})
 
 
-def _who(fact: str, said: str) -> Optional[str]:
-    """The person the emergency happened to, in the row's words, or None when it cannot be told confidently."""
+#: the words that SAY the emergency of each class: a fact is converted only when its own predicate carries them
+_EVENT_CUE = {
+    "fall": r"\b(?:fell|fall(?:s|en|ing)?|slipped|tripped|collapsed|(?:get|stand|getting|standing)\s+(?:back\s+)?up|floor|ground)\b",
+    "heart": r"\b(?:chest|heart)\b", "stroke": r"\b(?:stroke|slurr\w*|droop\w*|crooked|limp)\b",
+    "breathing": r"\b(?:breath\w*|throat|chok\w*)\b", "bleeding": r"\b(?:bleed\w*|blood)\b", "worst_headache": r"\bheadache\b",
+}
+
+
+def _who(fact: str, said: str) -> tuple[Optional[str], int]:
+    """``(person, end)``: who the fact is about, in the row's words, and where its subject ends; ``(None, 0)`` when unclear."""
     m = _WHO_REL_RE.match(fact or "")
     if m:
-        return f"User's {m.group(1).lower()}" + (f" {m.group(2)}" if m.group(2) else "")
-    if _WHO_USER_RE.match(fact or ""):
+        return f"User's {m.group(1).lower()}" + (f" {m.group(2)}" if m.group(2) else ""), m.end()
+    m = _WHO_USER_RE.match(fact or "")
+    if m:
         # the fact says the member; the turn must say so too ("my son has chest pain" filed as "User has chest pain" is not theirs)
-        return "User" if _FIRST_PERSON_RE.search(said) else None
+        return ("User", m.end()) if _FIRST_PERSON_RE.search(said) else (None, 0)
     m = _WHO_NAME_RE.match(fact or "")
-    if m and m.group(1).lower() not in _NOT_A_NAME:
-        return m.group(1) if re.search(rf"\b{re.escape(m.group(1))}\b", said, re.IGNORECASE) else None
-    return None
+    if m and m.group(1).lower() not in _NOT_A_NAME and re.search(rf"\b{re.escape(m.group(1))}\b", said, re.IGNORECASE):
+        return m.group(1), m.end()
+    return None, 0
+
+
+def _turn_subject(said: str, key: str) -> Optional[set]:
+    """Who the TURN says the emergency happened to: ``{"user"}`` for "i fell ...", else the words just before the emergency
+    ("my son max fell ..." -> {"son", "max"}); None when the turn does not say."""
+    m = re.search(_EVENT_CUE.get(key, r"(?!x)x"), said, re.IGNORECASE)
+    if not m:
+        return None
+    lead = re.split(r"[;,.!?]|\band\b|\bbut\b", said[:m.start()], flags=re.IGNORECASE)[-1]
+    words = re.findall(r"[a-z]+", _fold(lead))[-4:]
+    if any(w in ("i", "im", "ive", "me") for w in words):
+        return {"user"}
+    who = {w for w in words if w not in _NOT_A_NAME and w not in ("is", "has", "just", "has", "got", "had", "having", "was")}
+    return who or None
 
 
 def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency).",
     "User's son Max had chest pain on ..."), or None: the mined fact is then stored exactly as mined. It is an event only when
     ``said`` (the ONE turn it was mined from) is a call-now emergency said NOW (no past time in the turn or the fact: "chest pain in
-    2020" keeps its date), and the fact IS that emergency or restates the turn's words ("User cannot get up"). The event is about
-    whoever the fact says it happened to - never re-filed on the member (QA round 9 review); an unclear subject is not rewritten. In
-    EVERY mode: the flag gates the reply, never how memory files an emergency. A whole transcript (several lines) is never read as
-    the turn. Pure apart from the date. Never raises."""
+    2020" keeps its date), the fact's OWN predicate says that emergency (its symptom / event words: "Max is helping" from "I fell;
+    my son Max is helping" is not a fall) and the fact's subject is the person the turn says it happened to (QA round 9 review: never
+    re-filed on the member, never a helper's medical history); an unclear subject is not rewritten. In EVERY mode: the flag gates
+    the reply, never how memory files an emergency. A whole transcript (several lines) is never read as the turn. Pure apart from
+    the date. Never raises."""
     try:
         one = (said or "").strip()
         if not one or "\n" in one or _PAST_RE.search(one) or _PAST_RE.search(fact or ""):
@@ -443,12 +461,14 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
         v = detect(one)
         if v.cls != "red_call":
             return None
-        if detect(fact).cls != "red_call":
-            fw = _words(fact)
-            if not fw or len(fw & _words(one)) * 2 < len(fw):
-                return None
-        who = _who(fact, one)
-        if who is None:
+        who, end = _who(fact, one)
+        if who is None or not re.search(_EVENT_CUE.get(v.key, r"(?!x)x"), (fact or "")[end:], re.IGNORECASE):
+            return None
+        target = _turn_subject(one, v.key)
+        if target is None:
+            return None
+        mine = {"user"} if who == "User" else {w.lower() for w in re.findall(r"[A-Za-z]+", who)} - {"user"}
+        if not (mine & target) or (who == "User") != (target == {"user"}):
             return None
         import datetime as _dt
 

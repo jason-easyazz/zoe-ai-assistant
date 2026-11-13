@@ -1294,18 +1294,24 @@ def _kind_of(word: str) -> Optional[str]:
     return "animal" if w in ANIMAL_WORDS else "person" if w in PERSON_WORDS else None
 
 
+#: a name as written: a first name, or a first name and surname. Kept WHOLE: a cat called "Oscar Wilde" is not a person "Oscar
+#: Smith" (QA round 9 review), and a bare "Oscar" is not "Oscar Smith" either (a surname names a more specific subject, the way the
+#: people graph never resolves "Oscar Smith" to a stored bare "Oscar"). Two bare first names still compare equal.
+_FULL_NAME = r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+
+
 def subject_kinds(text: str) -> dict:
-    """``{name_lower: {"person"|"animal"}}`` for every capitalised name a kind word sits right beside ("grandson Kit", "pet is
-    named Kit", "cat called Pickle", "Theo is a cat", "Kit, the user's grandson"). Pure."""
+    """``{name_lower: {"person"|"animal"}}`` for every capitalised name (first name, or full name) a kind word sits right beside
+    ("grandson Kit", "pet is named Kit", "cat called Oscar Wilde", "Theo is a cat", "Kit, the user's grandson"). Pure."""
     out: dict = {}
     t = text or ""
     # anchored on the KIND VOCABULARY, never on position: an optional word before the kind slot ate the kind ("Fenn is a cat and
     # is six" captured "and", QA round 9 review), so every slot below is a kind word or nothing
-    for m in re.finditer(rf"(?i:\b({_KIND_ALT})s?){_KIND_GAP}([A-Z][a-z]+)\b", t):
+    for m in re.finditer(rf"(?i:\b({_KIND_ALT})s?){_KIND_GAP}({_FULL_NAME})\b", t):
         k = _kind_of(m.group(1))
         if k and m.group(2).lower() not in ("user", "the"):
             out.setdefault(m.group(2).lower(), set()).add(k)
-    for m in re.finditer(rf"\b([A-Z][a-z]+)(?i:(?:\s+is|\s+was|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my|our|the)\s+"
+    for m in re.finditer(rf"\b({_FULL_NAME})(?i:(?:\s+is|\s+was|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my|our|the)\s+"
                          rf"(?:[a-z]+\s+){{0,2}}?({_KIND_ALT})s?)\b", t):
         k = _kind_of(m.group(2))
         if k and m.group(1).lower() not in ("user", "the"):
@@ -1314,7 +1320,8 @@ def subject_kinds(text: str) -> dict:
 
 
 def kind_flip(candidate: str, existing: str) -> Optional[str]:
-    """The name a candidate gives a DIFFERENT kind (person vs animal) from the one ``existing`` gives it, else None. Pure."""
+    """The name a candidate gives a DIFFERENT kind (person vs animal) from the one ``existing`` gives it, else None. Names compare
+    WHOLE (``_FULL_NAME``): first name to first name, full name to full name. Pure."""
     a, b = subject_kinds(candidate), subject_kinds(existing)
     for name, kinds in a.items():
         if len(kinds) == 1 and len(b.get(name, ())) == 1 and kinds != b[name]:

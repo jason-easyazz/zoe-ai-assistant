@@ -100,6 +100,18 @@ def test_the_kind_is_read_from_the_vocabulary_not_the_position(text, want):
     assert mq.subject_kinds(text) == want
 
 
+@pytest.mark.parametrize("stored, incoming, refused", [
+    ("User has a cat called Oscar Wilde", "User's friend Oscar Smith is a teacher", False),   # two different full names
+    ("User has a cat called Oscar", "User's friend Oscar is a teacher", True),               # the same bare first name
+    ("User has a cat called Oscar Wilde", "User's friend Oscar Wilde is a teacher", True),   # the same full name
+    ("User has a cat called Oscar", "User's friend Oscar Smith is a teacher", False),        # a surname: a more specific subject
+])
+def test_names_compare_whole(stored, incoming, refused):
+    svc = _Svc(stored, hits=set())
+    assert (run(mq.reconcile_for_ingest(svc, incoming, UID))[0] == "refuse") is refused
+    assert bool(mq.kind_flip(incoming, stored)) is refused
+
+
 def test_a_kind_after_an_adjective_or_before_and_is_still_refused():
     svc = _Svc("User's son is named Fenn", hits=set())
     assert run(mq.reconcile_for_ingest(svc, "Fenn is a cat and is six years old", UID)) == ("refuse", "r0")
@@ -364,6 +376,25 @@ def test_the_event_is_about_whoever_it_happened_to(fact, said, want):
 
     out = medical_safety.emergency_event(fact, said, today=datetime.date(2026, 11, 13))
     assert out == f"{want} on 13 November 2026 (a medical emergency)."
+
+
+HELPED = "i fell and can't get up; my son max is helping"
+WITH_HIM = "my son max fell and can't get up, i'm with him"
+
+
+@pytest.mark.parametrize("fact, said, want", [
+    ("User fell and cannot get up", HELPED, "User had a fall"),
+    ("User's son Max is helping User", HELPED, None),              # a helper, not a patient
+    ("User's son Max fell and cannot get up", WITH_HIM, "User's son Max had a fall"),
+    ("Max fell and cannot get up", WITH_HIM, "Max had a fall"),
+    ("User is with Max", WITH_HIM, None),                           # the member is there, not hurt
+    ("User fell and cannot get up", WITH_HIM, None),               # the model put the son's fall on the member
+])
+def test_only_the_person_it_happened_to_gets_the_event(fact, said, want):
+    import datetime
+
+    out = medical_safety.emergency_event(fact, said, today=datetime.date(2026, 11, 13))
+    assert out == (f"{want} on 13 November 2026 (a medical emergency)." if want else None)
 
 
 @pytest.mark.parametrize("fact, said", [
