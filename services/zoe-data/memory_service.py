@@ -1502,8 +1502,13 @@ class MemoryService:
         hold: Optional[str] = None,
         claim: Any = None,
         claim_siblings: Any = (),
+        source_ref: Optional[Mapping[str, str]] = None,
     ) -> Optional[MemoryRef]:
         """Store a fact. Returns None when silently dropped.
+
+        ``source_ref`` (``memory_authority.external_source_ref``) is REQUIRED for an ``external_source`` writer (a fact a
+        connected account's provider gave) and refused for any other: a provider's fact with no pointer is never stored
+        (``MemoryServiceError``), so forget-by-source can always find it.
 
         ``claim`` is the extractor's structured CLAIM ROW for this fact (``structural_claims``; a dict or ``Claim``): stored
         on the row as ``metadata["claim"]`` (polarity / modality / tense decided once, with the owner's verbatim quote),
@@ -1709,6 +1714,10 @@ class MemoryService:
                 claimed=authority, user_id=user_id, prompt_text=prompt_text,
                 speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
             )
+            try:   # the pointer rule, before anything is written
+                _auth.check_source_ref(resolved.cls, source_ref)
+            except ValueError as exc:
+                raise MemoryServiceError(f"ingest refused: {exc}") from exc
             _auth.note_structural(resolved, lane=writer, user_id=user_id)
             clash = None
             if resolved.power < _auth.RANK[_auth.OPERATOR] and status == "approved" and _auth.active():
@@ -1763,7 +1772,9 @@ class MemoryService:
                 text=scrubbed,
                 captured_at=captured_at,
             )
-            metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or ev_turn_id))
+            for k in _auth.SOURCE_REF_KEYS:   # a pointer comes from ``source_ref`` only, never from caller metadata
+                metadata.pop(k, None)
+            metadata.update(_auth.provenance(writer, resolved, turn_ref=turn_ref or ev_turn_id, source_ref=source_ref))
             _stamp_claim(metadata, claim)
             if clash is not None:
                 metadata["contradicts_id"] = clash[0].id
@@ -2379,8 +2390,13 @@ class MemoryService:
         speaker_verified: Optional[bool] = None,
         claim: Any = None,
         claim_siblings: Any = (),
+        source_ref: Optional[Mapping[str, str]] = None,
     ) -> Optional[MemoryRef]:
         """Approve / reject / edit a pending memory.
+
+        ``source_ref`` (``edit`` only): an ``external_source`` writer's edit must RE-SUPPLY the pointer of the feed item the new
+        text came from (``MemoryServiceError`` without it); the edited row's pointer is never carried forward, because only the
+        writer knows which item said the NEW words. Refused for any other writer.
 
         ``claim`` / ``claim_siblings`` (``edit`` only): the claim row of the NEW fact, exactly as ``ingest`` takes it.
 
@@ -2511,11 +2527,16 @@ class MemoryService:
         # The authority wall (memory_authority): an inferred writer may not retire, rewrite
         # or contradict a row the USER said. ``edit`` text the user's own turn supports is
         # itself user_stated (resolved below) and passes.
+        if decision == "edit" or source_ref is not None:   # the pointer rule, before anything is written
+            try:
+                _auth.check_source_ref(_auth.writer_class(origin or actor, user_id=user_id), source_ref)
+            except ValueError as exc:
+                raise MemoryServiceError(f"review refused: {exc}") from exc
         if await self._authority_refuses(
             current, decision=decision, actor=origin or actor, user_id=user_id, edits=edits,
             anchor_text=anchor_text if anchor_text is not None else source_excerpt,
             authority=authority, session_id=session_id, prompt_text=prompt_text,
-            speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings,
+            speaker_verified=speaker_verified, claim=claim, claim_siblings=claim_siblings, source_ref=source_ref,
         ):
             self._bump("authority_block", actor)
             return None
@@ -2677,7 +2698,9 @@ class MemoryService:
                 if strip_affect and key in _AFFECT_CANDIDATE_KEYS:
                     continue
                 new_meta[key] = value
-            new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref))
+            for k in _auth.SOURCE_REF_KEYS:   # from ``source_ref`` only (caller metadata cannot plant a pointer)
+                new_meta.pop(k, None)
+            new_meta.update(_auth.provenance(writer, edit_res, turn_ref=turn_ref, source_ref=source_ref))
             _stamp_claim(new_meta, claim)
             new_id = _memory_id(user_id, scrubbed, new_meta)
             new_meta["supersedes_id"] = mem_id
@@ -3079,6 +3102,7 @@ class MemoryService:
         speaker_verified: Optional[bool] = None,
         claim: Any = None,
         claim_siblings: Any = (),
+        source_ref: Optional[Mapping[str, str]] = None,
     ) -> bool:
         """True when ``actor`` (a writer below the user classes) may not apply ``decision`` to
         ``current`` because ``current`` outranks it. Logs ``AUTHORITY_BLOCKED`` (labels
@@ -3116,7 +3140,7 @@ class MemoryService:
                                 current.text.strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
                                 kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
                                 entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
-                                basis=res0.basis)
+                                basis=res0.basis, source_ref=source_ref)
                             return True
                 return False
             kind = _auth.kind_of(current.text)
@@ -3139,7 +3163,7 @@ class MemoryService:
                                 (edits or current.text).strip(), user_id=user_id, writer=actor, contradicts=clash0[0].id,
                                 kind=clash0[1], session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
                                 entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res0.cls,
-                                basis=res0.basis)
+                                basis=res0.basis, source_ref=source_ref)
                             return True
                 return False
             if decision == "edit":
@@ -3164,7 +3188,8 @@ class MemoryService:
                 await self._write_candidate(
                     (edits or current.text).strip(), user_id=user_id, writer=actor, contradicts=clash[0].id, kind=clash[1],
                     session_id=session_id, memory_type=str(meta.get("memory_type") or "fact"),
-                    entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res.cls, basis=res.basis)
+                    entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"), cls=res.cls, basis=res.basis,
+                    source_ref=source_ref)
                 return True
             if decision == "edit":
                 new_text = (edits or current.text).strip()
@@ -3181,7 +3206,7 @@ class MemoryService:
                 contradicts=current.id, kind=kind, session_id=session_id,
                 memory_type=str(meta.get("memory_type") or "fact"),
                 entity_type=meta.get("entity_type"), entity_id=meta.get("entity_id"),
-                cls=res.cls, basis=res.basis,
+                cls=res.cls, basis=res.basis, source_ref=source_ref,
             )
         return True
 
@@ -3348,6 +3373,7 @@ class MemoryService:
         status: str = "disputed",
         cls: Optional[str] = None,
         extra: Optional[Mapping[str, Any]] = None,
+        source_ref: Optional[Mapping[str, str]] = None,
     ) -> Optional[str]:
         """Store ``text`` as a ``disputed`` (or, for a person to ask about, ``pending``)
         candidate - never approved, never recalled - linked to the row it disagrees with. Idempotent (deterministic id); a
@@ -3368,11 +3394,14 @@ class MemoryService:
             )
             cand_cls = cls or (_auth.MODEL_FROM_TURN if _auth.writer_class(writer) == _auth.MODEL_FROM_TURN
                                else _auth.MODEL_FROM_TRANSCRIPT)
-            md.update(_auth.provenance(writer, _auth.Resolved(cand_cls, basis)))
+            if _auth.writer_class(writer) == _auth.EXTERNAL_SOURCE:
+                cand_cls = _auth.EXTERNAL_SOURCE      # a provider's candidate keeps its class, so it needs (and keeps) its pointer
+            md.update(_auth.provenance(writer, _auth.Resolved(cand_cls, basis),
+                                       source_ref=source_ref if cand_cls == _auth.EXTERNAL_SOURCE else None))
             if contradicts:
                 md["contradicts_id"] = contradicts
             for k, v in (extra or {}).items():  # scalar payload (e.g. the edge change of a dispute)
-                if isinstance(v, (str, int, float, bool)):
+                if isinstance(v, (str, int, float, bool)) and k not in _auth.SOURCE_REF_KEYS:
                     md[str(k)] = v
             md["authority_blocked"] = True
             mem_id = _memory_id(user_id, scrubbed, md)

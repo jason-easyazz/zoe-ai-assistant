@@ -38,9 +38,14 @@ systemd encrypted credential, or the `zoe-vaultd` broker per credential-vault de
 
 ## Generation fence and sync log (`connected_accounts.py`)
 
-- `disconnect` bumps `account_generation`, marks the row `revoked`, deletes its secrets.
-- `start_run` records the generation; `finish_run` records counts and the cursor only if the account is still at that generation
-  (`still_current`, checked inside the same transaction), else the run is `fenced` and nothing about the account changes.
+- `disconnect` bumps `account_generation`, marks the row `revoked`, deletes its secrets. It takes the account row lock
+  (`SELECT ... FOR UPDATE` on PostgreSQL) inside its transaction.
+- `start_run` records the generation; `finish_run` records counts and the cursor only if the account is still at that generation.
+  The check and the write are one step: `still_current` locks the row for the rest of the transaction, and the account UPDATE is
+  itself conditional (`WHERE id = ? AND account_generation = ? AND status <> 'revoked'`); zero rows = the run is `fenced` and
+  nothing about the account changes. A sync never outlives a disconnect.
+- Reconnecting (`create` on an existing member + provider + subject) returns the same id. A `revoked` account starts over as a fresh
+  link does: `pending` (active after its first good sync), under a NEW generation, so a run from the old connection stays fenced.
 - `upsert_by_external_id(db, table, match=, values=, version_col=)` is the idempotent feed write (`created` / `updated` /
   `unchanged`), on the caller's connection so it sits inside the caller's transaction and fence.
 - Every member write snapshots `user_erase_gate.generation` when scheduled and writes inside `erase_gate.writing`: a write scheduled
@@ -52,7 +57,12 @@ A fact a provider gave (contact card, calendar, mail) is class `external_source`
 ([memory-authority.md](memory-authority.md)). It never supersedes a `user_stated` / `user_confirmed` row and is superseded by them; it
 becomes `user_confirmed` only when the member accepts it. Writer name `external_source`; the row must carry
 `memory_authority.external_source_ref(kind, account_id, external_id)` (kind `calendar_event` | `contact_card` | `mail_item`): a pointer,
-never words. No ingest path writes such rows yet.
+never words. The pointer is REQUIRED at every write path: `provenance()` raises without it, and `MemoryService.ingest(...,
+source_ref=)` / `review(edit, source_ref=)` refuse (`MemoryServiceError`) before writing anything; a blocked provider edit's disputed
+candidate keeps the class and the pointer; caller metadata cannot plant one. An edit by a provider must RE-SUPPLY the pointer of the
+item the new words came from (the edited row's pointer is never carried forward: only the writer knows which item said the new words);
+a member's own edit of a provider row is theirs and carries none, while the retired provider row keeps its pointer. No feed writes such
+rows yet.
 
 ## Forget reach
 

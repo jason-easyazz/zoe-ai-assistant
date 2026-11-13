@@ -68,7 +68,9 @@ def subject_hash(provider: str, subject: str) -> str:
 async def create(user_id: str, provider: str, kind: str, subject: str, *, label: str = "", scopes: Iterable[str] = (),
                  scheduled_at: Optional[int] = None) -> Optional[str]:
     """Record a connection; the account id, or None when the member is being (or was since scheduled) erased. A reconnect of the same
-    (member, provider, subject) returns the existing id. Raises ``ValueError`` on bad input and on a database error."""
+    (member, provider, subject) returns the existing id; if that account was ``revoked`` it starts over as a fresh link does
+    (``pending``, active after its first good sync) under a NEW generation, so a run from the old connection stays fenced.
+    Raises ``ValueError`` on bad input and on a database error."""
     if kind not in KINDS or not _PROVIDER.match(provider or "") or not (user_id and subject):
         raise ValueError("connected_accounts.create: bad provider / kind / member / subject")
     gen = erase_gate.generation(user_id) if scheduled_at is None else scheduled_at
@@ -82,6 +84,12 @@ async def create(user_id: str, provider: str, kind: str, subject: str, *, label:
                                    (user_id, provider, shash))
             row = await cur.fetchone()
             if row is not None:
+                async with db.transaction():
+                    await db.execute(f"SELECT id FROM connected_accounts WHERE id = ?{_for_update(db)}", (row[0],))
+                    await db.execute("UPDATE connected_accounts SET status = 'pending', account_generation = account_generation + 1, "
+                                     "kind = ?, label = ?, scopes = ?, last_error_class = NULL, updated_at = ? "
+                                     "WHERE id = ? AND status = 'revoked'",
+                                     (kind, label[:120], json.dumps(sorted(set(scopes))), now, row[0]))
                 return str(row[0])
             aid = f"acct_{uuid.uuid4().hex}"
             await db.execute("INSERT INTO connected_accounts (id, user_id, provider, kind, subject_hash, label, scopes, status, "
@@ -92,9 +100,16 @@ async def create(user_id: str, provider: str, kind: str, subject: str, *, label:
     return aid
 
 
+def _for_update(db) -> str:
+    """`` FOR UPDATE`` on PostgreSQL (the asyncpg compat connection): the account row stays locked to the end of the caller's
+    transaction, so a disconnect cannot land between a fence check and the write it guards. SQLite (lab / tests) has one writer."""
+    return " FOR UPDATE" if type(db).__name__ == "AsyncpgCompat" else ""
+
+
 async def still_current(db, account_id: str, generation: int) -> bool:
-    """Is the account still connected at ``generation``? A feed writer asks this INSIDE the transaction that writes its batch."""
-    cur = await db.execute("SELECT account_generation, status FROM connected_accounts WHERE id = ?", (account_id,))
+    """Is the account still connected at ``generation``? A feed writer asks this INSIDE the transaction that writes its batch; on
+    PostgreSQL the row is then locked (``FOR UPDATE``) until that transaction ends, and ``disconnect`` waits for it."""
+    cur = await db.execute(f"SELECT account_generation, status FROM connected_accounts WHERE id = ?{_for_update(db)}", (account_id,))
     row = await cur.fetchone()
     return row is not None and int(row[0]) == int(generation) and str(row[1]) != "revoked"
 
@@ -103,11 +118,12 @@ async def disconnect(account_id: str) -> Optional[int]:
     """Fence and revoke: bump the generation (in-flight batches stop counting), mark ``revoked``, delete the secrets. The new
     generation, or None when there is no such account. The member's synced rows are removed by the feed's own disconnect step (Stage 1)."""
     async with _db() as db:
-        await db.execute("UPDATE connected_accounts SET account_generation = account_generation + 1, status = 'revoked', "
-                         "updated_at = ? WHERE id = ?", (_now(), account_id))
-        await db.commit()
-        cur = await db.execute("SELECT account_generation FROM connected_accounts WHERE id = ?", (account_id,))
-        row = await cur.fetchone()
+        async with db.transaction():   # the same row lock as ``still_current``: never between a run's fence check and its write
+            await db.execute(f"SELECT id FROM connected_accounts WHERE id = ?{_for_update(db)}", (account_id,))
+            await db.execute("UPDATE connected_accounts SET account_generation = account_generation + 1, status = 'revoked', "
+                             "updated_at = ? WHERE id = ?", (_now(), account_id))
+            cur = await db.execute("SELECT account_generation FROM connected_accounts WHERE id = ?", (account_id,))
+            row = await cur.fetchone()
     if row is None:
         return None
     await account_secrets.remove(account_id)
@@ -157,15 +173,22 @@ async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, in
             return False
         async with _db() as db:
             async with db.transaction():
-                if not await still_current(db, run.account_id, run.generation):
+                # the check and the write are ONE step: the row is locked by the check (PostgreSQL), and the write itself only lands
+                # on the generation the run started under - zero rows means a disconnect got there first, and the run is fenced
+                moved = 0
+                if await still_current(db, run.account_id, run.generation):
+                    cur = await db.execute(
+                        "UPDATE connected_accounts SET status = ?, last_sync_at = ?, last_error_class = ?, updated_at = ? "
+                        "WHERE id = ? AND account_generation = ? AND status <> 'revoked'",
+                        ("error" if outcome == "error" else "active", now, error_class, now, run.account_id, run.generation))
+                    moved = int(getattr(cur, "rowcount", 0) or 0)
+                if not moved:
                     await db.execute("UPDATE sync_runs SET outcome = 'fenced', finished_at = ? WHERE id = ?", (now, run.run_id))
                     return False
                 await db.execute("UPDATE sync_runs SET outcome = ?, finished_at = ?, error_class = ?, n_seen = ?, n_created = ?, "
                                  "n_updated = ?, n_deleted = ?, cursor_after = ?, backoff_until = ? WHERE id = ?",
                                  (outcome, now, error_class, c["seen"], c["created"], c["updated"], c["deleted"], cursor_after,
                                   backoff_until, run.run_id))
-                await db.execute("UPDATE connected_accounts SET status = ?, last_sync_at = ?, last_error_class = ?, updated_at = ? "
-                                 "WHERE id = ?", ("error" if outcome == "error" else "active", now, error_class, now, run.account_id))
     return True
 
 

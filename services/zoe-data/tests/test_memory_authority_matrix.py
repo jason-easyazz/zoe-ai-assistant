@@ -38,6 +38,7 @@ OLD = "User's dog is named Teddy."
 NEW = "User's dog is named Rex."
 SAID = "my dog is called Rex"          # the user's own words supporting NEW
 CLASSES = list(ma.CLASSES)
+REF = ma.external_source_ref("contact_card", "acct_test", "people/c1")   # the pointer every external_source row must carry
 
 
 @pytest.fixture
@@ -64,7 +65,7 @@ def seed(svc, cls, text=OLD, tag="a"):
         user_id=UID, source="seed", session_id=None, user_turn_id=None, memory_type="fact",
         confidence=0.9, status="approved", tags=[], entity_type=None, entity_id=None,
         expires_at=None, text=text)
-    md.update(ma.provenance("seed", ma.Resolved(cls, "seed")))
+    md.update(ma.provenance("seed", ma.Resolved(cls, "seed"), source_ref=REF if cls == ma.EXTERNAL_SOURCE else None))
     mem_id = f"seed-{tag}-{cls}"
     svc._col.upsert(ids=[mem_id], documents=[text], metadatas=[md])
     return mem_id
@@ -132,7 +133,7 @@ EDIT_PATHS = [
     ("operator tool", "identity_audit", {}, ma.OPERATOR),
     ("P7 curator (memory_curation)", "curator", {}, ma.CURATED),
     ("unknown writer (fail-closed)", "some_new_writer", {}, ma.MODEL_FROM_TRANSCRIPT),
-    ("feed writer (a provider said so)", "external_source", {}, ma.EXTERNAL_SOURCE),
+    ("feed writer (a provider said so)", "external_source", {"source_ref": REF}, ma.EXTERNAL_SOURCE),
 ]
 
 
@@ -186,7 +187,8 @@ def test_ingest_matrix(svc, monkeypatch, actor, wcls, target):
     row of every class, for a CONTRADICTING fact: ingest never retires anything, and a write
     below the row's rank is held back as a disputed candidate."""
     old = seed(svc, target)
-    ref = asyncio.run(svc.ingest(NEW, user_id=UID, source=actor, status="approved"))
+    kw = {"source_ref": REF} if wcls == ma.EXTERNAL_SOURCE else {}
+    ref = asyncio.run(svc.ingest(NEW, user_id=UID, source=actor, status="approved", **kw))
     assert ref.metadata["authority_class"] == wcls
     want_ok = allowed(wcls, target)
     assert (ref.metadata["status"] == "approved") == want_ok, (actor, target)
@@ -196,7 +198,7 @@ def test_ingest_matrix(svc, monkeypatch, actor, wcls, target):
     # negative control: off stores it approved beside the row it contradicts
     monkeypatch.setenv("ZOE_MEMORY_AUTHORITY", "off")
     other = asyncio.run(svc.ingest("User's dog is named Max.", user_id=UID, source=actor,
-                                   status="approved", user_turn_id="ctl"))
+                                   status="approved", user_turn_id="ctl", **kw))
     assert other.metadata["status"] == "approved"
 
 

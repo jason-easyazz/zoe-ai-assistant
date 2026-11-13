@@ -273,6 +273,46 @@ def test_external_source_is_below_the_person_and_carries_a_pointer():
         ma.external_source_ref("contact_card", "acct_1", "")
     with pytest.raises(ValueError):                                             # a pointer only on a provider's row
         ma.provenance("voice_fact", ma.resolve_write("voice_fact", "my dentist is Dr Example"), source_ref=ref)
+    with pytest.raises(ValueError):                                             # and a provider's row never goes without one
+        ma.provenance("external_source", res)
+    assert ma.resolve_write("external_source", "x", claimed=ma.INFERRED).cls == ma.EXTERNAL_SOURCE   # no pointer-less downgrade
+
+
+# review round 2, item 2: every MemoryService write path refuses a pointer-less provider fact and stores the full pointer
+from memory_service import MemoryServiceError  # noqa: E402
+from test_memory_authority_matrix import REF, UID, seed, status, svc  # noqa: E402,F401 - the matrix's in-memory store fixture
+
+_POINTER = {"source_ref_kind": "contact_card", "source_ref_account": "acct_test", "source_ref_external_id": "people/c1"}
+
+
+def _pointer(md):
+    return {k: md.get(k) for k in ma.SOURCE_REF_KEYS}
+
+
+def test_every_write_path_refuses_a_provider_fact_without_its_pointer(svc):
+    with pytest.raises(MemoryServiceError):
+        run(svc.ingest("User's dentist is Dr Example.", user_id=UID, source="external_source"))
+    with pytest.raises(MemoryServiceError):                                      # origin names the real writer: same rule
+        run(svc.ingest("User's dentist is Dr Example.", user_id=UID, source="contacts", origin="external_source"))
+    old = seed(svc, ma.EXTERNAL_SOURCE, text="User's dentist is Dr Example.")
+    with pytest.raises(MemoryServiceError):                                      # an edit must RE-SUPPLY the pointer
+        run(svc.review(old, decision="edit", edits="User's dentist is Dr Sample.", actor="external_source"))
+    with pytest.raises(MemoryServiceError):                                      # and nobody else may plant one
+        run(svc.review(old, decision="edit", edits="User's dentist is Dr Sample.", actor="voice_fact", source_ref=REF))
+    assert status(svc, old) == "approved" and len(svc._col.rows) == 1          # nothing was written by any refusal
+
+
+def test_a_provider_fact_stores_the_whole_pointer_and_an_edit_carries_its_own(svc):
+    ref = run(svc.ingest("User's dentist is Dr Example.", user_id=UID, source="external_source", source_ref=REF))
+    assert ref.metadata["authority_class"] == ma.EXTERNAL_SOURCE and _pointer(ref.metadata) == _POINTER
+    new_ref = dict(REF, source_ref_external_id="people/c2")
+    got = run(svc.review(ref.id, decision="edit", edits="User's dentist is Dr Sample.", actor="external_source", source_ref=new_ref))
+    assert _pointer(got.metadata)["source_ref_external_id"] == "people/c2"       # the NEW item's pointer, not the old row's
+    mine = run(svc.review(got.id, decision="edit", edits="User's dentist is Dr Other.", actor="voice_fact"))
+    assert mine.metadata["authority_class"] == ma.USER_STATED and _pointer(mine.metadata) == dict.fromkeys(ma.SOURCE_REF_KEYS)
+    assert _pointer(svc._col.rows[got.id][1])["source_ref_external_id"] == "people/c2"   # the retired provider row keeps it
+    planted = run(svc.ingest("User likes tea.", user_id=UID, source="voice_fact", metadata=dict(_POINTER)))
+    assert _pointer(planted.metadata) == dict.fromkeys(ma.SOURCE_REF_KEYS)      # caller metadata cannot plant a pointer
 
 
 # -- 6. forget reach + the erase-gate race --------------------------------------------------------------------------------------------
@@ -346,3 +386,49 @@ def test_forget_never_deletes_another_members_event_in_my_calendar(db):
     assert db.rows("SELECT user_id, calendar_id FROM events WHERE id = 'ev-ben-in-ann'") == [("ben", None)]
     assert db.rows("SELECT id FROM event_attendees") == [("att-ben",)] and db.rows("SELECT id FROM event_alarms") == [("al-ben",)]
     assert db.rows("SELECT id FROM calendars") == [] and {r[0] for r in db.rows("SELECT id FROM events")} == {"ev-local-ann", "ev-ben-in-ann"}
+
+
+# -- review round 2, item 1: a sync never outlives a disconnect ---------------------------------------------------------------------
+
+def test_a_disconnect_between_the_fence_check_and_the_write_fences_the_run(db, monkeypatch):
+    """Drive the interleaving: ``finish_run`` reads "still current", THEN the disconnect lands, THEN finish_run writes. The account
+    stays revoked, nothing about it advances, and the run is recorded fenced. Negative control: drop the generation / status
+    condition from finish_run's account UPDATE and the account comes back ``active``."""
+    monkeypatch.setattr(ca.account_secrets, "remove", lambda _aid: asyncio.sleep(0, 0))
+    a = run(ca.create("ann", "google", "calendar", "s1"))
+    real = ca.still_current
+
+    async def check_then_disconnect(conn, account_id, generation):
+        ok = await real(conn, account_id, generation)
+        assert ok                                                               # the read said "current" ...
+        assert await ca.disconnect(account_id) == 2                            # ... and the disconnect lands right after it
+        return ok
+
+    async def go():
+        r = await ca.start_run(a, "ann", cursor_before="c0")
+        monkeypatch.setattr(ca, "still_current", check_then_disconnect)
+        return r, await ca.finish_run(r, outcome="ok", counts={"created": 4}, cursor_after="c1")
+    r, done = run(go())
+    assert done is False
+    assert db.rows("SELECT status, account_generation, last_sync_at FROM connected_accounts") == [("revoked", 2, None)]
+    assert db.rows("SELECT outcome, n_created, cursor_after FROM sync_runs WHERE id = ?", (r.run_id,)) == [("fenced", 0, None)]
+
+
+# -- review round 2, item 3: reconnecting a revoked account --------------------------------------------------------------------------
+
+def test_reconnecting_a_revoked_account_starts_it_over_under_a_new_generation(db, monkeypatch):
+    """A fresh link starts ``pending`` (active after its first good sync); a reconnect of a revoked account does the same under a NEW
+    generation, so a run from the old connection stays fenced and a new run works. Negative control: without the reconnect update
+    the account stays revoked and no new run can start."""
+    monkeypatch.setattr(ca.account_secrets, "remove", lambda _aid: asyncio.sleep(0, 0))
+    a = run(ca.create("ann", "google", "calendar", "s1", label="Work"))
+    old = run(ca.start_run(a, "ann"))
+    assert run(ca.disconnect(a)) == 2
+    assert run(ca.create("ann", "google", "calendar", "S1 ", label="Work again")) == a
+    assert db.rows("SELECT status, account_generation, label FROM connected_accounts") == [("pending", 3, "Work again")]
+    assert run(ca.finish_run(old, outcome="ok", cursor_after="stale")) is False
+    new = run(ca.start_run(a, "ann"))
+    assert new is not None and new.generation == 3 and run(ca.finish_run(new, outcome="ok"))
+    assert db.rows("SELECT status FROM connected_accounts") == [("active",)]
+    assert run(ca.create("ann", "google", "calendar", "s1")) == a              # reconnecting a LIVE account changes nothing
+    assert db.rows("SELECT status, account_generation FROM connected_accounts") == [("active", 3)]

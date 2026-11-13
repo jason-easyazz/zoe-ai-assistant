@@ -244,6 +244,7 @@ EXTERNAL_WRITERS = frozenset({"external_source"})
 EXTERNAL_BASIS = "provider_said"
 #: what an ``external_source`` pointer may name
 SOURCE_REF_KINDS = ("calendar_event", "contact_card", "mail_item")
+SOURCE_REF_KEYS = ("source_ref_kind", "source_ref_account", "source_ref_external_id")
 #: Model writers that READ one user turn: user_stated only when that turn supports the fact.
 MODEL_FROM_TURN_WRITERS = frozenset({
     "turn_digest", "voice_turn_digest", "person_extractor_llm", "brain_tool", "mcp",
@@ -373,6 +374,10 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
     single turn to quote). No claim row: exactly the lexical decision, in every mode."""
     w = (writer or "").strip()
     base = writer_class(w, user_id=user_id)
+    if base == EXTERNAL_SOURCE:
+        # before ``claimed``: a provider's row is ALWAYS external_source, so it always needs its pointer (never a pointer-less
+        # model_from_transcript row that forget-by-source could not find)
+        return Resolved(EXTERNAL_SOURCE, EXTERNAL_BASIS)
     if claimed == INFERRED:
         return Resolved(MODEL_FROM_TRANSCRIPT, "claimed_inferred")
     if RANK[base] >= USER_RANK:
@@ -394,8 +399,6 @@ def resolve_write(writer: str, text: str, *, anchor_text: Optional[str] = None,
         if w in MODEL_FROM_TURN_WRITERS:
             return _arbitrate(lexical, w, base, text, anchor_text, speaker_verified, claim, claim_siblings)
         return lexical
-    if base == EXTERNAL_SOURCE:
-        return Resolved(EXTERNAL_SOURCE, EXTERNAL_BASIS)
     return Resolved(MODEL_FROM_TRANSCRIPT, "automatic_writer")
 
 
@@ -547,12 +550,23 @@ def external_source_ref(kind: str, account_id: str, external_id: str) -> dict[st
     return {"source_ref_kind": k, "source_ref_account": a[:128], "source_ref_external_id": e[:256]}
 
 
+def check_source_ref(cls: str, source_ref: Optional[Mapping[str, str]]) -> None:
+    """The pointer rule, for the write choke points (``MemoryService.ingest`` / ``review(edit)`` / candidates) to apply BEFORE
+    they write anything: an ``external_source`` row needs a complete pointer, any other row must not carry one."""
+    if cls == EXTERNAL_SOURCE:
+        if not isinstance(source_ref, Mapping):
+            raise ValueError("an external_source write needs a source_ref (external_source_ref(kind, account_id, external_id))")
+        external_source_ref(*(str(source_ref.get(k) or "") for k in SOURCE_REF_KEYS))
+    elif source_ref is not None:
+        raise ValueError("a source_ref belongs on an external_source row only")
+
+
 def provenance(writer: str, res: Resolved, *, turn_ref: Optional[str] = None,
                model: Optional[str] = None, source_ref: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
     """The flat metadata a row carries about WHO wrote it (chroma-safe scalars). An ``external_source`` row also carries its
-    ``source_ref`` pointer (``external_source_ref``); passing one for any other class is refused."""
-    if source_ref is not None and res.cls != EXTERNAL_SOURCE:
-        raise ValueError("provenance: a source_ref belongs on an external_source row only")
+    ``source_ref`` pointer (``external_source_ref``) - REQUIRED: without it the row could never be found by its source, so
+    ``ValueError``. Passing one for any other class is refused too."""
+    check_source_ref(res.cls, source_ref)
     out: dict[str, Any] = {
         "authority": res.authority,
         "authority_class": res.cls,
