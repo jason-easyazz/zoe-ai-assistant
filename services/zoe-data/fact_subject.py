@@ -36,8 +36,18 @@ def _tokens(text: str) -> set:
     return {_stem(t) for t in re.findall(r"[a-z0-9']+", (text or "").lower()) if t not in _STOP and len(t) > 1}
 
 
+_NUM_WORD = (r"(?:\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
+             r"seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)")
+# "13 and a half thousand", "two hundred and fifty", "one and a quarter": the "and" INSIDE a number is not a clause break. Split there,
+# "ive got 13 and a half thousand saved for the caravan now" lost its "I" to the first half, so the amount was filed as someone else's
+# and dropped (QA round 8, 2026-11-12) - while the quote retirement retired the old amount, leaving no amount at all.
+_NUMBER_AND_RE = re.compile(rf"\b(?P<a>{_NUM_WORD})\s+and\s+(?=a\s+(?:half|quarter|third)\b)"
+                            rf"|\b(?P<b>hundred|thousand|million)\s+and\s+(?={_NUM_WORD}\b)", re.IGNORECASE)
+
+
 def _clauses(message: str) -> list:
-    return [c.strip() for c in _CLAUSE_SPLIT_RE.split(message or "") if c and c.strip()]
+    text = _NUMBER_AND_RE.sub(lambda m: (m.group("a") or m.group("b")) + " & ", message or "")
+    return [c.strip() for c in _CLAUSE_SPLIT_RE.split(text) if c and c.strip()]
 
 
 def _support(fact_rest: str, clauses: list) -> Optional[str]:

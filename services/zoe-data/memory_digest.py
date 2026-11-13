@@ -826,7 +826,11 @@ async def _quote_retire_pass(result: dict, user_id: str, user_message: str, sour
                     return result
             except Exception:  # noqa: BLE001 - an unreadable pref must not stop the walls from judging
                 pass
-            decision = await memory_retire.distill_turn(user_id, user_message, speaker_verified=speaker_verified, lane=lane)
+            # the rows THIS turn just wrote are never candidates: "I've got 13.5 thousand saved now" must retire the old amount, not the
+            # new one the digest stored a moment ago (QA round 8 - the judge is shown the sentence's top rows, and the new row is the
+            # closest to it)
+            decision = await memory_retire.distill_turn(user_id, user_message, speaker_verified=speaker_verified, lane=lane,
+                                                        exclude_ids=tuple(i for i in result.get("written_ids") or () if i))
             if decision.action not in ("off", "nothing_to_offer"):
                 result["quote_retire"] = decision.action
         except Exception as exc:  # noqa: BLE001 - the digest result is already in hand
@@ -1241,6 +1245,7 @@ async def run_turn_digest(
                     )
                     if new_ref is not None:
                         result["new"] += 1
+                        result.setdefault("written_ids", []).append(str(getattr(new_ref, "id", "") or ""))
                         stored_claims.append((new_ref, item_claims[idx], fact))
                         log_row("turn_digest", user_id, new_ref, "edited")
                         logger.info("turn_digest: superseded %s with %r", target_id, fact[:60])
@@ -1270,6 +1275,7 @@ async def run_turn_digest(
                 )
                 if ref is not None:
                     stored_claims.append((ref, item_claims[idx], fact))
+                    result.setdefault("written_ids", []).append(str(getattr(ref, "id", "") or ""))
                 if ref is not None and memory_authority.is_candidate(ref):
                     # held back (it disputes something the user said): ask ONE question
                     result["skipped_low_quality"] += 1
