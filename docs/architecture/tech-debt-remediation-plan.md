@@ -1,7 +1,7 @@
 ---
 type: executable-plan
 audience: all agents + Jason
-status: planned
+status: partly delivered (Waves 1-2 merged; Wave 4 largely open as of 2026-11-13)
 source: senior-dev architecture review, 2026-07-04 (read-only)
 verification: every claim below re-checked against the LIVE checkout (/home/zoe/assistant
   @ flue-recall-reliable) + live host, 2026-07-04, via 3 read-only sub-agents. Findings
@@ -25,7 +25,7 @@ under `flock /tmp/zoe-voice-harness.lock`; new test files must be reachable by C
 
 **Status key:** 📝 planned · 🔨 active · ✅ done · 🗄️ parked
 
-## Delivery status (2026-07-04) — PRs open, verified, NOT merged (await review)
+## Delivery status (Waves 1-2, merged 2026-07)
 | Item | PR | State |
 |---|---|---|
 | Graphify tooling retirement (+ host cleanup) | [#1007](https://github.com/jason-easyazz/zoe-ai-assistant/pull/1007) | ✅ delivered |
