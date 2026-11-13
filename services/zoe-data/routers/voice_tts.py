@@ -3005,7 +3005,38 @@ def _open_moonshine_stream():
     return st
 
 
-async def _run_moonshine(wav_path: str) -> str:
+_STT_SRCS = ("panel", "pendant", "probe", "harness", "other")
+
+
+def _stt_src_tag(src: str = "other", trigger: str = "") -> str:
+    """``src=<caller> [trigger=wake|followup]`` for the STT_EMPTY marker, built in the CALLER's task and handed down as an
+    argument (the executor thread that logs the marker has none of the request's context variables). A turn the traffic class
+    marks as an instrument is never counted as the panel's, whatever lane it came through. Fields only, never text."""
+    src = src if src in _STT_SRCS else "other"
+    try:
+        cls = traffic_class.current()
+    except Exception:  # noqa: BLE001
+        cls = ""
+    if src != "pendant" and cls == traffic_class.PROBE:
+        src = "probe"
+    elif src != "pendant" and cls in (traffic_class.HARNESS, traffic_class.CI):
+        src = "harness"
+    tag = f"src={src}"
+    if src == "panel" and trigger in ("wake", "followup"):
+        tag += f" trigger={trigger}"
+    return tag
+
+
+def _turn_stt_src(payload: Optional[dict], caller: Optional[dict]) -> dict:
+    """``src`` / ``trigger`` kwargs for a voice-turn lane: the panel's daemon (device token) or another caller. The daemon sends
+    ``window`` (followup | conversation) only for a no-wake-word window, so its absence is a wake-word turn."""
+    if (caller or {}).get("source") != "device":
+        return {"src": "other"}
+    window = (payload or {}).get("window")
+    return {"src": "panel", "trigger": "followup" if window in ("followup", "conversation") else "wake"}
+
+
+async def _run_moonshine(wav_path: str, src_tag: str = "src=other") -> str:
     from moonshine_voice.utils import load_wav_file
 
     # The turn's holder for the transcript BEFORE the wake word is stripped (see _stt_raw_var): the executor thread writes into the dict
@@ -3024,7 +3055,7 @@ async def _run_moonshine(wav_path: str) -> str:
             # call. Treat the clip as unusable -> empty transcript (the caller's
             # empty_transcript handling re-prompts).
             logger.warning("Moonshine: unusable sample rate %r for %s — skipping clip", sr, wav_path)
-            logger.info("STT_EMPTY reason=bad_sample_rate")
+            logger.info("STT_EMPTY %s reason=bad_sample_rate", src_tag)
             return ""
         with _stt_stream.infer_guard(_moonshine_infer_lock):
             if env_bool("ZOE_MOONSHINE_VAD_RESET", default=True):
@@ -3047,7 +3078,7 @@ async def _run_moonshine(wav_path: str) -> str:
         flat = getattr(out, "text", None)
         if isinstance(flat, str) and flat.strip():
             return _strip_wake_word([flat])
-        logger.info("STT_EMPTY %s", _moonshine_empty_reason(lines, audio, sr))
+        logger.info("STT_EMPTY %s %s", src_tag, _moonshine_empty_reason(lines, audio, sr))
         return ""
 
     return await asyncio.get_running_loop().run_in_executor(None, _work)
@@ -3096,7 +3127,10 @@ async def _maybe_capture_stt(wav_path: str, primary: str) -> None:
     logger.info("STT_CAPTURE file=%s moonshine %s", dst, _utt_tag(primary or ""))
 
 
-async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None) -> str:
+async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str | None = None, *, src: str = "other",
+                            trigger: str = "") -> str:
+    """``src`` (panel | pendant | probe | harness | other) and ``trigger`` (wake | followup, panel turns) only label the
+    STT_EMPTY marker; they never change what is transcribed or returned."""
     _stt_raw_var.set({})  # a fresh holder per transcription: never a previous turn's raw text
     import voice_clips as _vc
     _vc.begin()           # ... and never a previous turn's saved clip
@@ -3108,7 +3142,7 @@ async def _transcribe_audio(wav_path: str, capture: bool = True, pre_text: str |
         # The stream result arrives wake-stripped; carry the unstripped transcript so "Zoe, ..." still counts as naming Zoe.
         _stt_raw_var.get()["raw"] = _stt_stream_raw_var.get() or pre_text
     else:
-        text = await _transcribe_audio_impl(wav_path)
+        text = await _transcribe_audio_impl(wav_path, src_tag=_stt_src_tag(src, trigger))
     # capture=False for instrument callers (replay- panel ids): the replay gate
     # POSTs EXISTING corpus WAVs through here, and recapturing them fed the
     # corpus duplicates of its own newest samples — 62 byte-identical copies in
@@ -3133,7 +3167,7 @@ _stt_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_raw", default
 _stt_stream_raw_var: contextvars.ContextVar = contextvars.ContextVar("stt_stream_raw", default="")
 
 
-async def _transcribe_audio_impl(wav_path: str) -> str:
+async def _transcribe_audio_impl(wav_path: str, src_tag: str = "src=other") -> str:
     """Transcribe with Moonshine v2 — the ONLY live STT engine.
 
     Moonshine is the rock: there is no whisper fallback in the live path (it
@@ -3143,7 +3177,7 @@ async def _transcribe_audio_impl(wav_path: str) -> str:
     can tell a real failure apart from silence instead of masking it as success.
     """
     try:
-        text = await _run_moonshine(wav_path)
+        text = await _run_moonshine(wav_path, src_tag=src_tag)
     except Exception as exc:
         logger.warning("Moonshine STT failed (backend error, surfacing): %s", exc)
         raise
@@ -3210,7 +3244,9 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         # authenticates with the device token, so it satisfies both.
         is_instrument = _suppress_ui_broadcast(panel_id) and caller.get("source") == "device"
         try:
-            text = await _transcribe_audio(wav_path, capture=not is_instrument)
+            text = await _transcribe_audio(wav_path, capture=not is_instrument,
+                                           src="harness" if is_instrument else
+                                           ("panel" if caller.get("source") == "device" else "other"))
         finally:
             try:
                 os.unlink(wav_path)
@@ -6133,7 +6169,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth),
             wav_path = tmp.name
         duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         try:
-            transcript = await _transcribe_audio(wav_path)
+            transcript = await _transcribe_audio(wav_path, **_turn_stt_src(payload, caller))
         finally:
             try:
                 os.unlink(wav_path)
@@ -6323,8 +6359,9 @@ async def voice_turn_stream(payload: dict, caller: dict = Depends(_require_voice
             wav_path = tmp.name
         duration_s = _wav_duration_seconds(wav_path) if suffix == ".wav" else None
         try:
-            # kwarg only when a stream result exists: the flag-off call is byte-identical to before
-            transcript = await _transcribe_audio(wav_path, **({"pre_text": _pre_text} if _pre_text else {}))
+            # pre_text only when a stream result exists (flag off = batch STT as before); src/trigger only label STT_EMPTY
+            transcript = await _transcribe_audio(wav_path, **({"pre_text": _pre_text} if _pre_text else {}),
+                                                 **_turn_stt_src(payload, caller))
         finally:
             try:
                 os.unlink(wav_path)
@@ -6944,7 +6981,7 @@ async def voice_turn_stream_speculation(payload: dict, caller: dict = Depends(_r
                 tmp.write(raw)
                 wav_path = tmp.name
             try:
-                final_transcript = (await _transcribe_audio(wav_path) or "").strip()
+                final_transcript = (await _transcribe_audio(wav_path, src=_turn_stt_src(payload, caller)["src"]) or "").strip()
             finally:
                 try:
                     os.unlink(wav_path)

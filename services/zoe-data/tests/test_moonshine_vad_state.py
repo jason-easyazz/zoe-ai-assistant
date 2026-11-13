@@ -229,7 +229,7 @@ def test_blank_lines_logs_blank_lines(monkeypatch, tmp_path, caplog):
 def test_bad_sample_rate_logs_bad_sample_rate(monkeypatch, tmp_path, caplog):
     caplog.set_level("INFO")
     assert _run_with(monkeypatch, tmp_path, ["x"], rate=0) == ""
-    assert _empty_logs(caplog) == ["STT_EMPTY reason=bad_sample_rate"]
+    assert _empty_logs(caplog) == ["STT_EMPTY src=other reason=bad_sample_rate"]
 
 
 def test_non_empty_result_does_not_log_stt_empty(monkeypatch, tmp_path, caplog):

@@ -23,7 +23,7 @@ def _app(monkeypatch, brain, filler_after="0.15"):
     monkeypatch.setenv("ZOE_VOICE_FILLER_ENABLED", "1")
     monkeypatch.setenv("ZOE_VOICE_FILLER_AFTER_S", filler_after)
 
-    async def _fake_stt(_path):
+    async def _fake_stt(_path, **_kw):
         return "tell me something interesting"
     monkeypatch.setattr(vt, "_transcribe_audio", _fake_stt)
 

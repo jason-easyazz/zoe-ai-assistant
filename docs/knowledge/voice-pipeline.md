@@ -26,6 +26,11 @@ How a spoken turn flows through Zoe, and how we measure it without regressing. T
    and said-vs-did passed, but STT ran +43 % median / ~1.9× per file slower on the Orin CPU. The
    box moved to 0.1.3 instead on 2026-09-27 (STT at parity with 0.0.62). Numbers, method and
    retest conditions are in [moonshine-0-1-5-upgrade.md](moonshine-0-1-5-upgrade.md).
+   **`STT_EMPTY` marker (2026-11-13).** One INFO line per empty batch transcription:
+   `STT_EMPTY src=<panel|pendant|probe|harness|other> [trigger=wake|followup] reason=<no_segments|blank_lines|bad_sample_rate> lines= audio_s= active_s= peak=`
+   (counts and fields only, never text). `src` is passed as an argument from the caller (the executor thread has no request
+   context); the traffic class turns a probe/harness turn into `probe`/`harness`; `trigger` is on panel turns only (absent
+   `window` = wake). Count household empties with `grep 'STT_EMPTY src=panel'`; LiveKit and Telegram log `src=other`.
    **VAD state (2026-10-28).** moonshine-voice 0.1.3 and 0.1.5 segment every batch clip with ONE
    process-global Silero (`VoiceActivityDetector::silero_vad`, `core/voice-activity-detector.cpp`
    L22/L35) whose LSTM state + 64-sample context (`core/silero-vad.cpp` L48-49) are never cleared, so a
