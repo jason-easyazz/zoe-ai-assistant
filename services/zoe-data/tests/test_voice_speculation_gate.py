@@ -259,7 +259,7 @@ def test_flag_on_empty_speculative_transcript_ends_cancelled(monkeypatch):
     monkeypatch.setenv(vs.FLAG, "1")
     app = _app(monkeypatch, _dict_brain)
 
-    async def _empty_stt(_path, capture=True):
+    async def _empty_stt(_path, capture=True, **_kw):
         return ""
     monkeypatch.setattr(vt, "_transcribe_audio", _empty_stt)
     with TestClient(app) as client:
@@ -303,7 +303,7 @@ def test_flag_on_empty_transcript_after_early_commit_still_ends_cancelled(monkey
     monkeypatch.setenv(vs.FLAG, "1")
     app = _app(monkeypatch, _dict_brain)
 
-    async def _stt_commit_wins(_path, capture=True):
+    async def _stt_commit_wins(_path, capture=True, **_kw):
         vs.get_gate("early2").resolve("commit")  # daemon's commit lands mid-STT
         return ""
     monkeypatch.setattr(vt, "_transcribe_audio", _stt_commit_wins)
@@ -358,7 +358,7 @@ def _app(monkeypatch, brain):
     monkeypatch.setenv("ZOE_VOICE_FILLER_ENABLED", "0")
     monkeypatch.setenv("ZOE_VOICE_GREETING_ENABLED", "0")
 
-    async def _fake_stt(_path, capture=True):
+    async def _fake_stt(_path, capture=True, **_kw):
         return "what time is it"
     monkeypatch.setattr(vt, "_transcribe_audio", _fake_stt)
 

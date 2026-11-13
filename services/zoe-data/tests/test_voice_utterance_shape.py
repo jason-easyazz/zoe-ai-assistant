@@ -273,7 +273,7 @@ def _app(monkeypatch, transcript, brain_calls):
     monkeypatch.delenv("ZOE_VOICE_FILLER_ENABLED", raising=False)
     monkeypatch.delenv("ZOE_CONVERSATION_OPENER_ENABLED", raising=False)
 
-    async def _fake_stt(_path):
+    async def _fake_stt(_path, **_kw):
         return transcript
     monkeypatch.setattr(vt, "_transcribe_audio", _fake_stt)
 
