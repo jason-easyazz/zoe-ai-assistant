@@ -80,13 +80,11 @@ def off_record_sql(alias: str = "cm") -> str:
 
 
 def _distress(text: str) -> bool:
-    """A turn ``distress_handoff`` ENFORCES, or a call-now emergency ``medical_safety`` answers (stateless text tests). Independent of
-    ``ZOE_MEMORY_PROVENANCE_ANSWERS``: a floor, not a feature."""
+    """A turn ``distress_handoff`` ENFORCES (stateless text test). Independent of ``ZOE_MEMORY_PROVENANCE_ANSWERS``: a floor, not a feature."""
     try:
         import distress_handoff
-        import medical_safety
 
-        return distress_handoff.guarded_text(text) or medical_safety.guarded_text(text)
+        return distress_handoff.guarded_text(text)
     except Exception:  # noqa: BLE001
         return False
 

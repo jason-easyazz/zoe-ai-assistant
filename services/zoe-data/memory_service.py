@@ -1584,6 +1584,19 @@ class MemoryService:
         except Exception:  # noqa: BLE001 - the wall must never break a write that is not off the record
             pass
 
+        # A call-now medical emergency ("i fell over and i cant get up") is filed as ONE dated, health-tagged EVENT, never as a
+        # routine / preference / standing fact (QA round 9: a fall was listed under Routines). Same text for every writer of the day.
+        try:
+            import medical_safety as _ms
+
+            _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
+        except Exception:  # noqa: BLE001
+            _event = None
+        if _event is not None:
+            logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)
+            text, memory_type = _event, "event"
+            tags = list(dict.fromkeys([*(tags or []), "health", "medical"]))
+
         # Identity is an ACCOUNT fact, never a recalled one: an automatic writer (regex,
         # digest, consolidation, person extractor…) must not store "the user's name is X"
         # — it mishears and mis-attributes (a speech-to-text fragment naming a third

@@ -24,9 +24,9 @@ in either order ("tight feeling in my chest", "my chest feels tight", "pressure 
 shirt, a blurry photo). Still deterministic, still stdlib, still no model.
 A non-emergency question in a thread ("how long should it rest", "what number is the vet") matches nothing and stays with the brain.
 
-FLAG ``ZOE_MEDICAL_SAFETY`` off | shadow | enforce (DEFAULT enforce; a typo enforces). shadow logs the class only. Logs carry the class id, never the words. A CALL-NOW
-(``red_call``) turn is kept out of every memory writer like a distress turn (``guarded_text``, QA round 9: a fall was filed under
-Routines); every other class is not: a symptom the member mentions is still recallable. Doc: docs/knowledge/medical-safety.md. Stdlib only. NEVER raises.
+FLAG ``ZOE_MEDICAL_SAFETY`` off | shadow | enforce (DEFAULT enforce; a typo enforces). shadow logs the class only. Logs carry the class id, never the words. The turn is
+NOT marked off the record (unlike a distress turn): a symptom the member mentions is still recallable. A call-now turn is filed as ONE
+dated health event, never a routine or standing fact (``emergency_event``). Doc: docs/knowledge/medical-safety.md. Stdlib only. NEVER raises.
 """
 from __future__ import annotations
 
@@ -376,6 +376,45 @@ async def _intercom_reachable(user_id: str, voice: bool) -> bool:
         return False
 
 
+# -- how an emergency turn is FILED (QA round 9) ----------------------------------------------------------------------------------
+# All four fall turns became ordinary rows ("you fell over in the kitchen and are unable to get up" listed under Routines, because
+# "get up" reads as a routine). The turn stays recallable (Zoe should ask after them), but as ONE dated health EVENT, never a habit,
+# preference or standing fact. ``MemoryService.ingest`` (every writer's chokepoint) files a mined fact through ``emergency_event``.
+_EVENT_WHAT = {"fall": "a fall", "heart": "chest pain", "stroke": "signs of a stroke", "breathing": "trouble breathing",
+               "bleeding": "bleeding that would not stop", "worst_headache": "a sudden severe headache"}
+_EVENT_STOP = frozenset({"user", "users", "the", "and", "are", "was", "were", "has", "have", "had", "their", "they", "them", "is",
+                         "his", "her", "own", "with", "that", "this", "from", "into", "onto", "of", "on", "in", "to", "a", "an"})
+
+
+def _words(text: str) -> set:
+    return {w.rstrip("s") for w in re.findall(r"[a-z]+", _fold(text)) if len(w) > 1 and w not in _EVENT_STOP}
+
+
+def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
+    """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency)."),
+    or None for an ordinary fact. A mined fact is the event when it IS a call-now emergency itself, or when ``said`` (the member's
+    one turn it was mined from) is one and the fact restates that turn's words ("User cannot get up"). Only what the floor ENFORCES;
+    a whole transcript (several lines) is never read as the turn. Pure apart from the mode and the date. Never raises."""
+    try:
+        if mode() != "enforce":
+            return None
+        v = detect(fact)
+        if v.cls != "red_call":
+            one = (said or "").strip()
+            if not one or "\n" in one:
+                return None
+            v = detect(one)
+            fw = _words(fact)
+            if v.cls != "red_call" or not fw or len(fw & _words(one)) * 2 < len(fw):
+                return None
+        import datetime as _dt
+
+        d = today or _dt.date.today()
+        return f"User had {_EVENT_WHAT.get(v.key, 'a medical emergency')} on {d.day} {d:%B %Y} (a medical emergency)."
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> str:
     """The fixed text for a verdict. Never model text. A call-now reply also says how to get someone in the house (QA round 8: a member
     who has fallen may not reach a phone): the intercom phrase only when ``intercom`` says it will work, else "call out". Zoe never
@@ -404,16 +443,6 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
     else:
         return ""
     return out
-
-
-def guarded_text(text: str) -> bool:
-    """Must this turn stay out of every memory writer? A CALL-NOW emergency in enforce ("i fell over and i cant get up"): the moment
-    is not a durable fact - all four fall turns of QA round 9 were filed, one under Routines. Other classes (a symptom, a reading)
-    stay recallable. Stateless; the same seam the distress hand-off uses (``memory_provenance``). Never raises."""
-    try:
-        return mode() == "enforce" and detect(text).cls == "red_call"
-    except Exception:  # noqa: BLE001
-        return False
 
 
 async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool = False) -> Optional[str]:

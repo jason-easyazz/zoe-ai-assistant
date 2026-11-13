@@ -238,15 +238,69 @@ def test_real_facts_are_still_kept(fact):
 
 
 FALL = "i fell over in the kitchen and i cant get up"
+MINED = ["User fell over in the kitchen and is unable to get up", "User falls over in the kitchen", "User cannot get up"]
 
 
-def test_a_call_now_emergency_is_off_the_record(monkeypatch):
+def test_a_call_now_emergency_is_one_dated_health_event(monkeypatch):
+    import datetime
+
     monkeypatch.delenv("ZOE_MEDICAL_SAFETY", raising=False)
-    assert medical_safety.detect(FALL).cls == "red_call"
-    assert medical_safety.guarded_text(FALL) is True
-    assert memory_provenance.is_off_record(UID, FALL) is True
-    assert memory_provenance.claim_turn("demo_qa9_00000002", FALL) is True       # the transcript row is flagged off the record
-    assert medical_safety.guarded_text("my phone fell over") is False
-    assert memory_provenance.is_off_record(UID, "i fell asleep on the couch") is False
+    day = datetime.date(2026, 11, 13)
+    want = "User had a fall on 13 November 2026 (a medical emergency)."
+    assert {medical_safety.emergency_event(f, FALL, today=day) for f in MINED} == {want}
+    assert medical_safety.emergency_event("User fell in the bathroom and can't get up on their own", "", today=day) == want
+    for fact, said in [("User fell asleep on the couch", "i fell asleep on the couch"), ("User's phone fell over", "my phone fell over"),
+                       ("User plays bowls every Thursday", FALL), ("User cannot get up", FALL + "\nmy son is 7")]:
+        assert medical_safety.emergency_event(fact, said, today=day) is None
     monkeypatch.setenv("ZOE_MEDICAL_SAFETY", "shadow")
-    assert medical_safety.guarded_text(FALL) is False                            # only what the floor ENFORCES
+    assert medical_safety.emergency_event(MINED[0], FALL, today=day) is None       # only what the floor ENFORCES
+
+
+@pytest.fixture
+def mem(monkeypatch):
+    import memory_service
+    from memory_service import MemoryService
+    from test_memory_authority import _Col
+
+    for k in ("ZOE_MEMORY_AUTHORITY", "ZOE_AFFECT_CONSENT_GATE", "ZOE_MEDICAL_SAFETY"):
+        monkeypatch.delenv(k, raising=False)
+    s = MemoryService(data_dir="/nonexistent/zoe-test-qa9-memory")
+    col = _Col()
+    s._collection = lambda: col
+
+    async def no_audit(**_kw):
+        return None
+
+    async def opted_in(_uid):
+        return False
+
+    s._append_audit = no_audit
+    monkeypatch.setattr(memory_service, "_user_opted_out", opted_in)
+    return s
+
+
+def _rows(s):
+    return [r for st in ("approved", "pending") for r in run(s.list_by_status(user_id=UID, status=st))]
+
+
+def test_the_fall_turn_files_no_routine_and_stays_recallable(mem):
+    import provenance_answers as pa
+
+    assert memory_provenance.is_off_record(UID, FALL) is False                   # the turn itself is NOT off the record
+    assert memory_provenance.claim_turn("demo_qa9_00000002", FALL) is False
+    for fact in MINED:
+        run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=FALL, anchor_text=FALL))
+    rows = _rows(mem)
+    assert len(rows) == 1                                                         # ONE event row, no routine / standing fact
+    row = rows[0]
+    assert row.text.startswith("User had a fall on ") and row.metadata.get("memory_type") == "event"
+    assert "health" in str(row.metadata.get("tags") or "")
+    assert pa.sensitive_class(row.text, row.metadata) == "health"                # private: off shared surfaces, never "Routines"
+    assert pa.group_of(MINED[0], {}) == "routines"                               # what the raw fact WAS grouped as (the bug)
+
+
+def test_ordinary_fell_turns_file_as_before(mem):
+    run(mem.ingest("User fell asleep on the couch", user_id=UID, source="turn_digest", source_excerpt="i fell asleep on the couch"))
+    run(mem.ingest("User's phone fell over", user_id=UID, source="turn_digest", source_excerpt="my phone fell over"))
+    assert sorted(r.text for r in _rows(mem)) == ["User fell asleep on the couch", "User's phone fell over"]
+    assert all(r.metadata.get("memory_type") != "event" for r in _rows(mem))
