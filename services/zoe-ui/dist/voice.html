@@ -376,49 +376,39 @@ function addTranscriptLine(role, text) {
 }
 
 // ── AG-UI card rendering ──────────────────────────────────────────────────
+// Card text comes from the server's reply and is escaped at the sink. There is no HTTP "decide" route for a
+// confirmation: on this page you answer by voice ("yes" / "no") on the next turn, so the card says so and only dismisses.
+function escCard(v) {
+  return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function showAguiCard(card) {
   const overlay = document.getElementById('aguiOverlay');
   const el = document.createElement('div');
   el.className = 'agui-card';
 
   if (card.type === 'confirmation' || card.type === 'confirm') {
-    el.innerHTML = `<h3>${card.title || 'Confirm'}</h3><p>${card.message || card.body || ''}</p>
+    el.innerHTML = `<h3>${escCard(card.title || 'Confirm')}</h3><p>${escCard(card.message || card.body || '')}</p>
+      <p style="margin-top:8px;font-size:13px;opacity:.8;">Hold the button and say "yes" to go ahead, or "no" to cancel.</p>
       <div class="card-actions">
-        <button class="btn-confirm" onclick="confirmAguiAction(this,'confirm','${card.action_id||''}')">Confirm</button>
-        <button class="btn-cancel" onclick="this.closest('.agui-card').remove()">Cancel</button>
+        <button class="btn-cancel" onclick="this.closest('.agui-card').remove()">Dismiss</button>
       </div>`;
   } else if (card.type === 'status' || card.type === 'info') {
-    el.innerHTML = `<h3>${card.title || 'Zoe'}</h3><p>${card.message || card.body || ''}</p>`;
+    el.innerHTML = `<h3>${escCard(card.title || 'Zoe')}</h3><p>${escCard(card.message || card.body || '')}</p>`;
     setTimeout(() => el.remove(), 5000);
   } else if (card.type === 'qr_code') {
-    el.innerHTML = `<h3>${card.title || 'Scan QR Code'}</h3>
-      <p style="margin-bottom:12px;">${card.message || ''}</p>
-      <div id="qr-${card.id||'x'}" style="background:#fff;padding:8px;border-radius:8px;display:inline-block;"></div>
-      <p style="margin-top:8px;font-size:11px;word-break:break-all;color:#666;">${card.url || ''}</p>`;
-    setTimeout(() => {
-      const qrEl = el.querySelector('[id^="qr-"]');
-      if (qrEl && card.url) {
-        // Simple QR-like placeholder using text (full QR library can be added later)
-        qrEl.innerHTML = `<a href="${card.url}" target="_blank" style="display:block;padding:8px;color:#333;font-size:11px;text-decoration:none;">Open Link →</a>`;
-      }
-    }, 0);
+    const safeUrl = /^https?:\/\//i.test(String(card.url || '')) ? card.url : '';
+    el.innerHTML = `<h3>${escCard(card.title || 'Open link')}</h3>
+      <p style="margin-bottom:12px;">${escCard(card.message || '')}</p>
+      ${safeUrl ? `<a href="${escCard(safeUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:8px;background:#fff;border-radius:8px;color:#333;font-size:13px;text-decoration:none;">Open link →</a>
+      <p style="margin-top:8px;font-size:11px;word-break:break-all;color:#666;">${escCard(safeUrl)}</p>` : ''}`;
   } else {
-    el.innerHTML = `<h3>${card.title || 'Zoe'}</h3><p>${card.message || card.body || JSON.stringify(card)}</p>`;
+    el.innerHTML = `<h3>${escCard(card.title || 'Zoe')}</h3><p>${escCard(card.message || card.body || JSON.stringify(card))}</p>`;
     setTimeout(() => el.remove(), 8000);
   }
 
   overlay.appendChild(el);
-}
-
-async function confirmAguiAction(btn, decision, actionId) {
-  btn.closest('.agui-card').remove();
-  try {
-    await fetch('/api/chat/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-ID': getSessionId() },
-      body: JSON.stringify({ action_id: actionId, decision })
-    });
-  } catch(e) { /* non-fatal */ }
 }
 
 // ── Session helpers ───────────────────────────────────────────────────────

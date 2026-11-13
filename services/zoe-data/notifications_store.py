@@ -203,6 +203,19 @@ async def _wearer_status(uid: str) -> Optional[dict]:
         return None
 
 
+async def _unread_of_type(uid: str, type_: str) -> list[dict]:
+    """The member's unread rows of one type, oldest first (so the original ask is the one kept); [] when unreadable."""
+    try:
+        async with _db() as db:
+            cur = await db.execute("SELECT id, type, data FROM notifications WHERE user_id = ? AND delivered = 0 AND type = ? "
+                                   "ORDER BY created_at ASC LIMIT 5", (uid, type_))
+            rows = await cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("notifications: unread-of-type unavailable (%s)", exc.__class__.__name__)
+        return []
+    return [{"id": r[0], "type": r[1], "data": _parse(r[2])} for r in rows]
+
+
 async def notify_wearer_proposals(user_id: str) -> Optional[str]:
     """The pendant keeps hearing a regular voice and the member has no confirmed wearer print: ONE notification per batch of open
     proposals ("Please confirm this voice"). The row holds proposal ids only, never what was said. Never raises."""
@@ -214,6 +227,20 @@ async def notify_wearer_proposals(user_id: str) -> Optional[str]:
     if not st or int(st.get("confirmed") or 0) >= int(st.get("needed") or 0) or not st.get("proposals"):
         return None
     ids = sorted(str(p["id"]) for p in st["proposals"])
+    # one open ask per member: a batch that shrank (one proposal decided or expired) or grew is the SAME ask, so the unread row is
+    # updated in place rather than a second "confirm this voice" appearing beside it
+    for n in await _unread_of_type(uid, WEARER_TYPE):          # by type, not inside the newest-N window: an old ask is still THE ask
+        if sorted(str(x) for x in (n.get("data") or {}).get("proposals") or []) != ids:
+            try:
+                async with erase_gate.writing(uid, gen) as live:
+                    if live:
+                        async with _db() as db:
+                            await db.execute("UPDATE notifications SET data = ? WHERE id = ? AND user_id = ?",
+                                             (json.dumps({**(n.get("data") or {}), "proposals": ids}), n["id"], uid))
+                            await db.commit()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("NOTIFY event=failed type=%s (%s)", WEARER_TYPE, exc.__class__.__name__)
+        return None
     batch = hashlib.sha256("|".join(ids).encode()).hexdigest()[:16]
     return await create(uid, WEARER_TYPE, WEARER_TITLE, WEARER_MESSAGE, {"proposals": ids}, dedupe_id=batch, scheduled_at=gen)
 
@@ -414,8 +441,14 @@ async def act(member: str, item: dict, action: str) -> dict:
         import omi_repass
 
         async with _db() as db:
-            fn = omi_repass.confirm_wearer if action == "me" else omi_repass.reject_wearer
-            changed = await fn(db, member, item["ref"])
+            if action == "me":                         # confirm_wearer answers a dict that is always truthy: read its status
+                res = await omi_repass.confirm_wearer(db, member, item["ref"])
+                status = str((res or {}).get("status") or "")
+                if status == "not_eligible":
+                    raise ActError(403, "not available")
+                changed = status == "confirmed"
+            else:
+                changed = await omi_repass.reject_wearer(db, member, item["ref"])
         if not changed:
             raise ActError(409, "already decided")
         if not await _open_proposals(member, {"data": {"proposals": item.get("batch") or []}}):

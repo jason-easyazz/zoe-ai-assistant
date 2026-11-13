@@ -111,6 +111,8 @@ async def _resolve(message: str, uid: str, exclude: Optional[Callable[[str], boo
         candidates: list[str] = []
         for q in questions:
             candidates.extend(c for c in _gate.person_candidate_names(q) if c not in candidates)
+            # "how old is eli": no capitals, so no capitalised run - the content words are the lookup keys (QA round 8)
+            candidates.extend(c for c in _gate.person_caseless_candidates(q) if c not in candidates)
         try:
             for name in await _pending_entity_names(uid, candidates):
                 found.append(NamedPerson(name, "", "memory"))
