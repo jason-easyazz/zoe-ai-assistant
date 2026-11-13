@@ -304,7 +304,7 @@ def _app(monkeypatch, brain):
     monkeypatch.setenv("ZOE_VOICE_FILLER_ENABLED", "0")
     monkeypatch.setenv("ZOE_VOICE_GREETING_ENABLED", "0")
 
-    async def _fake_stt(_path, capture=True):
+    async def _fake_stt(_path, capture=True, **_kw):
         return "add milk to the shopping list"
     monkeypatch.setattr(vt, "_transcribe_audio", _fake_stt)
 
