@@ -222,10 +222,8 @@ def test_a_mid_send_transport_error_keeps_the_claim(world):
     assert _deliver().outcomes["web_push"] == "skipped:duplicate" and world.web_push == []
 
 
-def test_web_push_through_the_real_send_push_to_user(world, monkeypatch):
-    """Only the lowest transport (pywebpush.webpush) and the subscription read are stubbed: a wrong call into
-    routers.push.send_push_to_user fails here."""
-    import json
+def _real_web_push(monkeypatch) -> list:
+    """The REAL routers.push.send_push_to_user; only pywebpush.webpush, the subscription read and the VAPID key are stubbed."""
     import sys
     import types
 
@@ -252,23 +250,16 @@ def test_web_push_through_the_real_send_push_to_user(world, monkeypatch):
     async def fake_get_db():
         yield _DB()
 
-    def fake_webpush(**kw):
-        sent.append(kw)
-
     mod = types.ModuleType("pywebpush")
-    mod.webpush, mod.WebPushException = fake_webpush, type("WebPushException", (Exception,), {})
+    mod.webpush, mod.WebPushException = (lambda **kw: sent.append(kw)), type("WebPushException", (Exception,), {})
     monkeypatch.setitem(sys.modules, "pywebpush", mod)
     monkeypatch.setattr(push, "get_db", fake_get_db)
     monkeypatch.setattr(push, "_get_vapid_keys", lambda: {"private_key": "k", "public_key": "p"})
-    res = _deliver(sensitive=True)
-    assert res.outcomes["web_push"] == "delivered" and res.web_push_sent == 1
-    assert len(sent) == 1 and sent[0]["subscription_info"]["endpoint"] == "https://push.invalid/sub-1"
-    payload = json.loads(sent[0]["data"])
-    assert payload == {"title": "Zoe", "body": reminder_delivery.NEUTRAL_TEXT, "url": "/"}
+    return sent
 
 
-def test_telegram_through_the_real_telegram_notify(world, monkeypatch):
-    """Only httpx's client is stubbed: the real telegram_notify.send builds the request."""
+def _real_telegram(monkeypatch) -> list:
+    """The REAL telegram_notify.send; only httpx's client is stubbed."""
     import types
 
     import httpx
@@ -294,9 +285,77 @@ def test_telegram_through_the_real_telegram_notify(world, monkeypatch):
             return types.SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    return posts
+
+
+def test_web_push_through_the_real_send_push_to_user(world, monkeypatch):
+    import json
+
+    sent = _real_web_push(monkeypatch)
+    res = _deliver(sensitive=True)
+    assert res.outcomes["web_push"] == "delivered" and res.web_push_sent == 1
+    assert len(sent) == 1 and sent[0]["subscription_info"]["endpoint"] == "https://push.invalid/sub-1"
+    assert json.loads(sent[0]["data"]) == {"title": "Zoe", "body": reminder_delivery.NEUTRAL_TEXT, "url": "/"}
+
+
+def test_telegram_through_the_real_telegram_notify(world, monkeypatch):
+    posts = _real_telegram(monkeypatch)
     assert _deliver().outcomes["telegram"] == "delivered"
     assert posts == [(telegram_notify.DEFAULT_NOTIFY_URL, {"telegram_id": "1001", "text": "Water the ferns"},
                       {"Authorization": "Bearer test-token"})]
+
+
+@pytest.mark.parametrize("visibility, full_text, shows_text", [
+    ("personal", False, False),     # the schema default for a member's own reminder: a lock screen must not show it
+    ("family", False, True),        # the one household-visible value (routers/reminders.py read filter)
+    (None, False, False),
+    ("", False, False),
+    ("something-new", False, False),
+    ("personal", True, True),       # the member chose full text
+])
+def test_phone_text_is_neutral_unless_the_reminder_is_household_visible(world, monkeypatch, visibility, full_text, shows_text):
+    import json
+
+    row = {"title": "Water the ferns", "category": "general", "visibility": visibility}
+
+    class _DB:
+        async def execute(self, sql, params=()):
+            assert params == ("rem-1",)
+            return type("C", (), {"fetchone": staticmethod(lambda: _one(row))})()
+
+    async def _one(r):
+        return r
+
+    @contextlib.asynccontextmanager
+    async def fake_db():
+        yield _DB()
+
+    monkeypatch.setattr(reminder_delivery, "_db", fake_db)
+    prefs = {**MEMBERS["member-a"]["prefs"], "reminder_delivery": {"channels": ["telegram", "web_push"], "full_text": full_text}}
+    monkeypatch.setitem(MEMBERS["member-a"], "prefs", prefs)
+    sent, posts = _real_web_push(monkeypatch), _real_telegram(monkeypatch)
+    sensitive = asyncio.run(reminder_delivery.reminder_sensitive("rem-1"))
+    assert _deliver(sensitive=sensitive).outcomes == {"web_push": "delivered", "telegram": "delivered"}
+    expected = "Water the ferns" if shows_text else reminder_delivery.NEUTRAL_TEXT
+    assert json.loads(sent[0]["data"])["body"] == expected
+    assert posts[0][1]["text"] == expected
+
+
+def test_a_household_health_reminder_is_still_neutral(world, monkeypatch):
+    row = {"title": "Dentist at nine", "category": "health", "visibility": "family"}
+
+    class _DB:
+        async def execute(self, sql, params=()):
+            async def one():
+                return row
+            return type("C", (), {"fetchone": staticmethod(one)})()
+
+    @contextlib.asynccontextmanager
+    async def fake_db():
+        yield _DB()
+
+    monkeypatch.setattr(reminder_delivery, "_db", fake_db)
+    assert asyncio.run(reminder_delivery.reminder_sensitive("rem-1")) is True
 
 
 def test_shadow_sends_and_stores_nothing(world, monkeypatch):

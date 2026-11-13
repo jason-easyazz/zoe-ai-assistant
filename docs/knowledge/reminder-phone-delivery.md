@@ -39,8 +39,10 @@ Rules (all tested in `services/zoe-data/tests/test_reminder_phone_delivery.py`):
 - Adults only: `enrollment_state.audience_of` must be `adult`; a child, guest, unknown role or failed lookup gets nothing.
 - Quiet hours: the member's `communication.quiet_hours` (comm_prefs), else the household `ZOE_QUIET_START_HOUR` /
   `ZOE_QUIET_END_HOUR`. Phone channels are skipped (not deferred) inside the window; the panel still has the reminder.
-- Sensitive: category `health` / `medical` / `private`, visibility `private`, health words in the title, or an unknown
-  reminder = the phone shows "You have a reminder." unless the member set `full_text`.
+- Neutral text by default: the phone shows "You have a reminder." unless the member set `full_text`, for every reminder
+  that is not positively household-visible (visibility `family`, the one value the reminders read filter shares; the
+  schema default `personal`, empty and unknown values are all neutral), and for a household one with category
+  `health` / `medical` / `private` or health words in the title. A lock screen shows previews to anyone nearby.
 - At most once per (reminder fire, channel): a claim row in `app_settings`, key `reminder_phone:<member>:<hash>:<channel>`,
   value = outcome class, written before the send inside `user_erase_gate.writing`. A definite failure releases the claim:
   a `retry` outcome, no web push reached, or an error raised before any transport call (`PRE_SEND_ERRORS`: a wrong

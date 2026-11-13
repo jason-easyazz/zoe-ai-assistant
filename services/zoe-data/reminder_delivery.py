@@ -12,7 +12,8 @@ Rules (each one tested):
   * OPT-IN: ``user_prefs`` key ``reminder_delivery`` = ``{"channels": ["telegram", "web_push"], "full_text": false}``; absent = none.
   * ADULTS ONLY: ``enrollment_state.audience_of`` must say ``adult`` (a child, guest, unknown or failed lookup gets nothing).
   * QUIET HOURS: the member's ``communication.quiet_hours`` (comm_prefs), else the household's ``ZOE_QUIET_START/END_HOUR``.
-  * SENSITIVE (health category or words, private visibility, or unknown) = the neutral line unless ``full_text`` is true.
+  * NEUTRAL TEXT ("You have a reminder.") unless ``full_text`` is true, for every reminder that is not positively household-visible
+    (visibility ``family``), and for a household one with a health category or health words.
   * AT MOST ONCE per (dedupe_id, channel): a claim row in ``app_settings`` (``reminder_phone:<uid>:<hash>:<channel>``) is written
     before the send, inside ``user_erase_gate.writing``; a ``retry`` outcome (definitely not sent) releases it. Forget reach:
     ``forget_user`` (called by ``MemoryService.delete_user``).
@@ -39,6 +40,9 @@ LEDGER_PREFIX = "reminder_phone:"
 CHANNEL_TIMEOUT_S = 20.0
 NEUTRAL_TEXT = "You have a reminder."
 SENSITIVE_CATEGORIES = frozenset({"health", "medical", "private"})
+# The ONE visibility the reminders read filter shares with the household (routers/reminders.py ``_visibility_filter_sql``);
+# the schema default is ``personal``. Anything else is the member's own and shows only the neutral line on a phone.
+HOUSEHOLD_VISIBILITY = frozenset({"family"})
 # Raised before any transport call (a wrong argument, a missing module or key): definitely not sent, so the claim is released.
 # Anything else raised by a sender (a transport error mid-send) is "uncertain" and keeps the claim. Both senders already turn
 # their transport outcomes into return values (send_push_to_user counts, telegram_notify.send classifies), so this is the rest.
@@ -94,7 +98,8 @@ async def _subscription_count(user_id: str) -> int:
 
 
 async def reminder_sensitive(item_id: str) -> bool:
-    """Is the reminder behind ``item_id`` sensitive? Health category / private visibility / health words in the title. Fail closed."""
+    """Is the reminder behind ``item_id`` sensitive? Everything is, unless it is positively household-visible (``family``) and
+    neither health-category nor health-worded. Fail closed: no row, no id or a failed read = sensitive."""
     if not item_id:
         return True
     try:
@@ -103,7 +108,9 @@ async def reminder_sensitive(item_id: str) -> bool:
             row = await cur.fetchone()
         if row is None:
             return True
-        if str(row["category"] or "").lower() in SENSITIVE_CATEGORIES or str(row["visibility"] or "").lower() == "private":
+        if str(row["visibility"] or "").strip().lower() not in HOUSEHOLD_VISIBILITY:
+            return True          # personal, private, empty, or any value we do not know: a lock screen shows only the neutral line
+        if str(row["category"] or "").lower() in SENSITIVE_CATEGORIES:
             return True
         from intent_router import _infer_event_category
         return _infer_event_category(str(row["title"] or "")) == "health"
