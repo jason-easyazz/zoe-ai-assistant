@@ -60,7 +60,7 @@ Guards (from review): an animal counts only as the SUBJECT (before the verb), a 
 
 Numbers: `distress_data/crisis_lines.json` per country, `emergency` plus a `poison` entry (AU 13 11 26, US 1-800-222-1222, GB NHS 111). OPERATOR: verify each before relying on it; a country with no entry gets "your local ..." wording.
 
-Not marked off the record: unlike a distress turn, a symptom the member states stays recallable.
+Not marked off the record: unlike a distress turn, a symptom the member states stays recallable. A call-now turn happening NOW (a past time such as a year, "years ago" or "last year", or a condition / instruction such as "if", "should", "told to", "what if", "whenever", leaves the fact as mined; the reply still gives the number) is filed, under a CONSERVATIVE rule, as ONE dated health event ("User had a fall on <date> (a medical emergency).", "User's son Max had a fall on <date> ...", `memory_type=event`, tagged health) only when the turn names exactly ONE affected person (the member alone, or one other person by name), the fact's subject is that person (the member, or the same name; a relation alone never counts) and the fact itself reads as that emergency to the detector. Anything else - two people in the turn, a condition ("has heart disease"), a body-part overlap, a paraphrase the detector does not read - is stored exactly as mined: a missed conversion is safe, a false health record is not. A converted fact is never filed as a routine, preference or standing fact (`emergency_event`, applied at `MemoryService.ingest` in every mode - the flag gates the reply only; QA round 9 listed a fall under Routines).
 
 ## Limits (stated, not hidden)
 

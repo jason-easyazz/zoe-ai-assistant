@@ -57,7 +57,7 @@ def test_transcribe_ok_with_mock_whisper(client, monkeypatch):
 
     seen_capture = []
 
-    async def _fake_run(path: str, capture: bool = True) -> str:
+    async def _fake_run(path: str, capture: bool = True, **_kw) -> str:
         seen_capture.append(capture)
         return "hello world"
 
@@ -78,7 +78,7 @@ def test_transcribe_ok_with_mock_whisper(client, monkeypatch):
 def test_transcribe_writes_stt_audit_log(client, monkeypatch, tmp_path):
     from routers import voice_tts
 
-    async def _fake_run(path: str, capture: bool = True) -> str:
+    async def _fake_run(path: str, capture: bool = True, **_kw) -> str:
         return "hello audit"
 
     log_path = tmp_path / "voice_stt.jsonl"
@@ -110,7 +110,7 @@ def test_transcribe_missing_body_400(client):
 def test_transcribe_503_when_moonshine_fails(client, monkeypatch, tmp_path):
     from routers import voice_tts
 
-    async def _boom(path: str, capture: bool = True) -> str:
+    async def _boom(path: str, capture: bool = True, **_kw) -> str:
         raise RuntimeError("moonshine unavailable")
 
     log_path = tmp_path / "voice_stt.jsonl"
@@ -408,7 +408,7 @@ def test_transcribe_audio_impl_is_moonshine_only(monkeypatch):
     """The live path uses ONLY Moonshine; whisper must never be called."""
     from routers import voice_tts
 
-    async def _moon(path: str) -> str:
+    async def _moon(path: str, **_kw) -> str:
         return "moonshine result"
 
     monkeypatch.setattr(voice_tts, "_run_moonshine", _moon)
@@ -420,7 +420,7 @@ def test_transcribe_audio_impl_empty_returns_empty_no_whisper(monkeypatch):
     """On Moonshine-empty, return '' (caller re-prompts) — do NOT fall to whisper."""
     from routers import voice_tts
 
-    async def _moon_empty(path: str) -> str:
+    async def _moon_empty(path: str, **_kw) -> str:
         return ""
 
     monkeypatch.setattr(voice_tts, "_run_moonshine", _moon_empty)
@@ -433,7 +433,7 @@ def test_transcribe_audio_impl_moonshine_error_raises(monkeypatch):
     from silence (Greptile #854) — and whisper is never reached as a rescue."""
     from routers import voice_tts
 
-    async def _moon_boom(path: str) -> str:
+    async def _moon_boom(path: str, **_kw) -> str:
         raise RuntimeError("moonshine boom")
 
     monkeypatch.setattr(voice_tts, "_run_moonshine", _moon_boom)

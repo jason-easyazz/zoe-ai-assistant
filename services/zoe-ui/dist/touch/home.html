@@ -4767,12 +4767,17 @@
   // future) are pruned so they never alarm.
   var _tAlarm={known:{},fired:{},chime:null};
   function _tAlarmRefresh(){timersGet().then(function(d){
-    var seen={},now=Date.now(),acks=_acksGet();
+    var seen={},now=Date.now(),acks=_acksGet(),late=[];
     ((d&&d.timers)||[]).forEach(function(t){var id=String(t.timer_id||t.id||''),exp=+t.expires_at_ms||0;if(!id||!exp)return;seen[id]=1;
-      if(acks[id]){_ackSend(id);return;}  // dismissed but the cancel never landed: retry it, never ring it again
+      if(acks[id]){delete _tUnspoken()[id];_ackSend(id);return;}  // dismissed but the cancel never landed: retry it, never ring it again
+      // Fired silently because the panel would say it, and the server now says it will not (quiet hours, a failed queue):
+      // the page says it, ONCE (``unspoken`` is spent here and never refilled).
+      var u=_tUnspoken();if(u[id]&&t.spoken_by_panel!==true){late.push(u[id]);delete u[id];}
       // spoken_by_panel: the panel's voice daemon says "timer is done" for this one itself, so the page must not say it too
       if(!_tAlarm.fired[id])_tAlarm.known[id]={exp:exp,label:t.label||t.title||'Timer',panel:t.spoken_by_panel===true};});
     Object.keys(acks).forEach(function(id){if(!seen[id]){delete acks[id];}});_acksSet(acks);  // server forgot it: nothing to retry
+    var un=_tUnspoken();Object.keys(un).forEach(function(id){if(!seen[id])delete un[id];});  // cancelled or past the grace
+    if(late.length)timerSay(late.join(' / ')+' timer is done');
     Object.keys(_tAlarm.known).forEach(function(id){if(!seen[id]&&_tAlarm.known[id].exp>now+1500)delete _tAlarm.known[id];});
     // Bound `fired` on a long-lived kiosk: drop ids fired >6h ago (their timers
     // are long gone, so they can never re-appear and re-fire).
@@ -4780,7 +4785,8 @@
   }).catch(function(){});}
   function _tAlarmTick(){var now=Date.now(),due=[],ids=[],say=[];
     Object.keys(_tAlarm.known).forEach(function(id){var t=_tAlarm.known[id];
-      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);ids.push(id);if(!t.panel)say.push(t.label);}});
+      if(now>=t.exp&&!_tAlarm.fired[id]){_tAlarm.fired[id]=now;delete _tAlarm.known[id];due.push(t.label);ids.push(id);
+        if(!t.panel)say.push(t.label);if(t.panel)_tUnspoken()[id]=t.label;}});
     // Batch same-tick expiries into ONE alarm ("Pasta / Eggs") so a second
     // timer finishing doesn't overwrite the first's label + speech.
     if(due.length)timerAlarm(due.join(' / '),ids,say.join(' / '));}
@@ -4790,6 +4796,8 @@
       g.gain.setValueAtTime(0,t0);g.gain.linearRampToValueAtTime(.45,t0+.02);g.gain.linearRampToValueAtTime(0,t0+.4);o.start(t0);o.stop(t0+.42);}
     var t=c.currentTime;ping(t);ping(t+.55);ping(t+1.1);}catch(e){}}
   var _ACK_KEY='zoe_timer_acks';
+  // Timers whose alarm fired SILENTLY because the panel's daemon would say it (id -> label); spent when the page speaks one.
+  function _tUnspoken(){return _tAlarm.unspoken||(_tAlarm.unspoken={});}
   function _acksGet(){try{return JSON.parse(localStorage.getItem(_ACK_KEY)||'{}')||{};}catch(e){return {};}}
   function _acksSet(o){try{localStorage.setItem(_ACK_KEY,JSON.stringify(o));}catch(e){}}
   function _ackSend(id){return apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id}).then(function(){var a=_acksGet();delete a[id];_acksSet(a);}).catch(function(){});}
@@ -4829,7 +4837,7 @@
     // window passes, because every voice turn reloads this page (panel_navigate) and a page that was reloaded
     // - or first polled - after the end must still ring it. Cancelling the id is what stops a reload re-ringing it.
     document.getElementById('tmrAlarmX').onclick=function(){ov.classList.remove('on');timerHush();
-      var acked=Object.keys(_tAlarm.pending||{});_tAlarm.pending={};
+      var acked=Object.keys(_tAlarm.pending||{});_tAlarm.pending={};acked.forEach(function(id){delete _tUnspoken()[id];});
       // Persist the ack BEFORE sending it and drop it only once the server confirms: a failed cancel (restart, network)
       // is retried by every poll, and survives a page reload, so a dismissed alarm never sounds again inside the grace.
       var a=_acksGet();acked.forEach(function(id){a[id]=1;});_acksSet(a);

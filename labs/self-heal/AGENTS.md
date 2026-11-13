@@ -11,7 +11,7 @@ healed / not healed; a fault that is not healed is parked, not retried forever.
 
 ## Ownership
 
-`selfheal/` (config, safety, detectors, engines, gates, gitops, landing, runner, CLI),
+`selfheal/` (config, safety, sandbox, binaries, detectors, engines, gates, gitops, landing, runner, CLI),
 `tests/` (fake-engine tests on throwaway repos), `e2e_scratch.py` (synthetic end-to-end proof),
 `systemd/` (user unit + timer TEMPLATES), `self-heal.example.json`, `README.md`.
 
@@ -59,6 +59,27 @@ The loop (and anyone running it) must never:
   the list is literal and `tests/test_self_heal_round3.py` fails when a workflow runs a repo script it misses;
 - leave the integration ref advanced after a local landing that did not confirm a heal: every exit,
   exceptions included, restores the snapshot;
+- run ANY repo code from a heal or base worktree (detector, gates, verify, python health checks) outside
+  `selfheal/sandbox.py`; select a backend weaker than the best one that works on the box (`none` while
+  bwrap works); add a config knob for network or writable paths; raise the sandbox limits; run
+  `local` / `full` when no sandbox backend works (only `dry` may run, reason audited);
+- count a heal as healed on exit code alone: the reproduction NODE must have passed in the junit report;
+  accept an engine diff that adds a skip / xfail to a test file or touches `conftest.py` / pytest config;
+- heal from a detect run that has collection errors or no junit report;
+- start a second heal for a fault that has an open heal PR or an unlanded local heal branch;
+- delete a remote branch that is not the exact `self-heal/<id>` of a recorded ticket, or one that has a PR;
+- advance the integration ref without a write-ahead `landing_intent`, or clear it before a confirmed heal
+  or a VERIFIED rollback (ref read back == snapshot); while a rollback is `rollback_stuck`, run anything
+  (dry included) but the retry;
+- give a sandboxed step a writable `/tmp` or any scratch outside the worktree, or skip the worktree
+  growth cap (`sandbox_disk_mb` may only be lowered);
+- read a JUnit report from inside a worktree, or accept a missing, stale or unparseable report (or exit 0
+  without one) as a pass; accept an engine diff that adds a JUnit-looking `*.xml`;
+- accept a diff that deletes or renames any file under `tests/`, `test_*.py`, `*_test.py` or `conftest.py`;
+- pass a heal whose pytest gate shows, against the base-commit baseline, a previously-run node now
+  skipped / xfailed / deselected / missing, or a reproduction node that did not go failing -> passed;
+- run a binary from the inherited PATH, or one that is group/world-writable, foreign-owned, or under the
+  worktrees, the state dir or a temp dir (`selfheal/binaries.py`);
 - run between 01:30 and 05:00, while a voice lander runs, or while `night_busy.sh deploy` says pause;
 - record a missing or failed cross-review as reviewed;
 - remove or bypass `~/.zoe/multica_dispatch_paused` or any other kill switch, or create a board issue in `todo`;

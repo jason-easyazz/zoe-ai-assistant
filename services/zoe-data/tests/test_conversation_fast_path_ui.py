@@ -41,7 +41,7 @@ def _app(monkeypatch, transcript, brain_calls):
     # Never start the real LiveKit container from a unit test.
     monkeypatch.setattr(conversation_opener, "_warm_livekit", lambda: None)
 
-    async def _fake_stt(_path):
+    async def _fake_stt(_path, **_kw):
         return transcript
     monkeypatch.setattr(vt, "_transcribe_audio", _fake_stt)
 
@@ -177,7 +177,7 @@ def test_speculative_opener_push_waits_for_the_verdict(monkeypatch, events, verd
     monkeypatch.setenv(vs.MAX_HOLD_FLAG, "300")
     turn_id = "conv-" + verdict
 
-    async def _stt_then_verdict(_path, capture=True):
+    async def _stt_then_verdict(_path, capture=True, **_kw):
         vs.get_gate(turn_id).resolve(verdict)
         return "Let's talk"
     monkeypatch.setattr(vt, "_transcribe_audio", _stt_then_verdict)

@@ -25,7 +25,8 @@ shirt, a blurry photo). Still deterministic, still stdlib, still no model.
 A non-emergency question in a thread ("how long should it rest", "what number is the vet") matches nothing and stays with the brain.
 
 FLAG ``ZOE_MEDICAL_SAFETY`` off | shadow | enforce (DEFAULT enforce; a typo enforces). shadow logs the class only. Logs carry the class id, never the words. The turn is
-NOT marked off the record (unlike a distress turn): a symptom the member mentions is still recallable. Doc: docs/knowledge/medical-safety.md. Stdlib only. NEVER raises.
+NOT marked off the record (unlike a distress turn): a symptom the member mentions is still recallable. A call-now turn is filed as ONE
+dated health event, never a routine or standing fact (``emergency_event``). Doc: docs/knowledge/medical-safety.md. Stdlib only. NEVER raises.
 """
 from __future__ import annotations
 
@@ -373,6 +374,150 @@ async def _intercom_reachable(user_id: str, voice: bool) -> bool:
         return len({str(p.get("panel_id") or "") for p in panels} - {""}) >= 2
     except Exception:  # noqa: BLE001
         return False
+
+
+# -- how an emergency turn is FILED (QA round 9) ----------------------------------------------------------------------------------
+# All four fall turns became ordinary rows ("you fell over in the kitchen and are unable to get up" listed under Routines, because
+# "get up" reads as a routine). The turn stays recallable (Zoe should ask after them), but as ONE dated health EVENT, never a habit,
+# preference or standing fact. ``MemoryService.ingest`` (every writer's chokepoint) files a mined fact through ``emergency_event``.
+_EVENT_WHAT = {"fall": "a fall", "heart": "chest pain", "stroke": "signs of a stroke", "breathing": "trouble breathing",
+               "bleeding": "bleeding that would not stop", "worst_headache": "a sudden severe headache"}
+
+
+# THE CONSERVATIVE RULE (QA round 9 review; a better design is a follow-up). A mined fact becomes the event only when it is
+# unambiguous; anything else is stored exactly as mined (a missed conversion is safe, a false health record is not):
+#   * the source turn names EXACTLY ONE affected person: the member alone (first person, nobody else mentioned), or exactly one
+#     other person BY NAME (no first person, at most one relation word, no plural "sons" / "kids", the name not listed with another);
+#   * the fact's subject is that same person: "User" for the member, or the SAME NAME ("User's son Max" / "Max"); a relation alone
+#     ("User's son has chest pain") is never enough;
+#   * the fact's own text is the detector's emergency of the same class (``detect(fact)``): a condition ("has heart disease"), a
+#     body-part or topic overlap, or a paraphrase the detector does not read stays as mined.
+_REL_WORDS = (r"son|daughter|grandson|granddaughter|grandchild|child|kid|baby|wife|husband|partner|girlfriend|boyfriend|sister|"
+              r"brother|mum|mom|mother|dad|father|nan|nana|grandma|grandmother|grandpa|grandfather|aunt|auntie|uncle|cousin|niece|"
+              r"nephew|friend|neighbou?r|flatmate|housemate")
+_REL_RE = re.compile(rf"\b(?:{_REL_WORDS})\b", re.IGNORECASE)
+_PLURAL_PEOPLE_RE = re.compile(rf"\b(?:(?:{_REL_WORDS})s|children|kids|parents|twins|grandkids|boys|girls|everyone|both)\b",
+                               re.IGNORECASE)
+_WHO_REL_RE = re.compile(rf"^\s*(?:the\s+)?user['’]s\s+(?:{_REL_WORDS}),?\s+(?:named\s+|called\s+)?(?-i:([A-Z][a-z]+))\b",
+                         re.IGNORECASE)
+_REL_OF_RE = re.compile(r"^\s*(?:the\s+)?user['’]s\s+([a-z]+)", re.IGNORECASE)
+_WHO_USER_RE = re.compile(r"^\s*(?:the\s+)?user\b(?!['’])", re.IGNORECASE)
+_WHO_NAME_RE = re.compile(r"^\s*([A-Z][a-z]+)\b(?!['’])")
+#: a first-person turn: the member is the one it happened to
+_FIRST_PERSON_RE = re.compile(r"\b(?:i|im|i['’]m|ive|i['’]ve|me|myself)\b", re.IGNORECASE)
+#: a PAST time: a year, "last year", "in March", "years ago", "when I was a kid", past perfect, "used to" - a history, not now
+_PAST_RE = re.compile(
+    r"\b(?:1[89]\d\d|20\d\d)\b|\b(?:last|previous)\s+(?:year|month|week|summer|winter|spring|autumn|fall|christmas|time)\b"
+    r"|\bago\b|\b(?:in|back\s+in|during|since)\s+(?:january|february|march|april|may|june|july|august|september|october|november|"
+    r"december)\b|\bwhen\s+(?:i|he|she|they|we|you)\s+(?:was|were)\b|\bas\s+a\s+(?:kid|child|boy|girl|teenager|baby)\b"
+    r"|\b(?:had|has|have)\s+had\b|\bused\s+to\b|\bonce\b|\byesterday\b|\blast\s+night\b|\bhistory\s+of\b|\bprevious(?:ly)?\b",
+    re.IGNORECASE)
+#: a CONDITIONAL / hypothetical / instruction: "told to call an ambulance if I have chest pain", "if I ever fall", "what would you
+#: do if". FILING only (the reply still gives the number). Plain "when" is left out on purpose: it is temporal in real present-tense
+#: emergencies ("I can't breathe when I lie down", "when I stood up I fell and can't get up"); only "whenever" counts. "could not"
+#: / "would not" are left out too ("I fell and could not get up", "the bleeding would not stop" are actual).
+_HYPOTHETICAL_RE = re.compile(
+    r"\b(?:if|in\s+case|should|could(?!\s+not)|would(?!\s+not)|might|told\s+(?:me\s+|us\s+|him\s+|her\s+|them\s+)?to|was\s+told|"
+    r"were\s+told|advised|supposed\s+to|in\s+the\s+future|what\s+if|unless|next\s+time|whenever)\b", re.IGNORECASE)
+
+
+def _not_now(text: str) -> bool:
+    """Is this NOT an emergency happening now - a past time or a condition / hypothetical / instruction? (filing only)"""
+    return bool(_PAST_RE.search(text or "") or _HYPOTHETICAL_RE.search(text or ""))
+
+
+_NOT_A_NAME = frozenset({"the", "user", "a", "an", "my", "his", "her", "their", "they", "he", "she", "it", "we", "you", "i", "this",
+                         "that", "there", "someone", "somebody", "anyone", "anybody", "everyone", "everybody", "nobody", "people",
+                         "one", "both", "all", "some", "each", "family", "household"})
+
+
+def _subject(fact: str) -> Optional[str]:
+    """"User" or the NAME the fact is about; None for a relation alone ("User's son ...") or anything unclear."""
+    m = _WHO_REL_RE.match(fact or "")
+    if m:
+        return m.group(1)
+    if _WHO_USER_RE.match(fact or ""):
+        return "User"
+    m = _WHO_NAME_RE.match(fact or "")
+    return m.group(1) if m and m.group(1).lower() not in _NOT_A_NAME else None
+
+
+#: a third-person reference ("because HE has chest pain"): someone other than the subject may be the one it happened to
+_THIRD_PERSON_RE = re.compile(r"\b(?:he|she|they|him|her|them)\b", re.IGNORECASE)
+_CALENDAR_WORDS = frozenset({"january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+                             "november", "december", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"})
+
+
+def _names_another(fact: str, said: str, subject: str) -> bool:
+    """Do the fact or the turn name ANY person besides ``subject`` (QA round 9 review: "I called an ambulance because Quinlan has
+    crushing chest pain" was filed as the member's own emergency)? Another capitalised name in the fact, a he / she / they / him /
+    her / them anywhere, or a kin word beyond the subject's own (none for the member). Pure."""
+    said_mid = re.sub(r"(?:^|[.!?;]\s*)[A-Za-z]+", " ", said or "")      # a typed turn's sentence-initial word is no name
+    names = {w for w in re.findall(r"\b[A-Z][a-z]+\b", f"{fact or ''} {said_mid}")
+             if w.lower() not in _NOT_A_NAME and w.lower() not in _CALENDAR_WORDS and w.lower() != subject.lower()}
+    if names or _THIRD_PERSON_RE.search(fact or "") or _THIRD_PERSON_RE.search(said or ""):
+        return True
+    return len(_REL_RE.findall(fact or "")) > (0 if subject == "User" else 1)
+
+
+_CLAUSE_SPLIT_RE = re.compile(r"[;.!?]|\b(?:because|cause|cos|coz|since|while|after|so)\b", re.IGNORECASE)
+
+
+def _clause_is_about(said: str, subject: str) -> bool:
+    """The clause of the turn the detector reads as the emergency must itself name the subject: the member in the first person,
+    or the subject's name ("i called an ambulance because quinlan has crushing chest pain": the emergency clause is quinlan's,
+    a lowercase name the fact-side checks cannot see). No such clause on its own: the whole turn. Pure."""
+    clauses = [c for c in _CLAUSE_SPLIT_RE.split(said) if c and detect(c).cls == "red_call"] or [said]
+    c = clauses[0]
+    if subject == "User":
+        return bool(_FIRST_PERSON_RE.search(c))
+    return bool(re.search(rf"\b{re.escape(subject)}\b", c, re.IGNORECASE))
+
+
+def _only_person(said: str, subject: str) -> bool:
+    """Does the turn name exactly ONE affected person, and is it ``subject``? (the rule above). Pure."""
+    first, rels = bool(_FIRST_PERSON_RE.search(said)), len(_REL_RE.findall(said))
+    if _PLURAL_PEOPLE_RE.search(said):
+        return False
+    if subject == "User":
+        return first and rels == 0
+    name = re.escape(subject)
+    if first or rels > 1 or not re.search(rf"\b{name}\b", said, re.IGNORECASE):
+        return False
+    return not re.search(rf"\b\w+\s*(?:,|&|\band\b)\s*{name}\b|\b{name}\s*(?:,|&|\band\b)\s*(?!(?:i|im|cant|can|cannot|is|has|he|she)\b)\w+",
+                         said, re.IGNORECASE)
+
+
+def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
+    """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency).",
+    "User's son Max had chest pain on ..."), or None: the mined fact is then stored exactly as mined. Only under THE CONSERVATIVE
+    RULE above, and only when ``said`` (the ONE turn it was mined from) is a call-now emergency said NOW (no past time in the turn
+    or the fact: "chest pain in 2020" keeps its date). In EVERY mode: the flag gates the reply, never how memory files an
+    emergency. A whole transcript (several lines) is never read as the turn. Pure apart from the date. Never raises."""
+    try:
+        one = (said or "").strip()
+        # one check, "is this happening now to this person": present (no past time), actual (no condition), then one named person
+        if not one or "\n" in one or _not_now(one) or _not_now(fact):
+            return None
+        v = detect(one)
+        if v.cls != "red_call":
+            return None
+        fv = detect(fact or "")
+        if fv.cls != "red_call" or fv.key != v.key:
+            return None
+        subject = _subject(fact)
+        if subject is None or not _only_person(one, subject) or _names_another(fact, one, subject):
+            return None
+        if not _clause_is_about(one, subject):
+            return None
+        rel = _REL_OF_RE.match(fact or "") if _WHO_REL_RE.match(fact or "") else None
+        who = f"User's {rel.group(1).lower()} {subject}" if rel else subject
+        import datetime as _dt
+
+        d = today or _dt.date.today()
+        return f"{who} had {_EVENT_WHAT.get(v.key, 'a medical emergency')} on {d.day} {d:%B %Y} (a medical emergency)."
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> str:
