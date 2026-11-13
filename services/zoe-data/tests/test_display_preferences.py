@@ -106,23 +106,36 @@ class _Rows(dict):
 
 
 class _FakeDb:
-    def __init__(self, rows):
+    def __init__(self, rows, panels=None):
         self.rows = rows
+        self.panels = panels or {}      # registered address -> [panel_id, ...] (active panels only)
 
     async def execute(self, sql, params):
-        row = self.rows.get(params[0])
+        if "FROM panels" in sql:
+            found = [_Rows(panel_id=p) for p in self.panels.get(params[0], [])]
+        else:
+            found = [self.rows[params[0]]] if params[0] in self.rows else []
 
         class _Cur:
             async def fetchone(self_inner):
-                return row
+                return found[0] if found else None
+
+            async def fetchall(self_inner):
+                return found
         return _Cur()
 
 
-def _get(db, device_id):
+def _request(peer="192.0.2.10", headers=()):
+    from starlette.requests import Request
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": [(k.encode(), v.encode()) for k, v in headers],
+                    "client": (peer, 40000), "query_string": b""})
+
+
+def _get(db, device_id, request=None):
     import asyncio
 
     from routers import system
-    return asyncio.run(system.get_display_preferences(device_id=device_id, db=db))
+    return asyncio.run(system.get_display_preferences(request=request, device_id=device_id, db=db))
 
 
 def test_a_panel_without_its_own_row_reads_the_saved_default():
@@ -140,3 +153,73 @@ def test_a_panels_own_row_wins_over_the_default_and_no_rows_means_code_defaults(
     none = _get(_FakeDb({}), "panel-kitchen")
     assert none["inherited"] is False and none["preferences"]["off_enabled"] is False     # control: the code default
     assert _get(db, "default")["inherited"] is False
+
+
+# ── a per-panel row reaches the panel AGENT, which polls with its own device id ────────────────────────────────────
+
+def test_the_agent_reads_its_panels_row_by_the_panels_registered_address():
+    """Settings saves a panel's row under the panel id; the agent on that panel polls with ``pi-<MAC>``. The machine at the
+    panel's registered address gets the panel's row, not the default."""
+    db = _FakeDb({"default": _Rows(day_brightness=40), "panel-kitchen": _Rows(day_brightness=75, pi_host="192.0.2.10")},
+                 panels={"192.0.2.10": ["panel-kitchen"]})
+    out = _get(db, "pi-0000000000aa", _request("192.0.2.10"))
+    assert out["inherited"] is False and out["preferences"]["day_brightness"] == 75 and out["pi_host"] == "192.0.2.10"
+    # controls: another address, no request, or the public tunnel get the default; two panels at one address are not guessed
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.99"))["preferences"]["day_brightness"] == 40
+    assert _get(db, "pi-0000000000aa")["preferences"]["day_brightness"] == 40
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.10", [("cf-ray", "x")]))["preferences"]["day_brightness"] == 40
+    db.panels = {"192.0.2.10": ["panel-kitchen", "panel-hall"]}
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.10"))["preferences"]["day_brightness"] == 40
+
+
+def test_the_devices_own_row_still_wins_and_a_panel_without_a_row_falls_to_the_default():
+    db = _FakeDb({"default": _Rows(day_brightness=40), "pi-0000000000aa": _Rows(day_brightness=20),
+                  "panel-kitchen": _Rows(day_brightness=75)}, panels={"192.0.2.10": ["panel-kitchen"]})
+    assert _get(db, "pi-0000000000aa", _request("192.0.2.10"))["preferences"]["day_brightness"] == 20
+    db = _FakeDb({"default": _Rows(day_brightness=40)}, panels={"192.0.2.10": ["panel-kitchen"]})
+    out = _get(db, "pi-0000000000aa", _request("192.0.2.10"))
+    assert out["inherited"] is True and out["preferences"]["day_brightness"] == 40
+
+
+# ── the unauthenticated route believes an address header only from a proxy of ours (panel_principal.trusted_client_ip) ──
+# trusted_client_ip: the TCP peer itself, unless the peer is in ZOE_TRUSTED_PROXY_NETS (default loopback + docker 172.16/12),
+# when nginx's X-Real-IP is believed; X-Forwarded-For and Forwarded are never read (a client writes them); a relayed request
+# has no address. The route also refuses any request carrying a Cloudflare edge header (_via_public_tunnel).
+
+_SPOOF = [("x-real-ip", "192.0.2.10"), ("x-forwarded-for", "192.0.2.10"), ("forwarded", "for=192.0.2.10")]
+
+
+def _kitchen_db():
+    return _FakeDb({"default": _Rows(day_brightness=40), "panel-kitchen": _Rows(day_brightness=75)},
+                   panels={"192.0.2.10": ["panel-kitchen"]})
+
+
+@pytest.fixture
+def _default_proxy_nets(monkeypatch):
+    monkeypatch.delenv("ZOE_TRUSTED_PROXY_NETS", raising=False)
+    monkeypatch.delenv("ZOE_RELAY_INGRESS", raising=False)
+
+
+@pytest.mark.parametrize("header", _SPOOF)
+def test_an_address_header_from_an_untrusted_peer_never_selects_a_panel(_default_proxy_nets, header):
+    import panel_principal
+
+    req = _request("192.0.2.50", [header])
+    assert panel_principal.trusted_client_ip(req) == "192.0.2.50"                       # the peer, never the header
+    assert _get(_kitchen_db(), "pi-0000000000aa", req)["preferences"]["day_brightness"] == 40
+    # control: the same peer AT the panel's address is the panel
+    assert _get(_kitchen_db(), "pi-0000000000aa", _request("192.0.2.10"))["preferences"]["day_brightness"] == 75
+
+
+def test_a_trusted_proxy_is_believed_for_x_real_ip_only(_default_proxy_nets):
+    import panel_principal
+
+    via_nginx = _request("172.18.0.5", [("x-real-ip", "192.0.2.10")])
+    assert panel_principal.trusted_client_ip(via_nginx) == "192.0.2.10"
+    assert _get(_kitchen_db(), "pi-0000000000aa", via_nginx)["preferences"]["day_brightness"] == 75
+    for header in _SPOOF[1:]:                     # X-Forwarded-For / Forwarded are not nginx's word, even from nginx's side
+        req = _request("172.18.0.5", [header])
+        assert panel_principal.trusted_client_ip(req) == "172.18.0.5"
+        assert _get(_kitchen_db(), "pi-0000000000aa", req)["preferences"]["day_brightness"] == 40
+    tunnel = _request("172.18.0.5", [("x-real-ip", "192.0.2.10"), ("cf-connecting-ip", "198.51.100.7")])
+    assert _get(_kitchen_db(), "pi-0000000000aa", tunnel)["preferences"]["day_brightness"] == 40

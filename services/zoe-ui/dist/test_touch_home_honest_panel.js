@@ -96,6 +96,10 @@ const run = (box, code) => vm.runInContext(code, box);
       if (!/^\s*if\(!window\.__kiosk\)cmdbar\.innerHTML=/m.test(mainScript(t))) bad.push('the Ask bar is not built off-kiosk only');
       // a phone hand-off must land on a page that can do the job: no members page edits a reminder's words, so the reminder dialog has none
       if (/phoneQrHtml\('\/calendar\.html'/.test(near(mainScript(t), 'function editReminder(', 900))) bad.push('reminder edit hands off to a page that cannot edit it');
+      // nor a list item's words (lists.html only adds, ticks and deletes items): the item dialog says what works instead
+      const item = near(mainScript(t), "if(a==='edit'){", 600);
+      if (/handoffDialog\([^;]*'\/[\w-]+\.html'/.test(item)) bad.push('list-item edit hands off to a page that cannot rename an item');
+      if (!item.includes('To change the words, take it off the list and add the new one.')) bad.push('list-item edit does not say what works');
       if (/createElement\('input'\)/.test(s)) bad.push("createElement('input')");
       return bad;
     },
@@ -167,6 +171,8 @@ const run = (box, code) => vm.runInContext(code, box);
   check('control: a static text field is seen', () => red('typingFields', plant('<div id="cmdbar"></div>', '<div id="cmdbar"><input id="cmdin" type="text"></div>')));
   check('control: a Dismiss that leaves speech pending is seen', () => red('timerVoice', plant("ov.classList.remove('on');timerHush();", "ov.classList.remove('on');")));
   check('control: a reminder hand-off to a page that cannot edit it is seen', () => red('typingFields', plant("To change the words, delete this one and say the new reminder.", "x'+phoneQrHtml('/calendar.html','scan')+'")));
+  check('control: a list-item hand-off to a page that cannot rename it is seen', () => red('typingFields', plant("handoffDialog('Change “'+cur+'”','',''", "handoffDialog('Change “'+cur+'”','/lists.html','Scan'")));
+  check('control: a list-item dialog that hides what works is seen', () => red('typingFields', plant('To change the words, take it off the list and add the new one.', 'Edit it.')));
   check('control: a silent guest timer is seen', () => red('timerVoice', plant('if(!sid()){fb();return;}', 'if(!sid())return;')));
   check('control: an ignored person arrival is seen', () => red('personArrival', plant("if(wi>=0)openContact(ps[wi],wi);", "")));
   check('control: a chat without session id is seen', () => red('chatSession', plant('if(th)cb.session_id=th;', '')));

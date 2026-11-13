@@ -3594,9 +3594,10 @@
     return '<div class="phqr"><canvas width="150" height="150" data-qr="'+esc(o+path)+'"></canvas><div class="phcap">'+esc(cap)+'</div></div>';}
   function phoneQrDraw(m){function draw(){(m||document).querySelectorAll('.phqr canvas[data-qr]').forEach(function(cv){try{QRCode.toCanvas(cv,cv.getAttribute('data-qr'),{width:150,margin:0,errorCorrectionLevel:'M'});}catch(e){}});}
     if(window.QRCode)draw();else{var sc=document.createElement('script');sc.src='/lib/qrcode/qrcode.min.js';sc.onload=draw;document.head.appendChild(sc);}}
-  // A phone-or-voice edit dialog: the code, a "say it like this" line, and Say it (closes, opens the mic).
+  // A phone-or-voice edit dialog: the code, a "say it like this" line, and Say it (closes, opens the mic). No path = no code:
+  // only a page that can really do the job gets one.
   function handoffDialog(title,path,cap,sayLine,listenCue){
-    estOpen('<h3>'+esc(title)+'</h3>'+phoneQrHtml(path,cap)+(sayLine?'<div class="saysay">'+esc(sayLine)+'</div>':'')
+    estOpen('<h3>'+esc(title)+'</h3>'+(path?phoneQrHtml(path,cap):'')+(sayLine?'<div class="saysay">'+esc(sayLine)+'</div>':'')
       +'<div class="btns"><button data-x="cancel">Close</button>'+(sayLine?'<button class="save" data-x="say">Say it</button>':'')+'</div>');
     var m=document.getElementById('estModal');m.querySelector('[data-x="cancel"]').onclick=estClose;
     var sb=m.querySelector('[data-x="say"]');if(sb)sb.onclick=function(){estClose();panelVoice(listenCue||'Listening — tell Zoe the change');};
@@ -3667,8 +3668,9 @@
           if(a==='del'){estConfirm('Delete “'+(row.querySelector('.tx2')?row.querySelector('.tx2').textContent:'this item')+'”?',function(){
             apiJson('DELETE',base+iid).then(paintListBody).catch(function(){toast('Couldn’t delete');});});return;}
           if(a==='edit'){var cur=row.querySelector('.tx2')?row.querySelector('.tx2').textContent:'this item';
-            handoffDialog('Change “'+cur+'”','/lists.html','Scan to change it on your phone',
-              'Or say: “take '+cur+' off the list”, then add the new one.','Listening — tell Zoe what to change');return;}}
+            // no page renames a list item (lists.html widgets only add, tick and delete), so no phone code: say what works today
+            handoffDialog('Change “'+cur+'”','','',
+              'To change the words, take it off the list and add the new one. Say: “take '+cur+' off the list”, then the new one.','Listening — tell Zoe what to change');return;}}
         // otherwise: toggle completion
         var now=row.getAttribute('data-done')!=='1';
         row.classList.toggle('done',now);row.setAttribute('data-done',now?1:0);row.querySelector('.bx').innerHTML=now?CHK:'';

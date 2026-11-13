@@ -264,18 +264,54 @@ def _fact_text(item: Any) -> str:
     return str(item or "").strip()
 
 
-def _last_turn_epoch(rows) -> Optional[float]:
-    """Epoch seconds of the newest turn in ``rows`` (the ``at`` column), or None when it cannot be read."""
+def _turn_epoch(row) -> Optional[float]:
+    """Epoch seconds of one turn's ``at`` column, or None when it cannot be read."""
+    try:
+        at = row["at"]
+        return at.timestamp() if hasattr(at, "timestamp") else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _first_turn_epoch(rows) -> Optional[float]:
+    """Epoch seconds of the oldest turn in ``rows``, or None when none can be read."""
+    times = [t for t in (_turn_epoch(r) for r in rows or []) if t is not None]
+    return min(times) if times else None
+
+
+def _fact_said_at(item: Any, fact: str, rows) -> Optional[float]:
+    """When the member said the words a mined ``fact`` came from, for the value-correction staleness check.
+
+    The rule: the time of the NEWEST user turn that supports the fact - a turn holding the model's verbatim ``quote``
+    (``fact_anchor``) or a turn whose own sentence entails the fact, whichever is newer (subject, value and attribute together:
+    ``memory_authority.supporting_span``). A correction made after that turn makes the fact stale; a value restated after the
+    correction is the latest word and is kept. When no supporting turn can be identified, the session's FIRST turn time: the
+    fact may come from before a correction made mid-session, so any correction after the session began applies (the session's
+    LAST turn time would let a pre-correction value through whenever the chat carried on after the correction)."""
+    from memory_digest import fact_anchor
+    import memory_authority
+
+    quoted = isinstance(item, dict) and bool(str(item.get("quote") or "").strip())
     best = None
     for r in rows or []:
+        if str(r["role"]) != "user" or not r["content"]:
+            continue
+        content = str(r["content"])
+        # BOTH sets count: a turn holding the quote, and a turn whose own sentence entails the fact. With the quote alone, an
+        # early quoted turn would beat a newer restatement and make the fact look older than it is.
         try:
-            at = r["at"]
-            ts = at.timestamp() if hasattr(at, "timestamp") else None
-        except Exception:  # noqa: BLE001
-            ts = None
+            ok = quoted and fact_anchor(item, content) is not None
+        except Exception:  # noqa: BLE001 - an unreadable turn supports nothing
+            ok = False
+        if not ok:
+            try:
+                ok = bool(memory_authority.supporting_span(fact, content))
+            except Exception:  # noqa: BLE001
+                ok = False
+        ts = _turn_epoch(r) if ok else None
         if ts is not None and (best is None or ts > best):
             best = ts
-    return best
+    return best if best is not None else _first_turn_epoch(rows)
 
 
 async def _fetch_transcript_rows(conn, session_id: str, since: Optional[Any]) -> list:
@@ -448,8 +484,8 @@ async def consolidate_session(session_id: str, user_id: str,
         try:
             import value_correction
 
-            # the transcript's LAST turn: a correction made before it cannot make these words stale (they may restate the value)
-            stale = value_correction.superseded_by_correction(user_id, text, said_at=_last_turn_epoch(rows))
+            # the time of the turns that SUPPORT this fact (the first turn when none can be told): see _fact_said_at
+            stale = value_correction.superseded_by_correction(user_id, text, said_at=_fact_said_at(item, text, rows))
         except Exception:  # noqa: BLE001 - the check never costs the session its facts
             stale = False
         if stale:
