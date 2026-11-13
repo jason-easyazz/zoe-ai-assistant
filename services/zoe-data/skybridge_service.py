@@ -310,6 +310,8 @@ class _TimerStore:
         if target is not None:
             timers.remove(target)
             self._disarm(timer_id)  # cancelled or dismissed: it never speaks
+            if target.get("panel_id"):  # ... and a line already queued but not yet claimed is withdrawn
+                _spawn(_revoke_timer_done(target))
             self._prune(owner)
             self._save()
         return target
@@ -408,11 +410,44 @@ async def _queue_timer_done(owner: str, timer: dict[str, Any], left_s: float) ->
         async with get_compat_db() as db:
             await voice_announce.enqueue_announcement(db, user_id=owner, message=text, panel_id=timer["panel_id"],
                                                       trigger_type=TIMER_DONE_TRIGGER, ttl_s=max(1, int(left_s)),
-                                                      dedupe_key=f"timer_done:{timer['timer_id']}:{timer['expires_at']:.3f}")
+                                                      dedupe_key=_timer_done_key(timer))
         return "queued"
     except Exception as exc:  # noqa: BLE001 - the panel still shows and chimes the alarm
         logger.warning("TIMER_ANNOUNCE outcome=failed (%s)", type(exc).__name__)
         return "failed"
+
+
+def _timer_done_key(timer: dict[str, Any]) -> str:
+    """The queue row's idempotency key: timer id + due time (a replay after a crash finds the same row)."""
+    return f"timer_done:{timer['timer_id']}:{float(timer['expires_at']):.3f}"
+
+
+_BG: set = set()
+
+
+def _spawn(coro) -> None:
+    """Run ``coro`` on the running loop (kept referenced until done); closed unrun when there is no loop."""
+    try:
+        task = asyncio.get_running_loop().create_task(coro)
+    except RuntimeError:
+        coro.close()
+        return
+    _BG.add(task)
+    task.add_done_callback(_BG.discard)
+
+
+async def _revoke_timer_done(timer: dict[str, Any]) -> None:
+    """Withdraw the timer's pending "timer is done" row after a cancel or Dismiss. Never raises."""
+    try:
+        import voice_announce
+        from db_compat import get_compat_db
+
+        async with get_compat_db() as db:
+            withdrawn = await voice_announce.revoke_pending(db, dedupe_key=_timer_done_key(timer))
+        if withdrawn:
+            logger.info("TIMER_ANNOUNCE outcome=revoked")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("TIMER_ANNOUNCE outcome=revoke_failed (%s)", type(exc).__name__)
 
 
 async def preload_timers() -> None:

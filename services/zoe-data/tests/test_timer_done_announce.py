@@ -233,3 +233,100 @@ def test_card_tells_the_page_the_panel_speaks_it(monkeypatch):
                             "panel_id": "panel-kitchen"})["props"]["spoken_by_panel"] is True
     assert sky._timer_card({"timer_id": "a", "label": "Tea", "duration_seconds": 60,
                             "expires_at": 1.0})["props"]["spoken_by_panel"] is False
+
+
+_LATE_SPEECH_HARNESS = r"""
+const src = require('fs').readFileSync(process.argv[1], 'utf8');
+const alarmBody = 'var _ACK_KEY' + src.split('var _ACK_KEY')[1].split('_tAlarmRefresh();')[0];
+const refreshBody = 'function _tAlarmRefresh' + src.split('function _tAlarmRefresh')[1].split('function _beep')[0];
+function page() {
+  const els = {}; const mk = id => els[id] = els[id] || {id, innerHTML:'', onclick:null, classList:{add(){}, remove(){}}, appendChild(){}};
+  const document = {getElementById: id => (id === 'tmrAlarm' || id === 'tmrAlarmX') ? mk(id) : null, createElement: () => mk('tmrAlarm'), body: mk('body')};
+  const store = {}; const localStorage = {getItem:k => (k in store ? store[k] : null), setItem:(k,v) => { store[k] = v; }};
+  const said = [], st = {timers: []};
+  const SpeechSynthesisUtterance = function (t) { this.text = t; };
+  const window = {speechSynthesis: {cancel(){}, speak(u){ said.push(u.text); }}}, speechSynthesis = window.speechSynthesis;
+  const apiJson = () => Promise.resolve({}), timersGet = () => Promise.resolve({timers: st.timers});
+  const _tAlarm = {known:{}, fired:{}, chime:null}, _tmMemo = {p:1}, _cur = 'home';
+  const esc = x => x, sid = () => '', _beep = () => {}, setInterval = () => 1, clearInterval = () => {};
+  eval(alarmBody + refreshBody + '; globalThis.__p = {_tAlarmRefresh, _tAlarmTick, els};');
+  return Object.assign(globalThis.__p, {said, st});
+}
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const T = (spoken, exp) => ({timer_id: 't1', label: 'Tea', expires_at_ms: exp, spoken_by_panel: spoken});
+(async () => {
+  const out = {};
+  for (const name of ['late_false', 'always_true', 'dismissed_first']) {
+    const p = page(), exp = Date.now() + 40;
+    p.st.timers = [T(true, exp)]; await p._tAlarmRefresh(); await wait(10);
+    await wait(60); p._tAlarmTick();                          // fires: the panel would say it, so the page is silent
+    const atFire = p.said.length;
+    if (name === 'dismissed_first') { p.els.tmrAlarmX.onclick(); await wait(10); }
+    p.st.timers = [T(name === 'always_true', exp)];
+    await p._tAlarmRefresh(); await wait(10);                // the server now says the panel will not (or still will)
+    await p._tAlarmRefresh(); await wait(10);                // a second poll must not say it again
+    p._tAlarmTick();
+    out[name] = {atFire, said: p.said};
+  }
+  console.log(JSON.stringify(out));
+})();
+"""
+
+
+def test_page_speaks_a_silently_fired_alarm_once_when_the_panel_will_not():
+    """Review round 2: the alarm fired silently (spoken_by_panel true on the last poll), then the server's queue failed
+    or quiet hours began. The next poll that says false makes the page speak it ONCE; true stays silent; a dismissed
+    alarm is never spoken."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "zoe-ui", "dist", "touch", "home.html")
+    out = subprocess.run([node, "-e", _LATE_SPEECH_HARNESS, path], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    r = json.loads(out.stdout.strip().splitlines()[-1])
+    assert r["late_false"] == {"atFire": 0, "said": ["Tea timer is done"]}
+    assert r["always_true"] == {"atFire": 0, "said": []}
+    assert r["dismissed_first"] == {"atFire": 0, "said": []}
+
+
+async def _pending(conn):
+    cur = await conn.execute("SELECT id FROM voice_announcements WHERE delivered_at IS NULL AND expired = 0")
+    return [r[0] for r in await cur.fetchall()]
+
+
+async def test_dismiss_withdraws_the_pending_row(ann_db):
+    t = _set("member-a", "Pasta", "panel-kitchen", 0.05)
+    await asyncio.sleep(0.3)
+    assert len(await _pending(ann_db)) == 1
+    assert sky.cancel_any_timer(t["timer_id"]) is not None  # the panel's Dismiss
+    await asyncio.sleep(0.1)
+    assert await _pending(ann_db) == []
+    assert await voice_announce.claim_announcements(ann_db, panel_id="panel-kitchen") == []
+
+
+async def test_owner_cancel_withdraws_the_pending_row(ann_db):
+    t = _set("member-a", "Pasta", "panel-kitchen", 0.05)
+    await asyncio.sleep(0.3)
+    assert sky.cancel_timer_by_id("member-a", t["timer_id"]) is not None
+    await asyncio.sleep(0.1)
+    assert await _pending(ann_db) == []
+
+
+async def test_a_claimed_row_is_left_alone(ann_db):
+    t = _set("member-a", "Pasta", "panel-kitchen", 0.05)
+    await asyncio.sleep(0.3)
+    claimed = await voice_announce.claim_announcements(ann_db, panel_id="panel-kitchen")
+    assert len(claimed) == 1
+    sky.cancel_any_timer(t["timer_id"])
+    await asyncio.sleep(0.1)
+    cur = await ann_db.execute("SELECT delivered_at, expired FROM voice_announcements")
+    row = await cur.fetchone()
+    assert row["delivered_at"] is not None and row["expired"] == 0
+
+
+async def test_revoke_is_a_no_op_without_a_row(ann_db):
+    assert await voice_announce.revoke_pending(ann_db, dedupe_key="timer_done:none:1.000") is False
+    assert await _rows(ann_db) == []

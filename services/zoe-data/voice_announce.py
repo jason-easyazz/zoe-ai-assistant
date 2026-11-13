@@ -144,9 +144,7 @@ async def enqueue_announcement(
     ttl = max(1, int(ttl_s)) if ttl_s else _ttl_s()
     now = _now()
     if dedupe_key:
-        import hashlib
-
-        ann_id = "k" + hashlib.sha256(dedupe_key.encode("utf-8")).hexdigest()[:15]
+        ann_id = dedupe_id(dedupe_key)
     else:
         ann_id = uuid.uuid4().hex[:16]
     await db.execute(
@@ -166,6 +164,29 @@ async def enqueue_announcement(
     if commit:
         await db.commit()
     return ann_id
+
+
+def dedupe_id(dedupe_key: str) -> str:
+    """The row id ``enqueue_announcement`` derives from a ``dedupe_key`` (one place, so a revoke finds the same row)."""
+    import hashlib
+
+    return "k" + hashlib.sha256(str(dedupe_key).encode("utf-8")).hexdigest()[:15]
+
+
+async def revoke_pending(db, *, dedupe_key: str, commit: bool = True) -> bool:
+    """Withdraw the still-PENDING row queued under ``dedupe_key``; True when one was withdrawn.
+
+    Only a row nobody has claimed is touched (``delivered_at IS NULL``): a claimed or played row is the daemon's and is
+    left as it is. The row is marked ``expired`` rather than deleted, so a replayed enqueue of the same key still finds it
+    and adds nothing. No row = a no-op."""
+    async with db.execute(
+        "UPDATE voice_announcements SET expired = 1 WHERE id = ? AND delivered_at IS NULL AND expired = 0",
+        (dedupe_id(dedupe_key),),
+    ) as cur:
+        withdrawn = getattr(cur, "rowcount", 0) == 1
+    if commit:
+        await db.commit()
+    return withdrawn
 
 
 async def enqueue_command(
