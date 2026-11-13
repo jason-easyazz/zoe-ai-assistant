@@ -11,6 +11,7 @@ Negative controls (run by hand when this was written; each turned the named test
   * drop the ``decision == "approved"`` idempotence branch                -> test_a_verdict_is_recorded_once
   * make ``board_mirror_on`` default true                                  -> test_the_board_mirror_is_off_by_default
   * select approved rows again in ``_backlog``                             -> test_decided_cards_leave_the_list_and_later_comes_back
+  * ``_seen`` on ``proposed_at`` only (ignore ``last_seen``)              -> test_staleness_follows_the_latest_occurrence
   * call ``scan_windows`` on the loop (no ``asyncio.to_thread``)         -> test_the_scan_runs_off_the_event_loop
   * the old past-decisions query (approved / measured only)              -> test_every_verdict_leaves_a_visible_trail
   * cap the key path at ``MAX_IDS`` (500)                                  -> test_a_big_group_is_decided_by_its_key
@@ -233,6 +234,30 @@ def test_every_verdict_leaves_a_visible_trail(client, db, monkeypatch):
     assert past[yes]["decision"] == "approved" and wait not in past
     (swept,) = [d for d in out["decided"] if d.get("kind") == "dismissed_stale"]
     assert swept["count"] == 5 and swept["at"] and len(out["decided"]) == 3
+
+
+def test_staleness_follows_the_latest_occurrence(db, quiet, monkeypatch):
+    """Proposed 40 days ago but seen again today -> a live card, not stale; seen last 31 days ago -> stale; an old row with no
+    ``last_seen`` ages on ``proposed_at`` as before. The recurrence mark comes from the writers' own dedup path
+    (``record_user_issue`` / NOTICE). Negative control: make ``_seen`` return ``proposed_at`` only -> red."""
+    monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace())
+    monkeypatch.delenv(evolution_notice.BOARD_MIRROR_ENV, raising=False)
+    monkeypatch.setattr(evolution_notice.time, "time", lambda: NOW - 40 * DAY)
+    run(evolution_notice.record_user_issue("the synthetic kettle timer never rang", "member-a"))
+    run(evolution_notice.record_user_issue("the synthetic oven timer never rang", "member-a"))
+    monkeypatch.setattr(evolution_notice.time, "time", lambda: NOW)
+    run(evolution_notice.record_user_issue("the synthetic kettle timer never rang", "member-a"))     # recurred today
+    monkeypatch.setattr(evolution_notice.time, "time", lambda: NOW - 31 * DAY)
+    run(evolution_notice.record_user_issue("the synthetic oven timer never rang", "member-a"))       # last seen 31 days ago
+    legacy = add(db, "Intent gap: 'plain legacy row'", age_days=40)                                    # no last_seen at all
+    fresh_legacy = add(db, "Intent gap: 'plain recent row'", age_days=2)
+    out = run(ei.inbox("admin-1", now=NOW))
+    shown = {i for c in out["cards"] for i in run(ei._resolve(c["key"], NOW))}
+    ids = {r["title"]: r["id"] for r in db.rows("SELECT id, title FROM evolution_proposals")}
+    kettle = next(v for k, v in ids.items() if "kettle" in k)
+    oven = next(v for k, v in ids.items() if "oven" in k)
+    assert kettle in shown and fresh_legacy in shown
+    assert oven not in shown and legacy not in shown and out["stale"]["count"] == 2
 
 
 def test_dismiss_old_rejects_only_the_stale_bucket(client, db, monkeypatch):

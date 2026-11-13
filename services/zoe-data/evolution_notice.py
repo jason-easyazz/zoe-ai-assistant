@@ -101,14 +101,31 @@ def _simple_cluster(texts: list[str]) -> list[tuple[str, list[str]]]:
 
 
 async def _proposal_exists(title: str, prop_type: str, db) -> bool:
-    """Check if an open proposal with this type+title already exists."""
+    """True when an open proposal with this type + title already exists; it is then marked SEEN again (``_seen_again``)."""
     rows = await db.fetch(
         """SELECT id FROM evolution_proposals
            WHERE type=$1 AND title=$2
            AND status NOT IN ('rejected','kept','reverted')""",
         prop_type, title,
     )
+    if rows:
+        await _seen_again(db, rows[0]["id"])
     return len(rows) > 0
+
+
+async def _seen_again(db, pid: str, now: float | None = None) -> None:
+    """A tracked problem RECURRED: record the latest occurrence as ``evidence_json.signal.last_seen`` (and a ``seen_count``), so the
+    decide page ages a card on its newest evidence, not on the day it was first proposed. Never fails the writer."""
+    t = time.time() if now is None else float(now)
+    try:
+        row = await evolution_queue._fetch(db, str(pid))
+        sig = evolution_queue._json(row.get("evidence_json")).get("signal")
+        sig = dict(sig) if isinstance(sig, dict) else {}
+        sig["last_seen"] = round(t, 3)
+        sig["seen_count"] = int(sig.get("seen_count") or 1) + 1
+        await evolution_queue.attach_evidence(db, str(pid), {"signal": sig}, now=t)
+    except Exception as exc:  # noqa: BLE001 - a recurrence mark is evidence, never a reason to drop the write path
+        logger.warning("evolution_notice: could not mark %s seen again (%s)", pid, type(exc).__name__)
 
 
 def _attach_notice_trace_to_row(
@@ -401,6 +418,7 @@ async def record_frustration_signal(
             title,
         )
         if rows:
+            await _seen_again(db, rows[0]["id"])     # recurred: the card ages on its newest evidence
             return  # already tracked
 
         prop_id = uuid.uuid4().hex
@@ -511,6 +529,7 @@ async def record_user_issue(message: str, user_id: str) -> None:
             title,
         )
         if rows:
+            await _seen_again(db, rows[0]["id"])     # recurred: the card ages on its newest evidence
             return  # already tracked
 
         prop_id = uuid.uuid4().hex

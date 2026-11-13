@@ -302,7 +302,9 @@ def test_a_legacy_writer_lands_in_the_queue(db, monkeypatch):
     row = rows[0]
     assert (row["status"], row["decision"], row["change_class"], row["risk_tier"], row["component"], row["source"]) == (
         "proposed", "", "code", 3, "chat", "evolution_notice:user_issue_report")
-    assert json.loads(row["evidence_json"]) == {"signal": {"kind": "user_issue_report"}}       # counts only: the words stay in the legacy column
+    sig = json.loads(row["evidence_json"])["signal"]                                          # counts only: the words stay in the legacy column
+    assert sig["kind"] == "user_issue_report" and sig["seen_count"] == 2 and isinstance(sig["last_seen"], float)   # the repeat recurred
+    assert set(json.loads(row["evidence_json"])) == {"signal"} and set(sig) == {"kind", "seen_count", "last_seen"}
     assert json.loads(row["evidence"])["signal"]["source"] == "evolution_notice:user_issue_report"
     assert [h["to_status"] for h in db.rows("SELECT to_status FROM evolution_proposal_history")] == ["proposed"]
     walk(db, row["id"], ["rejected"])

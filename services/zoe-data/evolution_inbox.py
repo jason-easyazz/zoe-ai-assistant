@@ -105,7 +105,12 @@ async def _backlog(db, t: float) -> tuple[list[dict], int]:
 
 
 def _seen(row: dict) -> float:
-    """The EVIDENCE date of a row (when its signal was recorded): never ``updated_at``, which a decision bumps."""
+    """The LATEST EVIDENCE date of a row: ``evidence_json.signal.last_seen`` (set when a writer sees the tracked problem again),
+    else ``proposed_at``. Never ``updated_at``, which a decision bumps."""
+    sig = eq._json(row.get("evidence_json")).get("signal")
+    last = sig.get("last_seen") if isinstance(sig, dict) else None
+    if isinstance(last, (int, float)) and not isinstance(last, bool) and last > 0:
+        return max(float(last), float(row.get("proposed_at") or 0))
     return float(row.get("proposed_at") or 0)
 
 
@@ -124,7 +129,7 @@ def _queue_cards(groups: dict[str, list[dict]], now: float) -> list[dict]:
     for key, members in groups.items():
         m0 = members[0]
         component, cls, kind = m0["component"], m0["change_class"], _kind(m0)
-        first = min(_seen(m) for m in members)
+        first = min(float(m.get("proposed_at") or 0) for m in members)
         last = max(_seen(m) for m in members)
         strength = sum(_strength(m) for m in members)
         tier = max(int(m.get("risk_tier") or 0) for m in members)

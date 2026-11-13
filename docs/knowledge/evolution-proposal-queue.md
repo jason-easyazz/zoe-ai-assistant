@@ -76,7 +76,9 @@ change proposals - there is no night-mind proposal writer in the repo. **Generat
 
 - `GET /api/system/evolution/inbox?stale_days=30`: at most 20 cards. A card groups the UNDECIDED open proposals (not approved, not
   put off past their review date) with the same component, class, kind and normalised title (or lesson id), ranked by (count + summed
-  signal counts) halved every 14 days of EVIDENCE age (`proposed_at`; a decision never refreshes a card). A card carries its count and
+  signal counts) halved every 14 days of EVIDENCE age (the latest occurrence: `evidence_json.signal.last_seen`, which the NOTICE /
+  frustration / user-report writers set when they see an already-tracked problem again; else `proposed_at`; a decision never
+  refreshes a card). A card carries its count and
   an opaque group `key` (a hash of those grouping fields), never its ids. A group with no new evidence for `stale_days` is stale. Struggle proposals
   (live evidence only) and the owner's own failed-turn clusters (counts only, no buttons) are cards too. Open rows with no activity for
   `stale_days` are only a count; rows put off with "later" are a count. A card carries kind, counts, dates, the proposed change and its
