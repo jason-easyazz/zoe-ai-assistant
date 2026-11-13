@@ -91,9 +91,10 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
 
 ### 1.4 The restore drill and alerts
 
-- **Weekly, on the box** (Sunday 05:30): the restore drill of section 7.2 - the on-box dumps restored into a throwaway
-  container, the palace opened and queried, the host archive checked. It runs first in `zoe-backup-verify`.
-- **Monthly** (the weekly `zoe-backup-verify` runs it once per 28 days, Sunday 05:30): for each tier, restore the newest snapshot
+- **Weekly, on the box** (timer daily 05:30, drill only when DUE: no pass for ~6.5 days): the restore drill of section 7.2 -
+  the on-box dumps restored into a throwaway container, the palace opened and queried, the host archive checked. It runs first
+  in `zoe-backup-verify`; a refused or failed drill is retried the next morning.
+- **Monthly** (`zoe-backup-verify` runs it once per 28 days, 05:30): for each tier, restore the newest snapshot
   from the411 into a scratch dir (`~/.cache/zoe-offbox/drill-*`, removed after), compare every file's sha256 with the manifest the
   box recorded when it SENT that snapshot, read one twelfth of the repo's data (`restic check --read-data-subset=<month>/12`, the
   whole repo once a year), and check retention: a household snapshot more than 35 days older than the newest (no slack) means the411's prune
@@ -280,7 +281,7 @@ Not added (and why): the Flue brain session store (447 MB, append-only, no forge
 path cannot reach; decide with D-1), Docker named volumes other than the database (`multica-uploads`: lab-grade), the ONNX MiniLM
 cache and HF weights (re-downloadable; the lock covers the brain), the Pi itself (the panel's own backup is V-3's).
 
-### 7.2 The weekly restore drill (`zoe_restore_drill.py`, Sunday 05:30)
+### 7.2 The weekly restore drill (`zoe_restore_drill.py`, timer daily 05:30, runs when due)
 
 The old weekly check restored the newest dumps **into the live Postgres instance**, counted two tables, never loaded the palace's
 HNSW index, and ran at 03:30 inside the night window. Now:
@@ -307,9 +308,19 @@ HNSW index, and ran at 03:30 inside the night window. Now:
    **host archive**: every file against its manifest sha256, every source label present, the HA export opens and holds
    `core.config_entries`; freshness (newest dump, tarball and archive under 26 h); the drill image vs the live container's.
 4. **Guards.** Refuses (quietly) inside 01:35-04:55 or while `zoe-night-window` runs; waits up to 45 min for `zoe-backup` /
-   `zoe-offbox-backup`; refuses **loudly (alert + failed unit, exit 4)** below 1100 MB MemAvailable (measured peak ~180 MB, container cap 512 MB) (the voice stack is resident). Findings alert over
-   Telegram through the crash-loop watcher's sender; a drill that has not passed for 15 days says so. State:
-   `~/.local/state/zoe-offbox/last_restore_drill.json`.
+   `zoe-offbox-backup`; samples MemAvailable every minute for up to 30 min and only then refuses **loudly (alert + failed
+   unit, exit 4)** below 1100 MB (measured peak ~180 MB, container cap 512 MB; the voice stack is resident; one low sample at
+   05:31 refused the 2026-11-01 drill for a whole week). Findings alert over Telegram through the crash-loop watcher's sender.
+   State: `~/.local/state/zoe-offbox/last_restore_drill.json`.
+5. **Cadence and staleness.** The timer fires daily; the drill exits 5 (not due, nothing runs) while its last pass is under
+   6.5 days old, so a refusal or a failure is retried each morning until it passes. A drill with no pass for 10 days
+   (`STALE_PASS_DAYS`; counted from the last pass, else from the first attempt that did not pass) turns every refusal loud and
+   adds a finding to every failure. `zoe_restore_drill.py --check-stale` (exit 0 fresh / 4 stale, never alerts) is the
+   independent probe; `zoe_health.py` runs it as its `restore drill` check, so a timer that stopped firing still alarms.
+6. **Log format.** `~/.zoe-logs/backup-verify.log` has no journald timestamps, so `zoe-backup-verify.sh` brackets every run:
+   `zoe-backup-verify: start <ISO-8601>` first, then `zoe-backup-verify: result <ISO-8601> onbox=<pass|failed|refused-quiet|
+   refused-loud|not-due> offbox=<ok|failed|skipped>` just before the unchanged last line (`done` / `N problem(s) detected`).
+   An `ALERT:` line between a start and its result belongs to that run.
 
 Never touched: the live database (the drill only reads its image name), the live palace (`palace_drill_check.py` refuses
 `~/.mempalace`), the live backups (read only).
@@ -371,7 +382,7 @@ verify on 2026-10-25, and it would equally break a real disaster restore. The cl
    `zoe_offbox.py`, `pg_dump_manifest.py` and `pg_restore_plan.py` alongside it - the script finds them next to itself), or point
    `zoe-backup-verify.service` at the repo copy.
 3. **Units**: `cp scripts/setup/systemd/zoe-backup{,-verify}.{service,timer} ~/.config/systemd/user/ && systemctl --user
-   daemon-reload` (both timers are already enabled live; the verify moves from the live 03:30 to Sunday 05:30). The first
+   daemon-reload` (both timers are already enabled live; the verify runs daily at 05:30 and drills when due). The first
    night writes `~/.zoe-backups/host/` and the first dump manifests; run `python3 scripts/maintenance/zoe_restore_drill.py` by
    hand once after that (outside 01:35-04:55, MemAvailable >= 1100 MB) and read its `ok:` lines.
 4. **Optional**: local encryption of the host archive (7.3), after section 4 step 3 exists.

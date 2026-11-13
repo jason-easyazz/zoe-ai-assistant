@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -376,3 +377,31 @@ def test_mempalace_archive_is_published_only_after_tar_succeeds():
     body = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
     assert 'tar -czf "$out"' not in body and body.count('tar -czf "$part"') == 2
     assert 'mv "$part" "$out"' in body and '"$part"\' EXIT' in body
+
+
+def test_health_alarms_when_the_restore_drill_has_gone_stale():
+    """A drill refused week after week, or a verify timer that stopped firing, is not a failed unit (2026-11-14)."""
+    def run(rc, out):
+        def _r(argv, timeout=5.0):
+            if argv[1:] == [str(health.DRILL), "--check-stale"]:
+                return rc, out
+            return _fake_run(argv, timeout)
+        return _r
+    ok = health.restore_drill_check(run(0, "restore drill: last pass 2026-11-08T05:31:00+08:00"))
+    assert ok.ok and ok.name == "restore drill"
+    bad = health.restore_drill_check(run(4, "STALE: the restore drill has never passed (13 days ...)"))
+    assert not bad.ok and "never passed" in bad.detail
+    assert not health.restore_drill_check(run(124, "TimeoutExpired")).ok      # a hung probe is not a pass
+    checks = health.probe(http=lambda port: (True, "x"), run=run(4, "STALE: x"), night_open=True)
+    c = [c for c in checks if c.name == "restore drill"]
+    assert c and not c[0].ok                                    # in the probe even while the window is open
+    _, st = health.transitions(c, {})
+    lines, _ = health.transitions(c, st)
+    assert lines and lines[0].startswith("DOWN: restore drill")
+
+
+def test_health_restore_drill_probe_runs_the_real_cli(tmp_path):
+    env = {**os.environ, "ZOE_OFFBOX_STATE_DIR": str(tmp_path)}
+    r = subprocess.run([sys.executable, str(health.DRILL), "--check-stale"], capture_output=True, text=True, env=env,
+                       timeout=60)
+    assert r.returncode == 4 and "ever been recorded" in r.stdout

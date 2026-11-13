@@ -424,15 +424,16 @@ def test_preflight_night_window_quiet_busy_backup_alerts_low_memory_alerts(monke
     assert e.value.alert is True
     monkeypatch.setattr(ob, "mem_available_mb", lambda: 1200)
     with pytest.raises(ob.Refused) as e:
-        drill.preflight(day, 2000, active=lambda u: False)
+        drill.preflight(day, 2000, active=lambda u: False, mem_wait_s=0)
     assert e.value.alert is True and "1200" in str(e.value)
     monkeypatch.setattr(ob, "mem_available_mb", lambda: 4000)
     drill.preflight(day, 2000, active=lambda u: False)           # control: a clear Sunday morning runs
 
 
-def test_verify_timer_is_sunday_morning_outside_the_night_window():
+def test_verify_timer_is_daily_morning_outside_the_night_window():
+    """Daily since 2026-11-14 (the drill self-gates to ~weekly): a refused Sunday used to wait a whole week."""
     t = (SYSTEMD / "zoe-backup-verify.timer").read_text()
-    m = re.search(r"^OnCalendar=Sun \*-\*-\* (\d\d):(\d\d):00$", t, re.M)
+    m = re.search(r"^OnCalendar=\*-\*-\* (\d\d):(\d\d):00$", t, re.M)
     assert m and (int(m.group(1)), int(m.group(2))) == (5, 30)
     delay = int(re.search(r"RandomizedDelaySec=(\d+)", t).group(1))
     assert delay <= 600 and not ob.in_quiet_hours(datetime(2026, 10, 18, 5, 30))
@@ -470,7 +471,7 @@ def test_floor_refuses_below_and_runs_at_or_above(monkeypatch):
     day = datetime(2026, 10, 25, 5, 30)
     monkeypatch.setattr(ob, "mem_available_mb", lambda: drill.MEM_FLOOR_MB - 1)
     with pytest.raises(ob.Refused):
-        drill.preflight(day, drill.MEM_FLOOR_MB, active=lambda u: False)
+        drill.preflight(day, drill.MEM_FLOOR_MB, active=lambda u: False, mem_wait_s=0)
     monkeypatch.setattr(ob, "mem_available_mb", lambda: drill.MEM_FLOOR_MB)
     drill.preflight(day, drill.MEM_FLOOR_MB, active=lambda u: False)      # control: exactly the floor runs
 
@@ -483,7 +484,9 @@ def test_container_is_hard_capped_with_swap_off_and_small_postgres():
     assert "--pids-limit" in h
 
 
-def _run_main(monkeypatch, tmp_path, *, avail, now, alerts):
+def _run_main(monkeypatch, tmp_path, *, avail, now, alerts, argv=()):
+    monkeypatch.setattr(drill, "MEM_WAIT_S", 0)
+    monkeypatch.setattr(drill.time, "sleep", lambda s: None)
     monkeypatch.setattr(ob, "mem_available_mb", lambda: avail)
     monkeypatch.setattr(ob, "alert", lambda t: alerts.append(t))
     monkeypatch.setattr(drill, "unit_active", lambda u: False)
@@ -497,7 +500,7 @@ def _run_main(monkeypatch, tmp_path, *, avail, now, alerts):
         home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=tmp_path / "s",
         stage_dir=tmp_path / "st")))
     (tmp_path / "s").mkdir(exist_ok=True)
-    return drill.main([])
+    return drill.main(list(argv))
 
 
 def test_low_memory_refusal_is_loud_exit_4_and_alerts(monkeypatch, tmp_path):
@@ -514,7 +517,7 @@ def test_night_window_refusal_stays_quiet_exit_3_no_alert(monkeypatch, tmp_path)
     assert rc == drill.EXIT_REFUSED_QUIET == 3 and not alerts
 
 
-def test_quiet_refusals_turn_loud_once_the_drill_has_not_passed_for_15_days(monkeypatch, tmp_path):
+def test_quiet_refusals_turn_loud_once_the_drill_has_gone_stale(monkeypatch, tmp_path):
     alerts: list[str] = []
     s = tmp_path / "s"
     s.mkdir()
@@ -522,9 +525,9 @@ def test_quiet_refusals_turn_loud_once_the_drill_has_not_passed_for_15_days(monk
     rc = _run_main(monkeypatch, tmp_path, avail=4000,
                    now=datetime(2026, 10, 25, 3, 0).astimezone(), alerts=alerts)
     assert rc == drill.EXIT_REFUSED_LOUD and alerts and "has not passed" in alerts[0]
-    # control: a recent pass keeps the same quiet refusal quiet
+    # control: a pass that is due again (8 days) but not stale keeps the same quiet refusal quiet
     alerts.clear()
-    (s / "last_restore_drill.json").write_text(json.dumps({"last_ok": "2026-10-20T05:30:00+08:00"}))
+    (s / "last_restore_drill.json").write_text(json.dumps({"last_ok": "2026-10-17T05:30:00+08:00"}))
     rc = _run_main(monkeypatch, tmp_path, avail=4000,
                    now=datetime(2026, 10, 25, 3, 0).astimezone(), alerts=alerts)
     assert rc == drill.EXIT_REFUSED_QUIET and not alerts
@@ -542,6 +545,7 @@ def test_verify_script_fails_the_unit_on_loud_refusal_not_on_quiet(tmp_path):
     assert r4.returncode == 1 and "REFUSED to run" in r4.stderr   # loud refusal -> unit failed, named as a refusal
     assert run(3).returncode == 0                    # quiet (night window) -> not a failure
     assert run(0).returncode == 0                    # control: pass
+    assert run(5).returncode == 0                    # not due: nothing ran, not a failure
 
 
 def test_loud_refusals_are_recorded_so_a_later_quiet_one_still_escalates(monkeypatch, tmp_path):
@@ -577,6 +581,7 @@ def test_preflight_resolves_unit_active_at_call_time_so_host_state_cannot_leak(m
     probed: list[str] = []
     monkeypatch.setattr(drill, "unit_active", lambda u: probed.append(u) or False)   # host says: nothing active
     monkeypatch.setattr(ob, "mem_available_mb", lambda: 10)
+    monkeypatch.setattr(drill, "MEM_WAIT_S", 0)
     with pytest.raises(ob.Refused) as e:
         drill.preflight(day, drill.MEM_FLOOR_MB)                  # no active= passed: the patched probe must be used
     assert e.value.alert is True and "MemAvailable" in str(e.value) and probed   # low-memory, not quiet/stalled
@@ -598,11 +603,140 @@ def test_preflight_resolves_sleep_at_call_time(monkeypatch):
     assert slept == [30]                                           # waited via the patched sleep, no real 30 s
 
 
-def test_staleness_escalates_at_exactly_15_days_and_survives_an_unwritable_state(monkeypatch, tmp_path):
+def test_staleness_escalates_at_exactly_stale_days_and_survives_an_unwritable_state(monkeypatch, tmp_path):
+    assert drill.STALE_PASS_DAYS == 10
     st = tmp_path / "last_restore_drill.json"
-    st.write_text(json.dumps({"last_ok": "2026-10-10T05:30:00+08:00"}))
+    st.write_text(json.dumps({"last_ok": "2026-10-15T05:30:00+08:00"}))
     at = datetime.fromisoformat("2026-10-25T05:30:00+08:00")
-    assert drill.note_refusal(st, at) is True                      # exactly 15 days
+    assert drill.note_refusal(st, at) is True                      # exactly 10 days
     assert drill.note_refusal(st, at - drill.timedelta(seconds=1)) is False       # control: just under
     monkeypatch.setattr(ob, "_atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError("ro")))
     assert drill.note_refusal(st, at) is True                      # still loud when the state cannot be written
+
+
+# ── 2026-11-14: memory wait, daily cadence with a due gate, staleness probe, dated log lines ────────────────────────
+
+
+def test_memory_wait_rides_out_a_transient_dip(monkeypatch):
+    """2026-11-01: one 906 MB sample at 05:31 refused the drill for a week. A dip that recovers must not refuse."""
+    samples = iter([906, 950, drill.MEM_FLOOR_MB + 50])
+    slept: list[float] = []
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: next(samples))
+    drill.wait_for_memory(drill.MEM_FLOOR_MB, 30 * 60, slept.append)
+    assert slept == [drill.MEM_SAMPLE_S] * 2
+
+
+def test_memory_wait_refuses_loudly_with_the_range_once_the_wait_is_spent(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 900 + len(slept))
+    with pytest.raises(ob.Refused) as e:
+        drill.wait_for_memory(drill.MEM_FLOOR_MB, 5 * 60, slept.append)
+    assert e.value.alert is True and len(slept) == 5                # 6 samples over 5 min, then refuse
+    assert "for 5 min" in str(e.value) and "900-905 MB" in str(e.value)
+
+
+def test_preflight_waits_for_memory_by_default(monkeypatch):
+    samples = iter([500, drill.MEM_FLOOR_MB])
+    slept: list[float] = []
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: next(samples))
+    drill.preflight(datetime(2026, 11, 15, 5, 30), drill.MEM_FLOOR_MB, active=lambda u: False, sleep=slept.append)
+    assert slept == [drill.MEM_SAMPLE_S]
+    assert drill.MEM_WAIT_S >= 15 * 60 and drill.MEM_WAIT_S < 3 * 3600   # inside the unit's TimeoutStartSec=3h
+
+
+def _state(tmp_path, d: dict) -> None:
+    s = tmp_path / "s"
+    s.mkdir(exist_ok=True)
+    (s / "last_restore_drill.json").write_text(json.dumps(d))
+
+
+def test_not_due_skips_before_any_guard_or_alert(monkeypatch, tmp_path):
+    alerts: list[str] = []
+    _state(tmp_path, {"last_ok": "2026-11-12T05:31:00+08:00"})
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime.fromisoformat("2026-11-15T05:31:00+08:00"),
+                   alerts=alerts)
+    assert rc == drill.EXIT_NOT_DUE == 5 and not alerts             # low memory never even sampled
+    # control: a week after the pass it is due, so the same low memory now refuses loudly
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime.fromisoformat("2026-11-19T05:31:00+08:00"),
+                   alerts=alerts)
+    assert rc == drill.EXIT_REFUSED_LOUD and alerts
+    # and --force runs it inside the week
+    alerts.clear()
+    _state(tmp_path, {"last_ok": "2026-11-12T05:31:00+08:00"})
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime.fromisoformat("2026-11-15T05:31:00+08:00"),
+                   alerts=alerts, argv=["--force"])
+    assert rc == drill.EXIT_REFUSED_LOUD and alerts
+
+
+def test_a_weekly_timer_jitter_cannot_skip_a_week():
+    last = datetime.fromisoformat("2026-11-08T05:35:00+08:00")      # passed late in the 5-min jitter
+    assert drill.is_due({"last_ok": last.isoformat()}, datetime.fromisoformat("2026-11-15T05:30:00+08:00"))
+    assert not drill.is_due({"last_ok": last.isoformat()}, datetime.fromisoformat("2026-11-14T05:30:00+08:00"))
+    assert drill.is_due({}, datetime.fromisoformat("2026-11-14T05:30:00+08:00"))
+    assert drill.is_due({"last_ok": "garbage"}, datetime.fromisoformat("2026-11-14T05:30:00+08:00"))
+
+
+def test_check_stale_probe(monkeypatch, tmp_path, capsys):
+    now = datetime.fromisoformat("2026-11-14T08:00:00+08:00")
+    cases = [({"last_ok": "2026-11-08T05:31:00+08:00"}, 0, "last pass"),
+             ({"last_ok": "2026-11-01T05:31:00+08:00"}, 4, "has not passed in 13 days"),
+             # the live shape on 2026-11-14: never passed, first refused 2026-11-01, failed 2026-11-08
+             ({"last_ok": None, "first_refusal": "2026-11-01T05:31:09+08:00", "ok": False}, 4, "never passed"),
+             ({}, 4, "ever been recorded")]
+    for st, rc_want, text in cases:
+        _state(tmp_path, st)
+        alerts: list[str] = []
+        rc = _run_main(monkeypatch, tmp_path, avail=10, now=now, alerts=alerts, argv=["--check-stale"])
+        out = capsys.readouterr().out
+        assert rc == rc_want and text in out and not alerts, (st, rc, out)
+
+
+def test_a_drill_that_never_passed_is_anchored_at_its_first_failure(monkeypatch, tmp_path):
+    """Before 2026-11-14 a drill that failed without a prior refusal had no anchor, so 'never passed' never fired."""
+    s = tmp_path / "s"
+    s.mkdir()
+    monkeypatch.setattr(ob, "alert", lambda t: None)
+    monkeypatch.setattr(ob, "mem_available_mb", lambda: 5000)
+    monkeypatch.setattr(ob.Paths, "from_env", classmethod(lambda cls: ob.Paths(
+        home=tmp_path, checkout=tmp_path, config_dir=tmp_path / "c", state_dir=s, stage_dir=tmp_path / "st")))
+    monkeypatch.setattr(drill.Sandbox, "default", classmethod(lambda cls: None))
+    monkeypatch.setattr(drill, "run_drill", lambda *a, **k: drill.Result(findings=["host archive: x"]))
+    times = iter([datetime.fromisoformat("2026-11-01T05:31:00+08:00"),
+                  datetime.fromisoformat("2026-11-12T05:31:00+08:00")])
+
+    class _DT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(times)
+    monkeypatch.setattr(drill, "datetime", _DT)
+    assert drill.main(["--ignore-window"]) == 1
+    st = json.loads((s / "last_restore_drill.json").read_text())
+    assert st["first_unpassed"].startswith("2026-11-01") and st["first_refusal"] is None
+    assert drill.main(["--ignore-window"]) == 1
+    st = json.loads((s / "last_restore_drill.json").read_text())
+    assert any("never passed" in f for f in st["findings"])          # 11 days on: the failure says so
+    assert st["first_unpassed"].startswith("2026-11-01")
+
+
+def _verify(tmp_path, code: int) -> subprocess.CompletedProcess:
+    d = tmp_path / f"v{code}"
+    d.mkdir()
+    (d / "zoe-backup-verify.sh").write_text((MAINT / "zoe-backup-verify.sh").read_text())
+    (d / "zoe_restore_drill.py").write_text(f"import sys; sys.exit({code})\n")
+    return subprocess.run(["bash", str(d / "zoe-backup-verify.sh")], capture_output=True, text=True,
+                          env={**os.environ, "HOME": str(tmp_path)})
+
+
+@pytest.mark.parametrize("code,onbox,rc", [(0, "pass", 0), (1, "failed", 1), (3, "refused-quiet", 0),
+                                           (4, "refused-loud", 1), (5, "not-due", 0)])
+def test_every_verify_run_is_bracketed_by_dated_start_and_result_lines(tmp_path, code, onbox, rc):
+    r = _verify(tmp_path, code)
+    stamp = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d"
+    assert r.returncode == rc
+    out = r.stdout.splitlines()
+    assert re.fullmatch(rf"zoe-backup-verify: start {stamp}", out[0])
+    res = [ln for ln in out if ln.startswith("zoe-backup-verify: result ")]
+    assert len(res) == 1 and re.fullmatch(rf"zoe-backup-verify: result {stamp} onbox={onbox} offbox=skipped", res[0])
+    # the last line is unchanged (labs/felt-scorecard ends a run on it)
+    last = (r.stderr if rc else r.stdout).splitlines()[-1]
+    assert re.fullmatch(r"zoe-backup-verify: (done|\d+ problem\(s\) detected)", last)

@@ -10,7 +10,9 @@ Probes, all bounded (2 s HTTP, 5 s docker/systemctl):
   * the spine's real ``/health`` (never ``is-active``, which lies while a model loads): zoe-data :8000,
     the 4B llama-server :11434, the Flue 2.x brain :3579, Kokoro :10201, the FunctionGemma router :11436;
   * Postgres (``pg_isready`` in zoe-database), containers in ``(unhealthy)`` / ``Restarting``;
-  * failed user units (a failed backup or verify job shows up here), disk on /, MemAvailable.
+  * failed user units (a failed backup or verify job shows up here), disk on /, MemAvailable;
+  * the restore drill has passed in the last 10 days (``zoe_restore_drill.py --check-stale``): a failed unit clears
+    when the next run is merely refused or never fires, so staleness is its own check.
 While the night window is open (``~/.zoe/night-window/WINDOW_OPEN``) the spine is stopped ON PURPOSE: its probes
 are skipped, not failed.
 
@@ -82,6 +84,14 @@ def _run(argv: list[str], timeout: float = 5.0) -> tuple[int, str]:
 
 
 NIGHT_TIMER = "zoe-night-window.timer"
+DRILL = REPO_ROOT / "scripts" / "maintenance" / "zoe_restore_drill.py"
+
+
+def restore_drill_check(run: Callable = _run) -> Check:
+    """A drill refused week after week, or a verify timer that stopped firing, never shows as a failed unit."""
+    rc, txt = run([sys.executable, str(DRILL), "--check-stale"], timeout=20.0)
+    line = (txt or "").strip().splitlines()[-1:] or [f"rc={rc}"]
+    return Check("restore drill", rc == 0, line[0])
 
 
 def night_timer_check(run: Callable = _run) -> Check:
@@ -113,6 +123,7 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
     failed = sorted(ln.split()[0] for ln in txt.splitlines() if ln.strip()) if rc == 0 else []
     out.append(Check("failed units", not failed, ", ".join(failed) if failed else "none"))
     out.append(night_timer_check(run))
+    out.append(restore_drill_check(run))
     du = shutil.disk_usage("/")
     pct = round(100 * du.used / du.total)
     out.append(Check("disk /", pct < DISK_WARN_PCT, f"{pct}% used"))
