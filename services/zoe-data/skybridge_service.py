@@ -3826,9 +3826,12 @@ async def _calendar_refusal(db: Any, user_id: str, event_id: Any, intent: Skybri
         line = f"I could not find a calendar event to {verb}."
         return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
                 "cards": [_status_card("Which appointment?", line)], "actions": []}
-    if calendar_read.is_writable(row):
+    if calendar_read.is_writable(row) and not calendar_read.is_repeating_row(row):
         return None
-    line = calendar_read.refusal(row)
+    if not calendar_read.is_writable(row):
+        line = calendar_read.refusal(row)
+    else:   # a repeating event: the card lists one occurrence, the write would hit the whole series
+        line = calendar_read.REPEATING_MOVE_LINE if verb == "move" else calendar_read.REPEATING_DELETE_LINE
     return {"handled": True, "intent": _intent_dict(intent), "spoken_summary": line,
             "cards": [_status_card(f"I can't {verb} that event", line)], "actions": []}
 

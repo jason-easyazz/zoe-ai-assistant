@@ -187,6 +187,21 @@ def source_label(row: dict) -> str:
     return str(row.get("calendar_name") or "") or SOURCE_LABELS.get(source, "another calendar")
 
 
+REPEATING_DELETE_LINE = "That's a repeating event. I can't remove just one yet, so change it on your phone."
+REPEATING_MOVE_LINE = "That's a repeating event. I can't move just one yet, so change it on your phone."
+
+
+def is_repeating_row(row: Optional[dict]) -> bool:
+    """A STORED row (``load_for_write``) that belongs to a series: a master (``rrule`` / legacy ``recurring`` /
+    ``rdates``) or an override (``recurrence_id`` / ``series_id``). Voice and card edits act on the row's id, and the
+    lists now show one item per occurrence, so a "delete this one" or "move this one" there would change every
+    occurrence (or, for an override, bring the master's instance back). Callers refuse with the lines above until
+    per-occurrence edits exist."""
+    if not row:
+        return False
+    return is_recurring(row) or bool(str(row.get("recurrence_id") or "").strip() or str(row.get("series_id") or "").strip())
+
+
 def refusal(row: dict) -> str:
     """The honest answer when an edit is refused: where the event lives, and that the change belongs there."""
     source = str(row.get("source") or "local").strip().lower()

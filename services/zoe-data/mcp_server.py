@@ -2311,6 +2311,10 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         current, refused = await _calendar_writable_row(db, eid, user_id)
         if refused:
             return refused
+        from calendar_read import REPEATING_MOVE_LINE, is_repeating_row
+
+        if is_repeating_row(current) and {"start_date", "start_time", "end_time", "all_day"}.intersection(args):
+            return {"error": REPEATING_MOVE_LINE, "status": "repeating"}      # one occurrence's time would move the series
         updates, params = [], []
         for field in ("title", "start_date", "start_time", "end_time", "location", "category"):
             if field in args:
@@ -2335,9 +2339,13 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     elif name == "calendar_delete_event":
         eid = args["event_id"]
-        _row, refused = await _calendar_writable_row(db, eid, user_id)
+        row, refused = await _calendar_writable_row(db, eid, user_id)
         if refused:
             return refused
+        from calendar_read import REPEATING_DELETE_LINE, is_repeating_row
+
+        if is_repeating_row(row):
+            return {"error": REPEATING_DELETE_LINE, "status": "repeating"}    # never the whole series from one occurrence
         from calendar_service import now_text
 
         await db.execute("UPDATE events SET deleted=1, deleted_at=?, updated_at=NOW() WHERE id=? AND user_id=?",

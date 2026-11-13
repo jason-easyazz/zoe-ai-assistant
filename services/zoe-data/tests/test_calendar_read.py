@@ -405,3 +405,38 @@ async def test_stored_mode_returns_each_master_and_override_once_as_stored(db):
                                                 include_cancelled=False, expand=False,
                                                 user={"user_id": A, "role": "user"}, db=db))["events"]
     assert sorted((e["id"], e["start_date"]) for e in events) == sorted([(master, "2026-10-07"), (moved, "2026-11-19")])
+
+
+async def test_voice_and_card_edits_of_a_repeating_event_are_refused_and_a_one_off_still_deletes(db, monkeypatch):
+    async def actor(_db, _name, _args, _ctx):
+        return {"user_id": A, "role": "user"}
+
+    async def quiet(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", actor)
+    monkeypatch.setattr(mcp_server, "_notify_ui", quiet)
+    monkeypatch.setattr(sky, "today_for_zoe_tz", lambda: date(2026, 6, 11))
+    series = await _add(db, "Dentist", "2026-05-28", start_time="15:00", rrule="FREQ=WEEKLY")
+    override = await _add(db, "Physio", "2026-06-11", start_time="15:00", series_id=series, recurrence_id="2026-06-10")
+    once = await _add(db, "Haircut", "2026-06-11", start_time="15:00")
+    pg = _PgOverSqlite(db)
+    # Skybridge card / voice: the card shows this week's occurrence, the row is the series
+    result = await sky.resolve_skybridge_request("delete Dentist from my calendar", A, context=_sky_context(series, "Dentist"), db=pg)
+    assert result["actions"] == [] and result["spoken_summary"] == calendar_read.REPEATING_DELETE_LINE
+    result = await sky.resolve_skybridge_request("change my dentist to 9am", A, context=_sky_context(series, "Dentist"), db=pg)
+    assert result["actions"] == [] and result["spoken_summary"] == calendar_read.REPEATING_MOVE_LINE
+    assert await _row(db, series) == ("Dentist", "15:00", 0)
+    # MCP (the brain's tools): delete refused for a master and an override; a time change refused; a rename is fine
+    for eid in (series, override):
+        out = await mcp_server._execute_tool(db, "calendar_delete_event", {"event_id": eid})
+        assert (out["status"], out["error"]) == ("repeating", calendar_read.REPEATING_DELETE_LINE)
+    out = await mcp_server._execute_tool(db, "calendar_update_event", {"event_id": series, "start_time": "09:00"})
+    assert (out["status"], out["error"]) == ("repeating", calendar_read.REPEATING_MOVE_LINE)
+    assert (await mcp_server._execute_tool(db, "calendar_update_event", {"event_id": series, "title": "Dentist (Dr B)"}))["status"] == "updated"
+    assert await _row(db, series) == ("Dentist (Dr B)", "15:00", 0) and (await _row(db, override))[2] == 0
+    # a one-off still deletes, by voice and by tool
+    result = await sky.resolve_skybridge_request("delete Haircut from my calendar", A, context=_sky_context(once, "Haircut"), db=pg)
+    assert result["actions"][0]["type"] == "deleted" and (await _row(db, once))[2] == 1
+    other = await _add(db, "Car service", "2026-06-12")
+    assert (await mcp_server._execute_tool(db, "calendar_delete_event", {"event_id": other}))["status"] == "deleted"
