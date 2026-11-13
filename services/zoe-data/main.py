@@ -891,11 +891,23 @@ async def _probe_runtimes() -> None:
     logger.info("Runtime health probe: local_llm=%s", _RUNTIME_HEALTH["local_llm"])
 
 
+async def _sync_alerting_notice() -> None:
+    """Owner alerting broken (recorded by the shared ops helper, maybe from a timer with no DB) -> the owner's panel
+    notification, created on this tick without anyone's request. Never raises."""
+    try:
+        import notifications_store
+
+        await notifications_store.sync_alerting_broken()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("alerting notice sync failed (non-fatal): %s", type(exc).__name__)
+
+
 async def _runtime_health_refresh_loop() -> None:
-    """Re-probe runtime health every 5 minutes."""
+    """Re-probe runtime health every 5 minutes (and surface a broken owner-alert path on the panel)."""
     while True:
         await asyncio.sleep(300)
         await _probe_runtimes()
+        await _sync_alerting_notice()
 
 
 _MEMPALACE_MIG_FLAG_KEY = "mempalace_wing_migration_done"

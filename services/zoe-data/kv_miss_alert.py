@@ -12,6 +12,7 @@ even be stored is retried on later misses, at most ``MAX_ATTEMPTS_PER_DAY`` a da
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import importlib.util
 import json
@@ -86,9 +87,39 @@ def _ops_send(text: str) -> bool:
         return False
     outcome, reason = _ops_module().deliver(ALERT_CODE, text, log=_marker_log)
     _last_failure = "" if outcome == "delivered" else str(reason)
+    if reason in ("auth", "config"):
+        _notice_owner_now()
     if outcome in ("queued", "gave_up"):
         logger.warning("kv_miss_alert: alert not delivered now, held in the outbox for retry: %s", _last_failure)
     return outcome in ("delivered", "uncertain", "queued")
+
+
+def alerting_spells() -> list:
+    """The ops helper's recent broken spells [{since, reason, healed}], [] when none or unreadable. Read-only; under
+    pytest only when a test injected the ops module."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and _ops_mod is None:
+        return []
+    try:
+        return list(_ops_module().alerting_spells())
+    except Exception:  # noqa: BLE001
+        return []
+
+
+_loop = None   # zoe-data's event loop, captured by note_first_miss (called on it): the owner notice is created there
+
+
+def _notice_owner_now() -> None:
+    """zoe-data itself just saw alerting break: create the owner's panel notification NOW on its event loop, rather
+    than waiting for the 5-minute tick. Never raises; nothing when there is no loop (tests, sync mode)."""
+    loop = _loop
+    if loop is None or loop.is_closed():
+        return
+    try:
+        import notifications_store
+
+        asyncio.run_coroutine_threadsafe(notifications_store.sync_alerting_broken(), loop)
+    except Exception:  # noqa: BLE001
+        logger.debug("kv_miss_alert: owner notice not scheduled", exc_info=True)
 
 
 def alerting_broken() -> "dict | None":
@@ -110,9 +141,14 @@ def note_first_miss(first_prompt: int, first_cache: int, *, now: "float | None" 
     """Count one cold first turn and send the day's single alert. ALL work (state file I/O included) runs on a daemon
     thread, so the voice turn that hit the miss never waits on storage; ``sync=True`` (tests) runs it inline and returns
     the text sent, or None."""
+    global _loop
     try:
         if not _enabled():
             return None
+        try:
+            _loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
         if sync:
             return _record_and_send(first_prompt, first_cache, now, send)
         threading.Thread(target=_record_and_send, args=(first_prompt, first_cache, now, send),

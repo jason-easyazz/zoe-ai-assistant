@@ -33,12 +33,25 @@ def _load_module():
 mod = _load_module()
 
 
+def _route_through_outbox(monkeypatch, tmp_path, transport):
+    """Every alert now goes through deliver(): a temp outbox, no backoff sleeps, and ``transport`` (text -> outcome class)
+    standing in for the ops Telegram path. A bare ``_telegram`` call would bypass the outbox, so it fails the test."""
+    monkeypatch.setattr(mod, "OUTBOX_PATH", str(tmp_path / "alert-outbox.json"))
+    monkeypatch.setattr(mod, "INLINE_BACKOFF_S", (0.0, 0.0))
+    monkeypatch.setattr(mod, "_ops_transport", transport)
+
+    def bypass(*a, **k):
+        raise AssertionError("an owner alert bypassed the shared outbox")
+
+    monkeypatch.setattr(mod, "_telegram", bypass)
+
+
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
     """Isolate state + capture what would have been sent."""
     monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
     sent: list[str] = []
-    monkeypatch.setattr(mod, "_telegram", lambda text: sent.append(text) or True)
+    _route_through_outbox(monkeypatch, tmp_path, lambda text: sent.append(text) or "delivered")
 
     def configure(*, restarts: int, healthy: bool, active: str = "activating"):
         monkeypatch.setattr(mod, "_systemd_prop",
@@ -132,20 +145,29 @@ def test_unreadable_unit_is_an_error_not_a_false_alarm(rig, monkeypatch):
     assert sent == []
 
 
-def test_alert_not_marked_delivered_when_send_fails(rig, monkeypatch):
-    """If Telegram is down the alert must stay pending, so the next tick retries
-    instead of the box going quiet about an ongoing outage."""
+def test_alert_not_marked_delivered_when_send_fails(rig, monkeypatch, tmp_path):
+    """If Telegram is down the alert must stay pending, so a later tick retries instead of the box going quiet about an
+    ongoing outage. ONE retry path: the outbox holds it and the tick's drain() re-sends it, exactly once; the watcher's
+    own state does not raise a duplicate."""
+    import json
+
     configure, sent = rig
     configure(restarts=0, healthy=True, active="active")
     mod.check(threshold=5, cooldown=1800, dry_run=False)
 
-    monkeypatch.setattr(mod, "_telegram", lambda text: False)
+    tried: list[str] = []
+    monkeypatch.setattr(mod, "_ops_transport", lambda text: tried.append(text) or "network")
     configure(restarts=30, healthy=False)
     mod.check(threshold=5, cooldown=1800, dry_run=False)
+    assert tried and sent == []
+    assert [e["code"] for e in json.loads((tmp_path / "alert-outbox.json").read_text())["entries"]] == ["crash_loop"]
 
-    monkeypatch.setattr(mod, "_telegram", lambda text: sent.append(text) or True)
+    monkeypatch.setattr(mod, "_ops_transport", lambda text: sent.append(text) or "delivered")
     configure(restarts=60, healthy=False)
-    mod.check(threshold=5, cooldown=1800, dry_run=False)
+    mod.check(threshold=5, cooldown=1800, dry_run=False)        # still looping, inside cooldown: no second raise
+    assert sent == []
+    mod.drain(now=10**10)                                        # the tick's retry
+    mod.drain(now=10**10 + 1)
     assert len(sent) == 1 and "crash-looping" in sent[0]
 
 
@@ -307,7 +329,7 @@ def test_a_nonempty_env_recipient_still_overrides(monkeypatch, tmp_path):
 def units_rig(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
     sent: list[str] = []
-    monkeypatch.setattr(mod, "_telegram", lambda text: sent.append(text) or True)
+    _route_through_outbox(monkeypatch, tmp_path, lambda text: sent.append(text) or "delivered")
     props: dict = {}
     monkeypatch.setattr(mod, "_systemd_prop", lambda unit, prop: props.get((unit, prop), ""))
     return props, sent
@@ -389,21 +411,66 @@ def test_restarts_older_than_the_window_do_not_add_up(units_rig, monkeypatch):
 
 
 def test_an_undelivered_alert_is_retried_until_telegram_takes_it(tmp_path, monkeypatch):
+    """One tick = check_units() then drain() (as main() does). Telegram down: the loop alert is held in the outbox and
+    every due tick retries it; once Telegram takes it, it is delivered exactly once and never re-sent."""
     monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
     attempts: list[str] = []
+    delivered: list[str] = []
     up = [False]
-    monkeypatch.setattr(mod, "_telegram", lambda text: attempts.append(text) or up[0])
+
+    def transport(text):
+        attempts.append(text)
+        if up[0]:
+            delivered.append(text)
+            return "delivered"
+        return "network"
+
+    _route_through_outbox(monkeypatch, tmp_path, transport)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(mod.time, "time", lambda: clock[0])
     props = {(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "activating"}
     monkeypatch.setattr(mod, "_systemd_prop", lambda unit, prop: props.get((unit, prop), ""))
+
+    def tick():
+        clock[0] += 3600                                   # past any backoff
+        mod.check_units([BOT], 5, 1800, False)
+        mod.drain()
+
     mod.check_units([BOT], 5, 1800, False)
     props[(BOT, "NRestarts")] = "40"
-    mod.check_units([BOT], 5, 1800, False)                # detected; Telegram down
-    mod.check_units([BOT], 5, 1800, False)                # counter flat: still retried
+    tick()                                                 # detected; Telegram down
+    tick()                                                 # counter flat: still retried (by the outbox)
+    failed_before = len(attempts)
+    assert failed_before >= 2 and delivered == []
     up[0] = True
-    mod.check_units([BOT], 5, 1800, False)                # delivered
-    mod.check_units([BOT], 5, 1800, False)                # nothing pending any more
-    loop_attempts = [a for a in attempts if a.startswith("🔴")]
-    assert len(loop_attempts) == 3
+    tick()                                                 # delivered
+    tick()                                                 # nothing pending any more
+    loops = [d for d in delivered if d.startswith("🔴")]
+    assert len(loops) == 1 and BOT in loops[0]
+    assert not mod._load_state()["units"][BOT].get("pending"), "the watcher keeps no second retry path"
+
+
+def test_a_recovery_never_overtakes_its_undelivered_loop_alert(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "STATE_PATH", str(tmp_path / "state.json"))
+    delivered: list[str] = []
+    up = [False]
+    _route_through_outbox(monkeypatch, tmp_path,
+                          lambda text: (delivered.append(text) or "delivered") if up[0] else "network")
+    props = {(BOT, "NRestarts"): "0", (BOT, "ActiveState"): "active"}
+    monkeypatch.setattr(mod, "_systemd_prop", lambda unit, prop: props.get((unit, prop), ""))
+    mod.check_units([BOT], 5, 1800, False)
+    props.update({(BOT, "NRestarts"): "40", (BOT, "ActiveState"): "activating"})
+    mod.check_units([BOT], 5, 1800, False)                # loop alert held
+    up[0] = True
+    props[(BOT, "ActiveState")] = "active"
+    mod.check_units([BOT], 5, 1800, False)                # the recovery raise sends both, oldest first
+    assert [d[:1] for d in delivered] == ["🔴", "🟢"]
+
+
+def test_alert_codes_are_fixed_per_unit():
+    assert mod._unit_code("unit_crash_loop", BOT) == "unit_crash_loop.flue-zoe-telegram"
+    assert mod._unit_code("unit_crash_loop", "not-watched.service") == "unit_crash_loop"
+    assert all(mod._CODE_RE.match(mod._unit_code(p, u)) for u in mod.OTHER_UNITS for p in ("unit_crash_loop", "unit_recovered"))
 
 
 def test_the_bot_and_the_brains_are_watched():

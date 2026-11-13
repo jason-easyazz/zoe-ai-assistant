@@ -122,9 +122,9 @@ def test_the_outbox_holds_only_code_times_counts_and_the_text(box):
     mod.deliver("Bad Code!", "ops text", transport=Transport("network", "network", "network"), now=T0,
                 sleep=box["sleep"], log=box["log"])
     st = _read(box)
-    assert set(st) <= {"entries", "totals", "broken"}
+    assert set(st) <= {"entries", "totals", "broken", "spells"}
     (e,) = st["entries"]
-    assert set(e) == {"code", "text", "first_ts", "last_raised_ts", "raised", "tries", "next_ts"}
+    assert set(e) == {"code", "text", "first_ts", "last_raised_ts", "raised", "tries", "next_ts", "rev"}
     assert e["code"] == "other", "a code outside the fixed vocabulary shape is never stored verbatim"
     for ln in box["lines"]:
         assert ln.startswith("ALERT_DELIVERY event=") and "ops text" not in ln, "markers carry counts only"
@@ -157,3 +157,97 @@ def test_http_401_from_telegram_is_classified_auth(tmp_path, monkeypatch):
     monkeypatch.setattr(mod.urllib.request, "urlopen", unreachable)
     assert mod._telegram_result("x", report=lines.append) == "network"
     assert mod._telegram("x", report=lines.append) is False
+
+
+# ── durability and concurrency: the lock is never held across a send ──
+
+def test_the_entry_is_durable_before_the_send_and_the_lock_is_free_during_it(box):
+    seen = {}
+
+    def transport(text):
+        seen["on_disk"] = [e["code"] for e in _read(box)["entries"]]
+        with mod._outbox_locked():                  # would deadlock (flock is per open file) if the sender held it
+            seen["lock_free"] = True
+        return "delivered"
+
+    assert mod.deliver("health", "x", transport=transport, now=T0, log=box["log"])[0] == "delivered"
+    assert seen == {"on_disk": ["health"], "lock_free": True}
+
+
+def test_a_transport_that_raises_leaves_the_entry_and_the_next_drain_sends_it_once(box):
+    def boom(text):
+        raise RuntimeError("socket blew up")
+
+    assert mod.deliver("health", "x", transport=boom, now=T0, sleep=box["sleep"], log=box["log"])[0] == "queued"
+    assert [e["code"] for e in _read(box)["entries"]] == ["health"]
+    up = Transport()
+    mod.drain(transport=up, now=T0 + 99999, log=box["log"])
+    mod.drain(transport=up, now=T0 + 99999 + 1, log=box["log"])
+    assert up.sent == ["x"]
+
+
+def test_a_sender_killed_mid_send_leaves_a_claimed_entry_that_a_later_drain_sends_exactly_once(box):
+    def killed(text):
+        raise SystemExit(137)
+
+    with pytest.raises(SystemExit):
+        mod.deliver("crash_loop", "x", transport=killed, now=T0, log=box["log"])
+    (e,) = _read(box)["entries"]
+    assert e["code"] == "crash_loop" and e.get("claim"), "durable, and claimed by the dead sender"
+    up = Transport()
+    assert mod.drain(transport=up, now=T0 + 10, log=box["log"]) == {} and up.sent == [], "lease not expired yet"
+    assert mod.drain(transport=up, now=T0 + mod.CLAIM_LEASE_S + 1, log=box["log"]) == {"crash_loop": ("delivered", "-")}
+    mod.drain(transport=up, now=T0 + mod.CLAIM_LEASE_S + 2, log=box["log"])
+    assert up.sent == ["x"] and _read(box)["entries"] == []
+
+
+def test_two_interleaved_senders_keep_each_others_entries(box):
+    """Sender A is mid-send (lock released) when sender B raises and fails; A's write-back must re-read, not overwrite."""
+    def b_transport(text):
+        return "network"
+
+    def a_transport(text):
+        if text == "a":
+            out = mod.deliver("backup", "b", transport=b_transport, now=T0 + 1, sleep=box["sleep"], log=box["log"])
+            assert out[0] == "queued"
+        return "delivered"
+
+    assert mod.deliver("health", "a", transport=a_transport, now=T0, log=box["log"]) == ("delivered", "-")
+    st = _read(box)
+    assert [e["code"] for e in st["entries"]] == ["backup"], "B's held alert survived A's write-back"
+    assert st["totals"]["raised"] == 2 and st["totals"]["delivered"] == 1
+
+
+def test_a_superseded_entry_whose_old_text_was_delivered_still_sends_the_new_text(box):
+    def a_transport(text):
+        if text == "old":
+            mod.deliver("health", "new", transport=Transport(), now=T0 + 1, log=box["log"])   # in flight: not sent twice
+        return "delivered"
+
+    mod.deliver("health", "old", transport=a_transport, now=T0, log=box["log"])
+    up = Transport()
+    mod.drain(transport=up, now=T0 + 2, log=box["log"])
+    assert up.sent == ["new"] and _read(box)["entries"] == []
+
+
+def test_the_outbox_file_is_0600_whatever_the_umask(box):
+    import os
+    import stat
+
+    old = os.umask(0)
+    try:
+        mod.deliver("health", "x", transport=Transport("network", "network", "network"), now=T0, sleep=box["sleep"],
+                    log=box["log"])
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(box["path"].stat().st_mode) == 0o600
+
+
+def test_broken_spells_are_recorded_and_kept_after_heal(box):
+    mod.deliver("health", "x", transport=Transport("auth"), now=T0, log=box["log"])
+    assert mod.alerting_spells() == [{"since": T0, "reason": "auth", "healed": None}]
+    mod.deliver("health", "y", transport=Transport("auth"), now=T0 + 5, log=box["log"])
+    assert len(mod.alerting_spells()) == 1, "one spell while it stays broken"
+    mod.drain(transport=Transport("delivered"), now=T0 + 99999, log=box["log"])
+    assert mod.alerting_broken() is None
+    assert mod.alerting_spells() == [{"since": T0, "reason": "auth", "healed": T0 + 99999}]

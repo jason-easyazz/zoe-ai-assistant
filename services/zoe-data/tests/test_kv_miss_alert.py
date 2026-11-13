@@ -238,8 +238,11 @@ def test_kv_alert_that_fails_is_held_and_delivered_once_later_and_the_daily_cap_
     mod, urls, up = _ops_rig(monkeypatch, tmp_path, "TELEGRAM_BOT_TOKEN=file-token\nZOE_ALERT_TELEGRAM_CHAT_IDS=42\n",
                              "env-token")
     caplog.set_level("INFO", logger="kv_miss_alert")
+    noticed: list = []
+    monkeypatch.setattr(kma, "_notice_owner_now", lambda: noticed.append(1))
     up[0] = False
     assert kma.note_first_miss(3400, 0, now=DAY1, sync=True)
+    assert noticed == [1], "zoe-data was the sender: the owner's panel notice is created at that moment"
     assert len(urls) == 1, "an auth refusal is not retried inline"
     assert json.loads((tmp_path / "state.json").read_text())["alerted"] is True, "the outbox owns it now"
     assert mod.alerting_broken()["reason"] == "auth" and kma.alerting_broken()["reason"] == "auth"
@@ -254,3 +257,33 @@ def test_kv_alert_that_fails_is_held_and_delivered_once_later_and_the_daily_cap_
     assert mod.drain(now=10**10) == {"kv_miss_first": ("delivered", "-")}
     assert mod.drain(now=10**10 + 1) == {} and len(urls) == 2, "delivered once, never again"
     assert mod.alerting_broken() is None
+
+
+def test_the_direct_owner_notice_runs_on_zoe_datas_event_loop(monkeypatch):
+    """From the alert's worker thread, the panel notification is scheduled on the captured event loop (no tick wait)."""
+    import asyncio
+    import threading
+
+    import notifications_store
+
+    ran: list = []
+
+    async def fake_sync():
+        ran.append(threading.current_thread().name)
+        return 1
+
+    monkeypatch.setattr(notifications_store, "sync_alerting_broken", fake_sync)
+
+    async def main():
+        monkeypatch.setattr(kma, "_loop", asyncio.get_running_loop())
+        t = threading.Thread(target=kma._notice_owner_now, name="kv-miss-alert")
+        t.start()
+        t.join()
+        for _ in range(20):
+            await asyncio.sleep(0)
+        return threading.current_thread().name
+
+    loop_thread = asyncio.run(main())
+    assert ran == [loop_thread]
+    monkeypatch.setattr(kma, "_loop", None)
+    kma._notice_owner_now()                                    # no loop: nothing, no error

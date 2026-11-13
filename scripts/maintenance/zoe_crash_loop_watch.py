@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 STATE_PATH = os.path.expanduser("~/.zoe/crash_loop_watch.json")
 TELEGRAM_ENV = os.path.expanduser("~/assistant/labs/flue-zoe-telegram-2x/.env")
@@ -179,23 +180,30 @@ def _telegram_result(text: str, report=None) -> str:
 
 
 # ── the shared owner-alert delivery helper ────────────────────────────────────────────────────────────────────────
-# EVERY owner alert goes through deliver() (services/AGENTS.md). Why: 2026-10-28..11-03 nine alerts were raised, failed
+# EVERY owner alert goes through deliver() (scripts/AGENTS.md). Why: 2026-10-28..11-03 nine alerts were raised, failed
 # with HTTP 401 and were simply lost - nothing retried them and nothing said alerting itself was broken.
 #
-# deliver() first writes the alert to a durable OUTBOX, then tries to send it (bounded retries with backoff for a
-# transient failure, an explicit 15 s timeout per request). Delivered (or uncertain) = removed; otherwise it stays and
-# every later deliver() / drain() (the crash-loop watcher's 2-minute tick) retries it on an exponential backoff, until
-# delivered or GIVE_UP_S old (then a loud gave_up marker; never a silent drop).
+# Shape of every send (deliver() and drain() alike), so the lock is NEVER held across the network:
+#   (a) a short locked write: the alert is upserted into the durable OUTBOX and the due entries are CLAIMED (a lease,
+#       CLAIM_LEASE_S), the file and its directory fsynced;
+#   (b) the lock is released and the claimed entries are sent (bounded retries with backoff for a transient failure,
+#       an explicit 15 s timeout per request);
+#   (c) a second short locked write RE-READS the outbox and records each outcome on the entry it claimed (a concurrent
+#       sender's changes are kept). Delivered (or uncertain) = removed; otherwise it stays, backed off.
+# A process killed during (b) leaves its claimed entries on disk; when the lease expires the next drain() (the crash-loop
+# watcher's 2-minute tick) sends them. An alert is retried until delivered or GIVE_UP_S old (then a loud gave_up marker;
+# never a silent drop). A raise whose code is pending SUPERSEDES that entry's text (one entry per code).
 #
 # The outbox is ONE small JSON file, not a table: every sender (zoe-data's thread, three systemd timers) can reach it
 # with no database, while zoe-data or Postgres are the very things that may be down. It holds per alert only a fixed
 # code, timestamps, counts and the message text; a caller must pass text with NO household content (ops facts only).
-# It also keeps running totals (the durable raised-vs-delivered record) and, while delivery fails on a credential or a
-# missing setting, the ``broken`` record that the second channel reads (notifications_store: a panel notification for
-# the owner, which does not use the Telegram credential at all).
+# It also keeps running totals (the durable raised-vs-delivered record), the open ``broken`` record while delivery
+# fails on a credential or a missing setting, and ``spells`` (the last SPELLS_KEPT broken spells, healed ones included)
+# that zoe-data turns into the owner's panel notification - the second channel, which does not use the Telegram
+# credential (notifications_store.sync_alerting_broken).
 #
 # Marker, one line per outcome, counts only:
-#   ALERT_DELIVERY event=<raised|delivered|uncertain|queued|gave_up|broken|healed> code=<code> tries=<n> reason=<class> pending=<n>
+#   ALERT_DELIVERY event=<raised|delivered|uncertain|queued|gave_up|broken|healed|failed> code=<code> tries=<n> reason=<class> pending=<n>
 OUTBOX_PATH = os.path.expanduser("~/.zoe/alert-outbox.json")
 OUTBOX_MAX = 50                  # distinct pending codes; the oldest beyond this gives up (loudly)
 MAX_TEXT = 1000
@@ -204,6 +212,8 @@ RETRY_BASE_S = 120               # first later retry after 2 min, doubling, capp
 RETRY_MAX_S = 3600
 INLINE_BACKOFF_S = (2.0, 6.0)    # the new alert's own retries: 3 attempts in ~8 s, transient failures only
 DRAIN_LIMIT = 10
+CLAIM_LEASE_S = 300              # > the longest send (recipients x 15 s x 3 + 8 s): a claim older than this was a dead sender
+SPELLS_KEPT = 20
 BROKEN = ("auth", "config")
 TRANSIENT = ("network", "server")
 _CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,39}$")
@@ -211,6 +221,11 @@ _CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,39}$")
 
 def _stderr_log(line: str) -> None:
     print(line, file=sys.stderr)
+
+
+def _ops_transport(text: str) -> str:
+    """The default transport: the ops Telegram path, one outcome class, no report lines (the class is the reason)."""
+    return _telegram_result(text, report=lambda _line: None)
 
 
 def _live_outbox_under_test() -> bool:
@@ -234,21 +249,36 @@ def _load_outbox() -> dict:
     return box
 
 
+def _write_outbox(box: dict) -> None:
+    """Atomic, durable write: temp file 0600 (fchmod, whatever the umask), fsync, rename, fsync the directory."""
+    box.pop("corrupt", None)
+    d = os.path.dirname(OUTBOX_PATH)
+    tmp = OUTBOX_PATH + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, json.dumps(box).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, OUTBOX_PATH)
+    dfd = os.open(d, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 @contextlib.contextmanager
 def _outbox_locked():
-    """The outbox, read-modify-written under an exclusive lock (several processes send). Raises OSError when it
-    cannot be stored."""
+    """A SHORT read-modify-write under an exclusive lock (several processes send). Never send inside it. Raises OSError
+    when the outbox cannot be stored."""
     os.makedirs(os.path.dirname(OUTBOX_PATH), exist_ok=True)
     with open(OUTBOX_PATH + ".lock", "a") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         box = _load_outbox()
         yield box
-        box.pop("corrupt", None)
-        tmp = OUTBOX_PATH + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            json.dump(box, fh)
-        os.replace(tmp, OUTBOX_PATH)
+        _write_outbox(box)
 
 
 def _marker(log, event: str, code: str, tries: int = 0, reason: str = "-", pending: int = 0) -> None:
@@ -267,7 +297,8 @@ def _backoff(tries: int) -> float:
 
 
 def _attempt(transport, text: str, attempts: int, sleep) -> tuple[str, int]:
-    """Up to ``attempts`` sends; only a TRANSIENT class is retried. (outcome class, attempts used)."""
+    """Up to ``attempts`` sends; only a TRANSIENT class is retried. (outcome class, attempts used). An Exception from
+    the transport is a network failure; a BaseException (the process being killed) propagates: the claim stays on disk."""
     res = "network"
     for i in range(attempts):
         try:
@@ -281,62 +312,111 @@ def _attempt(transport, text: str, attempts: int, sleep) -> tuple[str, int]:
     return res, attempts
 
 
-def _drain_locked(box: dict, transport, now: float, sleep, log, inline: str = "") -> dict:
-    """Send every DUE entry (oldest first, at most DRAIN_LIMIT). The entry named ``inline`` gets the bounded inline
-    retries; the rest one attempt each (their backoff is across drains). Stops at the first broken/transient failure:
-    the same credential and network would fail the rest too. Returns {code: (outcome, reason)}."""
+def _claimed(ent: dict, now: float) -> bool:
+    c = ent.get("claim") or {}
+    return bool(c) and float(c.get("until") or 0) > now
+
+
+def _claim_due(box: dict, now: float, inline: str = "") -> list[dict]:
+    """(a) Claim unclaimed entries, OLDEST FIRST (so a "recovered" never overtakes the loop alert it answers), at most
+    DRAIN_LIMIT: on a fresh raise (``inline`` = its code) every pending entry, since the path is being tried anyway; on a
+    drain only the DUE ones (their backoff). Returns snapshots {code, text, rev, claim, inline} to send outside the lock."""
+    due = sorted((e for e in box["entries"]
+                  if (inline or float(e.get("next_ts") or 0) <= now) and not _claimed(e, now)),
+                 key=lambda e: float(e.get("first_ts") or 0))[:DRAIN_LIMIT]
+    out = []
+    for e in due:
+        cid = uuid.uuid4().hex
+        e["claim"] = {"id": cid, "until": now + CLAIM_LEASE_S}
+        out.append({"code": e["code"], "text": e.get("text") or "", "rev": int(e.get("rev") or 0), "claim": cid,
+                    "inline": e["code"] == inline})
+    return out
+
+
+def _send_claimed(claims: list[dict], transport, sleep) -> list[tuple[dict, str, int]]:
+    """(b) Send outside the lock. Stops at the first broken/transient failure: the same credential and network would
+    fail the rest too (they are released unsent in (c))."""
+    done = []
+    for c in claims:
+        res, used = _attempt(transport, c["text"], 3 if c["inline"] else 1, sleep)
+        done.append((c, res, used))
+        if res not in ("delivered", "uncertain"):
+            break
+    return done
+
+
+def _record(box: dict, claims: list[dict], done: list[tuple[dict, str, int]], now: float, log) -> dict:
+    """(c) Record outcomes on the RE-READ outbox. An entry whose text was superseded while it was being sent (its
+    ``rev`` moved) is kept and due again if its OLD text was delivered: the new text has not been sent yet."""
     out: dict = {}
     entries = box["entries"]
-    due = sorted((e for e in entries if float(e.get("next_ts") or 0) <= now),
-                 key=lambda e: (e.get("code") != inline, float(e.get("first_ts") or 0)))[:DRAIN_LIMIT]
-    for ent in due:
-        code = ent["code"]
-        res, used = _attempt(transport, ent.get("text") or "", 3 if code == inline else 1, sleep)
-        ent["tries"] = int(ent.get("tries") or 0) + used
+    by_code = {e.get("code"): e for e in entries}
+    sent_ids = {c["claim"] for c, _r, _u in done}
+    for c in claims:                                  # claimed but not attempted: released, no attempt counted
+        e = by_code.get(c["code"])
+        if c["claim"] not in sent_ids and e and (e.get("claim") or {}).get("id") == c["claim"]:
+            e.pop("claim", None)
+    for c, res, used in done:
+        code = c["code"]
+        e = by_code.get(code)
+        if e is None or (e.get("claim") or {}).get("id") != c["claim"]:
+            continue                                  # another sender took over after our lease expired: theirs counts
+        e.pop("claim", None)
+        e["tries"] = int(e.get("tries") or 0) + used
+        superseded = int(e.get("rev") or 0) != c["rev"]
         if res in ("delivered", "uncertain"):
-            entries.remove(ent)
             _bump(box, res)
-            _marker(log, res, code, ent["tries"], "-", len(entries))
+            if superseded:
+                e["next_ts"] = now
+            else:
+                entries.remove(e)
+            _marker(log, res, code, e["tries"], "-", len(entries))
             if res == "delivered" and box.get("broken"):
-                box.pop("broken")
-                _marker(log, "healed", code, ent["tries"], "-", len(entries))
+                br = box.pop("broken")
+                for sp in box.get("spells") or []:
+                    if sp.get("since") == br.get("since"):
+                        sp["healed"] = now
+                _marker(log, "healed", code, e["tries"], "-", len(entries))
             out[code] = (res, "-")
             continue
         if res in BROKEN:
-            br = box.get("broken") or {"since": now, "count": 0}
+            br = box.get("broken")
+            if not br:
+                br = {"since": now, "count": 0}
+                spells = box.setdefault("spells", [])
+                spells.append({"since": now, "reason": res, "healed": None})
+                del spells[:-SPELLS_KEPT]
             box["broken"] = {**br, "last": now, "reason": res, "count": int(br.get("count") or 0) + 1}
             _bump(box, "broken")
-            _marker(log, "broken", code, ent["tries"], res, len(entries))
-        if now - float(ent.get("first_ts") or now) >= GIVE_UP_S:
-            entries.remove(ent)
+            _marker(log, "broken", code, e["tries"], res, len(entries))
+        if now - float(e.get("first_ts") or now) >= GIVE_UP_S:
+            entries.remove(e)
             _bump(box, "gave_up")
-            _marker(log, "gave_up", code, ent["tries"], res, len(entries))
+            _marker(log, "gave_up", code, e["tries"], res, len(entries))
             out[code] = ("gave_up", res)
         else:
-            ent["next_ts"] = now + _backoff(ent["tries"])
+            e["next_ts"] = now + _backoff(e["tries"])
             _bump(box, "queued")
-            _marker(log, "queued", code, ent["tries"], res, len(entries))
+            _marker(log, "queued", code, e["tries"], res, len(entries))
             out[code] = ("queued", res)
-        break
     return out
 
 
 def deliver(code: str, text: str, *, transport=None, now: "float | None" = None, sleep=time.sleep,
             log=None) -> tuple[str, str]:
     """Raise one owner alert. Returns (outcome, reason): outcome is delivered | uncertain | queued (the outbox holds it
-    and will retry) | gave_up | failed (it could not even be stored, and the direct send failed too). ``reason`` is a
-    transport class from the closed vocabulary above, or "-". A new alert with the code of one still pending
-    SUPERSEDES that one's text (so a flapping check cannot fill the outbox) and is sent now. Never raises."""
+    and will retry; also when another sender is sending this code right now) | gave_up | failed (it could not even be
+    stored, and the direct send failed too). ``reason`` is a transport class from the closed vocabulary above, or "-".
+    Never raises an Exception (a BaseException - the process being killed - propagates; the entry is already durable)."""
     log = log or _stderr_log
-    transport = transport or (lambda t: _telegram_result(t, report=lambda _line: None))
+    transport = transport or _ops_transport
     code = code if isinstance(code, str) and _CODE_RE.match(code) else "other"
     text = str(text or "")[:MAX_TEXT]
     t = time.time() if now is None else float(now)
     _marker(log, "raised", code)
     if _live_outbox_under_test():
         return "failed", "test_guard"
-    attempted = False
-    try:
+    try:                                                  # (a) durable before any send
         with _outbox_locked() as box:
             if box.get("corrupt"):
                 _marker(log, "corrupt", "outbox")
@@ -344,55 +424,91 @@ def deliver(code: str, text: str, *, transport=None, now: "float | None" = None,
             entries = box["entries"]
             ent = next((e for e in entries if e.get("code") == code), None)
             if ent:
-                ent.update(text=text, raised=int(ent.get("raised") or 0) + 1, last_raised_ts=t, next_ts=t)
+                ent.update(text=text, raised=int(ent.get("raised") or 0) + 1, last_raised_ts=t, next_ts=t,
+                           rev=int(ent.get("rev") or 0) + 1)
             else:
                 entries.append({"code": code, "text": text, "first_ts": t, "last_raised_ts": t,
-                                "raised": 1, "tries": 0, "next_ts": t})
+                                "raised": 1, "tries": 0, "next_ts": t, "rev": 0})
             while len(entries) > OUTBOX_MAX:
                 old = min(entries, key=lambda e: float(e.get("first_ts") or 0))
                 entries.remove(old)
                 _bump(box, "gave_up")
                 _marker(log, "gave_up", old.get("code", "other"), old.get("tries", 0), "outbox_full", len(entries))
-            attempted = True
-            res = _drain_locked(box, transport, t, sleep, log, inline=code)
-        return res.get(code, ("queued", "-"))
+            claims = _claim_due(box, t, inline=code)
     except Exception as exc:   # the outbox cannot be stored: one direct send, and the failure is never silent
-        if attempted:          # the send already ran; only the write-back failed: never send it twice
-            _marker(log, "failed", code, 0, "outbox_write")
-            return "failed", "outbox_write"
         res, used = _attempt(transport, text, 3, sleep)
         outcome = res if res in ("delivered", "uncertain") else "failed"
         _marker(log, outcome, code, used, res if outcome == "failed" else type(exc).__name__)
         return outcome, res
+    done = _send_claimed(claims, transport, sleep)        # (b) no lock held
+    try:                                                  # (c)
+        with _outbox_locked() as box:
+            res = _record(box, claims, done, t, log)
+    except Exception:
+        _marker(log, "failed", code, 0, "outbox_write")   # the claim lease expires and a drain re-sends it
+        return "failed", "outbox_write"
+    return res.get(code, ("queued", "inflight"))
 
 
 def drain(*, transport=None, now: "float | None" = None, sleep=time.sleep, log=None) -> dict:
-    """Retry whatever is due in the outbox (the crash-loop watcher calls this every tick). {code: (outcome, reason)}."""
+    """Retry whatever is due in the outbox (the crash-loop watcher calls this every tick), same (a)/(b)/(c) shape.
+    {code: (outcome, reason)}."""
     log = log or _stderr_log
-    transport = transport or (lambda t: _telegram_result(t, report=lambda _line: None))
+    transport = transport or _ops_transport
     if _live_outbox_under_test() or not os.path.exists(OUTBOX_PATH):
         return {}
+    t = time.time() if now is None else float(now)
     try:
         with _outbox_locked() as box:
-            return _drain_locked(box, transport, time.time() if now is None else float(now), sleep, log)
+            claims = _claim_due(box, t)
+        if not claims:
+            return {}
+        done = _send_claimed(claims, transport, sleep)
+        with _outbox_locked() as box:
+            return _record(box, claims, done, t, log)
     except Exception as exc:
         print(f"crash-watch: outbox drain failed: {type(exc).__name__}", file=sys.stderr)
         return {}
 
 
 def outbox_status() -> dict:
-    """Read-only counts: pending, totals, and the broken record (no message text)."""
+    """Read-only counts: pending, totals, the broken record and the broken spells (no message text)."""
     if _live_outbox_under_test():
-        return {"pending": 0, "totals": {}, "broken": None}
+        return {"pending": 0, "pending_codes": [], "totals": {}, "broken": None, "spells": []}
     box = _load_outbox()
     return {"pending": len(box["entries"]), "pending_codes": sorted(e.get("code", "?") for e in box["entries"]),
-            "totals": box["totals"], "broken": box.get("broken")}
+            "totals": box["totals"], "broken": box.get("broken"), "spells": box.get("spells") or []}
 
 
 def alerting_broken() -> "dict | None":
     """The open broken record ({since, last, reason, count}) while owner alerts fail on a credential or a missing
     setting; None once one alert is delivered again."""
     return outbox_status().get("broken")
+
+
+def alerting_spells() -> list:
+    """The recent broken spells [{since, reason, healed}] (healed = None while open): what zoe-data's tick turns into
+    one owner notification per spell, kept (marked resolved) after the spell heals."""
+    return list(outbox_status().get("spells") or [])
+
+
+CODE_CRASH_LOOP = "crash_loop"
+CODE_RECOVERED = "recovered"
+
+
+def _unit_code(prefix: str, unit: str) -> str:
+    """A fixed alert code per watched unit (``unit_crash_loop.<unit>`` / ``unit_recovered.<unit>``), so one unit's alert
+    never supersedes another's; a unit outside OTHER_UNITS gets the bare prefix (never a free string)."""
+    if unit in OTHER_UNITS:
+        return f"{prefix}.{unit[:-len('.service')] if unit.endswith('.service') else unit}"
+    return prefix
+
+
+def _raise_alert(code: str, msg: str) -> bool:
+    """True when the outbox has it (delivered, uncertain, held for retry, or given up loudly); False only when it could
+    not even be stored and the direct send failed."""
+    outcome, _reason = deliver(code, msg)
+    return outcome != "failed"
 
 
 def check(threshold: int, cooldown: int, dry_run: bool) -> int:
@@ -430,12 +546,14 @@ def check(threshold: int, cooldown: int, dry_run: bool) -> int:
 
     if msg:
         print(msg.replace("\n", " | "))
-        delivered = True if dry_run else _telegram(msg)
         if not dry_run:
-            state["alerted"] = bool(looping and delivered)
-            if looping and delivered:
-                state["last_alert_ts"] = now
-            if recovered:
+            # ONE retry path: the outbox. Handed to it = done here (cooldown starts); the outbox re-sends until delivered.
+            handed = _raise_alert(CODE_CRASH_LOOP if looping else CODE_RECOVERED, msg)
+            if looping:
+                state["alerted"] = handed
+                if handed:
+                    state["last_alert_ts"] = now
+            elif handed:
                 state["alerted"] = False
                 state.pop("last_alert_ts", None)
     else:
@@ -478,8 +596,10 @@ UNIT_WINDOW_S = 900   # restarts are counted over this window, not one tick: lla
 def check_units(units, threshold: int, cooldown: int, dry_run: bool, window_s: float = UNIT_WINDOW_S) -> int:
     """Restart-counter loop check for ``units``; per-unit state under ``state["units"]``. A unit this host does not
     have (no readable NRestarts) is skipped silently. A loop is ``threshold`` automatic restarts within ``window_s``.
-    An alert that Telegram did not take stays PENDING and is retried every tick until delivered, even after the
-    restart rate drops. Returns 2 if any unit is looping, else 0."""
+    Every alert goes through deliver(): an alert Telegram did not take is held in the OUTBOX and re-sent by every tick's
+    drain() until delivered, even after the restart rate drops. ``pending`` here is only for an alert the outbox could
+    not even store (or one left by the pre-outbox version), so there is ONE retry path. Returns 2 if any unit is
+    looping, else 0."""
     state = _load_state()
     per = state.setdefault("units", {})
     now = time.time()
@@ -503,7 +623,7 @@ def check_units(units, threshold: int, cooldown: int, dry_run: bool, window_s: f
         any_loop = any_loop or looping
         msg = None
         if s.get("pending"):
-            msg = s["pending"]                                    # an undelivered loop alert is retried first
+            msg = s["pending"]                                    # one the outbox could not store (or a pre-outbox state)
         elif looping and now - s.get("last_alert_ts", 0) >= cooldown:
             msg = (f"🔴 {unit} is crash-looping: restarted {recent}x in the last {int(window_s // 60)} min "
                    f"(total {restarts}), ActiveState={active}.\nCheck: journalctl --user -u {unit}")
@@ -511,16 +631,17 @@ def check_units(units, threshold: int, cooldown: int, dry_run: bool, window_s: f
             msg = f"🟢 {unit} recovered (total restarts {restarts})."
         if msg:
             print(msg.replace("\n", " | "))
-            delivered = True if dry_run else _telegram(msg)
             if not dry_run:
-                if msg.startswith("🔴"):
-                    if delivered:
+                loop_msg = msg.startswith("🔴")
+                handed = _raise_alert(_unit_code("unit_crash_loop" if loop_msg else "unit_recovered", unit), msg)
+                if loop_msg:
+                    if handed:                                    # the outbox owns the retry from here
                         s["alerted"] = True
                         s["last_alert_ts"] = now
                         s.pop("pending", None)
-                    else:
+                    else:                                         # not even stored: the ONLY case this state retries
                         s["pending"] = msg
-                elif delivered:
+                elif handed:
                     s["alerted"] = False
                     s.pop("last_alert_ts", None)
         s["restarts"] = restarts

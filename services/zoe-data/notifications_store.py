@@ -186,7 +186,6 @@ async def refresh(user_id: str) -> None:
         return
     _REFRESHED[uid] = now
     await notify_wearer_proposals(uid)
-    await notify_alerting_broken(uid)
 
 
 ALERTING_TYPE = "ops_alerting_broken"
@@ -197,34 +196,65 @@ ALERTING_MESSAGE = {
     "config": "Zoe's alert bot has no token or no recipient set, so Zoe cannot warn your phone about problems. "
               "The alerts are being kept and will be sent once it is set up.",
 }
-_OWNER_ROLES = ("admin", "family-admin")
 
 
-async def notify_alerting_broken(user_id: str) -> Optional[str]:
+def _alerting_spells() -> list:
+    import kv_miss_alert
+
+    return kv_miss_alert.alerting_spells()
+
+
+async def sync_alerting_broken(spells: Optional[list] = None) -> int:
     """The SECOND channel for "owner alerting is broken": an alert about the Telegram credential failing cannot travel
-    over Telegram, so while the shared owner-alert helper (``scripts/maintenance/zoe_crash_loop_watch.deliver``) records
-    its broken state, an OWNER (admin role) gets ONE notification per broken spell (dedupe = the spell's start), on the
-    panel orb / card and the end-of-turn line. Fixed text, no household content. Never raises."""
-    uid = _account(user_id)
-    if not enabled() or uid is None:
-        return None
+    over Telegram. The shared owner-alert helper (``scripts/maintenance/zoe_crash_loop_watch.deliver``, which may run in a
+    systemd timer with no database) records each broken spell durably in its outbox; this turns every recorded spell
+    into ONE fixed-text notification per owner (admin role), dedupe = the spell's start, and marks it resolved (never
+    deletes it) once the spell healed. Idempotent. Runs WITHOUT anyone's request: zoe-data's 5-minute runtime-health
+    tick (``main._runtime_health_refresh_loop``) and, when zoe-data itself was the sender, right away
+    (``kv_miss_alert``). Returns the rows created. Never raises."""
+    if not enabled():
+        return 0
+    made = 0
     try:
-        import kv_miss_alert
-
-        broken = kv_miss_alert.alerting_broken()
-        if not broken:
-            return None
+        spells = _alerting_spells() if spells is None else spells
+        if not spells:
+            return 0
         async with _db() as db:
-            cur = await db.execute("SELECT role FROM users WHERE id = ?", (uid,))
-            row = await cur.fetchone()
-        if row is None or str(row[0] or "") not in _OWNER_ROLES:
-            return None
-        reason = "auth" if broken.get("reason") == "auth" else "config"
-        return await create(uid, ALERTING_TYPE, ALERTING_TITLE, ALERTING_MESSAGE[reason], {"reason": reason},
-                            dedupe_id=str(int(float(broken.get("since") or 0))))
+            cur = await db.execute("SELECT id FROM users WHERE role IN ('admin', 'family-admin') ORDER BY id")
+            owners = [str(r[0]) for r in await cur.fetchall()]
+        for sp in spells:
+            since = int(float(sp.get("since") or 0))
+            reason = "auth" if sp.get("reason") == "auth" else "config"
+            healed = sp.get("healed")
+            for owner in owners:
+                uid = _account(owner)
+                if uid is None:
+                    continue
+                if await create(uid, ALERTING_TYPE, ALERTING_TITLE, ALERTING_MESSAGE[reason],
+                                {"reason": reason, "since": since}, dedupe_id=str(since)):
+                    made += 1
+                if healed:
+                    await _resolve_alerting(uid, since, reason, int(float(healed)))
     except Exception as exc:  # noqa: BLE001
         logger.warning("NOTIFY event=failed type=%s (%s)", ALERTING_TYPE, exc.__class__.__name__)
-        return None
+    return made
+
+
+async def _resolve_alerting(uid: str, since: int, reason: str, healed: int) -> None:
+    """Mark the spell's row resolved (kept, never deleted); a no-op when already marked or absent."""
+    nid = f"{ALERTING_TYPE}:{uid}:{since}"
+    gen = erase_gate.generation(uid)
+    async with erase_gate.writing(uid, gen) as live:
+        if not live:
+            return
+        async with _db() as db:
+            cur = await db.execute("SELECT data FROM notifications WHERE id = ? AND user_id = ?", (nid, uid))
+            row = await cur.fetchone()
+            if row is None or _parse(row[0]).get("resolved"):
+                return
+            await db.execute("UPDATE notifications SET data = ? WHERE id = ? AND user_id = ?",
+                             (json.dumps({"reason": reason, "since": since, "resolved": True, "healed_at": healed}), nid, uid))
+            await db.commit()
 
 
 async def _wearer_status(uid: str) -> Optional[dict]:
