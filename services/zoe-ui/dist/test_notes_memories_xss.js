@@ -345,9 +345,11 @@ check('memories.html: memory content is not interpolated into innerHTML', () => 
         'memories.html still writes a collection name through innerHTML');
 });
 
-check('memories.html: defines DOM-building + URL-sanitising helpers', () => {
+check('memories.html: defines the DOM-building helper; the dead collections canvas stays gone', () => {
     assert.ok(/function\s+memDiv\s*\(/.test(memSrc), 'memDiv helper missing');
-    assert.ok(/function\s+sanitizeTileUrl\s*\(/.test(memSrc), 'sanitizeTileUrl helper missing');
+    // the canvas only ever drew the always-empty /api/collections stub (removed 2026-11-13); nothing may call it again
+    assert.ok(!/['"`]\/(?:api\/)?collections/.test(memSrc) && !/memoryCanvas|openTile\(/.test(memSrc),
+        'memories.html calls the collections stub or carries its canvas again');
 });
 
 check('memories.html: still loads js/common.js', () => {
@@ -364,7 +366,7 @@ function memSandbox(extra) {
     }, extra));
     vm.createContext(sandbox);
     vm.runInContext(
-        extractFunctions(memRaw, ['memDiv', 'sanitizeTileUrl', 'updateSidebar', 'displayNotifications']),
+        extractFunctions(memRaw, ['memDiv', 'updateSidebar', 'displayNotifications']),
         sandbox);
     return sandbox;
 }
@@ -403,30 +405,6 @@ check('memories.html displayNotifications(): hostile message cannot inject', () 
     const html = serialize(sandbox.__nodes.notificationsContent);
     assertNoInjection('displayNotifications', html,
         { rawPayloads: [SQ_PAYLOAD, TAG_PAYLOAD], marker: 'alert(1)' });
-});
-
-// -- sanitizeTileUrl ----------------------------------------------
-check('memories.html sanitizeTileUrl(): rejects script-bearing URLs', () => {
-    const sandbox = makeSandbox({});
-    vm.createContext(sandbox);
-    vm.runInContext(extractFunctions(memRaw, ['sanitizeTileUrl']), sandbox);
-    const call = u => vm.runInContext('sanitizeTileUrl(__u)', Object.assign(sandbox, { __u: u }));
-    assert.strictEqual(call('javascript:alert(1)'), '');
-    assert.strictEqual(call('JaVaScRiPt:alert(1)'), '');
-    assert.strictEqual(call('java\tscript:alert(1)'), '', 'control-char scheme bypass accepted');
-    assert.strictEqual(call('  javascript:alert(1)'), '');
-    assert.strictEqual(call('vbscript:msgbox(1)'), '');
-    assert.strictEqual(call('data:text/html,<script>alert(1)</script>'), '');
-    // SVG is an active document format, not an inert raster image.
-    assert.strictEqual(call('data:image/svg+xml;base64,AAAA'), '',
-        'data:image/svg+xml must be rejected -- SVG can carry script');
-    assert.strictEqual(call('data:image/svg+xml,<svg onload=alert(1)>'), '');
-    assert.strictEqual(call('https://example.com/a.png'), 'https://example.com/a.png');
-    assert.strictEqual(call('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA');
-    // A data URL may carry no parameters at all -- must not be rejected.
-    assert.strictEqual(call('data:image/gif,AAAA'), 'data:image/gif,AAAA');
-    assert.strictEqual(call('data:image/jpeg;base64,AAAA'), 'data:image/jpeg;base64,AAAA');
-    assert.strictEqual(call(null), '');
 });
 
 /* ── done ───────────────────────────────────────────────────────── */

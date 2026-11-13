@@ -402,11 +402,13 @@
       '<div class="evqrcap">' + cap + '</div></div>';
   }
   // Where "Edit on your phone" points. The desktop calendar page is members-only
-  // (the phone signs in, then lands on the calendar). A non-secret URL, so the
-  // one CLIENT qrcode library is the right tool (see AGENTS.md: authCard rule).
-  function phoneEditUrl(origin) {
+  // (the phone signs in, then lands on the calendar, which opens `?event=<id>`).
+  // A non-secret URL, so the one CLIENT qrcode library is the right tool (see AGENTS.md: authCard rule).
+  function phoneEditUrl(origin, eventId) {
     origin = str(origin).replace(/\/+$/, '');
-    return /^https?:\/\/[^\s"'<>]+$/i.test(origin) ? origin + '/calendar.html' : '';
+    var id = str(eventId);
+    if (!/^https?:\/\/[^\s"'<>]+$/i.test(origin)) return '';
+    return origin + '/calendar.html' + (id ? '?event=' + encodeURIComponent(id) : '');
   }
 
   function renderDeleteConfirm(ev) {
