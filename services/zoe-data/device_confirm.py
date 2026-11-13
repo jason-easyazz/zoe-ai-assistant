@@ -22,6 +22,7 @@ raises into a turn. Contract: docs/knowledge/voice-pipeline.md -> *Device confir
 from __future__ import annotations
 
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import re
 import time
 from collections import OrderedDict
@@ -181,6 +182,7 @@ def _device_claim(text: str, context: Optional[dict], claimed: Optional[Callable
 
 
 def log_line(ask: Ask, outcome: str, *, guest: bool) -> None:
-    """``DEVICE_CONFIRM to=<intent> outcome=<asked|refused_home|...>``; the words only on a member's line, never a guest's."""
-    words = "" if guest else f" heard={ask.heard[:60]!r}"
+    """``DEVICE_CONFIRM to=<intent> outcome=<asked|refused_home|...>``; a member's line adds ``len=N utt=<hash>`` of what was
+    heard (never the words: the log is outside the forget cascade); a guest's line adds nothing."""
+    words = "" if guest else f" {_utag(ask.heard)}"
     logger.warning("DEVICE_CONFIRM to=%s outcome=%s%s", ask.intent, outcome, words)

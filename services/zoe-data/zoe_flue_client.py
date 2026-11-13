@@ -95,6 +95,7 @@ import contextvars
 import errno
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import re
 import time
@@ -2165,7 +2166,7 @@ async def _run_turn_aggregated_wire2(
                     try:
                         chunk = json.loads(line)
                     except ValueError:
-                        logger.warning("flue wire-2 stream: undecodable line %r", line[:120])
+                        logger.warning("flue wire-2 stream: undecodable line %s", _utag(line))
                         continue
                     if isinstance(chunk, str):
                         # Activity sentinels are not reply text — dropped here
@@ -3212,7 +3213,7 @@ async def _run_flue_brain_streaming_turn(
                             try:
                                 chunk = json.loads(line)
                             except ValueError:
-                                logger.warning("flue stream: undecodable line %r", line[:120])
+                                logger.warning("flue stream: undecodable line %s", _utag(line))
                                 continue
                             if isinstance(chunk, str):
                                 if chunk:

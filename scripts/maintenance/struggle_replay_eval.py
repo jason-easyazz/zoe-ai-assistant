@@ -49,6 +49,7 @@ _TWO = re.compile(r"router_two_stage (\{.*\})")
 _TWO_FAIL = re.compile(r"two_stage decide failed")
 _CMD = re.compile(r"voice/command panel=(\S+) session=(\S+) user=(\S+) ")
 _SKY = re.compile(r"SKYBRIDGE TIMING .* reply=(.*)$")
+_REPLY_TAG = re.compile(r"^len=\d+ utt=[0-9a-f]{12}$")   # since 2026-11-14 the line carries a tag, not the words
 _LANE = re.compile(r"BRAIN_LANE lane_attempted=\S+ lane_served=(\S+) outcome=(\S+) .*session=(\S+)")
 _SYNTHETIC_PANELS = ("replay", "test", "probe", "ci-", "e2e", "bench")
 _SKYGATE = re.compile(r"SKYBRIDGE_GATE router=\S+ conf=\S+ skybridge=(\S+) action=\S+ decision=(\S+)")
@@ -133,7 +134,9 @@ def parse(paths: list[Path], since: datetime) -> list[sig.Turn]:
                         t.is_guest = t.user_id == "guest"
                         by_session[t.session_id] = t
                 elif (ms := _SKY.search(line)):
-                    last.reply, last.path = _lit(ms.group(1)), sig.PATH_FAST
+                    _r = ms.group(1).strip()
+                    last.reply = "(fast reply not logged)" if _REPLY_TAG.match(_r) else _lit(_r)
+                    last.path = sig.PATH_FAST
                 elif (ml := _LANE.search(line)):
                     t = by_session.get(ml.group(3))
                     if t is not None:
@@ -157,7 +160,7 @@ def run(turns: list[sig.Turn]) -> list[tuple[sig.Turn | None, sig.Turn, list[sig
         hist = hist_by_conv.get(t.conv_key, [])
         prev = hist[-1] if hist else None
         evs = sig.detect_window(hist, t)       # exactly what the live worker runs
-        if t.reply == "(brain reply not logged)":   # no words to judge: CANT_DO / VERBOSE are not evaluable here
+        if t.reply in ("(brain reply not logged)", "(fast reply not logged)"):   # no words to judge: CANT_DO / VERBOSE are not evaluable here
             evs = [e for e in evs if not (e.about is t and e.signal in (sig.CANT_DO, sig.VERBOSE))]
         out.append((prev, t, evs))
         hist_by_conv[t.conv_key] = (hist + [t])[-(sig.LOOKBACK_TURNS + 1):]
