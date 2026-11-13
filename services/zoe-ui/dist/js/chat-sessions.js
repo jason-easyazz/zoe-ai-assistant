@@ -24,9 +24,9 @@ class ChatSessionManager {
             // Use window.apiRequest if available (handles HTTPS properly)
             let data;
             if (window.apiRequest) {
-                data = await window.apiRequest(`/api/chat/sessions?user_id=${userId}`);
+                data = await window.apiRequest(`/api/chat/sessions`);
             } else {
-                const response = await fetch(`/api/chat/sessions?user_id=${userId}`, {
+                const response = await fetch(`/api/chat/sessions`, {
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Session-ID': session?.session_id || ''
@@ -106,22 +106,10 @@ class ChatSessionManager {
     /**
      * Load a specific session and display its messages
      */
-    /**
-     * Fire-and-forget: pre-warm the Hermes agent pool for this session so the
-     * first user message is responded to quickly rather than cold-starting.
-     */
-    warmSession(sessionId) {
-        // No-op since 2026-10-09: the warm-up route never existed, so this was a guaranteed
-        // 404 on every session load. Kept as a method because callers remain.
-        void sessionId;
-    }
-
     async loadSession(sessionId) {
         try {
             console.log('📖 Loading session:', sessionId);
 
-            // Pre-warm the Hermes agent pool so the first message is fast.
-            this.warmSession(sessionId);
             
             // Check cache first
             if (this.messageCache.has(sessionId)) {
@@ -289,7 +277,6 @@ class ChatSessionManager {
             }
             
             console.log('✅ Created new session:', data.session_id);
-            this.warmSession(data.session_id); // Pre-warm Hermes for this new session
             
             // Clear current chat
             const chatContainer = document.getElementById('messagesContainer');

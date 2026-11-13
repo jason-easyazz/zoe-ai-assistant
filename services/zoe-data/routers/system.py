@@ -2124,18 +2124,29 @@ async def get_display_preferences(
     Deliberately unauthenticated so the Pi panel agent can poll this without a
     session token. No sensitive data is exposed.
     """
-    cursor = await db.execute(
-        "SELECT * FROM display_preferences WHERE device_id = ?",
-        (device_id,),
-    )
-    row = await cursor.fetchone()
+    row, inherited = await _display_row_or_default(db, device_id)
     prefs = _row_to_prefs(row)
-    pi_host = (row["pi_host"] if row and "pi_host" in row.keys() and row["pi_host"] else _DEFAULT_PI_HOST)
+    # a panel's reload host is its OWN: never inherited from the "default" row
+    own = row if not inherited else None
+    pi_host = (own["pi_host"] if own and "pi_host" in own.keys() and own["pi_host"] else _DEFAULT_PI_HOST)
     return {
         "device_id": device_id,
         "pi_host": pi_host,
         "preferences": prefs,
+        "inherited": inherited,
     }
+
+
+async def _display_row_or_default(db, device_id: str):
+    """(row, inherited): the device's own ``display_preferences`` row, else the saved ``default`` row ("All panels" in Settings),
+    else None. Without the fallback, saving "All panels (default)" wrote a row no panel ever read."""
+    cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", (device_id,))
+    row = await cursor.fetchone()
+    if row is not None or device_id == "default":
+        return row, False
+    cursor = await db.execute("SELECT * FROM display_preferences WHERE device_id = ?", ("default",))
+    row = await cursor.fetchone()
+    return row, row is not None
 
 
 @router.get("/panel/idle-logout")

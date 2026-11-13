@@ -41,7 +41,6 @@
     const DESKTOP_PUBLIC_PATHS = new Set([
         '/', '/index.html', '/auth.html', '/404.html', '/offline.html',
         '/jukebox.html', '/setup-device.html', '/setup-music.html', '/voice.html',
-        '/clear-cache.html', '/clear-cache-v2.html', '/clear-session.html',
     ]);
     function desktopAuthGate(pathname, session) {
         const path = String(pathname || '/');
@@ -628,7 +627,7 @@
 
     // The one push socket for this page. Subscribers get parsed messages; the
     // hub also re-dispatches each one as a `zoe:push_event` window event for
-    // the pages that already listen that way (chat.html / agent-activity.js).
+    // the pages that already listen that way.
     window.zoePush = createPushHub({
         WebSocket: window.WebSocket,
         getSessionId: function () {

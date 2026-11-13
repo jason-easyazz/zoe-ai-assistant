@@ -304,23 +304,6 @@ html.light-mode .topbar { background: rgba(244,244,248,0.90); }
 .users-table tr:last-child td { border-bottom: none; }
 .users-table tr:hover td { background: var(--surface2); }
 
-/* ── Voice enroll ──────────────────────────────────────────── */
-.enroll-status {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 18px;
-  font-size: 14px; color: var(--text2);
-}
-.record-btn {
-  width: 64px; height: 64px; border-radius: 50%;
-  background: var(--accent); border: none; color: #fff;
-  font-size: 24px; cursor: pointer; transition: transform 0.15s, background 0.15s;
-  display: flex; align-items: center; justify-content: center;
-  margin: 0 auto;
-}
-.record-btn.recording { background: var(--danger); animation: pulse 1s ease infinite; }
-.record-btn:hover:not(.recording) { background: var(--accent2); }
-@keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.08)} }
-
 /* ── Proactive schedule ────────────────────────────────────── */
 .schedule-item {
   display: flex; align-items: flex-start; justify-content: space-between;
@@ -464,10 +447,13 @@ html.light-mode .topbar { background: rgba(244,244,248,0.90); }
     <div class="field">
       <label>Role</label>
       <select id="new-user-role">
-        <option value="user">User</option>
+        <option value="user">Adult</option>
+        <option value="family_member">Family member (adult)</option>
+        <option value="child">Child</option>
         <option value="admin">Admin</option>
         <option value="guest">Guest</option>
       </select>
+      <div class="field-hint">Child turns on Zoe's child-safety rules for this member.</div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('modal-new-user')">Cancel</button>
@@ -488,10 +474,13 @@ html.light-mode .topbar { background: rgba(244,244,248,0.90); }
     <div class="field">
       <label>Role</label>
       <select id="edit-user-role">
-        <option value="user">User</option>
+        <option value="user">Adult</option>
+        <option value="family_member">Family member (adult)</option>
+        <option value="child">Child</option>
         <option value="admin">Admin</option>
         <option value="guest">Guest</option>
       </select>
+      <div class="field-hint">Child turns on Zoe's child-safety rules for this member.</div>
     </div>
     <div class="field">
       <label>Active</label>
@@ -797,7 +786,7 @@ function buildSections() {
   <!-- Display -->
   <div class="section" id="sec-display">
     <div class="section-title">Display</div>
-    <div class="section-desc">Screen and audio preferences for this device.</div>
+    <div class="section-desc">How a wall panel dims, sleeps and wakes.</div>
     <div class="card" id="display-card">
       <div class="empty"><span class="spinner"></span></div>
     </div>
@@ -807,25 +796,16 @@ function buildSections() {
   <!-- Voice -->
   <div class="section" id="sec-voice">
     <div class="section-title">Speaker Identity</div>
-    <div class="section-desc">Enroll your voice so Zoe can identify who is speaking.</div>
+    <div class="section-desc">Zoe learns voices at a wall panel, so she can tell who is speaking.</div>
     <div class="card">
-      <div class="card-header">Enroll voice sample</div>
-      <div style="padding:20px;text-align:center;">
-        <p style="color:var(--text2);font-size:14px;margin-bottom:16px;">
-          Hold the button and say a natural phrase (5–10 seconds). Repeat 3 times for best results.
-        </p>
-        <label style="display:flex;align-items:center;gap:8px;justify-content:center;color:var(--text2);font-size:13px;margin-bottom:14px;cursor:pointer;">
-          <input type="checkbox" id="enroll-consent">
-          I consent to Zoe storing a voice signature (an embedding, never audio) to identify me
-        </label>
-        <button class="record-btn" id="record-btn" onclick="toggleRecording()">🎙️</button>
-        <div class="enroll-status" id="enroll-status" style="justify-content:center;margin-top:12px;">
-          Ready to enroll
-        </div>
+      <div class="card-header">Teach Zoe your voice</div>
+      <div style="padding:16px 18px;color:var(--text2);font-size:14px;line-height:1.5;">
+        Stand at a panel and say <strong>"Zoe, learn my voice"</strong>. Zoe will ask you to say a few short phrases.
+        Voice learning happens only at a panel, never from this page. Zoe keeps a voice signature, never the recording.
       </div>
     </div>
     <div class="card">
-      <div class="card-header">Enrolled profiles</div>
+      <div class="card-header">Voices Zoe knows</div>
       <div id="voice-profiles-list"><div class="empty"><span class="spinner"></span></div></div>
     </div>
   </div>
@@ -1383,131 +1363,125 @@ function setAccent(color) {
 }
 
 /* ── Display prefs ────────────────────────────────────────── */
-let displayPrefs = {};
+/* GET/PUT /api/system/display/preferences?device_id=<panel>  (routers/system.py): the panel's
+   dim / night / idle / sleep behaviour, stored per panel and polled by the panel agent.
+   Field names below are the API's own (`preferences.day_brightness` ...); the PUT answers
+   with what was actually stored, and that is what the page shows after a save. */
+const DISPLAY_FIELDS = [
+  { key: 'enabled',          type: 'bool',  label: 'Automatic dimming', sub: 'Let Zoe dim the panel by time of day and when idle' },
+  { key: 'day_brightness',   type: 'pct',   label: 'Daytime brightness' },
+  { key: 'night_enabled',    type: 'bool',  label: 'Night mode', sub: 'Dim the panel overnight' },
+  { key: 'night_start',      type: 'time',  label: 'Night starts' },
+  { key: 'night_end',        type: 'time',  label: 'Night ends' },
+  { key: 'night_brightness', type: 'pct',   label: 'Night brightness' },
+  { key: 'idle_enabled',     type: 'bool',  label: 'Dim when idle' },
+  { key: 'idle_seconds',     type: 'secs',  label: 'Dim after (seconds without a touch)' },
+  { key: 'idle_brightness',  type: 'pct',   label: 'Idle brightness' },
+  { key: 'sleep_enabled',    type: 'bool',  label: 'Sleep clock', sub: 'Show the dim clock after a while without use' },
+  { key: 'sleep_seconds',    type: 'secs',  label: 'Sleep clock after (seconds)' },
+];
+let displayDevice = 'default';
+
+function renderDisplayFields(prefs) {
+  const body = document.getElementById('display-fields');
+  body.innerHTML = '';
+  for (const f of DISPLAY_FIELDS) {
+    const v = prefs[f.key];
+    const id = 'disp-' + f.key;
+    if (f.type === 'bool') {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<div class="row-info"><div class="row-label"></div><div class="row-sub"></div></div>
+        <label class="toggle"><input type="checkbox" id="${id}"><div class="toggle-track"></div></label>`;
+      row.querySelector('.row-label').textContent = f.label;
+      row.querySelector('.row-sub').textContent = f.sub || '';
+      row.querySelector('input').checked = !!v;
+      body.appendChild(row);
+      continue;
+    }
+    const field = document.createElement('div');
+    field.className = 'field';
+    const label = document.createElement('label');
+    label.htmlFor = id;
+    label.textContent = f.label;
+    const input = document.createElement('input');
+    input.id = id;
+    if (f.type === 'pct') { input.type = 'range'; input.min = 0; input.max = 100; }
+    else if (f.type === 'time') { input.type = 'time'; }
+    else { input.type = 'number'; input.min = 0; input.max = 86400; }
+    input.value = v ?? '';
+    field.append(label, input);
+    if (f.type === 'pct') {
+      const hint = document.createElement('div');
+      hint.className = 'field-hint';
+      hint.textContent = (v ?? '') + '%';
+      input.oninput = () => { hint.textContent = input.value + '%'; };
+      field.appendChild(hint);
+    }
+    body.appendChild(field);
+  }
+}
+
 async function loadDisplayPrefs() {
   const card = document.getElementById('display-card');
+  card.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
+  let panels = [];
+  try { panels = (await apiCall('GET', '/api/panels')).panels || []; } catch { /* no panel list: the default entry only */ }
   try {
-    displayPrefs = await apiCall('GET', '/api/system/display/preferences');
+    const data = await apiCall('GET', `/api/system/display/preferences?device_id=${encodeURIComponent(displayDevice)}`);
     card.innerHTML = `
       <div class="field">
-        <label>Brightness (0–100)</label>
-        <input type="range" id="disp-brightness" min="0" max="100" value="${displayPrefs.brightness ?? 80}">
-        <div class="field-hint" id="disp-brightness-val">${displayPrefs.brightness ?? 80}%</div>
+        <label for="disp-device">Panel</label>
+        <select id="disp-device"></select>
+        <div class="field-hint">These settings belong to one wall panel. "All panels (default)" applies to any panel without its own.</div>
       </div>
-      <div class="field">
-        <label>Volume (0–100)</label>
-        <input type="range" id="disp-volume" min="0" max="100" value="${displayPrefs.volume ?? 60}">
-        <div class="field-hint" id="disp-volume-val">${displayPrefs.volume ?? 60}%</div>
-      </div>
-      <div class="field">
-        <label>Auto-dim after (seconds, 0 = never)</label>
-        <input type="number" id="disp-autodim" min="0" max="3600" value="${displayPrefs.auto_dim_seconds ?? 0}">
-      </div>
-      <div class="row">
-        <div class="row-info">
-          <div class="row-label">Screen saver</div>
-          <div class="row-sub">Activate when idle</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="disp-screensaver" ${displayPrefs.screensaver ? 'checked' : ''}>
-          <div class="toggle-track"></div>
-        </label>
-      </div>
-    `;
-    const br = document.getElementById('disp-brightness');
-    const bv = document.getElementById('disp-brightness-val');
-    br.oninput = () => bv.textContent = br.value + '%';
-    const vl = document.getElementById('disp-volume');
-    const vv = document.getElementById('disp-volume-val');
-    vl.oninput = () => vv.textContent = vl.value + '%';
-  } catch {
-    card.innerHTML = '<div class="empty">Display preferences not available</div>';
+      <div id="display-fields"></div>`;
+    const sel = document.getElementById('disp-device');
+    const opts = [{ id: 'default', name: 'All panels (default)' }].concat(
+      panels.map(p => ({ id: p.panel_id, name: p.name || p.panel_id })));
+    for (const o of opts) {
+      const opt = document.createElement('option');
+      opt.value = o.id; opt.textContent = o.name;
+      sel.appendChild(opt);
+    }
+    sel.value = displayDevice;
+    sel.onchange = () => { displayDevice = sel.value; loadDisplayPrefs(); };
+    renderDisplayFields(data.preferences || {});
+  } catch (e) {
+    card.innerHTML = `<div class="empty">Couldn't load display settings: ${escHtml(e.message)}</div>`;
   }
 }
 
 async function saveDisplayPrefs() {
+  if (!document.getElementById('display-fields')) return toast("Display settings didn't load, so there is nothing to save", 'error');
+  const preferences = {};
+  for (const f of DISPLAY_FIELDS) {
+    const el = document.getElementById('disp-' + f.key);
+    if (!el) continue;
+    if (f.type === 'bool') preferences[f.key] = el.checked;
+    else if (f.type === 'time') { if (el.value) preferences[f.key] = el.value; }
+    else if (el.value !== '') preferences[f.key] = parseInt(el.value, 10);
+  }
   try {
-    const prefs = {
-      brightness: parseInt(document.getElementById('disp-brightness')?.value ?? 80),
-      volume: parseInt(document.getElementById('disp-volume')?.value ?? 60),
-      auto_dim_seconds: parseInt(document.getElementById('disp-autodim')?.value ?? 0),
-      screensaver: document.getElementById('disp-screensaver')?.checked ?? false,
-    };
-    await apiCall('PUT', '/api/system/display/preferences', prefs);
+    const saved = await apiCall('PUT', '/api/system/display/preferences', { device_id: displayDevice, preferences });
+    renderDisplayFields(saved.preferences || {});   // show what the server stored, not what we sent
     toast('Display settings saved', 'success');
   } catch (e) {
-    toast(e.message, 'error');
+    toast("Couldn't save display settings: " + e.message, 'error');
   }
 }
 
 /* ── Voice ────────────────────────────────────────────────── */
-/* The enroll endpoint (POST /api/voice/enroll) takes JSON
-   {"audio_base64": <16-bit PCM WAV>, "consent": bool} — resemblyzer
-   server-side needs real WAV, so we capture PCM via WebAudio and build
-   the WAV in the browser instead of MediaRecorder's webm/opus. */
-let enrollStream = null;
-let enrollCtx = null;
-let enrollProc = null;
-let enrollBuffers = [];
-let enrollSampleRate = 16000;
-let isRecording = false;
-let enrollSamples = 0;
-
-function resampleLinear(float32Chunks, fromRate, toRate) {
-  let length = 0;
-  for (const c of float32Chunks) length += c.length;
-  const src = new Float32Array(length);
-  let off = 0;
-  for (const c of float32Chunks) { src.set(c, off); off += c.length; }
-  if (fromRate === toRate) return src;
-  const outLen = Math.floor(src.length * toRate / fromRate);
-  const out = new Float32Array(outLen);
-  const ratio = fromRate / toRate;
-  for (let i = 0; i < outLen; i++) {
-    const pos = i * ratio;
-    const i0 = Math.floor(pos);
-    const i1 = Math.min(i0 + 1, src.length - 1);
-    out[i] = src[i0] + (src[i1] - src[i0]) * (pos - i0);
-  }
-  return out;
-}
-
-function encodeWav(float32Chunks, sampleRate) {
-  /* Downsample to 16 kHz before encoding: browsers capture at 44.1/48 kHz,
-     which would push a 10s enrollment past nginx's 1 MB default body limit.
-     Resemblyzer resamples to 16 kHz server-side anyway — no fidelity lost. */
-  const targetRate = 16000;
-  const mono = resampleLinear(float32Chunks, sampleRate, targetRate);
-  sampleRate = targetRate;
-  const pcm = new Int16Array(mono.length);
-  for (let i = 0; i < mono.length; i++) {
-    const s = Math.max(-1, Math.min(1, mono[i]));
-    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  const buf = new ArrayBuffer(44 + pcm.length * 2);
-  const v = new DataView(buf);
-  const writeStr = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
-  writeStr(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); writeStr(8, 'WAVE');
-  writeStr(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
-  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-  writeStr(36, 'data'); v.setUint32(40, pcm.length * 2, true);
-  new Int16Array(buf, 44).set(pcm);
-  let bin = '';
-  const bytes = new Uint8Array(buf);
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(bin);
-}
-
+/* Voice profiles are built at a panel ("Zoe, learn my voice"); the server refuses audio uploads, so this page
+   only lists them (GET /api/voice/profiles: your own, or everyone's for an admin) and deletes them
+   (DELETE /api/voice/profiles/{id}: "forget my voice"). */
 async function loadVoiceProfiles() {
   const el = document.getElementById('voice-profiles-list');
   try {
     const data = await apiCall('GET', '/api/voice/profiles');
     const profiles = data.profiles || data || [];
     if (!profiles.length) {
-      el.innerHTML = '<div class="empty"><span class="empty-icon">🎙️</span>No voice profiles enrolled</div>';
+      el.innerHTML = '<div class="empty"><span class="empty-icon">🎙️</span>Zoe has not learned any voices yet. Say "Zoe, learn my voice" at a panel.</div>';
       return;
     }
     // One row per (member, speaker model): during the ResNet34 dual-run a member has two, so each names its model
@@ -1522,7 +1496,7 @@ async function loadVoiceProfiles() {
           <div class="session-meta">${escHtml(label)} · ${p.sample_count || 1} sample${(p.sample_count || 1) > 1 ? 's' : ''}${p.consented === false ? ' — consent pending' : ''}</div>
         </div>
         <button class="btn btn-danger btn-sm" data-id="${escHtml(String(p.id))}" data-who="${escHtml(who)}" data-label="${escHtml(label)}"
-                onclick="deleteVoiceProfile(this.dataset.id, this.dataset.who, this.dataset.label)">Delete</button>
+                onclick="deleteVoiceProfile(this.dataset.id, this.dataset.who, this.dataset.label)">Forget</button>
       </div>`;
     }).join('');
   } catch {
@@ -1530,97 +1504,12 @@ async function loadVoiceProfiles() {
   }
 }
 
-async function toggleRecording() {
-  if (isRecording) {
-    stopRecording();
-  } else {
-    startRecording();
-  }
-}
-
-async function startRecording() {
-  if (!document.getElementById('enroll-consent').checked) {
-    toast('Please tick the consent box first', 'error');
-    document.getElementById('enroll-status').textContent = 'Consent is required to enroll';
-    return;
-  }
-  try {
-    enrollStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    enrollCtx = new (window.AudioContext || window.webkitAudioContext)();
-    enrollSampleRate = enrollCtx.sampleRate;
-    const source = enrollCtx.createMediaStreamSource(enrollStream);
-    enrollBuffers = [];
-    enrollProc = enrollCtx.createScriptProcessor(4096, 1, 1);
-    enrollProc.onaudioprocess = e => {
-      if (isRecording) enrollBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-    };
-    source.connect(enrollProc);
-    enrollProc.connect(enrollCtx.destination);
-    isRecording = true;
-    document.getElementById('record-btn').classList.add('recording');
-    document.getElementById('record-btn').textContent = '⏹';
-    document.getElementById('enroll-status').textContent = 'Recording… speak naturally for 5–10 seconds';
-  } catch (e) {
-    toast('Microphone access denied', 'error');
-  }
-}
-
-function stopRecording() {
-  isRecording = false;
-  try {
-    if (enrollProc) enrollProc.disconnect();
-    if (enrollStream) enrollStream.getTracks().forEach(t => t.stop());
-    if (enrollCtx) enrollCtx.close();
-  } catch (e) { /* teardown is best-effort */ }
-  document.getElementById('record-btn').classList.remove('recording');
-  document.getElementById('record-btn').textContent = '🎙️';
-  document.getElementById('enroll-status').textContent = 'Processing…';
-  uploadEnrollment();
-}
-
-async function uploadEnrollment() {
-  if (!enrollBuffers.length) {
-    document.getElementById('enroll-status').textContent = 'No audio captured — please try again';
-    return;
-  }
-  const audioBase64 = encodeWav(enrollBuffers, enrollSampleRate);
-  enrollBuffers = [];
-  enrollSamples++;
-  try {
-    const r = await fetch('/api/voice/enroll', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-ID': SESSION_ID || '' },
-      body: JSON.stringify({
-        audio_base64: audioBase64,
-        consent: document.getElementById('enroll-consent').checked,
-      }),
-    });
-    if (!r.ok) {
-      // the server says WHY (e.g. 409: profiles are built at the panel when ZOE_SPEAKER_MODEL=resnet34) - show it, do not hide it
-      let detail = '';
-      try { detail = (await r.json()).detail || ''; } catch (_) { /* not JSON */ }
-      throw new Error(detail || 'Enroll failed');
-    }
-    const data = await r.json();
-    document.getElementById('enroll-status').textContent =
-      data.message || `Sample ${enrollSamples} enrolled. ${enrollSamples < 3 ? 'Record again for better accuracy.' : 'Done!'}`;
-    if (data.complete || enrollSamples >= 3) {
-      enrollSamples = 0;
-      loadVoiceProfiles();
-    }
-    toast('Voice sample uploaded', 'success');
-  } catch (e) {
-    toast('Enrollment failed: ' + e.message, 'error');
-    document.getElementById('enroll-status').textContent = e.message && e.message !== 'Enroll failed' ? e.message : 'Failed — please try again';
-  }
-}
-
 async function deleteVoiceProfile(id, who, label) {
   // name WHICH profile: with two models a member has two rows, and deleting the current one stops recognition
-  if (!confirm(`Delete ${label || 'this voice profile'}${who ? ' for ' + who : ''}?`)) return;
+  if (!confirm(`Delete ${label || 'this voice profile'}${who ? ' for ' + who : ''}? Zoe will stop recognising this voice until it is learned again at a panel.`)) return;
   try {
     await apiCall('DELETE', `/api/voice/profiles/${id}`);
-    toast('Profile deleted', 'success');
+    toast('Voice forgotten', 'success');
     loadVoiceProfiles();
   } catch (e) {
     toast(e.message, 'error');
@@ -1754,11 +1643,30 @@ async function cancelReminder(id) {
 }
 
 /* ── Admin: Users ─────────────────────────────────────────── */
+let usersById = {};
+const ROLE_LABELS = { user: 'Adult', family_member: 'Family member (adult)', child: 'Child', admin: 'Admin', guest: 'Guest' };
+function roleLabel(role) { return ROLE_LABELS[role] || role || '—'; }
+
+// Plain words for the one role change that changes what Zoe will do for someone.
+function confirmRoleChange(name, from, to) {
+  if (from === to) return true;
+  if (to === 'child') {
+    return confirm(`Mark ${name} as a child?\n\nZoe will apply her child-safety rules to ${name}: no purchases or other ` +
+      `high-risk actions, and gentler replies.`);
+  }
+  if (from === 'child') {
+    return confirm(`Change ${name} from child to ${roleLabel(to)}?\n\nZoe will stop applying her child-safety rules to ${name}.`);
+  }
+  return true;
+}
+
 async function loadUsers() {
   const tbody = document.getElementById('users-tbody');
   try {
     const data = await apiCall('GET', '/api/admin/users');
     const users = data.users || data || [];
+    usersById = {};
+    for (const u of users) usersById[u.user_id] = u;
     if (!users.length) {
       tbody.innerHTML = '<tr><td colspan="5" class="empty">No users found</td></tr>';
       return;
@@ -1767,13 +1675,13 @@ async function loadUsers() {
       <tr>
         <td><strong>${escHtml(u.username)}</strong></td>
         <td style="color:var(--text2)">${escHtml(u.email)}</td>
-        <td><span class="badge badge-accent">${escHtml(u.role)}</span></td>
+        <td><span class="badge badge-accent">${escHtml(roleLabel(u.role))}</span></td>
         <td>${u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-danger">Inactive</span>'}</td>
         <td>
-          <div style="display:flex;gap:6px;">
-            <button class="btn btn-ghost btn-sm" onclick="openEditUser(${JSON.stringify(u).replace(/"/g,'&quot;')})">Edit</button>
-            <button class="btn btn-ghost btn-sm" onclick="openResetPw('${u.user_id}')">Reset PW</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.user_id}','${escHtml(u.username)}')">Delete</button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" data-uid="${escHtml(u.user_id)}" onclick="openEditUser(this.dataset.uid)">Edit</button>
+            <button class="btn btn-ghost btn-sm" data-uid="${escHtml(u.user_id)}" onclick="openResetPw(this.dataset.uid)">Reset PW</button>
+            <button class="btn btn-danger btn-sm" data-uid="${escHtml(u.user_id)}" onclick="deleteUser(this.dataset.uid)">Delete</button>
           </div>
         </td>
       </tr>`).join('');
@@ -1788,6 +1696,7 @@ async function createUser() {
   const password = document.getElementById('new-user-password').value;
   const role = document.getElementById('new-user-role').value;
   if (!username || !email || !password) return toast('Fill in all fields', 'error');
+  if (role === 'child' && !confirmRoleChange(username, '', 'child')) return;
   try {
     await apiCall('POST', '/api/admin/users', { username, email, password, role });
     toast('User created', 'success');
@@ -1798,22 +1707,35 @@ async function createUser() {
   }
 }
 
-function openEditUser(u) {
+function openEditUser(id) {
+  const u = usersById[id];
+  if (!u) return;
   document.getElementById('edit-user-id').value = u.user_id;
-  document.getElementById('edit-user-email').value = u.email;
-  document.getElementById('edit-user-role').value = u.role;
+  document.getElementById('edit-user-email').value = u.email || '';
+  const sel = document.getElementById('edit-user-role');
+  // A role this page does not list (a custom one) is shown as itself, so saving never rewrites it by accident.
+  if (u.role && !Array.from(sel.options).some(o => o.value === u.role)) {
+    const opt = document.createElement('option');
+    opt.value = u.role; opt.textContent = u.role; opt.dataset.custom = '1';
+    sel.appendChild(opt);
+  }
+  sel.value = u.role;
   document.getElementById('edit-user-active').value = u.is_active ? 'true' : 'false';
   openModal('modal-edit-user');
 }
 
 async function saveUser() {
   const id = document.getElementById('edit-user-id').value;
+  const u = usersById[id] || {};
+  const role = document.getElementById('edit-user-role').value;
+  if (!confirmRoleChange(u.username || 'this member', u.role, role)) return;
+  const body = {
+    email: document.getElementById('edit-user-email').value.trim() || undefined,   // "" is not an email: leave it unchanged
+    is_active: document.getElementById('edit-user-active').value === 'true',
+  };
+  if (role !== u.role) body.role = role;   // only a real change is sent
   try {
-    await apiCall('PUT', `/api/admin/users/${id}`, {
-      email: document.getElementById('edit-user-email').value,
-      role: document.getElementById('edit-user-role').value,
-      is_active: document.getElementById('edit-user-active').value === 'true',
-    });
+    await apiCall('PUT', `/api/admin/users/${encodeURIComponent(id)}`, body);
     toast('User updated', 'success');
     closeModal('modal-edit-user');
     loadUsers();
@@ -1833,7 +1755,7 @@ async function doResetPassword() {
   const pw = document.getElementById('reset-pw-new').value;
   if (!pw || pw.length < 8) return toast('Password must be 8+ characters', 'error');
   try {
-    await apiCall('POST', `/api/admin/users/${id}/reset-password`, { new_password: pw });
+    await apiCall('POST', `/api/admin/users/${encodeURIComponent(id)}/reset-password`, { new_password: pw });
     toast('Password reset', 'success');
     closeModal('modal-reset-pw');
   } catch (e) {
@@ -1841,10 +1763,11 @@ async function doResetPassword() {
   }
 }
 
-async function deleteUser(id, name) {
+async function deleteUser(id) {
+  const name = (usersById[id] || {}).username || 'this user';
   if (!confirm(`Permanently delete user "${name}"?`)) return;
   try {
-    await apiCall('DELETE', `/api/admin/users/${id}`);
+    await apiCall('DELETE', `/api/admin/users/${encodeURIComponent(id)}`);
     toast('User deleted', 'success');
     loadUsers();
   } catch (e) {
@@ -1854,26 +1777,37 @@ async function deleteUser(id, name) {
 
 /* ── Admin: System info ───────────────────────────────────── */
 async function loadSystemInfo() {
+  // GET /api/system/platform {platform, version, engine, architecture} + GET /api/system/stats
+  // {cpu, memory, disk, uptime_seconds, services[]} (the dashboard System card's source).
   const card = document.getElementById('system-info-card');
+  const pct = x => (x && x.percent != null ? x.percent + '%' : '—');
+  const gb = b => (b != null ? (b / 1073741824).toFixed(1) + ' GB' : '—');
+  function uptime(sec) {
+    if (sec == null) return '—';
+    const d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+    return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+  }
   try {
-    const [platform, status] = await Promise.all([
+    const [platform, stats] = await Promise.all([
       apiCall('GET', '/api/system/platform').catch(() => null),
-      apiCall('GET', '/api/system/status').catch(() => null),
+      apiCall('GET', '/api/system/stats').catch(() => null),
     ]);
     const rows = [];
     if (platform) {
       rows.push(['Platform', platform.platform || '—']);
-      rows.push(['Architecture', platform.arch || '—']);
-      rows.push(['Python', platform.python_version || '—']);
+      rows.push(['Version', platform.version || '—']);
+      rows.push(['Engine', platform.engine || '—']);
+      rows.push(['Architecture', platform.architecture || '—']);
     }
-    if (status) {
-      rows.push(['Uptime', status.uptime || '—']);
-      rows.push(['LLM endpoint', status.llm_endpoint || '—']);
-      rows.push(['LLM status', status.llm_status || '—']);
-      if (status.memory_mb) rows.push(['Memory', Math.round(status.memory_mb) + ' MB']);
+    if (stats) {
+      rows.push(['Uptime', uptime(stats.uptime_seconds)]);
+      rows.push(['CPU', pct(stats.cpu)]);
+      rows.push(['Memory', stats.memory ? `${pct(stats.memory)} of ${gb(stats.memory.total_bytes)}` : '—']);
+      rows.push(['Disk', stats.disk ? `${pct(stats.disk)} of ${gb(stats.disk.total_bytes)}` : '—']);
+      for (const svc of stats.services || []) rows.push([svc.name || svc.id, svc.status || '—']);
     }
     if (!rows.length) {
-      card.innerHTML = '<div class="empty">No system info available</div>';
+      card.innerHTML = '<div class="empty">System information is not available right now</div>';
       return;
     }
     card.innerHTML = rows.map(([k, v]) => `
@@ -1882,14 +1816,25 @@ async function loadSystemInfo() {
         <div style="color:var(--text2);font-size:14px;font-family:monospace;">${escHtml(String(v))}</div>
       </div>`).join('');
   } catch (e) {
-    card.innerHTML = `<div class="empty">Failed to load: ${e.message}</div>`;
+    card.innerHTML = `<div class="empty">Failed to load: ${escHtml(e.message)}</div>`;
   }
 }
 
 /* ── Music ────────────────────────────────────────────────── */
-function openMASetup() {
-  const url = `http://${window.location.hostname}:8095`;
-  window.open(url, '_blank', 'width=900,height=700,noopener');
+// Music Assistant's own UI is served ONLY through the gated proxy path (nginx auth_request -> /api/music/ma-ui/gate),
+// the same one music.html opens. A popup cannot carry X-Session-ID, so trade it for the path-scoped cookie first.
+// The window is opened inside the click (popup blockers) and pointed at the UI once the cookie is set.
+async function openMASetup() {
+  const win = window.open('', '_blank', 'width=960,height=720');
+  try {
+    await apiCall('POST', '/api/music/ma-ui/session');
+  } catch (e) {
+    if (win) win.close();
+    return toast("Couldn't open music setup: " + e.message, 'error');
+  }
+  const url = `${window.location.origin}/modules/music-assistant/`;
+  if (win) { win.opener = null; win.location.href = url; }
+  else window.location.href = url;   // popups blocked: open it in this tab instead
 }
 
 async function loadMusicStatus() {
@@ -1946,7 +1891,9 @@ async function loadMusicStatus() {
             <div class="row-label">${name}</div>
             ${domain ? `<div class="row-sub">${domain}</div>` : ''}
           </div>
-          <span class="badge badge-success">Connected</span>
+          ${p.available === false ? '<span class="badge badge-danger">Unavailable</span>'
+            : p.available === true ? '<span class="badge badge-success">Connected</span>'
+            : '<span class="badge badge-accent">Configured</span>'}
         </div>`;
       }).join('');
     }

@@ -512,54 +512,7 @@
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
         
-        /* Onboarding Prompt Modal */
-        .onboarding-prompt-modal {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(8px);
-            display: flex; align-items: center; justify-content: center;
-            z-index: 10000; animation: fadeIn 0.3s ease;
-        }
-        .onboarding-prompt-content {
-            background: var(--glass-bg); backdrop-filter: blur(40px);
-            border-radius: 20px; padding: 40px; max-width: 400px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            text-align: center;
-        }
-        .onboarding-zoe-orb {
-            width: 80px; height: 80px; border-radius: 50%;
-            background: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
-            margin: 0 auto 20px; animation: breathe 4s ease-in-out infinite;
-        }
-        .onboarding-prompt-content h2 {
-            font-size: 24px; font-weight: 600; margin-bottom: 12px;
-            color: var(--text-primary);
-        }
-        .onboarding-prompt-content p {
-            font-size: 15px; color: var(--text-secondary);
-            margin-bottom: 24px; line-height: 1.6;
-        }
-        .onboarding-prompt-actions {
-            display: flex; gap: 12px; margin-bottom: 16px;
-        }
-        .onboarding-btn-primary, .onboarding-btn-secondary {
-            flex: 1; padding: 12px 24px; border-radius: 10px;
-            font-size: 15px; font-weight: 500; cursor: pointer;
-            transition: all 0.2s; border: none;
-        }
-        .onboarding-btn-primary {
-            background: linear-gradient(135deg, var(--purple), #0891b2);
-            color: white;
-        }
-        .onboarding-btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(124, 58, 237, 0.4); }
-        .onboarding-btn-secondary {
-            background: rgba(255, 255, 255, 0.6);
-            color: var(--text-secondary);
-        }
-        .onboarding-btn-secondary:hover { background: rgba(255, 255, 255, 0.8); }
-        .onboarding-skip-option {
-            display: block; font-size: 13px; color: var(--text-tertiary);
-            cursor: pointer;
-        }
+        /* Overlay fade */
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
         /* More Overlay (navigation menu) */
@@ -1583,52 +1536,10 @@
             try {
                 const response = await apiRequest('/api/user/profile');
                 userProfile = response;
-                
-                // Check if onboarding is needed
-                if (!userProfile.onboarding_completed) {
-                    showOnboardingPrompt();
-                }
+                // No onboarding nag: nothing on the server records "onboarding done" (PUT /api/user/profile does not
+                // exist), so a "don't ask again" could never stick and the prompt came back on every visit.
             } catch (error) {
                 console.error('Failed to load user profile:', error);
-            }
-        }
-        
-        function showOnboardingPrompt() {
-            const modal = document.createElement('div');
-            modal.className = 'onboarding-prompt-modal';
-            modal.innerHTML = `
-                <div class="onboarding-prompt-content">
-                    <div class="onboarding-zoe-orb"></div>
-                    <h2>Hi! I'm Zoe 👋</h2>
-                    <p>Would you like to do your onboarding now? It helps me learn about you so I can be more helpful!</p>
-                    <div class="onboarding-prompt-actions">
-                        <button class="onboarding-btn-primary" onclick="startOnboarding()">Let's do it!</button>
-                        <button class="onboarding-btn-secondary" onclick="closeOnboardingPrompt(this)">Maybe later</button>
-                    </div>
-                    <label class="onboarding-skip-option">
-                        <input type="checkbox" onchange="toggleOnboardingReminder(this.checked)">
-                        Don't ask again
-                    </label>
-                </div>
-            `;
-            document.body.appendChild(modal);
-        }
-        
-        function startOnboarding() {
-            window.location.href = 'chat.html?onboarding=true';
-        }
-        
-        function closeOnboardingPrompt(btn) {
-            btn.closest('.onboarding-prompt-modal').remove();
-        }
-        
-        function toggleOnboardingReminder(checked) {
-            if (checked) {
-                // Mark profile as onboarding completed (minimal)
-                apiRequest('/api/user/profile', {
-                    method: 'PUT',
-                    body: JSON.stringify({ onboarding_completed: true })
-                });
             }
         }
         
@@ -1953,7 +1864,6 @@
         })();
     </script>
     <!-- Mini Player for persistent music playback -->
-    <script src="js/mini-player.js"></script>
     <script src="/js/orb-loader.js"></script>
     <!-- Touch panel action executor -->
 </body>

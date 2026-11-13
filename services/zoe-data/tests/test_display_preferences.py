@@ -96,3 +96,47 @@ def test_every_advertised_pref_is_refreshed_on_conflict():
         f"{sorted(missing)} — the first write would stick and every later edit "
         f"would be silently dropped for any device that already has a row"
     )
+
+
+# ── "All panels (default)" is read by a panel that has no row of its own ────────────────────────
+
+class _Rows(dict):
+    def keys(self):
+        return super().keys()
+
+
+class _FakeDb:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def execute(self, sql, params):
+        row = self.rows.get(params[0])
+
+        class _Cur:
+            async def fetchone(self_inner):
+                return row
+        return _Cur()
+
+
+def _get(db, device_id):
+    import asyncio
+
+    from routers import system
+    return asyncio.run(system.get_display_preferences(device_id=device_id, db=db))
+
+
+def test_a_panel_without_its_own_row_reads_the_saved_default():
+    db = _FakeDb({"default": _Rows(off_enabled=True, day_brightness=40, pi_host="10.0.0.9")})
+    out = _get(db, "panel-kitchen")
+    assert out["inherited"] is True and out["preferences"]["off_enabled"] is True and out["preferences"]["day_brightness"] == 40
+    from routers import system
+    assert out["pi_host"] == system._DEFAULT_PI_HOST          # the reload host is never inherited
+
+
+def test_a_panels_own_row_wins_over_the_default_and_no_rows_means_code_defaults():
+    db = _FakeDb({"default": _Rows(day_brightness=40), "panel-kitchen": _Rows(day_brightness=75)})
+    own = _get(db, "panel-kitchen")
+    assert own["inherited"] is False and own["preferences"]["day_brightness"] == 75
+    none = _get(_FakeDb({}), "panel-kitchen")
+    assert none["inherited"] is False and none["preferences"]["off_enabled"] is False     # control: the code default
+    assert _get(db, "default")["inherited"] is False

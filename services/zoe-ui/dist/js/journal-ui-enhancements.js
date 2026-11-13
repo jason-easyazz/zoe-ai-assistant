@@ -38,7 +38,7 @@ async function setupPeopleAutocomplete() {
         try {
             const session = window.zoeAuth?.getCurrentSession?.();
             const userId = session?.user_info?.user_id || session?.user_id;
-            const qs = userId ? `?user_id=${encodeURIComponent(userId)}&limit=100` : `?limit=100`;
+            const qs = `?limit=100`;
             const response = await fetch(`/api/memories/people${qs}`);
             const data = await response.json();
             peopleList = data.people || [];
@@ -307,7 +307,7 @@ window.publishEntryEnhanced = async function() {
     try {
         const session = window.zoeAuth?.getCurrentSession?.();
         const userId = session?.user_info?.user_id || session?.user_id;
-        const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+        const qs = '';
         const response = await fetch(`/api/journal/entries${qs}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
