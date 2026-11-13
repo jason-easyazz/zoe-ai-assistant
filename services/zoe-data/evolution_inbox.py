@@ -142,7 +142,7 @@ async def _struggle_cards(now: float) -> list[dict]:
     try:
         import struggle_proposals as sp
 
-        items = await sp.list_proposals(status="proposed", limit=200)
+        items = await sp.list_proposals(status="proposed", limit=200, awake_at=now)    # decided and snoozed are left out IN the query
     except Exception as exc:  # noqa: BLE001 - a missing table / DB blip leaves the other cards
         logger.info("evolution_inbox: struggle proposals unavailable (%s)", type(exc).__name__)
         return []
@@ -208,8 +208,7 @@ async def inbox(viewer_id: str, *, stale_days: float = STALE_DAYS, now: Optional
     groups = _groups(rows)
     live = {k: m for k, m in groups.items() if max(_seen(r) for r in m) >= cutoff}
     stale = sum(len(m) for k, m in groups.items() if k not in live)          # a whole group is old: no new evidence for any member
-    struggle = [c for c in await _struggle_cards(t) if c["key"][2:] not in snoozed_struggle]
-    cards = _queue_cards(live, t) + struggle + await _failed_turn_cards(viewer_id, t)
+    cards = _queue_cards(live, t) + await _struggle_cards(t) + await _failed_turn_cards(viewer_id, t)
     cards.sort(key=lambda c: (-c["score"], c["card"]))
     decided = []
     for r in past:

@@ -6,6 +6,8 @@ Negative controls (run by hand when this was written; each turned the named test
   * drop the ``unauthenticated_override`` refusal in ``_owner``            -> test_only_a_signed_in_admin_person_decides
   * put ``r["title"]`` into a queue card's ``noticed``                     -> test_no_member_words_leave_the_api
   * restore "no target patterns -> validated" in ``measure_verdict``      -> test_measure_never_validates_what_it_did_not_measure
+  * drop the after-window coverage proof (``alive_after``)                 -> test_measure_records_unmeasured_..[log_stopped]
+  * compare raw counts instead of rates                                    -> test_far_less_traffic_after_is_not_an_improvement
   * drop the ``decision == "approved"`` idempotence branch                -> test_a_verdict_is_recorded_once
   * make ``board_mirror_on`` default true                                  -> test_the_board_mirror_is_off_by_default
   * select approved rows again in ``_backlog``                             -> test_decided_cards_leave_the_list_and_later_comes_back
@@ -237,23 +239,43 @@ def test_no_member_words_leave_the_api(client, db, monkeypatch):
 
 # -- MEASURE -----------------------------------------------------------------------
 
-@pytest.mark.parametrize("patterns,before,after,want", [
-    ([], 9, 1, ("unmeasured", "no_target_signal")),
-    (["x"], None, 1, ("unmeasured", "no_before_data")),
-    (["x"], 9, None, ("unmeasured", "no_after_data")),
-    (["x"], evolution_notice.MEASURE_MIN_BEFORE - 1, 0, ("unmeasured", "sample_too_small")),
-    (["x"], 10, 8, ("validated", "fewer_misses")),
-    (["x"], 10, 12, ("regressed", "more_misses")),
-    (["x"], 10, 10, ("no_change", "within_band")),
+T = evolution_notice.MEASURE_MIN_TURNS
+
+
+@pytest.mark.parametrize("patterns,before,after,turns,want", [
+    ([], 9, 1, (T, T), ("unmeasured", "no_target_signal")),
+    (["x"], None, 1, (T, T), ("unmeasured", "no_before_data")),
+    (["x"], 9, 1, (T - 1, T), ("unmeasured", "no_before_data")),
+    (["x"], 9, None, (T, T), ("unmeasured", "no_after_coverage")),          # the miss log has no record in the after window
+    (["x"], 9, 0, (T, None), ("unmeasured", "no_after_coverage")),          # no router coverage after
+    (["x"], 9, 0, (T, T - 1), ("unmeasured", "no_after_coverage")),         # too little traffic after
+    (["x"], evolution_notice.MEASURE_MIN_BEFORE - 1, 0, (T, T), ("unmeasured", "sample_too_small")),
+    (["x"], 10, 8, (100, 100), ("validated", "fewer_misses_per_turn")),
+    (["x"], 10, 12, (100, 100), ("regressed", "more_misses_per_turn")),
+    (["x"], 10, 10, (100, 100), ("no_change", "within_band")),
+    (["x"], 10, 4, (100, 40), ("no_change", "within_band")),               # 4 <= 8 raw, but the same RATE: not an improvement
 ])
-def test_measure_never_validates_what_it_did_not_measure(patterns, before, after, want):
-    assert evolution_notice.measure_verdict(patterns, before, after) == want
+def test_measure_never_validates_what_it_did_not_measure(patterns, before, after, turns, want):
+    got = evolution_notice.measure_verdict(patterns, before, after, turns_before=turns[0], turns_after=turns[1])
+    assert got == want
 
 
-def _applied(db, monkeypatch, tmp_path, lines, *, patterns=(WORDS,), kind="intent_pattern"):
-    log = tmp_path / "misses.jsonl"
-    log.write_text("".join(json.dumps(x) + "\n" for x in lines))
-    monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(log))
+W = evolution_notice._MEASURE_WINDOW_S
+
+
+def _turns(before=100, after=100):
+    """Router records: household turns spread over each window, plus one old record so the log covers the before window."""
+    recs = [{"ts": NOW - W - 120, "traffic": "harness"}]
+    recs += [{"ts": NOW - W + 60 + i * (W - 120) / max(1, before), "traffic": "household"} for i in range(before)]
+    recs += [{"ts": NOW + 60 + i * (W - 120) / max(1, after), "traffic": "household"} for i in range(after)]
+    return recs
+
+
+def _applied(db, monkeypatch, tmp_path, lines, *, patterns=(WORDS,), kind="intent_pattern", router=None):
+    for name, env, recs in (("misses.jsonl", "ZOE_INTENT_MISS_LOG", lines), ("router.jsonl", "ZOE_ROUTER_HEAD_LOG",
+                                                                             _turns() if router is None else router)):
+        (tmp_path / name).write_text("".join(json.dumps(x) + "\n" for x in recs))
+        monkeypatch.setenv(env, str(tmp_path / name))
     pid = run(eq.propose(db, source="evolution_notice:intent_miss_cluster", change_class="code", component="intent_router",
                          title="Intent gap", legacy_type=kind, target_patterns=json.dumps(list(patterns)), now=NOW - 10 * DAY))
     run(eq.transition(db, pid, "applied", actor="test", now=NOW))
@@ -263,26 +285,42 @@ def _applied(db, monkeypatch, tmp_path, lines, *, patterns=(WORDS,), kind="inten
     return out, row["status"], json.loads(row["validation_result"])
 
 
+def miss(ts, text=WORDS):
+    return {"ts": ts, "text": text, "traffic_class": "household"}
+
+
+BEFORE = [miss(NOW - W - 60, "an unrelated old line")] + [miss(NOW - W / 2 + i) for i in range(10)]
+
+
 def test_measure_end_to_end(db, monkeypatch, tmp_path):
-    w = evolution_notice._MEASURE_WINDOW_S
-    miss = lambda ts, text=WORDS: {"ts": ts, "text": text, "traffic_class": "household"}
-    lines = [miss(NOW - w - 60, "an unrelated old line")] + [miss(NOW - w / 2 + i) for i in range(10)] + [miss(NOW + 60)]
-    out, status, vr = _applied(db, monkeypatch, tmp_path, lines)
-    assert (status, vr["verdict"], vr["misses_before"], vr["misses_after"]) == ("kept", "validated", 10, 1)
-    assert out["applied_due"] == 1 and out["validated"] == 1
+    """Traffic after and ZERO target misses after (the miss writer still alive: an unrelated miss in the window) -> validated."""
+    out, status, vr = _applied(db, monkeypatch, tmp_path, BEFORE + [miss(NOW + 60, "an unrelated new line")])
+    assert (status, vr["verdict"], vr["misses_before"], vr["misses_after"]) == ("kept", "validated", 10, 0)
+    assert (vr["turns_before"], vr["turns_after"]) == (100, 100) and out["applied_due"] == 1 and out["validated"] == 1
 
 
-@pytest.mark.parametrize("case,reason", [("no_patterns", "no_target_signal"), ("other_kind", "no_target_signal"),
-                                         ("swept_log", "no_before_data"), ("few", "sample_too_small")])
+@pytest.mark.parametrize("case,reason", [
+    ("no_patterns", "no_target_signal"), ("other_kind", "no_target_signal"), ("swept_log", "no_before_data"),
+    ("few", "sample_too_small"),
+    ("log_stopped", "no_after_coverage"),      # the miss log stops before the deployment: (10, 0) is NOT an improvement
+    ("router_stopped", "no_after_coverage"),   # misses still logged, but no household traffic after: nothing to compare
+])
 def test_measure_records_unmeasured_and_leaves_the_row_applied(db, monkeypatch, tmp_path, case, reason):
-    w = evolution_notice._MEASURE_WINDOW_S
-    lines = [{"ts": NOW - w / 2, "text": WORDS}] if case != "swept_log" else [{"ts": NOW + 10, "text": WORDS}]
-    if case == "few":
-        lines = [{"ts": NOW - w - 60, "text": "x"}, {"ts": NOW - 60, "text": WORDS}]
-    kw = {"patterns": ()} if case == "no_patterns" else {"kind": "agent_health"} if case == "other_kind" else {}
+    alive = [miss(NOW + 60, "an unrelated new line")]
+    lines = {"swept_log": [miss(NOW + 10)], "few": [miss(NOW - W - 60, "x"), miss(NOW - 60)] + alive,
+             "log_stopped": BEFORE}.get(case, BEFORE + alive)
+    kw = {"no_patterns": {"patterns": ()}, "other_kind": {"kind": "agent_health"},
+          "router_stopped": {"router": _turns(after=0)}}.get(case, {})
     out, status, vr = _applied(db, monkeypatch, tmp_path, lines, **kw)
     assert (status, vr["verdict"], vr["reason"], vr["schema"]) == ("applied", "unmeasured", reason, 2)
     assert out["validated"] == 0 and out["unmeasured"] == 1
+
+
+def test_far_less_traffic_after_is_not_an_improvement(db, monkeypatch, tmp_path):
+    """10 misses in 100 turns before, 4 in 40 after: raw counts fell 60 %, the rate did not move -> no_change, never validated."""
+    after = [miss(NOW + 600 + i) for i in range(4)]
+    out, status, vr = _applied(db, monkeypatch, tmp_path, BEFORE + after, router=_turns(100, 40))
+    assert (status, vr["verdict"], vr["misses_after"], vr["turns_after"]) == ("applied", "no_change", 4, 40)
 
 
 def test_the_decide_page_shows_the_measurement(client, db, monkeypatch, tmp_path):

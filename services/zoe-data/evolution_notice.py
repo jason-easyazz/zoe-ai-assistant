@@ -615,12 +615,16 @@ def _load_target_patterns(raw: str | None) -> list[str]:
     return []
 
 
-#: the honest measure (2026-11-13). ``validated`` needs a before / after comparison on the proposal's OWN target signal - the household
-#: intent misses (``local_text_logs.INTENT_MISSES``) similar to its target patterns, in the window before vs after it was applied - with
-#: at least ``MEASURE_MIN_BEFORE`` misses in the before window. Anything less is ``unmeasured`` with a reason, never a pass.
+#: the honest measure (2026-11-13). ``validated`` needs a before / after comparison of the proposal's OWN target signal as a RATE: household
+#: intent misses (``local_text_logs.INTENT_MISSES``) similar to its target patterns, per household turn the router logged
+#: (``local_text_logs.ROUTER_SHADOW``: one record per routed turn, ``ts`` + ``traffic``), 48 h before vs 48 h after it was applied. It
+#: needs PROOF OF COVERAGE: at least ``MEASURE_MIN_TURNS`` household turns in EACH window (there was traffic and the router logged
+#: it), at least one miss-log record of any kind inside the after window (the miss writer was alive), and at least
+#: ``MEASURE_MIN_BEFORE`` target misses before. A log that just stopped is never an improvement: it is ``unmeasured``.
 MEASURE_MIN_BEFORE = 5
-MEASURE_BETTER = 0.8          # after <= 0.8 x before: validated (misses fell by at least a fifth)
-MEASURE_WORSE = 1.2           # after >= 1.2 x before: regressed
+MEASURE_MIN_TURNS = 30
+MEASURE_BETTER = 0.8          # after-rate <= 0.8 x before-rate: validated (misses per turn fell by at least a fifth)
+MEASURE_WORSE = 1.2           # after-rate >= 1.2 x before-rate: regressed
 _SIMILAR = 0.4                # the trigram overlap the NOTICE clustering used to group the misses in the first place
 
 
@@ -635,33 +639,34 @@ def _similar(a: str, b: str) -> bool:
     return bool(union) and len(ta & tb) / union > _SIMILAR
 
 
-def measure_verdict(patterns: list, before: int | None, after: int | None, *, min_before: int = MEASURE_MIN_BEFORE) -> tuple[str, str]:
-    """(verdict, reason). verdict: validated | regressed | no_change | unmeasured. ``None`` = the window has no data at all."""
+def measure_verdict(patterns: list, before: int | None, after: int | None, *, turns_before: int | None = None,
+                    turns_after: int | None = None, min_before: int = MEASURE_MIN_BEFORE,
+                    min_turns: int = MEASURE_MIN_TURNS) -> tuple[str, str]:
+    """(verdict, reason). verdict: validated | regressed | no_change | unmeasured. ``None`` = no coverage of that window."""
     if not patterns:
         return "unmeasured", "no_target_signal"
-    if before is None:
+    if before is None or turns_before is None or turns_before < min_turns:
         return "unmeasured", "no_before_data"
-    if after is None:
-        return "unmeasured", "no_after_data"
+    if after is None or turns_after is None or turns_after < min_turns:
+        return "unmeasured", "no_after_coverage"
     if before < min_before:
         return "unmeasured", "sample_too_small"
-    if after <= before * MEASURE_BETTER:
-        return "validated", "fewer_misses"
-    if after >= before * MEASURE_WORSE:
-        return "regressed", "more_misses"
+    rate_before, rate_after = before / turns_before, after / turns_after
+    if rate_after <= rate_before * MEASURE_BETTER:
+        return "validated", "fewer_misses_per_turn"
+    if rate_after >= rate_before * MEASURE_WORSE:
+        return "regressed", "more_misses_per_turn"
     return "no_change", "within_band"
 
 
-def miss_counts(patterns: list, deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> tuple[int | None, int | None]:
-    """Household intent misses similar to a target pattern in the window before / after ``deployed_at``. A window the log does not
-    cover (no log, or its oldest line is newer than the window's start: swept by retention) is ``None``, not 0."""
+def _records(log) -> list[dict]:
     import local_text_logs as ltl
 
-    seen: list[tuple[float, str]] = []
     try:
-        paths = ltl.segments(ltl.INTENT_MISSES)
+        paths = ltl.segments(log)
     except Exception:  # noqa: BLE001
-        paths = [ltl.log_path(ltl.INTENT_MISSES)]
+        paths = [ltl.log_path(log)]
+    out: list[dict] = []
     for path in paths:
         try:
             lines = Path(path).read_text(errors="replace").splitlines()
@@ -670,21 +675,50 @@ def miss_counts(patterns: list, deployed_at: float, *, window_s: float = _MEASUR
         for line in lines:
             try:
                 row = json.loads(line)
-                seen.append((float(row["ts"]), str(row.get("text") or "") if row.get("traffic_class") in (None, "household") else ""))
+                row["ts"] = float(row["ts"])
+                out.append(row)
             except (ValueError, KeyError, TypeError):
                 continue
+    return out
+
+
+def miss_counts(patterns: list, deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> tuple[int | None, int | None]:
+    """Household intent misses similar to a target pattern in the window before / after ``deployed_at``. ``None`` = no coverage:
+    before, the log's oldest line is newer than the window start (swept); after, the log holds NO record of any kind inside the
+    window (the writer may have stopped: zero is then not a measurement)."""
+    import local_text_logs as ltl
+
+    seen = _records(ltl.INTENT_MISSES)
     if not seen:
         return None, None
-    oldest = min(ts for ts, _ in seen)
+    oldest = min(r["ts"] for r in seen)
     before = after = 0
-    for ts, text in seen:
+    alive_after = False
+    for r in seen:
+        ts = r["ts"]
+        if deployed_at <= ts < deployed_at + window_s:
+            alive_after = True
+        text = str(r.get("text") or "") if r.get("traffic_class") in (None, "household") else ""
         if not text or not any(_similar(text, p) for p in patterns):
             continue
         if deployed_at - window_s <= ts < deployed_at:
             before += 1
         elif deployed_at <= ts < deployed_at + window_s:
             after += 1
-    return (before if oldest <= deployed_at - window_s else None), (after if oldest <= deployed_at else None)
+    return (before if oldest <= deployed_at - window_s else None), (after if alive_after else None)
+
+
+def household_turns(deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> tuple[int | None, int | None]:
+    """Household turns the router logged in the window before / after ``deployed_at`` (the rate's denominator). ``None`` when the
+    log does not reach back to the before window's start."""
+    import local_text_logs as ltl
+
+    seen = _records(ltl.ROUTER_SHADOW)
+    if not seen:
+        return None, None
+    before = sum(1 for r in seen if r.get("traffic") == "household" and deployed_at - window_s <= r["ts"] < deployed_at)
+    after = sum(1 for r in seen if r.get("traffic") == "household" and deployed_at <= r["ts"] < deployed_at + window_s)
+    return (before if min(r["ts"] for r in seen) <= deployed_at - window_s else None), after
 
 
 async def run_measure_phase() -> dict:
@@ -718,9 +752,11 @@ async def run_measure_phase() -> dict:
             deployed_at = row["deployed_at"]
             patterns = _load_target_patterns(row["target_patterns"]) if row["type"] == "intent_pattern" else []
             before, after = miss_counts(patterns[:20], deployed_at) if patterns else (None, None)
-            verdict, reason = measure_verdict(patterns, before, after)
+            turns_before, turns_after = household_turns(deployed_at) if patterns else (None, None)
+            verdict, reason = measure_verdict(patterns, before, after, turns_before=turns_before, turns_after=turns_after)
             validation_result = {"schema": 2, "verdict": verdict, "reason": reason, "misses_before": before, "misses_after": after,
-                                 "window_h": _MEASURE_WINDOW_S / 3600, "min_before": MEASURE_MIN_BEFORE, "measured_at": now}
+                                 "turns_before": turns_before, "turns_after": turns_after, "window_h": _MEASURE_WINDOW_S / 3600,
+                                 "min_before": MEASURE_MIN_BEFORE, "min_turns": MEASURE_MIN_TURNS, "measured_at": now}
             move = {"validated": "kept", "regressed": "reverted"}.get(verdict)
             # the status move (when there is one) and the result are ONE transaction, and the result write is conditional on the
             # deployment it measured: a failed write leaves the row applied with no result, so the next pass measures it again

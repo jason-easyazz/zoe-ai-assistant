@@ -92,10 +92,13 @@ change proposals - there is no night-mind proposal writer in the repo. **Generat
 
 Only an `applied` row older than 48 h is measured. Today nothing reaches `applied` (the board is paused, the legacy page has no deploy
 button, the struggle retrain is off), which is why every night logged `evaluated: 0`; the result now carries `applied_due`. The
-verdict (`measure_verdict`): `validated` only on a before / after comparison of the proposal's own target signal (household intent
-misses similar to its target patterns, 48 h each side) with at least `MEASURE_MIN_BEFORE` (5) misses before and a drop to 0.8x or less;
-`regressed` at 1.2x or more (moved to `reverted`; nothing is rolled back automatically); otherwise `no_change`, or `unmeasured` with
-`no_target_signal` / `no_before_data` / `no_after_data` / `sample_too_small`. Every outcome is written to `validation_result`
+verdict (`measure_verdict`) compares a RATE: household intent misses similar to the proposal's target patterns per household turn the
+router logged (`local_text_logs.ROUTER_SHADOW`, one record per routed turn), 48 h each side. It first needs PROOF OF COVERAGE: at least
+`MEASURE_MIN_TURNS` (30) household turns in EACH window and at least one miss-log record of any kind inside the after window (the miss
+writer was alive), else `unmeasured` / `no_before_data` or `no_after_coverage`: a log that stopped is never an improvement. Then at
+least `MEASURE_MIN_BEFORE` (5) target misses before (else `sample_too_small`); `validated` at a rate of 0.8x or less, `regressed` at
+1.2x or more (moved to `reverted`; nothing is rolled back automatically), otherwise `no_change`; no target patterns is
+`no_target_signal`. Every outcome is written to `validation_result`
 (`schema: 2`, counts only); a verdict without `schema: 2` is shown as not measurable.
 
 The Multica board mirror of new proposals (and of measured status) is opt-in: `ZOE_EVOLUTION_BOARD_MIRROR` (default off). The NOTICE
