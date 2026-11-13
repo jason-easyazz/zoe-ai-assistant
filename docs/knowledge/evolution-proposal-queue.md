@@ -74,13 +74,16 @@ change proposals - there is no night-mind proposal writer in the repo. **Generat
 `evolution.html` (desktop / phone, linked from Settings > Evolution Proposals; never from a touch page) over `evolution_inbox.py` +
 `routers/evolution_inbox.py`, household admin persons only (a panel token and the `ZOE_UNAUTHENTICATED_ROLE` promotion are refused):
 
-- `GET /api/system/evolution/inbox?stale_days=30`: at most 20 cards. A card groups the open proposals with the same component, class,
-  kind and normalised title (or lesson id), ranked by (count + summed signal counts) halved every 14 days of age. Struggle proposals
+- `GET /api/system/evolution/inbox?stale_days=30`: at most 20 cards. A card groups the UNDECIDED open proposals (not approved, not
+  put off past their review date) with the same component, class, kind and normalised title (or lesson id), ranked by (count + summed
+  signal counts) halved every 14 days of EVIDENCE age (`proposed_at`; a decision never refreshes a card). A card carries its count and
+  an opaque group `key` (a hash of those grouping fields), never its ids. A group with no new evidence for `stale_days` is stale. Struggle proposals
   (live evidence only) and the owner's own failed-turn clusters (counts only, no buttons) are cards too. Open rows with no activity for
   `stale_days` are only a count; rows put off with "later" are a count. A card carries kind, counts, dates, the proposed change and its
   risk tier, and what a yes does next; NEVER a title, description or legacy evidence (they can hold a member's words). `decided` lists
   the last approved / measured rows with their measurement (better / no change / worse / not measurable).
-- `POST /api/system/evolution/decide {ids, action: approve | reject | later, reason: code}`: approve = the `decision` column, reject = the
+- `POST /api/system/evolution/decide {key | ids (max 500), action: approve | reject | later, reason: code}`: by key the server recomputes
+  the groups and applies the verdict to that group's CURRENT undecided ids (any number, in chunks of 200); approve = the `decision` column, reject = the
   `rejected` status, later = the legacy defer (`next_review_at` + 7 days, decision withdrawn); a struggle card goes through
   `struggle_proposals.decide`. Idempotent; the queue history is the audit (actor, time, reason code). Approving applies nothing.
 - `POST /api/system/evolution/dismiss-stale {stale_days}`: rejects the stale bucket (history note `dismissed: stale`).

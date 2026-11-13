@@ -37,10 +37,10 @@ const HOSTILE = '<img src=x onerror="window.__pwned=1">';
 function inbox() {
     return {
         cards: [
-            { card: 'q-1', source: 'queue', ids: ['p-a', 'p-b'], count: 2, noticed: HOSTILE, first_seen: '2026-11-01', last_seen: '2026-11-10',
+            { card: 'q-1', key: 'q-00000000000000a1', source: 'queue', count: 640, noticed: HOSTILE, first_seen: '2026-11-01', last_seen: '2026-11-10',
               evidence: { proposals: 2, signal_count: 7 }, proposes: 'A code change to intent_router (risk tier 3).', approved: false,
               next: 'Today a yes only records your decision.', actions: ['approve', 'reject', 'later'] },
-            { card: 't-weather', source: 'failed_turns', ids: [], count: 3, noticed: '3 of your own requests went to the wrong place',
+            { card: 't-weather', key: null, source: 'failed_turns', count: 3, noticed: '3 of your own requests went to the wrong place',
               evidence: { turns: 3 }, proposes: 'Learn from these turns.', next: 'not built yet', actions: [] },
         ],
         more_cards: 0, open: 9, stale: { count: 7, days: 30 }, later: 1,
@@ -82,7 +82,7 @@ const buttons = (n) => n.all(x => x.tagName === 'BUTTON');
         assert(doc.ids.evoPast.textContent.includes('measured: better'));
     });
     for (const [action, label] of [['approve', 'Yes, do it'], ['reject', 'No'], ['later', 'Later']]) {
-        await check('the ' + action + ' button posts one verdict for every id of its card', async () => {
+        await check('the ' + action + ' button posts the card key, never a list of ids', async () => {
             const { doc, win, sent } = setup();
             await win.ZoeEvolution.init(doc);
             const b = buttons(doc.ids.evoCards).find(x => x.getAttribute('data-action') === action);
@@ -90,7 +90,7 @@ const buttons = (n) => n.all(x => x.tagName === 'BUTTON');
             await b.click();
             const post = sent.find(s => s.method === 'POST');
             assert.strictEqual(post.url, '/api/system/evolution/decide');
-            assert.deepStrictEqual(post.body, { ids: ['p-a', 'p-b'], action });
+            assert.deepStrictEqual(post.body, { key: 'q-00000000000000a1', action });
         });
     }
     await check('a card without actions has no buttons (failed turns are labelled with the words, elsewhere)', async () => {

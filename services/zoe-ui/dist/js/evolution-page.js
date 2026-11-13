@@ -3,7 +3,7 @@
  *
  * Global `ZoeEvolution` ({ init }). Loaded AFTER js/auth.js, so `fetch` carries the session. Routes (routers/evolution_inbox.py):
  *   GET  /api/system/evolution/inbox            short ranked list of grouped cards, counts and dates only
- *   POST /api/system/evolution/decide           { ids, action: approve | reject | later }
+ *   POST /api/system/evolution/decide           { key, action: approve | reject | later }  (the card's group key)
  *   POST /api/system/evolution/dismiss-stale    { stale_days }
  * Every server string goes into the DOM through textContent; this file never assigns innerHTML and uses no inline handlers.
  * Pinned by dist/test_evolution_page.js (CI: services/zoe-data/tests/test_evolution_inbox.py).
@@ -63,13 +63,13 @@
         box.appendChild(el('p', 'hint', 'If you say yes: ' + c.next));
         if (c.approved) box.appendChild(el('p', 'chip', 'You already said yes'));
         const acts = (c.actions || []).filter(a => ACTION_LABEL[a]);
-        if (acts.length && (c.ids || []).length) {
+        if (acts.length && c.key) {
             const row = el('div', 'row evo-acts');
             for (const a of acts) {
                 const b = el('button', 'pb' + (a === 'approve' ? ' primary' : a === 'reject' ? ' danger' : ''), ACTION_LABEL[a]);
                 b.setAttribute('type', 'button');
                 b.setAttribute('data-action', a);
-                b.addEventListener('click', () => decide(c.ids, a, b));
+                b.addEventListener('click', () => decide(c.key, a, b));
                 row.appendChild(b);
             }
             box.appendChild(row);
@@ -77,10 +77,10 @@
         return box;
     }
 
-    async function decide(ids, action, btn) {
+    async function decide(key, action, btn) {
         if (btn) btn.disabled = true;
         try {
-            const out = await api('POST', BASE + '/decide', { ids: ids.slice(), action });
+            const out = await api('POST', BASE + '/decide', { key, action });
             toast(out.changed ? 'Recorded. Nothing has been changed in Zoe yet.' : 'Already recorded.');
             await load();
         } catch (e) {

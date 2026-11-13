@@ -1,7 +1,8 @@
 """The owner's decide page API (``evolution_inbox.py``; page ``zoe-ui/dist/evolution.html``). HOUSEHOLD ADMIN PERSONS only.
 
   * ``GET  /api/system/evolution/inbox?stale_days=30``  at most 20 grouped cards, counts and dates only (never a member's words)
-  * ``POST /api/system/evolution/decide`` ``{ids, action: approve|reject|later, reason?}``  one card's verdict, idempotent
+  * ``POST /api/system/evolution/decide`` ``{key | ids, action: approve|reject|later, reason?}``  one card's verdict by its group key
+    (the server re-resolves the group's current undecided ids, any number) or a short id list; idempotent
   * ``POST /api/system/evolution/dismiss-stale`` ``{stale_days}``  reject the hidden old proposals in one go
 
 Refused (403): a non-admin (member, child, guest, no session), a panel device token (it authenticates a panel, not a person) and the
@@ -9,7 +10,7 @@ Refused (403): a non-admin (member, child, guest, no session), a panel device to
 """
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -27,7 +28,9 @@ async def _owner(user: dict = Depends(require_admin)) -> dict:
 
 
 class Verdict(BaseModel):
-    ids: List[str] = Field(..., min_length=1, max_length=500)
+    # a card KEY (``q-`` + 16 hex: a hash the server recomputes from the grouping fields; ``s-`` + a struggle id), or a short id list
+    key: Optional[str] = Field(None, pattern=r"^(q-[0-9a-f]{16}|s-[A-Za-z0-9_.:-]{1,80})$")
+    ids: Optional[List[str]] = Field(None, min_length=1, max_length=500)
     action: Literal["approve", "reject", "later"]
     reason: Literal["", "not_a_problem", "wrong_label", "already_fixed", "not_now", "other"] = ""
 
@@ -55,12 +58,12 @@ async def evolution_decide(body: Verdict, user: dict = Depends(_owner)):
     import evolution_inbox as ei
 
     try:
-        out = await ei.decide(body.ids, body.action, str(user["user_id"]), body.reason)
+        out = await ei.decide(body.action, str(user["user_id"]), body.reason, key=body.key, ids=body.ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise _unavailable(exc) from exc
-    if out["missing"] and not (out["changed"] or out["unchanged"]):
+    if body.ids is not None and out["missing"] and not (out["changed"] or out["unchanged"]):
         raise HTTPException(status_code=404, detail="no such proposal")
     return out
 

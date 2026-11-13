@@ -8,6 +8,8 @@ Negative controls (run by hand when this was written; each turned the named test
   * restore "no target patterns -> validated" in ``measure_verdict``      -> test_measure_never_validates_what_it_did_not_measure
   * drop the ``decision == "approved"`` idempotence branch                -> test_a_verdict_is_recorded_once
   * make ``board_mirror_on`` default true                                  -> test_the_board_mirror_is_off_by_default
+  * select approved rows again in ``_backlog``                             -> test_decided_cards_leave_the_list_and_later_comes_back
+  * cap the key path at ``MAX_IDS`` (500)                                  -> test_a_big_group_is_decided_by_its_key
 The page's own controls are mutations of ``js/evolution-page.js`` below (test_page_negative_controls_turn_the_harness_red).
 """
 from __future__ import annotations
@@ -17,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -69,11 +72,13 @@ def test_grouping_ranking_cap_and_the_stale_bucket(db, quiet):
     old = [add(db, f"Intent gap: 'ancient thing {i}'", age_days=90) for i in range(4)]
     out = run(ei.inbox("admin-1", now=NOW))
     assert len(out["cards"]) == ei.CARD_CAP and out["more_cards"] == 32 - ei.CARD_CAP
-    assert out["cards"][0]["ids"] == [strong]                                       # the strongest evidence first
-    pair = next(c for c in out["cards"] if a in c["ids"])
-    assert sorted(pair["ids"]) == sorted([a, b]) and pair["count"] == 2 and pair["evidence"]["signal_count"] == 4
+    ids_of = {c["key"]: run(ei._resolve(c["key"], NOW)) for c in out["cards"]}
+    assert ids_of[out["cards"][0]["key"]] == [strong]                               # the strongest evidence first
+    pair = next(c for c in out["cards"] if a in ids_of[c["key"]])
+    assert ids_of[pair["key"]] == sorted([a, b]) and pair["count"] == 2 and pair["evidence"]["signal_count"] == 4
+    assert all("ids" not in c for c in out["cards"])                                 # a card ships its count and key, not ids
     assert out["stale"] == {"count": 4, "days": ei.STALE_DAYS} and out["open"] == 37
-    assert not any(set(old) & set(c["ids"]) for c in out["cards"])
+    assert not any(set(old) & set(v) for v in ids_of.values())
     assert "only records your decision" in out["approval_does"]
 
 
@@ -93,7 +98,7 @@ def test_struggle_and_failed_turn_cards_are_included(db, monkeypatch):
     monkeypatch.setattr(sp, "list_proposals", struggles)
     monkeypatch.setattr(turn_outcomes, "review", turns)
     cards = {c["source"]: c for c in run(ei.inbox("admin-1", now=NOW))["cards"]}
-    assert cards["struggle"]["ids"] == ["s1"] and "router training" in cards["struggle"]["next"]
+    assert cards["struggle"]["key"] == "s-s1" and "router training" in cards["struggle"]["next"]
     assert cards["failed_turns"]["count"] == 1 and cards["failed_turns"]["actions"] == []
     assert WORDS not in json.dumps(cards)
 
@@ -161,6 +166,47 @@ def test_a_verdict_is_recorded_once(client, db):
     assert rej()["changed"] == 2 and rej()["changed"] == 0
     assert client.post("/api/system/evolution/decide", json={"ids": ["nope"], "action": "reject"}).status_code == 404
     assert client.post("/api/system/evolution/decide", json={"ids": ids, "action": "reject", "reason": WORDS}).status_code == 422
+
+
+def test_decided_cards_leave_the_list_and_later_comes_back(db, quiet):
+    """30 distinct groups, the top 20 decided by key (approve / reject / later): the next read shows the other 10 and none of the
+    decided ones (an approved row lives only in ``decided``; a decision does not refresh a card's rank); a "later" card returns only
+    after its review date. Negative control: drop ``COALESCE(decision, '') = ''`` from ``_backlog`` -> red."""
+    for i in range(30):
+        add(db, f"Intent gap: 'synthetic {chr(97 + i % 26)}{chr(97 + i // 26)}x'", count=30 - i, age_days=1)
+    first = run(ei.inbox("admin-1", now=NOW))["cards"]
+    assert len(first) == 20
+    for n, c in enumerate(first):
+        action = ("approve", "reject", "later")[n % 3]
+        assert run(ei.decide(action, "admin-1", key=c["key"], now=NOW))["changed"] == 1
+    top = {c["key"] for c in first}
+    again = run(ei.inbox("admin-1", now=NOW + 60, stale_days=365))
+    assert len(again["cards"]) == 10 and not top & {c["key"] for c in again["cards"]}
+    assert again["later"] == 6 and sum(d["decision"] == "approved" for d in again["decided"]) == 7
+    back = run(ei.inbox("admin-1", now=NOW + (ei.LATER_DAYS + 1) * DAY, stale_days=365))["cards"]
+    later_keys = {c["key"] for n, c in enumerate(first) if n % 3 == 2}
+    assert later_keys <= {c["key"] for c in back} and len(back) == 16
+
+
+def test_a_big_group_is_decided_by_its_key(client, db):
+    """600 near-identical proposals are ONE card (count 600, no ids shipped); approving by key changes all 600 (more than the
+    500-id body limit), a repeat changes nothing, and the card is gone. Negative control: cap the key path at ``MAX_IDS`` -> red."""
+    db.conn.executemany(
+        "INSERT INTO evolution_proposals (id, type, title, description, status, proposed_at, change_class, risk_tier, component, "
+        "evidence_json, source, decision, decided_by, decision_note, updated_at) VALUES (?, 'intent_pattern', ?, '', 'proposed', ?, "
+        "'code', 3, 'intent_router', '{}', 'evolution_notice:intent_miss_cluster', '', '', '', ?)",
+        [(f"big-{i:04d}", "Intent gap: 'the same synthetic thing'", time.time(), time.time()) for i in range(600)])   # fresh: not stale
+    db.conn.commit()
+    (card,) = client.get("/api/system/evolution/inbox").json()["cards"]
+    assert card["count"] == 600 and "ids" not in card and len(json.dumps(card)) < 2000
+    approve = lambda: client.post("/api/system/evolution/decide", json={"key": card["key"], "action": "approve"}).json()
+    assert approve() == {"action": "approve", "changed": 600, "unchanged": 0, "missing": 0}
+    assert approve()["changed"] == 0
+    assert client.get("/api/system/evolution/inbox").json()["cards"] == []
+    assert len(db.rows("SELECT 1 FROM evolution_proposals WHERE decision = 'approved'")) == 600
+    bad = client.post("/api/system/evolution/decide", json={"key": "q-' OR 1=1 --", "action": "reject"})
+    assert bad.status_code == 422                                                    # a key is a hash, never SQL or free text
+    assert client.post("/api/system/evolution/decide", json={"key": "q-" + "0" * 16, "action": "reject"}).json()["changed"] == 0
 
 
 def test_dismiss_old_rejects_only_the_stale_bucket(client, db, monkeypatch):
@@ -300,10 +346,10 @@ def test_page_harness_passes():
 @pytest.mark.parametrize("old,new", [
     ("if (text !== undefined && text !== null) n.textContent = String(text);",
      "if (text !== undefined && text !== null) n.innerHTML = String(text);"),          # string-built DOM
-    ("api('POST', BASE + '/decide', { ids: ids.slice(), action })", "api('POST', BASE + '/decide', { ids: ids.slice(0, 1), action })"),
+    ("api('POST', BASE + '/decide', { key, action })", "api('POST', BASE + '/decide', { ids: [key], action })"),
     ("const ACTION_LABEL = { approve: 'Yes, do it', reject: 'No', later: 'Later' };",
      "const ACTION_LABEL = { approve: 'Yes, do it', reject: 'Yes, do it', later: 'Later' };"),
-    ("const acts = (c.actions || []).filter(a => ACTION_LABEL[a]);\n        if (acts.length && (c.ids || []).length) {",
+    ("const acts = (c.actions || []).filter(a => ACTION_LABEL[a]);\n        if (acts.length && c.key) {",
      "const acts = Object.keys(ACTION_LABEL);\n        if (acts.length) {"),               # buttons on a card that cannot be decided here
 ])
 def test_page_negative_controls_turn_the_harness_red(tmp_path, old, new):
