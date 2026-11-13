@@ -125,6 +125,43 @@ def test_an_animal_word_that_modifies_a_noun_is_not_a_kind(text, refused):
     assert (run(mq.reconcile_for_ingest(svc, text, UID))[0] == "refuse") is refused
 
 
+def _people(monkeypatch, *names, owner=UID):
+    """The member's people graph holds ``names`` (person rows of ``owner`` only)."""
+    import people_graph
+    import person_extractor
+
+    async def ensure(_db):
+        return object(), False
+
+    async def roster(_db, _sql, params=()):
+        return [(f"p{i}", n) for i, n in enumerate(names)] if params and params[0] == owner else []
+
+    monkeypatch.setattr(person_extractor, "_ensure_db", ensure)
+    monkeypatch.setattr(people_graph, "_all", roster)
+
+
+@pytest.mark.parametrize("text", ["Pip is a baby rabbit", "User has a baby rabbit called Pip"])
+def test_an_ambiguous_kind_never_refuses_on_words_alone(text, monkeypatch):
+    assert mq.subject_kinds(text) == {"pip": {"person", "animal"}}               # two kind words: ambiguous
+    assert mq.kind_flip(text, "User's son is named Pip") is None
+    _people(monkeypatch)                                                          # nobody named Pip
+    assert run(mq.reconcile_for_ingest(_Svc("User's son is named Pip", hits=set()), text, UID))[0] == "add"
+
+
+@pytest.mark.parametrize("text", ["Pip is a baby rabbit", "Pip is a rabbit"])
+def test_the_people_graph_decides_a_person_never_becomes_an_animal(text, monkeypatch):
+    _people(monkeypatch, "Pip")
+    assert run(mq.reconcile_for_ingest(_Svc(hits=set()), text, UID)) == ("refuse", None)
+    _people(monkeypatch, "Pip", owner="demo_qa9_member_b")                        # another member's Pip does not count
+    assert run(mq.reconcile_for_ingest(_Svc(hits=set()), text, UID))[0] == "add"
+
+
+def test_a_modifier_never_consults_the_graph_and_is_stored(monkeypatch):
+    _people(monkeypatch, "Fenn")
+    assert run(mq.reconcile_for_ingest(_Svc(hits=set()), "Fenn is a dog trainer", UID))[0] == "add"
+    assert run(mq.reconcile_for_ingest(_Svc("User's son is named Fenn", hits=set()), "Fenn is a cat", UID))[0] == "refuse"
+
+
 def test_a_kind_after_an_adjective_or_before_and_is_still_refused():
     svc = _Svc("User's son is named Fenn", hits=set())
     assert run(mq.reconcile_for_ingest(svc, "Fenn is a cat and is six years old", UID)) == ("refuse", "r0")
@@ -391,7 +428,9 @@ def test_real_facts_are_still_kept(fact):
 
 
 FALL = "i fell over in the kitchen and i cant get up"
-MINED = ["User fell over in the kitchen and is unable to get up", "User falls over in the kitchen", "User cannot get up"]
+MINED = ["User fell over in the kitchen and is unable to get up", "User fell over in the kitchen and cannot get up"]
+#: what the CONSERVATIVE rule leaves as mined from the same turn: the detector does not read them as the emergency (follow-up design)
+UNREAD = ["User falls over in the kitchen", "User cannot get up"]
 
 
 def test_a_call_now_emergency_is_one_dated_health_event(monkeypatch):
@@ -405,7 +444,7 @@ def test_a_call_now_emergency_is_one_dated_health_event(monkeypatch):
                                           "i fell in the bathroom and cant get up on my own", today=day) == want
     assert medical_safety.emergency_event(MINED[0], "", today=day) is None          # no source turn: not a CURRENT emergency
     for fact, said in [("User fell asleep on the couch", "i fell asleep on the couch"), ("User's phone fell over", "my phone fell over"),
-                       ("User plays bowls every Thursday", FALL), ("User cannot get up", FALL + "\nmy son is 7")]:
+                       ("User plays bowls every Thursday", FALL), (MINED[0], FALL + "\nmy son is 7"), *((f, FALL) for f in UNREAD)]:
         assert medical_safety.emergency_event(fact, said, today=day) is None
 
 
@@ -415,7 +454,6 @@ CHEST = "my son fenn has crushing chest pain and cant breathe"
 @pytest.mark.parametrize("fact, said, want", [
     ("User fell over in the kitchen and is unable to get up", FALL, "User had a fall"),
     ("User's son Fenn has crushing chest pain and can't breathe", CHEST, "User's son Fenn had chest pain"),
-    ("User's son has crushing chest pain", "my son has crushing chest pain and cant breathe", "User's son had chest pain"),
     ("Fenn has crushing chest pain", CHEST, "Fenn had chest pain"),
 ])
 def test_the_event_is_about_whoever_it_happened_to(fact, said, want):
@@ -430,12 +468,16 @@ WITH_HIM = "my son max fell and can't get up, i'm with him"
 
 
 @pytest.mark.parametrize("fact, said, want", [
-    ("User fell and cannot get up", HELPED, "User had a fall"),
-    ("User's son Max is helping User", HELPED, None),              # a helper, not a patient
-    ("User's son Max fell and cannot get up", WITH_HIM, "User's son Max had a fall"),
-    ("Max fell and cannot get up", WITH_HIM, "Max had a fall"),
-    ("User is with Max", WITH_HIM, None),                           # the member is there, not hurt
-    ("User fell and cannot get up", WITH_HIM, None),               # the model put the son's fall on the member
+    # the CONSERVATIVE rule: a turn naming two people (the member AND a helper / a companion) converts nothing
+    ("User fell and cannot get up", HELPED, None),
+    ("User's son Max is helping User", HELPED, None),
+    ("User's son Max fell and cannot get up", WITH_HIM, None),
+    ("Max fell and cannot get up", WITH_HIM, None),
+    ("User is with Max", WITH_HIM, None),
+    ("User fell and cannot get up", WITH_HIM, None),
+    # exactly one named person: their event, by NAME
+    ("User's son Max fell and cannot get up", "my son max fell and can't get up", "User's son Max had a fall"),
+    ("Max fell and cannot get up", "my son max fell and can't get up", "Max had a fall"),
 ])
 def test_only_the_person_it_happened_to_gets_the_event(fact, said, want):
     import datetime
@@ -448,9 +490,35 @@ def test_only_the_person_it_happened_to_gets_the_event(fact, said, want):
     ("User has crushing chest pain", CHEST),                       # the model filed the son's emergency on the member
     ("They have crushing chest pain", CHEST),                       # nobody named
     ("Someone has crushing chest pain", "someone here has crushing chest pain"),
+    ("User's son has crushing chest pain", "my son has crushing chest pain and cant breathe"),     # a relation alone, no name
 ])
 def test_an_unclear_subject_is_not_rewritten(fact, said):
     assert medical_safety.emergency_event(fact, said) is None
+
+
+TWO_SONS = "my sons eli and max are here and eli fell and cant get up"
+
+
+@pytest.mark.parametrize("fact, said", [
+    ("Eli fell and cannot get up", TWO_SONS), ("User's son Max fell and cannot get up", TWO_SONS),
+    ("Max fell and cannot get up", "max and eli are both here, max fell and cant get up"),
+    ("User's son Eli fell and cannot get up", "my son eli and my son max, eli fell and cant get up"),
+])
+def test_a_turn_naming_two_people_converts_nothing(fact, said, mem):
+    assert medical_safety.emergency_event(fact, said) is None
+    run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
+    assert [r.text for r in _rows(mem)] == [fact]                               # stored exactly as mined
+
+
+@pytest.mark.parametrize("flag", ["off", "shadow", "enforce"])
+@pytest.mark.parametrize("fact", ["User's father has heart disease", "User has asthma", "User is diabetic",
+                                  "User's father Ned has heart disease"])
+def test_a_condition_is_never_an_emergency_event(fact, flag, mem, monkeypatch):
+    monkeypatch.setenv("ZOE_MEDICAL_SAFETY", flag)
+    said = "my dad ned has crushing chest pain and i cant breathe"
+    assert medical_safety.emergency_event(fact, said) is None
+    run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
+    assert [r.text for r in _rows(mem)] == [fact]
 
 
 @pytest.mark.parametrize("fact, said", [
@@ -526,6 +594,8 @@ def test_the_fall_turn_files_no_routine_and_stays_recallable(mem, flag, monkeypa
     rows = _rows(mem)
     assert len(rows) == 1                                                         # ONE event row, no routine / standing fact
     row = rows[0]
+    for fact in UNREAD:         # the conservative rule's known miss: what the detector does not read stays as mined (follow-up)
+        assert medical_safety.emergency_event(fact, FALL) is None
     assert row.text.startswith("User had a fall on ") and row.metadata.get("memory_type") == "event"
     assert "health" in str(row.metadata.get("tags") or "")
     assert pa.sensitive_class(row.text, row.metadata) == "health"                # private: off shared surfaces, never "Routines"

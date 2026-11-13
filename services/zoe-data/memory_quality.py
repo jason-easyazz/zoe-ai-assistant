@@ -1306,17 +1306,25 @@ def subject_kinds(text: str) -> dict:
     t = text or ""
     # anchored on the KIND VOCABULARY, never on position: an optional word before the kind slot ate the kind ("Fenn is a cat and
     # is six" captured "and", QA round 9 review), so every slot below is a kind word or nothing
+    # A phrase with TWO kind words ("a baby rabbit called Pip": a person word and an animal word) is AMBIGUOUS: the name gets both
+    # kinds, which ``kind_flip`` never refuses on (the people record decides instead: ``kind_conflict``).
     for m in re.finditer(rf"(?i:\b({_KIND_ALT})s?){_KIND_GAP}({_FULL_NAME})\b", t):
         k = _kind_of(m.group(1))
         if k and m.group(2).lower() not in ("user", "the"):
-            out.setdefault(m.group(2).lower(), set()).add(k)
+            before = re.search(r"([A-Za-z]+)\s+$", t[:m.start()])
+            other = _kind_of(before.group(1)) if before else None
+            out.setdefault(m.group(2).lower(), set()).update({k} | ({other} if other else set()))
     for m in re.finditer(rf"\b({_FULL_NAME})(?i:(?:\s+is|\s+was|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my|our|the)\s+"
-                         rf"(?:[a-z]+\s+){{0,2}}?({_KIND_ALT})s?)\b", t):
-        k = _kind_of(m.group(2))
-        if k == "animal" and _modifies_a_noun(t[m.end():]):
-            continue                    # "Fenn is a dog trainer": the animal word describes the next noun, Fenn is not a dog
+                         rf"((?:[a-z]+\s+){{0,2}}?)({_KIND_ALT})s?)\b", t):
+        k = _kind_of(m.group(3))
+        nxt = re.match(r"\s+([A-Za-z]+)", t[m.end():])
+        extra = {_kind_of(w) for w in m.group(2).split()} - {None}
+        if nxt and _kind_of(nxt.group(1)):
+            extra.add(_kind_of(nxt.group(1)))           # "Pip is a baby rabbit": two kind words, ambiguous
+        elif _modifies_a_noun(t[m.end():]):
+            continue                    # "Fenn is a dog trainer": the kind word describes the next noun, no kind at all
         if k and m.group(1).lower() not in ("user", "the"):
-            out.setdefault(m.group(1).lower(), set()).add(k)
+            out.setdefault(m.group(1).lower(), set()).update({k} | extra)
     return out
 
 
@@ -1388,7 +1396,34 @@ async def kind_conflict(svc, text: str, user_id: str) -> tuple[bool, Optional[st
         if any(re.search(rf"\b{re.escape(n)}\b", stored, re.IGNORECASE) for n in kinds) and kind_flip(text, stored):
             logger.info("KIND_FLIP_REFUSED user=%s kept=%s", user_id, getattr(r, "id", ""))
             return True, getattr(r, "id", None)
+    # the authoritative PEOPLE record: a name the member's people graph holds as a person is never made an animal, whether the
+    # phrase was clear ("Pip is a rabbit") or ambiguous ("Pip is a baby rabbit")
+    for name, ks in kinds.items():
+        if "animal" in ks and await _person_in_graph(user_id, name):
+            logger.info("KIND_FLIP_REFUSED user=%s kept=people_graph", user_id)
+            return True, None
     return False, None
+
+
+async def _person_in_graph(user_id: str, name: str) -> bool:
+    """Does this member's people graph hold ``name`` as a person (``people_graph.resolve_person``, exact or whole-token tier, no
+    prefix guesses)? One roster read (``SELECT id, name FROM people WHERE user_id = ? AND deleted = 0``) matched in Python. A
+    graph that cannot be read answers False: only a POSITIVE person refuses. Never raises."""
+    try:
+        import people_graph
+        import person_extractor
+
+        db, opened = await person_extractor._ensure_db(None)
+        if db is None:
+            return False
+        try:
+            res = await people_graph.resolve_person(db, user_id, name, allow_prefix=False)
+        finally:
+            if opened:
+                await db.close()
+        return res.status in ("unique", "ambiguous") and res.tier in ("exact", "token")
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def guard_existing_by_entity(

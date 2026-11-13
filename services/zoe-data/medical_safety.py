@@ -384,12 +384,23 @@ _EVENT_WHAT = {"fall": "a fall", "heart": "chest pain", "stroke": "signs of a st
                "bleeding": "bleeding that would not stop", "worst_headache": "a sudden severe headache"}
 
 
-# who the emergency happened to, as the MINED FACT says it: the member ("User fell ..."), the member's relative, named or not
-# ("User's son Max has ..."), or a named person ("Max has ..."). Anything else is not rewritten (never filed on the wrong person).
+# THE CONSERVATIVE RULE (QA round 9 review; a better design is a follow-up). A mined fact becomes the event only when it is
+# unambiguous; anything else is stored exactly as mined (a missed conversion is safe, a false health record is not):
+#   * the source turn names EXACTLY ONE affected person: the member alone (first person, nobody else mentioned), or exactly one
+#     other person BY NAME (no first person, at most one relation word, no plural "sons" / "kids", the name not listed with another);
+#   * the fact's subject is that same person: "User" for the member, or the SAME NAME ("User's son Max" / "Max"); a relation alone
+#     ("User's son has chest pain") is never enough;
+#   * the fact's own text is the detector's emergency of the same class (``detect(fact)``): a condition ("has heart disease"), a
+#     body-part or topic overlap, or a paraphrase the detector does not read stays as mined.
 _REL_WORDS = (r"son|daughter|grandson|granddaughter|grandchild|child|kid|baby|wife|husband|partner|girlfriend|boyfriend|sister|"
               r"brother|mum|mom|mother|dad|father|nan|nana|grandma|grandmother|grandpa|grandfather|aunt|auntie|uncle|cousin|niece|"
               r"nephew|friend|neighbou?r|flatmate|housemate")
-_WHO_REL_RE = re.compile(rf"^\s*(?:the\s+)?user['’]s\s+({_REL_WORDS})(?:,?\s+(?:named\s+|called\s+)?(?-i:([A-Z][a-z]+)))?\b", re.IGNORECASE)
+_REL_RE = re.compile(rf"\b(?:{_REL_WORDS})\b", re.IGNORECASE)
+_PLURAL_PEOPLE_RE = re.compile(rf"\b(?:(?:{_REL_WORDS})s|children|kids|parents|twins|grandkids|boys|girls|everyone|both)\b",
+                               re.IGNORECASE)
+_WHO_REL_RE = re.compile(rf"^\s*(?:the\s+)?user['’]s\s+(?:{_REL_WORDS}),?\s+(?:named\s+|called\s+)?(?-i:([A-Z][a-z]+))\b",
+                         re.IGNORECASE)
+_REL_OF_RE = re.compile(r"^\s*(?:the\s+)?user['’]s\s+([a-z]+)", re.IGNORECASE)
 _WHO_USER_RE = re.compile(r"^\s*(?:the\s+)?user\b(?!['’])", re.IGNORECASE)
 _WHO_NAME_RE = re.compile(r"^\s*([A-Z][a-z]+)\b(?!['’])")
 #: a first-person turn: the member is the one it happened to
@@ -401,59 +412,42 @@ _PAST_RE = re.compile(
     r"december)\b|\bwhen\s+(?:i|he|she|they|we|you)\s+(?:was|were)\b|\bas\s+a\s+(?:kid|child|boy|girl|teenager|baby)\b"
     r"|\b(?:had|has|have)\s+had\b|\bused\s+to\b|\bonce\b|\byesterday\b|\blast\s+night\b|\bhistory\s+of\b|\bprevious(?:ly)?\b",
     re.IGNORECASE)
-
-
 _NOT_A_NAME = frozenset({"the", "user", "a", "an", "my", "his", "her", "their", "they", "he", "she", "it", "we", "you", "i", "this",
                          "that", "there", "someone", "somebody", "anyone", "anybody", "everyone", "everybody", "nobody", "people",
-                         "a", "one", "both", "all", "some", "each", "family", "household"})
+                         "one", "both", "all", "some", "each", "family", "household"})
 
 
-#: the words that SAY the emergency of each class: a fact is converted only when its own predicate carries them
-_EVENT_CUE = {
-    "fall": r"\b(?:fell|fall(?:s|en|ing)?|slipped|tripped|collapsed|(?:get|stand|getting|standing)\s+(?:back\s+)?up|floor|ground)\b",
-    "heart": r"\b(?:chest|heart)\b", "stroke": r"\b(?:stroke|slurr\w*|droop\w*|crooked|limp)\b",
-    "breathing": r"\b(?:breath\w*|throat|chok\w*)\b", "bleeding": r"\b(?:bleed\w*|blood)\b", "worst_headache": r"\bheadache\b",
-}
-
-
-def _who(fact: str, said: str) -> tuple[Optional[str], int]:
-    """``(person, end)``: who the fact is about, in the row's words, and where its subject ends; ``(None, 0)`` when unclear."""
+def _subject(fact: str) -> Optional[str]:
+    """"User" or the NAME the fact is about; None for a relation alone ("User's son ...") or anything unclear."""
     m = _WHO_REL_RE.match(fact or "")
     if m:
-        return f"User's {m.group(1).lower()}" + (f" {m.group(2)}" if m.group(2) else ""), m.end()
-    m = _WHO_USER_RE.match(fact or "")
-    if m:
-        # the fact says the member; the turn must say so too ("my son has chest pain" filed as "User has chest pain" is not theirs)
-        return ("User", m.end()) if _FIRST_PERSON_RE.search(said) else (None, 0)
+        return m.group(1)
+    if _WHO_USER_RE.match(fact or ""):
+        return "User"
     m = _WHO_NAME_RE.match(fact or "")
-    if m and m.group(1).lower() not in _NOT_A_NAME and re.search(rf"\b{re.escape(m.group(1))}\b", said, re.IGNORECASE):
-        return m.group(1), m.end()
-    return None, 0
+    return m.group(1) if m and m.group(1).lower() not in _NOT_A_NAME else None
 
 
-def _turn_subject(said: str, key: str) -> Optional[set]:
-    """Who the TURN says the emergency happened to: ``{"user"}`` for "i fell ...", else the words just before the emergency
-    ("my son max fell ..." -> {"son", "max"}); None when the turn does not say."""
-    m = re.search(_EVENT_CUE.get(key, r"(?!x)x"), said, re.IGNORECASE)
-    if not m:
-        return None
-    lead = re.split(r"[;,.!?]|\band\b|\bbut\b", said[:m.start()], flags=re.IGNORECASE)[-1]
-    words = re.findall(r"[a-z]+", _fold(lead))[-4:]
-    if any(w in ("i", "im", "ive", "me") for w in words):
-        return {"user"}
-    who = {w for w in words if w not in _NOT_A_NAME and w not in ("is", "has", "just", "has", "got", "had", "having", "was")}
-    return who or None
+def _only_person(said: str, subject: str) -> bool:
+    """Does the turn name exactly ONE affected person, and is it ``subject``? (the rule above). Pure."""
+    first, rels = bool(_FIRST_PERSON_RE.search(said)), len(_REL_RE.findall(said))
+    if _PLURAL_PEOPLE_RE.search(said):
+        return False
+    if subject == "User":
+        return first and rels == 0
+    name = re.escape(subject)
+    if first or rels > 1 or not re.search(rf"\b{name}\b", said, re.IGNORECASE):
+        return False
+    return not re.search(rf"\b\w+\s*(?:,|&|\band\b)\s*{name}\b|\b{name}\s*(?:,|&|\band\b)\s*(?!(?:i|im|cant|can|cannot|is|has|he|she)\b)\w+",
+                         said, re.IGNORECASE)
 
 
 def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
     """The ONE dated health event a call-now emergency is filed as ("User had a fall on 13 November 2026 (a medical emergency).",
-    "User's son Max had chest pain on ..."), or None: the mined fact is then stored exactly as mined. It is an event only when
-    ``said`` (the ONE turn it was mined from) is a call-now emergency said NOW (no past time in the turn or the fact: "chest pain in
-    2020" keeps its date), the fact's OWN predicate says that emergency (its symptom / event words: "Max is helping" from "I fell;
-    my son Max is helping" is not a fall) and the fact's subject is the person the turn says it happened to (QA round 9 review: never
-    re-filed on the member, never a helper's medical history); an unclear subject is not rewritten. In EVERY mode: the flag gates
-    the reply, never how memory files an emergency. A whole transcript (several lines) is never read as the turn. Pure apart from
-    the date. Never raises."""
+    "User's son Max had chest pain on ..."), or None: the mined fact is then stored exactly as mined. Only under THE CONSERVATIVE
+    RULE above, and only when ``said`` (the ONE turn it was mined from) is a call-now emergency said NOW (no past time in the turn
+    or the fact: "chest pain in 2020" keeps its date). In EVERY mode: the flag gates the reply, never how memory files an
+    emergency. A whole transcript (several lines) is never read as the turn. Pure apart from the date. Never raises."""
     try:
         one = (said or "").strip()
         if not one or "\n" in one or _PAST_RE.search(one) or _PAST_RE.search(fact or ""):
@@ -461,15 +455,14 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
         v = detect(one)
         if v.cls != "red_call":
             return None
-        who, end = _who(fact, one)
-        if who is None or not re.search(_EVENT_CUE.get(v.key, r"(?!x)x"), (fact or "")[end:], re.IGNORECASE):
+        fv = detect(fact or "")
+        if fv.cls != "red_call" or fv.key != v.key:
             return None
-        target = _turn_subject(one, v.key)
-        if target is None:
+        subject = _subject(fact)
+        if subject is None or not _only_person(one, subject):
             return None
-        mine = {"user"} if who == "User" else {w.lower() for w in re.findall(r"[A-Za-z]+", who)} - {"user"}
-        if not (mine & target) or (who == "User") != (target == {"user"}):
-            return None
+        rel = _REL_OF_RE.match(fact or "") if _WHO_REL_RE.match(fact or "") else None
+        who = f"User's {rel.group(1).lower()} {subject}" if rel else subject
         import datetime as _dt
 
         d = today or _dt.date.today()
