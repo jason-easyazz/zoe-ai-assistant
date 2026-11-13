@@ -947,3 +947,36 @@ def test_the_other_refusal_paths_log_no_fact(mem, monkeypatch, caplog):
     assert run(mem.review(son.id, decision="edit", edits=SECRET_FACT, actor="memory_digest")) is None
     assert run(mem.supersede_by(UID, son.id, cat.id, actor="memory_supersede")) is False
     _assert_log_is_clean(caplog, tagged=False)
+
+
+FOUNDED = "User's book club was founded on the 12th of December."
+SCHEDULED = "User's book club is on the 12th of December."
+
+
+def test_a_moved_date_rewrites_only_a_scheduled_date(monkeypatch):
+    vc.reset_state()
+    svc = _Svc(SCHEDULED, FOUNDED)
+    assert _apply_keep(svc, "book club moved to the 19th of december", monkeypatch) == 1
+    assert svc.edits == [("r0", "User's book club is on the 19th of December.")]            # the founding date is untouched
+    vc.reset_state()
+
+
+@pytest.mark.parametrize("row", [SCHEDULED, "User's book club meets on the 12th", "User's book club is scheduled for the 12th"])
+def test_a_scheduled_only_store_is_still_rewritten(row, monkeypatch):
+    vc.reset_state()
+    svc = _Svc(row)
+    assert _apply_keep(svc, "book club moved to the 19th of december", monkeypatch) == 1
+    vc.reset_state()
+
+
+@pytest.mark.parametrize("row", [FOUNDED, "User's book club started on the 12th of December", "User's book club has run since the 12th"])
+def test_a_founded_only_store_is_unchanged(row, monkeypatch):
+    import time
+
+    vc.reset_state()
+    before = time.time() - 60
+    svc = _Svc(row)
+    assert _apply_keep(svc, "book club moved to the 19th of december", monkeypatch) == 0 and svc.edits == []
+    # the restatement is remembered with no old value: a late re-filing of the founding date is NOT judged stale
+    assert vc.superseded_by_correction(UID, row.rstrip("."), said_at=before) is False
+    vc.reset_state()

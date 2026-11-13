@@ -675,7 +675,23 @@ def _restate_date(head: str, tail: str, new: str) -> Optional[str]:
         return None
     if not _date_attached(tail, q):
         return None                 # the one date is not clearly the subject's: unchanged
+    if not _SCHEDULED_BEFORE_RE.search(_date_expr_start(tail, q)):
+        return None                 # "was founded on the 12th": not when it HAPPENS, so a moved date never touches it
     return head + _put_date(tail, q, qn, month_new)
+
+
+#: the ONLY phrases that introduce a date a "moved to" / restated date may replace (QA round 9 review: "moved to the 19th" rewrote
+#: "was founded on the 12th"); any other verb in front of the date (founded, born, started, since, married, joined, died) leaves it
+_SCHEDULED_BEFORE_RE = re.compile(r"\b(?:is\s+on|is\s+at|meets\s+on|happens\s+on|is\s+scheduled\s+for|moved\s+to|was\s+set\s+for)"
+                                  r"\s+(?:the\s+)?$", re.IGNORECASE)
+
+
+def _date_expr_start(tail: str, q: "Quantity") -> str:
+    """``tail`` up to where the date at ``q`` starts, the month counted as part of the date when it comes first ("on December 12")."""
+    before = re.search(r"([A-Za-z]+)\s+$", tail[:q.start])
+    if before and _MONTH_RE.fullmatch(before.group(1)):
+        return tail[:before.start(1)]
+    return tail[:q.start]
 
 
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
