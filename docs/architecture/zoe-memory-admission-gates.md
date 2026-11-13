@@ -5,9 +5,9 @@ trusted durable memory. Reflection, extraction, and sidecar recall may propose
 memory, but they cannot silently promote it into truth.
 
 The executable contract lives in
-`services/zoe-data/zoe_memory_admission.py`. Multica/review records can be
-converted into the same inert decision shape by
-`services/zoe-data/zoe_multica_memory_admission.py`. Terminal evolution
+`services/zoe-data/zoe_memory_admission.py`. (The Multica/review converter,
+`zoe_multica_memory_admission.py`, was imported by nothing and was deleted in the
+2026-11-13 gap audit.) Terminal evolution
 outcome memory candidates can be evaluated by
 `services/zoe-data/zoe_evolution_outcome_admission.py`. Hindsight retain
 payloads can be planned by `services/zoe-data/hindsight_retain_candidates.py`

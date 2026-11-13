@@ -173,7 +173,7 @@ The owner's panel, a misheard quiet "turn on the light": the router guessed musi
   offline or ambiguous switch records nothing. A device receipt never backs a WRITE claim, untargeted ones included
   (`write_receipts.NOT_A_WRITE`), and no write receipt backs a switch.
 * **Honest line**: "I didn't manage to switch that, so nothing's changed. Want me to try again?"; `correction_kinds.device`
-  feeds the session correction note. `authority_table.json` proves `smart_home` with the same receipt (`problem_loop`).
+  feeds the session correction note. `authority_table.json` names the same receipt kind for `smart_home`.
 * Spanish has no device claim words yet (no native review). Pinned by `tests/test_garbled_light_first_turn.py` (`ci_safe`, the
   every-cut stream equality included).
 

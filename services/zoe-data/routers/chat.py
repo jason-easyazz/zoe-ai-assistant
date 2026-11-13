@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 import panel_principal
 import untrusted_content
 import voice_phrases
-from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message, Intent
+from intent_router import detect_intent, detect_and_extract_intent, execute_intent, Intent
 from browser_broker import create_default_browser_broker
 from conversation_context import ConversationContext as _CC
 
@@ -64,7 +64,6 @@ _INTENT_PANEL_NAV = {
     "list_add":          ("/touch/home.html?domain=lists",    "new_list_item"),
     "list_show":         ("/touch/home.html?domain=lists",    None),
     "timer_create":      ("/touch/home.html?domain=timers",   "new_timer"),
-    "recipe_search":     (None,                   None),
     "reminder_create":   (None,                   None),  # handled as toast
     # "Set up music" → the panel's Browse → Sources card (Connect = phone QR).
     "music_setup":       ("/touch/home.html?domain=music_sources", None),
@@ -437,10 +436,7 @@ def _shows_form(intent_name: str, slots: dict) -> bool:
 # These get an AG-UI approval card before being queued; the raw user message is used
 # as the board issue description.
 _MULTICA_BOARD_INTENTS: frozenset[str] = frozenset({
-    "build_widget",
-    "build_page",
     "extend_capability",
-    "self_improve",
 })
 
 
@@ -1292,7 +1288,6 @@ INTENT_LABELS = {
     "transaction_create": "Transactions",
     "transaction_summary": "Transactions",
     "daily_briefing": "Daily Briefing",
-    "ha_full_setup": "Home Assistant setup",
     # New intents (ZOE-42, ZOE-15, ZOE-9, ZOE-10, ZOE-13)
     "greeting": "Greeting",
     "smart_home": "Smart Home",
@@ -1838,8 +1833,7 @@ async def chat_stream_generator(
                 return
 
             # ── Multica board routing for long-running intents ────────────────
-            # Board-routed intents get an AG-UI approval card; openclaw_user_message()
-            # is NOT called — the raw user_text is used as the board issue description.
+            # Board-routed intents get an AG-UI approval card; the raw user_text is the board issue description.
             if intent.name in _MULTICA_BOARD_INTENTS:
                 try:
                     from multica_client import MULClient  # type: ignore[import]
@@ -2008,9 +2002,7 @@ async def chat_stream_generator(
                     pi_portrait = await load_portrait(user_id) or ""
                 except Exception as _pe:
                     logger.debug("chat: portrait load failed (non-fatal): %s", _pe)
-                # Apply openclaw_user_message expansion so Zoe Agent has the same rich context
-                # as the OpenClaw path (includes HA device state bootstrap text when intent matched).
-                expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
+                expanded_msg = message_for_processing
                 if _tier05_hint is not None:
                     expanded_msg = (
                         f"[Intent hint: {_tier05_hint.name}, confidence {_tier05_hint.confidence:.2f}, "
@@ -2397,6 +2389,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
     session_id = await resolve_session_id(
         body, user_id, channel=req_channel, busy=lambda sid: _get_session_lock(sid).locked()
     )
+    traffic_class.refine_for_session(session_id)   # a QA/demo-minted session is not household traffic (only ever demotes)
     await _ensure_user_and_chat_session(session_id, user_id)
 
     if stream:
@@ -2591,7 +2584,7 @@ async def chat(request: Request, user: dict = Depends(resolve_acting_user), stre
                 ns_portrait = await _safe_load_portrait(user_id)
                 # Use original (pre-suffix) message for agent so fast-path checks work
                 _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
-                expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
+                expanded_msg = _agent_msg
                 response_text = await _brain_oneshot(
                     expanded_msg, session_id, user_id,
                     portrait=ns_portrait,
@@ -2724,15 +2717,15 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     role = body.get("role", "user")
     content = body.get("content", "")
     client_meta = body.get("metadata")
-    # The traffic class is the SERVER's (traffic_class.py): every row carries it and a client cannot claim one.
-    # A dict keeps its keys (its own traffic_class overwritten); any other shape is kept under "client".
+    # The traffic class is the SERVER's (traffic_class.py): every row carries it and a client cannot claim one
+    # (a harness-minted session id only ever demotes it). A dict keeps its keys (its own traffic_class overwritten); any other shape is kept under "client".
     if isinstance(client_meta, dict):
         meta = dict(client_meta)
     elif client_meta in (None, "", [], {}):
         meta = {}
     else:
         meta = {"client": client_meta}
-    meta["traffic_class"] = traffic_class.current()
+    meta["traffic_class"] = traffic_class.refine_for_session(session_id)
     metadata = json.dumps(meta)
     # get_db_ctx, not `async for db in get_db()`: exiting the generator
     # early leaks the pooled connection (#953 / the 2026-07-03 pool drain).

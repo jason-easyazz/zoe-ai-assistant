@@ -275,28 +275,5 @@ def test_guest_post_to_agent_task_intake_and_hermes_delegate_is_refused():
     app.include_router(system._agent_card_router)
     # the removed intake route: nothing accepts a POST to /api/agent/tasks any more
     assert _guest_post(app, "/api/agent/tasks", task="x", caller="a") in (404, 405)
-    # delegate is privileged (guests are refused before any routing) ...
-    assert _guest_post(app, "/api/agent/delegate", agent_name="hermes", task="x") == 401
-
-
-@pytest.mark.asyncio
-async def test_privileged_delegate_to_hermes_is_gone_not_queued(monkeypatch):
-    from fastapi import HTTPException
-
-    from routers import system
-
-    with pytest.raises(HTTPException) as ei:
-        await system.delegate_to_agent({"agent_name": "hermes", "task": "rm -rf"}, user={"user_id": "jason", "role": "admin"})
-    assert ei.value.status_code == 410
-
-
-@pytest.mark.asyncio
-async def test_mcp_a2a_delegate_to_hermes_is_refused_not_queued(monkeypatch):
-    import mcp_server
-
-    async def fake_actor(db, name, args, actor_context=None):
-        return {"user_id": "jason"}
-
-    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", fake_actor)
-    out = await mcp_server._execute_tool(None, "a2a_delegate", {"agent_name": "hermes", "task": "x"})
-    assert "retired" in str(out.get("error", "")) and "queued" not in str(out)
+    # ... and the delegate route is gone with the peer-agent registry (gap audit 2026-11-13)
+    assert _guest_post(app, "/api/agent/delegate", agent_name="hermes", task="x") in (404, 405)

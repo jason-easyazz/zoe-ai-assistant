@@ -2724,7 +2724,7 @@ async def run_flue_brain_streaming(
     # sugar reading gets ONE fixed reply with the household's numbers, whatever memory or the open thread says (docs/knowledge/medical-safety.md).
     import medical_safety
 
-    _ms = await medical_safety.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")))
+    _ms = await medical_safety.handle(_spoken, user_id, dry=bool(kwargs.get("replay_isolation")), voice=bool(kwargs.get("voice_mode")))
     if _ms:
         _record_outcome(kwargs.get("outcome_sink"), FLUE_OUTCOME_SEAM_REPLY, "medical_safety")
         yield _ms

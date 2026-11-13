@@ -408,9 +408,8 @@ def _intent_dispatch_token_required() -> bool:
 
 
 async def require_intent_dispatch_auth(request: Request) -> None:
-    """Gate for the internal ACTOR-ASSERTING endpoints — the brain's funnels:
-    ``/api/system/intent-dispatch`` (writes as body ``user_id``) and
-    ``/api/system/delegate-sync`` (delegates as body ``user_id``).
+    """Gate for the internal ACTOR-ASSERTING endpoint — the brain's funnel:
+    ``/api/system/intent-dispatch`` (writes as body ``user_id``).
 
     A body-asserted ``user_id`` under bare-loopback trust is the same
     impersonation class #1054 closed for the ``X-Zoe-User-Id`` header: any

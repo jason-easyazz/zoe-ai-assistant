@@ -1901,11 +1901,10 @@
                 <button class="close-library" onclick="closeWidgetLibrary()">×</button>
             </div>
             
-            <!-- Tabs for Core vs Marketplace -->
+            <!-- Tabs: core widgets and your lists -->
             <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #ddd;">
                 <button id="coreWidgetsTab" class="library-tab active" onclick="switchLibraryTab('core')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid #7B61FF; font-weight: 500;">Core Widgets</button>
                 <button id="yourListsTab" class="library-tab" onclick="switchLibraryTab('your-lists')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Your Lists</button>
-                <button id="marketplaceTab" class="library-tab" onclick="switchLibraryTab('marketplace')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Marketplace</button>
             </div>
             
             <!-- Core Widgets Grid -->
@@ -1918,10 +1917,6 @@
                 <!-- Your existing lists and projects will be populated here -->
             </div>
             
-            <!-- Marketplace Grid -->
-            <div id="marketplaceGrid" class="library-grid" style="display: none;">
-                <!-- Marketplace widgets will be populated here -->
-            </div>
             
             <!-- (the 'AI Generate' widget tab was removed 2026-10-09: its handler never existed) -->
         </div>
@@ -1960,7 +1955,6 @@
     
     <!-- Music Widgets (Advanced) -->
     <!-- MCP Client (modular architecture) -->
-    <script src="js/lib/mcp-client.js"></script>
     
     <script>
         // Alias new MCP-based manager to expected name
@@ -2172,7 +2166,6 @@
             // Hide all grids
             document.getElementById('coreWidgetsGrid').style.display = 'none';
             document.getElementById('yourListsGrid').style.display = 'none';
-            document.getElementById('marketplaceGrid').style.display = 'none';
             
             // Show selected tab
             if (tab === 'core') {
@@ -2184,10 +2177,6 @@
                 document.getElementById('yourListsTab').style.borderBottomColor = '#7B61FF';
                 document.getElementById('yourListsGrid').style.display = 'block';
                 loadYourLists();
-            } else if (tab === 'marketplace') {
-                document.getElementById('marketplaceTab').classList.add('active');
-                document.getElementById('marketplaceTab').style.borderBottomColor = '#7B61FF';
-                document.getElementById('marketplaceGrid').style.display = 'grid';
             }
         }
     </script>
@@ -2334,7 +2323,6 @@
     </script>
     <script src="/js/orb-loader.js"></script>
     <!-- Mini Player for persistent music playback -->
-    <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor -->
 </body>
 </html>

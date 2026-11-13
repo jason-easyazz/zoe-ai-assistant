@@ -185,6 +185,7 @@ async function stub(page, ctx, opts) {
 
     if (req.method() === 'POST' && url.includes('/api/ha/control')) {
       ctx.writes.push(JSON.parse(req.postData() || '{}'));
+      if (o.haStatus) return route.fulfill({ status: o.haStatus, contentType: 'application/json', body: '{}' });
       return json({ ok: true });
     }
     if (req.method() === 'PUT' && url.includes('/api/panels/')) {
@@ -464,6 +465,20 @@ async function t(name, fn) {
     await page.close();
   });
 
+  // 7b. A3 (2026-11-13): a scene that did not run never flashes; the failure is said, and a proxy 503 lights the
+  // single "Can't reach Zoe" line until the next answer clears it.
+  await t('a failed scene does not flash, says so, and shows the offline line', async () => {
+    const ctx = newCtx();
+    const page = await open(browser, ctx, { base, cfg: cfg({ pinned: [PIN_NIGHT] }), haStatus: 503 });
+    await page.click('#dbody .pc.scene');
+    await page.waitForTimeout(300);
+    assert.ok(!(await page.$eval('#dbody .pc.scene', (e) => e.classList.contains('fire'))), 'a failed scene must not flash');
+    const toast = await page.$eval('#saytoast', (e) => e.textContent);
+    assert.ok(/didn.t run/.test(toast) && /can.t be reached/.test(toast), 'expected a plain failure line, got: ' + toast);
+    assert.ok(await page.$eval('#zoeOff', (e) => e.classList.contains('on')), 'the offline line shows after a 503');
+    await page.close();
+  });
+
   // 8. HA down => pins still render
   await t('ha_available:false still renders the pins', async () => {
     const ctx = newCtx();
@@ -580,8 +595,8 @@ async function t(name, fn) {
     await page.close();
   });
 
-  // 14. the one-word rule is enforced in the UI with a sentence, not a raw 400
-  await t('the pin editor rejects a two-word name before it can hit the API', async () => {
+  // 14. no keyboard on the panel (A1, 2026-11-13): the dock label is PICKED from one-word chips, never typed
+  await t('the pin editor offers one-word label chips and no text field', async () => {
     const ctx = newCtx();
     const page = await open(browser, ctx, { base, cfg: cfg({ pinned: [] }) });
     await openPanelSettings(page);
@@ -592,20 +607,16 @@ async function t(name, fn) {
     await page.click('#estModal .eopt');           // pick the first candidate entity
     await page.waitForTimeout(300);
 
-    // The suggested name is already one word, derived from the friendly name.
-    const suggested = await page.$eval('#estModal [data-f="nm"]', (e) => e.value);
+    assert.strictEqual(await page.$$eval('#estModal input, #estModal textarea', (n) => n.length), 0, 'the label dialog must not need a keyboard');
+    // The suggested label is preselected, one word, derived from the friendly name; every chip is one word.
+    const suggested = await page.$eval('#estModal .pchips button.on', (e) => e.getAttribute('data-nm'));
     assert.ok(suggested && !/\s/.test(suggested), 'suggested name should be one word, got ' + suggested);
-
-    await page.fill('#estModal [data-f="nm"]', 'Living Room');
-    await page.click('#estModal [data-x="add"]');
-    await page.waitForTimeout(200);
-    const err = await page.$eval('#estModal .perr', (e) => e.textContent);
-    assert.ok(/One word/i.test(err), 'expected a helpful one-word message, got: ' + err);
-    assert.strictEqual(ctx.puts.length, 0, 'a bad name must never reach the API');
+    const chips = await page.$$eval('#estModal .pchips button', (n) => n.map((e) => e.getAttribute('data-nm')));
+    assert.ok(chips.every((c) => c && !/\s/.test(c) && c.length <= 12), JSON.stringify(chips));
     await shoot(page, '14_oneword_rule');
+    await page.click('#estModal .pchips button[data-nm="Living"]');
 
-    // A valid one-word name goes through and saves the pair the API expects.
-    await page.fill('#estModal [data-f="nm"]', 'Living');
+    // A picked one-word name goes through and saves the pair the API expects.
     await page.click('#estModal [data-x="add"]');
     await page.waitForTimeout(250);
     await page.click('#estModal [data-x="save"]');

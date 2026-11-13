@@ -172,7 +172,7 @@ async function loadOnThisDay() {
     if (!capabilities.supportsJournal) return;
     try {
         const uid = getUserId();
-        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const qs = '';
         const data = await apiCall(`/journal/entries/on-this-day${qs}`);
         const entries = Array.isArray(data)
             ? data
@@ -189,7 +189,7 @@ async function loadJournalPrompts() {
     if (!capabilities.supportsPrompts) return;
     try {
         const uid = getUserId();
-        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const qs = '';
         const data = await apiCall(`/journal/prompts${qs}`);
         
         if (data.prompts && data.prompts.length > 0) {
@@ -203,7 +203,7 @@ async function loadJournalPrompts() {
 async function createJournalEntry(entryData) {
     try {
         const uid = getUserId();
-        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const qs = '';
         const response = await apiCall(`/journal/entries${qs}`, {
             method: 'POST',
             body: JSON.stringify(entryData)
@@ -225,7 +225,7 @@ async function loadStreakData() {
     if (!capabilities.supportsStreak) return;
     try {
         const uid = getUserId();
-        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const qs = '';
         const data = await apiCall(`/journal/stats/streak${qs}`);
         displayStreak(data);
     } catch (error) {
@@ -292,7 +292,7 @@ async function loadJourneys(status = null) {
 async function loadJourneyDetails(journeyId) {
     try {
         const uid = getUserId();
-        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const qs = '';
         const journey = await apiCall(`/journeys/${journeyId}${qs}`);
         displayJourneyDetails(journey);
         return journey;
@@ -305,7 +305,7 @@ async function loadJourneyDetails(journeyId) {
 async function createJourneyCheckin(journeyId, checkinData) {
     try {
         const uid = getUserId();
-        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const qs = '';
         const response = await apiCall(`/journeys/${journeyId}/checkin${qs}`, {
             method: 'POST',
             body: JSON.stringify(checkinData)
@@ -318,19 +318,6 @@ async function createJourneyCheckin(journeyId, checkinData) {
         console.error('Failed to create check-in:', error);
         showError('Failed to create check-in');
         throw error;
-    }
-}
-
-/**
- * Location Search
- */
-async function searchLocation(query) {
-    try {
-        const data = await apiCall(`/location/search?query=${encodeURIComponent(query)}&limit=5`);
-        return data.results || [];
-    } catch (error) {
-        console.error('Location search failed:', error);
-        return [];
     }
 }
 
@@ -623,7 +610,7 @@ function createPastJourneyCard(journey) {
 window.openEntry = async function(entryId) {
     try {
         const uid = getUserId();
-        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const qs = '';
         const entry = await apiCall(`/journal/${entryId}${qs}`);
         showEntryModal(entry.entry || entry);
     } catch (error) {

@@ -518,14 +518,19 @@
         #searchBtn:hover { opacity: 0.88; }
         #searchBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        /* Search feedback toast */
-        #searchFeedback {
-            display: none; align-items: center; gap: 8px;
-            background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.25);
-            border-radius: 10px; padding: 10px 14px; margin-bottom: 12px;
-            font-size: 13px; color: #4ade80;
-        }
-        #searchFeedback.visible { display: flex; }
+        /* Search results */
+        #searchResults { margin-bottom: 12px; }
+        #searchResults:empty { display: none; }
+        .sr-group { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.06em; margin: 10px 0 6px; }
+        .sr-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .sr-meta { flex: 1; min-width: 0; }
+        .sr-name, .sr-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sr-name { font-size: 14px; color: var(--text1); }
+        .sr-sub { font-size: 12px; color: var(--text3); }
+        .sr-row button { min-width: 44px; min-height: 36px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.06); color: var(--text1); cursor: pointer; font-size: 13px; }
+        .sr-row button.sr-play { background: var(--primary); border-color: var(--primary); color: #fff; }
+        .sr-note { font-size: 13px; color: var(--text2); padding: 8px 0; }
 
         /* Queue header */
         .queue-header {
@@ -887,20 +892,13 @@
             <div class="queue-panel">
                 <!-- Search -->
                 <div class="search-row">
-                    <input type="text" id="searchInput" placeholder="Search or ask Zoe…"
-                           onkeydown="if(event.key==='Enter') doSearch()">
-                    <button id="searchBtn" onclick="doSearch()">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                        </svg>
-                        Ask
-                    </button>
+                    <input type="search" id="searchInput" placeholder="Search songs, artists, albums, radio…"
+                           aria-label="Search music" onkeydown="if(event.key==='Enter') doSearch()">
+                    <button id="searchBtn" onclick="doSearch()">Search</button>
                 </div>
 
-                <!-- Search feedback -->
-                <div id="searchFeedback">
-                    <span>✓</span> <span id="searchFeedbackText">Sent to Zoe!</span>
-                </div>
+                <!-- Search results (GET /api/music/search; play/queue via POST /api/music/play_media) -->
+                <div id="searchResults" aria-live="polite"></div>
 
                 <!-- Queue header -->
                 <div class="queue-header">
@@ -1421,33 +1419,101 @@
         renderQueue([]);
     }
 
-    /* ── Search / Zoe ask ────────────────────────────────────────────────── */
+    /* ── Search ──────────────────────────────────────────────────────────── */
+    // GET /api/music/search?q= (grouped results from the connected providers) and POST /api/music/play_media
+    // {uri, player_id, option}: the same pair jukebox.html and the panel use. Results are built as DOM (escaped by
+    // textContent), never HTML strings.
+    const SEARCH_GROUPS = [['tracks', 'Songs'], ['artists', 'Artists'], ['albums', 'Albums'], ['playlists', 'Playlists'], ['radio', 'Radio']];
+
+    function srNote(text) {
+        const d = document.createElement('div');
+        d.className = 'sr-note';
+        d.textContent = text;
+        return d;
+    }
+
     async function doSearch() {
         const inp = document.getElementById('searchInput');
+        const out = document.getElementById('searchResults');
         const query = inp.value.trim();
-        if (!query) return;
+        if (!query) { out.replaceChildren(); return; }
         const btn = document.getElementById('searchBtn');
         btn.disabled = true;
+        out.replaceChildren(srNote('Searching…'));
         try {
-            await fetch('/api/chat/', {
-                method: 'POST',
-                headers: zoeHdrs(),
-                body: JSON.stringify({ message: query, stream: false })
-            });
-            inp.value = '';
-            showSearchFeedback(`Sent to Zoe: "${query.slice(0, 40)}${query.length > 40 ? '…' : ''}"`);
-        } catch {
-            showSearchFeedback('Could not reach Zoe. Try again.');
+            const r = await fetchT('/api/music/search?q=' + encodeURIComponent(query) + '&limit=6', 15000, { headers: zoeHdrs() });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const d = await r.json();
+            const nodes = [];
+            if (d && d.degraded) {
+                nodes.push(srNote('Song and album search is unavailable right now' + (d.degraded_reason ? ' (' + d.degraded_reason + ')' : '') + '. Only radio stations can be found.'));
+            }
+            for (const [key, label] of SEARCH_GROUPS) {
+                const items = (d && d.results && d.results[key]) || (d && d[key]) || [];
+                if (!items.length) continue;
+                const h = document.createElement('div');
+                h.className = 'sr-group';
+                h.textContent = label;
+                nodes.push(h);
+                for (const it of items) nodes.push(searchRow(it, label.replace(/s$/, '')));
+            }
+            if (!nodes.length || (nodes.length === 1 && d && d.degraded)) nodes.push(srNote('No results for "' + query + '".'));
+            out.replaceChildren(...nodes);
+        } catch (e) {
+            out.replaceChildren(srNote("Search failed. Music Assistant may be offline."));
         } finally {
             btn.disabled = false;
         }
     }
 
-    function showSearchFeedback(msg) {
-        const el = document.getElementById('searchFeedback');
-        document.getElementById('searchFeedbackText').textContent = msg || 'Sent to Zoe!';
-        el.classList.add('visible');
-        setTimeout(() => el.classList.remove('visible'), 4000);
+    function searchRow(it, kind) {
+        const row = document.createElement('div');
+        row.className = 'sr-row';
+        const meta = document.createElement('div');
+        meta.className = 'sr-meta';
+        const name = document.createElement('div');
+        name.className = 'sr-name';
+        name.textContent = it.name || '';
+        const sub = document.createElement('div');
+        sub.className = 'sr-sub';
+        sub.textContent = [kind, it.artist].filter(Boolean).join(' · ');
+        meta.append(name, sub);
+        const q = document.createElement('button');
+        q.textContent = '+ Queue';
+        q.title = 'Add to the queue';
+        q.addEventListener('click', () => playResult(it.uri, 'add', q));
+        const p = document.createElement('button');
+        p.className = 'sr-play';
+        p.textContent = '▶';
+        p.title = 'Play now';
+        p.setAttribute('aria-label', 'Play ' + (it.name || ''));
+        p.addEventListener('click', () => playResult(it.uri, 'replace', p));
+        row.append(meta, q, p);
+        return row;
+    }
+
+    async function playResult(uri, option, btn) {
+        if (!uri) return;
+        const label = btn.textContent;
+        btn.disabled = true;
+        try {
+            const r = await fetch('/api/music/play_media', {
+                method: 'POST', headers: zoeHdrs(),
+                body: JSON.stringify({ uri, option, player_id: S.activeId || '' })
+            });
+            const d = r.ok ? await r.json() : { ok: false, reason: 'HTTP ' + r.status };
+            if (d && d.ok) {
+                btn.textContent = option === 'add' ? 'Queued' : 'Playing';
+                if (S.activeId) setTimeout(() => fetchQueue(S.activeId), 1200);
+            } else {
+                btn.textContent = 'Failed';
+                btn.title = (d && d.reason) || 'Could not play that';
+            }
+        } catch {
+            btn.textContent = 'Failed';
+        } finally {
+            setTimeout(() => { btn.disabled = false; btn.textContent = label; }, 2500);
+        }
     }
 
     /* ── Start MA via Zoe ────────────────────────────────────────────────── */

@@ -1,12 +1,12 @@
 ---
 type: Reference
-title: The household authority table and the bounded problem-solving loop
-description: What Zoe may do, for whom, without asking - one data file (action class x member role -> allow / ask_first / never) with code-enforced floors, a pure decision function, a log-only check at the brain's tool dispatch, and a 6-step / 90-second loop that ends in an escalation card and counts a step done only on a receipt. Flag ZOE_PROBLEM_LOOP = off | shadow | on, default off.
+title: The household authority table
+description: What Zoe may do, for whom, without asking - one data file (action class x member role -> allow / ask_first / never) with code-enforced floors, a pure decision function, and a log-only check at the brain's tool dispatch. Flag ZOE_PROBLEM_LOOP = off | shadow | on (on = shadow), default off.
 tags: [trust, authority, problem-solving, samantha, zoe-data]
 timestamp: 2026-11-05T00:00:00Z
 ---
 
-# The household authority table (`household_authority.py`, `authority_table.json`, `problem_loop.py`)
+# The household authority table (`household_authority.py`, `authority_table.json`)
 
 Samantha initiative roadmap item 17 / lane F E7 ([research](../research/samantha-initiative-2026-11-03/lane-F-personality-proactive.md), section 4).
 Independent problem-solving on a household box is mostly POLICY around tools that already exist: what may be done without asking,
@@ -61,26 +61,21 @@ AUTHORITY_SHADOW intent=smart_home class=home_control role=guest verdict=never w
 No user id and no slot values reach the log. Role lookup reads `auth_users.role` + `manner_block.is_adult` under a 0.5 s budget;
 a failure judges the member a child. zoe-data logs to `~/.zoe-logs/`, not journald.
 
-## The loop (`problem_loop.run`, `ZOE_PROBLEM_LOOP=on` only)
+## The problem-solving loop: deleted, never wired
 
-A library, not yet called by any live turn. The caller supplies `plan_next(history)` and `execute(step)`. Per step: authority
-decision first (`ask_first` unconfirmed or `never` = stop before running); each step runs in its own receipt turn; success is
-code-checked: a write counts as done only when `write_receipts` holds a receipt of its kind for this member from this step's
-turn, a read when its result is ok; a write with no receipt kind (lights, music, memory) is `unverified`, never done. Stops with
-an `EscalationCard` (`"Here's what I tried: ... Here's what I need from you: ..."`, addressed to the member, a guardian for a
-child, or the owner for self-modify) on: 6 steps, 90 seconds, the same tool with the same arguments twice, an unverified
-write, any failed step, a planner failure. A caller may tighten the budget, never widen it; the time bound is hard (an expired
-planner/executor call is cancelled and not awaited, so a callback that ignores cancellation cannot hold the loop).
+`problem_loop.py` (a 6-step / 90-second multi-step loop ending in an escalation card, a step done only on a receipt) was built
+2026-11-05 but no turn ever called it, so `ZOE_PROBLEM_LOOP=shadow` live did nothing for it. It was deleted in the 2026-11-13 gap
+audit (git history keeps it; the idea is pinned in `docs/IDEAS.md`). `ZOE_PROBLEM_LOOP=on` now behaves as `shadow`.
 
 ## Evidence plan
 
 1. Owner sets `ZOE_PROBLEM_LOOP=shadow` and restarts zoe-data.
 2. After two weeks: `grep AUTHORITY_SHADOW ~/.zoe-logs/*.log | grep -o 'class=[a-z_]* role=[a-z_]* .*would=[a-z]*' | sort | uniq -c`
    - any `would=refuse` or `would=ask` on a call that really ran is a case to review (a table row too tight, or a real gap).
-3. Only then: enforce at dispatch (a separate, reviewed PR) and wire the loop behind a turn.
+3. Only then: enforce at dispatch (a separate, reviewed PR).
 
 ## Open
 
 - Receipts from a brain tool call reach zoe-data as a separate HTTP request with no turn id, so they are unstamped and count for
   any concurrent turn of that member (the write-claim guard has the same residual; ledgered in `open-problems.md`).
-- No writer records a receipt for lights, music, journal or memory writes; the loop reports those as unverified until one does.
+- No writer records a receipt for lights, music, journal or memory writes.
