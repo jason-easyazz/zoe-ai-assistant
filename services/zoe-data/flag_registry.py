@@ -826,6 +826,7 @@ _ENTRIES = (
     _f('ZOE_RELAY_TRUSTED_PEER', 'str', '', doc='docs/knowledge/panel-relay-r1-box.md'),
     _f('ZOE_REMINDER_DEFAULT_TIME', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_REMINDER_MAX_ATTEMPTS', 'int', 5, doc='docs/knowledge/feature-audit-2026-09-25.md'),
+    _f('ZOE_REMINDER_PHONE_DELIVERY', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/reminder-phone-delivery.md'),
     _f('ZOE_REMINDER_STUCK_CLAIM_S', 'int', 600),
     _f('ZOE_REPLY_POLISH', 'str', 'on', allowed=('off', 'shadow', 'on'), doc='services/zoe-data/AGENTS.md', note='kill switch: off'),
     _f('ZOE_REPO_ROOT', 'str', ''),
