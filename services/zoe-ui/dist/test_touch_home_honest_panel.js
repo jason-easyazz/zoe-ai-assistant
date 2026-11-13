@@ -248,7 +248,7 @@ const run = (box, code) => vm.runInContext(code, box);
       apiGet(url) { box.urls.push(url); return PRIV.test(url) ? new Promise((res, rej) => { box.pending[url.replace(/\?.*$/, '')] = { res, rej }; }) : new Promise(() => {}); },
       apiJson: () => new Promise(() => {}), zfetch: () => new Promise(() => {}),
       _tmMemo: {}, _lst: {}, _calEvents: {}, show(id) { box.shown.push(id); if (id === 'settings') vm.runInContext('wireSettings()', box); }, shown: [],
-      wirePanelSettings() {}, toast() {}, panelVoice() {}, orbPress() {}, _panelDevId: () => 'p1', _savePrefs() {},
+      wirePanelSettings() {}, estClose() {}, toast() {}, panelVoice() {}, orbPress() {}, _panelDevId: () => 'p1', _savePrefs() {},
       setInterval: () => 1, clearInterval() {},
     };
     vm.createContext(box);
@@ -313,7 +313,7 @@ const run = (box, code) => vm.runInContext(code, box);
     ['the live-sid match', 'staleMetadata', "if(!live||!u||String(u.session_id||'')!==live)return null;", 'if(!live||!u)return null;'],
     ['a missing role read as member', 'staleMetadata', "return (!role||role==='guest'||!uid||uid==='guest')?null:u;}", "return (role==='guest')?null:u;}"],
     ['the stale-answer drop', 'lateAnswer', 'if(s0!==undefined&&sid()!==s0)return;', ''],
-    ['the downgrade repaint', 'downgradeClears', 'if(PRIVATE_SCREENS[_cur])show(_cur);}', '}'],
+    ['the downgrade repaint', 'downgradeClears', 'if(PRIVATE_BOXES[_cur])show(_cur);}', '}'],
     ['the display-row drop', 'lateAnswer', "if(_cur!=='settings'||!sessLive(s0))return;var pr=", "if(_cur!=='settings')return;var pr="],
     ['the voice-row drop', 'lateAnswer', "        if(_cur!=='settings'||!sessLive(s0))return;\n        var voices=", "        if(_cur!=='settings')return;\n        var voices="],
     ['the idle-logout-row drop', 'lateAnswer', "if(_cur!=='settings'||!sessLive(s0))return;var cur=", "if(_cur!=='settings')return;var cur="],
@@ -364,18 +364,65 @@ const run = (box, code) => vm.runInContext(code, box);
       assert(lateAnswerGuards(plant(guards[0], guards[0].replace(/\|\|!sessLive\(s0\)|&&sessLive\(s0\)|if\(!sessLive\(s0\)\)return;/, '')), name, guards).length > 0));
   });
 
-  // the generic part, for real: a session change forgets cached private answers and repaints ONLY a private open screen
+  // the generic part, for real: a session change empties EVERY private container at once (before any request answers),
+  // forgets cached private answers, closes an open dialog and repaints ONLY a private open screen; the first change is always seen
+  const SC_MEM = /\/\/ MEMBER-BEGIN[\s\S]*?\/\/ MEMBER-END/.exec(HOME)[0], SC_TG = /var TIMERS_MEMO_MS=[\s\S]*?\n  function timersGet\(now\)\{[\s\S]*?\n  \}/.exec(HOME)[0];
+  const BOX_IDS = { home: ['hToday'], day: ['dayEvents', 'dayRems', 'dayCommsList'], calendar: ['calBody'], reminder: ['remList', 'remMeta'],
+    list: ['lstTabs', 'lstItems', 'lstCount'], person: ['ctGrid', 'ctAZ', 'ctDetail'], work: ['wkBody', 'wkMeta'], timer: ['tmRings', 'tmMore', 'alFull'], settings: ['setSecs'] };
+  function scBox(text, cur, opts) {
+    opts = opts || {};
+    const sc = /\/\/ SESSCHECK-BEGIN[\s\S]*?\/\/ SESSCHECK-END/.exec(text);
+    assert(sc, 'SESSCHECK block missing');
+    const els = {}, chips = [{ gone: false, remove() { this.gone = true; } }];
+    Object.values(BOX_IDS).flat().forEach((id) => { els[id] = { innerHTML: '<b>MemberA private ' + id + '</b>', onclick: () => {} }; });
+    const box = { live: 'M1', meta: MEMBER, shown: [], closed: 0, _cur: cur, JSON, String, Object, setInterval: () => 1, calls: 0, els, chips,
+      localStorage: { getItem: () => JSON.stringify(box.meta) }, sid: () => box.live, show(id) { box.shown.push(id); },
+      document: { getElementById: (id) => els[id] || null }, estClose() { box.closed++; },
+      dbody: { querySelectorAll: (q) => (q === '.pc.tchip' ? chips : []) },
+      apiGet() { box.calls++; return new Promise(() => {}); }, Date, _lst: { lists: ['A-list'], sel: 'a' }, _calEvents: { k: 1 } };
+    vm.createContext(box);
+    vm.runInContext(SC_MEM + '\n' + SC_TG, box);
+    if (opts.before) opts.before(box);          // a change that happens BEFORE the watcher block runs counts as the start
+    vm.runInContext(sc[0], box);
+    if (opts.after) opts.after(box);
+    return box;
+  }
+  const leftover = (b) => Object.keys(b.els).filter((id) => /MemberA/.test(b.els[id].innerHTML));
+  const scChecks = {
+    clearsAllAtOnce(text) {
+      const b = scBox(text, 'day'), bad = [];
+      b.live = 'G1'; b.meta = GUEST; vm.runInContext('sessionCheck()', b);   // synchronous: nothing has been answered yet
+      const left = leftover(b); if (left.length) bad.push('member text left in: ' + left.join(' '));
+      if (b.closed !== 1) bad.push('an open dialog is not closed'); if (!b.chips[0].gone) bad.push('dock timer chips stay');
+      if (b.shown.join() !== 'day') bad.push('the open private screen is not repainted');
+      return bad;
+    },
+    firstChangeSeen(text) {
+      const b = scBox(text, 'person', { after: (x) => { x.live = 'G1'; x.meta = GUEST; } }), bad = [];   // the change lands before the first tick
+      vm.runInContext('sessionCheck()', b);
+      if (leftover(b).length || b.shown.join() !== 'person') bad.push('a change before the first tick is taken as the starting state');
+      return bad;
+    },
+  };
+  Object.keys(scChecks).forEach((k) => check('session change: ' + k, () => assert.deepStrictEqual(scChecks[k](HOME), [])));
+  check('control: a session change that only repaints (no synchronous clear) is seen', () =>
+    assert(scChecks.clearsAllAtOnce(plant('    clearPrivate();\n    if(PRIVATE_BOXES[_cur])show(_cur);}', '    if(PRIVATE_BOXES[_cur])show(_cur);}')).length > 0));
+  check('control: a container missing from the clear list is seen', () =>
+    assert(scChecks.clearsAllAtOnce(plant("work:['wkBody','wkMeta']", "work:['wkMeta']")).length > 0));
+  check('control: a baseline taken lazily at the first tick is seen', () =>
+    assert(scChecks.firstChangeSeen(plant('var _paintFor=sessKey();', 'var _paintFor=null;').replace('function sessionCheck(){var k=sessKey();if(k===_paintFor)return;', 'function sessionCheck(){var k=sessKey();if(_paintFor===null||k===_paintFor){_paintFor=k;return;}')).length > 0));
+  check('the clear list names every private screen and only containers the page really has', () => {
+    const m = /var PRIVATE_BOXES=(\{[\s\S]*?\});/.exec(HOME); assert(m, 'PRIVATE_BOXES missing');
+    const boxes = vm.runInNewContext('(' + m[1] + ')');
+    assert.strictEqual(JSON.stringify(boxes), JSON.stringify(BOX_IDS));
+    Object.values(boxes).flat().forEach((id) => assert(HOME.includes('id="' + id + '"'), 'no element ' + id));
+  });
+  check('a hidden screen keeps no DOM: every private screen is rebuilt from its template on show()', () => {
+    assert(/full\.innerHTML=f\.html;/.test(HOME));
+    Object.keys(BOX_IDS).filter((s) => s !== 'home').forEach((s) => assert(new RegExp('\\n    ' + s + ':\\{').test(HOME), s + ' is not a FULL screen'));
+  });
   {
-    const sc = /\/\/ SESSCHECK-BEGIN[\s\S]*?\/\/ SESSCHECK-END/.exec(HOME), mem = /\/\/ MEMBER-BEGIN[\s\S]*?\/\/ MEMBER-END/.exec(HOME);
-    const tg = /var TIMERS_MEMO_MS=[\s\S]*?\n  function timersGet\(now\)\{[\s\S]*?\n  \}/.exec(HOME);
-    const run = (cur) => {
-      const box = { live: 'M1', meta: MEMBER, shown: [], _cur: cur, JSON, String, setInterval: () => 1, calls: 0,
-        localStorage: { getItem: () => JSON.stringify(box.meta) }, sid: () => box.live, show(id) { box.shown.push(id); },
-        apiGet() { box.calls++; return new Promise(() => {}); }, Date, _lst: { lists: ['A-list'], sel: 'a' }, _calEvents: { k: 1 } };
-      vm.createContext(box);
-      vm.runInContext(mem[0] + '\n' + tg[0] + '\n' + sc[0] + '\nsessionCheck();', box);
-      return box;
-    };
+    const run = (cur) => scBox(HOME, cur);
     check('session change on a private screen: repainted, cached lists / calendar / timers forgotten', () => {
       const b = run('list'); vm.runInContext('timersGet(1)', b);
       b.live = 'G1'; b.meta = GUEST; vm.runInContext('sessionCheck()', b);
@@ -384,7 +431,7 @@ const run = (box, code) => vm.runInContext(code, box);
     });
     check('session change on a non-private screen repaints nothing; no change repaints nothing', () => {
       const b = run('weather'); b.live = 'G1'; b.meta = GUEST; vm.runInContext('sessionCheck()', b); assert.deepStrictEqual(b.shown, []);
-      const c = run('day'); vm.runInContext('sessionCheck()', c); assert.deepStrictEqual(c.shown, []);
+      const c = run('day'); vm.runInContext('sessionCheck()', c); assert.deepStrictEqual(c.shown, []); assert.strictEqual(leftover(c).length, Object.values(BOX_IDS).flat().length, 'no change must not clear');
     });
     check('the timers memo is never another session\'s answer', () => {
       const b = run('home'); vm.runInContext('timersGet(1000)', b); b.live = 'M2'; vm.runInContext('timersGet(1001)', b); assert.strictEqual(b.calls, 2);

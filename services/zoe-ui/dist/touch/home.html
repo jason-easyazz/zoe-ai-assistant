@@ -2108,12 +2108,26 @@
   // since the request started (s0 = sid() then), so a late answer for member A never paints for member B or a guest; sessionCheck()
   // forgets every cached private answer and repaints the open private screen the moment the member session changes. Called by
   // kioskAuthFail, estateAuthFail and convEnsureSession, and by a 2 s watch (the executor's own recovery rewrites the session).
-  var PRIVATE_SCREENS={home:1,day:1,calendar:1,reminder:1,list:1,person:1,work:1,timer:1,settings:1},_paintFor=null;
+  // Every container a member's data is painted into, per screen. On a session change they are emptied SYNCHRONOUSLY, before any
+  // re-render, so nothing of the previous member stays on screen while the new session's request is in flight. A hidden screen
+  // holds no DOM (show() rebuilds each one from its FULL template); an open dialog (event sheet, contact, reminder) is closed and
+  // the dock's timer chips go too.
+  var PRIVATE_BOXES={home:['hToday'],day:['dayEvents','dayRems','dayCommsList'],calendar:['calBody'],reminder:['remList','remMeta'],
+    list:['lstTabs','lstItems','lstCount'],person:['ctGrid','ctAZ','ctDetail'],work:['wkBody','wkMeta'],timer:['tmRings','tmMore','alFull'],
+    settings:['setSecs']};
+  function clearPrivate(){
+    Object.keys(PRIVATE_BOXES).forEach(function(s){PRIVATE_BOXES[s].forEach(function(id){var el=document.getElementById(id);if(el){el.innerHTML='';el.onclick=null;}});});
+    if(typeof _evd!=='undefined')_evd=null;
+    estClose();
+    if(typeof dbody!=='undefined'&&dbody)dbody.querySelectorAll('.pc.tchip').forEach(function(c){c.remove();});}
+  function sessKey(){var m=sessionMember();return m?String(m.session_id):'';}
   function sessLive(s0){return sid()===s0;}
-  function sessionCheck(){var m=sessionMember(),k=m?String(m.session_id):'';
-    if(_paintFor===null||k===_paintFor){_paintFor=k;return;}
+  function sessionCheck(){var k=sessKey();if(k===_paintFor)return;
     _paintFor=k;_tmMemo.p=null;_lst.lists=[];_lst.sel=null;_calEvents={};
-    if(PRIVATE_SCREENS[_cur])show(_cur);}
+    clearPrivate();
+    if(PRIVATE_BOXES[_cur])show(_cur);}
+  // Who the page is painted for is fixed NOW, before any private read, so the very first change is seen (not taken as the start).
+  var _paintFor=sessKey();
   setInterval(sessionCheck,2000);
   // SESSCHECK-END
   // Off-kiosk (a member's laptop/phone on the estate) a 401 means the stored
