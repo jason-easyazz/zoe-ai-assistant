@@ -2894,6 +2894,12 @@ async def _run_flue_brain_streaming_turn(
     # Keep the format byte-for-byte in sync with that module. Omit empty/guest ids
     # so the sidecar's own fail-closed identity handling applies.
     uid = (user_id or "").strip()
+    # Similar-recall turn embed (ZOE_RECALL_SIMILAR, default OFF): start it NOW, beside the note_turn / verify / block work below, so
+    # ``recall_every_turn.block_for`` further down finds it finished. A no-op (one flag read) unless both recall flags are on;
+    # never raises, never waits. The distress / medical gates in the wrapper above have already run: they never reach here.
+    import recall_every_turn
+
+    recall_every_turn.begin(uid, message, voice=bool(kwargs.get("voice_mode")))
     # ZOE_RECALL_EVIDENCE (default OFF): note this turn's shape so a
     # recall_memory TOOL call made during it quotes the user's words when asked
     # "what did I say / are you sure" (the tool only sends the model's query).

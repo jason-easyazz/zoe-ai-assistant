@@ -30,6 +30,7 @@ every eligible household brain turn writes one ``RECALL_EVERY_TURN`` coverage li
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import threading
 import time
@@ -50,7 +51,8 @@ BUDGET_TOKENS = 90
 ROW_CHARS = 160
 #: the by-id recheck of the picks: on the voice path the turn never waits longer than this for it
 POOL_TIMEOUT_S = 0.25
-#: the similar arm: one MiniLM embed of the turn's words (median ~60 ms on the Orin CPU, 2026-11-12); a slower one is dropped
+#: the similar arm: one MiniLM embed of the turn's words (padded to length: p50 ~4 ms on the Orin CPU, 2026-11-13; the palace's own
+#: fixed 256-token padding was 41-165 ms), started early by ``begin``; a slower one is dropped
 EMBED_TIMEOUT_S = 0.20
 #: cosine floor for a similar row. Synthetic lab with the palace's MiniLM (labs/recall-match-lab, 2026-11-12): at 0.30 the needed
 #: fact is found on 9 of 20 oblique turns (the lexical gate: 2 of 20) and a row is offered on 2 of 20 irrelevant turns; at 0.20 it
@@ -227,7 +229,9 @@ _BUILDS: "dict[str, asyncio.Task]" = {}
 
 
 _VECS: "dict[tuple, tuple[int, Any]]" = {}      # (member, row id) -> (text hash, unit vector): never shared across members
-_QUERY_EMBEDS: dict = {"job": None}              # the last turn embed's future: still running = the arm is busy (a timeout does not stop a worker)
+#: the last turn embed's future + a sha256 of its words (never the words): still running = the arm is busy (a timeout does not stop a
+#: worker); the same words again = ``begin`` already started it, so the turn only waits for what is left of it
+_QUERY_EMBEDS: dict = {"job": None, "key": None}
 
 
 def _reset_state() -> None:
@@ -235,16 +239,55 @@ def _reset_state() -> None:
     _BUILDS.clear()
     _VECS.clear()
     _QUERY_EMBEDS["job"] = None
+    _QUERY_EMBEDS["key"] = None
+    _FAST["ef"] = None
+    _FAST["tok"] = None
 
 
 _EMBED_LOCK = threading.Lock()
+#: the palace EF this module's tokenizer was built for (rebuilt if the palace swaps its EF) and that tokenizer
+_FAST: dict = {"ef": None, "tok": None}
+#: sentence-transformers' max_seq_length for this MiniLM (the palace EF truncates at the same length)
+MAX_TOKENS = 256
+
+
+def _embed_dynamic(ef: Any, texts: list) -> Any:
+    """The palace MiniLM's vectors (float32, not yet unit) with the batch padded to its LONGEST text, not to 256 tokens.
+
+    Chroma's ``ONNXMiniLM_L6_V2`` pads every text to a fixed 256 tokens, so a 10-word turn runs ~25x the tokens it needs: 41-165 ms
+    on the Orin CPU against ~4 ms padded to length (docs/knowledge/recall-every-turn.md). Mean pooling is attention-masked, so the
+    pad tokens carry no weight and the vectors are the same (cosine 1.00000 against the fixed-pad vectors on the 100 lab texts).
+    SAME session (``ef.model``) and same ``tokenizer.json`` as the palace; only a second tokenizer object with no fixed length, so
+    the palace's own embeds are untouched. Raises on anything unexpected: the caller falls back to ``ef(texts)``."""
+    import os
+
+    import numpy as np
+
+    if _FAST["ef"] is not ef:
+        from tokenizers import Tokenizer
+
+        tok = Tokenizer.from_file(os.path.join(ef.DOWNLOAD_PATH, ef.EXTRACTED_FOLDER_NAME, "tokenizer.json"))
+        tok.enable_truncation(max_length=MAX_TOKENS)
+        tok.enable_padding(pad_id=0, pad_token="[PAD]")
+        _FAST["tok"], _FAST["ef"] = tok, ef
+    enc = _FAST["tok"].encode_batch([str(t) for t in texts])
+    ids = np.array([e.ids for e in enc], dtype=np.int64)
+    mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
+    out = ef.model.run(None, dict(input_ids=ids, attention_mask=mask, token_type_ids=np.zeros_like(ids)))[0]
+    m = mask[..., None].astype(np.float32)
+    return (out * m).sum(1) / np.clip(m.sum(1), 1e-9, None)
 
 
 def _embed_raw(texts: list) -> Any:
     import numpy as np
     from memory_service import _drawers_embedding_function
 
-    v = np.asarray(_drawers_embedding_function()(list(texts)), dtype=np.float32)
+    ef = _drawers_embedding_function()
+    try:
+        v = np.asarray(_embed_dynamic(ef, texts), dtype=np.float32)
+    except Exception as exc:  # noqa: BLE001 - any surprise (another EF, a missing file): the palace's own call, slower but the same
+        logger.debug("recall_every_turn: dynamic-pad embed unavailable (%s)", type(exc).__name__)
+        v = np.asarray(ef(list(texts)), dtype=np.float32)
     n = np.linalg.norm(v, axis=1, keepdims=True)
     n[n == 0.0] = 1.0
     return v / n
@@ -374,14 +417,51 @@ def _ranked(ix: _Index, message: str) -> list:
     return [c for _o, c in out]
 
 
-def _nearest(vecs: Any, message: str, k: int) -> list:
-    """(row index, cosine) for the ``k`` rows nearest ``message``, best first. Runs in a worker thread: the embed, the product and
-    the sort all stay off the event loop."""
+def _rank_vec(vecs: Any, qvec: Any, k: int) -> list:
+    """(row index, cosine) for the ``k`` rows nearest the turn's vector, best first (both unit vectors)."""
     import numpy as np
 
-    sims = vecs @ _embed([message])[0]
-    top = np.argsort(-sims)[:k]
+    sims = vecs @ qvec
+    if k < len(sims):      # top-k by partition (O(n)) then a k-element sort: no full sort of a big pool on the event loop
+        top = np.argpartition(-sims, k - 1)[:k]
+        top = top[np.argsort(-sims[top], kind="stable")]
+    else:
+        top = np.argsort(-sims, kind="stable")
     return [(int(j), float(sims[j])) for j in top]
+
+
+def _turn_job(message: str) -> "Optional[asyncio.Future]":
+    """The future of THIS turn's embed (shape (1, d)): the one ``begin`` already started for the same words, else a new one, else
+    None when an earlier turn's embed is still running (a timeout cannot stop a worker thread: never start another behind it).
+    Must be called on the running loop."""
+    key = hashlib.sha256(message.encode("utf-8", "replace")).digest()      # collision-resistant: never another turn's vector
+    prev = _QUERY_EMBEDS["job"]
+    if prev is not None and _QUERY_EMBEDS["key"] == key and not prev.cancelled():
+        return prev
+    if prev is not None and not prev.done():
+        return None
+    # the FUTURE is the busy mark: done when the worker returns, raises, or is cancelled before it ever starts, so nothing can
+    # leave the arm switched off. Callers shield it: a turn's timeout (or cancellation) must not cancel the mark itself.
+    job = _QUERY_EMBEDS["job"] = asyncio.get_running_loop().run_in_executor(None, _embed, [message])
+    _QUERY_EMBEDS["key"] = key
+    job.add_done_callback(lambda f: f.cancelled() or f.exception())      # a late failure is consumed, never "never retrieved"
+    return job
+
+
+def begin(user_id: str, message: str, *, voice: bool = False) -> None:
+    """Start this turn's embed NOW (the similar arm only), so it runs beside the routing / packet / block work that precedes
+    ``block_for`` and the brain call waits only for what is left of it, not the whole ~4 ms (~40-160 ms before the dynamic-pad
+    embed). Call it where the turn's words are final, on the running loop. A no-op unless both flags are on, the turn is eligible
+    and the member's index already holds vectors (nothing to compare against = nothing to embed). Never raises, never waits."""
+    try:
+        if mode() == "off" or similar_mode() == "off" or eligible(user_id, message, voice):
+            return
+        ix = _INDEX.get((user_id or "").strip())
+        if ix is None or ix.vecs is None or not ix.rows:
+            return
+        _turn_job(message)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("recall_every_turn: begin skipped (%s)", type(exc).__name__)
 
 
 async def _similar(ix: _Index, message: str, taken: set) -> list:
@@ -390,14 +470,13 @@ async def _similar(ix: _Index, message: str, taken: set) -> list:
     embed at a time: a timeout cannot stop its worker thread, so while one is still running the next turn skips the arm instead
     of starting another (work never piles up behind a slow model)."""
     try:
-        prev = _QUERY_EMBEDS["job"]
-        if ix.vecs is None or not ix.rows or (prev is not None and not prev.done()):
+        if ix.vecs is None or not ix.rows:
             return []
-        # the FUTURE is the busy mark: done when the worker returns, raises, or is cancelled before it ever starts, so nothing
-        # can leave the arm switched off. shield: this turn's timeout (or cancellation) must not cancel the mark itself.
-        job = _QUERY_EMBEDS["job"] = asyncio.get_running_loop().run_in_executor(None, _nearest, ix.vecs, message, MAX_ROWS * 3)
-        job.add_done_callback(lambda f: f.cancelled() or f.exception())      # a late failure is consumed, never "never retrieved"
-        near = await asyncio.wait_for(asyncio.shield(job), timeout=EMBED_TIMEOUT_S)
+        job = _turn_job(message)           # usually already running: ``begin`` started it when the words were final
+        if job is None:
+            return []
+        qvec = (await asyncio.wait_for(asyncio.shield(job), timeout=EMBED_TIMEOUT_S))[0]
+        near = _rank_vec(ix.vecs, qvec, MAX_ROWS * 3)      # one matrix-vector product: microseconds, no thread hop
         floor = similar_floor()
         return [(sim, ix.rows[j][0]) for j, sim in near if sim >= floor and ix.rows[j][0].id not in taken]
     except Exception as exc:  # noqa: BLE001 - a timeout included
