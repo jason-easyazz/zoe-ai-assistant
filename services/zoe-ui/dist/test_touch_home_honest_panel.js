@@ -224,19 +224,108 @@ const run = (box, code) => vm.runInContext(code, box);
   check('control: a typed pendant link instead of the voice path is seen', () => red('settingsScreen', plant("if(a==='pendlink')panelVoice(", "if(a==='pendlink')phoneForm(")));
   check('control: a guest reaching the member rows is seen', () => red('settingsScreen', plant('if(guest){wireSetSys();return host.onclick=setClick;}', '')));
   check('control: editable panel rows for a guest are seen', () => red('settingsScreen', plant('if(_setGuest()){el.innerHTML=', 'if(false){el.innerHTML=')));
-  check('control: a silent pendant flag-off is seen', () => red('settingsScreen', plant("_setLine('setPend','<div class=\"srow2\"><span class=\"lderr\">Pendant sync isn’t switched on.</span></div>')", "_setLine('setPend','')")));
+  check('control: a silent pendant flag-off is seen', () => red('settingsScreen', plant("_setLine('setPend','<div class=\"srow2\"><span class=\"lderr\">Pendant sync isn’t switched on.</span></div>',s0)", "_setLine('setPend','',s0)")));
   check('control: a second orb press path is seen', () => red('settingsScreen', plant("orb.addEventListener('click',function(){orbPress();});", "orb.addEventListener('click',function(){panelVoice();});")));
-  {
-    const g = /\/\/ SETGUEST-BEGIN[\s\S]*?\/\/ SETGUEST-END/.exec(HOME);
-    const guestOf = (sess, live) => { const box = { localStorage: { getItem: () => (sess ? JSON.stringify(sess) : null) }, sid: () => (live ? 'S' : ''), JSON };
-      vm.createContext(box); vm.runInContext(g[0], box); return vm.runInContext('_setGuest()', box); };
-    check('Settings: a guest session, a stale session or none reads as guest; a member does not', () => {
-      assert.strictEqual(guestOf({ session_id: 'S', role: 'guest', user_id: 'guest' }, true), true);
-      assert.strictEqual(guestOf({ session_id: 'S', role: 'user', user_id: 'member-a' }, false), true);
-      assert.strictEqual(guestOf(null, false), true);
-      assert.strictEqual(guestOf({ session_id: 'S', role: 'user', user_id: 'member-a' }, true), false);
-    });
+  // ── Settings privacy, for real: the MEMBER helper + the whole Settings block in a vm with a fake DOM and a controllable API ──
+  // (a) a live GUEST id beside stale member metadata is a guest: no private endpoint, no private row; (b) a private answer that
+  // lands after the session changed is dropped; (c) a member -> guest change while Settings is open clears the private rows at once;
+  // (d) a genuine member still sees them.
+  const PRIV = /\/api\/(enrollment\/state|omi\/my-pendant|omi\/health|notifications\/pending|proactive\/inbox)/;
+  function settingsBox(text, live, meta) {
+    const mem = /\/\/ MEMBER-BEGIN[\s\S]*?\/\/ MEMBER-END/.exec(text), blk = /\/\/ SETGUEST-BEGIN[\s\S]*?(?=\n {2}function editContact\()/.exec(text);
+    assert(mem && blk, 'MEMBER / Settings block missing');
+    const store = {}; let hostHTML = '';
+    const mk = (id) => store[id] || (store[id] = { id, innerHTML: '', textContent: '', style: {}, disabled: false, options: [], selectedIndex: 0,
+      classList: { toggle() {}, add() {}, remove() {} }, querySelector: () => null, querySelectorAll: () => [] });
+    const host = { onclick: null, get innerHTML() { return hostHTML; }, set innerHTML(v) { hostHTML = v; Object.keys(store).forEach((k) => delete store[k]); } };
+    const box = {
+      urls: [], pending: {}, store, host, live, meta, _cur: 'settings', JSON, Date, Promise, encodeURIComponent, String, Object, Math, isFinite,
+      localStorage: { getItem: (k) => (k === 'zoe_session' && box.meta ? JSON.stringify(box.meta) : null) },
+      sid: () => box.live,
+      document: { getElementById: (id) => (id === 'setSecs' ? host : hostHTML.includes('id="' + id + '"') ? mk(id) : null), querySelector: () => null },
+      esc: (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]),
+      loadErr: (w) => 'Couldn’t load your ' + w + '.',
+      apiGet(url) { box.urls.push(url); return PRIV.test(url) ? new Promise((res, rej) => { box.pending[url.replace(/\?.*$/, '')] = { res, rej }; }) : new Promise(() => {}); },
+      apiJson: () => new Promise(() => {}), zfetch: () => new Promise(() => {}),
+      wirePanelSettings() {}, toast() {}, show() {}, panelVoice() {}, orbPress() {}, _panelDevId: () => 'p1', _savePrefs() {},
+      setInterval: () => 1, clearInterval() {},
+    };
+    vm.createContext(box);
+    vm.runInContext(mem[0] + '\n' + blk[0], box);
+    return box;
   }
+  const flush = () => new Promise((r) => setImmediate(r));
+  const MEMBER = { session_id: 'M1', role: 'user', user_id: 'member-a', username: 'member-a' };
+  const GUEST = { session_id: 'G1', role: 'guest', user_id: 'guest' };
+  const shown = (b) => Object.values(b.store).map((e) => e.innerHTML).join('|') + '|' + b.host.innerHTML;
+  async function answerAll(b) {
+    const r = (u, v) => { if (b.pending[u]) b.pending[u].res(v); };
+    r('/api/enrollment/state', { voice: { enrolled: true } });
+    r('/api/omi/my-pendant', { linking: { enabled: true }, pendants: [{ label: 'PendantX', last_sync_at: null }] });
+    r('/api/notifications/pending', { notifications: [{ title: 'NoteX', message: 'private words' }] });
+    r('/api/proactive/inbox', { notify: 1 });
+    await flush(); await flush();
+  }
+  const privacy = {
+    async staleMetadata(text) {      // (a)
+      const b = settingsBox(text, 'G1', MEMBER), bad = [];
+      if (vm.runInContext('_setGuest()', b) !== true) bad.push('a live guest id beside member metadata reads as a member');
+      vm.runInContext('wireSettings()', b);
+      if (b.urls.some((u) => PRIV.test(u))) bad.push('private endpoints called for a guest: ' + b.urls.filter((u) => PRIV.test(u)).join(' '));
+      if (/id="set(Vid|Pend|Note)"/.test(b.host.innerHTML)) bad.push('private rows painted for a guest');
+      return bad;
+    },
+    async lateAnswer(text) {         // (b)
+      const b = settingsBox(text, 'M1', MEMBER), bad = [];
+      vm.runInContext('wireSettings()', b);
+      b.live = 'G1'; b.meta = GUEST;
+      await answerAll(b);
+      if (/enrolled|PendantX|NoteX/.test(shown(b))) bad.push('a private answer for the old session was painted');
+      return bad;
+    },
+    async downgradeClears(text) {    // (c)
+      const b = settingsBox(text, 'M1', MEMBER), bad = [];
+      vm.runInContext('wireSettings()', b);
+      await answerAll(b);
+      if (!/Your voice is enrolled/.test(shown(b))) bad.push('setup: member rows never shown');
+      b.live = 'G1'; b.meta = GUEST;
+      vm.runInContext('settingsSessionCheck()', b);
+      if (/enrolled|PendantX|NoteX|id="set(Vid|Pend|Note)"/.test(shown(b))) bad.push('private rows stay after the member -> guest change');
+      if (!/sign in for the rest/.test(b.host.innerHTML)) bad.push('Settings not repainted in its guest form');
+      return bad;
+    },
+    async memberSees(text) {         // (d)
+      const b = settingsBox(text, 'M1', MEMBER), bad = [];
+      if (vm.runInContext('_setGuest()', b) !== false) bad.push('a genuine member reads as guest');
+      vm.runInContext('wireSettings()', b);
+      await answerAll(b);
+      const s = shown(b);
+      ['Your voice is enrolled', 'PendantX', 'NoteX'].forEach((x) => { if (!s.includes(x)) bad.push('member row missing: ' + x); });
+      return bad;
+    },
+  };
+  for (const k of Object.keys(privacy)) { const bad = await privacy[k](HOME); check('Settings privacy: ' + k, () => assert.deepStrictEqual(bad, [])); }
+  for (const [name, k, from, to] of [
+    ['the live-sid match', 'staleMetadata', "if(!live||!u||String(u.session_id||'')!==live)return null;", 'if(!live||!u)return null;'],
+    ['a missing role read as member', 'staleMetadata', "return (!role||role==='guest'||!uid||uid==='guest')?null:u;}", "return (role==='guest')?null:u;}"],
+    ['the stale-answer drop', 'lateAnswer', 'if(s0!==undefined&&sid()!==s0)return;', ''],
+    ['the downgrade repaint', 'downgradeClears', 'if(now!==_setFor)wireSettings();}', '}'],
+  ]) {
+    let bad;
+    if (k === 'staleMetadata' && name.startsWith('a missing role')) {   // a session with no role must never count as a member
+      const b = settingsBox(plant(from, to), 'M1', { session_id: 'M1', user_id: 'member-a' });
+      bad = vm.runInContext('_setGuest()', b) === true ? [] : ['seen'];
+    } else bad = await privacy[k](plant(from, to));
+    check('control: removing ' + name + ' is seen', () => assert(bad.length > 0, 'check ' + k + ' did not see the planted fault'));
+  }
+  check('Settings privacy: a session with no role is a guest', () => assert.strictEqual(vm.runInContext('_setGuest()', settingsBox(HOME, 'M1', { session_id: 'M1', user_id: 'member-a' })), true));
+  check('page: no member-vs-guest decision outside sessionMember', () => {
+    const s = mainScript(HOME);
+    const reads = (s.match(/JSON\.parse\(localStorage\.getItem\('zoe_session'\)/g) || []).length;
+    assert.strictEqual(reads, 2, 'the main script reads stored session metadata outside sid() and sessionMember(): ' + reads);
+    assert(!/u\.role|\.role\|\|''\)\.toLowerCase\(\)==='guest'/.test(s.replace(/\/\/ MEMBER-BEGIN[\s\S]*?\/\/ MEMBER-END/, '')), 'a role check outside sessionMember');
+    ['kioskAuthFail', 'estateAuthFail', 'convEnsureSession'].forEach((f) => assert(near(s, 'function ' + f + '(', 900).includes('settingsSessionCheck()'), f + ' does not repaint Settings'));
+  });
   check('control: a 9px dock label is seen', () => red('smallWallText', plant('#dock .pc.temp .tl{font-size:16px', '#dock .pc.temp .tl{font-size:9px')));
   check('control: faint error copy is seen', () => red('smallWallText', plant('<div class="lderr">Couldn’t load rooms.', '<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.')));
 

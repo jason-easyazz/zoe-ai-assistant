@@ -2094,6 +2094,15 @@
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function fmt12(hhmm){var m=/^(\d{1,2}):(\d{2})/.exec(hhmm||'');if(!m)return esc(hhmm||'');var h=+m[1],ap=h<12?'am':'pm',hr=h%12;if(hr===0)hr=12;return hr+':'+m[2]+' '+ap;}
   function sid(){try{var s=JSON.parse(localStorage.getItem('zoe_session')||'{}');if(s.expires_at&&Date.parse(s.expires_at)<Date.now())return '';return s.session_id||'';}catch(_){return '';}}
+  // MEMBER-BEGIN - the ONE answer to "is a household member signed in on this page RIGHT NOW?": the stored metadata counts only
+  // when it describes the LIVE session (its session_id is sid(), so a guest id held beside stale member metadata during a
+  // member -> guest recovery is a guest) and names a real signed-in role. Anything else - no session, a mismatch, a missing
+  // role, role or user "guest" - is a guest. Every member-vs-guest decision in this script goes through it.
+  function sessionMember(){var live=sid(),u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
+    if(!live||!u||String(u.session_id||'')!==live)return null;
+    var role=String(u.role||'').toLowerCase(),uid=String(u.user_id||'').toLowerCase();
+    return (!role||role==='guest'||!uid||uid==='guest')?null:u;}
+  // MEMBER-END
   // Off-kiosk (a member's laptop/phone on the estate) a 401 means the stored
   // session is dead server-side: drop it and raise the estate's OWN who+PIN card
   // in place — never navigate to the retired /touch/index.html (2026-10-05: a
@@ -2102,7 +2111,7 @@
   // the session (a guest asking for something personal) and raises the card.
   var _authBounced=false;
   function estateAuthFail(status){
-    if(status===401){if(!_authBounced){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}}window.__needAuth=true;}
+    if(status===401){if(!_authBounced){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}}window.__needAuth=true;settingsSessionCheck();}
     if(window.__showAuthCard)window.__showAuthCard();
   }
   // Kiosk policy for a 401/403 from a data call. The who+PIN card is NOT the
@@ -2122,7 +2131,7 @@
     if(!window.__guestBootSettled)return;
     var pend=null;try{pend=sessionStorage.getItem('zoe_panel_auth_challenge');}catch(e){}
     if(pend){if(window.__showAuthCard)window.__showAuthCard();return;}
-    if(status===401){try{localStorage.removeItem('zoe_session');}catch(e){}
+    if(status===401){try{localStorage.removeItem('zoe_session');}catch(e){}settingsSessionCheck();
       var now=Date.now();if(now-_guestRefillT>30000){_guestRefillT=now;convEnsureSession();}}
   }
   // every request helper carries a deadline; guarded because the touch harness (and an old WebView) has no AbortSignal
@@ -4287,56 +4296,65 @@
   }
 
   // SETGUEST-BEGIN - a guest kiosk (or no live session) sees only This panel (read-only) and System, plus how to get the rest.
-  function _setGuest(){var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
-    return !sid()||!u||String(u.role||'').toLowerCase()==='guest'||String(u.user_id||'').toLowerCase()==='guest';}
+  function _setGuest(){return !sessionMember();}
+  // A member-private row is written only for the session that ASKED: `s0` is sid() when the request started, and an answer that
+  // lands after the session changed (member -> guest, or another member) is dropped, never painted.
+  function _setLine(id,html,s0){if(s0!==undefined&&sid()!==s0)return;var el=document.getElementById(id);if(el&&_cur==='settings')el.innerHTML=html;}
+  function _setErr(id,what,e,s0){_setLine(id,'<div class="srow2"><span class="lderr">'+esc(loadErr(what,e))+'</span></div>',s0);}
+  // Settings was painted for ONE session; when that changes while it is open (the kiosk downgrade, a refused 401, a fresh guest,
+  // a PIN switch) the screen is repainted at once - for a guest that drops every private row. A 2 s watch covers the changes
+  // this script does not see (the executor's own recovery writes the stored session).
+  var _setFor=null,_setWatch=null;
+  function settingsSessionCheck(){
+    if(_cur!=='settings'){if(_setWatch){clearInterval(_setWatch);_setWatch=null;}return;}
+    var m=sessionMember(),now=m?String(m.session_id):'';
+    if(now!==_setFor)wireSettings();}
   // SETGUEST-END
-  function _setLine(id,html){var el=document.getElementById(id);if(el&&_cur==='settings')el.innerHTML=html;}
-  function _setErr(id,what,e){_setLine(id,'<div class="srow2"><span class="lderr">'+esc(loadErr(what,e))+'</span></div>');}
   function _setAgo(iso){var t=Date.parse(iso||'');if(!isFinite(t))return 'not yet';var m=Math.max(0,Math.floor((Date.now()-t)/60000));
     return m<2?'just now':m<90?m+' minutes ago':m<2160?Math.round(m/60)+' hours ago':Math.round(m/1440)+' days ago';}
   // Voice ID: the signed-in member's OWN enrolment state (GET /api/enrollment/state). Enrolling is by voice only.
-  function wireSetVoiceId(){
+  function wireSetVoiceId(){var s0=sid();
     apiGet('/api/enrollment/state').then(function(d){
       var on=!!(d&&d.voice&&d.voice.enrolled);
       _setLine('setVid',on?'<div class="srow2"><span>Your voice is enrolled</span><span class="sv">Zoe knows it’s you</span></div>'
-        :'<div class="srow2"><span>Your voice isn’t enrolled yet</span></div><div class="srow2"><span class="lderr">Say: “Zoe, learn my voice”</span></div>');
-    }).catch(function(e){_setErr('setVid','voice ID',e);});
+        :'<div class="srow2"><span>Your voice isn’t enrolled yet</span></div><div class="srow2"><span class="lderr">Say: “Zoe, learn my voice”</span></div>',s0);
+    }).catch(function(e){_setErr('setVid','voice ID',e,s0);});
   }
   // Pendant: GET /api/omi/my-pendant (404 = pendant sync not switched on, ZOE_OMI_SYNC_ENABLED) + its health line (GET /api/omi/health).
   // Linking is by voice at this panel ("Zoe, link my pendant"): proof is a verified voice + the pendant in the hand, never a form.
-  function wireSetPendant(){
+  function wireSetPendant(){var s0=sid();
     apiGet('/api/omi/my-pendant').then(function(v){
       var lk=(v&&v.linking)||{},ps=(v&&v.pendants)||[];
-      if(!lk.enabled){_setLine('setPend','<div class="srow2"><span class="lderr">'+esc(lk.message||'Pendant linking isn’t switched on here yet.')+'</span></div>');return;}
+      if(!lk.enabled){_setLine('setPend','<div class="srow2"><span class="lderr">'+esc(lk.message||'Pendant linking isn’t switched on here yet.')+'</span></div>',s0);return;}
       _setLine('setPend',(ps.length?ps.map(function(p){return '<div class="srow2"><span>'+esc(p.label||'My pendant')+'</span><span class="sv">Linked · synced '+esc(_setAgo(p.last_sync_at))+'</span></div>';}).join('')
           :'<div class="srow2"><span>No pendant linked to you yet</span></div>')
-        +'<div id="setPendH"></div><div class="srow2"><span>Hold it next to the panel</span><button class="sbtn" data-act="pendlink">Link my pendant</button></div>');
-      if(!ps.length)return;
+        +'<div id="setPendH"></div><div class="srow2"><span>Hold it next to the panel</span><button class="sbtn" data-act="pendlink">Link my pendant</button></div>',s0);
+      if(!ps.length||sid()!==s0)return;
       apiGet('/api/omi/health').then(function(h){
         _setLine('setPendH',((h&&h.pendants)||[]).map(function(p){var b=['last report '+_setAgo(p.reported_at)];
           if(p.battery&&p.battery.pct!=null)b.push('battery '+p.battery.pct+'%');
           if(p.ring&&p.ring.fill_pct!=null)b.push('storage '+p.ring.fill_pct+'% full');
           return '<div class="srow2"><span class="sv" style="margin-left:0;text-align:left">'+esc((p.label||'Pendant')+': '+b.join(' · '))+'</span></div>'
-            +(p.warnings||[]).map(function(w){return '<div class="srow2"><span class="lderr">'+esc(w.text||w.kind)+'</span></div>';}).join('');}).join(''));
-      }).catch(function(e){_setErr('setPendH','pendant health',e);});
-    }).catch(function(e){if(e&&e.message==='http 404')_setLine('setPend','<div class="srow2"><span class="lderr">Pendant sync isn’t switched on.</span></div>');else _setErr('setPend','pendant',e);});
+            +(p.warnings||[]).map(function(w){return '<div class="srow2"><span class="lderr">'+esc(w.text||w.kind)+'</span></div>';}).join('');}).join(''),s0);
+      }).catch(function(e){_setErr('setPendH','pendant health',e,s0);});
+    }).catch(function(e){if(e&&e.message==='http 404')_setLine('setPend','<div class="srow2"><span class="lderr">Pendant sync isn’t switched on.</span></div>',s0);else _setErr('setPend','pendant',e,s0);});
   }
   // Notifications: the member's unread rows (GET /api/notifications/pending), words only. Their Done / That's me buttons live on the
   // ONE notifications card (js/touch-review-cards.js), which the orb press / "what's up?" pushes to this panel - opened from here the same way.
-  function wireSetNotes(){
+  function wireSetNotes(){var s0=sid();
     Promise.all([apiGet('/api/notifications/pending'),apiGet('/api/proactive/inbox').catch(function(){return null;})]).then(function(r){
       var ns=(r[0]&&r[0].notifications)||[],card=!!(r[1]&&('notify' in r[1]));
-      if(!ns.length){_setLine('setNote','<div class="srow2"><span>No new notifications</span></div>');return;}
+      if(!ns.length){_setLine('setNote','<div class="srow2"><span>No new notifications</span></div>',s0);return;}
       _setLine('setNote',ns.map(function(n){return '<div class="srow2"><span>'+esc(n.title||'Notification')
           +(n.message?' <small style="color:var(--ink-soft)">'+esc(String(n.message).slice(0,120))+'</small>':'')+'</span></div>';}).join('')
         +(card?'<div class="srow2"><span>Done, That’s me and the rest are on the card</span><button class="sbtn" data-act="notecard">Show the card</button></div>'
-          :'<div class="srow2"><span class="lderr">The notifications card isn’t switched on here.</span></div>'));
-    }).catch(function(e){_setErr('setNote','notifications',e);});
+          :'<div class="srow2"><span class="lderr">The notifications card isn’t switched on here.</span></div>'),s0);
+    }).catch(function(e){_setErr('setNote','notifications',e,s0);});
   }
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
-    var u=null;try{u=JSON.parse(localStorage.getItem('zoe_session')||'null');}catch(e){}
-    var who=(u&&(u.username||u.user_id))||'Guest',guest=_setGuest();
+    var u=sessionMember(),who=(u&&(u.username||u.user_id))||'Guest',guest=!u;
+    _setFor=u?String(u.session_id):'';if(!_setWatch)_setWatch=setInterval(settingsSessionCheck,2000);
     var LOAD='<div class="srow2"><span class="lderr">Loading…</span></div>';
     var secs=guest?[
       {t:'This panel',b:'<div id="setPanel">'+LOAD+'</div>'},
@@ -5022,7 +5040,7 @@
     return zfetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({device_info:{source:'estate-conversation'}})})
       .then(function(r){return r.ok?r.json():null;})
       .then(function(d){
-        if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));}catch(e){}return d.session_id;}
+        if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));}catch(e){}settingsSessionCheck();return d.session_id;}
         return '';
       }).catch(function(){return '';});
   }
