@@ -802,8 +802,8 @@ def _remember(user_id: str, corr: Correction) -> None:
     import time
 
     uid = (user_id or "").strip().lower()
-    if not uid or corr.old is None:
-        return
+    if not uid:
+        return                      # a RESTATEMENT (old None) is remembered too: see superseded_by_correction
     now = time.time()
     keep = [(t, c) for t, c in _REMEMBERED.get(uid, []) if now - t <= REMEMBER_S]
     keep.append((now, corr))
@@ -833,11 +833,24 @@ def superseded_by_correction(user_id: str, fact: str, said_at: Optional[float] =
             last = latest[_subject_key(corr.subject)]
             if corr is not last and _same_value(corr.old, last.new):
                 continue
+            if corr.old is None and corr is not last:
+                continue            # a restatement ("moved to the 19th") is only ever judged as the subject's LATEST value
             if rewrite(fact or "", corr) is not None:
                 return True
     except Exception:  # noqa: BLE001
         return False
     return False
+
+
+def _displaced(old_text: str, new_text: str) -> Optional[str]:
+    """The words a rewrite REPLACED in a row ("on the 12th of December" -> "on the 19th of December": "12th"; with the month
+    changed too: "12th December"), punctuation stripped, or None. Pure."""
+    import difflib
+
+    a, b = old_text.split(), new_text.split()
+    gone = [w for op, i1, i2, _j1, _j2 in difflib.SequenceMatcher(None, a, b).get_opcodes() if op != "equal" for w in a[i1:i2]]
+    out = " ".join(re.sub(r"[^\w'’-]+$", "", w) for w in gone).strip()
+    return out or None
 
 
 def reset_state() -> None:
@@ -913,8 +926,13 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             except Exception:  # noqa: BLE001
                 pass
         # Remembered whether or not a row was rewritten: the corrected-away fact may still be waiting in an earlier session's idle
-        # pass (stated 15 s before the correction, filed minutes after it), and that pass must not store the old value.
-        _remember(user_id, corr)
+        # pass (stated 15 s before the correction, filed minutes after it), and that pass must not store the old value. A
+        # RESTATEMENT with no old value ("book club moved to the 19th") is remembered with the value it DISPLACED from each row it
+        # rewrites (QA round 9 review: a late idle pass re-filed the 12th); with nothing rewritten, as a restatement of the subject
+        # (any OTHER value of it, mined from turns older than this, is stale).
+        displaced = [_displaced(r.text or "", t) for r, t in hits] if corr.old is None and 0 < len(hits) <= MAX_ROWS else []
+        for old in [d for d in displaced if d] or [None]:
+            _remember(user_id, corr._replace(old=old) if old else corr)
         if not hits or len(hits) > MAX_ROWS:
             return 0
         excerpt = " ".join(user_message.split())

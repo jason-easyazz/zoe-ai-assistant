@@ -1164,6 +1164,16 @@ def _delete_tombstone_body(ids: list[str]) -> dict[str, Any]:
     return {"rows_targeted": len(ids), "id_hashes": hashes, "truncated": len(ids) > len(hashes)}
 
 
+def _kind_flips(new_text: str, old_text: str) -> bool:
+    """Does ``new_text`` give a subject of ``old_text`` a different KIND (``memory_quality.kind_flip``)? Never raises."""
+    try:
+        from memory_quality import kind_flip
+
+        return bool(kind_flip(new_text or "", old_text or ""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _memory_id(user_id: str, text: str, metadata: Mapping[str, Any]) -> str:
     """Stable row id; include durable identity so same text can exist in distinct lanes."""
 
@@ -2485,6 +2495,12 @@ class MemoryService:
                         return None
                 except Exception:  # noqa: BLE001
                     pass
+            if actor != user_id and _kind_flips(edits, current.text or ""):
+                # an edit that re-types the row's subject (a son edited into a cat) is never written by a writer (QA round 9
+                # review); the owner's own edit is theirs to make
+                self._bump("kind_flip", actor)
+                logger.info("KIND_FLIP_REFUSED user=%s kept=%s op=edit source=%s", user_id, mem_id, actor)
+                return None
         if (
             decision == "edit"
             and _opt_out_writer(actor, origin)
@@ -2810,6 +2826,9 @@ class MemoryService:
             return False
         if str(old_m.get("status") or "") != "approved":
             return False
+        if _kind_flips(docs.get(new_id, ""), docs.get(old_id, "")):
+            logger.info("KIND_FLIP_REFUSED user=%s kept=%s op=supersede_by", user_id, old_id)
+            return False            # a successor that re-types the old row's subject never retires it
         # Authority: an INFERRED successor can never retire a row the user said. (The
         # implicit-supersede passes pick pairs by topic; they have no user turn in hand
         # when they run nightly, so the rows' own authority decides.)

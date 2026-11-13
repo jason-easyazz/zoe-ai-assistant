@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 import pytest
 
@@ -698,3 +699,126 @@ def test_ordinary_fell_turns_file_as_before(mem):
     run(mem.ingest("User's phone fell over", user_id=UID, source="turn_digest", source_excerpt="my phone fell over"))
     assert sorted(r.text for r in _rows(mem)) == ["User fell asleep on the couch", "User's phone fell over"]
     assert all(r.metadata.get("memory_type") != "event" for r in _rows(mem))
+
+
+# -- QA round 9 review: the kind guard runs FIRST on every writer path; a restatement is remembered with what it displaced -----------
+
+class _EntitySvc(_Svc):
+    """A store whose son row is ENTITY-keyed (the person extractor's same-kind supersede reaches it without any text match)."""
+
+    def __init__(self, *texts):
+        super().__init__(*texts, hits=set())
+        for r in self.rows:
+            r.metadata = {"user_id": UID, "entity_id": "slug:fenn", "entity_type": "person", "pattern_type": "relationship"}
+
+    async def list_by_entity(self, _uid, _ids, **_k):
+        return list(self.rows)
+
+    async def get(self, rid):
+        return next((r for r in self.rows if r.id == rid), None)
+
+
+def test_the_person_extractor_never_supersedes_a_son_into_a_cat(monkeypatch):
+    import memory_service
+    import person_extractor as pe
+
+    svc = _EntitySvc("User's son is named Fenn")
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    out = run(pe._ingest_to_mempalace("Fenn is a cat", UID, "Fenn", "slug:fenn", pattern_type="relationship"))
+    assert out is None and svc.edits == [] and svc.archived == [] and svc.ingested == []
+
+
+def test_a_same_kind_entity_update_still_supersedes(monkeypatch):
+    import memory_service
+    import person_extractor as pe
+
+    svc = _EntitySvc("User's son Fenn is 6 years old")
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    run(pe._ingest_to_mempalace("User's son Fenn is 7 years old", UID, "Fenn", "slug:fenn", pattern_type="relationship"))
+    assert svc.edits == [("r0", "User's son Fenn is 7 years old")]
+
+
+def test_the_write_chokepoints_refuse_a_kind_flip(mem):
+    son = run(mem.ingest("User's son is named Fenn", user_id=UID, source="turn_digest"))
+    cat = run(mem.ingest("Fenn is a cat", user_id=UID, source="turn_digest"))
+    # review(edit): any writer path that supersedes by entity / name / text ends here
+    assert run(mem.review(son.id, decision="edit", edits="Fenn is a cat", actor="memory_digest")) is None
+    # supersede_by: the implicit / claim-key retirement passes end here
+    assert run(mem.supersede_by(UID, son.id, cat.id, actor="memory_supersede")) is False
+    assert "User's son is named Fenn" in [r.text for r in _rows(mem)]
+    import memory_service
+
+    assert memory_service._kind_flips("User's son Fenn is 7 years old", "User's son is named Fenn") is False   # same kind: not this wall
+
+
+def test_every_writer_path_is_kind_guarded():
+    """Static: the chokepoints call the guard, the person extractor calls it before its entity supersede, and every module that
+    edits / supersedes rows is one this list was reviewed against (a NEW one fails here until it is checked and added)."""
+    import inspect
+    import pathlib
+
+    import memory_service
+    import person_extractor as pe
+
+    assert "_kind_flips(" in inspect.getsource(memory_service.MemoryService.review)
+    assert "_kind_flips(" in inspect.getsource(memory_service.MemoryService._supersede_by_sync)
+    assert "kind_guard(" in inspect.getsource(mq.reconcile_for_ingest)
+    src = inspect.getsource(pe._ingest_to_mempalace)
+    assert src.index("kind_guard(") < src.index("_reconcile_same_kind_entity_row(")
+    here = pathlib.Path(mq.__file__).parent
+    writers = sorted(p.name for p in here.rglob("*.py") if "tests" not in p.parts and p.name != "memory_service.py"
+                     and re.search(r'decision="edit"|\.supersede_by\(', p.read_text(encoding="utf-8")))
+    assert writers == ["correction_apply.py", "expert_dispatch.py", "hold_the_fact.py", "memory_curation.py", "memory_digest.py",
+                       "memory_extractor.py", "memory_supersede.py", "named_relations.py", "person_extractor.py",
+                       "value_correction.py"], writers
+
+
+# -- a restatement is remembered with the value it displaced ------------------------------------------------------------------------
+
+CLUB_12 = "User's book club is on the 12th of December."
+
+
+def _apply_keep(svc, text, monkeypatch):
+    import correction_apply
+    import user_prefs
+
+    async def opted_in(_u):
+        return False
+
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    monkeypatch.setattr(correction_apply, "_is_unidentified", lambda _u: False)
+    return run(vc.apply(text, UID, None, svc=svc))
+
+
+def test_a_restated_date_makes_the_displaced_one_stale(monkeypatch):
+    import time
+
+    vc.reset_state()
+    before = time.time() - 60
+    assert _apply_keep(_Svc(CLUB_12), "book club moved to the 19th of december", monkeypatch) == 1
+    assert vc.superseded_by_correction(UID, "User's book club is on the 12th of December", said_at=before) is True
+    assert vc.superseded_by_correction(UID, "User's book club is on the 12th of December", said_at=time.time() + 5) is False
+    assert vc.superseded_by_correction(UID, "User's book club is on the 19th of December", said_at=before) is False
+
+
+def test_a_restatement_with_nothing_stored_yet(monkeypatch):
+    import time
+
+    vc.reset_state()
+    before = time.time() - 60
+    assert _apply_keep(_Svc(), "book club moved to the 19th of december", monkeypatch) == 0
+    assert vc.superseded_by_correction(UID, "User's book club is on the 12th of December", said_at=before) is True
+    assert vc.superseded_by_correction(UID, "User's book club is on the 19th of December", said_at=before) is False
+
+
+def test_a_chain_of_restatements(monkeypatch):
+    import time
+
+    vc.reset_state()
+    before = time.time() - 60
+    _apply_keep(_Svc(), "book club moved to the 12th of december", monkeypatch)
+    _apply_keep(_Svc(), "book club moved again, its on the 19th of december now", monkeypatch)
+    assert vc.superseded_by_correction(UID, "User's book club is on the 5th of December", said_at=before) is True
+    assert vc.superseded_by_correction(UID, "User's book club is on the 12th of December", said_at=before) is True
+    assert vc.superseded_by_correction(UID, "User's book club is on the 19th of December", said_at=before) is False   # latest wins
+    vc.reset_state()

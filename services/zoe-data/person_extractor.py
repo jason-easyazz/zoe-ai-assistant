@@ -773,7 +773,15 @@ async def _ingest_to_mempalace(
             return None
         from memory_service import get_memory_service
         svc = get_memory_service()
-        # Entity-keyed reconciliation FIRST (QA follow-up 2026-07-13): compact
+        # The KIND guard before ANY reconcile or supersede (QA round 9 review: the entity-keyed supersede below returned before the
+        # kind refusal, so a stored son could still be edited into a cat). memory_quality.kind_guard is the one guard every writer
+        # path calls first; MemoryService.review(edit) / supersede_by re-check it at the write.
+        from memory_quality import kind_guard
+        refused, _kept = await kind_guard(svc, text, user_id)
+        if refused:
+            logger.info("person_extractor: kind refusal cand=%r", text[:60])
+            return None
+        # Entity-keyed reconciliation (QA follow-up 2026-07-13): compact
         # "Name: value" rows ("Delia: March 15") have no parseable attribute, so
         # the text reconcile below can never supersede them. When this fact is
         # linked to a person and has a known kind, look for an existing row of

@@ -1426,6 +1426,12 @@ async def _person_in_graph(user_id: str, name: str) -> bool:
         return False
 
 
+#: THE kind guard every writer path calls FIRST, before any reconcile, supersede or archive keyed by entity or name
+#: (``reconcile_for_ingest`` and ``person_extractor._ingest_to_mempalace``); ``MemoryService.review(edit)`` and ``supersede_by``
+#: re-check the pair they write (``kind_flip``). Pinned by ``tests/test_qa9_memory.py::test_every_writer_path_is_kind_guarded``.
+kind_guard = kind_conflict
+
+
 def guard_existing_by_entity(
     text: str,
     existing: list[tuple[str, str]],
@@ -1504,7 +1510,7 @@ async def reconcile_for_ingest(
     :func:`memory_metrics.record_reconcile_failopen` so the duplicate-factory
     risk is watchable; the decision itself is unchanged."""
     t0 = time.monotonic()
-    refuse, kept = await kind_conflict(svc, text, user_id)
+    refuse, kept = await kind_guard(svc, text, user_id)
     if refuse:
         # the candidate re-types a stored subject (person <-> animal), or the check could not be made: nothing is written
         return "refuse", kept
