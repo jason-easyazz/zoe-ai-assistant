@@ -81,7 +81,7 @@ def test_every_writer_source_in_the_codebase_is_classified():
     # memory_authority's automatic classes are the second enumeration (it names writers no
     # call site spells as a literal): all must honour the opt-out unless exempted here.
     automatic = (ma.DETERMINISTIC_USER_WRITERS | ma.MODEL_FROM_TURN_WRITERS | ma.TRANSCRIPT_WRITERS
-                 | ma.VOICE_LANE_WRITERS | ma.INFERRED_ONLY_AUTOMATIC | ma.LLM_WRITERS)
+                 | ma.VOICE_LANE_WRITERS | ma.INFERRED_ONLY_AUTOMATIC | ma.LLM_WRITERS | ma.EXTERNAL_WRITERS)
     exempt = EXPLICIT_OR_NON_AUTOMATIC | {
         "zoe_agent",            # a wrapper label; its real writes go out as chat_regex / chat_regex_fallback
         "decay_sweep", "implicit_supersede", "hindsight_retain_candidate", "person_extractor_llm",

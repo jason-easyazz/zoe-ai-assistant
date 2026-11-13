@@ -54,6 +54,9 @@ MEMORY_OPT_OUT_SOURCES = frozenset({
     "voice",                # person_extractor / person_extractor_llm over a spoken turn
     "chat_regex_fallback",  # zoe_agent's fallback regex writer
     "idle_consolidation",   # memory_idle_consolidation
+    # A connected account's provider (feed plumbing Stage 0; memory_authority.EXTERNAL_WRITERS): nothing the member said, so an
+    # opted-out member gets nothing stored from any feed - no row, no candidate, no pointer.
+    "external_source",
 })
 
 _UNSET = object()
