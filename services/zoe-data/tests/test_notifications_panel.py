@@ -472,3 +472,25 @@ def test_whats_up_collects_notifications_with_the_selector_off_and_controls(env,
     monkeypatch.setenv("ZOE_PROACTIVE_SELECTOR", "1")
     monkeypatch.setattr(pl, "pull", declined)
     assert run(fast_tiers._pull_tier("what's up", MEMBER, "s1", "voice", ctx)) is None
+
+
+# -- the second channel for "owner alerting is broken" ---------------------------------------------------------------------------
+def test_broken_alerting_reaches_the_owner_on_the_panel_once_and_control(env, monkeypatch):
+    """An alert about the Telegram credential failing cannot travel over Telegram: while the shared helper records alerting as
+    broken, an OWNER gets one panel notification per broken spell. Negative controls: a non-owner member gets none; nothing is
+    created once alerting is healthy."""
+    import kv_miss_alert
+
+    env.conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (MEMBER,))
+    broken = {"since": 1_790_000_000.0, "last": 1_790_000_100.0, "reason": "auth", "count": 3}
+    monkeypatch.setattr(kv_miss_alert, "alerting_broken", lambda: broken)
+    assert run(ns.notify_alerting_broken(MEMBER))
+    assert run(ns.notify_alerting_broken(MEMBER)) is None                     # same spell: one row
+    assert run(ns.notify_alerting_broken(OTHER)) is None                      # not an owner
+    rows = env.rows("SELECT user_id, type, title, message FROM notifications")
+    assert len(rows) == 1 and rows[0][0] == MEMBER and rows[0][1] == ns.ALERTING_TYPE
+    assert "Telegram" in rows[0][3]
+    monkeypatch.setattr(kv_miss_alert, "alerting_broken", lambda: None)     # healthy: nothing
+    env.conn.execute("DELETE FROM notifications")
+    assert run(ns.notify_alerting_broken(MEMBER)) is None
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0

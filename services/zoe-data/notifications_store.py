@@ -186,6 +186,45 @@ async def refresh(user_id: str) -> None:
         return
     _REFRESHED[uid] = now
     await notify_wearer_proposals(uid)
+    await notify_alerting_broken(uid)
+
+
+ALERTING_TYPE = "ops_alerting_broken"
+ALERTING_TITLE = "Phone alerts are not getting through"
+ALERTING_MESSAGE = {
+    "auth": "Telegram is refusing the sign-in of Zoe's alert bot, so Zoe cannot warn your phone about problems. "
+            "The alerts are being kept and will be sent once the bot's token is fixed.",
+    "config": "Zoe's alert bot has no token or no recipient set, so Zoe cannot warn your phone about problems. "
+              "The alerts are being kept and will be sent once it is set up.",
+}
+_OWNER_ROLES = ("admin", "family-admin")
+
+
+async def notify_alerting_broken(user_id: str) -> Optional[str]:
+    """The SECOND channel for "owner alerting is broken": an alert about the Telegram credential failing cannot travel
+    over Telegram, so while the shared owner-alert helper (``scripts/maintenance/zoe_crash_loop_watch.deliver``) records
+    its broken state, an OWNER (admin role) gets ONE notification per broken spell (dedupe = the spell's start), on the
+    panel orb / card and the end-of-turn line. Fixed text, no household content. Never raises."""
+    uid = _account(user_id)
+    if not enabled() or uid is None:
+        return None
+    try:
+        import kv_miss_alert
+
+        broken = kv_miss_alert.alerting_broken()
+        if not broken:
+            return None
+        async with _db() as db:
+            cur = await db.execute("SELECT role FROM users WHERE id = ?", (uid,))
+            row = await cur.fetchone()
+        if row is None or str(row[0] or "") not in _OWNER_ROLES:
+            return None
+        reason = "auth" if broken.get("reason") == "auth" else "config"
+        return await create(uid, ALERTING_TYPE, ALERTING_TITLE, ALERTING_MESSAGE[reason], {"reason": reason},
+                            dedupe_id=str(int(float(broken.get("since") or 0))))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("NOTIFY event=failed type=%s (%s)", ALERTING_TYPE, exc.__class__.__name__)
+        return None
 
 
 async def _wearer_status(uid: str) -> Optional[dict]:

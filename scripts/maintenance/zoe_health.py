@@ -16,8 +16,10 @@ are skipped, not failed.
 
 Alerting is on TRANSITIONS only: a check must fail on two consecutive runs before it alerts (one restart window is
 not an outage), then stays quiet until it recovers, which sends one "recovered" line. State:
-``~/.local/state/zoe-health/state.json``. The alert goes over Telegram through the crash-loop watcher's sender -
-a process separate from zoe-data, so it can report zoe-data's death.
+``~/.local/state/zoe-health/state.json``. The alert goes over Telegram through the shared owner-alert helper
+(``zoe_crash_loop_watch.deliver``: retries + a durable outbox) - a process separate from zoe-data, so it can report
+zoe-data's death. The "owner alerts" check is red while that helper records alerting as broken (Telegram refused the
+credential, or no recipient), so the health log says so even though its own Telegram line cannot get through.
 
     python3 scripts/maintenance/zoe_health.py            # one run (the unit)
     python3 scripts/maintenance/zoe_health.py --dry-run  # probe + print, no state, no alert
@@ -147,6 +149,26 @@ def transitions(checks: list[Check], state: dict) -> tuple[list[str], dict]:
     return lines, new
 
 
+def _ops():
+    spec = importlib.util.spec_from_file_location("_clw", REPO_ROOT / "scripts" / "maintenance" / "zoe_crash_loop_watch.py")
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def alerting_check(broken: "Callable[[], Optional[dict]] | None" = None) -> Check:
+    """Red while owner alerts fail on a credential or a missing setting (the outbox's broken record)."""
+    try:
+        b = (broken or _ops().alerting_broken)()
+    except Exception as exc:  # noqa: BLE001
+        return Check("owner alerts", True, f"unreadable ({type(exc).__name__})")
+    if not b:
+        return Check("owner alerts", True, "ok")
+    since = datetime.fromtimestamp(float(b.get("since") or 0)).isoformat(timespec="minutes")
+    return Check("owner alerts", False, f"BROKEN since {since}: Telegram {b.get('reason', '?')} failure, alerts held in the outbox")
+
+
 def send(lines: list[str]) -> bool:
     """True when the lines were delivered (or there was nothing to send)."""
     if not lines:
@@ -154,12 +176,8 @@ def send(lines: list[str]) -> bool:
     if os.environ.get("ZOE_HEALTH_NO_ALERT"):
         return True
     try:
-        spec = importlib.util.spec_from_file_location("_clw", REPO_ROOT / "scripts" / "maintenance" /
-                                                      "zoe_crash_loop_watch.py")
-        mod = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(mod)
-        return bool(mod._telegram("Zoe health: " + "; ".join(lines)))
+        outcome, _reason = _ops().deliver("health", "Zoe health: " + "; ".join(lines))
+        return outcome in ("delivered", "uncertain", "queued")   # queued: the shared outbox retries it
     except Exception as exc:  # noqa: BLE001
         print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
         return False
@@ -179,7 +197,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dry-run", action="store_true")
     ns = ap.parse_args(argv)
-    checks = probe()
+    checks = probe() + [alerting_check()]
     stamp = datetime.now().isoformat(timespec="seconds")
     if NIGHT_MARKER.exists():
         print(f"[{stamp}] night window open: spine probes skipped")
