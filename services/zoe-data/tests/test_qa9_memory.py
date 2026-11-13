@@ -105,11 +105,24 @@ def test_the_kind_is_read_from_the_vocabulary_not_the_position(text, want):
     ("User has a cat called Oscar", "User's friend Oscar is a teacher", True),               # the same bare first name
     ("User has a cat called Oscar Wilde", "User's friend Oscar Wilde is a teacher", True),   # the same full name
     ("User has a cat called Oscar", "User's friend Oscar Smith is a teacher", False),        # a surname: a more specific subject
+    ("User has a cat called Oscar Wilde", "User's friend Oscar is a teacher", True),          # bare "Oscar" IS Oscar Wilde (graph)
+    ("User's son Fenn Smith is 7 years old", "Fenn is a cat", True),                         # the round-9 bug, with a surname
+    ("User's son Fenn Smith is 7 years old", "Fenn Jones is a cat", False),
 ])
 def test_names_compare_whole(stored, incoming, refused):
     svc = _Svc(stored, hits=set())
     assert (run(mq.reconcile_for_ingest(svc, incoming, UID))[0] == "refuse") is refused
     assert bool(mq.kind_flip(incoming, stored)) is refused
+
+
+@pytest.mark.parametrize("text, refused", [
+    ("Fenn is a dog trainer", False), ("Fenn is a cat lover", False), ("Fenn is a horse vet", False), ("Fenn is a dog-walker", False),
+    ("Fenn is a cat", True), ("Fenn is a cat and is six", True), ("Fenn is a lovely cat called Fenn", True),
+])
+def test_an_animal_word_that_modifies_a_noun_is_not_a_kind(text, refused):
+    assert (mq.subject_kinds(text) == {"fenn": {"animal"}}) is refused
+    svc = _Svc("User's son is named Fenn", hits=set())
+    assert (run(mq.reconcile_for_ingest(svc, text, UID))[0] == "refuse") is refused
 
 
 def test_a_kind_after_an_adjective_or_before_and_is_still_refused():
@@ -320,6 +333,40 @@ def test_a_failed_offer_withdrawal_never_confirms_and_the_repeat_finishes(monkey
     res = run(forget_topic.forget(svc, UID, "my sister"))
     assert not res.store_down and res.turns_retracted == 1
     assert [o["id"] for o in db.offers] == ["o3"]
+
+
+def test_after_a_restart_the_persisted_index_names_the_offer(monkeypatch, forget_env):
+    import contextlib
+
+    import exact_words
+    import pending_suggestions
+    import turn_forget
+
+    db = _Db([_offer("o1", "Wynne"), _offer("o2", "Tamsin")])         # name-only offers: the topic word is not in them
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield db
+
+    monkeypatch.setattr(pending_suggestions, "get_db_ctx", ctx)
+    turn_forget.reset()                                                 # a restart: no recent turn in process
+    backend = exact_words.get_backend()
+    run(backend.add(UID, "t1", 1.0, "my sister wynne lives down south", " my sister wynne lives down south ", "chat"))
+    run(backend.add("demo_qa9_member_b", "t2", 1.0, "my sister tamsin lives up north", " my sister tamsin ", "chat"))
+    res = run(forget_topic.forget(_Svc(), UID, "my sister"))
+    assert not res.store_down
+    assert [o["id"] for o in db.offers] == ["o2"]                       # Wynne's offer withdrawn; member B's index changed nothing
+
+
+def test_an_unreadable_index_does_not_confirm_the_forget(monkeypatch, forget_env):
+    import exact_words
+
+    class _Down(exact_words.MemoryBackend):
+        async def rows_matching(self, *_a, **_k):
+            raise RuntimeError("index unreadable")
+
+    exact_words.set_backend(_Down())
+    assert run(forget_topic.forget(_Svc(), UID, "my sister")).store_down
 
 
 def test_a_process_with_no_database_holds_no_offers(monkeypatch):

@@ -1294,9 +1294,8 @@ def _kind_of(word: str) -> Optional[str]:
     return "animal" if w in ANIMAL_WORDS else "person" if w in PERSON_WORDS else None
 
 
-#: a name as written: a first name, or a first name and surname. Kept WHOLE: a cat called "Oscar Wilde" is not a person "Oscar
-#: Smith" (QA round 9 review), and a bare "Oscar" is not "Oscar Smith" either (a surname names a more specific subject, the way the
-#: people graph never resolves "Oscar Smith" to a stored bare "Oscar"). Two bare first names still compare equal.
+#: a name as written: a first name, or a first name and surname, kept whole; ``kind_flip`` compares them the way the people graph
+#: resolves names (a cat "Oscar Wilde" is not a person "Oscar Smith"; a bare "Fenn" is a stored "Fenn Smith").
 _FULL_NAME = r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
 
 
@@ -1314,18 +1313,46 @@ def subject_kinds(text: str) -> dict:
     for m in re.finditer(rf"\b({_FULL_NAME})(?i:(?:\s+is|\s+was|,)\s+(?:(?:the\s+)?user['’]s|their|his|her|a|an|my|our|the)\s+"
                          rf"(?:[a-z]+\s+){{0,2}}?({_KIND_ALT})s?)\b", t):
         k = _kind_of(m.group(2))
+        if k == "animal" and _modifies_a_noun(t[m.end():]):
+            continue                    # "Fenn is a dog trainer": the animal word describes the next noun, Fenn is not a dog
         if k and m.group(1).lower() not in ("user", "the"):
             out.setdefault(m.group(1).lower(), set()).add(k)
     return out
 
 
+#: what may FOLLOW an animal word that is the kind itself ("a cat", "a cat and ...", "a cat called Pip"); any other word after it is
+#: the noun it modifies ("a dog trainer", "a cat lover", "a horse vet")
+_KIND_ENDERS = frozenset({"and", "with", "called", "named", "who", "that", "which", "but", "is", "was", "of", "from", "in", "at",
+                          "now", "too", "though", "since", "for", "aged", "so", "or"})
+#: backstop: modified nouns that end a phrase in a hyphenated or run-on form the structural rule cannot see
+_MODIFIED_NOUNS = frozenset({"trainer", "walker", "groomer", "sitter", "breeder", "vet", "lover", "person", "owner", "show", "food",
+                             "park", "whisperer", "handler", "rescue", "shelter"})
+
+
+def _modifies_a_noun(rest: str) -> bool:
+    """Does the text right after an animal word make it a MODIFIER ("dog trainer", "dog-walker") rather than the kind? Pure."""
+    m = re.match(r"\s*(-\s*)?([A-Za-z]+)", rest or "")
+    if not m or (not m.group(1) and re.match(r"\s*[.,;:!?)]", rest)):
+        return False
+    word = m.group(2).lower()
+    if m.group(1) or word in _MODIFIED_NOUNS:
+        return True
+    return word not in _KIND_ENDERS and not m.group(2)[:1].isupper()
+
+
 def kind_flip(candidate: str, existing: str) -> Optional[str]:
     """The name a candidate gives a DIFFERENT kind (person vs animal) from the one ``existing`` gives it, else None. Names compare
-    WHOLE (``_FULL_NAME``): first name to first name, full name to full name. Pure."""
+    the way the people graph resolves them (``people_graph.match_tier``): the same name, or a bare first name against a stored
+    full name it is the first token of ("Fenn is a cat" vs "User's son Fenn Smith": the graph reads "Fenn" as Fenn Smith). A full
+    name never matches a stored bare one ("Oscar Smith" is not the cat "Oscar"), nor a different full name. Pure."""
     a, b = subject_kinds(candidate), subject_kinds(existing)
     for name, kinds in a.items():
-        if len(kinds) == 1 and len(b.get(name, ())) == 1 and kinds != b[name]:
-            return name
+        if len(kinds) != 1:
+            continue
+        for stored, skinds in b.items():
+            same = stored == name or (" " not in name and stored.split()[0] == name)
+            if same and len(skinds) == 1 and kinds != skinds:
+                return name
     return None
 
 

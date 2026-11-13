@@ -178,6 +178,20 @@ async def _owned_rows(svc: Any, user_id: str, groups: list) -> list:
     return out
 
 
+async def _index_hits(user_id: str, groups: list) -> dict:
+    """``{turn_id: text}``: the member's PERSISTED exact-words entries that hold the whole topic (the index outlives a restart
+    and the in-process recent turns). RAISES when the index cannot be read."""
+    import exact_words
+
+    backend = exact_words.get_backend()
+    hits: dict = {}
+    for needle in sorted(min(groups, key=len)):     # the narrowest group: "heart", not the eight spellings of "mum"
+        for tid, text in await backend.rows_matching(user_id, needle):
+            if row_matches(groups, text or ""):
+                hits[tid] = text
+    return hits
+
+
 async def _erase_words(user_id: str, groups: list) -> tuple:
     """The owner's words about the topic: the in-process recent turns (retracted, so a capture in flight never lands) and the
     exact-words index entries (deleted), plus the saved transcript turn of each (flagged off the record). RAISES when the index
@@ -194,13 +208,8 @@ async def _erase_words(user_id: str, groups: list) -> tuple:
         turn_forget.mark_forgotten(user_id, turn)
         retracted += 1
     erased = 0
-    group = min(groups, key=len)                    # the narrowest group: "heart", not the eight spellings of "mum"
     backend = exact_words.get_backend()
-    hits: dict = {}
-    for needle in sorted(group):
-        for tid, text in await backend.rows_matching(user_id, needle):
-            if row_matches(groups, text or ""):
-                hits[tid] = text
+    hits = await _index_hits(user_id, groups)
     if hits:
         erased = int(await backend.delete(user_id, list(hits)) or 0)
         for text in hits.values():
@@ -252,7 +261,11 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     # the pending offers FIRST: a failure leaves the forget not confirmed with nothing half-done, so the member's repeat sees the
     # same turns and rows (and so the same names) again
     try:
-        await _withdraw_offers(user_id, groups, said + [getattr(r, "text", "") or "" for r in rows])
+        # the names come from every place the words still are: the recent turns, the rows, and the PERSISTED exact-words index
+        # (after a restart the turn "my sister Bea lives in Hobart" may be nowhere else; QA round 9 review). An unreadable index
+        # raises here: not confirmed.
+        indexed = list((await _index_hits(user_id, groups)).values())
+        await _withdraw_offers(user_id, groups, said + indexed + [getattr(r, "text", "") or "" for r in rows])
     except Exception as exc:  # noqa: BLE001 - not confirmed: an offer about the topic may still be pending
         logger.warning("forget_topic: pending offers not withdrawn (%s) - not confirmed", type(exc).__name__)
         try:        # "I won't bring it up meanwhile": the offer reads (pending_suggestions) withhold what a tombstone names
