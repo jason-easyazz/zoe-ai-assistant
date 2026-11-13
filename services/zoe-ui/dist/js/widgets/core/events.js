@@ -54,7 +54,7 @@ class EventsWidget extends WidgetModule {
     
     async loadEvents() {
         try {
-            const response = await fetch(`/api/calendar/events?user_id=${this.userId}`);
+            const response = await fetch(`/api/calendar/events`);
             if (response.ok) {
                 const data = await response.json();
                 const events = Array.isArray(data) ? data : data.events || [];

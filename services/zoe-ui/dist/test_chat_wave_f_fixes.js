@@ -13,10 +13,8 @@
  *  3. claimPending() dispatched 'proactive_session' and rewrote ?session=, but
  *     nothing listened and nothing read the param → tapping a proactive
  *     notification landed on a blank chat.
- *  4. agent-activity.js guarded on `!this._container`, which does not catch a
- *     DETACHED node. chat.html's loadSessions() replaces sessionsList.innerHTML
- *     at three sites, orphaning the feed while the reference stayed truthy —
- *     so it rendered into a detached node forever.
+ *  4. (retired 2026-11-13) the agent-activity feed polled the retired A2A task
+ *     list; the feed and its script are gone, and chat.html must not load it.
  *
  * Run: node services/zoe-ui/dist/test_chat_wave_f_fixes.js
  */
@@ -27,7 +25,6 @@ const vm = require('vm');
 const assert = require('assert');
 
 const html = fs.readFileSync(path.join(__dirname, 'chat.html'), 'utf8');
-const activitySrc = fs.readFileSync(path.join(__dirname, 'js', 'agent-activity.js'), 'utf8');
 
 /** Drop // and block comments so assertions match CODE, not prose about code. */
 function stripComments(src) {
@@ -107,58 +104,11 @@ check('proactive_session has a listener that opens the session', () => {
         'loadSessionMessages alone leaves the session inactive — the next reply would use a stale id');
 });
 
-// ── 4 — behavioural, not textual ─────────────────────────────────────────
-check('agent-activity re-attaches after its container is detached (live DOM sim)', () => {
-    // Minimal DOM good enough to model prepend + innerHTML replacement.
-    function mkNode(id) {
-        return {
-            id, children: [], isConnected: true,
-            prepend(c) { c.isConnected = true; this.children.unshift(c); },
-            set innerHTML(_v) { this.children.forEach(c => { c.isConnected = false; }); this.children = []; },
-            get innerHTML() { return ''; },
-            addEventListener() {}, querySelector() { return null; }
-        };
-    }
-    const sessionsList = mkNode('sessionsList');
-    const head = mkNode('head');
-    head.appendChild = () => {};          // _injectStyles() uses document.head
-    const sandbox = {
-        console: { log() {}, warn() {}, error() {}, debug() {} },
-        document: {
-            getElementById: (id) => (id === 'sessionsList' ? sessionsList : null),
-            createElement: () => mkNode('agentActivitySection'),
-            addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
-            head,
-            // 'loading' so the module registers a DOMContentLoaded listener
-            // instead of auto-running init() (which starts polling timers).
-            readyState: 'loading'
-        },
-        setInterval: () => 0, clearInterval() {}, setTimeout: () => 0, clearTimeout() {},
-        fetch: async () => ({ ok: true, json: async () => ({ tasks: [] }) }),
-        Promise, JSON, Date, Math, Array, Object, String, Number, Boolean, Error
-    };
-    sandbox.window = sandbox; sandbox.globalThis = sandbox;
-    vm.createContext(sandbox);
-    vm.runInContext(activitySrc, sandbox, { filename: 'agent-activity.js' });
-
-    // The module self-boots: `window.agentActivity = new AgentActivity()`.
-    const inst = sandbox.agentActivity;
-    assert.ok(inst, 'agent-activity must expose window.agentActivity');
-    assert.ok(typeof inst._ensureContainer === 'function' && typeof inst._render === 'function',
-        'expected _ensureContainer/_render on the instance');
-
-    inst._tasks = [];
-    inst._ensureContainer();
-    const first = inst._container;
-    assert.ok(first && first.isConnected, 'container must be attached initially');
-
-    // chat.html's loadSessions() does exactly this, milliseconds after boot.
-    sessionsList.innerHTML = '<div>sessions</div>';
-    assert.strictEqual(first.isConnected, false, 'the wipe must detach our node');
-
-    inst._render();
-    assert.ok(inst._container && inst._container.isConnected,
-        'after a wipe, _render must re-attach — otherwise the feed renders into an orphan forever');
+// ── 4 — the retired A2A task feed is gone ─────────────────────────────────
+check('chat.html no longer loads the retired agent-activity feed (A2A task polling)', () => {
+    assert.ok(!/agent-activity\.js/.test(html), 'chat.html still loads js/agent-activity.js');
+    assert.ok(!html.includes('/api/agent/tasks'), 'chat.html still calls the retired A2A task list');
+    assert.ok(!fs.existsSync(path.join(__dirname, 'js', 'agent-activity.js')), 'js/agent-activity.js still shipped');
 });
 
 console.log(`\n${passed} checks passed`);

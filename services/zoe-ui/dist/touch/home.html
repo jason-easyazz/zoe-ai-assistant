@@ -5165,6 +5165,8 @@
   // predates /pull answers 404 (still opaque here), so the busy state is only a timeout-bounded cue.
   // `notify_any` alone (the guest kiosk) lights the dot but proves no one: /pull carries no voice, so the server would refuse the
   // guest. That press opens the mic instead - a verified voice asking "what's up?" opens the member's own short session.
+  // The same holds for a member whose dot is lit by notifications alone (the proactive selector reports nothing): /pull would be
+  // refused, so that press opens the verified listen too. Only a selector-reported item uses /pull.
   var _pullT=null,_dotVoiceOnly=false;
   function orbPull(){
     if(_convLive||_orbBusy)return;
@@ -5202,7 +5204,8 @@
       zfetch('/api/proactive/inbox',{headers:{'X-Session-ID':s},credentials:'include',signal:reqSig(8000)})
         .then(function(r){return r.ok?r.json():null;})
         .then(function(d){var mine=!!(d&&!d.quiet&&((d.enabled&&d.count>0)||d.notify>0));
-          paint(mine||!!(d&&!d.quiet&&d.notify_any===true),!!(d&&d.review===true&&!d.quiet),!mine);})
+          var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);
+          paint(mine||!!(d&&!d.quiet&&d.notify_any===true),!!(d&&d.review===true&&!d.quiet),!pullable);})
         .catch(function(){});
     }
     poll();setInterval(poll,60000);

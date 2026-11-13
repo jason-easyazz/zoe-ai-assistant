@@ -105,6 +105,28 @@ _TOKEN_RE = re.compile(r"\d+(?:\.\d+)?|\.\d+|[a-z]+|[-+*/%^]|\S")
 _DIGITS_RE = re.compile(r"\d+(?:\.\d+)?|\.\d+")
 
 
+_UNIT_RE = re.compile(r"(?<=\d)\s*(?:dollars?|bucks|cents|volts?|amps?|watts?|kms?|kilomet(?:re|er)s?|met(?:re|er)s?|kgs?|kilos?"
+                      r"|grams?|lit(?:re|er)s?)\b")
+_ADDITIVE_RE = re.compile(r"\b(?:plus|minus|add|added to|less|subtract|take away)\b|[-+]")
+_UNIT_KINDS = (("dollar", "dollar"), ("buck", "dollar"), ("cent", "cent"), ("volt", "volt"), ("amp", "amp"), ("watt", "watt"),
+               ("km", "km"), ("kilomet", "km"), ("met", "metre"), ("kg", "kg"), ("kilo", "kg"), ("gram", "gram"), ("lit", "litre"))
+
+
+_UNIT_FAMILIES = (frozenset({"dollar", "cent"}), frozenset({"km", "metre"}), frozenset({"kg", "gram"}))
+
+
+def _unit_kind(word: str) -> str:
+    w = word.strip()
+    return next((kind for prefix, kind in _UNIT_KINDS if w.startswith(prefix)), w)
+
+
+_PERIOD = r"(hour|day|night|week|fortnight|month|year)"
+_QTY = r"(\d+(?:\.\d+)?(?: (?:hundred|thousand|million))?)"
+#: "450 a week for 10 weeks" -> "450 * 10": a rate over a count of the SAME period. Mismatched periods are left alone (and so reject).
+_RATE_RE = re.compile(_QTY + r" (?:a|per|each|every) " + _PERIOD + r" for " + _QTY + r" (?P=per)s?\b".replace("(?P=per)", r"\2"))
+_HAS_OP_RE = re.compile(r"\b(?:plus|minus|times|multiplied by|divided by)\b|[-+*/]")
+
+
 class _Reject(Exception):
     """Not (valid) arithmetic - the parser gave up."""
 
@@ -136,6 +158,20 @@ def _prep(text: str) -> str:
     s = re.sub(r"(?<=[a-z])-(?=[a-z])", " ", s)           # twenty-one
     s = re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "", s)         # 1,000 -> 1000
     s = s.replace(",", " ")
+    # Everyday sums carry money slang and units ("12 grand", "$450", "240 volts times 10 amps"; QA round 8: the brain answered
+    # 12000 + 450 x 10 as 167,500). A closed unit list after a DIGIT is dropped; any other stray word still rejects the utterance.
+    dollar_sign = bool(re.search(r"\$\s*(?=\d)", s))
+    s = re.sub(r"\$\s*(?=\d)", "", s)
+    s = re.sub(r"(?<=\d)\s*k\b", " thousand", s)
+    s = re.sub(r"\bgrand\b", "thousand", s)
+    # Adding or subtracting DIFFERENT units is not a sum this can do ("2 dollars plus 50 cents" is not 52, "5 km plus 300 metres" is
+    # not 305): the units stay in, the stray word rejects the utterance and the brain answers. A wrong fixed answer is worse than none.
+    # Two sizes of the SAME measure (dollars and cents, km and metres, kg and grams) are wrong under any operator: "5 km divided by
+    # 300 metres" is not 0.0167 and "2 dollars times 50 cents" is not 100. Different measures multiply fine ("240 volts times 10 amps").
+    kinds = {_unit_kind(m.group(0)) for m in _UNIT_RE.finditer(s)} | ({"dollar"} if dollar_sign else set())
+    same_measure = any(len(kinds & fam) > 1 for fam in _UNIT_FAMILIES)
+    if not (same_measure or (len(kinds) > 1 and _ADDITIVE_RE.search(s))):
+        s = _UNIT_RE.sub("", s)
     return re.sub(r"\s+", " ", s).strip()
 
 
@@ -468,6 +504,8 @@ def _parse(text: str, prev: Optional[float]) -> Optional[Calc]:
     s = _TAIL_RE.sub("", s, count=1).strip()
     if not s:
         return None
+    if asked or _HAS_OP_RE.search(s):       # a bare "450 a week for 10 weeks" is an answer to something, not a sum to do
+        s = _RATE_RE.sub(r"\1 * \3", s)
     toks = _map_ops(_tokens(s))
     if not toks or len(toks) > _MAX_TOKENS:
         return None
