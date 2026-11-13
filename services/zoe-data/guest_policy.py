@@ -24,7 +24,6 @@ PUBLIC_HOUSEHOLD_INTENTS: frozenset[str] = frozenset({
     "date_query",
     "time_planning_clarification",
     "weather",
-    "recipe_search",
     "timer_create",
     "general_knowledge",
     "greeting",
@@ -63,11 +62,10 @@ USER_SCOPED_INTENTS: frozenset[str] = frozenset({
     "people_create", "people_search", "people_update",
     "memory_forget_last", "memory_forget_entity", "memory_remember", "memory_recall",
     "daily_briefing", "agenda_show",
-    "build_widget", "build_page", "extend_capability", "ha_full_setup",
+    "extend_capability",
     # Panel/board admin intents — need identity.
     "board_heal", "board_status", "evolution_proposals_review",
-    "self_improve", "portrait_refresh", "portrait_reveal",
-    "a2a_federation_status",
+    "portrait_refresh", "portrait_reveal",
     # Music with personal library.
     "music_setup",
     # Panel setup/auth flows.

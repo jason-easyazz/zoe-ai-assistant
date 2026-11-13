@@ -1,7 +1,8 @@
 """Distress hand-off: a deterministic floor for self-harm, abuse and danger language (governance note section 7).
 
 On such a turn the BRAIN IS NOT ASKED: Zoe speaks one fixed, warm, two-sentence pointer to a human (the household contact and the local crisis line), the turn is kept
-out of every memory writer, and the household contact is told once with no words from the turn. No humour, no diagnosis, no persona.
+out of every memory writer, and the household contact (when one is configured) is told once with no words from the turn. With no contact configured nobody
+is told: the reply never claims otherwise, and each such hand-off logs one ``DISTRESS_NO_CONTACT`` WARNING. No humour, no diagnosis, no persona.
 
 LANGUAGE INDEPENDENCE BY CONSTRUCTION (blueprint 2.9): this file reads no word of any language. Cues, guards and reply texts live in ``lexicons_data/<lang>.json``
 (``distress``; en + es). A cue is a closed-vocabulary sequence (named ``groups`` joined by a closed ``fillers`` list: "I want my mum to die" is not "I want to die") or a
@@ -289,6 +290,10 @@ async def handle(text: str, user_id: str, *, dry: bool = False) -> Optional[str]
         if not dry:
             import memory_provenance
             memory_provenance.mark_turn(uid, text)
+            cfg = config()
+            if v.tier == "handoff" and not cfg.contact_user and cfg.notify != "off":
+                # Nobody can be told: say so in the log every time, never silently (the reply never claims a notice either).
+                logger.warning("DISTRESS_NO_CONTACT a hand-off fired and nobody was told: ZOE_DISTRESS_CONTACT_USER is not set")
             asyncio.ensure_future(_notify(uid, v, minor))
         return build_reply(v, minor=minor, user_id=uid)
     except Exception as exc:  # noqa: BLE001

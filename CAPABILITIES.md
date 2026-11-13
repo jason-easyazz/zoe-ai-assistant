@@ -10,7 +10,6 @@
 | 2 | OpenClaw | Gemma 4 E4B-QAT + browser | :18789 | available fallback, not default route |
 
 ## MCP Tools
-- `a2a_delegate`
 - `ambient_search`
 - `browser_compare_backends`
 - `browser_get_capabilities`

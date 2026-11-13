@@ -107,6 +107,32 @@ def test_refine_only_ever_moves_away_from_household():
     assert tc.refine_for_user("ci_x") == "probe"              # an established non-household class is kept
 
 
+@pytest.mark.parametrize("sid,expected", [
+    ("qa7-ab12cd34", "harness"), ("qa-s1", "harness"), ("QA12_x", "harness"), ("demo-run-1", "harness"),
+    ("bench_3", "harness"), ("bar-0007", "harness"), ("probe-route-1", "probe"), ("test_sess_1", "ci"), ("e2e-flow", "ci"),
+])
+def test_a_harness_minted_session_demotes_a_guest_turn(sid, expected):
+    """Gap audit 2026-11-13: a QA run under the shared ``guest`` account in ``qa7-`` sessions was counted as household (60 of
+    290 turns). NEGATIVE CONTROL: the same turn in a session the household surfaces mint stays household."""
+    tc.bind(tc.HOUSEHOLD)
+    assert tc.class_for_user("guest") is None                 # the user id alone cannot catch it
+    assert tc.refine_for_session(sid) == expected
+
+
+@pytest.mark.parametrize("sid", ["voice-panel-kitchen-1", "voice-ab12", "ask_1a2b3c4d", "web_9f8e7d6c", "qa", "quality-1",
+                                 "qatar-trip", "demolition_plans", "barbecue-chat", "benchmarks", "", None])
+def test_household_session_shapes_stay_household(sid):
+    tc.bind(tc.HOUSEHOLD)
+    assert tc.class_for_session(sid) is None
+    assert tc.refine_for_session(sid) == "household"
+
+
+def test_a_session_never_promotes_a_non_household_turn():
+    tc.bind(tc.PROBE)
+    assert tc.refine_for_session("ask_1a2b3c4d") == "probe"
+    assert tc.refine_for_session("qa7-x") == "probe"
+
+
 # ── the request path: middleware binds, auth refines ─────────────────────────────────────────────────────
 
 
@@ -332,6 +358,55 @@ def test_save_message_stamps_the_server_class_whatever_the_client_sent(monkeypat
     asyncio.run(go())
     insert = next(p for sql, p in writes if "INSERT INTO chat_messages" in sql)
     assert _json.loads(insert[4]) == expected
+
+
+def test_save_message_in_a_qa_session_is_not_household(monkeypatch):
+    """A guest turn saved into a ``qa7-`` session is stamped harness; the same turn in an ``ask_`` session stays household."""
+    import json as _json
+
+    from routers import chat as chat_router
+
+    writes = []
+
+    class _Db:
+        async def execute(self, sql, params=()):
+            writes.append((sql, params))
+
+        async def execute_fetchall(self, sql, params=()):
+            return [{"id": "x"}] if "SELECT id FROM chat_sessions" in sql else []
+
+        async def commit(self):
+            pass
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Db()
+
+        async def __aexit__(self, *a):
+            return False
+
+    async def _touch(*a, **k):
+        return None
+
+    class _Req:
+        async def json(self):
+            return {"role": "user", "content": "hi"}
+
+    monkeypatch.setattr(chat_router, "get_db_ctx", lambda: _Ctx())
+    monkeypatch.setattr(chat_router, "_touch_chat_session", _touch)
+
+    def stamped(sid):
+        writes.clear()
+
+        async def go():
+            tc.bind(tc.HOUSEHOLD)
+            await chat_router.save_message(sid, _Req(), {"user_id": "guest"})
+        asyncio.run(go())
+        insert = next(p for sql, p in writes if "INSERT INTO chat_messages" in sql)
+        return _json.loads(insert[4])["traffic_class"]
+
+    assert stamped("qa7-ab12cd34") == "harness"
+    assert stamped("ask_1a2b3c4d") == "household"
 
 
 # ── the replay's between-clip yield (cross-review: a panel still busy after the wait must abort, not proceed) ──

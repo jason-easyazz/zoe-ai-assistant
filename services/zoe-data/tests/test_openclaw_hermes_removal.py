@@ -42,6 +42,8 @@ def _src(rel: str) -> str:
         "routers.openclaw", "openclaw_manager", "proactive.triggers.openclaw_trigger",
         # slice 2: the chat-side OpenClaw / Hermes clients
         "openclaw_ws", "zoe_acp_client", "chat_hermes_stream", "hermes_http",
+        # gap audit 2026-11-13: the peer-agent registry and its A2A delegation client (their only peers were these two)
+        "a2a_client", "zoe_agent_registry",
     ],
 )
 def test_deleted_modules_do_not_exist(module: str):
@@ -90,7 +92,6 @@ _SKIP_FILES = ("services/zoe-data/tests/test_openclaw_hermes_removal.py",)
 # tolerated. The scan also fails when an entry no longer hits, so this list can only shrink.
 _ALLOWED = {
     "scripts/maintenance/zoe_ground_truth.sh": "inverse check: reports if a Hermes gateway is unexpectedly LISTENING on :8642 (ss, no connect)",
-    "services/zoe-data/agents_registry.yml": "legacy peer-agent registry: /agent/registry lists base_url but never dials it (status comes from _RUNTIME_HEALTH, which no longer holds these agents); follow-up: drop the retired entries",
     "services/zoe-data/tests/test_nginx_security_headers_helper.py": "nginx fixture text for the security-header helper",
 }
 
@@ -324,8 +325,24 @@ def test_active_agents_lists_only_the_local_model():
 # -- the A2A card / runtimes report only what exists ----------------------------------------
 
 
+def test_the_peer_agent_registry_and_delegation_surfaces_are_gone():
+    """gap audit 2026-11-13: /api/agent/registry, /delegate, /squad, /peers/{name}/card, /api/system/delegate-sync and the
+    MCP ``a2a_delegate`` tool only ever reached the retired agents. A request for any of them is a 404 now, not a refusal."""
+    import mcp_server
+    from routers import system
+
+    assert not (ROOT / "agents_registry.yml").exists()
+    paths = {getattr(r, "path", "") for r in (*system.router.routes, *system._agent_card_router.routes)}
+    for gone in ("/registry", "/registry/reload", "/delegate", "/squad", "/peers/{name}/card", "/delegate-sync"):
+        assert not any(p.endswith(gone) for p in paths), f"{gone} is back"
+    assert not hasattr(system, "delegate_sync") and not hasattr(system, "_load_registry")
+    assert "a2a_delegate" not in {t["name"] for t in mcp_server.TOOLS}
+    assert not hasattr(mcp_server, "_load_agents_registry")
+
+
 def test_agent_card_and_runtimes_do_not_advertise_retired_tiers():
     src = _src("routers/system.py")
+    assert "/api/agent/registry" not in src
     assert '_RUNTIME_HEALTH.get("hermes"' not in src
     assert '_RUNTIME_HEALTH.get("openclaw"' not in src
     assert '"openclaw_gateway"' not in src

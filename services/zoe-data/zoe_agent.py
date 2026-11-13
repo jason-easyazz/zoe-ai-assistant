@@ -86,13 +86,6 @@ _MAX_TOOL_ITERS   = env_int("ZOE_AGENT_MAX_TOOL_ITERS", 5)
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
 _DDG_SEARCH_HTML_MAX_BYTES = 5 * 1024 * 1024
-# ── Agent registry — loaded from zoe_agent_registry.py ───────────────────────
-from zoe_agent_registry import (  # type: ignore[import]
-    load_agent_registry as _load_agent_registry,
-)
-
-_AGENT_REGISTRY = _load_agent_registry()
-
 
 def _llm_timeout_s(*, voice_mode: bool = False) -> float:
     """Resolve LLM timeout with a tighter ceiling for voice turns."""
@@ -2839,8 +2832,6 @@ _TOOL_CAPS: dict[str, int] = {
     "web_browse":          env_int("ZOE_CAP_WEB_BROWSE", 6000),
     # memory_list: {"items":[...], "count":N, "status":...}
     "memory_list":         env_int("ZOE_CAP_MEMORY_LIST", 0),   # handled specially
-    # a2a_delegate: arbitrary peer JSON
-    "a2a_delegate":        env_int("ZOE_CAP_A2A_DELEGATE", 3000),
     # zoe_self_capabilities: service/widget/page/skill lists
     "zoe_self_capabilities": env_int("ZOE_CAP_SELF_CAPS", 2000),
 }

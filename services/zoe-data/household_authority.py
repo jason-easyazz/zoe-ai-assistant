@@ -300,7 +300,7 @@ async def lookup_role(user_id: Optional[str]) -> str:
 
 
 def mode() -> str:
-    """``ZOE_PROBLEM_LOOP``: ``off`` (default) | ``shadow`` (log-only authority at dispatch) | ``on`` (shadow + the loop)."""
+    """``ZOE_PROBLEM_LOOP``: ``off`` (default) | ``shadow`` (log-only authority at dispatch) | ``on`` (the same as shadow: the multi-step problem loop it once also enabled was never wired and was deleted, gap audit 2026-11-13)."""
     try:
         from typed_env import flag
 

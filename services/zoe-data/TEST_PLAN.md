@@ -32,7 +32,6 @@
 | O6 | Cron | "Set a daily reminder at 8am" | Cron job created |
 | O7 | Memory write | "Remember that Charlie is our dog" | Updates USER.md |
 | O8 | Memory recall (cross-session) | Reset session, ask "What's our dog's name?" | Recalls Charlie |
-| O9 | Exec (allowed) | "Run mcporter-safe call zoe-data.calendar_list_events" | Returns data |
 | O10 | Exec (blocked) | "Run rm -rf /" | Denied by allowlist |
 
 ## WebSocket Push

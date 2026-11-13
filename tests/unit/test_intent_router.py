@@ -42,7 +42,7 @@ def _build_stubs() -> dict[str, types.ModuleType]:
         "multica_client": mod("multica_client", MULClient=mock.MagicMock()),
         "background_runner": mod("background_runner", enqueue_background_task=mock.AsyncMock()),
     }
-    for name in ["agents_registry", "a2a_client", "evolution_notice", "memory_digest", "agent_sync"]:
+    for name in ["evolution_notice", "memory_digest", "agent_sync"]:
         stubs[name] = mod(name)
     return stubs
 
@@ -101,10 +101,10 @@ def _intent_name(ir_module, text: str) -> str | None:
         return None
 
 
-# ── A2A federation intent ─────────────────────────────────────────────────────
+# ── A2A federation intent: retired with the peer agents (gap audit 2026-11-13) ──
 
-class TestA2AIntent:
-    POSITIVE = [
+class TestA2AIntentIsGone:
+    MESSAGES = [
         "show me the agent federation status",
         "what is the a2a status",
         "federation health check",
@@ -112,21 +112,10 @@ class TestA2AIntent:
         "list connected agents",
         "are hermes and openclaw online",
     ]
-    NEGATIVE = [
-        "play some music",
-        "what is the weather",
-        "remind me to call mum",
-    ]
 
-    def test_positive_cases(self, ir):
-        for msg in self.POSITIVE:
-            name = _intent_name(ir, msg)
-            assert name == "a2a_federation_status", f"Expected a2a_federation_status for: {msg!r}, got: {name!r}"
-
-    def test_negative_cases(self, ir):
-        for msg in self.NEGATIVE:
-            name = _intent_name(ir, msg)
-            assert name != "a2a_federation_status", f"False positive a2a_federation_status for: {msg!r}"
+    def test_no_federation_intent_is_detected(self, ir):
+        for msg in self.MESSAGES:
+            assert _intent_name(ir, msg) != "a2a_federation_status", msg
 
 
 # ── Multica board intent ──────────────────────────────────────────────────────
@@ -236,17 +225,11 @@ class TestMulticaRoutedIntents:
     """Verify that intents used in the Multica board routing list exist."""
     EXPECTED_MULTICA_INTENTS = [
         "extend_capability",
-        "self_improve",
-        "build_widget",
-        "build_page",
     ]
 
     def test_intents_are_classified(self, ir):
         messages = {
             "extend_capability": "can you extend your capabilities",
-            "self_improve": "improve yourself",
-            "build_widget": "build a widget for the dashboard",
-            "build_page": "build a new page",
         }
         for expected_name, msg in messages.items():
             name = _intent_name(ir, msg)
