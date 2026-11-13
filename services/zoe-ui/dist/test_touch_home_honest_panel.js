@@ -230,9 +230,9 @@ const run = (box, code) => vm.runInContext(code, box);
   // (a) a live GUEST id beside stale member metadata is a guest: no private endpoint, no private row; (b) a private answer that
   // lands after the session changed is dropped; (c) a member -> guest change while Settings is open clears the private rows at once;
   // (d) a genuine member still sees them.
-  const PRIV = /\/api\/(enrollment\/state|omi\/my-pendant|omi\/health|notifications\/pending|proactive\/inbox)/;
+  const PRIV = /\/api\/(enrollment\/state|omi\/my-pendant|omi\/health|notifications\/pending|proactive\/inbox|system\/display\/preferences|voice\/voices|system\/panel\/idle-logout)/;
   function settingsBox(text, live, meta) {
-    const mem = /\/\/ MEMBER-BEGIN[\s\S]*?\/\/ MEMBER-END/.exec(text), blk = /\/\/ SETGUEST-BEGIN[\s\S]*?(?=\n {2}function editContact\()/.exec(text);
+    const mem = /\/\/ MEMBER-BEGIN[\s\S]*?\/\/ SESSCHECK-END/.exec(text), blk = /\/\/ SETGUEST-BEGIN[\s\S]*?(?=\n {2}function editContact\()/.exec(text);
     assert(mem && blk, 'MEMBER / Settings block missing');
     const store = {}; let hostHTML = '';
     const mk = (id) => store[id] || (store[id] = { id, innerHTML: '', textContent: '', style: {}, disabled: false, options: [], selectedIndex: 0,
@@ -247,11 +247,12 @@ const run = (box, code) => vm.runInContext(code, box);
       loadErr: (w) => 'Couldn’t load your ' + w + '.',
       apiGet(url) { box.urls.push(url); return PRIV.test(url) ? new Promise((res, rej) => { box.pending[url.replace(/\?.*$/, '')] = { res, rej }; }) : new Promise(() => {}); },
       apiJson: () => new Promise(() => {}), zfetch: () => new Promise(() => {}),
-      wirePanelSettings() {}, toast() {}, show() {}, panelVoice() {}, orbPress() {}, _panelDevId: () => 'p1', _savePrefs() {},
+      _tmMemo: {}, _lst: {}, _calEvents: {}, show(id) { box.shown.push(id); if (id === 'settings') vm.runInContext('wireSettings()', box); }, shown: [],
+      wirePanelSettings() {}, toast() {}, panelVoice() {}, orbPress() {}, _panelDevId: () => 'p1', _savePrefs() {},
       setInterval: () => 1, clearInterval() {},
     };
     vm.createContext(box);
-    vm.runInContext(mem[0] + '\n' + blk[0], box);
+    vm.runInContext(mem[0] + '\n' + blk[0] + '\nsessionCheck();', box);   // the watch's first look sets who the page is painted for
     return box;
   }
   const flush = () => new Promise((r) => setImmediate(r));
@@ -264,6 +265,9 @@ const run = (box, code) => vm.runInContext(code, box);
     r('/api/omi/my-pendant', { linking: { enabled: true }, pendants: [{ label: 'PendantX', last_sync_at: null }] });
     r('/api/notifications/pending', { notifications: [{ title: 'NoteX', message: 'private words' }] });
     r('/api/proactive/inbox', { notify: 1 });
+    r('/api/system/display/preferences', { preferences: { day_brightness: 37, night_start: 'NightX' } });
+    r('/api/voice/voices', { voices: [{ id: 'v1', label: 'VoiceX' }], current: 'v1' });
+    r('/api/system/panel/idle-logout', { seconds: 7777 });
     await flush(); await flush();
   }
   const privacy = {
@@ -280,7 +284,7 @@ const run = (box, code) => vm.runInContext(code, box);
       vm.runInContext('wireSettings()', b);
       b.live = 'G1'; b.meta = GUEST;
       await answerAll(b);
-      if (/enrolled|PendantX|NoteX/.test(shown(b))) bad.push('a private answer for the old session was painted');
+      if (/enrolled|PendantX|NoteX|NightX|VoiceX|130 min/.test(shown(b))) bad.push('an answer for the old session was painted: ' + (shown(b).match(/enrolled|PendantX|NoteX|NightX|VoiceX|130 min/) || [])[0]);
       return bad;
     },
     async downgradeClears(text) {    // (c)
@@ -289,7 +293,7 @@ const run = (box, code) => vm.runInContext(code, box);
       await answerAll(b);
       if (!/Your voice is enrolled/.test(shown(b))) bad.push('setup: member rows never shown');
       b.live = 'G1'; b.meta = GUEST;
-      vm.runInContext('settingsSessionCheck()', b);
+      vm.runInContext('sessionCheck()', b);
       if (/enrolled|PendantX|NoteX|id="set(Vid|Pend|Note)"/.test(shown(b))) bad.push('private rows stay after the member -> guest change');
       if (!/sign in for the rest/.test(b.host.innerHTML)) bad.push('Settings not repainted in its guest form');
       return bad;
@@ -309,7 +313,10 @@ const run = (box, code) => vm.runInContext(code, box);
     ['the live-sid match', 'staleMetadata', "if(!live||!u||String(u.session_id||'')!==live)return null;", 'if(!live||!u)return null;'],
     ['a missing role read as member', 'staleMetadata', "return (!role||role==='guest'||!uid||uid==='guest')?null:u;}", "return (role==='guest')?null:u;}"],
     ['the stale-answer drop', 'lateAnswer', 'if(s0!==undefined&&sid()!==s0)return;', ''],
-    ['the downgrade repaint', 'downgradeClears', 'if(now!==_setFor)wireSettings();}', '}'],
+    ['the downgrade repaint', 'downgradeClears', 'if(PRIVATE_SCREENS[_cur])show(_cur);}', '}'],
+    ['the display-row drop', 'lateAnswer', "if(_cur!=='settings'||!sessLive(s0))return;var pr=", "if(_cur!=='settings')return;var pr="],
+    ['the voice-row drop', 'lateAnswer', "        if(_cur!=='settings'||!sessLive(s0))return;\n        var voices=", "        if(_cur!=='settings')return;\n        var voices="],
+    ['the idle-logout-row drop', 'lateAnswer', "if(_cur!=='settings'||!sessLive(s0))return;var cur=", "if(_cur!=='settings')return;var cur="],
   ]) {
     let bad;
     if (k === 'staleMetadata' && name.startsWith('a missing role')) {   // a session with no role must never count as a member
@@ -319,12 +326,102 @@ const run = (box, code) => vm.runInContext(code, box);
     check('control: removing ' + name + ' is seen', () => assert(bad.length > 0, 'check ' + k + ' did not see the planted fault'));
   }
   check('Settings privacy: a session with no role is a guest', () => assert.strictEqual(vm.runInContext('_setGuest()', settingsBox(HOME, 'M1', { session_id: 'M1', user_id: 'member-a' })), true));
+  // Voice ID: an answer that does not say enrolled true/false is a load failure, never "not enrolled"
+  {
+    const b = settingsBox(HOME, 'M1', MEMBER);
+    vm.runInContext('wireSettings()', b);
+    b.pending['/api/enrollment/state'].res({ voice: { enrolled: null } });
+    await flush(); await flush();
+    check('Settings: an unknown enrolment reads as a load failure, not "not enrolled"', () => {
+      const s = shown(b); assert(/Couldn’t load your voice ID\./.test(s) && !/isn’t enrolled/.test(s), s.slice(0, 200)); });
+  }
+
+  // ── every member-private screen: the session is captured when the request starts, a late answer is dropped ──
+  // (the request starts with s0=sid(); each answer and each failure is painted only while sessLive(s0)). One case per screen.
+  const fnBody = (text, name) => { const s = mainScript(text), i = s.indexOf('function ' + name + '('); if (i < 0) return '';
+    const j = s.indexOf('\n  function ', i + 10); return s.slice(i, j < 0 ? undefined : j); };
+  const SCREENS = [
+    ['home agenda', 'loadToday', ["if(_cur!=='home'||!sessLive(s0))return;", '}).catch(function(e){if(!sessLive(s0))return;']],
+    ['Day', 'wireDay', ["if(_cur!=='day'||!host||!sessLive(s0))return;", "if(host&&_cur==='day'&&sessLive(s0))", "if(_cur!=='day'||!rems||!sessLive(s0))return;", "if(rems&&_cur==='day'&&sessLive(s0))"]],
+    ['Calendar', 'paintCal', ["if(_cur!=='calendar'||gen!==_cal.gen||!sessLive(s0))return;\n      var evs", "}).catch(function(e){if(_cur!=='calendar'||gen!==_cal.gen||!sessLive(s0))return;"]],
+    ['Reminders', 'wireReminder', ["apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder'||!sessLive(s0))return;", "}).catch(function(e){if(_cur!=='reminder'||!sessLive(s0))return;"]],
+    ['Lists', 'wireListsFull', ["if(_cur!=='list'||!sessLive(s0))return;", "if(_cur==='list'&&sessLive(s0))"]],
+    ['Contacts', 'wireContacts', ["apiJson('GET','/api/people/').then(function(d){if(_cur!=='person'||!sessLive(s0))return;", '}).catch(function(e){if(!grid||!sessLive(s0))return;']],
+    ['Work board', 'wireWork', ["if(_cur!=='work'||!sessLive(s0))return;", "if(_cur==='work'&&sessLive(s0))"]],
+    ['Timers', 'wireTimer', ["timersGet().then(function(d){if(_cur!=='timer'||!sessLive(s0))return;", "if(_cur==='timer'&&sessLive(s0)&&rings"]],
+  ];
+  function lateAnswerGuards(text, name, guards) {
+    const body = fnBody(text, name), bad = [];
+    if (!body) return ['function ' + name + ' missing'];
+    const cap = body.search(/s0=sid\(\)/), call = body.search(/apiGet\(|apiJson\(|timersGet\(\)\.then|Promise\.all\(/);
+    if (cap < 0 || call < 0 || cap > call) bad.push(name + ': the session is not captured before the request');
+    guards.forEach((g) => { if (!body.includes(g)) bad.push(name + ': a late answer is not dropped at ' + g.slice(0, 50)); });
+    return bad;
+  }
+  SCREENS.forEach(([label, name, guards]) => {
+    check('late answer dropped: ' + label, () => assert.deepStrictEqual(lateAnswerGuards(HOME, name, guards), []));
+    check('control: ' + label + ' painting a late answer is seen', () =>
+      assert(lateAnswerGuards(plant(guards[0], guards[0].replace(/\|\|!sessLive\(s0\)|&&sessLive\(s0\)|if\(!sessLive\(s0\)\)return;/, '')), name, guards).length > 0));
+  });
+
+  // the generic part, for real: a session change forgets cached private answers and repaints ONLY a private open screen
+  {
+    const sc = /\/\/ SESSCHECK-BEGIN[\s\S]*?\/\/ SESSCHECK-END/.exec(HOME), mem = /\/\/ MEMBER-BEGIN[\s\S]*?\/\/ MEMBER-END/.exec(HOME);
+    const tg = /var TIMERS_MEMO_MS=[\s\S]*?\n  function timersGet\(now\)\{[\s\S]*?\n  \}/.exec(HOME);
+    const run = (cur) => {
+      const box = { live: 'M1', meta: MEMBER, shown: [], _cur: cur, JSON, String, setInterval: () => 1, calls: 0,
+        localStorage: { getItem: () => JSON.stringify(box.meta) }, sid: () => box.live, show(id) { box.shown.push(id); },
+        apiGet() { box.calls++; return new Promise(() => {}); }, Date, _lst: { lists: ['A-list'], sel: 'a' }, _calEvents: { k: 1 } };
+      vm.createContext(box);
+      vm.runInContext(mem[0] + '\n' + tg[0] + '\n' + sc[0] + '\nsessionCheck();', box);
+      return box;
+    };
+    check('session change on a private screen: repainted, cached lists / calendar / timers forgotten', () => {
+      const b = run('list'); vm.runInContext('timersGet(1)', b);
+      b.live = 'G1'; b.meta = GUEST; vm.runInContext('sessionCheck()', b);
+      assert.deepStrictEqual(b.shown, ['list']); assert.strictEqual(vm.runInContext('JSON.stringify(_lst.lists)', b), '[]');
+      assert.strictEqual(vm.runInContext('JSON.stringify(_calEvents)', b), '{}'); vm.runInContext('timersGet(2)', b); assert.strictEqual(b.calls, 2, 'timers memo reused across sessions');
+    });
+    check('session change on a non-private screen repaints nothing; no change repaints nothing', () => {
+      const b = run('weather'); b.live = 'G1'; b.meta = GUEST; vm.runInContext('sessionCheck()', b); assert.deepStrictEqual(b.shown, []);
+      const c = run('day'); vm.runInContext('sessionCheck()', c); assert.deepStrictEqual(c.shown, []);
+    });
+    check('the timers memo is never another session\'s answer', () => {
+      const b = run('home'); vm.runInContext('timersGet(1000)', b); b.live = 'M2'; vm.runInContext('timersGet(1001)', b); assert.strictEqual(b.calls, 2);
+      vm.runInContext('timersGet(1002)', b); assert.strictEqual(b.calls, 2, 'same session inside the memo window reuses');
+    });
+  }
+
+  // ── calendar list shape (#2447-tolerant): occurrences keyed by instance_key, placed on occurrence_date, series id for writes ──
+  {
+    const cs = /\/\/ CALSHAPE-BEGIN[\s\S]*?\/\/ CALSHAPE-END/.exec(HOME);
+    const box = { String }; vm.createContext(box); vm.runInContext(cs ? cs[0] : '', box);
+    check('calendar: an occurrence is keyed by instance_key (id as fallback), placed on occurrence_date, read_only honoured', () => {
+      assert.strictEqual(vm.runInContext("ekey({id:'s1',instance_key:'s1:2026-10-22'})", box), 's1:2026-10-22');
+      assert.strictEqual(vm.runInContext("ekey({id:7})", box), '7');
+      assert.strictEqual(vm.runInContext("eday({start_date:'2026-10-01',occurrence_date:'2026-10-22'})", box), '2026-10-22');
+      assert.strictEqual(vm.runInContext("eday({start_date:'2026-10-01'})", box), '2026-10-01');
+      assert.strictEqual(vm.runInContext("eRO({read_only:1})", box), true); assert.strictEqual(vm.runInContext("eRO({read_only:false})", box), false);
+    });
+    const calText = (text) => { const s = mainScript(text), bad = [];
+      if (/data-eid="'\+esc\(String\(e\.id\)\)/.test(s)) bad.push('a calendar row keyed by the series id');
+      if (!s.includes('_calEvents[ekey(e)]=e') || !s.includes('var k=eday(e);')) bad.push('calendar map / buckets not by occurrence');
+      const day = fnBody(text, 'wireDay');
+      if (!day.includes('return ekey(x)===row.getAttribute(\'data-eid\')')) bad.push('Day looks rows up by series id');
+      if (!day.includes("apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(e.id))")) bad.push('Day delete does not send the series id');
+      if (!day.includes("(eRO(e)?'':'<span class=\"lact\">")) bad.push('a read-only event offers Edit / Delete');
+      if (!day.includes("(e.source_label?'<div class=\"es\">From '+esc(e.source_label)")) bad.push('source_label not shown');
+      return bad; };
+    check('calendar: rows keyed and acted on by the occurrence; writes keep the series; read-only and source honoured', () => assert.deepStrictEqual(calText(HOME), []));
+    check('control: a calendar row keyed by series id is seen', () => assert(calText(plant(`return '<div class="cwe" data-eid="'+esc(ekey(e))+'"`, `return '<div class="cwe" data-eid="'+esc(String(e.id))+'"`)).length > 0));
+    check('control: a read-only Day row with Edit / Delete is seen', () => assert(calText(plant("(eRO(e)?'':'<span class=\"lact\">", "(false?'':'<span class=\"lact\">")).length > 0));
+  }
   check('page: no member-vs-guest decision outside sessionMember', () => {
     const s = mainScript(HOME);
     const reads = (s.match(/JSON\.parse\(localStorage\.getItem\('zoe_session'\)/g) || []).length;
     assert.strictEqual(reads, 2, 'the main script reads stored session metadata outside sid() and sessionMember(): ' + reads);
     assert(!/u\.role|\.role\|\|''\)\.toLowerCase\(\)==='guest'/.test(s.replace(/\/\/ MEMBER-BEGIN[\s\S]*?\/\/ MEMBER-END/, '')), 'a role check outside sessionMember');
-    ['kioskAuthFail', 'estateAuthFail', 'convEnsureSession'].forEach((f) => assert(near(s, 'function ' + f + '(', 900).includes('settingsSessionCheck()'), f + ' does not repaint Settings'));
+    ['kioskAuthFail', 'estateAuthFail', 'convEnsureSession'].forEach((f) => assert(near(s, 'function ' + f + '(', 900).includes('sessionCheck()'), f + ' does not repaint the open private screen'));
   });
   check('control: a 9px dock label is seen', () => red('smallWallText', plant('#dock .pc.temp .tl{font-size:16px', '#dock .pc.temp .tl{font-size:9px')));
   check('control: faint error copy is seen', () => red('smallWallText', plant('<div class="lderr">Couldn’t load rooms.', '<div style="color:var(--ink-faint);font-size:18px">Couldn’t load rooms.')));
