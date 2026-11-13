@@ -1407,7 +1407,7 @@ def _authorized_target_user(actor: dict, requested_user_id, tool_name: str) -> s
 def _mcp_occurrence(o: dict) -> dict:
     """One ``calendar_read`` occurrence as the calendar tools return it (household-local date and time)."""
     ev = o["event"]
-    return {"id": o["event_id"], "title": o["title"], "start_date": o["date"], "start_time": o["start_time"],
+    return {"id": o["event_id"], "instance_key": o["instance_key"], "title": o["title"], "start_date": o["date"], "start_time": o["start_time"],
             "end_date": o["end_date"], "end_time": o["end_time"], "category": o["category"], "location": o["location"],
             "all_day": o["all_day"], "is_recurring": o["is_recurring"], "read_only": o["read_only"],
             "source": o["source_label"], "status": o["status"], "visibility": ev.get("visibility")}

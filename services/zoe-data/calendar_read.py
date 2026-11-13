@@ -159,6 +159,12 @@ def _household(d: date, hhmm: str, row: dict, tz_key: str = "timezone") -> "tupl
     return local.date(), local.strftime("%H:%M")
 
 
+def instance_key(event_id: Any, day: date, hhmm: str = "") -> str:
+    """One occurrence's stable key: ``<id>@<household date>[T<HH:MM>]``. Unique within a window (an event has at most one
+    occurrence per start day) and identical across calls. ``id`` stays the series id that edits and deletes act on."""
+    return f"{event_id}@{day.isoformat()}" + (f"T{hhmm}" if hhmm else "")
+
+
 def is_writable(row: Optional[dict]) -> bool:
     """May Zoe (voice, a tool, the API) update or delete this event? Not when it is read-only, comes from a provider
     calendar (no write-back exists, so an edit would fork it), or sits in a calendar marked not writable."""
@@ -227,7 +233,7 @@ async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_ca
                            own_only: bool = False, include_busy: bool = False,
                            category: Optional[str] = None, pg_fetch: bool = False) -> "list[dict]":
     """Occurrences overlapping the household-local dates ``[start, end]`` (inclusive), sorted: per day all-day first,
-    then by time. Each is ``{event_id, date, start_time, end_date, end_time, title, location, category, all_day,
+    then by time. Each is ``{event_id, instance_key, series_start_date, date, start_time, end_date, end_time, title, location, category, all_day,
     is_recurring, read_only, source, source_label, calendar_id, status, event}`` where ``event`` is the full row (its
     ``start_date`` / ``end_date`` moved to this occurrence, in the event's own frame).
 
@@ -278,9 +284,12 @@ async def events_in_window(db, user_id: str, start: Any, end: Any, *, include_ca
                 continue
             event = {**row, "start_date": d.isoformat(),
                      "end_date": (d + timedelta(days=span)).isoformat() if row.get("end_date") else row.get("end_date")}
-            out.append({"event_id": row.get("id"), "date": hd.isoformat(), "start_time": ht, "end_date": he.isoformat(),
+            all_day = _truthy(row.get("all_day"))
+            out.append({"event_id": row.get("id"), "instance_key": instance_key(row.get("id"), hd, "" if all_day else ht),
+                        "series_start_date": row.get("start_date"),
+                        "date": hd.isoformat(), "start_time": ht, "end_date": he.isoformat(),
                         "end_time": het, "title": row.get("title"), "location": row.get("location"),
-                        "category": row.get("category"), "all_day": _truthy(row.get("all_day")),
+                        "category": row.get("category"), "all_day": all_day,
                         "is_recurring": is_recurring(row), "read_only": not is_writable(row),
                         "source": str(row.get("source") or "local"), "source_label": source_label(row),
                         "calendar_id": row.get("calendar_id"), "status": row.get("status") or "confirmed",

@@ -199,8 +199,9 @@ DEFAULT_LIST_DAYS = 90
 
 async def _list_window(db, user_id: str, start, end, *, include_cancelled: bool, category: Optional[str]) -> list:
     """The window through the shared read path (``calendar_read``): overlapping multi-day events, repeats expanded,
-    cancelled hidden unless asked. Each item is the presented event plus ``occurrence_date`` / ``occurrence_start_time``
-    (household time), ``is_recurring``, ``read_only`` and ``source`` / ``source_label``."""
+    cancelled hidden unless asked. Each item is the presented event plus ``instance_key`` (one occurrence, stable; ``id``
+    stays the series id edits act on), ``series_start_date``, ``occurrence_date`` / ``occurrence_start_time`` (household
+    time), ``is_recurring``, ``read_only`` and ``source`` / ``source_label``."""
     occurrences = await calendar_read.events_in_window(db, user_id, start, end, include_cancelled=include_cancelled,
                                                        include_busy=True, category=category)
     unique = {o["event_id"]: o["event"] for o in occurrences}     # present (and load children for) each event once
@@ -210,7 +211,8 @@ async def _list_window(db, user_id: str, start, end, *, include_cancelled: bool,
         event = {**presented[occ["event_id"]], "start_date": occ["event"]["start_date"],
                  "end_date": occ["event"]["end_date"]}
         events.append(event)
-        event.update({"occurrence_date": occ["date"], "occurrence_start_time": occ["start_time"],
+        event.update({"instance_key": occ["instance_key"], "series_start_date": occ["series_start_date"],
+                      "occurrence_date": occ["date"], "occurrence_start_time": occ["start_time"],
                       "is_recurring": occ["is_recurring"], "read_only": occ["read_only"]})
         if not event.get("busy_only"):
             event.update({"source": occ["source"], "source_label": occ["source_label"]})

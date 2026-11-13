@@ -367,3 +367,26 @@ async def test_an_event_in_a_non_writable_calendar_is_refused_and_a_writable_one
     result = await sky.resolve_skybridge_request("delete Exam from my calendar", A, context=_sky_context(locked, "Exam (room 4)"),
                                                  db=_PgOverSqlite(db))
     assert result["actions"][0]["type"] == "deleted" and (await _row(db, locked))[2] == 1
+
+
+async def test_each_occurrence_has_a_unique_stable_instance_key(db, monkeypatch):
+    await _add(db, "Swim squad", "2026-11-02", recurring="weekly", start_time="07:00")
+    user = {"user_id": A, "role": "user"}
+
+    async def keys():
+        events = (await calendar_router.list_events(start_date="2026-11-01", end_date="2026-11-30", category=None,
+                                                    include_cancelled=False, user=user, db=db))["events"]
+        return [(e["id"], e["instance_key"], e["series_start_date"]) for e in events]
+
+    first, second = await keys(), await keys()
+    assert len(first) == 5 and len({k for _, k, _ in first}) == 5          # 2, 9, 16, 23, 30 November
+    assert len({i for i, _, _ in first}) == 1 and {s for _, _, s in first} == {"2026-11-02"}
+    assert first[1][1] == f"{first[1][0]}@2026-11-09T07:00"
+    assert first == second                                                 # the same occurrence, the same key
+
+    async def actor(_db, _name, _args, _ctx):
+        return {"user_id": A, "role": "user"}
+
+    monkeypatch.setattr(mcp_server, "_resolve_mcp_actor", actor)
+    out = await mcp_server._execute_tool(db, "calendar_list_events", {"start_date": "2026-11-01", "end_date": "2026-11-30"})
+    assert [e["instance_key"] for e in out["events"]] == [k for _, k, _ in first]
