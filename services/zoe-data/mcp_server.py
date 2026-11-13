@@ -117,7 +117,7 @@ async def _get_weather_default_location(db) -> dict:
 TOOLS = [
     {
         "name": "calendar_list_events",
-        "description": "List calendar events. Optionally filter by date range or category.",
+        "description": "List calendar events (repeats expanded, cancelled hidden). Optionally filter by date range (default: the next 30 days) or category.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1404,6 +1404,28 @@ def _authorized_target_user(actor: dict, requested_user_id, tool_name: str) -> s
     return actor_user_id
 
 
+def _mcp_occurrence(o: dict) -> dict:
+    """One ``calendar_read`` occurrence as the calendar tools return it (household-local date and time)."""
+    ev = o["event"]
+    return {"id": o["event_id"], "instance_key": o["instance_key"], "title": o["title"], "start_date": o["date"], "start_time": o["start_time"],
+            "end_date": o["end_date"], "end_time": o["end_time"], "category": o["category"], "location": o["location"],
+            "all_day": o["all_day"], "is_recurring": o["is_recurring"], "read_only": o["read_only"],
+            "source": o["source_label"], "status": o["status"], "visibility": ev.get("visibility")}
+
+
+async def _calendar_writable_row(db, event_id: str, user_id: str) -> "tuple[dict | None, dict | None]":
+    """``(row, None)`` when the member may change this event; else ``(None, error)`` (not found, or provider-owned /
+    read-only: the change belongs at its source)."""
+    from calendar_read import is_writable, load_for_write, refusal
+
+    row = await load_for_write(db, user_id, event_id, own_only=True)     # the tools write the member's own events only
+    if row is None:
+        return None, {"error": f"Event {event_id} not found"}
+    if not is_writable(row):
+        return None, {"error": refusal(row), "status": "read_only"}
+    return row, None
+
+
 async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = None):
     actor = await _resolve_mcp_actor(db, name, args, actor_context)
     user_id = actor["user_id"]
@@ -1412,24 +1434,13 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])
 
     if name == "calendar_list_events":
-        sql = (
-            "SELECT id, title, start_date, start_time, end_time, category, location, all_day"
-            " FROM events WHERE (visibility = 'family' OR user_id = ?) AND deleted = 0"
-        )
-        params = [user_id]
-        if args.get("start_date"):
-            sql += " AND start_date >= ?"
-            params.append(args["start_date"])
-        if args.get("end_date"):
-            sql += " AND start_date <= ?"
-            params.append(args["end_date"])
-        if args.get("category"):
-            sql += " AND category = ?"
-            params.append(args["category"])
-        sql += " ORDER BY start_date, start_time LIMIT 20"
-        cursor = await db.execute(sql, params)
-        rows = await cursor.fetchall()
-        return {"events": [dict(r) for r in rows]}
+        from calendar_read import events_in_window
+        from calendar_service import parse_date
+
+        start = parse_date(args.get("start_date")) or today_for_zoe_tz()
+        end = parse_date(args.get("end_date")) or start + timedelta(days=30)      # no end: the next month
+        occurrences = await events_in_window(db, user_id, start, end, category=args.get("category"))
+        return {"events": [_mcp_occurrence(o) for o in occurrences[:20]]}
 
     elif name == "calendar_create_event":
         from calendar_service import conversational_visibility, create_event_record
@@ -1452,15 +1463,11 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
         return {**result, "date": args["start_date"], "status": "created"}
 
     elif name == "calendar_today":
+        from calendar_read import events_in_window
+
         today = today_for_zoe_tz().isoformat()
-        cursor = await db.execute(
-            "SELECT id, title, start_time, end_time, category, location FROM events"
-            " WHERE start_date = ? AND (visibility = 'family' OR user_id = ?) AND deleted = 0"
-            " ORDER BY start_time",
-            (today, user_id),
-        )
-        rows = await cursor.fetchall()
-        return {"date": today, "events": [dict(r) for r in rows]}
+        occurrences = await events_in_window(db, user_id, today, today)
+        return {"date": today, "events": [_mcp_occurrence(o) for o in occurrences]}
 
     elif name == "list_get_items":
         lt = args["list_type"]
@@ -2301,9 +2308,13 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
     # === CALENDAR CRUD ===
     elif name == "calendar_update_event":
         eid = args["event_id"]
-        cursor = await db.execute("SELECT id FROM events WHERE id=? AND user_id=? AND deleted=0", (eid, user_id))
-        if not await cursor.fetchone():
-            return {"error": f"Event {eid} not found"}
+        current, refused = await _calendar_writable_row(db, eid, user_id)
+        if refused:
+            return refused
+        from calendar_read import REPEATING_MOVE_LINE, is_repeating_row
+
+        if is_repeating_row(current) and {"start_date", "start_time", "end_time", "all_day"}.intersection(args):
+            return {"error": REPEATING_MOVE_LINE, "status": "repeating"}      # one occurrence's time would move the series
         updates, params = [], []
         for field in ("title", "start_date", "start_time", "end_time", "location", "category"):
             if field in args:
@@ -2314,6 +2325,12 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
             params.append(1 if args["all_day"] else 0)
         if not updates:
             return {"error": "No fields to update"}
+        from calendar_service import INSTANT_INPUTS, derive_instants
+
+        if INSTANT_INPUTS.intersection(args) and current.get("timezone"):   # a zoned event's UTC instants move with it
+            start_at, end_at = derive_instants({**current, **{k: args[k] for k in INSTANT_INPUTS if k in args}})
+            updates += ["start_at=?", "end_at=?"]
+            params += [start_at, end_at]
         updates.append("updated_at=NOW()")
         params.extend([eid, user_id])
         await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=? AND user_id=?", params)
@@ -2322,10 +2339,17 @@ async def _execute_tool(db, name: str, args: dict, actor_context: dict | None = 
 
     elif name == "calendar_delete_event":
         eid = args["event_id"]
-        cursor = await db.execute("SELECT id FROM events WHERE id=? AND user_id=? AND deleted=0", (eid, user_id))
-        if not await cursor.fetchone():
-            return {"error": f"Event {eid} not found"}
-        await db.execute("UPDATE events SET deleted=1, updated_at=NOW() WHERE id=? AND user_id=?", (eid, user_id))
+        row, refused = await _calendar_writable_row(db, eid, user_id)
+        if refused:
+            return refused
+        from calendar_read import REPEATING_DELETE_LINE, is_repeating_row
+
+        if is_repeating_row(row):
+            return {"error": REPEATING_DELETE_LINE, "status": "repeating"}    # never the whole series from one occurrence
+        from calendar_service import now_text
+
+        await db.execute("UPDATE events SET deleted=1, deleted_at=?, updated_at=NOW() WHERE id=? AND user_id=?",
+                         (now_text(), eid, user_id))
         await _notify_ui("calendar", "event_deleted", {"id": eid})
         return {"id": eid, "status": "deleted"}
 
