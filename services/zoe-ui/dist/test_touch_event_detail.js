@@ -364,6 +364,76 @@ function staleGuard(region) {
   return /stok=_evd/.test(region) && /if\(_evd!==stok\)return;/.test(region) && /_evd\.ev=r\.event;evdDetailView\(r\.event\)/.test(region)
     && /dtok=_evd/.test(region) && /if\(_evd===dtok\)evdClose\(\);/.test(region);
 }
+// ---- the panel's DELETE sites in touch/home.html, executed (not regex-matched) ------------------------------------
+// Since PR 2447 a repeating event is listed once per occurrence under its SERIES id, so a delete from one row would
+// remove every occurrence. The Day row must offer no delete for it, and both delete handlers must refuse it.
+function extractFn(src, name) {
+  const start = src.indexOf('function ' + name + '(');
+  assert(start >= 0, 'home.html lost function ' + name);
+  let i = src.indexOf('{', start), depth = 0;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+  }
+  throw new Error('unbalanced ' + name);
+}
+const flush = () => new Promise((r) => setImmediate(r));
+async function homeDeleteChecks(M, home) {
+  const fails = [];
+  const t = async (name, fn) => { try { await fn(); } catch (e) { fails.push('home: ' + name + ' :: ' + String(e && e.message || e).split('\n')[0]); } };
+  const ONEOFF = Object.assign({}, MINIMAL, { id: 'ev-once' });
+  function daySandbox(events, withModule) {
+    const els = { dayEvents: { innerHTML: '' }, dayRems: { innerHTML: '' }, dayMeta: {} };
+    const calls = [], opened = [];
+    const ctx = vm.createContext({
+      window: withModule ? { ZoeEventDetail: M } : {}, Array, String, Date, Promise,
+      document: { getElementById: (id) => els[id] || null },
+      apiGet: (url) => Promise.resolve(url.indexOf('/api/calendar/') >= 0 ? { events } : { reminders: [] }),
+      apiJson: (method, url) => { calls.push(method + ' ' + url); return Promise.resolve({}); },
+      estConfirm: (_msg, cb) => cb(), editEvent: (e) => opened.push(e.id), toast() {}, editReminder() {}, fmtRemWhen: () => '',
+      _cur: 'day', CAT: {}, fmt12: (x) => x || '', esc: M.esc, two: (n) => (n < 10 ? '0' : '') + n, loadErr: () => 'err'
+    });
+    vm.runInContext(extractFn(home, 'evRepeating') + '\n' + extractFn(home, 'wireDay'), ctx);
+    return { ctx, els, calls, opened };
+  }
+  const clickRow = (host, id, act) => host.onclick({ target: { closest: (sel) => (sel === '.dev[data-eid]'
+    ? { getAttribute: () => id } : (sel === '[data-act]' && act ? { getAttribute: () => act } : null)) } });
+  for (const withModule of [true, false]) {
+    const tag = withModule ? '' : ' (module not loaded: inline rule)';
+    await t('a repeating Day row renders no delete and its delete makes no API call' + tag, async () => {
+      const d = daySandbox([OCCURRENCE, ONEOFF], withModule);
+      d.ctx.wireDay(); await flush(); await flush();
+      const rows = d.els.dayEvents.innerHTML.split('<div class="dev" ').slice(1);
+      assert.strictEqual(rows.length, 2, 'two rows');
+      const rep = rows.find((r) => r.includes('data-eid="ev-series"')), one = rows.find((r) => r.includes('data-eid="ev-once"'));
+      assert(!rep.includes('data-act="del"'), 'the repeating row has no delete');
+      assert(one.includes('data-act="del"'), 'the one-off row keeps its delete');
+      clickRow(d.els.dayEvents, 'ev-series', 'del'); await flush();
+      assert.deepStrictEqual(d.calls, [], 'no DELETE for the series');
+      assert.deepStrictEqual(d.opened, ['ev-series'], 'the read-only sheet opens instead');
+      clickRow(d.els.dayEvents, 'ev-once', 'del'); await flush();
+      assert.deepStrictEqual(d.calls, ['DELETE /api/calendar/events/ev-once'], 'a one-off row still deletes');
+    });
+  }
+  await t('the sheet refuses del / delyes for a repeating event', async () => {
+    const calls = [], toasts = [];
+    const m = {};
+    const ctx = vm.createContext({
+      window: { ZoeEventDetail: M }, Array, String, document: { getElementById: (id) => (id === 'estModal' ? m : { innerHTML: '' }) },
+      _evd: { ev: OCCURRENCE }, EVD: M, evdTouch() {}, evdClose() {}, evdRefresh() {}, toast: (x) => toasts.push(x),
+      apiJson: (method, url) => { calls.push(method + ' ' + url); return Promise.resolve({}); }
+    });
+    vm.runInContext(extractFn(home, 'evRepeating') + '\n' + extractFn(home, 'evdClick'), ctx);
+    for (const x of ['del', 'delyes']) {
+      const btn = { disabled: false, getAttribute: () => x };
+      ctx.evdClick({ target: { closest: (sel) => (sel === '[data-x]' ? btn : null) } });
+    }
+    await flush();
+    assert.deepStrictEqual(calls, [], 'no DELETE sent'); assert.strictEqual(toasts.length, 2, 'said why, twice');
+  });
+  return fails;
+}
+
 function wiringChecks() {
   const fails = [];
   const t = (name, fn) => { try { fn(); } catch (e) { fails.push(name + ' :: ' + e.message.split('\n')[0]); } };
@@ -417,7 +487,15 @@ function wiringChecks() {
   const real = checkSuite(M);
   const asyncFails = [];
   for (const [name, fn] of real.saveCases) { try { await fn(); } catch (e) { asyncFails.push(name + ' :: ' + String(e.message).split('\n')[0]); } }
-  const failures = real.fails.concat(asyncFails, wiringChecks());
+  const failures = real.fails.concat(asyncFails, wiringChecks(), await homeDeleteChecks(M, HOME));
+  // negative control for the home.html guards: the pre-fix Day row and handlers MUST go red
+  const BROKEN_HOME = HOME.replace(`'+(evRepeating(e)?'':'<button class="del" data-act="del" title="Delete">✕</button>')+'`,
+    `<button class="del" data-act="del" title="Delete">✕</button>`)
+    .replace(`if(act&&act.getAttribute('data-act')==='del'&&evRepeating(e)){editEvent(e);return;}`, '')
+    .replace(`else if((x==='del'||x==='delyes')&&evRepeating(ev)){`, `else if(false){`);
+  assert.notStrictEqual(BROKEN_HOME, HOME, 'home negative control did not apply');
+  const brokenFails = await homeDeleteChecks(M, BROKEN_HOME);
+  if (brokenFails.length < 3) { console.error('NEGATIVE CONTROL NOT RED: home delete guards (' + brokenFails.length + ' red)'); process.exit(1); }
   total += 1;
   if (failures.length) { console.error('FAIL:\n  ' + failures.join('\n  ')); process.exit(1); }
 
