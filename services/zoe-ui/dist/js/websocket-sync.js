@@ -310,13 +310,8 @@ window.ZoeWebSockets = {
 
             if (typeof loadNotes === 'function') loadNotes();
 
-            // Journal: prefer the PAGE-LOCAL loader. touch/journal.html defines
-            // loadEntries AND stubs displayTimelineEntries to a no-op
-            // (touch/journal.html:665) -- so journal-api.js's loadJournalEntries
-            // would fetch and render into nothing there. Desktop journal.html is
-            // the mirror image: no loadEntries, and its live path IS
-            // loadJournalEntries. The two are mutually exclusive, so this order
-            // is correct on both.
+            // Journal: a page-local loadEntries wins; desktop journal.html has none and
+            // its live path is journal-api.js's loadJournalEntries.
             if (typeof loadEntries === 'function') loadEntries();
             else if (typeof loadJournalEntries === 'function') loadJournalEntries();
             this._refreshWidget('events');

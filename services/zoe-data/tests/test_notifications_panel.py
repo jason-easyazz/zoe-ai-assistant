@@ -223,8 +223,10 @@ def test_a_guest_dot_press_opens_the_mic_never_the_voiceless_pull_and_control():
     assert "var pullable=!!(d&&!d.quiet&&d.enabled&&d.count>0);" in html and ",!pullable);" in html
     # voice-only = nothing the proactive selector reports: the guest's notify_any AND a member's notifications-only dot, because
     # the voiceless /pull is refused for both
-    click = html[html.index("orb.addEventListener('click'"):]
-    click = click[:click.index("});")]
+    # ONE press path (orbPress): the orb and Settings > Notifications "Show the card" both run it
+    assert "orb.addEventListener('click',function(){orbPress();});" in html
+    click = html[html.index("function orbPress(idlePrompt){"):]
+    click = click[:click.index("\n  }")]
     guest, member = click.index("if(ready&&_dotVoiceOnly)panelVoice("), click.index("else if(ready)orbPull();")
     assert guest < member                                                              # the guest branch wins before any pull
     assert click.count("orbPull()") == 1                                               # control: a member's own dot still pulls

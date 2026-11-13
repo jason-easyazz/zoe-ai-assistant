@@ -211,7 +211,9 @@ def test_a_ringing_timer_is_not_a_running_one_for_speech(monkeypatch):
 def test_kiosk_dismiss_acknowledges_through_cancel():
     path = os.path.join(os.path.dirname(__file__), "..", "..", "zoe-ui", "dist", "touch", "home.html")
     html = open(path, encoding="utf-8").read()
-    assert "timerAlarm(due.join(' / '),ids)" in html
+    # the due timers' ids still reach the alarm (third argument: which labels the PAGE should speak, added when the panel's own
+    # voice started announcing timers); Dismiss acknowledges every one of those ids through cancel
+    assert "timerAlarm(due.join(' / '),ids," in html
     alarm = html.split("function timerAlarm")[1].split("_tAlarmRefresh();")[0] + html.split("function _ackSend")[1].split("function timerAlarm")[0]
     assert "apiJson('POST','/api/skybridge/timers/cancel',{timer_id:id})" in alarm
 
