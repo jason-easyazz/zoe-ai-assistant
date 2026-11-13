@@ -48,6 +48,10 @@ with its own README/RUNBOOK and is self-contained.
   THREE ways until deliberately lifted: it idles while the dispatch kill switch
   `~/.zoe/multica_dispatch_paused` exists, `ZOE_EXECUTOR_DISPATCH` defaults to
   `dry` (poll + log, mutate nothing), and it claims at most one task at a time.
+  `self-heal/` -> `labs/self-heal/systemd/zoe-self-heal.{service,timer}` (the self-heal
+  loop; templates kept under the lab, never installed by any script; dispatch defaults to
+  `dry`, it idles while `~/.zoe/self_heal_paused` exists, and its GitHub landing only ever
+  opens DRAFT PRs).
   No other lab may ship a unit without amending this contract.)
 - ⚠ **`labs/flue-zoe-brain-2x/` AND `labs/flue-zoe-telegram-2x/` ARE AUTO-DEPLOYED.** They
   are the two labs where "it's only a lab directory" is false. `.github/workflows/deploy.yml`
@@ -532,3 +536,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `recall_every_turn._ranked` called as a library on an in-memory index (plus lowered thresholds), bge-small cosine
   top-3 (fastembed, local cache only, CPU), a 150-token standing card, and their union. Never opens a database, Chroma,
   the network or the brain. Hand-run under `flock /tmp/zoe-test-lane.lock`; no regression net. README is the record.
+- `self-heal/` - **the self-heal loop, lab** (2026-11-13, lane F of the gap audit): a failing test on
+  the base branch -> a coding engine (codex | claude adapter, the buyer's subscription) fixes it in
+  `~/.worktrees/heal-<id>` -> diff policy (forbidden paths, 300-line cap) + local gates -> landing
+  adapter (`github`: DRAFT PR only; `local`: snapshot, fast-forward, verify, automatic rollback, no
+  `gh` / network) -> verify re-runs the ORIGINAL reproduction, not-healed faults are parked. Has its
+  own AGENTS.md with the Forbidden list. Local net: `python3 -m pytest labs/self-heal/tests` (fake
+  engine, throwaway repos); `e2e_scratch.py` is the synthetic end-to-end proof.

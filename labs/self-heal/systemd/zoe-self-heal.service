@@ -1,0 +1,20 @@
+# TEMPLATE ONLY - never auto-installed or enabled. Operator opt-in; see labs/self-heal/README.md.
+# One self-heal pass (dispatch comes from the config file; default dry).
+[Unit]
+Description=Zoe self-heal loop (one pass)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/assistant/labs/self-heal
+Environment=PYTHONDONTWRITEBYTECODE=1
+# codex is a node script: put the nvm node bin first (adjust the version to the box)
+Environment=PATH=%h/.nvm/versions/node/v22.23.3/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Board mirror (optional): a file holding MULTICA_BASE_URL / MULTICA_API_TOKEN / MULTICA_WORKSPACE_ID.
+# The engine never sees these (engine env is an allow-list).
+# EnvironmentFile=%h/.zoe/self-heal/multica.env
+# The loop pins every python it runs to THIS interpreter, so start it with the venv the lanes need.
+ExecStart=%h/.zoe/venvs/zoe-data-py312/bin/python -m selfheal run --config %h/.zoe/self-heal/config.json
+ExecStartPost=%h/.zoe/venvs/zoe-data-py312/bin/python -m selfheal verify --config %h/.zoe/self-heal/config.json
+TimeoutStartSec=3h
+Nice=10

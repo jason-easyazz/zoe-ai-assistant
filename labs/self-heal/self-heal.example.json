@@ -1,0 +1,27 @@
+{
+  "repo": "/home/zoe/.worktrees/self-heal-base",
+  "live_checkout": "/home/zoe/assistant",
+  "worktree_root": "/home/zoe/.worktrees",
+  "state_dir": "/home/zoe/.zoe/self-heal",
+  "kill_switches": [
+    "/home/zoe/.zoe/self_heal_paused"
+  ],
+  "dispatch": "dry",
+  "landing": "github",
+  "engine": "flue_executor",
+  "engine_fallbacks": [
+    "codex"
+  ],
+  "codex_bin": "/home/zoe/.nvm/versions/node/v22.23.3/bin/codex",
+  "engine_timeout_s": 600,
+  "daily_cap": 3,
+  "per_fault_cap": 2,
+  "diff_line_cap": 300,
+  "detect_timeout_s": 1800,
+  "ignore_nodeids": [
+    "services/zoe-data/tests/test_voice_routing.py::TestPlanShowVsCreate::test_misheard_question_fragment_defers_to_brain"
+  ],
+  "test_lock": "/tmp/zoe-test-lane.lock",
+  "night_busy_script": "/home/zoe/assistant/scripts/landing/night_busy.sh",
+  "board": "multica"
+}
