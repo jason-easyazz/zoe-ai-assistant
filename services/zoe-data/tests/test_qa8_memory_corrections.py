@@ -365,6 +365,22 @@ def test_a_matching_number_of_another_kind_does_not_make_the_row_up_to_date():
     assert vc.rewrite("User's gas bill is 27 dollars", money) is None                              # really up to date
 
 
+def test_only_a_number_of_the_corrections_unit_counts():
+    """27 dollars not 20 dollars: a street number, a count and an age of 27 neither make the row current nor get rewritten."""
+    money = vc.statement("actually the gas bill is 27 dollars not 20 dollars")
+    row = "User's gas bill is 20 dollars, paid at 27 Example Street for 27 units, and Tam turned 27"
+    assert vc.rewrite(row, money) == "User's gas bill is 27 dollars, paid at 27 Example Street for 27 units, and Tam turned 27"
+    assert vc.rewrite("User's gas bill is 20 dollars for 20 units", money) == "User's gas bill is 27 dollars for 20 units"
+    assert vc.rewrite("User's gas bill is 20, sent to 27 Example Street", money) == \
+        "User's gas bill is 27, sent to 27 Example Street"                     # a unitless 20 is still the single candidate
+    assert vc.rewrite("User's gas bill is 27 dollars at 20 Example Street", money) is None      # really up to date
+    assert vc.rewrite("User's gas bill is 20 dollars after a 27 km drive", money) == "User's gas bill is 27 dollars after a 27 km drive"
+    # the reverse: an age correction is not made current by a dollar amount, and never rewrites one
+    age = vc.statement("actually eli is 9 years old not 8 years old")
+    assert vc.rewrite("Eli is 8 years old and has 9 dollars", age) == "Eli is 9 years old and has 9 dollars"
+    assert vc.rewrite("Eli has 8 dollars and is 9 years old", age) is None
+
+
 def test_a_value_restated_after_the_correction_is_a_new_fact_not_the_stale_one(monkeypatch):
     """12 thousand, corrected to 13.5 thousand; LATER the member says it is 12 thousand again. Words said after the correction
     are never discarded by it; words said before it still are."""
@@ -421,6 +437,24 @@ def test_a_fact_restated_after_the_correction_is_kept(monkeypatch):
     rows = _session_around_a_correction(monkeypatch, after_text="my dentist appointment is on the 20th of november")
     said = mic._fact_said_at({"fact": fact}, fact, rows)                               # no quote: the entailing turn
     assert said == rows[-1]["at"].timestamp()                                          # the NEWEST supporting turn wins
+
+
+def test_a_newer_entailing_restatement_beats_an_older_quoted_turn(monkeypatch):
+    """The model quoted the EARLY turn, but the member restated the value after the correction: the fact is as new as the
+    restatement, so it is kept. Control: with no restatement the quoted turn's time stands and the fact is stale."""
+    import memory_idle_consolidation as mic
+
+    fact = "User has a dentist appointment on the 20th of November"
+    item = {"fact": fact, "quote": "my dentist appointment is on the 20th of november"}
+    rows = _session_around_a_correction(monkeypatch, after_text="i have a dentist appointment on the 20th of November")
+    said = mic._fact_said_at(item, fact, rows)
+    assert said == rows[-1]["at"].timestamp()
+    assert vc.superseded_by_correction(UID, fact, said_at=said) is False
+    vc.reset_state()
+    rows = _session_around_a_correction(monkeypatch)
+    said = mic._fact_said_at(item, fact, rows)
+    assert said == rows[0]["at"].timestamp()
+    assert vc.superseded_by_correction(UID, fact, said_at=said) is True
 
 
 def test_no_supporting_turn_falls_back_to_the_first_turn(monkeypatch):

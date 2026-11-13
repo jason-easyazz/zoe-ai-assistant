@@ -481,6 +481,55 @@ def _is_day_of_month(text: str, q: Quantity) -> bool:
     return bool((after and _month_of(after.group(1))) or (before and _month_of(before.group(1))))
 
 
+#: the unit a number's neighbouring word names: money words, and measures read reliably from the word after the number
+_MONEY_WORDS = frozenset({"dollar", "dollars", "bucks", "buck", "cents", "cent", "grand", "aud", "usd"})
+_MEASURE_WORDS = {
+    **dict.fromkeys(("km", "kms", "kilometre", "kilometres", "kilometer", "kilometers"), "km"),
+    **dict.fromkeys(("kg", "kgs", "kilo", "kilos", "kilogram", "kilograms"), "kg"),
+    **dict.fromkeys(("min", "mins", "minute", "minutes"), "minute"),
+    **dict.fromkeys(("hr", "hrs", "hour", "hours"), "hour"),
+    **dict.fromkeys(("sec", "secs", "second", "seconds"), "second"),
+    **dict.fromkeys(("day", "days"), "day"), **dict.fromkeys(("week", "weeks"), "week"),
+    **dict.fromkeys(("month", "months"), "month"), **dict.fromkeys(("year", "years"), "year"),
+    **dict.fromkeys(("metre", "metres", "meter", "meters"), "metre"), **dict.fromkeys(("cm",), "cm"),
+    **dict.fromkeys(("litre", "litres", "liter", "liters"), "litre"), **dict.fromkeys(("mile", "miles"), "mile"),
+    **dict.fromkeys(("percent", "per cent", "%"), "percent"),
+}
+
+
+def _unit_at(text: str, q: Quantity) -> Optional[str]:
+    """The UNIT of the number at ``q`` in ``text``, read from the number itself and its neighbours: "date" (a day of the month),
+    "money" (a currency sign, dollars / bucks / cents / grand / AUD, or a scale word used as an amount: "12 thousand", "12k"), "age"
+    ("9 years old", "aged 9", "turned 9"), a measure from the next word ("5 km", "20 minutes"), or None when no
+    unit can be read (a bare number, "20 Example Street", "3 dogs"). Pure."""
+    if _is_day_of_month(text, q):
+        return "date"
+    before, after = text[:q.start], text[q.end:]
+    if "$" in q.text or re.search(r"[$£€]\s*$", before):
+        return "money"
+    words = re.match(r"\s*(%|[A-Za-z]+)(?:[ -]([A-Za-z]+))?", after)
+    w1 = (words.group(1) or "").lower() if words else ""
+    w2 = (words.group(2) or "").lower() if words else ""
+    if w1 in _MONEY_WORDS:
+        return "money"
+    if (w1 in ("year", "years", "yrs") and w2 == "old") or w1 == "yo" or re.search(r"\baged?\s*$", before, re.IGNORECASE):
+        return "age"
+    # an age-row hit counts when it SAYS age ("turned 9", "Eli: 9 yo"); a bare "is 20" is no unit ("the bill is 20")
+    if any(am.start("num") <= q.start < am.end("num") and (am.group("post") or re.search(r"turn|age", am.group("pre"), re.I))
+           for am in _age_matches(text)):
+        return "age"
+    if w1 in _MEASURE_WORDS:
+        return _MEASURE_WORDS[w1]
+    if q.scaled:
+        return "money"
+    return None
+
+
+def _correction_unit(corr: Correction, qn: Quantity, qo: Quantity) -> Optional[str]:
+    """The unit the correction's own words give ("27 dollars not 20", "the 27th not the 20th"), or None for bare numbers."""
+    return _unit_at(corr.new, qn) or _unit_at(corr.old, qo)
+
+
 def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     """The quantity half of ``rewrite``: the ONE number after the subject whose value is the old one (any spelling: "20th",
     "twentieth", "12 thousand", "twelve thousand"), replaced by the new one. An old value said without its scale takes the new
@@ -511,10 +560,23 @@ def _rewrite_quantity(head: str, tail: str, corr: Correction) -> Optional[str]:
     # that is not a date never rewrites a day-of-month. The same holds for "already up to date": "on the 20th that costs 27
     # dollars" does not hold the corrected DATE just because 27 appears in it.
     date_corr = bool(qn.ordinal or qo.ordinal or month_new or month_old)
-    if (any(q.value == qn.value and _is_day_of_month(tail, q) == date_corr for q in spans)
-            and (not month_new or month_new == row_month)):
-        return None                 # the row already holds the corrected value
-    hits = [q for q in spans if q.value in want and _is_day_of_month(tail, q) == date_corr]
+    unit = "date" if date_corr else _correction_unit(corr, qn, qo)
+    units = [_unit_at(tail, q) for q in spans]
+    if unit is None:
+        # bare numbers ("9 not 8"): no unit to compare, only day-of-month vs not, as before
+        same = [(q.value == qn.value, q.value in want) for q, u in zip(spans, units) if u != "date"]
+        if any(n for n, _ in same):
+            return None             # the row already holds the corrected value
+        hits = [q for q, u in zip(spans, units) if q.value in want and u != "date"]
+    else:
+        # only a number of the correction's UNIT holds the new value ("27 Example Street" never makes "20 dollars" current);
+        # a number with no readable unit never hides a stale value, and is rewritten only as the single candidate. A date is
+        # never a unitless guess ("20 Example Street" is not the 20th).
+        if any(q.value == qn.value and u == unit for q, u in zip(spans, units)) and (not month_new or month_new == row_month):
+            return None             # the row already holds the corrected value
+        hits = [q for q, u in zip(spans, units) if q.value in want and u == unit]
+        if not hits and unit != "date":
+            hits = [q for q, u in zip(spans, units) if q.value in want and u is None]
     if len(hits) != 1:
         return None
     q = hits[0]

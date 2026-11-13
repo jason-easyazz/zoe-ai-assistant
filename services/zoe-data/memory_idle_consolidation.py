@@ -282,8 +282,8 @@ def _first_turn_epoch(rows) -> Optional[float]:
 def _fact_said_at(item: Any, fact: str, rows) -> Optional[float]:
     """When the member said the words a mined ``fact`` came from, for the value-correction staleness check.
 
-    The rule: the time of the NEWEST user turn that supports the fact - the turn holding the model's verbatim ``quote``
-    (``fact_anchor``), or, with no quote, a turn whose own sentence entails the fact (subject, value and attribute together:
+    The rule: the time of the NEWEST user turn that supports the fact - a turn holding the model's verbatim ``quote``
+    (``fact_anchor``) or a turn whose own sentence entails the fact, whichever is newer (subject, value and attribute together:
     ``memory_authority.supporting_span``). A correction made after that turn makes the fact stale; a value restated after the
     correction is the latest word and is kept. When no supporting turn can be identified, the session's FIRST turn time: the
     fact may come from before a correction made mid-session, so any correction after the session began applies (the session's
@@ -297,10 +297,17 @@ def _fact_said_at(item: Any, fact: str, rows) -> Optional[float]:
         if str(r["role"]) != "user" or not r["content"]:
             continue
         content = str(r["content"])
+        # BOTH sets count: a turn holding the quote, and a turn whose own sentence entails the fact. With the quote alone, an
+        # early quoted turn would beat a newer restatement and make the fact look older than it is.
         try:
-            ok = (fact_anchor(item, content) is not None) if quoted else bool(memory_authority.supporting_span(fact, content))
+            ok = quoted and fact_anchor(item, content) is not None
         except Exception:  # noqa: BLE001 - an unreadable turn supports nothing
             ok = False
+        if not ok:
+            try:
+                ok = bool(memory_authority.supporting_span(fact, content))
+            except Exception:  # noqa: BLE001
+                ok = False
         ts = _turn_epoch(r) if ok else None
         if ts is not None and (best is None or ts > best):
             best = ts

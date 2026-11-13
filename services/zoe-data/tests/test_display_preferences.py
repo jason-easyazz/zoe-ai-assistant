@@ -179,3 +179,47 @@ def test_the_devices_own_row_still_wins_and_a_panel_without_a_row_falls_to_the_d
     db = _FakeDb({"default": _Rows(day_brightness=40)}, panels={"192.0.2.10": ["panel-kitchen"]})
     out = _get(db, "pi-0000000000aa", _request("192.0.2.10"))
     assert out["inherited"] is True and out["preferences"]["day_brightness"] == 40
+
+
+# ── the unauthenticated route believes an address header only from a proxy of ours (panel_principal.trusted_client_ip) ──
+# trusted_client_ip: the TCP peer itself, unless the peer is in ZOE_TRUSTED_PROXY_NETS (default loopback + docker 172.16/12),
+# when nginx's X-Real-IP is believed; X-Forwarded-For and Forwarded are never read (a client writes them); a relayed request
+# has no address. The route also refuses any request carrying a Cloudflare edge header (_via_public_tunnel).
+
+_SPOOF = [("x-real-ip", "192.0.2.10"), ("x-forwarded-for", "192.0.2.10"), ("forwarded", "for=192.0.2.10")]
+
+
+def _kitchen_db():
+    return _FakeDb({"default": _Rows(day_brightness=40), "panel-kitchen": _Rows(day_brightness=75)},
+                   panels={"192.0.2.10": ["panel-kitchen"]})
+
+
+@pytest.fixture
+def _default_proxy_nets(monkeypatch):
+    monkeypatch.delenv("ZOE_TRUSTED_PROXY_NETS", raising=False)
+    monkeypatch.delenv("ZOE_RELAY_INGRESS", raising=False)
+
+
+@pytest.mark.parametrize("header", _SPOOF)
+def test_an_address_header_from_an_untrusted_peer_never_selects_a_panel(_default_proxy_nets, header):
+    import panel_principal
+
+    req = _request("192.0.2.50", [header])
+    assert panel_principal.trusted_client_ip(req) == "192.0.2.50"                       # the peer, never the header
+    assert _get(_kitchen_db(), "pi-0000000000aa", req)["preferences"]["day_brightness"] == 40
+    # control: the same peer AT the panel's address is the panel
+    assert _get(_kitchen_db(), "pi-0000000000aa", _request("192.0.2.10"))["preferences"]["day_brightness"] == 75
+
+
+def test_a_trusted_proxy_is_believed_for_x_real_ip_only(_default_proxy_nets):
+    import panel_principal
+
+    via_nginx = _request("172.18.0.5", [("x-real-ip", "192.0.2.10")])
+    assert panel_principal.trusted_client_ip(via_nginx) == "192.0.2.10"
+    assert _get(_kitchen_db(), "pi-0000000000aa", via_nginx)["preferences"]["day_brightness"] == 75
+    for header in _SPOOF[1:]:                     # X-Forwarded-For / Forwarded are not nginx's word, even from nginx's side
+        req = _request("172.18.0.5", [header])
+        assert panel_principal.trusted_client_ip(req) == "172.18.0.5"
+        assert _get(_kitchen_db(), "pi-0000000000aa", req)["preferences"]["day_brightness"] == 40
+    tunnel = _request("172.18.0.5", [("x-real-ip", "192.0.2.10"), ("cf-connecting-ip", "198.51.100.7")])
+    assert _get(_kitchen_db(), "pi-0000000000aa", tunnel)["preferences"]["day_brightness"] == 40
