@@ -99,7 +99,10 @@ router logged (`local_text_logs.ROUTER_SHADOW`, one record per routed turn), 48 
 writer was alive), else `unmeasured` / `no_before_data` or `no_after_coverage`: a log that stopped is never an improvement. Then at
 least `MEASURE_MIN_BEFORE` (5) target misses before (else `sample_too_small`); `validated` at a rate of 0.8x or less, `regressed` at
 1.2x or more (moved to `reverted`; nothing is rolled back automatically), otherwise `no_change`; no target patterns is
-`no_target_signal`. Every outcome is written to `validation_result`
+`no_target_signal`. The scan (`scan_windows`) is blocking file work, so the async callers run it through `asyncio.to_thread` (the in-process
+digest loop shares zoe-data's event loop with live voice turns), and it is bounded: a rotated segment last written before the window is
+skipped by mtime, a log stops at the first record past the window, and past `MEASURE_MAX_LINES` / `MEASURE_MAX_BYTES` per log or
+`MEASURE_MAX_COMPARISONS` trigram comparisons it stops; a truncated scan is `unmeasured` / `scan_truncated`. Every outcome is written to `validation_result`
 (`schema: 2`, counts only); a verdict without `schema: 2` is shown as not measurable.
 
 The Multica board mirror of new proposals (and of measured status) is opt-in: `ZOE_EVOLUTION_BOARD_MIRROR` (default off). The NOTICE

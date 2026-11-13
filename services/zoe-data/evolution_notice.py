@@ -10,6 +10,7 @@ risk tier 3, legal status moves enforced there). Deduplication prevents repeat e
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -186,8 +187,8 @@ async def run_evolution_notice() -> dict:
 
     async with get_db_ctx() as db:
         # ── 1. Intent miss clustering ─────────────────────────────────────────
-        misses = _load_recent_misses()
-        clusters = _simple_cluster(misses)
+        misses = await asyncio.to_thread(_load_recent_misses)          # file read + O(n x clusters) trigrams: off the event loop
+        clusters = await asyncio.to_thread(_simple_cluster, misses)
         logger.info(
             "evolution_notice: %d misses → %d clusters with ≥%d hits",
             len(misses), len(clusters), _MIN_CLUSTER_SIZE,
@@ -641,10 +642,12 @@ def _similar(a: str, b: str) -> bool:
 
 def measure_verdict(patterns: list, before: int | None, after: int | None, *, turns_before: int | None = None,
                     turns_after: int | None = None, min_before: int = MEASURE_MIN_BEFORE,
-                    min_turns: int = MEASURE_MIN_TURNS) -> tuple[str, str]:
+                    min_turns: int = MEASURE_MIN_TURNS, truncated: bool = False) -> tuple[str, str]:
     """(verdict, reason). verdict: validated | regressed | no_change | unmeasured. ``None`` = no coverage of that window."""
     if not patterns:
         return "unmeasured", "no_target_signal"
+    if truncated:
+        return "unmeasured", "scan_truncated"
     if before is None or turns_before is None or turns_before < min_turns:
         return "unmeasured", "no_before_data"
     if after is None or turns_after is None or turns_after < min_turns:
@@ -659,7 +662,19 @@ def measure_verdict(patterns: list, before: int | None, after: int | None, *, tu
     return "no_change", "within_band"
 
 
-def _records(log) -> list[dict]:
+#: scan bounds (2026-11-13). The measure runs inside zoe-data's event loop on the digest path, so the scan itself goes to a worker
+#: thread (``asyncio.to_thread``) AND is bounded: a segment last written before the window is skipped by its mtime, a time-ordered
+#: log stops at the first record past the window, and past these caps the scan stops and says so (``truncated``), which makes the
+#: verdict ``unmeasured`` / ``scan_truncated``, never a guess. Sized ~10x above the live logs (the router log held ~13.5k lines in four
+#: months; the miss log ~30 lines a week).
+MEASURE_MAX_LINES = 200_000          # per log
+MEASURE_MAX_BYTES = 64 * 1024 * 1024  # per log
+MEASURE_MAX_COMPARISONS = 200_000    # trigram comparisons (target-window misses x patterns)
+
+
+def _window_records(log, start: float, end: float) -> tuple[list[dict], bool, bool]:
+    """The records of ``log`` with ``start <= ts < end``, whether the log reaches back to ``start`` (a record or a whole segment at or
+    before it), and whether the scan was truncated by a cap."""
     import local_text_logs as ltl
 
     try:
@@ -667,58 +682,71 @@ def _records(log) -> list[dict]:
     except Exception:  # noqa: BLE001
         paths = [ltl.log_path(log)]
     out: list[dict] = []
-    for path in paths:
+    covers = truncated = done = False
+    lines = nbytes = 0
+    for path in paths:                                     # oldest first
         try:
-            lines = Path(path).read_text(errors="replace").splitlines()
+            if os.path.getmtime(path) < start:            # last written before the window: no record of it is inside
+                covers = True
+                continue
+            fh = open(path, "rb")
         except OSError:
             continue
-        for line in lines:
-            try:
-                row = json.loads(line)
-                row["ts"] = float(row["ts"])
-                out.append(row)
-            except (ValueError, KeyError, TypeError):
-                continue
-    return out
+        with fh:
+            for raw in fh:
+                lines += 1
+                nbytes += len(raw)
+                if lines > MEASURE_MAX_LINES or nbytes > MEASURE_MAX_BYTES:
+                    truncated = done = True
+                    break
+                try:
+                    row = json.loads(raw)
+                    ts = float(row["ts"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                if ts <= start:
+                    covers = True
+                if ts >= end:                              # append-only and time-ordered: nothing later is inside
+                    done = True
+                    break
+                if ts >= start:
+                    row["ts"] = ts
+                    out.append(row)
+        if done:
+            break
+    return out, covers, truncated
 
 
-def miss_counts(patterns: list, deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> tuple[int | None, int | None]:
-    """Household intent misses similar to a target pattern in the window before / after ``deployed_at``. ``None`` = no coverage:
-    before, the log's oldest line is newer than the window start (swept); after, the log holds NO record of any kind inside the
-    window (the writer may have stopped: zero is then not a measurement)."""
+def scan_windows(patterns: list, deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> dict:
+    """BLOCKING (file reads, JSON, trigrams): call it through ``asyncio.to_thread`` from async code. The counts of both windows:
+    target misses (``None`` = no coverage: before, the miss log does not reach back to the window start; after, it holds no record of
+    any kind in the window, so the writer may have stopped) and household turns the router logged (``None`` = no coverage before)."""
     import local_text_logs as ltl
 
-    seen = _records(ltl.INTENT_MISSES)
-    if not seen:
-        return None, None
-    oldest = min(r["ts"] for r in seen)
-    before = after = 0
-    alive_after = False
-    for r in seen:
-        ts = r["ts"]
-        if deployed_at <= ts < deployed_at + window_s:
+    start, end = deployed_at - window_s, deployed_at + window_s
+    misses, miss_covers, t1 = _window_records(ltl.INTENT_MISSES, start, end)
+    turns, turn_covers, t2 = _window_records(ltl.ROUTER_SHADOW, start, end)
+    before = after = comparisons = 0
+    alive_after = truncated = False
+    for r in misses:
+        if r["ts"] >= deployed_at:
             alive_after = True
         text = str(r.get("text") or "") if r.get("traffic_class") in (None, "household") else ""
-        if not text or not any(_similar(text, p) for p in patterns):
+        if not text:
             continue
-        if deployed_at - window_s <= ts < deployed_at:
-            before += 1
-        elif deployed_at <= ts < deployed_at + window_s:
-            after += 1
-    return (before if oldest <= deployed_at - window_s else None), (after if alive_after else None)
-
-
-def household_turns(deployed_at: float, *, window_s: float = _MEASURE_WINDOW_S) -> tuple[int | None, int | None]:
-    """Household turns the router logged in the window before / after ``deployed_at`` (the rate's denominator). ``None`` when the
-    log does not reach back to the before window's start."""
-    import local_text_logs as ltl
-
-    seen = _records(ltl.ROUTER_SHADOW)
-    if not seen:
-        return None, None
-    before = sum(1 for r in seen if r.get("traffic") == "household" and deployed_at - window_s <= r["ts"] < deployed_at)
-    after = sum(1 for r in seen if r.get("traffic") == "household" and deployed_at <= r["ts"] < deployed_at + window_s)
-    return (before if min(r["ts"] for r in seen) <= deployed_at - window_s else None), after
+        comparisons += len(patterns)
+        if comparisons > MEASURE_MAX_COMPARISONS:
+            truncated = True
+            break
+        if any(_similar(text, p) for p in patterns):
+            if r["ts"] < deployed_at:
+                before += 1
+            else:
+                after += 1
+    tb = sum(1 for r in turns if r.get("traffic") == "household" and r["ts"] < deployed_at)
+    ta = sum(1 for r in turns if r.get("traffic") == "household" and r["ts"] >= deployed_at)
+    return {"before": before if miss_covers else None, "after": after if alive_after else None,
+            "turns_before": tb if turn_covers else None, "turns_after": ta, "truncated": truncated or t1 or t2}
 
 
 async def run_measure_phase() -> dict:
@@ -751,9 +779,12 @@ async def run_measure_phase() -> dict:
             proposal_id = row["id"]
             deployed_at = row["deployed_at"]
             patterns = _load_target_patterns(row["target_patterns"]) if row["type"] == "intent_pattern" else []
-            before, after = miss_counts(patterns[:20], deployed_at) if patterns else (None, None)
-            turns_before, turns_after = household_turns(deployed_at) if patterns else (None, None)
-            verdict, reason = measure_verdict(patterns, before, after, turns_before=turns_before, turns_after=turns_after)
+            # the scan is blocking file work: off the event loop (zoe-data's digest path runs this in-process)
+            scan = (await asyncio.to_thread(scan_windows, patterns[:20], deployed_at) if patterns else
+                    {"before": None, "after": None, "turns_before": None, "turns_after": None, "truncated": False})
+            before, after, turns_before, turns_after = scan["before"], scan["after"], scan["turns_before"], scan["turns_after"]
+            verdict, reason = measure_verdict(patterns, before, after, turns_before=turns_before, turns_after=turns_after,
+                                              truncated=scan["truncated"])
             validation_result = {"schema": 2, "verdict": verdict, "reason": reason, "misses_before": before, "misses_after": after,
                                  "turns_before": turns_before, "turns_after": turns_after, "window_h": _MEASURE_WINDOW_S / 3600,
                                  "min_before": MEASURE_MIN_BEFORE, "min_turns": MEASURE_MIN_TURNS, "measured_at": now}

@@ -11,6 +11,7 @@ Negative controls (run by hand when this was written; each turned the named test
   * drop the ``decision == "approved"`` idempotence branch                -> test_a_verdict_is_recorded_once
   * make ``board_mirror_on`` default true                                  -> test_the_board_mirror_is_off_by_default
   * select approved rows again in ``_backlog``                             -> test_decided_cards_leave_the_list_and_later_comes_back
+  * call ``scan_windows`` on the loop (no ``asyncio.to_thread``)         -> test_the_scan_runs_off_the_event_loop
   * the old past-decisions query (approved / measured only)              -> test_every_verdict_leaves_a_visible_trail
   * cap the key path at ``MAX_IDS`` (500)                                  -> test_a_big_group_is_decided_by_its_key
 The page's own controls are mutations of ``js/evolution-page.js`` below (test_page_negative_controls_turn_the_harness_red).
@@ -344,6 +345,71 @@ def test_far_less_traffic_after_is_not_an_improvement(db, monkeypatch, tmp_path)
     after = [miss(NOW + 600 + i) for i in range(4)]
     out, status, vr = _applied(db, monkeypatch, tmp_path, BEFORE + after, router=_turns(100, 40))
     assert (status, vr["verdict"], vr["misses_after"], vr["turns_after"]) == ("applied", "no_change", 4, 40)
+
+
+def test_the_scan_runs_off_the_event_loop(db, monkeypatch, tmp_path):
+    """The measure's blocking scan runs on a worker thread: a concurrent coroutine keeps ticking while a deliberately slow fake scan
+    runs. Negative control: call ``scan_windows`` directly inside ``run_measure_phase`` -> same thread, no ticks, red."""
+    import asyncio
+    import threading
+
+    seen = {}
+
+    def slow_scan(patterns, deployed_at, **_k):
+        seen["thread"] = threading.get_ident()
+        time.sleep(0.5)
+        return {"before": 10, "after": 0, "turns_before": 100, "turns_after": 100, "truncated": False}
+
+    monkeypatch.setattr(evolution_notice, "scan_windows", slow_scan)
+    pid = run(eq.propose(db, source="evolution_notice:intent_miss_cluster", change_class="code", component="intent_router",
+                         title="Intent gap", legacy_type="intent_pattern", target_patterns=json.dumps([WORDS]), now=NOW - 10 * DAY))
+    run(eq.transition(db, pid, "applied", actor="test", now=NOW))
+    monkeypatch.setitem(sys.modules, "multica_client", types.SimpleNamespace())
+
+    async def main():
+        loop_thread, ticks = threading.get_ident(), [0]
+
+        async def ticker():
+            while "done" not in seen:
+                ticks[0] += 1
+                await asyncio.sleep(0.01)
+
+        t = asyncio.create_task(ticker())
+        out = await evolution_notice.run_measure_phase()
+        seen["done"] = True
+        await t
+        return loop_thread, ticks[0], out
+
+    loop_thread, ticks, out = run(main())
+    assert seen["thread"] != loop_thread and ticks >= 10 and out["validated"] == 1
+
+
+def test_the_scan_is_bounded(monkeypatch, tmp_path):
+    """A rotated segment last written before the window is skipped unread; a cap stops the scan and says so; a truncated scan is
+    unmeasured, never a verdict."""
+    misses, router = tmp_path / "m.jsonl", tmp_path / "r.jsonl"
+    old = tmp_path / "r.jsonl.1"
+    old.write_text(json.dumps({"ts": NOW - W / 2, "traffic": "household"}) + "\n")         # would count if it were read
+    os.utime(old, (NOW - 3 * W, NOW - 3 * W))
+    router.write_text("".join(json.dumps(r) + "\n" for r in _turns(40, 40)[1:]))
+    misses.write_text("".join(json.dumps(r) + "\n" for r in BEFORE + [miss(NOW + 60, "an unrelated new line")]))
+    monkeypatch.setenv("ZOE_ROUTER_HEAD_LOG", str(router))
+    monkeypatch.setenv("ZOE_INTENT_MISS_LOG", str(misses))
+    scan = evolution_notice.scan_windows([WORDS], NOW)
+    assert (scan["turns_before"], scan["turns_after"], scan["before"], scan["after"], scan["truncated"]) == (40, 40, 10, 0, False)
+    monkeypatch.setattr(evolution_notice, "MEASURE_MAX_LINES", 20)
+    assert evolution_notice.scan_windows([WORDS], NOW)["truncated"] is True
+    monkeypatch.setattr(evolution_notice, "MEASURE_MAX_LINES", 10 ** 6)
+    monkeypatch.setattr(evolution_notice, "MEASURE_MAX_COMPARISONS", 3)
+    assert evolution_notice.scan_windows([WORDS], NOW)["truncated"] is True
+    assert evolution_notice.measure_verdict(["x"], 10, 0, turns_before=100, turns_after=100, truncated=True) == ("unmeasured",
+                                                                                                                  "scan_truncated")
+
+
+def test_a_truncated_scan_is_unmeasured_end_to_end(db, monkeypatch, tmp_path):
+    monkeypatch.setattr(evolution_notice, "MEASURE_MAX_LINES", 20)
+    out, status, vr = _applied(db, monkeypatch, tmp_path, BEFORE + [miss(NOW + 60, "an unrelated new line")])
+    assert (status, vr["verdict"], vr["reason"]) == ("applied", "unmeasured", "scan_truncated")
 
 
 def test_the_decide_page_shows_the_measurement(client, db, monkeypatch, tmp_path):
