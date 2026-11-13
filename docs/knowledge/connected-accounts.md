@@ -64,6 +64,10 @@ item the new words came from (the edited row's pointer is never carried forward:
 a member's own edit of a provider row is theirs and carries none, while the retired provider row keeps its pointer. No feed writes such
 rows yet.
 
+The member's memory opt-out (`user_prefs.MEMORY_OPT_OUT_SOURCES`) holds `external_source` exactly like every other automatic writer,
+at the same three walls - `ingest`, `review(edit)` and the candidate write - matched on the lane `source` OR the real writer `origin`:
+an opted-out member gets nothing stored from any feed (no row, no candidate, no pointer).
+
 ## Forget reach
 
 `MemoryService.delete_user` (fail closed) runs `connected_accounts.forget_user` (secrets, sync runs, accounts),

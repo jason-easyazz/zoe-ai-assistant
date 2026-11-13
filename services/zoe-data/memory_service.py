@@ -1354,6 +1354,12 @@ def scrub_source_excerpt(text: Optional[str], *, limit: int = _SOURCE_EXCERPT_MA
     return scrubbed[:limit].rstrip() or None
 
 
+def _opt_out_writer(source: str, origin: Optional[str] = None) -> bool:
+    """Is this write held by the member's memory opt-out? By the lane ``source`` OR the real writer ``origin`` (a provider
+    writing under another lane label is still the provider)."""
+    return source in MEMORY_OPT_OUT_SOURCES or bool(origin and origin in MEMORY_OPT_OUT_SOURCES)
+
+
 async def _user_opted_out(user_id: str) -> bool:
     """Per-user ``memory_opt_out`` preference. Fail-open: a lookup failure (no
     pool in tests, DB blip) returns False — a preference read must never lose a fact."""
@@ -1561,7 +1567,7 @@ class MemoryService:
         # automatic writer (per-turn extractor, turn digest, person extractors,
         # idle/nightly digest, consolidation, synthesis) honours it without each
         # caller remembering to. Explicit teach sources are never dropped.
-        if source in MEMORY_OPT_OUT_SOURCES and (opt_out or await _user_opted_out(user_id)):
+        if _opt_out_writer(source, origin) and (opt_out or await _user_opted_out(user_id)):
             self._bump("opt_out", source)
             return None
 
@@ -2468,7 +2474,7 @@ class MemoryService:
                     pass
         if (
             decision == "edit"
-            and actor in MEMORY_OPT_OUT_SOURCES
+            and _opt_out_writer(actor, origin)
             and await _user_opted_out(user_id)
         ):
             self._bump("opt_out", actor)
@@ -3381,6 +3387,9 @@ class MemoryService:
         if _is_unidentified(user_id):
             self._bump(GUEST_DROP, writer)
             logger.info("GUEST_MEMORY_DISCARD writer=%s op=candidate", writer)
+            return None
+        if _opt_out_writer(writer) and await _user_opted_out(user_id):   # the same wall as ingest / review(edit)
+            self._bump("opt_out", writer)
             return None
         try:
             scrubbed, reject = scrub_pii(text)

@@ -432,3 +432,49 @@ def test_reconnecting_a_revoked_account_starts_it_over_under_a_new_generation(db
     assert db.rows("SELECT status FROM connected_accounts") == [("active",)]
     assert run(ca.create("ann", "google", "calendar", "s1")) == a              # reconnecting a LIVE account changes nothing
     assert db.rows("SELECT status, account_generation FROM connected_accounts") == [("active", 3)]
+
+
+# -- review round 3: the member's memory opt-out holds a provider exactly like every other automatic writer -------------------------
+
+def _opted_out(monkeypatch, out: bool):
+    import memory_service
+
+    async def check(_uid):
+        return out
+    monkeypatch.setattr(memory_service, "_user_opted_out", check)
+
+
+def _provider_calls(svc, target):
+    """ingest (lane label + real writer), a provider edit, and a provider candidate. Returns their results."""
+    return [
+        run(svc.ingest("User's dentist is Dr Example.", user_id=UID, source="external_source", source_ref=REF)),
+        run(svc.ingest("User's dentist is Dr Sample.", user_id=UID, source="contacts", origin="external_source", source_ref=REF)),
+        run(svc.review(target, decision="edit", edits="User's dentist is Dr Other.", actor="external_source", source_ref=REF)),
+        run(svc.record_candidate("User's dentist is Dr Fourth.", user_id=UID, writer="external_source", contradicts=target,
+                                 kind="other", source_ref=REF)),
+    ]
+
+
+def test_an_opted_out_member_gets_nothing_stored_from_a_provider(svc, monkeypatch):
+    """Negative control: take ``external_source`` out of ``user_prefs.MEMORY_OPT_OUT_SOURCES`` and every call below stores."""
+    _opted_out(monkeypatch, True)
+    target = seed(svc, ma.MODEL_FROM_TRANSCRIPT, text="User's dentist is Dr Zero.")
+    before = dict(svc._col.rows)
+    got = _provider_calls(svc, target)
+    # exactly what an automatic writer already held by the opt-out gets (chat_regex ingest / digest edit / conversation candidate)
+    other = [run(svc.ingest("User's dentist is Dr Example.", user_id=UID, source="chat_regex")),
+             run(svc.ingest("User's dentist is Dr Sample.", user_id=UID, source="digest")),
+             run(svc.review(target, decision="edit", edits="User's dentist is Dr Other.", actor="digest")),
+             run(svc.record_candidate("User's dentist is Dr Fourth.", user_id=UID, writer="conversation", contradicts=target,
+                                      kind="other"))]
+    assert got == other == [None, None, None, None]
+    assert svc._col.rows == before                                                # no row, no candidate, no pointer
+    assert not any(k in md for _d, md in svc._col.rows.values() for k in ma.SOURCE_REF_KEYS)
+
+
+def test_a_member_who_is_not_opted_out_still_gets_provider_facts_with_their_pointer(svc, monkeypatch):
+    _opted_out(monkeypatch, False)
+    target = seed(svc, ma.MODEL_FROM_TRANSCRIPT, text="User's dentist is Dr Zero.")
+    ing, ing_origin, edit, cand = _provider_calls(svc, target)
+    for md in (ing.metadata, ing_origin.metadata, edit.metadata, svc._col.rows[cand][1]):
+        assert md["authority_class"] == ma.EXTERNAL_SOURCE and _pointer(md) == _POINTER
