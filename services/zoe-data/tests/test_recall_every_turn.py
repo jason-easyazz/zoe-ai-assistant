@@ -848,3 +848,148 @@ def test_only_one_embed_runs_at_a_time_across_builds_and_turns(monkeypatch):
     for t in threads:
         t.join(5)
     assert state["peak"] > 1
+
+
+# ── the turn embed starts early (begin) and the dynamic-pad embed ─────────────────────────────────
+
+def test_begin_starts_the_turn_embed_and_select_reuses_it(monkeypatch, similar):
+    monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "on")
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        del similar[:]
+        rt.begin(UID, GIFT)                                   # the transcript is final: the embed starts here
+        job = rt._QUERY_EMBEDS["job"]
+        assert job is not None
+        sel = await rt.select(UID, GIFT, svc=svc)             # ... and the turn only awaits it
+        return sel, job
+    sel, job = asyncio.run(go())
+    assert sel.ids == ("m_fish_0003",) and sel.sim_in == 1
+    assert similar == [1] and rt._QUERY_EMBEDS["job"] is job   # ONE embed for begin + select together
+
+
+def test_begin_is_a_no_op_unless_it_can_help(monkeypatch, similar):
+    monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "on")
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        rt.begin(UID, GIFT)                                   # no index yet: nothing to compare against
+        none_yet = rt._QUERY_EMBEDS["job"]
+        await rt._build(UID, svc)
+        monkeypatch.setenv("ZOE_RECALL_SIMILAR", "off")
+        rt.begin(UID, GIFT)
+        similar_off = rt._QUERY_EMBEDS["job"]
+        monkeypatch.setenv("ZOE_RECALL_SIMILAR", "on")
+        rt.begin("", GIFT)                                    # not an identified member
+        no_member = rt._QUERY_EMBEDS["job"]
+        monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "off")
+        rt.begin(UID, GIFT)
+        recall_off = rt._QUERY_EMBEDS["job"]
+        monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "shadow")
+        rt.begin(UID, GIFT)                                   # negative control: with everything right it does start
+        return none_yet, similar_off, no_member, recall_off, rt._QUERY_EMBEDS["job"]
+    none_yet, similar_off, no_member, recall_off, started = asyncio.run(go())
+    assert none_yet is None and similar_off is None and no_member is None and recall_off is None
+    assert started is not None and similar[1:] == [1]      # [0] = the index build; then exactly one turn embed
+
+
+def test_begin_never_raises_without_a_running_loop(monkeypatch, similar):
+    """With a POPULATED index begin() reaches the loop lookup; outside a loop that raises inside, and begin swallows it."""
+    monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "on")
+    rt._reset_state()
+    svc = FakeSvc(world())
+    asyncio.run(rt._build(UID, svc))
+    assert rt._INDEX[UID].vecs is not None                    # the early returns are NOT what keeps this quiet
+    rt.begin(UID, GIFT)                                       # no running loop: no raise, nothing started
+    assert rt._QUERY_EMBEDS["job"] is None
+
+    async def inside():                                       # negative control: the same call on a loop does start an embed
+        rt.begin(UID, GIFT)
+        return rt._QUERY_EMBEDS["job"]
+    assert asyncio.run(inside()) is not None
+
+
+def test_turn_embed_is_keyed_by_the_exact_words_not_a_hash(monkeypatch, similar):
+    """Two different messages must never share a vector, even if Python's hash() collided (it is not the key)."""
+    monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "on")
+    monkeypatch.setattr("builtins.hash", lambda _o: 7)       # every message "collides"
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        rt.begin(UID, GIFT)
+        await asyncio.sleep(0.05)
+        first = rt._QUERY_EMBEDS["job"]
+        return first, await rt.select(UID, "How is Juniper getting on?", svc=svc)
+    first, sel = asyncio.run(go())
+    assert sel.ids == ("m_walk_0001",) and rt._QUERY_EMBEDS["job"] is not first
+
+
+def test_rank_vec_partition_equals_a_full_sort():
+    import numpy as np
+
+    rng = np.random.default_rng(3)
+    v = rng.standard_normal((400, 24)).astype(np.float32)
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    q = v[17] * 0.9 + 0.1 * v[200]
+    q /= np.linalg.norm(q)
+    sims = v @ q
+    want = [(int(j), float(sims[j])) for j in np.argsort(-sims)[:9]]
+    assert rt._rank_vec(v, q, 9) == want
+    assert [j for j, _s in rt._rank_vec(v[:5], q, 9)] == [int(j) for j in np.argsort(-(v[:5] @ q))]   # k >= n: all rows
+
+
+def test_other_words_after_begin_get_their_own_embed(monkeypatch, similar):
+    monkeypatch.setenv("ZOE_RECALL_EVERY_TURN", "on")
+    rt._reset_state()
+    svc = FakeSvc(world())
+
+    async def go():
+        await rt._build(UID, svc)
+        del similar[:]
+        rt.begin(UID, GIFT)
+        await asyncio.sleep(0.05)                             # the first embed finished
+        return await rt.select(UID, "How is Juniper getting on?", svc=svc)
+    sel = asyncio.run(go())
+    assert sel.ids == ("m_walk_0001",) and len(similar) == 2
+
+
+def _real_palace_ef():
+    import memory_service
+
+    try:
+        ef = memory_service._drawers_embedding_function()
+        ef.model, ef.tokenizer                                # noqa: B018 - the model files must be on disk (no download in a test)
+        return ef
+    except Exception:  # noqa: BLE001
+        pytest.skip("the palace MiniLM is not on this machine")
+
+
+def test_dynamic_pad_vectors_equal_the_palaces_fixed_pad_vectors():
+    import numpy as np
+
+    ef = _real_palace_ef()
+    texts = [GIFT, WALK, "yes", "x " * 400, "What should I get my sister for her birthday?"]
+    fixed = np.asarray(ef(list(texts)), dtype=np.float32)
+    fast = rt._embed_raw(texts)
+    assert fast.shape == fixed.shape
+    assert float(np.sum(fast * fixed, axis=1).min()) > 0.9999   # same model, same tokens: padding carries no weight
+    assert rt._FAST["ef"] is ef                                  # the dynamic path ran (not the fallback)
+    assert float(np.sum(rt._embed_raw([GIFT]) * fixed[:1])) > 0.9999   # a batch of one is the same as in a batch
+
+
+def test_dynamic_pad_falls_back_to_the_palace_call_on_any_surprise(monkeypatch):
+    import numpy as np
+    import memory_service
+
+    class Plain:
+        def __call__(self, texts):
+            return np.ones((len(texts), 4), dtype=np.float32) * 3.0
+
+    monkeypatch.setattr(memory_service, "_drawers_embedding_function", lambda: Plain())
+    v = rt._embed_raw(["a", "b"])
+    assert v.shape == (2, 4) and abs(float(np.linalg.norm(v[0])) - 1.0) < 1e-6

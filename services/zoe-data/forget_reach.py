@@ -271,6 +271,9 @@ OTHER: tuple[Store, ...] = (
     Store("account_secrets", "vault", CONFIG, REACHED, "Connected-account credentials (account_secrets.py seam). No backend is configured yet, so "
           "nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user.",
           member="connected_accounts.forget_user", markers=("account_secrets",)),
+    Store("reminder_phone_ledger", "db", METADATA, REACHED, "app_settings rows reminder_phone:<member>:<hash>:<channel> = an outcome class: the "
+          "at-most-once claim of a reminder's phone send (reminder_delivery.py). Ids only, no words; delete_user removes the member's rows.",
+          member="reminder_delivery.forget_user", markers=("reminder_phone:",)),
     Store("omi_audio_files", "file", BIOMETRIC, REACHED, "Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files).",
           member=_OMI_M, entity="omi_recordings.erase_entity", markers=("omi-audit.jsonl",)),
     Store("device_audit_logs", "file", METADATA, OUT_OF_SCOPE, "Audit trails of device/bluetooth/model-profile changes: ids and actions, no household words.",
