@@ -183,13 +183,10 @@ async def _run_evening_winddown() -> None:
 
 
 async def _run_evolution_notice() -> None:
-    """Run the evolution notice (Phase 6 nightly dreaming cycle)."""
-    try:
-        from evolution_notice import run_evolution_notice  # type: ignore[import]
-        result = await run_evolution_notice()
-        logger.info("autopilot: evolution_notice complete — %s", result)
-    except Exception as exc:
-        logger.warning("_run_evolution_notice: %s", exc)
+    """The evolution NOTICE pass runs ONCE a night, in the night digest (``scripts/night/jobs/night_digest.py`` / the in-process
+    ``_memory_digest_loop``), right before MEASURE. This board autopilot used to run it a second time at 02:00 (2026-11-13 audit):
+    the title stays mapped so it can never fall through to another task by substring, and it does nothing."""
+    logger.info("autopilot: evolution notice runs in the night digest, not from the board")
 
 
 async def _run_evolution_weekly_digest() -> None:
