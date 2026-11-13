@@ -304,7 +304,7 @@ def _stream_app(monkeypatch, brain, transcript):
     monkeypatch.setenv("ZOE_VOICE_FILLER_ENABLED", "1")
     monkeypatch.setenv("ZOE_VOICE_FILLER_AFTER_S", "0.15")
 
-    async def _stt(_path):
+    async def _stt(_path, **_kw):
         return transcript
 
     async def _tts(_text):

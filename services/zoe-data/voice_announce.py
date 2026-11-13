@@ -59,9 +59,11 @@ _DEFAULT_TTL_S = 120
 # must never play it. arrival.py queues it only for a panel that holds a live
 # device token, so the ids match by construction.
 # The intercom's rows (``intercom.py``: a member's announcement / ring addressed to ONE named panel) are panel-scoped for the same
-# reason - "tell the kitchen" must never be played by whichever daemon polls first.
+# reason - "tell the kitchen" must never be played by whichever daemon polls first. ``timer_done``
+# (``skybridge_service._ring_when_done``): a member's timer ending is said only by the panel that set it.
 PANEL_SCOPED_TRIGGERS: tuple[str, ...] = ("morning_checkin_arrival", "voice_profile_forget", "voice_enroll",
-                                          "intercom_announce", "intercom_ring", "voice_clip_play", "omi_link")
+                                          "intercom_announce", "intercom_ring", "voice_clip_play", "omi_link",
+                                          "timer_done")
 
 # ── Panel COMMANDS riding the same lane (Zoe-driven voice enrolment) ──────────────────────────────────────────────────────
 # A row whose trigger is one of these is not speech: its ``message`` is a JSON object the daemon ACTS on, and the claim returns it
@@ -124,8 +126,13 @@ async def enqueue_announcement(
     trigger_type: str = "",
     ttl_s: int | None = None,
     commit: bool = True,
+    dedupe_key: str = "",
 ) -> str:
     """Insert one pending spoken announcement; returns its id.
+
+    ``dedupe_key``: an idempotency key. The row id is derived from it, and the insert is ``ON CONFLICT (id) DO
+    NOTHING``, so replaying the same key (a crash between queueing and the caller's own bookkeeping) never makes a
+    second row, whether the first is still pending, claimed or played. Empty = a fresh random id, as before.
 
     Raises on bad input or DB failure — the CALLER (the proactive engine's
     never-raise adapter) owns swallowing, so a queue failure is logged there
@@ -136,11 +143,14 @@ async def enqueue_announcement(
         raise ValueError("announcement message is empty")
     ttl = max(1, int(ttl_s)) if ttl_s else _ttl_s()
     now = _now()
-    ann_id = uuid.uuid4().hex[:16]
+    if dedupe_key:
+        ann_id = dedupe_id(dedupe_key)
+    else:
+        ann_id = uuid.uuid4().hex[:16]
     await db.execute(
         """INSERT INTO voice_announcements
                (id, user_id, panel_id, message, trigger_type, created_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING""",
         (
             ann_id,
             user_id,
@@ -154,6 +164,29 @@ async def enqueue_announcement(
     if commit:
         await db.commit()
     return ann_id
+
+
+def dedupe_id(dedupe_key: str) -> str:
+    """The row id ``enqueue_announcement`` derives from a ``dedupe_key`` (one place, so a revoke finds the same row)."""
+    import hashlib
+
+    return "k" + hashlib.sha256(str(dedupe_key).encode("utf-8")).hexdigest()[:15]
+
+
+async def revoke_pending(db, *, dedupe_key: str, commit: bool = True) -> bool:
+    """Withdraw the still-PENDING row queued under ``dedupe_key``; True when one was withdrawn.
+
+    Only a row nobody has claimed is touched (``delivered_at IS NULL``): a claimed or played row is the daemon's and is
+    left as it is. The row is marked ``expired`` rather than deleted, so a replayed enqueue of the same key still finds it
+    and adds nothing. No row = a no-op."""
+    async with db.execute(
+        "UPDATE voice_announcements SET expired = 1 WHERE id = ? AND delivered_at IS NULL AND expired = 0",
+        (dedupe_id(dedupe_key),),
+    ) as cur:
+        withdrawn = getattr(cur, "rowcount", 0) == 1
+    if commit:
+        await db.commit()
+    return withdrawn
 
 
 async def enqueue_command(

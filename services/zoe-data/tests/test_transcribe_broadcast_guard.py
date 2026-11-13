@@ -58,7 +58,7 @@ async def test_capture_false_never_touches_the_corpus(monkeypatch):
     assert len(calls) == 1, "real user turns (default) must still capture"
 
 
-async def _fake_impl(wav_path):
+async def _fake_impl(wav_path, **_kw):
     return "hello"
 
 
