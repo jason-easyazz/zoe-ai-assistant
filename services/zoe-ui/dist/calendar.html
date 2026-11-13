@@ -1963,6 +1963,7 @@
             <button class="close-panel" onclick="closeEventPanel()">×</button>
         </div>
         <div class="event-panel-content">
+            <div class="form-group" id="eventSeriesNote" style="display: none;"></div>
             <!-- Basic Section (Always Visible) -->
             <div class="form-group">
                 <label class="form-label">Event Title</label>
@@ -2216,7 +2217,8 @@
         let selectedTasks = [];
         let draggedTask = null;
         let draggedEvent = null;
-        let editingEventId = null;
+        let editingEventId = null;   // the series id an edit / delete sends
+        let editingEventKey = null;  // the occurrence the panel shows (instance_key)
         
         // Data from API
         let events = [];
@@ -2402,6 +2404,14 @@
                     
                     return {
                         id: event.id,
+                        // One OCCURRENCE: a repeating event comes back once per date sharing one id, so rows,
+                        // lookups and selection key on this; edits and deletes still send the series `id`.
+                        // An older server sends no instance_key: fall back to the id.
+                        key: event.instance_key || String(event.id),
+                        isRecurring: !!event.is_recurring,
+                        seriesStartDate: event.series_start_date || null,
+                        readOnly: !!event.read_only,
+                        sourceLabel: event.source_label || '',
                         title: event.title,
                         date: parseEventDate(event),
                         time: event.start_time || event.time || '09:00',
@@ -2455,6 +2465,7 @@
                     })
                     .map(reminder => ({
                         id: `reminder-${reminder.id}`,
+                        key: `reminder-${reminder.id}`,
                         title: reminder.title,
                         date: parseEventDate({ start_date: reminder.due_date }), // Use same parsing as events
                         time: reminder.due_time || '09:00',
@@ -2879,7 +2890,7 @@
                     eventBar.className = `month-event-bar ${event.category}`;
                     eventBar.textContent = event.title;
                     eventBar.draggable = true;
-                    eventBar.dataset.eventId = event.id;
+                    eventBar.dataset.eventId = event.key;
                     
                     eventBar.onclick = (e) => {
                         e.stopPropagation();
@@ -3535,7 +3546,7 @@
                     readyBlock.innerHTML = `⏰ ${getReadyTime}m`;
                     readyBlock.title = `Get ready: ${getReadyTime} minutes`;
                     readyBlock.onclick = () => {
-                        const eventData = events.find(e => e.id === event.id);
+                        const eventData = events.find(e => e.key === event.key);
                         openEventPanel(eventData);
                     };
                     container.appendChild(readyBlock);
@@ -3554,7 +3565,7 @@
                     travelBlock.innerHTML = `🚗 ${travelTime}m`;
                     travelBlock.title = `Travel time: ${travelTime} minutes`;
                     travelBlock.onclick = () => {
-                        const eventData = events.find(e => e.id === event.id);
+                        const eventData = events.find(e => e.key === event.key);
                         openEventPanel(eventData);
                     };
                     container.appendChild(travelBlock);
@@ -3586,8 +3597,11 @@
             
             eventEl.style.top = top + 'px';
             eventEl.style.height = event.duration + 'px'; // duration is already in minutes, 1 minute = 1 pixel
-            eventEl.dataset.eventId = event.id;
-            eventEl.draggable = !isReminder; // Reminders are not draggable
+            eventEl.dataset.eventId = event.key;
+            // Reminders, read-only (synced) events and repeating events are not dragged or resized: a drag would move
+            // a provider's copy or re-anchor the whole series on the dropped date.
+            const movable = !isReminder && canEditEvent(event) && !event.isRecurring;
+            eventEl.draggable = movable;
             
             let taskCountHtml = '';
             if (event.linkedTasks && event.linkedTasks.length > 0) {
@@ -3604,11 +3618,11 @@
                 <div class="event-title">${icon} ${escapeHtml(event.title)} ${indicators}</div>
                 <div class="event-time">${escapeHtml(timeDisplay)}</div>
                 ${taskCountHtml}
-                ${!isReminder ? '<div class="resize-handle bottom"></div>' : ''}
+                ${movable ? '<div class="resize-handle bottom"></div>' : ''}
             `;
             
             eventEl.onclick = () => {
-                const eventData = events.find(e => e.id === event.id);
+                const eventData = events.find(e => e.key === event.key);
                 if (isReminder) {
                     openReminderPanel(eventData);
                 } else {
@@ -3674,7 +3688,13 @@
             });
         }
         
+        /** May this page change the event? Not a read-only (synced / provider) one; the server refuses it anyway (409). */
+        function canEditEvent(event) {
+            return !!event && !event.readOnly;
+        }
+
         async function rescheduleEvent(event, newDate, newTime) {
+            if (!canEditEvent(event) || event.isRecurring) return;
             const eventData = {
                 title: event.title,
                 start_date: formatDateISO(newDate),
@@ -3707,6 +3727,7 @@
         }
         
         async function linkTasksToEvent(event, taskArray) {
+            if (!canEditEvent(event)) { showNotification('That event is read only here', 'error'); return; }
             taskArray.forEach(task => {
                 if (!event.linkedTasks) event.linkedTasks = [];
                 event.linkedTasks.push({
@@ -3723,7 +3744,7 @@
             
             const eventData = {
                 title: event.title,
-                start_date: formatDateISO(event.date),
+                start_date: (event.isRecurring && event.seriesStartDate) || formatDateISO(event.date),
                 start_time: event.time,
                 duration,
                 category: event.category,
@@ -3762,7 +3783,7 @@
             
             const startY = e.clientY;
             const startHeight = event.duration;
-            const eventElement = document.querySelector(`[data-event-id="${event.id}"]`);
+            const eventElement = document.querySelector(`[data-event-id="${CSS.escape(String(event.key))}"]`);
             
             // Add visual feedback
             eventElement.classList.add('resizing');
@@ -3803,9 +3824,11 @@
         }
         
         async function saveEventDuration(event) {
+            if (!canEditEvent(event)) return;
             const eventData = {
                 title: event.title,
-                start_date: formatDateISO(event.date),
+                // a repeating event's PUT keeps the series' own start date, never this occurrence's
+                start_date: (event.isRecurring && event.seriesStartDate) || formatDateISO(event.date),
                 start_time: event.time,
                 duration: event.duration,
                 category: event.category,
@@ -3896,9 +3919,10 @@
         }
         
         async function saveEventLinkedTasks(event) {
+            if (!canEditEvent(event)) return;
             const eventData = {
                 title: event.title,
-                start_date: formatDateISO(event.date),
+                start_date: (event.isRecurring && event.seriesStartDate) || formatDateISO(event.date),
                 start_time: event.time,
                 duration: event.duration,
                 category: event.category,
@@ -3954,7 +3978,7 @@
         }
         
         function completeEvent() {
-            const event = events.find(e => e.id === editingEventId);
+            const event = events.find(e => e.key === editingEventKey);
             if (!event || !event.linkedTasks) return;
             
             const incompleteTasks = event.linkedTasks.filter(t => !t.completed);
@@ -3975,6 +3999,7 @@
         
         function openNewEventPanel(date, time) {
             editingEventId = null; // Indicates we're creating a new event
+            editingEventKey = null;
             document.getElementById('editTitle').value = '';
             document.getElementById('editDate').value = formatDateISO(date);
             document.getElementById('editTime').value = time;
@@ -4008,10 +4033,14 @@
             // Hide delete button for new events
             const deleteBtn = document.querySelector('.btn-danger');
             if (deleteBtn) deleteBtn.style.display = 'none';
+            const note = document.getElementById('eventSeriesNote');
+            if (note) { note.textContent = ''; note.style.display = 'none'; }
             
             // Change panel title and save button text to indicate new event
             document.querySelector('.panel-title').textContent = 'New Event';
-            document.querySelector('.btn-primary').textContent = 'Create Event';
+            const createBtn = document.querySelector('.btn-primary');
+            createBtn.textContent = 'Create Event';
+            createBtn.style.display = '';
             
             document.getElementById('eventPanel').classList.add('open');
             document.getElementById('overlay').classList.add('active');
@@ -4019,6 +4048,7 @@
         
         async function openEventPanel(event) {
             editingEventId = event.id;
+            editingEventKey = event.key || String(event.id);
             document.getElementById('editTitle').value = event.title;
             document.getElementById('editDate').value = formatDateISO(event.date);
             document.getElementById('editTime').value = event.time;
@@ -4073,13 +4103,23 @@
                 document.getElementById('completeBtn').style.display = 'none';
             }
             
-            // Show delete button for existing events
+            // Delete and Save only for an event Zoe may change (read_only: a synced / provider calendar)
+            const editable = canEditEvent(event);
             const deleteBtn = document.querySelector('.btn-danger');
-            if (deleteBtn) deleteBtn.style.display = '';
+            if (deleteBtn) deleteBtn.style.display = editable ? '' : 'none';
             
             // Change panel title and save button text to indicate editing
             document.querySelector('.panel-title').textContent = 'Event Details';
-            document.querySelector('.btn-primary').textContent = 'Save';
+            const saveBtn = document.querySelector('.btn-primary');
+            saveBtn.textContent = 'Save';
+            saveBtn.style.display = editable ? '' : 'none';
+            const note = document.getElementById('eventSeriesNote');
+            if (note) {
+                note.textContent = !editable
+                    ? `From ${event.sourceLabel || 'another calendar'} - read only here; change it there.`
+                    : (event.isRecurring ? 'This is a repeating event: changes apply to the whole series.' : '');
+                note.style.display = note.textContent ? '' : 'none';
+            }
             
             document.getElementById('eventPanel').classList.add('open');
             document.getElementById('overlay').classList.add('active');
@@ -4089,6 +4129,7 @@
             document.getElementById('eventPanel').classList.remove('open');
             document.getElementById('overlay').classList.remove('active');
             editingEventId = null;
+            editingEventKey = null;
         }
         
         // Advanced Section Toggle
@@ -4572,9 +4613,13 @@
             };
 
             if (editingEventId) {
-                // Update existing event
-                const event = events.find(e => e.id === editingEventId);
-                if (!event) return;
+                // Update existing event (the series: `id`, never the occurrence key)
+                const event = events.find(e => e.key === editingEventKey);
+                if (!event || !canEditEvent(event)) return;
+                // the form shows THIS occurrence's date; unchanged, it must not re-anchor the series on it
+                if (event.isRecurring && event.seriesStartDate && eventData.start_date === formatDateISO(event.date)) {
+                    eventData.start_date = event.seriesStartDate;
+                }
 
                 // The server replaces the metadata column wholesale, so carry over
                 // any key this form does not model; the form's own fields win.
@@ -4629,15 +4674,15 @@
         // event's `metadata` field in saveEvent().
         
         async function deleteEvent() {
-            const event = events.find(e => e.id === editingEventId);
-            if (!event) return;
+            const event = events.find(e => e.key === editingEventKey);
+            if (!event || !canEditEvent(event)) return;
             
             try {
                 await authedApiRequest(`/calendar/events/${editingEventId}`, {
                     method: 'DELETE'
                 });
                 
-                events = events.filter(e => e.id !== editingEventId);
+                events = events.filter(e => e.id !== editingEventId);   // the series is gone: every occurrence
                 updateView();
                 closeEventPanel();
                 showNotification('Event deleted');
@@ -4731,10 +4776,12 @@
             let id = null;
             try { id = new URLSearchParams(window.location.search).get('event'); } catch (_) { /* no query */ }
             if (!id) return;
-            const find = () => events.find(e => String(e.id) === String(id));
+            // an occurrence's instance_key ("<id>@<date>...") opens that occurrence; a bare id opens the first one
+            const find = () => events.find(e => String(e.key) === String(id))
+                || events.find(e => String(e.id) === String(id).split('@')[0]);
             if (!find()) {
                 try {
-                    const one = await authedApiRequest(`/calendar/events/${encodeURIComponent(id)}`);
+                    const one = await authedApiRequest(`/calendar/events/${encodeURIComponent(String(id).split('@')[0])}`);
                     const ev = (one && one.event) || one;
                     if (ev && ev.start_date) {
                         currentDate = parseEventDate(ev);

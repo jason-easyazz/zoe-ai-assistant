@@ -174,7 +174,10 @@ function sandboxWith(fnNames, globals) {
     const helper = /function\s+escapeHtml\s*\(/.test(script)
         ? extractFunction(script, 'escapeHtml')
         : 'function escapeHtml(v) { return String(v == null ? \'\' : v); }';
-    const src = [helper]
+    // canEditEvent (the read-only guard every write site calls) rides along like escapeHtml when the file has it.
+    const guard = /function\s+canEditEvent\s*\(/.test(script) && !fnNames.includes('canEditEvent')
+        ? [extractFunction(script, 'canEditEvent')] : [];
+    const src = [helper].concat(guard)
         .concat(fnNames.map(n => extractFunction(script, n)))
         .join('\n');
     new vm.Script(src, { filename: 'calendar-inline.js' }).runInContext(ctx);
@@ -618,6 +621,106 @@ check('no unescaped user-content interpolation remains in the render templates',
     }
     assert.deepStrictEqual(offenders, [],
         'raw user-content interpolation found: ' + offenders.join(' | '));
+});
+
+/* ===================================================== OCCURRENCES ======== */
+// GET /api/calendar/events returns a repeating event once per occurrence, all sharing the series `id` (PR 2447).
+// The page must key rows, clicks and the editor by `instance_key`, and still send the series `id` on writes.
+
+const SERIES = [4, 11, 18].map(d => ({
+    id: 'ev-swim', instance_key: `ev-swim@2026-11-${String(d).padStart(2, '0')}T07:00`,
+    title: 'Swim squad', start_date: `2026-11-${String(d).padStart(2, '0')}`, start_time: '07:00', end_time: '08:00',
+    series_start_date: '2026-11-04', is_recurring: true, read_only: false, source_label: 'Zoe', metadata: {}
+}));
+const SYNCED = { id: 'ev-sync', instance_key: 'ev-sync@2026-11-12T09:00', title: 'Board call', start_date: '2026-11-12',
+                 start_time: '09:00', end_time: '10:00', is_recurring: false, read_only: true,
+                 source_label: 'Google Calendar', metadata: {} };
+
+function occurrenceSandbox(extra) {
+    const calls = { opened: [], requests: [] };
+    const ctx = sandboxWith(
+        ['formatDateISO', 'parseEventDate', 'calculateEventDuration', 'loadEvents', 'createEventElement',
+         'canEditEvent', 'saveEventDuration', 'deleteEvent'],
+        Object.assign({
+            events: [], currentDate: new Date(2026, 10, 15), editingEventId: null, editingEventKey: null,
+            updateView() {}, closeEventPanel() {}, showNotification() {},
+            loadReminders: async () => {},
+            openEventPanel: ev => calls.opened.push(ev), openReminderPanel() {},
+            getPriorityColor: () => '#000', getCategoryColor: () => '#000',
+            handleEventDragStart() {}, handleEventDragEnd() {}, linkTasksToEvent() {}, startResize() {},
+            authedApiRequest: async (url, opts) => {
+                calls.requests.push({ url, opts });
+                return url.startsWith('/calendar/events?') ? { events: SERIES.concat([SYNCED]) } : {};
+            }
+        }, extra || {}));
+    return { ctx, calls };
+}
+
+check('three occurrences sharing one id stay three distinct rows', async () => {
+    const { ctx } = occurrenceSandbox();
+    await ctx.loadEvents();
+    const swims = ctx.events.filter(e => e.id === 'ev-swim');
+    assert.strictEqual(swims.length, 3, 'all three occurrences are listed');
+    assert.strictEqual(new Set(swims.map(e => e.key)).size, 3, 'each occurrence has its own key');
+    const els = swims.map(e => ctx.createEventElement(e, 0));
+    assert.strictEqual(new Set(els.map(el => el.dataset.eventId)).size, 3, 'three distinct DOM keys');
+});
+
+check('clicking the second occurrence opens the second one, not the first', async () => {
+    const { ctx, calls } = occurrenceSandbox();
+    await ctx.loadEvents();
+    const second = ctx.events.filter(e => e.id === 'ev-swim')[1];
+    ctx.createEventElement(second, 0).onclick();
+    assert.strictEqual(calls.opened.length, 1, 'the editor opened');
+    assert.strictEqual(ctx.formatDateISO(calls.opened[0].date), '2026-11-11', 'it opened the 11th');
+});
+
+check('edits and deletes of an occurrence send the series id and keep the series start date', async () => {
+    const { ctx, calls } = occurrenceSandbox();
+    await ctx.loadEvents();
+    const third = ctx.events.filter(e => e.id === 'ev-swim')[2];
+    await ctx.saveEventDuration(third);
+    const put = calls.requests.find(r => r.opts && r.opts.method === 'PUT');
+    assert.strictEqual(put.url, '/calendar/events/ev-swim', 'the PUT names the series');
+    assert.strictEqual(JSON.parse(put.opts.body).start_date, '2026-11-04', 'the series is not re-anchored');
+    ctx.editingEventId = third.id;
+    ctx.editingEventKey = third.key;
+    await ctx.deleteEvent();
+    const del = calls.requests.find(r => r.opts && r.opts.method === 'DELETE');
+    assert.strictEqual(del.url, '/calendar/events/ev-swim', 'the DELETE names the series');
+});
+
+check('a read-only item offers no edit, drag, resize or delete', async () => {
+    const { ctx, calls } = occurrenceSandbox();
+    await ctx.loadEvents();
+    const synced = ctx.events.find(e => e.id === 'ev-sync');
+    assert.strictEqual(synced.readOnly, true);
+    assert.strictEqual(synced.sourceLabel, 'Google Calendar');
+    const el = ctx.createEventElement(synced, 0);
+    assert.strictEqual(el.draggable, false, 'not draggable');
+    assert.ok(!/resize-handle/.test(el.innerHTML), 'no resize handle');
+    ctx.editingEventId = synced.id;
+    ctx.editingEventKey = synced.key;
+    await ctx.deleteEvent();
+    await ctx.saveEventDuration(synced);
+    assert.deepStrictEqual(calls.requests.filter(r => r.opts), [], 'no write was sent');
+
+    const els = {};
+    const get = k => (els[k] = els[k] || Object.assign(makeEl(), { checked: false }));
+    const panel = sandboxWith(['openEventPanel', 'canEditEvent', 'formatDateISO'], {
+        document: { getElementById: get, querySelector: get, querySelectorAll: () => [], createElement: makeEl },
+        switchTimeMode() {}, renderPrepItemsList() {}, renderAttendeesList() {}, renderRemindersList() {},
+        renderLinkedTasks() {}, currentPrepItems: [], currentAttendees: [], currentReminders: [],
+        editingEventId: null, editingEventKey: null
+    });
+    await panel.openEventPanel(synced);
+    assert.strictEqual(els['.btn-danger'].style.display, 'none', 'Delete hidden');
+    assert.strictEqual(els['.btn-primary'].style.display, 'none', 'Save hidden');
+    assert.ok(/Google Calendar/.test(els.eventSeriesNote.textContent), 'the source is shown');
+    const swim = ctx.events.find(e => e.id === 'ev-swim');
+    await panel.openEventPanel(swim);
+    assert.strictEqual(els['.btn-primary'].style.display, '', 'Save shown for a local event');
+    assert.ok(/whole series/.test(els.eventSeriesNote.textContent), 'a repeating event says edits change the series');
 });
 
 /* ============================================================ SW_VERSION == */
