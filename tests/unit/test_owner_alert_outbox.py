@@ -351,9 +351,10 @@ def test_an_alert_that_cannot_be_stored_is_never_sent(box, monkeypatch):
     assert any("event=failed" in ln and "reason=outbox_write" in ln for ln in lines)
 
 
-def test_a_timeout_wrapped_in_urlerror_is_uncertain_not_network(tmp_path, monkeypatch):
-    """urlopen wraps a socket timeout in URLError. It may have been delivered, so it must never be retried as a network
-    failure (that could send the alert twice)."""
+def test_only_a_reply_timeout_is_uncertain_a_connect_timeout_is_retried(tmp_path, monkeypatch):
+    """urllib wraps in URLError only what fails BEFORE the request is handed over (DNS, refused, a connect timeout): none
+    of it can have been delivered, so it is "network" and stays in the outbox. A timeout while waiting for the reply is
+    raised bare and is the only "uncertain" (never re-sent: it may have been delivered)."""
     import socket
 
     env = tmp_path / "bot.env"
@@ -362,18 +363,41 @@ def test_a_timeout_wrapped_in_urlerror_is_uncertain_not_network(tmp_path, monkey
     monkeypatch.delenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", raising=False)
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    def wrapped(req, timeout=0):
-        raise urllib.error.URLError(socket.timeout("timed out"))
+    for reason in (socket.timeout("timed out"), TimeoutError("timed out"), ConnectionRefusedError("refused"),
+                   socket.gaierror("no such host")):
+        def wrapped(req, timeout=0, _r=reason):
+            raise urllib.error.URLError(_r)
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", wrapped)
+        monkeypatch.setattr(mod.urllib.request, "urlopen", wrapped)
+        assert mod._telegram_all("x", report=lambda _l: None) == ("network", 0, 1), reason
+
+    def reply_lost(req, timeout=0):
+        raise socket.timeout("timed out")           # bare: getresponse() timed out after the request went out
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", reply_lost)
     assert mod._telegram_all("x", report=lambda _l: None) == ("uncertain", 0, 1)
 
-    def refused(req, timeout=0):
-        raise urllib.error.URLError(ConnectionRefusedError("refused"))
 
-    monkeypatch.setattr(mod.urllib.request, "urlopen", refused)
-    assert mod._telegram_all("x", report=lambda _l: None) == ("network", 0, 1)     # nothing reached Telegram: retryable
+def test_a_real_connect_timeout_keeps_the_alert_in_the_outbox(box, tmp_path, monkeypatch):
+    """The real urlopen with the socket layer timing out at connect: the alert was never sent, so it must stay queued."""
+    import socket
 
+    env = tmp_path / "bot.env"
+    env.write_text("TELEGRAM_BOT_TOKEN=file-token\nZOE_ALERT_TELEGRAM_CHAT_IDS=101\n")
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(env))
+    monkeypatch.delenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    for var in ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+
+    def no_connect(*_a, **_k):
+        raise socket.timeout("timed out")
+
+    monkeypatch.setattr(socket, "create_connection", no_connect)
+    assert mod._telegram_all("x", report=lambda _l: None) == ("network", 0, 1)
+    out = mod.deliver("crash_loop", "x", now=T0, sleep=box["sleep"], log=box["log"])
+    assert out[0] not in ("delivered", "uncertain"), out
+    assert "crash_loop" in Path(mod.OUTBOX_PATH).read_text()   # still queued for the next drain
 
 def test_the_lease_outlives_the_longest_possible_send_and_recipients_are_capped(tmp_path, monkeypatch):
     longest = (mod.MAX_RECIPIENTS * mod.SEND_TIMEOUT_S * mod.INLINE_ATTEMPTS + sum(mod.INLINE_BACKOFF_S)

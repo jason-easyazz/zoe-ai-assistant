@@ -184,10 +184,12 @@ def _telegram_all(text: str, report=None) -> "tuple[str, int, int]":
             fails.append(_http_class(exc.code))
         except urllib.error.URLError as exc:
             report(f"crash-watch: telegram send failed: {exc}")
-            # urlopen WRAPS a socket timeout in URLError. A timeout may have happened after the request went out, so it
-            # may have been delivered: "uncertain" (never re-sent), not "network" (retried, which could send it twice).
-            # Anything else (DNS, refused, unreachable) never reached Telegram.
-            fails.append("uncertain" if isinstance(exc.reason, (TimeoutError, socket.timeout)) else "network")
+            # urllib wraps in URLError ONLY what fails before the request is fully handed over: DNS, refused,
+            # unreachable, the TLS handshake, a CONNECT timeout, a send that could not complete. None of those can have
+            # been delivered, so all are "network" and stay in the outbox for retry (a connect timeout labelled
+            # "uncertain" was dropped as if sent, and the alert was lost). A timeout while WAITING FOR THE REPLY is raised
+            # bare by getresponse() and is the only "uncertain" (the branch below).
+            fails.append("network")
         except (TimeoutError, socket.timeout) as exc:   # sent, reply lost: may have been delivered
             report(f"crash-watch: telegram send failed: {exc}")
             fails.append("uncertain")
