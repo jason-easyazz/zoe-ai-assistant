@@ -97,7 +97,10 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
    when the recording closes, wake turns first, behind a panel flag (off). First a week of a new log-only instrument (close timing,
    talk after the close, false closes). Number: share of turns with first sound inside 1 s, 8.5% today; predicted 40-70% of eligible
    turns. Inside 0.6 s stays 0%: detection on today's endpoint cannot reach it, and prediction is blocked because the speaker-mic mutes
-   itself during playback. State: instrument on a branch, no PR. Gate: the instrument week, zero overlap with speech, a panel rehearsal.
+   itself during playback. State: instrument built on a branch (no PR yet); decision logic #2470 (draft, standalone, nothing wired). **It cannot play until two
+   things exist:** (a) the daemon reads the panel's media state (buildable: the same local source the screensaver gate uses), and
+   (b) a speaker identity before the close (the last confident speaker of the session, or a score on audio before the close);
+   until then every guard that is unsure stays silent. Gate: the instrument week, zero overlap with speech, a panel rehearsal.
 2. **Sound human, step 3: she tunes her own end-of-turn wait** (owner idea, 2026-11-14) from counts of talk after the close,
    household-wide first, per person once voice ID is verified on the turn, inside a floor and ceiling, with a spoken override.
    Includes the owner's call on the faster clean tail `[default ZOE_VAD_CLEAN_TAIL_MS=0]` (560 closes a clean stop about 160 ms
