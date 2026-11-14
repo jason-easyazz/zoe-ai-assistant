@@ -67,7 +67,7 @@ def test_a_person_with_tracking_off_has_no_baseline_and_a_guest_is_never_tracked
 def test_it_keeps_a_bounded_window_of_reduced_days(tmp_path):
     k, twin, _ = learn(tmp_path, n=70)
     assert {person: len(days) for person, days in twin.days.items()} == dict.fromkeys(("alex", "sam", "kid"), WINDOW_DAYS)
-    assert min(twin.days["alex"]) == "2030-03-18"            # the first 14 days are gone
+    assert WINDOW_DAYS == 28 and min(twin.days["alex"]) == "2030-04-15"     # the first 42 days are gone
     k.close()
 
 

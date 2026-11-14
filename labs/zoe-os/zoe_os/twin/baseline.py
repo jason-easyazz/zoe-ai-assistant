@@ -10,9 +10,9 @@ code. No model, no score, nothing inferred about why.
 What it keeps is REDUCED: per person and day, a few clock times, rooms seen, and which routine
 steps were done, each with the sequence number it came from. Never free text (a room or a
 routine item's label is kept as the key of a count), and never older than ``window_days``:
-a day that far behind the newest one seen is dropped. The window is the twin's own retention
-and is an OWNER DECISION (``docs/architecture/zoe-os.md``, the twin section); 56 is the lab's
-placeholder, not a choice.
+a day that far behind the newest one seen is dropped. The window is the twin's own retention.
+The owner decided it (2026-11-14, ``docs/architecture/zoe-os.md`` section 11): 28 days, held
+as ``retention.TWIN_WINDOW_DAYS`` so that it sits in the retention policy and not in a skill.
 
 ``normal(person, day_type)`` says nothing until it has ``MIN_DAYS[day_type]`` days of that
 type for that person: ten working days, or six weekend days. Below that the answer is the
@@ -27,9 +27,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from ..events import Event, Kind
+from ..retention import TWIN_WINDOW_DAYS
 
 MIN_DAYS = {"workday": 10, "weekend": 6}
-WINDOW_DAYS = 56
+WINDOW_DAYS = TWIN_WINDOW_DAYS
 DAY_STARTS = 4                     # a "day" runs 04:00 to 04:00, so a late bedtime stays in its day
 TIMES = ("up", "left", "arrived", "bed")
 NOT_ENOUGH, OFF, OK = "not enough days yet", "no data: not enabled for this person", "ok"

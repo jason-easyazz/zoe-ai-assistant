@@ -9,6 +9,7 @@ from .attention import Attention
 from .capability import Enforcer, Grant, GrantStore, Person
 from .events import Event, Kind, Visibility
 from .explain import Explainer
+from .retention import POLICY, Retention
 from .receipts import ClaimAuditor, Dispatcher, Receipt
 from .spine import KERNEL, Refused, Spine
 
@@ -47,6 +48,7 @@ class Kernel:
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
         self.explainer = Explainer(self.spine, self.grants.people)
+        self.retention = Retention(self.spine, POLICY)      # the chosen policy; sweeps only when called
         self._skills: list[tuple[object, object, Context]] = []
 
     def _grant_changed(self, change: str, g: Grant) -> None:
