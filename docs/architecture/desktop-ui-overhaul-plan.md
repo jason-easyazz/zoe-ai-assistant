@@ -548,7 +548,7 @@ numbers in the bullets below are from July and no longer match; the pins are the
 | `const subscription`, orb logout listener | landed | `dist/test_desktop_wave3.js`, `dist/test_desktop_no_touch_links.js` |
 | Vendor chat's 9 CDN assets | landed, under `dist/lib/` (not `/js/lib/` + `/css/lib/`) | `test_ui_no_external_assets_scan.py` |
 | chat.html duplicate functions | **done 2026-11-14**: the second copies of the seven notification helpers and the weaker second `escapeAttr` (not in the July list) removed; `openMoreOverlay` / `closeMoreOverlay` / `updateTimeDate` kept | `dist/test_chat_single_definitions.js` |
-| Found while closing the wave | chat.html's `escapeHtml` does not escape `"` or `'`, and the generative-UI renderers put it inside attributes and inline handlers; its own PR | - |
+| Found while closing the wave (not in the July register) | **done 2026-11-14**: chat.html's `escapeHtml` did not escape `"` or `'` and the generative-UI renderers used it in attribute values, inline handlers and `href`s. Attributes use `escapeAttr`, actions are bound listeners, links go through `safeComponentUrl` | `dist/test_chat_component_attributes.js` |
 
 Not Wave 1, seen on the way: `renderActionCards` in chat.html interpolates card text raw, but no
 server code emits `action_cards` (dead renderer, a Wave 4 deletion); `index.html` still falls back
