@@ -22,12 +22,20 @@ WHO IS SHOWN A LINE (owner decision 2026-11-14, section 12 of the record): a lin
 person is shown to THAT PERSON, and, for a child, to that child's guardians. To nobody else:
 not another adult of the household, not a guest, not a skill. ``unusual`` computes; a surface
 must pass its result through ``shown_to`` and show only what comes back.
+
+SHARING IS THE PERSON'S CHOICE (owner decision 2026-11-14: "you can choose to share").
+``Sharing`` lets an adult share the lines about THEMSELF with a named member of the household.
+Off by default, one way (sharing with someone shows you nothing of theirs), revocable at
+once, and only that person can turn it on or off: not a partner, not a guardian, not a skill.
+Each change is a kernel event with names and no content.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..capability import CHILD, GUEST, Person
+from ..capability import ADULT, CHILD, GUEST, ConsentError, Person
+from ..events import Event, Kind, Visibility
+from ..spine import KERNEL, Spine
 from .baseline import OK, TIMES, Twin, day_type, hhmm
 
 MIN_MARGIN = 20        # minutes beyond the most extreme baseline day before a time is "unusual"
@@ -51,13 +59,50 @@ class Unusual:
     silent: dict[str, str] = field(default_factory=dict)      # person -> why nothing can be said
 
 
-def shown_to(result: Unusual, viewer: str, people: dict[str, Person]) -> list[Departure]:
-    """The departures ``viewer`` may be shown: their own, and those of a child they are a
-    guardian of. An unknown viewer, a guest or a skill gets nothing."""
+class Sharing:
+    """Who each adult has chosen to share their own lines with. In memory, like grants."""
+
+    def __init__(self, spine: Spine, people: dict[str, Person]) -> None:
+        self.spine, self.people = spine, people
+        self._with: dict[str, set[str]] = {}
+
+    def _may_set(self, by: str, person: str) -> bool:
+        """Only an adult, and only for themself. A child's lines already go to their guardians
+        and cannot be shared further by anyone (that question is still open)."""
+        who = self.people.get(person)
+        return who is not None and who.role == ADULT and by == person
+
+    def _change(self, change: str, person: str, other: str, by: str) -> None:
+        if not self._may_set(by, person):
+            raise ConsentError("only the person themself can choose who sees their lines")
+        them = self.people.get(other)
+        if them is None or them.role == GUEST or other == person:
+            raise ConsentError("lines can be shared only with another member of the household")
+        (self._with.setdefault(person, set()).add if change == "shared" else
+         self._with.setdefault(person, set()).discard)(other)
+        self.spine._kernel_append(Event(Kind.GRANT_CHANGE, KERNEL, visibility=Visibility.KERNEL,
+                                        payload={"change": change, "person": person, "with": other}))
+
+    def share(self, person: str, other: str, *, by: str) -> None:
+        self._change("shared", person, other, by)
+
+    def stop(self, person: str, other: str, *, by: str) -> None:
+        self._change("unshared", person, other, by)
+
+    def shared_with(self, person: str) -> frozenset[str]:
+        return frozenset(self._with.get(person, ()))
+
+
+def shown_to(result: Unusual, viewer: str, people: dict[str, Person],
+             sharing: Sharing | None = None) -> list[Departure]:
+    """The departures ``viewer`` may be shown: their own, those of a child they are a guardian
+    of, and those of anyone who has CHOSEN to share with them. An unknown viewer, a guest or a
+    skill gets nothing."""
     me = people.get(viewer)
     if me is None or me.role == GUEST:
         return []
-    return [d for d in result.departures if _may_show(viewer, people.get(d.person))]
+    return [d for d in result.departures if _may_show(viewer, people.get(d.person))
+            or (sharing is not None and viewer in sharing.shared_with(d.person))]
 
 
 def _may_show(viewer: str, about: Person | None) -> bool:
