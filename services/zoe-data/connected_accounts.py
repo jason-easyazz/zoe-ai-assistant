@@ -8,7 +8,8 @@ Nothing here talks to a provider, and no route exposes it yet.
   generation is FENCED: ``finish_run`` refuses to record it as done and ``still_current`` (checked by the writer inside its own
   transaction) says no, so a batch already in flight cannot recreate rows after a disconnect.
 * ``start_run`` / ``finish_run`` keep the sync log: counts, outcome, an error CLASS (``ERROR_CLASSES``, never a provider message),
-  an opaque cursor before / after, ``backoff_until``.
+  an opaque cursor before / after, ``backoff_until``; since 0079 also the feed counts, bytes, duration and an error CODE
+  (``ERROR_CODES``, the plain-words reason, mirrored on the account as ``last_error_code``).
 * ``upsert_by_external_id`` is the idempotent write a feed importer adopts (Stage 1 moves ``calendar_ical`` onto it).
 * ``forget_user`` (``MemoryService.delete_user``) erases the member's accounts, runs and secrets under the member's erase gate.
 
@@ -35,6 +36,13 @@ KINDS = ("calendar", "contacts", "mail", "music", "other")
 STATUSES = ("pending", "active", "error", "revoked")
 ERROR_CLASSES = ("auth", "network", "rate_limited", "quota", "provider", "config", "internal")
 OUTCOMES = ("ok", "partial", "error")
+#: the plain-words error CODES a feed records beside its class (alembic 0079 CHECKs both columns against the same list)
+ERROR_CODES = ("http_404", "too_large", "not_calendar", "ssrf_blocked", "parse_failed", "revoked_link", "suspect_empty",
+               "ledger_unavailable")
+#: ``sync_runs`` counts: the 0078 four, then the 0079 ones (written only when the caller gives them, so a 0078 database still works)
+COUNTS = ("seen", "created", "updated", "deleted")
+COUNTS_0079 = ("unchanged", "skipped", "pruned", "suppressed", "rrule_unsupported")
+_UNSET = object()
 _PROVIDER = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 #: tables ``upsert_by_external_id`` may write (feed rows only)
@@ -161,12 +169,25 @@ async def start_run(account_id: str, user_id: str, *, scope: str = "", cursor_be
 
 
 async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, int]] = None, cursor_after: Optional[str] = None,
-                     error_class: Optional[str] = None, backoff_until: Optional[str] = None) -> bool:
+                     error_class: Optional[str] = None, backoff_until: Optional[str] = None, error_code: Any = _UNSET,
+                     n_bytes: Optional[int] = None, duration_ms: Optional[int] = None) -> bool:
     """Close a run. True when recorded as ``outcome``; False when the member was erased since (nothing written) or the account was
-    disconnected since (the run is recorded ``fenced``, its cursor dropped, the account untouched)."""
+    disconnected since (the run is recorded ``fenced``, its cursor dropped, the account untouched).
+
+    The 0079 extras are written only when given: a ``COUNTS_0079`` key in ``counts``, ``n_bytes`` / ``duration_ms``, and
+    ``error_code`` (a code from ``ERROR_CODES`` or None; passing it also sets / clears ``connected_accounts.last_error_code``)."""
     if outcome not in OUTCOMES or (error_class is not None and error_class not in ERROR_CLASSES):
         raise ValueError("connected_accounts.finish_run: unknown outcome / error class")
-    c = {k: max(0, int((counts or {}).get(k, 0))) for k in ("seen", "created", "updated", "deleted")}
+    if error_code is not _UNSET and error_code is not None and error_code not in ERROR_CODES:
+        raise ValueError("connected_accounts.finish_run: unknown error code")
+    c = {k: max(0, int((counts or {}).get(k, 0))) for k in COUNTS}
+    run_extra = {f"n_{k}": max(0, int(counts[k])) for k in COUNTS_0079 if counts and k in counts}
+    for col, val in (("bytes", n_bytes), ("duration_ms", duration_ms)):
+        if val is not None:
+            run_extra[col] = max(0, int(val))
+    acct_extra: dict = {}
+    if error_code is not _UNSET:
+        run_extra["error_code"] = acct_extra["last_error_code"] = error_code
     now = _now()
     async with erase_gate.writing(run.user_id, run.scheduled_at) as live:
         if not live:
@@ -177,18 +198,21 @@ async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, in
                 # on the generation the run started under - zero rows means a disconnect got there first, and the run is fenced
                 moved = 0
                 if await still_current(db, run.account_id, run.generation):
+                    extra_sql = "".join(f", {k} = ?" for k in acct_extra)
                     cur = await db.execute(
-                        "UPDATE connected_accounts SET status = ?, last_sync_at = ?, last_error_class = ?, updated_at = ? "
+                        f"UPDATE connected_accounts SET status = ?, last_sync_at = ?, last_error_class = ?, updated_at = ?{extra_sql} "
                         "WHERE id = ? AND account_generation = ? AND status <> 'revoked'",
-                        ("error" if outcome == "error" else "active", now, error_class, now, run.account_id, run.generation))
+                        ("error" if outcome == "error" else "active", now, error_class, now, *acct_extra.values(), run.account_id,
+                         run.generation))
                     moved = int(getattr(cur, "rowcount", 0) or 0)
                 if not moved:
                     await db.execute("UPDATE sync_runs SET outcome = 'fenced', finished_at = ? WHERE id = ?", (now, run.run_id))
                     return False
+                extra_sql = "".join(f", {k} = ?" for k in run_extra)
                 await db.execute("UPDATE sync_runs SET outcome = ?, finished_at = ?, error_class = ?, n_seen = ?, n_created = ?, "
-                                 "n_updated = ?, n_deleted = ?, cursor_after = ?, backoff_until = ? WHERE id = ?",
+                                 f"n_updated = ?, n_deleted = ?, cursor_after = ?, backoff_until = ?{extra_sql} WHERE id = ?",
                                  (outcome, now, error_class, c["seen"], c["created"], c["updated"], c["deleted"], cursor_after,
-                                  backoff_until, run.run_id))
+                                  backoff_until, *run_extra.values(), run.run_id))
     return True
 
 

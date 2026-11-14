@@ -200,8 +200,10 @@ def _drawers_embedding_function() -> Any:
                 from functools import cached_property
 
                 import ort_arena
+                # each batch padded to its own longest text, not a fixed 256 tokens: same vectors, ~10x faster
+                from palace_embed import DynamicPadMixin
 
-                class _ZoeMiniLM(ONNXMiniLM_L6_V2):
+                class _ZoeMiniLM(DynamicPadMixin, ONNXMiniLM_L6_V2):
                     @staticmethod
                     def name() -> str:
                         return "default"
