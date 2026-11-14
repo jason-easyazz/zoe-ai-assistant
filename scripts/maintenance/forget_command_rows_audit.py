@@ -48,7 +48,9 @@ Usage (operator, on the box):
   systemctl --user start zoe-data && until curl -sf http://127.0.0.1:8000/readyz; do sleep 5; done
 Verify: re-run the audit - "linked: 0".
 
-Exit codes: 0 = report printed / dry run / cleanup complete; 2 = refused or unreadable; 5 = cleanup left rows behind.
+Exit codes: 0 = report printed / dry run / cleanup complete (rows erased AND the residue scrub ok); 2 = refused or unreadable;
+5 = cleanup left rows behind; 6 = rows erased but the physical residue scrub failed or did not run (``physical_scrub_failed``;
+a re-run cannot retry it: run the palace-wide scrub ``POST /api/memories/maintenance/scrub-residue`` and the verifier).
 """
 from __future__ import annotations
 
@@ -369,7 +371,13 @@ async def cleanup(todo: dict[str, list[str]], *, svc) -> dict[str, dict[str, int
             if ref is not None:
                 archived.append(rid)
         res = await svc.erase_rows(owner, archived, actor=ACTOR, reason=REASON) if archived else {"rows_removed": 0}
-        done[member_key(owner)] = {"asked": len(ids), "archived": len(archived), "rows_removed": int((res or {}).get("rows_removed") or 0)}
+        removed = int((res or {}).get("rows_removed") or 0)
+        phys = (res or {}).get("physical")
+        # the residue scrub (free pages, WAL, FTS5, index files) is DONE only when it reports ok: a failed, skipped (flag off)
+        # or missing report means the forgotten words may survive on disk
+        scrubbed = isinstance(phys, dict) and phys.get("ok") is True
+        done[member_key(owner)] = {"asked": len(ids), "archived": len(archived), "rows_removed": removed,
+                                   "physical_scrub_failed": 0 if (scrubbed or not removed) else removed}
     return done
 
 
@@ -435,6 +443,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         done = asyncio.run(cleanup(todo, svc=MemoryService(data_dir=str(Path(args.palace).expanduser()))))
         left, _ = plan_cleanup(load_rows(args.palace), turns, plan, window_hours=args.window_hours, member_turns=mt)
         print(json.dumps({"done": done, "after": _member_counts(left), "remaining": sum(len(v) for v in left.values())}))
+        failed = sum(d["physical_scrub_failed"] for d in done.values())
+        if failed:
+            # the rows ARE erased (logically gone, not restored); the physical scrub is OWED. A re-run of this script cannot retry it
+            # (it finds no rows left to erase): the palace-wide scrub does, then the verifier proves it.
+            print(f"physical_scrub_failed rows={failed} members={sum(1 for d in done.values() if d['physical_scrub_failed'])}: "
+                  "the rows stay erased; the residue scrub is owed. Retry with POST /api/memories/maintenance/scrub-residue "
+                  "(zoe-data up, internal token), then verify with scripts/maintenance/memory_residue_check.py.", file=sys.stderr)
+            return 6
         return 5 if left else 0
     try:
         rows = load_rows(args.palace)

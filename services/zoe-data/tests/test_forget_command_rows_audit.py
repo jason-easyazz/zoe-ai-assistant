@@ -149,6 +149,9 @@ def test_cleanup_dry_run_changes_nothing_and_confirm_needs_the_stop(tmp_path, mo
     assert not called and _sha(db) == before
 
 
+PHYSICAL = {"enabled": True, "ok": True}
+
+
 def _store(svc, monkeypatch):  # noqa: F811
     """``svc`` holding the synthetic rows, with call recording; the REAL archive (review), the erase over the stand-in store."""
     monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "0")
@@ -169,7 +172,7 @@ def _store(svc, monkeypatch):  # noqa: F811
         gone = [i for i in ids if i in svc._col.rows and (svc._col.rows[i][1].get("user_id") or svc._col.rows[i][1].get("wing")) == user_id]
         for i in gone:
             svc._col.rows.pop(i)
-        return {"rows_removed": len(gone)}
+        return {"rows_removed": len(gone), "physical": dict(PHYSICAL)}
     monkeypatch.setattr(svc, "review", review)
     monkeypatch.setattr(svc, "erase_rows", erase_rows)
     return rows, calls
@@ -187,7 +190,7 @@ def test_cleanup_forgets_exactly_the_audited_ids_through_the_owner_forget_path(s
     done = asyncio.run(fca.cleanup(todo, svc=svc))
     assert sorted(calls["review"]) == [("minted_excerpt", "archive"), ("minted_turnid", "archive")]
     assert calls["erase"] == [(UID, ["minted_excerpt", "minted_turnid"])]
-    assert list(done.values()) == [{"asked": 2, "archived": 2, "rows_removed": 2}]
+    assert list(done.values()) == [{"asked": 2, "archived": 2, "rows_removed": 2, "physical_scrub_failed": 0}]
     assert "minted_excerpt" not in svc._col.rows and "minted_turnid" not in svc._col.rows
     for keep in ("ordinary", "forget_word", "window", "window_late", "other_member"):
         assert keep in svc._col.rows                                            # nothing else touched
@@ -361,3 +364,17 @@ def test_an_owner_authority_row_is_listed_as_owner_decision_and_never_erased(cls
     assert _confirm(svc, monkeypatch, tmp_path, forged) == 0
     assert '"owner_decision_report_only": 1' in capsys.readouterr().out
     assert "minted_turnid" in svc._col.rows and "minted_excerpt" not in svc._col.rows
+
+
+# ── review #2482 PRRT ...cWrH: a failed residue scrub is said and fails the run ──────────────────────────────────────────────────
+@pytest.mark.parametrize("physical, code", [({"enabled": True, "ok": True}, 0), ({"enabled": True, "ok": False, "error": "x"}, 6),
+                                            ({"enabled": False}, 6)])
+def test_a_failed_or_skipped_residue_scrub_exits_non_zero_and_says_so(physical, code, svc, monkeypatch, tmp_path, capsys):  # noqa: F811
+    monkeypatch.setitem(PHYSICAL, "ok", physical.get("ok"))
+    monkeypatch.setitem(PHYSICAL, "enabled", physical.get("enabled"))
+    rows, _ = _store(svc, monkeypatch)
+    assert _confirm(svc, monkeypatch, tmp_path, fca.audit(rows, _turns(), member_turns=_transcript)) == code
+    err = capsys.readouterr().err
+    assert ("physical_scrub_failed rows=2 members=1" in err) is (code == 6)
+    assert UID not in err and "brother" not in err
+    assert "minted_excerpt" not in svc._col.rows                               # logically erased either way
