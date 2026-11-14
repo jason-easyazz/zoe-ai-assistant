@@ -4147,7 +4147,7 @@ async def _execute_forget_last(user_id: str) -> str:
     except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
         failed += 1
-    try:    # instrument (counts only, read-only): corrections from that turn the in-process memory still holds (#2487 makes it 0)
+    try:    # instrument (counts only, read-only): corrections from that turn the in-process memory still holds (0 since #2487)
         import value_correction
         value_correction.log_held_after_forget("last", user_id, texts=[text])
     except Exception:  # noqa: BLE001
