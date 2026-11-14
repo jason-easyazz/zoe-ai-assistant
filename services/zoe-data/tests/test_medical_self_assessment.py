@@ -384,7 +384,8 @@ def test_a_lower_urgency_class_never_hides_the_self_assessment_in_either_order(t
     assert medical_safety.detect(text).cls == lower[0]                       # detect alone reads the lesser class
     want = _expected(cond)
     assert medical_safety.urgency(want) < medical_safety.urgency(medical_safety.detect(text))
-    assert run(medical_safety.handle(text, "demo_bar_00000001")) == medical_safety.build_reply(want)
+    # the condition's reply LEADS; beside another person's ingestion it is followed by that reply (the cross-detector combine)
+    assert run(medical_safety.handle(text, "demo_bar_00000001")).startswith(medical_safety.build_reply(want))
 
 
 def test_control_first_verdict_wins_gives_the_lesser_reply(monkeypatch):
@@ -679,3 +680,63 @@ def test_a_human_present_past_question_outranks_a_vet_reply_in_either_order(text
 @pytest.mark.parametrize("text", ["is my dog overdosing? did i have a stroke last year?", "did i have a stroke last year? is my dog overdosing"])
 def test_mirror_a_true_recall_question_beside_a_pet_leaves_the_vet_reply(text):
     assert medical_safety.self_assessment(text) == medical_safety.Verdict("ingest_animal", "poison_animal")
+
+
+# ── review #2525 PRRT ...fyYx: the speaker's own call-now is never made conditional by another person's poisoning reply ─────
+SPEAKER_CALL_NOW = {"heart": "am i having a heart attack", "stroke": "am i having a stroke", "breathing": "am i having anaphylaxis"}
+DETECT_CLASSES = {"object_urgent": "my son swallowed a button battery", "poison_human": "my dad swallowed sleeping pills",
+                  "object_minor": "my son swallowed a coin", "ingest_animal": "my dog ate rat bait",
+                  "number": "what number do i ring if someone collapses", "red_soon": "my vision is blurry",
+                  "glucose": "my blood sugar is 6.5", "red_call": "my dad has crushing chest pain"}
+
+
+def _speaker_plus_detect() -> list:
+    return [(t, cond, kind) for cond, ask in SPEAKER_CALL_NOW.items() for kind, other in DETECT_CLASSES.items()
+            for t in (f"{ask}, {other}", f"{other}, {ask}")]
+
+
+def _opening(cond: str) -> str:
+    return medical_safety.build_reply(medical_safety.Verdict("red_call", cond)).split(". ")[0]      # "Ring <number> now"
+
+
+@pytest.mark.parametrize("text, cond, kind", _speaker_plus_detect())
+def test_invariant_the_speakers_call_now_is_always_in_the_reply(text, cond, kind, monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    reply = run(medical_safety.handle(text, "demo_bar_00000001"))
+    assert reply and _opening(cond) in reply
+    if medical_safety.detect(text).cls in ("ingest_human", "ingest_animal"):
+        # both fixed lines, the speaker's unconditional call-now FIRST, then the other person's poisoning line (no new prose)
+        call_now = medical_safety.build_reply(medical_safety.Verdict("red_call", cond))
+        assert reply.startswith(call_now) and reply.endswith(medical_safety.build_reply(medical_safety.detect(text)))
+
+
+def test_the_threads_example(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    reply = run(medical_safety.handle("am i having a heart attack and my dad swallowed sleeping pills", "demo_bar_00000001"))
+    assert reply.startswith(_opening("heart")) and "oisons" in reply and len(reply) < 1200
+
+
+@pytest.mark.parametrize("text", list(DETECT_CLASSES.values()))
+def test_pin_another_persons_emergency_alone_is_unchanged(text, monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert run(medical_safety.handle(text, "demo_bar_00000001")) == (medical_safety.build_reply(medical_safety.detect(text)) or None)
+
+
+def test_pin_a_speakers_own_overdose_alone_is_unchanged(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert run(medical_safety.handle("am i overdosing", "demo_bar_00000001")) == medical_safety.build_reply(_expected("poison_human"))
+
+
+@pytest.mark.parametrize("value", ["off", "shadow", ""])
+def test_off_and_shadow_are_byte_identical_for_a_combined_turn(value, monkeypatch):
+    if value:
+        monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, value)
+    text = "am i having a heart attack and my dad swallowed sleeping pills"
+    assert run(medical_safety.handle(text, "demo_bar_00000001")) == medical_safety.build_reply(medical_safety.detect(text))
+
+
+def test_control_without_the_combine_the_speaker_is_told_to_wait_on_the_other_persons_signs(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    monkeypatch.setattr(medical_safety, "speaker_call_now", lambda _t: medical_safety.NONE)      # 88aea93a1's behaviour
+    reply = run(medical_safety.handle("am i having a heart attack and my dad swallowed sleeping pills", "demo_bar_00000001"))
+    assert _opening("heart") not in reply

@@ -563,36 +563,50 @@ def _sa_match_verdict(m: "re.Match", s: str) -> Optional[Verdict]:
     return Verdict(cls, key)
 
 
+def _sa_found(s: str) -> list:
+    """``[(verdict, who)]`` over every present frame match and every present-relevant past question of the folded turn, after the
+    speaker-over-third-party rule (below). Pure."""
+    present = list(_sa_present_re().finditer(s))
+    found = [(v, _sa_who(m)) for m in present for v in [_sa_match_verdict(m, s)] if v is not None]
+    # a past question naming a condition JOINS the choice (it no longer runs only when no present frame matched: "is my dog
+    # overdosing? have i had a stroke today?"). It is a recall question - answered from memory - only when every clause that
+    # holds no present frame is wholly the allow-listed recall shape and none of them carries a present marker
+    recall_re, past_q_re = _sa_recall_res()
+    past = list(past_q_re.finditer(s))
+    if past:
+        clauses = [c for c in re.finditer(r"[^.!?;,\n]+", s) if c.group(0).strip() and not _RQ_FILLER_ONLY_RE.match(c.group(0).strip())]
+        rest = [c.group(0).strip() for c in clauses
+                if not any(pm.start() < c.end() and c.start() < pm.end() for pm in present)]
+        recall = bool(rest) and not _PRESENT_MARK_RE.search(" ".join(rest)) and all(recall_re.match(c) for c in rest)
+        if not recall:
+            found += [(v, None) for pm in past for v in [_sa_match_verdict(pm, s)] if v is not None]
+    # the SPEAKER's own call-now condition wins the wording over a poison verdict about SOMEONE ELSE ("am i having a heart
+    # attack and my dad is overdosing on cocaine"); both the speaker's, or either unclear: URGENCY alone decides
+    if any(v.cls == "red_call" and who == "speaker" for v, who in found):
+        found = [(v, who) for v, who in found if not (v.cls == "ingest_human" and who == "other")]
+    return found
+
+
 def self_assessment(text: str) -> Verdict:
     """The most urgent verdict (``URGENCY``) over EVERY present frame match in the turn - an idiom voids only the match it is in -
-    else a past question naming a condition that is not wholly a recall question. ``NONE`` otherwise. Pure; never raises."""
+    and every present-relevant past question naming a condition. ``NONE`` otherwise. Pure; never raises."""
     try:
         s = _fold(text)
-        if not s:
-            return NONE
-        present = list(_sa_present_re().finditer(s))
-        found = [(v, _sa_who(m)) for m in present for v in [_sa_match_verdict(m, s)] if v is not None]
-        # a past question naming a condition JOINS the choice (it no longer runs only when no present frame matched: "is my dog
-        # overdosing? have i had a stroke today?"). It is a recall question - answered from memory - only when every clause that
-        # holds no present frame is wholly the allow-listed recall shape and none of them carries a present marker
-        recall_re, past_q_re = _sa_recall_res()
-        past = list(past_q_re.finditer(s))
-        if past:
-            clauses = [c for c in re.finditer(r"[^.!?;,\n]+", s) if c.group(0).strip() and not _RQ_FILLER_ONLY_RE.match(c.group(0).strip())]
-            rest = [c.group(0).strip() for c in clauses
-                    if not any(pm.start() < c.end() and c.start() < pm.end() for pm in present)]
-            recall = bool(rest) and not _PRESENT_MARK_RE.search(" ".join(rest)) and all(recall_re.match(c) for c in rest)
-            if not recall:
-                found += [(v, None) for pm in past for v in [_sa_match_verdict(pm, s)] if v is not None]
-        if not found:
-            return NONE
-        # the SPEAKER's own call-now condition wins the wording over a poison verdict about SOMEONE ELSE ("am i having a heart
-        # attack and my dad is overdosing on cocaine"); both the speaker's, or either unclear: URGENCY alone decides
-        if any(v.cls == "red_call" and who == "speaker" for v, who in found):
-            found = [(v, who) for v, who in found if not (v.cls == "ingest_human" and who == "other")]
-        return min((v for v, _who in found), key=urgency)
+        found = _sa_found(s) if s else []
+        return min((v for v, _who in found), key=urgency) if found else NONE
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety self_assessment failed (%s)", type(exc).__name__)
+        return NONE
+
+
+def speaker_call_now(text: str) -> Verdict:
+    """The SPEAKER's own call-now condition in the turn (a red_call verdict whose frame subject is i / we), else ``NONE``. Pure."""
+    try:
+        s = _fold(text)
+        calls = [v for v, who in (_sa_found(s) if s else []) if v.cls == "red_call" and who == "speaker"]
+        return calls[0] if calls else NONE
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_safety speaker_call_now failed (%s)", type(exc).__name__)
         return NONE
 
 
@@ -924,7 +938,7 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool
         m = mode()
         if m == "off":
             return None
-        v = detect(text)
+        v = det = detect(text)
         # EVERY detector is read, and the MOST urgent verdict wins (URGENCY): a lower-urgency class detect found (a see-today
         # symptom, a blood sugar, the emergency-number question) never hides the self-assessment's call-now
         sa = self_assessment(text)
@@ -945,12 +959,27 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool
         logger.info("MEDICAL_SAFETY user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest", v.cls, v.key, m)
         if m != "enforce":
             return None
+        # CROSS-DETECTOR COMBINE (review of #2525): an ingestion / poisoning reply makes calling now CONDITIONAL on the other
+        # person's signs; when the SPEAKER's own call-now condition is also in the turn, the speaker must still hear the
+        # unconditional call-now. Both fixed replies, in that order: the speaker's call-now first, then the poisoning one.
+        # RULE: combine whenever the SPEAKER's own call-now condition is in the turn AND an ingestion / poisoning verdict (detect's,
+        # or the self-assessment's about someone else) is too - whichever of the two URGENCY ranked first; otherwise one reply.
+        other = v if v.cls in ("ingest_human", "ingest_animal") else (det if det.cls in ("ingest_human", "ingest_animal") else NONE)
+        spk = speaker_call_now(text) if other.cls and self_assess_mode() == "enforce" else NONE
+        if spk.cls:
+            v = other
+        lead = v if not spk.cls else spk
         minor = False
-        if v.cls == "red_call":
+        if lead.cls == "red_call":
             import distress_handoff
 
             minor = await distress_handoff._is_minor((user_id or "").strip())
-        return build_reply(v, minor=minor, intercom=v.cls == "red_call" and await _intercom_reachable(user_id, voice)) or None
+        out = build_reply(lead, minor=minor, intercom=lead.cls == "red_call" and await _intercom_reachable(user_id, voice))
+        if spk.cls:
+            logger.info("MEDICAL_SAFETY_COMBINED user=%s first=%s:%s then=%s:%s", (user_id or "guest").strip() or "guest",
+                        spk.cls, spk.key, v.cls, v.key)
+            out = f"{out} {build_reply(v)}"
+        return out or None
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety handle failed (%s)", type(exc).__name__)
         return None
