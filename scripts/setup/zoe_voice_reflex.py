@@ -10,7 +10,9 @@ Truthfulness (design note W2 sections 0, 3; ``docs/knowledge/voice-reflex.md``):
 * never before the commit: the close was decided, so "I heard sound that stopped" is true;
 * non-lexical only: the bank holds "mm" takes, nothing that claims understanding or agreement;
 * one voice: the bank's manifest voice must equal the household's current voice, else silence (never the wrong voice);
-* silent when in doubt: every rule below that fails is ONE named skip reason from the fixed ``SKIPS`` enum.
+* silent when in doubt: every rule below that fails is ONE named skip reason from the fixed ``SKIPS`` enum, and the explicit
+  inputs ``committed``, ``guest`` and ``media_active`` are silence unless the daemon states the safe value (``speaker_conf``:
+  a known score under ``REFLEX_MIN_SPEAKER_CONF`` is silence; an unknown one only under ``REFLEX_REQUIRE_SPEAKER``).
 
 Logs and the handshake carry integers and fixed enums only, never text or audio.
 """
@@ -39,6 +41,9 @@ REFLEX_NIGHT_START = 22         # silent from 22:00 ...
 REFLEX_NIGHT_END = 7            # ... to 07:00 (env REFLEX_NIGHT="22-07")
 REFLEX_GAIN_DB = -3.0           # a take's active-speech RMS relative to the reference reply speech
 REFLEX_NOISE_FLOOR_DBFS = -40.0  # pre-roll RMS above this = music / TV in the room; PROVISIONAL until S0 data sets it
+REFLEX_FOR_GUESTS = False       # a guest / unknown speaker gets silence unless the owner allows it
+REFLEX_REQUIRE_SPEAKER = False  # an UNKNOWN speaker confidence is silence only when this is on
+REFLEX_MIN_SPEAKER_CONF = 0.70  # a KNOWN speaker confidence under this is silence (the live voice claim threshold)
 REFLEX_CHAIN_ENABLED = False    # S4 (later): follow-up / conversation turns under the chain rule
 REFLEX_CHAIN_EVERY = 3          # chain rule: at most one reflex per this many turns of a chain
 REFLEX_DIR = "~/.zoe-voice/reflex"
@@ -55,8 +60,9 @@ _MAX_MANIFEST_BYTES = 64 * 1024
 KINDS = ("heard", "none")
 RULES = ("deep", "quiet", "clean", "hesitation", "no_speech", "max_duration")
 TURN_KINDS = ("wake", "followup", "conversation", "barge")
-SKIPS = ("short", "capped", "muted", "busy", "noisy", "night", "idle_greeting", "budget", "no_bank", "voice_mismatch",
-         "not_wake", "disabled", "prev_question")
+#: in gate order (the first that applies is the one reported)
+SKIPS = ("disabled", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
+         "idle_greeting", "guest", "low_confidence", "prev_question", "budget", "no_bank", "voice_mismatch")
 LOAD_RESULTS = ("ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format", "too_long", "too_few")
 NO_SKIP = "-"
 
@@ -169,6 +175,9 @@ class Settings:
     night_end: int = REFLEX_NIGHT_END
     gain_db: float = REFLEX_GAIN_DB
     noise_floor_dbfs: float = REFLEX_NOISE_FLOOR_DBFS
+    for_guests: bool = REFLEX_FOR_GUESTS
+    require_speaker: bool = REFLEX_REQUIRE_SPEAKER
+    min_speaker_conf: float = REFLEX_MIN_SPEAKER_CONF
     chain_enabled: bool = REFLEX_CHAIN_ENABLED
     chain_every: int = REFLEX_CHAIN_EVERY
     dir: str = REFLEX_DIR
@@ -188,6 +197,9 @@ def settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         night_start=ns, night_end=ne,
         gain_db=_env_num(env, "REFLEX_GAIN_DB", REFLEX_GAIN_DB, -24, 0),
         noise_floor_dbfs=_env_num(env, "REFLEX_NOISE_FLOOR_DBFS", REFLEX_NOISE_FLOOR_DBFS, -90, 0),
+        for_guests=_env_bool(env, "REFLEX_FOR_GUESTS", REFLEX_FOR_GUESTS),
+        require_speaker=_env_bool(env, "REFLEX_REQUIRE_SPEAKER", REFLEX_REQUIRE_SPEAKER),
+        min_speaker_conf=_env_num(env, "REFLEX_MIN_SPEAKER_CONF", REFLEX_MIN_SPEAKER_CONF, 0.0, 1.0),
         chain_enabled=_env_bool(env, "REFLEX_CHAIN_ENABLED", REFLEX_CHAIN_ENABLED),
         chain_every=int(_env_num(env, "REFLEX_CHAIN_EVERY", REFLEX_CHAIN_EVERY, 2, 20)),
         dir=(env.get("REFLEX_DIR") or "").strip() or REFLEX_DIR,
@@ -197,7 +209,8 @@ def settings(env: Optional[Mapping[str, str]] = None) -> Settings:
 # ── the decision ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Ctx:
-    """What the daemon knows at the committed close: numbers and enums only."""
+    """What the daemon knows at the committed close: numbers and enums only. The four explicit-truth inputs default to
+    UNKNOWN (None), and unknown is silence (``speaker_conf`` alone: unknown is silence only under REFLEX_REQUIRE_SPEAKER)."""
     rule: str                           # RULES: the endpoint rule (tail_rule, or max_duration when the cap stopped it)
     speech_ms: int                      # speech chunks x 80 ms
     muted_ms: int = 0                   # the Jabra's playback mute inside this recording
@@ -213,6 +226,10 @@ class Ctx:
     bank_voice: Optional[str] = None    # the loaded bank's manifest voice (None = no bank)
     current_voice: Optional[str] = None  # the household's current voice (cached from the done frame; None = unknown)
     takes: tuple = ()                   # the loaded bank's take ids
+    committed: Optional[bool] = None    # the endpointer COMMITTED the close (push() returned True); anything but True = silence
+    guest: Optional[bool] = None        # the speaker is a guest / unknown (False only for a household member's local claim)
+    speaker_conf: Optional[float] = None  # the local speaker claim's score at the close (None = no claim scored)
+    media_active: Optional[bool] = None   # music / video is playing through the panel (None = unknown = silence)
 
 
 @dataclass(frozen=True)
@@ -241,6 +258,8 @@ def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
     s = s or settings()
     if not s.enabled:
         return "disabled"
+    if ctx.committed is not True:
+        return "not_committed"          # the truthfulness rule: never a sound before the close is committed
     window = ctx.turn_kind in ("followup", "conversation")
     if ctx.turn_kind != "wake" and not (window and s.chain_enabled):
         return "not_wake"               # S1: wake turns only; a barge turn never gets one
@@ -252,12 +271,22 @@ def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
         return "muted"
     if ctx.other_player:
         return "busy"
+    if ctx.media_active is not False:
+        return "media"                  # music / video through the panel, or unknown
     if not (ctx.noise_dbfs <= s.noise_floor_dbfs):     # NaN counts as noisy
         return "noisy"
     if is_night(ctx.local_hour, s):
         return "night"
     if ctx.idle_h >= s.idle_greet_h:
         return "idle_greeting"
+    if ctx.guest is not False and not s.for_guests:
+        return "guest"                  # a guest or an unknown speaker: silent unless REFLEX_FOR_GUESTS
+    if ctx.speaker_conf is None:
+        if s.require_speaker:
+            return "low_confidence"     # unknown confidence counts only when the owner requires a claim
+    elif (isinstance(ctx.speaker_conf, bool) or not isinstance(ctx.speaker_conf, (int, float))
+          or not ctx.speaker_conf >= s.min_speaker_conf):
+        return "low_confidence"         # a known score under the threshold (NaN / a non-number counts as under)
     if window and ctx.prev_question:
         return "prev_question"
     if ctx.since_last_s is not None and not (ctx.since_last_s >= s.min_gap_s):

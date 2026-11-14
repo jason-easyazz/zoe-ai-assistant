@@ -47,11 +47,13 @@ def _load(name: str = "zoe_voice_reflex_under_test", source: str | None = None):
 R = _load()
 ON = R.Settings(enabled=True)
 TAKES = ("mm_01", "mm_02", "mm_03", "mm_04")
+#: the otherwise-clean context: every explicit input states its safe value
+CLEAN = dict(rule="deep", speech_ms=1200, turn_kind="wake", local_hour=12, bank_voice="af_sky", current_voice="af_sky",
+             takes=TAKES, committed=True, guest=False, speaker_conf=0.9, media_active=False)
 
 
 def ok_ctx(**kw):
-    base = dict(rule="deep", speech_ms=1200, turn_kind="wake", local_hour=12, bank_voice="af_sky",
-                current_voice="af_sky", takes=TAKES)
+    base = dict(CLEAN)
     base.update(kw)
     return R.Ctx(**base)
 
@@ -59,6 +61,10 @@ def ok_ctx(**kw):
 # ── the gate: one case per skip reason ───────────────────────────────────────────────────────────────────────────────────────
 SKIP_CASES = {
     "disabled": (dict(), R.Settings(enabled=False)),
+    "not_committed": (dict(committed=None), ON),
+    "media": (dict(media_active=None), ON),
+    "guest": (dict(guest=True), ON),
+    "low_confidence": (dict(speaker_conf=0.5), ON),
     "not_wake": (dict(turn_kind="followup"), ON),
     "capped": (dict(rule="max_duration"), ON),
     "short": (dict(speech_ms=400), ON),
@@ -69,7 +75,7 @@ SKIP_CASES = {
     "idle_greeting": (dict(idle_h=5.0), ON),
     "prev_question": (dict(turn_kind="conversation", prev_question=True), replace(ON, chain_enabled=True)),
     "budget": (dict(since_last_s=12.0), ON),
-    "no_bank": (dict(bank_voice=None), ON),
+    "no_bank": (dict(takes=("mm_01", "mm_02")), ON),
     "voice_mismatch": (dict(current_voice="bf_emma"), ON),
 }
 
@@ -92,17 +98,40 @@ def test_each_skip(skip):
 
 @pytest.mark.parametrize("skip", sorted(SKIP_CASES))
 def test_each_guard_is_load_bearing(skip):
-    """Negative control: with this skip's ``return`` removed from gate(), its case no longer yields it."""
+    """Negative control: with this skip's ``return`` removed from gate(), its otherwise-clean case PLAYS (``heard``): a removed
+    guard is proven to let a sound through, not merely to change the reason."""
     src = _MOD.read_text(encoding="utf-8")
     mutated, n = re.subn(rf'return "{skip}"', "pass", src)
     assert n >= 1
     M = _load(f"zoe_voice_reflex_mut_{skip}", mutated)
     kw, s = SKIP_CASES[skip]
     s = M.Settings(**{f: getattr(s, f) for f in s.__dataclass_fields__})
-    base = dict(rule="deep", speech_ms=1200, turn_kind="wake", local_hour=12, bank_voice="af_sky",
-                current_voice="af_sky", takes=TAKES)
+    base = dict(CLEAN)
     base.update(kw)
-    assert M.decide(M.Ctx(**base), s=s, seed=1).skip != skip
+    d = M.decide(M.Ctx(**base), s=s, seed=1)
+    assert (d.kind, d.skip) == ("heard", "-") and d.take in TAKES
+
+
+def test_the_explicit_inputs_fail_silent():
+    for v in (None, False, 1, "yes"):
+        assert R.decide(ok_ctx(committed=v), s=ON).skip == "not_committed"     # exactly True, nothing else
+    for v in (None, True, 0, "no"):
+        assert R.decide(ok_ctx(media_active=v), s=ON).skip == "media"
+    for v in (None, True, 0):
+        assert R.decide(ok_ctx(guest=v), s=ON).skip == "guest"                  # unknown speaker = guest
+    allow = replace(ON, for_guests=True)
+    assert R.decide(ok_ctx(guest=True), s=allow).kind == "heard"
+    assert R.decide(ok_ctx(guest=None, speaker_conf=None), s=allow).kind == "heard"
+    # speaker confidence: a known low / NaN / non-number score is silence; unknown is silence only when required
+    for v in (0.69, float("nan"), "0.9", True):
+        assert R.decide(ok_ctx(speaker_conf=v), s=ON).skip == "low_confidence"
+    assert R.decide(ok_ctx(speaker_conf=0.70), s=ON).kind == "heard"
+    assert R.decide(ok_ctx(speaker_conf=None), s=ON).kind == "heard"            # requirement off + unknown: no fire
+    assert R.decide(ok_ctx(speaker_conf=None), s=replace(ON, require_speaker=True)).skip == "low_confidence"
+    assert R.decide(ok_ctx(speaker_conf=0.75), s=replace(ON, min_speaker_conf=0.8)).skip == "low_confidence"
+    # the safe defaults: a bare Ctx (the daemon stated nothing) is silent
+    bare = R.Ctx(rule="deep", speech_ms=1200, bank_voice="af_sky", current_voice="af_sky", takes=TAKES)
+    assert R.decide(bare, s=ON).skip == "not_committed"
 
 
 def test_more_silence_rules():
@@ -114,6 +143,7 @@ def test_more_silence_rules():
     assert R.decide(ok_ctx(noise_dbfs=float("nan")), s=ON).skip == "noisy"
     assert R.decide(ok_ctx(current_voice=None), s=ON).skip == "voice_mismatch"   # unknown voice: never the wrong one
     assert R.decide(ok_ctx(takes=("mm_01", "mm_02")), s=ON).skip == "no_bank"     # rotation needs a third take
+    assert R.decide(ok_ctx(bank_voice=None), s=ON).skip == "no_bank"
     for h in (22, 0, 6):
         assert R.decide(ok_ctx(local_hour=h), s=ON).skip == "night"
     for h in (7, 9, 21):
@@ -223,6 +253,7 @@ def test_defaults_are_the_s1_constants():
     s = R.settings({})
     assert (s.enabled, s.min_speech_ms, s.max_ms, s.seam_ms, s.min_gap_s, s.idle_greet_h, s.night_start, s.night_end,
             s.gain_db) == (False, 480, 600, 120, 30, 4, 22, 7, -3)
+    assert (s.for_guests, s.require_speaker, s.min_speaker_conf) == (False, False, 0.70)
 
 
 def test_env_overrides_are_clamped():
@@ -232,6 +263,9 @@ def test_env_overrides_are_clamped():
     assert s.enabled is True and s.min_gap_s == 10 and s.max_ms == 1000 and s.seam_ms == 40
     assert s.min_speech_ms == 480 and s.gain_db == 0 and s.idle_greet_h == 4 and (s.night_start, s.night_end) == (21, 6)
     assert s.chain_every == 2
+    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_REQUIRE_SPEAKER": "on", "REFLEX_MIN_SPEAKER_CONF": "7"})
+    assert t.for_guests and t.require_speaker and t.min_speaker_conf == 1.0
+    assert R.settings({"REFLEX_MIN_SPEAKER_CONF": "-1"}).min_speaker_conf == 0.0
     assert R.settings({"REFLEX_ENABLED": "maybe"}).enabled is False
     assert R.settings({"REFLEX_NIGHT": "25-07"}).night_start == 22
     assert R.settings({"REFLEX_NIGHT": "7-7"}).night_start == 7 and not R.is_night(23, R.settings({"REFLEX_NIGHT": "7-7"}))
