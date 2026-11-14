@@ -138,8 +138,9 @@ TABLES: tuple[Store, ...] = (
     _t("background_tasks", WORDS, GAP, "Holds the task text and its result; neither path reaches it."),
     _t("pending_suggestions", WORDS, GAP, "Offer text naming people can outlive the forget (person offers are withdrawn by name; "
        "anticipation offers naming the entity are deleted by the cascade; a TOPIC forget withdraws the offers holding the topic or a "
-       "name from the forgotten words: forget_topic._withdraw_offers); delete_user does not reach the table.",
-       entity="memory_forget_cascade._run"),
+       "name from the forgotten words: forget_topic._withdraw_offers); delete_user withdraws only the anticipation offers on the "
+       "member's erased calendar events (calendar_forget.forget_user), not the rest of the table.",
+       member="calendar_forget.forget_user", entity="memory_forget_cascade._run"),
     # --- member-owned product data: the member's own lists, notes, calendar, journal, money ---
     _t("notes", WORDS, GAP, _OWN + " Holds free text."),
     _t("journal_entries", WORDS, GAP, _OWN + " Holds free text."),

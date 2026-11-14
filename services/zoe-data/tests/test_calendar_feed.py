@@ -2,8 +2,8 @@
 
 Synthetic feeds only (every title, place, address and person below is invented), fixed dates, SQLite through the compat-DB shape
 with migrations 0052 / 0078 / 0079 applied, the forget ledger on its in-memory backend (``ci_safe``). The tests that parse a feed
-need the ``icalendar`` package (pinned in CI) and skip without it. This stage has no deletes: an absent key is counted, never
-removed. Negative controls: the clamp and the generation fence.
+need the ``icalendar`` package (pinned in CI) and skip without it. One negative control per guard: clamp, mass-delete guard, forget
+shield and the generation fence.
 """
 from __future__ import annotations
 
@@ -202,7 +202,7 @@ def eid(d, title):
     return d.one("SELECT id FROM events WHERE title = ?", (title,))
 
 
-# -- create / unchanged / change -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# -- create / unchanged / change / delete -------------------------------------------------------------------------------------------
 
 @needs_ics
 def test_create_then_unchanged_by_304_and_by_same_body(db, monkeypatch):
@@ -250,17 +250,19 @@ def test_sequence_and_title_changes_update_and_only_they_replace_attendees(db):
 
 
 @needs_ics
-def test_this_stage_leaves_an_absent_event_untouched_and_counts_it(db):
-    """Deletes are not on yet: an event the feed no longer carries stays, counted ``absent``; even an empty feed deletes nothing."""
+def test_a_removed_event_is_deleted_with_its_children_and_offers(db):
     a = account()
     f = Feed(ics(*THREE))
     sync(a, f)
+    gone = eid(db, "Club practice")
+    offer(db, "ann", gone, "off-1")
+    offer(db, "ann", eid(db, "Market day"), "off-2")
     f.body = ics(*THREE[1:])
     r = sync(a, f)
-    assert (r.outcome, r.counts.get("absent"), r.counts.get("deleted", 0)) == ("ok", 1, 0) and "Club practice" in events(db)
-    f.body = ics()
-    r = sync(a, f)
-    assert (r.outcome, r.counts.get("absent")) == ("ok", 3) and db.one("SELECT COUNT(*) FROM events") == 3
+    assert (r.outcome, r.counts.get("deleted"), r.counts.get("unchanged")) == ("ok", 1, 2)
+    assert "Club practice" not in events(db)
+    assert db.one("SELECT COUNT(*) FROM event_attendees") == 0 and db.one("SELECT COUNT(*) FROM event_alarms") == 0
+    assert db.rows("SELECT id FROM pending_suggestions") == [("off-2",)]
 
 
 @needs_ics
@@ -285,6 +287,9 @@ def test_overrides_are_stored_rows_linked_to_their_master_and_exdate_holds(db):
     occ = [(o["date"], o["title"]) for o in run(window())]
     assert ("2026-12-10", "Weekly swim") not in occ                                 # EXDATE
     assert ("2026-12-17", "Weekly swim") not in occ and ("2026-12-18", "Weekly swim (moved)") in occ   # the override replaces
+    f.body = ics(master)
+    r = sync(a, f)
+    assert r.counts.get("deleted") == 1 and "Weekly swim (moved)" not in events(db)
 
 
 @needs_ics
@@ -306,6 +311,11 @@ def test_window_prune_and_unsupported_rules_are_counted(db):
     r = sync(a, f)
     assert r.skipped == {"out_of_window": 1} and r.counts["rrule_unsupported"] == 1 and "Odd yearly" in events(db)
     assert db.rows("SELECT n_rrule_unsupported, n_skipped FROM sync_runs") == [(1, 1)]
+    # two months on, the December event has left the window: it is pruned, not "deleted by the provider"
+    f.body = ics(THREE[0], odd, vevent("feb@example.test", "February thing", "20270210T010000Z", "20270210T020000Z"))
+    r = run(feed.sync_account(a, f, run_mode="on", now=datetime(2027, 2, 1, tzinfo=timezone.utc)))
+    assert (r.counts.get("pruned"), r.counts.get("deleted"), r.counts.get("created")) == (1, 0, 1)
+    assert set(events(db)) == {"Odd yearly", "February thing"}
 
 
 @needs_ics
@@ -362,7 +372,150 @@ def test_subscription_is_a_read_only_provider_source():
     assert calendar_read.refusal(row) == "That one comes from a subscribed calendar; change it there."
 
 
-# -- the fence and the erase gate ----------------------------------------------------------------------------
+# -- the mass-delete guard --------------------------------------------------------------------------------------------------------
+
+@needs_ics
+def test_an_empty_feed_deletes_nothing_until_it_repeats(db):
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    f.body = ics()
+    r = sync(a, f)
+    assert (r.outcome, r.error_class, r.error_code, r.counts.get("deleted", 0)) == ("partial", "provider", "suspect_empty", 0)
+    assert db.one("SELECT COUNT(*) FROM events") == 3
+    assert db.rows("SELECT last_error_code FROM connected_accounts") == [("suspect_empty",)]
+    r = sync(a, f)                                                                  # the same empty body again: confirmed
+    assert (r.outcome, r.counts.get("deleted")) == ("ok", 3) and db.one("SELECT COUNT(*) FROM events") == 0
+
+
+@needs_ics
+def test_a_big_drop_is_held_and_a_small_one_is_not(db):
+    a = account()
+    many = [vevent(f"m{i}@example.test", f"Fixture {i}", f"202612{10 + i % 15:02d}T010000Z", f"202612{10 + i % 15:02d}T020000Z")
+            for i in range(30)]
+    f = Feed(ics(*many))
+    sync(a, f)
+    f.body = ics(*many[:25])                                                       # 5 of 30: an ordinary delete
+    assert sync(a, f).counts.get("deleted") == 5
+    f.body = ics(*many[:3])                                                        # 22 of 25: held
+    r = sync(a, f)
+    assert (r.outcome, r.error_code) == ("partial", "suspect_empty") and db.one("SELECT COUNT(*) FROM events") == 25
+    f.body = ics(*many[:4])                                                        # a DIFFERENT body is not a confirmation
+    assert sync(a, f).error_code == "suspect_empty" and db.one("SELECT COUNT(*) FROM events") == 25
+    assert sync(a, f).counts.get("deleted") == 21                                  # the same body twice in a row is
+
+
+@needs_ics
+def test_mass_delete_guard_negative_control(db, monkeypatch):
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    monkeypatch.setattr(feed, "mass_delete_suspect", lambda *_: False)
+    f.body = ics()
+    assert sync(a, f).counts.get("deleted") == 3 and db.one("SELECT COUNT(*) FROM events") == 0
+
+
+def test_the_guard_rule():
+    assert feed.mass_delete_suspect(0, 3, 3) and not feed.mass_delete_suspect(0, 0, 0)
+    assert feed.mass_delete_suspect(5, 40, 21) and not feed.mass_delete_suspect(5, 50, 21) and not feed.mass_delete_suspect(5, 30, 20)
+
+
+# -- the forget shield ------------------------------------------------------------------------------------------------------------
+
+def _ledger_rows():
+    return list(memory_forgotten.get_backend().rows.values())
+
+
+@needs_ics
+def test_a_forgotten_feed_event_never_comes_back(db):
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    target = eid(db, "Club practice")
+    offer(db, "ann", target, "off-1")
+    assert run(feed.forget_feed_event("ann", target)) is True
+    assert "Club practice" not in events(db) and db.one("SELECT COUNT(*) FROM pending_suggestions") == 0
+    rows = _ledger_rows()
+    assert [r["scope"] for r in rows] == ["feed_item"]
+    assert not any("Club" in str(v) or "u-1" in str(v) for r in rows for v in r.values())    # a hash, never the title or UID
+    f.honour_etag = False
+    f.body = ics(*THREE, vevent("new@example.test", "Something new"))
+    r = sync(a, f)
+    assert (r.counts.get("suppressed"), r.counts.get("created")) == (1, 1) and "Club practice" not in events(db)
+    assert run(feed.forget_feed_event("ben", eid(db, "Market day"))) is False      # not Ben's: nothing happens
+    assert "Market day" in events(db)
+
+
+@needs_ics
+def test_forgetting_a_master_shields_its_whole_series(db):
+    a = account()
+    master = vevent("series@example.test", "Weekly swim", "20261203T010000Z", "20261203T020000Z", rrule="FREQ=WEEKLY")
+    moved = vevent("series@example.test", "Weekly swim (moved)", "20261218T030000Z", "20261218T040000Z", rid="20261217T010000Z")
+    f = Feed(ics(master, moved))
+    sync(a, f)
+    run(feed.forget_feed_event("ann", eid(db, "Weekly swim")))
+    assert events(db) == {}
+    f.honour_etag = False
+    f.body = ics(master, moved, THREE[0])
+    r = sync(a, f)
+    assert r.counts.get("suppressed") == 2 and set(events(db)) == {"Club practice"}
+
+
+@needs_ics
+def test_forget_shield_negative_control(db, monkeypatch):
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    run(feed.forget_feed_event("ann", eid(db, "Club practice")))
+    monkeypatch.setattr(feed, "_shielded", lambda *_: False)
+    f.honour_etag = False
+    f.body = ics(*THREE, vevent("new@example.test", "Something new"))
+    sync(a, f)
+    assert "Club practice" in events(db)                                           # without the check it is re-imported
+
+
+@needs_ics
+def test_an_unconfigured_ledger_refuses_the_sync_and_the_forget(db, monkeypatch):
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)                                                                     # control: configured, it syncs
+    target = eid(db, "Club practice")
+    monkeypatch.delenv("ZOE_FORGET_LEDGER_SALT")
+    f.calls = 0
+    f.body = ics(*THREE, vevent("new@example.test", "Something new"))
+    r = sync(a, f)
+    assert (r.outcome, r.error_class, r.error_code, f.calls) == ("error", "config", "ledger_unavailable", 0)
+    assert "Something new" not in events(db)
+    with pytest.raises(feed.FeedForgetRefused):
+        run(feed.forget_feed_event("ann", target))
+    assert "Club practice" in events(db)                                           # refused loudly, nothing deleted
+
+
+@needs_ics
+def test_a_ledger_outage_refuses_the_sync(db, monkeypatch):
+    class Down(memory_forgotten.MemoryBackend):
+        async def active_hashes(self, user_id, now_iso):
+            raise ConnectionError("synthetic outage")
+    memory_forgotten.set_backend(Down())
+    r = sync(account(), Feed(ics(*THREE)))
+    assert (r.outcome, r.error_code) == ("error", "ledger_unavailable") and events(db) == {}
+
+
+@needs_ics
+def test_a_forget_shield_that_cannot_be_made_durable_deletes_nothing(db):
+    a = account()
+    sync(a, Feed(ics(*THREE)))
+
+    class ReadOnly(memory_forgotten.MemoryBackend):
+        async def upsert(self, *a, **k):
+            raise ConnectionError("synthetic write failure")
+    memory_forgotten.set_backend(ReadOnly())
+    with pytest.raises(feed.FeedForgetRefused):
+        run(feed.forget_feed_event("ann", eid(db, "Club practice")))
+    assert "Club practice" in events(db)
+
+
+# -- the fence, the erase gate, disconnect and forget-me ----------------------------------------------------------------------------
 
 @needs_ics
 def test_a_disconnect_during_the_fetch_fences_the_run(db):
@@ -407,6 +560,61 @@ def test_fence_negative_control(db, monkeypatch):
     monkeypatch.setattr(ca, "still_current", always)
     sync(a, f)
     assert len(events(db)) == 3
+
+
+@needs_ics
+def test_forget_me_during_the_fetch_leaves_nothing(db):
+    a = account()
+    f = Feed(ics(*THREE))
+    sync(a, f)
+    offer(db, "ann", eid(db, "Market day"), "off-1")
+
+    async def forget_me():
+        await calendar_forget.forget_user("ann")
+        await ca.forget_user("ann")
+    f.before = forget_me
+    f.honour_etag = False
+    f.body = ics(*THREE, vevent("new@example.test", "Something new"))
+    r = sync(a, f)
+    assert r.outcome == "erased"
+    for table in ("events", "event_attendees", "event_alarms", "calendars", "sync_runs", "connected_accounts", "pending_suggestions"):
+        assert db.one(f"SELECT COUNT(*) FROM {table}") == 0, table
+
+
+@needs_ics
+def test_disconnect_leaves_zero_rows_and_zero_offers(db):
+    a = account()
+    b = account("ben", "ben-subject")
+    sync(a, Feed(ics(*THREE)))
+    sync(b, Feed(ics(*THREE)))
+    for i, title in enumerate(("Club practice", "Market day")):
+        offer(db, "ann", db.one("SELECT id FROM events WHERE user_id = 'ann' AND title = ?", (title,)), f"off-{i}")
+    db.conn.execute("INSERT INTO pending_suggestions (id, user_id, session_id, action_type, description, offer_phrase, created_at) "
+                    "VALUES ('keep', 'ann', 's', 'list_add', 'x', 'x', 'x')")
+    db.conn.commit()
+    assert run(feed.disconnect_feed(a)) > 0
+    for table in ("events", "event_attendees", "event_alarms", "calendars"):
+        assert {r[0] for r in db.rows(f"SELECT user_id FROM {table}")} == {"ben"}, table
+    assert db.rows("SELECT id FROM pending_suggestions") == [("keep",)]
+    assert db.rows("SELECT status FROM connected_accounts WHERE id = ?", (a,)) == [("revoked",)]
+    r = sync(a, Feed(ics(*THREE)))                                                 # a revoked account syncs nothing
+    assert r.outcome == "fenced" and {r[0] for r in db.rows("SELECT user_id FROM events")} == {"ben"}
+
+
+@needs_ics
+def test_forget_me_after_a_sync_reaches_every_feed_row_and_offer(db):
+    a = account()
+    sync(a, Feed(ics(*THREE)))
+    offer(db, "ann", eid(db, "Club practice"), "off-1")
+    run(calendar_forget.forget_user("ann"))
+    run(ca.forget_user("ann"))
+    for table in ("events", "event_attendees", "event_alarms", "calendars", "sync_runs", "connected_accounts", "pending_suggestions"):
+        assert db.one(f"SELECT COUNT(*) FROM {table}") == 0, table
+
+
+def test_the_offer_action_is_anticipations():
+    src = (SVC / "anticipation.py").read_text(encoding="utf-8")
+    assert re.search(r'^ACTION = "([a-z_]+)"', src, re.M).group(1) == calendar_forget.OFFER_ACTION
 
 
 # -- the fetch seam ---------------------------------------------------------------------------------------------------------------
@@ -526,12 +734,22 @@ def test_no_title_place_person_address_or_body_reaches_a_log_line(db, caplog):
     sync(a, f)                                                                     # create
     f.body = ics(planted.replace("SEQUENCE:0", "SEQUENCE:1"), *THREE)
     sync(a, f)                                                                     # update
+    f.body = ics()
+    sync(a, f)                                                                     # guard trip
+    f.body = ics(*THREE)
+    sync(a, f)                                                                     # delete
+    f.body = ics(planted, *THREE)
+    sync(a, f)
+    run(feed.forget_feed_event("ann", eid(db, "Quillon Marsh allergy clinic")))    # forget
+    sync(a, f)                                                                     # shield
+
     async def boom():
         raise ConnectionError("GET https://calendar.example/private-token-abc123 failed for Quillon Marsh")
     f.before = boom
     sync(a, f)                                                                     # a fetcher error carrying a URL
     f.before = None
     sync(a, Feed(b"<html>Quillon Marsh</html>", content_type="text/html"))
+    run(feed.disconnect_feed(a))
     assert any("CALENDAR_FEED" in r.getMessage() for r in caplog.records)
     assert _leaks(caplog) == []
     # negative control: the sweep sees a planted title when one IS logged
