@@ -161,3 +161,15 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 - 💡 **The calendar fetch moves into the credential broker**, so a calendar link never reaches the assistant's own service.
 - 💡 **The router learns how to talk to the brain from outcomes**: a route hint (tool groups, rule ids) learned from what worked, flag-dark and A/B'd on the voice corpus; the no-subscription evolution tier.
 - 💡 **A speculative start on pre-brain work while the person is still speaking** (recall, embeddings, context assembly), narrower than the flag-dark whole-turn speculation of B1.1.
+
+### Routines: a daily checklist she walks you through, and catches what you forgot — 💡 pinned
+- **Source:** owner idea, 2026-11-14, from watching what a carer has to remember for someone recovering at home. Not built; nothing measured.
+- **Core:** a routine is a named, ordered checklist per person, tied to an anchor (waking, a meal, leaving, bed) rather than a clock time, and started fresh each day. Each step is pending, done, skipped or snoozed, and she knows which because she was told, the panel was tapped, or a sensor saw it; when she is not sure she asks ("have you had your tablets?") rather than ticking.
+- 💡 **A one-off joins tomorrow's routine**: "remind me to take the drill to work tomorrow" is not a to-do and not a clock reminder; it is one extra line on tomorrow's morning routine, gone the day after.
+- 💡 **The leaving catch**: an undone "take with you" step plus a leaving signal (the phone drops off the home network, a door sensor) sends a message: "I think you forgot the drill."
+- 💡 **A step can carry its how-to**: a carer writes the procedure once and she reads it back one line at a time, exactly as written. She never invents or changes a dose or a number (the medical safety floor stands).
+- 💡 **A step can carry a reading with bounds the carer set**: the spoken number is logged; outside the bounds she tells the carer and repeats the carer's own written instruction, never her own advice.
+- 💡 **The carer loop**: a missed step is prompted gently, then again, then the carer is told; one summary a day.
+- 💡 **Care mode** for someone recovering or confused: the day, the place, who is coming and what happens next, in the same calm short wording every time, on request and at waking.
+- **Order:** (1) routines, one-offs, ask-and-tick by voice and panel, carer told; no new sensors (builds on reminders, lists, proactive and push). (2) The leaving catch from phone presence. (3) Sensors confirm steps. (4) Care mode and a panel in a second home.
+- **Rules:** opt-in per person and per routine, silent for everyone else (unprompted speech stays off by default). A sensed tick for a medicine step must never be wrong: unsure means ask. Numbers to take before building: steps prompted, confirmed and missed per day; wrong ticks; time from a missed step to the carer being told; leaving catches right and wrong.
