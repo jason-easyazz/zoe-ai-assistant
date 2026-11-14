@@ -42,7 +42,7 @@ WORDS, BIOMETRIC, DERIVED, METADATA, CONFIG = "words", "biometric", "derived", "
 @dataclass(frozen=True)
 class Store:
     key: str                          # the table name, or a short id for a non-table store
-    kind: str                         # pg_table | palace | chroma | file | corpus | backup | vault
+    kind: str                         # pg_table | palace | chroma | file | corpus | backup | vault | db | memory (in process)
     holds: str                        # WORDS | BIOMETRIC | DERIVED | METADATA | CONFIG
     status: str                       # REACHED | OUT_OF_SCOPE | GAP
     why: str = ""                     # one line; required unless the store is reached by both paths
@@ -265,6 +265,10 @@ OTHER: tuple[Store, ...] = (
           "a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming "
           "the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate.",
           entity="self_review.erase_entity", markers=("candidate-cells.jsonl",)),
+    Store("pending_correction_markers", "memory", METADATA, REACHED, "correction_marker.py (ZOE_CORRECTION_PENDING_MARKER): in process only, "
+          "member id + chat turn id + time + hashed subject keys, NO words (the packet fetches the turn's text from chat_messages by id). "
+          "TTL 2 h, lost on restart; every forget path drops the member's markers (turn, topic, entity, delete_user).",
+          member="correction_marker.forget_user", entity="correction_marker.forget_user", markers=("PENDING_CORRECTION",)),
     Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
           "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
           member="warm_speaker.forget_user", markers=("warm-speaker.json",)),

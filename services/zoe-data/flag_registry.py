@@ -235,6 +235,7 @@ _ENTRIES = (
     _f('ZOE_CORE_USER_ID', 'str', '', doc='docs/strategy/zoe-samantha-harness-plan.md'),
     _f('ZOE_CORE_VOICE_MODEL_MAXTOKENS', 'int', 512),
     _f('ZOE_CORRECTION_APPLY', 'bool', False, doc='docs/knowledge/samantha-bar.md'),
+    _f('ZOE_CORRECTION_PENDING_MARKER', 'bool', False, doc='services/zoe-data/AGENTS.md', note='memory redesign step 1: same-turn pending-correction block in the recall packet'),
     _f('ZOE_DAILY_BRIEFING_CACHE_MAX_USERS', 'int', 64),
     _f('ZOE_DAILY_BRIEFING_CACHE_TTL_SECONDS', 'int', 120),
     _f('ZOE_DATA_DB', 'str', '', doc='docs/knowledge/python-312-venv-migration.md'),

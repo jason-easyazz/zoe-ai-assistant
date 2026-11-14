@@ -268,6 +268,9 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     groups = topic_groups(topic)
     if not groups:
         return res
+    import correction_marker
+
+    correction_marker.forget_user(user_id, reason="forget_topic")   # any forget drops the member's pending corrections
     try:
         rows = await _owned_rows(svc, user_id, groups)
     except Exception as exc:  # noqa: BLE001

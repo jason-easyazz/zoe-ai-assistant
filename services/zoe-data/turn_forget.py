@@ -210,6 +210,9 @@ def retract(user_id: str, turn: Turn, *, now: Optional[float] = None) -> None:
             while len(_retracted) > _MAX_USERS:
                 _retracted.popitem(last=False)
         logger.info("TURN_FORGET user=%s retracted=1", user_id)
+        import correction_marker
+
+        correction_marker.forget_user(user_id, reason="forget_turn")   # any forget drops the member's pending corrections
     except Exception:  # noqa: BLE001
         logger.warning("turn_forget.retract failed", exc_info=True)
 

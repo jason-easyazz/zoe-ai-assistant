@@ -2232,6 +2232,8 @@ class MemoryService:
             # The in-process per-turn text (exact-words mark, retirement notes, the voice-session bridge's held exchanges): verbatim
             # words that would otherwise survive a member-wide forget and be bridged into the next session. Never raises.
             try:
+                import correction_marker
+                correction_marker.forget_user(user_id, reason="delete_user")   # pending-correction markers: ids only, never raises
                 import forget_redact
                 forget_redact.clear_turn_caches(user_id)
             except Exception:  # noqa: BLE001

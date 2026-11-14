@@ -257,6 +257,9 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
     if not user_id or not (name or "").strip():
         return res
     rx = _name_re(name)
+    import correction_marker
+
+    correction_marker.forget_user(user_id, reason="forget_entity")   # any forget drops the member's pending corrections
 
     async def mutes() -> int:
         import restraint

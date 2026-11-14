@@ -146,6 +146,7 @@ PINNED = {
     "pending_suggestions.py": {"name"},
     "zoe_agent.py": {"raw_streaming_args", "tool_result", "tool_args"},   # ``raw`` is also a URL there (kept)
     "zoe_flue_client.py": {"line"},   # SEAM_CONTINUITY_DEBUG reply= is harness-ids only (test_/demo_), kept
+    "correction_marker.py": {"user_message", "words", "content", "text", "texts", "found", "keys", "out"},   # PENDING_CORRECTION: ids + counts only
     "routers/ui_actions.py": {"result_text"},
     "routers/voice_tts.py": {"_skybridge_reply"},
     "stt_snap.py": set(),
