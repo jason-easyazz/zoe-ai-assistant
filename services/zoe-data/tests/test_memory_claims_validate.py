@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import medical_safety
+import memory_authority as auth
 import memory_claims as mc
 import memory_claims_validate as vm
 import people_graph
@@ -62,14 +63,20 @@ def build_context(case: dict) -> vm.Context:
     opts = dict(case.get("context") or {})
     graph_cls = {"allow_prefix": _PrefixGraph, "fails": _FailingGraph}.get(opts.pop("resolver", ""), vm.Graph)
     member = case.get("member") or "demo_mc"
+    # a fixture row is the member's own statement unless it says otherwise ("authority": null = unknown)
     rows = [vm.Row(r["id"], r["text"], r.get("status") or "approved", r.get("entity_id"),
                    tuple(vm.Attr(a["subject_ref"], a["attribute"], a["value_norm"], a.get("unit") or "", a.get("span"))
-                         for a in (r.get("attrs") or [])))
+                         for a in (r.get("attrs") or [])),
+                   authority=r["authority"] if "authority" in r else auth.USER_STATED)
             for r in case.get("rows_before") or []]
     turns = [vm.Turn(t["t"], _ts(t["at"]), t["text"], people_graph.content_turn_id(member, t["text"]) or "",
                      t.get("own", True)) for t in case.get("turns") or []]
     registry = [vm.Registered(e["subject_ref"], e["attribute"], e["role"], e["value_norm"], _ts(e["said_at"]))
                 for e in case.get("registry_before") or []]
+    # the fixture's default speaker: a verified, identified adult member speaking directly, with a ledger that was read
+    opts.setdefault("speaker_verified", True)
+    opts.setdefault("speaker_rank", auth.RANK[auth.USER_STATED])
+    opts.setdefault("forgotten", lambda _text: False)
     return vm.Context(member, turns, rows, graph_cls(people, edges), registry, detector=medical_safety.detect, **opts)
 
 
@@ -164,11 +171,23 @@ def test_rule_passes_and_fails(rule):
     assert bad_v[0].rule == _FAIL_RULE.get(rule, rule) and bad_v[0].verdict in ("abstain", "refuse")
 
 
-def test_every_rule_has_a_case_in_both_directions_in_the_fixture():
+def test_every_rule_runs_in_the_fixture_and_fails_somewhere():
+    """Instrumented, not hand-listed: ``vm.HITS`` counts every call of every rule function while the whole fixture runs."""
     fails = {c["expect"]["invalid_rule"] for c in CASES.values()}
-    passes = {n for c in CASES.values() for n in c["expect"]["exercises"]}
     assert set(range(1, 21)) - {7, 10} <= fails
-    assert set(range(1, 21)) <= passes
+    vm.HITS.clear()
+    for cid, case in CASES.items():
+        run_case(case, DATA["oracle"][cid])
+    never = [n for n in range(1, 21) if vm.HITS[n] == 0]
+    assert never == [], f"rules that never ran in the fixture: {never}"
+
+
+def test_the_hit_counter_counts_the_real_rule_functions(monkeypatch):
+    vm.HITS.clear()
+    run_case(CASES["G02"], DATA["oracle"]["G02"])           # stopped at the speaker gate: later rules never run
+    assert vm.HITS[16] == 1 and vm.HITS[9] == 0 and vm.HITS[13] == 0
+    rules = {name for name in dir(vm) if name.startswith("rule_")}
+    assert rules and all(hasattr(getattr(vm, name), "__wrapped__") for name in rules), "an uncounted rule function"
 
 
 # -- the rule functions directly (inputs the fixture cannot express) -----------------------------------------------
@@ -178,6 +197,9 @@ T0 = datetime(2026, 11, 14, 9, 0, tzinfo=timezone.utc)
 
 
 def _ctx(people=(), edges=(), rows=(), texts=("juno is 8 not 7",), **kw):
+    kw.setdefault("speaker_verified", True)
+    kw.setdefault("speaker_rank", auth.RANK[auth.USER_STATED])
+    kw.setdefault("forgotten", lambda _text: False)
     turns = [vm.Turn(i, T0.replace(minute=5 * i), t, f"t{i}") for i, t in enumerate(texts)]
     return vm.Context(UID, turns, list(rows), vm.Graph([vm.Person(*p) for p in people], edges), **kw)
 
@@ -281,7 +303,7 @@ def test_an_unexpected_error_inside_is_an_abstain(monkeypatch):
 def test_a_day_that_the_stored_month_does_not_have_abstains_on_rule_8():
     text = "Book club is on the 12th of February"
     rows = [vm.Row("r0", text, attrs=(vm.Attr({"kind": "label", "key": "book club"}, "event_date", {"m": 2, "d": 12},
-                                              "date", f"{text.index('12th')}:{len(text)}"),))]
+                                              "date", f"{text.index('12th')}:{len(text)}"),), authority=auth.USER_STATED)]
     ctx = _ctx(rows=rows, texts=("book club moved to the 31st",))
     claim = {"type": "correction", "turn": 0, "quote": "book club moved to the 31st", "subject": "book club",
              "attribute": "event_date", "new": "the 31st", "time": "current"}
@@ -301,7 +323,7 @@ def _book(d: int, minute: int):
 def test_a_chain_inside_one_session_is_ordered_by_when_it_was_said():
     text = "Book club is on the 5th of December"
     rows = [vm.Row("r0", text, attrs=(vm.Attr({"kind": "label", "key": "book club"}, "event_date", {"m": 12, "d": 5},
-                                              "date", f"{text.index('5th')}:{len(text)}"),))]
+                                              "date", f"{text.index('5th')}:{len(text)}"),), authority=auth.USER_STATED)]
     texts = ("book club moved to the 12th", "book club moved to the 19th", "book club moved to the 5th")
     ctx = _ctx(rows=rows, texts=texts)
     out = vm.validate({"claims": [_book(5, 10), _book(19, 5), _book(12, 0)]}, ctx)       # emitted out of order
@@ -360,23 +382,33 @@ def _docstring_nodes(tree) -> set:
     return out
 
 
-def test_the_validator_imports_no_regex_and_holds_only_vocabulary_strings():
-    tree = ast.parse(Path(vm.__file__).read_text(encoding="utf-8"))
+def phrasing_violations(source: str) -> list:
+    """THE checker: what in ``source`` breaks the validator's hard rule (a pattern-matching import, an f-string, a string
+    constant outside the vocabulary). The real file and the bad samples below go through this one function."""
+    tree = ast.parse(source)
     imports = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     imports |= {(n.module or "").split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
-    assert not imports & {"re", "regex", "fnmatch", "lexicons"}
-    assert not [n for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)], "no f-strings: they build phrasing"
+    out = [f"import {m}" for m in sorted(imports & {"re", "regex", "fnmatch", "lexicons"})]
+    out += ["f-string" for n in ast.walk(tree) if isinstance(n, ast.JoinedStr)]
     docs = _docstring_nodes(tree)
     allowed = mc.VALIDATOR_VOCABULARY | set(mc.LOG_CODES) | {""}      # an empty default carries no phrasing
-    strays = sorted({n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
-                     and id(n) not in docs and n.value not in allowed})
-    assert strays == [], f"string constants outside the vocabulary: {strays}"
+    return out + sorted({f"string {n.value!r}" for n in ast.walk(tree) if isinstance(n, ast.Constant)
+                         and isinstance(n.value, str) and id(n) not in docs and n.value not in allowed})
 
 
-def test_the_ast_check_catches_a_phrase_list_and_a_regex():
-    bad = ast.parse('import re\nWORDS = ("cat", "dog")\n')
-    assert any(isinstance(n, ast.Import) and n.names[0].name == "re" for n in ast.walk(bad))
-    assert {n.value for n in ast.walk(bad) if isinstance(n, ast.Constant)} - mc.VALIDATOR_VOCABULARY == {"cat", "dog"}
+def test_the_validator_imports_no_regex_and_holds_only_vocabulary_strings():
+    assert phrasing_violations(Path(vm.__file__).read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize("extra, want", [
+    ("import re\n", ["import re"]),
+    ("from fnmatch import fnmatch\n", ["import fnmatch"]),
+    ('WORDS = ("cat", "dog")\n', ["string 'cat'", "string 'dog'"]),
+    ('def f(x):\n    return f"moved to {x}"\n', ["f-string", "string 'moved to '"]),
+])
+def test_the_real_checker_catches_a_regex_a_phrase_list_and_an_f_string_added_to_the_real_file(extra, want):
+    real = Path(vm.__file__).read_text(encoding="utf-8")
+    assert phrasing_violations(real + "\n" + extra) == want
 
 
 def test_the_vocabulary_is_tied_to_the_code_it_names():
@@ -401,6 +433,11 @@ GOLDEN_CLASSES = ("correction", "kind", "emergency")
 GOLDEN_SKIPS_PATH = HERE / "fixtures" / "memory_claims_golden_validator_skips.json"
 #: the number of skipped golden cases when the list was written (2026-11-14): it may only go DOWN
 GOLDEN_SKIP_CEILING = 77
+#: the skipped cases BY NAME: a name may leave this set (delete it here with its entry), none may join it
+GOLDEN_SKIP_NAMES = frozenset(\
+    "K01 K02 K03 K04a K04b K05 K06 K07 K08 K11 K12 K13 K14 K15 C01 C02 C03 C04 C23 C23b C24 C25b C26 C27 C28 C29 "
+    "C29b C31 C44 C05 C06 C07 C08 C09 C10b C11 C12 C13 C14 C16 C45 C17 C18 C19 C20 C21b C22 C22b C34 C35 C36 C37 "
+    "C39 C42 C43 E01 E02 E03 E03b E04 E05 E06 E06b E06c E06d E06e E07 E08 E09 E10 E11 E12 E13 E14 E15 E16 E17".split())
 
 
 def _golden() -> tuple:
@@ -447,6 +484,23 @@ def test_golden_case(case):
     assert _golden_problems(case) == []
 
 
+def skip_set_problems(skipped) -> list:
+    """The ratchet: every skipped name is one of ``GOLDEN_SKIP_NAMES`` (so the set can only shrink) and the pinned set
+    holds no name that is no longer skipped (a stale pin would let that name come back)."""
+    names = set(skipped)
+    return ([f"new skip {n}" for n in sorted(names - GOLDEN_SKIP_NAMES)]
+            + [f"stale pin {n}" for n in sorted(GOLDEN_SKIP_NAMES - names)]
+            + (["over the ceiling"] if len(names) > GOLDEN_SKIP_CEILING else []))
+
+
+def test_the_golden_skip_set_is_pinned_by_name():
+    assert skip_set_problems(SKIPPED) == [] and len(GOLDEN_SKIP_NAMES) == GOLDEN_SKIP_CEILING
+    gone, other = sorted(SKIPPED)[0], next(c["id"] for c in GOLDEN_CASES if c["id"] not in SKIPPED)
+    swapped = (set(SKIPPED) - {gone}) | {other}                       # same count, one name swapped for another
+    assert len(swapped) == len(SKIPPED) and skip_set_problems(swapped) == [f"new skip {other}", f"stale pin {gone}"]
+    assert skip_set_problems(set(SKIPPED) - {gone}) == [f"stale pin {gone}"]      # shrinking means unpinning it too
+
+
 def test_the_golden_skips_only_shrink():
     assert len(SKIPPED) <= GOLDEN_SKIP_CEILING, "a golden skip was ADDED: that needs a reason in review"
     assert set(GOLDEN_SKIPS["reasons"]) >= {e["cause"] for e in SKIPPED.values()}
@@ -461,3 +515,84 @@ def test_a_skipped_golden_case_still_fails():
         pytest.skip("golden set not on this branch")
     green = [c["id"] for c in GOLDEN_CASES if c["id"] in SKIPPED and not _golden_problems(c)]
     assert green == [], f"these skipped golden cases pass now: remove their entries from {GOLDEN_SKIPS_PATH.name}"
+
+
+# -- review of PR 2499: the speaker gate, the unread ledger, the authority model, the envelope ----------------------
+
+def _c01(**ctx):
+    case = dict(CASES["C01"], context=ctx)
+    return [(v.verdict, v.rule) for v in run_case(case, DATA["oracle"]["C01"])]
+
+
+def test_only_a_verified_speaker_passes_the_gate():
+    assert _c01(speaker_verified=True) == [("apply", None)]
+    assert _c01(speaker_verified=None) == [("abstain", 16)]            # no verdict is not a verification
+    assert _c01(speaker_verified=False) == [("abstain", 16)]
+    assert vm.Context("u", [], [], vm.Graph([])).speaker_verified is None      # and the default is "not verified"
+
+
+def test_a_ledger_that_was_not_read_abstains():
+    assert _c01(forgotten=None) == [("abstain", 18)]
+    assert _c01(forgotten=lambda _t: False) == [("apply", None)]
+    assert vm.Context("u", [], [], vm.Graph([])).forgotten is None
+
+
+SPEECH = [auth.USER_STATED, auth.USER_STATED_DERIVED, auth.USER_UNVERIFIED, auth.MODEL_FROM_TURN, auth.MODEL_FROM_TRANSCRIPT]
+
+
+@pytest.mark.parametrize("speaker", SPEECH)
+@pytest.mark.parametrize("row", [auth.CURATED, auth.OPERATOR])
+def test_no_spoken_power_supersedes_a_curated_or_an_operator_row(speaker, row):
+    """Whoever is speaking - an adult, a child, a guest, an unverified voice - a statement carries at most the member's
+    own power, and ``memory_authority.may_override`` never lets that replace a curator's or an operator's row."""
+    ctx = _ctx(speaker_rank=auth.RANK[speaker])
+    assert _fail_rule(vm.rule_17_may_supersede, vm.Row("r0", "x", authority=row), ctx) == 17
+
+
+def test_the_supersede_decision_is_memory_authoritys_own():
+    for power in sorted(set(auth.RANK.values())):
+        for cls in auth.RANK:
+            ctx, row = _ctx(speaker_rank=power), vm.Row("r0", "x", authority=cls)
+            if auth.may_override(power, cls):
+                vm.rule_17_may_supersede(row, ctx)
+            else:
+                assert _fail_rule(vm.rule_17_may_supersede, row, ctx) == 17
+    # a confirmed row stays overridable by a direct statement (intended); an unknown class or power never is
+    vm.rule_17_may_supersede(vm.Row("r0", "x", authority=auth.USER_CONFIRMED), _ctx(speaker_rank=auth.USER_RANK))
+    for row, rank in ((vm.Row("r0", "x"), auth.USER_RANK), (vm.Row("r0", "x", authority="nobody"), auth.USER_RANK),
+                      (vm.Row("r0", "x", authority=auth.USER_STATED), None), (vm.Row("r0", "x", authority=auth.USER_STATED), True)):
+        assert _fail_rule(vm.rule_17_may_supersede, row, _ctx(speaker_rank=rank)) == 17
+
+
+def test_negative_control_without_the_authority_rule_a_curated_row_is_superseded(monkeypatch):
+    assert _verdicts("A01") == [("abstain", 17)] and _verdicts("A08") == [("abstain", 17)]
+    monkeypatch.setattr(vm, "rule_17_may_supersede", lambda row, ctx: None)
+    assert _verdicts("A01") == [("apply", None)] and _verdicts("A08") == [("apply", None)]
+
+
+class _NoItems:
+    error = None
+
+    @property
+    def items(self):
+        raise KeyError("claims")
+
+
+@pytest.mark.parametrize("output", [None, 7, [], "", "[1, 2]", '{"claims": 3}', {"claims": None}, {"abstain": None},
+                                    {"claims": [None, 5, "x"]}, {"claims": {"type": "correction"}}, b"\xff\xfe"])
+def test_a_malformed_envelope_abstains_and_never_raises(output):
+    out = vm.validate(output, _ctx())
+    assert all(v.verdict == "abstain" for v in out) and (out == () or out[0].rule == 2)
+
+
+def test_an_envelope_that_raises_when_read_is_an_abstain(monkeypatch):
+    assert [(v.verdict, v.rule) for v in vm.validate(mc.Output((), None, None), _ctx())] == []
+
+    def boom(_raw):
+        raise ValueError("parser broke")
+
+    monkeypatch.setattr(mc, "parse_output", boom)
+    assert [(v.verdict, v.rule) for v in vm.validate("{}", _ctx())] == [("abstain", 2)]
+    monkeypatch.undo()
+    monkeypatch.setattr(mc, "Output", _NoItems)                 # an Output-shaped object whose items cannot be read
+    assert [(v.verdict, v.rule) for v in vm.validate(_NoItems(), _ctx())] == [("abstain", 2)]

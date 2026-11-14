@@ -15,18 +15,35 @@ AST test in ``tests/test_memory_claims_validate.py``. Phrasing enters ONLY throu
 """
 from __future__ import annotations
 
+import functools
 import logging
 from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+import memory_authority as auth
 import memory_claims as mc
 import people_graph
 import structural_claims as sc
 
 logger = logging.getLogger(__name__)
 STATS: Counter = Counter()
+#: rule number -> how many times that rule's function RAN (the tests prove every rule is exercised from this, not from a
+#: hand-written list)
+HITS: Counter = Counter()
+
+
+def _rule(number: int):
+    """Marks a rule function: every call is counted under its D number."""
+    def mark(fn):
+        @functools.wraps(fn)
+        def counted(*args, **kwargs):
+            HITS[number] += 1
+            return fn(*args, **kwargs)
+        return counted
+    return mark
+
 
 # -- the injected inputs ------------------------------------------------------------------------------------------
 
@@ -58,6 +75,9 @@ class Row:
     entity_id: Optional[str] = None
     attrs: tuple = ()
     planned: bool = False       # a replacement this run planned: its attrs are code's own, no span to re-check
+    #: the stored row's authority CLASS (``memory_authority.row_class``). No default that means "may be replaced": a row
+    #: whose class is missing or unknown is never superseded (D.17)
+    authority: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -114,11 +134,14 @@ class Context:
     rows: Sequence[Row]
     graph: Any                                       # ``Graph`` or any object with resolve / related / relationship
     registry: Sequence[Registered] = ()
-    speaker_verified: Optional[bool] = None          # D.16: False = rejected
+    speaker_verified: Optional[bool] = None          # D.16: only True passes; None (no verdict) and False both abstain
+    #: D.17: the POWER of the speaker's own statement (a ``memory_authority.RANK`` value, as ``resolve_write(...).power``
+    #: gives it). None = unknown: nothing is superseded
+    speaker_rank: Optional[int] = None
     identified: bool = True
     opted_out: bool = False
     retracted: bool = False                          # D.18: a turn of this session was retracted (turn_forget.blocks_write)
-    forgotten: Optional[Callable[[str], bool]] = None   # D.18: the forgotten ledger's matcher
+    forgotten: Optional[Callable[[str], bool]] = None   # D.18: the forgotten ledger's matcher; None = not read: abstain
     erase_generation_scheduled: int = 0              # D.19
     erase_generation_now: int = 0
     detector: Optional[Callable[[str], Any]] = None  # D.15: ``medical_safety.detect`` (an object with ``cls`` / ``key``)
@@ -179,27 +202,41 @@ def _need(ok: Any, rule: int, verdict: str = mc.ABSTAIN) -> None:
 
 # -- the gates (D.16-D.19) ----------------------------------------------------------------------------------------
 
+@_rule(16)
 def rule_16_speaker(ctx: Context) -> None:
-    """The speaker is not rejected, is identified and is not opted out (value_correction.apply's checks)."""
-    _need(ctx.speaker_verified is not False and ctx.identified and not ctx.opted_out, 16)
+    """The speaker is VERIFIED (no verdict at all is not a verification), identified and not opted out."""
+    _need(ctx.speaker_verified is True and ctx.identified and not ctx.opted_out, 16)
 
 
+@_rule(17)
 def rule_17_own_words(turn: Turn) -> None:
     """Authority is resolved on the member's own quote, never on code-authored text."""
     _need(turn.own, 17)
 
 
+@_rule(17)
+def rule_17_may_supersede(row: Row, ctx: Context) -> None:
+    """A stored row is superseded only when ``memory_authority.may_override`` lets a statement of the speaker's power
+    replace a row of that class - the one ordering every other writer uses (a later direct statement replaces a stated or
+    confirmed row; an operator's or a curator's row is not replaced by speech). An unknown row class or an unknown speaker
+    power is never "allowed"."""
+    known = row.authority in auth.RANK and isinstance(ctx.speaker_rank, int) and not isinstance(ctx.speaker_rank, bool)
+    _need(known and auth.may_override(ctx.speaker_rank, row.authority), 17)
+
+
+@_rule(18)
 def rule_18_not_forgotten(claim: Any, ctx: Context) -> None:
-    """No turn of the session was retracted; neither the subject nor the quote matches the forgotten ledger."""
-    _need(not ctx.retracted, 18)
-    if ctx.forgotten is not None:
-        try:
-            hit = ctx.forgotten(claim.subject) or ctx.forgotten(claim.quote)
-        except Exception:  # noqa: BLE001 - a ledger that cannot be read is not "nothing forgotten"
-            hit = True
-        _need(not hit, 18)
+    """No turn of the session was retracted; neither the subject nor the quote matches the forgotten ledger. A ledger that
+    was not read (no matcher) or cannot be read is not "nothing forgotten": abstain."""
+    _need(not ctx.retracted and ctx.forgotten is not None, 18)
+    try:
+        hit = ctx.forgotten(claim.subject) or ctx.forgotten(claim.quote)
+    except Exception:  # noqa: BLE001
+        hit = True
+    _need(not hit, 18)
 
 
+@_rule(19)
 def rule_19_erase_generation(ctx: Context) -> None:
     """The member's erase generation has not moved since the session was scheduled."""
     _need(ctx.erase_generation_scheduled == ctx.erase_generation_now, 19)
@@ -207,6 +244,7 @@ def rule_19_erase_generation(ctx: Context) -> None:
 
 # -- the claim itself (D.1, D.2) ----------------------------------------------------------------------------------
 
+@_rule(1)
 def rule_1_quote(claim: Any, ctx: Context) -> Turn:
     """The quote is a substring of user turn ``claim.turn`` (``structural_claims.norm``: NFKC, casefold, whitespace fold);
     a correction's old and new values as said are inside the quote."""
@@ -220,6 +258,7 @@ def rule_1_quote(claim: Any, ctx: Context) -> Turn:
     return turn
 
 
+@_rule(2)
 def rule_2_enums(claim: Any) -> None:
     """Type and attribute are in the closed enums (B.1, B.2; ``memory_claims.parse_claim`` enforced the shape); a
     correction is about NOW (a past or future value is no correction of the stored one)."""
@@ -230,6 +269,7 @@ def rule_2_enums(claim: Any) -> None:
 
 # -- the subject (D.3-D.7) ----------------------------------------------------------------------------------------
 
+@_rule(5)
 def rule_5_resolve(name: str, ctx: Context) -> people_graph.Resolution:
     """A failed roster read is an abstain (the injected graph raises), never "nobody by that name"."""
     try:
@@ -238,11 +278,13 @@ def rule_5_resolve(name: str, ctx: Context) -> people_graph.Resolution:
         raise _Fail(5) from None
 
 
+@_rule(3)
 def rule_3_tier(res: people_graph.Resolution) -> None:
     """Only the exact and whole-token tiers count: a prefix guess never resolves a subject."""
     _need(res.status == mc.NONE or res.tier in (mc.EXACT, mc.TOKEN), 3)
 
 
+@_rule(4)
 def rule_4_whole_parts(name: str, res: people_graph.Resolution) -> tuple:
     """Token tier: every query part must be a WHOLE name part with its hyphen kept ("ana" is not a part of "Ana-Lise").
     Returns the matches that survive."""
@@ -254,6 +296,7 @@ def rule_4_whole_parts(name: str, res: people_graph.Resolution) -> tuple:
     return kept
 
 
+@_rule(6)
 def rule_6_relation(kin: str, ctx: Context, allow_label: bool) -> Mapping:
     """A relation subject resolves through exactly ONE current edge of that kin code; none is the label ``rel:<kin>``."""
     try:
@@ -271,12 +314,14 @@ def _typed_upto(phrase: str, upto: int, ctx: Context) -> bool:
     return any(t.t <= upto and t.own and mc.occurs_in(t.text, phrase) for t in ctx.turns)
 
 
+@_rule(6)
 def rule_6_in_session(name: str, upto: int, ctx: Context) -> bool:
     """A named subject was said by the member, as whole name parts, in a user turn at or before the quote's (B.3: the
     model may carry a name over a pronoun; code accepts it only if the member actually said it)."""
     return _typed_upto(mc.label_key(name), upto, ctx)
 
 
+@_rule(7)
 def rule_7_lazy_possessive(name: str, typed: bool, upto: int, ctx: Context) -> Optional[str]:
     """X typed ("kais") resolves none, Y ("Kai") resolves unique EXACT and fold(X) == fold(Y) + "s": the subject is Y.
     Never the reverse - an X that resolves wins. Returns the person id, or None."""
@@ -343,6 +388,7 @@ def same_ref(a: Optional[Mapping], b: Optional[Mapping]) -> bool:
 
 # -- the value (D.8) ----------------------------------------------------------------------------------------------
 
+@_rule(8)
 def rule_8_values(claim: mc.CorrectionClaim, ref: Mapping, said_at: datetime, ctx: Context, rows: Sequence[Row]) -> tuple:
     """value_norm(new) parses under the attribute's normaliser with a unit in its unit set (a count is never an age, money
     never a date); an old value parses the same way; a partner resolves to one person; an age agrees with a stored
@@ -379,12 +425,14 @@ def _attr(row: Row, ref: Mapping, attribute: str) -> Optional[Attr]:
     return next((a for a in row.attrs if a.attribute == attribute and same_ref(a.subject_ref, ref)), None)
 
 
+@_rule(12)
 def rule_12_candidates(ref: Mapping, attribute: str, rows: Sequence[Row]) -> list:
     """Each attribute is its own slot: an event_date claim only ever sees event_date attributes (never origin_date or a
     birthday), matched by subject_ref - never by the row's words."""
     return [r for r in _approved(rows) if _attr(r, ref, attribute) is not None]
 
 
+@_rule(20)
 def rule_20_spans(cands: Sequence[Row], ref: Mapping, attribute: str) -> None:
     """A stored attribute's span is a verbatim slice of the row text and its value_norm is what code computes from it."""
     for row in cands:
@@ -395,6 +443,7 @@ def rule_20_spans(cands: Sequence[Row], ref: Mapping, attribute: str) -> None:
         _need(got is not None and mc.same_value(attribute, got.value, a.value_norm) and got.unit == a.unit, 20)
 
 
+@_rule(13)
 def rule_13_order(ref: Mapping, attribute: str, said_at: datetime, registry: Sequence[Registered]) -> None:
     """An older claim never overwrites a newer one: the claim must be newer than the latest 'asserted' entry for the
     same (subject, attribute)."""
@@ -403,11 +452,13 @@ def rule_13_order(ref: Mapping, attribute: str, said_at: datetime, registry: Seq
     _need(not latest or said_at > max(latest), 13)
 
 
+@_rule(10)
 def rule_10_up_to_date(attribute: str, new: mc.Norm, ref: Mapping, cands: Sequence[Row]) -> list:
     """The rows whose stored value already IS the new one: nothing to write for them."""
     return [r for r in cands if mc.same_value(attribute, _attr(r, ref, attribute).value_norm, new.value)]
 
 
+@_rule(12)
 def rule_12_other_slot(attribute: str, old: mc.Norm, ref: Mapping, rows: Sequence[Row]) -> None:
     """The old value the claim names sits in ANOTHER slot of the same unit (an origin_date, a birthday) of the subject:
     that slot is not this claim's to move."""
@@ -420,6 +471,7 @@ def rule_12_other_slot(attribute: str, old: mc.Norm, ref: Mapping, rows: Sequenc
                 raise _Fail(12)
 
 
+@_rule(9)
 def rule_9_targets(claim: mc.CorrectionClaim, old: Optional[mc.Norm], ref: Mapping, cands: Sequence[Row],
                    fresh: Sequence[Row], rows: Sequence[Row] = ()) -> list:
     """Old said: the rows (1..MAX_ROWS twins) whose stored value the old one names. Old not said: exactly ONE candidate
@@ -436,6 +488,7 @@ def rule_9_targets(claim: mc.CorrectionClaim, old: Optional[mc.Norm], ref: Mappi
     return hits
 
 
+@_rule(11)
 def rule_11_year(attribute: str, new: Mapping, stored: Mapping, said_at: datetime) -> Mapping:
     """A date restated without a year keeps the row's year only when the result is on or after the day it was said. A
     completed date that does not exist ("the 31st" over a February row) is no value at all (D.8)."""
@@ -478,6 +531,7 @@ def _correction(claim: mc.CorrectionClaim, index: int, ctx: Context, rows: Seque
     targets = rule_9_targets(claim, old, ref, cands, fresh, rows)
     edits, entries = [], []
     for row in targets:
+        rule_17_may_supersede(row, ctx)
         a = _attr(row, ref, attribute)
         value = _new_value(attribute, new, a.value_norm, said_at)
         attrs = tuple(replace(x, value_norm=value, span=None) if x is a else x for x in row.attrs)
@@ -509,6 +563,7 @@ def _distinct(values: Sequence[Mapping]) -> list:
     return out
 
 
+@_rule(14)
 def rule_14_kind(subject: str, kind: str, ctx: Context, rows: Sequence[Row], upto: Optional[int] = None) -> tuple:
     """KIND comes from the graph only: a people row whose relationship is ``pet`` / ``pet <kind>`` is an animal, any other
     (empty included) a person. ``(verdict, rule)``: agree = the graph says the same; refuse = it says otherwise (a person is
@@ -560,6 +615,7 @@ def _kind(claim: mc.KindClaim, index: int, ctx: Context, rows: Sequence[Row]) ->
                    anchor=(turn.t, claim.quote))
 
 
+@_rule(15)
 def rule_15_emergency(claim: mc.EmergencyClaim, ref: Mapping, ctx: Context) -> None:
     """A health event is filed only when it is happening NOW, the safety detector reads the member's quote as a call-now
     emergency of the SAME kind, and the quote names no other person the graph knows."""
@@ -620,20 +676,25 @@ def validate(output: Any, ctx: Context) -> tuple:
     order. Claims are decided OLDEST FIRST, each against the rows and registry as the earlier applies left them, so a
     chain inside one session (8 -> 7, 5th -> 12th -> 19th) is ordered by when it was said. An empty or abstained output
     is ``()``; a malformed envelope is one abstain on rule 2."""
-    parsed = output if isinstance(output, mc.Output) else mc.parse_output(output)
-    if parsed.error:
+    try:        # the envelope is read INSIDE the fail-closed boundary: a malformed output or a missing key abstains
+        parsed = output if isinstance(output, mc.Output) else mc.parse_output(output)
+        if parsed.error:
+            return (Verdict(mc.ABSTAIN, 2, mc.NONE, 0),)
+        items = tuple(parsed.items)
+        at = {t.t: t.at for t in ctx.turns}
+        order = sorted(range(len(items)), key=lambda i: (_said_key(at, items[i]), i))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(mc.LOG_INVALID, mc.NONE, mc.ABSTAIN, type(exc).__name__, None)
         return (Verdict(mc.ABSTAIN, 2, mc.NONE, 0),)
-    at = {t.t: t.at for t in ctx.turns}
-    order = sorted(range(len(parsed.items)), key=lambda i: (_said_key(at, parsed.items[i]), i))
     rows, registry = list(ctx.rows), list(ctx.registry)
     out: dict = {}
     for i in order:
-        v = validate_claim(parsed.items[i], i, ctx, rows, registry)
+        v = validate_claim(items[i], i, ctx, rows, registry)
         out[i] = v
         if v.verdict == mc.APPLY:
             rows = _fold(rows, v)
             registry.extend(v.registry)
-    return tuple(out[i] for i in range(len(parsed.items)))
+    return tuple(out[i] for i in range(len(items)))
 
 
 def _said_key(at: Mapping, claim: Any) -> tuple:
@@ -648,7 +709,7 @@ def _fold(rows: list, v: Verdict) -> list:
         if r.id in edited:
             out.append(replace(r, status=mc.SUPERSEDED))
             out.append(Row(mc.planned_row_id(r.id, v.claim_id), r.text, mc.APPROVED, r.entity_id,
-                           edited[r.id].attrs, True))
+                           edited[r.id].attrs, True, r.authority))
         else:
             out.append(r)
     return out
