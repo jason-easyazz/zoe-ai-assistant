@@ -695,6 +695,12 @@ def _date_expr_start(tail: str, q: "Quantity") -> str:
 
 
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
+    """``_rewrite_row``, refused (None) when the result would hold LESS than the row did (``drops_value``). Pure."""
+    out = _rewrite_row(row_text, corr, lazy_s)
+    return None if out is not None and drops_value(row_text, out) else out
+
+
+def _rewrite_row(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
     """``row_text`` with the corrected value, or None when the row is not the fact being corrected. Pure.
 
     The row must name the subject; a value pair needs the old value as a whole word AFTER the subject's first mention (the
@@ -856,6 +862,31 @@ def superseded_by_correction(user_id: str, fact: str, said_at: Optional[float] =
     except Exception:  # noqa: BLE001
         return False
     return False
+
+
+def drops_value(old_text: str, new_text: str) -> bool:
+    """Would replacing ``old_text`` with ``new_text`` leave the subject with LESS (QA round 10: "Tobin: turned 6" was replaced by
+    "Tobin: next month" and the age was gone)? True when the new text is empty while the old one is not, or when a value the old
+    text holds (a number, a date, an amount) has no counterpart of its unit in the new text: a date needs a date; an age, amount
+    or measure needs the same unit or a bare number; a bare number needs any number that is not a date. Text with no number is
+    never judged. Conservative on purpose: a refused replacement leaves the row as it was. Pure; never raises."""
+    try:
+        old, new = old_text or "", new_text or ""
+        if not old.strip():
+            return False
+        if not new.strip():
+            return True
+        qo = quantities(old)
+        if not qo:
+            return False
+        units = {_unit_at(new, q) for q in quantities(new)}
+        for u in {_unit_at(old, q) for q in qo}:
+            ok = ("date" in units) if u == "date" else any(x != "date" for x in units) if u is None else (u in units or None in units)
+            if not ok:
+                return True
+        return False
+    except Exception:  # noqa: BLE001 - a pair that cannot be read is never replaced
+        return True
 
 
 def _displaced(old_text: str, new_text: str) -> Optional[str]:
