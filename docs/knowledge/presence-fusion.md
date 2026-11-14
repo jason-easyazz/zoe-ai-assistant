@@ -107,6 +107,66 @@ Same `Observation` interface, `hardware=True` in `SIGNALS`, no producer anywhere
   calls it whatever the flag says (`forget_reach.py` entry `presence_fusion_memory`, pinned by
   `tests/test_forget_reach_inventory.py`). Nothing is written to disk.
 
+## The lab numbers [lab]
+
+`labs/presence/harness.py` (stdlib only), 3 seeds x 28 days of the synthetic household in `labs/presence/household.py`:
+two adults with phones (one forgets it at home once a week, one wears the pendant), a child with no phone, a weekly evening
+guest, one panel in the kitchen, a TV whose false wakes are accepted as an adult 1 time in 100, phones that drop off the
+Wi-Fi for 4-30 min at night and 3-12 min by day, two people arriving together every weekday. Truth is per minute; the
+fusion is sampled every 5 min. Run 2026-11-14 on this branch's code; the two door rows (`phone+door`, `phone+all`) were re-run 2026-11-15 after the last change (a door shortens the ARRIVED dwell whether or not the person was recently active), which moved only their `arrived` delay (3.0 and 1.5 min to 0). **These are synthetic numbers: they rank the sensors
+and expose the failure modes; they are not a measurement of this house.** The real numbers come from shadow mode.
+
+seeds=3 days=28 tracked people=3 false-left target <= 0.03/adult-day
+
+| scenario | home P | home R | away P | away R | unknown | left found | left found (phone owners) | left delay min | false left /adult-day | arrived found | arrived delay min | false arrived /adult-day | woke found | woke delay min | false woke /person-day | room known | room right | gate: others? yes when alone | gate: yes when others there |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| today | 0.83 | 0.19 | 0.00 | 0.00 | 0.83 | 0.00 | 0.00 | nan | 0.000 | 0.00 | nan | 0.000 | 0.94 | 20.50 | 0.004 | 0.04 | 0.97 | 0.075 | 0.258 |
+| today+door | 0.83 | 0.19 | 0.00 | 0.00 | 0.83 | 0.00 | 0.00 | nan | 0.000 | 0.00 | nan | 0.000 | 0.94 | 20.50 | 0.004 | 0.04 | 0.97 | 0.075 | 0.258 |
+| today+ble | 0.89 | 0.68 | 0.67 | 0.59 | 0.32 | 0.59 | 0.86 | 18.00 | 0.012 | 0.60 | 3.00 | 0.000 | 0.93 | 20.00 | 0.004 | 0.66 | 0.99 | 0.067 | 0.903 |
+| today+mmwave | 0.83 | 0.19 | 0.00 | 0.00 | 0.83 | 0.00 | 0.00 | nan | 0.000 | 0.00 | nan | 0.000 | 0.94 | 20.50 | 0.004 | 0.04 | 0.97 | 0.075 | 0.258 |
+| today+camera | 0.91 | 0.50 | 0.00 | 0.00 | 0.58 | 0.00 | 0.00 | nan | 0.000 | 0.00 | nan | 0.000 | 1.00 | 15.00 | 0.000 | 0.27 | 0.98 | 0.091 | 0.990 |
+| phone | 0.88 | 0.66 | 0.62 | 0.59 | 0.33 | 0.59 | 0.86 | 18.00 | 0.030 | 0.60 | 3.00 | 0.018 | 0.93 | 20.00 | 0.004 | 0.04 | 0.97 | 0.075 | 0.258 |
+| phone+door | 0.88 | 0.66 | 0.62 | 0.59 | 0.33 | 0.59 | 0.86 | 10.00 | 0.036 | 0.60 | 0.00 | 0.024 | 0.93 | 20.00 | 0.004 | 0.04 | 0.97 | 0.075 | 0.258 |
+| phone+ble | 0.88 | 0.66 | 0.67 | 0.59 | 0.34 | 0.59 | 0.86 | 16.00 | 0.012 | 0.60 | 3.00 | 0.000 | 0.93 | 20.00 | 0.004 | 0.66 | 0.99 | 0.067 | 0.903 |
+| phone+mmwave | 0.88 | 0.66 | 0.62 | 0.59 | 0.33 | 0.59 | 0.86 | 18.00 | 0.030 | 0.60 | 3.00 | 0.018 | 0.93 | 20.00 | 0.004 | 0.04 | 0.97 | 0.075 | 0.258 |
+| phone+camera | 0.93 | 0.74 | 0.62 | 0.58 | 0.26 | 0.61 | 0.89 | 19.00 | 0.036 | 0.61 | 3.00 | 0.036 | 1.00 | 15.00 | 0.000 | 0.27 | 0.98 | 0.091 | 0.990 |
+| phone+all | 0.93 | 0.74 | 0.67 | 0.59 | 0.26 | 0.63 | 0.92 | 8.00 | 0.000 | 0.63 | 0.00 | 0.000 | 1.00 | 15.00 | 0.000 | 0.71 | 0.99 | 0.079 | 0.998 |
+
+Read it like this:
+
+- **Today, with no phone tracker, Zoe cannot know anyone left.** Nothing positively says "away", so `left` is never
+  decided (by design: silence is not leaving) and a member is "not sure" 83 % of the time. "Woke" works already (94 %
+  found, median 20 min after the real wake: the first word at the panel or the alarm).
+- **The HA phone tracker (configuration, no hardware) is the first step.** `left` found for 86 % of the phone owners'
+  real departures, a median 18 min after the door. Misses are the forgotten-phone day and the 20-min school pick-up (back
+  before the dwell ends). **False `left`: 0.030 per adult-day, exactly at the target of 0.03 (about one a month per
+  person), so the target is met only just.** In a debug breakdown of 2 seeds taken BEFORE the "own activity in the last
+  3 h" rule, all 11 false `left`s were Wi-Fi drops: 10 while that person slept (around 06:00-07:00 and 23:00, while
+  someone else was up) and 1 at 07:00 while awake; that rule was added for the early-morning ones, and the table above is with it.
+- **The child is never "left" or "arrived"**: no phone, no BLE beacon. Only a camera with face match, or the child's own
+  device, would change that.
+- `gate`: with voice alone, "someone else is here" is said 7.5 % of the time the member is alone (their own unrecognised
+  voice, the TV: the safe direction) and caught only 26 % of the time someone else really is there (a silent person is
+  invisible to voice).
+
+### Which sensor buys the most
+
+Each row adds ONE adapter to the phone-tracker baseline (same traces, same seeds).
+
+| added to "phone" | left delay (min) | false left / adult-day | room known | "others here" caught | woke delay (min) | what it buys |
+|---|---|---|---|---|---|---|
+| nothing (baseline) | 18 | 0.030 | 4 % | 26 % | 20 | the leaving catch, just inside the cry-wolf target |
+| door contact | 10 | 0.036 | 4 % | 26 % | 20 | speed, at a cry-wolf cost: a door is "someone", often another member leaving |
+| **BLE IRK (phones)** | 16 | **0.012** | **66 %** | **90 %** | 20 | **the most:** a phone seen in a room vetoes a Wi-Fi drop, gives rooms, and finds other people for the privacy gate |
+| mmWave | 18 | 0.030 | 4 % | 26 % | 20 | nothing on these numbers: it cannot say who, nor count (it serves the panel sleep gate, not measured here) |
+| camera person-detect + face | 19 | 0.036 | 27 % | 99 % | 15 | the privacy gate (counts people), faster "woke", the child's room |
+| all four | 8 | 0.000 | 71 % | 100 % | 15 | |
+
+BLE alone, with no phone tracker at all (`today+ble`), finds the same departures (86 %, 18 min) at 0.012 false per
+adult-day: the BLE scanner on the Pi is a substitute for the HA tracker, not only an addition. The answer to "which sensor
+buys the most" is **BLE IRK** for leaving and rooms, and a **counting camera** for the privacy gate. The cheapest next step
+needs no hardware: map the household's HA phone trackers to members.
+
 ## Acceptance (owner words, true when done)
 
 1. "Zoe knows who is home" - for each member, home / away / not sure, and she says "not sure" rather than guess.
