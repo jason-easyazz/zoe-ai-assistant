@@ -336,6 +336,21 @@ async def erase_unknown(cluster_id: Optional[str] = None) -> int:
     return n
 
 
+async def forget_user(db, user_id: str) -> int:
+    """The member is erased (``contacts_store.forget_user``): every unknown voice HELD for them goes, samples first. They are held for
+    the household's first admin, who would have owned the guest an answered ask creates; with that member gone nobody holds them.
+    RAISES on a failure, except a missing table (before 0073 there is nothing to erase)."""
+    try:
+        await db.execute("DELETE FROM panel_voice_samples WHERE cluster_id IN (SELECT id FROM panel_voice_clusters WHERE user_id = ?)",
+                         (user_id,))
+        cur = await db.execute("DELETE FROM panel_voice_clusters WHERE user_id = ?", (user_id,))
+    except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ == "UndefinedTableError" or "no such table" in str(exc).lower():
+            return 0
+        raise
+    return int(getattr(cur, "rowcount", 0) or 0)
+
+
 _ASK: contextvars.ContextVar[bool] = contextvars.ContextVar("named_guest_ask", default=False)
 
 

@@ -929,6 +929,9 @@ async def purge_people(db, user_id: str, person_ids: Iterable[str]) -> int:
         return 0
     ph = _qs(len(ids))
     n = 0
+    import named_guest_memory      # a named guest's remembered panel conversations go with their voice (the same person, this layer)
+
+    on_panels = await named_guest_memory.panel_guest_ids(db, user_id, ids)       # read before the erase: the panels are told after it
     for (vp,) in await _all(db, f"SELECT id FROM learned_voiceprints WHERE owner_user_id = ? AND people_id IN ({ph})", (user_id, *ids)):
         n += await _run(db, "DELETE FROM learned_voiceprint_segments WHERE voiceprint_id = ?", (vp,))
     n += await _run(db, f"DELETE FROM learned_voiceprints WHERE owner_user_id = ? AND people_id IN ({ph})", (user_id, *ids))
@@ -936,10 +939,9 @@ async def purge_people(db, user_id: str, person_ids: Iterable[str]) -> int:
                         f"WHERE user_id = ? AND tagged_person_id IN ({ph})", (user_id, *ids))
     n += await _run(db, f"UPDATE omi_segments SET suggested_person_id = NULL, suggested_score = NULL "
                         f"WHERE user_id = ? AND suggested_person_id IN ({ph})", (user_id, *ids))
-    import named_guest_memory      # a named guest's remembered panel conversations go with their voice (the same person, this layer)
-
     n += await named_guest_memory.erase_people(db, user_id, ids)
     await db.commit()
+    await named_guest_memory.drop_from_panels(on_panels)
     return n
 
 
