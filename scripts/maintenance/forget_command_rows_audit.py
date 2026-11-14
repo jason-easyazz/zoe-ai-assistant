@@ -56,8 +56,9 @@ a re-run cannot retry it: run the palace-wide scrub ``POST /api/memories/mainten
 ``--erase-from`` command re-proves and erases them. An archive anyone else made is never touched. On ANY exception from
 erase_rows the row ids (and owner ids; never text) go to ``<--state-dir>/pending-recovery.json`` (0600): the drawer rows may
 already be gone while their audit trail and the residue remain. The next confirmed run reads that file FIRST, re-runs the
-audit-trail delete for the ids whose rows are gone and then the physical scrub, and removes them from the file only when BOTH
-succeed (the file is deleted when empty); 8 = that recovery is still owed (``recovery_pending``): re-run until it exits 0.
+audit-trail delete for the ids whose rows are gone, re-checks that no audit row names them, then runs the physical scrub, and
+removes them only when the audit is verified empty AND the scrub ran to completion (``scrub_completed``; the file is deleted when
+empty); 8 = that recovery is still owed (``recovery_pending``): re-run until it exits 0.
 """
 from __future__ import annotations
 
@@ -531,11 +532,36 @@ def add_pending(path: str, owner: str, ids: Iterable[str]) -> None:
     write_pending(path, cur)
 
 
+def scrub_completed(report: Any) -> bool:
+    """Did the physical scrub RUN TO COMPLETION? ``memory_service.erase_residue_sync`` with NO needles (the recovery has no text
+    left to look for) never returns ``ok: True``: its verify step reports ``checked: False`` and ``ok`` is ``None``
+    (memory_service.py ``_verify_residue``: "no needles"; ``erase_residue_sync``: ``ok = bool(clean) if checked else None``). So
+    completion = the scrub was enabled and ran, and reported no failure: ``enabled`` is True, ``ok`` is not False, and neither the
+    report nor its ``scrub`` step carries an ``error``. Absence of the text cannot be proven without the text (the stated limit;
+    ``memory_residue_check.py`` is the verifier). Pure."""
+    if not isinstance(report, dict) or report.get("enabled") is not True or report.get("ok") is False or "error" in report:
+        return False
+    scrub = report.get("scrub")
+    return isinstance(scrub, dict) and "error" not in scrub
+
+
+def _audit_rows_left(svc, ids: list) -> int:
+    """How many audit-trail rows still name any of ``ids`` (the same ``mempalace_id`` query the delete uses). Sync."""
+    col = svc._audit_collection()
+    left = 0
+    for i in range(0, len(ids), 100):
+        got = col.get(where={"mempalace_id": {"$in": ids[i:i + 100]}})
+        left += len(got.get("ids") or [])
+    return left
+
+
 async def recover_pending(pending: dict[str, list[str]], live_ids: set, *, svc) -> tuple[dict[str, list[str]], int]:
-    """FIRST step of a confirmed cleanup: for every pending id whose drawer row is GONE, re-run the audit-trail delete
-    (``MemoryService._delete_audit_for_rows_sync``) and then the physical scrub (``MemoryService._physical_erase``); an id is
-    released only when BOTH succeeded (the scrub reports ok). An id whose row still exists is left for the normal path (marked
-    archive) and kept pending. Returns ``(still_pending, released)``. Counts only."""
+    """FIRST step of a confirmed cleanup. For every pending id whose drawer row is GONE: re-run the audit-trail delete
+    (``MemoryService._delete_audit_for_rows_sync``), then CHECK that no audit row names it any more, then run the physical scrub
+    (``MemoryService._physical_erase([])``: no text is left, so no needles). An id is released only when (a) the audit delete
+    succeeded AND zero audit rows remain for it, AND (b) the scrub ran to completion (``scrub_completed``). Anything else keeps it
+    pending. An id whose row still exists is left for the normal path (marked archive) and kept pending.
+    Returns ``(still_pending, released)``. Counts only."""
     still: dict[str, list[str]] = {}
     released = 0
     for owner, ids in sorted(pending.items()):
@@ -544,11 +570,11 @@ async def recover_pending(pending: dict[str, list[str]], live_ids: set, *, svc) 
         if gone:
             try:
                 await svc._run_sync(svc._delete_audit_for_rows_sync, gone)
-                rep = await svc._physical_erase([])
-                ok = isinstance(rep, dict) and rep.get("ok") is True
+                audit_clear = await svc._run_sync(_audit_rows_left, svc, gone) == 0
+                done_ok = audit_clear and scrub_completed(await svc._physical_erase([]))
             except Exception:  # noqa: BLE001
-                ok = False
-            if ok:
+                done_ok = False
+            if done_ok:
                 released += len(gone)
             else:
                 keep += gone

@@ -443,20 +443,38 @@ def test_control_the_old_filter_strands_the_row_and_exits_0(svc, monkeypatch, tm
 
 
 # ── review #2482 PRRT ...dTd8: erase_rows raised AFTER deleting the drawer rows ─────────────────────────────────────────────────
-def _residue_model(svc, monkeypatch, *, audit_fails=False, scrub_ok=True):
-    """The audit trail of the minted rows (still holding their words) and the scrub, as the recovery path calls them."""
+#: the REAL ``memory_service.erase_residue_sync`` report for a scrub that ran with NO needles (pinned against the real function in
+#: ``test_the_real_scrub_with_no_needles_reports_ok_none_and_that_counts_as_completed``): ``ok`` is None, never True
+REAL_NO_NEEDLE_OK = {"enabled": True, "heap_scrub_active": False, "scrub": {"vacuum": True},
+                     "verify": {"checked": False, "reason": "no needles"}, "ok": None, "seconds": 0.1}
+REAL_SCRUB_FAILED = {"enabled": True, "heap_scrub_active": False, "scrub": {"error": "OperationalError: locked"},
+                     "verify": {"checked": False, "reason": "no needles"}, "ok": False, "seconds": 0.1}
+
+
+def _residue_model(svc, monkeypatch, *, audit_fails=False, scrub_ok=True, audit_leaves_rows=False):
+    """The audit trail of the minted rows (still holding their words), its delete, the collection the recovery re-checks, and
+    the scrub - which returns what the REAL erase_residue_sync returns for an empty needle list."""
     trail = {"minted_excerpt", "minted_turnid"}
-    state = {"audit_fails": audit_fails, "scrub_ok": scrub_ok}
+    state = {"audit_fails": audit_fails, "scrub_ok": scrub_ok, "audit_leaves_rows": audit_leaves_rows}
 
     def delete_audit(ids):
         if state["audit_fails"]:
             raise RuntimeError("audit delete failed")
+        if state["audit_leaves_rows"]:
+            return 0                                        # returned without error, but the rows are still there
         trail.difference_update(ids)
         return len(ids)
 
+    class _AuditCol:
+        def get(self, where):
+            want = set(where["mempalace_id"]["$in"])
+            return {"ids": [f"a-{i}" for i in sorted(trail & want)]}
+
     async def physical(_needles):
-        return {"enabled": True, "ok": state["scrub_ok"]}
+        assert _needles == []                               # the recovery has no text left to look for
+        return dict(REAL_NO_NEEDLE_OK if state["scrub_ok"] else REAL_SCRUB_FAILED)
     monkeypatch.setattr(svc, "_delete_audit_for_rows_sync", delete_audit)
+    monkeypatch.setattr(svc, "_audit_collection", lambda: _AuditCol())
     monkeypatch.setattr(svc, "_physical_erase", physical)
     return trail, state
 
@@ -619,3 +637,51 @@ def test_end_to_end_the_review_examples_are_read_and_their_leaked_rows_found(pre
             for i, c in enumerate(COMMANDS[:2])]
     rep = fca.audit(rows, turns, member_turns=lambda uid: iter(table if uid == UID else []))
     assert (sorted(x["id"] for x in rep["linked"]) == ["leak0", "leak1"]) is found
+
+
+
+# ── review #2482 PRRT ...d04e: the real no-needle scrub never says ok: True ─────────────────────────────────────────────────────
+def test_the_real_scrub_with_no_needles_reports_ok_none_and_that_counts_as_completed(monkeypatch, tmp_path):
+    import contextlib
+
+    import memory_service
+
+    monkeypatch.setattr(memory_service, "physical_erase_enabled", lambda: True)
+    monkeypatch.setattr(memory_service, "_maintenance_window", lambda *_a, **_k: contextlib.nullcontext())
+    monkeypatch.setattr(memory_service, "_scrub_residue_in_window", lambda *_a, **_k: {"vacuum": True})
+    rep = memory_service.erase_residue_sync(str(tmp_path), needles=[])            # the REAL function, store internals stubbed
+    assert rep["ok"] is None and rep["verify"] == {"checked": False, "reason": "no needles"}
+    assert fca.scrub_completed(rep) and fca.scrub_completed(REAL_NO_NEEDLE_OK)
+    monkeypatch.setattr(memory_service, "_scrub_residue_in_window", lambda *_a, **_k: {"error": "OperationalError: locked"})
+    failed = memory_service.erase_residue_sync(str(tmp_path), needles=[])
+    assert failed["ok"] is False and not fca.scrub_completed(failed) and not fca.scrub_completed(REAL_SCRUB_FAILED)
+    monkeypatch.setattr(memory_service, "physical_erase_enabled", lambda: False)
+    off = memory_service.erase_residue_sync(str(tmp_path), needles=[])
+    assert off["ok"] is None and not fca.scrub_completed(off)                     # a scrub that did not run is not done
+
+
+def test_an_audit_delete_that_leaves_rows_keeps_the_ids_pending(svc, monkeypatch, tmp_path):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    trail, state = _residue_model(svc, monkeypatch, audit_leaves_rows=True)
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _rows_gone_then_raise(svc))
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    monkeypatch.setattr(svc, "erase_rows", good)
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 8 and (tmp_path / "state" / fca.PENDING_FILE).exists()
+    state["audit_leaves_rows"] = False
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 0 and not (tmp_path / "state" / fca.PENDING_FILE).exists()
+
+
+def test_control_the_old_ok_true_rule_never_releases_the_ids(svc, monkeypatch, tmp_path):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    _residue_model(svc, monkeypatch)
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _rows_gone_then_raise(svc))
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    monkeypatch.setattr(svc, "erase_rows", good)
+    monkeypatch.setattr(fca, "scrub_completed", lambda r: isinstance(r, dict) and r.get("ok") is True)   # d531a3760's rule
+    for _ in range(3):
+        assert _confirm(svc, monkeypatch, tmp_path, plan) == 8                  # exit 8 forever: the reviewed bug
+    assert (tmp_path / "state" / fca.PENDING_FILE).exists()
