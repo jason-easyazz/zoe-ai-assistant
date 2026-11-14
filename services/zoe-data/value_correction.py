@@ -697,6 +697,12 @@ def _date_expr_start(tail: str, q: "Quantity") -> str:
 
 
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
+    """``_rewrite_row``, refused (None) when the result would hold LESS than the row did (``drops_value``). Pure."""
+    out = _rewrite_row(row_text, corr, lazy_s)
+    return None if out is not None and drops_value(row_text, out) else out
+
+
+def _rewrite_row(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
     """``row_text`` with the corrected value, or None when the row is not the fact being corrected. Pure.
 
     The row must name the subject; a value pair needs the old value as a whole word AFTER the subject's first mention (the
@@ -871,6 +877,59 @@ def superseded_by_correction(user_id: str, fact: str, said_at: Optional[float] =
     except Exception:  # noqa: BLE001
         return False
     return False
+
+
+def drops_value(old_text: str, new_text: str) -> bool:
+    """Would replacing ``old_text`` with ``new_text`` leave the subject with LESS (QA round 10: "Tobin: turned 6" was replaced by
+    "Tobin: next month" and the age was gone)? True when the new text is empty while the old one is not, or when a value the old
+    text holds (a number, a date, an amount) has no counterpart of its unit in the new text. Values are COUNTED, one new value
+    standing in for one old value: a date needs a date; an age, amount or measure needs the same unit or a bare number; a bare
+    number needs any number that is not a date. So "runs from the 3rd to the 5th" -> "on the 10th" (two dates, one left) is
+    refused, as is two amounts -> one. Accepted conservative outcome: a real correction that REDUCES the count ("from the 3rd to
+    the 5th" -> "only on the 4th") is refused too, and both rows stay. And at most ONE old value may be missing from the new text
+    (a value = date or not, plus its number, any spelling: "6" and "six" are one value), so another subject's value never stands
+    in for a lost one ("X is 6 and Y is 9" -> "X's age is unknown; Y is 10 and Z is 4" loses two: refused). A real correction
+    changes one value. Accepted conservative outcome: a two-value correction in one go ("from the 3rd to the 5th" -> "from the
+    4th to the 6th") is refused too and both rows stay: never less outranks a tidy merge. Text with no number is never judged. A
+    refused replacement leaves the row as it was. Pure; never raises."""
+    try:
+        from collections import Counter
+
+        old, new = old_text or "", new_text or ""
+        if not old.strip():
+            return False
+        if not new.strip():
+            return True
+        qo = quantities(old)
+        if not qo:
+            return False
+        pool = Counter(_unit_at(new, q) for q in quantities(new))
+
+        def take(*choices) -> bool:
+            for c in choices:
+                if pool[c] > 0:
+                    pool[c] -= 1
+                    return True
+            return False
+
+        # the most specific first: a date only a date covers; a named unit its own, then a bare number; a bare old number last,
+        # by any unused value that is not a date
+        for u in sorted((_unit_at(old, q) for q in qo), key=lambda x: 0 if x == "date" else 2 if x is None else 1):
+            if u == "date":
+                ok = take("date")
+            elif u is None:
+                ok = take(None, *[x for x in pool if x not in ("date", None)])
+            else:
+                ok = take(u, None)
+            if not ok:
+                return True
+
+        def values(text: str) -> Counter:
+            return Counter((_unit_at(text, q) == "date", q.value) for q in quantities(text))
+
+        return sum((values(old) - values(new)).values()) > 1
+    except Exception:  # noqa: BLE001 - a pair that cannot be read is never replaced
+        return True
 
 
 def _displaced(old_text: str, new_text: str) -> Optional[str]:
