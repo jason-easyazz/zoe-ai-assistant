@@ -226,6 +226,28 @@ def _drawers_embedding_function() -> Any:
     return _DRAWERS_EF
 
 
+def _query_embeddings_once(col: Any, query: str) -> Any:
+    """``query`` embedded exactly as ``col.query(query_texts=[query])`` would embed it, or None.
+
+    chromadb 1.5.9 (``CollectionCommon._embed``, ``is_query=True``): a collection opened with an
+    embedding function that is not chroma's ``DefaultEmbeddingFunction`` embeds query texts with
+    ``self._embedding_function.embed_query(input=[query])``, and a ``query_embeddings`` argument of
+    that shape (a list of float32 arrays) reaches the index unchanged. So calling the collection's
+    OWN function here gives the same vector, which ``_semantic_search`` then reuses for both of its
+    queries instead of embedding the same text twice. Any other shape (chroma's default function,
+    a schema-configured one, a test double without a chroma embedding function) returns None and
+    the caller keeps ``query_texts``, the path it always had.
+    """
+    try:
+        from chromadb.api.types import DefaultEmbeddingFunction, EmbeddingFunction
+    except Exception:  # noqa: BLE001 - no chroma here: the caller keeps query_texts
+        return None
+    ef = getattr(col, "_embedding_function", None)
+    if not isinstance(ef, EmbeddingFunction) or isinstance(ef, DefaultEmbeddingFunction):
+        return None
+    return ef.embed_query(input=[query])
+
+
 def get_drawers_collection(data_dir: str) -> Any:
     """The recall (drawers) collection: Zoe's one opener, raw chromadb.
 
@@ -4211,15 +4233,19 @@ class MemoryService:
         # behind it, /readyz stopped answering). Reproduced on a palace copy with two
         # searchers + two writers; without the count the same run completes. The index
         # caps ``k`` at its own size, so a fixed over-fetch is safe at any store size.
+        # The query text is embedded ONCE and the vector is handed to both queries (speed audit
+        # 2026-11-14 A4): each ``query_texts`` call would run the MiniLM on the same text again.
+        q_emb = _query_embeddings_once(col, query)
+        q_arg = {"query_embeddings": q_emb} if q_emb is not None else {"query_texts": [query]}
         _collect(col.query(
-            query_texts=[query],
+            **q_arg,
             n_results=max(limit * 20, 200),
             include=["documents", "metadatas", "distances"],
         ))
         wide = len(hits)
         if len(hits) < limit:
             _collect(col.query(
-                query_texts=[query],
+                **q_arg,
                 n_results=max(limit * 3, limit),
                 where=where,
                 include=["documents", "metadatas", "distances"],
