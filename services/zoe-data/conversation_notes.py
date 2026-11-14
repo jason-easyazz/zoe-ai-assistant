@@ -868,22 +868,34 @@ async def block_for(user_id: str, session_id: str, *, now: Optional[float] = Non
     """The member's notes for this brain turn, or ''. Never raises. '' before any work when the flag is off.
 
     A CONFIRMED speaker only on voice (voice is a password; typed chat is the authenticated account); the first ``_YOUNG_TURNS`` brain turns of a session; the member's own layer
-    (``people_id = ''``) only. ``shadow`` logs what ``on`` would inject and returns ''."""
+    (``people_id = ''``) only. ``shadow`` logs what ``on`` would inject and returns ''. = ``prepare_block`` + its commit at once."""
+    draft = await prepare_block(user_id, session_id, now=now)
+    await draft.commit()
+    return draft.block
+
+
+async def prepare_block(user_id: str, session_id: str, *, now: Optional[float] = None):
+    """``block_for`` as a ``turn_draft.TurnDraft``: ``.block`` is computed with NO state change; the session turn count
+    (``_YOUNG``), the 6 h cooldown clock (``_SERVED_AT``) and the persisted ``served_count`` (``_bump``) move only on
+    ``commit()`` - which the brain turn calls when it reaches the POST, so a turn that never sends burns nothing."""
+    from turn_draft import TurnDraft
+
+    draft = TurnDraft()
     m = mode()
     if m == "off":
-        return ""
+        return draft
     try:
         from user_filters import is_unidentified
 
         uid = (user_id or "").strip()
         if not uid or not session_id or is_unidentified(uid) or uid in _GUESTS:
-            return ""
+            return draft
         seen, chosen, quiet = _YOUNG.get(session_id, (0, (), frozenset()))
         if seen >= _YOUNG_TURNS:
-            return ""
-        _bounded(_YOUNG, session_id, (seen + 1, chosen, quiet))
+            return draft
+        draft.on_commit(lambda v=(seen + 1, chosen, quiet): _bounded(_YOUNG, session_id, v))
         if not _speaker_ok(session_id):
-            return ""
+            return draft
         t = _now() if now is None else now
         if seen == 0:
             pool = [n for n in await load_active(uid, "", now=t, include_shadow=m == "shadow") if n.served_count < MAX_SERVED]
@@ -893,26 +905,33 @@ async def block_for(user_id: str, session_id: str, *, now: Optional[float] = Non
             notes = await _defer_to_facts(uid, picked)
             chosen = tuple(n.id for n in notes)
             quiet = frozenset(n.id for n, was in zip(notes, picked) if (was.open_threads or was.follow_up) and not (n.open_threads or n.follow_up))
-            _bounded(_YOUNG, session_id, (1, chosen, quiet))
+            draft.on_commit(lambda v=(1, chosen, quiet): _bounded(_YOUNG, session_id, v))
             if m == "on" and notes:
-                for n in notes:
-                    _bounded(_SERVED_AT, f"{uid}|{n.id}", mono)
-                await _bump([n.id for n in notes])
+                ids = [n.id for n in notes]
+
+                def _served(ids=ids, mono=mono):
+                    for i in ids:
+                        _bounded(_SERVED_AT, f"{uid}|{i}", mono)
+
+                draft.on_commit(_served)
+                draft.on_commit(lambda ids=ids: _bump(ids))
         else:
             if not chosen:
-                return ""
+                return draft
             notes = [n for n in await load_active(uid, "", limit=12, now=t, include_shadow=m == "shadow") if n.id in chosen]
             notes = await _unmuted(uid, await _unforgotten(uid, notes))
             notes = [replace(n, open_threads=[], follow_up="") if n.id in quiet else n for n in notes]   # the first turn's precedence decision stands
         if not notes:
-            return ""
+            return draft
         block = render(notes, now=t)
         logger.info("CONVERSATION_NOTES_INJECT user=%s mode=%s session=%s notes=%d ids=%s chars=%d", uid, m, session_id[:40], len(notes),
                     ",".join(n.id[:8] for n in notes), len(block))
-        return block if m == "on" else ""
+        draft.block = block if m == "on" else ""
+        return draft
     except Exception as exc:  # noqa: BLE001 - fail closed
         logger.debug("conversation notes withheld (%s)", type(exc).__name__)
-        return ""
+        draft.block = ""
+        return draft
 
 
 _VISIT_GAP_S = 30 * 60
