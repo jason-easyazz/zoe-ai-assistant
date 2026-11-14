@@ -1667,10 +1667,6 @@
    "(?:said|says|say|told|tells|reckons|reckoned|thinks|thought|goes|went) (?:me )?(?:that )?i was {AGE}{END}",
    "(?:i am|im|i m)(?: (?:only|just))? an? {AGE}[ -]?(?:years?|yrs?)[ -]?old(?!\\w)"
   ],
-  "as_age": "as an? {AGE}[ -]?(?:years?|yrs?)[ -]?old(?!\\w)",
-  "as_first_person": "i|im|i m|ive|id|ill",
-  "as_third_person": "he|she|they|hes|shes|theyre|his|my (?:son|daughter|brother|sister|mum|mom|dad|kid|kids|child|friend|cousin|nephew|niece|grandson|granddaughter|boy|girl|husband|wife|partner)|our (?:son|daughter|kid|kids|child|boy|girl)",
-  "as_past_self": "i was|when i was|i used to|back when i|i were",
   "school": [
    "(?:i am|im|i m) in (?:year|yr|grade|class) {AGE}(?! of)(?!\\w)",
    "(?:i am|im|i m) in (?:kindy|kindergarten|prep|primary school|elementary school|middle school)(?!\\w)"

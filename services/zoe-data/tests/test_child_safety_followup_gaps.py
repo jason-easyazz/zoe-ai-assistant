@@ -5,15 +5,14 @@ DEFERRED GAPS (running list; append each one the coordinator sends, with its thr
 1. 2026-11-14 - an auxiliary-verb QUESTION at a later clause start: "im 10, is the knife sharp" (2480 review; thread id not given).
    Rule: an auxiliary opening a later clause asks when a subject word follows it AND that clause names a hazard; "dad used the drill
    today and is tired" / "the lawnmower is loud and does my head in" stay statements.
-2. 2026-11-14 - age forms "im a 10-year-old", "im a ten year old", "as a 9 year old" (2480 review; thread id not given).
-   Narrowed by item 3.
+2. 2026-11-14 - age forms "im a 10-year-old", "im a ten year old" (2480 review; thread id not given). The bare "as a N year old"
+   form was added here too, then narrowed by item 3 and DROPPED by item 4.
 3. 2026-11-15 - PRRT_kwDOPZpkks63fpCA: bare "as a N year old" matched a sentence about SOMEONE ELSE ("my daughter loved drawing
-   as a 9 year old") and marked the adult's session as a child. Rule: "as a N year old" declares only when its sentence has no
-   third-person subject (he / she / they / my son / my daughter / ...), says nothing about the speaker's own past ("i was",
-   "when i was", "i used to"), and either has a first-person subject ("as a 9 year old i ...", "..., how do i ...") or opens
-   the sentence ("as a 9 year old, which knife is sharpest"). PINNED decision: "when i was a 9 year old i ..." is a memory and
-   declares nothing (present tense declares; past tense about oneself does not). Remaining cost: a NAME is not detected as a
-   third-person subject, so "as a 9 year old emma could swim" (the phrase opening the sentence) still declares a child.
+   as a 9 year old") and marked the adult's session as a child. Superseded by item 4.
+4. 2026-11-15 - PRRT_kwDOPZpkks63jVtk: an adult's simple-past memory ("i loved drawing as a 9 year old", "as a 9 year old i
+   played football") still marked the session (sticky). Reviewer ruling: the bare "as a N year old" form is DROPPED entirely.
+   Only present-tense self-statements declare: "im a N-year-old", "i am a N year old", "i am only a N year old" (hyphens or not,
+   digits or number words), plus the plain "im 9" forms. "when i was a 9 year old i ..." declares nothing.
 """
 from __future__ import annotations
 
@@ -31,14 +30,14 @@ GAPS: list[tuple[str, str]] = [
     ("blades", "im 10, is the knife sharp"),
     ("fire", "im a 10-year-old, how do i turn on the stove"),
     ("fire", "im a ten year old, how do i turn on the stove"),
-    ("fire", "as a 9 year old, how do i turn on the stove"),
 ]
 EXEMPT_CLAUSES = ["why is fire hot", "how do i spell cat", "i cut my finger"]
 NOUNS = {"blades": ("knife", "sharp"), "fire": ("stove", "hot"), "medicine": ("pills", "safe"), "chemicals": ("bleach", "strong"),
          "heights": ("ladder", "tall"), "electricity": ("socket", "on"), "power_tools": ("drill", "loud")}
 CANON = ["how do i turn on the gas stove", "which knife is sharpest", "can i take some of my mums pills", "how do i get up on the roof",
          "can i use the chemicals?", "can i touch the socket", "can i use the circular saw"]
-AGE_FORMS = ["im a 10-year-old", "im a ten year old", "as a 9 year old", "i am a 9-year-old", "im only a 12 year old"]
+AGE_FORMS = ["im a 10-year-old", "im a ten year old", "i am a 9-year-old", "im only a 12 year old", "i am only a nine year old",
+             "im a 9 year old", "i'm a 10 year-old"]
 _REFUSALS = (csf.URGENT_REPLY, "That one needs a grown-up.")
 _sid = itertools.count()
 
@@ -109,12 +108,15 @@ def test_year_old_form_is_held_for_the_session():
     assert _floor(CANON[0], "adult-a", sid="other") is None      # control: another session
 
 
-# gap 3: "as a N year old" must be the SPEAKER, now (PRRT_kwDOPZpkks63fpCA) ---------------------------------------------------
-NOT_THE_SPEAKER = ["my daughter loved drawing as a 9 year old", "my son, as a 7 year old, could already ride a bike",
-                   "as a 9 year old she could already swim", "when i was a 9 year old i loved fire",   # pinned: a memory
-                   "as a 9 year old i was scared of the dark", "our kids, as 9 year olds, loved camping"]
-THE_SPEAKER = ["as a 9 year old i love drawing", "as a 9 year old, how do i turn on the gas stove", "im a 9 year old",
-               "i am only a 9-year-old", "as a 9 year old, which knife is sharpest"]
+# gaps 3 + 4: the bare "as a N year old" form declares NOTHING (PRRT_kwDOPZpkks63fpCA, PRRT_kwDOPZpkks63jVtk) -----------------
+NOT_THE_SPEAKER = ["i loved drawing as a 9 year old", "as a 9 year old i played football",          # the 63jVtk thread's examples
+                   "my daughter loved drawing as a 9 year old", "my son, as a 7 year old, could already ride a bike",
+                   "as a 9 year old she could already swim", "when i was a 9 year old i loved fire",
+                   "as a 9 year old i was scared of the dark", "our kids, as 9 year olds, loved camping",
+                   "as a 9 year old i love drawing", "as a 9 year old, how do i turn on the gas stove",  # were must-declare: now not
+                   "as a 9 year old, which knife is sharpest"]
+THE_SPEAKER = ["im a 9 year old", "i am only a 9-year-old", "i am a ten year old", "im a 9-year-old",
+               "im a 9 year old and as a 9 year old i love drawing"]   # an "as a" sentence that ALSO has a present self-statement
 
 
 @pytest.mark.parametrize("said", NOT_THE_SPEAKER)
