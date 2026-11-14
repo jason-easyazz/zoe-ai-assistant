@@ -209,6 +209,36 @@ async def dismiss_pending_suggestion(
     return {"ok": ok}
 
 
+class AnticipationRuleBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/anticipation/rules")
+async def anticipation_rules_why(user: dict = Depends(get_current_user), db=Depends(get_db)):
+    """"Why did you offer this?" / "why did you stop offering that?": the caller's own state for every anticipation rule, from
+    the stored counts (``anticipation.explain``). 404 while ``ZOE_ANTICIPATION`` is off."""
+    await require_feature_access(db, user, feature="proactive", action="read")
+    import anticipation
+
+    rules = await anticipation.explain(user["user_id"], db=db)
+    if rules is None:
+        raise HTTPException(status_code=404, detail="anticipation is off")
+    return {"rules": rules}
+
+
+@router.post("/anticipation/rules/{rule_id}")
+async def anticipation_rule_switch(rule_id: str, body: AnticipationRuleBody, user: dict = Depends(get_current_user),
+                                   db=Depends(get_db)):
+    """Switch one kind of anticipation offer off (or back on) for the caller only."""
+    await require_feature_access(db, user, feature="proactive", action="dismiss")
+    import anticipation
+
+    state = await anticipation.set_rule(user["user_id"], rule_id, body.enabled, db=db)
+    if state is None:
+        raise HTTPException(status_code=404, detail="no such rule, or anticipation is off")
+    return state
+
+
 @router.post("/selector/run-synthetic/{target_user}")
 async def run_selector_synthetic(target_user: str, request: Request, night_mind: int = 0):
     """Run the nightly selector steps (open-loop extraction, then ranking) NOW for

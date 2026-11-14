@@ -26,6 +26,11 @@ THE ENGINE (docs/knowledge/anticipation.md). The same night pass also runs the r
 and are forgotten through the same code below; an engine offer is re-checked by running the pack again (its key must still be
 made). Phase 1's own wake / leave / packing offers win over the pack's for the same event.
 
+LEARNING (``anticipation_learning``). Every answered row keeps its rule, outcome and time, and those rows ARE the learning
+state: per member and per rule they shift the priority, lengthen the lead, or silence a rule after three noes in a row
+(``_tuner``). A member can switch a rule off (``set_rule``: one control row, ``list_type = 'rule_off'``, ``resolved = 7``) and ask
+why (``explain``: the exact counts). A forget that deletes an offer deletes its vote.
+
 PRIVACY. Only the event's owner, only a real member account, only a chat session (voice surfacing is phase 1b). A member who is not
 positively an adult gets no alarm offers. Logs carry counts and kinds only - never a title, a place or a line. ``off`` = every entry
 point returns before any I/O.
@@ -63,7 +68,8 @@ PACKING_BASICS = ("Phone charger", "Toiletries", "Medications", "Clothes")
 PACKING_TRAVEL_DOCS = ("ID or passport",)
 
 # resolved states (pending_suggestions.resolved; every other reader only ever selects resolved = 0)
-OPEN, DONE, DECLINED, IGNORED, WITHDRAWN, UNAVAILABLE, CLAIMED = 0, 1, 2, 3, 4, 5, 6
+OPEN, DONE, DECLINED, IGNORED, WITHDRAWN, UNAVAILABLE, CLAIMED, RULE_OFF = 0, 1, 2, 3, 4, 5, 6, 7
+RULE_OFF_KIND = "rule_off"          # list_type of the control row that switches one rule off for one member (amount_hint = rule_off:<id>)
 
 _TS = "%Y-%m-%dT%H:%M:%SZ"
 _TITLE_MAX = 200
@@ -432,6 +438,9 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
             events = await _events(conn, uid, now)
             offers = candidates(events, now=now, usual_wake=usual_wake_from(await _usual_alarms(conn, uid)),
                                 adult=await _is_adult(uid, db=conn))
+            learned = await _rows(conn, uid)
+            off, tune = _disabled(learned), _tuner(learned, now)
+            offers = [o for o in offers if o.kind not in off and not tune(o.kind).quiet]
             counts["events"] = len(events)
             for o in offers:
                 counts[o.kind] += 1
@@ -468,12 +477,37 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
 
 
 # -- the engine: the rule pack's offers in the same rows -----------------------------------------------------------------------------
-async def _engine_offers(conn: Any, uid: str, now: datetime) -> list:
-    """What the rule pack offers this member now (``anticipation_rules.Offer``, best first). Raises on a store error."""
+def _history(rows: list) -> list:
+    """The member's answered offers as learning votes (``anticipation_learning.Outcome``). The rows ARE the counts."""
+    import anticipation_learning
+
+    out = []
+    for r in rows:
+        at = _parse_iso(r["slots"].get("answered_at"))
+        if at is not None and r["slots"].get("outcome") in anticipation_learning.OUTCOMES:
+            out.append(anticipation_learning.Outcome(r["kind"], r["slots"]["outcome"], at.astimezone(_tz())))
+    return out
+
+
+def _disabled(rows: list) -> frozenset:
+    return frozenset(r["key"].partition(":")[2] for r in rows if r["kind"] == RULE_OFF_KIND and r["resolved"] == RULE_OFF)
+
+
+def _tuner(rows: list, now: datetime):
+    import anticipation_learning
+
+    return anticipation_learning.tuner(_history(rows), now.astimezone(_tz()))
+
+
+async def _engine_offers(conn: Any, uid: str, now: datetime, rows: Optional[list] = None) -> list:
+    """What the rule pack offers this member now (``anticipation_rules.Offer``, best first), with their switched-off rules left out
+    and their learned tuning applied. Raises on a store error."""
     import anticipation_facts
     import anticipation_rules
 
-    return anticipation_rules.offers(await anticipation_facts.load(conn, uid, now), uid)
+    rows = rows if rows is not None else await _rows(conn, uid)
+    return anticipation_rules.offers(await anticipation_facts.load(conn, uid, now), uid, disabled=_disabled(rows),
+                                     tune=_tuner(rows, now))
 
 
 def _source_event(sources: Any) -> str:
@@ -536,10 +570,12 @@ async def _still_holds(conn: Any, uid: str, r: dict, now: datetime, cache: Optio
     return r["key"] in cache["keys"]
 
 
-def _priority(r: dict) -> int:
-    if r["slots"].get("engine"):
-        return int(r["slots"].get("priority") or 0)
-    return {"wake": 90, "leave": 70, "packing": 50}.get(r["kind"], 0)
+def _priority(r: dict, tune: Any = None) -> int:
+    """The rule's base priority plus what this member's answers have taught (never the priority frozen into the row)."""
+    import anticipation_rules
+
+    rule = anticipation_rules.BY_ID.get(r["kind"])
+    return (rule.priority if rule else 0) + (tune(r["kind"]).priority if tune else 0)
 
 
 def _question(r: dict, now: datetime) -> str:
@@ -609,8 +645,9 @@ async def pick_for_turn(user_id: str, session_id: str, *, now: Optional[datetime
                     return None
             if sum(1 for r in rows if r["slots"].get("last_day") == day) >= PER_DAY:
                 return None
-            open_rows = sorted((r for r in rows if r["resolved"] == OPEN),
-                               key=lambda r: (-_priority(r), r["expires"] or now, r["key"]))
+            off, tune = _disabled(rows), _tuner(rows, now)       # a rule switched off or gone quiet since the offer was made
+            open_rows = sorted((r for r in rows if r["resolved"] == OPEN and r["kind"] not in off and not tune(r["kind"]).quiet),
+                               key=lambda r: (-_priority(r, tune), r["expires"] or now, r["key"]))
             for r in open_rows:
                 s = r["slots"]
                 start = _parse_iso(s.get("surface_from"))
@@ -833,6 +870,54 @@ async def on_dismissed(suggestion_id: str, user_id: str) -> None:
         _log_outcome(uid, r["kind"], "dismissed")
     except Exception as exc:  # noqa: BLE001
         logger.warning("ANTICIPATION dismiss not recorded user=%s: %s", uid, type(exc).__name__)
+
+
+# -- the member's own controls: switch a rule off, ask why ------------------------------------------------------------------------
+async def explain(user_id: str, rule_id: Optional[str] = None, *, now: Optional[datetime] = None, db: Any = None) -> Any:
+    """"Why did you offer this?" / "why did you stop offering that?": the member's state for one rule (a dict) or every rule (a
+    list), straight from the stored counts (``anticipation_learning.explain``). None = off, not a member, or no such rule."""
+    uid = (user_id or "").strip()
+    if mode() == "off" or not is_member(uid):
+        return None
+    import anticipation_learning
+    import anticipation_rules
+
+    if rule_id is not None and rule_id not in anticipation_rules.BY_ID:
+        return None
+    local = (now or datetime.now(timezone.utc)).astimezone(_tz())
+    async with _conn(db) as conn:
+        rows = await _rows(conn, uid)
+    hist, off = _history(rows), _disabled(rows)
+    out = [anticipation_learning.explain(hist, r.id, local, disabled=r.id in off) for r in anticipation_rules.RULES
+           if rule_id in (None, r.id)]
+    return out[0] if rule_id is not None else out
+
+
+async def set_rule(user_id: str, rule_id: str, enabled: bool, *, now: Optional[datetime] = None, db: Any = None) -> Optional[dict]:
+    """Switch one rule off (or back on) for this member only. Off also withdraws their open offers of that rule. Returns the
+    rule's ``explain`` state; None = off, not a member, or no such rule."""
+    uid = (user_id or "").strip()
+    import anticipation_rules
+
+    if mode() == "off" or not is_member(uid) or rule_id not in anticipation_rules.BY_ID:
+        return None
+    now = now or datetime.now(timezone.utc)
+    key = f"{RULE_OFF_KIND}:{rule_id}"
+    async with _conn(db) as conn:
+        await conn.execute("DELETE FROM pending_suggestions WHERE user_id = ? AND action_type = ? AND amount_hint = ?", (uid, ACTION, key))
+        if not enabled:                     # the control row holds no words: nothing in it for a forget to match
+            await conn.execute(
+                "INSERT INTO pending_suggestions (id, user_id, session_id, action_type, description, list_type, when_hint,"
+                " amount_hint, offer_phrase, pre_filled_slots, created_at, turns_elapsed, expire_after_turns, resolved)"
+                " VALUES (?, ?, ?, ?, '-', ?, NULL, ?, '-', '{}', ?, 0, ?, ?)",
+                (str(uuid.uuid4()), uid, SESSION, ACTION, RULE_OFF_KIND, key, _iso(now), MAX_SURFACED, RULE_OFF))
+        await conn.commit()
+        if not enabled:
+            for r in await _rows(conn, uid):
+                if r["resolved"] == OPEN and r["kind"] == rule_id:
+                    await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**r["slots"], "outcome": "switched_off"}, only_from=OPEN)
+        logger.info("ANTICIPATION_RULE user=%s rule=%s enabled=%d", uid, rule_id, int(bool(enabled)))
+        return await explain(uid, rule_id, now=now, db=conn)
 
 
 # -- forget ------------------------------------------------------------------------------------------------------------------------
