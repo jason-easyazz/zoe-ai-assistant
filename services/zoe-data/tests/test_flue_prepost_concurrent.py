@@ -97,7 +97,8 @@ async def test_a_turn_closed_before_its_post_leaves_no_task_running(monkeypatch)
     t0 = time.monotonic()
     pp.cancel_tasks()                                            # what run_flue_brain_streaming's finally does
     await asyncio.wait_for(asyncio.gather(*pp.tasks, return_exceptions=True), timeout=1.0)
-    assert all(t.cancelled() for t in pp.tasks) and time.monotonic() - t0 < 1.0   # not left to run out the 5 s
+    assert all(t.done() for t in pp.tasks) and time.monotonic() - t0 < 1.0   # not left to run out the 5 s
+    assert sum(t.cancelled() for t in pp.tasks) >= 9            # every slow block was cancelled (the stub apply is instant)
     assert pre.tasks                                             # nothing was taken
 
 
