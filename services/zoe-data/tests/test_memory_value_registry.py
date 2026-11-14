@@ -307,6 +307,14 @@ def test_record_refuses_names_words_and_unknown_subjects(db, kwargs):
     assert db.q("SELECT COUNT(*) FROM memory_value_registry") == [(0,)]
 
 
+def test_a_name_shaped_people_id_is_refused_even_when_that_row_exists(db):
+    """The subject check is the id SHAPE, not only "a people row exists": a legacy / hand-made row whose id is a name stays out."""
+    db.conn.execute("INSERT INTO people (id, user_id, name, deleted) VALUES ('juno', ?, 'Juno', 0)", (A,))
+    db.conn.commit()
+    assert run(reg.record(A, "juno", "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim=C(1), now=T0)) == 0
+    assert db.q("SELECT COUNT(*) FROM memory_value_registry") == [(0,)]
+
+
 def test_the_well_shaped_ids_are_accepted(db):
     """Control for the refusals above: the same call with every id in its real shape writes."""
     assert run(reg.record(A, JUNO, "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim=C(1), source_turn_id=T("1"),
