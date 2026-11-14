@@ -793,3 +793,10 @@ def test_control_sibling_serve_guards_with_the_old_lenient_lookup_leak(svc, monk
     _lenient_active_hashes(monkeypatch)
     assert run(recall_every_turn._forgotten(USER, "Dana rang about the kids")) is False
     assert run(svc._names_forgotten(USER, "Dana rang about the kids")) is False
+
+
+def test_the_verbatim_index_redacts_a_contact(index):
+    """The owner's exact words are a derived copy: a phone number and a street address are redacted, the turn is kept."""
+    assert say("I told the plumber to ring me back on 0400 000 000 about the leak at 1 Example St") is True
+    (stored,) = [r["text"] for r in index.rows.values()]
+    assert "[REDACTED]" in stored and "0400" not in stored and "Example St" not in stored and "plumber" in stored

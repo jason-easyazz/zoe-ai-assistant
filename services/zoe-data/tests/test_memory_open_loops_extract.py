@@ -287,3 +287,13 @@ async def test_regex_extractor_forwards_the_whole_utterance(monkeypatch):
 
     assert svc.ingested, "expected a candidate from the favourite-colour template"
     assert all(kw["source_excerpt"] == " ".join(message.split()) for kw in svc.ingested)
+
+
+async def test_a_contact_in_loop_text_is_redacted(monkeypatch):
+    db = _LoopsDb(["the plumber is coming tomorrow"])
+    _install(monkeypatch, db, reply=json.dumps([_loop("User must call the plumber on 0400 000 000 about the leak at 1 Example St")]))
+
+    await memory_digest._extract_open_loops("user-1")
+
+    stored = db.inserts[0][1]
+    assert "[REDACTED]" in stored and "0400" not in stored and "Example St" not in stored and "plumber" in stored

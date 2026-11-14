@@ -519,3 +519,68 @@ async def test_delete_user_still_fails_closed_when_the_night_erase_really_fails(
     monkeypatch.setattr(night_store, "_backend", Broken())
     with pytest.raises(MemoryServiceError, match="night-mind erasure failed"):
         await svc.delete_user("u1", actor="admin")
+
+
+# ── scrub_pii contact=False (2026-11-15): a contact-bearing household FACT is stored intact, its derived copies are not ──
+# Synthetic values only. Negative control: flip ``contact=False`` to the default at the caller under test and its test
+# goes red; remove ``_scrub_contact`` from the default and the excerpt / claim tests go red.
+
+PLUMBER = "User's plumber's number is 0400 000 000"
+ADDRESS = "User's plumber works from 1 Example St"
+SAID_CONTACT = "my plumber's number is 0400 000 000 and he works from 1 Example St"
+
+
+def _doc(svc, ref):
+    return svc._fake.rows[ref.id]["document"]
+
+
+@pytest.mark.parametrize("fact", [PLUMBER, ADDRESS])
+async def test_ingest_stores_a_contact_fact_intact_and_redacts_its_excerpt(svc, fact):
+    ref = await _seed(svc, fact, source_excerpt=SAID_CONTACT)
+    assert ref.text == fact and _doc(svc, ref) == fact                      # not refused, not dropped, not redacted
+    excerpt = ref.metadata["source_excerpt"]
+    assert "[REDACTED]" in excerpt and "0400" not in excerpt and "Example St" not in excerpt
+
+
+async def test_the_authority_text_of_a_mined_event_keeps_the_contact(svc, monkeypatch):
+    """The emergency-event branch resolves authority on the MINED words (its own scrub_pii call, contact=False)."""
+    import medical_safety
+
+    seen = []
+    real = memory_service._auth.resolve_write
+
+    def spy(writer, text, **kw):
+        seen.append(text)
+        return real(writer, text, **kw)
+
+    monkeypatch.setattr(medical_safety, "emergency_event", lambda *a, **k: "Emergency: an ambulance was called")
+    monkeypatch.setattr(memory_service._auth, "resolve_write", spy)
+    await svc.ingest(PLUMBER, user_id="u1", source="test")
+    assert seen == [PLUMBER]
+
+
+@pytest.mark.parametrize("fact", [PLUMBER, ADDRESS])
+async def test_review_edit_stores_a_contact_fact_intact(svc, fact):
+    ref = await _seed(svc, "User has a plumber")
+    edited = await svc.review(ref.id, decision="edit", edits=fact, actor="tester", source_excerpt=SAID_CONTACT)
+    assert edited.text == fact and svc._fake.rows[edited.id]["document"] == fact
+    assert "0400" not in edited.metadata["source_excerpt"]
+
+
+@pytest.mark.parametrize("fact", [PLUMBER, ADDRESS])
+async def test_the_candidate_writer_stores_a_contact_fact_intact(svc, fact):
+    cid = await svc._write_candidate(fact, user_id="u1", writer="turn_digest", contradicts="zoe_u1_x", kind="authority_blocked")
+    assert cid and svc._fake.rows[cid]["document"] == fact
+
+
+def _claim(quote, obj):
+    return {"subj": "user", "pred": "other", "obj": obj, "pol": "affirm", "mod": "asserted", "tense": "current",
+            "quote": quote}
+
+
+async def test_a_claim_quote_carrying_a_contact_is_not_stored(svc, monkeypatch):
+    monkeypatch.delenv("ZOE_STRUCTURAL_CLAIMS", raising=False)            # shadow: claims are stamped
+    plain = await _seed(svc, "User has a plumber called Rowan", claim=_claim("my plumber is called Rowan", "Rowan"))
+    assert "claim" in plain.metadata                                        # control: an ordinary claim IS stamped
+    ref = await _seed(svc, PLUMBER, claim=_claim(SAID_CONTACT, "0400 000 000"))
+    assert ref.text == PLUMBER and "claim" not in ref.metadata              # the fact is kept, its verbatim claim is not

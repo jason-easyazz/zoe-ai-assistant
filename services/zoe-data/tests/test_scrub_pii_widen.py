@@ -202,6 +202,14 @@ def test_the_night_quote_gate_refuses_the_new_classes(text):
     "I live at 1 " + "word " * 5000,
 ])
 def test_a_long_adversarial_string_is_fast(blob):
+    """Linear, not catastrophic: measured relative to a benign sentence of the SAME length on the same box (so a loaded CI
+    runner slows both), plus a generous absolute ceiling. Measured 2026-11-15: worst blob ~64 ms; a backtracking trap at
+    this size runs for minutes."""
+    benign = ("the plumber is coming on Friday about the leak in the laundry " * (len(blob) // 60 + 1))[:len(blob)]
+    t0 = time.perf_counter()
+    scrub_pii(benign)
+    base = time.perf_counter() - t0
     t0 = time.perf_counter()
     scrub_pii(blob)
-    assert time.perf_counter() - t0 < 1.0
+    took = time.perf_counter() - t0
+    assert took < 50 * base + 0.5 and took < 10.0, (took, base)

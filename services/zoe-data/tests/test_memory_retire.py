@@ -766,3 +766,13 @@ def test_forgetting_an_entity_the_cited_sentence_names_leaves_no_retained_row(la
     assert status(lab, "community orchestra") == "superseded"
     run(intent_router.execute_intent(intent_router.Intent("memory_forget_entity", {"name": "cello"}), U))
     assert status(lab, "community orchestra") == "archived" and status(lab, "oat milk") == "approved"
+
+
+def test_the_retire_quote_redacts_a_contact_the_owner_said(lab):
+    """The quote is a derived verbatim copy (scrub_source_excerpt, contact redaction on): the retirement still happens."""
+    seed(lab, CELLO)
+    rid = _cello_id(lab)
+    quote = "I gave up the cello, my teacher on 0400 000 000 moved to 1 Example St"
+    assert run(lab.service.retire_with_quote(U, rid, quote=quote, turn_ref="t", lane="chat", cue="gave up"))
+    kept = row(lab, "plays the cello")[2]["retire_quote"]
+    assert "[REDACTED]" in kept and "0400" not in kept and "Example St" not in kept and "gave up the cello" in kept

@@ -170,3 +170,10 @@ def test_style_line_is_the_first_style_sentence_scrubbed():
         "She prefers blunt feedback."
     assert c.style_line("She runs a lot.") == ""
     assert c.style_line("She is direct; her password is hunter2.") == ""
+
+
+def test_a_contact_fact_never_reaches_the_card():
+    """The card is a derived copy: an address (which the card's own phone / e-mail guard does not see) is dropped because
+    scrub_pii redacts it."""
+    assert "Example St" not in card([ref("User's plumber works from 1 Example St.", "relationship")])
+    assert card([ref("User's plumber works from 1 Example St.", "relationship")]) == ""
