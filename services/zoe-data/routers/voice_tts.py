@@ -4727,8 +4727,8 @@ async def voice_command(
                 _skybridge_audio = await synthesize({"text": _skybridge_reply}, caller=caller)
                 _skybridge_audio_b64 = base64.b64encode(_skybridge_audio.body).decode("ascii")
                 _skybridge_ct = _skybridge_audio.media_type
-            logger.info("SKYBRIDGE TIMING resolve=%.2fs broadcast=%.2fs synth=%.2fs stream=%s reply=%r",
-                        _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, stream, _skybridge_reply[:50])
+            logger.info("SKYBRIDGE TIMING resolve=%.2fs broadcast=%.2fs synth=%.2fs stream=%s reply=%s",
+                        _sky_t_resolve, _bcast_dt, time.monotonic() - _synth_t0, stream, _utt_tag(_skybridge_reply))
             try:
                 from push import broadcaster as _bc_sky
                 await _bc_sky.broadcast(_panel_channel(panel_id), "voice:responding", {"panel_id": panel_id, "text": _skybridge_reply})

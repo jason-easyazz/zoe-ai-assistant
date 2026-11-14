@@ -41,6 +41,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import re
 from dataclasses import dataclass, field
@@ -486,8 +487,9 @@ def confirm_question(snap: Snap) -> str:
 
 
 def log_line(snap: Snap, outcome: str, *, guest: bool) -> None:
-    """``STT_SNAP from=<hash> to=<intent> outcome=<...>``; a member's line also carries the words, a guest's never."""
-    words = "" if guest else f" heard={snap.heard[:80]!r} as={snap.text[:80]!r}"
+    """``STT_SNAP from=<hash> to=<intent> outcome=<...>``; a member's line adds ``len=N utt=<hash>`` of the snapped text (never
+    the words: the log is outside the forget cascade); a guest's line adds nothing."""
+    words = "" if guest else f" as_{_utag(snap.text)}"
     logger.warning("STT_SNAP from=%s to=%s outcome=%s safety=%s cost=%.2f pos=%d mode=%s%s",
                    snap.from_hash, snap.intent, outcome, snap.safety, snap.cost, snap.position, mode(), words)
 

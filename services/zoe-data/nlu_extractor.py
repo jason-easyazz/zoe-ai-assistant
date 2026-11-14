@@ -11,6 +11,7 @@ so callers fall through to the Zoe Agent.
 import datetime
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import re
 from typing import Optional
 
@@ -62,7 +63,7 @@ async def _call_with_tool(text: str, tool_schema: dict) -> Optional[dict]:
         data = r.json()
         tc = (data["choices"][0]["message"].get("tool_calls") or [])
         if not tc:
-            logger.warning("nlu_extractor: no tool_call for intent (text=%s)", text[:60])
+            logger.warning("nlu_extractor: no tool_call for intent (text=%s)", _utag(text))
             return None
         return json.loads(tc[0]["function"]["arguments"])
     except Exception as exc:

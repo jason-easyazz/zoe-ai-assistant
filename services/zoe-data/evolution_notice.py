@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from log_redaction import utterance_tag as _utag  # logs carry a tag, never fact/turn text
 import os
 import time
 import uuid
@@ -501,8 +502,8 @@ async def record_frustration_signal(
             evidence={"signal": {"kind": "user_frustration", "repeat_count": repeat_count}},
         )
         logger.info(
-            "evolution_notice: frustration signal for user=%s message='%s' repeats=%d",
-            user_id, normalized_message[:60], repeat_count,
+            "evolution_notice: frustration signal for user=%s message=%s repeats=%d",
+            user_id, _utag(normalized_message), repeat_count,
         )
 
         await _mirror(db, row["id"], dict(intake.multica_payload))
@@ -604,8 +605,8 @@ async def record_user_issue(message: str, user_id: str) -> None:
             evidence={"signal": {"kind": "user_issue_report"}},
         )
         logger.info(
-            "evolution_notice: user issue report from user=%s message='%s'",
-            user_id, message[:60],
+            "evolution_notice: user issue report from user=%s message=%s",
+            user_id, _utag(message),
         )
 
         await _mirror(db, row["id"], dict(intake.multica_payload, label_name="user-feedback"))
