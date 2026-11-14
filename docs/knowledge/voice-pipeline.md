@@ -1693,6 +1693,20 @@ per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks 
     turn's end, off the path to the first sound. `-1` when no recording is known.
   - `media=<1|0|-1> media_age_ms=<n|-1>` (appended last, 2026-11-14): the media watch's snapshot at the close (see
     below). `-1 -1` while `MEDIA_WATCH_ENABLED` is off (the default).
+  - `spk=<1|0|-1> spk_ms=<n|-1>` (appended after the media pair): this turn's speaker claim judged by the model's OWN
+    accept at the stricter window bar (ResNet34 FAR 0.1 %: 0.309 for 2 s or less, 0.351 longer; an env override can
+    only raise it): `1` a member cleared it and no named guest is closer, `0` scored and not accepted (under the bar, a
+    scored no-match, a closer guest), `-1` not scored on this turn (speaker shadow mode, no claim, encoder missing, an
+    unknown model, a claim carried in from a speculative stream). `spk_ms` = close -> the verdict ready (the inline
+    score before the POST), `-1` with `spk=-1` or a carried claim. No id, no score.
+  - `skip=` is now the SHADOW reflex decision: `zoe_voice_reflex.decide()` over this turn's real close-time inputs
+    (committed close, rule, speech length, mute, another player, `media`, pre-roll level, hour, idle time, `spk` as
+    `speaker_accept` + `verdict_ms`), with the master switch forced on inside that one call. It runs at the turn's
+    end, after the stream; it creates no player, loads no bank and changes nothing. With no bank, a turn every guard
+    clears reads `skip=no_bank` - that is "would have played". Unknown inputs map to the silent side (unknown speech
+    -> `short`, unknown mute -> `muted`, unknown pre-roll -> `noisy`, unknown idle -> `idle_greeting`). `-` when
+    `zoe_voice_reflex.py` is not deployed. OPEN: the pre-roll holds the wake word, so expect `noisy` to dominate
+    ([voice-reflex-noise-input.md](voice-reflex-noise-input.md)).
 - **Media watch** (`_MediaWatch`, flag `MEDIA_WATCH_ENABLED` in `.env.voice`, default off, LOG-ONLY): is anything that
   is not the daemon playing into the panel's PulseAudio server (AirPlay, the kiosk browser)? The reflex's `media`
   input. A `media-watch` thread re-reads `pactl list sink-inputs` (C locale) on a `pactl subscribe` sink-input event
@@ -1715,6 +1729,9 @@ per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks 
   change: there is no flag. Read the lines with `ssh zoe-pi "grep -E 'PCM_WRITE|FIRST_SOUND' /home/pi/.zoe-voice/voice.log"`.
   **Rollback:** `cp -p /home/pi/.zoe-voice/zoe_voice_daemon.py.bak-<ts> /home/pi/.zoe-voice/zoe_voice_daemon.py` then
   `systemctl --user restart zoe-voice` (the deploy script prints the exact commands). Nothing server-side changes.
+- The speaker fields and the shadow decision are pinned by `tests/unit/test_voice_daemon_shadow_reflex.py` (far01 vs
+  far1, each real input moving the skip, no player or bank touched, identical playback with the shadow on, off or
+  raising).
 - Pinned by `tests/unit/test_voice_daemon_first_sound_log.py`. It covers field order, sentinels, underrun
   arithmetic, close carry on wake and follow-up, talk counting, no text, the two existing lines byte-identical, and
   identical playback, POSTs and barge decisions with the instrument stubbed out or raising.
