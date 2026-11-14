@@ -122,6 +122,19 @@ def replay(rec: Recording, skills: list, *, label: str = "") -> Report:
 
 
 def _run(k: Kernel, rec: Recording, skills: list, now: list, label: str) -> Report:
+    load(k, rec, skills)
+    return _report(rec, skills, play(k, rec, now), label)
+
+
+def join(days: list[Recording]) -> Recording:
+    """Several days as one recording, in time order (the people and policy of the first)."""
+    rows = sorted((row for day in days for row in day.events), key=lambda r: r["t"])
+    return Recording(days[0].people, rows, days[0].answers, days[0].no_accept, days[0].off,
+                     {"days": [d.meta.get("day", "") for d in days]})
+
+
+def load(k: Kernel, rec: Recording, skills: list) -> None:
+    """Prepare a fresh kernel for a recording: its adapters, the skills, stand-in devices, grants."""
     origins: dict[str, set[str]] = {PANEL: {"offer_response"}}
     for row in rec.events:
         origins.setdefault(row["source"], set()).add(row["kind"])
@@ -140,6 +153,10 @@ def _run(k: Kernel, rec: Recording, skills: list, now: list, label: str) -> Repo
                 k.grants.grant(p.id, m.skill)
             elif p.role == CHILD and p.guardians:
                 k.grants.grant(p.id, m.skill, guardian=p.guardians[0])
+
+
+def play(k: Kernel, rec: Recording, now: list) -> list:
+    """Feed the recording's events to a loaded kernel. ``now[0]`` is the kernel's clock."""
     facts, answered = [], set()
     for index, row in enumerate(rec.events, start=2):           # the file's line number
         now[0] = row["t"]
@@ -149,7 +166,7 @@ def _run(k: Kernel, rec: Recording, skills: list, now: list, label: str) -> Repo
         _settle(k, rec, row["t"], answered)
         k.auditor.scan()
         facts += [(index, row["t"], e) for e in k.spine._fetch(before, None, None, 100_000)]
-    return _report(rec, skills, facts, label)
+    return facts
 
 
 def _settle(k: Kernel, rec: Recording, t: float, answered: set[int]) -> None:
