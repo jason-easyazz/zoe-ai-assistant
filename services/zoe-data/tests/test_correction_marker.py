@@ -27,7 +27,7 @@ FIX = "No, the book club is on the 19th, not the 12th"            # synthetic, c
 OLD_ROW = "The book club meets on the 12th"
 HEAD = "## A newer correction from the member"
 CHAT: dict = {}                                                     # id -> {user, session, content}
-_REAL_FETCH = cm._fetch_texts
+_REAL_FETCH, _REAL_TURNS = cm._fetch_texts, cm._session_turns
 
 
 @pytest.fixture(autouse=True)
@@ -35,13 +35,13 @@ def _state(monkeypatch):
     cm.reset(), turn_forget.reset(), CHAT.clear()
     monkeypatch.setenv("ZOE_CORRECTION_PENDING_MARKER", "1")
 
-    async def find(user_id, session_id, words):
-        return next((t for t, r in reversed(CHAT.items()) if (r["user"], r["session"], r["content"]) == (user_id, session_id, words)), None)
+    async def turns(user_id, session_id):        # the SQL's owner + session filter, newest first (pinned below)
+        return [(t, r["content"]) for t, r in reversed(CHAT.items()) if (r["user"], r["session"]) == (user_id, session_id)]
 
     async def fetch(user_id, ids):
         return {t: CHAT[t]["content"] for t in ids if t in CHAT and CHAT[t]["user"] == user_id}
 
-    monkeypatch.setattr(cm, "_find_turn_id", find)
+    monkeypatch.setattr(cm, "_session_turns", turns)
     monkeypatch.setattr(cm, "_fetch_texts", fetch)
     yield
     cm.reset(), turn_forget.reset()
@@ -93,7 +93,21 @@ async def test_set_for_a_member_correction_only_and_holds_no_words():
 @pytest.mark.parametrize("user,verified", [("guest", None), ("guest-abc123", None), (MEMBER, False)])
 async def test_never_set_for_a_guest_or_a_rejected_speaker(user, verified):
     assert await _note(user=user, speaker_verified=verified) is False and cm.pending(user) == []
+    CHAT.clear()                                                                    # (one saved turn, or it is ambiguous)
     assert await _note(user=MEMBER, speaker_verified=True, tid="t9") is True       # control: a verified member
+
+
+async def test_binds_only_the_one_exact_turn_of_that_member(caplog):
+    caplog.set_level(logging.INFO)
+    CHAT["t1"] = {"user": MEMBER, "session": "s-panel", "content": FIX + " and the venue moved too"}   # starts with the words
+    CHAT["t2"] = {"user": OTHER, "session": "s-panel", "content": FIX}                              # another member's identical turn
+    assert await cm.note_turn(FIX, MEMBER, "s-panel") is False and cm.pending(MEMBER) == []
+    CHAT["t3"] = CHAT["t4"] = {"user": MEMBER, "session": "s-panel", "content": FIX}                 # two identical turns
+    assert await cm.note_turn(FIX, MEMBER, "s-panel") is False and cm.pending(MEMBER) == []
+    reasons = [r.getMessage().split()[2] for r in caplog.records if "PENDING_CORRECTION skipped" in r.getMessage()]
+    assert reasons == ["reason=not_found", "reason=ambiguous"]
+    del CHAT["t4"]                                                                                   # control: the one exact turn binds
+    assert await cm.note_turn(FIX, MEMBER, "s-panel") is True and cm.pending(MEMBER)[0].turn_id == "t3"
 
 
 async def test_a_turn_already_retracted_is_not_marked():
@@ -174,9 +188,9 @@ async def test_the_real_read_filters_by_owner_and_off_record(monkeypatch):
             return False
 
     monkeypatch.setattr(db_pool, "get_db_ctx", lambda: _Db())
-    assert await _REAL_FETCH(MEMBER, ["t1"]) == {"t1": FIX}
-    sql, params = seen[-1]
-    assert message_owner_expr() in sql and off_record_sql("cm") in sql and "cm.id IN (?)" in sql and params == (MEMBER, "t1")
+    assert await _REAL_FETCH(MEMBER, ["t1"]) == {"t1": FIX} and await _REAL_TURNS(MEMBER, "s-panel") == [("t1", FIX)]
+    for (sql, params), tail in zip(seen, ("cm.id IN (?)", "cm.session_id = ? ORDER BY")):
+        assert message_owner_expr() in sql and off_record_sql("cm") in sql and tail in sql and params[0] == MEMBER
 
 
 async def test_every_forget_path_clears_only_that_member(monkeypatch):
@@ -197,9 +211,21 @@ async def test_every_forget_path_clears_only_that_member(monkeypatch):
         assert len(cm.pending(MEMBER)) == 1
         await forget()
         assert cm.pending(MEMBER) == [] and len(cm.pending(OTHER)) == 1
-    src = inspect.getsource(memory_service.MemoryService.delete_user)              # delete_user: too heavy to run here
+    src = inspect.getsource(memory_service.MemoryService.delete_user)              # delete_user: the AST pin, second line
     assert any(isinstance(n, ast.Attribute) and n.attr == "forget_user" and getattr(n.value, "id", "") == "correction_marker"
                for n in ast.walk(ast.parse("class _X:\n" + src)))
+
+
+async def test_the_real_delete_user_clears_the_marker_and_the_block(monkeypatch, tmp_path):
+    from test_memory_loss_class import _Col, _svc                                  # palace collections faked, the method is real
+
+    monkeypatch.setattr(memory_service, "_invalidate_agent_user_facts_cache", lambda _u: None)
+    await _note()
+    cm.put(OTHER, "t7")
+    assert HEAD in _packet(monkeypatch)["packet"]                                   # control: served before the forget
+    await _svc(_Col(["zoe_wren_aa"]), _Col(), tmp_path).delete_user(MEMBER, actor="admin", reason="rtbf")
+    assert cm.pending(MEMBER) == [] and len(cm.pending(OTHER)) == 1
+    assert HEAD not in _packet(monkeypatch)["packet"]
 
 
 async def test_clear_by_turn_ttl_and_bound():

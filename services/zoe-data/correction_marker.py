@@ -26,7 +26,9 @@ TTL_S, MAX_PER_USER, MAX_USERS, MAX_SERVED, TEXT_CAP = 2 * 3600.0, 16, 64, 3, 24
 class Marker(NamedTuple):
     turn_id: str
     said_at: float
-    keys: tuple = ()            # sha256(folded subject)[:12], never the subject
+    # sha256(folded subject)[:12], never the subject. Held ON PURPOSE (cross-review, PR 2471): a privacy feature, not a leak -
+    # they are what lets a forget-by-subject clear the marker without the marker ever holding the words.
+    keys: tuple = ()
 
 
 _LOCK = threading.Lock()
@@ -124,17 +126,32 @@ async def _rows(sql: str, params: tuple) -> list:
     return [(str(r["id"]), r["content"] or "") if isinstance(r, dict) else (str(tuple(r)[0]), tuple(r)[1] or "") for r in rows]
 
 
-async def _find_turn_id(user_id: str, session_id: str, words: str) -> Optional[str]:
-    """``chat_messages.id`` of this member's newest saved user turn in the session holding these words; None if not saved yet."""
-    from turn_forget import norm
+async def _session_turns(user_id: str, session_id: str) -> list:
+    """The member's recent on-the-record user turns in the session, newest first: ``[(id, content)]``."""
+    return await _rows(_sql("AND cm.session_id = ? ORDER BY cm.created_at::timestamptz DESC LIMIT 50"), (user_id, session_id))
 
-    want = norm(words)
-    for rid, content in await _rows(_sql("AND cm.session_id = ? ORDER BY cm.created_at::timestamptz DESC LIMIT 4"),
-                                    (user_id, session_id)):
-        have = norm(content)
-        if want and have and (have == want or have.startswith(want) or want.startswith(have)):
-            return rid
-    return None
+
+def _saved_form(words: str) -> str:
+    """The text ``routers.chat._save_chat_message`` stores for this turn: the user's own words (``_capture_words`` drops the voice
+    lane's appended reply instructions), ``.strip()``-ed exactly as the save does."""
+    try:
+        from routers.chat import _capture_words
+
+        words = _capture_words(words)
+    except Exception:  # noqa: BLE001 - no chat router: the words are already the saved form
+        pass
+    return (words or "").strip()
+
+
+async def _find_turn_id(user_id: str, session_id: str, words: str) -> Optional[str]:
+    """``chat_messages.id`` of the ONE saved turn of this member in this session whose text EQUALS these words in saved form.
+    None (logged ``not_found`` / ``ambiguous``) when no turn or more than one matches: a marker never binds a guessed turn."""
+    want = _saved_form(words)
+    hits = [rid for rid, content in await _session_turns(user_id, session_id) if want and content == want]
+    if len(hits) != 1:
+        logger.info("PENDING_CORRECTION skipped reason=%s user=%s n=%d", "ambiguous" if hits else "not_found", user_id, len(hits))
+        return None
+    return hits[0]
 
 
 async def _fetch_texts(user_id: str, turn_ids: list) -> dict:
