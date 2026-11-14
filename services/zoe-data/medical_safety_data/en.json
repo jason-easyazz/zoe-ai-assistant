@@ -97,6 +97,10 @@
    "poison_human": {"ING": ["overdosing", "overdoseing", "overdozing"], "ED": ["overdosed", "overdozed", "overdoesed"], "BASE": ["overdose", "overdoes", "overdoze"]}
   },
   "verdicts": {"poison_human": "ingest_human"},
+  "condition_not_after": {
+   "stroke": ["of luck", "of good luck", "of bad luck", "of genius", "of brilliance", "of inspiration", "of fortune", "of the pen", "of a pen", "of the brush", "of a brush", "of midnight", "of the clock", "of the oar", "in the pool", "in this pool", "in the water", "on the water", "rate", "count", "play", "technique", "the cat", "the dog"],
+   "heart": ["on a plate", "waiting to happen"]
+  },
   "verb_idiom_objects": ["chocolate", "sugar", "sweets", "lollies", "candy", "cake", "cakes", "biscuits", "cookies", "food", "pizza", "chips", "snacks", "junk food", "ice cream", "carbs", "netflix", "tv", "telly", "television", "youtube", "tiktok", "instagram", "social media", "games", "gaming", "video games", "love", "cuteness", "work", "sport", "football", "footy", "cricket", "news", "christmas", "music", "shopping", "sun", "sunshine", "exercise", "drama", "nostalgia", "memes", "reality tv", "books", "reading", "studying", "homework"],
   "verb_idiom_unless_asked": ["coffee", "caffeine", "tea", "energy drinks", "red bull", "espresso"],
   "drug_names": ["heroin", "cocaine", "coke", "crack", "fentanyl", "meth", "ice", "opioids", "opiates", "oxy", "oxycodone", "oxycontin", "ketamine", "mdma", "ecstasy", "xanax", "benzos", "valium", "methadone", "tramadol", "codeine", "morphine", "ghb", "pills", "insulin", "sleeping pills", "painkillers", "pain killers"],

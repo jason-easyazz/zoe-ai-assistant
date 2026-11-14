@@ -355,7 +355,8 @@ def test_overdose_verb_forms_fire_from_the_data(text):
 # ── review #2525 PRRT ...ethI: the MOST urgent verdict wins, never the first computed ─────────────────────────────────────────
 def test_the_urgency_order_is_explicit_and_pinned():
     assert medical_safety.URGENCY == (("ingest_human", "object_urgent"), ("ingest_human", "poison_human"), ("red_call", None),
-                                      ("ingest_human", "object_minor"), ("ingest_animal", None), ("number", None),
+                                      ("ingest_human", "poison_caffeine"), ("ingest_human", "object_minor"),
+                                      ("ingest_animal", "poison_animal"), ("ingest_animal", None), ("number", None),
                                       ("red_soon", None), ("glucose", None))
     assert medical_safety.urgency(medical_safety.NONE) == len(medical_safety.URGENCY)
 
@@ -500,7 +501,10 @@ def test_every_idiom_object_with_every_verb_form_never_fires():
                                          ("am i overdosing on caffeine?", True), ("could he be overdosing on energy drinks", True),
                                          ("is she overdosing on caffeine", True), ("we have overdosed on tea", False)])
 def test_the_caffeine_family_is_an_idiom_unless_asked_about_now(text, fires):
-    assert (medical_safety.self_assessment(text) == _expected("poison_human")) is fires
+    v = medical_safety.self_assessment(text)
+    assert (v.cls == "ingest_human") is fires
+    if fires:                                                                     # the same poisoning reply, ranked lower
+        assert medical_safety.build_reply(v) == medical_safety.build_reply(_expected("poison_human"))
 
 
 def test_control_the_old_substance_gate_missed_the_threads_examples():
@@ -548,7 +552,7 @@ def test_a_caffeine_clause_beside_a_question_counts_as_asked_left_whole_turn_on_
     """``_sa_asked`` reads the WHOLE turn: a question anywhere makes a caffeine overdose fire. Scoping it to the clause would make a
     real overdose fire LESS, so it is left (fail-safe); the most urgent verdict still wins through URGENCY."""
     v = medical_safety.self_assessment("am i having a heart attack and my dad is overdosing on coffee")
-    assert v.cls in ("ingest_human", "red_call")
+    assert v == _expected("heart")                    # asked, so it fires - and ranks below the speaker's call-now
 
 
 @pytest.mark.parametrize("text, cond", _human_with_animal_mention())
@@ -565,3 +569,113 @@ def test_mirror_an_animal_as_the_frames_own_subject_gets_the_vet_reply(text):
 def test_the_threads_two_examples():
     assert medical_safety.self_assessment("my dad is overdosing on coffee and he is having a stroke") == _expected("stroke")
     assert medical_safety.self_assessment("is alex overdosing? the dog is fine") == _expected("poison_human")
+
+
+
+# ── ruling on #2525: the speaker's own call-now wins the wording over a caffeine-class or a third party's poison verdict ─────
+CALL_NOW = {"heart": "am i having a heart attack", "stroke": "am i having a stroke", "breathing": "is this anaphylaxis"}
+
+
+def _call_now_plus_caffeine() -> list:
+    out = []
+    for cond, ask in CALL_NOW.items():
+        for x in _sa()["verb_idiom_unless_asked"]:
+            caf = f"my dad is overdosing on {x}"
+            out += [(f"{ask} and {caf}", cond), (f"{caf} and {ask}", cond), (f"{ask}? {caf}?", cond), (f"{caf}? {ask}?", cond)]
+    return out
+
+
+@pytest.mark.parametrize("text, cond", _call_now_plus_caffeine())
+def test_a_call_now_condition_outranks_a_caffeine_class_poison_in_either_order(text, cond):
+    assert medical_safety.self_assessment(text) == _expected(cond)
+
+
+def test_the_reviewers_example_and_its_reverse(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    for text in ("am i having a heart attack and my dad is overdosing on coffee",
+                 "my dad is overdosing on coffee and am i having a heart attack"):
+        assert run(medical_safety.handle(text, "demo_bar_00000001")) == medical_safety.build_reply(_expected("heart"))
+
+
+def test_control_a_lone_caffeine_question_still_gets_the_poison_reply(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert run(medical_safety.handle("am i overdosing on caffeine?", "demo_bar_00000001")) == \
+        medical_safety.build_reply(_expected("poison_human"))
+
+
+@pytest.mark.parametrize("text, want", [
+    ("am i having a heart attack and my dad is overdosing on cocaine", "heart"),       # the speaker's call-now, a third party's poison
+    ("my dad is overdosing on cocaine and am i having a heart attack", "heart"),
+    ("am i having a stroke and is she overdosing on heroin", "stroke"),
+    ("am i having a heart attack and am i overdosing on cocaine", "poison_human"),     # both the speaker's: URGENCY (poisons line kept)
+    ("is this a stroke and my dad is overdosing on heroin", "poison_human"),           # whose stroke is unclear: URGENCY decides
+    ("is she having a stroke and is my dad overdosing", "poison_human"),               # neither is the speaker: URGENCY decides
+])
+def test_the_speakers_own_call_now_beats_a_third_partys_poison_only(text, want):
+    assert medical_safety.self_assessment(text) == _expected(want)
+
+
+def test_pinned_a_heart_question_beside_a_stated_drug_ingestion_gets_the_heart_reply():
+    """"am i having a heart attack, i took too much cocaine": nothing on this branch reads "took too much cocaine" (cocaine is not in
+    the ingestion lexicon and no frame states a drug ingestion), so the heart reply is the only verdict - nothing is demoted. A
+    follow-up case for fix/medical-took-too-many (the drug names there could carry the poisons line)."""
+    for text in ("am i having a heart attack, i took too much cocaine", "i took too much cocaine, am i having a heart attack"):
+        assert medical_safety.detect(text).cls == "" and medical_safety.self_assessment(text) == _expected("heart")
+
+
+
+# ── review #2525 PRRT ...ff5C: an exclusion is an explicit idiom phrase, never a bare function word ──────────────────────────
+def test_no_exclusion_in_the_data_is_a_bare_function_word():
+    for key, phrases in _sa().get("condition_not_after", {}).items():
+        assert key in _sa()["conditions"]
+        for p in phrases:
+            assert not set(p.split()) <= medical_safety._FUNCTION_WORDS, (key, p)
+    for p in _sa()["verb_idiom_objects"] + _sa()["verb_idiom_unless_asked"]:
+        assert not set(p.split()) <= medical_safety._FUNCTION_WORDS, p
+
+
+TAILS = ["on my left side", "on one side", "on the right", "down my arm", "in my chest", "in my face", "at work", "at home",
+         "right now", "on the bus", "a bit", "again"]
+
+
+def test_every_condition_with_a_body_side_location_or_time_tail_fires():
+    misses = []
+    for key, terms in _sa()["conditions"].items():
+        for term in terms:
+            art = f"a {term}" if term[0] not in "aeiou" else f"an {term}"
+            for tail in TAILS:
+                text = f"am i having {art} {tail}"
+                if medical_safety.self_assessment(text) != _expected(key):
+                    misses.append(text)
+    assert misses == []
+
+
+@pytest.mark.parametrize("text", ["is this a stroke of luck", "what a stroke of genius", "is that a stroke in the pool",
+                                  "is my stroke rate ok", "that burger is a heart attack on a plate"])
+def test_mirror_an_explicit_idiom_phrase_still_voids(text):
+    assert medical_safety.self_assessment(text).cls == ""
+
+
+# ── review #2525 PRRT ...ff5I: a present-relevant past question joins the urgency choice ───────────────────────────────────────
+PRESENT_PAST = ["today", "just now", "this morning", "a minute ago"]
+PAST_ASKS = {"heart": "have i had a heart attack", "stroke": "have i had a stroke", "breathing": "have i had anaphylaxis",
+             "poison_human": "have i had an overdose"}
+
+
+def _pet_plus_present_past() -> list:
+    out = []
+    for cond, ask in PAST_ASKS.items():
+        for when in PRESENT_PAST:
+            q = f"{ask} {when}?"
+            out += [(f"is my dog overdosing? {q}", cond), (f"{q} is my dog overdosing?", cond)]
+    return out
+
+
+@pytest.mark.parametrize("text, cond", _pet_plus_present_past())
+def test_a_human_present_past_question_outranks_a_vet_reply_in_either_order(text, cond):
+    assert medical_safety.self_assessment(text) == _expected(cond)
+
+
+@pytest.mark.parametrize("text", ["is my dog overdosing? did i have a stroke last year?", "did i have a stroke last year? is my dog overdosing"])
+def test_mirror_a_true_recall_question_beside_a_pet_leaves_the_vet_reply(text):
+    assert medical_safety.self_assessment(text) == medical_safety.Verdict("ingest_animal", "poison_animal")

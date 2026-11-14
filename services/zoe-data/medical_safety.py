@@ -392,7 +392,8 @@ _SA_A = r"(?:a\s+|an\s+|the\s+)?(?:(?:big|massive|major|small|little|minor|mild|
 _SA_WHO = r"(?:i|you|he|she|they|we|it|this|that|my\s+[a-z]+|our\s+[a-z]+|your\s+[a-z]+|the\s+(?:baby|kid|child|man|woman)|(?!(?:a|an|the|what|which|how|there|here)(?!\w))[a-z]+)"
 _SA_FICTION = r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play))"
 #: a "stroke" that is not the condition: "stroke of luck / genius", a stroke on the water / in the pool / of the game
-_SA_NOT_AFTER_STROKE = r"(?!\s+(?:of|on|in\s+(?:the|this|that)\s+(?:pool|water|game|round)))"
+#: function words no exclusion may be on its own (a bare "on" / "of" after a condition dropped "a stroke on my left side")
+_FUNCTION_WORDS = frozenset("a an the of on in at to for with by from down up my his her their our your this that it is was".split())
 
 
 def _phrase_rx(phrase: str) -> str:
@@ -406,6 +407,15 @@ def _sa_data() -> dict:
     return _data()["self_assess"]
 
 
+def _sa_not_after(key: str) -> str:
+    """A lookahead refusing the condition only when an EXPLICIT idiom / sport / art phrase from the data follows it ("stroke of
+    luck", "stroke in the pool", "heart attack on a plate"); never a bare function word ("a stroke on my left side" fires)."""
+    phrases = [p for p in _sa_data().get("condition_not_after", {}).get(key, []) if p.split() and not set(p.split()) <= _FUNCTION_WORDS]
+    if not phrases:
+        return ""
+    return r"(?!\s+(?:" + "|".join(r"\s+".join(map(re.escape, p.split())) for p in sorted(phrases, key=len, reverse=True)) + r")(?!\w))"
+
+
 @lru_cache(maxsize=1)
 def _sa_cond() -> "tuple[str, dict]":
     """(regex of every condition term and variant, longest first; {term: reply key}) from the data file."""
@@ -413,7 +423,7 @@ def _sa_cond() -> "tuple[str, dict]":
     alts = []
     for t in sorted(keys, key=len, reverse=True):
         rx = r"[\s-]?".join(re.escape(w) for w in re.split(r"[\s-]+", t))
-        alts.append(rx + (_SA_NOT_AFTER_STROKE if "stro" in t or t == "stoke" else ""))
+        alts.append(rx + _sa_not_after(keys[t]))
     return "(?:" + "|".join(alts) + r")(?!\w)", keys
 
 
@@ -502,6 +512,21 @@ def _sa_asked(s: str) -> bool:
     return "?" in s or bool(re.match(rf"^(?:{_RQ_FILLER}\s+)*(?:am|is|are|could|might|can|do|does|did|have|has)(?!\w)", s))
 
 
+_SA_SPEAKER_RE = re.compile(r"^(?:am\s+i|i|im|i\s+am|we|we\s+are|were|are\s+we|do\s+i|do\s+we|have\s+i|have\s+we|ive|i\s+have|"
+                            r"weve|we\s+have)$")
+
+
+def _sa_who(m: "re.Match") -> Optional[str]:
+    """"speaker" when the frame's subject slot is the speaker (i / we), "other" when it names someone else, None when the frame
+    has no subject ("is this a stroke") or it cannot be told. Pure."""
+    subject = " ".join(v for n, v in m.groupdict().items() if v and n.startswith("s")).strip()
+    if not subject:
+        return None
+    if _SA_SPEAKER_RE.match(subject):
+        return "speaker"
+    return None if re.fullmatch(r"(?:is|are)\s+(?:it|you)|you|youre|you\s+are", subject) else "other"
+
+
 def _sa_match_verdict(m: "re.Match", s: str) -> Optional[Verdict]:
     """The verdict of ONE frame match, from its own named slots, or None when an idiom voids this match. Pure."""
     _cond_rx, keys = _sa_cond()
@@ -520,6 +545,10 @@ def _sa_match_verdict(m: "re.Match", s: str) -> Optional[Verdict]:
                               + "|".join(r"\s+".join(map(re.escape, w.split())) for w in asked) + r")(?!\w)", after) \
                 and not _sa_asked(s):
             return None
+        if asked and re.match(r"\s+on\s+(?:(?:my|his|her|their|the|some|so|way|too|much|many|lots|of)\s+)*(?:"
+                              + "|".join(r"\s+".join(map(re.escape, w.split())) for w in asked) + r")(?!\w)", after):
+            # fired ONLY through the caffeine-class "asked now" path: the poisoning reply, ranked below any call-now condition
+            return Verdict("ingest_human", "poison_caffeine")
     else:
         term = re.sub(r"[\s-]+", " ", slot[1]).strip()
         key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
@@ -541,19 +570,27 @@ def self_assessment(text: str) -> Verdict:
         s = _fold(text)
         if not s:
             return NONE
-        found = [v for v in (_sa_match_verdict(m, s) for m in _sa_present_re().finditer(s)) if v is not None]
-        if found:
-            return min(found, key=urgency)
+        present = list(_sa_present_re().finditer(s))
+        found = [(v, _sa_who(m)) for m in present for v in [_sa_match_verdict(m, s)] if v is not None]
+        # a past question naming a condition JOINS the choice (it no longer runs only when no present frame matched: "is my dog
+        # overdosing? have i had a stroke today?"). It is a recall question - answered from memory - only when every clause that
+        # holds no present frame is wholly the allow-listed recall shape and none of them carries a present marker
         recall_re, past_q_re = _sa_recall_res()
-        m = past_q_re.search(s)
-        if m is None:
+        past = list(past_q_re.finditer(s))
+        if past:
+            clauses = [c for c in re.finditer(r"[^.!?;,\n]+", s) if c.group(0).strip() and not _RQ_FILLER_ONLY_RE.match(c.group(0).strip())]
+            rest = [c.group(0).strip() for c in clauses
+                    if not any(pm.start() < c.end() and c.start() < pm.end() for pm in present)]
+            recall = bool(rest) and not _PRESENT_MARK_RE.search(" ".join(rest)) and all(recall_re.match(c) for c in rest)
+            if not recall:
+                found += [(v, None) for pm in past for v in [_sa_match_verdict(pm, s)] if v is not None]
+        if not found:
             return NONE
-        # a past question naming the condition: a recall question only when EVERY clause is wholly the allow-listed shape and no
-        # present marker appears anywhere; anything else ("did i just have a stroke", "... its back") is the floor
-        clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip() and not _RQ_FILLER_ONLY_RE.match(c.strip())]
-        if not _PRESENT_MARK_RE.search(s) and clauses and all(recall_re.match(c) for c in clauses):
-            return NONE
-        return _sa_match_verdict(m, s) or NONE
+        # the SPEAKER's own call-now condition wins the wording over a poison verdict about SOMEONE ELSE ("am i having a heart
+        # attack and my dad is overdosing on cocaine"); both the speaker's, or either unclear: URGENCY alone decides
+        if any(v.cls == "red_call" and who == "speaker" for v, who in found):
+            found = [(v, who) for v, who in found if not (v.cls == "ingest_human" and who == "other")]
+        return min((v for v, _who in found), key=urgency)
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety self_assessment failed (%s)", type(exc).__name__)
         return NONE
@@ -840,7 +877,8 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
     emergency, poison = _lines()
     f = dict(emergency=emergency, poison_number=poison or r["poison_number_fallback"])
     if v.cls == "ingest_human":
-        out = r[v.key if poison else v.key + "_nolines"].format(**f)
+        key = "poison_human" if v.key == "poison_caffeine" else v.key       # a caffeine overdose: the same poisoning reply
+        out = r[key if poison else key + "_nolines"].format(**f)
     elif v.cls == "ingest_animal":
         out = r["poison_animal"].format(**f)
     elif v.cls == "number":
@@ -867,7 +905,9 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
 #: that class. The poisoning / call-now tier keeps ``detect``'s own choice between ingestion and a red flag (an urgent object or a
 #: poison before a red flag, a red flag before a harmless-looking object).
 URGENCY: tuple = (("ingest_human", "object_urgent"), ("ingest_human", "poison_human"), ("red_call", None),
-                  ("ingest_human", "object_minor"), ("ingest_animal", None), ("number", None), ("red_soon", None), ("glucose", None))
+                  ("ingest_human", "poison_caffeine"), ("ingest_human", "object_minor"), ("ingest_animal", "poison_animal"),
+                  ("ingest_animal", None), ("number", None),
+                  ("red_soon", None), ("glucose", None))
 
 
 def urgency(v: Verdict) -> int:
