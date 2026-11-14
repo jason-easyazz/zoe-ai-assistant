@@ -215,6 +215,12 @@ def _parse_vevent(ve, default_visibility: str, home: str) -> dict:
     ev["exdates"] = exdates or None
     if ve.get("RECURRENCE-ID") is not None:
         ev["recurrence_id"] = _iso_value(ve.decoded("RECURRENCE-ID"))
+    if ve.get("LAST-MODIFIED") is not None:            # the provider's own change time (not stored by store_parsed)
+        try:
+            lm = ve.decoded("LAST-MODIFIED")
+            ev["provider_updated_at"] = cal.utc_iso(lm) if isinstance(lm, datetime) and lm.tzinfo else None
+        except (ValueError, TypeError):
+            ev["provider_updated_at"] = None
     ev["start_at"], ev["end_at"] = cal.derive_instants(ev)
 
     attendees: list = []
