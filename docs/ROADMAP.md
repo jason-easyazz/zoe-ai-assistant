@@ -36,7 +36,7 @@ then feeds in, then evolve herself. Inputs: [gap audit](research/gap-audit-2026-
 first sound under 1 s, corrections applied and alerts by source) is the instrument: every item names its number and reports before and
 after, including when it did not move. Speed: one embedding fix (#2460, open: the palace embedder pads each batch to its longest text,
 not 256 tokens) measured on this box, synthetic bench, p50: memory writes 55.6 to 16.9 ms (about 3x), lookups 48.6 to 8.1 ms (about
-6x); the recall-side half merged as #2452. A whole-system speed audit for more of the same is owed (not written yet). Brain cache
+6x); the recall-side half merged as #2452. A whole-system speed audit for more of the same was done on 2026-11-14 (kept privately, numbers only): its estimate is a first spoken word at about 1.6-1.9 s after the top fixes, a floor near 1.5 s without changing the models, and under 1 s only with the panel's own sound, a fast path for common commands, or end-of-turn prediction; its items are on branches, no PR yet. Brain cache
 misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no item below may raise it.
 
 1. **Make failure loud.** Undeliverable owner alerts are kept and retried, and broken alerting surfaces on a second channel (#2458,
