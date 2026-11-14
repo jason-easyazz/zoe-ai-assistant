@@ -278,7 +278,7 @@ Each step: run it, then look at what it names before the next. Off switch at any
 - The executor path unblocked (above), so the heal rides Multica + Flue executor + Omnigent on both kinds of unit; the thin CLI stays as the fallback.
 - The live `apply` behind an owner step, with the local voice replay wired as `voice_replay_cmd`.
 - A readable landing record for the owner ("what changed", undo) - today only the audit log and the snapshot refs.
-- An `offline_lane_cmd` that runs on the sold box's own venv.
+- An `offline_lane_cmd` that runs on the sold box's own venv. A candidate exists: the offline tier (`tools/ci/offline_tier.json`, 117 hermetic files covering 489 of 499 zoe-data modules), as the plain pytest argv `<python> -m pytest -p no:cacheprovider -q -p tools.ci.offline_guard --offline-tier services/zoe-data/tests tests/unit`, which `check_pytest_argv` accepts. Measured 2026-11-14 on x86_64, not on this Jetson and not inside bwrap: 70 s under an empty network namespace and a 2,048 MB address-space cap. Not wired into `Config`; the tool's three files are not yet on the forbidden list. `docs/knowledge/offline-test-tier.md`.
 
 ## v2: what closed the v1 blockers (`tests/test_self_heal_sandbox.py`)
 

@@ -229,6 +229,8 @@ docs/knowledge/memory-writer-map.md
 !tools/audit/privacy_canary_digests.json
 # per-file test weights that cut the validate shards (tools/ci/shard_ledger.py weights); hand-refreshed, not per PR
 !tools/ci/shard_weights.json
+# the offline test tier manifest (tools/ci/offline_tier.py select); generated but committed: a box must not need a measurement run to use it
+!tools/ci/offline_tier.json
 # zoe-data test fixtures: golden recordings replayed by ci_safe tests. Contract
 # data only, no secrets. Without this, a new .json fixture is silently ignored
 # and CI fails on a file the author can see locally.
