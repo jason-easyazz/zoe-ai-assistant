@@ -97,6 +97,8 @@ def _rx(lang: str) -> Optional[dict]:
     w = lambda body: re.compile(rf"(?<!\w)(?:{body})(?!\w)")  # noqa: E731
     return {"adult": int(e["adult_age"]), "max_year": int(e["max_school_year"]), "nums": nums,
             "own": [comp(p) for p in e["own_age"]], "school": [comp(p) for p in e["school"]],
+            "as_age": comp(e["as_age"]), "as_first": w(e["as_first_person"]), "as_third": w(e["as_third_person"]),
+            "as_past": w(e["as_past_self"]),
             "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
             # a question word at the start of ANY clause ("im 10, which knife is sharpest"; "im 9 and where do you keep the matches")
             "clause_q": re.compile(rf"(?:[,;:.!?]\s*|(?<!\w)(?:{e['clause_break']})\s+)(?:{e['clause_opener']})(?!\w)"),
@@ -136,7 +138,22 @@ def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
             year = m.groupdict().get("age")
             if year is None or _age(year, rx["nums"]) <= rx["max_year"]:
                 found.append((m.start(), True))
+    found += [(m.start(), _age(m.group("age"), rx["nums"]) < rx["adult"]) for m in rx["as_age"].finditer(s)
+              if not _not_own(s, m.start(), rx) and _as_age_is_own(s, m, rx)]
     return any(child for _pos, child in found) if found else None   # any child age declares a child, whatever follows (sticky)
+
+
+def _as_age_is_own(s: str, m: "re.Match", rx: dict) -> bool:
+    """Is "as a N year old" the SPEAKER, now? Judged in its sentence: never with a third-person subject there ("my daughter loved
+    drawing as a 9 year old", "as a 9 year old she could swim"), never about one's own past ("when i was a 9 year old i ..." is a
+    memory); otherwise only with a first-person subject ("as a 9 year old i want ...", "as a 9 year old, how do i ...") or when the
+    phrase opens the sentence ("as a 9 year old, which knife is sharpest")."""
+    start = max(s.rfind(ch, 0, m.start()) for ch in ".!?;\n") + 1
+    ends = [i for i in (s.find(ch, m.end()) for ch in ".!?;\n") if i != -1]
+    sent = s[start:min(ends) if ends else len(s)]
+    if rx["as_third"].search(sent) or rx["as_past"].search(sent):
+        return False
+    return bool(rx["as_first"].search(sent)) or not s[start:m.start()].strip(" ,")
 
 
 def is_request(s: str, rx: dict) -> bool:

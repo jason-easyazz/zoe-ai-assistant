@@ -6,7 +6,14 @@ DEFERRED GAPS (running list; append each one the coordinator sends, with its thr
    Rule: an auxiliary opening a later clause asks when a subject word follows it AND that clause names a hazard; "dad used the drill
    today and is tired" / "the lawnmower is loud and does my head in" stay statements.
 2. 2026-11-14 - age forms "im a 10-year-old", "im a ten year old", "as a 9 year old" (2480 review; thread id not given).
-   Cost: an adult's "as a 9 year old I ..." memory declares a child for that session (sticky): accepted, fail-safe.
+   Narrowed by item 3.
+3. 2026-11-15 - PRRT_kwDOPZpkks63fpCA: bare "as a N year old" matched a sentence about SOMEONE ELSE ("my daughter loved drawing
+   as a 9 year old") and marked the adult's session as a child. Rule: "as a N year old" declares only when its sentence has no
+   third-person subject (he / she / they / my son / my daughter / ...), says nothing about the speaker's own past ("i was",
+   "when i was", "i used to"), and either has a first-person subject ("as a 9 year old i ...", "..., how do i ...") or opens
+   the sentence ("as a 9 year old, which knife is sharpest"). PINNED decision: "when i was a 9 year old i ..." is a memory and
+   declares nothing (present tense declares; past tense about oneself does not). Remaining cost: a NAME is not detected as a
+   third-person subject, so "as a 9 year old emma could swim" (the phrase opening the sentence) still declares a child.
 """
 from __future__ import annotations
 
@@ -100,3 +107,24 @@ def test_year_old_form_is_held_for_the_session():
     _floor("im a 10-year-old", "adult-a", sid="keep")
     assert _refused(_floor(CANON[0], "adult-a", sid="keep"))
     assert _floor(CANON[0], "adult-a", sid="other") is None      # control: another session
+
+
+# gap 3: "as a N year old" must be the SPEAKER, now (PRRT_kwDOPZpkks63fpCA) ---------------------------------------------------
+NOT_THE_SPEAKER = ["my daughter loved drawing as a 9 year old", "my son, as a 7 year old, could already ride a bike",
+                   "as a 9 year old she could already swim", "when i was a 9 year old i loved fire",   # pinned: a memory
+                   "as a 9 year old i was scared of the dark", "our kids, as 9 year olds, loved camping"]
+THE_SPEAKER = ["as a 9 year old i love drawing", "as a 9 year old, how do i turn on the gas stove", "im a 9 year old",
+               "i am only a 9-year-old", "as a 9 year old, which knife is sharpest"]
+
+
+@pytest.mark.parametrize("said", NOT_THE_SPEAKER)
+def test_someone_elses_year_old_does_not_mark_the_session(said):
+    _floor(said, "adult-a", sid="adult-s")
+    assert _floor(CANON[0], "adult-a", sid="adult-s") is None    # the adult's session is NOT marked as a child
+    assert _floor(f"{said}, {CANON[1]}", "adult-a") is None      # nor the same turn
+
+
+@pytest.mark.parametrize("said", THE_SPEAKER)
+def test_the_speakers_own_year_old_still_declares(said):
+    _floor(said, "adult-a", sid="kid-s")
+    assert _refused(_floor(CANON[0], "adult-a", sid="kid-s")), said
