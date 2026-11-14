@@ -38,9 +38,11 @@ not a verdict) and only then refuses LOUDLY. Findings alert over Telegram throug
 Exit: 0 all checks pass, 1 findings (alerted), 3 refused QUIETLY (night window: expected, not a failure),
 4 refused LOUDLY (low memory, backup stuck, or no pass for STALE_PASS_DAYS: alerted, and the unit shows failed),
 5 not due (a pass within DUE_AFTER; nothing ran). ``--check-stale``: 0 fresh, 4 stale (prints why, never alerts),
-6 stale but the drill itself alerted the owner within STALE_VOICE_FRESH (``zoe_health`` treats 6 as ok: one voice).
-Stale alerts: the TRANSITION to stale, then at most one reminder per STALE_REMIND (``stale_alert_at`` in the state
-file), and one "passed again" line when a pass ends a stale spell.
+6 stale but the drill recorded a run within DRILL_ALIVE (``zoe_health`` treats 6 as ok).
+ONE VOICE: every owner alert goes through ``owner_alert`` - a failed restore, a loud refusal and a stale drill are ONE
+bad spell until a pass: alerted on the transition into it, then at most once per ALERT_REMIND (``alert_since`` /
+``alert_at`` in the state file), and closed by ONE "passed again" line (``owner_cleared``). ``zoe_health``'s
+restore-drill check is report-only while the drill runs, and alerts only when the drill has stopped (exit 4).
 """
 from __future__ import annotations
 
@@ -85,9 +87,9 @@ WAIT_BUSY_S = 45 * 60
 STALE_PASS_DAYS = 10
 DUE_AFTER = timedelta(days=6, hours=12)    # under 7 d so the timer's RandomizedDelaySec cannot skip a week
 EXIT_NOT_DUE = 5
-EXIT_STALE_VOICED = 6      # --check-stale: stale, and the drill itself told the owner recently (zoe_health stays quiet)
-STALE_REMIND = timedelta(days=7)               # while stale: the transition alert, then at most one reminder a week
-STALE_VOICE_FRESH = STALE_REMIND + timedelta(days=1)   # a drill alert newer than this means the drill is still speaking
+EXIT_STALE_VOICED = 6      # --check-stale: stale, but the drill is still running and alerting itself (zoe_health quiet)
+ALERT_REMIND = timedelta(days=7)    # a bad spell: the transition alert, then at most one reminder a week, then "passed again"
+DRILL_ALIVE = timedelta(days=2)     # the timer fires daily: no recorded run for longer = the drill has stopped (dead timer)
 BUSY_UNITS = ("zoe-backup.service", "zoe-offbox-backup.service")
 NIGHT_UNIT = "zoe-night-window.service"
 LIVE_DB_CONTAINER = "zoe-database"
@@ -694,27 +696,56 @@ def _instant(v) -> Optional[datetime]:
     return t if t.tzinfo is not None else None
 
 
-def stale_alert_due(state: Path, now: datetime) -> bool:
-    """While the drill is stale: True on the TRANSITION (no valid ``stale_alert_at``: never alerted, or a missing /
-    malformed value, which must not silence the first alert) and then once per STALE_REMIND; the alert time is stored
-    atomically before returning True. Without this, every daily refusal after day 10 alerted: an alarm the owner learns
-    to ignore."""
-    prev = read_state(state)
-    last = _instant(prev.get("stale_alert_at"))
-    if last is not None and now - last < STALE_REMIND:
-        return False
-    prev["stale_alert_at"] = now.isoformat(timespec="seconds")
+def _write(state: Path, d: dict) -> None:
     try:
-        ob._atomic_write(state, json.dumps(prev, indent=1))
+        ob._atomic_write(state, json.dumps(d, indent=1))
     except OSError:
-        pass                                   # unwritable state: alert anyway (a repeat beats silence)
+        pass                                   # unwritable state: the alert still goes (a repeat beats silence)
+
+
+def _say(text: str) -> None:
+    """The drill's ONE call to the owner-alert path (zoe_offbox.alert -> the shared deliver()). Only owner_alert and
+    owner_cleared call it, so every drill alert carries the spell cadence (pinned by a static test)."""
+    ob.alert(text)
+
+
+def owner_alert(state: Path, now: datetime, text: str) -> bool:
+    """THE ONLY place the drill alerts the owner about a bad spell (a failed restore, a loud refusal, a stale drill: any
+    mix, in any order, is ONE spell until a pass). It alerts on the TRANSITION into the spell, then at most once per
+    ALERT_REMIND, recording ``alert_since`` / ``alert_at`` in the state file (atomic; read back as aware instants, so a
+    missing, malformed or naive value counts as "not alerted" and never silences the first alert). True when it alerted.
+    Pinned: no other ``ob.alert`` call exists in this file (tests/unit/test_restore_drill.py)."""
+    prev = read_state(state)
+    last = _instant(prev.get("alert_at"))
+    if last is not None and timedelta(0) <= now - last < ALERT_REMIND:
+        return False
+    reminder = last is not None and _instant(prev.get("alert_since")) is not None
+    prev["alert_since"] = prev.get("alert_since") if reminder else now.isoformat(timespec="seconds")
+    prev["alert_at"] = now.isoformat(timespec="seconds")
+    _write(state, prev)
+    _say(("still failing (weekly reminder): " if reminder else "") + text)
     return True
 
 
-def stale_voiced(prev: dict, now: datetime) -> bool:
-    """The drill itself alerted about this staleness recently, so zoe_health's check must not add a second voice."""
-    last = _instant(prev.get("stale_alert_at"))
-    return last is not None and timedelta(0) <= now - last < STALE_VOICE_FRESH
+def owner_cleared(state: Path) -> bool:
+    """On a pass: ONE "passed again" line if ANY bad spell was alerted (whatever its kind), and the spell is closed, so
+    the next pass says nothing. Goes through the same alert path as owner_alert."""
+    prev = read_state(state)
+    if _instant(prev.get("alert_since")) is None and _instant(prev.get("alert_at")) is None:
+        return False
+    prev.pop("alert_since", None)
+    prev.pop("alert_at", None)
+    _write(state, prev)
+    _say("weekly restore drill passed again: the backups restore cleanly")
+    return True
+
+
+def drill_alive(prev: dict, now: datetime) -> bool:
+    """The drill recorded a run (a pass, a failure or a refusal) within DRILL_ALIVE: it is running, so it is the one
+    voice for its own spells and zoe_health stays quiet. False = the drill stopped (dead timer): zoe_health alerts."""
+    last = max((t for t in (_instant(prev.get("time")), _instant(prev.get("last_refusal"))) if t is not None),
+               default=None)
+    return last is not None and timedelta(0) <= now - last < DRILL_ALIVE
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -724,7 +755,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                          "for memory; MemAvailable is still sampled ONCE and the drill refuses below the floor")
     ap.add_argument("--force", action="store_true", help="run even when a pass is newer than DUE_AFTER")
     ap.add_argument("--check-stale", action="store_true",
-                    help=f"only report whether a drill passed in the last {STALE_PASS_DAYS} days (exit 0 / 4; no alert)")
+                    help=f"only report whether a drill passed in the last {STALE_PASS_DAYS} days (exit 0 fresh / 6 stale "
+                         "but the drill is running and alerting / 4 stale and the drill has stopped; never alerts)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--teardown", action="store_true", help="only remove the sandbox (the unit's ExecStopPost)")
     ns = ap.parse_args(argv)
@@ -739,8 +771,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     prev = read_state(state)
     if ns.check_stale:
         why = staleness(prev, now)
-        if why and stale_voiced(prev, now):
-            print(f"STALE (the drill alerted the owner at {prev.get('stale_alert_at')}): {why}")
+        if why and drill_alive(prev, now):
+            print(f"STALE (the drill is running and alerting the owner itself): {why}")
             return EXIT_STALE_VOICED
         print(f"STALE: {why}" if why else f"restore drill: last pass {prev.get('last_ok')}")
         return EXIT_REFUSED_LOUD if why else 0
@@ -754,14 +786,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             preflight(now, floor)
     except ob.Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
-        stale = note_refusal(state, now)          # always record, even when this refusal already alerts
-        if stale:                                 # loud (unit failed) every time, but ALERTED only on the transition
-            if stale_alert_due(state, now):       # and then at most once a week
-                ob.alert(f"weekly restore drill has not passed in {STALE_PASS_DAYS}+ days (latest refusal: {exc}); "
-                         "a reminder follows weekly while it stays this way")
-            return EXIT_REFUSED_LOUD
-        if exc.alert:
-            ob.alert(f"weekly restore drill refused: {exc}")
+        stale = note_refusal(state, now)          # always record, even when this refusal is quiet
+        if stale or exc.alert:                    # loud (unit failed) every time; ALERTED per owner_alert's cadence
+            owner_alert(state, now, f"weekly restore drill has not passed in {STALE_PASS_DAYS}+ days (latest refusal: {exc})"
+                        if stale else f"weekly restore drill refused: {exc}")
             return EXIT_REFUSED_LOUD
         return EXIT_REFUSED_QUIET
     res = run_drill(p, backup_root, now, Sandbox.default(), python)
@@ -773,10 +801,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             res.findings.append(why)
     stamp = now.isoformat(timespec="seconds")
     passed = not res.findings
-    was_stale_alerted = _instant(prev.get("stale_alert_at")) is not None
     ob._atomic_write(state, json.dumps({"time": stamp, "ok": passed,
-                                        # a pass clears the stale state; a failed run keeps it (no new "transition")
-                                        "stale_alert_at": None if passed else prev.get("stale_alert_at"),
+                                        # the alerted spell is kept here; owner_cleared() closes it on a pass
+                                        "alert_since": prev.get("alert_since"), "alert_at": prev.get("alert_at"),
                                         "last_ok": stamp if passed else prev_ok,
                                         "findings": res.findings, "notes": res.notes,
                                         "first_refusal": None if passed else prev.get("first_refusal"),
@@ -790,10 +817,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if ns.json:
         print(json.dumps({"findings": res.findings, "notes": res.notes}))
     if res.findings:
-        ob.alert(f"weekly restore drill FAILED ({len(res.findings)}): " + "; ".join(res.findings)[:900])
+        owner_alert(state, now, f"weekly restore drill FAILED ({len(res.findings)}): " + "; ".join(res.findings)[:900])
         return 1
-    if was_stale_alerted:                      # ONE line closes the stale spell; the next pass finds it cleared
-        ob.alert("weekly restore drill passed again: the backups restore cleanly")
+    owner_cleared(state)                       # ONE line closes any alerted spell; the next pass finds it closed
     print("restore drill: all checks passed")
     return 0
 

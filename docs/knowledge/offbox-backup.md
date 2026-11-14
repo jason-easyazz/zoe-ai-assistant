@@ -94,11 +94,12 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
 - **Weekly, on the box** (timer daily 05:30, drill only when DUE: no pass for ~6.5 days): the restore drill of section 7.2 -
   the on-box dumps restored into a throwaway container, the palace opened and queried, the host archive checked. It runs first
   in `zoe-backup-verify`; a refused or failed drill is retried the next morning.
-- **Stale drill alerts (one voice, 2026-11-14).** Once no drill has passed in 10 days a refusal still exits loud (the unit
-  shows failed every day), but the owner is ALERTED only on the transition to stale, then at most once per 7 days
-  (`stale_alert_at` in `last_restore_drill.json`, an instant), and once with "passed again" when a pass ends the spell.
-  `zoe_health.py`'s restore-drill check stays ok while that alert is under 8 days old (`--check-stale` exit 6) and
-  alerts itself only when the drill has gone silent (exit 4, e.g. a dead timer).
+- **Drill alerts: one cadence, one voice (2026-11-14).** A failed restore, a loud refusal (low memory, a stuck backup) and
+  a stale drill (no pass in 10 days) are ONE bad spell until a pass. The owner is alerted on the transition into it, then
+  at most once per 7 days (`alert_since` / `alert_at` in `last_restore_drill.json`, read as instants), and gets ONE
+  "passed again" line when a pass ends it. The unit still exits loud every day. Every drill alert goes through
+  `owner_alert` / `owner_cleared` (a static test pins it). `zoe_health.py`'s restore-drill check is report-only while the
+  drill runs (`--check-stale` exit 6) and alerts only when the drill has stopped running for 2+ days (exit 4).
 - **Monthly** (`zoe-backup-verify` runs it once per 28 days, 05:30): for each tier, restore the newest snapshot
   from the411 into a scratch dir (`~/.cache/zoe-offbox/drill-*`, removed after), compare every file's sha256 with the manifest the
   box recorded when it SENT that snapshot, read one twelfth of the repo's data (`restic check --read-data-subset=<month>/12`, the

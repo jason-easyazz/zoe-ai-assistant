@@ -653,17 +653,17 @@ def _state(tmp_path, d: dict) -> None:
 def test_not_due_skips_before_any_guard_or_alert(monkeypatch, tmp_path):
     alerts: list[str] = []
     _state(tmp_path, {"last_ok": "2026-11-12T05:31:00+08:00"})
-    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime.fromisoformat("2026-11-15T05:31:00+08:00"),
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime(2026, 11, 15, 5, 31).astimezone(),
                    alerts=alerts)
     assert rc == drill.EXIT_NOT_DUE == 5 and not alerts             # low memory never even sampled
     # control: a week after the pass it is due, so the same low memory now refuses loudly
-    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime.fromisoformat("2026-11-19T05:31:00+08:00"),
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime(2026, 11, 19, 5, 31).astimezone(),
                    alerts=alerts)
     assert rc == drill.EXIT_REFUSED_LOUD and alerts
     # and --force runs it inside the week
     alerts.clear()
     _state(tmp_path, {"last_ok": "2026-11-12T05:31:00+08:00"})
-    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime.fromisoformat("2026-11-15T05:31:00+08:00"),
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=datetime(2026, 11, 15, 5, 31).astimezone(),
                    alerts=alerts, argv=["--force"])
     assert rc == drill.EXIT_REFUSED_LOUD and alerts
 
@@ -743,94 +743,141 @@ def test_every_verify_run_is_bracketed_by_dated_start_and_result_lines(tmp_path,
     assert re.fullmatch(r"zoe-backup-verify: (done|\d+ problem\(s\) detected)", last)
 
 
-# ── stale alerts: the transition, then at most one reminder a week, and one "passed again" (review of #2459) ───────────
+# ── one alert cadence for EVERY bad spell (failure, refusal, stale): transition, weekly, one "passed again" (#2459) ─
 
 # The drill reads its guards from datetime.now().astimezone(): PROCESS-LOCAL time, the same clock the night window
 # (night_window.py, night_busy.sh `date`) and its systemd timers use. So test instants are built in process-local time:
 # a fixed +08:00 05:30 lands inside the window under some zones. Comparisons inside the drill are instants either way.
 DAY0 = datetime(2026, 11, 20, 5, 30).astimezone()
+NIGHT0 = DAY0.replace(hour=3)
 
 
 def _stale_state(tmp_path, **extra):
     _state(tmp_path, {"last_ok": "2026-10-01T05:30:00+08:00", **extra})     # long stale
 
 
-def _daily_refusals(monkeypatch, tmp_path, days, start=DAY0, avail=10):
-    """One refusal a day (low memory by default; ``avail`` high at a night-window hour = a QUIET refusal); returns the day
-    numbers that alerted, and asserts every refusal of a stale drill exits loud."""
-    alerted = []
-    for d in range(days):
-        alerts: list[str] = []
-        rc = _run_main(monkeypatch, tmp_path, avail=avail, now=start + timedelta(days=d), alerts=alerts)
-        assert rc == drill.EXIT_REFUSED_LOUD, (d, rc)
-        if alerts:
-            assert len(alerts) == 1 and "has not passed" in alerts[0]
-            alerted.append(d)
-    return alerted
+def _st(tmp_path) -> dict:
+    return json.loads((tmp_path / "s" / "last_restore_drill.json").read_text())
 
 
-def test_stale_daily_refusals_alert_on_the_transition_then_once_a_week(monkeypatch, tmp_path):
-    """Before: every daily refusal after day 10 alerted (15 refusals = 15 alerts). Now: the transition, then one reminder
-    per 7 days; the unit still exits loud every day."""
-    # quiet (night-window) refusals: the old code alerted every one. The script reads the window from
-    # datetime.now().astimezone(), i.e. in PROCESS-LOCAL time, so the night instant is built in process-local time too
-    # (a fixed +08:00 03:00 is 19:00 under TZ=UTC: no refusal, the drill ran).
-    night = DAY0.replace(hour=3)
-    _stale_state(tmp_path)
-    assert _daily_refusals(monkeypatch, tmp_path, 14, start=night, avail=4000) == [0, 7]   # d0..d13: transition + reminder
-    assert _daily_refusals(monkeypatch, tmp_path, 8, start=night + timedelta(days=14), avail=4000) == [0, 7]   # d14, d21
-    # low-memory (loud-reason) refusals while stale are throttled the same way
-    _stale_state(tmp_path)
-    assert _daily_refusals(monkeypatch, tmp_path, 15) == [0, 7, 14]
-
-
-def test_a_reminder_is_never_early_and_times_compare_as_instants(monkeypatch, tmp_path):
-    _stale_state(tmp_path)
-    assert _daily_refusals(monkeypatch, tmp_path, 1) == [0]
-    almost = DAY0 + timedelta(days=7) - timedelta(minutes=5)                  # timer jitter: 5 minutes short of a week
-    same_instant_other_zone = almost.astimezone(timezone.utc)                # same instant, a different local string
-    assert _daily_refusals(monkeypatch, tmp_path, 1, start=same_instant_other_zone) == []
-
-
-def test_a_malformed_stale_alert_time_does_not_crash_or_silence_the_first_alert(monkeypatch, tmp_path):
-    for bad in ("garbage", 12345, "2026-11-19T05:30:00", ["x"], ""):          # naive local text is not an instant
-        _stale_state(tmp_path, stale_alert_at=bad)
-        assert _daily_refusals(monkeypatch, tmp_path, 1) == [0], bad
-
-
-def _pass_now(monkeypatch, tmp_path, now, argv=()):
+def _day(monkeypatch, tmp_path, kind: str, now) -> tuple[int, list[str]]:
+    """One daily run of ``kind``: "failed" (the restore runs and finds a problem), "lowmem" (a loud refusal) or "quiet"
+    (a night-window refusal). Returns (exit code, alerts sent)."""
     alerts: list[str] = []
     monkeypatch.setattr(drill.Sandbox, "default", classmethod(lambda cls: None))
-    monkeypatch.setattr(drill, "run_drill", lambda *a, **k: drill.Result(notes=["ok"]))
-    rc = _run_main(monkeypatch, tmp_path, avail=5000, now=now, alerts=alerts, argv=argv)
+    monkeypatch.setattr(drill, "run_drill", lambda *a, **k: drill.Result(findings=["host archive: synthetic problem"]))
+    avail = 10 if kind == "lowmem" else 5000
+    when = now.replace(hour=3) if kind == "quiet" else now
+    rc = _run_main(monkeypatch, tmp_path, avail=avail, now=when, alerts=alerts)
     return rc, alerts
 
 
-def test_a_pass_after_a_stale_spell_sends_one_passed_again_line_and_clears_it(monkeypatch, tmp_path):
-    _stale_state(tmp_path)
-    assert _daily_refusals(monkeypatch, tmp_path, 1) == [0]
-    rc, alerts = _pass_now(monkeypatch, tmp_path, DAY0 + timedelta(days=1))
+def _alert_days(monkeypatch, tmp_path, kinds, start=DAY0) -> list[int]:
+    out = []
+    for d, kind in enumerate(kinds):
+        rc, alerts = _day(monkeypatch, tmp_path, kind, start + timedelta(days=d))
+        assert rc in (1, drill.EXIT_REFUSED_LOUD), (d, kind, rc)          # loud every day: the unit shows failed
+        assert len(alerts) <= 1, alerts
+        if alerts:
+            out.append(d)
+    return out
+
+
+@pytest.mark.parametrize("kind", ["failed", "lowmem", "quiet"])
+def test_15_daily_bad_runs_alert_on_days_0_7_14_only(monkeypatch, tmp_path, kind):
+    """Before: a failed restore and a loud refusal alerted on EVERY daily retry, and so did a stale refusal (15 = 15).
+    Now each kind is a spell: the transition, then one reminder per 7 days."""
+    if kind == "quiet":
+        _stale_state(tmp_path)                    # a night-window refusal is only loud once the drill is stale
+    assert _alert_days(monkeypatch, tmp_path, [kind] * 15) == [0, 7, 14]
+
+
+def test_a_spell_that_changes_kind_is_one_spell(monkeypatch, tmp_path):
+    kinds = ["lowmem"] * 4 + ["failed"] * 11                                    # refusals, then failures
+    assert _alert_days(monkeypatch, tmp_path, kinds) == [0, 7, 14], "no new 'transition' when the kind changes"
+    st = _st(tmp_path)
+    assert datetime.fromisoformat(st["alert_since"]) == DAY0, "the spell starts at its first alert"
+
+
+def test_reminders_say_so(monkeypatch, tmp_path):
+    texts = [_day(monkeypatch, tmp_path, "failed", DAY0 + timedelta(days=d))[1] for d in (0, 7)]
+    assert "FAILED" in texts[0][0] and not texts[0][0].startswith("still failing")
+    assert texts[1][0].startswith("still failing (weekly reminder): ")
+
+
+def test_a_reminder_is_never_early_and_times_compare_as_instants(monkeypatch, tmp_path):
+    assert _alert_days(monkeypatch, tmp_path, ["failed"]) == [0]
+    almost = (DAY0 + timedelta(days=7) - timedelta(minutes=5)).astimezone(timezone.utc)   # same instant, another zone
+    rc, alerts = _day(monkeypatch, tmp_path, "failed", almost.astimezone())
+    assert rc == 1 and alerts == []
+
+
+@pytest.mark.parametrize("bad", ["garbage", 12345, "2026-11-19T05:30:00", ["x"], ""])
+def test_malformed_alert_state_never_silences_the_first_alert(monkeypatch, tmp_path, bad):
+    _state(tmp_path, {"alert_at": bad, "alert_since": bad})                  # naive local text is not an instant
+    rc, alerts = _day(monkeypatch, tmp_path, "failed", DAY0)
+    assert rc == 1 and len(alerts) == 1 and not alerts[0].startswith("still failing")
+
+
+def _pass(monkeypatch, tmp_path, now) -> tuple[int, list[str]]:
+    alerts: list[str] = []
+    monkeypatch.setattr(drill.Sandbox, "default", classmethod(lambda cls: None))
+    monkeypatch.setattr(drill, "run_drill", lambda *a, **k: drill.Result(notes=["ok"]))
+    rc = _run_main(monkeypatch, tmp_path, avail=5000, now=now, alerts=alerts, argv=["--force"])
+    return rc, alerts
+
+
+@pytest.mark.parametrize("kind", ["failed", "lowmem", "quiet"])
+def test_recovery_after_each_kind_sends_passed_again_exactly_once(monkeypatch, tmp_path, kind):
+    if kind == "quiet":
+        _stale_state(tmp_path)
+    assert _alert_days(monkeypatch, tmp_path, [kind] * 3) == [0]
+    rc, alerts = _pass(monkeypatch, tmp_path, DAY0 + timedelta(days=3))
     assert rc == 0 and alerts == ["weekly restore drill passed again: the backups restore cleanly"]
-    st = json.loads((tmp_path / "s" / "last_restore_drill.json").read_text())
-    assert st["stale_alert_at"] is None
-    rc, alerts = _pass_now(monkeypatch, tmp_path, DAY0 + timedelta(days=9))   # the next weekly pass: nothing extra
-    assert rc == 0 and alerts == []
+    st = _st(tmp_path)
+    assert "alert_at" not in st and "alert_since" not in st
+    rc, alerts = _pass(monkeypatch, tmp_path, DAY0 + timedelta(days=10))
+    assert rc == 0 and alerts == [], "the next pass says nothing"
+    assert _alert_days(monkeypatch, tmp_path, ["failed"], start=DAY0 + timedelta(days=18)) == [0], "a new spell alerts"
 
 
-def test_a_pass_without_a_stale_spell_says_nothing(monkeypatch, tmp_path):
+def test_a_pass_with_no_alerted_spell_says_nothing(monkeypatch, tmp_path):
     _state(tmp_path, {"last_ok": "2026-11-12T05:30:00+08:00"})
-    rc, alerts = _pass_now(monkeypatch, tmp_path, DAY0)
+    rc, alerts = _pass(monkeypatch, tmp_path, DAY0)
     assert rc == 0 and alerts == []
 
 
-def test_check_stale_says_voiced_while_the_drill_is_alerting_then_hands_back_to_health(monkeypatch, tmp_path, capsys):
-    """One voice: while the drill's own stale alert is under STALE_VOICE_FRESH old, --check-stale exits 6 (zoe_health
-    treats it as ok); once the drill stops speaking (a dead timer), it exits 4 and the health check alerts."""
-    _stale_state(tmp_path, stale_alert_at=DAY0.isoformat())
-    rc = _run_main(monkeypatch, tmp_path, avail=10, now=DAY0 + timedelta(days=3), alerts=[], argv=["--check-stale"])
-    assert rc == drill.EXIT_STALE_VOICED == 6 and "alerted the owner" in capsys.readouterr().out
-    rc = _run_main(monkeypatch, tmp_path, avail=10, now=DAY0 + drill.STALE_VOICE_FRESH, alerts=[], argv=["--check-stale"])
+def test_check_stale_is_report_only_while_the_drill_runs_and_alerts_when_it_stops(monkeypatch, tmp_path, capsys):
+    """One voice: the drill speaks for its own spells while it runs (exit 6, zoe_health stays ok); once it has recorded no
+    run for DRILL_ALIVE (a dead timer) --check-stale exits 4 and zoe_health alerts."""
+    _stale_state(tmp_path, last_refusal=DAY0.isoformat())
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=DAY0 + timedelta(days=1), alerts=[], argv=["--check-stale"])
+    assert rc == drill.EXIT_STALE_VOICED == 6 and "running and alerting" in capsys.readouterr().out
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=DAY0 + drill.DRILL_ALIVE, alerts=[], argv=["--check-stale"])
     assert rc == drill.EXIT_REFUSED_LOUD and "STALE:" in capsys.readouterr().out
+    _stale_state(tmp_path)                                                     # never ran at all: health's voice
+    assert _run_main(monkeypatch, tmp_path, avail=10, now=DAY0, alerts=[], argv=["--check-stale"]) == 4
+
+
+def test_every_drill_alert_goes_through_the_cadence():
+    """Static pin: exactly ONE ob.alert call in the drill, inside _say, and _say is called only by owner_alert and
+    owner_cleared - so no path can alert the owner without the spell cadence."""
+    import ast
+
+    tree = ast.parse((MAINT / "zoe_restore_drill.py").read_text())
+    owners: dict = {}
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for c in ast.walk(fn):
+            if isinstance(c, ast.Call):
+                f = c.func
+                name = (f"{f.value.id}.{f.attr}" if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                        else f.id if isinstance(f, ast.Name) else "")
+                if name in ("ob.alert", "_say"):
+                    owners.setdefault(name, []).append(fn.name)
+    assert owners.get("ob.alert") == ["_say"], owners
+    assert sorted(owners.get("_say", [])) == ["owner_alert", "owner_cleared"], owners
+    assert "alert(" not in (MAINT / "zoe_restore_drill.py").read_text().replace("ob.alert(text)", "").replace(
+        "owner_alert(", "").replace("def _say", ""), "no other alert call by another spelling"
 
 
 def test_ignore_window_samples_memory_once_and_its_help_says_so(monkeypatch, tmp_path, capsys):

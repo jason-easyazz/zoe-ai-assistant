@@ -408,8 +408,8 @@ def test_health_alarms_when_the_restore_drill_has_gone_stale():
     bad = health.restore_drill_check(run(4, "STALE: the restore drill has never passed (13 days ...)"))
     assert not bad.ok and "never passed" in bad.detail
     assert not health.restore_drill_check(run(124, "TimeoutExpired")).ok      # a hung probe is not a pass
-    # one voice: stale but the drill itself alerted the owner within the week -> the health check stays ok (no DOWN)
-    voiced = health.restore_drill_check(run(6, "STALE (the drill alerted the owner at 2026-11-20T05:30:00+08:00): x"))
+    # one voice: stale but the drill is still running (and alerting on its own cadence) -> report-only here (no DOWN)
+    voiced = health.restore_drill_check(run(6, "STALE (the drill is running and alerting the owner itself): x"))
     assert voiced.ok and "STALE" in voiced.detail
     _, st6 = health.transitions([voiced], {})
     assert health.transitions([voiced], st6)[0] == [], "no second voice while the drill is speaking"
