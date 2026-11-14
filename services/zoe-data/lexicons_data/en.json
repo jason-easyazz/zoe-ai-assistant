@@ -1653,7 +1653,7 @@
   ]
  },
  "child_safety": {
-  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. A class fires on one of its 'terms' in a REQUEST or QUESTION: a '?', an 'ask' cue anywhere, or an 'opener' as the first word (after 'lead_strip'). A STATEMENT that only mentions a hazard is not one. 'factual' questions (a why... question, or what is it made of / called, with no 'factual_not' first-person word and no ask cue) and 'benign' ones (spell, draw) are removed first; a 'report' (an injury, a hazard that is already on) is never refused. 'reply' is the whole fixed answer.",
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. A class fires on one of its 'terms' in a REQUEST or QUESTION: a '?', an 'ask' cue anywhere, or an 'opener' as the first word (after 'lead_strip'). A STATEMENT that only mentions a hazard is not one. 'factual' questions (a why... question, or what is it made of / called, with no 'factual_not' first-person word and no ask cue) and 'benign' ones (spell, draw) are removed first; a 'report' (an injury, a hazard that is already on) is not refused unless an ask / opener cue comes BEFORE it ('how do i cut my bread' is an ask). 'reply' is the whole fixed answer.",
   "adult_age": 18,
   "max_school_year": 12,
   "number_words": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen",
@@ -1670,8 +1670,8 @@
    "(?:i am|im|i m) in (?:kindy|kindergarten|prep|primary school|elementary school|middle school)(?!\\w)"
   ],
   "lead_strip": "^(?:(?:hey|hi|ok|okay|um|so|and) )*(?:zoe )?[,. ]*",
-  "opener": "how|what|whats|which|where|when|who|can|could|may|should|would|will|do|does|is|are|am|tell|show|explain|teach|help|walk|give|get|bring|find|grab|pass|turn|switch|light|start|use|open|plug|make|let|lets|please|try",
-  "ask": "can i|could i|may i|should i|can you|could you|will you|would you|how (?:do|can|to|would|should|much|many)|show me|tell me|teach me|help me|walk me|explain|i (?:want|wanna|need|would like|d like) to|let me|lets|please|is it (?:ok|okay|safe|alright)|am i allowed|instructions|steps",
+  "opener": "how|what|whats|which|where|when|who|can|could|may|should|would|will|do|does|is|are|am|tell|show|explain|teach|walk|give|get|bring|find|grab|pass|turn|switch|light|start|use|open|plug|make|let|lets|please|try",
+  "ask": "can i|could i|may i|should i|can you|could you|will you|would you|how (?:do|can|to|would|should|much|many)|show me|tell me|teach me|help me|walk me|explain|i (?:want|wanna|need|would like|d like) to|let me|lets|please|is it (?:ok|okay|safe|alright)|am i allowed|instructions|steps|what happens if|what would happen if",
   "factual": "^(?:why|whys) .*|^what (?:is|are|was|were) (?:a |an |the )?.{0,40}(?:made of|made from|called)$",
   "factual_not": "i|me|my|we|us|our|im|ive",
   "benign": "how (?:do|can|would) (?:i|you|we) (?:spell|say|pronounce|draw|write|paint|colou?r|sing)",
@@ -1689,12 +1689,12 @@
    },
    {
     "id": "fire",
-    "terms": "fire(?!\\s+(?:drills?|trucks?|engines?|fighters?|station|brigade|alarms?|type|emblem|ants?))s?|flames?|(?<!have )(?<!got )gas|(?:hot|boiling) (?:oil|pans?|pots?|water|plates?|trays?|stove|grill)|(?<!the )heat (?:up|it up)|kettles?|microwave|frying pan|deep fry\\w*|toaster|stoves?|stovetop|cooktop|hob|ovens?|gas (?:stove|burner|ring|bottle|heater)|turn on the gas|burners?|lighters?|matchbox|matchsticks?|box of matches|(?:light|strike) (?:a |the )?match(?:es)?|(?:light|lighting) (?:a |the |some )?candles?|(?:light|set off|let off) (?:the |some |a )?(?:fireworks?|sparklers?|crackers?)|firecrackers?|(?:light|start|make|build) (?:a |the )?fire|campfire|bonfire|fireplace|bbq|barbecue",
+    "terms": "fire(?!\\s+(?:drills?|trucks?|engines?|fighters?|station|brigade|alarms?|type|emblem|ants?))s?|flames?|(?<!have )(?<!got )gas|(?:hot|boiling) (?:oil|pans?|pots?|water|plates?|trays?|stove|grill)|(?<!the )heat (?:up|it up)|kettles?|microwave|frying pan|deep fry\\w*|toaster|burn|burning|stoves?|stovetop|cooktop|hob|ovens?|gas (?:stove|burner|ring|bottle|heater)|turn on the gas|burners?|lighters?|matchbox|matchsticks?|box of matches|(?:light|strike) (?:a |the )?match(?:es)?|(?:light|lighting) (?:a |the |some )?candles?|(?:light|set off|let off) (?:the |some |a )?(?:fireworks?|sparklers?|crackers?)|firecrackers?|(?:light|start|make|build) (?:a |the )?fire|campfire|bonfire|fireplace|bbq|barbecue",
     "reply": "That one needs a grown-up. Can you ask one to help you with anything hot or with fire?"
    },
    {
     "id": "blades",
-    "terms": "knife|knives|blades?|razors?|box cutter|stanley knife|cleaver|machete|axe|hatchet",
+    "terms": "knife|knives|scissors|cut(?!\\s+(?:and|&) paste)|cutting|chop(?:ping)?|slic(?:e|ing)|blades?|razors?|box cutter|stanley knife|cleaver|machete|axe|hatchet",
     "reply": "That one needs a grown-up. Can you ask one to help you with anything sharp?"
    },
    {
@@ -1704,7 +1704,7 @@
    },
    {
     "id": "electricity",
-    "terms": "electricity|electrics|(?:power ?point|power socket|wall socket|power outlet|electrical outlet|socket|outlet)s?|wiring|(?:electrical|live|mains) wires?|fuse ?box|switchboard|circuit breakers?",
+    "terms": "electricity|electrics|(?:electric )?shocks?|shocked|electrocut\\w*|(?:power ?point|power socket|wall socket|power outlet|electrical outlet|socket|outlet)s?|wiring|(?:electrical|live|mains) wires?|fuse ?box|switchboard|circuit breakers?",
     "reply": "That one needs a grown-up. Can you ask one to help you with anything electrical?"
    },
    {

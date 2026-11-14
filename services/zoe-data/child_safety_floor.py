@@ -123,14 +123,23 @@ def is_request(s: str, rx: dict) -> bool:
     return "?" in s or bool(rx["ask"].search(s)) or bool(rx["opener"].match(head))
 
 
+def _cue_before(s: str, pos: int, rx: dict) -> bool:
+    """A request cue (the same ``ask`` / ``opener`` set ``is_request`` uses) BEFORE ``pos``: then the words after it are the ask."""
+    head = rx["lead"].sub("", s[:pos], count=1)
+    return bool(rx["ask"].search(s[:pos])) or bool(head and rx["opener"].match(head))
+
+
 def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
     """(class id, fixed reply) when ``s`` is a request or question naming one hazard and reports no danger, else None."""
     core = re.sub(r"[\s.,!?;:]+$", "", rx["lead"].sub("", s, count=1))
     if rx["factual"].match(core) and not rx["ask"].search(core) and not rx["factual_not"].search(core):
         return None   # "why is fire hot": a pure factual question; "how does it work" / "how do I" / "can I" never match
     s = rx["benign"].sub(" ", s)
-    if not is_request(s, rx) or rx["report"].search(s):
+    if not is_request(s, rx):
         return None
+    rep = rx["report"].search(s)
+    if rep and not _cue_before(s, rep.start(), rx):
+        return None   # a report ("i cut my finger") - unless a request cue came FIRST ("how do i cut my bread with a knife")
     for cid, terms, reply in rx["classes"]:
         if terms.search(s):
             return cid, reply
