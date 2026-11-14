@@ -1108,6 +1108,18 @@ async def _resolve_tiers(text: str, user_id: str, session_id: str, **kwargs):
             answered = None
         if answered is not None:
             return answered
+        # routines (ZOE_ROUTINES + ZOE_ROUTINE_VOICE, both default OFF = returns before any work): "done" / "skip" / "later" to the
+        # step Zoe just named, "what's next?", a one-off line ("remind me to take the drill to work tomorrow", only when a routine
+        # fits; a clock time steps aside to the reminder path), "I'm off" with an undone take-with line. medical_safety.detect first.
+        try:
+            import routines_tier as _rt
+
+            answered = await _rt.tier(text, user_id, session_id, channel=kwargs.get("channel"),
+                                      extra_ctx=kwargs.get("extra_ctx"), allow_writes=kwargs.get("allow_writes") is not False)
+        except Exception:  # noqa: BLE001 - the tier never breaks a turn
+            answered = None
+        if answered is not None:
+            return answered
         # intercom (ZOE_INTERCOM, default OFF = returns before any work): "tell the kitchen dinner's ready", "announce: ...", "call the
         # kitchen" - a member's words spoken on another panel, under the owner's call rules (guests never, quiet hours, adults drop in).
         try:

@@ -39,6 +39,7 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
 |---|---|---|
 | 1a | the tables (alembic `0081_routines.py`), routines + steps in `services/zoe-data/routines_store.py`, both erasers, forget reach | 11 (for the four tables that exist) |
 | 1b | the day: lazy day copies, one-off lines, the walk (`note_named`) and the said / tapped ticks | 3 (store-level tick rule) |
+| 2 | the conversation tier `services/zoe-data/routines_tier.py`, registered in `fast_tiers._resolve_tiers` | 1, 2, 3, 4 (voice side), 9 |
 
 ### PR 1 (1a + 1b) - the store
 
@@ -67,6 +68,29 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
   `routines` step of `memory_forget_cascade`) deletes a routine named for the entity and any line naming it.
 - **Logs**: `ROUTINE event=<created|step_added|one_off|prompted|ticked|skipped|snoozed|undo|missed|refused> kind= via= verified=
   member=<hash8> routine=<hash8>`; codes and counts only, never a step's words or a name (a test asserts it).
+
+### PR 2 - the conversation tier
+
+- **Flags**: `ZOE_ROUTINES=on` AND `ZOE_ROUTINE_VOICE` = off (default) | shadow | on. Off = the tier returns before any work (no
+  floor call, no regex, no database), proven over a corpus of the repo's own synthetic utterances. Shadow logs
+  `ROUTINE_TIER shadow would=<kind>` from read-only checks and takes nothing.
+- **Where**: one tier in `fast_tiers._resolve_tiers` (the conversation half, after distress, feedback, provenance and the panel
+  review cards; voice runs it with `phase="conversation"` before its confirmation gate and keyword intents). `routers/voice_tts.py`
+  is not edited.
+- **Walk**: "done / yep / had them" ticks the step Zoe just named, "skip", "later / not now" (snooze), "stop", "no I haven't /
+  untick that" (undo). Any other turn the tier sees ends the walk, so a later "yes" answers that turn, not a step. Residual: a turn
+  answered by a tier ABOVE this one (distress, feedback, provenance, enrolment, ...) does not close it; the 120 s cap bounds it.
+- **What's next**: "what's next? / what's left?" names the next line of the walk or of the member's routine whose window is open
+  now; a bare "next" outside a walk is left alone (it is a music skip). "start my <name> routine" opens a walk.
+- **One-off**: claimed only when the member has exactly one enabled routine of their own matching the cue, the day is one day, no
+  clock time, number or repeat is said, and the routine runs that day. Otherwise None: "remind me at 7 to take the drill" stays a
+  7:00 reminder. Reply: "Added to tomorrow's morning routine: take the drill."
+- **I'm off**: with an undone take-with line today, "Before you go: take the drill." (and "got it" then ticks it).
+- **Safety**: `medical_safety.detect` runs before anything is claimed; when it fires the tier steps aside and the floor answers on
+  the brain lane ("I took them twice by accident" is never a tick). The child safety floor is consulted the same way when it is
+  present. A medicine line needs `speaker_verified is True` on voice (chat is the member's own session); otherwise Zoe says so and
+  ticks nothing. A dry run (`allow_writes=False`, the replay harness) takes nothing. No unprompted speech: every reply answers the
+  person's own words.
 
 ## The numbers
 
