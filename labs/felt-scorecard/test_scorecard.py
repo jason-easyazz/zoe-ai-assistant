@@ -818,3 +818,96 @@ def test_alert_section_never_crashes_and_renders_sections(tmp_path, monkeypatch)
                       "window": {"since": "a", "until": "b", "long_since": "c"}})
     assert f"== {sc.ALERTS} ==" in text and f"== {sc.PERFORMANCE} ==" in text
     assert text.index(sc.ALERTS) < text.index(sc.PERFORMANCE)
+
+
+# --- INSTRUMENTS (2026-11-14 measurement gaps): each row from a synthetic log; absent marker = unmeasured ------------------
+
+START = "FORGET_LEDGER state=configured"
+
+
+def _block(ms, fp="83d123ad"):
+    return f"EVENT_LOOP_BLOCK ms={ms} top=mod.py:10:fn via=- depth=12 fp={fp} at1s=-"
+
+
+def test_loop_block_per_day_and_first_60s_after_a_start():
+    lines = parsed([
+        L("06T10:00:00", START),
+        L("06T10:00:20", _block(900)),             # 20 s after the start: early
+        L("06T10:00:59", _block(300)),             # 59 s: early
+        L("06T10:01:00", _block(400)),             # 60 s: not early (strictly under 60 s)
+        L("06T12:00:00", "EVENT_LOOP_BLOCK_TOP n=3 fp=83d123ad top=x count=3 total_ms=1600 max_ms=900"),  # not an episode
+        L("08T09:00:00", START),
+        L("08T09:00:00", START.replace("configured", "unconfigured") + " reason=module_error"),
+        L("08T11:00:00", _block(1300) + " traffic=harness"),   # process-wide: harness tag does not hide a stall
+    ])
+    logs = _logset(lines, sc.parse_ts(L("01T00:00:00", "")))
+    m = sc.inst_loop_block(logs, SINCE, UNTIL)
+    d = m["data"]
+    assert m["status"] == "measured" and d["episodes"] == 4
+    assert d["starts"] == 3 and d["startup_episodes"] == 2 and d["starts_with_any"] == 1
+    assert d["by_day"] == {"2026-11-06": 3, "2026-11-08": 1} and d["ms_max"] == 1300
+    assert abs(d["days"] - 5.5833) < 0.01            # from the 11-06 10:00 start to the window end
+    assert "first 60 s after a start: 2 episodes over 3 starts (1 starts with any)" in m["value"]
+    assert "mod.py" not in str(m) and "83d123ad" not in str(m)   # codes and counts only, never a frame or a fingerprint
+
+
+def test_loop_block_absent_marker_and_no_start_and_malformed():
+    logs = _logset(parsed([L("06T10:00:00", START)]), sc.parse_ts(L("01T00:00:00", "")))
+    m = sc.inst_loop_block(logs, SINCE, UNTIL)
+    assert m["status"] == "unmeasured" and "no EVENT_LOOP_BLOCK ms= line" in m["reason"]
+    logs = _logset(parsed([L("06T10:00:00", _block(500))]), sc.parse_ts(L("01T00:00:00", "")))
+    m = sc.inst_loop_block(logs, SINCE, UNTIL)
+    assert m["status"] == "measured" and "unmeasured (no FORGET_LEDGER start line" in m["value"]
+    logs = _logset(parsed([L("06T10:00:00", "EVENT_LOOP_BLOCK ms=lots top=x")]), sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_loop_block(logs, SINCE, UNTIL)["reason"]
+
+
+def test_impossible_timestamp_line_is_skipped(tmp_path):
+    log = tmp_path / "zoe-data.app.log"
+    log.write_text("\n".join([
+        "2026-11-01T00:00:00+0800 INFO     mod: first",
+        L("06T10:00:00", START),
+        "2026-13-45T10:00:30+0800 WARNING  loop_block_stacks: " + _block(700),   # month 13: never counted
+        "2026-11-06T25:00:30+0800 WARNING  loop_block_stacks: " + _block(700),   # hour 25: never counted
+        L("06T10:00:30", _block(500)),
+        L("11T23:59:00", "last"),
+    ]) + "\n")
+    logs = sc.load_log_lines([str(log)])
+    m = sc.inst_loop_block(logs, SINCE, UNTIL)
+    assert m["data"]["episodes"] == 1 and m["data"]["ms_max"] == 500
+
+
+def test_forget_ledger_state_row():
+    lines = parsed([L("06T10:00:00", START), L("07T10:00:00", "FORGET_LEDGER state=unconfigured"),
+                    L("08T10:00:00", "FORGET_LEDGER state=unconfigured reason=module_error")])
+    logs = _logset(lines, sc.parse_ts(L("01T00:00:00", "")))
+    m = sc.inst_forget_ledger(logs, SINCE, UNTIL)
+    assert m["data"] == {"configured": 1, "unconfigured": 2, "module_error": 1, "starts": 3, "last": "unconfigured"}
+    assert sc.inst_forget_ledger(_logset([], sc.parse_ts(L("01T00:00:00", ""))), SINCE, UNTIL)["status"] == "unmeasured"
+    bad = _logset(parsed([L("06T10:00:00", "FORGET_LEDGER state=maybe")]), sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_forget_ledger(bad, SINCE, UNTIL)["reason"]
+
+
+def _prepost(total, blocks, extra=""):
+    return f"FLUE_PREPOST sid=0123456789 total_ms={total} blocks_ms={blocks} other_ms={total - blocks} awaited=3 recall_ms=4{extra}"
+
+
+def test_flue_prepost_row_household_only_and_unmeasured_until_deployed():
+    lines = parsed([L("06T10:00:00", _prepost(100, 80)), L("06T10:01:00", _prepost(300, 200)),
+                    L("06T10:02:00", _prepost(9000, 9000, " traffic=harness"))])
+    logs = _logset(lines, sc.parse_ts(L("01T00:00:00", "")))
+    m = sc.inst_flue_prepost(logs, SINCE, UNTIL)
+    assert m["n"] == 2 and m["data"]["total_p50"] == 200 and m["data"]["blocks_p90"] == 188
+    none = sc.inst_flue_prepost(_logset([], sc.parse_ts(L("01T00:00:00", ""))), SINCE, UNTIL)
+    assert none["status"] == "unmeasured" and "#2484 is not deployed" in none["reason"]
+    raw = _logset(parsed([L("06T10:00:00", "FLUE_PREPOST sid=voice-panel-x total_ms=1 blocks_ms=0 other_ms=1 awaited=0")]),
+                  sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_flue_prepost(raw, SINCE, UNTIL)["reason"]   # a raw session id is not the format
+
+
+def test_instrument_rows_are_not_member_candidates_and_uncovered_is_unmeasured():
+    lines = parsed([L("06T10:00:00", START + " user=member-z"), L("06T10:00:01", _prepost(1, 0, " session=voice-panel-z"))])
+    assert sc.candidate_values(lines, SINCE, UNTIL) == ([], [])
+    rot = sc.Rotation("zoe-data.app.log.1.gz", first=sc.parse_ts(L("01T00:00:00", "")), last=UNTIL, error="EOFError")
+    rows = sc.instrument_section(None, sc.LogSet(lines, [rot]), SINCE, UNTIL)
+    assert rows and all(r["status"] == "unmeasured" and r["section"] == sc.INSTRUMENTS for r in rows)

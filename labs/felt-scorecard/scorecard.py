@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import bisect
 import datetime as dt
 import glob
 import gzip
@@ -69,6 +70,8 @@ MARKERS = (
     "VOICE TIMING", "DAY_REVIEW_RAISE", "VALUE_CORRECTION",
     # ALERTS section (counted only; never member-joined, never printed): see alert_* below
     "DISTRESS_NO_CONTACT", "PANEL_KV_MISS", "kv_miss_alert: alert not delivered",
+    # INSTRUMENTS section (counted only; never member-joined, never printed): see inst_* below
+    "EVENT_LOOP_BLOCK ms=", "FORGET_LEDGER state=", "FLUE_PREPOST ",
 )
 USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE", "VALUE_CORRECTION")
 SESSION_MARKERS = ("FLUE_TOOLS", "VOICE TIMING")
@@ -614,6 +617,7 @@ def m_nights(path: str, until: dt.datetime, nights: int) -> dict:
 
 ALERTS = "ALERTS (told, or should have told, the owner something is wrong)"
 PERFORMANCE = "PERFORMANCE (a regression the owner is alerted to)"
+INSTRUMENTS = "INSTRUMENTS (the before/after number of a change; unmeasured until its marker is in the log)"
 
 #: scripts/maintenance/zoe_crash_loop_watch.py: UNIT plus OTHER_UNITS. A unit named in an alert outside this list is `other`.
 CRASH_UNITS = ("zoe-data.service", "flue-zoe-telegram.service", "flue-zoe-brain-2x.service", "llama-server.service",
@@ -1022,6 +1026,10 @@ def alert_section(args, logs: LogSet, long_since, until) -> list[dict]:
         ("perf_panel_kv_miss", "Brain cache misses on household panel turns", PERFORMANCE,
          lambda: perf_panel_kv_miss(logs, long_since, until)),
     )
+    return _run_rows(jobs)
+
+
+def _run_rows(jobs) -> list[dict]:
     out = []
     for key, title, section, fn in jobs:
         try:
@@ -1031,6 +1039,155 @@ def alert_section(args, logs: LogSet, long_since, until) -> list[dict]:
         m["section"] = section
         out.append(m)
     return out
+
+
+# ---------------------------------------------------------------------------
+# INSTRUMENTS: one row per log-only instrument (codes, counts and milliseconds only)
+# ---------------------------------------------------------------------------
+# Each row reads ONE marker whose format is pinned by the emitting module's own test. A window with no line of the marker
+# is `unmeasured` (an instrument that is not deployed, or is off, is not a zero). A line with the marker but not the exact
+# format makes the row `unmeasured` ("malformed marker"). A line whose timestamp is impossible (month 13) never gets here:
+# parse_ts() returns None for it and read_rotation() drops it.
+
+#: The first line zoe-data's lifespan writes (main.py: memory_forgotten.log_startup_state, or its fail-closed fallback with
+#: reason=module_error): exactly one per process start, so it is the start marker for "the first 60 s after a start".
+_START_RE = re.compile(r"\bFORGET_LEDGER state=(configured|unconfigured)(?: reason=([a-z_]{1,32}))?(?:\s|$)")
+_LOOP_BLOCK_RE = re.compile(r"\bEVENT_LOOP_BLOCK ms=(\d{1,9}) ")
+_PREPOST_RE = re.compile(r"\bFLUE_PREPOST sid=[0-9a-f]{10} total_ms=(\d{1,9}) blocks_ms=(\d{1,9}) other_ms=(\d{1,9}) "
+                         r"awaited=(\d{1,4})(?:\s|$)")
+STARTUP_WINDOW_S = 60.0
+
+
+def _inst_lines(logs: LogSet, since, until, key: str, title: str, marker: str, absent: str, *, household_only: bool = True):
+    """(start, window text, [(t, line)]) for ``marker`` in the (narrowed) window, or an unmeasured row: the logs do not cover
+    the window, or no line carries the marker (``absent`` says what that can mean). Harness lines dropped when household_only."""
+    since, reason, w = _app_log_window(logs, since, until)
+    if reason:
+        return unmeasured(key, title, reason, window=w)
+    rows = [(t, line) for t, line in in_window(logs.lines, since, until, marker)
+            if not (household_only and is_harness(line, fields(line)))]
+    if not rows:
+        return unmeasured(key, title, f"no {marker.strip()} line in window: {absent}", window=w)
+    return since, w, rows
+
+
+def _starts(logs: LogSet, since, until) -> list[dt.datetime]:
+    return sorted(t for t, line in in_window(logs.lines, since, until, "FORGET_LEDGER state=") if _START_RE.search(line))
+
+
+def _ms_txt(values: list[float], *qs: int) -> str:
+    return " / ".join(f"p{q} {pct(values, q):.0f}" for q in qs)
+
+
+def inst_loop_block(logs: LogSet, since, until) -> dict:
+    """EVENT_LOOP_BLOCK (services/zoe-data/loop_block_stacks.py _emit, #2473): one line per stall >= 250 ms, written when the
+    stall ENDS. Per day over the days the instrument was provably running, and the first 60 s after each process start."""
+    key, title = "inst_loop_block", "Event-loop stalls (EVENT_LOOP_BLOCK episodes, >= 250 ms)"
+    got = _inst_lines(logs, since, until, key, title, "EVENT_LOOP_BLOCK ms=",
+                      "the watcher (ZOE_LOOP_BLOCK_STACKS, #2473) was not running, or no stall reached 250 ms; the log cannot "
+                      "tell which", household_only=False)
+    if isinstance(got, dict):
+        return got
+    since, w, rows = got
+    eps = []
+    for t, line in rows:
+        m = _LOOP_BLOCK_RE.search(line)
+        if not m:
+            return malformed_metric(key, title, sum(1 for _, x in rows if not _LOOP_BLOCK_RE.search(x)), since, until)
+        eps.append((t, int(m.group(1))))
+    starts = _starts(logs, since, until)
+    # the measured span opens at the last process start at or before the first episode (else at the first episode itself)
+    before = [s for s in starts if s <= eps[0][0]]
+    first = before[-1] if before else eps[0][0]
+    days = max((until - first).total_seconds() / 86400.0, 1 / 1440)
+    by_day: dict[str, int] = {}
+    for t, _ in eps:
+        d = t.astimezone(LOCAL_TZ).date().isoformat()
+        by_day[d] = by_day.get(d, 0) + 1
+    worst = max(sorted(by_day), key=lambda d: by_day[d])
+    early = hit = 0
+    if starts:
+        per_start: dict[int, int] = {}
+        for t, _ in eps:
+            i = bisect.bisect_right(starts, t) - 1     # the latest start at or before the episode's end
+            if i >= 0 and (t - starts[i]).total_seconds() < STARTUP_WINDOW_S:
+                per_start[i] = per_start.get(i, 0) + 1
+        early, hit = sum(per_start.values()), len(per_start)
+        early_txt = f"{early} episodes over {len(starts)} starts ({hit} starts with any)"
+    else:
+        early_txt = "unmeasured (no FORGET_LEDGER start line in window)"
+    ms = [float(v) for _, v in eps]
+    return metric(key, title,
+                  (f"episodes {len(eps)} ({len(eps) / days:.2f}/day over {days:.1f} d); worst day {worst} {by_day[worst]}; "
+                   f"ms {_ms_txt(ms, 50, 90)} / max {max(ms):.0f}; first {STARTUP_WINDOW_S:.0f} s after a start: {early_txt}"),
+                  n=len(eps), window=w + f" (measured from {_fmt(first)})",
+                  method=("zoe-data app log EVENT_LOOP_BLOCK ms= lines (one per stall, logged when it ends; _TOP/_FRAMES not "
+                          "counted); the span opens at the last FORGET_LEDGER start line at or before the first episode; an "
+                          "episode is 'after a start' when it ENDED < 60 s after the latest start (1 s log resolution)"),
+                  label="[Performance]",
+                  data={"episodes": len(eps), "days": round(days, 3), "by_day": by_day, "starts": len(starts),
+                        "startup_episodes": early, "starts_with_any": hit,
+                        "ms_p50": pct(ms, 50), "ms_p90": pct(ms, 90), "ms_max": max(ms)})
+
+
+def inst_forget_ledger(logs: LogSet, since, until) -> dict:
+    """FORGET_LEDGER state= (services/zoe-data/memory_forgotten.log_startup_state, #2462): one line per process start."""
+    key, title = "inst_forget_ledger", "Forget ledger state at each start"
+    got = _inst_lines(logs, since, until, key, title, "FORGET_LEDGER state=",
+                      "no zoe-data start in window carried the line (#2462 not deployed)", household_only=False)
+    if isinstance(got, dict):
+        return got
+    since, w, rows = got
+    counts = {"configured": 0, "unconfigured": 0, "module_error": 0}
+    last = None
+    for t, line in rows:
+        m = _START_RE.search(line)
+        if not m:
+            return malformed_metric(key, title, sum(1 for _, x in rows if not _START_RE.search(x)), since, until)
+        counts[m.group(1)] += 1
+        counts["module_error"] += m.group(2) == "module_error"
+        last = m.group(1)
+    return metric(key, title,
+                  (f"last start {last}; starts {len(rows)}: configured {counts['configured']}, unconfigured "
+                   f"{counts['unconfigured']} (of which module_error {counts['module_error']})"),
+                  n=len(rows), window=w,
+                  method=("zoe-data app log FORGET_LEDGER state=configured|unconfigured [reason=module_error], one per start; "
+                          "unconfigured = a forget is not permanent (only the 300 s tombstone guards it)"),
+                  data={**counts, "starts": len(rows), "last": last})
+
+
+def inst_flue_prepost(logs: LogSet, since, until) -> dict:
+    """FLUE_PREPOST (PR #2484, services/zoe-data/zoe_flue_client.py): what a household brain turn awaited before the POST."""
+    key, title = "inst_flue_prepost", "Pre-POST chain cost per household brain turn (FLUE_PREPOST)"
+    got = _inst_lines(logs, since, until, key, title, "FLUE_PREPOST ", "the timing of PR #2484 is not deployed")
+    if isinstance(got, dict):
+        return got
+    since, w, rows = got
+    total, blocks = [], []
+    for _, line in rows:
+        m = _PREPOST_RE.search(line)
+        if not m:
+            return malformed_metric(key, title, sum(1 for _, x in rows if not _PREPOST_RE.search(x)), since, until)
+        total.append(float(m.group(1)))
+        blocks.append(float(m.group(2)))
+    return metric(key, title,
+                  f"total_ms {_ms_txt(total, 50, 90)}; blocks_ms {_ms_txt(blocks, 50, 90)}", n=len(total), window=w,
+                  method=("zoe-data app log FLUE_PREPOST total_ms= (wrapper entry to payload built) and blocks_ms= (the "
+                          "context-block awaits), one line per brain turn that reached the POST; harness traffic excluded"),
+                  label="[Performance]",
+                  data={"n": len(total), "total_p50": pct(total, 50), "total_p90": pct(total, 90),
+                        "blocks_p50": pct(blocks, 50), "blocks_p90": pct(blocks, 90)})
+
+
+def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
+    """The INSTRUMENTS rows (long window, narrowed to the retained logs like the ALERTS app-log rows)."""
+    jobs = (
+        ("inst_loop_block", "Event-loop stalls", INSTRUMENTS, lambda: inst_loop_block(logs, long_since, until)),
+        ("inst_forget_ledger", "Forget ledger state at each start", INSTRUMENTS,
+         lambda: inst_forget_ledger(logs, long_since, until)),
+        ("inst_flue_prepost", "Pre-POST chain cost", INSTRUMENTS, lambda: inst_flue_prepost(logs, long_since, until)),
+    )
+    return _run_rows(jobs)
 
 
 # ---------------------------------------------------------------------------
@@ -1483,6 +1640,7 @@ def build(args) -> dict:
         out.append(unmeasured("usage", "Members active / days of use", db_err))
 
     out += alert_section(args, logset, long_since, until)
+    out += instrument_section(args, logset, long_since, until)
 
     for m in out:
         if m["status"] == "measured" and m["n"] == 0:
