@@ -251,7 +251,9 @@ starts, the replay also waits between clips while the panel is in use (`ZOE_HARN
 `ZOE_HARNESS_FORCE=1` is the deliberate override. The replay process tags itself `probe`
 (`ZOE_TRAFFIC_CLASS`, `services/zoe-data/traffic_class.py`), so its log lines and records are not the household's.
 A household panel turn that re-prefills more than 500 prompt tokens logs `PANEL_KV_MISS` (record:
-[panel-kv-residency-2026-10-19.md](panel-kv-residency-2026-10-19.md)).
+[panel-kv-residency-2026-10-19.md](panel-kv-residency-2026-10-19.md)), with `cause=` naming the first prefix section that
+changed since the session's previous turn (`member_switch`, `tool_block_changed`, `elided_block`, ...). Every brain turn
+also logs `FLUE_PREPOST total_ms= ... <block>_ms=`: what the context-block awaits cost before the POST (numbers only).
 
 **The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
 new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
