@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Off-box encrypted backup of the box to a household repo on the411 (architecture deep dive A5, 2026-10-18).
 
-restic writes to a rest-server in APPEND-ONLY mode (the box can add snapshots, never delete them); retention is
+restic writes to a TARGET (``TargetAdapter``: the411 rest-server, default, or a local directory on another device)
+and the rest-server runs in APPEND-ONLY mode (the box can add snapshots, never delete them); retention is
 applied on the411 by its own prune job (``scripts/setup/offbox-backup/the411/prune.sh``). Runbook, owner steps and
 the threat model: ``docs/knowledge/offbox-backup.md``.
 
@@ -37,6 +38,8 @@ age-encrypted (``index.json.age``). The stage holds ciphertext only.
 Commands (all print no secret; read-only towards the box's data):
 
     zoe_offbox.py check            # config + tools + guards, no network
+    zoe_offbox.py plan [--json]    # dry run: what the next backup WOULD send (counts + sizes), no config needed
+    zoe_offbox.py drill-key        # OWNER: the drill key (decrypts the drill canary only; never the config dir)
     zoe_offbox.py backup           # nightly (zoe-offbox-backup.timer)
     zoe_offbox.py drill [--force]  # monthly restore + checksum + retention check (zoe-backup-verify)
     zoe_offbox.py restore --identity FILE --tier T --target DIR [--snapshot ID]   # OWNER, disaster recovery
@@ -499,6 +502,82 @@ class Refused(Exception):
         self.alert = alert
 
 
+class TargetMissing(Refused):
+    """The configured target is not there (a disk not mounted, a directory gone): ALERTED, never a quiet skip."""
+
+
+class KeyMissing(Refused):
+    """The configuration names a key file that is not there: nothing can be encrypted or written. ALERTED."""
+
+
+class TargetAdapter:
+    """Where restic writes. One interface, so the owner's choice of target is one line in offbox.env
+    (``ZOE_BACKUP_TARGET``) and the rest of the script never asks which one it is. No adapter carries a cloud SDK or
+    opens a network connection itself: restic does the I/O."""
+    kind = ""
+    required: tuple[str, ...] = ()
+    #: the box applies RETENTION itself (``restic forget --prune``). False when the target's own host prunes and the
+    #: box may only append (the411's rest-server runs append-only and prunes with its own job).
+    prunes_on_box = False
+
+    def __init__(self, vals: dict[str, str], p: "Paths"):
+        self.vals, self.p = vals, p
+
+    def env(self) -> dict[str, str]:
+        raise NotImplementedError
+
+    def check(self) -> None:
+        """Raise ``TargetMissing`` / ``Refused`` when the target cannot take a backup now."""
+
+
+class RestServerTarget(TargetAdapter):
+    """the411's append-only rest-server (the original design; prune runs on the411)."""
+    kind = "rest"
+    required = ("RESTIC_REPOSITORY", "RESTIC_REST_USERNAME", "RESTIC_REST_PASSWORD")
+
+    def env(self) -> dict[str, str]:
+        repo = self.vals["RESTIC_REPOSITORY"]
+        if "@" in repo.split("://", 1)[-1].split("/", 1)[0]:
+            raise Refused("RESTIC_REPOSITORY carries credentials in the URL (process listings show it); "
+                          "use RESTIC_REST_USERNAME / RESTIC_REST_PASSWORD")
+        out = {"RESTIC_REPOSITORY": repo, "RESTIC_REST_USERNAME": self.vals["RESTIC_REST_USERNAME"],
+               "RESTIC_REST_PASSWORD": self.vals["RESTIC_REST_PASSWORD"]}
+        if self.vals.get("RESTIC_CACERT"):
+            out["RESTIC_CACERT"] = os.path.expanduser(self.vals["RESTIC_CACERT"])
+        return out
+
+
+class LocalDirTarget(TargetAdapter):
+    """A restic repository in a local directory: an external disk, a NAS mount. It must be on a DIFFERENT device
+    from the live data (a copy on the same NVMe is not off-box); the box owns its retention."""
+    kind = "local"
+    required = ("ZOE_BACKUP_TARGET_DIR",)
+    prunes_on_box = True
+
+    @property
+    def path(self) -> Path:
+        return Path(os.path.expanduser(self.vals["ZOE_BACKUP_TARGET_DIR"]))
+
+    def env(self) -> dict[str, str]:
+        return {"RESTIC_REPOSITORY": str(self.path)}
+
+    def check(self) -> None:
+        d = self.path
+        if not d.is_absolute():
+            raise Refused(f"ZOE_BACKUP_TARGET_DIR must be an absolute path, not {d}")
+        if not d.is_dir():
+            raise TargetMissing(f"backup target directory {d} is not there (disk not mounted?) - nothing was written")
+        if not os.access(d, os.W_OK | os.X_OK):
+            raise TargetMissing(f"backup target directory {d} is not writable by this account")
+        if not os.environ.get("ZOE_OFFBOX_ALLOW_SAME_DEVICE") and d.stat().st_dev == self.p.home.stat().st_dev:
+            raise Refused(f"backup target {d} is on the same device as {self.p.home}: that is not off-box "
+                          "(mount an external disk; ZOE_OFFBOX_ALLOW_SAME_DEVICE=1 is for the lab only)")
+
+
+TARGETS: dict[str, type[TargetAdapter]] = {a.kind: a for a in (RestServerTarget, LocalDirTarget)}
+COMMON_KEYS = ("RESTIC_PASSWORD_FILE", "ZOE_BACKUP_AGE_RECIPIENTS_FILE")
+
+
 @dataclass
 class Config:
     env: dict[str, str]
@@ -506,7 +585,7 @@ class Config:
     age: str
     recipients: Path
     limit_upload_kib: int
-
+    target: Optional[TargetAdapter] = None
 
 def _read_env_file(path: Path) -> dict[str, str]:
     out = {}
@@ -538,19 +617,20 @@ def load_config(p: Paths) -> Config:
         if not _private(f):
             raise Refused(f"{f} is readable by group/other; chmod 600 it")
     vals = _read_env_file(env_file)
-    need = ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "RESTIC_REST_USERNAME", "RESTIC_REST_PASSWORD",
-            "ZOE_BACKUP_AGE_RECIPIENTS_FILE")
-    missing = [k for k in need if not vals.get(k)]
+    kind = (vals.get("ZOE_BACKUP_TARGET") or "rest").strip().lower()
+    if kind not in TARGETS:
+        raise NotConfigured(f"ZOE_BACKUP_TARGET={kind!r} is not one of {', '.join(sorted(TARGETS))}")
+    target = TARGETS[kind](vals, p)
+    missing = [k for k in COMMON_KEYS + target.required if not vals.get(k)]
     if missing:
         raise NotConfigured(f"{env_file} lacks {', '.join(missing)}")
-    if "@" in vals["RESTIC_REPOSITORY"].split("://", 1)[-1].split("/", 1)[0]:
-        raise Refused("RESTIC_REPOSITORY carries credentials in the URL (process listings show it); "
-                      "use RESTIC_REST_USERNAME / RESTIC_REST_PASSWORD")
+    target_env = target.env()
     pw = Path(os.path.expanduser(vals["RESTIC_PASSWORD_FILE"]))
     rec = Path(os.path.expanduser(vals["ZOE_BACKUP_AGE_RECIPIENTS_FILE"]))
-    for f in (pw, rec):
+    for f, what in ((pw, "the box's restic repository key"), (rec, "the owner's age recipients (the encryption key)")):
         if not f.is_file():
-            raise NotConfigured(f"{f} missing")
+            # configured, but the key is gone: LOUD (alerted), unlike a box that was never configured
+            raise KeyMissing(f"{f} ({what}) is missing: no backup can be written; restore it (runbook offbox-backup.md)")
     if not _private(pw):
         raise Refused(f"{pw} is readable by group/other; chmod 600 it")
     recips = [ln.strip() for ln in rec.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
@@ -562,15 +642,12 @@ def load_config(p: Paths) -> Config:
         if not (Path(b).is_file() and os.access(b, os.X_OK)):
             raise NotConfigured(f"{b} not installed (scripts/setup/offbox-backup/install_tools.sh)")
     env = {
-        "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(p.home),
-        "RESTIC_REPOSITORY": vals["RESTIC_REPOSITORY"], "RESTIC_PASSWORD_FILE": str(pw),
-        "RESTIC_REST_USERNAME": vals["RESTIC_REST_USERNAME"], "RESTIC_REST_PASSWORD": vals["RESTIC_REST_PASSWORD"],
-        "RESTIC_CACHE_DIR": str(p.home / ".cache" / "restic"), "GOGC": "50",
+        "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(p.home), "RESTIC_PASSWORD_FILE": str(pw),
+        "RESTIC_CACHE_DIR": str(p.home / ".cache" / "restic"), "GOGC": "50", **target_env,
     }
-    if vals.get("RESTIC_CACERT"):
-        env["RESTIC_CACERT"] = os.path.expanduser(vals["RESTIC_CACERT"])
+    target.check()                     # last: a missing disk is an ALERT for a configured box, never a silent skip
     return Config(env=env, restic=restic, age=age, recipients=rec,
-                  limit_upload_kib=int(vals.get("ZOE_BACKUP_LIMIT_UPLOAD_KIB", "2048") or 0))
+                  limit_upload_kib=int(vals.get("ZOE_BACKUP_LIMIT_UPLOAD_KIB", "2048") or 0), target=target)
 
 
 def in_quiet_hours(now: datetime) -> bool:
@@ -696,6 +773,124 @@ def _globals_dump(cfg: Config, tmpdir: Path) -> Optional[Source]:
     return Source("pg/globals.sql.gz", out)
 
 
+# ── restore proof of the ENCRYPTED archive: the drill canary ─────────────────────────────────────────────────────
+# The box cannot decrypt the household tier (the identity is the owner's, vault O5), so a checksum of restored
+# ciphertext proves restic, not that what was sent can be turned back into plaintext. The canary closes that: each
+# backup encrypts a fresh random canary with age to a SEPARATE drill recipient whose identity the box holds
+# (``drill-key``, an owner step), and the drill decrypts the RESTORED canary and checks its digest. The drill key
+# opens the canary and nothing else: every household file is encrypted to the owner's recipients only.
+DRILL_CANARY = "drill-canary.age"
+CANARY_PREFIX = b"zoe-drill-canary v1\n"
+
+
+def drill_key_paths(p: Paths) -> tuple[Path, Path]:
+    """``(identity, recipient)`` of the drill key: the state dir, never the config dir (that one must hold no identity)."""
+    return p.state_dir / "drill-identity.txt", p.state_dir / "drill-recipient.txt"
+
+
+def write_canary(cfg: Config, p: Paths, stage: Path) -> Optional[str]:
+    """Encrypt a fresh canary into ``stage`` to the drill recipient; returns its plaintext sha256 (None = no drill key)."""
+    _ident, recip = drill_key_paths(p)
+    if not recip.is_file():
+        return None
+    data = CANARY_PREFIX + secrets.token_hex(32).encode()
+    out = stage / DRILL_CANARY
+    r = subprocess.run([cfg.age, "-R", str(recip), "-o", str(out)], input=data, capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError("age failed on the drill canary")
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify_canary(cfg: Config, p: Paths, root: Path, want_sha: Optional[str]) -> tuple[list[str], list[str]]:
+    """``(findings, notes)`` for the canary in a restored household stage ``root``."""
+    ident, _recip = drill_key_paths(p)
+    can = root / DRILL_CANARY
+    if not ident.is_file():
+        return [], ["household: no drill key, so the restore was checked as ciphertext only (owner step: zoe_offbox.py drill-key)"]
+    if not can.is_file():
+        return ["household: the drill key exists but the restored snapshot has no drill canary"], []
+    r = subprocess.run([cfg.age, "-d", "-i", str(ident), str(can)], capture_output=True)
+    if r.returncode != 0:
+        return ["household: the restored drill canary does not decrypt - the encrypted archive cannot be read back"], []
+    if not r.stdout.startswith(CANARY_PREFIX) or (want_sha and hashlib.sha256(r.stdout).hexdigest() != want_sha):
+        return ["household: the restored drill canary decrypts to the wrong plaintext"], []
+    return [], ["household: drill canary restored, decrypted and verified"]
+
+
+def cmd_drill_key(p: Paths, age_keygen: Optional[str] = None) -> int:
+    """OWNER: make the box's drill key (age-keygen). It can decrypt the canary only; refuses to overwrite one."""
+    ident, recip = drill_key_paths(p)
+    if ident.exists():
+        print(f"a drill key already exists at {ident}; delete it first to make a new one")
+        return 2
+    keygen = age_keygen or shutil.which("age-keygen") or str(p.home / ".local" / "bin" / "age-keygen")
+    p.state_dir.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run([keygen, "-o", str(ident)], capture_output=True, text=True)
+    if r.returncode != 0 or not ident.is_file():
+        print("age-keygen failed", file=sys.stderr)
+        return 1
+    os.chmod(ident, 0o600)
+    pub = next((ln.split(":", 1)[1].strip() for ln in ident.read_text().splitlines() if ln.startswith("# public key:")), "")
+    if not pub.startswith("age1"):
+        print("age-keygen wrote no public key line", file=sys.stderr)
+        return 1
+    _atomic_write(recip, pub + "\n")
+    print(f"drill key written ({ident}, 0600); it decrypts the drill canary only")
+    return 0
+
+
+def apply_retention(cfg: Config) -> list[str]:
+    """A target the box owns (a local directory): apply RETENTION itself, the same flags the411's prune.sh carries."""
+    problems = []
+    for tier in RETENTION:
+        r = restic(cfg, "forget", "--tag", f"zoe-{tier}", "--host", HOST_TAG, *forget_flags(tier), "--prune", check=False)
+        if r.returncode != 0:
+            problems.append(f"{tier}: retention (restic forget --prune) failed: exit {r.returncode} - "
+                            "old snapshots outlive the 35-day bound until it succeeds")
+    return problems
+
+
+# ── dry run: what WOULD be sent ──────────────────────────────────────────────────────────────────────────────────
+
+
+def plan(p: Paths) -> dict[str, dict[str, dict[str, int]]]:
+    """``{tier: {group: {"files": n, "bytes": b}}}`` for what the next backup would send. Groups are the fixed source
+    labels' first segment (``pg``, ``zoe``, ``voice-samples``, ``ha``, ``checkout``...): counts and sizes only, never
+    a file name below a source. Read-only: needs no config, encrypts nothing, writes nothing."""
+    out: dict[str, dict[str, dict[str, int]]] = {}
+
+    def add(tier: str, srcs: list[Source]) -> None:
+        groups = out.setdefault(tier, {})
+        for s in srcs:
+            g = groups.setdefault(s.label.split("/", 1)[0], {"files": 0, "bytes": 0, "unreadable": 0})
+            errs: list[str] = []
+            for _rel, f in walk_source(s, errs):
+                try:
+                    g["bytes"] += f.stat().st_size
+                    g["files"] += 1
+                except OSError:
+                    g["unreadable"] += 1
+            g["unreadable"] += len(errs)
+
+    add("household", household_sources(p))
+    add("secrets", secret_sources(p))
+    add("artefacts", [Source(a.name, a) for a in artefact_paths(p)])
+    return out
+
+
+def render_plan(pl: dict[str, dict[str, dict[str, int]]]) -> str:
+    lines = []
+    for tier, groups in pl.items():
+        files = sum(g["files"] for g in groups.values())
+        size = sum(g["bytes"] for g in groups.values())
+        enc = "age-encrypted to the owner's key" if tier != "artefacts" else "restic only (no household words)"
+        lines.append(f"{tier}: {files} file(s), {size / 1e6:.1f} MB ({enc})")
+        for name, g in sorted(groups.items()):
+            extra = f", {g['unreadable']} unreadable" if g["unreadable"] else ""
+            lines.append(f"  {name}: {g['files']} file(s), {g['bytes'] / 1e6:.1f} MB{extra}")
+    return "\n".join(lines)
+
+
 def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
     salt = _salt(p)
     enc = age_encryptor(cfg.age, cfg.recipients)
@@ -727,10 +922,12 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
             if res.unreadable:
                 problems.append(f"{tier}: {len(res.unreadable)} unreadable file(s)/dir(s) - last good copy kept: "
                                 + ", ".join(sorted(res.unreadable)[:5]))
+            canary = write_canary(cfg, p, stage) if tier == "household" else None
             man = manifest_of(stage)
             (stage / "MANIFEST.sha256").write_text("".join(f"{v}  {k}\n" for k, v in man.items()))
             sid = backup_tier(cfg, tier, [stage])
-            _atomic_write(p.state_dir / "manifests" / f"{sid}.json", json.dumps({"tier": tier, "files": man}))
+            _atomic_write(p.state_dir / "manifests" / f"{sid}.json",
+                          json.dumps({"tier": tier, "files": man, **({"canary_sha256": canary} if canary else {})}))
             result["snapshots"][tier] = {"id": sid, "encrypted": res.encrypted, "kept": res.kept,
                                          "removed": res.removed, "files": len(man)}
             print(f"{tier}: snapshot {sid[:8]} - {len(man)} files ({res.encrypted} re-encrypted, "
@@ -748,6 +945,8 @@ def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:
         result["snapshots"]["artefacts"] = {"id": sid, "files": len(man)}
         print(f"artefacts: snapshot {sid[:8]} - {len(man)} files")
     _prune_local_manifests(p, keep=200)
+    if cfg.target is not None and cfg.target.prunes_on_box:
+        problems += apply_retention(cfg)
     result["problems"] = problems
     _atomic_write(p.state_dir / "last_backup.json", json.dumps(result, indent=1))
     if problems:
@@ -830,6 +1029,12 @@ def cmd_drill(p: Paths, cfg: Config, now: datetime, force: bool) -> int:
                     want = {ln[66:].strip(): ln[:64] for ln in (root / "MANIFEST.sha256").read_text().splitlines()}
                     findings.append(f"{tier}: no local manifest for {snap['short_id']} (new box?) - compared "
                                     "against the in-snapshot manifest only")
+                if tier == "household":
+                    want_sha = json.loads(local.read_text()).get("canary_sha256") if local.exists() else None
+                    bad_canary, canary_notes = verify_canary(cfg, p, root, want_sha)
+                    findings += bad_canary
+                    for n in canary_notes:
+                        print(n)
             if not want:
                 findings.append(f"{tier}: nothing to compare for snapshot {snap['short_id']}")
             elif got != want:
@@ -940,6 +1145,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check")
+    pl = sub.add_parser("plan", help="dry run: what the next backup WOULD send (counts and sizes only); needs no config")
+    pl.add_argument("--json", action="store_true")
+    sub.add_parser("drill-key", help="OWNER: make the drill key (decrypts the drill canary only)")
     nt = sub.add_parser("notify", help="send one alert line (used by zoe-backup-verify.sh)")
     nt.add_argument("text")
     b = sub.add_parser("backup")
@@ -960,10 +1168,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     p = Paths.from_env()
     now = datetime.now().astimezone()
+    if ns.cmd == "plan":
+        pl_ = plan(p)
+        print(json.dumps(pl_, indent=1) if ns.json else render_plan(pl_))
+        try:
+            cfg = load_config(p)
+            print(f"target: {cfg.target.kind if cfg.target else '?'} - ready; drill key: "
+                  f"{'yes' if drill_key_paths(p)[0].is_file() else 'no (owner step: drill-key)'}")
+        except (NotConfigured, Refused) as exc:
+            print(f"target: NOT READY - {exc}")
+        return 0
+    if ns.cmd == "drill-key":
+        return cmd_drill_key(p)
     try:
         cfg = load_config(p)
         if ns.cmd == "check":
-            print(f"configured: repo set, recipients {cfg.recipients}, restic {cfg.restic}, age {cfg.age}")
+            print(f"configured: target {cfg.target.kind if cfg.target else '?'}, recipients {cfg.recipients}, restic {cfg.restic}, age {cfg.age}")
             print(f"household sources: {[s.label for s in household_sources(p) if s.path and s.path.exists()]}")
             print(f"secret files: {len(secret_files(p))}; artefacts: {[str(a) for a in artefact_paths(p)]}")
             return 0

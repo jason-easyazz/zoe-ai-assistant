@@ -107,6 +107,30 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
   --tier household --target <dir>` decrypts every file and checks its plaintext sha256 against the encrypted index; then
   `pg_restore --list` the dump. The box cannot run this one by design: it never holds the identity.
 
+### 1.5 Ready for the owner's choice of target (2026-11-14)
+
+Nothing here is installed live; these make the script ready for whichever target the owner picks.
+
+- **Target adapters.** `ZOE_BACKUP_TARGET` in `offbox.env` picks one `TargetAdapter`: `rest` (the default, the411's append-only
+  rest-server above, unchanged) or `local` (`ZOE_BACKUP_TARGET_DIR`: a restic repository on an external disk or a NAS mount). No
+  adapter carries a cloud SDK or opens a connection itself; restic does the I/O. `local` refuses a directory on the SAME device as
+  the live data (a copy on the same NVMe is not off-box; `ZOE_OFFBOX_ALLOW_SAME_DEVICE=1` is for the lab only) and, because no
+  other host prunes it, the box applies `RETENTION` itself after each backup (`restic forget --prune`, the same flags as
+  the411's `prune.sh`, so the 35-day household bound holds). A failed prune is a reported problem (alerted).
+- **Loud failure.** On a configured box (an `offbox.env` exists) a missing target directory (`TargetMissing`) or a missing key file
+  (`restic.pass` or `age-recipients.txt`: `KeyMissing`) refuses the run with exit 3 and a Telegram alert. A box that was never
+  configured stays exit 2, quiet.
+- **Dry run.** `zoe_offbox.py plan [--json]` lists what the next backup WOULD send: per tier and per source group (`pg`, `palace`,
+  `zoe`, `voice-samples`, `ha`, `checkout`, `systemd`, ...) the file count and size, and whether the target and the drill key are
+  ready. Counts and sizes only, never a file name below a source; needs no config, encrypts and writes nothing.
+- **Restore proof of the encrypted archive (the drill canary).** The box cannot decrypt the household tier, so the monthly drill's
+  checksum of restored ciphertext proves restic, not that the age layer reads back. `zoe_offbox.py drill-key` (an OWNER step) makes
+  a SEPARATE drill key in `~/.local/state/zoe-offbox/` (never the config dir, whose identity guard is unchanged); each backup then
+  encrypts a fresh random canary to that key only, into the household stage; the drill restores it, decrypts it and checks its
+  digest against the one recorded when it was sent. The drill key opens the canary and nothing else: household files are
+  encrypted to the owner's recipients only (test-pinned). Without a drill key the drill says it checked ciphertext only.
+- Pinned by `tests/unit/test_zoe_offbox_targets.py` (fake `age` / `age-keygen` stubs, lab keys in tmp, restic never run).
+
 ## 2. Decision: the DNS name and port
 
 | option | for | against |
