@@ -919,21 +919,33 @@ def _keep_only(uid: str, keep: list) -> None:
         _REMEMBERED.pop(uid, None)
 
 
-def forget_user(user_id: str) -> int:
-    """The member erase: every remembered correction of the member. Returns the entries dropped. Never raises."""
+def _uid(user_id) -> str:
+    """The member key, from anything: ``""`` when it cannot be read (then nothing is identifiable and nothing is dropped)."""
     try:
-        return len(_REMEMBERED.pop((user_id or "").strip().lower(), None) or ())
+        return str("" if user_id is None else user_id).strip().lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _drop_all(uid: str) -> int:
+    try:
+        return len(_REMEMBERED.pop(uid, None) or ()) if uid else 0
     except Exception:  # noqa: BLE001
         return 0
 
 
-def forget_matching(user_id: str, matches) -> int:
+def forget_user(user_id) -> int:
+    """The member erase: every remembered correction of the member. Returns the entries dropped. Never raises."""
+    return _drop_all(_uid(user_id))
+
+
+def forget_matching(user_id, matches) -> int:
     """Drop the member's remembered corrections whose subject or values ``matches(text)`` - a callable, or anything with ``.search``
-    (a compiled name pattern, the forget ledger's ``LedgerPattern``). An entry the matcher cannot judge is dropped. Returns the
-    entries dropped. Never raises."""
+    (a compiled name pattern, the forget ledger's ``LedgerPattern``). An entry the matcher cannot judge is dropped, and a matcher
+    that cannot be used at all drops every entry of the member (over-forget). Returns the entries dropped. Never raises."""
+    uid = _uid(user_id)
     try:
-        uid = (user_id or "").strip().lower()
-        entries = list(_REMEMBERED.get(uid) or ())
+        entries = list(_REMEMBERED.get(uid) or ()) if uid else []
         if not entries:
             return 0
         test = matches.search if hasattr(matches, "search") else matches
@@ -947,30 +959,43 @@ def forget_matching(user_id: str, matches) -> int:
         _keep_only(uid, keep)
         return len(entries) - len(keep)
     except Exception:  # noqa: BLE001
-        return 0
+        return _drop_all(uid)
 
 
-def forget_subject(user_id: str, name: str) -> int:
-    """"Forget <name>": every remembered correction naming it (the forget ledger's whole-word, separator-blind name pattern)."""
-    if not (name or "").strip():
-        return 0
+def forget_subject(user_id, name) -> int:
+    """"Forget <name>": every remembered correction naming it (the forget ledger's whole-word, separator-blind name pattern). A
+    name that cannot be read drops every entry of the member (over-forget). Never raises."""
+    uid = _uid(user_id)
     try:
-        from memory_forgotten import name_pattern
+        if name is None:
+            return 0
+        text = str(name).strip()
+        if not text:
+            return 0
+        try:
+            from memory_forgotten import name_pattern
 
-        rx = name_pattern(name)
+            rx = name_pattern(text)
+        except Exception:  # noqa: BLE001
+            rx = re.compile(rf"(?<![A-Za-z0-9]){re.escape(text)}(?![A-Za-z0-9])", re.IGNORECASE)
+        return forget_matching(uid, rx)
     except Exception:  # noqa: BLE001
-        rx = re.compile(rf"(?<![A-Za-z0-9]){re.escape(name.strip())}(?![A-Za-z0-9])", re.IGNORECASE)
-    return forget_matching(user_id, rx)
+        return _drop_all(uid)
 
 
-def forget_in_texts(user_id: str, texts) -> int:
+def forget_in_texts(user_id, texts) -> int:
     """A forget of specific words ("forget that"'s turn, the rows a physical erase removes): every remembered correction whose
-    SUBJECT occurs as a whole word in any of ``texts``. Never raises."""
+    SUBJECT occurs as a whole word in any of ``texts``. Texts that cannot be read drop every entry of the member (over-forget).
+    Never raises."""
+    uid = _uid(user_id)
     try:
-        blob = " ".join(str(t or "") for t in texts or ()).lower().replace("’", "'")
-        uid = (user_id or "").strip().lower()
-        entries = list(_REMEMBERED.get(uid) or ())
-        if not blob.strip() or not entries:
+        entries = list(_REMEMBERED.get(uid) or ()) if uid else []
+        if not entries:
+            return 0
+        if isinstance(texts, (str, bytes)):
+            texts = [texts]
+        blob = " ".join(str(t if t is not None else "") for t in (texts or ())).lower().replace("\u2019", "'")
+        if not blob.strip():
             return 0
 
         def named(c) -> bool:
@@ -980,7 +1005,7 @@ def forget_in_texts(user_id: str, texts) -> int:
         _keep_only(uid, keep)
         return len(entries) - len(keep)
     except Exception:  # noqa: BLE001
-        return 0
+        return _drop_all(uid)
 
 
 async def _distinct_people(rows: list, subject: str, user_id: str) -> int:

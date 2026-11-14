@@ -91,6 +91,47 @@ def test_the_functions_never_raise():
         vc._REMEMBERED = real
 
 
+class _Hostile:
+    """Neither ``str()`` nor ``strip()`` works on it."""
+
+    def __str__(self):
+        raise ValueError("unreadable")
+
+    def strip(self):
+        raise ValueError("unreadable")
+
+    def __iter__(self):
+        raise ValueError("unreadable")
+
+
+@pytest.mark.parametrize("bad", [None, 42, _Hostile()])
+def test_no_function_raises_on_any_input(bad):
+    """The contract is never-raising for EVERY argument (not only via the callers' wrappers)."""
+    for call in (lambda: vc.forget_user(bad), lambda: vc.forget_subject(bad, "Juno"), lambda: vc.forget_subject(A, bad),
+                 lambda: vc.forget_matching(bad, lambda _t: True), lambda: vc.forget_matching(A, bad),
+                 lambda: vc.forget_in_texts(bad, ["Juno"]), lambda: vc.forget_in_texts(A, bad), lambda: vc.forget_in_texts(A, [bad])):
+        assert isinstance(call(), int)
+    assert _subjects(B) == ["Juno"]                       # whatever was over-forgotten, another member's entry is never touched
+
+
+def test_an_unreadable_name_or_text_over_forgets_the_member():
+    """Over-forgetting is the safe error: a name or text that cannot be read drops every entry of that member, and only of them."""
+    assert vc.forget_subject(A, _Hostile()) == 3
+    assert _subjects(A) == [] and _subjects(B) == ["Juno"]
+    vc._remember(A, vc.Correction("Wren", "4", "3"))
+    assert vc.forget_in_texts(A, _Hostile()) == 1 and _subjects(A) == []
+    vc._remember(A, vc.Correction("Wren", "4", "3"))
+    assert vc.forget_in_texts(A, ["ok", _Hostile()]) == 1 and _subjects(A) == []
+    vc._remember(A, vc.Correction("Wren", "4", "3"))
+    assert vc.forget_matching(A, None) == 1 and _subjects(A) == []
+
+
+def test_a_none_name_or_empty_text_forgets_nothing():
+    assert vc.forget_subject(A, None) == 0 and vc.forget_subject(A, "  ") == 0 and vc.forget_in_texts(A, None) == 0
+    assert vc.forget_user(None) == 0 and vc.forget_user(42) == 0
+    assert _subjects(A) == ["Juno", "Wren", "the book club"]
+
+
 # ── each forget path, through its real entry point ──────────────────────────────────────────
 
 def test_entity_forget_through_the_cascade_clears_that_name(monkeypatch):
