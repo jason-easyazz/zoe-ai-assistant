@@ -1,0 +1,632 @@
+{
+ "cases": 94,
+ "totals": {
+  "PASS": 67,
+  "FAIL": 23,
+  "NOT_RUNNABLE": 4
+ },
+ "by_class": {
+  "correction": {
+   "PASS": 37,
+   "FAIL": 15,
+   "NOT_RUNNABLE": 0
+  },
+  "emergency": {
+   "PASS": 17,
+   "FAIL": 5,
+   "NOT_RUNNABLE": 0
+  },
+  "forget": {
+   "PASS": 0,
+   "FAIL": 0,
+   "NOT_RUNNABLE": 4
+  },
+  "kind": {
+   "PASS": 12,
+   "FAIL": 3,
+   "NOT_RUNNABLE": 0
+  },
+  "log": {
+   "PASS": 1,
+   "FAIL": 0,
+   "NOT_RUNNABLE": 0
+  }
+ },
+ "failing_ids": [
+  "K11",
+  "K13",
+  "K14",
+  "C23",
+  "C23b",
+  "C25",
+  "C25b",
+  "C27",
+  "C40",
+  "C09",
+  "C10b",
+  "C13",
+  "C18",
+  "C22b",
+  "C34",
+  "C35",
+  "C36",
+  "C37",
+  "E03",
+  "E04",
+  "E05",
+  "E06",
+  "E06e"
+ ],
+ "not_runnable": {
+  "F01": "needs_registry",
+  "F02": "needs_registry",
+  "F03": "needs_marker",
+  "F04": "needs_registry"
+ },
+ "results": {
+  "K01": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K02": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K03": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K04a": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K04b": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K05": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K06": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K07": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K08": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K09": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K10": {
+   "class": "log",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K11": {
+   "class": "kind",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "kind ['refuse']"
+  },
+  "K12": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "K13": {
+   "class": "kind",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "kind ['refuse']"
+  },
+  "K14": {
+   "class": "kind",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "kind ['add']"
+  },
+  "K15": {
+   "class": "kind",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C01": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C02": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C03": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C04": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C23": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C23b": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C24": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C25": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0; rewrote despite left_as_mined"
+  },
+  "C25b": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r1"
+  },
+  "C26": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C27": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0; row r1; rewrote despite left_as_mined"
+  },
+  "C28": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C29": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C29b": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C30": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C31": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C32": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C33": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C40": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r1; rewrote despite left_as_mined"
+  },
+  "C44": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C05": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C06": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C07": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C08": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C09": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C10": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C10b": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C11": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C12": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C13": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C14": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C15": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C15b": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C16": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C45": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C17": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C18": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C19": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C20": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C21": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C21b": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C22": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C22b": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C34": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C35": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C36": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C37": {
+   "class": "correction",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "row r0"
+  },
+  "C38": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C39": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C41": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C42": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "C43": {
+   "class": "correction",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E01": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E02": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E03": {
+   "class": "emergency",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "event missing"
+  },
+  "E03b": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E04": {
+   "class": "emergency",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "event missing"
+  },
+  "E05": {
+   "class": "emergency",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "event missing"
+  },
+  "E06": {
+   "class": "emergency",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "event missing; event filed or text changed"
+  },
+  "E06b": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E06c": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E06d": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E06e": {
+   "class": "emergency",
+   "status": "FAIL",
+   "reason": "differs",
+   "detail": "event missing"
+  },
+  "E07": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E08": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E09": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E10": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E11": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E12": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E13": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E14": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E15": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E16": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "E17": {
+   "class": "emergency",
+   "status": "PASS",
+   "reason": "",
+   "detail": ""
+  },
+  "F01": {
+   "class": "forget",
+   "status": "NOT_RUNNABLE",
+   "reason": "needs_registry",
+   "detail": ""
+  },
+  "F02": {
+   "class": "forget",
+   "status": "NOT_RUNNABLE",
+   "reason": "needs_registry",
+   "detail": ""
+  },
+  "F03": {
+   "class": "forget",
+   "status": "NOT_RUNNABLE",
+   "reason": "needs_marker",
+   "detail": ""
+  },
+  "F04": {
+   "class": "forget",
+   "status": "NOT_RUNNABLE",
+   "reason": "needs_registry",
+   "detail": ""
+  }
+ }
+}
