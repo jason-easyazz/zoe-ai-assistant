@@ -174,3 +174,26 @@ async def test_skybridge_move_and_delete_refuse_a_repeating_subscription_event(m
     db = FakeDb(events=[local])
     result = await sky.resolve_skybridge_request("delete Dentist from my calendar", "family-admin", context=context(local), db=db)
     assert result["actions"][0]["type"] == "deleted" and local["deleted"] is True
+
+
+# -- the pendant day review's duplicate check: POSITIVE and NEGATIVE, through the real _on_calendar -----------------------------
+
+def _cand(title, date_, time=""):
+    return dr.Candidate("calendar_event", {"title": title, "date": date_, "time": time}, [], [], 0.5, "not_sure", "k")
+
+
+async def test_day_review_duplicate_check_matches_a_one_off_by_title_and_by_time(db):
+    await _add(db, "Project meeting", DAY, start_time="14:00")
+    assert await dr._on_calendar(db, A, _cand("Project meeting", DAY)) is True                      # same title that day
+    assert await dr._on_calendar(db, A, _cand("Meeting with the project team", DAY, "14:00")) is True   # same time + shared word
+    assert await dr._on_calendar(db, A, _cand("Meeting with the project team", DAY, "15:00")) is False  # other time
+    assert await dr._on_calendar(db, A, _cand("Dentist", DAY, "14:00")) is False                    # no shared word
+    assert await dr._on_calendar(db, A, _cand("Project meeting", "2026-12-11")) is False            # other day
+    assert await dr._on_calendar(db, B, _cand("Project meeting", DAY)) is False                     # another member's calendar
+
+
+async def test_day_review_duplicate_check_matches_a_later_occurrence_of_a_repeat(db):
+    await _add(db, "Swim squad", "2026-11-12", start_time="17:00", recurring="weekly")             # the anchor is four weeks back
+    assert await dr._on_calendar(db, A, _cand("Swim squad", DAY)) is True                           # a later occurrence, by title
+    assert await dr._on_calendar(db, A, _cand("Squad swim practice", DAY, "17:00")) is True         # ... and by time + word
+    assert await dr._on_calendar(db, A, _cand("Swim squad", "2026-12-11")) is False                 # not a Thursday
