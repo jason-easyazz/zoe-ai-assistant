@@ -1236,6 +1236,11 @@ async def lifespan(app: FastAPI):
                 logger.info("Semantic router (Tier-1) warmup scheduled — mode=%s", _sr.mode())
         except Exception as _sr_exc:
             logger.warning("Semantic router warmup scheduling failed (non-fatal): %s", _sr_exc)
+        try:  # A6: the deterministic tiers' lazy imports, off the loop, before the first turn needs them
+            import fast_tiers as _ft
+            asyncio.create_task(asyncio.to_thread(_ft.warm), name="fast_tiers_warmup")
+        except Exception as _ft_exc:  # noqa: BLE001
+            logger.warning("fast_tiers warmup scheduling failed (non-fatal): %s", type(_ft_exc).__name__)
     except Exception as _voice_warmup_exc:
         logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
