@@ -94,6 +94,9 @@ _STATE_PINS = (
     ("ZOE_MULTICA_KILL_SWITCH", "multica_kill_switch"),
     ("ZOE_BLUETOOTH_AUDIT_PATH", "bluetooth-audit.jsonl"),
     ("ZOE_VAPID_KEY_PATH", "vapid_keys.json"),
+    # ytmusic_signin reads this AT IMPORT. Unpinned, 20 tests of the sign-in flow reached _clear_viewer_token() and removed the real
+    # ~/.zoe-ytmusic/viewer-token, the live LAN viewer's per-session secret (found 2026-11-14 by the home-write guard).
+    ("ZOE_YTMUSIC_SECRET_DIR", "ytmusic-secrets"),
 )
 for _var, _leaf in _STATE_PINS:
     os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
@@ -102,6 +105,44 @@ os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"] = os.environ["ZOE_WARM_SPEAKER
 
 
 import pytest  # noqa: E402
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+def _load_home_write_guard():
+    """tools/ci/home_write_guard.py, loaded by path (one module however many lanes' conftests load it)."""
+    import importlib.util
+    name = "zoe_home_write_guard"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, os.path.join(_REPO_ROOT, "tools", "ci", "home_write_guard.py"))
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+_home_write_guard = _load_home_write_guard()
+_home_write_guard.install(checkout=_REPO_ROOT)
+
+
+@pytest.fixture(autouse=True)
+def _no_writes_under_the_real_home_or_the_checkout(request):
+    """The pins above cover the state paths somebody already found. This is the guard for the next one: a ``ci_safe`` test that writes
+    under the real home directory or into the checkout fails, naming the path (tools/ci/home_write_guard.py; an unmarked test is
+    not enforced - it runs only on the device, where its writes were never measured)."""
+    yield from _home_write_guard.fixture_body(enforce=request.node.get_closest_marker("ci_safe") is not None)
+
+
+@pytest.fixture(autouse=True)
+def _music_prefs_are_per_test(tmp_path, monkeypatch):
+    """``music_service`` remembers the household's default speaker in ``data/music_prefs.json`` BESIDE THE MODULE, so a test of a
+    targeted play or transfer wrote the checkout it ran from (found 2026-11-14 by the home-write guard: ``test_ma_ondemand.py`` and
+    ``test_music_bridge.py``; in the live checkout that file is the household's real default speaker), and the next test read it."""
+    try:
+        import music_service
+    except Exception:  # noqa: BLE001 - not importable in this lane: nothing to isolate
+        yield
+        return
+    monkeypatch.setattr(music_service, "_PREFS_PATH", tmp_path / "music_prefs.json")
+    yield
 
 
 @pytest.fixture(autouse=True)

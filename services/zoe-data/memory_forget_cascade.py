@@ -173,12 +173,6 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
         return only is None or label in only
 
     db_only = None if (only is None or "database" in only) else frozenset(only.intersection(DB_STEPS))
-    try:    # the in-process correction memory naming the entity (value_correction._REMEMBERED; in-process, never raises)
-        import value_correction
-
-        value_correction.forget_matching(user_id, rx)
-    except Exception:  # noqa: BLE001
-        pass
 
     async def database() -> int:
         if db is not None:
