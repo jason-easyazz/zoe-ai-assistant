@@ -207,7 +207,8 @@ def _confirm(svc, monkeypatch, tmp_path, plan: dict, *extra):  # noqa: F811
     monkeypatch.setattr(fca, "iter_member_turns", lambda _cmd, uid, since=None, **_k: iter(_transcript(uid)))
     monkeypatch.setattr(fca, "load_rows", lambda _p: _live_rows(svc))
     monkeypatch.setattr(memory_service, "MemoryService", lambda **_k: svc)
-    return fca.main(["--palace", str(tmp_path), "--erase-from", str(path), "--confirm", "--i-stopped-zoe-data", *extra])
+    return fca.main(["--palace", str(tmp_path), "--erase-from", str(path), "--confirm", "--i-stopped-zoe-data",
+                     "--state-dir", str(tmp_path / "state"), *extra])       # never the real state dir
 
 
 def test_an_edited_plan_cannot_erase_an_ordinary_row(svc, monkeypatch, tmp_path, capsys):  # noqa: F811
@@ -403,7 +404,7 @@ def test_an_erase_that_raises_exits_7_and_a_retry_finishes_it(svc, monkeypatch, 
     assert "minted_excerpt" not in svc._col.rows and "minted_turnid" not in svc._col.rows
 
 
-def test_the_retry_exits_6_when_its_scrub_fails(svc, monkeypatch, tmp_path):  # noqa: F811
+def test_the_retry_exits_8_and_keeps_the_ids_pending_when_its_scrub_fails(svc, monkeypatch, tmp_path):  # noqa: F811
     rows, _ = _store(svc, monkeypatch)
     good = svc.erase_rows
     plan = fca.audit(rows, _turns(), member_turns=_transcript)
@@ -411,7 +412,9 @@ def test_the_retry_exits_6_when_its_scrub_fails(svc, monkeypatch, tmp_path):  # 
     assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
     monkeypatch.setattr(svc, "erase_rows", good)
     monkeypatch.setitem(PHYSICAL, "ok", False)
-    assert _confirm(svc, monkeypatch, tmp_path, plan) == 6 and "minted_excerpt" not in svc._col.rows
+    # the rows are erased now, but their ids stay PENDING (the scrub is owed) and the next run retries it: 8, not 6
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 8 and "minted_excerpt" not in svc._col.rows
+    assert (tmp_path / "state" / fca.PENDING_FILE).exists()
 
 
 def test_an_archive_someone_else_made_is_never_touched(svc, monkeypatch, tmp_path):  # noqa: F811
@@ -433,5 +436,91 @@ def test_control_the_old_filter_strands_the_row_and_exits_0(svc, monkeypatch, tm
     assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
     monkeypatch.setattr(svc, "erase_rows", good)
     monkeypatch.setattr(fca, "_own_archive", lambda _m: False)             # the withdrawn rule: every archived row is out
+    (tmp_path / "state" / fca.PENDING_FILE).unlink()                       # ... and the code of that time kept no pending file
     assert _confirm(svc, monkeypatch, tmp_path, plan) == 0                  # "clean" exit ...
     assert "minted_excerpt" in svc._col.rows                                # ... with the forgotten row still stored
+
+
+
+# ── review #2482 PRRT ...dTd8: erase_rows raised AFTER deleting the drawer rows ─────────────────────────────────────────────────
+def _residue_model(svc, monkeypatch, *, audit_fails=False, scrub_ok=True):
+    """The audit trail of the minted rows (still holding their words) and the scrub, as the recovery path calls them."""
+    trail = {"minted_excerpt", "minted_turnid"}
+    state = {"audit_fails": audit_fails, "scrub_ok": scrub_ok}
+
+    def delete_audit(ids):
+        if state["audit_fails"]:
+            raise RuntimeError("audit delete failed")
+        trail.difference_update(ids)
+        return len(ids)
+
+    async def physical(_needles):
+        return {"enabled": True, "ok": state["scrub_ok"]}
+    monkeypatch.setattr(svc, "_delete_audit_for_rows_sync", delete_audit)
+    monkeypatch.setattr(svc, "_physical_erase", physical)
+    return trail, state
+
+
+def _rows_gone_then_raise(svc):
+    async def erase(user_id, ids, **_k):
+        for i in ids:                                  # the drawer rows ARE deleted ...
+            svc._col.rows.pop(i, None)
+        raise RuntimeError("audit trail delete failed")   # ... then the audit-trail delete raises
+    return erase
+
+
+def test_rows_deleted_then_audit_delete_fails_leaves_a_private_ids_only_pending_file(svc, monkeypatch, tmp_path, capsys):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    _residue_model(svc, monkeypatch)
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _rows_gone_then_raise(svc))
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    f = tmp_path / "state" / fca.PENDING_FILE
+    assert f.exists() and os.stat(f).st_mode & 0o777 == 0o600
+    assert json.loads(f.read_text()) == {"pending": {UID: ["minted_excerpt", "minted_turnid"]}}      # ids only, no text
+    assert "brother" not in f.read_text()
+
+
+@pytest.mark.parametrize("scrub_ok, code", [(True, 0), (False, 8)])
+def test_a_retry_finishes_the_audit_delete_and_the_scrub(scrub_ok, code, svc, monkeypatch, tmp_path, capsys):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    trail, state = _residue_model(svc, monkeypatch)
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _rows_gone_then_raise(svc))
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    monkeypatch.setattr(svc, "erase_rows", good)
+    state["scrub_ok"] = scrub_ok
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == code
+    assert trail == set()                                                    # the audit trail is deleted either way
+    f = tmp_path / "state" / fca.PENDING_FILE
+    assert f.exists() is (not scrub_ok)                                      # removed only after BOTH succeed
+    if not scrub_ok:
+        assert "recovery_pending rows=2" in capsys.readouterr().err
+        state["scrub_ok"] = True
+        assert _confirm(svc, monkeypatch, tmp_path, plan) == 0 and not f.exists()
+
+
+def test_a_retry_whose_audit_delete_fails_again_keeps_the_file(svc, monkeypatch, tmp_path):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    trail, state = _residue_model(svc, monkeypatch, audit_fails=True)
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _rows_gone_then_raise(svc))
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    monkeypatch.setattr(svc, "erase_rows", good)
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 8 and (tmp_path / "state" / fca.PENDING_FILE).exists()
+    assert trail == {"minted_excerpt", "minted_turnid"}
+
+
+def test_control_without_the_pending_file_the_retry_exits_0_with_residue(svc, monkeypatch, tmp_path):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    trail, _state = _residue_model(svc, monkeypatch)
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(fca, "add_pending", lambda *_a, **_k: None)          # the withdrawn handler: nothing recorded
+    monkeypatch.setattr(svc, "erase_rows", _rows_gone_then_raise(svc))
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    monkeypatch.setattr(svc, "erase_rows", good)
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 0                  # "clean" ...
+    assert trail == {"minted_excerpt", "minted_turnid"}                      # ... with the forgotten words in the audit trail

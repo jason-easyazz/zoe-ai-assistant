@@ -53,7 +53,11 @@ Exit codes: 0 = report printed / dry run / cleanup complete (rows erased AND the
 a re-run cannot retry it: run the palace-wide scrub ``POST /api/memories/maintenance/scrub-residue`` and the verifier);
 7 = an erase RAISED after its rows were archived (``erase_failed``): they stay archived WITH this script's marker (reviewed_by
 ``forget_command_cleanup`` + the fixed note), the audit and plan_cleanup treat such rows as candidates again, so re-running the same
-``--erase-from`` command re-proves and erases them. An archive anyone else made is never touched.
+``--erase-from`` command re-proves and erases them. An archive anyone else made is never touched. On ANY exception from
+erase_rows the row ids (and owner ids; never text) go to ``<--state-dir>/pending-recovery.json`` (0600): the drawer rows may
+already be gone while their audit trail and the residue remain. The next confirmed run reads that file FIRST, re-runs the
+audit-trail delete for the ids whose rows are gone and then the physical scrub, and removes them from the file only when BOTH
+succeed (the file is deleted when empty); 8 = that recovery is still owed (``recovery_pending``): re-run until it exits 0.
 """
 from __future__ import annotations
 
@@ -83,6 +87,10 @@ GONE = frozenset({"archived", "rejected", "deleted"})
 ACTOR = "forget_command_cleanup"
 #: the fixed note this script's OWN archive carries (with ``reviewed_by`` = ACTOR): no free text
 ARCHIVE_NOTE = "forget_command_cleanup"
+#: the script's state dir: ``pending-recovery.json`` (0600) holds the ids (and owner ids) of rows whose erase_rows RAISED - row
+#: ids only, never text - until a later run finished their audit delete AND physical scrub
+DEFAULT_STATE_DIR = "~/.zoe/forget-command-cleanup"
+PENDING_FILE = "pending-recovery.json"
 REASON = "minted from a forget command's own turn (QA round 10a); forgotten through the owner-forget path"
 # a superset prefilter (every verb the detectors accept); the detector itself decides
 _PREFILTER = r"(forget|delete|remove|erase|scrap|never ?mind|remember|keep|sav|stor)"
@@ -375,7 +383,8 @@ def plan_cleanup(rows: list[dict], turns: list[dict], plan: dict, *, window_hour
     return {u: v for u, v in out.items() if v}, refused
 
 
-async def cleanup(todo: dict[str, list[str]], *, svc, premarked: Iterable[str] = ()) -> dict[str, dict[str, int]]:
+async def cleanup(todo: dict[str, list[str]], *, svc, premarked: Iterable[str] = (),
+                  pending_path: Optional[str] = None) -> dict[str, dict[str, int]]:
     """The owner-forget path, per owner: archive each row (``review``, marked ACTOR + ARCHIVE_NOTE), then ``erase_rows`` the
     archived ones. ``premarked`` = rows a previous run archived but could not erase: they go straight to the erase. An erase
     that RAISES leaves its rows archived with the marker (a retry re-proves and erases them) and is counted. Counts only."""
@@ -396,17 +405,79 @@ async def cleanup(todo: dict[str, list[str]], *, svc, premarked: Iterable[str] =
         erase_failed = 0
         try:
             res = await svc.erase_rows(owner, archived, actor=ACTOR, reason=REASON) if archived else {"rows_removed": 0}
-        except Exception:  # noqa: BLE001 - the rows stay archived WITH the marker: a retry finishes them
-            res, erase_failed = {"rows_removed": 0, "physical": {"ok": True}}, len(archived)
+        except Exception:  # noqa: BLE001
+            # erase_rows can raise AFTER the drawer rows are gone (the audit-trail delete or the completion write failed): the scrub
+            # is NEVER counted done here. The ids go to the pending-recovery file (a retry finishes the audit delete + scrub); rows
+            # still present stay archived WITH the marker (a retry re-proves and erases them).
+            res, erase_failed = {"rows_removed": 0}, len(archived)
+            if pending_path:
+                add_pending(pending_path, owner, archived)
         removed = int((res or {}).get("rows_removed") or 0)
         phys = (res or {}).get("physical")
         # the residue scrub (free pages, WAL, FTS5, index files) is DONE only when it reports ok: a failed, skipped (flag off)
         # or missing report means the forgotten words may survive on disk
         scrubbed = isinstance(phys, dict) and phys.get("ok") is True
+        if pending_path and not erase_failed and scrubbed and archived:
+            # a full erase of ids a previous run left pending (rows that were still present): nothing is owed for them any more
+            cur = read_pending(pending_path)
+            if owner in cur:
+                cur[owner] = [i for i in cur[owner] if i not in set(archived)]
+                write_pending(pending_path, cur)
         done[member_key(owner)] = {"asked": len(ids), "archived": len(archived), "rows_removed": removed,
                                    "physical_scrub_failed": 0 if (scrubbed or not removed) else removed,
                                    "erase_failed": erase_failed}
     return done
+
+
+def read_pending(path: str) -> dict[str, list[str]]:
+    """``{owner: [row ids]}`` from the pending-recovery file; ``{}`` when there is none. RAISES on an unreadable file."""
+    p = Path(path).expanduser()
+    if not p.exists():
+        return {}
+    data = json.loads(p.read_text(encoding="utf-8"))
+    return {str(u): [str(i) for i in ids] for u, ids in (data.get("pending") or {}).items() if ids}
+
+
+def write_pending(path: str, pending: dict[str, list[str]]) -> None:
+    """Write (0600) or, when nothing is pending, REMOVE the pending-recovery file."""
+    p = Path(path).expanduser()
+    left = {u: sorted(set(v)) for u, v in pending.items() if v}
+    if left:
+        _write_private(str(p), {"pending": left})
+    elif p.exists():
+        p.unlink()
+
+
+def add_pending(path: str, owner: str, ids: Iterable[str]) -> None:
+    cur = read_pending(path)
+    cur.setdefault(owner, []).extend(str(i) for i in ids)
+    write_pending(path, cur)
+
+
+async def recover_pending(pending: dict[str, list[str]], live_ids: set, *, svc) -> tuple[dict[str, list[str]], int]:
+    """FIRST step of a confirmed cleanup: for every pending id whose drawer row is GONE, re-run the audit-trail delete
+    (``MemoryService._delete_audit_for_rows_sync``) and then the physical scrub (``MemoryService._physical_erase``); an id is
+    released only when BOTH succeeded (the scrub reports ok). An id whose row still exists is left for the normal path (marked
+    archive) and kept pending. Returns ``(still_pending, released)``. Counts only."""
+    still: dict[str, list[str]] = {}
+    released = 0
+    for owner, ids in sorted(pending.items()):
+        gone = [i for i in ids if i not in live_ids]
+        keep = [i for i in ids if i in live_ids]
+        if gone:
+            try:
+                await svc._run_sync(svc._delete_audit_for_rows_sync, gone)
+                rep = await svc._physical_erase([])
+                ok = isinstance(rep, dict) and rep.get("ok") is True
+            except Exception:  # noqa: BLE001
+                ok = False
+            if ok:
+                released += len(gone)
+            else:
+                keep += gone
+        if keep:
+            still[owner] = keep
+    return still, released
 
 
 def _service_up() -> Optional[str]:
@@ -435,6 +506,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--ids-out", metavar="FILE", help="write the row ids (and owners) here, mode 0600")
     ap.add_argument("--erase-from", metavar="FILE", help="cleanup: the --ids-out file of an audit run (dry run unless --confirm)")
     ap.add_argument("--refused-out", metavar="FILE", help="cleanup: the refused planned ids go here, mode 0600")
+    ap.add_argument("--state-dir", default=DEFAULT_STATE_DIR, help="where pending-recovery.json lives (default ~/.zoe/forget-command-cleanup)")
     ap.add_argument("--confirm", action="store_true")
     ap.add_argument("--i-stopped-zoe-data", action="store_true")
     ap.add_argument("--json", action="store_true")
@@ -463,13 +535,24 @@ def main(argv: Optional[list[str]] = None) -> int:
                           "refused_not_linked_now": len(refused), "window_report_only": len(plan.get("window") or []),
                           "owner_decision_report_only": len(plan.get("owner_decision") or []),
                           "unclear_report_only": len(plan.get("unclear") or [])}))
+        pending_path = str(Path(args.state_dir).expanduser() / PENDING_FILE)
+        try:
+            pending = read_pending(pending_path)
+        except (OSError, ValueError) as exc:
+            print(f"refused: the pending-recovery file is unreadable ({type(exc).__name__}); nothing was changed", file=sys.stderr)
+            return 2
         if not args.confirm:
+            print(json.dumps({"pending_recovery_rows": sum(len(v) for v in pending.values())}))
             print("DRY RUN: nothing was changed. Add --confirm --i-stopped-zoe-data (zoe-data stopped) to forget the verified rows.")
             return 0
         from memory_service import MemoryService
 
+        svc = MemoryService(data_dir=str(Path(args.palace).expanduser()))
+        # FIRST: rows an earlier run's erase_rows deleted before it raised - their audit trail and residue are still owed
+        still, released = asyncio.run(recover_pending(pending, {r["id"] for r in rows}, svc=svc))
+        write_pending(pending_path, still)
         premarked = {r["id"] for r in rows if _own_archive(r.get("meta") or {})}
-        done = asyncio.run(cleanup(todo, svc=MemoryService(data_dir=str(Path(args.palace).expanduser())), premarked=premarked))
+        done = asyncio.run(cleanup(todo, svc=svc, premarked=premarked, pending_path=pending_path))
         left, _ = plan_cleanup(load_rows(args.palace), turns, plan, window_hours=args.window_hours, member_turns=mt)
         print(json.dumps({"done": done, "after": _member_counts(left), "remaining": sum(len(v) for v in left.values())}))
         erase_failed = sum(d["erase_failed"] for d in done.values())
@@ -479,8 +562,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"erase_failed rows={erase_failed} members={sum(1 for d in done.values() if d['erase_failed'])}: the rows are "
                   "archived (marked) but still stored; re-run the same --erase-from command to finish them.", file=sys.stderr)
         failed = sum(d["physical_scrub_failed"] for d in done.values())
+        owed = sum(len(v) for v in read_pending(pending_path).values())
+        print(json.dumps({"pending_recovery_released": released, "pending_recovery_rows": owed}))
         if erase_failed:
             return 7
+        if owed:
+            print(f"recovery_pending rows={owed}: an earlier erase raised; the audit-trail delete and the physical scrub are still owed. "
+                  "Re-run the same --erase-from command (zoe-data stopped) until this exits 0.", file=sys.stderr)
+            return 8
         if failed:
             # the rows ARE erased (logically gone, not restored); the physical scrub is OWED. A re-run of this script cannot retry it
             # (it finds no rows left to erase): the palace-wide scrub does, then the verifier proves it.
