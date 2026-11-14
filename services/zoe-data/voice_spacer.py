@@ -25,6 +25,12 @@ What this module decides, once, for all three:
 
 ``SpacerTurn.expect_first_token(seconds)`` is the hook for a measured time-to-first-token or a cache hit at dispatch; today only
 the fast-lane heuristic (``fast_lane``) sets it. No word of any language lives here. NEVER raises into a turn.
+
+The PANEL REFLEX (``scripts/setup/zoe_voice_reflex.py``, ``docs/knowledge/voice-reflex.md``): the panel may already have said a
+soft "Mm." at the close. Its ``reflex`` block on the turn request is recorded with ``SpacerTurn.note_reflex`` (strictly parsed:
+fixed enums and clamped ints, nothing else survives) and, while ``ZOE_VOICE_REFLEX_AWARE`` (default on) holds, a heard reflex
+vetoes the generic sounds that would stack on it: the timer filler until the wait reaches ``REFLEX_FILLER_HOLD_S``, the tool
+filler, a tool ack that is not the corroborated domain's own line, and the processing-ack AUDIO. No block = nothing changes.
 """
 from __future__ import annotations
 
@@ -135,6 +141,11 @@ def words_name_domain(text: str, domain: str, lang: str = "en") -> bool:
     return any(str(w).lower() in toks for w in words)
 
 
+def own_tool_ack_pool(domain: str, lang: str = "en") -> list[str]:
+    """The domain's OWN acknowledgement lines ("Checking your calendar."): no family fallback. Empty when it has none."""
+    return list((_section(lang).get("tool_ack") or {}).get((domain or "").strip().lower()) or [])
+
+
 def tool_ack_pool(domain: str, lang: str = "en") -> list[str]:
     """The lines the dispatch-time acknowledgement may say for ``domain``: its own pool, else its family's. Empty for ``chat``
     and for a domain the router does not name (no acknowledgement)."""
@@ -176,6 +187,63 @@ def last_line(panel_key: str) -> Optional[str]:
 
 def reset() -> None:
     _recent.clear()
+
+
+# ── the panel reflex (its handshake block) ───────────────────────────────────────────────────────────────────────────────────
+#: past this wait a truthful "One moment." is kinder than silence, even after a reflex (design note W2 H2)
+REFLEX_FILLER_HOLD_S = 5.0
+#: the panel's fixed enums (mirrors scripts/setup/zoe_voice_reflex.py KINDS / SKIPS; pinned equal by the tests)
+REFLEX_KINDS = ("heard", "none")
+REFLEX_SKIPS = ("disabled", "error", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
+                "idle_greeting", "guest", "low_confidence", "prev_question", "budget", "no_bank", "voice_mismatch")
+_REFLEX_ID_RES = {
+    "take": re.compile(r"^[a-z0-9_]{1,32}$"),
+    "bank": re.compile(r"^[0-9a-f]{8}$"),
+    "voice": re.compile(r"^[a-z0-9_]{2,64}$"),
+}
+_REFLEX_INTS = {"at_ms": 10000, "dur_ms": 2000}
+
+
+def reflex_aware() -> bool:
+    """``ZOE_VOICE_REFLEX_AWARE`` (default ON): honour a panel reflex block. Inert unless a block arrives; 0 = ignore blocks."""
+    try:
+        from typed_env import flag
+
+        return bool(flag("ZOE_VOICE_REFLEX_AWARE"))
+    except Exception:  # noqa: BLE001 - unreadable = the declared default
+        return True
+
+
+def parse_reflex_block(block) -> Optional[dict]:
+    """The panel's ``reflex`` block reduced to what may be trusted: ``kind`` (enum), ``skip`` (enum), ``take`` / ``bank`` /
+    ``voice`` (id-shaped), ``at_ms`` / ``dur_ms`` (ints, clamped). Unknown keys, text, wrong types and non-finite numbers are
+    dropped. ``None`` when there is no valid ``kind``."""
+    if not isinstance(block, dict):
+        return None
+    kind = block.get("kind")
+    if not isinstance(kind, str) or kind not in REFLEX_KINDS:
+        return None
+    out: dict = {"kind": kind}
+    if kind == "none":
+        skip = block.get("skip")
+        if isinstance(skip, str) and skip in REFLEX_SKIPS:
+            out["skip"] = skip
+        return out
+    for key, rx in _REFLEX_ID_RES.items():
+        v = block.get(key)
+        if isinstance(v, str) and rx.fullmatch(v):
+            out[key] = v
+    for key, hi in _REFLEX_INTS.items():
+        v = block.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        try:
+            f = float(v)
+        except (OverflowError, ValueError):
+            continue
+        if f == f and f not in (float("inf"), float("-inf")):
+            out[key] = int(min(hi, max(0, f)))
+    return out
 
 
 # ── the turn ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -236,7 +304,45 @@ class SpacerTurn:
     spoken: Optional[str] = None            # which mechanism holds the turn's one spacer ("timer" | "tool_ack" | "tool_filler")
     fast: bool = False
     expected_ttft_s: Optional[float] = None
+    reflex: Optional[dict] = None           # the panel's parsed reflex block (``note_reflex``); NOT ``spoken``: claims untouched
     _disclosure: Optional[bool] = None
+
+    # ── what the panel already played ──
+    def note_reflex(self, block) -> None:
+        """Record the turn request's ``reflex`` block (strictly parsed; a missing or invalid block records nothing)."""
+        try:
+            self.reflex = parse_reflex_block(block)
+            if self.reflex is not None:
+                logger.info("REFLEX kind=%s skip=%s at_ms=%d dur_ms=%d", self.reflex["kind"], self.reflex.get("skip", "-"),
+                            self.reflex.get("at_ms", -1), self.reflex.get("dur_ms", -1))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("voice_spacer: note_reflex failed: %s", type(exc).__name__)
+
+    @property
+    def reflex_heard(self) -> bool:
+        """The panel played its reflex this turn and the server honours it (``ZOE_VOICE_REFLEX_AWARE``)."""
+        return bool(self.reflex) and self.reflex.get("kind") == "heard" and reflex_aware()
+
+    def processing_ack_audio_allowed(self) -> bool:
+        """May the cached processing-ack AUDIO play? Not after a reflex (its text frame for the screen is unaffected)."""
+        return not self.reflex_heard
+
+    def reflex_timing_fields(self) -> str:
+        """``reflex=<kind|-> reflex_at_ms=<n|-1> reflex_dur_ms=<n|-1>`` for the VOICE TIMING line: enums and ints only."""
+        r = self.reflex or {}
+        return f"reflex={r.get('kind', '-')} reflex_at_ms={r.get('at_ms', -1)} reflex_dur_ms={r.get('dur_ms', -1)}"
+
+    def _reflex_veto(self, source: str, waited_s: Optional[float]) -> Optional[str]:
+        if source == "timer":
+            # the reflex already said "I heard you"; "One moment." on top of it is stacking - until the wait itself is long
+            if waited_s is None or not waited_s >= REFLEX_FILLER_HOLD_S:
+                return "already_spoken:reflex"
+            return None
+        if source == "tool_filler":
+            return "already_spoken:reflex"              # a generic line after a receipt is noise
+        if source == "tool_ack" and not (self.corroborated and own_tool_ack_pool(self.domain, self.lang)):
+            return "already_spoken:reflex"              # only a line that carries information ("Checking your calendar.")
+        return None
 
     # ── what the router said ──
     def note_router(self, decision: Optional[dict]) -> None:
@@ -290,10 +396,15 @@ class SpacerTurn:
             return "en"
 
     # ── the one-per-turn rule ──
-    def veto(self, source: str) -> Optional[str]:
-        """Why ``source`` ("timer" | "tool_ack" | "tool_filler") must stay silent this turn, or ``None`` when it may speak."""
+    def veto(self, source: str, *, waited_s: Optional[float] = None) -> Optional[str]:
+        """Why ``source`` ("timer" | "tool_ack" | "tool_filler") must stay silent this turn, or ``None`` when it may speak.
+        ``waited_s``: how long the turn has already waited for its first audio (only the reflex hold reads it)."""
         if self.spoken:
             return f"already_spoken:{self.spoken}"
+        if self.reflex_heard:
+            reason = self._reflex_veto(source, waited_s)
+            if reason:
+                return reason
         if self.disclosure:
             return "disclosure"
         if source == "timer":
@@ -318,9 +429,9 @@ class SpacerTurn:
             self.spoken = None
 
     # ── the lines ──
-    def timer_line(self) -> Optional[str]:
+    def timer_line(self, *, waited_s: Optional[float] = None) -> Optional[str]:
         """The timer filler's line for this turn, or ``None`` when it must stay silent. Claims the turn."""
-        reason = self.veto("timer")
+        reason = self.veto("timer", waited_s=waited_s)
         if reason:
             logger.info("SPACER skip source=timer reason=%s domain=%s", reason, self.domain or "-")
             return None
@@ -333,6 +444,8 @@ class SpacerTurn:
             if self.domain in DOMAIN_FAMILY:
                 logger.info("SPACER skip source=tool_ack reason=%s domain=%s", reason, self.domain)
             return None
+        if self.reflex_heard:     # after a reflex only the domain's own line (the veto has checked it is corroborated)
+            return self._claim_and_pick("tool_ack", lambda: own_tool_ack_pool(self.domain, self.lang))
         return self._claim_and_pick("tool_ack", lambda: self._domain_pool(tool_ack_pool))
 
     def _claim_and_pick(self, source: str, pool) -> Optional[str]:
