@@ -3709,13 +3709,14 @@ def _trim_chunk_silence(pcm: bytes, rate: int, ch: int, width: int) -> bytes:
 # text from the person or the reply). All ms are relative to t_close, the monotonic stamp taken where the
 # recording's capture loop ends (the chunk where _Endpointer.push returned True, or the cap). It travels like
 # _pending_stt_stream: the recorder writes _turn_close, the next streamed turn reads it.
-#   PCM_WRITE n=<writes> first_ms=<close->first write LANDED> last_ms=<close->last write landed> dur_ms=<pcm ms>
+#   PCM_WRITE n=<writes> first_ms=<close->first write OFFERED (t_start)> last_ms=<close->last write offered> dur_ms=<pcm ms>
 #     gap_max_ms=<longest gap between landings> starved=<writes that landed after the previous chunk ended>
-#     underrun_max_ms=.. underrun_sum_ms=..      (a stamp is taken AFTER write()+flush() return)
+#     underrun_max_ms=.. underrun_sum_ms=.. first_end_ms=<close->first write RETURNED>   (stamps: t_start before write(),
+#     t_end after write()+flush(); first_ms is t_start, a lower bound; neither includes the player's device-open latency)
 #   FIRST_SOUND close=<rule>=<ms>ms post_ms=.. reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0
 #     reflex_wait_ms=0 server_first_ms=.. server_kind=<enum> gap_ms=-1 still_talking=<0|1> talk_chunks=..
 #     chunks=.. underrun_max_ms=.. underrun_sum_ms=.. obs_ms=.. win=<wake|followup|conversation|barge> quiet_ms=..
-#     fall=<clean|hesitating|none> muted_ms=..
+#     fall=<clean|hesitating|none> muted_ms=.. first_end_ms=..
 # The reflex fields are constants until a reflex exists, so a parser written now never changes. -1 = unknown.
 _turn_close: dict = {}
 _CLOSE_RULES = ("deep", "quiet", "clean", "hesitation", "no_speech")
@@ -3842,6 +3843,7 @@ class _FirstSound:
         self.starved = 0
         self.pcm_s = 0.0
         self.first_write: "float | None" = None
+        self.first_end: "float | None" = None
         self.last_write: "float | None" = None
         self.gap_max = 0
 
@@ -3865,7 +3867,7 @@ class _FirstSound:
             self._pending_kind = "unknown"
 
     def sound(self, at: float) -> None:
-        """The first PCM write has LANDED (``at`` is taken after write() and flush() returned)."""
+        """The first PCM write was OFFERED to the player (``at`` is its t_start, taken just before write())."""
         if self.first_at is None:
             self.first_at = at
             if self.kind == "none":
@@ -3879,18 +3881,21 @@ class _FirstSound:
             self.kind = self._pending_kind
         _TALK.first_sound()
 
-    def write(self, at: float, dur_s: float) -> None:
-        """One PCM write has landed in the player's pipe at ``at``. Plain arithmetic, no I/O, no logging. Audio is
-        modelled as playing back to back: a chunk starts at max(its landing, the previous chunk's end); a write that
-        lands after that end is starvation."""
-        under = 0 if self._play_end is None else max(0, int(round((at - self._play_end) * 1000.0)))
-        self._play_end = max(at, self._play_end if self._play_end is not None else at) + dur_s
+    def write(self, t_start: float, t_end: float, dur_s: float) -> None:
+        """One PCM write: ``t_start`` just before write(), ``t_end`` after write()+flush() returned. A chunk bigger
+        than the pipe makes write() BLOCK while the player is already playing its start, so the honest first-sound
+        stamp is t_start (the pipe accepts the first bytes at once and the player reads them); t_end only says when
+        the whole chunk was accepted. Playback is modelled as chunk_start = max(t_start, prev_end), prev_end =
+        chunk_start + dur; a write is starved when t_start > prev_end. Plain arithmetic: no I/O, no logging."""
+        under = 0 if self._play_end is None else max(0, int(round((t_start - self._play_end) * 1000.0)))
+        self._play_end = max(t_start, self._play_end if self._play_end is not None else t_start) + dur_s
         if self.last_write is not None:
-            self.gap_max = max(self.gap_max, int(round((at - self.last_write) * 1000.0)))
-        self.last_write = at
+            self.gap_max = max(self.gap_max, int(round((t_start - self.last_write) * 1000.0)))
+        self.last_write = t_start
         if self.first_write is None:
-            self.first_write = at
-        self.sound(at)
+            self.first_write = t_start
+            self.first_end = t_end
+        self.sound(t_start)
         self.writes += 1
         self.pcm_s += dur_s
         if under > 0:
@@ -3901,9 +3906,10 @@ class _FirstSound:
     def pcm_line(self) -> str:
         """The turn's PCM summary, one line (-1 = unknown, 0 writes = nothing was streamed)."""
         return ("PCM_WRITE n=%d first_ms=%d last_ms=%d dur_ms=%d gap_max_ms=%d starved=%d underrun_max_ms=%d "
-                "underrun_sum_ms=%d") % (self.writes, self.rel_ms(self.first_write), self.rel_ms(self.last_write),
-                                         int(round(self.pcm_s * 1000.0)), self.gap_max, self.starved,
-                                         self.underrun_max, self.underrun_sum)
+                "underrun_sum_ms=%d first_end_ms=%d") % (
+            self.writes, self.rel_ms(self.first_write), self.rel_ms(self.last_write),
+            int(round(self.pcm_s * 1000.0)), self.gap_max, self.starved, self.underrun_max, self.underrun_sum,
+            self.rel_ms(self.first_end))
 
     @staticmethod
     def _muted(c: "dict | None") -> int:
@@ -3926,21 +3932,21 @@ class _FirstSound:
         return ("FIRST_SOUND close=%s=%dms post_ms=%d reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                 "reflex_cut=0 reflex_wait_ms=0 server_first_ms=%d server_kind=%s gap_ms=-1 still_talking=%d "
                 "talk_chunks=%d chunks=%d underrun_max_ms=%d underrun_sum_ms=%d obs_ms=%d win=%s quiet_ms=%d fall=%s "
-                "muted_ms=%d") % (
+                "muted_ms=%d first_end_ms=%d") % (
             rule, int(c["ms"]) if rule != "none" else 0, self.rel_ms(self.post_at), self.rel_ms(self.first_at),
             kind, int(talk[1]), int(talk[0]), self.writes, self.underrun_max, self.underrun_sum, int(talk[2]),
             self.win, int(c.get("quiet_ms", -1)) if c is not None else -1,
             c["fall"] if c is not None and c.get("fall") in ("clean", "hesitating") else "none",
-            self._muted(c))
+            self._muted(c), self.rel_ms(self.first_end))
 
 
-def _fs_note_write(at: float, dur_s: float) -> None:
+def _fs_note_write(t_start: float, t_end: float, dur_s: float) -> None:
     """Record one landed PCM write of the current streamed turn in memory. Never logs (see the block comment)."""
     fs = getattr(_fs_local, "turn", None)
     if fs is None:
         return
     try:
-        fs.write(at, dur_s)
+        fs.write(t_start, t_end, dur_s)
     except Exception:  # the instrument must never touch playback
         pass
 
@@ -3964,18 +3970,19 @@ def _feed_pcm_chunk(aplay, wav_bytes: bytes):
         _register_tts_process(aplay)
         if BARGE_DUCK_ENABLED:
             _PLAYOUT.reset()
-    wrote_at = None
+    t_start = t_end = None
     try:
         if aplay.stdin:
+            t_start = _fs_now()  # the bytes are offered NOW (the player is already reading its pipe)
             aplay.stdin.write(pcm)
             aplay.stdin.flush()
-            wrote_at = _fs_now()  # AFTER write+flush returned: a blocked write is part of when the sound landed
+            t_end = _fs_now()    # the whole chunk is accepted (a chunk over the pipe size blocks until then)
             if BARGE_DUCK_ENABLED and rate and ch and width:
                 _PLAYOUT.note(time.monotonic(), len(pcm) / float(rate * ch * width))
     except (BrokenPipeError, ValueError, OSError):
         pass
-    if wrote_at is not None and rate and ch and width:
-        _fs_note_write(wrote_at, len(pcm) / float(rate * ch * width))
+    if t_end is not None and rate and ch and width:
+        _fs_note_write(t_start, t_end, len(pcm) / float(rate * ch * width))
     return aplay
 
 

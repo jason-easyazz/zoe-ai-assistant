@@ -1638,18 +1638,28 @@ is taken in `record_command`, `_follow_up_listen` and the barge seed, and it rea
 through `_turn_close` (the same hand-off as `_pending_stt_stream`). `-1` means unknown. One monotonic clock read
 per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks tens of ms long.
 
-- `PCM_WRITE n=<writes> first_ms=<close->first write landed> last_ms=<close->last write landed> dur_ms=<total pcm ms
-  after trim> gap_max_ms=<longest gap between landings> starved=<writes that landed after the previous chunk's
-  modelled end> underrun_max_ms=<n> underrun_sum_ms=<n>`. One line per turn; `n=0 first_ms=-1 last_ms=-1` when
-  nothing was streamed. **A write is stamped AFTER `write()` and `flush()` return**: a blocked write is part of
-  when the sound landed. Underrun is starvation: a write landed after the previous chunk's modelled end. Chunks
-  are modelled back to back, each starting at max(its landing, the previous end). The kept 130 ms tail is inside
-  `dur_ms`. `first_ms` includes the player spawn, because the first chunk spawns it. (Meaning changed from the first
-  draft: per-chunk `at_ms` was taken before the write; the per-chunk lines are gone.)
+- `PCM_WRITE n=<writes> first_ms=<n> last_ms=<n> dur_ms=<total pcm ms after trim> gap_max_ms=<n> starved=<n> underrun_max_ms=<n>
+  underrun_sum_ms=<n> first_end_ms=<n>`. One line per turn; `n=0` and `-1` stamps when nothing was streamed. **Two
+  stamps per write**: `t_start` just before `write()` and `t_end` after `write()` + `flush()` return. A sentence
+  chunk bigger than the pipe buffer (64 KiB is about 1.3 s at 24 kHz mono 16-bit) makes `write()` BLOCK while the
+  player is already playing the start of it, so:
+  - `first_ms` is the `t_start` of the first write: when the first audio bytes were OFFERED to the player (the
+    pipe takes the first bytes at once). It is a **lower bound** on first sound. The first chunk spawns the player
+    just before it, so `first_ms` is after the spawn returned but before the player has opened its device; the
+    player's start-up (about 70-90 ms, not measured on the Pi) is in neither stamp.
+  - `first_end_ms` is the `t_end` of the first write: when the pipe accepted the whole first chunk. For a big
+    chunk, first sound lies at or after `first_ms` and the chunk's start is already playing before `first_end_ms`;
+    for a small chunk the write returns at once and `first_end_ms` is no upper bound. It is there so the gap is
+    visible, not as a second estimate.
+  - `last_ms` and `gap_max_ms` use `t_start` of the last write and the longest gap between consecutive `t_start`s.
+  - Playback is modelled `chunk_start = max(t_start, prev_end)`, `prev_end = chunk_start + dur`. A write is
+    `starved` when its `t_start` is after `prev_end`; `underrun_*` are those gaps (sum and max). Back-to-back chunks
+    that block in `write()` are not starved, and a blocked write is never added on top of audio already playing.
+    The kept 130 ms tail is inside `dur_ms`.
 - `FIRST_SOUND close=<rule>=<ms>ms post_ms=<close->POST> reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1
   reflex_cut=0 reflex_wait_ms=0 server_first_ms=<n> server_kind=<content|filler|tool_ack|greeting|canned|unknown|none>
   gap_ms=-1 still_talking=<0|1> talk_chunks=<n> chunks=<n> underrun_max_ms=<n> underrun_sum_ms=<n>
-  obs_ms=<n> win=<wake|followup|conversation|barge> quiet_ms=<n> fall=<clean|hesitating|none> muted_ms=<n>`.
+  obs_ms=<n> win=<wake|followup|conversation|barge> quiet_ms=<n> fall=<clean|hesitating|none> muted_ms=<n> first_end_ms=<n>`.
   Every `_do_single_turn_stream` call logs exactly one, after
   `turn_stream TTFA=` and `PCM_WRITE`, also when nothing played (`server_first_ms=-1 server_kind=none`).
   - `close` is `deep|quiet|clean|hesitation|no_speech` with the rule limit (as on the `Recorded` line), `cap=0ms`,
@@ -1657,7 +1667,8 @@ per chunk (a vDSO call, tens of ns) is the whole per-chunk cost, against chunks 
     goes out before the close.
   - The `reflex*` and `gap_ms` fields are constants until the Pi reflex exists. A parser written now does not
     change when it ships.
-  - `server_first_ms` is when the first PCM write LANDED (after `write()`+`flush()`). A whole-blob reply (a
+  - `server_first_ms` is the `t_start` of the first PCM write (offered, a lower bound; see `PCM_WRITE`), and the
+    appended `first_end_ms` is the `t_end` of that write. A whole-blob reply (a
     `full_audio` frame played by the file player) has no observable first-sample time, so it records `-1`, never
     the dispatch time; `server_kind` is still read, and `PCM_WRITE n=0` shows nothing was streamed.
   - `server_kind` is read from the first audio header: chunk -2 / `greeting` gives greeting; chunk -1 / `filler` /

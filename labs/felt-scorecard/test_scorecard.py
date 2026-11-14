@@ -826,7 +826,7 @@ def test_alert_section_never_crashes_and_renders_sections(tmp_path, monkeypatch)
 _FS_OK = ("2026-11-10 05:30:00,123 [voice-daemon] INFO FIRST_SOUND close=deep=640ms post_ms=120 reflex=none skip=- "
           "reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0 reflex_wait_ms=0 server_first_ms=870 server_kind=content "
           "gap_ms=-1 still_talking=1 talk_chunks=4 chunks=3 underrun_max_ms=40 underrun_sum_ms=55 "
-          "obs_ms=1500 win=wake quiet_ms=640 fall=clean muted_ms=160")
+          "obs_ms=1500 win=wake quiet_ms=640 fall=clean muted_ms=160 first_end_ms=1900")
 
 
 @pytest.mark.skipif(shutil.which("sed") is None, reason="needs sed")
@@ -843,6 +843,7 @@ def test_first_sound_allowlist_emits_integers_only_and_text_emits_nothing(tmp_pa
         _FS_OK.replace("win=wake", "win=wake LEAKME"),
         _FS_OK.replace("fall=clean", "fall=LEAK ME"),
         _FS_OK + " muted_ms=5",
+        _FS_OK.replace("first_end_ms=1900", "first_end_ms=1900 LEAKME"),
     ]
     log.write_text("\n".join([_FS_OK] + texty) + "\n")
     out = subprocess.run(sc.panel_command(str(log)), shell=True, capture_output=True, text=True, check=True).stdout

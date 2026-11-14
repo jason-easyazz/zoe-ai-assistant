@@ -1058,7 +1058,7 @@ PANEL_SED = (
     r"reflex_at_ms=(-?[0-9]{1,6}) reflex_dur_ms=-?[0-9]{1,6} reflex_cut=[01] reflex_wait_ms=[0-9]{1,6} "
     r"server_first_ms=(-?[0-9]{1,6}) server_kind=[a-z_]{1,10} gap_ms=-?[0-9]{1,6} still_talking=([01]) "
     r"talk_chunks=(-?[0-9]{1,6}) chunks=[0-9]{1,6} underrun_max_ms=([0-9]{1,6}) underrun_sum_ms=([0-9]{1,7}) "
-    r"obs_ms=([0-9]{1,6}) win=[a-z]{1,12} quiet_ms=-?[0-9]{1,6} fall=[a-z]{1,12} muted_ms=(-?[0-9]{1,6})$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
+    r"obs_ms=([0-9]{1,6}) win=[a-z]{1,12} quiet_ms=-?[0-9]{1,6} fall=[a-z]{1,12} muted_ms=(-?[0-9]{1,6}) first_end_ms=-?[0-9]{1,6}$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
     "t",
     r"s/^" + _PTS + r".*$/\1 E/p",  # any other timestamped line: its timestamp only, to prove how far the log reaches
 )
@@ -1179,7 +1179,9 @@ def panel_first_sound_metrics(reduced: list[str], since: dt.datetime, until: dt.
     if not rows:
         return [unmeasured(k, t, "no FIRST_SOUND lines in window (daemon without the instrument, or no turns)", window=w)
                 for k, t in keys]
-    method = "Pi voice.log FIRST_SOUND line (integers only), ms from the committed endpoint close"
+    method = ("Pi voice.log FIRST_SOUND line (integers only), ms from the committed endpoint close; first sound is the "
+              "time the first audio bytes were OFFERED to the player (a lower bound: first_end_ms on the line is when the "
+              "write returned, and neither includes the player's device-open latency)")
     firsts = []
     servers = []
     for reflex_at, server_first, *_ in rows:
