@@ -41,6 +41,14 @@ with open(_GIT_CONFIG, "w", encoding="utf-8") as _fh:
     _fh.write("[user]\n\tname = Zoe Test\n\temail = zoe-test@example.invalid\n")
 os.environ.update(GIT_CONFIG_GLOBAL=_GIT_CONFIG, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
 
+# ``forget_session`` (stdlib-only) keeps its epochs at a module-level path under ``~/.zoe`` with no env knob. Session-wide pin here, so a
+# module-scoped fixture or a thread that outlives its test still cannot reach the live file; the autouse fixture below adds per-test isolation.
+_STATE_DIR = tempfile.mkdtemp(prefix="zoe-unit-state-")
+atexit.register(shutil.rmtree, _STATE_DIR, ignore_errors=True)
+import forget_session as _forget_session  # noqa: E402
+
+_forget_session._PATH = Path(_STATE_DIR) / "forget_session_epochs.json"
+
 
 def _repo_module_names() -> frozenset[str]:
     names = {p.stem for p in _ZOE_DATA.glob("*.py") if not p.name.startswith(("test_", "__"))}
@@ -170,6 +178,27 @@ def _harness_quiet_hours_not_wall_clock(monkeypatch):
     (both checks skipped, no ssh). ``test_harness_quiet.py`` clears it in its own autouse fixture, which runs
     after this one, so the real hours and panel rules are still tested there."""
     monkeypatch.setenv("ZOE_HARNESS_FORCE", "1")
+
+
+@pytest.fixture(autouse=True)
+def _forget_session_epochs_off_the_live_home(monkeypatch, tmp_path):
+    """``forget_session`` persists each member's latest-forget epoch to ``~/.zoe/forget_session_epochs.json`` and has no env knob, so
+    every test whose forget changed something wrote the box's LIVE file (measured 2026-11-14 with a throwaway HOME: 22 ``ci_safe``
+    files, real member ids among the keys), and the epochs an earlier test left there changed the sidecar session id a later test saw
+    (``test_flue_client_wire`` failed on a home that had run the suite before). Each test gets its own file and an empty table."""
+    import forget_session
+
+    monkeypatch.setattr(forget_session, "_PATH", tmp_path / "forget_session_epochs.json")
+    monkeypatch.setattr(forget_session, "_EPOCH", {})
+    monkeypatch.setattr(forget_session, "_LOADED", False)
+
+
+@pytest.fixture(autouse=True)
+def _night_extract_off_the_live_home(monkeypatch, tmp_path):
+    """The shadow night pre-pass keeps its proposals and erase marks under ``~/.zoe/night-extract`` unless ``ZOE_NIGHT_EXTRACT_DIR``
+    is set; a member erase reaches it. The zoe-data lane pins it per test, this lane did not (``test_memory_service_fixes.py`` wrote
+    ``.erased.json`` and ``.lock`` there)."""
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "night-extract"))
 
 
 @pytest.fixture(autouse=True)
