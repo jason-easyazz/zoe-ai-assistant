@@ -972,3 +972,20 @@ def test_summary_rows_absent_malformed_and_bucket_pct():
     assert "malformed marker" in sc.inst_search_embed(txt, SINCE, UNTIL)["reason"]
     assert sc.bucket_pct([0, 0, 0], (1, 2), 50) == "-"
     assert sc.bucket_pct([0, 0, 4], (1, 2), 50) == ">2" and sc.bucket_pct([1, 1, 0], (1, 2), 50) == "<=1"
+
+
+def test_alarm_seen_row_splits_ring_start_from_other_changes():
+    lines = parsed([
+        L("06T07:00:01", "ALARM_RING_SEEN event=rang ms=1800 changes=1"),
+        L("07T07:00:01", "ALARM_RING_SEEN event=rang ms=40 changes=1"),
+        L("07T07:03:00", "ALARM_RING_SEEN event=snoozed ms=900 changes=2"),
+        L("08T07:00:01", "ALARM_RING_SEEN event=rang ms=-1 changes=1"),
+        L("08T07:00:02", "ALARM_RING_SEEN event=rang ms=5 changes=1 traffic=probe"),     # a replay panel: excluded
+    ])
+    m = sc.inst_alarm_seen(_logset(lines, sc.parse_ts(L("01T00:00:00", ""))), SINCE, UNTIL)
+    assert m["data"] == {"lines": 4, "rang_ms": [1800.0, 40.0], "other_ms": [900.0], "never": 1}
+    assert m["value"].startswith("a ring starting: ms p50 920 / p90 1624 / max 1800 (n=2)")
+    empty = _logset([], sc.parse_ts(L("01T00:00:00", "")))
+    assert sc.inst_alarm_seen(empty, SINCE, UNTIL)["status"] == "unmeasured"
+    bad = _logset(parsed([L("06T07:00:01", "ALARM_RING_SEEN event=Wake ms=10 changes=1")]), sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_alarm_seen(bad, SINCE, UNTIL)["reason"]

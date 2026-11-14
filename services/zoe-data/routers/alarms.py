@@ -21,6 +21,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 import alarm_music
+import alarm_ring_lateness
 import alarms
 from database import get_db
 from panel_principal import is_member, require_member_or_panel
@@ -67,6 +68,8 @@ async def list_alarms(request: Request, user: dict = Depends(require_member_or_p
 async def ringing_now(request: Request, user: dict = Depends(require_member_or_panel), db=Depends(get_db)):
     v, now = viewer_of(user), time.time()
     live = [a for a in await alarms.ringing(db) if alarms.can_silence(a, v)]
+    if v.panel:   # ALARM_RING_SEEN: the first panel read after a ring-set change logs how late it came (never raises)
+        alarm_ring_lateness.seen_by_panel()
 
     def shown(a: dict) -> dict:
         """The ring screen needs the time, snooze and which tone to play - not what a PERSONAL alarm is called or which music it wakes

@@ -73,7 +73,7 @@ MARKERS = (
     "DISTRESS_NO_CONTACT", "PANEL_KV_MISS", "kv_miss_alert: alert not delivered",
     # INSTRUMENTS section (counted only; never member-joined, never printed): see inst_* below
     "EVENT_LOOP_BLOCK ms=", "FORGET_LEDGER state=", "FLUE_PREPOST ", "FORGET_CORRECTION_HELD ",
-    "SQL_ADAPT_MEMO_SUMMARY ", "MEMORY_SEARCH_EMBED_SUMMARY ", "PALACE_EMBED_SUMMARY ",
+    "SQL_ADAPT_MEMO_SUMMARY ", "MEMORY_SEARCH_EMBED_SUMMARY ", "PALACE_EMBED_SUMMARY ", "ALARM_RING_SEEN ",
 )
 USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE", "VALUE_CORRECTION")
 SESSION_MARKERS = ("FLUE_TOOLS", "VOICE TIMING")
@@ -1322,6 +1322,42 @@ def inst_palace_embed(logs: LogSet, since, until) -> dict:
                         "fallback": s.get("fallback", 0)})
 
 
+_ALARM_SEEN_RE = re.compile(r"\bALARM_RING_SEEN event=(rang|snoozed|dismissed|auto_stopped|deleted|updated|other) "
+                            r"ms=(-1|\d{1,6}) changes=(\d{1,6})(?:\s|$)")
+
+
+def inst_alarm_seen(logs: LogSet, since, until) -> dict:
+    """ALARM_RING_SEEN (services/zoe-data/alarm_ring_lateness.py): a committed ringing-set change to the first panel re-read of
+    GET /api/alarms/ringing, server clock. The number #2472 (ring push) is judged by: the poll's lateness before, the push's after."""
+    key, title = "inst_alarm_seen", "Alarm ring change to the panel's re-read (ALARM_RING_SEEN)"
+    got = _inst_lines(logs, since, until, key, title, "ALARM_RING_SEEN ",
+                      "the instrument is not deployed, or no alarm rang, was snoozed or stopped")
+    if isinstance(got, dict):
+        return got
+    since, w, rows = got
+    rang, other, never = [], [], 0
+    for _, line in rows:
+        m = _ALARM_SEEN_RE.search(line)
+        if not m:
+            return malformed_metric(key, title, sum(1 for _, x in rows if not _ALARM_SEEN_RE.search(x)), since, until)
+        ms = int(m.group(2))
+        if ms < 0:
+            never += 1
+        else:
+            (rang if m.group(1) == "rang" else other).append(float(ms))
+    rang_txt = f"{_ms_txt(rang, 50, 90)} / max {max(rang):.0f} (n={len(rang)})" if rang else "none"
+    all_ms = rang + other
+    return metric(key, title,
+                  (f"a ring starting: ms {rang_txt}; every change: ms {_ms_txt(all_ms, 50, 90) if all_ms else '-'} "
+                   f"(n={len(all_ms)}); no panel read within 10 min {never}"),
+                  n=len(rows), window=w,
+                  method=("zoe-data app log ALARM_RING_SEEN event= ms= changes=: change committed (alarms._emit) to the first "
+                          "panel GET /api/alarms/ringing, server monotonic clock; excludes the response trip and the panel's "
+                          "paint; first panel only; harness traffic excluded"),
+                  label="[Performance]",
+                  data={"lines": len(rows), "rang_ms": rang, "other_ms": other, "never": never})
+
+
 def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
     """The INSTRUMENTS rows (long window, narrowed to the retained logs like the ALERTS app-log rows)."""
     jobs = (
@@ -1334,6 +1370,7 @@ def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
         ("inst_sql_memo", "SQL rewrite memo hit rate", INSTRUMENTS, lambda: inst_sql_memo(logs, long_since, until)),
         ("inst_search_embed", "Query embeds per memory search", INSTRUMENTS, lambda: inst_search_embed(logs, long_since, until)),
         ("inst_palace_embed", "Palace embed call latency", INSTRUMENTS, lambda: inst_palace_embed(logs, long_since, until)),
+        ("inst_alarm_seen", "Ring change to panel re-read", INSTRUMENTS, lambda: inst_alarm_seen(logs, long_since, until)),
     )
     return _run_rows(jobs)
 
