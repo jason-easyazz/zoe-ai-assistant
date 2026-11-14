@@ -223,7 +223,8 @@ OTHER: tuple[Store, ...] = (
     Store("production_feedback_log", "file", WORDS, OUT_OF_SCOPE, "Stopped at the source: no longer written unless ZOE_TRAINING_FEEDBACK_LOG=1 (default off): it held the message and "
           "Zoe's reply verbatim with no retention. Nothing reads it; an opt-in copy would be outside the cascade, so do not opt in.", markers=("production-feedback.jsonl",)),
     Store("voice_stt_log", "file", WORDS, GAP, "ZOE_VOICE_STT_LOG (~/.zoe-voice/voice_stt.jsonl): the Moonshine transcript of each utterance, "
-          "no user id, no retention, outside the cascade. Rotated by size only.", markers=("voice_stt.jsonl",)),
+          "no user id, outside the cascade by default; rotated by size. With ZOE_FORGET_REACH_EXTRA=on (default off) local_text_logs takes it into "
+          "retention, the entity forget (step text_logs) and the member erase: a gap until the owner turns that on.", markers=("voice_stt.jsonl",)),
     Store("flue_session_log", "file", WORDS, GAP, "The Flue brain sidecar's append-only event log (labs/flue-zoe-brain-2x/data/zoe-brain.db): its own session history, "
           "which keeps the words (off the record included). Zoe only READS it (mode=ro) for the guest-notes backfill, and the notes made from it are erased by the forget "
           "cascade (conversation_notes.erase_entity); the log itself is outside the cascade.", markers=("zoe-brain.db",)),
