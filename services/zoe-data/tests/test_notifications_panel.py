@@ -472,3 +472,80 @@ def test_whats_up_collects_notifications_with_the_selector_off_and_controls(env,
     monkeypatch.setenv("ZOE_PROACTIVE_SELECTOR", "1")
     monkeypatch.setattr(pl, "pull", declined)
     assert run(fast_tiers._pull_tier("what's up", MEMBER, "s1", "voice", ctx)) is None
+
+
+# -- the second channel for "owner alerting is broken" ---------------------------------------------------------------------------
+SINCE = 1_790_000_000.0
+
+
+def test_broken_alerting_is_created_by_the_tick_without_any_refresh_idempotent_and_kept_after_heal(env, monkeypatch):
+    """An alert about the Telegram credential failing cannot travel over Telegram. The ops helper records each broken spell;
+    zoe-data's periodic tick (sync_alerting_broken, no request, no refresh) creates ONE row per owner per spell, idempotent
+    across ticks, kept and marked resolved after the spell heals. Negative controls: a non-owner gets nothing; never broken =
+    nothing."""
+    import kv_miss_alert
+
+    env.conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (MEMBER,))
+    spells = [{"since": SINCE, "reason": "auth", "healed": None}]
+    monkeypatch.setattr(kv_miss_alert, "alerting_spells", lambda: spells)
+    called = []
+    monkeypatch.setattr(ns, "refresh", lambda *a, **k: called.append(a))     # proves no refresh is involved
+    assert run(ns.sync_alerting_broken()) == 1
+    assert run(ns.sync_alerting_broken()) == 0                                # next tick: same spell, no second row
+    rows = env.rows("SELECT id, user_id, type, message, data FROM notifications")
+    assert len(rows) == 1 and rows[0][1] == MEMBER and rows[0][2] == ns.ALERTING_TYPE and "Telegram" in rows[0][3]
+    assert not json.loads(rows[0][4]).get("resolved") and called == []
+    spells[0]["healed"] = SINCE + 600                                         # the spell heals
+    run(ns.sync_alerting_broken())
+    run(ns.sync_alerting_broken())
+    rows = env.rows("SELECT id, data FROM notifications")
+    assert len(rows) == 1 and json.loads(rows[0][1]) == {"reason": "auth", "since": int(SINCE), "resolved": True,
+                                                           "healed_at": int(SINCE + 600)}
+    assert env.rows("SELECT COUNT(*) FROM notifications WHERE user_id = ?", (OTHER,))[0][0] == 0
+
+
+def test_a_spell_that_healed_before_any_tick_still_leaves_a_resolved_row(env, monkeypatch):
+    import kv_miss_alert
+
+    env.conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (MEMBER,))
+    monkeypatch.setattr(kv_miss_alert, "alerting_spells", lambda: [{"since": SINCE, "reason": "config", "healed": SINCE + 5}])
+    assert run(ns.sync_alerting_broken()) == 1
+    (data,) = env.rows("SELECT data FROM notifications")[0]
+    assert json.loads(data)["resolved"] is True
+    # a healed spell must stop READING as broken (review of PR 2458): the kept row says alerts work again
+    title, message = env.rows("SELECT title, message FROM notifications")[0]
+    assert title == ns.ALERTING_HEALED_TITLE and message == ns.ALERTING_HEALED_MESSAGE
+    assert "not getting through" not in title and "refusing" not in message
+    assert run(ns.sync_alerting_broken()) == 0                                # a later tick neither re-creates nor rewrites it
+    assert env.rows("SELECT title FROM notifications")[0][0] == ns.ALERTING_HEALED_TITLE
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 1
+
+
+def test_an_open_spell_still_reads_as_broken(env, monkeypatch):
+    import kv_miss_alert
+
+    env.conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (MEMBER,))
+    monkeypatch.setattr(kv_miss_alert, "alerting_spells", lambda: [{"since": SINCE, "reason": "auth", "healed": None}])
+    assert run(ns.sync_alerting_broken()) == 1
+    title, message = env.rows("SELECT title, message FROM notifications")[0]
+    assert title == ns.ALERTING_TITLE and message == ns.ALERTING_MESSAGE["auth"]
+
+
+def test_never_broken_creates_nothing(env, monkeypatch):
+    import kv_miss_alert
+
+    env.conn.execute("UPDATE users SET role = 'admin' WHERE id = ?", (MEMBER,))
+    monkeypatch.setattr(kv_miss_alert, "alerting_spells", lambda: [])
+    assert run(ns.sync_alerting_broken()) == 0
+    assert env.rows("SELECT COUNT(*) FROM notifications")[0][0] == 0
+
+
+def test_the_runtime_health_tick_runs_the_sync():
+    """The 5-minute tick that needs no request is what creates the row."""
+    import ast
+
+    tree = ast.parse((SVC / "main.py").read_text())
+    fns = {n.name: ast.get_source_segment((SVC / "main.py").read_text(), n) for n in tree.body
+           if isinstance(n, ast.AsyncFunctionDef)}
+    assert "await _sync_alerting_notice()" in fns["_runtime_health_refresh_loop"]
+    assert "sync_alerting_broken()" in fns["_sync_alerting_notice"]
