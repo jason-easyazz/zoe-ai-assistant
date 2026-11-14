@@ -126,6 +126,15 @@ if _lp is not None:
 ```
 
 ```python
+# the carried verified speaker (services/zoe-data/carried_speaker.py), beside _note_voice_speaker (3965):
+if _scope_identity_user:
+    carried_speaker.note_verified(panel_id, _scope_identity_user)   # the server-verified member of THIS turn
+else:
+    carried_speaker.note_unverified(panel_id)
+# and on a wake turn's start: carried_speaker.on_wake(panel_id); on a voice-session close: carried_speaker.on_session_close(panel_id)
+```
+
+```python
 # a new route, the SAME device-token + local-panel check /profiles/sync uses (VT 7802-7821):
 @router.post("/turn_outcome")
 async def voice_turn_outcome(body: dict, caller: dict = Depends(_require_voice_auth)):
