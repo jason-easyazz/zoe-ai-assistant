@@ -8,8 +8,11 @@ code. No model, no score, nothing inferred about why.
 * a FORGET notice removes what it derived (``on_event``), for the person or for the named events.
 
 What it keeps is REDUCED: per person and day, a few clock times, rooms seen, and which routine
-steps were done, each with the sequence number it came from. Never text, and at most
-``WINDOW_DAYS`` days: an older day is dropped as a newer one arrives.
+steps were done, each with the sequence number it came from. Never free text (a room or a
+routine item's label is kept as the key of a count), and never older than ``window_days``:
+a day that far behind the newest one seen is dropped. The window is the twin's own retention
+and is an OWNER DECISION (``docs/architecture/zoe-os.md``, the twin section); 56 is the lab's
+placeholder, not a choice.
 
 ``normal(person, day_type)`` says nothing until it has ``MIN_DAYS[day_type]`` days of that
 type for that person: ten working days, or six weekend days. Below that the answer is the
@@ -74,9 +77,10 @@ def _rank(values: list[int], fraction: float) -> int:
 class Twin:
     manifest = {"skill": "twin", "reads": {"presence": "private", "routine_step": "private"}}
 
-    def __init__(self) -> None:
+    def __init__(self, window_days: int = WINDOW_DAYS) -> None:
         # person -> day -> fact name -> (value, seq of the event it came from)
         self.days: dict[str, dict[str, dict[str, tuple]]] = {}
+        self.window_days = window_days
 
     # ---- learning: one reduced fact per event -------------------------------------------------
     def on_event(self, ev: Event, ctx) -> None:
@@ -97,8 +101,20 @@ class Twin:
                 facts[f"room@{(minute // 60) % 24}"] = (p["room"], ev.seq)
         elif ev.kind is Kind.ROUTINE_STEP:
             facts[f"step:{p['routine']}/{p['item']}"] = (bool(p["done"]), ev.seq)      # the last word
-        for old in sorted(self.days[ev.subject])[:-WINDOW_DAYS]:
-            del self.days[ev.subject][old]
+        self.expire(day)
+
+    def expire(self, today: str) -> int:
+        """Drop every day that is ``window_days`` or more behind ``today``, for everyone.
+        Returns how many person-days went."""
+        cut = (datetime.fromisoformat(today) - timedelta(days=self.window_days)).date().isoformat()
+        gone = 0
+        for person in list(self.days):
+            for old in [d for d in self.days[person] if d <= cut]:
+                del self.days[person][old]
+                gone += 1
+            if not self.days[person]:
+                del self.days[person]
+        return gone
 
     def _forget(self, notice: Event) -> None:
         person, seqs = notice.payload.get("subject"), notice.payload.get("seqs")
