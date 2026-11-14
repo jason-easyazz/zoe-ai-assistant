@@ -88,6 +88,72 @@ def test_the_ideation_cues_respect_the_existing_guards(text, tier, why):
 
 
 @pytest.mark.parametrize("text,tier", [
+    ("I am suicidal", "handoff"), ("I have suicidal thoughts", "handoff"), ("I have suicidal thoughts about the future", "handoff"),
+    ("i have suicidal feelings", "handoff"), ("i had suicidal ideas last week", "handoff"), ("ive been suicidal for a while", "handoff"),
+    ("I have suicidal friends", "gentle"), ("I have suicidal patients", "gentle"), ("i have suicidal clients at work", "gentle"),
+    ("i get suicidal patients every week", "gentle"), ("i have suicidal content in my essay", "gentle"),
+    ("i work with suicidal teenagers", "gentle"), ("i had a suicidal brother", "gentle"),
+])
+def test_suicidal_is_the_speakers_own_state_never_a_person_they_name(text, tier):
+    """Review finding: "I have suicidal friends" handed off. Own state ("I am / I feel suicidal") or the noun ("suicidal thoughts") only; a person noun = third party."""
+    assert dh.detect(text).tier == tier
+
+
+@pytest.mark.parametrize("text", [
+    "I want to die. I am ending it with my boyfriend.", "I am ending it with my boyfriend. I want to die.",
+    "I'm dying to see it. I want to die.", "I want to die. I'm dying to see it.", "I'm dying to see it, I want to die",
+    "I'm dying to see it and I want to die",
+])
+def test_an_idiom_never_voids_a_cue_in_another_clause(text):
+    """Review finding (fail-open): an idiom within 15 characters voided a REAL cue across a sentence break."""
+    assert dh.detect(text).tier == "handoff"
+
+
+try:                                                   # the regex parser, to turn each lexicon idiom into one sentence it matches
+    from re import _parser as _sre                     # Python >= 3.11
+except ImportError:                                    # pragma: no cover
+    import sre_parse as _sre
+
+
+def _sample(pattern: str) -> str:
+    """One shortest string the pattern matches: first branch, first class member, minimum repeats."""
+    def gen(items) -> str:
+        out = []
+        for op, av in items:
+            name = str(op)
+            if name == "LITERAL":
+                out.append(chr(av))
+            elif name == "IN":
+                kind, val = av[0]
+                out.append(chr(val) if str(kind) == "LITERAL" else chr(val[0]) if str(kind) == "RANGE" else "a")
+            elif name == "BRANCH":
+                out.append(gen(av[1][0]))
+            elif name == "SUBPATTERN":
+                out.append(gen(av[-1]))
+            elif name in ("MAX_REPEAT", "MIN_REPEAT"):
+                out.append(gen(av[2]) * av[0])
+            elif name in ("ANY", "CATEGORY"):
+                out.append("a")
+        return "".join(out)
+    return gen(_sre.parse(pattern)).strip()
+
+
+IDIOMS = [i for lang in lexicons.LANGS for i in ((lexicons.load(lang).get("distress") or {}).get("idioms") or [])]
+IDIOM_SAMPLES = sorted({_sample(i) for i in IDIOMS})
+
+
+def test_every_idiom_alone_is_none_and_never_voids_a_handoff_in_the_next_or_previous_sentence():
+    """The CLASS behind the fail-open finding, generated from the data: every lexicon idiom x every hand-off row of the labelled set, both orders."""
+    assert len(IDIOMS) >= 35 and all(re.search(dh._strip(i), _sample(i)) for i in IDIOMS)      # the generator really produces each idiom
+    assert [i for i in IDIOM_SAMPLES if dh.detect(i).tier != "none"] == []
+    cues = sorted({t for _l, label, t in ROWS if label == "handoff" and dh.detect(t).tier == "handoff"})
+    assert len(cues) >= 150
+    bad = [(i, c) for i in IDIOM_SAMPLES for c in cues
+           if dh.detect(f"{i}. {c}.").tier != "handoff" or dh.detect(f"{c}. {i}.").tier != "handoff"]
+    assert bad == [], bad[:10]
+
+
+@pytest.mark.parametrize("text,tier", [
     ("The film was about suicide", "gentle"), ("my friend said she wanted to die", "gentle"), ("I don't want to die", "gentle"), ("I want to die", "handoff"),
     ("I want my mum to die", "none"), ("I'm dying to see it", "none"), ("In the movie he says I want to die", "gentle"),
     ("I watched a film and I want to die", "handoff"),                # the clause break: the film is not about THIS clause

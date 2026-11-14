@@ -24,12 +24,12 @@ Every language with a section is scanned on every turn (code-switching works); t
 * A **cue** is a closed-vocabulary sequence (`seq`: named `groups` joined by a closed `fillers` list, so "I want my mum to die" is not "I want to die") or a regex. Text and patterns are folded alike
   (NFKC, casefold, accents off Latin letters, apostrophes dropped).
 * **Tiers.** `handoff`: a first-person cue stands in its own clause (clauses end at punctuation and the lexicon's `clause_breaks`); this includes first-person
-  **ideation** ("I'm thinking about suicide", "I've had suicidal thoughts", "I feel suicidal", "I keep thinking about killing myself", "I've been thinking about not being
+  **ideation** ("I'm thinking about suicide", "I've had suicidal thoughts", "I feel suicidal" (the speaker's own state, or "suicidal" + thoughts / ideas / feelings: "I have suicidal friends / patients" is a third party, gentle), "I keep thinking about killing myself", "I've been thinking about not being
   here anymore"), added 2026-11-14 after a live test scored "im thinking about suicide" gentle because "suicide" was only a topic word. `gentle`: the same cue behind a **negation** ("I don't want to die") or a
   **story/quote marker** ("in the film he says..."), a bare topical word ("the film was about suicide"), a third party at risk ("my friend said she wanted to die"), ordinary low mood, a resolved past ("I used to think about suicide", "I used to have suicidal thoughts": the closed vocabulary has no "used to", the same as
   every other class), a professional or study mention ("I work in suicide prevention", "suicide prevention training", "suicide rate"). Simple past is NOT resolved: "I had
   suicidal thoughts last night" / "I thought about suicide" hand off (over-trigger). `none`: nothing, or an **idiom** ("dying to see it", "kill for a coffee", "I can't live without my phone", "ending it with my boyfriend").
-* **Over-triggering is preferred to missing**: a guard only ever lowers handoff to gentle, never to none; only the idiom list voids a cue; a marker AFTER a cue never demotes it.
+* **Over-triggering is preferred to missing**: a guard only ever lowers handoff to gentle, never to none; only the idiom list voids a cue, and only a cue it overlaps or sits beside IN ITS OWN CLAUSE (no punctuation or `clause_breaks` word between them: "I'm dying to see it. I want to die." hands off; a property test crosses every lexicon idiom with every hand-off row, both orders); a marker AFTER a cue never demotes it.
 
 ## Where it sits (voice-path change: the replay gate applies)
 1. `fast_tiers.resolve` wrapper, **before** the provenance tier and every other tier (chat fast path, voice, LiveKit, Telegram-through-chat): `DispatchResult(tier="distress_handoff")`.
