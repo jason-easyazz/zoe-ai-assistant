@@ -907,10 +907,10 @@ _PLAIN_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z'â€™\-]{0,24}(?: [A-Za-z][A-Za-z'â
 
 
 def _age_norm(value: Optional[str]) -> Optional[dict]:
-    """``{"years": x}`` for an AGE value ("8", "eight", "7 and a half", "9 years old"), else None (a date, an amount, a word). Pure."""
+    """``{"v": x}`` (the ``memory_claims`` age shape) for an AGE value ("8", "eight", "7 and a half", "9 years old"), else None (a date, an amount, a word). Pure."""
     t = re.sub(r"(?i)\s*(?:years?[ -]old|yrs?\s+old|yo)\s*$", "", (value or "").strip())
     x = value_of(t) if t else None
-    return {"years": x} if x is not None else None
+    return {"v": x} if x is not None else None
 
 
 async def _shadow_record(user_id: str, user_message: str, corr: "Correction", displaced: list, row_ids) -> None:

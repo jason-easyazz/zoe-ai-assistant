@@ -24,7 +24,7 @@ only: the in-process registry keeps deciding until a later step flips it.
 | `subject_ref` | `self` or a `people.id`. Never a name or a label: a subject that does not resolve to ONE person is not recorded |
 | `attribute` | closed vocabulary, number-valued only: `event_date origin_date birthday age amount measure count time_of_day schedule` (CHECKed) |
 | `role` | `superseded` (corrected away) or `asserted` (corrected to) |
-| `value_norm` | canonical JSON of numbers and enum codes (`{"years":8.0}`, `{"cents":1350000,"cur":"AUD"}`, `{"d":19,"m":12}`); `normalise` refuses anything else |
+| `value_norm` | canonical JSON of numbers and enum codes in the value shapes of `memory_claims` (PR #2477): `{"v":8.0}` (age), `{"cur":"AUD","v":"13500"}` (amount: a decimal numeral string), `{"v":3}` (count), `{"d":19,"m":12}`; `normalise` refuses anything else |
 | `said_at`, `expires_at`, `created_at` | epoch seconds; rows expire 7 days after `said_at` (swept on the next record) |
 | `by_claim`, `source_turn_id`, `row_ids` | ids only: the claim, the turn's content id (`people_graph.content_turn_id`), the memory rows involved |
 

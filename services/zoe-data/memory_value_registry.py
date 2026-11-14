@@ -10,8 +10,10 @@ corrected away) or ``asserted`` (the value they corrected TO).
 What it stores - and what it never stores:
   * ``subject_ref`` is ``'self'`` or a ``people.id``. Never a name or a label: an unresolved subject is not recorded.
   * ``attribute`` is one of ``ATTRIBUTES`` (number-valued only; CHECKed by the migration too).
-  * ``value_norm`` is canonical JSON built by ``normalise`` from numbers and enum codes only. A string anywhere in it that is not
-    a currency code, a unit or a weekday code is REFUSED, so no free text can enter through this module.
+  * ``value_norm`` is canonical JSON built by ``normalise`` from numbers and enum codes only, in the value shapes of
+    ``memory_claims`` (PR #2477): an age ``{"v": 8.0}``, an amount ``{"v": "13500", "cur": "AUD"}`` (a decimal NUMERAL string),
+    a count ``{"v": 3}``, dates ``{"y", "m", "d"}``. A string anywhere in it that is not a decimal numeral, a currency code, a unit,
+    a weekday or a frequency code is REFUSED, so no free text can enter through this module.
   * ``by_claim`` / ``source_turn_id`` / ``row_ids`` are ids (``_ID_RE``). Log lines carry counts and fixed codes only - no user
     id, no subject, no value.
 
@@ -61,10 +63,11 @@ SINGLE_VALUED = frozenset({"age", "birthday"})
 RETENTION_S = 7 * 86400.0
 MAX_ROW_IDS = 16
 MAX_VALUES = 4
-UNITS = ("km", "kg", "minute", "hour", "day", "week", "month", "year", "metre", "cm", "litre", "mile", "percent")
+UNITS = ("km", "kg", "minute", "hour", "second", "day", "week", "month", "year", "metre", "cm", "litre", "mile", "percent")
 FREQS = ("daily", "weekly", "monthly", "yearly")
 WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 _CUR_RE = re.compile(r"^[A-Z]{3}$")
+_DEC_RE = re.compile(r"^(?:0|[1-9][0-9]{0,12})(?:\.[0-9]{0,5}[1-9])?$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$")      # person / claim / turn / memory-row ids (``zoe_<user>_<hex>``)
 
 #: in-process counters (counts only): what was recorded / refused / compared
@@ -117,35 +120,44 @@ def _date(v: dict, need_md: bool) -> Optional[dict]:
     return out if ("m" in out or "d" in out) else None
 
 
+def _decimal(v: Any) -> Optional[str]:
+    """A plain non-negative decimal NUMERAL in ``memory_claims._plain`` form ("13500", "13.5"): the one string a value may hold."""
+    return v if isinstance(v, str) and _DEC_RE.match(v) else None
+
+
+def _hm(v: Any) -> Optional[dict]:
+    if not isinstance(v, dict) or set(v) != {"h", "mi"}:
+        return None              # an unresolved 12-hour time ({"h12", ...}) is not a stored value
+    h, mi = _int(v.get("h"), 0, 23), _int(v.get("mi"), 0, 59)
+    return {"h": h, "mi": mi} if h is not None and mi is not None else None
+
+
 def _value(attribute: str, v: Any) -> Optional[dict]:
+    """The value shapes of ``memory_claims`` (PR #2477, ``Norm.value``), so step 6 joins the two by equality."""
     if not isinstance(v, dict):
         return None
     if attribute in ("event_date", "origin_date", "birthday"):
         return _date(v, attribute == "birthday")
     if attribute == "age":
-        x = _num(v.get("years"), 0.0, 120.0) if set(v) == {"years"} else None
-        return {"years": x} if x is not None and (x * 2) == int(x * 2) else None
+        x = _num(v.get("v"), 0.0, 120.0) if set(v) == {"v"} else None
+        return {"v": x} if x is not None and (x * 2) == int(x * 2) else None
     if attribute == "amount":
-        if set(v) != {"cents", "cur"}:
+        if set(v) != {"v", "cur"}:
             return None
-        c = _int(v.get("cents"), 0, 10 ** 13)
-        cur = v.get("cur")
-        return {"cents": c, "cur": cur} if c is not None and isinstance(cur, str) and _CUR_RE.match(cur) else None
+        amount, cur = _decimal(v.get("v")), v.get("cur")
+        return {"cur": cur, "v": amount} if amount is not None and isinstance(cur, str) and _CUR_RE.match(cur) else None
     if attribute == "measure":
         if set(v) != {"u", "v"}:
             return None
-        x = _num(v.get("v"), 0.0, 1e9)
+        x = _decimal(v.get("v"))
         return {"u": v["u"], "v": x} if x is not None and v.get("u") in UNITS else None
     if attribute == "count":
-        n = _int(v.get("n"), 0, 10 ** 6) if set(v) == {"n"} else None
-        return {"n": n} if n is not None else None
+        n = _int(v.get("v"), 0, 10 ** 6) if set(v) == {"v"} else None
+        return {"v": n} if n is not None else None
     if attribute == "time_of_day":
-        if set(v) != {"h", "mi"}:
-            return None
-        h, mi = _int(v.get("h"), 0, 23), _int(v.get("mi"), 0, 59)
-        return {"h": h, "mi": mi} if h is not None and mi is not None else None
+        return _hm(v)
     if attribute == "schedule":
-        if not set(v) <= {"freq", "byday", "h", "mi"} or v.get("freq") not in FREQS:
+        if not set(v) <= {"freq", "byday", "time"} or v.get("freq") not in FREQS:
             return None
         out: dict = {"freq": v["freq"]}
         if "byday" in v:
@@ -153,11 +165,11 @@ def _value(attribute: str, v: Any) -> Optional[dict]:
             if not isinstance(days, list) or not days or any(d not in WEEKDAYS for d in days):
                 return None
             out["byday"] = sorted(set(days), key=WEEKDAYS.index)
-        if "h" in v or "mi" in v:
-            h, mi = _int(v.get("h"), 0, 23), _int(v.get("mi", 0), 0, 59)
-            if h is None or mi is None:
+        if "time" in v:
+            t = _hm(v["time"])
+            if t is None:
                 return None
-            out["h"], out["mi"] = h, mi
+            out["time"] = t
         return out
     return None
 
@@ -329,7 +341,7 @@ async def is_superseded(user_id: str, subject_ref: str, attribute: str, value: A
 
 def _render_age(value_norm: str) -> Optional[str]:
     try:
-        x = float(json.loads(value_norm)["years"])
+        x = float(json.loads(value_norm)["v"])
     except Exception:  # noqa: BLE001
         return None
     return str(int(x)) if x == int(x) else f"{int(x)} and a half"

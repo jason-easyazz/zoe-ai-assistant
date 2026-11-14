@@ -11,7 +11,7 @@ NO WORDS. Every column is an id, a closed-vocabulary label, a number or a time:
                        person is not recorded at all.
   * ``attribute``    - a CHECKed closed vocabulary, and only the attributes whose value is a NUMBER (dates, ages, amounts, measures,
                        counts, times, schedules). Word-valued attributes (a place, an employer, a diet) are not registry attributes.
-  * ``value_norm``   - canonical JSON of numbers and enum codes only (``{"years": 8.0}``, ``{"cents": 1350000, "cur": "AUD"}``,
+  * ``value_norm``   - canonical JSON of numbers and enum codes only (``memory_claims`` shapes: ``{"v": 8.0}``, ``{"cur": "AUD", "v": "13500"}``,
                        ``{"d": 19, "m": 12}``), validated by ``memory_value_registry.normalise`` before any write.
   * ``by_claim`` / ``source_turn_id`` / ``row_ids`` - ids only (a claim id, the turn's content id, memory row ids).
 

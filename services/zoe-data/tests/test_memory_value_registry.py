@@ -102,7 +102,7 @@ def db(monkeypatch, tmp_path):
 
 
 def _age(x):
-    return {"years": float(x)}
+    return {"v": float(x)}
 
 
 def _rec(user, subject, old, new, at, *, attribute="age", turn=None, rows=(), claim=None):
@@ -183,26 +183,29 @@ def test_no_request_time_ddl():
 # ── 2. normalised values: numbers and codes, never words ────────────────────────────────────
 
 @pytest.mark.parametrize("attribute, value, want", [
-    ("age", {"years": 8}, '{"years":8.0}'),
-    ("age", {"years": 7.5}, '{"years":7.5}'),
+    ("age", {"v": 8}, '{"v":8.0}'),
+    ("age", {"v": 7.5}, '{"v":7.5}'),
     ("event_date", {"m": 12, "d": 19}, '{"d":19,"m":12}'),
     ("birthday", {"m": 5, "d": 3, "y": 2019}, '{"d":3,"m":5,"y":2019}'),
-    ("amount", {"cents": 1_350_000, "cur": "AUD"}, '{"cents":1350000,"cur":"AUD"}'),
-    ("measure", {"v": 5, "u": "km"}, '{"u":"km","v":5.0}'),
-    ("count", {"n": 3}, '{"n":3}'),
+    ("amount", {"v": "13500", "cur": "AUD"}, '{"cur":"AUD","v":"13500"}'),
+    ("amount", {"v": "13.5", "cur": "USD"}, '{"cur":"USD","v":"13.5"}'),
+    ("measure", {"v": "5", "u": "km"}, '{"u":"km","v":"5"}'),
+    ("count", {"v": 3}, '{"v":3}'),
     ("time_of_day", {"h": 17, "mi": 0}, '{"h":17,"mi":0}'),
-    ("schedule", {"freq": "weekly", "byday": ["WE"]}, '{"byday":["WE"],"freq":"weekly"}'),
+    ("schedule", {"freq": "weekly", "byday": ["WE"], "time": {"h": 16, "mi": 0}},
+     '{"byday":["WE"],"freq":"weekly","time":{"h":16,"mi":0}}'),
 ])
 def test_normalise_is_canonical(attribute, value, want):
     assert reg.normalise(attribute, value) == want
 
 
 @pytest.mark.parametrize("attribute, value", [
-    ("age", {"years": "eight"}), ("age", {"years": 7.3}), ("age", {"years": 130}), ("age", {"years": True}), ("age", 8),
-    ("age", {"years": 8, "who": "Juno"}), ("amount", {"cents": 100, "cur": "Juno"}), ("amount", {"cents": 1.5, "cur": "AUD"}),
-    ("measure", {"v": 5, "u": "Ballarat"}), ("schedule", {"freq": "weekly", "byday": ["swimming"]}), ("birthday", {"m": 5}),
+    ("age", {"v": "eight"}), ("age", {"v": 7.3}), ("age", {"v": 130}), ("age", {"v": True}), ("age", 8),
+    ("age", {"v": 8, "who": "Juno"}), ("amount", {"v": "100", "cur": "Juno"}), ("amount", {"v": "twelve", "cur": "AUD"}),
+    ("amount", {"v": "13.50", "cur": "AUD"}), ("amount", {"v": 13500, "cur": "AUD"}), ("time_of_day", {"h12": 5, "mi": 0}),
+    ("measure", {"v": "5", "u": "Ballarat"}), ("count", {"n": 3}), ("schedule", {"freq": "weekly", "byday": ["swimming"]}), ("birthday", {"m": 5}),
     ("event_date", {"m": 13, "d": 1}), ("event_date", {}), ("location", {"v": "Ballarat"}), ("employer", {"v": "x"}),
-    ("diet", {"v": "vegan"}), ("count", {"n": float("nan")}),
+    ("diet", {"v": "vegan"}), ("count", {"v": float("nan")}),
 ])
 def test_normalise_refuses_anything_that_could_carry_words(attribute, value):
     assert reg.normalise(attribute, value) is None
@@ -231,7 +234,7 @@ def test_a_to_b_to_a_keeps_the_latest(db):
 
 def test_an_amount_chain_back_and_forth(db):
     """12k -> 13.5k, days later 12k again (design note C17); an amount is not single-valued."""
-    k12, k135 = {"cents": 1_200_000, "cur": "AUD"}, {"cents": 1_350_000, "cur": "AUD"}
+    k12, k135 = {"v": "12000", "cur": "AUD"}, {"v": "13500", "cur": "AUD"}
     _rec(A, "self", k12, k135, T0, attribute="amount")
     _rec(A, "self", k135, k12, T0 + 3 * 86400, attribute="amount")
     now = T0 + 3 * 86400
@@ -264,7 +267,7 @@ def test_entries_expire_after_seven_days(db):
     {"subject": "Juno"},                     # a NAME is not a person id: no people row has that id
     {"subject": "Juno Hale"},                # not even id-shaped
     {"subject": "p-nobody"},                 # an id of nobody
-    {"old": {"years": "seven"}},
+    {"old": {"v": "seven"}},
     {"turn": "my daughter juno is 8"},       # words where an id goes
     {"rows": ["a row text with spaces"]},
     {"claim": "juno is 8 not 7"},
@@ -620,8 +623,8 @@ def test_shadow_records_an_age_by_person_id_and_the_old_path_still_decides(db, m
     _f, svc, n = _vc_apply(monkeypatch, "juno is 8 not 7", "User's daughter Juno is 7 years old")
     assert n == 1 and svc.edits == [("zoe_x_r0", "User's daughter Juno is 8 years old")]          # unchanged decision
     rows = db.q("SELECT subject_ref, attribute, role, value_norm, source_turn_id, row_ids FROM memory_value_registry ORDER BY role")
-    assert rows == [(JUNO, "age", "asserted", '{"years":8.0}', content_turn_id(A, "juno is 8 not 7"), '["zoe_x_r0", "zoe_x_r0n"]'),
-                    (JUNO, "age", "superseded", '{"years":7.0}', content_turn_id(A, "juno is 8 not 7"), '["zoe_x_r0", "zoe_x_r0n"]')]
+    assert rows == [(JUNO, "age", "asserted", '{"v":8.0}', content_turn_id(A, "juno is 8 not 7"), '["zoe_x_r0", "zoe_x_r0n"]'),
+                    (JUNO, "age", "superseded", '{"v":7.0}', content_turn_id(A, "juno is 8 not 7"), '["zoe_x_r0", "zoe_x_r0n"]')]
 
 
 @pytest.mark.parametrize("text", [
