@@ -541,3 +541,42 @@ def test_a_range_that_is_not_a_forward_weekday_range_abstains(text):
 ])
 def test_a_range_in_any_other_normaliser_abstains(attribute, text):
     assert mc.normalise(attribute, text) is None
+
+
+# -- deferred from the normalisers' review (PR 2477): a clock suffix is no count noun; two named currencies abstain ------
+
+@pytest.mark.parametrize("text", ["5pm", "5 pm", "5am", "5 am", "5 p.m.", "5 A.M.", "five pm", "12 PM"])
+def test_a_clock_suffix_makes_a_count_abstain(text, monkeypatch):
+    assert mc.normalise("count", text) is None
+    assert mc.span_value("count", text, f"0:{len(text)}") is None
+    assert mc.normalise("time_of_day", text) is not None             # it IS a time
+    # negative control: without the clock marks the suffix is stripped as a noun and the time reads as a count
+    monkeypatch.setattr(mc, "_NOT_A_COUNT", mc._NOT_A_COUNT - mc._CLOCK_MARKS)
+    assert mc.normalise("count", text) is not None
+
+
+def test_a_count_with_an_ordinary_noun_still_reads():
+    for text, n in (("5 dogs", 5), ("three cats", 3), ("5", 5), ("12 pmo", 12)):
+        assert mc.normalise("count", text).value == {"v": n}, text
+
+
+@pytest.mark.parametrize("text", ["USD 60 EUR", "US$60 euros", "EUR 60 USD", "£60 EUR", "NZ$ 5 pounds", "aud 13.5k usd",
+                                  "A$60 USD", "€ 60 gbp"])
+def test_an_amount_that_names_two_currencies_abstains(text):
+    assert mc.normalise("amount", text) is None
+
+
+@pytest.mark.parametrize("text,cur", [("USD 60", "USD"), ("60 EUR", "EUR"), ("EUR 60 euros", "EUR"), ("US$60 USD", "USD"),
+                                      ("US$60 dollars", "USD"), ("$60 dollars", "AUD"), ("£60 pounds", "GBP"),
+                                      ("60 bucks", "AUD")])
+def test_control_one_currency_named_once_or_twice_still_reads(text, cur):
+    got = mc.normalise("amount", text)
+    assert got is not None and got.value == {"v": "60", "cur": cur}, text
+
+
+def test_a_pair_with_a_two_currency_side_is_not_ok():
+    ok, _old, new = mc.normalise_pair("amount", "50 EUR", "USD 60 EUR")
+    assert not ok and new is None
+    ok, old, new = mc.normalise_pair("amount", "USD 50 EUR", "60 EUR")
+    assert not ok and old is None
+    assert mc.normalise_pair("amount", "50 EUR", "60 EUR")[0] is True      # control
