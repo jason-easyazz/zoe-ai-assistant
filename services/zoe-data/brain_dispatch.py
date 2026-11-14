@@ -1017,6 +1017,41 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
     kwargs = _sanitize_kwargs(kwargs)
+    floor = _child_floor_check(message, session_id, user_id, kwargs)
+    if floor is not None:
+        return _child_floor_stream(floor, message, session_id, user_id, kwargs)
+    return _brain_streaming_lanes(message, session_id, user_id, **kwargs)
+
+
+def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> Any:
+    """``child_safety_floor.check`` (sync, pure): None on every turn that is not a hazard how-to, so those turns are dispatched exactly as before."""
+    try:
+        import child_safety_floor
+
+        return child_safety_floor.check(message, session_id, user_id, dry=bool(kwargs.get("replay_isolation")))
+    except Exception:  # noqa: BLE001 - the floor is optional; the turn is not
+        return None
+
+
+async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> AsyncIterator[str]:
+    """A hazard how-to: a child gets the floor's fixed line and no lane is dispatched; anyone else gets the lanes unchanged."""
+    import child_safety_floor
+
+    reply = await child_safety_floor.resolve(floor, user_id)
+    if reply:
+        yield reply
+        return
+    inner = _brain_streaming_lanes(message, session_id, user_id, **kwargs)
+    try:
+        async for delta in inner:
+            yield delta
+    finally:
+        aclose = getattr(inner, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
+def _brain_streaming_lanes(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> AsyncIterator[str]:
     if use_flue_brain():
         if failover_enabled():
             return _provenance_tracked_stream(_claim_guarded(
@@ -1038,6 +1073,13 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
     kwargs = _sanitize_kwargs(kwargs)
+    floor = _child_floor_check(message, session_id, user_id, kwargs)
+    if floor is not None:
+        import child_safety_floor
+
+        reply = await child_safety_floor.resolve(floor, user_id)
+        if reply:
+            return reply
     token = _provenance_begin(user_id)
     reply = ""
     started = _receipts_begin()

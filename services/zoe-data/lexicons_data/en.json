@@ -1651,5 +1651,58 @@
    "rough",
    "overwhelm\\w*"
   ]
+ },
+ "child_safety": {
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. 'howto' marks an ask for instructions; 'benign' how-to phrases (spell, draw) are removed first; a 'report' (an injury, a hazard that is already on) is never refused. A class fires on a how-to plus one of its 'terms'; 'reply' is the whole fixed answer.",
+  "adult_age": 18,
+  "max_school_year": 12,
+  "number_words": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen",
+  "tens_words": "twenty thirty forty fifty sixty seventy eighty ninety",
+  "lead_not": "when |if |until |till |once |pretend |pretend that |imagine |as if ",
+  "end": "(?=$|[.,!?;:]| (?:and|so|but|now|today|too|ok|okay|btw|how|can|could|what|which|is|please|zoe|i|im|my)(?!\\w))",
+  "own_age": [
+   "(?:i am|im|i m)(?: (?:only|just))? {AGE}(?: (?:years?|yrs?) old| yo)?{END}",
+   "i (?:just )?turned {AGE}{END}",
+   "my age is {AGE}{END}"
+  ],
+  "school": [
+   "(?:i am|im|i m) in (?:year|yr|grade|class) {AGE}(?! of)(?!\\w)",
+   "(?:i am|im|i m) in (?:kindy|kindergarten|prep|primary school|elementary school|middle school)(?!\\w)"
+  ],
+  "howto": "how (?:do|can|could|would|should) (?:i|you|we)|how to|how much|how many|show me how|teach me|tell me how|help me|can i|could i|may i|should i|am i allowed to|is it (?:ok|okay|safe|alright) (?:to|if i)|whats the (?:best|easiest|right|safest) way to|best way to|steps (?:to|for)|instructions (?:to|for)|which (?:\\w+ )?(?:is|are) (?:the )?(?:sharpest|best|strongest|hottest)|i (?:want|wanna|need) to (?:use|light|turn on|switch on|climb|try|mix|eat|drink|take|get on|go on)|lets (?:use|light|turn on|climb|mix)",
+  "benign": "how (?:do|can|would) (?:i|you|we) (?:spell|say|pronounce|draw|write|paint|colou?r|sing)",
+  "report": "i cut|cut (?:my|myself)|bleed\\w*|blood|burnt|burned|burn(?:ed|t)? (?:my|myself)|i burn|hurts?|hurting|stings?|on fire|smoke|smoky|smells? (?:like )?(?:gas|smoke|burning)|swallowed|ate|drank|emergency|fell|fallen|stuck|electric shock|got (?:a )?shock|electrocuted|(?:stove|oven|gas|cooktop|hob|heater|iron|bbq|barbecue|grill|fire|candle|burner)s? (?:is|are|was|were|has been|have been) (?:still )?(?:on|lit|burning|left on)|left (?:the \\w+ )?on|(?:wont|cant|doesnt) (?:turn|switch) off",
+  "classes": [
+   {
+    "id": "medicine",
+    "terms": "pills?|medicines?|medications?|meds|panadol|paracetamol|nurofen|ibuprofen|aspirin|painkillers?|antibiotics|sleeping tablets?|pain tablets?|headache tablets?|cough (?:syrup|medicine)",
+    "reply": "That one needs a grown-up. Can you ask one to help you with any medicine?"
+   },
+   {
+    "id": "chemicals",
+    "terms": "bleach|(?:laundry|washing|detergent|dishwasher|tide) (?:pods?|powder|liquid|capsules?|tablets?)|detergent|(?:drain|oven|toilet) cleaner|cleaning (?:products?|chemicals?|spray|liquid)|ammonia|chlorine|pool chemicals|weed ?killer|rat poison|poison|pesticides?|(?:bug|fly|insect) spray|turps|kerosene|petrol|methylated spirits|metho|lighter fluid",
+    "reply": "That one needs a grown-up. Can you ask one to help you with cleaning things and chemicals?"
+   },
+   {
+    "id": "fire",
+    "terms": "stoves?|stovetop|cooktop|hob|ovens?|gas (?:stove|burner|ring|bottle|heater)|turn on the gas|burners?|lighters?|matchbox|matchsticks?|box of matches|(?:light|strike) (?:a |the )?match(?:es)?|(?:light|lighting) (?:a |the |some )?candles?|(?:light|set off|let off) (?:the |some |a )?(?:fireworks?|sparklers?|crackers?)|firecrackers?|(?:light|start|make|build) (?:a |the )?fire|campfire|bonfire|fireplace|bbq|barbecue",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything hot or with fire?"
+   },
+   {
+    "id": "blades",
+    "terms": "knife|knives|blades?|razors?|box cutter|stanley knife|cleaver|machete|axe|hatchet|chainsaw|hacksaw|handsaw",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything sharp?"
+   },
+   {
+    "id": "electricity",
+    "terms": "(?:power ?point|power socket|wall socket|power outlet|electrical outlet|socket|outlet)s?|wiring|(?:electrical|live|mains) wires?|fuse ?box|switchboard|circuit breakers?",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything electrical?"
+   },
+   {
+    "id": "heights",
+    "terms": "roofs?|rooftop|ladders?|climb (?:out )?(?:of |through |onto |on )?(?:the |a |my )?window|jump out (?:of )?(?:the |a |my )?window|window ?(?:sill|ledge)|balcony (?:rail|railing|edge|ledge)|top of the (?:fridge|wardrobe|cupboard|bookshelf)",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything high up?"
+   }
+  ]
  }
 }
