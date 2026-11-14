@@ -33,9 +33,11 @@ _COUNT_SCAN_DAYS = 3660               # a COUNT rule is counted from its anchor;
 _OVERRIDE_PAD_DAYS = 31               # an override's original date this far before the window may still be inside it (multi-day)
 
 #: Sources whose rows are a provider's copy: Zoe has no write-back, so an edit here would silently fork the event.
-PROVIDER_SOURCES = frozenset(("ha", "caldav", "google", "microsoft"))
+#: ``subscription`` = a read-only subscribed calendar feed (an ICS address); ``ics`` = a file imported once, which stays editable.
+PROVIDER_SOURCES = frozenset(("ha", "caldav", "google", "microsoft", "subscription"))
 SOURCE_LABELS = {"local": "Zoe", "ics": "an imported calendar file", "ha": "Home Assistant",
-                 "caldav": "a CalDAV calendar", "google": "Google Calendar", "microsoft": "Outlook"}
+                 "caldav": "a CalDAV calendar", "google": "Google Calendar", "microsoft": "Outlook",
+                 "subscription": "a subscribed calendar"}
 
 _REPEAT_WORDS = {"daily": ("DAILY", 1), "weekly": ("WEEKLY", 1), "fortnightly": ("WEEKLY", 2), "biweekly": ("WEEKLY", 2),
                  "monthly": ("MONTHLY", 1), "yearly": ("YEARLY", 1), "annually": ("YEARLY", 1), "annual": ("YEARLY", 1)}
