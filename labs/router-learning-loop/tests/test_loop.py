@@ -216,3 +216,8 @@ def test_poison_moves_every_label():
 def test_committed_data_is_marked_synthetic_shape(path):
     rows = loop.read_jsonl(HERE / path)
     assert rows and all(set(r) <= {"id", "text", "label", "signal", "confidence", "channel", "intent", "expected"} for r in rows)
+
+
+def test_demo_totals_match_the_committed_summary(tmp_path):
+    """The README's numbers: re-running the demo on the committed synthetic data reproduces results/summary.json exactly."""
+    assert loop.demo_summary(tmp_path, SOURCE, FORGET) == json.loads(loop.SUMMARY.read_text())

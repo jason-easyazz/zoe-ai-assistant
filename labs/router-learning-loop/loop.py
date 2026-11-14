@@ -6,7 +6,7 @@ real FunctionGemma router: training a real adapter competes with the live voice 
 frozen guard, the proposal shape and the rollback are what is being proven; the stand-in is only something that can get better or
 worse. Nothing here reads a live log, a database, the network or a model.
 
-    python3 loop.py demo --workdir run                       # the measured clean run + the poisoned run, results/*.json
+    python3 loop.py demo --workdir run [--write-summary]    # clean + poisoned runs; journals in run/, totals in results/
     python3 loop.py run --source S.jsonl --forget F.jsonl --workdir W
     python3 loop.py rollback --workdir W                     # put the previous router back, byte for byte
     python3 loop.py status --workdir W
@@ -374,6 +374,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     r.add_argument("--poison", action="store_true", help="derange every label first (the gate must refuse)")
     d = sub.add_parser("demo")
     d.add_argument("--workdir", required=True)
+    d.add_argument("--write-summary", action="store_true", help="rewrite results/summary.json (the pinned totals)")
     for name in ("rollback", "status"):
         sub.add_parser(name).add_argument("--workdir", required=True)
     a = ap.parse_args(argv)
@@ -393,20 +394,29 @@ def main(argv: Optional[list[str]] = None) -> int:
         j = run(wd, lambda: rows, load_forget(Path(a.forget) if a.forget else None))
         print(table(j))
         return 0
-    # demo: the clean run and the poisoned run, each from the same base incumbent, results written for the README
-    src, fg = HERE / "data" / "synthetic_source.jsonl", load_forget(HERE / "data" / "forget.jsonl")
-    rows = read_jsonl(src)
+    # demo: full journals stay in the workdir (<workdir>/<name>/runs/); only the compact totals go beside the lab
+    s = demo_summary(wd, read_jsonl(HERE / "data" / "synthetic_source.jsonl"), load_forget(HERE / "data" / "forget.jsonl"), True)
+    if a.write_summary:
+        SUMMARY.parent.mkdir(exist_ok=True)
+        SUMMARY.write_text("{\n" + ",\n".join(f" {json.dumps(k)}: {json.dumps(v, sort_keys=True)}" for k, v in s.items()) + "\n}\n")
+    return 0
+
+
+SUMMARY = HERE / "results" / "summary.json"
+
+
+def demo_summary(wd: Path, rows: list[dict], forget: dict, verbose: bool = False) -> dict:
+    """The clean and poisoned runs, each from the same base incumbent, compact: totals, verdict, failed checks, drops."""
     out = {}
     for name, data in (("clean", rows), ("poisoned", poison(rows))):
         shutil.rmtree(wd / name, ignore_errors=True)
-        j = run(wd / name, lambda data=data: data, fg, stamp=f"demo-{name}")
-        out[name] = j
-        print(f"## {name} run\n\n{table(j)}\n\ndropped: {j['dropped']}\n")
-    res = HERE / "results"
-    res.mkdir(exist_ok=True)
-    for name, j in out.items():
-        (res / f"demo-{name}.json").write_text(json.dumps(j, indent=2, sort_keys=True) + "\n")
-    return 0
+        j = run(wd / name, lambda data=data: data, forget, stamp=f"demo-{name}")
+        if verbose:
+            print(f"## {name} run\n\n{table(j)}\n\ndropped: {j['dropped']}\n")
+        out[name] = {"before": f"{j['before']['correct']}/{j['before']['n']}", "after": f"{j['after']['correct']}/{j['after']['n']}",
+                     "promoted": j["promoted"], "failed_checks": sorted(k for k, v in j["verdict"]["checks"].items() if not v),
+                     "harvested": j["harvested"], "dropped": dict(sorted(j["dropped"].items()))}
+    return out
 
 
 if __name__ == "__main__":

@@ -1,0 +1,4 @@
+{
+ "clean": {"after": "63/89", "before": "45/89", "dropped": {"conflict": 2, "duplicate": 1, "forgotten": 3, "frozen_overlap": 1, "low_confidence": 1, "unknown_signal": 1}, "failed_checks": [], "harvested": 155, "promoted": true},
+ "poisoned": {"after": "28/89", "before": "45/89", "dropped": {"conflict": 2, "duplicate": 1, "forgotten": 3, "frozen_overlap": 1, "low_confidence": 1, "unknown_signal": 1}, "failed_checks": ["no_intent_regression", "overall_improves", "safety_held"], "harvested": 155, "promoted": false}
+}

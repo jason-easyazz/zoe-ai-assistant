@@ -10,7 +10,7 @@ word and character n-grams, pure Python, no new dependency. What is being proven
 frozen guard, the gate, the proposal and the rollback. The stand-in only needs to be able to get better or worse.
 
 ```bash
-python3 loop.py demo --workdir run            # clean run + poisoned run, writes results/demo-*.json
+python3 loop.py demo --workdir run [--write-summary]   # clean + poisoned runs; journals in run/, totals in results/
 python3 loop.py run --source S.jsonl --forget F.jsonl --workdir W [--poison]
 python3 loop.py rollback --workdir W          # previous router back, byte for byte
 python3 loop.py status --workdir W            # sha of current / previous
@@ -46,41 +46,40 @@ flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider 
 6. **Rollback**. Before a promotion, the current artefact is copied to `previous.json`. `loop.py rollback` puts it back byte for
    byte.
 
-## Measured runs (2026-11-14, `results/`)
+## Measured runs (2026-11-14)
 
-Both runs start from the same incumbent, trained on the base seeds only. The frozen set has 89 cases.
+All three runs start from the same incumbent, trained on the base seeds only. The frozen set has 89 cases. Full journals
+go to the git-ignored workdir (`run/<name>/runs/`). `results/summary.json` holds the totals, and a test re-runs the demo and
+pins them.
 
-**Clean run: PROMOTE.** 155 examples were harvested. Dropped: 3 forgotten, 1 planted frozen case, 1 low-confidence router
-belief, 1 unknown signal, 1 duplicate, 2 conflicting.
+| intent | before | clean (promoted) | poisoned (refused) | first attempt (refused) |
+|---|---|---|---|---|
+| calendar | 5/8 | 7/8 | 5/8 | 7/8 |
+| chat | 7/8 | 7/8 | 1/8 | 6/8 |
+| journal | 2/4 | 4/4 | 2/4 | 4/4 |
+| lists | 4/12 | 10/12 | 4/12 | 10/12 |
+| memory | 3/8 | 5/8 | 5/8 | 5/8 |
+| music | 2/6 | 4/6 | 1/6 | 4/6 |
+| notes | 4/7 | 5/7 | 3/7 | 5/7 |
+| people | 4/4 | 4/4 | 2/4 | 3/4 |
+| reminders | 3/7 | 4/7 | 2/7 | 4/7 |
+| safety:emergency | 2/4 | 2/4 | 1/4 | 2/4 |
+| safety:forget | 0/4 | 0/4 | 0/4 | 0/4 |
+| smart_home | 2/4 | 2/4 | 0/4 | 2/4 |
+| time | 1/4 | 2/4 | 0/4 | 3/4 |
+| timers | 3/4 | 4/4 | 0/4 | 4/4 |
+| weather | 3/5 | 3/5 | 2/5 | 3/5 |
+| **overall** | **45/89 (50.6%)** | **63/89 (70.8%)** | **28/89 (31.5%)** | **62/89 (69.7%)** |
 
-| intent | before | after |
-|---|---|---|
-| calendar | 5/8 (62.5%) | 7/8 (87.5%) |
-| chat | 7/8 (87.5%) | 7/8 (87.5%) |
-| journal | 2/4 (50.0%) | 4/4 (100.0%) |
-| lists | 4/12 (33.3%) | 10/12 (83.3%) |
-| memory | 3/8 (37.5%) | 5/8 (62.5%) |
-| music | 2/6 (33.3%) | 4/6 (66.7%) |
-| notes | 4/7 (57.1%) | 5/7 (71.4%) |
-| people | 4/4 (100.0%) | 4/4 (100.0%) |
-| reminders | 3/7 (42.9%) | 4/7 (57.1%) |
-| safety:emergency | 2/4 (50.0%) | 2/4 (50.0%) |
-| safety:forget | 0/4 (0.0%) | 0/4 (0.0%) |
-| smart_home | 2/4 (50.0%) | 2/4 (50.0%) |
-| time | 1/4 (25.0%) | 2/4 (50.0%) |
-| timers | 3/4 (75.0%) | 4/4 (100.0%) |
-| weather | 3/5 (60.0%) | 3/5 (60.0%) |
-| **overall** | **45/89 (50.6%)** | **63/89 (70.8%)** |
-
-**Poisoned run: REFUSED.** The same rows, with every label moved to a wrong one. Overall accuracy went from 50.6% to 31.5%
-(-19.1 points). All three checks failed: chat 7/8 -> 1/8, timers 3/4 -> 0/4, reminders 3/7 -> 2/7, emergency 2/4 -> 1/4, plus
-seven other intents beyond tolerance. The current router was kept and no proposal was written.
-
-**First clean attempt: REFUSED, and rightly** (`results/attempt1-clean-refused.json`, an earlier version of the source with no
-small-talk examples). It gained +19.1 points overall, but one greeting ("how's it going") started routing to weather, which
-is a new chat false positive, and one people case moved to memory. The gate refused it. Adding eight generic small-talk
-negatives and four people paraphrases fixed it, which gave the promoted run above. The lesson for the real loop: every round
-needs chat negatives. The real miner already collects them.
+- **Clean run: promoted.** All three checks passed. 155 examples were harvested. Dropped: 3 forgotten, 1 planted frozen case,
+  1 low-confidence router belief, 1 unknown signal, 1 duplicate, 2 conflicting.
+- **Poisoned run: refused.** The same rows, with every label moved to a wrong one. All three checks failed (-19.1 points, eight
+  intents beyond tolerance, and chat, timers, reminders and emergency all lost cases). The current router was kept and no
+  proposal was written. The drops were the same as the clean run.
+- **First clean attempt: refused, and rightly.** This used an earlier version of the source with no small-talk examples. It
+  gained +19.1 points, but the intent check (people -25 points) and the safety check failed: one greeting started routing to
+  weather, which is a new chat false positive. Adding eight generic small-talk negatives and four people paraphrases fixed it.
+  The lesson for the real loop: every round needs chat negatives, and the real miner already collects them.
 
 The stand-in's absolute numbers mean nothing about the real router. The live router measures 84.0% on the same 81 cases
 (0.70 floor). Only the deltas and the gate's behaviour carry over. The stand-in also never gets forget asks right (0/4), which
@@ -136,5 +135,5 @@ Each step needs the one before it.
 ## Files
 
 `loop.py` (the loop) · `data/synthetic_source.jsonl` (synthetic harvest source with one control row per harvest rule) ·
-`data/forget.jsonl` (two ids and one text key) · `data/frozen_safety.jsonl` (8 synthetic safety cases) · `results/*.json`
-(measured journals) · `tests/test_loop.py`. `run/` is a git-ignored scratch workdir.
+`data/forget.jsonl` (two ids and one text key) · `data/frozen_safety.jsonl` (8 synthetic safety cases) · `results/summary.json`
+(the pinned totals) · `tests/test_loop.py`. `run/` is a git-ignored scratch workdir.
