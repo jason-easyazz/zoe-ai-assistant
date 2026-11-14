@@ -70,10 +70,27 @@ async def test_the_precedence_chain_never_runs_speculatively(monkeypatch, flag):
     assert "offer" in calls and "list_share" not in calls      # the offer won: the list share is not consumed
 
 
-async def test_register_line_renders_after_the_style_request_is_stored(monkeypatch):
+@pytest.mark.parametrize("flag", ["0", "1"])
+async def test_the_style_request_write_runs_in_sequence_never_prefetched(monkeypatch, flag):
+    """register_requests.apply is a WRITE: it runs where it always ran - after the whole precedence chain - and the
+    register line is read after it, flag on or off."""
+    monkeypatch.setenv(ON, flag)
+    calls = await _calls(monkeypatch, {"register": "casual"}, delay_s={"register_apply": 0.05, "every_turn": 0.05})
+    assert calls.index("every_turn") < calls.index("register_apply") < calls.index("register")
+
+
+async def test_a_turn_that_aborts_before_the_write_never_stores_a_style_request(monkeypatch):
     monkeypatch.setenv(ON, "1")
-    calls = await _calls(monkeypatch, {"register": "casual"}, delay_s={"register_apply": 0.05})
-    assert calls.index("register_apply") < calls.index("register")
+    cap = rig.install(monkeypatch, {})
+
+    async def boom(*_a, **_k):
+        raise ValueError("synthetic recall failure")
+
+    monkeypatch.setattr(zfc, "_recall_context_block", boom)
+    with pytest.raises(ValueError):
+        await rig.outbound(cap, "hi")
+    await zfc._PREPOST.get().settle_tasks()
+    assert "register_apply" not in cap["calls"] and "register" not in cap["calls"]
 
 
 async def test_named_guest_only_when_the_identity_block_is_empty(monkeypatch):
@@ -92,14 +109,82 @@ async def test_a_turn_closed_before_its_post_leaves_no_task_running(monkeypatch)
     rig.install(monkeypatch, {}, delay_s={n: 5.0 for n in rig.BLOCK_NAMES})
     pp = zfc._PrepostTimer()
     pre = zfc._prefetch_for_turn(pp, "m1", "s1", "hi", {})
-    assert len(pp.tasks) >= 9
+    assert len(pp.tasks) == len(zfc._PREPOST_CONCURRENT_GROUP) == 8   # reads only: no register request / line
     await asyncio.sleep(0)
     t0 = time.monotonic()
     pp.cancel_tasks()                                            # what run_flue_brain_streaming's finally does
     await asyncio.wait_for(asyncio.gather(*pp.tasks, return_exceptions=True), timeout=1.0)
     assert all(t.done() for t in pp.tasks) and time.monotonic() - t0 < 1.0   # not left to run out the 5 s
-    assert sum(t.cancelled() for t in pp.tasks) >= 9            # every slow block was cancelled (the stub apply is instant)
+    assert all(t.cancelled() for t in pp.tasks)                  # every slow read was cancelled
     assert pre.tasks                                             # nothing was taken
+
+
+async def test_settle_cancels_then_waits_for_every_task(monkeypatch):
+    monkeypatch.setenv(ON, "1")
+    rig.install(monkeypatch, {}, delay_s={n: 5.0 for n in rig.BLOCK_NAMES})
+    pp = zfc._PrepostTimer()
+    zfc._prefetch_for_turn(pp, "m1", "s1", "hi", {})
+    await asyncio.sleep(0)
+    await asyncio.wait_for(pp.settle_tasks(), timeout=1.0)
+    assert pp.tasks and all(t.done() for t in pp.tasks)
+
+
+async def test_a_failed_prefetch_beside_an_aborted_turn_leaves_no_unretrieved_exception(monkeypatch):
+    """A sibling prefetch raises while another block aborts the turn before that prefetch is taken: no
+    "Task exception was never retrieved" (garbage-collected, loop exception handler captured)."""
+    import gc
+
+    import voice_session_bridge
+
+    monkeypatch.setenv(ON, "1")
+    cap = rig.install(monkeypatch, {})
+
+    async def bridge_fails(*_a, **_k):
+        raise RuntimeError("synthetic bridge failure")
+
+    async def recall_aborts(*_a, **_k):
+        await asyncio.sleep(0.02)                                 # the bridge prefetch has failed by now
+        raise ValueError("synthetic recall failure")
+
+    monkeypatch.setattr(voice_session_bridge, "block_for", bridge_fails)
+    monkeypatch.setattr(zfc, "_recall_context_block", recall_aborts)
+    loop = asyncio.get_running_loop()
+    seen: list = []
+    old = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _l, ctx: seen.append(ctx.get("message", "")))
+    try:
+        with pytest.raises(ValueError):
+            await rig.outbound(cap, "hi")
+        zfc._PREPOST.set(None)                                    # drop every reference to the turn's tasks
+        for _ in range(3):
+            gc.collect()
+            await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(old)
+    assert not [m for m in seen if "never retrieved" in m], seen
+
+
+async def test_negative_control_an_unretrieved_task_exception_is_caught(monkeypatch):
+    """The capture above can fail: a failed task nobody reads IS reported."""
+    import gc
+
+    loop = asyncio.get_running_loop()
+    seen: list = []
+    old = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _l, ctx: seen.append(ctx.get("message", "")))
+    try:
+        async def fails():
+            raise RuntimeError("synthetic")
+
+        t = asyncio.ensure_future(fails())
+        await asyncio.sleep(0.01)
+        del t
+        for _ in range(3):
+            gc.collect()
+            await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(old)
+    assert [m for m in seen if "never retrieved" in m], seen
 
 
 # ── the wall time before the POST, on a synthetic chain ──────────────────────────────────────────────────────────────

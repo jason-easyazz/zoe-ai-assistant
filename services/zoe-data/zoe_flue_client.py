@@ -1862,6 +1862,17 @@ class _PrepostTimer:
             if not t.done():
                 t.cancel()
 
+    async def settle_tasks(self) -> None:
+        """Cancel what is still running, then WAIT for every prefetch to settle (results and exceptions retrieved), so
+        nothing outlives the turn and no "Task exception was never retrieved" is left behind. Never raises."""
+        if not self.tasks:
+            return
+        self.cancel_tasks()
+        try:
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+        except Exception:  # noqa: BLE001 - outcomes are collected by gather; a cancel of THIS task still propagates
+            pass
+
     def add(self, name: str, since: float) -> None:
         """Add the wall time since ``since`` (a ``time.monotonic()`` reading) to ``name``."""
         if name in _PREPOST_BLOCK_SET:
@@ -1914,11 +1925,18 @@ _PREPOST: "contextvars.ContextVar[_PrepostTimer | None]" = contextvars.ContextVa
 # which stays sequential in the turn: its blocks consume state (the offer cooldown, the list-share "said once", the
 # recall gate's counters) only when they win, so none of them ever runs speculatively. Each prefetched block is still
 # awaited at its own place in the assembly, so the bytes and their order are exactly the sequential ones; only WHEN the
-# work happens changes. Dependencies stay chained inside the prefetch: the register line after the style request is
-# stored, the named-guest block only when the account identity block came back empty. Off = no task, the exact
+# work happens changes. Only READS are prefetched: the style-request WRITE (register_requests.apply) stays in the
+# sequential assembly exactly where it ran, and the register line it feeds is read after it, in place (nothing is left
+# to overlap it with there). The named-guest block runs only when the account identity block came back empty. Every
+# prefetch has its outcome retrieved, and the wrapper settles (cancels, then awaits) any left. Off = no task, the exact
 # sequential code path (``take`` awaits the call in place).
-_PREPOST_CONCURRENT_GROUP = ("fastpath", "bridge", "notes", "identity", "named_guest", "now_card", "register_apply",
-                             "register", "manner", "persona")
+_PREPOST_CONCURRENT_GROUP = ("fastpath", "bridge", "notes", "identity", "named_guest", "now_card", "manner", "persona")
+
+
+def _retrieve_outcome(task: "asyncio.Future") -> None:
+    """Done-callback: read a prefetch's exception so an unawaited one never logs "never retrieved"."""
+    if not task.cancelled():
+        task.exception()
 
 
 def _prepost_concurrent_enabled() -> bool:
@@ -1943,9 +1961,12 @@ class _Prefetch:
     def start(self, factories: "dict[str, Any]") -> None:
         """``factories``: name -> zero-arg callable returning a coroutine. Starts each as a task (timed under its name)."""
         for name, factory in factories.items():
-            task = asyncio.ensure_future(self.pp.timed(name, factory()))
-            self.tasks[name] = task
-            self.pp.tasks.append(task)
+            self.add(name, asyncio.ensure_future(self.pp.timed(name, factory())))
+
+    def add(self, name: str, task: "asyncio.Future") -> None:
+        task.add_done_callback(_retrieve_outcome)
+        self.tasks[name] = task
+        self.pp.tasks.append(task)
 
     async def take(self, name: str, factory: Any) -> Any:
         task = self.tasks.pop(name, None)
@@ -1965,7 +1986,6 @@ def _prefetch_for_turn(pp: "_PrepostTimer", uid: str, session_id: str, message: 
         import named_guests
         import voice_session_bridge
 
-        replay = bool(kwargs.get("replay_isolation"))
         voice = bool(kwargs.get("voice_mode"))
 
         pre.start({
@@ -1978,30 +1998,19 @@ def _prefetch_for_turn(pp: "_PrepostTimer", uid: str, session_id: str, message: 
             "persona": lambda: _persona_context_block(uid),
         })
         identity_task = pre.tasks["identity"]
-        apply_task = None
-        if not replay:   # as sequentially: a replay never stores a style request
-            import register_requests
-
-            pre.start({"register_apply": lambda: register_requests.apply(uid, message)})
-            apply_task = pre.tasks["register_apply"]
 
         async def named_guest():
             # the sequential order: the account identity block first, the named guest only when it came back empty
-            if await identity_task:
+            try:
+                if await asyncio.shield(identity_task):
+                    return ""
+            except Exception:  # noqa: BLE001 - the identity block's own take re-raises it in place
                 return ""
             return await pp.timed("named_guest", named_guests.brain_block(uid))
 
-        async def register_line():
-            if apply_task is not None:
-                await apply_task   # the style request this turn made is stored before the line is rendered
-            return await pp.timed("register", _register_context_block(uid))
-
-        for name, coro in (("named_guest", named_guest()), ("register", register_line())):
-            task = asyncio.ensure_future(coro)
-            pre.tasks[name] = task
-            pp.tasks.append(task)
+        pre.add("named_guest", asyncio.ensure_future(named_guest()))
     except Exception:  # noqa: BLE001 - a prefetch problem falls back to the sequential path
-        pp.cancel_tasks()
+        pp.cancel_tasks()   # each task's outcome is retrieved by its done-callback; the wrapper also settles them
         pre.tasks.clear()
     return pre
 
@@ -3175,8 +3184,10 @@ async def run_flue_brain_streaming(
         try:
             await turn.aclose()
         finally:
-            _pp.cancel_tasks()   # ZOE_FLUE_PREPOST_CONCURRENT: a turn closed before its POST leaves no task behind
-            brain_slot_guard.turn_finished()
+            try:
+                await _pp.settle_tasks()   # ZOE_FLUE_PREPOST_CONCURRENT: a turn closed before its POST leaves no task behind
+            finally:
+                brain_slot_guard.turn_finished()
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
         # CancelledError), and the brief it heard must still take the claim.
@@ -3494,7 +3505,7 @@ async def _run_flue_brain_streaming_turn(
     if not kwargs.get("replay_isolation"):
         import register_requests
 
-        await _pre.take("register_apply", lambda: register_requests.apply(uid, message))
+        await _pp.timed("register_apply", register_requests.apply(uid, message))   # a WRITE: never prefetched
     outbound_message = _wrap_message_with_register(
         outbound_message, await _pre.take("register", lambda: _register_context_block(uid)))
     outbound_message = _wrap_message_with_manner(
