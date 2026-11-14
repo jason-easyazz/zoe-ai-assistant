@@ -467,3 +467,74 @@ async def test_a_new_correction_about_a_forgotten_subject_waits_for_a_re_teach(m
     assert await _note(said, tid="t3") is True and said in _packet(monkeypatch)["packet"]
     FORGOTTEN.add("wren")                                       # forgotten again after the marker was set: not served
     assert HEAD not in _packet(monkeypatch)["packet"] and cm.pending(MEMBER) == []
+
+
+# ── a forget that finishes while note_turn awaits; a failing clear never masks a forget ─────────────────────────────────
+
+async def _forget_turn_both_ends():
+    turn = turn_forget.Turn(text="x", ts=0.0, h="h", tid=7)
+    turn_forget.retract(MEMBER, turn)
+    turn_forget.mark_forgotten(MEMBER, turn)
+
+
+@pytest.mark.parametrize("which", ["turn", "topic", "entity", "delete", "none"])   # "none" = the control
+async def test_a_forget_finishing_while_note_turn_awaits_leaves_no_marker(monkeypatch, tmp_path, which):
+    import asyncio
+
+    import memory_forget_cascade as mfc
+    import memory_forgotten
+
+    monkeypatch.setattr(mfc, "_clear", lambda *a, **k: _ret(None))
+    monkeypatch.setattr(mfc, "retry_pending", lambda *a, **k: _ret(None))
+    monkeypatch.setattr(memory_service, "_invalidate_agent_user_facts_cache", lambda _u: None)
+    reached, release = asyncio.Event(), asyncio.Event()
+
+    async def held_ledger(user_id, text, **_):              # note_turn suspended inside _names_forgotten (its call only)
+        if not reached.is_set():
+            reached.set()
+            await release.wait()
+        return False
+    monkeypatch.setattr(memory_forgotten, "matches", held_ledger)
+    CHAT["t1"] = {"user": MEMBER, "session": "s-panel", "content": FIX}
+    task = asyncio.ensure_future(cm.note_turn(FIX, MEMBER, "s-panel"))
+    await reached.wait()
+    forget = {"turn": _forget_turn_both_ends, "topic": _forget_topic, "entity": _forget_entity,
+              "delete": lambda: _forget_member(tmp_path), "none": lambda: _ret(None)}[which]
+    await forget()                                           # runs to completion, final clear included
+    release.set()
+    assert await task is (which == "none")
+    assert len(cm.pending(MEMBER)) == (1 if which == "none" else 0)
+
+
+def _boom(*a, **k):
+    raise RuntimeError("marker store down")
+
+
+async def test_a_failing_marker_clear_never_replaces_a_forgets_result(monkeypatch, tmp_path):
+    import forget_topic
+    import memory_forget_cascade as mfc
+
+    monkeypatch.setattr(mfc, "_clear", lambda *a, **k: _ret(None))
+    monkeypatch.setattr(mfc, "retry_pending", lambda *a, **k: _ret(None))
+    monkeypatch.setattr(memory_service, "_invalidate_agent_user_facts_cache", lambda _u: None)
+    monkeypatch.setattr(cm, "forget_user", _boom)
+    assert isinstance(await forget_topic.forget(object(), MEMBER, "the book club"), forget_topic.Result)
+    assert (await mfc.cascade_forget(MEMBER, "Wren")).complete
+    from test_memory_loss_class import _Col, _svc
+
+    assert await _svc(_Col(["zoe_wren_aa"]), _Col(), tmp_path).delete_user(MEMBER, actor="admin") == 1
+
+
+async def test_a_forgets_own_exception_still_propagates(monkeypatch):
+    import forget_topic
+    import memory_forget_cascade as mfc
+
+    async def body(*a, **k):
+        raise ValueError("the forget's own failure")
+    monkeypatch.setattr(cm, "forget_user", _boom)
+    monkeypatch.setattr(forget_topic, "_forget", body)
+    monkeypatch.setattr(mfc, "_cascade", body)
+    with pytest.raises(ValueError, match="own failure"):
+        await forget_topic.forget(object(), MEMBER, "the book club")
+    with pytest.raises(ValueError, match="own failure"):
+        await mfc.cascade_forget(MEMBER, "Wren")

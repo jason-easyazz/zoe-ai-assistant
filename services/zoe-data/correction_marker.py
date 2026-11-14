@@ -33,6 +33,11 @@ class Marker(NamedTuple):
 
 _LOCK = threading.Lock()
 _by_user: "OrderedDict[str, OrderedDict[str, Marker]]" = OrderedDict()
+# Per-member forget generation: ``forget_user`` (which every forget path calls, last of all) bumps it, and ``note_turn`` refuses
+# to set a marker if it moved while it awaited. Bounded like the markers; evicting a member bumps ``_epoch`` instead, so an
+# in-flight snapshot can never match a reset counter.
+_gen: "OrderedDict[str, int]" = OrderedDict()
+_epoch = 0
 
 
 def enabled() -> bool:
@@ -95,10 +100,20 @@ def clear(user_id: str, turn_id: str, reason: str = "rewritten") -> bool:
     return gone
 
 
+def generation(user_id: str) -> tuple:
+    with _LOCK:
+        return _epoch, _gen.get(user_id, 0)
+
+
 def forget_user(user_id: str, reason: str = "forget") -> int:
-    """ANY forget for the member drops every marker of theirs. Sync; never raises."""
+    """ANY forget for the member drops every marker of theirs and moves their forget generation. Sync."""
+    global _epoch
     with _LOCK:
         n = len(_by_user.pop(user_id, None) or ())
+        _gen[user_id] = _gen.pop(user_id, 0) + 1
+        while len(_gen) > MAX_USERS:
+            _gen.popitem(last=False)
+            _epoch += 1
     _log("cleared", reason, user_id, n)
     return n
 
@@ -106,6 +121,7 @@ def forget_user(user_id: str, reason: str = "forget") -> int:
 def reset() -> None:  # tests
     with _LOCK:
         _by_user.clear()
+        _gen.clear()
 
 
 # ── chat_messages seams (Postgres; the tests replace them) ──────────────────────────────────────────────────────────────
@@ -192,6 +208,7 @@ async def note_turn(user_message: str, user_id: str, session_id: Optional[str], 
         if not enabled() or speaker_verified is False or not session_id or rewrote > 0 or is_unidentified(user_id):
             return False
         shaped, keys = correction_shaped(user_message)
+        snap = generation(user_id)                              # BEFORE the first await
         turn_id = await _find_turn_id(user_id, session_id, user_message) if shaped else None
         import turn_forget
 
@@ -199,6 +216,9 @@ async def note_turn(user_message: str, user_id: str, session_id: Optional[str], 
             return False
         if await _names_forgotten(user_id, user_message):    # a forgotten subject stays forgotten until the member re-teaches it
             logger.info("PENDING_CORRECTION skipped reason=forgotten user=%s n=1", user_id)
+            return False
+        if generation(user_id) != snap:                         # a forget ran (and finished) while this turn was looked up:
+            logger.info("PENDING_CORRECTION skipped reason=forget_raced user=%s n=1", user_id)   # no await between check and put
             return False
         put(user_id, turn_id, keys=keys)
         return True

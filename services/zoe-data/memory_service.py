@@ -2313,8 +2313,8 @@ class MemoryService:
             try:   # pending-correction markers again, AFTER every store went: one set while the delete ran must not outlive it
                 import correction_marker
                 correction_marker.forget_user(user_id, reason="delete_user")
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001 - never replaces the delete's own result
+                logger.warning("PENDING_CORRECTION clear_failed reason=delete_user user=%s err=%s", user_id, type(exc).__name__)
             if pendant_failure is not None:
                 raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
             return len(ids)

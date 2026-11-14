@@ -267,9 +267,12 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     try:
         return await _forget(svc, user_id, topic)
     finally:   # any forget drops the member's pending corrections - AFTER their transcript turns went off the record
-        import correction_marker
+        try:   # never raises: a failing clear must not replace the forget's own result or exception
+            import correction_marker
 
-        correction_marker.forget_user(user_id, reason="forget_topic")
+            correction_marker.forget_user(user_id, reason="forget_topic")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PENDING_CORRECTION clear_failed reason=forget_topic user=%s err=%s", user_id, type(exc).__name__)
 
 
 async def _forget(svc: Any, user_id: str, topic: str) -> Result:
