@@ -414,6 +414,45 @@ def collection_op(timeout: float | None = None):
             _OPS_COND.notify_all()
 
 
+# ── ZOE_MEMORY_TICK_DEFER_S (default 0 = unchanged; 1.0 the candidate): see MemoryService._schedule_tick ─────────────────
+_TICK_DEFER_MAX_S = 10.0
+_TICK_READ_WAIT_MAX_S = 2.0
+_TICK_READ_POLL_S = 0.05
+_PROMPT_READS = [0]   # prompt reads in flight in this process (load_for_prompt / search); counted only while deferring
+
+
+def _tick_defer_s() -> float:
+    try:
+        from typed_env import flag
+
+        v = float(flag("ZOE_MEMORY_TICK_DEFER_S"))
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return v if 0.0 < v <= _TICK_DEFER_MAX_S else 0.0
+
+
+def _tick_query_hash(query: str) -> str:
+    """The distinct-query key ``tick_access`` stores (first 16 hex of sha1 of the lower-cased, stripped query)."""
+    return hashlib.sha1(query.lower().strip().encode()).hexdigest()[:16]
+
+
+class _PromptRead:
+    """``with _PromptRead():`` around a prompt read; counted only while ticks are deferred (0 = no bookkeeping)."""
+
+    __slots__ = ("on",)
+
+    def __enter__(self):
+        self.on = _tick_defer_s() > 0.0
+        if self.on:
+            _PROMPT_READS[0] += 1
+        return self
+
+    def __exit__(self, *exc):
+        if self.on:
+            _PROMPT_READS[0] = max(0, _PROMPT_READS[0] - 1)
+        return False
+
+
 def _leased_call(fn, *args):
     with collection_op():
         return fn(*args)
@@ -1501,6 +1540,9 @@ class MemoryService:
     def __init__(self, data_dir: str = _MEMPALACE_DATA):
         self._data_dir = data_dir
         self._user_locks: dict[str, asyncio.Lock] = {}
+        # ZOE_MEMORY_TICK_DEFER_S: per user, the access ticks waiting for one coalesced write (id -> [n, query hashes])
+        self._pending_ticks: dict[str, dict[str, list]] = {}
+        self._pending_lock = threading.Lock()   # the erase / status paths drop ids from executor threads
         self._seen_keys: _BoundedKeySet = _BoundedKeySet(
             on_evict=self._on_seen_key_evicted
         )
@@ -1910,17 +1952,15 @@ class MemoryService:
             return []
         self._require(user_id, "user_id is required")
         try:
-            rows = await self._run_sync(self._metadata_read, user_id, limit)
+            with _PromptRead():
+                rows = await self._run_sync(self._metadata_read, user_id, limit)
         except Exception as exc:
             logger.warning("memory_service: load_for_prompt failed user=%s: %s",
                            user_id, exc)
             return []
         ids = [r.id for r in rows]
         if ids:
-            self._track_background_task(
-                self._tick_access(user_id, ids),
-                name="memory_tick_access_prompt",
-            )
+            self._schedule_tick(user_id, ids, name="memory_tick_access_prompt")
         return rows
 
     async def load_durable_for_hop(self, user_id: str, *, strict: bool = False) -> list[MemoryRef]:
@@ -2044,13 +2084,14 @@ class MemoryService:
         # zero DB work, never crashes or slows a turn.
         depth_by_pid = await self._graph_depth_by_pid(query, user_id)
         try:
-            rows = await asyncio.wait_for(
-                self._run_sync(
-                    self._semantic_search, query, user_id, limit, depth_by_pid,
-                    *(() if as_of_ts is None else (as_of_ts,)),
-                ),
-                timeout=timeout_s,
-            )
+            with _PromptRead():
+                rows = await asyncio.wait_for(
+                    self._run_sync(
+                        self._semantic_search, query, user_id, limit, depth_by_pid,
+                        *(() if as_of_ts is None else (as_of_ts,)),
+                    ),
+                    timeout=timeout_s,
+                )
         except asyncio.TimeoutError:
             logger.debug("memory_service: search timed out after %.1fs", timeout_s)
             return []
@@ -2069,10 +2110,7 @@ class MemoryService:
             rows = await self._with_history(rows, query, user_id, limit, timeout_s)
         if ids:
             # Pass query for unique_query_count tracking in dreaming memory
-            self._track_background_task(
-                self.tick_access(user_id, ids, query=query),
-                name="memory_tick_access_search",
-            )
+            self._schedule_tick(user_id, ids, query=query, name="memory_tick_access_search")
         return rows
 
     async def _with_history(self, rows: list[MemoryRef], query: str, user_id: str, limit: int,
@@ -2165,7 +2203,7 @@ class MemoryService:
     # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
     @_erase_gate.whole_member_erase
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
-        """Right-to-be-forgotten. Returns number of rows removed.
+        """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
         A hard delete is the one removal that bypasses the ``status`` lifecycle, so it must not be
         silent. When rows match, a content-free ``delete_user`` INTENT row is written BEFORE anything
@@ -2176,6 +2214,7 @@ class MemoryService:
         survive the purge of the user's own per-row trail (that trail carries text and is removed). A
         sweep that matches no rows writes nothing — it removes nothing. Documented in
         docs/knowledge/memory-loss-audit-2026-10-05.md."""
+        self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
@@ -4350,6 +4389,7 @@ class MemoryService:
         return list(result.get("ids") or [])
 
     def _delete_ids(self, ids: list[str]) -> None:
+        self._drop_pending_ticks(ids)   # no deferred access tick outlives the row (ZOE_MEMORY_TICK_DEFER_S)
         col = self._collection()
         col.delete(ids=ids)
 
@@ -4396,6 +4436,8 @@ class MemoryService:
         return rows
 
     def _update_meta_sync(self, mem_id: str, md: dict[str, Any]) -> None:
+        if not _memory_status_visible(md):
+            self._drop_pending_ticks([mem_id])   # moved out of the readable statuses: no queued tick lands on it
         self._collection().update(ids=[mem_id], metadatas=[md])
 
     def _operator_rows_sync(self, user_id: str) -> list[MemoryRef]:
@@ -4448,6 +4490,118 @@ class MemoryService:
             {"id": rid, "text": doc, "metadata": meta}
             for rid, doc, meta in zip(ids, docs, metas)
         ]
+
+    def _schedule_tick(self, user_id: str, ids: list[str], *, name: str, query: Optional[str] = None) -> None:
+        """The access tick of one prompt read (``load_for_prompt`` / ``search``).
+
+        ``ZOE_MEMORY_TICK_DEFER_S`` unset / 0 (the default): the tick starts at once, exactly as before. Set: the tick is
+        queued per user and ONE coalesced write runs after the delay (then waits, bounded, while a prompt read is in
+        flight). Why: started at once, a packet's first read's tick (a chroma get + metadata update) writes while the
+        packet's next read runs, and the reads queue behind the writes - measured on a synthetic 1,500-row throwaway palace
+        (memory_for_prompt as the seam's household fallback calls it, database blocked): p50 78-110 ms with ticks at once
+        vs 44-58 ms without, against the fallback's 0.40 s budget. Coalescing keeps a burst of packets (the harness, a busy
+        household) to one write per user instead of two per packet. Same final metadata: ``access_count`` +1 per read that
+        returned the row, the same distinct-query bookkeeping; only ``last_accessed`` is the flush time."""
+        delay = _tick_defer_s()
+        if delay <= 0.0:
+            coro = self._tick_access(user_id, ids) if query is None else self.tick_access(user_id, ids, query=query)
+            self._track_background_task(coro, name=name)
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return   # no loop to flush on (a sync caller): the tick is best-effort and is dropped, never left queued
+        qh = _tick_query_hash(query) if query else None
+        with self._pending_lock:
+            pend = self._pending_ticks.get(user_id)
+            start = pend is None
+            if start:
+                pend = self._pending_ticks[user_id] = {}
+            for rid in ids:
+                entry = pend.setdefault(rid, [0, []])
+                entry[0] += 1
+                if qh and qh not in entry[1]:
+                    entry[1].append(qh)
+        if start:
+            task = self._track_background_task(self._flush_ticks_later(user_id, delay), name="memory_tick_access_coalesced")
+
+            def _on_done(t: "asyncio.Task[Any]", u: str = user_id, owned: dict = pend) -> None:
+                # cancelled before it ever ran (shutdown): its finally never ran, so drop THIS queue here - a queue left
+                # behind would make every later read of the user join a batch nobody flushes
+                if t.cancelled():
+                    with self._pending_lock:
+                        if self._pending_ticks.get(u) is owned:
+                            self._pending_ticks.pop(u, None)
+
+            task.add_done_callback(_on_done)
+
+    def _drop_pending_ticks(self, ids: Iterable[str] = (), *, user_id: Optional[str] = None) -> None:
+        """Forgotten means forever: a row erased, deleted or moved out of the readable statuses has its queued ticks
+        dropped (``user_id``: the user's whole queue). Thread-safe (called from executor threads). Never raises."""
+        try:
+            drop = {str(i) for i in ids}
+            with self._pending_lock:
+                if user_id is not None:
+                    self._pending_ticks.pop(user_id, None)
+                if drop:
+                    for pend in self._pending_ticks.values():
+                        for rid in drop:
+                            pend.pop(rid, None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _flush_ticks_later(self, user_id: str, delay: float) -> None:
+        """Best-effort, never raises. Reads that arrive while waiting join the same write; a read arriving after the
+        queue is taken starts the next one. Cancelled (shutdown): the queue is dropped, nothing is written."""
+        try:
+            await asyncio.sleep(delay)
+            waited = 0.0
+            while _PROMPT_READS[0] > 0 and waited < _TICK_READ_WAIT_MAX_S:
+                await asyncio.sleep(_TICK_READ_POLL_S)
+                waited += _TICK_READ_POLL_S
+        finally:
+            with self._pending_lock:
+                pend = self._pending_ticks.pop(user_id, None)
+        if not pend:
+            return
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:   # the same lock erase_rows / delete_user hold: an erase never interleaves with this write
+                await self._run_sync(self._tick_access_batch_sync, pend, user_id)
+        except Exception:
+            pass
+
+    def _tick_access_batch_sync(self, pend: dict[str, list], user_id: str = "") -> None:
+        """``_tick_access_sync`` for many reads at once: per row, ``access_count`` + the number of reads that returned it,
+        and each distinct query hash applied with the same capped, never-evicting rule, in arrival order. The rows are
+        RE-READ here and only a row the read path would still serve this user is touched (``_filter_visible``: unexpired,
+        visible to the user, a readable status) - a row rejected, archived, superseded or forgotten since the read gets
+        nothing, and an erased row is simply not returned by the get."""
+        if not pend:
+            return
+        col = self._collection()
+        result = col.get(ids=list(pend), include=["documents", "metadatas"])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        live = {r.id: r.metadata for r in self._filter_visible(result, user_id, now)}
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        got_ids = [i for i in (result.get("ids") or []) if i in live]
+        got_metas = [live[i] for i in got_ids]
+        new_metas = []
+        for rid, meta in zip(got_ids, got_metas):
+            n, hashes = pend.get(rid, [0, []])
+            m = dict(meta) if isinstance(meta, dict) else {}
+            m["access_count"] = int(m.get("access_count", 0) or 0) + int(n)
+            m["last_accessed"] = now_iso
+            if hashes:
+                seen_hashes = [h for h in (m.get("_query_hashes") or "").split(",") if h]
+                for qh in hashes:
+                    if qh not in seen_hashes and len(seen_hashes) < _MAX_QUERY_HASHES:
+                        seen_hashes.append(qh)
+                        m["_query_hashes"] = ",".join(seen_hashes)
+                        m["unique_query_count"] = int(m.get("unique_query_count", 0) or 0) + 1
+            new_metas.append(m)
+        if got_ids:
+            col.update(ids=list(got_ids), metadatas=new_metas)   # metadata-only: no re-embed (see _tick_access_sync)
 
     async def _tick_access(self, user_id: str, ids: Iterable[str]) -> None:
         """Best-effort metadata update - never raises."""
@@ -4504,9 +4658,7 @@ class MemoryService:
         """
         if not ids:
             return
-        query_hash: Optional[str] = None
-        if query:
-            query_hash = hashlib.sha1(query.lower().strip().encode()).hexdigest()[:16]
+        query_hash: Optional[str] = _tick_query_hash(query) if query else None
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         try:
             async with lock:

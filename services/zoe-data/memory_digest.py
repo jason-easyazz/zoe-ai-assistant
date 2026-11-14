@@ -1967,8 +1967,18 @@ async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:
     "nothing is forgotten", because the ingest guard behind this one is also lenient on an outage. Each caller defers
     the affected turns to a later run rather than mining them: the transcript readers surface it as a
     ``TranscriptLoadError`` (the existing retried-next-run path), idle consolidation leaves its watermark un-advanced,
-    and the per-fact / per-loop / per-turn callers drop the item for this run."""
+    and the per-fact / per-loop / per-turn callers drop the item for this run.
+
+    A turn that IS a forget command (``turn_forget.is_forget_instruction``) is skipped too, whatever the ledger says: a TOPIC
+    forget writes no ledger entry, so "forget that I told you about my brother" was re-mined into a row about the brother (QA
+    round 10a). New command rows are saved off the record; this also covers the rows saved before that, inside the lookback."""
     import memory_forgotten
+    import turn_forget
+
+    commands = sum(1 for t in turns if isinstance(t, str) and turn_forget.is_forget_instruction(t))
+    if commands:
+        turns = [t for t in turns if not (isinstance(t, str) and turn_forget.is_forget_instruction(t))]
+        logger.info("memory_digest: %s skipped %d forget-command turn(s) user=%s", reader, commands, user_id)
     try:
         kept, dropped = await memory_forgotten.keep_unforgotten(user_id, turns, strict=True)
     except Exception as exc:  # noqa: BLE001
