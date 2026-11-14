@@ -99,12 +99,14 @@ TABLES: tuple[Store, ...] = (
     _t("learned_voiceprints", BIOMETRIC, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),
     _t("learned_voiceprint_segments", BIOMETRIC, REACHED, member=_OMI_M, entity="contacts_store.forget_voiceprints"),
     _t("named_guest_turns", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_voiceprints"),   # via omi_voices.purge_people
-    _t("panel_voice_clusters", BIOMETRIC, GAP,
-       "Passive named guests (0073): unknown panel voices held for the household owner. Erased by expiry (14 days, hourly sweep), by "
-       "naming (the voice becomes a guest's print), and by the owner's DELETE /api/voice/unknown-voices; a member erase does not "
-       "reach them and they hold no name an entity forget could match. Never in the dumps (BIOMETRIC_TABLES)."),
-    _t("panel_voice_samples", BIOMETRIC, GAP,
-       "The embeddings behind panel_voice_clusters (never audio), erased with their voice. Never in the dumps (BIOMETRIC_TABLES)."),
+    _t("panel_voice_clusters", BIOMETRIC, REACHED,
+       "Passive named guests (0073): unknown panel voices held for the household owner. Erased with that member "
+       "(named_guest_learning.forget_user), by expiry (14 days, hourly sweep), by naming (the voice becomes a guest's print) and by "
+       "the owner's DELETE /api/voice/unknown-voices. They hold no name an entity forget could match. Never in the dumps "
+       "(BIOMETRIC_TABLES).", member=_CONTACTS_M),
+    _t("panel_voice_samples", BIOMETRIC, REACHED,
+       "The embeddings behind panel_voice_clusters (never audio), erased with their voice. Never in the dumps (BIOMETRIC_TABLES).",
+       member=_CONTACTS_M),
     _t("learned_voiceprints_0071", METADATA, OUT_OF_SCOPE,
        "Not a store: the SQLite-only (lab / unit test) rebuild table of migration 0071, renamed to learned_voiceprints inside the "
        "same migration; it never exists on the Postgres box the dumps read."),

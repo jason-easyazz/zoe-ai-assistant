@@ -76,7 +76,11 @@ Code: `services/zoe-data/named_guests.py` (who, the claim, the panel feed, the b
    is one of the speaker's guests) and `DELETE /api/voice/guests/{id}` erase the voiceprint AND every kept turn. The forget ledger
    is also a serve wall: a forgotten name is never matched, fed to a panel or recalled even if an erase did not land, and a ledger
    outage means no guest at all. A member re-enrolling a name they forgot releases it (an explicit re-teach). Erasing a member
-   (`contacts_store.forget_user`) erases their guests' turns.
+   (`contacts_store.forget_user`) erases their guests' turns and the unknown voices held for them
+   (`named_guest_learning.forget_user`). Every one of these erases also tells each PANEL to drop the guest's cached print at once
+   (`named_guest_memory.drop_from_panels` -> a `voice_profile_forget` command per panel): the daemon keeps synced guest prints in
+   memory and in its disk cache and re-syncs only hourly. A panel that cannot be told never fails the erase; the server does not
+   match an erased guest either way, and the next sync removes the copy.
 
 ## On a guest turn
 
@@ -192,7 +196,7 @@ Owner, 2026-11-08: "Can't Zoe learn a person's voice with enough conversation?"
 - **Expiry:** a voice with no new turn for `ZOE_GUEST_LEARN_EXPIRE_DAYS` (14) is dropped with its samples.
 - **The owner:** `GET /api/voice/unknown-voices` (admin; counts and dates only), `POST /api/voice/unknown-voices/{id}/name`
   `{"name"}` ("that was Quinn this morning": a named guest in the naming member's layer), `DELETE /api/voice/unknown-voices/{id}`
-  (or `all`). The nightly backup carries no row data of either table.
+  (or `all`). The nightly backup carries no row data of either table. Erasing the member who holds them erases them.
 - **Shadow first:** `shadow` keeps samples and logs `GUEST_LEARN ... action=ask` where Zoe WOULD ask, and never asks.
 
 ## Not built yet (follow-ups)

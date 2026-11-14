@@ -7,7 +7,8 @@ rule says otherwise). A guest cannot reach it by saying a name.
 
 Erasing (fail closed, a failure RAISES): "forget everything about Quinn" (the entity forget -> ``contacts_store.forget_voiceprints``
 -> ``omi_voices.purge_people`` -> ``erase_people``), "forget Quinn's voice" / "forget Quinn" said by the member who enrolled them
-(``named_guests.tier`` -> ``erase``), and ``DELETE /api/voice/guests/{id}``. The forget-reach inventory row is ``forget_reach.py``;
+(``named_guests.tier`` -> ``erase``), and ``DELETE /api/voice/guests/{id}``. Each erase then tells the panels to drop their cached copy
+of the print (``drop_from_panels``). The forget-reach inventory row is ``forget_reach.py``;
 the forget-completeness probe row is ``tests/test_forget_completeness_probe.py`` (layer ``named_guest_turns``).
 
 Flags: ``ZOE_NAMED_GUEST_MEMORY`` (default off; needs ``ZOE_NAMED_GUESTS=on``), ``ZOE_NAMED_GUEST_RECALL_TURNS`` (default 6).
@@ -127,6 +128,41 @@ async def erase_people(db, owner_user_id: str, person_ids: Iterable[str]) -> int
     return int(getattr(cur, "rowcount", 0) or 0) + notes
 
 
+async def panel_guest_ids(db, owner_user_id: str, person_ids: Optional[Iterable[str]] = None) -> list[str]:
+    """The people of this member who hold a PANEL print (all of them, or those among ``person_ids``): read BEFORE an erase, so the
+    panels can be told afterwards. A missing table is nobody."""
+    sql, params = "SELECT DISTINCT people_id FROM learned_voiceprints WHERE owner_user_id = ? AND channel = ?", [owner_user_id, CHANNEL]
+    if person_ids is not None:
+        ids = sorted(set(person_ids))
+        if not ids:
+            return []
+        sql += f" AND people_id IN ({', '.join('?' * len(ids))})"
+        params += ids
+    try:
+        async with db.execute(sql, tuple(params)) as cur:
+            return [str(r[0]) for r in await cur.fetchall()]
+    except Exception as exc:  # noqa: BLE001
+        if type(exc).__name__ == "UndefinedTableError" or "no such table" in str(exc).lower():
+            return []
+        raise
+
+
+async def drop_from_panels(person_ids: Iterable[str]) -> int:
+    """An erased guest's print also leaves every PANEL now: each daemon keeps the synced guest prints in memory and in its 0600 disk
+    cache and re-syncs only hourly, so without this a forgotten voice stayed on the panel (and was still scored there) for up to an
+    hour. One ``voice_profile_forget`` command per panel per guest (the daemon's handler already drops a guest id). Returns how
+    many were queued. Never raises: the server-side erase has already happened, and the server never matches an erased guest."""
+    queued = 0
+    for pid in sorted(set(person_ids)):
+        try:
+            import voice_enrollment
+
+            queued += await voice_enrollment.push_forget_to_panels(pid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("named_guests: panels not told to drop a forgotten guest (%s); the hourly sync will", type(exc).__name__)
+    return queued
+
+
 async def list_for(owner_user_id: str, *, admin: bool = False) -> list[dict]:
     """The named guests an owner can see (their own; an admin sees the household's). Never an embedding."""
     from db_compat import get_compat_db
@@ -154,4 +190,6 @@ async def erase(owner_user_id: str, person_id: str) -> bool:
         gone = int(getattr(cur, "rowcount", 0) or 0)
         turns = await erase_people(db, owner_user_id, [person_id])
         await db.commit()
+    if gone:
+        await drop_from_panels([person_id])
     return bool(gone or turns)

@@ -930,7 +930,12 @@ async def forget_user(user_id: str, *, db=None) -> int:
     voiceprint their tagging taught. A table that is not there yet is skipped; any other failure is logged at ERROR and re-raised
     so the caller does not report a clean erase."""
     async def go(conn) -> int:
+        import named_guest_learning
+        import named_guest_memory
+
         n = 0
+        on_panels = await named_guest_memory.panel_guest_ids(conn, user_id)      # read before the erase: the panels are told after it
+        n += await named_guest_learning.forget_user(conn, user_id)               # the unknown voices held for this member (0073)
         for table, col in FORGET_USER_TABLES:
             try:
                 n += await _run(conn, f"DELETE FROM {table} WHERE {col} = ?", (user_id,))
@@ -944,6 +949,7 @@ async def forget_user(user_id: str, *, db=None) -> int:
             if "source_contact_id" not in str(exc) and "no such table" not in str(exc).lower():
                 raise
         await conn.commit()
+        await named_guest_memory.drop_from_panels(on_panels)
         return n
 
     try:
