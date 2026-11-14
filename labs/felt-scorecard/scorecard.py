@@ -18,6 +18,8 @@ Sources, all opened read-only:
   - MemPalace chroma.sqlite3, mode=ro; one GROUP BY over metadata keys
     user_id / source / status (see durable_rows()). Never the document text.
   - night-window.log: NIGHT_WINDOW_SUMMARY outcome per run.
+  - ALERTS rows: crash-loop-watch.log, night-reports/*.json, backup-verify.log (+ the drill state file), health.log and
+    two app-log markers; counts and fixed (allowlisted) labels only. See the README table.
   - Optional (--panel): the panel daemon log on the Pi over ssh. The Pi side
     runs an allowlist sed program that emits only a timestamp, a one-letter tag
     and a number or enum per line; nothing else can cross the host boundary.
@@ -64,9 +66,11 @@ LOCAL_TZ = dt.datetime.now().astimezone().tzinfo
 
 MARKERS = (
     "FLUE_TOOLS", "SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN",
-    "VOICE TIMING", "DAY_REVIEW_RAISE",
+    "VOICE TIMING", "DAY_REVIEW_RAISE", "VALUE_CORRECTION",
+    # ALERTS section (counted only; never member-joined, never printed): see alert_* below
+    "DISTRESS_NO_CONTACT", "PANEL_KV_MISS", "kv_miss_alert: alert not delivered",
 )
-USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE")
+USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE", "VALUE_CORRECTION")
 SESSION_MARKERS = ("FLUE_TOOLS", "VOICE TIMING")
 
 # Lane 1 traffic split: a line is harness when it carries traffic=harness, when
@@ -493,6 +497,38 @@ def m_brain_first_text(lines, since, until, members: Members) -> dict:
                         "other": other, "no_token": no_token})
 
 
+def m_corrections(lines, since, until, members: Members) -> dict:
+    """Corrections a member made that changed stored memory ("it is the 19th, not the 12th"), and the two ways one goes wrong.
+    APPLIED carries rows= (stored rows rewritten); STALE and KIND_GUESS are the idle-consolidation lane's refusals."""
+    applied = rows = stale = kind = bad = 0
+    for _, line in in_window(lines, since, until, "VALUE_CORRECTION"):
+        f = fields(line)
+        if is_harness(line, f) or f.get("user") not in members.users:
+            continue
+        if "VALUE_CORRECTION_APPLIED" in line:
+            try:
+                r = _num(f.get("rows"))
+            except Malformed:
+                bad += 1
+                continue
+            applied += 1
+            rows += int(r)
+        elif "VALUE_CORRECTION_STALE" in line:
+            stale += 1
+        elif "VALUE_CORRECTION_KIND_GUESS" in line:
+            kind += 1
+    title = "Corrections applied to stored memory (member)"
+    if bad:
+        return malformed_metric("value_corrections", title, bad, since, until)
+    return metric("value_corrections", title,
+                  f"applied {applied} ({rows} rows rewritten); stale re-filing stopped {stale}; kind guess stopped {kind}",
+                  n=applied, window=wstr(since, until),
+                  method=("VALUE_CORRECTION_APPLIED lines (rows= summed), VALUE_CORRECTION_STALE and VALUE_CORRECTION_KIND_GUESS "
+                          "lines, member user=, harness excluded; a count of what happened, not a success rate (a correction "
+                          "that matched no stored row writes no line)"),
+                  data={"applied": applied, "rows": rows, "stale": stale, "kind_guess": kind})
+
+
 def count_raises(logs: LogSet, since, until) -> tuple[int | None, str | None]:
     """DAY_REVIEW_RAISE raised=1 lines (non-harness) in window, or (None, reason) when the logs do not cover it."""
     reason = coverage_reason(logs, since, until)
@@ -512,6 +548,7 @@ LOG_METRICS = (
     ("continuity", "Continuity carried", m_continuity),
     ("tool_calls", "Tool calls per member brain turn", m_tools),
     ("brain_first_text", "Brain dispatch to first text", m_brain_first_text),
+    ("value_corrections", "Corrections applied to stored memory", m_corrections),
 )
 
 
@@ -570,6 +607,433 @@ def m_nights(path: str, until: dt.datetime, nights: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ALERTS: what told, or should have told, the owner something is wrong. One row per source, over the long window
+# unless the source only supports less (each row says which). Every log-derived string that reaches the output goes
+# through a fixed allowlist; anything else prints as `other`.
+# ---------------------------------------------------------------------------
+
+ALERTS = "ALERTS (told, or should have told, the owner something is wrong)"
+PERFORMANCE = "PERFORMANCE (a regression the owner is alerted to)"
+
+#: scripts/maintenance/zoe_crash_loop_watch.py: UNIT plus OTHER_UNITS. A unit named in an alert outside this list is `other`.
+CRASH_UNITS = ("zoe-data.service", "flue-zoe-telegram.service", "flue-zoe-brain-2x.service", "llama-server.service",
+               "kokoro-tts.service", "functiongemma-router.service", "github-runner.service")
+CRASH_ALERT, CRASH_RECOVERY = "\U0001F534", "\U0001F7E2"  # the red / green circle each alert / recovery message starts with
+_CRASH_STAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}) ")
+_UNIT_RE = re.compile(r"([A-Za-z0-9@_.-]+\.service)\b")
+CRASH_TOLERANCE_S = 7200.0  # the watcher prints a timestamped heartbeat at least hourly (HEARTBEAT_S) on a 2-min timer
+
+#: scripts/maintenance/zoe_health.py check names: SPINE ("<name> :<port>") plus the fixed checks.
+HEALTH_CHECKS = ("zoe-data :8000", "llama-server :11434", "flue-zoe-brain-2x :3579", "kokoro-tts :10201",
+                 "functiongemma-router :11436", "postgres", "containers", "failed units", "night-window timer",
+                 "disk /", "memory")
+_HEALTH_LINE_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\] ")
+_HEALTH_ALERT_RE = re.compile(r"^\[[^\]]+\] ALERT (DOWN|recovered): (.*?) \(")
+HEALTH_TOLERANCE_S = 1800.0  # the timer runs every 5 min and every run prints timestamped lines
+
+#: ALERT: kinds written by scripts/maintenance/zoe_restore_drill.py and zoe_offbox.py (via zoe_offbox.alert).
+BACKUP_ALERT_KINDS = (("weekly restore drill FAILED", "drill_failed"), ("weekly restore drill refused", "drill_refused"),
+                      ("weekly restore drill has not passed", "drill_stale"),
+                      ("monthly off-box restore drill FAILED", "offbox_drill_failed"),
+                      ("off-box backup landed with problems", "offbox_backup_problems"))
+_BACKUP_END_RE = re.compile(r"^zoe-backup-verify: (done|\d+ problem\(s\) detected)\s*$")
+
+
+def _read_lines(path: str) -> tuple[list[str] | None, str | None]:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return [l.rstrip("\n") for l in fh], None
+    except OSError as exc:
+        return None, f"cannot read {os.path.basename(path)} ({type(exc).__name__})"
+
+
+def _stamp_coverage(stamps: list[dt.datetime], since, until, tol_s: float, what: str) -> str | None:
+    """None when timestamped lines provably cover [since, until): they start at or before `since`, no two consecutive
+    stamps that touch the window are more than `tol_s` apart, and the last one is within `tol_s` of `until`."""
+    if not stamps:
+        return f"{what} holds no timestamped line"
+    if stamps[0] > since:
+        return f"{what} starts {_fmt(stamps[0])}, after the window start {_fmt(since)}; a partial count is not reported"
+    for a, b in zip(stamps, stamps[1:]):
+        if b > since and a < until and (b - a).total_seconds() > tol_s:
+            return (f"{what} is silent for {(b - a).total_seconds() / 3600:.1f} h ({_fmt(a)}..{_fmt(b)}), more than "
+                    f"{tol_s / 60:.0f} min: the writer was not running; a partial count is not reported")
+    if stamps[-1] < until - dt.timedelta(seconds=tol_s):
+        return f"{what} ends {_fmt(stamps[-1])}, more than {tol_s / 60:.0f} min before the window end (stale or stopped log)"
+    return None
+
+
+def _crash_unit(line: str) -> str:
+    m = _UNIT_RE.search(line)
+    return m.group(1) if m and m.group(1) in CRASH_UNITS else "other"
+
+
+def alert_crash_loops(path: str, since, until) -> dict:
+    """Crash-loop alerts and recoveries in crash-loop-watch.log (the watcher's stdout+stderr, appended by its unit).
+    The writer prints each message as ONE line (newlines become " | ") and WITHOUT a timestamp; only its status lines
+    carry one. So an alert is dated by the timestamped lines around it: it counts in the window only when the stamp
+    before it is at or after `since` and the stamp after it (or the file's mtime, after the last stamp) is before
+    `until`. One straddling a window edge is reported apart, never guessed in or out."""
+    key, title = "alerts_crash_loops", "Crash-loop alerts (zoe-data and the watched units)"
+    w = wstr(since, until)
+    lines, err = _read_lines(path)
+    if lines is None:
+        return unmeasured(key, title, err, window=w)
+    try:
+        mtime = dt.datetime.fromtimestamp(os.stat(path).st_mtime, LOCAL_TZ)
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot stat {os.path.basename(path)} ({type(exc).__name__})", window=w)
+    stamps: list[dt.datetime] = []
+    events: list[tuple[int, str, str]] = []  # (index into stamps of the stamp before, kind, unit label)
+    undelivered = 0
+    for line in lines:
+        m = _CRASH_STAMP_RE.match(line)
+        if m:
+            t = parse_ts(m.group(1))
+            if t is not None:
+                stamps.append(t)
+            body = line[m.end():]
+        else:
+            body = line
+        if body.startswith(CRASH_ALERT):
+            events.append((len(stamps) - 1, "alert", _crash_unit(body)))
+        elif body.startswith(CRASH_RECOVERY):
+            events.append((len(stamps) - 1, "recovery", _crash_unit(body)))
+        elif body.startswith("crash-watch:") and ("telegram send failed" in body or "NO ALERT RECIPIENT" in body
+                                                   or "alert NOT delivered" in body):
+            events.append((len(stamps) - 1, "undelivered", "-"))
+    reason = _stamp_coverage(stamps, since, until, CRASH_TOLERANCE_S, os.path.basename(path))
+    if reason:
+        return unmeasured(key, title, reason, window=w)
+    alerts = recoveries = edge = 0
+    by_unit: dict[str, int] = {}
+    for i, kind, unit in events:
+        before = stamps[i] if i >= 0 else None
+        after = stamps[i + 1] if i + 1 < len(stamps) else mtime
+        if before is None or after < since or before >= until:
+            continue                       # wholly outside the window
+        if before < since or after >= until:
+            edge += 1                      # straddles an edge: not datable to one side
+            continue
+        if kind == "alert":
+            alerts += 1
+            by_unit[unit] = by_unit.get(unit, 0) + 1
+        elif kind == "recovery":
+            recoveries += 1
+        else:
+            undelivered += 1
+    units_txt = ", ".join(f"{k} {v}" for k, v in sorted(by_unit.items())) or "none"
+    return metric(key, title, f"alerts {alerts}, recoveries {recoveries}; by unit: {units_txt}", n=alerts, window=w,
+                  method=(f"crash-loop-watch.log lines starting with the red circle (alert) / green circle (recovery) "
+                          f"written by zoe_crash_loop_watch.py; undated, so each is dated by the timestamped lines around "
+                          f"it; at a window edge (not counted): {edge}; delivery failures logged: {undelivered}; "
+                          f"a pending alert is re-printed each tick until delivered, so alerts are lines, not incidents"),
+                  label="[Proven]", data={"alerts": alerts, "recoveries": recoveries, "by_unit": by_unit, "edge": edge,
+                                         "undelivered": undelivered})
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+#: a REAL night's report name (write_report: <date>.json, or <date>-HHMM.json for a second run that day); exploratory runs
+#: carry -cells / -trial / -sweep / -rehearse / -repass-only. An unreadable file is placed in a night by this name alone.
+_NIGHT_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:-\d{4})?\.json$")
+
+
+def _night_bucket(runs: list[dict]) -> str:
+    """The night's headline from its best real run: ok > degraded > not_ok."""
+    outs = [str(r.get("outcome", "")) for r in runs]
+    if any(o.startswith("ok") for o in outs):
+        return "ok"
+    if any(o.startswith("degraded") for o in outs):
+        return "degraded"
+    return "not_ok"
+
+
+def alert_nights(report_dir: str, since, until) -> dict:
+    """Per night in the window, from the night window's own reports (<date>.json, the machine twin of <date>.md, written
+    by scripts/night/night_window.py write_report). Only `mode == "night"` runs count (trials, rehearsals, sweeps and
+    re-pass-only runs do not). A night D is in the window when D 04:00 local (after the window's ~02:30-03:10 run) is.
+    The ALARM file beside the reports is one file that the next clean window deletes, so it only says "now"; the
+    per-night record of an alarm is the report's `restore_status` (NOT HEALTHY), `night_lost` and `decode_alert`."""
+    key, title = "alerts_night", "Night window: alarms, degraded and missing nights"
+    try:
+        names = sorted(os.listdir(report_dir))
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot list the night-reports directory ({type(exc).__name__})")
+    runs: dict[str, list[dict]] = {}
+    unreadable: list[str] = []   # file-name dates of real-night reports that exist but cannot be read (never "missing")
+    for name in names:
+        if not name.endswith(".json") or not _DATE_RE.match(name[:10]):
+            continue
+        real_name = _NIGHT_NAME_RE.match(name)
+        try:
+            with open(os.path.join(report_dir, name), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            if real_name:
+                unreadable.append(real_name.group(1))
+            continue
+        if not isinstance(d, dict):
+            if real_name:
+                unreadable.append(real_name.group(1))
+            continue
+        if d.get("mode") != "night":
+            continue
+        day = str(d.get("started", ""))[:10]
+        if not _DATE_RE.match(day) or not isinstance(d.get("outcome"), str):
+            unreadable.append(real_name.group(1) if real_name else name[:10])
+            continue
+        runs.setdefault(day, []).append(d)
+    if not runs:
+        return unmeasured(key, title, "no readable real-night report in the night-reports directory")
+    first_report = dt.date.fromisoformat(min(runs))
+    nights: list[dt.date] = []
+    d = since.astimezone(LOCAL_TZ).date() - dt.timedelta(days=1)
+    while True:
+        at4 = dt.datetime(d.year, d.month, d.day, 4, 0, tzinfo=LOCAL_TZ)
+        if at4 >= until:
+            break
+        if at4 >= since:
+            nights.append(d)
+        d += dt.timedelta(days=1)
+    asked = nights[:]
+    nights = [n for n in nights if n >= first_report]
+    if not nights:
+        return unmeasured(key, title, f"the night reports start {first_report}, after every night in the window")
+    bad = sum(1 for u in unreadable if u in {n.isoformat() for n in nights})
+    if bad:
+        return unmeasured(key, title, f"{bad} night report(s) in the window exist but cannot be read (corrupt or "
+                                      f"malformed); a night whose report cannot be read is neither missing nor ok",
+                          window=f"nights {nights[0]}..{nights[-1]}")
+    c = {"ok": 0, "degraded": 0, "not_ok": 0, "no_report": 0, "alarm": 0, "decode_slow": 0, "restore_failed": 0,
+         "night_lost": 0}
+    for n in nights:
+        rs = runs.get(n.isoformat())
+        if not rs:
+            c["no_report"] += 1
+            continue
+        c[_night_bucket(rs)] += 1
+        restore = any(str(r.get("restore_status", "")).startswith("NOT HEALTHY") for r in rs)
+        lost = any(r.get("night_lost") for r in rs)
+        slow = any(r.get("decode_alert") for r in rs)
+        c["restore_failed"] += restore
+        c["night_lost"] += lost
+        c["decode_slow"] += slow
+        c["alarm"] += restore or lost or slow
+    alarm_now = os.path.exists(os.path.join(report_dir, "ALARM"))
+    narrowed = len(nights) < len(asked)
+    w = f"nights {nights[0]}..{nights[-1]}" + (f" (narrowed: reports start {first_report}; window asked from {asked[0]})"
+                                               if narrowed else "")
+    return metric(key, title,
+                  (f"alarm {c['alarm']} (restore failed {c['restore_failed']}, night lost {c['night_lost']}, decode slow "
+                   f"{c['decode_slow']}); ok {c['ok']}, degraded {c['degraded']}, not ok {c['not_ok']}, no report "
+                   f"{c['no_report']} of {len(nights)}"),
+                  n=len(nights), window=w,
+                  method=("night-reports/<date>.json mode=night; per night the best run: outcome ok... > degraded... > "
+                          "anything else (refused/aborted/failed/noop); alarm = restore_status NOT HEALTHY, night_lost or "
+                          "decode_alert (what the ALARM file carries); a night with no report is counted, not skipped; "
+                          f"ALARM file present now: {'yes' if alarm_now else 'no'}; unreadable reports outside the window: {len(unreadable)}; "
+                          "a 30-day per-night view from the reports, not the night-window.log row above"),
+                  data={**c, "nights": len(nights), "alarm_file_now": alarm_now, "unreadable": len(unreadable),
+                        "narrowed": narrowed})
+
+
+def alert_backups(log_path: str, state_path: str) -> dict:
+    """ALERT: lines in backup-verify.log. The log has no per-line timestamps (stdout/stderr of the weekly unit); runs are
+    delimited by the script's last line ("zoe-backup-verify: done" / "N problem(s) detected"). So the count is over the
+    whole log, never a window, with the file's mtime as the last write and the drill state file's last run time."""
+    key, title = "alerts_backups", "Backup restore-drill alerts"
+    lines, err = _read_lines(log_path)
+    if lines is None:
+        return unmeasured(key, title, err, window="whole log")
+    runs = problem_runs = alerts = undelivered = 0
+    kinds: dict[str, int] = {}
+    tail = False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("ALERT: "):
+            alerts += 1
+            body = s[len("ALERT: "):]
+            kind = next((label for pre, label in BACKUP_ALERT_KINDS if body.startswith(pre)), "other")
+            kinds[kind] = kinds.get(kind, 0) + 1
+        elif s.startswith("alert not delivered"):
+            undelivered += 1
+        m = _BACKUP_END_RE.match(s)
+        if m:
+            runs += 1
+            problem_runs += m.group(1) != "done"
+            tail = False
+        elif s:
+            tail = True
+    counted = f"(readable: {alerts} ALERT lines over {runs} runs)"
+    try:
+        last_write = dt.datetime.fromtimestamp(os.stat(log_path).st_mtime, LOCAL_TZ)
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot stat {os.path.basename(log_path)} ({type(exc).__name__}) {counted}",
+                          window="whole log")
+    try:
+        with open(state_path, encoding="utf-8") as fh:
+            st = json.load(fh)
+        t = parse_local(str(st["time"]))
+        last_ok = st["ok"]
+        if not isinstance(last_ok, bool):
+            raise ValueError("ok is not a boolean")
+        last_run = _fmt(t)
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot read the drill state file {os.path.basename(state_path)} "
+                                      f"({type(exc).__name__}) {counted}", window="whole log")
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return unmeasured(key, title, f"the drill state file {os.path.basename(state_path)} is malformed "
+                                      f"({type(exc).__name__}) {counted}", window="whole log")
+    kinds_txt = ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())) or "none"
+    return metric(key, title,
+                  (f"{alerts} ALERT lines over {runs} runs ({problem_runs} with problems); by kind: {kinds_txt}; "
+                   f"last write {_fmt(last_write)}"),
+                  n=runs, window="whole log (undated: the count is all-time, not the long window)",
+                  method=("backup-verify.log ALERT: lines (zoe_offbox.alert, used by the on-box and off-box drills); runs "
+                          "end at the script's last line; the log has no per-line timestamps, so no date is guessed; "
+                          f"alert not delivered: {undelivered}; unterminated last run: {'yes' if tail else 'no'}; last drill "
+                          f"run (state file): {last_run}, passed: {'yes' if last_ok else 'no'}"),
+                  data={"alerts": alerts, "runs": runs, "problem_runs": problem_runs, "by_kind": kinds,
+                        "undelivered": undelivered, "last_write": last_write.isoformat(),
+                        "last_drill_ok": last_ok})
+
+
+def alert_health(path: str, since, until) -> dict:
+    """zoe_health.py's alert lines ("[<local ISO>] ALERT DOWN: <check> (...)" / "ALERT recovered: ..."), incl. the
+    night-window timer alarm of PR #2419. A check outside HEALTH_CHECKS is `other`."""
+    key, title = "alerts_health", "Health-check alerts (incl. the night-window timer alarm)"
+    w = wstr(since, until)
+    lines, err = _read_lines(path)
+    if lines is None:
+        return unmeasured(key, title, err, window=w)
+    stamps: list[dt.datetime] = []
+    down = recovered = 0
+    by_check: dict[str, int] = {}
+    for line in lines:
+        m = _HEALTH_LINE_RE.match(line)
+        if not m:
+            continue
+        try:
+            t = dt.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=LOCAL_TZ)
+        except ValueError:
+            if "] ALERT " in line:   # an alert that cannot be dated cannot be placed in or out of the window
+                return unmeasured(key, title, "malformed marker (an ALERT line with an invalid timestamp)", window=w)
+            continue
+        stamps.append(t)
+        a = _HEALTH_ALERT_RE.match(line)
+        if a and since <= t < until:
+            if a.group(1) == "DOWN":
+                down += 1
+                name = a.group(2) if a.group(2) in HEALTH_CHECKS else "other"
+                by_check[name] = by_check.get(name, 0) + 1
+            else:
+                recovered += 1
+    stamps.sort()
+    reason = _stamp_coverage(stamps, since, until, HEALTH_TOLERANCE_S, os.path.basename(path))
+    if reason:
+        return unmeasured(key, title, reason, window=w)
+    checks_txt = ", ".join(f"{k} {v}" for k, v in sorted(by_check.items())) or "none"
+    return metric(key, title,
+                  f"DOWN {down} (night-window timer {by_check.get('night-window timer', 0)}), recovered {recovered}; by check: {checks_txt}",
+                  n=down, window=w,
+                  method="zoe_health.py ALERT DOWN / recovered lines (2 consecutive failures per alert); check names allowlisted",
+                  data={"down": down, "recovered": recovered, "by_check": by_check})
+
+
+def _app_log_window(logs: LogSet, since, until) -> tuple[dt.datetime, str | None, str]:
+    """(start, reason, window text) for an app-log alert row: the long window when the retained rotations cover it;
+    otherwise, when the ONLY problem is that retention starts later, the narrower window from the earliest retained
+    line (stated in the window text); otherwise `reason`."""
+    reason = coverage_reason(logs, since, until)
+    if reason and logs.earliest is not None and logs.earliest > since:
+        start = logs.earliest
+        if coverage_reason(logs, start, until) is None:
+            return start, None, wstr(start, until) + f" (narrowed: app logs are retained from {_fmt(start)}; window asked from {_fmt(since)})"
+    return since, reason, wstr(since, until)
+
+
+def alert_distress_no_contact(logs: LogSet, since, until) -> dict:
+    """DISTRESS_NO_CONTACT WARNING lines (services/zoe-data/distress_handoff.py): a distress hand-off fired and nobody
+    was told because no contact is configured. Only this marker is counted; distress events themselves are not."""
+    key, title = "alerts_distress_no_contact", "Distress hand-offs where nobody was told"
+    since, reason, w = _app_log_window(logs, since, until)
+    if reason:
+        return unmeasured(key, title, reason, window=w)
+    n = harness = 0
+    for _, line in in_window(logs.lines, since, until, "DISTRESS_NO_CONTACT"):
+        if is_harness(line, fields(line)):
+            harness += 1
+        else:
+            n += 1
+    return metric(key, title, f"{n} (harness lines excluded: {harness})", n=n, window=w,
+                  method="zoe-data app log DISTRESS_NO_CONTACT lines (fixed text, no id), harness traffic excluded",
+                  data={"lines": n, "harness": harness})
+
+
+def perf_panel_kv_miss(logs: LogSet, since, until) -> dict:
+    """PANEL_KV_MISS WARNING lines (services/zoe-data/zoe_flue_client.py _panel_kv_alarm; household voice-panel turns
+    only): kind=first is the cold first reply kv_miss_alert.py tells the owner about (at most one Telegram a day)."""
+    key, title = "perf_panel_kv_miss", "Brain cache misses on household panel turns"
+    since, reason, w = _app_log_window(logs, since, until)
+    if reason:
+        return unmeasured(key, title, reason, window=w)
+    kinds = {"first": 0, "warm": 0, "other": 0}
+    first_days: set[str] = set()
+    undelivered = 0
+    for t, line in in_window(logs.lines, since, until, "PANEL_KV_MISS"):
+        f = fields(line)
+        if is_harness(line, f):
+            continue
+        k = f.get("kind")
+        k = k if k in ("first", "warm") else "other"
+        kinds[k] += 1
+        if k == "first":
+            first_days.add(t.astimezone(LOCAL_TZ).date().isoformat())
+    for _, line in in_window(logs.lines, since, until, "kv_miss_alert: alert not delivered"):
+        if not is_harness(line, fields(line)):
+            undelivered += 1
+    n = sum(kinds.values())
+    return metric(key, title,
+                  (f"misses {n}: first {kinds['first']}, warm {kinds['warm']}"
+                   + (f", other {kinds['other']}" if kinds["other"] else "")
+                   + f"; days with a cold first reply {len(first_days)}; owner alert not delivered {undelivered}"),
+                  n=n, window=w,
+                  method=("zoe-data app log PANEL_KV_MISS kind=first|warm (re-prefill above ZOE_PANEL_KV_MISS_TOKENS); "
+                          "kind=first days are the days kv_miss_alert.py sends its one owner alert; 'kv_miss_alert: alert "
+                          "not delivered' lines counted. A performance regression, not a failure"),
+                  label="[Performance]",
+                  data={**kinds, "days_first": len(first_days), "undelivered": undelivered})
+
+
+def alert_section(args, logs: LogSet, long_since, until) -> list[dict]:
+    """The ALERTS rows then the PERFORMANCE row; each reader is defensive, and one that still raises becomes `unmeasured`."""
+    log_dir = args.log_dir
+    jobs = (
+        ("alerts_crash_loops", "Crash-loop alerts", ALERTS,
+         lambda: alert_crash_loops(args.crash_log or os.path.join(log_dir, "crash-loop-watch.log"), long_since, until)),
+        ("alerts_night", "Night window: alarms, degraded and missing nights", ALERTS,
+         lambda: alert_nights(args.night_reports, long_since, until)),
+        ("alerts_backups", "Backup restore-drill alerts", ALERTS,
+         lambda: alert_backups(args.backup_log or os.path.join(log_dir, "backup-verify.log"), args.backup_state)),
+        ("alerts_health", "Health-check alerts", ALERTS,
+         lambda: alert_health(args.health_log or os.path.join(log_dir, "health.log"), long_since, until)),
+        ("alerts_distress_no_contact", "Distress hand-offs where nobody was told", ALERTS,
+         lambda: alert_distress_no_contact(logs, long_since, until)),
+        ("perf_panel_kv_miss", "Brain cache misses on household panel turns", PERFORMANCE,
+         lambda: perf_panel_kv_miss(logs, long_since, until)),
+    )
+    out = []
+    for key, title, section, fn in jobs:
+        try:
+            m = fn()
+        except Exception as exc:  # noqa: BLE001 - a scorecard reports, it never crashes
+            m = unmeasured(key, title, f"reader failed ({type(exc).__name__})")
+        m["section"] = section
+        out.append(m)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Panel (optional, over ssh)
 # ---------------------------------------------------------------------------
 
@@ -591,6 +1055,8 @@ PANEL_SED = (
 )
 PANEL_LOG = "/home/pi/.zoe-voice/voice.log"
 _PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R)|E)$")
+#: The voice lane's bars: a turn "feels answered" when ANY sound starts inside 1 s of speech end; 0.6 s is the reflex bar.
+FIRST_SOUND_BANDS_MS = (1000, 600)
 TAIL_FLOOR_MS = {"deep": 640.0, "quiet": 800.0}  # live .env.voice floors per lane 4 (used only when close= is absent)
 
 
@@ -650,13 +1116,17 @@ def panel_metric(reduced: list[str], since: dt.datetime, until: dt.datetime) -> 
     totals = panel_pairs(reduced, since, until)
     if not totals:
         return unmeasured("speech_end_first_sound", title, "no paired Recorded/TTFA lines in window", window=w)
+    under = {ms: sum(1 for x in totals if x < ms) for ms in FIRST_SOUND_BANDS_MS}
     return metric("speech_end_first_sound", title,
-                  f"p50 {pct(totals, 50) / 1000:.2f} s / p90 {pct(totals, 90) / 1000:.2f} s", n=len(totals), window=w,
+                  (f"p50 {pct(totals, 50) / 1000:.2f} s / p90 {pct(totals, 90) / 1000:.2f} s; "
+                   f"under 1 s {frac(under[1000], len(totals))}; under 0.6 s {frac(under[600], len(totals))}"),
+                  n=len(totals), window=w,
                   method=("Pi voice.log via an allowlist extractor: endpoint close (close=..ms, else tail floor 640/800) "
                           "+ turn_stream TTFA, paired per turn; excludes the Recorded-to-receipt upload (lane 4 stage B, "
                           "~0.16 s median)"),
                   label="[Experimental]",
-                  data={"p50_ms": pct(totals, 50), "p90_ms": pct(totals, 90)})
+                  data={"p50_ms": pct(totals, 50), "p90_ms": pct(totals, 90),
+                        "under_1000_ms": under[1000], "under_600_ms": under[600], "turns": len(totals)})
 
 
 def m_panel(host: str, since, until) -> dict:
@@ -934,7 +1404,8 @@ def build(args) -> dict:
     members = Members(db["member_users"], db["member_sessions"]) if db else None
 
     logs = log_section(logset, since, until, members, db_err)
-    out += [logs["memory_served_used"], logs["recall_every_turn"], logs["continuity"], logs["tool_calls"]]
+    out += [logs["memory_served_used"], logs["recall_every_turn"], logs["continuity"], logs["tool_calls"],
+            logs["value_corrections"]]
 
     if db:
         nt = db["night_threads"]
@@ -1011,6 +1482,8 @@ def build(args) -> dict:
     else:
         out.append(unmeasured("usage", "Members active / days of use", db_err))
 
+    out += alert_section(args, logset, long_since, until)
+
     for m in out:
         if m["status"] == "measured" and m["n"] == 0:
             m["note"] = "n=0: no data in window (a count, not a zero rate)"
@@ -1024,7 +1497,11 @@ def render(report: dict) -> str:
     w = report["window"]
     lines = [f"Felt scorecard  generated {report['generated_at']}  runtime {report['runtime_s']} s",
              f"short window {w['since'][:16]}..{w['until'][:16]}   long window {w['long_since'][:16]}..{w['until'][:16]}", ""]
+    section = None
     for m in report["metrics"]:
+        if m.get("section") and m["section"] != section:
+            section = m["section"]
+            lines += ["", f"== {section} =="]
         lines.append(f"* {m['title']}")
         lines.append(f"    value : {m['value']}" + (f"   n={m['n']}" if m.get("n") is not None else ""))
         if m["status"] == "unmeasured":
@@ -1049,6 +1526,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--palace", default=os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace")))
     ap.add_argument("--panel", action="store_true", help="also read the panel daemon log on the Pi over ssh")
     ap.add_argument("--panel-host", default="zoe-pi")
+    ap.add_argument("--crash-log", help="crash-loop watcher log (default: <log-dir>/crash-loop-watch.log)")
+    ap.add_argument("--night-reports", default=os.path.expanduser("~/.zoe/night-reports"))
+    ap.add_argument("--backup-log", help="backup verify log (default: <log-dir>/backup-verify.log)")
+    ap.add_argument("--backup-state", default=os.path.expanduser("~/.local/state/zoe-offbox/last_restore_drill.json"))
+    ap.add_argument("--health-log", help="zoe_health.py log (default: <log-dir>/health.log)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     try:

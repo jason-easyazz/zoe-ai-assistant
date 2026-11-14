@@ -13,6 +13,7 @@ Old code using cursor = await db.execute() + cursor.fetchall() still works.
 """
 import asyncio
 import asyncpg
+import functools
 import logging
 import os
 import re
@@ -464,7 +465,45 @@ def _copy_quoted_sql(sql: str, start: int) -> tuple[str, int]:
 
 
 def _adapt_params(sql: str, params) -> tuple[str, list]:
-    """Convert ? placeholders to $1, $2, $3... for asyncpg.
+    """Convert ? placeholders to $1, $2, $3... for asyncpg (see :func:`_adapt_sql_uncached`).
+
+    The rewritten text depends ONLY on the SQL text (``params`` is only copied to a
+    list), so it is memoised per SQL string: a household runs the same few hundred
+    statements all day, and the character walk below costs regex work at every
+    position on the single event-loop worker (speed audit 2026-11-14 A5). A
+    non-``str`` SQL argument takes the uncached path exactly as before.
+    """
+    sql_pg = _adapt_sql(sql) if type(sql) is str else _adapt_sql_uncached(sql)
+    return sql_pg, list(params) if params is not None else []
+
+
+def _adapt_sql(sql: str) -> str:
+    """:func:`_adapt_sql_uncached`, memoised on the SQL text.
+
+    The key also carries every module-level rule the walk reads, so a test that swaps
+    one (the NOW()-operand negative control does) gets a fresh rewrite under the
+    swapped rule and never leaves its result behind for the real rules. The key holds
+    the rule OBJECTS (compiled patterns and a function are hashable by identity), not
+    their id(): the cache then keeps each rule alive for as long as an entry uses it,
+    so a released rule's address can never be reused by a different rule and match a
+    stale entry (review of PR 2469).
+    """
+    return _adapt_sql_memo(sql, (
+        _SQLITE_DATETIME_OFFSET_RE, _SQLITE_DATETIME_NOW_RE, _NOW_RE,
+        _NOW_ARITH_AFTER_RE, _NOW_ARITH_BEFORE_RE, _copy_quoted_sql,
+    ))
+
+
+@functools.lru_cache(maxsize=2048)
+def _adapt_sql_memo(sql: str, _rules: tuple) -> str:
+    """Bounded (2048 statements), thread-safe memo behind :func:`_adapt_sql`."""
+    return _adapt_sql_uncached(sql)
+
+
+def _adapt_sql_uncached(sql: str) -> str:
+    """The SQL-text rewrite behind :func:`_adapt_params`; a pure function of ``sql``.
+
+    Converts ? placeholders to $1, $2, $3... for asyncpg.
 
     Also rewrites bare NOW() → NOW()::text so callers that write timestamps
     into TEXT columns (migrated from SQLite) don't get DatatypeMismatchError.
@@ -529,4 +568,4 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
         converted.append(char)
         pos += 1
 
-    return "".join(converted), list(params) if params is not None else []
+    return "".join(converted)

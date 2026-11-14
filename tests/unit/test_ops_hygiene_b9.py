@@ -113,6 +113,22 @@ def test_health_probe_reports_spine_containers_and_failed_units():
     assert not checks["failed units"].ok and "zoe-backup.service" in checks["failed units"].detail
 
 
+def test_health_ignores_desktop_session_units_but_not_zoe_ones():
+    """xdg portals fail on a headless login and are not Zoe's; a failed Zoe unit beside them still alerts."""
+    def run(argv, timeout=5.0):
+        if argv[:2] == ["docker", "exec"]:
+            return 0, ""
+        if argv[:2] == ["docker", "ps"]:
+            return 0, "zoe-ui\tUp 3 hours"
+        return 0, ("xdg-desktop-portal.service loaded failed failed Portal\n"
+                   "xdg-desktop-portal-gtk.service loaded failed failed Portal\n"
+                   "pipewire.service loaded failed failed PipeWire")
+    checks = {c.name: c for c in health.probe(http=lambda port: (True, "x"), run=run, night_open=False)}
+    assert checks["failed units"].ok and checks["failed units"].detail == "none"
+    checks = {c.name: c for c in health.probe(http=lambda port: (True, "x"), run=_fake_run, night_open=False)}
+    assert not checks["failed units"].ok and "zoe-backup.service" in checks["failed units"].detail
+
+
 def test_health_skips_the_spine_while_the_night_window_is_open():
     checks = health.probe(http=lambda port: (False, "down"), run=_fake_run, night_open=True)
     assert not any(":" in c.name for c in checks), "the night window stops the spine on purpose"
@@ -405,3 +421,60 @@ def test_health_restore_drill_probe_runs_the_real_cli(tmp_path):
     r = subprocess.run([sys.executable, str(health.DRILL), "--check-stale"], capture_output=True, text=True, env=env,
                        timeout=60)
     assert r.returncode == 4 and "ever been recorded" in r.stdout
+
+
+# ── the forget ledger: red when unconfigured, unknown (never red) when unreadable; the secret is never read ───────────────
+
+def test_health_forget_ledger_red_when_unconfigured_and_names_no_value(monkeypatch):
+    monkeypatch.setenv("ZOE_FORGET_LEDGER_SALT", "planted-sentinel-value-0123456789")   # the check must never echo it
+    checks = health.probe(http=lambda port: (True, "x"), run=_fake_run, night_open=False,
+                          forget_ledger=lambda: "unconfigured")
+    bad = [c for c in checks if c.name == "forget ledger"]
+    assert bad and not bad[0].ok and not bad[0].unknown
+    lines, st = health.transitions(bad, {})
+    assert lines == []                                                   # the two-failing-runs rule holds
+    lines, _ = health.transitions(bad, st)
+    assert len(lines) == 1 and lines[0].startswith("DOWN: forget ledger (unconfigured")
+    assert "planted-sentinel" not in lines[0] and "planted-sentinel" not in bad[0].detail
+    assert "ZOE_FORGET_LEDGER_SALT\")" not in (MAINT / "zoe_health.py").read_text()   # no env read of the secret
+    assert health.forget_ledger_check("configured").ok
+
+
+def test_health_forget_ledger_unknown_neither_alerts_nor_recovers():
+    red = [health.forget_ledger_check("unconfigured")]
+    _, st = health.transitions(red, {})
+    lines, st = health.transitions(red, st)
+    assert lines and st["forget ledger"]["alerted"]
+    unknown = [health.forget_ledger_check(None)]
+    assert unknown[0].unknown and unknown[0].ok
+    lines, st2 = health.transitions(unknown, st)
+    assert lines == [] and st2 == st                                     # zoe-data down is not a "recovered" ledger
+    # negative control: without the skip, an unknown that counts as ok would send a false "recovered"
+    lines, _ = health.transitions([health.Check("forget ledger", True, "unknown")], st)
+    assert lines and lines[0].startswith("recovered")
+
+
+def test_health_fetch_forget_ledger_reads_only_the_enum(monkeypatch):
+    class _Resp:
+        def __init__(self, body):
+            self._b = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self._b
+
+    for body, want in ((b'{"forget_ledger": "configured"}', "configured"),
+                       (b'{"forget_ledger": "unconfigured"}', "unconfigured"),
+                       (b'{"forget_ledger": "something-else"}', None), (b"{}", None), (b"not json", None)):
+        monkeypatch.setattr(health.urllib.request, "urlopen", lambda *a, _b=body, **k: _Resp(_b))
+        assert health.fetch_forget_ledger() == want
+
+    def _down(*a, **k):
+        raise OSError("refused")
+    monkeypatch.setattr(health.urllib.request, "urlopen", _down)
+    assert health.fetch_forget_ledger() is None
