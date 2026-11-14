@@ -1514,6 +1514,7 @@ class MemoryService:
         self._user_locks: dict[str, asyncio.Lock] = {}
         # ZOE_MEMORY_TICK_DEFER_S: per user, the access ticks waiting for one coalesced write (id -> [n, query hashes])
         self._pending_ticks: dict[str, dict[str, list]] = {}
+        self._pending_lock = threading.Lock()   # the erase / status paths drop ids from executor threads
         self._seen_keys: _BoundedKeySet = _BoundedKeySet(
             on_evict=self._on_seen_key_evicted
         )
@@ -2168,7 +2169,7 @@ class MemoryService:
         return rows, chain
 
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
-        """Right-to-be-forgotten. Returns number of rows removed.
+        """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
         A hard delete is the one removal that bypasses the ``status`` lifecycle, so it must not be
         silent. When rows match, a content-free ``delete_user`` INTENT row is written BEFORE anything
@@ -2179,6 +2180,7 @@ class MemoryService:
         survive the purge of the user's own per-row trail (that trail carries text and is removed). A
         sweep that matches no rows writes nothing — it removes nothing. Documented in
         docs/knowledge/memory-loss-audit-2026-10-05.md."""
+        self._drop_pending_ticks(user_id=user_id)
         self._require(user_id, "user_id is required")
         assert_write_allowed(getattr(self, "_data_dir", _MEMPALACE_DATA), user_id, "delete_user")
         # The pendant day review FIRST and OUTSIDE the memory lock (migration 0054): its erase takes the member's erase gate, which
@@ -4333,6 +4335,7 @@ class MemoryService:
         return list(result.get("ids") or [])
 
     def _delete_ids(self, ids: list[str]) -> None:
+        self._drop_pending_ticks(ids)   # no deferred access tick outlives the row (ZOE_MEMORY_TICK_DEFER_S)
         col = self._collection()
         col.delete(ids=ids)
 
@@ -4379,6 +4382,8 @@ class MemoryService:
         return rows
 
     def _update_meta_sync(self, mem_id: str, md: dict[str, Any]) -> None:
+        if not _memory_status_visible(md):
+            self._drop_pending_ticks([mem_id])   # moved out of the readable statuses: no queued tick lands on it
         self._collection().update(ids=[mem_id], metadatas=[md])
 
     def _operator_rows_sync(self, user_id: str) -> list[MemoryRef]:
@@ -4448,21 +4453,42 @@ class MemoryService:
             coro = self._tick_access(user_id, ids) if query is None else self.tick_access(user_id, ids, query=query)
             self._track_background_task(coro, name=name)
             return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return   # no loop to flush on (a sync caller): the tick is best-effort and is dropped, never left queued
         qh = _tick_query_hash(query) if query else None
-        pend = self._pending_ticks.get(user_id)
-        start = pend is None
-        if start:
-            pend = self._pending_ticks[user_id] = {}
-        for rid in ids:
-            entry = pend.setdefault(rid, [0, []])
-            entry[0] += 1
-            if qh and qh not in entry[1]:
-                entry[1].append(qh)
+        with self._pending_lock:
+            pend = self._pending_ticks.get(user_id)
+            start = pend is None
+            if start:
+                pend = self._pending_ticks[user_id] = {}
+            for rid in ids:
+                entry = pend.setdefault(rid, [0, []])
+                entry[0] += 1
+                if qh and qh not in entry[1]:
+                    entry[1].append(qh)
         if start:
             self._track_background_task(self._flush_ticks_later(user_id, delay), name="memory_tick_access_coalesced")
 
+    def _drop_pending_ticks(self, ids: Iterable[str] = (), *, user_id: Optional[str] = None) -> None:
+        """Forgotten means forever: a row erased, deleted or moved out of the readable statuses has its queued ticks
+        dropped (``user_id``: the user's whole queue). Thread-safe (called from executor threads). Never raises."""
+        try:
+            drop = {str(i) for i in ids}
+            with self._pending_lock:
+                if user_id is not None:
+                    self._pending_ticks.pop(user_id, None)
+                if drop:
+                    for pend in self._pending_ticks.values():
+                        for rid in drop:
+                            pend.pop(rid, None)
+        except Exception:  # noqa: BLE001
+            pass
+
     async def _flush_ticks_later(self, user_id: str, delay: float) -> None:
-        """Best-effort, never raises. Reads that arrive while waiting join the same write."""
+        """Best-effort, never raises. Reads that arrive while waiting join the same write; a read arriving after the
+        queue is taken starts the next one. Cancelled (shutdown): the queue is dropped, nothing is written."""
         try:
             await asyncio.sleep(delay)
             waited = 0.0
@@ -4470,26 +4496,32 @@ class MemoryService:
                 await asyncio.sleep(_TICK_READ_POLL_S)
                 waited += _TICK_READ_POLL_S
         finally:
-            pend = self._pending_ticks.pop(user_id, None)
+            with self._pending_lock:
+                pend = self._pending_ticks.pop(user_id, None)
         if not pend:
             return
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         try:
-            async with lock:
-                await self._run_sync(self._tick_access_batch_sync, pend)
+            async with lock:   # the same lock erase_rows / delete_user hold: an erase never interleaves with this write
+                await self._run_sync(self._tick_access_batch_sync, pend, user_id)
         except Exception:
             pass
 
-    def _tick_access_batch_sync(self, pend: dict[str, list]) -> None:
+    def _tick_access_batch_sync(self, pend: dict[str, list], user_id: str = "") -> None:
         """``_tick_access_sync`` for many reads at once: per row, ``access_count`` + the number of reads that returned it,
-        and each distinct query hash applied with the same capped, never-evicting rule, in arrival order."""
+        and each distinct query hash applied with the same capped, never-evicting rule, in arrival order. The rows are
+        RE-READ here and only a row the read path would still serve this user is touched (``_filter_visible``: unexpired,
+        visible to the user, a readable status) - a row rejected, archived, superseded or forgotten since the read gets
+        nothing, and an erased row is simply not returned by the get."""
         if not pend:
             return
         col = self._collection()
-        result = col.get(ids=list(pend), include=["metadatas"])
+        result = col.get(ids=list(pend), include=["documents", "metadatas"])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        live = {r.id: r.metadata for r in self._filter_visible(result, user_id, now)}
         now_iso = datetime.datetime.utcnow().isoformat() + "Z"
-        got_ids = result.get("ids") or []
-        got_metas = result.get("metadatas") or []
+        got_ids = [i for i in (result.get("ids") or []) if i in live]
+        got_metas = [live[i] for i in got_ids]
         new_metas = []
         for rid, meta in zip(got_ids, got_metas):
             n, hashes = pend.get(rid, [0, []])
