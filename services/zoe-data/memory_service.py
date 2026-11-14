@@ -62,6 +62,7 @@ import memory_authority as _auth
 import memory_forgotten as _forgotten
 import own_words as _own_words
 import memory_temporal as _temporal
+import user_erase_gate as _erase_gate
 from live_store_guard import (
     LiveStoreViolation,
     assert_palace_open_allowed,
@@ -737,6 +738,11 @@ def compact_drawers_index_sync(
 # maintenance gate (collection ops drained, new openers blocked) because ``VACUUM`` needs the file to itself.
 _ERASE_MAX_NEEDLES = 24          # verification scans every file once per needle: bound the cost
 _ERASE_NEEDLE_BYTES = 40         # a head window of each forgotten text; >= 12 bytes or it is noise
+
+
+def _log_erase_drop(lane: str) -> None:
+    """The ONE line a write dropped by the erase gate leaves: the writer's lane and a fixed code - never the member, the text or an id."""
+    logger.info("ERASE_GATE_DROP lane=%s code=erased_since_scheduled", lane or "-")
 
 
 def physical_erase_enabled() -> bool:
@@ -1791,6 +1797,9 @@ class MemoryService:
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            if _erase_gate.erased_since_scheduled(user_id):      # background work scheduled before an erase of this member: dropped
+                _log_erase_drop(source)
+                return None
             if idem_key in self._seen_keys:
                 self._bump("dedup", source)
                 return None
@@ -2190,6 +2199,9 @@ class MemoryService:
             frontier = nxt
         return rows, chain
 
+    # The WHOLE erase, first step to after the memory lock is released, runs inside ``user_erase_gate.erase_span``: every background
+    # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
+    @_erase_gate.whole_member_erase
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed. (The user's queued access ticks are dropped first.)
 
@@ -2682,6 +2694,9 @@ class MemoryService:
 
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
+            if _erase_gate.erased_since_scheduled(user_id):      # same rule as ingest: an erase since the work was scheduled wins
+                _log_erase_drop(origin or actor)
+                return None
             if decision in {"approve", "reject", "archive"}:
                 new_status = {
                     "approve": "approved",
@@ -3558,6 +3573,9 @@ class MemoryService:
             dup = await self._existing_candidate(user_id, scrubbed, contradicts)
             if dup is not None:
                 return dup.id
+            if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
+                _log_erase_drop(writer)
+                return None
             await self._run_sync(self._write_row, mem_id, scrubbed, md)
             await self._append_audit(
                 mem_id=mem_id, user_id=user_id, actor=writer, action="authority_candidate",
