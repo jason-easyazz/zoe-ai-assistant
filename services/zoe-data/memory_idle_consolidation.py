@@ -409,6 +409,16 @@ async def consolidate_session(session_id: str, user_id: str,
         logger.debug("idle consolidation: no real user for session=%s — skipped", session_id)
         return 0
     user_id = owner
+    # The member's turns at or before their erase watermark are never mined (erase_watermark: the transcript survives a member erase).
+    # FAIL-CLOSED: an unreadable watermark returns BEFORE the consolidation watermark moves, so the session is re-read next sweep.
+    read = rows
+    try:
+        import erase_watermark
+        rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r["at"], reader="idle_consolidation")
+    except Exception as exc:  # noqa: BLE001 - Unavailable (or any failure to consult it): defer
+        logger.warning("idle consolidation: erase watermark unreadable session=%s (%s) - deferred, watermark kept",
+                       session_id, type(exc).__name__)
+        return 0
 
     # USER turns only, to the extractor AND as the anchor: the extraction prompt says "user
     # turns only", and the old "role: content" transcript fed it the assistant's lines too, so
@@ -525,9 +535,9 @@ async def consolidate_session(session_id: str, user_id: str,
             logger.warning("idle consolidation ingest failed: %s", exc)
 
     # ── Step 3: fresh short-lived conn — advance the watermark, then release ───
-    last_at = rows[-1]["at"]
+    last_at = read[-1]["at"]       # every row READ is consolidated (a turn skipped at the erase watermark stays skipped)
     async with get_ctx() as conn:
-        await _write_watermark(conn, session_id, user_id, last_at, len(rows))
+        await _write_watermark(conn, session_id, user_id, last_at, len(read))
     _warn_if_all_zero(session_id, user_id, len(rows), user_rows_in, user_turns_kept,
                       len(user_turns), len(facts or []), stored, rejected, skipped, dropped, failed)
     logger.info("MEMORY_IDLE_CONSOLIDATE session=%s user=%s turns=%d stored=%d "

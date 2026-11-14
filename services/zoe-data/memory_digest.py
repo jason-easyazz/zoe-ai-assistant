@@ -1858,9 +1858,12 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
 
 async def _transcript_from_rows(user_id: str, rows) -> "Transcript":
     """``(content, id, created_at)`` chat rows -> the day's ``Transcript`` of the OWNER's own words: pasted / third-person text is cut away (``own_words``),
-    turns naming a forgotten entity are skipped, each kept turn keeps its message id and time."""
+    turns naming a forgotten entity are skipped, each kept turn keeps its message id and time. Turns at or before the member's erase
+    watermark are never read (``erase_watermark``; an unreadable one RAISES, which the loaders turn into ``TranscriptLoadError``)."""
+    import erase_watermark
     from exact_words import speaker_rejected
 
+    rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[2] if len(r) > 2 else None, reader="digest")
     pairs = [(row[0], (str(row[1]) if len(row) > 1 and row[1] is not None else ""),
               (str(row[2]) if len(row) > 2 and row[2] is not None else ""))
              for row in rows if row[0] and not distress_handoff.guarded_text(str(row[0]))]
@@ -3182,7 +3185,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 )
             result["discarded_meta"] = len(junk)
             async with _db.execute(
-                f"""SELECT cm.content FROM chat_messages cm
+                f"""SELECT cm.content, cm.created_at FROM chat_messages cm
                    JOIN chat_sessions cs ON cm.session_id = cs.id
                    WHERE {_message_owner_expr()} = ? AND cm.role = 'user'
                      AND {_off_record_sql("cm")}
@@ -3200,6 +3203,12 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
         return _done("load_error")
 
     rows = [r for r in rows if not distress_handoff.guarded_text(str(r[0]))]   # a distress hand-off turn is never mined for open loops
+    try:   # ... nor a turn at or before the member's erase watermark (erase_watermark). Fail closed: unreadable = no loops tonight.
+        import erase_watermark
+        rows = await erase_watermark.keep_after(rows, owner=user_id, at=lambda r: r[1], reader="open_loops")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("open_loops: erase watermark unreadable (%s) - deferred", type(exc).__name__)
+        return _done("load_error")
     # A turn naming a forgotten entity is skipped, not re-mined (memory_forgotten; ZMB F3).
     try:
         import memory_forgotten
