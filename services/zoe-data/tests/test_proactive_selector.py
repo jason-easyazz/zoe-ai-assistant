@@ -83,7 +83,7 @@ def env(monkeypatch, tmp_path):
         "follow_up_hint TEXT, emotional_weight INTEGER, created_at TEXT, follow_up_after TEXT, "
         "resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT)",
         "CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, "
-        "deleted INTEGER DEFAULT 0)",
+        "deleted INTEGER DEFAULT 0, end_date TEXT, recurring TEXT, rrule TEXT, rdates TEXT, recurrence_id TEXT)",
         "CREATE TABLE proactive_pending (id TEXT, trigger_type TEXT, item_id TEXT)",
     ):
         db.conn.execute(ddl)
