@@ -1,5 +1,5 @@
 """The distress hand-off (``distress_handoff``): detector, per-tier precision/recall, language independence, the fixed reply, the notification.
-Synthetic phrases only (``fixtures/distress_labelled.json``, 208 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
+Synthetic phrases only (``fixtures/distress_labelled.json``, 343 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
 from __future__ import annotations
 
 import ast
@@ -16,9 +16,12 @@ import lexicons
 
 pytestmark = pytest.mark.ci_safe
 SETS = json.loads((Path(__file__).parent / "fixtures" / "distress_labelled.json").read_text(encoding="utf-8"))
-ROWS = [(lang, label, t) for s in ("dev", "held_out_1", "blind_2") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
+SET_NAMES = ("dev", "held_out_1", "blind_2", "ideation_3", "ideation_3_probe")
+ROWS = [(lang, label, t) for s in SET_NAMES for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
 NEVER_WAKE = "I want to go to sleep and never wake up"
-KNOWN_MISSES = {NEVER_WAKE, "he is dying of cancer and I am scared"}      # the limits stated in docs/knowledge/distress-handoff.md
+IDEATION_MISSES = {"i keep thinking i should kill myself",                # no "should" desire (a bare "I should die" is common hyperbole)
+                   "been feeling suicidal since monday and i dont know why"}   # no subject: a bare form would also fire on "she has been feeling suicidal"
+KNOWN_MISSES = {NEVER_WAKE, "he is dying of cancer and I am scared"} | IDEATION_MISSES      # the limits stated in docs/knowledge/distress-handoff.md
 
 
 def run(coro):
@@ -33,8 +36,8 @@ def _env(monkeypatch):
     dh._NOTIFIED.clear()
 
 
-def table(scope=None):
-    got = [(label, dh.detect(t).tier) for lang, label, t in ROWS if scope in (None, lang)]
+def table(scope=None, rows=None):
+    got = [(label, dh.detect(t).tier) for lang, label, t in (ROWS if rows is None else rows) if scope in (None, lang)]
     out = {}
     for tier in ("handoff", "gentle", "none"):
         tp, pred, lab = (sum(1 for a, b in got if a == b == tier), sum(1 for _a, b in got if b == tier), sum(1 for a, _b in got if a == tier))
@@ -51,6 +54,37 @@ def test_per_tier_precision_and_recall_on_the_labelled_set():
     assert len(ROWS) >= 200 and {r[0] for r in ROWS} == {"en", "es"}
     assert {t for _l, label, t in ROWS if dh.detect(t).tier != label} == KNOWN_MISSES                      # every miss is a stated limit
     assert [t for _l, label, t in ROWS if label == "handoff" and dh.detect(t).tier == "none"] == [NEVER_WAKE]
+
+
+IDEATION = [(lang, label, t) for s in ("ideation_3", "ideation_3_probe") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
+
+
+def test_first_person_suicidal_ideation_is_a_handoff_and_every_must_not_stays_below_it():
+    """The live gap (2026-11-14): "im thinking about suicide" scored gentle (topic word), so the brain answered. A first-person ideation statement is a hand-off;
+    the same words negated, quoted, about a third party, topical, professional or resolved-past ("used to") stay gentle, and an idiom stays none."""
+    t = table(rows=IDEATION)
+    print("ideation", {k: (v["n"], round(v["precision"], 3), round(v["recall"], 3)) for k, v in t.items()})
+    fire = [x for _l, label, x in IDEATION if label == "handoff" and x not in IDEATION_MISSES]
+    assert len(fire) >= 30 and [x for x in fire if dh.detect(x).tier != "handoff"] == []
+    must_not = [(label, x) for _l, label, x in IDEATION if label != "handoff"]
+    assert len(must_not) >= 30 and [x for label, x in must_not if dh.detect(x).tier != label] == []
+    assert t["handoff"]["precision"] == 1.0 and all(dh.detect(x).tier == "gentle" for x in IDEATION_MISSES)     # a stated miss is gentle (logged), never none
+
+
+@pytest.mark.parametrize("text,tier,why", [
+    ("im thinking about suicide", "handoff", "cue"), ("I'm having suicidal thoughts", "handoff", "cue"), ("i feel suicidal", "handoff", "cue"),
+    ("im not thinking about suicide", "gentle", "negated"), ("i dont have suicidal thoughts", "gentle", "negated"), ("i am not suicidal", "gentle", "negated"),
+    ("i dont want to die", "gentle", "negated"),                                   # the new cues must not pull this into the hand-off
+    ("in the film he says he is thinking about suicide", "gentle", "cue"), ("in the film he says im thinking about suicide", "gentle", "quoted"),
+    ("my friend is thinking about suicide", "gentle", "cue"), ("she has suicidal thoughts", "gentle", "topic"),
+    ("we talked about suicide prevention at school", "gentle", "topic"), ("im thinking about suicide prevention training", "gentle", "topic"),
+    ("i work in suicide prevention", "gentle", "topic"), ("i used to think about suicide years ago", "gentle", "topic"),
+    ("i keep thinking about ending it with my boyfriend", "none", ""), ("no tengo pensamientos suicidas", "gentle", "topic"),
+    ("tengo pensamientos suicidas", "handoff", "cue"), ("pienso en el suicidio de mi tio", "gentle", "topic"),
+])
+def test_the_ideation_cues_respect_the_existing_guards(text, tier, why):
+    v = dh.detect(text)
+    assert (v.tier, v.why) == (tier, why), v
 
 
 @pytest.mark.parametrize("text,tier", [
