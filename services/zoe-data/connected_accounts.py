@@ -170,12 +170,13 @@ async def start_run(account_id: str, user_id: str, *, scope: str = "", cursor_be
 
 async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, int]] = None, cursor_after: Optional[str] = None,
                      error_class: Optional[str] = None, backoff_until: Optional[str] = None, error_code: Any = _UNSET,
-                     n_bytes: Optional[int] = None, duration_ms: Optional[int] = None) -> bool:
+                     n_bytes: Optional[int] = None, duration_ms: Optional[int] = None, update_account: bool = True) -> bool:
     """Close a run. True when recorded as ``outcome``; False when the member was erased since (nothing written) or the account was
     disconnected since (the run is recorded ``fenced``, its cursor dropped, the account untouched).
 
     The 0079 extras are written only when given: a ``COUNTS_0079`` key in ``counts``, ``n_bytes`` / ``duration_ms``, and
-    ``error_code`` (a code from ``ERROR_CODES`` or None; passing it also sets / clears ``connected_accounts.last_error_code``)."""
+    ``error_code`` (a code from ``ERROR_CODES`` or None; passing it also sets / clears ``connected_accounts.last_error_code``).
+    ``update_account=False`` (a shadow run) records the run only: the account row is never touched, the fence still applies."""
     if outcome not in OUTCOMES or (error_class is not None and error_class not in ERROR_CLASSES):
         raise ValueError("connected_accounts.finish_run: unknown outcome / error class")
     if error_code is not _UNSET and error_code is not None and error_code not in ERROR_CODES:
@@ -197,7 +198,9 @@ async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, in
                 # the check and the write are ONE step: the row is locked by the check (PostgreSQL), and the write itself only lands
                 # on the generation the run started under - zero rows means a disconnect got there first, and the run is fenced
                 moved = 0
-                if await still_current(db, run.account_id, run.generation):
+                if not update_account and await still_current(db, run.account_id, run.generation):
+                    moved = 1                    # a shadow run: the account row is left exactly as it is
+                elif update_account and await still_current(db, run.account_id, run.generation):
                     extra_sql = "".join(f", {k} = ?" for k in acct_extra)
                     cur = await db.execute(
                         f"UPDATE connected_accounts SET status = ?, last_sync_at = ?, last_error_class = ?, updated_at = ?{extra_sql} "
@@ -218,13 +221,21 @@ async def finish_run(run: Run, *, outcome: str, counts: Optional[Mapping[str, in
 
 async def upsert_by_external_id(db, table: str, *, match: Mapping[str, Any], values: Mapping[str, Any],
                                 version_col: Optional[str] = None) -> str:
-    """Write one feed row idempotently: ``created`` | ``updated`` | ``unchanged``. ``match`` is the row's external identity (e.g.
+    """``upsert_row`` without the row id."""
+    return (await upsert_row(db, table, match=match, values=values, version_col=version_col))[0]
+
+
+async def upsert_row(db, table: str, *, match: Mapping[str, Any], values: Mapping[str, Any],
+                     version_col: Optional[str] = None) -> "tuple[str, str]":
+    """Write one feed row idempotently and return ``(result, id)``, where ``id`` is the id of the row that is now stored: the new
+    one on ``created``, the EXISTING one on ``updated`` / ``unchanged`` (never the caller's proposed ``values["id"]``, so children
+    written after it always point at a real row). Result: ``created`` | ``updated`` | ``unchanged``. ``match`` is the row's external identity (e.g.: ``created`` | ``updated`` | ``unchanged``. ``match`` is the row's external identity (e.g.
     ``{"calendar_id": c, "external_uid": u, "recurrence_id": r}``; a None matches NULL); ``values`` the columns to set (an insert also
     needs ``id``). With ``version_col`` (``etag`` / ``sequence``) an equal stored version is ``unchanged`` and nothing is written.
     Runs on the caller's connection, so it sits inside the caller's transaction and its ``still_current`` fence."""
     cols = [*match, *values]
     if table not in UPSERT_TABLES or not all(_IDENT.match(c) for c in cols) or (version_col and version_col not in values):
-        raise ValueError("connected_accounts.upsert_by_external_id: table or column not allowed")
+        raise ValueError("connected_accounts.upsert_row: table or column not allowed")
     where = " AND ".join(f"{k} IS NULL" if v is None else f"{k} = ?" for k, v in match.items())
     params = tuple(v for v in match.values() if v is not None)
     cur = await db.execute(f"SELECT id{', ' + version_col if version_col else ''} FROM {table} WHERE {where}", params)
@@ -233,12 +244,12 @@ async def upsert_by_external_id(db, table: str, *, match: Mapping[str, Any], val
         row_cols = {**match, **values}
         await db.execute(f"INSERT INTO {table} ({', '.join(row_cols)}) VALUES ({', '.join('?' for _ in row_cols)})",
                          tuple(row_cols.values()))
-        return "created"
+        return "created", str(values.get("id"))
     if version_col and row[1] is not None and str(row[1]) == str(values[version_col]):
-        return "unchanged"
+        return "unchanged", str(row[0])
     upd = {k: v for k, v in values.items() if k != "id"}
     await db.execute(f"UPDATE {table} SET {', '.join(f'{k} = ?' for k in upd)} WHERE id = ?", (*upd.values(), row[0]))
-    return "updated"
+    return "updated", str(row[0])
 
 
 async def forget_user(user_id: str) -> int:
