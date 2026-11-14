@@ -101,6 +101,13 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
 
 ## Child DOX Index
 
+- `anticipation/` - **the anticipation lab** (`docs/knowledge/anticipation.md`): 35 invented household-days (two adults, a child, a guest;
+  placeholder names), hand-labelled with the offers a thoughtful human assistant would make (`days.py`; `DEV` 18 / `HELD` 17,
+  the held-out ones labelled before the harness first ran), and `run_lab.py`, which runs the engine's PURE modules
+  (`services/zoe-data/anticipation_situations.py` / `_rules.py` / `_learning.py`, imported read-only) and prints precision and
+  recall against the labels, privacy violations from a checker that does not use the engine's clamp (must be 0; non-zero exits
+  1), offers per person per day, and precision / recall after 30 / 90 / 180 simulated days of yes / no feedback. No database, no
+  model, no network; deterministic. Hand-run under the light pre-check lock; never CI-wired. README is the record.
 - `dock-pins-mockup/` — design spec + reproducible mockup for **user-pinned dock
   controls** on the touch panel (`SPEC-dock-pinned-controls.md`, `dock-mockup.html`,
   `shoot.js`). Research only; nothing here is wired to production. Verified against

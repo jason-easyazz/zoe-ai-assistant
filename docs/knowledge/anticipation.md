@@ -125,3 +125,12 @@ offer it once more after 2027-01-05."* Routes (the caller's own state only; 404 
 `GET /api/proactive/anticipation/rules`, `POST /api/proactive/anticipation/rules/{rule_id}` `{"enabled": false}`.
 
 Learning is per RULE, not per kind of event: three noes to a leave-by for road trips also silence the leave-by for flights.
+
+## The lab
+
+`labs/anticipation/` (README is the record): 35 invented household-days, hand-labelled with what a thoughtful human
+assistant would offer; `python3 labs/anticipation/run_lab.py` prints the numbers. Run of 2026-11-14: held-out days
+precision 1.000 / recall 0.824 (all days 0.941 / 0.914), privacy violations 0, 0.32 offers per person per day (0.29 after
+the 2-a-day budget). Learning did not move precision for a household that answers as labelled (0.941 after 30, 90 and
+180 simulated days); for a household that never wants a leave-by it rose from 0.676 to 0.920 in 30 days. The number a
+rule change is judged by: held-out precision and recall, before and after, with privacy violations at 0.
