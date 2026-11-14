@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import importlib.util
 import json
 import logging
@@ -625,6 +626,113 @@ def test_fetch_bound_negative_control(db, monkeypatch):
     a = account()
     with pytest.raises(asyncio.TimeoutError):
         run(asyncio.wait_for(feed.sync_account(a, hang, run_mode="on", now=NOW, fetch_timeout_s=0.05), 0.3))
+
+
+def _stubborn(release, swallowed, outcome):
+    """An async fetcher that SWALLOWS its cancellation and keeps going until ``release`` is set, then ends with ``outcome``."""
+    async def fetch(req):
+        while True:
+            try:
+                await release.wait()
+                break
+            except asyncio.CancelledError:
+                swallowed.append(1)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+    return fetch
+
+
+@needs_ics
+def test_a_fetcher_that_swallows_its_cancellation_is_abandoned_at_the_bound(db, caplog):
+    caplog.set_level(logging.DEBUG)
+    a, b = account(), account("ben", "ben-subject")
+
+    async def scenario():
+        release, swallowed = asyncio.Event(), []
+        try:
+            await steps(release, swallowed)
+        finally:
+            release.set()            # whatever failed above, the stubborn task ends, so the loop's teardown never waits on it
+            for _ in range(100):
+                if not feed._tasks:
+                    break
+                await asyncio.sleep(0.01)
+
+    async def steps(release, swallowed):
+        late = RuntimeError(f"late failure for {SENTINEL}")
+        t0 = time.monotonic()
+        r = await feed.sync_account(a, _stubborn(release, swallowed, late), run_mode="on", now=NOW, fetch_timeout_s=0.05)
+        assert (r.outcome, r.error_class, r.detail) == ("error", "network", "fetch_timeout") and time.monotonic() - t0 < 1
+        for _ in range(50):          # the store calls after the bound need not yield: let the abandoned task see its cancel
+            if swallowed:
+                break
+            await asyncio.sleep(0.01)
+        assert swallowed == [1] and a in feed._outstanding and list(feed._tasks.values()) == [a]   # abandoned, still running
+        calls = []
+        r = await feed.sync_account(a, lambda req: calls.append(1), run_mode="on", now=NOW)
+        assert (r.detail, calls) == ("fetch_outstanding", [])                                       # refused, fetcher not called
+        r = await feed.sync_account(b, Feed(ics(*THREE)), run_mode="on", now=NOW)                  # another feed still syncs
+        assert (r.outcome, r.counts["created"]) == ("ok", 3)
+        release.set()
+        for _ in range(100):
+            if a not in feed._outstanding:
+                break
+            await asyncio.sleep(0.01)
+        assert a not in feed._outstanding and not feed._tasks                                     # the task ended: released
+        r = await feed.sync_account(a, Feed(ics(*THREE)), run_mode="on", now=NOW)
+        assert r.counts["created"] == 3
+    run(scenario())
+    gc.collect()                                                    # an unretrieved task exception is reported on collection
+    text = _logged(caplog)
+    assert "never retrieved" not in text and SENTINEL not in text and "late failure" not in text
+
+
+def test_abandoned_fetches_are_bounded(db, monkeypatch):
+    monkeypatch.setattr(feed, "MAX_ABANDONED_FETCHES", 1)
+    a, b = account(), account("ben", "ben-subject")
+
+    async def scenario():
+        release = asyncio.Event()
+        try:
+            r = await feed.sync_account(a, _stubborn(release, [], feed.FetchResult("server_error")), run_mode="on", now=NOW,
+                                        fetch_timeout_s=0.05)
+            assert r.detail == "fetch_timeout"
+            calls = []
+            r = await feed.sync_account(b, lambda req: calls.append(1), run_mode="on", now=NOW)
+            assert (r.detail, calls) == ("fetch_capacity", [])                                     # at the bound: nothing starts
+        finally:
+            release.set()            # the stubborn task always ends: the loop's teardown never waits on it
+        for _ in range(100):
+            if not feed._tasks:
+                break
+            await asyncio.sleep(0.01)
+        r = await feed.sync_account(b, lambda req: feed.FetchResult("server_error"), run_mode="on", now=NOW)
+        assert (r.error_class, r.detail) == ("provider", None)                                      # below it again: it runs
+    run(scenario())
+
+
+def test_cancellation_swallowing_negative_control(db, monkeypatch):
+    """With the old ``wait_for`` bound, a fetcher that swallows its cancellation holds the sync far past the bound."""
+    async def wait_for_version(awaitable, timeout, account_id):
+        try:
+            return await asyncio.wait_for(awaitable, timeout)
+        except asyncio.TimeoutError:
+            raise feed.FetchTimeout() from None
+    monkeypatch.setattr(feed, "_bounded", wait_for_version)
+    a = account()
+
+    async def scenario():
+        release = asyncio.Event()
+        task = asyncio.ensure_future(feed.sync_account(a, _stubborn(release, [], feed.FetchResult("server_error")),
+                                                       run_mode="on", now=NOW, fetch_timeout_s=0.05))
+        try:
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            return not done
+        finally:
+            release.set()            # lets the held sync finish, so the loop's teardown never waits on it
+            await asyncio.wait({task}, timeout=2)
+    assert run(scenario()) is True                                                                  # still waiting at 10x the bound
 
 
 @needs_ics
