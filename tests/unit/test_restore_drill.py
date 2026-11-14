@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 import tarfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -741,3 +741,105 @@ def test_every_verify_run_is_bracketed_by_dated_start_and_result_lines(tmp_path,
     # the last line is unchanged (labs/felt-scorecard ends a run on it)
     last = (r.stderr if rc else r.stdout).splitlines()[-1]
     assert re.fullmatch(r"zoe-backup-verify: (done|\d+ problem\(s\) detected)", last)
+
+
+# ── stale alerts: the transition, then at most one reminder a week, and one "passed again" (review of #2459) ───────────
+
+DAY0 = datetime.fromisoformat("2026-11-20T05:30:00+08:00")       # fixed-offset instants: the same under any TZ
+
+
+def _stale_state(tmp_path, **extra):
+    _state(tmp_path, {"last_ok": "2026-10-01T05:30:00+08:00", **extra})     # long stale
+
+
+def _daily_refusals(monkeypatch, tmp_path, days, start=DAY0, avail=10):
+    """One refusal a day (low memory by default; ``avail`` high at a night-window hour = a QUIET refusal); returns the day
+    numbers that alerted, and asserts every refusal of a stale drill exits loud."""
+    alerted = []
+    for d in range(days):
+        alerts: list[str] = []
+        rc = _run_main(monkeypatch, tmp_path, avail=avail, now=start + timedelta(days=d), alerts=alerts)
+        assert rc == drill.EXIT_REFUSED_LOUD, (d, rc)
+        if alerts:
+            assert len(alerts) == 1 and "has not passed" in alerts[0]
+            alerted.append(d)
+    return alerted
+
+
+def test_stale_daily_refusals_alert_on_the_transition_then_once_a_week(monkeypatch, tmp_path):
+    """Before: every daily refusal after day 10 alerted (15 refusals = 15 alerts). Now: the transition, then one reminder
+    per 7 days; the unit still exits loud every day."""
+    night = DAY0.replace(hour=3)                         # quiet (night-window) refusals: the old code alerted every one
+    _stale_state(tmp_path)
+    assert _daily_refusals(monkeypatch, tmp_path, 14, start=night, avail=4000) == [0, 7]   # d0..d13: transition + reminder
+    assert _daily_refusals(monkeypatch, tmp_path, 8, start=night + timedelta(days=14), avail=4000) == [0, 7]   # d14, d21
+    # low-memory (loud-reason) refusals while stale are throttled the same way
+    _stale_state(tmp_path)
+    assert _daily_refusals(monkeypatch, tmp_path, 15) == [0, 7, 14]
+
+
+def test_a_reminder_is_never_early_and_times_compare_as_instants(monkeypatch, tmp_path):
+    _stale_state(tmp_path)
+    assert _daily_refusals(monkeypatch, tmp_path, 1) == [0]
+    almost = DAY0 + timedelta(days=7) - timedelta(minutes=5)                  # timer jitter: 5 minutes short of a week
+    same_instant_other_zone = almost.astimezone(timezone.utc)                # same instant, a different local string
+    assert _daily_refusals(monkeypatch, tmp_path, 1, start=same_instant_other_zone) == []
+
+
+def test_a_malformed_stale_alert_time_does_not_crash_or_silence_the_first_alert(monkeypatch, tmp_path):
+    for bad in ("garbage", 12345, "2026-11-19T05:30:00", ["x"], ""):          # naive local text is not an instant
+        _stale_state(tmp_path, stale_alert_at=bad)
+        assert _daily_refusals(monkeypatch, tmp_path, 1) == [0], bad
+
+
+def _pass_now(monkeypatch, tmp_path, now, argv=()):
+    alerts: list[str] = []
+    monkeypatch.setattr(drill.Sandbox, "default", classmethod(lambda cls: None))
+    monkeypatch.setattr(drill, "run_drill", lambda *a, **k: drill.Result(notes=["ok"]))
+    rc = _run_main(monkeypatch, tmp_path, avail=5000, now=now, alerts=alerts, argv=argv)
+    return rc, alerts
+
+
+def test_a_pass_after_a_stale_spell_sends_one_passed_again_line_and_clears_it(monkeypatch, tmp_path):
+    _stale_state(tmp_path)
+    assert _daily_refusals(monkeypatch, tmp_path, 1) == [0]
+    rc, alerts = _pass_now(monkeypatch, tmp_path, DAY0 + timedelta(days=1))
+    assert rc == 0 and alerts == ["weekly restore drill passed again: the backups restore cleanly"]
+    st = json.loads((tmp_path / "s" / "last_restore_drill.json").read_text())
+    assert st["stale_alert_at"] is None
+    rc, alerts = _pass_now(monkeypatch, tmp_path, DAY0 + timedelta(days=9))   # the next weekly pass: nothing extra
+    assert rc == 0 and alerts == []
+
+
+def test_a_pass_without_a_stale_spell_says_nothing(monkeypatch, tmp_path):
+    _state(tmp_path, {"last_ok": "2026-11-12T05:30:00+08:00"})
+    rc, alerts = _pass_now(monkeypatch, tmp_path, DAY0)
+    assert rc == 0 and alerts == []
+
+
+def test_check_stale_says_voiced_while_the_drill_is_alerting_then_hands_back_to_health(monkeypatch, tmp_path, capsys):
+    """One voice: while the drill's own stale alert is under STALE_VOICE_FRESH old, --check-stale exits 6 (zoe_health
+    treats it as ok); once the drill stops speaking (a dead timer), it exits 4 and the health check alerts."""
+    _stale_state(tmp_path, stale_alert_at=DAY0.isoformat())
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=DAY0 + timedelta(days=3), alerts=[], argv=["--check-stale"])
+    assert rc == drill.EXIT_STALE_VOICED == 6 and "alerted the owner" in capsys.readouterr().out
+    rc = _run_main(monkeypatch, tmp_path, avail=10, now=DAY0 + drill.STALE_VOICE_FRESH, alerts=[], argv=["--check-stale"])
+    assert rc == drill.EXIT_REFUSED_LOUD and "STALE:" in capsys.readouterr().out
+
+
+def test_ignore_window_samples_memory_once_and_its_help_says_so(monkeypatch, tmp_path, capsys):
+    samples: list[int] = []
+    monkeypatch.setattr(drill, "MEM_WAIT_S", 3600)                  # a real wait would be 61 samples
+    alerts: list[str] = []
+
+    def mem():
+        samples.append(1)
+        return 10
+    _run_main(monkeypatch, tmp_path, avail=10, now=DAY0.replace(hour=3), alerts=alerts, argv=["--ignore-window"])
+    monkeypatch.setattr(ob, "mem_available_mb", mem)
+    samples.clear()
+    rc = drill.main(["--ignore-window"])                           # inside the night window, low memory
+    assert rc == drill.EXIT_REFUSED_LOUD and samples == [1], "no wait: one sample, and the floor still holds"
+    with pytest.raises(SystemExit):
+        drill.main(["--help"])
+    assert "sampled ONCE" in " ".join(capsys.readouterr().out.split())

@@ -94,6 +94,11 @@ tier time-bounded at 35 days on the411; restore => re-issue the forget") so the 
 - **Weekly, on the box** (timer daily 05:30, drill only when DUE: no pass for ~6.5 days): the restore drill of section 7.2 -
   the on-box dumps restored into a throwaway container, the palace opened and queried, the host archive checked. It runs first
   in `zoe-backup-verify`; a refused or failed drill is retried the next morning.
+- **Stale drill alerts (one voice, 2026-11-14).** Once no drill has passed in 10 days a refusal still exits loud (the unit
+  shows failed every day), but the owner is ALERTED only on the transition to stale, then at most once per 7 days
+  (`stale_alert_at` in `last_restore_drill.json`, an instant), and once with "passed again" when a pass ends the spell.
+  `zoe_health.py`'s restore-drill check stays ok while that alert is under 8 days old (`--check-stale` exit 6) and
+  alerts itself only when the drill has gone silent (exit 4, e.g. a dead timer).
 - **Monthly** (`zoe-backup-verify` runs it once per 28 days, 05:30): for each tier, restore the newest snapshot
   from the411 into a scratch dir (`~/.cache/zoe-offbox/drill-*`, removed after), compare every file's sha256 with the manifest the
   box recorded when it SENT that snapshot, read one twelfth of the repo's data (`restic check --read-data-subset=<month>/12`, the
