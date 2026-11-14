@@ -75,6 +75,11 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
 
 ## Owner decisions waiting (recommendation first)
 
+- **SAFETY GAP, next safety PR (found 2026-11-14):** a present-tense self-assessment question ("am I having a heart attack?",
+  "is this a stroke?") gets no emergency floor today; it goes to the brain with no fixed "call now" reply. Fix it as its own small
+  PR with paraphrase tests and a replay: yes. Record: [open-problems](knowledge/open-problems.md) once #2491 lands.
+- **Should an unrecognised voice asking how to use a hazard be told to ask a grown-up** (#2480 covers known and possible children
+  only)? Yes: a wrongly refused adult is an annoyance, a wrongly answered child is the failure the floor exists to stop.
 - **Where connected-account secrets live:** in the credential broker, after the assistant's over-privileged service account is
   de-privileged; no key file readable by the assistant's own service.
 - **Who sees a newly connected calendar:** only its owner. **Calendars hosted on the home network:** not yet.
