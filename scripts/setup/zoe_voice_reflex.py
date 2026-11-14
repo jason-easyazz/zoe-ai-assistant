@@ -11,9 +11,15 @@ Truthfulness (design note W2 sections 0, 3; ``docs/knowledge/voice-reflex.md``):
 * non-lexical only: the bank holds "mm" takes, nothing that claims understanding or agreement;
 * one voice: the bank's manifest voice must equal the household's current voice, else silence (never the wrong voice);
 * silent when in doubt: every rule below that fails is ONE named skip reason from the fixed ``SKIPS`` enum, and the explicit
-  inputs ``committed``, ``guest``, ``media_active`` and ``speaker_conf`` are silence unless the daemon states the safe value
-  (a MISSING speaker score is always silence: until a pre-close identity exists, the reflex stays silent); a non-finite or
-  non-numeric number, or any exception inside ``decide``, is silence with skip ``error``.
+  inputs ``committed``, ``guest``, ``media_active``, ``speaker_accept``, ``speaker_model`` and ``verdict_ms`` are silence
+  unless the daemon states the safe value; a non-finite or non-numeric number, or any exception inside ``decide``, is
+  silence with skip ``error``.
+* the speaker guard is MODEL-AWARE: the reflex never compares a raw score against a number of its own. The daemon passes the
+  speaker model's OWN accept decision at the stricter window-tier bar (FAR 0.1 %: ResNet34 0.309 for a clip of 2 s or less,
+  0.351 longer; ``zoe_speaker_resnet34.decision(score, seconds, tier="far01")``) and that model's id. Silent unless the
+  accept is exactly True AND the id is one of ``KNOWN_SPEAKER_MODELS``; a retired or unknown model is silence.
+* a verdict that arrives late is silence (skip ``late``): ``verdict_ms`` = ms from the committed close until the speaker
+  verdict and the decision were ready; over ``REFLEX_SCORE_DEADLINE_MS`` (or unknown) means a sound would land too late.
 
 Logs and the handshake carry integers and fixed enums only, never text or audio.
 """
@@ -43,7 +49,7 @@ REFLEX_NIGHT_END = 7            # ... to 07:00 (env REFLEX_NIGHT="22-07")
 REFLEX_GAIN_DB = -3.0           # a take's active-speech RMS relative to the reference reply speech
 REFLEX_NOISE_FLOOR_DBFS = -40.0  # pre-roll RMS above this = music / TV in the room; PROVISIONAL until S0 data sets it
 REFLEX_FOR_GUESTS = False       # a guest / unknown speaker gets silence unless the owner allows it
-REFLEX_MIN_SPEAKER_CONF = 0.70  # a speaker confidence under this is silence (the live claim threshold); a MISSING one too
+REFLEX_SCORE_DEADLINE_MS = 250  # the speaker verdict + decision must be ready this many ms after the close, else skip "late"
 REFLEX_CHAIN_ENABLED = False    # S4 (later): follow-up / conversation turns under the chain rule
 REFLEX_CHAIN_EVERY = 3          # chain rule: at most one reflex per this many turns of a chain
 REFLEX_DIR = "~/.zoe-voice/reflex"
@@ -62,9 +68,13 @@ RULES = ("deep", "quiet", "clean", "hesitation", "no_speech", "max_duration")
 TURN_KINDS = ("wake", "followup", "conversation", "barge")
 #: in gate order (the first that applies is the one reported)
 SKIPS = ("disabled", "error", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
-         "idle_greeting", "guest", "low_confidence", "prev_question", "budget", "no_bank", "voice_mismatch")
+         "idle_greeting", "late", "guest", "low_confidence", "prev_question", "budget", "no_bank", "voice_mismatch")
 LOAD_RESULTS = ("ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format", "too_long", "too_few")
 NO_SKIP = "-"
+
+#: the speaker models whose accept decision the reflex trusts (zoe_speaker_resnet34.MODEL_ID; drift-pinned by
+#: tests/unit/test_voice_reflex.py). The retired Resemblyzer ("resemblyzer") is NOT here: its claims are silence.
+KNOWN_SPEAKER_MODELS = ("wespeaker_resnet34+i8qdq-u8s8+c1",)
 
 TAKE_ID_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 BANK_SHA_RE = re.compile(r"^[0-9a-f]{8}$")
@@ -176,7 +186,7 @@ class Settings:
     gain_db: float = REFLEX_GAIN_DB
     noise_floor_dbfs: float = REFLEX_NOISE_FLOOR_DBFS
     for_guests: bool = REFLEX_FOR_GUESTS
-    min_speaker_conf: float = REFLEX_MIN_SPEAKER_CONF
+    score_deadline_ms: int = REFLEX_SCORE_DEADLINE_MS
     chain_enabled: bool = REFLEX_CHAIN_ENABLED
     chain_every: int = REFLEX_CHAIN_EVERY
     dir: str = REFLEX_DIR
@@ -197,7 +207,7 @@ def settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         gain_db=_env_num(env, "REFLEX_GAIN_DB", REFLEX_GAIN_DB, -24, 0),
         noise_floor_dbfs=_env_num(env, "REFLEX_NOISE_FLOOR_DBFS", REFLEX_NOISE_FLOOR_DBFS, -90, 0),
         for_guests=_env_bool(env, "REFLEX_FOR_GUESTS", REFLEX_FOR_GUESTS),
-        min_speaker_conf=_env_num(env, "REFLEX_MIN_SPEAKER_CONF", REFLEX_MIN_SPEAKER_CONF, 0.0, 1.0),
+        score_deadline_ms=int(_env_num(env, "REFLEX_SCORE_DEADLINE_MS", REFLEX_SCORE_DEADLINE_MS, 50, 1000)),
         chain_enabled=_env_bool(env, "REFLEX_CHAIN_ENABLED", REFLEX_CHAIN_ENABLED),
         chain_every=int(_env_num(env, "REFLEX_CHAIN_EVERY", REFLEX_CHAIN_EVERY, 2, 20)),
         dir=(env.get("REFLEX_DIR") or "").strip() or REFLEX_DIR,
@@ -226,7 +236,9 @@ class Ctx:
     takes: tuple = ()                   # the loaded bank's take ids
     committed: Optional[bool] = None    # the endpointer COMMITTED the close (push() returned True); anything but True = silence
     guest: Optional[bool] = None        # the speaker is a guest / unknown (False only for a household member's local claim)
-    speaker_conf: Optional[float] = None  # the local speaker claim's score at the close (None = no claim scored)
+    speaker_accept: Optional[bool] = None  # the speaker model's OWN accept at the FAR 0.1 % bar (None = not scored)
+    speaker_model: Optional[str] = None    # the id of the model that made that decision (KNOWN_SPEAKER_MODELS, else silence)
+    verdict_ms: Optional[float] = None     # ms from the committed close until the verdict was ready (None = unknown = late)
     media_active: Optional[bool] = None   # music / video is playing through the panel (None = unknown = silence)
 
 
@@ -259,7 +271,7 @@ def _real(v) -> bool:
 #: the numeric Ctx inputs; each must be a finite, non-negative real number (the two optional ones may also be None)
 NUMERIC_FIELDS = ("speech_ms", "muted_ms", "idle_h")
 SIGNED_FIELDS = ("noise_dbfs",)
-OPTIONAL_FIELDS = ("since_last_s", "chain_turns_since")
+OPTIONAL_FIELDS = ("since_last_s", "chain_turns_since", "verdict_ms")
 
 
 def inputs_valid(ctx: Ctx) -> bool:
@@ -311,12 +323,14 @@ def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
         return "night"  # G:night
     if ctx.idle_h >= s.idle_greet_h:
         return "idle_greeting"  # G:idle_greeting
+    if ctx.verdict_ms is None or ctx.verdict_ms > s.score_deadline_ms:
+        return "late"  # G:late (the verdict came after REFLEX_SCORE_DEADLINE_MS, or when is unknown)
     if ctx.guest is not False and not s.for_guests:
         return "guest"  # G:guest (a guest or an unknown speaker: silent unless REFLEX_FOR_GUESTS)
-    if ctx.speaker_conf is None:
-        return "low_confidence"  # G:conf_missing (no pre-close speaker score: always silent)
-    if ctx.speaker_conf is not None and not (_real(ctx.speaker_conf) and s.min_speaker_conf <= ctx.speaker_conf <= 1.0):
-        return "low_confidence"  # G:conf_low (under the threshold, over 1.0 - not a score - or not a finite number)
+    if not isinstance(ctx.speaker_model, str) or ctx.speaker_model not in KNOWN_SPEAKER_MODELS:
+        return "low_confidence"  # G:model_unknown (no model, or a retired / unknown one: its accept means nothing here)
+    if ctx.speaker_accept is not True:
+        return "low_confidence"  # G:not_accepted (the model's own FAR 0.1 % accept, exactly True; None / False / 1 = silent)
     if window and ctx.prev_question:
         return "prev_question"  # G:prev_question
     if ctx.since_last_s is not None and ctx.since_last_s < s.min_gap_s:
