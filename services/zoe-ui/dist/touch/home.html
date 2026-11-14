@@ -1721,8 +1721,8 @@
   var TIMERS_MEMO_MS=10000,_tmMemo={at:0,p:null};
   function timersGet(now){
     now=now||Date.now();
-    if(_tmMemo.p&&_tmMemo.s===sid()&&now-_tmMemo.at<TIMERS_MEMO_MS)return _tmMemo.p;   // never the answer of another session
-    _tmMemo.at=now;_tmMemo.s=sid();
+    if(_tmMemo.p&&_tmMemo.s===sessKey()&&now-_tmMemo.at<TIMERS_MEMO_MS)return _tmMemo.p;   // never the answer of another session
+    _tmMemo.at=now;_tmMemo.s=sessKey();
     var p=apiGet('/api/skybridge/timers');
     _tmMemo.p=p;
     p.catch(function(){if(_tmMemo.p===p)_tmMemo.p=null;});
@@ -2071,7 +2071,7 @@
       if(!arr||!arr.length)return '';
       return '<div class="wksec"><h4>'+esc(title)+' ('+arr.length+')</h4>'+arr.map(function(it){return itemHtml(it,cls,withReason);}).join('')+'</div>';
     }
-    var s0=sid();
+    var s0=sessKey();
     apiGet('/api/board/summary').then(function(d){
       if(_cur!=='work'||!sessLive(s0))return;
       if(!d||!d.ok){body.innerHTML='<div class="wkempty">Board unavailable — the runner or Multica may be down.</div>';if(meta)meta.textContent='';return;}
@@ -2121,7 +2121,7 @@
     estClose();
     if(typeof dbody!=='undefined'&&dbody)dbody.querySelectorAll('.pc.tchip').forEach(function(c){c.remove();});}
   function sessKey(){return String(sid()||'')+(sessionMember()?'|m':'|g');}   // the ACTUAL session (a guest's too): a newly provisioned guest is a change, so its screen loads
-  function sessLive(s0){return sid()===s0;}
+  function sessLive(s0){return sessKey()===s0;}   // identity = the session AND whether it is a member: the same id dropping to guest is a change
   function sessionCheck(){var k=sessKey();if(k===_paintFor)return;
     _paintFor=k;_tmMemo.p=null;_lst.lists=[];_lst.sel=null;_calEvents={};
     clearPrivate();
@@ -2228,7 +2228,7 @@
     if(_cur==='home')wxApplySky(wxSky(w.icon));
   }).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
-    var s0=sid();
+    var s0=sessKey();
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
       if(_cur!=='home'||!sessLive(s0))return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
@@ -3548,7 +3548,7 @@
     return '';
   }
   function wireReminder(){
-    var ttl=document.getElementById('remMeta'),host=document.getElementById('remList'),s0=sid();
+    var ttl=document.getElementById('remMeta'),host=document.getElementById('remList'),s0=sessKey();
     apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder'||!sessLive(s0))return;
       var rs=(d&&d.reminders)||[];
       if(!rs.length){if(ttl)ttl.textContent='';if(host)host.innerHTML='<div style="color:var(--ink-faint);font-size:22px;padding-top:8px">No reminders set — ask Zoe to remind you of something.</div>';return;}
@@ -3653,7 +3653,7 @@
   var _lst={lists:[],sel:null};
   function wireListsFull(){
     var tabs=document.getElementById('lstTabs');if(!tabs)return;
-    tabs.innerHTML='<span class="ltab" style="opacity:.6">Loading…</span>';var s0=sid();
+    tabs.innerHTML='<span class="ltab" style="opacity:.6">Loading…</span>';var s0=sessKey();
     Promise.all(LIST_TYPES.map(function(t){return apiJson('GET','/api/lists/'+t).then(function(d){return {ok:true,lists:(d.lists||[]).map(function(l){l.list_type=l.list_type||t;return l;})};}).catch(function(e){return {ok:false,auth:!!(e&&e.message==='auth')};});}))
       .then(function(results){if(_cur!=='list'||!sessLive(s0))return;
         var m=mergeListGroups(results,_lst.lists);
@@ -3722,7 +3722,7 @@
   function wireTimer(){
     // Timers | Alarms tabs (js/touch-alarms.js): the strip appears only when the server has alarms (ZOE_ALARMS).
     if(window.ZoeAlarms)ZoeAlarms.attachTabs({tabsEl:document.getElementById('alTabs'),timersEl:document.querySelector('.tfull'),alarmsEl:document.getElementById('alFull')});
-    function paint(){var s0=sid();timersGet().then(function(d){if(_cur!=='timer'||!sessLive(s0))return;
+    function paint(){var s0=sessKey();timersGet().then(function(d){if(_cur!=='timer'||!sessLive(s0))return;
       var ts=(d.timers||[]).filter(function(t){return timerRemain(t)>0;}).sort(function(a,b){return timerRemain(a)-timerRemain(b);});
       var rings=document.getElementById('tmRings'),more=document.getElementById('tmMore');
       if(!rings)return;
@@ -3757,7 +3757,7 @@
   var _openPerson=null;   // {id,intro} from a voice 'introduce' arrival, consumed by the next wireContacts load
   function wireContacts(){
     var grid=document.getElementById('ctGrid'),det=document.getElementById('ctDetail'),az=document.getElementById('ctAZ');
-    var want=_openPerson;_openPerson=null;var s0=sid();
+    var want=_openPerson;_openPerson=null;var s0=sessKey();
     apiJson('GET','/api/people/').then(function(d){if(_cur!=='person'||!sessLive(s0))return;
       var ps=(d.people||[]).slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));});
       var have={};
@@ -4327,14 +4327,14 @@
   function _setGuest(){return !sessionMember();}
   // A member-private row is written only for the session that ASKED: `s0` is sid() when the request started, and an answer that
   // lands after the session changed (member -> guest, or another member) is dropped, never painted.
-  function _setLine(id,html,s0){if(s0!==undefined&&sid()!==s0)return;var el=document.getElementById(id);if(el&&_cur==='settings')el.innerHTML=html;}
+  function _setLine(id,html,s0){if(s0!==undefined&&sessKey()!==s0)return;var el=document.getElementById(id);if(el&&_cur==='settings')el.innerHTML=html;}
   function _setErr(id,what,e,s0){_setLine(id,'<div class="srow2"><span class="lderr">'+esc(loadErr(what,e))+'</span></div>',s0);}
   // A session change while Settings is open repaints it (sessionCheck, SESSCHECK block) - for a guest that drops every private row.
   // SETGUEST-END
   function _setAgo(iso){var t=Date.parse(iso||'');if(!isFinite(t))return 'not yet';var m=Math.max(0,Math.floor((Date.now()-t)/60000));
     return m<2?'just now':m<90?m+' minutes ago':m<2160?Math.round(m/60)+' hours ago':Math.round(m/1440)+' days ago';}
   // Voice ID: the signed-in member's OWN enrolment state (GET /api/enrollment/state). Enrolling is by voice only.
-  function wireSetVoiceId(){var s0=sid();
+  function wireSetVoiceId(){var s0=sessKey();
     apiGet('/api/enrollment/state').then(function(d){
       if(!(d&&d.voice&&typeof d.voice.enrolled==='boolean')){_setErr('setVid','voice ID',null,s0);return;}   // unknown is not "not enrolled"
       var on=d.voice.enrolled;
@@ -4344,14 +4344,14 @@
   }
   // Pendant: GET /api/omi/my-pendant (404 = pendant sync not switched on, ZOE_OMI_SYNC_ENABLED) + its health line (GET /api/omi/health).
   // Linking is by voice at this panel ("Zoe, link my pendant"): proof is a verified voice + the pendant in the hand, never a form.
-  function wireSetPendant(){var s0=sid();
+  function wireSetPendant(){var s0=sessKey();
     apiGet('/api/omi/my-pendant').then(function(v){
       var lk=(v&&v.linking)||{},ps=(v&&v.pendants)||[];
       if(!lk.enabled){_setLine('setPend','<div class="srow2"><span class="lderr">'+esc(lk.message||'Pendant linking isn’t switched on here yet.')+'</span></div>',s0);return;}
       _setLine('setPend',(ps.length?ps.map(function(p){return '<div class="srow2"><span>'+esc(p.label||'My pendant')+'</span><span class="sv">Linked · synced '+esc(_setAgo(p.last_sync_at))+'</span></div>';}).join('')
           :'<div class="srow2"><span>No pendant linked to you yet</span></div>')
         +'<div id="setPendH"></div><div class="srow2"><span>Hold it next to the panel</span><button class="sbtn" data-act="pendlink">Link my pendant</button></div>',s0);
-      if(!ps.length||sid()!==s0)return;
+      if(!ps.length||sessKey()!==s0)return;
       apiGet('/api/omi/health').then(function(h){
         _setLine('setPendH',((h&&h.pendants)||[]).map(function(p){var b=['last report '+_setAgo(p.reported_at)];
           if(p.battery&&p.battery.pct!=null)b.push('battery '+p.battery.pct+'%');
@@ -4363,7 +4363,7 @@
   }
   // Notifications: the member's unread rows (GET /api/notifications/pending), words only. Their Done / That's me buttons live on the
   // ONE notifications card (js/touch-review-cards.js), which the orb press / "what's up?" pushes to this panel - opened from here the same way.
-  function wireSetNotes(){var s0=sid();
+  function wireSetNotes(){var s0=sessKey();
     Promise.all([apiGet('/api/notifications/pending'),apiGet('/api/proactive/inbox').catch(function(){return null;})]).then(function(r){
       var ns=(r[0]&&r[0].notifications)||[],card=!!(r[1]&&('notify' in r[1]));
       if(!ns.length){_setLine('setNote','<div class="srow2"><span>No new notifications</span></div>',s0);return;}
@@ -4375,7 +4375,7 @@
   }
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
-    var u=sessionMember(),who=(u&&(u.username||u.user_id))||'Guest',guest=!u,s0=sid();
+    var u=sessionMember(),who=(u&&(u.username||u.user_id))||'Guest',guest=!u,s0=sessKey();
     var LOAD='<div class="srow2"><span class="lderr">Loading…</span></div>';
     var secs=guest?[
       {t:'This panel',b:'<div id="setPanel">'+LOAD+'</div>'},
@@ -4640,7 +4640,7 @@
     var start=_cal.view==='day'?new Date(now):win.gridStart,
         end  =_cal.view==='day'?new Date(now):win.gridEnd;
     if(ttl&&_cal.view==='day')ttl.textContent=calHeaderText('day',start,end,now);
-    var s0=sid();
+    var s0=sessKey();
     apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen||!sessLive(s0))return;
       var evs=((d&&d.events)||[]).filter(function(e){return !e.deleted;});
       _calEvents={};evs.forEach(function(e){if(e.id!=null)_calEvents[ekey(e)]=e;});
@@ -4767,7 +4767,7 @@
   function wireDay(){
     var ttl=document.getElementById('dayMeta'),host=document.getElementById('dayEvents'),rems=document.getElementById('dayRems');
     if(ttl)ttl.textContent=new Date().toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
-    var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate()),s0=sid();
+    var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate()),s0=sessKey();
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host||!sessLive(s0))return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--accent)"></span><div><div class="en">Nothing scheduled today</div></div></div>';return;}

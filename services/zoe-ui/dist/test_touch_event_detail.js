@@ -392,7 +392,7 @@ async function homeDeleteChecks(M, home) {
       apiJson: (method, url) => { calls.push(method + ' ' + url); return Promise.resolve({}); },
       estConfirm: (_msg, cb) => cb(), editEvent: (e) => opened.push(e.id), toast() {}, editReminder() {}, fmtRemWhen: () => '',
       // the session guard and the occurrence-shape helpers wireDay now uses (same rules as home.html's SESSCHECK / CALSHAPE blocks)
-      sid: () => 's1', sessLive: (s0) => s0 === 's1', ekey: (e) => String(e.instance_key != null && e.instance_key !== '' ? e.instance_key : e.id),
+      sid: () => 's1', sessKey: () => 's1|m', sessLive: (s0) => s0 === 's1|m', ekey: (e) => String(e.instance_key != null && e.instance_key !== '' ? e.instance_key : e.id),
       eRO: (e) => !!(e && (e.read_only === true || e.read_only === 1)),
       _cur: 'day', CAT: {}, fmt12: (x) => x || '', esc: M.esc, two: (n) => (n < 10 ? '0' : '') + n, loadErr: () => 'err'
     });

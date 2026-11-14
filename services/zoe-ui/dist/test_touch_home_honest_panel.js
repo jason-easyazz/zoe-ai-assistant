@@ -298,6 +298,17 @@ const run = (box, code) => vm.runInContext(code, box);
       if (!/sign in for the rest/.test(b.host.innerHTML)) bad.push('Settings not repainted in its guest form');
       return bad;
     },
+    // (e) the SAME session id drops from member to guest while member answers are in flight: identity is the id AND
+    // member-or-not, so those answers must not paint (a check on the id alone would let them through)
+    async sameIdDrop(text) {
+      const b = settingsBox(text, 'M1', MEMBER), bad = [];
+      vm.runInContext('wireSettings()', b);
+      b.meta = { session_id: 'M1', role: 'guest', user_id: 'guest' };      // live id unchanged
+      await answerAll(b);
+      const hit = shown(b).match(/enrolled|PendantX|NoteX|NightX|VoiceX|130 min/);
+      if (hit) bad.push('a member answer was painted after the same id became a guest: ' + hit[0]);
+      return bad;
+    },
     async memberSees(text) {         // (d)
       const b = settingsBox(text, 'M1', MEMBER), bad = [];
       if (vm.runInContext('_setGuest()', b) !== false) bad.push('a genuine member reads as guest');
@@ -312,7 +323,7 @@ const run = (box, code) => vm.runInContext(code, box);
   for (const [name, k, from, to] of [
     ['the live-sid match', 'staleMetadata', "if(!live||!u||String(u.session_id||'')!==live)return null;", 'if(!live||!u)return null;'],
     ['a missing role read as member', 'staleMetadata', "return (!role||role==='guest'||!uid||uid==='guest')?null:u;}", "return (role==='guest')?null:u;}"],
-    ['the stale-answer drop', 'lateAnswer', 'if(s0!==undefined&&sid()!==s0)return;', ''],
+    ['the stale-answer drop', 'lateAnswer', 'if(s0!==undefined&&sessKey()!==s0)return;', ''],
     ['the downgrade repaint', 'downgradeClears', 'if(PRIVATE_BOXES[_cur])show(_cur);}', '}'],
     ['the display-row drop', 'lateAnswer', "if(_cur!=='settings'||!sessLive(s0))return;var pr=", "if(_cur!=='settings')return;var pr="],
     ['the voice-row drop', 'lateAnswer', "        if(_cur!=='settings'||!sessLive(s0))return;\n        var voices=", "        if(_cur!=='settings')return;\n        var voices="],
@@ -324,6 +335,14 @@ const run = (box, code) => vm.runInContext(code, box);
       bad = vm.runInContext('_setGuest()', b) === true ? [] : ['seen'];
     } else bad = await privacy[k](plant(from, to));
     check('control: removing ' + name + ' is seen', () => assert(bad.length > 0, 'check ' + k + ' did not see the planted fault'));
+  }
+  {   // control: comparing the session id alone (the earlier form) lets the same-id downgrade through
+    const idOnly = HOME.split('function sessLive(s0){return sessKey()===s0;}').join('function sessLive(s0){return String(s0).split("|")[0]===sid();}')
+      .split('if(s0!==undefined&&sessKey()!==s0)return;').join('if(s0!==undefined&&String(s0).split("|")[0]!==sid())return;')
+      .split('if(!ps.length||sessKey()!==s0)return;').join('if(!ps.length||String(s0).split("|")[0]!==sid())return;');
+    assert(idOnly !== HOME, 'control anchors missing');
+    const bad = await privacy.sameIdDrop(idOnly);
+    check('control: an identity check on the session id alone is seen', () => assert(bad.length > 0, 'the same-id downgrade was not seen'));
   }
   check('Settings privacy: a session with no role is a guest', () => assert.strictEqual(vm.runInContext('_setGuest()', settingsBox(HOME, 'M1', { session_id: 'M1', user_id: 'member-a' })), true));
   // Voice ID: an answer that does not say enrolled true/false is a load failure, never "not enrolled"
@@ -337,7 +356,7 @@ const run = (box, code) => vm.runInContext(code, box);
   }
 
   // ── every member-private screen: the session is captured when the request starts, a late answer is dropped ──
-  // (the request starts with s0=sid(); each answer and each failure is painted only while sessLive(s0)). One case per screen.
+  // (the request starts with s0=sessKey(), the session id plus member-or-not; each answer and each failure is painted only while sessLive(s0)). One case per screen.
   const fnBody = (text, name) => { const s = mainScript(text), i = s.indexOf('function ' + name + '('); if (i < 0) return '';
     const j = s.indexOf('\n  function ', i + 10); return s.slice(i, j < 0 ? undefined : j); };
   const SCREENS = [
@@ -353,7 +372,7 @@ const run = (box, code) => vm.runInContext(code, box);
   function lateAnswerGuards(text, name, guards) {
     const body = fnBody(text, name), bad = [];
     if (!body) return ['function ' + name + ' missing'];
-    const cap = body.search(/s0=sid\(\)/), call = body.search(/apiGet\(|apiJson\(|timersGet\(\)\.then|Promise\.all\(/);
+    const cap = body.search(/s0=sessKey\(\)/), call = body.search(/apiGet\(|apiJson\(|timersGet\(\)\.then|Promise\.all\(/);
     if (cap < 0 || call < 0 || cap > call) bad.push(name + ': the session is not captured before the request');
     guards.forEach((g) => { if (!body.includes(g)) bad.push(name + ': a late answer is not dropped at ' + g.slice(0, 50)); });
     return bad;
