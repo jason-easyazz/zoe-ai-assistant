@@ -89,7 +89,7 @@ Urgency (review of #2525): when more than one detector reads a turn, the reply i
 `medical_safety.URGENCY` is the one ranked list (an urgent object or a poison, then a call-now red flag, then a harmless-looking
 object, a pet, the emergency-number question, a see-today symptom, a blood sugar). "my vision is blurry, is this a stroke?" gets the
 stroke reply. The condition is taken from its own named slot in the frame match, so a subject named like a condition ("is tia having a
-heart attack") never becomes the condition.
+heart attack") never becomes the condition. Every frame match in the turn is read (an idiom voids only the match it is in: "my dad is overdosing on cake and he is having a stroke" is a stroke) and the most urgent verdict wins; the pet (vet) reply is given only when the matched frame's OWN subject is an animal ("is my dog overdosing"), never because an animal is mentioned elsewhere ("is alex overdosing? the dog is fine" stays human).
 
 ## Limits (stated, not hidden)
 

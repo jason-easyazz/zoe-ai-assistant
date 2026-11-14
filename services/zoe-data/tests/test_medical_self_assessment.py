@@ -508,3 +508,60 @@ def test_control_the_old_substance_gate_missed_the_threads_examples():
     old_guard = re.compile(rf"overdosing(?!\s+on\s+(?!(?:(?:my|his|her|their|the|some|all|those|these|a|an|too|many|much)\s+)*(?:{sub})(?!\w)))")
     for text in ("am i overdosing on heroin", "my dad is overdosing on cocaine"):
         assert not old_guard.search(text) and medical_safety.self_assessment(text).cls == "ingest_human"
+
+
+# ── review #2525 PRRT ...fK7Q / ...fK7Z: decided on the matched frame's own span, every match read ────────────────────────────
+def _idiom_samples() -> list:
+    return _sa()["verb_idiom_objects"][::5] + _sa()["verb_idiom_unless_asked"]
+
+
+def _idiom_plus_emergency() -> list:
+    out = []
+    for x in _sa()["verb_idiom_objects"][::5]:          # always-idiom objects (the caffeine family: see the next test)
+        idiom = f"my dad is overdosing on {x}"
+        for cond, ask in CONDITION_ASKS.items():
+            if cond == "poison_human":
+                ask = "is my wife overdosing"
+            out += [(f"{idiom} and {ask}", cond), (f"{ask} and {idiom}", cond)]
+    return out
+
+
+@pytest.mark.parametrize("text, cond", _idiom_plus_emergency())
+def test_an_idiom_voids_only_its_own_match_in_either_order(text, cond):
+    assert medical_safety.self_assessment(text) == _expected(cond)
+
+
+@pytest.mark.parametrize("x", _idiom_samples()[:-len(_sa()["verb_idiom_unless_asked"])] + ["coffee", "tea"])
+def test_mirror_an_idiom_alone_is_still_nothing(x):
+    assert medical_safety.self_assessment(f"my dad is overdosing on {x}").cls == ""
+
+
+def _human_with_animal_mention() -> list:
+    out = []
+    for cond, ask in CONDITION_ASKS.items():
+        out += [(f"{ask}? the dog is fine", cond), (f"the cat is asleep, {ask}?", cond), (f"{ask} and my dog is barking", cond)]
+    out += [("is alex overdosing? the dog is fine", "poison_human"), ("has my wife overdosed, the cat knocked them over", "poison_human")]
+    return out
+
+
+def test_a_caffeine_clause_beside_a_question_counts_as_asked_left_whole_turn_on_purpose():
+    """``_sa_asked`` reads the WHOLE turn: a question anywhere makes a caffeine overdose fire. Scoping it to the clause would make a
+    real overdose fire LESS, so it is left (fail-safe); the most urgent verdict still wins through URGENCY."""
+    v = medical_safety.self_assessment("am i having a heart attack and my dad is overdosing on coffee")
+    assert v.cls in ("ingest_human", "red_call")
+
+
+@pytest.mark.parametrize("text, cond", _human_with_animal_mention())
+def test_an_animal_mentioned_elsewhere_leaves_a_human_emergency_human(text, cond):
+    assert medical_safety.self_assessment(text) == _expected(cond)
+
+
+@pytest.mark.parametrize("text", ["is my dog overdosing", "is my cat overdosing on xanax", "has my dog overdosed",
+                                  "is my puppy overdosing? my son is fine"])
+def test_mirror_an_animal_as_the_frames_own_subject_gets_the_vet_reply(text):
+    assert medical_safety.self_assessment(text) == medical_safety.Verdict("ingest_animal", "poison_animal")
+
+
+def test_the_threads_two_examples():
+    assert medical_safety.self_assessment("my dad is overdosing on coffee and he is having a stroke") == _expected("stroke")
+    assert medical_safety.self_assessment("is alex overdosing? the dog is fine") == _expected("poison_human")

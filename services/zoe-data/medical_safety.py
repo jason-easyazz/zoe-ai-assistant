@@ -445,6 +445,7 @@ def _sa_present_re() -> "re.Pattern":
     frames = []
     for i, f in enumerate(d["frames"]):
         rx = ""
+        j = 0
         for tok in re.split(r"(\{[A-Z]+\})", f):
             if tok == "{C}":
                 # the condition is captured in its OWN named slot (one name per frame), never re-searched in the whole match:
@@ -452,6 +453,10 @@ def _sa_present_re() -> "re.Pattern":
                 rx += _SA_A + f"(?P<c{i}>" + _sa_cond()[0] + ")"
             elif tok[1:-1] in verbs:
                 rx += f"(?P<v{i}>" + verbs[tok[1:-1]] + ")"
+            elif tok[1:-1] in _SA_SUBJECT_SLOTS:
+                # the frame's SUBJECT, captured so a decision about who it is (a pet?) reads only this span
+                rx += f"(?P<s{i}_{j}>" + slots[tok[1:-1]] + ")"
+                j += 1
             elif re.fullmatch(r"\{[A-Z]+\}", tok):
                 rx += slots[tok[1:-1]]
             elif tok:
@@ -459,6 +464,10 @@ def _sa_present_re() -> "re.Pattern":
                 rx += (r"\s+" if tok[0].isspace() else "") + words + (r"\s+" if tok[-1].isspace() and words else "")
         frames.append(rx)
     return re.compile(r"(?<!\w)(?:" + "|".join(frames) + r")" + _SA_FICTION)
+
+
+#: the slots that name WHO the frame is about
+_SA_SUBJECT_SLOTS = frozenset({"Q", "S", "SUBJ", "DO", "HAS", "PERF"})
 
 
 #: a recall-question shape naming a condition ("did i have a stroke last year", "has dad had a heart attack before"): the same
@@ -493,47 +502,58 @@ def _sa_asked(s: str) -> bool:
     return "?" in s or bool(re.match(rf"^(?:{_RQ_FILLER}\s+)*(?:am|is|are|could|might|can|do|does|did|have|has)(?!\w)", s))
 
 
+def _sa_match_verdict(m: "re.Match", s: str) -> Optional[Verdict]:
+    """The verdict of ONE frame match, from its own named slots, or None when an idiom voids this match. Pure."""
+    _cond_rx, keys = _sa_cond()
+    _verb_rx, verb_keys = _sa_verbs()
+    groups = {name: val for name, val in m.groupdict().items() if val}
+    slot = next(((n, v) for n, v in groups.items() if n[0] in "cv"), None)
+    if slot is None:
+        return None
+    if slot[0].startswith("v"):
+        key = verb_keys[slot[1].strip().lower()]
+        # the caffeine family is an idiom ("ive overdosed on coffee today") unless the turn ASKS about it in the present
+        # ("am i overdosing on caffeine?"): it voids THIS match only, never the rest of the turn
+        asked = _sa_data().get("verb_idiom_unless_asked", [])
+        after = s[m.end(slot[0]):]
+        if asked and re.match(r"\s+on\s+(?:(?:my|his|her|their|the|some|so|way|too|much|many|lots|of)\s+)*(?:"
+                              + "|".join(r"\s+".join(map(re.escape, w.split())) for w in asked) + r")(?!\w)", after) \
+                and not _sa_asked(s):
+            return None
+    else:
+        term = re.sub(r"[\s-]+", " ", slot[1]).strip()
+        key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
+    cls = _sa_data().get("verdicts", {}).get(key, "red_call")
+    if cls == "ingest_human":
+        # an animal ONLY when the frame's own SUBJECT is one ("is my dog overdosing"); an animal mentioned anywhere else in the
+        # turn ("is alex overdosing? the dog is fine") leaves it human - when unsure, human (the safe reply)
+        subject = " ".join(v for n, v in groups.items() if n.startswith("s"))
+        rx = _rx()
+        if subject and rx["animal"].search(subject) and not rx["human"].search(subject):
+            return Verdict("ingest_animal", "poison_animal")
+    return Verdict(cls, key)
+
+
 def self_assessment(text: str) -> Verdict:
-    """The call-now verdict for a PRESENT self-assessment of a closed-list condition (above), else ``NONE``. Pure; never raises."""
+    """The most urgent verdict (``URGENCY``) over EVERY present frame match in the turn - an idiom voids only the match it is in -
+    else a past question naming a condition that is not wholly a recall question. ``NONE`` otherwise. Pure; never raises."""
     try:
         s = _fold(text)
         if not s:
             return NONE
-        m = _sa_present_re().search(s)
+        found = [v for v in (_sa_match_verdict(m, s) for m in _sa_present_re().finditer(s)) if v is not None]
+        if found:
+            return min(found, key=urgency)
+        recall_re, past_q_re = _sa_recall_res()
+        m = past_q_re.search(s)
         if m is None:
-            recall_re, past_q_re = _sa_recall_res()
-            m = past_q_re.search(s)
-            if m is None:
-                return NONE
-            # a past question naming the condition: a recall question only when EVERY clause is wholly the allow-listed shape and
-            # no present marker appears anywhere; anything else ("did i just have a stroke", "... its back") is the floor
-            clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip() and not _RQ_FILLER_ONLY_RE.match(c.strip())]
-            if not _PRESENT_MARK_RE.search(s) and clauses and all(recall_re.match(c) for c in clauses):
-                return NONE
-        _cond_rx, keys = _sa_cond()
-        _verb_rx, verb_keys = _sa_verbs()
-        # the matched frame's own condition / verb slot (present-frame match), else the past-question shape's single condition
-        slot = next(((name, val) for name, val in (m.groupdict() if m.re.groupindex else {}).items() if val), None)
-        if slot is not None and slot[0].startswith("v"):
-            key = verb_keys[re.sub(r"(?:\s+on\s+.*)$", "", slot[1]).strip().lower()]
-            # the caffeine family is an idiom ("ive overdosed on coffee today") unless the turn ASKS about it in the present
-            # ("am i overdosing on caffeine?", "could he be overdosing on energy drinks"): a real, rare overdose
-            asked = _sa_data().get("verb_idiom_unless_asked", [])
-            after = s[m.end(slot[0]):]
-            if asked and re.match(r"\s+on\s+(?:(?:my|his|her|their|the|some|so|way|too|much|many|lots|of)\s+)*(?:"
-                                  + "|".join(r"\s+".join(map(re.escape, w.split())) for w in asked) + r")(?!\w)", after) \
-                    and not _sa_asked(s):
-                return NONE
-        else:
-            term = re.sub(r"[\s-]+", " ", slot[1]).strip()
-            key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
-        cls = _sa_data().get("verdicts", {}).get(key, "red_call")
-        if cls == "ingest_human":
-            rx = _rx()
-            # the poisoning floor's own rule: an animal only when the words clearly say so (a pet word, no person word, not "i")
-            if rx["animal"].search(s) and not rx["human"].search(s) and not re.search(r"(?<!\w)(?:i|im|ive|we|weve)(?!\w)", s):
-                return Verdict("ingest_animal", "poison_animal")
-        return Verdict(cls, key)
+            return NONE
+        # a past question naming the condition: a recall question only when EVERY clause is wholly the allow-listed shape and no
+        # present marker appears anywhere; anything else ("did i just have a stroke", "... its back") is the floor
+        clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip() and not _RQ_FILLER_ONLY_RE.match(c.strip())]
+        if not _PRESENT_MARK_RE.search(s) and clauses and all(recall_re.match(c) for c in clauses):
+            return NONE
+        return _sa_match_verdict(m, s) or NONE
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety self_assessment failed (%s)", type(exc).__name__)
         return NONE
