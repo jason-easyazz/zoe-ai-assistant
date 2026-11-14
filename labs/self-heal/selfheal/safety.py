@@ -140,7 +140,8 @@ class DiffReport:
     escaping_symlinks: list = field(default_factory=list)
     weakened_tests: list = field(default_factory=list)
     deleted_tests: list = field(default_factory=list)
-    planted_reports: list = field(default_factory=list)   # JUnit-looking *.xml added or changed   # deleted OR renamed test files / test infra
+    planted_reports: list = field(default_factory=list)   # JUnit-looking *.xml added or changed
+    process_control: list = field(default_factory=list)   # non-test .py whose added lines match PROCESS_CONTROL
     engine_committed: bool = False
     index_dirty: bool = False
 
@@ -159,6 +160,15 @@ def is_test_path(p: str) -> bool:
 # A skip / xfail added to a test file is test weakening, never a fix.
 WEAKEN = re.compile(r"\bpytest\.(skip|xfail|importorskip)\b|\bmark\.(skip|skipif|xfail)\b|"
                     r"\bunittest\.(skip|expectedFailure)\b|\b(skipTest|skipIf|skipUnless)\b|__test__\s*=")
+
+
+# full + local only (no human reads the diff): added lines of non-test python that end the process,
+# reach into other frames / the heap / the interpreter, or load code dynamically. A SPEED BUMP, not
+# a boundary: reflection can spell every one of these another way (README "Supervisor").
+PROCESS_CONTROL = re.compile(
+    r"\b(_exit|exit|quit|abort|kill|fork|_getframe|settrace|setprofile|atexit|ctypes|gc|inspect|"
+    r"importlib|__import__|eval|exec|compile|f_back|f_locals|f_globals|tb_frame|gi_frame|__code__|"
+    r"__globals__|__subclasses__|__builtins__|builtins|modules)\b|/proc/")
 
 
 JUNIT_NAME = re.compile(r"(junit|report|result|self-heal|selfheal|pytest|test)[^/]*\.xml$", re.I)
@@ -197,12 +207,17 @@ def check_diff(cfg: Config, report: DiffReport, *, ticket_has_repro_test: bool) 
     hits = forbidden_hits(cfg, report.files)
     if hits:
         raise Refused("forbidden_path", ", ".join(sorted(hits)[:10]))
+    scratch = [f for f in report.files if f == ".selfheal-tmp" or f.startswith(".selfheal-tmp/")]
+    if scratch:   # the gates' scratch dir: never an engine's to write, never carried into a tree
+        raise Refused("scratch_planted", ", ".join(scratch[:10]))
     if report.planted_reports:
         raise Refused("report_planted", ", ".join(report.planted_reports[:10]))
     if report.deleted_tests:   # a heal may add or edit tests, never remove or rename one
         raise Refused("test_deleted", ", ".join(report.deleted_tests[:10]))
     if report.weakened_tests:
         raise Refused("test_weakened", ", ".join(report.weakened_tests[:10]))
+    if cfg.unattended() and report.process_control:
+        raise Refused("process_control", ", ".join(report.process_control[:10]))
     if report.escaping_symlinks:
         raise Refused("outside_repo", ", ".join(report.escaping_symlinks[:10]))
     cap = min(cfg.diff_line_cap, MAX_DIFF_LINES)
