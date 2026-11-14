@@ -55,7 +55,7 @@ def seen_by_panel(*, clock=time.monotonic) -> None:
         p, _pending = _pending, None
         if p is None:
             return
-        ms = int((clock() - p[0]) * 1000)
+        ms = int(round((clock() - p[0]) * 1000))
         ev = p[1] if p[1] in EVENTS else "other"
         logger.info("ALARM_RING_SEEN event=%s ms=%d changes=%d", ev, ms if 0 <= ms <= STALE_MS else -1, p[2])
     except Exception:  # noqa: BLE001
