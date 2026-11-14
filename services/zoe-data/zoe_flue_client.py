@@ -1333,6 +1333,7 @@ async def _recall_context_block(message: str, user_id: str) -> str:
 
         if not memory_gate._touch_tokens(message):
             return ""
+    t_fetch = time.monotonic()
     try:
         if household:
             packet = await asyncio.wait_for(_fetch_for_prompt_packet(user_id, message, no_offer=True),
@@ -1341,13 +1342,16 @@ async def _recall_context_block(message: str, user_id: str) -> str:
             packet = await (_fetch_for_prompt_packet(user_id, message, focus=named) if named
                             else _fetch_for_prompt_packet(user_id, message))
     except asyncio.TimeoutError:
+        _prepost_add("household" if household else "recall_fetch", t_fetch)
         logger.info("SEAM_HOUSEHOLD user=%s budget_exceeded=%.2fs - turn proceeds without the block", user_id, _HOUSEHOLD_FETCH_BUDGET_S)
         return ""
     except Exception as exc:  # noqa: BLE001 — the recall floor must never break a turn
+        _prepost_add("household" if household else "recall_fetch", t_fetch)
         logger.warning(
             "seam recall inject: packet fetch failed, continuing without it: %s", exc
         )
         return ""
+    fetch_ms = _prepost_add("household" if household else "recall_fetch", t_fetch)
     packet = (_truncate_packet_keeping_relational((packet or "").strip()) if named
               else _truncate_packet((packet or "").strip(), max_chars=_HOUSEHOLD_MAX_CHARS,
                                     max_bullets=_HOUSEHOLD_MAX_BULLETS) if household
@@ -1356,7 +1360,7 @@ async def _recall_context_block(message: str, user_id: str) -> str:
         import memory_gate
 
         touched = memory_gate.packet_touches_question(message, packet)
-        logger.info("SEAM_HOUSEHOLD user=%s touched=%d chars=%d", user_id, int(touched), len(packet))
+        logger.info("SEAM_HOUSEHOLD user=%s touched=%d chars=%d ms=%d", user_id, int(touched), len(packet), fetch_ms)
         if not touched:
             return ""
     bullets = sum(1 for ln in packet.splitlines() if ln.lstrip().startswith(("-", "•", "*")))
@@ -1815,10 +1819,12 @@ _PREPOST_BLOCKS = (
     # the wrapper (run_flue_brain_streaming), in call order
     "distress", "medical", "restraint", "brief", "raise", "debug",
     # the turn (_run_flue_brain_streaming_turn), in call order
-    "verify", "recall", "continuity", "hop", "offer", "list_share", "risk", "every_turn", "fastpath", "bridge",
+    "verify", "recall", "recall_fetch", "household", "continuity", "hop", "offer", "list_share", "risk", "every_turn", "fastpath", "bridge",
     "notes", "identity", "named_guest", "now_card", "register_apply", "register", "manner", "persona", "speculative",
 )
 _PREPOST_BLOCK_SET = frozenset(_PREPOST_BLOCKS)
+# sub-steps measured INSIDE another block (the recall block's packet fetch): own field, never summed into blocks_ms
+_PREPOST_NESTED = frozenset({"recall_fetch", "household"})
 
 
 class _PrepostTimer:
@@ -1859,10 +1865,11 @@ class _PrepostTimer:
     def render(self, session_id: str, *, now: "float | None" = None) -> str:
         total = ((time.monotonic() if now is None else now) - self.t0) * 1000.0
         ran = [b for b in _PREPOST_BLOCKS if b in self.ms]
-        blocks = sum(self.ms[b] for b in ran)
+        blocks = sum(self.ms[b] for b in ran if b not in _PREPOST_NESTED)
         fields = " ".join(f"{b}_ms={int(round(self.ms[b]))}" for b in ran)
         return (f"FLUE_PREPOST session={session_id} total_ms={int(round(total))} blocks_ms={int(round(blocks))} "
-                f"other_ms={int(round(max(0.0, total - blocks)))} awaited={len(ran)}" + (f" {fields}" if fields else ""))
+                f"other_ms={int(round(max(0.0, total - blocks)))} "
+                f"awaited={sum(1 for b in ran if b not in _PREPOST_NESTED)}" + (f" {fields}" if fields else ""))
 
     def log(self, session_id: str) -> None:
         """At most once per turn. Never raises."""
@@ -1876,6 +1883,19 @@ class _PrepostTimer:
 
 
 _PREPOST: "contextvars.ContextVar[_PrepostTimer | None]" = contextvars.ContextVar("flue_prepost", default=None)
+
+
+def _prepost_add(name: str, since: float) -> int:
+    """Add a sub-step's wall time to the CURRENT turn's timer (``recall_fetch`` / ``household``: the packet fetch inside
+    the recall block, so a budget miss is visible per call). Returns the ms. Never raises; no timer = only the ms."""
+    ms = int(round((time.monotonic() - since) * 1000.0))
+    try:
+        t = _PREPOST.get()
+        if t is not None:
+            t.add(name, since)
+    except Exception:  # noqa: BLE001
+        pass
+    return ms
 
 
 def _prepost_timer_for_turn() -> _PrepostTimer:

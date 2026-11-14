@@ -4,6 +4,7 @@ Measurement only: these instruments must never change what is sent, and must nev
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -179,3 +180,44 @@ def test_context_budget_flags_a_tool_block_that_changed_mid_session(caplog):
     lines = _instrument_lines(caplog, "FLUE_CONTEXT_BUDGET")
     assert [line.endswith("tools_changed=1") for line in lines] == [False, False, True], lines
     assert "tools_changed" not in lines[1]                      # unchanged = the line exactly as before
+
+
+# ── the household fallback's packet fetch, per call ──────────────────────────────────────────────────────────────────
+def _household_path(monkeypatch, fetch_s: float):
+    import memory_gate
+
+    async def fetch(*_a, **_k):
+        await asyncio.sleep(fetch_s)
+        return "- synthetic fact about the garden"
+
+    async def no_named(*_a, **_k):
+        return []
+
+    monkeypatch.setattr(zfc, "_recall_inject_enabled", lambda: True)
+    monkeypatch.setattr(zfc, "_recall_floor_shape", lambda _m: "")
+    monkeypatch.setattr(zfc, "_named_person_floor", no_named)
+    monkeypatch.setattr(zfc, "is_continuity_turn", lambda *_a: False)
+    monkeypatch.setattr(memory_gate, "household_questions_enabled", lambda: True)
+    monkeypatch.setattr(memory_gate, "is_question_turn", lambda _m: True)
+    monkeypatch.setattr(memory_gate, "_touch_tokens", lambda _m: {"garden"})
+    monkeypatch.setattr(memory_gate, "packet_touches_question", lambda *_a: True)
+    monkeypatch.setattr(zfc, "_fetch_for_prompt_packet", fetch)
+    monkeypatch.setattr(zfc, "_HOUSEHOLD_FETCH_BUDGET_S", 0.05)
+
+
+@pytest.mark.parametrize("fetch_s,exceeded", [(0.0, False), (0.2, True)])
+async def test_household_fetch_ms_is_its_own_field_and_not_double_counted(monkeypatch, caplog, fetch_s, exceeded):
+    _household_path(monkeypatch, fetch_s)
+    caplog.set_level(logging.INFO, logger="zoe_flue_client")
+    t = zfc._PrepostTimer()
+    zfc._PREPOST.set(t)
+    block = await t.timed("recall", zfc._recall_context_block("does the garden need water?", "m1"))
+    assert bool(block) is not exceeded
+    assert "household" in t.ms and "recall_fetch" not in t.ms
+    line = t.render("s")
+    fields = dict(f.split("=") for f in line.split()[2:])
+    assert int(fields["blocks_ms"]) == int(fields["recall_ms"]) and fields["awaited"] == "1"   # nested: not summed
+    if exceeded:
+        assert int(fields["household_ms"]) >= 40
+    else:
+        assert "ms=" in _instrument_lines(caplog, "SEAM_HOUSEHOLD")[-1]
