@@ -342,6 +342,7 @@ _ENTRIES = (
     _f('ZOE_FORGET_ALIAS_SWEEP', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_FORGET_LEDGER_SALT', 'str', '', doc='docs/knowledge/live-acceptance-2026-10.md'),
     _f('ZOE_FORGET_NEAR', 'str', '', doc='docs/knowledge/memory-authority.md'),
+    _f('ZOE_FORGET_REACH_EXTRA', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/household-text-inventory.md', note='on: the voice STT log and the opt-in Telegram STT capture join retention, the entity forget and the member erase'),
     _f('ZOE_FORGET_REDACT', 'str', '', doc='docs/knowledge/memory-authority.md'),
     _f('ZOE_FORGOTTEN_SHIELD_DAYS', 'str', '', doc='docs/knowledge/memory-authority.md'),
     _f('ZOE_FRUSTRATION_MAX_SESSIONS', 'int', 2000),

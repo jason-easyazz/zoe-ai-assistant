@@ -64,11 +64,36 @@ class TextLog:
     text_field: str
     expire: str                      # "strip": remove ``text_field`` and keep the record; "drop": remove the record
     ts_field: str = "ts"
+    ts_iso: bool = False             # the timestamp is an ISO-8601 string, not epoch seconds
 
 
 ROUTER_SHADOW = TextLog("router_shadow", "utt_text", "strip")
 INTENT_MISSES = TextLog("intent_misses", "text", "drop")
 LOGS = (ROUTER_SHADOW, INTENT_MISSES)
+#: The panel STT audit log (``routers/voice_tts._log_voice_stt_sample``: ``{"ts": ISO, "transcript", ...}``, one ``.1`` size segment).
+#: Reached by retention, the entity forget and the member erase ONLY while ``ZOE_FORGET_REACH_EXTRA`` is ``on`` (default ``off``):
+#: turning it on starts deleting lines older than the retention window from a log the owner's STT tools read.
+VOICE_STT = TextLog("voice_stt", "transcript", "drop", ts_iso=True)
+EXTRA_LOGS = (VOICE_STT,)
+
+
+def _flag(name: str):
+    """A registered flag through ``typed_env`` (this module is also loaded by path from the hourly job, so put its own directory first)."""
+    if str(_HERE) not in sys.path:
+        sys.path.insert(0, str(_HERE))
+    import typed_env
+
+    return typed_env.flag(name)
+
+
+def extra_reach_on() -> bool:
+    """``ZOE_FORGET_REACH_EXTRA`` (off | on, default off): the household-text inventory's extra reach - the voice STT log and the
+    opt-in Telegram STT capture directory join retention, the entity forget and the member erase."""
+    return str(_flag("ZOE_FORGET_REACH_EXTRA")).lower() == "on"
+
+
+def active_logs() -> tuple[TextLog, ...]:
+    return LOGS + (EXTRA_LOGS if extra_reach_on() else ())
 
 
 def _anchored(raw: str) -> Path:
@@ -90,6 +115,9 @@ def log_path(log: TextLog) -> Path:
     if log is INTENT_MISSES:
         # the writer (intent_router.detect_intent) is fixed at ~/training/data; the env var exists so a TEST can pin this module off it
         return _anchored(os.environ.get("ZOE_INTENT_MISS_LOG") or str(Path.home() / "training" / "data" / "intent-misses.jsonl"))
+    if log is VOICE_STT:
+        # the writer opens ZOE_VOICE_STT_LOG as given, from the service's working directory (= _HERE): the same file for a relative value
+        return _anchored(_flag("ZOE_VOICE_STT_LOG") or str(Path.home() / ".zoe-voice" / "voice_stt.jsonl"))
     raise KeyError(log.name)
 
 
@@ -98,7 +126,7 @@ def segments(log: TextLog) -> list[Path]:
     segment above a since-lowered ``ZOE_ROUTER_SHADOW_KEEP`` is never rotated away again, so it must still be swept) then the live file."""
     base = log_path(log)
     out: list[Path] = []
-    if log is ROUTER_SHADOW and base.parent.is_dir():
+    if log in (ROUTER_SHADOW, VOICE_STT) and base.parent.is_dir():
         rotated = [(int(p.name[len(base.name) + 1:]), p) for p in base.parent.glob(base.name + ".*")
                    if p.name[len(base.name) + 1:].isdigit()]
         out += [p for _n, p in sorted(rotated, reverse=True)]
@@ -123,13 +151,16 @@ def retention_days() -> Optional[float]:
 
 
 _MISS_THREAD_LOCK = threading.Lock()
+_VOICE_STT_LOCK = threading.Lock()
 
 
 def _append_lock(log: Optional[TextLog] = None):
     """The log's in-process append lock: the router's own when this process has it loaded (zoe-data), this module's for the
-    intent-miss log; otherwise a no-op context."""
+    intent-miss log and the voice STT log (whose writer takes none: ``rewrite``'s old-inode catch-up covers it); otherwise a no-op."""
     if log is INTENT_MISSES:
         return _MISS_THREAD_LOCK
+    if log is VOICE_STT:
+        return _VOICE_STT_LOCK
     mod = sys.modules.get("semantic_router")
     lock = getattr(mod, "_shadow_write_lock", None)
     if lock is not None:
@@ -374,6 +405,10 @@ def _strip_or_drop(log: TextLog, line: str, *, older_than: Optional[float] = Non
 
 def _ts(rec: dict[str, Any], log: TextLog) -> float:
     try:
+        if log.ts_iso:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(str(rec.get(log.ts_field)).replace("Z", "+00:00"))
+            return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
         return float(rec.get(log.ts_field))
     except (TypeError, ValueError):
         return 0.0                                    # no timestamp = oldest: it ages out rather than living forever
@@ -449,6 +484,43 @@ def prune_adhoc_backups(now: Optional[float] = None) -> int:
     return removed
 
 
+def telegram_capture_dir() -> Optional[Path]:
+    """The opt-in Telegram STT capture corpus (``routers/telegram_media.capture_dir``: ``ZOE_TELEGRAM_STT_CAPTURE_DIR``, unset = none).
+    Each voice note is a pair ``tg-<stamp>-<pid>.wav`` + ``.txt`` (its transcript); no member id."""
+    raw = str(_flag("ZOE_TELEGRAM_STT_CAPTURE_DIR") or "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
+def erase_capture(*, match: Any = None, older_than: Optional[float] = None, everything: bool = False) -> int:
+    """Delete capture pairs: every pair (``everything``), a pair whose transcript matches ``match``, or one older than ``older_than``
+    (file mtime). A ``.wav`` with no ``.txt`` beside it cannot be judged and is deleted (fail closed), as is a transcript that cannot
+    be read. Returns the number of files removed. RAISES on a failed delete (the cascade step / sweep then fails, never silently)."""
+    root = telegram_capture_dir()
+    if root is None or not root.is_dir():
+        return 0
+    removed = 0
+    for wav_or_txt in sorted(root.glob("tg-*")):
+        if wav_or_txt.suffix not in (".wav", ".txt") or not wav_or_txt.exists():
+            continue
+        txt, wav = wav_or_txt.with_suffix(".txt"), wav_or_txt.with_suffix(".wav")
+        if wav_or_txt.suffix == ".wav" and txt.exists():
+            continue                                         # judged with its transcript
+        doomed = everything or not txt.exists()
+        if not doomed and older_than is not None:
+            doomed = txt.stat().st_mtime < older_than
+        if not doomed and match is not None:
+            try:
+                doomed = bool(match.search(txt.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                doomed = True
+        if doomed:
+            for f in (txt, wav):
+                if f.exists():
+                    f.unlink()
+                    removed += 1
+    return removed
+
+
 def sweep(now: Optional[float] = None) -> dict[str, int]:
     """Apply the retention window to every registered log, and expire the owner scripts' one-off backups.
     ``{name: records stripped or dropped | backups removed}``; a value of -1 means that part FAILED (the hosting job must fail
@@ -463,12 +535,18 @@ def sweep(now: Optional[float] = None) -> dict[str, int]:
     if days is None:
         return out
     cutoff = (now if now is not None else time.time()) - days * 86400.0
-    for log in LOGS:
+    for log in active_logs():
         try:
             out[log.name] = _apply(log, older_than=cutoff)
         except Exception as exc:  # noqa: BLE001 - a retention pass must never break the job that hosts it
             logger.error("local_text_logs: sweep of %s failed (%s)", log.name, type(exc).__name__)
             out[log.name] = -1
+    if extra_reach_on():
+        try:
+            out["telegram_capture"] = erase_capture(older_than=cutoff)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("local_text_logs: sweep of telegram_capture failed (%s)", type(exc).__name__)
+            out["telegram_capture"] = -1
     if any(v > 0 for v in out.values()):
         logger.info("local_text_logs: retention sweep %s", " ".join(f"{k}={v}" for k, v in out.items()))
     return out
@@ -507,7 +585,8 @@ def erase_entity(rx: Any) -> int:
     _bump_epoch(+1)
     try:
         # ... and the owner's opt-in recall-gate trace: a line whose words or row text name the entity, inside the same interval
-        return sum(_apply(log, match=rx) for log in LOGS) + recall_gate_trace.erase_entity(rx)
+        extra = erase_capture(match=rx) if extra_reach_on() else 0
+        return sum(_apply(log, match=rx) for log in active_logs()) + recall_gate_trace.erase_entity(rx) + extra
     finally:
         _bump_epoch(-1)
 
@@ -519,7 +598,8 @@ def erase_all_text() -> int:
     _bump_epoch(+1)
     try:
         # ... and the owner's opt-in recall-gate trace (owner words + row text) the same household-wide way, inside the same interval
-        return sum(_apply(log, everything=True) for log in LOGS) + recall_gate_trace.erase_all()
+        extra = erase_capture(everything=True) if extra_reach_on() else 0
+        return sum(_apply(log, everything=True) for log in active_logs()) + recall_gate_trace.erase_all() + extra
     finally:
         _bump_epoch(-1)
 
