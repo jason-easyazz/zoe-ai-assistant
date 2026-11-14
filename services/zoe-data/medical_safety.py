@@ -377,7 +377,8 @@ def _recall_question(s: str, rx: Optional[dict] = None) -> bool:
 #                                                             imperfect stroke wording; "stroke of luck/genius", backstroke, a golf
 #                                                             or swimming "stroke" never match)
 #   anaphylaxis / anaphylactic shock|reaction  -> breathing  (its reply is about breathing and a swelling throat)
-#   overdose (present / present perfect)       -> the human poisoning reply (Poisons line + the emergency number)
+#   overdose (noun and verb forms, present /  -> the human poisoning reply (Poisons line + the emergency number); the vet reply
+#   present perfect; data, like the others)      when the words clearly say an animal; "overdosed on <not a substance>" is an idiom
 # NOT added: choking and "can't breathe" (already red flags), an allergic reaction alone (hives are not call-now; with breathing trouble
 # the breathing flags already fire), a seizure (no existing reply fits; an open problem). A shape fires when the condition is asked
 # about or stated IN THE PRESENT about the speaker or someone present (am i / is he / is this / could this be / i think im having /
@@ -417,10 +418,28 @@ def _sa_cond() -> "tuple[str, dict]":
 
 
 @lru_cache(maxsize=1)
+def _sa_verbs() -> "tuple[dict, dict]":
+    """({slot: regex} for the VERB forms of a condition ("am i overdosing", "has she overdosed", "did i just overdose"),
+    {term: reply key}). "<verb> on <something that is not a substance>" ("overdosed on chocolate / netflix") is an idiom and never
+    matches; a substance from the ingestion lexicon ("overdosed on her tablets") does."""
+    sub = _data()["ingest"]["substance"]
+    guard = rf"(?!\s+on\s+(?!(?:(?:my|his|her|their|the|some|all|those|these|a|an|too|many|much)\s+)*(?:{sub})(?!\w)))"
+    slots: dict = {}
+    keys: dict = {}
+    for key, forms in _sa_data().get("verb_conditions", {}).items():
+        for slot, terms in forms.items():
+            slots.setdefault(slot, []).extend(terms)
+            keys.update({t.lower(): key for t in terms})
+    return {k: "(?:" + "|".join(re.escape(t) for t in sorted(v, key=len, reverse=True)) + r")(?!\w)" + guard
+            for k, v in slots.items()}, keys
+
+
+@lru_cache(maxsize=1)
 def _sa_present_re() -> "re.Pattern":
     """One regex of every frame in the data file, slots filled from its slot lists; the condition and its article are {C}."""
     d = _sa_data()
     slots = {k: "(?:" + "|".join(_phrase_rx(p) for p in sorted(v, key=len, reverse=True)) + ")" for k, v in d["slots"].items()}
+    slots.update(_sa_verbs()[0])       # {ING} / {ED} / {BASE}: the verb forms of a condition
     cond = _SA_A + _sa_cond()[0]
     frames = []
     for f in d["frames"]:
@@ -447,13 +466,6 @@ def _sa_recall_res() -> "tuple[re.Pattern, re.Pattern]":
         rf"(?:\s+{_RECALL_TIME})?$")
     past_q = re.compile(rf"(?<!\w)(?:did|have|has|had)\s+{_SA_WHO}\s+(?:just\s+|ever\s+)?(?:have|had)\s+{_SA_A}{cond}")
     return recall, past_q
-_SA_OVERDOSE_RE = re.compile(
-    rf"(?<!\w)(?:(?:am\s+i|is\s+{_SA_WHO}|are\s+(?:you|they)|im|hes|shes|theyre)\s+(?:having\s+an\s+)?overdos(?:ing|e)\b"
-    rf"|(?:is|could|might)\s+(?:this|it|that)\s+(?:be\s+)?an\s+overdose"
-    rf"|(?:ive|i\s+have|hes|he\s+has|shes|she\s+has|theyve|they\s+have|{_SA_WHO}\s+has|has\s+{_SA_WHO}|have\s+i|did\s+i\s+just)\s+"
-    rf"(?:just\s+)?overdosed"
-    rf"|(?:i|he|she|they)\s+just\s+overdosed)")
-
 
 def self_assess_mode() -> str:
     """``ZOE_MEDICAL_SELF_ASSESS``: unset = shadow (the code default until the floor is replayed); exactly ``off`` or ``shadow`` =
@@ -476,8 +488,6 @@ def self_assessment(text: str) -> Verdict:
         s = _fold(text)
         if not s:
             return NONE
-        if _SA_OVERDOSE_RE.search(s):
-            return Verdict("ingest_human", "poison_human")
         m = _sa_present_re().search(s)
         if m is None:
             recall_re, past_q_re = _sa_recall_res()
@@ -490,9 +500,21 @@ def self_assessment(text: str) -> Verdict:
             if not _PRESENT_MARK_RE.search(s) and clauses and all(recall_re.match(c) for c in clauses):
                 return NONE
         cond_rx, keys = _sa_cond()
-        term = re.sub(r"[\s-]+", " ", re.search(cond_rx, m.group(0)).group(0)).strip()
-        key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
-        return Verdict("red_call", key)
+        verb_rx, verb_keys = _sa_verbs()
+        found = re.search(cond_rx, m.group(0))
+        if found:
+            term = re.sub(r"[\s-]+", " ", found.group(0)).strip()
+            key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
+        else:
+            term = next(mm.group(0) for rx in verb_rx.values() for mm in [re.search(rx, m.group(0))] if mm)
+            key = verb_keys[term.lower()]
+        cls = _sa_data().get("verdicts", {}).get(key, "red_call")
+        if cls == "ingest_human":
+            rx = _rx()
+            # the poisoning floor's own rule: an animal only when the words clearly say so (a pet word, no person word, not "i")
+            if rx["animal"].search(s) and not rx["human"].search(s) and not re.search(r"(?<!\w)(?:i|im|ive|we|weve)(?!\w)", s):
+                return Verdict("ingest_animal", "poison_animal")
+        return Verdict(cls, key)
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety self_assessment failed (%s)", type(exc).__name__)
         return NONE

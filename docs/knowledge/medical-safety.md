@@ -68,8 +68,7 @@ Not marked off the record: unlike a distress turn, a symptom the member states s
 the brain answered with no call-now reply. `medical_safety.self_assessment` reads a PRESENT question or statement about the speaker or
 someone present (am i / is she / is my dad / is this / could this be / i think im having / do you think ...) naming a condition from a
 closed list, each mapped to the module's existing reply: heart attack, cardiac arrest -> `heart`; stroke, mini stroke, TIA, heat stroke
--> `stroke`; anaphylaxis / anaphylactic shock or reaction -> `breathing`; overdose (present or present perfect) -> the human poisoning
-reply. Not added: choking and "can't breathe" (already red flags), an allergic reaction alone, a seizure (no existing reply fits; open
+-> `stroke`; anaphylaxis / anaphylactic shock or reaction -> `breathing`; overdose -> the human poisoning reply. Not added: choking and "can't breathe" (already red flags), an allergic reaction alone, a seizure (no existing reply fits; open
 problem). When it is unclear whether a question is general knowledge or about now ("could this be a heart attack?", "is it a stroke if
 my face is drooping?") it fires. It does not fire on general knowledge with no present subject ("what is a stroke", "what are the
 signs of a heart attack"), a past narrative ("my grandad had a stroke in 2019", "i nearly had a heart attack when i saw the bill"), a
@@ -78,6 +77,13 @@ the condition in place of the symptom; a bare relation word keeps the floor). Th
 unchanged in every mode. shadow logs `MEDICAL_SELF_ASSESS ... mode=shadow` (codes only) and changes no reply; off is today; enforce
 gives the floor. Replay before enforce. Tests: `tests/test_medical_self_assessment.py` (`ci_safe`, 60 + ~1450 generated fire / 45 + ~1130 generated not, every mode value,
 byte-identity of off and shadow, negative control).
+
+Overdose and the other floors (pinned in `tests/test_medical_self_assessment.py`): the seam runs `distress_handoff.handle` BEFORE
+`medical_safety.handle`. An intentional-sounding statement ("i took all my tablets because i want to die", "i want to overdose", "i took
+all my tablets") is a distress `handoff` (enforced by default) and is answered there; this floor is not widened to grab it. An
+accidental-sounding question ("did i just overdose by accident", "am i overdosing") is only a distress `gentle` (shadow by default), so
+it falls through to this floor. A third party's ingestion ("my son swallowed my tablets") is the poisoning floor's (`detect`). A dose
+question that is not an emergency ("what is the maximum dose of paracetamol") matches no floor and the brain answers it, as before.
 
 ## Limits (stated, not hidden)
 

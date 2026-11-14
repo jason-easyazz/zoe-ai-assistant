@@ -90,8 +90,13 @@
   "conditions": {
    "heart": ["heart attack", "heartattack", "heart-attack", "cardiac arrest", "hart attack", "heart atack", "heart attak", "hart atack", "heart attach"],
    "stroke": ["stroke", "mini stroke", "mini-stroke", "ministroke", "tia", "heat stroke", "heatstroke", "sunstroke", "sun stroke", "stoke", "strok", "stroak"],
-   "breathing": ["anaphylaxis", "anaphylactic shock", "anaphylactic reaction", "anafylaxis", "anaphalaxis", "anaphylaxsis", "anaphylatic shock", "anaflaxis"]
+   "breathing": ["anaphylaxis", "anaphylactic shock", "anaphylactic reaction", "anafylaxis", "anaphalaxis", "anaphylaxsis", "anaphylatic shock", "anaflaxis"],
+   "poison_human": ["overdose", "over dose", "overdoes", "overdoze", "drug overdose"]
   },
+  "verb_conditions": {
+   "poison_human": {"ING": ["overdosing", "overdoseing", "overdozing"], "ED": ["overdosed", "overdozed", "overdoesed"], "BASE": ["overdose", "overdoes", "overdoze"]}
+  },
+  "verdicts": {"poison_human": "ingest_human"},
   "slots": {
    "Q": ["am i", "are we", "are you", "are they", "is he", "is she", "is it", "is {who}"],
    "S": ["im", "i am", "were", "we are", "youre", "you are", "theyre", "they are", "hes", "he is", "shes", "she is", "{who} is"],
@@ -100,7 +105,9 @@
    "DEM": ["this", "it", "that", "these", "those"],
    "DEMIS": ["its", "it is", "this is", "thats", "that is"],
    "SIGN": ["the start", "the beginning", "the onset", "the signs", "signs", "a sign", "the symptoms", "symptoms"],
-   "THINK": ["think", "think that", "maybe", "probably", "reckon", "worried", "scared", "afraid"]
+   "THINK": ["think", "think that", "maybe", "probably", "reckon", "worried", "scared", "afraid"],
+   "HAS": ["have i", "have we", "have you", "have they", "has he", "has she", "has {who}"],
+   "PERF": ["ive", "i have", "weve", "we have", "youve", "you have", "theyve", "they have", "hes", "he has", "shes", "she has", "{who} has"]
   },
   "frames": [
    "{Q} having {C}", "{Q} getting {C}", "{Q} going into {C}", "{Q} in {C}",
@@ -112,7 +119,10 @@
    "{SUBJ} just had {C}", "is {DEM} {C}", "is {DEM} really {C}", "could {DEM} be {C}",
    "might {DEM} be {C}", "may {DEM} be {C}", "can {DEM} be {C}", "would {DEM} be {C}",
    "could {DEM} really be {C}", "is {DEM} {SIGN} of {C}", "are {DEM} {SIGN} of {C}", "could {DEM} be {SIGN} of {C}",
-   "what if {DEM} is {C}", "what if {S} having {C}", "{THINK} {DEMIS} {C}"
+   "what if {DEM} is {C}", "what if {S} having {C}", "{THINK} {DEMIS} {C}",
+   "{Q} {ING}", "{S} {ING}", "{SUBJ} might be {ING}", "could {SUBJ} be {ING}",
+   "did {SUBJ} just {BASE}", "{HAS} {ED}", "{HAS} just {ED}", "{PERF} {ED}",
+   "{PERF} just {ED}", "{SUBJ} just {ED}", "{THINK} {SUBJ} {ED}", "{THINK} {SUBJ} just {ED}"
   ]
  }
 }

@@ -72,11 +72,11 @@ def _quiet(monkeypatch):
 def test_every_condition_in_the_data_maps_to_an_existing_call_now_reply():
     conditions = medical_safety._data()["self_assess"]["conditions"]
     replies = medical_safety._data()["replies"]
-    assert set(conditions) == {"heart", "stroke", "breathing"}
+    assert set(conditions) == {"heart", "stroke", "breathing", "poison_human"}
     for key, terms in conditions.items():
         assert key in replies and terms
         for term in terms:                                                    # each term and variant reaches its own reply
-            assert medical_safety.self_assessment(f"is this {term}") == medical_safety.Verdict("red_call", key), term
+            assert medical_safety.self_assessment(f"is this {term}") == _expected(key), term
     assert medical_safety.build_reply(medical_safety.Verdict("red_call", "heart")).startswith("Ring")
 
 
@@ -171,32 +171,57 @@ def test_the_flag_is_registered_with_its_modes():
 WHO_SAMPLES = ["my dad", "my wife", "grandma"]           # "{who}": a person present, named or by relation (placeholder words)
 
 
+VERB_SLOTS = ("ING", "ED", "BASE")
+
+
 def _expand(frame: str, term: str, choice: dict) -> str:
     slots = medical_safety._data()["self_assess"]["slots"]
     out = frame.replace("{C}", f"a {term}" if term[0] not in "aeiou" else f"an {term}")
+    for v in VERB_SLOTS:
+        out = out.replace("{" + v + "}", term)
     for name in re.findall(r"\{([A-Z]+)\}", out):
         out = out.replace("{" + name + "}", slots[name][choice.get(name, 0)], 1)
     return out.replace("{who}", choice.get("who", WHO_SAMPLES[0]))
 
 
-def _generated_fire() -> list:
+def _expected(key: str) -> "medical_safety.Verdict":
+    cls = medical_safety._data()["self_assess"].get("verdicts", {}).get(key, "red_call")
+    return medical_safety.Verdict(cls, key)
+
+
+def _terms_for(frame: str) -> list:
+    """(term, key) pairs a frame takes: the condition nouns for {C}, the condition's own verb forms for {ING} / {ED} / {BASE}."""
     d = medical_safety._data()["self_assess"]
-    terms = [t for ts in d["conditions"].values() for t in ts]
-    out = set()
+    verb = next((v for v in VERB_SLOTS if "{" + v + "}" in frame), None)
+    if verb:
+        return [(t, key) for key, forms in d.get("verb_conditions", {}).items() for t in forms.get(verb, [])]
+    return [(t, key) for key, ts in d["conditions"].items() for t in ts]
+
+
+def _generated_fire() -> list:
+    """(sentence, expected verdict) for every frame x every condition term (nouns and verb forms) x every speaker / slot form."""
+    d = medical_safety._data()["self_assess"]
+    out = {}
     for frame in d["frames"]:
-        for term in terms:                                                    # every condition term and variant
-            out.add(_expand(frame, term, {}))
-        for name in [n for n in re.findall(r"\{([A-Z]+)\}", frame) if n != "C"]:   # every speaker / slot form
+        pairs = _terms_for(frame)
+        for term, key in pairs:
+            out[_expand(frame, term, {})] = _expected(key)
+        term, key = pairs[0]
+        for name in [n for n in re.findall(r"\{([A-Z]+)\}", frame) if n != "C" and n not in VERB_SLOTS]:
             for i in range(len(d["slots"][name])):
                 for who in WHO_SAMPLES:
-                    out.add(_expand(frame, "heart attack", {name: i, "who": who}))
-    return sorted(out)
+                    out[_expand(frame, term, {name: i, "who": who})] = _expected(key)
+    return sorted(out.items())
 
 
 NOT_FRAMES = ["what is {C}", "what are the signs of {C}", "how do you treat {C}", "tell me about {C}", "how common is {C}",
               "{P} had {C} in 2019", "{P} had {C} last year", "{P} had {C} years ago", "{P} nearly had {C} when i saw the bill",
               "{P} is having {C} in the movie", "a man in the news had {C}", "{P} read about {C} online",
               "did my dad have {C} last year", "has my mum ever had {C} before", "what happens to someone who has {C}"]
+#: the verb forms' own must-not shapes: an idiom ("overdosed on chocolate / netflix"), a past narrative, fiction, a far-away third party
+NOT_VERB_FRAMES = ["{P} {ED} on chocolate", "{P} {ED} on netflix last night", "i think {P} {ED} on chocolate", "ive {ED} on netflix",
+                   "my friend {ED} in 2015", "{P} is {ING} in the movie", "a man in the news {ED}", "what happens if you {BASE}",
+                   "how many people {BASE} each year", "{P} {ED} years ago"]
 PEOPLE = ["i", "we", "he", "she", "my dad"]
 
 
@@ -209,13 +234,17 @@ def _generated_not() -> list:
             art = f"a {term}" if term[0] not in "aeiou" else f"an {term}"
             for p in (PEOPLE if "{P}" in f else [""]):
                 out.add(f.replace("{C}", art).replace("{P}", p))
+    for f in NOT_VERB_FRAMES:
+        for term, _key in _terms_for(f):
+            for p in (PEOPLE if "{P}" in f else [""]):
+                out.add(_expand(f.replace("{P}", p), term, {}))
     return sorted(out)
 
 
 def test_generated_must_fire_set_is_large_and_every_one_fires():
     fire = _generated_fire()
-    assert len(fire) > 1000
-    missed = [t for t in fire if medical_safety.self_assessment(t).cls != "red_call"]
+    assert len(fire) > 1000 and any(v.cls == "ingest_human" for _t, v in fire)       # overdose is in it automatically
+    missed = [t for t, want in fire if medical_safety.self_assessment(t) != want]
     assert missed == []
 
 
@@ -250,3 +279,74 @@ def test_control_the_previous_hand_regex_missed_the_review_shapes_and_typos():
     old = re.compile(r"(?<!\w)(?:(?:am\s+i|is\s+\w+|are\s+(?:you|they|we))\s+having\s+(?:a\s+|an\s+)?(?:heart\s?attack|stroke))")
     for text in ("what if this is a heart attack", "do i have a heart attack", "could i have had a stroke", "am i having a hart attack"):
         assert not old.search(text) and medical_safety.self_assessment(text).cls == "red_call"
+
+
+# ── overdose: which floor answers first (pinned), and what it never grabs ──────────────────────────────────────────────────────
+def test_the_seam_runs_the_distress_hand_off_before_the_medical_floor():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "zoe_flue_client.py").read_text(encoding="utf-8")
+    assert src.index("await distress_handoff.handle(") < src.index("await medical_safety.handle(")
+
+
+def _distress_default(monkeypatch):
+    for k in ("ZOE_DISTRESS_HANDOFF", "ZOE_DISTRESS_GENTLE"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_an_accidental_sounding_overdose_question_is_the_medical_floors(monkeypatch):
+    import distress_handoff
+
+    _distress_default(monkeypatch)
+    text = "did i just overdose by accident"
+    v = distress_handoff.detect(text)
+    assert v.tier == "gentle" and distress_handoff.mode_for(v.tier) == "shadow"     # the hand-off does not answer it
+    assert run(distress_handoff.handle(text, "demo_bar_00000001")) is None
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert run(medical_safety.handle(text, "demo_bar_00000001")) == medical_safety.build_reply(
+        medical_safety.Verdict("ingest_human", "poison_human"))
+
+
+@pytest.mark.parametrize("text", ["i took all my tablets because i want to die", "i want to overdose", "i took all my tablets"])
+def test_an_intentional_sounding_statement_is_the_distress_hand_offs(text, monkeypatch):
+    import distress_handoff
+
+    _distress_default(monkeypatch)
+    v = distress_handoff.detect(text)
+    assert v.tier == "handoff" and distress_handoff.mode_for(v.tier) == "enforce"   # answered first; the medical floor is never reached
+    assert medical_safety.self_assessment(text).cls == ""                          # and this floor was not widened to grab it
+
+
+def test_a_third_party_ingestion_is_the_poisoning_floors_not_this_ones(monkeypatch):
+    import distress_handoff
+
+    text = "my son swallowed my tablets"
+    assert distress_handoff.detect(text).tier == "none"
+    assert medical_safety.detect(text) == medical_safety.Verdict("ingest_human", "poison_human", lead="my son ")
+    assert medical_safety.self_assessment(text).cls == ""
+
+
+def test_a_pet_overdose_gets_the_vet_reply(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert medical_safety.self_assessment("is my dog overdosing") == medical_safety.Verdict("ingest_animal", "poison_animal")
+    assert medical_safety.self_assessment("am i overdosing, the dog is fine") == medical_safety.Verdict("ingest_human", "poison_human")
+
+
+@pytest.mark.parametrize("text", ["what is the maximum dose of paracetamol", "can i take two more paracetamol",
+                                  "how many ibuprofen can i take in a day", "what is a safe dose for a child"])
+def test_a_dose_question_keeps_todays_behaviour(text, monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert medical_safety.self_assessment(text).cls == "" and medical_safety.detect(text).cls == ""
+    assert run(medical_safety.handle(text, "demo_bar_00000001")) is None             # the brain answers it, as before
+
+
+@pytest.mark.parametrize("text", ["ive overdosed on netflix", "i think i overdosed on chocolate", "we overdosed on cake"])
+def test_the_overdosed_on_idiom_never_fires_but_a_substance_does(text):
+    assert medical_safety.self_assessment(text).cls == ""
+    assert medical_safety.self_assessment("shes overdosed on her tablets").cls == "ingest_human"
+
+
+@pytest.mark.parametrize("text", ["did i just overdose", "has she just overdosed", "is he overdosing", "ive overdosed",
+                                  "could this be an overdose", "am i overdozing"])
+def test_overdose_verb_forms_fire_from_the_data(text):
+    assert medical_safety.self_assessment(text).cls == "ingest_human"
