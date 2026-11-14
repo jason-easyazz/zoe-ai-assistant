@@ -330,7 +330,7 @@ def _owner_noun_re(owner: str, noun: str, lazy: bool = False):
     if lazy and _may_be_lazy(owner):
         alts.append(owner[:-1])
     alt = "|".join(re.escape(a) for a in sorted(alts, key=len, reverse=True))
-    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]s)?\s+{re.escape(noun)}(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9'’-])(?:{alt})(?:['’]s)?\s+{re.escape(noun)}(?![A-Za-z0-9-])", re.IGNORECASE)
 
 
 class Correction(NamedTuple):
@@ -443,7 +443,7 @@ def _subject_re(subject: str, lazy: bool = False):
     m = re.match(rf"(?i)(?:my|our)\s+({_REL})$", s)
     if m:
         # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
-        return re.compile(rf"(?:^|\buser['’]s\s+|\b(?:my|our)\s+){re.escape(m.group(1))}(?![A-Za-z0-9])", re.IGNORECASE)
+        return re.compile(rf"(?:^|\buser['’]s\s+|\b(?:my|our)\s+){re.escape(m.group(1))}(?![A-Za-z0-9-])", re.IGNORECASE)
     m = re.match(r"(?i)(my|our)\s+(.+)$", s)
     if m:
         # the USER's own <noun> ("my birthday"): "User's birthday ..." or an unpossessed mention, never "Oliver's birthday ..."
@@ -455,8 +455,9 @@ def _subject_re(subject: str, lazy: bool = False):
     stem = s[:-1] if lazy and _may_be_lazy(s) else None
     if stem:
         # a name typed with a stray s ("kais 21 not 22" for Kai): the word as typed, or without its s
-        return re.compile(rf"(?<![A-Za-z0-9'’])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9])", re.IGNORECASE)
-    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)   # exactly the word: "Carlo" never reaches "Carlos: 22"
+        return re.compile(rf"(?<![A-Za-z0-9'’-])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9-])", re.IGNORECASE)
+    # exactly the word: "Carlo" never reaches "Carlos: 22", and a hyphenated part is never the word ("ana" is not "Ana-Lise")
+    return re.compile(rf"(?<![A-Za-z0-9'’-]){re.escape(s)}(?![A-Za-z0-9-])", re.IGNORECASE)
 
 
 _AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
@@ -754,7 +755,7 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
     values = [v for v in (corr.new, corr.old) if v]
     low = (fact or "").lower()
     subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower()
-    if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+    if subj and re.search(rf"(?<![a-z0-9-]){re.escape(subj)}(?![a-z0-9-])", low):
         # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction - unless it gives the subject
         # a KIND the member never said: "kit is 10 not 9" is never "User's pet is named Kit" (QA round 9)
         return invented_kind(fact, user_message)
@@ -784,7 +785,7 @@ def kind_guess_on_correction(fact: str, turns: list) -> bool:
     for t in turns or ():
         corr = statement(t)
         subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower() if corr else ""
-        if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+        if subj and re.search(rf"(?<![a-z0-9-]){re.escape(subj)}(?![a-z0-9-])", low):
             return invented_kind(fact, "\n".join(turns))
     return False
 
@@ -972,7 +973,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         exact_re = _subject_re(corr.subject, False)
         _on = owner_noun(corr.subject)
         # the exact OWNER, whatever attribute the row is about: "Carlos is 22" means Carlos exists, so "carlos swimming" is never Carlo's
-        owner_re = re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(_on[0])}(?![A-Za-z0-9])", re.IGNORECASE) if _on else None
+        owner_re = re.compile(rf"(?<![A-Za-z0-9'’-]){re.escape(_on[0])}(?![A-Za-z0-9-])", re.IGNORECASE) if _on else None
         for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
             meta = r.metadata or {}
             if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
