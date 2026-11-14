@@ -18,6 +18,7 @@ module's module-scope ``from x import y`` cannot hit one. Pinned by ``test_sys_m
 from __future__ import annotations
 
 import atexit
+import os
 import shutil
 import sys
 import tempfile
@@ -28,6 +29,17 @@ from pathlib import Path
 import pytest
 
 _ZOE_DATA = Path(__file__).resolve().parents[2] / "services" / "zoe-data"
+
+# No test may inherit the CALLER's git config. A `git commit` in a test's temp repo otherwise runs whatever the caller configured:
+# a signing program (`commit.gpgsign`), a credential helper, `core.hooksPath` hooks, an `init.defaultBranch`. Measured 2026-11-14 with the
+# network blocked: 18 `ci_safe` files of this lane failed (279 tests across both lanes) only because the box's commit-signing program could not reach its server. A neutral identity is
+# supplied, so a box with no identity (a GitHub runner) and an owner's box see the same git. Pinned by tests/unit/test_git_config_isolation.py.
+_GIT_HOME = tempfile.mkdtemp(prefix="zoe-test-git-")
+atexit.register(shutil.rmtree, _GIT_HOME, ignore_errors=True)
+_GIT_CONFIG = os.path.join(_GIT_HOME, "gitconfig")
+with open(_GIT_CONFIG, "w", encoding="utf-8") as _fh:
+    _fh.write("[user]\n\tname = Zoe Test\n\temail = zoe-test@example.invalid\n")
+os.environ.update(GIT_CONFIG_GLOBAL=_GIT_CONFIG, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
 
 # ``forget_session`` (stdlib-only) keeps its epochs at a module-level path under ``~/.zoe`` with no env knob. Session-wide pin here, so a
 # module-scoped fixture or a thread that outlives its test still cannot reach the live file; the autouse fixture below adds per-test isolation.

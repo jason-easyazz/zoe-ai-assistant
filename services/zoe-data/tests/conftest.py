@@ -40,6 +40,14 @@ if _too_late:  # a pin after the import is a silent no-op — fail loudly instea
 
 ZOE_TEST_STORE_DIR = tempfile.mkdtemp(prefix="zoe-test-stores-")
 atexit.register(shutil.rmtree, ZOE_TEST_STORE_DIR, ignore_errors=True)  # no /tmp litter per session
+# No test may inherit the CALLER's git config. A `git commit` in a test's temp repo otherwise runs whatever the caller configured:
+# a signing program (`commit.gpgsign`), a credential helper, `core.hooksPath` hooks, an `init.defaultBranch`. Measured 2026-11-14 with the
+# network blocked: 3 `ci_safe` files of this lane failed only because the box's commit-signing program could not reach its server. A neutral identity is
+# supplied, so a box with no identity (a GitHub runner) and an owner's box see the same git. Pinned by tests/unit/test_git_config_isolation.py.
+_GIT_CONFIG = os.path.join(ZOE_TEST_STORE_DIR, "gitconfig")
+with open(_GIT_CONFIG, "w", encoding="utf-8") as _fh:
+    _fh.write("[user]\n\tname = Zoe Test\n\temail = zoe-test@example.invalid\n")
+os.environ.update(GIT_CONFIG_GLOBAL=_GIT_CONFIG, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
 os.environ["MEMPALACE_DATA_DIR"] = os.path.join(ZOE_TEST_STORE_DIR, "mempalace")
 os.environ["ZOE_VOICE_STT_LOG"] = os.path.join(ZOE_TEST_STORE_DIR, "voice_stt.jsonl")
 # The write-time reject ledger (memory_reject_ledger) persists day counters under ~/.zoe by default.
