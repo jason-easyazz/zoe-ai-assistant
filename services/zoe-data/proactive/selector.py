@@ -193,7 +193,6 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
     already spoke, and the member's own events in the next 48 h."""
     from memory_digest import fact_has_topic
     from memory_service import get_memory_service, is_emotional_memory
-    from time_utils import zoe_timezone
 
     async with db.execute(
         "SELECT id, loop_text, follow_up_hint, emotional_weight, created_at, follow_up_after "
@@ -216,24 +215,31 @@ async def _gather(db, user_id: str, now: datetime) -> tuple[list, list, list]:
         meta = ref.metadata or {}
         moments.append({"id": ref.id, "text": ref.text, "added": meta.get("added_at"),
                         "intensity": meta.get("candidate_intensity")})
+    return loops, moments, await _events_ahead(db, user_id, now)
+
+
+async def _events_ahead(db, user_id: str, now: datetime) -> list[dict]:
+    """The member's OWN events starting in the next three household days, via the shared read path (a repeat's occurrence
+    counts, cancelled / EXDATE do not, a zoned event is at its household time); one per event, its next one not yet begun."""
+    import calendar_read
+    from time_utils import zoe_timezone
+
     tz = zoe_timezone()
     local = now.astimezone(tz)
     days = [(local + timedelta(days=i)).date().isoformat() for i in range(3)]
-    async with db.execute(
-        "SELECT id, title, start_date, start_time FROM events WHERE user_id = ? AND deleted = 0 "
-        "AND start_date IN (?, ?, ?)", (user_id, *days),
-    ) as cur:
-        rows = await cur.fetchall()
-    events = []
-    for r in rows:
-        m = re.match(r"^\s*(\d{1,2}):(\d{2})", str(r[3] or ""))
+    events, seen = [], set()
+    for o in await calendar_read.events_in_window(db, user_id, days[0], days[-1], own_only=True):
+        m = re.match(r"^\s*(\d{1,2}):(\d{2})", str(o["start_time"] or ""))
         try:
-            day = datetime.fromisoformat(str(r[2])[:10]).replace(tzinfo=tz)
+            day = datetime.fromisoformat(o["date"]).replace(tzinfo=tz)
         except ValueError:
             continue
         start = day.replace(hour=int(m.group(1)), minute=int(m.group(2))) if m and int(m.group(1)) < 24 else day
-        events.append({"id": r[0], "title": r[1], "start": start, "tz": tz})
-    return loops, moments, events
+        if o["date"] not in days or o["event_id"] in seen or (o["is_recurring"] and start <= now):
+            continue
+        seen.add(o["event_id"])
+        events.append({"id": o["event_id"], "title": o["title"], "start": start, "tz": tz})
+    return events
 
 
 async def _people_names(db, user_id: str) -> list[str]:
