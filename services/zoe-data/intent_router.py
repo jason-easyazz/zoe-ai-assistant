@@ -4032,6 +4032,17 @@ async def _forget_cascade_note(user_id: str, name: str) -> tuple[str, bool]:
     return "", True
 
 
+def _forget_permanence_note() -> str:
+    """'' when the forget ledger can make a name forget permanent; else the fixed honest line (memory_forgotten.UNCONFIGURED_NOTE).
+    A ledger module that cannot even be loaded is unconfigured too. Never raises."""
+    try:
+        import memory_forgotten
+        return memory_forgotten.permanence_note()
+    except Exception:  # noqa: BLE001
+        return (" But I can't promise it stays forgotten until my forget setting is fixed. "
+                "Please tell whoever looks after me.")
+
+
 async def _forget_alias_note(user_id: str, name: str, svc: Any) -> str:
     """The forget-alias sweep (memory_forget_alias): the sentence asking about the first misspelling of ``name`` ('' when none / off / shadow).
     Never forgets anything on its own, never raises."""
@@ -4124,6 +4135,12 @@ async def _execute_forget_last(user_id: str) -> str:
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
+        import value_correction
+        value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
+        value_correction.forget_in_texts(user_id, [text])
+    except Exception:  # noqa: BLE001
+        pass
     try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
         import conversation_notes
         await conversation_notes.erase_for_text(user_id, text, at=ts)
@@ -4332,6 +4349,9 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         if not restored:
             return ("There's no contact I removed a moment ago that I can put back. "
                     "You can add them again from the People panel.")
+        _note = _forget_permanence_note()   # "stays forgotten" rests on the ledger: never promise it without one
+        if _note:
+            return "Okay — I've kept the contact." + _note
         return ("Okay — I've kept the contact. What I forgot about them stays forgotten "
                 "unless you tell me again.")
 
@@ -4539,7 +4559,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
             _cascade, _cascade_ok = await _forget_cascade_note(user_id, name)
             if not _cascade_ok:
                 return _FORGET_CASCADE_INCOMPLETE
-            return (f"I don't have anything saved about {name}." + _cascade
+            return (f"I don't have anything saved about {name}." + _cascade + _forget_permanence_note()
                     + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
         forgotten = 0
         archived_ids: list[str] = []
@@ -4579,7 +4599,7 @@ async def execute_intent(intent: Intent, user_id: str = "guest") -> Optional[str
         _cascade, _cascade_ok = await _forget_cascade_note(user_id, name)
         if not _cascade_ok:
             return _FORGET_CASCADE_INCOMPLETE
-        return (f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}" + _cascade
+        return (f"Okay — I've forgotten {forgotten} {things} about {name}.{suffix}" + _cascade + _forget_permanence_note()
                 + ("" if alias_confirmed else await _forget_alias_note(user_id, name, svc)))
 
     # "memory_retire" — the Flue brain's quote-backed retirement tool (memory_retire.py): a change of state the owner
