@@ -844,6 +844,10 @@ def test_first_sound_allowlist_emits_integers_only_and_text_emits_nothing(tmp_pa
         _FS_OK.replace("fall=clean", "fall=LEAK ME"),
         _FS_OK + " muted_ms=5",
         _FS_OK.replace("first_end_ms=1900", "first_end_ms=1900 LEAKME"),
+        _FS_OK + " media=LEAKME media_age_ms=5",
+        _FS_OK + " media=1 media_age_ms=5 transcript=LEAKME",
+        _FS_OK + " media=1",
+        _FS_OK + " media=2 media_age_ms=5",
     ]
     log.write_text("\n".join([_FS_OK] + texty) + "\n")
     out = subprocess.run(sc.panel_command(str(log)), shell=True, capture_output=True, text=True, check=True).stdout
@@ -855,6 +859,14 @@ def test_first_sound_allowlist_emits_integers_only_and_text_emits_nothing(tmp_pa
     since = dt.datetime(2026, 11, 1, tzinfo=sc.LOCAL_TZ)
     until = dt.datetime(2026, 11, 30, tzinfo=sc.LOCAL_TZ)
     assert sc.panel_first_sound_rows(rows, since, until) == [(-1, 870, 1, 4, 40, 55, 1500, 160)]
+
+
+@pytest.mark.skipif(shutil.which("sed") is None, reason="needs sed")
+def test_first_sound_line_with_the_media_tail_gives_the_same_row(tmp_path):
+    log = tmp_path / "voice.log"
+    log.write_text("\n".join([_FS_OK, _FS_OK + " media=1 media_age_ms=120", _FS_OK + " media=-1 media_age_ms=-1"]) + "\n")
+    out = subprocess.run(sc.panel_command(str(log)), shell=True, capture_output=True, text=True, check=True).stdout
+    assert out.splitlines() == ["2026-11-10 05:30:00 F -1 870 1 4 40 55 1500 160"] * 3
 
 
 def test_first_sound_metrics():

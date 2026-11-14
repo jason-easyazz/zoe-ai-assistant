@@ -44,7 +44,7 @@ FIRST_SOUND_RE = re.compile(
     r"server_first_ms=(-?\d+) server_kind=(content|filler|tool_ack|greeting|canned|unknown|none) gap_ms=-1 "
     r"still_talking=([01]) talk_chunks=(-?\d+) chunks=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+) "
     r"obs_ms=(\d+) win=(wake|followup|conversation|barge) quiet_ms=(-?\d+) fall=(clean|hesitating|none) "
-    r"muted_ms=(-?\d+) first_end_ms=(-?\d+)$")
+    r"muted_ms=(-?\d+) first_end_ms=(-?\d+) media=(-1|0|1) media_age_ms=(-?\d+)$")
 PCM_WRITE_RE = re.compile(r"^PCM_WRITE n=(\d+) first_ms=(-?\d+) last_ms=(-?\d+) dur_ms=(\d+) gap_max_ms=(\d+) "
                           r"starved=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+) first_end_ms=(-?\d+)$")
 
@@ -121,7 +121,7 @@ def test_line_with_nothing_known_is_all_sentinels(daemon):
     assert line == ("FIRST_SOUND close=none=0ms post_ms=-1 reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                     "reflex_cut=0 reflex_wait_ms=0 server_first_ms=-1 server_kind=none gap_ms=-1 still_talking=0 "
                     "talk_chunks=-1 chunks=0 underrun_max_ms=0 underrun_sum_ms=0 obs_ms=0 win=barge quiet_ms=-1 fall=none "
-                    "muted_ms=-1 first_end_ms=-1")
+                    "muted_ms=-1 first_end_ms=-1 media=-1 media_age_ms=-1")
     assert FIRST_SOUND_RE.match(line)
 
 
@@ -140,7 +140,7 @@ def test_field_order_is_fixed(daemon, monkeypatch):
     assert keys == ["close", "post_ms", "reflex", "skip", "reflex_at_ms", "reflex_dur_ms", "reflex_cut",
                     "reflex_wait_ms", "server_first_ms", "server_kind", "gap_ms", "still_talking", "talk_chunks",
                     "chunks", "underrun_max_ms", "underrun_sum_ms", "obs_ms", "win", "quiet_ms", "fall", "muted_ms",
-                    "first_end_ms"]
+                    "first_end_ms", "media", "media_age_ms"]
     m = FIRST_SOUND_RE.match(line)
     assert m and m.group(1, 2, 3, 4, 5, 6, 7, 8) == ("deep", "640", "210", "1500", "greeting", "1", "4", "1")
     # the four appended fields: the observed window, the turn kind, the endpointer's own state at the commit, muted ms
@@ -369,7 +369,7 @@ def test_turn_lines_are_relative_to_the_carried_close(daemon, monkeypatch, caplo
     assert line == ("FIRST_SOUND close=deep=640ms post_ms=100 reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                     "reflex_cut=0 reflex_wait_ms=0 server_first_ms=600 server_kind=greeting gap_ms=-1 still_talking=0 "
                     "talk_chunks=-1 chunks=3 underrun_max_ms=500 underrun_sum_ms=500 obs_ms=0 win=wake quiet_ms=-1 fall=none "
-                    "muted_ms=-1 first_end_ms=600")   # the hand-stamped close carries no quiet run, fall or frames: sentinels
+                    "muted_ms=-1 first_end_ms=600 media=-1 media_age_ms=-1")   # the hand-stamped close carries no quiet run, fall or frames: sentinels
 
 
 def test_followup_window_turn_is_relative_to_its_carried_close(daemon, monkeypatch, caplog):
@@ -606,6 +606,11 @@ def _effects(daemon, monkeypatch, mode):
     if mode == "off":
         monkeypatch.setattr(daemon, "_FirstSound", _NullFirstSound)
         monkeypatch.setattr(daemon, "_fs_note_write", lambda ts, te, dur: None)
+    elif mode in ("media_on", "media_broken"):   # the media watch: a stated snapshot, or a watcher that raises
+        snap = (lambda now: (True, 40)) if mode == "media_on" else (lambda now: 1 / 0)
+        monkeypatch.setattr(daemon, "_MEDIA", types.SimpleNamespace(snapshot=snap))
+        daemon._stamp_close(99.9, types.SimpleNamespace(tail_rule="deep", close_ms=640, _quiet=8, _hesitating=False),
+                            "silence")
     elif mode == "broken":
         def _boom(*a, **k):
             raise RuntimeError("instrument fault")
@@ -624,6 +629,11 @@ def test_playback_and_posts_identical_with_and_without_the_instrument(daemon, mo
     with monkeypatch.context() as m:
         broken = _effects(daemon, m, "broken")
     assert on == off == broken
+    with monkeypatch.context() as m:
+        media_on = _effects(daemon, m, "media_on")
+    with monkeypatch.context() as m:
+        media_broken = _effects(daemon, m, "media_broken")
+    assert media_on == media_broken == on          # the media watch changes no byte, POST, return or flag
     assert on[0] is True and len(on[1]) == 3 and len(on[3]) == 1
 
 

@@ -1054,11 +1054,14 @@ PANEL_SED = (
     # The daemon's first-sound instrument (zoe_voice_daemon.py FIRST_SOUND): the WHOLE line shape is pinned, so a line
     # that carries any extra token matches nothing here and falls through to the timestamp-only rule below. Only the
     # nine captures (timestamp + eight integers / one 0-1 flag) leave the device; the enums are matched, never captured.
+    # The optional appended tail (the media watch: media=<1|0|-1> media_age_ms=<n>) is matched whole and never captured,
+    # so a line from an older daemon (no tail) and a newer one give the same F row.
     r"s/^" + _PTS + r".*FIRST_SOUND close=[a-z_]{1,10}=[0-9]{1,5}ms post_ms=-?[0-9]{1,6} reflex=[a-z]{1,5} skip=[a-z_-]{1,24} "
     r"reflex_at_ms=(-?[0-9]{1,6}) reflex_dur_ms=-?[0-9]{1,6} reflex_cut=[01] reflex_wait_ms=[0-9]{1,6} "
     r"server_first_ms=(-?[0-9]{1,6}) server_kind=[a-z_]{1,10} gap_ms=-?[0-9]{1,6} still_talking=([01]) "
     r"talk_chunks=(-?[0-9]{1,6}) chunks=[0-9]{1,6} underrun_max_ms=([0-9]{1,6}) underrun_sum_ms=([0-9]{1,7}) "
-    r"obs_ms=([0-9]{1,6}) win=[a-z]{1,12} quiet_ms=-?[0-9]{1,6} fall=[a-z]{1,12} muted_ms=(-?[0-9]{1,6}) first_end_ms=-?[0-9]{1,6}$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
+    r"obs_ms=([0-9]{1,6}) win=[a-z]{1,12} quiet_ms=-?[0-9]{1,6} fall=[a-z]{1,12} muted_ms=(-?[0-9]{1,6}) first_end_ms=-?[0-9]{1,6}"
+    r"( media=(-1|0|1) media_age_ms=-?[0-9]{1,6})?$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
     "t",
     r"s/^" + _PTS + r".*$/\1 E/p",  # any other timestamped line: its timestamp only, to prove how far the log reaches
 )
