@@ -209,8 +209,12 @@ def test_the_explicit_inputs_fail_silent():
     assert R.decide(ok_ctx(guest=None, speaker_conf=0.8), s=allow).kind == "heard"
     assert R.decide(ok_ctx(guest=None, speaker_conf=None), s=allow).skip == "low_confidence"  # still needs a score
     # speaker confidence: missing, low, NaN, inf or a non-number is silence, always
-    for v in (None, 0.69, float("nan"), float("inf"), "0.9", True, [0.9]):
-        assert R.decide(ok_ctx(speaker_conf=v), s=ON).skip == "low_confidence"
+    for v in (None, 0.69, float("nan"), float("inf"), "0.9", True, [0.9], 1.0000001, 1.5, 1e9, -0.1):
+        assert R.decide(ok_ctx(speaker_conf=v), s=ON).skip == "low_confidence"   # over 1.0 is not a score
+    assert R.decide(ok_ctx(speaker_conf=1.0), s=ON).kind == "heard"              # exactly 1.0 still plays
+    for v in (0.001, 3.0, 1e9):                                                   # dBFS above full scale is not a reading
+        assert R.decide(ok_ctx(noise_dbfs=v), s=ON).skip == "error"
+    assert R.decide(ok_ctx(noise_dbfs=0.0), s=replace(ON, noise_floor_dbfs=0.0)).skip != "error"   # 0 dBFS is a reading
     assert R.decide(ok_ctx(speaker_conf=0.70), s=ON).kind == "heard"
     assert R.decide(ok_ctx(speaker_conf=1), s=ON).kind == "heard"
     assert R.decide(ok_ctx(speaker_conf=0.75), s=replace(ON, min_speaker_conf=0.8)).skip == "low_confidence"

@@ -269,8 +269,9 @@ def inputs_valid(ctx: Ctx) -> bool:
         v = getattr(ctx, f, None)
         if not (_real(v) and v >= 0):
             return False
-    for f in SIGNED_FIELDS:
-        if not _real(getattr(ctx, f, None)):
+    for f in SIGNED_FIELDS:                       # dBFS: full scale is 0, so a positive level is not a real reading
+        v = getattr(ctx, f, None)
+        if not (_real(v) and v <= 0):
             return False
     for f in OPTIONAL_FIELDS:
         v = getattr(ctx, f, None)
@@ -314,8 +315,8 @@ def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
         return "guest"  # G:guest (a guest or an unknown speaker: silent unless REFLEX_FOR_GUESTS)
     if ctx.speaker_conf is None:
         return "low_confidence"  # G:conf_missing (no pre-close speaker score: always silent)
-    if ctx.speaker_conf is not None and not (_real(ctx.speaker_conf) and ctx.speaker_conf >= s.min_speaker_conf):
-        return "low_confidence"  # G:conf_low (under the threshold, or not a finite number)
+    if ctx.speaker_conf is not None and not (_real(ctx.speaker_conf) and s.min_speaker_conf <= ctx.speaker_conf <= 1.0):
+        return "low_confidence"  # G:conf_low (under the threshold, over 1.0 - not a score - or not a finite number)
     if window and ctx.prev_question:
         return "prev_question"  # G:prev_question
     if ctx.since_last_s is not None and ctx.since_last_s < s.min_gap_s:
