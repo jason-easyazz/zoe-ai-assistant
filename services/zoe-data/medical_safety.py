@@ -581,6 +581,18 @@ def emergency_event(fact: str, said: str = "", *, today=None) -> Optional[str]:
         return None
 
 
+_EVENT_TEXT_RE = re.compile(r"^(?P<who>.+?) had (?P<what>.+?) on (?P<date>\d{1,2} [A-Z][a-z]+ \d{4}) \(a medical emergency\)\.?$")
+
+
+def event_key(text: str) -> Optional[tuple]:
+    """``(person, kind, date)`` of an ``emergency_event`` text ("User had a fall on 14 November 2026 (a medical emergency)."), else
+    None. Two event texts are the SAME record only when all three match: the fixed template's own words ("User had ... on <date>
+    (a medical emergency)") outweigh the kind word, so a word-overlap paraphrase test read the day's chest pain as a repeat of the
+    day's fall and dropped it (QA round 10a). Pure."""
+    m = _EVENT_TEXT_RE.match((text or "").strip())
+    return (m.group("who").strip().lower(), m.group("what").strip().lower(), m.group("date")) if m else None
+
+
 def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> str:
     """The fixed text for a verdict. Never model text. A call-now reply also says how to get someone in the house (QA round 8: a member
     who has fallen may not reach a phone): the intercom phrase only when ``intercom`` says it will work, else "call out". Zoe never

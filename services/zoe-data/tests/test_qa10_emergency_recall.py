@@ -125,3 +125,38 @@ def test_pure_rule_is_the_converter_declining_a_present_emergency(fact, said):
     assert not medical_safety.unfiled_emergency("User's wife is a nurse", "my wife is a nurse")                     # no emergency
     assert not medical_safety.unfiled_emergency("User asked what to do if someone has chest pain",
                                                 "what should i do if someone has chest pain")                       # hypothetical
+
+
+# ── E3: two different emergencies on one day are two records; a true repeat is still one ────────────────────────────────────────
+CHEST_NOW = "i have crushing chest pain right now"
+
+
+def _file_both(mem):  # noqa: F811
+    run(mem.ingest("User fell over in the shower and cannot get up", user_id=UID, source="turn_digest",
+                   source_excerpt=FALL_FLOOR[0], anchor_text=FALL_FLOOR[0]))
+    run(mem.ingest("User has crushing chest pain", user_id=UID, source="turn_digest", source_excerpt=CHEST_NOW, anchor_text=CHEST_NOW))
+    return sorted(medical_safety.event_key(r.text)[1] for r in _rows(mem) if medical_safety.event_key(r.text))
+
+
+def test_a_fall_and_chest_pain_on_one_day_both_file(mem):  # noqa: F811
+    assert _file_both(mem) == ["a fall", "chest pain"]
+
+
+def test_control_word_overlap_alone_drops_the_second_emergency(mem, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(medical_safety, "event_key", lambda _t: None)
+    _file_both(mem)                                                                     # (it reads back by event_key: count rows)
+    texts = [r.text for r in _rows(mem)]
+    assert len(texts) == 1 and "a fall" in texts[0]                                    # the round-10a defect: chest pain dropped
+
+
+def test_a_true_repeat_from_a_second_writer_still_dedups(mem):  # noqa: F811
+    for source in ("turn_digest", "chat_regex"):
+        run(mem.ingest("User fell over in the shower and cannot get up", user_id=UID, source=source,
+                       source_excerpt=FALL_FLOOR[0], anchor_text=FALL_FLOOR[0]))
+    assert len(_rows(mem)) == 1
+
+
+def test_event_key_reads_only_the_fixed_template():
+    assert medical_safety.event_key("User had a fall on 14 November 2026 (a medical emergency).") == ("user", "a fall", "14 November 2026")
+    assert medical_safety.event_key("User's son Max had chest pain on 3 May 2026 (a medical emergency).")[0] == "user's son max"
+    assert medical_safety.event_key("User had a fall on the stairs") is None and medical_safety.event_key("") is None

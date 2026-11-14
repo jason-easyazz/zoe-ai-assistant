@@ -3864,8 +3864,17 @@ class MemoryService:
     async def _recent_paraphrase(self, user_id: str, text: str) -> bool:
         """True when a row an automatic writer stored within ``_RECENT_AUTO_TTL_S`` says the same thing (and is still approved)."""
         now = time.monotonic()
+        try:   # a filed emergency event is the same record as another only by (person, kind, date), never by word overlap (QA round 10a)
+            import medical_safety as _ms
+
+            ev = _ms.event_key(text)
+        except Exception:  # noqa: BLE001
+            _ms, ev = None, None
         for ts, mem_id, stored in reversed(self._recent_auto.get(user_id, ())):
-            if now - ts > _RECENT_AUTO_TTL_S or not _is_paraphrase(text, stored):
+            if now - ts > _RECENT_AUTO_TTL_S:
+                continue
+            sk = _ms.event_key(stored) if ev is not None else None
+            if not ((ev == sk) if (ev is not None and sk is not None) else _is_paraphrase(text, stored)):
                 continue
             try:
                 row = await self._run_sync(self._get_sync, mem_id)
