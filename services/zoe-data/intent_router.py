@@ -4126,6 +4126,7 @@ async def _execute_forget_last(user_id: str) -> str:
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
     try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
         import value_correction
+        value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
         value_correction.forget_in_texts(user_id, [text])
     except Exception:  # noqa: BLE001
         pass

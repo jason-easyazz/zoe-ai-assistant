@@ -30,10 +30,11 @@ def run(coro):
 @pytest.fixture(autouse=True)
 def seeded():
     vc.reset_state()
-    vc._remember(A, vc.Correction("Juno", "8", "7"))
-    vc._remember(A, vc.Correction("the book club", "the 19th", "the 12th"))
-    vc._remember(A, vc.Correction("Wren", "4", "3"))
-    vc._remember(B, vc.Correction("Juno", "6", "5"))
+    # as ``apply`` remembers them: each with the turn it was said in
+    vc._remember(A, vc.Correction("Juno", "8", "7"), "juno is 8 not 7")
+    vc._remember(A, vc.Correction("the book club", "the 19th", "the 12th"), "the book club is on the 19th not the 12th")
+    vc._remember(A, vc.Correction("Wren", "4", "3"), "wren is 4 not 3")
+    vc._remember(B, vc.Correction("Juno", "6", "5"), "juno is 6 not 5")
     yield
     vc.reset_state()
 
@@ -302,6 +303,133 @@ def test_a_failing_clear_never_breaks_the_row_erase(monkeypatch, tmp_path):
     assert run(svc.erase_rows(A, ["zoe_x_r1"], actor=A))["rows_removed"] == 1
 
 
+# ── Codex P1 threads: the retracted TURNS, and every subject spelling the matcher accepts ──────────
+
+SAID = "my daughter Wynne is 8, not 7"
+
+
+def _said_before_any_row(monkeypatch):
+    """The correction is remembered from its turn (as ``apply`` does) and that turn is a recent turn - no row exists yet."""
+    import turn_forget
+
+    vc._remember(A, vc.Correction("Wynne", "8", "7"), SAID)
+    turn_forget.note_user_turn(A, SAID)
+
+
+def test_apply_remembers_the_turn_a_correction_was_said_in(monkeypatch):
+    import correction_apply
+    import user_prefs
+
+    async def opted_in(_u):
+        return False
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_in)
+    monkeypatch.setattr(correction_apply, "_is_unidentified", lambda _u: False)
+    vc.reset_state()
+    run(vc.apply("wynne is 8 not 7", A, None, svc=_Svc(("zoe_r1", "User's daughter Wynne is 7 years old"))))
+    (entry,) = [c for _t, c in vc._REMEMBERED[A]]
+    assert entry.turn == vc.turn_id_of(A, "wynne is 8 not 7") and entry.turn.startswith("ut-")
+
+
+def test_a_topic_forget_reaches_a_correction_said_before_any_row(forget_env, monkeypatch):
+    """Thread PRRT_kwDOPZpkks63cELD: "forget what I told you about my daughter" retracts the turn; no row exists and the
+    correction's own subject / values ("Wynne 8 7") hold no topic word."""
+    import forget_topic
+
+    _said_before_any_row(monkeypatch)
+    vc._remember(B, vc.Correction("Wynne", "6", "5"), SAID)                 # another member said the same words
+    res = run(forget_topic.forget(_Svc(), A, "my daughter"))
+    assert not res.store_down and res.turns_retracted == 1
+    assert "Wynne" not in _subjects(A) and "Wynne" in _subjects(B)
+
+
+def test_the_turn_ids_alone_reach_it(forget_env, monkeypatch):
+    """Control 1: with the text clear disabled, the retracted turn id still drops it."""
+    import forget_topic
+
+    _said_before_any_row(monkeypatch)
+    monkeypatch.setattr(vc, "forget_in_texts", lambda *_a, **_k: 0)
+    run(forget_topic.forget(_Svc(), A, "my daughter"))
+    assert "Wynne" not in _subjects(A)
+
+
+def test_the_retracted_turn_texts_alone_reach_it(forget_env, monkeypatch):
+    """Control 2: with the turn-id clear disabled, the retracted turn's TEXT (passed now, an empty list before) drops it."""
+    import forget_topic
+
+    _said_before_any_row(monkeypatch)
+    monkeypatch.setattr(vc, "forget_turns", lambda *_a, **_k: 0)
+    run(forget_topic.forget(_Svc(), A, "my daughter"))
+    assert "Wynne" not in _subjects(A)
+
+
+def test_with_both_turn_clears_off_the_correction_survives(forget_env, monkeypatch):
+    """Control 3: the leak the thread describes is real - with neither turn clear, the correction outlives the forget."""
+    import forget_topic
+
+    _said_before_any_row(monkeypatch)
+    monkeypatch.setattr(vc, "forget_turns", lambda *_a, **_k: 0)
+    real = vc.forget_in_texts
+    monkeypatch.setattr(vc, "forget_in_texts", lambda uid, texts: real(uid, [t for t in texts if t != SAID]))
+    run(forget_topic.forget(_Svc(), A, "my daughter"))
+    assert "Wynne" in _subjects(A)
+
+
+def test_forget_turns_drops_that_turns_entries_and_any_with_no_turn():
+    vc.reset_state()
+    vc._remember(A, vc.Correction("Wynne", "8", "7"), "wynne is 8 not 7")
+    vc._remember(A, vc.Correction("Tamsin", "4", "3"), "tamsin is 4 not 3")
+    vc._remember(A, vc.Correction("Rook", "9", "8"))                         # no recorded turn: cannot be ruled out
+    vc._remember(B, vc.Correction("Wynne", "6", "5"), "wynne is 8 not 7")
+    assert vc.forget_turns(A, [vc.turn_id_of(A, "Wynne is 8  not 7")]) == 2  # case / whitespace: the same content id
+    assert _subjects(A) == ["Tamsin"] and _subjects(B) == ["Wynne"]
+    assert vc.forget_turns(A, []) == 0 and _subjects(A) == ["Tamsin"]
+    assert vc.forget_turns(A, [None]) == 1 and _subjects(A) == []            # an id that could not be computed: over-forget
+
+
+def test_forget_that_reaches_the_turns_correction(monkeypatch):
+    vc.reset_state()
+    vc._remember(A, vc.Correction("Wynne", "8", "7"), SAID)
+    vc._remember(B, vc.Correction("Wynne", "6", "5"), SAID)
+    monkeypatch.setattr(vc, "forget_in_texts", lambda *_a, **_k: 0)          # the turn id alone
+    assert _forget_last(monkeypatch, SAID).startswith("Done")
+    assert _subjects(A) == [] and _subjects(B) == ["Wynne"]
+
+
+@pytest.mark.parametrize("subject, erased", [
+    ("Asha's swimming", "Asha swimming is on Wednesday"),        # thread PRRT_kwDOPZpkks63cELH, verbatim shape
+    ("Asha's swimming", "ASHA'S SWIMMING is on Wednesday"),
+    ("Asha's swimming", "Asha\u2019s   swimming is on Wednesday"),
+    ("Asha's swimming", "User's niece Asha has swimming on Wednesday"),     # the owner alone: when in doubt, drop
+    ("ashas swimming", "Asha swimming is on Wednesday"),          # a lazily typed possessive
+    ("Ana-Lise", "Ana Lise is 8"),                                # hyphen style
+    ("Ana Lise", "ana-lise is 8"),
+    ("José", "Jose is 8"),                                        # accent fold (the people graph's normaliser)
+    ("the book club", "Book  Club moved to the 19th"),
+    ("my dad", "User's dad is 76"),
+])
+def test_forget_in_texts_matches_every_spelling_the_matcher_accepts(subject, erased):
+    vc.reset_state()
+    vc._remember(A, vc.Correction(subject, "x1", "x2"))
+    vc._remember(B, vc.Correction(subject, "x1", "x2"))
+    assert vc.forget_in_texts(A, [erased]) == 1
+    assert _subjects(A) == [] and _subjects(B) == [subject]           # another member's identical correction survives
+
+
+def test_the_literal_comparison_was_the_leak():
+    """Control: the old literal key match misses the thread's example, so the variant test above is not vacuous."""
+    blob = "asha swimming is on wednesday"
+    key = vc._subject_key("Asha's swimming")
+    assert re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", blob) is None
+
+
+def test_an_unrelated_text_drops_nothing():
+    vc.reset_state()
+    vc._remember(A, vc.Correction("Asha's swimming", "wednesday", "thursday"))
+    vc._remember(A, vc.Correction("Wynne", "8", "7"))
+    assert vc.forget_in_texts(A, ["Rook went to the dentist"]) == 0
+    assert _subjects(A) == ["Asha's swimming", "Wynne"]
+
+
 # ── the call sites, by AST, each with its break-the-fix control ─────────────────────────────
 
 CALL_SITES = (
@@ -310,6 +438,8 @@ CALL_SITES = (
     ("forget_topic.py", "forget", "forget_matching"),
     ("forget_topic.py", "forget", "forget_in_texts"),
     ("intent_router.py", "_execute_forget_last", "forget_in_texts"),
+    ("intent_router.py", "_execute_forget_last", "forget_turns"),
+    ("forget_topic.py", "forget", "forget_turns"),
     ("memory_service.py", "erase_rows", "forget_in_texts"),
 )
 
