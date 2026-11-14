@@ -20,9 +20,53 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# A6 step 2: the tiers import their modules lazily, and after start-up 27 of them (~430 ms on the Orin) were still cold, so the
+# first turns paid those imports ON the event loop. warm() imports them all once, off the loop (main.lifespan schedules it in a
+# thread; the first resolve() before it finishes runs it in a thread too). The module list is read from this file, so it never drifts.
+_WARM = False
+_WARM_LOCK = threading.Lock()
+
+
+def _lazy_modules() -> list[str]:
+    import ast
+
+    with open(__file__, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    names: list[str] = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for n in ast.walk(fn):
+                if isinstance(n, ast.Import):
+                    names += [a.name for a in n.names]
+                elif isinstance(n, ast.ImportFrom) and n.module and not n.level:
+                    names.append(n.module)
+    return list(dict.fromkeys(names))
+
+
+def warm() -> int:
+    """Import every module the tiers import lazily (blocking: call it in a thread). Idempotent; never raises; returns the count."""
+    global _WARM
+    import importlib
+
+    with _WARM_LOCK:
+        if _WARM:
+            return 0
+        n = 0
+        try:
+            for name in _lazy_modules():
+                try:
+                    importlib.import_module(name)
+                    n += 1
+                except Exception:  # noqa: BLE001 - a tier that cannot import fails on its own path, as before
+                    pass
+        finally:
+            _WARM = True
+        return n
 
 # Read intents whose `execute_intent` returns a finished spoken/printed string and
 # are idempotent (safe to short-circuit at Tier-0). Writes / forms / panel /
@@ -943,6 +987,8 @@ def _calc_tier(text: str, user_id: str, session_id: str):
 
 @_functools.wraps(_resolve_core)
 async def resolve(text: str, user_id: str, session_id: str, **kwargs):  # noqa: F811 - the documented wrapper
+    if not _WARM:
+        await asyncio.to_thread(warm)  # cold: the tiers' first imports run off the loop (A6 step 2)
     res = await _resolve_tiers(text, user_id, session_id, **kwargs)
     if res is not None:
         try:  # failure capture (ZOE_STRUGGLE_OUTCOMES, default off): WHICH tier answered - one deque append, never raises

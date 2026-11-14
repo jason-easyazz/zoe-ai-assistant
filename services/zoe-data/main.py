@@ -302,6 +302,11 @@ async def _build_readiness_report(*, use_cache: bool = True) -> dict:
 async def _wait_for_brain_startup() -> None:
     deadline = time.monotonic() + max(0.0, _env_float("ZOE_BRAIN_STARTUP_WAIT_S", 30.0))
     last: dict = {}
+    try:  # A6: the HTTP stack's first-use cost off the loop, before this probe makes the first real request (bounded, best-effort)
+        import startup_warmups
+        await asyncio.wait_for(asyncio.to_thread(startup_warmups.warm_http_stack_sync), startup_warmups.WARM_TIMEOUT_S + 0.5)
+    except Exception:  # noqa: BLE001 - never delays readiness beyond the bound, never raises into lifespan
+        pass
     while time.monotonic() < deadline:
         last = await _check_brain_ready(timeout_s=2.0)
         if last.get("ok"):
@@ -1166,6 +1171,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
     asyncio.create_task(_wait_for_brain_startup(), name="brain_startup_readiness_probe")
+    try:  # A6: FastAPI builds included routers' route tables (pydantic) on the first request; build them now, off the loop
+        import startup_warmups
+        asyncio.create_task(asyncio.to_thread(startup_warmups.prebuild_route_tables, app), name="route_table_prebuild")
+    except Exception:  # noqa: BLE001 - never raises into lifespan
+        pass
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
     # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:
@@ -1256,6 +1266,11 @@ async def lifespan(app: FastAPI):
                 logger.info("Semantic router (Tier-1) warmup scheduled — mode=%s", _sr.mode())
         except Exception as _sr_exc:
             logger.warning("Semantic router warmup scheduling failed (non-fatal): %s", _sr_exc)
+        try:  # A6: the deterministic tiers' lazy imports, off the loop, before the first turn needs them
+            import fast_tiers as _ft
+            asyncio.create_task(asyncio.to_thread(_ft.warm), name="fast_tiers_warmup")
+        except Exception as _ft_exc:  # noqa: BLE001
+            logger.warning("fast_tiers warmup scheduling failed (non-fatal): %s", type(_ft_exc).__name__)
     except Exception as _voice_warmup_exc:
         logger.warning("Voice STT worker warmup scheduling failed (non-fatal): %s", _voice_warmup_exc)
 
