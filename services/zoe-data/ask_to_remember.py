@@ -299,7 +299,7 @@ async def remember(clause: str, user_id: str, *, utterance: str = "", session_id
     try:
         from memory_service import get_memory_service, scrub_pii
 
-        scrubbed, reject = scrub_pii(clause)
+        scrubbed, reject = scrub_pii(clause, contact=False)   # what ingest stores: a phone / address is a fact to keep
         if reject or scrubbed != clause:
             # a card / SSN is REJECTED by the store; a password / PIN / key is REDACTED in place - either way the
             # words the owner wants kept are not what would be stored, so nothing is, and Zoe says so

@@ -1349,6 +1349,130 @@ _PEM_RE = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----")
 _JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
 _IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")
 _BANKING_CONTEXT_RE = re.compile(r"(?i)\b(iban|bank|account|swift|bic|transfer)\b")
+_LABELLED_SECRET_RE = re.compile(
+    r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:is|=|:)\s*)\S+",
+)
+
+# ── widened classes (2026-11-15). Every label list is CLOSED and lives HERE only; a label never redacts without a value
+# (a code / number needs a digit), so "the alarm code changed", "the dress code is casual" and "pineapple" are untouched.
+#: what a code opens (``the door code is 5791``, ``code for the gate: 0042``)
+_CODE_LABELS = ("front door", "back door", "side door", "door", "alarm", "gate", "garage", "safe", "lockbox", "lock box",
+                "key safe", "keysafe", "key box", "keypad", "padlock", "bike lock", "lock", "locker", "security", "entry",
+                "access", "wifi", "wi-fi", "network", "router")
+#: the words that make a label a secret
+_CODE_WORDS = ("code", "pin", "passcode", "password", "combination", "combo", "key")
+#: labelled account / identity numbers that are neither Luhn-valid nor IBAN-shaped
+_ACCOUNT_LABELS = ("account number", "account no", "account #", "acct number", "acct no", "bank account", "bsb",
+                   "sort code", "routing number", "routing no", "member number", "member no", "membership number",
+                   "membership no", "customer number", "customer no", "client number", "policy number",
+                   "licence number", "license number", "driver's licence", "drivers licence", "driver's license",
+                   "drivers license", "passport number", "passport no", "tax file number", "tfn", "medicare number",
+                   "medicare card number", "national insurance number", "ni number", "social security number",
+                   "card number")
+#: street-type words an address ends in (``12 Example Street``)
+_STREET_TYPES = ("street", "st", "road", "rd", "avenue", "ave", "lane", "ln", "drive", "dr", "court", "ct", "crescent",
+                 "cres", "place", "pl", "boulevard", "blvd", "way", "terrace", "tce", "parade", "pde", "close", "cl",
+                 "highway", "hwy", "circuit", "cct", "grove", "square", "sq", "esplanade", "esp", "mews", "promenade",
+                 "quay", "alley")
+#: the labels a phone number follows ("my number is 9123 4567", "call me on ...", "ring the shop at ...")
+_PHONE_NOUNS = ("phone", "mobile", "cell", "landline", "fax", "whatsapp", "telephone", "tel", "number", "contact")
+_PHONE_VERBS = ("call", "ring", "text", "phone", "reach", "contact", "sms", "message")
+
+
+def _alt(words: tuple[str, ...]) -> str:
+    return "|".join(re.escape(w).replace(r"\ ", r"\s+") for w in sorted(words, key=len, reverse=True))
+
+
+_CONNECT = r"(\s*(?:is|was|=|:|'s|’s)?\s*)"
+#: one secret token holding a digit, stopping before trailing punctuation (``plum-ladder-9``, ``5791``), then up to three
+#: more digit groups (``12 34``)
+_TOKEN = r"[^\s,;!?]*?\d[^\s,;!?]*?(?=\.?(?:[\s,;!?]|$))(?:[ -]\d{2,}){0,3}"
+_CODE_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_CODE_LABELS)})(?:'s|’s)?[\s-]?(?:{_alt(_CODE_WORDS)})(?:\s+number)?"
+    rf"|(?:code|pin|passcode|password|combination|combo)\s+(?:to|for)\s+(?:the\s+|my\s+|our\s+)?(?:{_alt(_CODE_LABELS)}))\b"
+    rf"{_CONNECT}({_TOKEN})"
+)
+#: a PIN said without "is" (``my pin 4821``): at least three digits, so "pin 3 photos" stays
+_BARE_PIN_RE = re.compile(r"(?i)\b(pin(?:\s+(?:number|code))?|passcode)\b(\s*(?:is|was|=|:|-)?\s*)(\d{3,}(?:[ -]\d{2,}){0,2})\b")
+_BARE_PASSWORD_RE = re.compile(rf"(?i)\b(password|passphrase)\b(\s*(?:is|was|=|:|-)?\s*)({_TOKEN})")
+_ACCOUNT_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_ACCOUNT_LABELS)})(?:'s|’s|\.)?)(\s*(?:is|was|=|:|#|of)?\s*)([A-Za-z]{{0,2}}\d[\d -]{{2,30}}\d[A-Za-z]?)"
+)
+_EMAIL_RE = re.compile(r"(?<![\w.%+-])[\w.%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}\b")
+_SPOKEN_EMAIL_RE = re.compile(
+    r"(?i)\b(e-?mail(?:\s+address)?(?:\s+(?:is|was))?\s*:?\s+)"
+    r"([\w.+-]{1,64}\s+at\s+[\w-]{1,63}(?:\s+dot\s+[\w-]{1,63}){0,3}\s+dot\s+[a-z]{2,6})\b"
+)
+_PHONE_LABEL_RE = re.compile(
+    rf"(?i)\b((?:{_alt(_PHONE_NOUNS)})(?:\s+(?:number|no))?|(?:{_alt(_PHONE_VERBS)})(?:\s+[\w'’]+){{0,2}}?\s+(?:on|at))\b"
+    rf"{_CONNECT}(\+?\(?\d[\d ().-]{{5,22}}\d)"
+)
+#: unlabelled phone shapes: a leading +, a leading trunk 0 (AU / UK), or the 3-3-4 North American form with - or .
+_PHONE_INTL_RE = re.compile(r"(?<![\w+])\+\d{1,3}[ .-]?(?:\(\d{1,4}\)[ .-]?)?\d[\d .-]{5,16}\d(?!\w)")
+_PHONE_TRUNK_RE = re.compile(r"(?<![\w.,+/-])(?:\(0\d{1,3}\)|0\d{1,4})(?:[ .-]?\d{2,5}){1,3}(?!\w|[.,/-]\d)")
+_PHONE_NANP_RE = re.compile(r"(?<![\w.-])(?:\(\d{3}\)[ .-]?|\d{3}[.-])\d{3}[.-]\d{4}(?!\w|[.-]\d)")
+_UNIT = r"(?:(?i:unit|apt|apartment|flat|suite|lot)\s*\d{1,5}[A-Za-z]?\s*[,/]?\s*)?\d{1,5}[A-Za-z]?(?:\s*[/-]\s*\d{1,5}[A-Za-z]?)?"
+#: ``[unit] number Capitalised Name street-type [, Suburb] [STATE] [postcode]``; a lower-case street needs a label below
+_ADDRESS_RE = re.compile(
+    rf"(?<![\w/.-]){_UNIT},?\s+(?:[A-Z][A-Za-z'’-]*\s+){{1,3}}(?i:{_alt(_STREET_TYPES)})\b\.?"
+    r"(?:(?:,\s*|\s+)(?:[A-Z][\w'’-]*\s+){0,3}(?:[A-Z]{2,3}\s+)?\d{4,5}\b|,\s*[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2})?"
+)
+_ADDRESS_LABEL_RE = re.compile(
+    r"(?i)\b((?:(?:my|our|his|her|their|the|home|postal|street|new|old|billing|delivery|shipping)\s+)*(?<!ip\s)(?<!mac\s)"
+    r"address(?:\s+(?:is|was)|\s*:)\s*)"
+    r"(\d[^.;!?\n]{0,80}?(?=\s*(?:[.;!?\n]|$)|\s+(?:and|but|so|because|since|then)\b)|\d[^.;!?\n]{0,80})"
+)
+_LIVE_AT_RE = re.compile(
+    rf"(?i)\b((?:i|we|they|he|she|who)?\s*(?:live|lives|living|stay|stays|staying)\s+at\s+)"
+    rf"({_UNIT},?\s+(?:[\w'’-]+\s+){{1,3}}?(?:{_alt(_STREET_TYPES)})\b\.?"
+    r"(?:(?:,?\s+[A-Za-z][\w'’-]*){0,3}?,?\s+\d{4,5}\b|,\s*[A-Za-z][\w'’-]*(?:\s+[A-Za-z][\w'’-]*){0,2}?)?)"
+)
+_PO_BOX_RE = re.compile(r"(?i)\bP\.?\s?O\.?\s+Box\s+\d{1,6}\b")
+_REDACT = "[REDACTED]"
+
+
+def _digits(s: str) -> int:
+    return sum(c.isdigit() for c in s)
+
+
+def _keep_label_if(lo: int, hi: int):
+    def sub(m: "re.Match[str]") -> str:
+        return m.group(1) + m.group(2) + _REDACT if lo <= _digits(m.group(3)) <= hi else m.group(0)
+    return sub
+
+
+def _whole_if(lo: int, hi: int):
+    def sub(m: "re.Match[str]") -> str:
+        return _REDACT if lo <= _digits(m.group(0)) <= hi else m.group(0)
+    return sub
+
+
+def _scrub_secrets(text: str) -> str:
+    """Labelled codes, PINs / passwords said without "is", labelled account numbers. Never rejects."""
+    if not any(c.isdigit() for c in text):
+        return text
+    text = _CODE_RE.sub(r"\1\2" + _REDACT, text)
+    text = _BARE_PIN_RE.sub(r"\1\2" + _REDACT, text)
+    text = _BARE_PASSWORD_RE.sub(r"\1\2" + _REDACT, text)
+    return _ACCOUNT_RE.sub(_keep_label_if(4, 30), text)
+
+
+def _scrub_contact(text: str) -> str:
+    """Email addresses, street addresses, phone numbers. Never rejects."""
+    if "@" in text:
+        text = _EMAIL_RE.sub(_REDACT, text)
+    if " dot " in text.lower():
+        text = _SPOKEN_EMAIL_RE.sub(r"\1" + _REDACT, text)
+    if not any(c.isdigit() for c in text):
+        return text
+    text = _ADDRESS_LABEL_RE.sub(r"\1" + _REDACT, text)
+    text = _LIVE_AT_RE.sub(r"\1" + _REDACT, text)
+    text = _ADDRESS_RE.sub(_REDACT, text)
+    text = _PO_BOX_RE.sub(_REDACT, text)
+    text = _PHONE_LABEL_RE.sub(_keep_label_if(8, 15), text)
+    text = _PHONE_INTL_RE.sub(_whole_if(8, 15), text)
+    text = _PHONE_TRUNK_RE.sub(_whole_if(9, 11), text)
+    return _PHONE_NANP_RE.sub(_REDACT, text)
 
 
 def _luhn_valid(digits: str) -> bool:
@@ -1367,8 +1491,21 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
-def scrub_pii(text: str) -> tuple[str, Optional[str]]:
-    """Return (possibly-redacted-text, reject_reason_or_None)."""
+def scrub_pii(text: str, *, contact: bool = True) -> tuple[str, Optional[str]]:
+    """Return (possibly-redacted-text, reject_reason_or_None). Pure, compiled regexes only, never logs.
+
+    REJECT (the whole text is refused): a Luhn-valid card, an SSN, a labelled TOTP, an AWS key, a PEM key, a JWT, an
+    IBAN in a banking context. REDACT in place (value -> ``[REDACTED]``, the label kept): a labelled password / PIN /
+    key / token / secret; a labelled door / alarm / gate / garage / safe / lock / wifi code (``_CODE_LABELS``); a PIN or
+    password said without "is" (``my pin 4821``); a labelled account / identity number (``_ACCOUNT_LABELS``).
+
+    ``contact`` (default True) also redacts CONTACT details: email addresses (typed, or a labelled spoken "x at y dot
+    com"), street addresses (number + Capitalised name + ``_STREET_TYPES`` word, or after "my address is" / "I live
+    at"), PO boxes, and phone numbers (a leading +, a leading trunk 0, the 3-3-4 form with - or ., or 8-15 digits after
+    a phone label). Every excerpt / verbatim path takes the default. ``contact=False`` is for the memory FACT text only
+    (ingest, review edit, candidates, ask-to-remember): "the plumber's number is ..." and "my pickup is at 12 Main
+    Street" are household facts the owner asked Zoe to keep, so the fact keeps them while the excerpt beside it does not.
+    """
     if not text:
         return text, None
 
@@ -1395,12 +1532,8 @@ def scrub_pii(text: str) -> tuple[str, Optional[str]]:
     if _IBAN_RE.search(text) and _BANKING_CONTEXT_RE.search(text):
         return text, "iban"
 
-    redacted = re.sub(
-        r"(?i)\b(password|passcode|passphrase|pin|api[\s_-]?key|token|secret|auth[\s_-]?token)\b(\s*(?:is|=|:)\s*)\S+",
-        r"\1\2[REDACTED]",
-        text,
-    )
-    return redacted, None
+    redacted = _scrub_secrets(_LABELLED_SECRET_RE.sub(r"\1\2" + _REDACT, text))
+    return (_scrub_contact(redacted) if contact else redacted), None
 
 
 #: Cap for the verbatim evidence stored beside a fact (metadata
@@ -1716,7 +1849,7 @@ class MemoryService:
             metadata = {k: v for k, v in (metadata or {}).items() if k not in _auth.AFFECT_KEYS}
             logger.info("AFFECT_STRIPPED writer=%s", source)
 
-        scrubbed, reject = scrub_pii(text)
+        scrubbed, reject = scrub_pii(text, contact=False)   # the FACT keeps a phone / address; its excerpt does not
         if reject:
             self._bump("pii_reject", source)
             if _METRICS_OK:
@@ -1809,7 +1942,7 @@ class MemoryService:
             # pending candidate (the user's words stay approved; nothing is lost).
             writer = origin or source
             # an emergency event is resolved on the fact as MINED (its words are what the member's turn supports)
-            auth_text = (scrub_pii(_mined)[0] or scrubbed) if _mined else scrubbed
+            auth_text = (scrub_pii(_mined, contact=False)[0] or scrubbed) if _mined else scrubbed
             resolved = _auth.resolve_write(
                 writer, auth_text,
                 anchor_text=anchor_text if anchor_text is not None else source_excerpt,
@@ -2727,7 +2860,7 @@ class MemoryService:
             new_text = (edits or current.text).strip()
             if not new_text:
                 raise MemoryServiceError("edit decision requires non-empty edits")
-            scrubbed, reject = scrub_pii(new_text)
+            scrubbed, reject = scrub_pii(new_text, contact=False)
             if reject:
                 raise MemoryServiceError(f"edit rejected by PII scrubber: {reject}")
             current_scope = current.metadata.get("scope")
@@ -3504,7 +3637,7 @@ class MemoryService:
             self._bump("opt_out", writer)
             return None
         try:
-            scrubbed, reject = scrub_pii(text)
+            scrubbed, reject = scrub_pii(text, contact=False)
             if reject or not scrubbed.strip():
                 return None
             md = self._build_metadata(
