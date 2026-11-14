@@ -248,6 +248,14 @@ def _query_embeddings_once(col: Any, query: str) -> Any:
     return ef.embed_query(input=[query])
 
 
+try:   # MEMORY_SEARCH_EMBED_SUMMARY s= searches= embeds= reused= (gap audit 2026-11-14.6); None = no instrument, search unchanged
+    import perf_summary as _perf_summary
+
+    _SEARCH_EMBED_SUMMARY = _perf_summary.Summary("MEMORY_SEARCH_EMBED", ("searches", "embeds", "reused"), log=logger)
+except Exception:  # noqa: BLE001
+    _SEARCH_EMBED_SUMMARY = None
+
+
 def get_drawers_collection(data_dir: str) -> Any:
     """The recall (drawers) collection: Zoe's one opener, raw chromadb.
 
@@ -4218,6 +4226,11 @@ class MemoryService:
             ))
             logger.info("MEMORY_SEARCH_SUPPLEMENT user=%s unfiltered_visible=%d limit=%d "
                         "filtered_added=%d", user_id, wide, limit, len(hits) - wide)
+        # MEMORY_SEARCH_EMBED_SUMMARY (A4's live number): query embeds per search = 1 when the vector was reused, else one per
+        # query_texts call. Counters only; a line at most every 10 min (perf_summary).
+        if _SEARCH_EMBED_SUMMARY is not None:
+            _queries = 2 if wide < limit else 1
+            _SEARCH_EMBED_SUMMARY.add(searches=1, embeds=1 if q_emb is not None else _queries, reused=q_emb is not None)
 
         # Re-rank by blending semantic distance with hotness signals.
         # load_for_prompt already does this for the metadata-only path; here we

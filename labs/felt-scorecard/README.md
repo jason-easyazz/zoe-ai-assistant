@@ -127,6 +127,10 @@ twice with `--long-since/--until` on each side of the deploy.
 | `inst_loop_block` | `EVENT_LOOP_BLOCK ms=` (`loop_block_stacks._emit`, #2473; `_TOP`/`_FRAMES` not counted) | episodes per day over the span from the last start at or before the first episode; worst day; ms p50/p90/max; episodes that ENDED < 60 s after the latest process start (start = `FORGET_LEDGER state=`, the first line of `main.lifespan`) |
 | `inst_forget_ledger` | `FORGET_LEDGER state=configured\|unconfigured [reason=module_error]` (`memory_forgotten.log_startup_state`, #2462) | starts by state, and the state at the last start |
 | `inst_flue_prepost` | `FLUE_PREPOST sid=<10 hex> total_ms= blocks_ms= other_ms= awaited=` (PR #2484, not on main yet) | household turns: total_ms and blocks_ms p50/p90 |
+| `inst_forget_held` | `FORGET_CORRECTION_HELD path= held= live=` (`value_correction.log_held_after_forget`) | household forgets with a correction still held in process (> 0 before #2487, 0 after), by path |
+| `inst_sql_memo` | `SQL_ADAPT_MEMO_SUMMARY` (`db_pool`, A5) | memo hits / (hits + misses), summed over lines; all traffic |
+| `inst_search_embed` | `MEMORY_SEARCH_EMBED_SUMMARY` (`memory_service._semantic_search`, A4) | query embeds per search (1.00 = A4 working; up to 2 without it); all traffic |
+| `inst_palace_embed` | `PALACE_EMBED_SUMMARY` (`palace_embed`, #2460) | embed-call ms p50/p90 as fixed-bucket bounds, mean ms, texts per call, fallbacks; all traffic |
 
 ## Sample output (real run, 2026-11-12 09:21 local, default windows)
 
