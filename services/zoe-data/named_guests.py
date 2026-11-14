@@ -265,7 +265,11 @@ async def brain_block(user_id: str) -> str:
             return f"{BLOCK_OPEN}\n{named_guest_learning.ask_line()}\n{BLOCK_CLOSE}" if named_guest_learning.asking() else ""
 
         lines = [guest_line(guest)]
+        import named_guest_disclosure     # not yet told what Zoe keeps about them (ZOE_NAMED_GUEST_DISCLOSURE): say it, once
         import named_guest_memory
+
+        if await named_guest_disclosure.due(guest):
+            lines.append(named_guest_disclosure.line(guest))
 
         past = await named_guest_memory.recall_lines(guest)
         if past:

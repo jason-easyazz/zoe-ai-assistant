@@ -569,6 +569,9 @@ async def test_forget_user_erases_every_contact_row_of_the_member_only(db):
     m72 = _ilu.module_from_spec(spec)
     spec.loader.exec_module(m72)
     db.conn.execute(m72.TURNS)                        # a named guest's kept turns are the member's too (named_guest_memory)
+    db.conn.execute("CREATE TABLE named_guest_disclosures (user_id TEXT NOT NULL, people_id TEXT NOT NULL, told_at TEXT NOT NULL)")
+    for who in (A, B):                                # ... and so is the mark that the guest was told (0083)
+        db.conn.execute("INSERT INTO named_guest_disclosures VALUES (?, 'g', 'x')", (who,))
     for who in (A, B):
         db.conn.execute("INSERT INTO named_guest_turns (id, user_id, people_id, user_text, created_at) VALUES (?, ?, 'g', 'hi', 'x')",
                         (f"t-{who}", who))

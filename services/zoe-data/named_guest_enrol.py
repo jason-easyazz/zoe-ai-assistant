@@ -281,12 +281,44 @@ async def _verified_here(uid: str, speaker_verified: Optional[bool], panel_id: s
         return False
 
 
+async def _forget_me(text: str, user_id: str, allow_writes: bool):
+    """A RECOGNISED named guest's own "forget me" (``ZOE_NAMED_GUEST_SELF_FORGET``, default off): their panel voice and every kept
+    conversation are erased, exactly as when the member who taught Zoe asks. The proof it is them is the proof their memory is
+    already read on: this turn's voice matched that guest at the server's bar (``named_guests.current()``); saying a name is
+    never enough, and a member's turn never comes here. A read-only turn changes nothing. None = not this (the turn goes on)."""
+    import guest_asks
+    import named_guest_disclosure
+    import named_guests
+    from user_filters import is_unidentified
+
+    guest = named_guests.current()
+    if (guest is None or not named_guest_disclosure.self_forget_on() or not is_unidentified(user_id)
+            or guest_asks.kind(text) != "forget" or allow_writes is False):
+        return None
+    try:
+        import named_guest_memory
+
+        await named_guest_memory.erase(guest.owner_user_id, guest.person_id)
+        named_guests.bind_turn(None)             # no longer a known guest: this turn is not kept and nothing more is recalled
+        reply = _say("forget_me_done")
+    except Exception as exc:  # noqa: BLE001 - fail closed: say so
+        logger.warning("named_guests: a guest's own forget failed: %s", type(exc).__name__)
+        reply = _say("forget_me_fail")
+    logger.info("NAMED_GUEST tier kind=forget_me")
+    import expert_dispatch as _xd
+
+    return _xd.DispatchResult(domain="identity", reply=reply, intent="named_guest_forget_me", tier=TIER)
+
+
 async def tier(text: str, user_id: str, session_id: str = "", *, channel: Optional[str] = None,
                speaker_verified: Optional[bool] = None, panel_id: Optional[str] = None, allow_writes: bool = True):
     """"Learn Quinn's voice" / "forget Quinn's voice" / "forget Quinn" (only when Quinn is one of my guests): a ``DispatchResult`` or None. NEVER raises."""
     try:
         if mode() != "on":
             return None
+        mine = await _forget_me(text, user_id, allow_writes)
+        if mine is not None:
+            return mine
         q = classify(text)
         if q is None:
             return None

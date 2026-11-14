@@ -48,7 +48,9 @@
     "minor_cannot": "That's one for a grown-up in the house to ask me.",
     "forget_done": "Done. I've forgotten {name}'s voice and our conversations.",
     "forget_none": "I don't know a voice for {name}.",
-    "forget_fail": "Something went wrong and I couldn't forget {name}'s voice just now. Please ask me again."
+    "forget_fail": "Something went wrong and I couldn't forget {name}'s voice just now. Please ask me again.",
+    "forget_me_done": "Done. I've forgotten your voice and our conversations. I won't know you next time, unless someone who lives here asks me to learn your voice again.",
+    "forget_me_fail": "Something went wrong and I couldn't forget you just now. Please ask me again, or ask someone who lives here."
   },
   "script": {
     "done": "Thanks, {name}. I'll know your voice now.",
