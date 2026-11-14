@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 ENV = "ZOE_CHILD_SAFETY_FLOOR"
 CARRY_ENV = "ZOE_CHILD_SAFETY_CARRY"
 LANGS_ENV = "ZOE_CHILD_SAFETY_LANGS"
+REACH_ENV = "ZOE_CHILD_SAFETY_REACH"
 #: a hazard named in one turn carries to the speaker's NEXT turn only, and only this long
 CARRY_TTL_S = 60.0
 LEXICON_KEY = "child_safety"
@@ -63,6 +64,45 @@ class Pending:
     blind: bool = False   # the floor itself failed: refuse unless the speaker is POSITIVELY an adult
     carried: bool = False  # the hazard came from this speaker's PREVIOUS turn (``carry_mode``): "the gas stove" -> "how do i turn it on"
     shadow_lang: str = ""  # only another language's words matched and ZOE_CHILD_SAFETY_LANGS is shadow: log, never answer
+    shadow_reach: bool = False  # only a misspelling or a framing cue made it a hazard ask and ZOE_CHILD_SAFETY_REACH is shadow
+
+
+def reach_mode() -> str:
+    """``ZOE_CHILD_SAFETY_REACH`` off (DEFAULT: as before) | shadow (log ``reach=shadow would_refuse=1`` only) | on: a misspelled
+    hazard noun ("knif", "dril") reads as the noun, and a framing cue ("for my story", "pretend", "describe") counts as an ask."""
+    try:
+        from typed_env import flag
+
+        raw = str(flag(REACH_ENV) or "").strip().lower()
+        return raw if raw in ("shadow", "on") else "off"
+    except Exception:  # noqa: BLE001
+        return "off"
+
+
+def _one_edit(a: str, b: str) -> bool:
+    """Exactly one insert / delete / substitute / adjacent swap between ``a`` and ``b``."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1 and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    i = next((k for k in range(len(short)) if short[k] != long_[k]), len(short))
+    return short[i:] == long_[i + 1:]
+
+
+def reach(s: str, rx: dict) -> str:
+    """``s`` with each framing cue turned into an ask ("tell me") and each misspelled hazard noun (5+ letters, one edit away, not a
+    real word in ``fuzzy_not``) turned into the noun. Framing never unlocks anything: it only ever makes a turn MORE of an ask."""
+    s = rx["framing"].sub("tell me", s)
+
+    def fix(m: "re.Match") -> str:
+        tok = m.group(0)
+        if len(tok) < 4 or tok in rx["fuzzy_not"] or tok in rx["fuzzy_exact"]:
+            return tok
+        return next((n for n in rx["fuzzy_nouns"] if _one_edit(tok, n)), tok)
+
+    return re.sub(r"[a-z]+", fix, s)
 
 
 def mode() -> str:
@@ -204,6 +244,9 @@ def _rx(lang: str) -> Optional[dict]:
             # later-clause openers skip auxiliaries and the question words (clause_q owns those, with its "what a ..." exclusion)
             "aux": frozenset(e["aux_openers"].split()) | {q.split("(")[0] for q in e["clause_opener"].split("|")},
             "aux_words": frozenset(e["aux_openers"].split()), "aux_subjects": frozenset(e["aux_subjects"].split()),
+            "framing": w(e.get("framing") or "(?!x)x"), "fuzzy_not": frozenset((e.get("fuzzy_not") or "").split()),
+            "fuzzy_nouns": tuple(n for v in (e.get("fuzzy_nouns") or {}).values() for n in v.split()),
+            "fuzzy_exact": frozenset(n for v in (e.get("fuzzy_nouns") or {}).values() for n in v.split()),
             "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
             "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
             "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
@@ -377,10 +420,18 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, f
         held_child = bool(held and time.monotonic() - held["t"] <= SESSION_TTL_S and held["child"])
         if said and key[1] and not dry:
             _entry(key)["child"] = True   # STICKY for the session: a later adult-age claim never clears it
-        hit = hazard_class(s, rx)
-        carried = _carry_step(key, s, rx) if key[1] and not dry and carry_mode() != "off" else None
+        rm = reach_mode()
+        s_reach = reach(s, rx) if rm != "off" else s   # misspellings and framing cues (ZOE_CHILD_SAFETY_REACH)
+        s_live = s_reach if rm == "on" else s
+        hit = hazard_class(s_live, rx)
+        carried = _carry_step(key, s_live, rx) if key[1] and not dry and carry_mode() != "off" else None
         if hit is None and carried is not None:
             hit = carried
+        if hit is None and rm == "shadow" and s_reach != s:
+            shadow = hazard_class(s_reach, rx)   # what a misspelling / framing cue WOULD refuse: logged by resolve, never answered
+            if shadow is not None and not _owned_by_other_floor(text, floors_live):
+                return Pending(cls=shadow[0], reply=shadow[1], declared=bool(said) or held_child, key=key,
+                               shadow_reach=True)
         if hit is None and lm == "shadow" and rx_l is not None:
             shadow = hazard_class(s, rx_l)   # what the other language's words WOULD refuse: logged by resolve, never answered
             if shadow is not None and not _owned_by_other_floor(text, floors_live):
@@ -435,6 +486,9 @@ async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
             e["n"] += 1
             n = e["n"]
         m = _safe_mode()
+        if p.shadow_reach:   # only a misspelling or a framing cue made it an ask, and that part is in shadow: log, never answer
+            logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s reach=shadow would_refuse=1 n=%d", p.cls, source, m, n)
+            return None
         if p.shadow_lang:   # only another language's (unreviewed) words matched, and that part is in shadow: log, never answer
             logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s lang=%s would_refuse=1 n=%d", p.cls, source, m, p.shadow_lang, n)
             return None
