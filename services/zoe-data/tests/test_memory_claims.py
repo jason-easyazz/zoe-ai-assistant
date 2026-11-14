@@ -1,0 +1,314 @@
+"""The pure half of the memory claims (memory redesign step 3, ``memory_claims``): strict parsing of the model's claim JSON,
+the attribute vocabulary, the value normalisers (every date / amount shape from the design note's evidence appendix) and
+the name helpers. Synthetic values only. ``ci_safe``."""
+from __future__ import annotations
+
+import json
+from datetime import date
+
+import pytest
+
+import memory_claims as mc
+import structural_claims as sc
+
+pytestmark = pytest.mark.ci_safe
+
+
+# -- strict parsing -------------------------------------------------------------------------------------------------
+
+GOOD = {"type": "correction", "turn": 1, "quote": "juno is 8 not 7", "subject": "Juno", "attribute": "age", "old": "7",
+        "new": "8", "time": "current"}
+
+
+def test_a_well_formed_claim_of_each_type_parses():
+    c = mc.parse_claim(GOOD)
+    assert c == mc.CorrectionClaim(1, "juno is 8 not 7", "Juno", "age", "8", "current", "7")
+    assert mc.parse_claim({**GOOD, "old": None}).old is None
+    assert mc.parse_claim({k: v for k, v in GOOD.items() if k != "old"}).old is None
+    k = mc.parse_claim({"type": "kind", "turn": 0, "quote": "pip is a cat", "subject": "Pip", "kind": "animal"})
+    assert isinstance(k, mc.KindClaim) and k.kind == "animal"
+    e = mc.parse_claim({"type": "emergency", "turn": 0, "quote": "i fell", "subject": "I", "event": "fall",
+                        "time": "current"})
+    assert isinstance(e, mc.EmergencyClaim) and e.event == "fall"
+
+
+@pytest.mark.parametrize("raw, reason", [
+    ({**GOOD, "confidence": 0.9}, "unknown_field"),
+    ({**GOOD, "turn": True}, "bad_turn"),
+    ({**GOOD, "turn": "1"}, "bad_turn"),
+    ({**GOOD, "turn": -1}, "bad_turn"),
+    ({**GOOD, "quote": "x" * 161}, "bad_quote"),
+    ({**GOOD, "quote": "   "}, "bad_quote"),
+    ({**GOOD, "new": 8}, "bad_new"),
+    ({**GOOD, "old": 7}, "bad_old"),
+    ({**GOOD, "attribute": "height"}, "bad_attribute"),
+    ({**GOOD, "attribute": "other"}, "bad_attribute"),
+    ({**GOOD, "time": "hypothetical"}, "bad_time"),
+    ({k: v for k, v in GOOD.items() if k != "subject"}, "bad_subject"),
+    ({**GOOD, "type": "fact"}, "bad_type"),
+    ({"type": "kind", "turn": 0, "quote": "pip is a cat", "subject": "Pip", "kind": "cat"}, "bad_kind"),
+    ({"type": "emergency", "turn": 0, "quote": "x fell", "subject": "I", "event": "stubbed_toe", "time": "current"},
+     "bad_event"),
+    ({"type": "emergency", "turn": 0, "quote": "x fell", "subject": "I", "event": "fall", "time": "future"}, "bad_time"),
+    (["not", "an", "object"], "not_an_object"),
+])
+def test_a_malformed_claim_is_an_item_never_an_exception(raw, reason):
+    got = mc.parse_claim(raw)
+    assert isinstance(got, mc.Malformed) and got.reason == reason
+
+
+@pytest.mark.parametrize("raw, error", [
+    ("{not json", "unparseable"),
+    ([], "bad_envelope"),
+    ({"claims": [], "abstain": None, "extra": 1}, "bad_envelope"),
+    ({"abstain": "unsure"}, "bad_envelope"),
+    ({"claims": [GOOD] * 4, "abstain": None}, "bad_claims"),
+    ({"claims": GOOD, "abstain": None}, "bad_claims"),
+    ({"claims": [], "abstain": "maybe"}, "bad_abstain"),
+])
+def test_a_malformed_envelope_is_an_error_code(raw, error):
+    assert mc.parse_output(raw).error == error
+
+
+def test_an_envelope_parses_from_json_text_and_keeps_bad_items_in_place():
+    out = mc.parse_output(json.dumps({"claims": [GOOD, {**GOOD, "x": 1}], "abstain": None}))
+    assert out.error == "" and isinstance(out.items[0], mc.CorrectionClaim) and isinstance(out.items[1], mc.Malformed)
+    assert mc.parse_output({"claims": [], "abstain": "no_correction"}).abstain == "no_correction"
+
+
+def test_claim_ids_are_stable_and_distinct():
+    a = mc.claim_id("demo_u", "ut-1", 0)
+    assert a == mc.claim_id("demo_u", "ut-1", 0) and len(a) == 16
+    assert a != mc.claim_id("demo_u", "ut-1", 1) != mc.claim_id("demo_v", "ut-1", 1)
+
+
+# -- the attribute vocabulary --------------------------------------------------------------------------------------
+
+def test_every_attribute_maps_onto_an_existing_structural_predicate():
+    assert set(mc.ATTRIBUTES) == {"event_date", "origin_date", "birthday", "age", "amount", "measure", "count",
+                                  "time_of_day", "schedule", "location", "employer", "partner", "diet"}
+    for spec in mc.ATTRIBUTES.values():
+        assert spec.predicate in sc.PREDICATES or spec.predicate.startswith("kin:")
+        assert spec.units and set(spec.units) <= mc.UNITS
+    assert {a for a, s in mc.ATTRIBUTES.items() if s.needs_old} == {"employer", "diet"}
+
+
+# -- the normalisers, table-driven ---------------------------------------------------------------------------------
+
+DATES = [
+    # evidence appendix rows 6, 7, 8, 9, 16, 17, 21 and design note G C05-C14, C39
+    ("the 19th", {"d": 19}), ("19th", {"d": 19}), ("the 21st", {"d": 21}), ("the 14th", {"d": 14}),
+    ("the 5th", {"d": 5}), ("the 3rd", {"d": 3}), ("the 2nd", {"d": 2}), ("1st", {"d": 1}),
+    ("the 12th of january", {"m": 1, "d": 12}), ("12th of December", {"m": 12, "d": 12}),
+    ("the 27th of november", {"m": 11, "d": 27}), ("the twentieth of November", {"m": 11, "d": 20}),
+    ("twenty-first of may", {"m": 5, "d": 21}), ("twenty first of may", {"m": 5, "d": 21}),
+    ("the thirtieth of june", {"m": 6, "d": 30}), ("December 19", {"m": 12, "d": 19}), ("19 Dec", {"m": 12, "d": 19}),
+    ("the 3rd of may", {"m": 5, "d": 3}), ("sept 4", {"m": 9, "d": 4}),
+    ("12th of December 2026", {"y": 2026, "m": 12, "d": 12}), ("12 December 2026", {"y": 2026, "m": 12, "d": 12}),
+    ("the 12th of december, 2026", {"y": 2026, "m": 12, "d": 12}), ("2026-12-19", {"y": 2026, "m": 12, "d": 19}),
+    ("12/12", {"m": 12, "d": 12}), ("3/1/2027", {"y": 2027, "m": 1, "d": 3}), ("on 13/12", {"m": 12, "d": 13}),
+    ("January", {"m": 1}), ("in january", {"m": 1}), ("March 2027", {"y": 2027, "m": 3}),
+    ("friday the 19th", {"d": 19}), ("29 February", {"m": 2, "d": 29}),
+    # abstain: relative, a weekday alone, a 2-digit year, impossible dates, money, a day and year with no month
+    ("next friday", None), ("tomorrow", None), ("friday", None), ("7/8/91", None), ("31 April", None),
+    ("29 February 2027", None), ("the 32nd", None), ("$20", None), ("the 12th, 2026", None), ("", None),
+    ("the 12th and the 19th", None), ("december january", None),
+]
+
+
+@pytest.mark.parametrize("text, want", DATES)
+def test_dates(text, want):
+    got = mc.normalise("event_date", text)
+    assert (got.value if got else None) == want
+    if got:
+        assert got.unit == "date"
+
+
+@pytest.mark.parametrize("text, want", [
+    ("the 3rd of may", {"m": 5, "d": 3}), ("the 4th", {"d": 4}), ("4 May 2019", {"y": 2019, "m": 5, "d": 4}),
+    ("May", None), ("2019", None),
+])
+def test_birthdays_name_a_day(text, want):
+    got = mc.normalise("birthday", text)
+    assert (got.value if got else None) == want
+
+
+AMOUNTS = [
+    # evidence appendix rows 9, 10, 18 and design note G C17-C21, C43
+    ("$13,500", "13500", "AUD", 1), ("$12,000", "12000", "AUD", 1), ("13.5k", "13500", "AUD", 1000),
+    ("12k", "12000", "AUD", 1000), ("13.5 k", "13500", "AUD", 1000), ("13 thousand", "13000", "AUD", 1000),
+    ("twelve thousand dollars", "12000", "AUD", 1000), ("a hundred thousand", "100000", "AUD", 1000),
+    ("twelve thousand five hundred", "12500", "AUD", 1000), ("2 grand", "2000", "AUD", 1000),
+    ("1.2m", "1200000", "AUD", 1_000_000), ("1.2 million", "1200000", "AUD", 1_000_000), ("27", "27", "AUD", 1),
+    ("20 dollar", "20", "AUD", 1), ("20 dollars", "20", "AUD", 1), ("$27.50", "27.5", "AUD", 1),
+    ("US$40", "40", "USD", 1), ("40 usd", "40", "USD", 1), ("€15", "15", "EUR", 1), ("fifty bucks", "50", "AUD", 1),
+]
+
+
+@pytest.mark.parametrize("text, v, cur, scale", AMOUNTS)
+def test_amounts(text, v, cur, scale):
+    got = mc.normalise("amount", text)
+    assert got.value == {"v": v, "cur": cur} and got.unit == "money" and got.scale == scale
+
+
+@pytest.mark.parametrize("text", ["50 cents", "lots", "13,50", "the 12th", "12 km", "-5"])
+def test_amounts_that_abstain(text):
+    assert mc.normalise("amount", text) is None
+
+
+@pytest.mark.parametrize("old, new, readings, new_v", [
+    ("12", "13 thousand", [{"v": "12", "cur": "AUD"}, {"v": "12000", "cur": "AUD"}], "13000"),     # the qa8 rule
+    ("12k", "13.5k", [{"v": "12000", "cur": "AUD"}], "13500"),
+    ("$12,000", "13.5k", [{"v": "12000", "cur": "AUD"}], "13500"),           # a full number takes no scale
+    ("$12,000", "$13,500", [{"v": "12000", "cur": "AUD"}], "13500"),
+    ("20", "27", [{"v": "20", "cur": "AUD"}], "27"),
+])
+def test_amount_pairs(old, new, readings, new_v):
+    ok, o, n = mc.normalise_pair("amount", old, new)
+    assert ok and list(o.readings()) == readings and n.value["v"] == new_v
+
+
+def test_amount_pairs_take_a_stated_currency_and_refuse_a_mismatch():
+    ok, o, n = mc.normalise_pair("amount", "40", "US$45")
+    assert ok and o.value["cur"] == n.value["cur"] == "USD"
+    ok, _, _ = mc.normalise_pair("amount", "€40", "US$45")
+    assert not ok
+
+
+AGES = [("8", 8.0), ("eight", 8.0), ("8 years old", 8.0), ("9 years", 9.0), ("seven years old", 7.0), ("8 yo", 8.0),
+        ("three and a half", 3.5), ("3 and a half years old", 3.5), ("3.5", 3.5), ("twenty-one", 21.0), ("0", 0.0),
+        ("8 dogs", None), ("8th", None), ("8 months", None), ("3.3", None), ("121", None), ("the 8th of may", None),
+        ("$8", None), ("8 km", None)]
+
+
+@pytest.mark.parametrize("text, want", AGES)
+def test_ages_are_never_counts_dates_or_money(text, want):
+    got = mc.normalise("age", text)
+    assert (got.value["v"] if got else None) == want
+
+
+@pytest.mark.parametrize("text, want", [("3 dogs", 3), ("8", 8), ("three", 3), ("twenty four", 24), ("8 years", None),
+                                        ("8 years old", None), ("2.5", None), ("$3", None), ("5 km", None)])
+def test_counts_are_never_ages(text, want):
+    got = mc.normalise("count", text)
+    assert (got.value["v"] if got else None) == want
+
+
+@pytest.mark.parametrize("text, want", [("5 km", ("5", "km")), ("5km", ("5", "km")), ("2.5 hours", ("2.5", "hour")),
+                                        ("3%", ("3", "percent")), ("ten kilos", ("10", "kg")), ("5", None),
+                                        ("5 dogs", None)])
+def test_measures_keep_their_unit(text, want):
+    got = mc.normalise("measure", text)
+    assert ((got.value["v"], got.unit) if got else None) == want
+
+
+def test_a_bare_old_measure_takes_the_new_unit_and_a_unit_clash_abstains():
+    ok, o, n = mc.normalise_pair("measure", "5", "6 km")
+    assert ok and o.value == {"v": "5", "u": "km"}
+    ok, _, _ = mc.normalise_pair("measure", "5 kg", "6 km")
+    assert not ok
+
+
+TIMES = [("5pm", {"h": 17, "mi": 0}), ("5 pm", {"h": 17, "mi": 0}), ("5.30 p.m.", {"h": 17, "mi": 30}),
+         ("4pm", {"h": 16, "mi": 0}), ("9am", {"h": 9, "mi": 0}), ("12am", {"h": 0, "mi": 0}),
+         ("12pm", {"h": 12, "mi": 0}), ("17:00", {"h": 17, "mi": 0}), ("09:30", {"h": 9, "mi": 30}),
+         ("noon", {"h": 12, "mi": 0}), ("midnight", {"h": 0, "mi": 0}), ("five pm", {"h": 17, "mi": 0}),
+         ("at 5 o'clock", {"h12": 5, "mi": 0}), ("5", {"h12": 5, "mi": 0}), ("5:30", {"h12": 5, "mi": 30}),
+         ("13pm", None), ("25:00", None), ("5:7", None), ("half past five", None), ("soon", None)]
+
+
+@pytest.mark.parametrize("text, want", TIMES)
+def test_times_of_day(text, want):
+    got = mc.normalise("time_of_day", text)
+    assert (got.value if got else None) == want
+
+
+def test_an_hour_alone_inherits_the_stored_half_of_the_day_or_abstains():
+    assert mc.resolve_time({"h12": 5, "mi": 0}, {"h": 16, "mi": 0}) == {"h": 17, "mi": 0}
+    assert mc.resolve_time({"h12": 5, "mi": 0}, {"h": 9, "mi": 0}) == {"h": 5, "mi": 0}
+    assert mc.resolve_time({"h12": 5, "mi": 0}, {}) is None
+    assert mc.old_matches("time_of_day", {"h12": 4, "mi": 0}, {"h": 16, "mi": 0})
+    assert not mc.old_matches("time_of_day", {"h12": 4, "mi": 0}, {"h": 17, "mi": 0})
+
+
+@pytest.mark.parametrize("text, want", [
+    ("on wednesday", {"freq": "weekly", "byday": ["WE"]}), ("wednesdays", {"freq": "weekly", "byday": ["WE"]}),
+    ("mondays and thursdays", {"freq": "weekly", "byday": ["MO", "TH"]}), ("every day", {"freq": "daily"}),
+    ("weekly", {"freq": "weekly"}), ("every month", {"freq": "monthly"}),
+    ("weekdays at 5pm", {"freq": "weekly", "byday": ["MO", "TU", "WE", "TH", "FR"], "time": {"h": 17, "mi": 0}}),
+    ("next week", None), ("daily on monday", None), ("at noonish", None),
+])
+def test_schedules(text, want):
+    got = mc.normalise("schedule", text)
+    assert (got.value if got else None) == want
+
+
+@pytest.mark.parametrize("attribute, text, want, unit", [
+    ("location", "Ballarat", {"label": "ballarat"}, "place"), ("location", "Wagga Wagga", {"label": "wagga wagga"}, "place"),
+    ("employer", "Corvid Freight", {"label": "corvid freight"}, "org"), ("diet", "Vegan", {"label": "vegan"}, "label"),
+    ("partner", "Sam Reyes", {"name": "sam reyes"}, "person"), ("location", "  ", None, None),
+])
+def test_labels_fold(attribute, text, want, unit):
+    got = mc.normalise(attribute, text)
+    assert (got.value, got.unit) == (want, unit) if want else got is None
+
+
+def test_partial_dates_compare_and_merge_without_guessing():
+    assert mc.date_matches({"d": 12}, {"m": 12, "d": 12})
+    assert mc.date_matches({"m": 12, "d": 12}, {"y": 2026, "m": 12, "d": 12})      # a year on one side: (m, d)
+    assert not mc.date_matches({"m": 11, "d": 12}, {"m": 12, "d": 12})
+    assert not mc.date_matches({"y": 2026}, {"m": 12, "d": 12})                   # nothing shared
+    assert mc.merge_date({"d": 19}, {"y": 2026, "m": 12, "d": 12}) == ({"y": 2026, "m": 12, "d": 19}, True)
+    assert mc.merge_date({"m": 1, "d": 12}, {"m": 12, "d": 12}) == ({"m": 1, "d": 12}, False)
+    assert mc.merge_date({"m": 1}, {"m": 12, "d": 12}) == ({"m": 1}, False)       # a month-only move drops the day
+    assert mc.merge_date({"y": 2027, "m": 1, "d": 3}, {"y": 2026, "m": 12, "d": 12}) == ({"y": 2027, "m": 1, "d": 3}, False)
+    assert mc.date_not_before({"y": 2026, "m": 12, "d": 19}, date(2026, 11, 14))
+    assert not mc.date_not_before({"y": 2026, "m": 1, "d": 3}, date(2026, 11, 14))
+    assert not mc.date_not_before({"m": 1, "d": 3}, date(2026, 11, 14))
+
+
+def test_age_from_a_birthday_with_a_year():
+    assert mc.age_at({"y": 2019, "m": 5, "d": 4}, date(2026, 11, 14)) == 7
+    assert mc.age_at({"y": 2019, "m": 12, "d": 4}, date(2026, 11, 14)) == 6
+    assert mc.age_at({"m": 5, "d": 4}, date(2026, 11, 14)) is None
+
+
+def test_row_spans_compute_their_value():
+    text = "Book club is on the 12th of December 2026"
+    start = text.index("12th")
+    span = f"{start}:{len(text)}"
+    assert mc.span_value("event_date", text, span).value == {"y": 2026, "m": 12, "d": 12}
+    assert mc.span_value("event_date", text, f"{start}:{len(text) + 1}") is None
+    assert mc.span_value("event_date", text, "5:2") is None and mc.span_value("event_date", text, "x") is None
+
+
+# -- names and subjects --------------------------------------------------------------------------------------------
+
+def test_name_parts_keep_hyphens_and_drop_a_possessive():
+    assert mc.name_parts("Ana-Lise Moss") == ("ana-lise", "moss")
+    assert mc.name_parts("Juno's swimming") == ("juno", "swimming")
+    assert mc.name_parts("José  O'Brien") == ("jose", "obrien")
+    assert mc.occurs_in("my daughter juno started school", "Juno")
+    assert not mc.occurs_in("ana-lise is 7", "ana")
+    assert not mc.occurs_in("kais 21 not 22", "Kai")
+    assert mc.occurs_in("the boat fund is 12k", "boat fund")
+
+
+def test_lazy_possessive_base_and_label_keys():
+    assert mc.possessive_base("kais") == "kai" and mc.possessive_base("Kai") is None and mc.possessive_base("is") is None
+    assert mc.label_key("the boat fund") == "boat fund" and mc.label_key("My Savings") == "savings"
+
+
+@pytest.mark.parametrize("subject, form, value", [
+    ("I", "member", ""), ("me", "member", ""), ("my dad", "relation", "father"), ("our son", "relation", "son"),
+    ("she", "pronoun", ""), ("It", "pronoun", ""), ("Juno", "name", "Juno"), ("book club", "name", "book club"),
+    ("my grandson", "name", "my grandson"), ("", "unknown", ""),
+])
+def test_subject_forms(subject, form, value):
+    assert mc.subject_form(subject) == mc.SubjectForm(form, value)
+
+
+@pytest.mark.parametrize("rel, pet", [("pet", True), ("pet dog", True), ("Pet cat", True), ("", False),
+                                      ("son", False), ("petsitter", False), (None, False)])
+def test_the_pet_marker_is_correction_apply_s(rel, pet):
+    assert mc.is_pet_relationship(rel) is pet
