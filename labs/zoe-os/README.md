@@ -106,6 +106,8 @@ bad outcome.
 | forgetting a person removes their baseline | `test_twin_forget.py` | a twin that ignores the notice still describes what was forgotten |
 | a line about a person is shown to that person, and to a child's guardians, and to nobody else | `test_decisions.py` | without the rule one adult is shown another adult's day |
 
+| a person's lines are shared only if that person chose it, one way, revocably | `test_sharing.py` | without the ownership rule an outsider shares someone's lines with themself |
+
 Three owner decisions (2026-11-14) are pinned by `test_decisions.py`: the retention policy, the twin's 28 days,
 and who is shown a line. Change the record first, then the code.
 

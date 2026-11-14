@@ -711,7 +711,18 @@ applied, and it should be confirmed rather than assumed:
 - to **nobody else**: not another adult of the household, not a guest, not a skill.
 
 In the lab **[lab]** this is `twin/unusual.py` `shown_to`, with a test (one adult is not shown the other adult's
-day; a guardian is shown the child's) and a negative control. Two things remain open and unbuilt: whether a
-person may choose to share their lines with another adult, and whether an older child's lines should stop going
-to a guardian. And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
+day; a guardian is shown the child's) and a negative control.
+
+**Sharing is the person's choice: decided by the owner on 2026-11-14** ("you can choose to share"). An adult may
+share the lines about themself with a named member of the household. It is off by default, one way (sharing
+with someone shows you nothing of theirs), revocable at once, and only that person can turn it on or off: not a
+partner, not a guardian, not a skill. Each change is a kernel event with names and no content, which the person
+can ask about. In the lab **[lab]** this is `Sharing` in the same module, with a negative control (without the
+ownership rule an outsider switches it on for themself). The owner's words were about "memories"; what is built
+covers the twin's lines about a person and nothing wider, and whether the same choice should govern anything
+else a person has stored is a separate question that this does not answer.
+
+Still open and unbuilt: whether an older child's lines should stop going to a guardian, and whether a child's
+lines may be shared beyond their guardians at all (today they cannot be, by anyone). The choice is kept in
+memory, like grants, so a restart returns everyone to "not shared". And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
 forces a surface to call it.
