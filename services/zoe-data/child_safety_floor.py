@@ -55,12 +55,21 @@ class Pending:
     reply: str
     declared: bool
     key: tuple
+    blind: bool = False   # the floor itself failed: refuse unless the speaker is POSITIVELY an adult
 
 
 def mode() -> str:
     from typed_env import flag
 
-    return str(flag(ENV) or "enforce").strip().lower()
+    raw = str(flag(ENV) or "").strip().lower()
+    return raw if raw in ("off", "shadow") else "enforce"   # anything else (unknown, empty) is a floor that enforces
+
+
+def _safe_mode() -> str:
+    try:
+        return mode()
+    except Exception:  # noqa: BLE001
+        return "enforce"
 
 
 def _fold(text: str) -> str:
@@ -85,7 +94,7 @@ def _rx(lang: str) -> Optional[dict]:
     return {"adult": int(e["adult_age"]), "max_year": int(e["max_school_year"]), "nums": nums,
             "own": [comp(p) for p in e["own_age"]], "school": [comp(p) for p in e["school"]],
             "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
-            "factual": re.compile(e["factual"]), "benign": w(e["benign"]), "report": w(e["report"]),
+            "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": w(e["benign"]), "report": w(e["report"]),
             "classes": [(c["id"], w(c["terms"]), c["reply"]) for c in e["classes"]]}
 
 
@@ -117,8 +126,8 @@ def is_request(s: str, rx: dict) -> bool:
 def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
     """(class id, fixed reply) when ``s`` is a request or question naming one hazard and reports no danger, else None."""
     core = re.sub(r"[\s.,!?;:]+$", "", rx["lead"].sub("", s, count=1))
-    if rx["factual"].match(core):
-        return None
+    if rx["factual"].match(core) and not rx["ask"].search(core) and not rx["factual_not"].search(core):
+        return None   # "why is fire hot": a pure factual question; "how does it work" / "how do I" / "can I" never match
     s = rx["benign"].sub(" ", s)
     if not is_request(s, rx) or rx["report"].search(s):
         return None
@@ -134,8 +143,8 @@ def _owned_by_other_floor(text: str) -> bool:
         import medical_safety
 
         return distress_handoff.detect(text).tier != "none" or bool(medical_safety.detect(text).cls)
-    except Exception:  # noqa: BLE001 - cannot rule an emergency out: leave the turn to the path that owns emergencies
-        return True
+    except Exception:  # noqa: BLE001 - a broken detector must not wave a child's hazard ask through: this floor still refuses
+        return False
 
 
 def _entry(key: tuple) -> dict:
@@ -152,8 +161,13 @@ def _entry(key: tuple) -> dict:
 
 
 def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -> Optional[Pending]:
-    """The sync pre-check. None = not a hazard request (or the floor is off): the turn goes on exactly as before. NEVER raises."""
+    """The sync pre-check. None = not a hazard request (or the floor is off): the turn goes on exactly as before. NEVER raises.
+    FAIL SAFE: an error AFTER a hazard was found keeps that class's refusal; an error BEFORE detection could run (lexicon, import,
+    regex) refuses with the generic line - both ``blind``, so ``resolve`` lets only a positively adult speaker through."""
+    key: tuple = ("", "")
+    hit: Optional[tuple[str, str]] = None
     try:
+        key = ((user_id or "").strip(), (session_id or "").strip())
         if mode() == "off":
             return None
         s = _fold(text)
@@ -163,8 +177,7 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -
 
         rx = _rx(lexicons.detect(s) or FALLBACK_LANG) or _rx(FALLBACK_LANG)
         if rx is None:
-            return None
-        key = ((user_id or "").strip(), (session_id or "").strip())
+            raise LookupError("no child_safety lexicon")
         said = own_age_says_child(s, rx)
         if said is not None and key[1] and not dry:
             _entry(key)["child"] = said
@@ -175,8 +188,8 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -
         declared = said if said is not None else bool(held and time.monotonic() - held["t"] <= SESSION_TTL_S and held["child"])
         return Pending(cls=hit[0], reply=hit[1], declared=bool(declared), key=key)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("child_safety_floor check failed (%s)", type(exc).__name__)
-        return None
+        logger.warning("CHILD_SAFETY_FLOOR check failed stage=%s (%s)", "after" if hit else "before", type(exc).__name__)
+        return Pending(cls=hit[0] if hit else "error", reply=hit[1] if hit else FALLBACK_REPLY, declared=False, key=key, blind=True)
 
 
 async def _who(user_id: str) -> str:
@@ -207,7 +220,10 @@ async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
     """The fixed reply when the speaker of a hazard ask is (or could be) a child and the floor ENFORCES, else None (ask the brain).
     NEVER raises; an error refuses."""
     try:
-        source = "declared" if p.declared else _SOURCE.get(await _who(user_id), "")
+        if p.blind:
+            source = "" if await _who(user_id) == "adult" else "error"
+        else:
+            source = "declared" if p.declared else _SOURCE.get(await _who(user_id), "")
         if not source:
             return None
         n = 1
@@ -215,9 +231,9 @@ async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
             e = _entry(p.key)
             e["n"] += 1
             n = e["n"]
-        m = mode()
+        m = _safe_mode()
         logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s n=%d", p.cls, source, m, n)
-        return p.reply if m == "enforce" and p.reply else None
+        return (p.reply or FALLBACK_REPLY) if m == "enforce" else None
     except Exception as exc:  # noqa: BLE001 - fail SAFE: a hazard ask we could not clear gets the cautious line
         logger.warning("CHILD_SAFETY_FLOOR class=%s source=error (%s)", getattr(p, "cls", "?"), type(exc).__name__)
         return getattr(p, "reply", "") or FALLBACK_REPLY

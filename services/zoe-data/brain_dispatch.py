@@ -104,6 +104,7 @@ import sys
 import threading
 import time
 import traffic_class
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional
 
 logger = logging.getLogger(__name__)
@@ -1029,19 +1030,36 @@ def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict
         import child_safety_floor
 
         return child_safety_floor.check(message, session_id, user_id, dry=bool(kwargs.get("replay_isolation")))
-    except Exception:  # noqa: BLE001 - the floor is optional; the turn is not
-        return None
+    except Exception:  # noqa: BLE001 - FAIL SAFE: a floor that cannot run lets only a positively adult speaker through
+        logger.warning("CHILD_SAFETY_FLOOR source=error stage=dispatch")
+        return _CHILD_FLOOR_BROKEN
+
+
+#: needs no lexicon and no floor module: what a speaker who is not positively an adult hears when the floor cannot run at all
+_CHILD_FLOOR_GENERIC = "That one needs a grown-up. Can you ask one to help you?"
+_CHILD_FLOOR_BROKEN = SimpleNamespace(cls="error", reply=_CHILD_FLOOR_GENERIC, declared=False, key=("", ""), blind=True, broken=True)
+
+
+async def _positively_adult(user_id: str) -> bool:
+    try:
+        import manner_block
+
+        return bool(await manner_block.is_adult(user_id))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 async def _child_floor_reply(floor: Any, user_id: str) -> str:
     """``child_safety_floor.resolve``, failing SAFE: if it cannot answer, the hazard ask gets the floor's cautious line, never the brain."""
+    if getattr(floor, "broken", False):
+        return "" if await _positively_adult(user_id) else _CHILD_FLOOR_GENERIC
     try:
         import child_safety_floor
 
         return await child_safety_floor.resolve(floor, user_id) or ""
     except Exception:  # noqa: BLE001
-        logger.warning("CHILD_SAFETY_FLOOR source=error (dispatch)")
-        return getattr(floor, "reply", "") or "That one needs a grown-up. Can you ask one to help you?"
+        logger.warning("CHILD_SAFETY_FLOOR source=error stage=resolve")
+        return "" if await _positively_adult(user_id) else (getattr(floor, "reply", "") or _CHILD_FLOOR_GENERIC)
 
 
 async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> AsyncIterator[str]:
