@@ -94,9 +94,11 @@ def proxy_rules() -> dict[str, list[re.Pattern]]:
 
 
 ALLOWED = [("POST", "/v1.47/containers/zoe-music-assistant/start"), ("POST", "/containers/livekit/stop"),
-           ("GET", "/v1.47/containers/zoe-database/json"), ("POST", "/v1.47/containers/zoe-database/exec"),
-           ("POST", "/v1.47/exec/" + "a" * 64 + "/start"), ("HEAD", "/_ping"), ("GET", "/v1.47/containers/json")]
-DENIED = [("POST", "/v1.47/containers/create"), ("POST", "/v1.47/build"), ("POST", "/v1.47/images/create"),
+           ("GET", "/v1.47/containers/zoe-database/json"), ("HEAD", "/_ping"), ("GET", "/v1.47/containers/json"),
+           ("GET", "/v1.47/version")]
+DENIED = [("POST", "/v1.47/containers/zoe-database/exec"), ("POST", "/v1.47/exec/" + "a" * 64 + "/start"),
+          ("GET", "/v1.47/exec/" + "a" * 64 + "/json"), ("POST", "/v1.47/exec/" + "a" * 64 + "/resize"),
+          ("POST", "/v1.47/containers/create"), ("POST", "/v1.47/build"), ("POST", "/v1.47/images/create"),
           ("POST", "/v1.47/containers/homeassistant/exec"), ("POST", "/v1.47/containers/zoe-omnigent/exec"),
           ("POST", "/v1.47/containers/zoe-ui/restart"), ("GET", "/v1.47/containers/zoe-auth/json"),
           ("POST", "/v1.47/containers/zoe-music-assistant/../homeassistant/exec"), ("POST", "/v1.47/exec/abc/start"),
@@ -171,6 +173,13 @@ def test_gpu_tier_can_reach_the_jetson_gpu():
     d = directives(DROPINS["llama-server"])
     assert "video" in " ".join(d["SupplementaryGroups"]).split()
     assert d.get("PrivateDevices", ["no"])[-1] != "yes" and "DevicePolicy" not in d
+
+
+def test_proxy_allows_no_exec_at_all():
+    """P0-1 audit: exec takes Privileged/User from the body the proxy cannot see; no exec path may be allowed."""
+    for method, pats in proxy_rules().items():
+        for p in pats:
+            assert "exec" not in p.pattern, (method, p.pattern)
 
 
 @pytest.mark.parametrize("argv", [["zoe-mem-compact"], ["zoe-mem-compact", "2"], ["zoe-mem-compact", "-1"], ["zoe-mem-compact", "3", "x"],

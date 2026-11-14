@@ -61,5 +61,20 @@ Cmnd_Alias ZOE_DEPLOY = /usr/local/libexec/zoe-priv/zoe-compose-deploy zoe-auth,
                         /usr/local/libexec/zoe-priv/zoe-compose-deploy logs zoe-auth, \
                         /usr/local/libexec/zoe-priv/zoe-compose-deploy logs zoe-ui
 
-zoe ALL=(root) NOPASSWD: ZOE_MEM, ZOE_MODEL_UNITS, ZOE_SVC_UNITS, ZOE_BACKUP, ZOE_DEPLOY
+# Database reads and writes for the backup, the dump manifest, the off-box globals, the Multica heartbeat and the
+# health checks (P0-1 audit): the Docker proxy does not allow exec, so these go through one fixed helper that execs
+# unprivileged, as postgres, in zoe-database only. Its SQL and dump input come on STDIN.
+Cmnd_Alias ZOE_DB = /usr/local/libexec/zoe-priv/zoe-db-exec isready, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec dump zoe, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec dump multica, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec dumpall-globals, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec psql zoe, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec psql multica, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec psql-at zoe, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec psql-at multica, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec restore-list, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec restore-schema, \
+                    /usr/local/libexec/zoe-priv/zoe-db-exec restore-data
+
+zoe ALL=(root) NOPASSWD: ZOE_MEM, ZOE_MODEL_UNITS, ZOE_SVC_UNITS, ZOE_BACKUP, ZOE_DEPLOY, ZOE_DB
 zoe-deploy ALL=(root) NOPASSWD: ZOE_SVC_UNITS, ZOE_DEPLOY

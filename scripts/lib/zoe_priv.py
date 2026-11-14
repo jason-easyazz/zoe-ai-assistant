@@ -32,6 +32,9 @@ ALLOWED: "dict[str, frozenset[tuple[str, ...]]]" = {
         {("up",), ("down",), ("inspect", "list"), ("inspect", "schema")}
         | {("restore", db, s) for db in ("zoe", "multica") for s in ("pre-data", "data", "post-data")}
         | {("psql", db) for db in ("zoe", "multica", "drill")}),
+    "zoe-db-exec": frozenset({("isready",), ("dumpall-globals",), ("restore-list",), ("restore-schema",),
+                              ("restore-data",)}
+                             | {(v, db) for v in ("dump", "psql", "psql-at") for db in ("zoe", "multica")}),
     "zoe-compose-deploy": frozenset({("zoe-auth",), ("zoe-auth", "--build"), ("zoe-ui",), ("modules",),
                                      ("logs", "zoe-auth"), ("logs", "zoe-ui")}),
 }
