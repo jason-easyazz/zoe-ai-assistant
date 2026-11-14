@@ -4469,7 +4469,17 @@ class MemoryService:
                 if qh and qh not in entry[1]:
                     entry[1].append(qh)
         if start:
-            self._track_background_task(self._flush_ticks_later(user_id, delay), name="memory_tick_access_coalesced")
+            task = self._track_background_task(self._flush_ticks_later(user_id, delay), name="memory_tick_access_coalesced")
+
+            def _on_done(t: "asyncio.Task[Any]", u: str = user_id, owned: dict = pend) -> None:
+                # cancelled before it ever ran (shutdown): its finally never ran, so drop THIS queue here - a queue left
+                # behind would make every later read of the user join a batch nobody flushes
+                if t.cancelled():
+                    with self._pending_lock:
+                        if self._pending_ticks.get(u) is owned:
+                            self._pending_ticks.pop(u, None)
+
+            task.add_done_callback(_on_done)
 
     def _drop_pending_ticks(self, ids: Iterable[str] = (), *, user_id: Optional[str] = None) -> None:
         """Forgotten means forever: a row erased, deleted or moved out of the readable statuses has its queued ticks

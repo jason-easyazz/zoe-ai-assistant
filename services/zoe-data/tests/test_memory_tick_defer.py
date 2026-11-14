@@ -247,7 +247,12 @@ async def test_shutdown_cancel_writes_nothing_and_leaves_no_queue(monkeypatch):
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.sleep(0)
     assert co.updates == 0 and svc._pending_ticks == {}
+    monkeypatch.setenv(ENV, "0.02")                               # no stuck queue: the next read gets its own flush
+    svc._schedule_tick("u", ["r1"], name="t")
+    await asyncio.sleep(0.15)
+    assert co.updates == 1 and co.metas["r1"]["access_count"] == 3
 
 
 def test_scheduling_with_no_running_loop_is_a_no_op(monkeypatch):
