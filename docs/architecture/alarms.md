@@ -81,7 +81,8 @@ asked to sign in. Recommendation (decision 3): keep it this way; personal-alarm 
   is the target; this is hit half-asleep). A separate **Turn off** control sits low-centre, large, away from where a thumb rests,
   and is **press-and-hold 1 s** (a fill ring shows progress; releasing early does nothing and never snoozes). If the panel was on
   another screen it first navigates to sleep. After 8 snoozes tap no longer snoozes and the hint says "Hold to turn off".
-* The ring is driven by polling `/api/alarms/ringing` every 2 s plus the server clock offset, so a reload, a voice-turn page reload
+* The ring is driven by reading `/api/alarms/ringing` (at once on a push from `alarm_push.py`, else by poll: 2 s, or 20 s once the push is
+  proven healthy by its 2 s beat; see `services/zoe-ui/AGENTS.md`) plus the server clock offset, so a reload, a voice-turn page reload
   or a zoe-data restart mid-ring all re-show it (the same lesson as the timer ack logic of #2208: the state lives on the server).
   Local audio plays from the page (P3), so the panel rings even if Music Assistant is down.
 * Hold vs tap for Turn off (decision 1): **recommend hold 1 s**. Tap-anywhere already snoozes, so a tap on the off button by a
