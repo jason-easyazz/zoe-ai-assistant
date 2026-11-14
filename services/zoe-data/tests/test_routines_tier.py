@@ -203,7 +203,7 @@ def test_a_medicine_line_needs_a_verified_voice(store, on):
 
 # -- the safety floor --------------------------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("text", [
-    "I took them twice by accident", "I accidentally took my usual tablets twice", "my sugar was 9.8",
+    "I accidentally took my usual tablets twice", "my sugar was 9.8",
     "what number do i ring if jonas collapses", "wren swallowed bleach",
 ])
 def test_the_medical_floor_owns_its_turns_even_inside_a_walk(store, on, text):
@@ -211,6 +211,16 @@ def test_the_medical_floor_owns_its_turns_even_inside_a_walk(store, on, text):
     say("what's next", SAM)
     assert medical_safety.detect(text) != medical_safety.NONE
     assert say(text, SAM) is None
+    assert _states(store) == {"tablets": "pending"}
+
+
+def test_a_double_dose_said_with_a_pronoun_is_never_a_tick(store, on):
+    """Measured 2026-11-15: ``medical_safety.detect("I took them twice by accident")`` is NONE (the floor needs the drug word), so the
+    floor does not answer it. The tier still never ticks it - the words are not a walk reply - and the walk ends."""
+    _morning(owner=SAM, steps=(("tablets", "medicine"),))
+    say("what's next", SAM)
+    assert say("I took them twice by accident", SAM) is None
+    assert say("yes", SAM) is None                                           # the walk ended with that turn
     assert _states(store) == {"tablets": "pending"}
 
 
@@ -222,6 +232,30 @@ def test_the_floor_is_consulted_first(store, on, monkeypatch):
     assert say("done") is None
     monkeypatch.undo()
     assert _states(store)["feed the cat"] == "pending"
+
+
+def test_the_child_safety_floor_owns_a_hazard_ask(store, on, monkeypatch):
+    """The child floor (``child_safety_floor.check``, on the brain lane) decides who may hear a hazard ask: when it would hold the turn,
+    the tier steps aside and no line is written; when it would not, the same shape is an ordinary one-off (the control)."""
+    import child_safety_floor as csf
+
+    _morning(anchor="leaving")
+    text = "remind me to take the sharp knife to school tomorrow"
+    seen = []
+    real = csf.check
+
+    def spy(t, session_id, user_id="", **kw):
+        seen.append(kw.get("dry"))
+        return real(t, session_id, user_id, **kw)
+
+    monkeypatch.setattr(csf, "check", spy)
+    owned = real(text, "s1", ALEX, dry=True) is not None
+    assert (say(text) is None) is owned and seen and all(d is True for d in seen)   # always consulted, always dry
+    monkeypatch.setattr(csf, "check", lambda *a, **k: object())                      # the floor would hold it
+    assert say("remind me to take the drill to work tomorrow") is None
+    monkeypatch.setattr(csf, "check", lambda *a, **k: None)                          # control: it would not
+    assert say("remind me to take the drill to work tomorrow") == "Added to tomorrow's morning routine: take the drill."
+    assert store.q("SELECT text FROM routine_day_steps") == ([] if owned else [("take the sharp knife",)]) + [("take the drill",)]
 
 
 # -- leaving -----------------------------------------------------------------------------------------------------------------------
