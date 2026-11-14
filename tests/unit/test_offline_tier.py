@@ -150,3 +150,18 @@ def test_missing_file_and_budget_are_failures(tree, capsys):
     assert rc == 0 and res["over_budget"]                                # reported, not fatal, by default
     rc, res = _verify(tree, ["lane/test_clean.py"], "--enforce-budget", budget_s=0)
     assert rc == 1 and any("budget" in p for p in res["problems"])
+
+
+def test_committed_manifest_is_sound():
+    man = json.loads(tier.MANIFEST.read_text(encoding="utf-8"))
+    assert set(man["lanes"]) == set(tier.LANES) and man["budget_s"] > 0 and man["budget_rss_mb"] > 0
+    files = [(lane, f) for lane, fs in man["lanes"].items() for f in fs]
+    assert files, "an empty tier pins nothing"
+    for lane, f in files:
+        p = REPO / f
+        assert p.is_file(), f"{f}: selected file is gone - re-run `tools/ci/offline_tier.py select`"
+        assert f.startswith(tier.LANES[lane]["root"] + "/"), f"{f} is not in lane {lane}"
+        assert "ci_safe" in p.read_text(encoding="utf-8"), f"{f} lost its ci_safe marker"
+    assert guard.tier_files() == frozenset(f for _, f in files)      # the lanes arm the guard for exactly these
+    assert man["modules"]["covered"] + len(man["uncovered"]) == man["modules"]["total"]
+    assert sum(len(v["covers"]) for fs in man["lanes"].values() for v in fs.values()) == man["modules"]["covered"]
