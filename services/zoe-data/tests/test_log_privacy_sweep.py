@@ -336,6 +336,7 @@ PINNED = {
     "routers/voice_tts.py": {"_skybridge_reply"},
     "stt_snap.py": set(),
     "device_confirm.py": set(),
+    "child_safety_floor.py": {"text", "s"},   # one class-code line; the words and the age never ride it
 }
 SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "kind_refusal_tag", "exc_tag", "len", "type", "bool"}   # never ``sorted``/``join``: they keep every string
 LOG_METHODS = {"debug", "info", "warning", "error", "critical", "exception", "log"}
