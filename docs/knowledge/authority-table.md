@@ -78,4 +78,4 @@ audit (git history keeps it; the idea is pinned in `docs/IDEAS.md`). `ZOE_PROBLE
 
 - Receipts from a brain tool call reach zoe-data as a separate HTTP request with no turn id, so they are unstamped and count for
   any concurrent turn of that member (the write-claim guard has the same residual; ledgered in `open-problems.md`).
-- No writer records a receipt for lights, music, journal or memory writes.
+- No writer records a receipt for music, journal or people writes (lights record `device`; `memory_store` / `memory_retire` / `list_remove` receipts are named in the table since the plan loop, [plan-loop.md](plan-loop.md)).

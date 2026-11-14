@@ -773,6 +773,7 @@ _ENTRIES = (
     _f('ZOE_PI_LOCAL_MODEL_REQUIRED', 'bool', True, doc='docs/architecture/zoe-pi-runtime-harness.md'),
     _f('ZOE_PI_OFFLINE_ONLY', 'bool', True, doc='docs/architecture/zoe-pi-runtime-harness.md'),
     _f('ZOE_PI_TIMEOUT_SECONDS', 'float', 2.0, doc='docs/architecture/zoe-pi-runtime-harness.md'),
+    _f('ZOE_PLAN_LOOP', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/plan-loop.md'),
     _f('ZOE_POSTGRES_CONTAINER', 'str', 'zoe-database'),
     _f('ZOE_PRESENCE_WINDOW_S', 'str', '', doc='docs/architecture/samantha-evolution-packets.md'),
     _f('ZOE_PRIVACY_CANARY_DIR', 'str', ''),
