@@ -62,7 +62,26 @@ Numbers: `distress_data/crisis_lines.json` per country, `emergency` plus a `pois
 
 Not marked off the record: unlike a distress turn, a symptom the member states stays recallable. A call-now turn happening NOW (a past time such as a year, "years ago" or "last year", or a condition / instruction such as "if", "should", "told to", "what if", "whenever", leaves the fact as mined; the reply still gives the number) is filed, under a CONSERVATIVE rule, as ONE dated health event ("User had a fall on <date> (a medical emergency).", "User's son Max had a fall on <date> ...", `memory_type=event`, tagged health) only when the turn names exactly ONE affected person (the member alone, or one other person by name), the fact's subject is that person (the member, or the same name; a relation alone never counts) and the fact itself reads as that emergency to the detector. Anything else - two people in the turn, a condition ("has heart disease"), a body-part overlap, a paraphrase the detector does not read - is stored exactly as mined: a missed conversion is safe, a false health record is not. A converted fact is never filed as a routine, preference or standing fact (`emergency_event`, applied at `MemoryService.ingest` in every mode - the flag gates the reply only; QA round 9 listed a fall under Routines).
 
+## Present self-assessment (flag-dark, `ZOE_MEDICAL_SELF_ASSESS` = off | shadow (DEFAULT) | enforce, 2026-11-14)
+
+"am i having a heart attack?" and "is this a stroke?" name a time-critical CONDITION rather than a symptom, so no red flag saw them and
+the brain answered with no call-now reply. `medical_safety.self_assessment` reads a PRESENT question or statement about the speaker or
+someone present (am i / is she / is my dad / is this / could this be / i think im having / do you think ...) naming a condition from a
+closed list, each mapped to the module's existing reply: heart attack, cardiac arrest -> `heart`; stroke, mini stroke, TIA, heat stroke
+-> `stroke`; anaphylaxis / anaphylactic shock or reaction -> `breathing`; overdose (present or present perfect) -> the human poisoning
+reply. Not added: choking and "can't breathe" (already red flags), an allergic reaction alone, a seizure (no existing reply fits; open
+problem). When it is unclear whether a question is general knowledge or about now ("could this be a heart attack?", "is it a stroke if
+my face is drooping?") it fires. It does not fire on general knowledge with no present subject ("what is a stroke", "what are the
+signs of a heart attack"), a past narrative ("my grandad had a stroke in 2019", "i nearly had a heart attack when i saw the bill"), a
+stroke of luck / backstroke / a golf stroke, fiction ("... in the movie") or a past recall question (the recall allow-list above, with
+the condition in place of the symptom; a bare relation word keeps the floor). Read by `handle` only: `detect` and memory filing are
+unchanged in every mode. shadow logs `MEDICAL_SELF_ASSESS ... mode=shadow` (codes only) and changes no reply; off is today; enforce
+gives the floor. Replay before enforce. Tests: `tests/test_medical_self_assessment.py` (`ci_safe`, 60 fire / 45 not, all three modes,
+byte-identity of off and shadow, negative control).
+
 ## Limits (stated, not hidden)
+
+- Two emergency events are one record by `(person, kind, date)`, and the person is the NAME when one follows "User's/my <relation>" (`medical_safety.event_key`). So two different people who share a name, with the same kind of emergency on the same day, merge into one event record. Accepted as rare (review of #2491); a relation with no name, or two different names, never merge.
 
 - English only (`medical_safety_data/en.json`); other languages fall through to the brain.
 - The thread's own question is not answered in the same turn: the member is invited to ask it again. Splitting a compound turn is a follow-up.

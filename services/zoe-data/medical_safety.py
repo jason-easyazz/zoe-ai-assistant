@@ -367,6 +367,95 @@ def _recall_question(s: str, rx: Optional[dict] = None) -> bool:
     return True
 
 
+# PRESENT SELF-ASSESSMENT (flag ZOE_MEDICAL_SELF_ASSESS = off | shadow (DEFAULT) | enforce): "am i having a heart attack?", "is this a
+# stroke?" name a time-critical CONDITION, not a symptom, so the red flags above never saw them and the turn reached the brain with no
+# call-now reply. The CLOSED condition list and the existing reply each one gets:
+#   heart attack / cardiac arrest              -> heart      (no red flag names the condition itself; the symptoms are covered)
+#   stroke / mini stroke / TIA / heat stroke   -> stroke     (heat stroke is a call-now condition too: the floor wins over the
+#                                                             imperfect stroke wording; "stroke of luck/genius", backstroke, a golf
+#                                                             or swimming "stroke" never match)
+#   anaphylaxis / anaphylactic shock|reaction  -> breathing  (its reply is about breathing and a swelling throat)
+#   overdose (present / present perfect)       -> the human poisoning reply (Poisons line + the emergency number)
+# NOT added: choking and "can't breathe" (already red flags), an allergic reaction alone (hives are not call-now; with breathing trouble
+# the breathing flags already fire), a seizure (no existing reply fits; an open problem). A shape fires when the condition is asked
+# about or stated IN THE PRESENT about the speaker or someone present (am i / is he / is this / could this be / i think im having /
+# do you think ...); when it is unclear whether a question is general knowledge or about now ("could this be a heart attack?",
+# "is it a stroke if my face is drooping?") it fires. General knowledge with no present subject ("what is a stroke", "what are the
+# signs of a heart attack"), a past narrative ("my grandad had a stroke in 2019", "i nearly had a heart attack when i saw the bill")
+# and a past recall question (the allow-list shape above, with the condition) do not. Read by ``handle`` only: ``detect`` and the
+# memory filing are unchanged in every mode; off and shadow change no reply.
+SELF_ASSESS_ENV = "ZOE_MEDICAL_SELF_ASSESS"
+_SA_COND = (r"(?:heart\s?attack|cardiac\s+arrest|(?:heat\s*|sun\s*)?stroke(?!\s+(?:of|on|in\s+(?:the|this|that)\s+"
+            r"(?:pool|water|game|round)))|mini[\s-]?stroke|tia|anaphyla\w+(?:\s+(?:shock|reaction))?)")
+_SA_COND_RE = re.compile(_SA_COND)
+_SA_A = r"(?:a\s+|an\s+|the\s+)?(?:(?:big|massive|major|small|little|minor|mild|serious|bad)\s+)?"
+_SA_WHO = r"(?:i|you|he|she|they|we|it|this|that|my\s+[a-z]+|our\s+[a-z]+|your\s+[a-z]+|the\s+(?:baby|kid|child|man|woman)|(?!(?:a|an|the|what|which|how|there|here)(?!\w))[a-z]+)"
+_SA_FICTION = r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play))"
+_SA_PRESENT_RE = re.compile(
+    r"(?<!\w)(?:"
+    # am i / is he / is my dad / are they  having | getting | going into  a COND
+    rf"(?:am\s+i|is\s+{_SA_WHO}|are\s+(?:you|they|we))\s+(?:having|getting|going\s+into|in\s+the\s+middle\s+of|in)\s+{_SA_A}{_SA_COND}"
+    # is this / could it be / might that be  a COND  (also "the start of a COND")
+    rf"|(?:is|could|might|may|can|would)\s+(?:this|it|that|these|those)\s+(?:be\s+|really\s+be\s+)?"
+    rf"(?:(?:the\s+)?(?:start|beginning|onset|signs?|symptoms?)\s+of\s+)?{_SA_A}{_SA_COND}"
+    # im / he is / my dad is / she might be  having a COND  ("i think im having", "do you think hes having")
+    rf"|(?:im|i\s+am|hes|shes|theyre|youre|{_SA_WHO}\s+is|{_SA_WHO}\s+(?:might|may|could|must)\s+be|"
+    rf"(?:i|he|she|they|you)\s+(?:might|may|could|must)\s+be|(?:could|might|may|can)\s+{_SA_WHO}\s+be)\s+having\s+{_SA_A}{_SA_COND}"
+    # are these / is this  (the) signs of a COND ;  i think / do you think  its / this is  a COND
+    rf"|(?:are|is)\s+(?:these|this|those|that)\s+(?:the\s+)?(?:signs?|symptoms?)\s+of\s+{_SA_A}{_SA_COND}"
+    rf"|(?:think|maybe|probably|reckon|worried|scared|afraid)\s+(?:that\s+)?(?:its|it\s+is|this\s+is|thats|that\s+is)\s+{_SA_A}{_SA_COND}"
+    rf"){_SA_FICTION}")
+#: a recall-question shape naming a condition ("did i have a stroke last year", "has dad had a heart attack before"): the same
+#: allow-list as the symptom one - the WHOLE clause, at most one closed past-time phrase, no present marker - or the floor fires
+_SA_RECALL_RE = re.compile(
+    rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)\s+{_SA_A}{_SA_COND}"
+    rf"(?:\s+{_RECALL_TIME})?$")
+_SA_PAST_Q_RE = re.compile(rf"(?<!\w)(?:did|have|has|had)\s+{_SA_WHO}\s+(?:just\s+|ever\s+)?(?:have|had)\s+{_SA_A}{_SA_COND}")
+_SA_OVERDOSE_RE = re.compile(
+    rf"(?<!\w)(?:(?:am\s+i|is\s+{_SA_WHO}|are\s+(?:you|they)|im|hes|shes|theyre)\s+(?:having\s+an\s+)?overdos(?:ing|e)\b"
+    rf"|(?:is|could|might)\s+(?:this|it|that)\s+(?:be\s+)?an\s+overdose"
+    rf"|(?:ive|i\s+have|hes|he\s+has|shes|she\s+has|theyve|they\s+have|{_SA_WHO}\s+has|has\s+{_SA_WHO}|have\s+i|did\s+i\s+just)\s+"
+    rf"(?:just\s+)?overdosed"
+    rf"|(?:i|he|she|they)\s+just\s+overdosed)")
+_SA_KEY = (("heart", re.compile(r"heart|cardiac")), ("breathing", re.compile(r"anaphyla")), ("stroke", re.compile(r"stroke|tia")))
+
+
+def self_assess_mode() -> str:
+    """``ZOE_MEDICAL_SELF_ASSESS``: off | shadow (DEFAULT, also for an unlisted value) | enforce. Per-call read."""
+    try:
+        from typed_env import flag
+
+        return str(flag(SELF_ASSESS_ENV))
+    except Exception:  # noqa: BLE001
+        return "shadow"
+
+
+def self_assessment(text: str) -> Verdict:
+    """The call-now verdict for a PRESENT self-assessment of a closed-list condition (above), else ``NONE``. Pure; never raises."""
+    try:
+        s = _fold(text)
+        if not s:
+            return NONE
+        if _SA_OVERDOSE_RE.search(s):
+            return Verdict("ingest_human", "poison_human")
+        m = _SA_PRESENT_RE.search(s)
+        if m is None:
+            m = _SA_PAST_Q_RE.search(s)
+            if m is None:
+                return NONE
+            # a past question naming the condition: a recall question only when EVERY clause is wholly the allow-listed shape and
+            # no present marker appears anywhere; anything else ("did i just have a stroke", "... its back") is the floor
+            clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip() and not _RQ_FILLER_ONLY_RE.match(c.strip())]
+            if not _PRESENT_MARK_RE.search(s) and clauses and all(_SA_RECALL_RE.match(c) for c in clauses):
+                return NONE
+        cond = _SA_COND_RE.search(m.group(0)).group(0)
+        key = next((k for k, rx in _SA_KEY if rx.search(cond)), "heart")
+        return Verdict("red_call", key)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_safety self_assessment failed (%s)", type(exc).__name__)
+        return NONE
+
+
 def detect(text: str) -> Verdict:
     """The class of one turn (``NONE`` = leave it to the brain). Pure; never raises."""
     return _detect(text, recall_gate=True)
@@ -677,6 +766,15 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool
         if m == "off":
             return None
         v = detect(text)
+        if not v.cls:
+            sa = self_assessment(text)
+            if sa.cls:
+                sam = self_assess_mode()
+                if sam != "off":
+                    logger.info("MEDICAL_SELF_ASSESS user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest",
+                                sa.cls, sa.key, sam)
+                if sam == "enforce":
+                    v = sa          # the call-now floor (shadow and off: the reply is exactly what it was)
         if not v.cls:
             held = _detect(text, recall_gate=False)
             if held.cls in ("red_call", "red_soon"):

@@ -510,6 +510,7 @@ _ENTRIES = (
     _f('ZOE_MCP_USER_ID', 'str', ''),
     _f('ZOE_MCP_USER_ROLE', 'str', ''),
     _f('ZOE_MEDICAL_SAFETY', 'str', 'enforce', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/medical-safety.md'),
+    _f('ZOE_MEDICAL_SELF_ASSESS', 'str', 'shadow', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/medical-safety.md', note='present self-assessment of a closed-list condition ("am i having a heart attack?"): shadow logs MEDICAL_SELF_ASSESS only; enforce gives the call-now floor; replay before enforce'),
     _f('ZOE_MEMBER_REGISTER', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/member-register.md'),
     _f('ZOE_MEMBER_REGISTER_KIDS', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/member-register.md'),
     _f('ZOE_MEMORIES_CURATORS', 'bool', False, doc='docs/knowledge/memory-curation.md'),
