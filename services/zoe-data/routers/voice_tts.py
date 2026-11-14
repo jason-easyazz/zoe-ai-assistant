@@ -39,6 +39,7 @@ from moonshine_vad_state import reset_silero_state, transcriber_lib
 import speaker_adaptation
 import speaker_models
 import traffic_class
+import user_erase_gate as _erase_gate
 from voice_speaker_id import _cosine_similarity
 # Waterfall engine mechanics live in tts_waterfall; they are re-exported here so
 # existing importers (main.py health detail, tests that monkeypatch this module,
@@ -3487,6 +3488,9 @@ async def _schedule_voice_chat_save(
         )
 
 
+# The member's erase generation is read when the turn queues this (``_spawn_bg(_run_voice_memory_passes(...))``): every memory write
+# of the passes is dropped if the member is erased after that (``user_erase_gate.scheduled``; mirrors chat's post-turn hook).
+@_erase_gate.scheduled_at_call("user_id")
 async def _run_voice_memory_passes(
     user_text: str, reply: str, user_id: str, session_id: str,
     speaker_verified: Optional[bool] = None, interrupted: bool = False,

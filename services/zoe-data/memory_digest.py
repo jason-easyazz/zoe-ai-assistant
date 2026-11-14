@@ -31,6 +31,7 @@ from llm_json import strip_code_fence
 import memory_authority
 import own_words
 import trait_challenge
+import user_erase_gate as erase_gate
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
 from typed_env import env_float
@@ -840,13 +841,15 @@ async def _quote_retire_pass(result: dict, user_id: str, user_message: str, sour
 
 def _then_quote_retire(fn):
     """Run ``fn`` (the per-turn digest, unchanged), then ``_quote_retire_pass``. ``functools.wraps`` keeps ``run_turn_digest``'s own source,
-    signature and name (``inspect.getsource`` follows ``__wrapped__``)."""
+    signature and name (``inspect.getsource`` follows ``__wrapped__``). Both halves run as work scheduled for ``user_id``
+    (``user_erase_gate.scheduled_here``): the post-turn task's own snapshot, taken when the turn's work was queued, when it has one."""
     @functools.wraps(fn)
     async def wrapper(user_id, user_message, assistant_response="", *, session_id=None, source="turn_digest",
                       speaker_verified=None):
-        result = await fn(user_id, user_message, assistant_response, session_id=session_id, source=source,
-                          speaker_verified=speaker_verified)
-        return await _quote_retire_pass(result, user_id, user_message, source, speaker_verified)
+        with erase_gate.scheduled_here(user_id):
+            result = await fn(user_id, user_message, assistant_response, session_id=session_id, source=source,
+                              speaker_verified=speaker_verified)
+            return await _quote_retire_pass(result, user_id, user_message, source, speaker_verified)
     return wrapper
 
 
@@ -884,6 +887,14 @@ async def run_turn_digest(
     if is_unidentified(user_id):
         result["skipped_reason"] = "unidentified"
         _count_drop(source, "unidentified", gate=False)
+        return result
+    # The member was erased after this turn's work was scheduled: nothing of it is mined (the model call is saved; every store below
+    # is also checked under the store's own lock, for an erase that lands while the model runs).
+    if erase_gate.erased_since_scheduled(user_id):
+        result["skipped_reason"] = "erased_since_scheduled"
+        from memory_service import _log_erase_drop
+
+        _log_erase_drop(source)
         return result
 
     # BM5: an off-the-record turn is never digested.
@@ -1333,6 +1344,7 @@ async def run_turn_digest(
     return result
 
 
+@erase_gate.scheduled_at_call("user_id")      # an on-demand run is scheduled when called; the nightly pass's earlier snapshot wins
 async def run_memory_digest(user_id: str, db=None) -> dict:
     """Extract facts from today's chat history and write to MemPalace + memory_items.
 
@@ -1955,8 +1967,18 @@ async def _skip_forgotten_turns(user_id: str, turns: list, reader: str) -> list:
     "nothing is forgotten", because the ingest guard behind this one is also lenient on an outage. Each caller defers
     the affected turns to a later run rather than mining them: the transcript readers surface it as a
     ``TranscriptLoadError`` (the existing retried-next-run path), idle consolidation leaves its watermark un-advanced,
-    and the per-fact / per-loop / per-turn callers drop the item for this run."""
+    and the per-fact / per-loop / per-turn callers drop the item for this run.
+
+    A turn that IS a forget command (``turn_forget.is_forget_instruction``) is skipped too, whatever the ledger says: a TOPIC
+    forget writes no ledger entry, so "forget that I told you about my brother" was re-mined into a row about the brother (QA
+    round 10a). New command rows are saved off the record; this also covers the rows saved before that, inside the lookback."""
     import memory_forgotten
+    import turn_forget
+
+    commands = sum(1 for t in turns if isinstance(t, str) and turn_forget.is_forget_instruction(t))
+    if commands:
+        turns = [t for t in turns if not (isinstance(t, str) and turn_forget.is_forget_instruction(t))]
+        logger.info("memory_digest: %s skipped %d forget-command turn(s) user=%s", reader, commands, user_id)
     try:
         kept, dropped = await memory_forgotten.keep_unforgotten(user_id, turns, strict=True)
     except Exception as exc:  # noqa: BLE001
@@ -2590,6 +2612,7 @@ async def run_digest_for_all_active_users(db=None, cutoff=None) -> list[dict]:
     nightly pass binds the same instant to the input probe).
     """
     results = []
+    seen = erase_gate.snapshot()      # the pass is scheduled NOW: a member erased while it runs keeps nothing it writes for them
     try:
         if cutoff is not None:
             sql = _message_owner_users_sql(
@@ -2604,7 +2627,8 @@ async def run_digest_for_all_active_users(db=None, cutoff=None) -> list[dict]:
         return []
 
     for uid in user_ids:
-        result = await run_memory_digest(uid, db=db)
+        with erase_gate.scheduled(uid, seen.get(uid, 0)):
+            result = await run_memory_digest(uid, db=db)
         results.append(result)
         logger.info("memory_digest: %s", result)
     return results
