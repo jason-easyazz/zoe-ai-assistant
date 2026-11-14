@@ -35,7 +35,7 @@ CANNED = {
     "edits_test": _edit("tests/test_calc.py", WEAK_TEST),
     "pinned": _edit("conftest.py", NOOP_CONFTEST, old=""),
     "workflow": _edit(".github/workflows/heal.yml", "on: push\n", old=None),
-    "scratch": _edit(".selfheal-tmp/sitecustomize.py", "import os\n", old=None),
+    "scratch": _edit(".selfheal-tmp/plant.py", "import os\n", old=None),
     "dotdot": _edit("../outside.py", "x = 1\n", old=None),
     "symlink": lambda p: SYMLINK,
     "rename": lambda p: RENAME,
@@ -52,4 +52,13 @@ CANNED = {
     "reported_ok": lambda p: Proposal(good(p), Usage(turns=3, tokens=1200)),
     "slow": _slow,
     "raises": lambda p: 1 / 0,
+}
+
+# The fault FIXTURE the loop driver starts from: a JUnit report naming the failing test on the base branch.
+FAULT_JUNIT = ('<testsuites><testsuite><testcase classname="tests.test_calc" name="test_add">'
+               '<failure message="assert">assert</failure></testcase>'
+               '<testcase classname="tests.test_calc" name="test_zero"/></testsuite></testsuites>')
+SCENARIOS = {   # loop_scratch.py: the fake engine's script per scenario
+    "good": ["good"], "retry": ["garbage", "good"], "wrong_then_good": ["bad", "good"], "never": ["garbage"],
+    "malicious": ["edits_test"], "over_budget": ["over_tokens"],
 }
