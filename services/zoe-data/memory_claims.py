@@ -651,12 +651,15 @@ _CURRENCY_PREFIX = {"us": "USD", "nz": "NZD", "a": "AUD", "au": "AUD"}     # "us
 _AMOUNT_SCALE = {"k": 1000, "grand": 1000, "thousand": 1000, "m": 1_000_000, "million": 1_000_000, "mil": 1_000_000,
                  "b": 1_000_000_000, "bn": 1_000_000_000, "billion": 1_000_000_000}
 DEFAULT_CURRENCY = "AUD"
-_NOT_A_COUNT = frozenset(_UNIT_WORDS) | frozenset(_CURRENCY) | _AGE_TAIL | {"cents", "cent"}
+#: a clock marker after a number is a TIME ("5pm", "5 am", "5 p.m."): never a count noun to strip (PR 2477 review)
+_CLOCK_MARKS = frozenset({"am", "pm"})
+_NOT_A_COUNT = frozenset(_UNIT_WORDS) | frozenset(_CURRENCY) | _AGE_TAIL | _CLOCK_MARKS | {"cents", "cent"}
 
 
 @_numeric
 def norm_count(text: str) -> Optional[Norm]:
-    """A whole count ("3", "three", "3 dogs"): one trailing noun allowed, never a unit, money or age word."""
+    """A whole count ("3", "three", "3 dogs"): one trailing noun allowed, never a unit, money, age or clock word (a
+    time is not a count: "5pm" and "5 am" abstain)."""
     toks = _toks(text)
     if len(toks) > 1 and toks[-1].isalpha() and toks[-1] not in _NUMBER_WORDS:
         if toks[-1] in _NOT_A_COUNT:
@@ -671,21 +674,28 @@ def norm_count(text: str) -> Optional[Norm]:
 @_numeric
 def norm_amount(text: str) -> Optional[Norm]:
     """Money: "$13,500", "13.5k", "twelve thousand dollars", "2 grand", "1.2m", "US$40", "20 dollar". The scale is applied
-    and remembered (an unscaled old value takes the new one's: ``normalise_pair``); the currency is the stated one or AUD."""
+    and remembered (an unscaled old value takes the new one's: ``normalise_pair``); the currency is the stated one or AUD.
+    An amount that NAMES two different currencies ("USD 60 EUR", "US$60 euros") abstains: neither is picked by position.
+    A generic word beside a named one ("$", "dollars", "bucks") names none and does not conflict."""
     toks = _toks(text)
     cur: Optional[str] = None
+    named: set = set()
 
     def take(word: str) -> None:
         nonlocal cur
         if _CURRENCY[word]:
             cur = _CURRENCY[word]
+            named.add(cur)
 
     if len(toks) >= 2 and toks[0] in _CURRENCY_PREFIX and toks[1] == "$":
         cur, toks = _CURRENCY_PREFIX[toks[0]], toks[2:]
+        named.add(cur)
     while toks and toks[0] in _CURRENCY:
         take(toks.pop(0))
     while toks and toks[-1] in _CURRENCY:
         take(toks.pop())
+    if len(named) > 1:
+        return None
     scale = 1
     # a scale word after a NUMERAL ("13.5k", "12 thousand", "2 grand") multiplies it; after spelled words the scale is part
     # of the spelled number ("two hundred thousand", "one million five hundred thousand") and the accumulator reads it -
