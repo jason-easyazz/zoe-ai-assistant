@@ -14,17 +14,20 @@ The detector is the fix's own (``turn_forget.is_forget_instruction``: ``forget_t
 the entity-forget pattern), so "I always forget my keys" is never a command.
 A row with NO linkage (no excerpt, no turn id: idle consolidation / digest rows often have neither) cannot be proven: the
 best conservative match is reported as WINDOW - a row from the idle / digest writers, in a session that holds a forget-command
-turn, added after it within ``--window-hours``. Window rows are counted and listed for review, and cleaned only with
-``--include-window``.
+turn, added after it within ``--window-hours``. Window rows are REPORT-ONLY: counted and listed for review, never erased (they
+can be ordinary memories written after a command).
 
-Safety contract (pinned by tests/unit/test_forget_command_rows_audit.py):
-  * The palace is opened with sqlite ``mode=ro``; chat turns are one SELECT through psql. No write, no chromadb import.
+Safety contract (pinned by services/zoe-data/tests/test_forget_command_rows_audit.py):
+  * The palace is opened with sqlite ``mode=ro``; chat turns are one SELECT through psql: the WHOLE history by default (rows are
+    durable), ``--since YYYY-MM-DD`` to narrow it; the dates actually read are printed. No write, no chromadb import.
   * Output is COUNTS per member INDEX (``member-1`` + a short hash of the id, never a name) and per writer. No row text, no
     turn text. Row ids (with their owner id) go only to the private ``--ids-out`` file (mode 0600).
   * Cleanup (``--erase-from FILE``) is a DRY RUN unless ``--confirm``; ``--confirm`` also needs ``--i-stopped-zoe-data`` and a
     service that is provably down. It uses the owner-forget path: ``MemoryService.review(archive)`` then
     ``MemoryService.erase_rows`` (content-free intent row, the rows and their audit trail, the physical residue erase), for rows
-    the file's owner still owns and that are not archived already. Never a raw delete.
+    The plan file is a HINT, never an authority: before anything is erased the link is RECOMPUTED from the palace and the
+    transcripts by the same three rules, and a planned row not linked NOW to a forget command of that same owner is refused
+    (counted; its id only to ``--refused-out``, 0600) and left untouched. Window rows are never erased. Never a raw delete.
 
 Usage (operator, on the box):
   python3 scripts/maintenance/forget_command_rows_audit.py --ids-out ~/.zoe/forget-command-rows.json
@@ -110,11 +113,18 @@ def load_rows(palace: str) -> list[dict[str, Any]]:
         con.close()
 
 
-def load_turns(psql_cmd: str, days: int) -> list[dict[str, Any]]:
-    """The user turns of the last ``days`` that could be a forget instruction (one SELECT, JSON out, never printed)."""
-    sql = ("select coalesce(json_agg(json_build_object('id', id, 'session_id', session_id, 'at', created_at::text, "
-           "'meta', metadata, 'content', content)), '[]') from chat_messages where role = 'user' "
-           f"and created_at::timestamptz > now() - make_interval(days => {int(days)}) and content ~* '{_PREFILTER}'")
+def turns_sql(since: Optional[str] = None) -> str:
+    """The one SELECT: every user turn that could be a forget instruction, the WHOLE history unless ``since`` (an ISO date,
+    validated: anything else raises ValueError, so nothing but a date reaches the SQL)."""
+    when = f"and created_at::timestamptz >= '{_dt.date.fromisoformat(since).isoformat()}'::date " if since else ""
+    return ("select coalesce(json_agg(json_build_object('id', id, 'session_id', session_id, 'at', created_at::text, "
+            "'meta', metadata, 'content', content)), '[]') from chat_messages where role = 'user' "
+            f"{when}and content ~* '{_PREFILTER}'")
+
+
+def load_turns(psql_cmd: str, since: Optional[str] = None) -> list[dict[str, Any]]:
+    """The candidate user turns (``turns_sql``), JSON out, never printed."""
+    sql = turns_sql(since)
     out = subprocess.run([*shlex.split(psql_cmd), "-Atc", sql], capture_output=True, text=True, timeout=120, check=True).stdout
     turns = []
     for t in json.loads(out.strip() or "[]"):
@@ -197,24 +207,40 @@ def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 
     }
 
 
-def write_ids(path: str, report: dict) -> None:
+def turn_dates(turns: Iterable[dict]) -> dict[str, str]:
+    """The first and last DATE of the turns read (dates only, never a time or a word)."""
+    days = sorted(str(t.get("at") or "")[:10] for t in turns if str(t.get("at") or "")[:10])
+    return {"from": days[0], "to": days[-1]} if days else {"from": "-", "to": "-"}
+
+
+def _write_private(path: str, obj: Any) -> None:
     p = Path(path).expanduser()
     p.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump({"linked": report["linked"], "window": report["window"]}, fh, indent=1)
+        json.dump(obj, fh, indent=1)
     os.chmod(str(p), 0o600)
 
 
-def plan_cleanup(rows: Iterable[dict], plan: dict, *, include_window: bool) -> dict[str, list[str]]:
-    """``{owner: [ids]}`` the cleanup may forget: planned ids the planned owner STILL owns and that are not gone. Pure."""
-    live = {r["id"]: r for r in rows}
+def write_ids(path: str, report: dict) -> None:
+    _write_private(path, {"linked": report["linked"], "window": report["window"]})
+
+
+def plan_cleanup(rows: list[dict], turns: list[dict], plan: dict, *,
+                 window_hours: float = 48.0) -> tuple[dict[str, list[str]], list[str]]:
+    """``({owner: [ids]}, refused_ids)``. The plan is a HINT: a planned ``linked`` row is kept only when the audit RECOMPUTED here from
+    ``rows`` and ``turns`` links it NOW to a forget command of the SAME owner the plan names (which also means it still exists and
+    is not gone); every other planned id - an edited plan, a row that changed - is refused. ``window`` entries are never erased. Pure."""
+    verified = {(x["id"], x["user_id"]) for x in audit(rows, turns, window_hours=window_hours)["linked"]}
     out: dict[str, list[str]] = collections.defaultdict(list)
-    for x in list(plan.get("linked") or []) + (list(plan.get("window") or []) if include_window else []):
-        r = live.get(str(x.get("id")))
-        if r and r["user_id"] == x.get("user_id") and str((r.get("meta") or {}).get("status") or "approved").lower() not in GONE:
-            out[r["user_id"]].append(r["id"])
-    return dict(out)
+    refused: list[str] = []
+    for x in list(plan.get("linked") or []):
+        key = (str(x.get("id")), str(x.get("user_id")))
+        if key in verified and key[0] not in out[key[1]]:
+            out[key[1]].append(key[0])
+        elif key not in verified:
+            refused.append(key[0])
+    return {u: v for u, v in out.items() if v}, refused
 
 
 async def cleanup(todo: dict[str, list[str]], *, svc) -> dict[str, dict[str, int]]:
@@ -255,11 +281,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--palace", default=DEFAULT_PALACE)
     ap.add_argument("--psql-cmd", default=DEFAULT_PSQL)
-    ap.add_argument("--days", type=int, default=60, help="how far back to read user turns (default 60)")
+    ap.add_argument("--since", metavar="YYYY-MM-DD", help="read user turns from this date (default: the whole history)")
     ap.add_argument("--window-hours", type=float, default=48.0)
     ap.add_argument("--ids-out", metavar="FILE", help="write the row ids (and owners) here, mode 0600")
     ap.add_argument("--erase-from", metavar="FILE", help="cleanup: the --ids-out file of an audit run (dry run unless --confirm)")
-    ap.add_argument("--include-window", action="store_true", help="cleanup: also the unproven session-window rows")
+    ap.add_argument("--refused-out", metavar="FILE", help="cleanup: the refused planned ids go here, mode 0600")
     ap.add_argument("--confirm", action="store_true")
     ap.add_argument("--i-stopped-zoe-data", action="store_true")
     ap.add_argument("--json", action="store_true")
@@ -276,24 +302,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             plan = json.loads(Path(args.erase_from).expanduser().read_text(encoding="utf-8"))
             rows = load_rows(args.palace)
-        except (OSError, ValueError, sqlite3.Error) as exc:
-            print(f"refused: could not read the plan or the palace ({type(exc).__name__})", file=sys.stderr)
+            turns = load_turns(args.psql_cmd, args.since)       # the link is RECOMPUTED: the plan is a hint
+        except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
+            print(f"refused: could not read the plan, the palace or the turns ({type(exc).__name__})", file=sys.stderr)
             return 2
-        todo = plan_cleanup(rows, plan, include_window=args.include_window)
-        print(json.dumps({"before": _member_counts(todo), "total": sum(len(v) for v in todo.values()),
-                          "include_window": args.include_window}))
+        todo, refused = plan_cleanup(rows, turns, plan, window_hours=args.window_hours)
+        if refused and args.refused_out:
+            _write_private(args.refused_out, {"refused": refused})
+        print(json.dumps({"turns_read": turn_dates(turns), "before": _member_counts(todo), "total": sum(len(v) for v in todo.values()),
+                          "refused_not_linked_now": len(refused), "window_report_only": len(plan.get("window") or [])}))
         if not args.confirm:
-            print("DRY RUN: nothing was changed. Add --confirm --i-stopped-zoe-data (zoe-data stopped) to forget these rows.")
+            print("DRY RUN: nothing was changed. Add --confirm --i-stopped-zoe-data (zoe-data stopped) to forget the verified rows.")
             return 0
         from memory_service import MemoryService
 
         done = asyncio.run(cleanup(todo, svc=MemoryService(data_dir=str(Path(args.palace).expanduser()))))
-        left = plan_cleanup(load_rows(args.palace), plan, include_window=args.include_window)
+        left, _ = plan_cleanup(load_rows(args.palace), turns, plan, window_hours=args.window_hours)
         print(json.dumps({"done": done, "after": _member_counts(left), "remaining": sum(len(v) for v in left.values())}))
         return 5 if left else 0
     try:
         rows = load_rows(args.palace)
-        turns = load_turns(args.psql_cmd, args.days)
+        turns = load_turns(args.psql_cmd, args.since)
     except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError) as exc:
         print(f"refused: could not read the palace or the turns ({type(exc).__name__})", file=sys.stderr)
         return 2
@@ -302,8 +331,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         write_ids(args.ids_out, report)
     c = report["counts"]
     if args.json:
-        print(json.dumps(c, indent=2))
+        print(json.dumps({**c, "turns_read": turn_dates(turns), "since": args.since}, indent=2))
     else:
+        d = turn_dates(turns)
+        print(f"turns read: {d['from']} .. {d['to']}{' (since ' + args.since + ')' if args.since else ' (whole history)'}")
         print(f"forget-command turns read: {c['command_turns']}; rows minted from one: linked={c['linked']} "
               f"{c['linked_by_how']} window(unproven)={c['window']}")
         for m, counts in c["by_member"].items():

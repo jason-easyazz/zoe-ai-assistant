@@ -127,6 +127,7 @@ def test_cleanup_dry_run_changes_nothing_and_confirm_needs_the_stop(tmp_path, mo
     fca.write_ids(str(plan), fca.audit(_rows(), _turns()))
     called = []
     monkeypatch.setattr(fca, "cleanup", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(fca, "load_turns", lambda *_a, **_k: _turns())
     assert fca.main(["--palace", str(tmp_path), "--erase-from", str(plan)]) == 0
     assert '"total": 2' in capsys.readouterr().out and not called and _sha(db) == before
     assert fca.main(["--palace", str(tmp_path), "--erase-from", str(plan), "--confirm"]) == 2      # no stop acknowledgement
@@ -135,7 +136,8 @@ def test_cleanup_dry_run_changes_nothing_and_confirm_needs_the_stop(tmp_path, mo
     assert not called and _sha(db) == before
 
 
-def test_cleanup_forgets_exactly_the_audited_ids_through_the_owner_forget_path(svc, monkeypatch):  # noqa: F811
+def _store(svc, monkeypatch):  # noqa: F811
+    """``svc`` holding the synthetic rows, with call recording; the REAL archive (review), the erase over the stand-in store."""
     monkeypatch.setenv("ZOE_MEMORY_PHYSICAL_ERASE", "0")
     rows = _rows()
     for r in rows:
@@ -157,9 +159,18 @@ def test_cleanup_forgets_exactly_the_audited_ids_through_the_owner_forget_path(s
         return {"rows_removed": len(gone)}
     monkeypatch.setattr(svc, "review", review)
     monkeypatch.setattr(svc, "erase_rows", erase_rows)
+    return rows, calls
+
+
+def _live_rows(svc):
+    return [{"id": i, "user_id": str(md.get("user_id") or ""), "text": d, "meta": dict(md)} for i, (d, md) in svc._col.rows.items()]
+
+
+def test_cleanup_forgets_exactly_the_audited_ids_through_the_owner_forget_path(svc, monkeypatch):  # noqa: F811
+    rows, calls = _store(svc, monkeypatch)
     plan = fca.audit(rows, _turns())
-    todo = fca.plan_cleanup(rows, plan, include_window=False)
-    assert todo == {UID: ["minted_excerpt", "minted_turnid"]}
+    todo, refused = fca.plan_cleanup(rows, _turns(), plan)
+    assert todo == {UID: ["minted_excerpt", "minted_turnid"]} and refused == []
     done = asyncio.run(fca.cleanup(todo, svc=svc))
     assert sorted(calls["review"]) == [("minted_excerpt", "archive"), ("minted_turnid", "archive")]
     assert calls["erase"] == [(UID, ["minted_excerpt", "minted_turnid"])]
@@ -167,3 +178,69 @@ def test_cleanup_forgets_exactly_the_audited_ids_through_the_owner_forget_path(s
     assert "minted_excerpt" not in svc._col.rows and "minted_turnid" not in svc._col.rows
     for keep in ("ordinary", "forget_word", "window", "window_late", "other_member"):
         assert keep in svc._col.rows                                            # nothing else touched
+
+
+def _confirm(svc, monkeypatch, tmp_path, plan: dict, *extra):  # noqa: F811
+    """main --erase-from --confirm over ``svc`` (the service provably down, the palace read from the stand-in store)."""
+    import memory_service
+
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan))
+    monkeypatch.setattr(fca, "_service_up", lambda: None)
+    monkeypatch.setattr(fca, "load_turns", lambda *_a, **_k: _turns())
+    monkeypatch.setattr(fca, "load_rows", lambda _p: _live_rows(svc))
+    monkeypatch.setattr(memory_service, "MemoryService", lambda **_k: svc)
+    return fca.main(["--palace", str(tmp_path), "--erase-from", str(path), "--confirm", "--i-stopped-zoe-data", *extra])
+
+
+def test_an_edited_plan_cannot_erase_an_ordinary_row(svc, monkeypatch, tmp_path, capsys):  # noqa: F811
+    rows, calls = _store(svc, monkeypatch)
+    plan = fca.audit(rows, _turns())
+    forged = {"linked": plan["linked"] + [{"id": "ordinary", "user_id": UID, "source": "chat_regex", "how": "excerpt_is_command"},
+                                          {"id": "other_member", "user_id": UID, "source": "digest", "how": "turn_id"}],
+              "window": []}
+    refused_out = tmp_path / "refused.json"
+    assert _confirm(svc, monkeypatch, tmp_path, forged, "--refused-out", str(refused_out)) == 0
+    out = capsys.readouterr().out
+    assert '"refused_not_linked_now": 2' in out and UID not in out
+    assert "ordinary" in svc._col.rows and "other_member" in svc._col.rows             # refused and untouched
+    assert "minted_excerpt" not in svc._col.rows and "minted_turnid" not in svc._col.rows   # the true rows still go
+    assert all(rid not in ("ordinary", "other_member") for rid, _ in calls["review"])
+    assert json.loads(refused_out.read_text()) == {"refused": ["ordinary", "other_member"]}
+    assert os.stat(refused_out).st_mode & 0o777 == 0o600
+
+
+def test_control_the_old_trusting_plan_check_would_have_erased_the_forged_row(svc, monkeypatch):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    forged = {"linked": [{"id": "ordinary", "user_id": UID}]}
+    trusted = [x["id"] for x in forged["linked"] if any(r["id"] == x["id"] and r["user_id"] == x["user_id"] for r in rows)]
+    assert trusted == ["ordinary"]                                       # ownership + status alone pass it (the reviewed defect)
+    assert fca.plan_cleanup(rows, _turns(), forged) == ({}, ["ordinary"])  # the recomputed link refuses it
+
+
+def test_window_rows_are_report_only_even_with_confirm(svc, monkeypatch, tmp_path, capsys):  # noqa: F811
+    rows, calls = _store(svc, monkeypatch)
+    plan = fca.audit(rows, _turns())
+    assert [x["id"] for x in plan["window"]] == ["window"]
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 0
+    assert '"window_report_only": 1' in capsys.readouterr().out
+    assert "window" in svc._col.rows and all(rid != "window" for rid, _ in calls["review"])
+    with pytest.raises(SystemExit):
+        fca.main(["--erase-from", str(tmp_path / "plan.json"), "--include-window"])   # the erase path for window rows is gone
+
+
+def test_turns_are_read_over_the_whole_history_unless_since_is_given(tmp_path, monkeypatch, capsys):
+    assert "created_at" not in fca.turns_sql().split("from chat_messages", 1)[1]        # no time bound by default
+    assert "'2026-01-02'::date" in fca.turns_sql("2026-01-02")
+    with pytest.raises(ValueError):
+        fca.turns_sql("2026-01-02'; drop table chat_messages; --")                     # only a date reaches the SQL
+    _palace(tmp_path, _rows())
+    seen = {}
+
+    def turns(_cmd, since=None):
+        seen["since"] = since
+        return _turns()
+    monkeypatch.setattr(fca, "load_turns", turns)
+    assert fca.main(["--palace", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert seen["since"] is None and "turns read: 2026-11-14 .. 2026-11-14 (whole history)" in out

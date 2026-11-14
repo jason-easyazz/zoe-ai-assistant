@@ -207,3 +207,90 @@ def test_existence_question_finds_nothing_once_the_command_is_not_mined():
     clean = "- User's sister Ione is a nurse in Perth\n- User is a librarian"
     assert not memory_gate.packet_touches_question(QUESTION, clean)       # the block is not sent: nothing about him
     assert memory_gate.packet_touches_question(QUESTION, clean + f"\n- {MINED}")   # control: the minted row WAS what it showed
+
+
+# ── the PRODUCTION SQL of every reader the fix relies on asks for the off-the-record exclusion (the fakes above apply it themselves) ──
+class _RecDb:
+    """Records every SQL a reader issues; returns no rows."""
+
+    def __init__(self):
+        self.sql: list = []
+
+    async def execute(self, sql, *_a, **_k):
+        self.sql.append(sql)
+        cur = MagicMock()
+        cur.fetchall = AsyncMock(return_value=[])
+        return cur
+
+    async def fetch(self, sql, *_a, **_k):
+        self.sql.append(sql)
+        return []
+
+    async def execute_fetchall(self, sql, *_a, **_k):
+        self.sql.append(sql)
+        return []
+
+
+def _recording_pool(monkeypatch):
+    import db_pool
+
+    rec = _RecDb()
+
+    @contextlib.asynccontextmanager
+    async def ctx():
+        yield rec
+    monkeypatch.setattr(db_pool, "get_db_ctx", ctx)
+    return rec
+
+
+def _user_turn_reads(rec) -> list:
+    return [q for q in rec.sql if "chat_messages" in q and "role = 'user'" in q]
+
+
+def _asks_off_record(q: str) -> bool:
+    import memory_provenance
+
+    return memory_provenance.OFF_RECORD_JSON_MARK in q and "NOT LIKE" in q
+
+
+@pytest.mark.parametrize("reader", ["idle_consolidation", "digest_today", "digest_day", "exact_words_backfill",
+                                    "exact_words_candidates", "pronoun_lookback"])
+def test_each_transcript_readers_production_sql_excludes_off_record_rows(reader, monkeypatch):
+    import exact_words
+    import memory_extractor
+
+    rec = _recording_pool(monkeypatch)
+    calls = {
+        "idle_consolidation": lambda: mic._fetch_transcript_rows(rec, "sess-a", None),
+        "digest_today": lambda: md._load_todays_messages(USER, rec),
+        "digest_day": lambda: md.load_day_messages(USER, "2026-11-14T00:00:00+00:00", "2026-11-15T00:00:00+00:00", rec),
+        "exact_words_backfill": lambda: exact_words._backfill_page(USER, 36, None, 50),
+        "exact_words_candidates": lambda: exact_words._transcript_candidates(USER, "brother"),
+        "pronoun_lookback": lambda: memory_extractor._load_recent_user_messages(USER, "sess-a", QUESTION),
+    }
+    run(calls[reader]())
+    if reader == "idle_consolidation":                      # its SQL has no role filter: it reads both sides, then keeps user turns
+        reads = [q for q in rec.sql if "chat_messages" in q]
+    else:
+        reads = _user_turn_reads(rec)
+    assert reads and all(_asks_off_record(q) for q in reads)
+
+
+def test_fastpath_context_reads_the_metadata_and_filters_off_record_in_code(monkeypatch):
+    """The fast-path reader keeps the off-record rows in its SQL ON PURPOSE: it must see a skipped user row to also skip the reply
+    that restates it (``select_unseen``'s ``skip_reply``). Its production SQL must therefore return ``metadata``; the filter itself is
+    the real ``select_unseen`` (driven above with the metadata ``_save_chat_message`` writes)."""
+    rec = _recording_pool(monkeypatch)
+    run(ffc._fetch_rows("sess-a"))
+    assert rec.sql and "metadata" in rec.sql[0]
+    rows = [("user", QUESTION, json.dumps({"user_id": USER}), "r2"),
+            ("user", TOPIC_FORGET, json.dumps({"user_id": USER, "off_record": True}), "r1")]
+    assert all(t != TOPIC_FORGET for _r, t in ffc.select_unseen(rows, USER, "next", []))
+
+
+def test_control_the_sql_check_sees_a_reader_that_stops_asking(monkeypatch):
+    monkeypatch.setattr(md, "_off_record_sql", lambda alias="cm": "1 = 1")      # the digest binds it at import
+    rec = _recording_pool(monkeypatch)
+    run(md._load_todays_messages(USER, rec))
+    reads = _user_turn_reads(rec)
+    assert reads and not any(_asks_off_record(q) for q in reads)          # the instrument is not blind

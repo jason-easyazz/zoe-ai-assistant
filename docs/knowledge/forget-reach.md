@@ -117,10 +117,10 @@ reader leaves it out: idle consolidation, the digest loaders, the fast-path cont
 `memory_digest._skip_forgotten_turns` skip one saved before the fix (`services/zoe-data/tests/test_qa10_forget_command_leak.py`).
 Rows already minted that way are found by `scripts/maintenance/forget_command_rows_audit.py` (read-only, counts per member index
 and writer, row ids only to a 0600 file; a row is cleaned only when its own provenance - `source_excerpt` or `user_turn_id` - links
-it to a forget-command turn; unlinked idle / digest rows in the same session are reported as unproven "window" rows):
+it to a forget-command turn; unlinked idle / digest rows in the same session are reported as unproven "window" rows, never erased; turns are read over the whole history):
 `python3 scripts/maintenance/forget_command_rows_audit.py --ids-out ~/.zoe/forget-command-rows.json`, then, with zoe-data stopped,
 `~/.zoe/venvs/zoe-data-py312/bin/python scripts/maintenance/forget_command_rows_audit.py --erase-from ~/.zoe/forget-command-rows.json`
-(dry run) and the same with `--confirm --i-stopped-zoe-data`, which forgets them through the owner-forget path
+(dry run) and the same with `--confirm --i-stopped-zoe-data`, which re-verifies every planned row from the palace and the turns (the plan file is a hint: an unlinked id is refused and left alone) and forgets the verified ones through the owner-forget path
 (`MemoryService.review(archive)` then `erase_rows`). Still open: a topic forget reaches less than an entity forget
 ([open-problems.md](open-problems.md)).
 
