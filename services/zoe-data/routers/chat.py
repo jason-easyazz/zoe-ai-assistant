@@ -24,6 +24,7 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 import panel_principal
 import untrusted_content
+import user_erase_gate as _erase_gate
 import voice_phrases
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, Intent
 from browser_broker import create_default_browser_broker
@@ -904,6 +905,9 @@ def _extract_memory_candidates(user_message: str, assistant_response: str):
     ]
 
 
+# The member's erase generation is read HERE, when the turn queues this task (``ensure_future(_persist_memory_candidates(...))``):
+# every memory write the passes below make is dropped if the member is erased after that (``user_erase_gate.scheduled``).
+@_erase_gate.scheduled_at_call("user_id")
 async def _persist_memory_candidates(user_id: str, session_id: str, user_message: str, assistant_response: str):
     """Single post-turn memory hook.
 
