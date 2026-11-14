@@ -711,11 +711,12 @@ def test_a_drill_that_never_passed_is_anchored_at_its_first_failure(monkeypatch,
     monkeypatch.setattr(drill, "datetime", _DT)
     assert drill.main(["--ignore-window"]) == 1
     st = json.loads((s / "last_restore_drill.json").read_text())
-    assert st["first_unpassed"].startswith("2026-11-01") and st["first_refusal"] is None
+    first = datetime.fromisoformat("2026-11-01T05:31:00+08:00")   # compared as an instant: the stored text is in local time
+    assert datetime.fromisoformat(st["first_unpassed"]) == first and st["first_refusal"] is None
     assert drill.main(["--ignore-window"]) == 1
     st = json.loads((s / "last_restore_drill.json").read_text())
     assert any("never passed" in f for f in st["findings"])          # 11 days on: the failure says so
-    assert st["first_unpassed"].startswith("2026-11-01")
+    assert datetime.fromisoformat(st["first_unpassed"]) == first
 
 
 def _verify(tmp_path, code: int) -> subprocess.CompletedProcess:
