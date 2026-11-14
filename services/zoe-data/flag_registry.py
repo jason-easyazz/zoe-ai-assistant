@@ -339,6 +339,8 @@ _ENTRIES = (
     _f('ZOE_FLUE_BRAIN_URL', 'str', 'http://127.0.0.1:3579', doc='docs/knowledge/clause-first-prompt-2026-10-10.md'),
     _f('ZOE_FLUE_EARLY_TEXT', 'str', '', doc='docs/knowledge/panel-ttfa-breakdown-2026-09-28.md'),
     _f('ZOE_FLUE_FASTPATH_CONTEXT', 'bool', True, doc='services/zoe-data/AGENTS.md'),
+    _f('ZOE_FLUE_PREPOST_CONCURRENT', 'bool', False, doc='docs/knowledge/voice-pipeline.md',
+       note='A1 step 2 (speed audit 2026-11-14): the always-awaited pre-POST blocks run concurrently; same bytes'),
     _f('ZOE_FLUE_STREAM_ENABLED', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
     _f('ZOE_FLUE_WIRE', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
     _f('ZOE_FOLLOWUP_ADDRESSED', 'str', 'off', allowed=('off', 'on', 'strict'), doc='docs/knowledge/voice-pipeline.md', note='live: unset (code default in force)'),

@@ -61,7 +61,10 @@ def install(monkeypatch, blocks: "dict[str, str] | None" = None, *, delay_s: "di
         return _Plan(b) if b else None
 
     async def register_apply(*_a, **_k):
-        calls.append("register_apply")
+        d = delay_s.get("register_apply", 0.0)
+        if d:
+            await asyncio.sleep(d)
+        calls.append("register_apply")   # recorded when the request is STORED (the end of the call)
         return None
 
     async def spec(*_a, **_k):

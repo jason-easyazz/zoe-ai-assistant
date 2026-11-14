@@ -1848,13 +1848,19 @@ class _PrepostTimer:
     exception) and adds its wall time to ``name``. ``claimed`` marks a timer the inner turn has adopted, so a timer left
     in the contextvar by an earlier turn on the same task is never reused."""
 
-    __slots__ = ("t0", "ms", "claimed", "logged")
+    __slots__ = ("t0", "ms", "claimed", "logged", "tasks")
 
     def __init__(self) -> None:
         self.t0 = time.monotonic()
         self.ms: "dict[str, float]" = {}
         self.claimed = False
         self.logged = False
+        self.tasks: "list[asyncio.Future]" = []   # ZOE_FLUE_PREPOST_CONCURRENT prefetches; the wrapper cancels any left
+
+    def cancel_tasks(self) -> None:
+        for t in self.tasks:
+            if not t.done():
+                t.cancel()
 
     def add(self, name: str, since: float) -> None:
         """Add the wall time since ``since`` (a ``time.monotonic()`` reading) to ``name``."""
@@ -1899,6 +1905,105 @@ class _PrepostTimer:
 
 
 _PREPOST: "contextvars.ContextVar[_PrepostTimer | None]" = contextvars.ContextVar("flue_prepost", default=None)
+
+
+# ── ZOE_FLUE_PREPOST_CONCURRENT (default OFF; speed audit 2026-11-14 A1 step 2) ───────────────────────────────────────
+# The blocks every brain turn awaits WHATEVER the precedence chain decides (fast-path, bridge, notes, identity / named
+# guest, now card, register request + line, manner, persona) start together as tasks right after the verify-on-challenge
+# early return, and run beside the precedence chain (recall > continuity > hop > offer / list share > risk > every turn),
+# which stays sequential in the turn: its blocks consume state (the offer cooldown, the list-share "said once", the
+# recall gate's counters) only when they win, so none of them ever runs speculatively. Each prefetched block is still
+# awaited at its own place in the assembly, so the bytes and their order are exactly the sequential ones; only WHEN the
+# work happens changes. Dependencies stay chained inside the prefetch: the register line after the style request is
+# stored, the named-guest block only when the account identity block came back empty. Off = no task, the exact
+# sequential code path (``take`` awaits the call in place).
+_PREPOST_CONCURRENT_GROUP = ("fastpath", "bridge", "notes", "identity", "named_guest", "now_card", "register_apply",
+                             "register", "manner", "persona")
+
+
+def _prepost_concurrent_enabled() -> bool:
+    try:
+        from typed_env import flag
+
+        return bool(flag("ZOE_FLUE_PREPOST_CONCURRENT"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class _Prefetch:
+    """Per-turn prefetch of the always-awaited blocks. ``take(name, factory)`` returns the prefetched result, or awaits
+    ``factory()`` in place (timed under ``name``) when nothing was prefetched - the sequential path, byte for byte."""
+
+    __slots__ = ("pp", "tasks")
+
+    def __init__(self, pp: "_PrepostTimer") -> None:
+        self.pp = pp
+        self.tasks: "dict[str, asyncio.Future]" = {}
+
+    def start(self, factories: "dict[str, Any]") -> None:
+        """``factories``: name -> zero-arg callable returning a coroutine. Starts each as a task (timed under its name)."""
+        for name, factory in factories.items():
+            task = asyncio.ensure_future(self.pp.timed(name, factory()))
+            self.tasks[name] = task
+            self.pp.tasks.append(task)
+
+    async def take(self, name: str, factory: Any) -> Any:
+        task = self.tasks.pop(name, None)
+        if task is not None:
+            return await task
+        return await self.pp.timed(name, factory())
+
+
+def _prefetch_for_turn(pp: "_PrepostTimer", uid: str, session_id: str, message: str, kwargs: dict) -> _Prefetch:
+    """A ``_Prefetch``; with ZOE_FLUE_PREPOST_CONCURRENT on, the always-awaited group is already running. Never raises."""
+    pre = _Prefetch(pp)
+    if not _prepost_concurrent_enabled():
+        return pre
+    try:
+        import conversation_notes
+        import flue_fastpath_context
+        import named_guests
+        import voice_session_bridge
+
+        replay = bool(kwargs.get("replay_isolation"))
+        voice = bool(kwargs.get("voice_mode"))
+
+        pre.start({
+            "fastpath": lambda: flue_fastpath_context.block_for(uid, session_id, message),
+            "bridge": lambda: voice_session_bridge.block_for(uid, session_id),
+            "notes": lambda: conversation_notes.block_for(uid, session_id),
+            "identity": lambda: _identity_context_block(uid),
+            "now_card": lambda: _now_card_context_block(uid, voice),
+            "manner": lambda: _manner_context_block(uid, message),
+            "persona": lambda: _persona_context_block(uid),
+        })
+        identity_task = pre.tasks["identity"]
+        apply_task = None
+        if not replay:   # as sequentially: a replay never stores a style request
+            import register_requests
+
+            pre.start({"register_apply": lambda: register_requests.apply(uid, message)})
+            apply_task = pre.tasks["register_apply"]
+
+        async def named_guest():
+            # the sequential order: the account identity block first, the named guest only when it came back empty
+            if await identity_task:
+                return ""
+            return await pp.timed("named_guest", named_guests.brain_block(uid))
+
+        async def register_line():
+            if apply_task is not None:
+                await apply_task   # the style request this turn made is stored before the line is rendered
+            return await pp.timed("register", _register_context_block(uid))
+
+        for name, coro in (("named_guest", named_guest()), ("register", register_line())):
+            task = asyncio.ensure_future(coro)
+            pre.tasks[name] = task
+            pp.tasks.append(task)
+    except Exception:  # noqa: BLE001 - a prefetch problem falls back to the sequential path
+        pp.cancel_tasks()
+        pre.tasks.clear()
+    return pre
 
 
 def _prepost_add(name: str, since: float) -> int:
@@ -3070,6 +3175,7 @@ async def run_flue_brain_streaming(
         try:
             await turn.aclose()
         finally:
+            _pp.cancel_tasks()   # ZOE_FLUE_PREPOST_CONCURRENT: a turn closed before its POST leaves no task behind
             brain_slot_guard.turn_finished()
         # Settled HERE, not after the loop: a consumer that disconnects or barges
         # in after the first text exits through this finally (GeneratorExit or a
@@ -3207,6 +3313,8 @@ async def _run_flue_brain_streaming_turn(
         yield verify_plan.reply
         return
     verify_block = verify_plan.block if verify_plan is not None else ""
+    # ZOE_FLUE_PREPOST_CONCURRENT (default OFF): the always-awaited blocks start now, beside the precedence chain below.
+    _pre = _prefetch_for_turn(_pp, uid, session_id, message, kwargs)
     # Deterministic recall floor (default OFF): on a personal-, event- or evidence-shaped
     # question turn, prepend the for-prompt packet so recall no longer depends on the model
     # electing to call its recall_memory tool. Placed BEFORE the identity wrap
@@ -3289,31 +3397,31 @@ async def _run_flue_brain_streaming_turn(
     # follow-up like "thank you" / "no" reached the brain with nothing to follow. Context beside the other blocks, same session + member only.
     import flue_fastpath_context
 
-    fastpath_block = await _pp.timed("fastpath", flue_fastpath_context.block_for(uid, session_id, message))
+    fastpath_block = await _pre.take("fastpath", lambda: flue_fastpath_context.block_for(uid, session_id, message))
     # Where we left off (ZOE_VOICE_SESSION_BRIDGE, default OFF; voice_session_bridge.py): a panel voice session that rolled after
     # the idle TTL starts with history=0 in the sidecar, so its first few brain turns carry the SAME confirmed speaker's last
     # exchanges from the session it replaced - in memory, forget-ledger checked (strict), token-capped. Ahead of the fast-path
     # block (it is older), inside the latest user message: the cached prefix is untouched. Off => "" before any work.
     import voice_session_bridge
 
-    bridge_block = await _pp.timed("bridge", voice_session_bridge.block_for(uid, session_id))
+    bridge_block = await _pre.take("bridge", lambda: voice_session_bridge.block_for(uid, session_id))
     # Notes about earlier conversations with this member (ZOE_CONVERSATION_NOTES, default OFF; conversation_notes.py): the first
     # brain turns of a session carry the member's newest 1-2 notes as soft context ("last time you talked about X; it is open").
     # Same slot and delimiters as the bridge (the sidecar elides it from older turns); confirmed speaker only; shadow logs, serves "".
     import conversation_notes
 
-    notes_block = await _pp.timed("notes", conversation_notes.block_for(uid, session_id))
+    notes_block = await _pre.take("notes", lambda: conversation_notes.block_for(uid, session_id))
     # Who this is + where the house is (ZOE_IDENTITY_BLOCK, default ON): one line from the
     # ACCOUNT, first in the block run (right behind the identity envelope line) so the
     # order is fixed: identity → bridge → fast-path → recall → offer → the user's words. "" when the flag is
     # off or the id is not a registered account → the bytes are exactly what they were.
-    identity_block = await _pp.timed("identity", _identity_context_block(uid))
+    identity_block = await _pre.take("identity", lambda: _identity_context_block(uid))
     if not identity_block:
         # A NAMED GUEST (ZOE_NAMED_GUESTS, named_guests.py): who Zoe is talking with + their OWN past exchanges, in the same slot.
         # "" for a member and for any other unidentified voice (the bytes are unchanged).
         import named_guests
 
-        identity_block = await _pp.timed("named_guest", named_guests.brain_block(uid))
+        identity_block = await _pre.take("named_guest", lambda: named_guests.brain_block(uid))
     # BM5 (ZOE_MEMORY_PROVENANCE_ANSWERS): label the stored-context blocks this turn carries that do not come through /for-prompt,
     # so "why did you say that?" does not call a reply that offered to add a contact memory-free. Labels only; the message is
     # not touched (the sidecar prefix and the prompt cache are unaffected).
@@ -3378,25 +3486,23 @@ async def _run_flue_brain_streaming_turn(
     outbound_message = _wrap_message_with_identity(_wrap_message_with_locale(brain_message, _household_locale_line()), uid)
     # Now card (ZOE_MEMORY_NOW_CARD, default OFF; now_card.py): the member's nightly card, between the manner line and the identity
     # line; the sidecar puts it in the SYSTEM prompt after the user-model card. "" (off, shadow, a guest, an unverified voice) = unchanged bytes.
-    _t_card = time.monotonic()
     outbound_message = _wrap_message_with_now_card(
-        outbound_message, await _now_card_context_block(uid, bool(kwargs.get("voice_mode"))))
-    _pp.add("now_card", _t_card)
+        outbound_message, await _pre.take("now_card", lambda: _now_card_context_block(uid, bool(kwargs.get("voice_mode")))))
     # Manner block (ZOE_MANNER_BLOCK, default OFF; adults only): rides between the persona line and the identity line. "" = unchanged bytes.
     # An explicit style request in THIS turn ("stop ending with questions", "be more casual") is stored first, so the line rendered next
     # already carries it and this very reply obeys it (register_requests; rides ZOE_MEMBER_REGISTER, adults only, a no-op while off).
     if not kwargs.get("replay_isolation"):
         import register_requests
 
-        await _pp.timed("register_apply", register_requests.apply(uid, message))
-    with _pp.span("register"):
-        outbound_message = _wrap_message_with_register(outbound_message, await _register_context_block(uid))
-    with _pp.span("manner"):
-        outbound_message = _wrap_message_with_manner(outbound_message, await _manner_context_block(uid, message))
+        await _pre.take("register_apply", lambda: register_requests.apply(uid, message))
+    outbound_message = _wrap_message_with_register(
+        outbound_message, await _pre.take("register", lambda: _register_context_block(uid)))
+    outbound_message = _wrap_message_with_manner(
+        outbound_message, await _pre.take("manner", lambda: _manner_context_block(uid, message)))
     # Household persona + this member's mode (ZOE_PERSONA_LAYER, default OFF): rides between the
     # replay line and the identity line. "" (the default) = unchanged bytes.
-    with _pp.span("persona"):
-        outbound_message = _wrap_message_with_persona(outbound_message, await _persona_context_block(uid))
+    outbound_message = _wrap_message_with_persona(
+        outbound_message, await _pre.take("persona", lambda: _persona_context_block(uid)))
     _note_turn_envelope(uid, session_id, outbound_message)
     _note_prefix_structure(session_id, outbound_message, uid)
     # Replay isolation rides OUTSIDE the identity wrap so its line is first on the

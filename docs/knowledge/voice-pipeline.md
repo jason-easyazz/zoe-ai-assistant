@@ -264,6 +264,12 @@ cached bytes diverge before its words; after the words they stay equal through t
 turn is the previous turn's words and template tokens only: the previous reply and the new turn still re-prefill.
 `ZOE_CONTINUITY_CEILING_S` (default 3.0, unchanged) is the continuity packet's wait; **0.4 is the candidate** (the household
 fallback's budget): a late packet is simply not carried, so SEAM_CONTINUITY matches may drop on a slow day.
+`ZOE_FLUE_PREPOST_CONCURRENT=1` (default off) starts the blocks every brain turn awaits whatever the precedence chain
+decides (fast-path, bridge, notes, identity / named guest, now card, register request + line, manner, persona) as tasks
+right after the verify-on-challenge return, beside the sequential precedence chain (recall > continuity > hop > offer /
+list share > risk > every turn, whose blocks consume state only when they win). Same bytes in the same order (golden
+corpus test); a turn closed before its POST cancels what it started. Synthetic plain turn: `FLUE_PREPOST total_ms` 252 ->
+92 (`tests/test_flue_prepost_concurrent.py`); the live gain is what `FLUE_PREPOST` shows before and after.
 
 **The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
 new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
