@@ -11,6 +11,12 @@ One ``EVENT_LOOP_BLOCK`` line per episode, logged when the episode ENDS (so the 
 for a logging lock), an hourly ``EVENT_LOOP_BLOCK_TOP`` summary, and bounded per-fingerprint counters on ``/metrics``
 (internal token). ``fp=unseen`` = a lag the watcher could not sample (the GIL was held by C code for the whole block, or it
 ended before the sample). Flag ``ZOE_LOOP_BLOCK_STACKS`` (default on; costs nothing until a block is in progress).
+
+Pass-through wrappers (``PASSTHROUGH``) are transparent: ``top`` names the nearest own frame ABOVE them (the caller), the
+wrapper is reported as ``thru=file:function`` at the end of the line and stays in the frames list, and since ``top`` is in
+the fingerprint key, different callers behind one wrapper get different fingerprints. ``EVENT_LOOP_BLOCK_FRAMES`` is logged
+at WARNING the first time a fingerprint is seen (first ``FRAMES_WARN_FPS`` per watcher, i.e. per process), DEBUG after.
+With no own frame at all, the frames are the innermost ``OWN_FRAMES`` frames as ``package:function:line``.
 """
 from __future__ import annotations
 
@@ -39,6 +45,10 @@ MAX_FPS = 64          # fingerprints kept; the rest count under "other"
 SECOND_S = 1.0        # second sample: same frame still running (one slow call) or moved (many calls)
 POLL_S = 0.05         # only while a block is in progress
 SUMMARY_EVERY_S = 3600.0
+FRAMES_WARN_FPS = 20  # distinct fingerprints whose first FRAMES line is logged at WARNING
+LABEL_MAX = 96        # chars per frame label on the FRAMES line
+# Own frames that only forward the call (file basename, function): never named as ``top``.
+PASSTHROUGH = frozenset({("brain_scheduler.py", "send")})
 
 blocks_total = Counter("zoe_event_loop_block_total", "Event-loop block episodes (>= 250 ms) by stack fingerprint.",
                        ("fp", "top", "via"), registry=REGISTRY)
@@ -96,16 +106,22 @@ def reduce(raw: list) -> dict:
     labels = [f"{c[1]}:{n}:{ln}" if c[0] == "own" else (f"std:{c[1]}:{n}:{ln}" if c[0] == "std" else f"{c[1]}:{n}:{ln}")
               for c, n, ln in cls]
     own = [i for i, (c, _, _) in enumerate(cls) if c[0] == "own"]
-    if own:
-        top, inner = labels[own[-1]], cls[own[-1] + 1:]
-        key = [labels[i] for i in own][-OWN_FRAMES:][::-1]
+    wrap = {i for i in own if (os.path.basename(cls[i][0][1]), cls[i][1]) in PASSTHROUGH}
+    real = [i for i in own if i not in wrap]
+    thru_i = [i for i in own if i in wrap and (not real or i > real[-1])]
+    thru = f"{cls[thru_i[0]][0][1]}:{cls[thru_i[0]][1]}" if thru_i else "-"
+    if real:
+        t = real[-1]
+        top, inner = labels[t], cls[t + 1:]
+        # wrappers below top stay visible but do not use up the OWN_FRAMES budget, so top is always in the key
+        key = [labels[i] for i in thru_i][::-1] + [labels[i] for i in own if i <= t][-OWN_FRAMES:][::-1]
     else:
         top, inner, key = "-", cls[::-1], labels[-OWN_FRAMES:][::-1]
     via = next((c[1] for c, _, _ in inner if c[0] == "pkg"), None)
     if via is None:
         via = next((f"std:{c[1]}" for c, _, _ in inner if c[0] == "std"), "-")
     fp = hashlib.sha1("|".join(key + [via]).encode()).hexdigest()[:8]
-    return {"top": top, "via": via, "depth": len(raw), "fp": fp, "frames": key}
+    return {"top": top, "via": via, "depth": len(raw), "fp": fp, "frames": key, "thru": thru}
 
 
 class _Watcher(threading.Thread):
@@ -119,6 +135,7 @@ class _Watcher(threading.Thread):
         self.last_summary = time.monotonic()
         self.summarised = 0
         self.accounted = _lag._beat.big[0]
+        self.frames_warned: set = set()
 
     def run(self) -> None:
         while not self.stop_ev.is_set():
@@ -167,9 +184,14 @@ class _Watcher(threading.Thread):
         r = first or {"top": "-", "via": "-", "depth": 0, "fp": "unseen", "frames": []}
         at1s = "-" if not (first and second) else ("same" if second["fp"] == r["fp"] else "moved")
         tail = f" top1s={second['top']}" if at1s == "moved" else ""
-        logger.warning("EVENT_LOOP_BLOCK ms=%d top=%s via=%s depth=%d fp=%s at1s=%s%s",
-                       ms, r["top"], r["via"], r["depth"], r["fp"], at1s, tail)
-        logger.debug("EVENT_LOOP_BLOCK_FRAMES fp=%s frames=%s", r["fp"], " < ".join(r["frames"]) or "-")
+        logger.warning("EVENT_LOOP_BLOCK ms=%d top=%s via=%s depth=%d fp=%s at1s=%s%s thru=%s",
+                       ms, r["top"], r["via"], r["depth"], r["fp"], at1s, tail, r.get("thru", "-"))
+        level = logging.DEBUG
+        if r["frames"] and r["fp"] not in self.frames_warned and len(self.frames_warned) < FRAMES_WARN_FPS:
+            self.frames_warned.add(r["fp"])
+            level = logging.WARNING
+        logger.log(level, "EVENT_LOOP_BLOCK_FRAMES fp=%s frames=%s", r["fp"],
+                   " < ".join(f[:LABEL_MAX] for f in r["frames"]) or "-")
         with self.lock:
             self.episodes += 1
             key = r["fp"] if (r["fp"] in self.table or len(self.table) < MAX_FPS) else "other"

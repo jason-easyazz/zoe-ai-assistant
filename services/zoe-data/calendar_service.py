@@ -178,7 +178,7 @@ STATUSES = ("confirmed", "tentative", "cancelled")
 _STATUS_ALIASES = {"canceled": "cancelled"}
 TRANSPARENCIES = ("opaque", "transparent")
 _TRANSPARENCY_ALIASES = {"free": "transparent", "busy": "opaque"}
-SOURCES = ("local", "ha", "caldav", "google", "microsoft", "ics")
+SOURCES = ("local", "ha", "caldav", "google", "microsoft", "ics", "subscription")
 ATTENDEE_ROLES = ("chair", "req-participant", "opt-participant", "non-participant")
 _ROLE_ALIASES = {"participant": "req-participant", "required": "req-participant", "optional": "opt-participant",
                  "organizer": "chair", "attendee": "req-participant", "informational": "non-participant"}
