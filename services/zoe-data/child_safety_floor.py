@@ -37,6 +37,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_CHILD_SAFETY_FLOOR"
+CARRY_ENV = "ZOE_CHILD_SAFETY_CARRY"
+#: a hazard named in one turn carries to the speaker's NEXT turn only, and only this long
+CARRY_TTL_S = 60.0
 LEXICON_KEY = "child_safety"
 FALLBACK_LANG = "en"
 FALLBACK_REPLY = "That one needs a grown-up. Can you ask one to help you?"
@@ -57,6 +60,7 @@ class Pending:
     declared: bool
     key: tuple
     blind: bool = False   # the floor itself failed: refuse unless the speaker is POSITIVELY an adult
+    carried: bool = False  # the hazard came from this speaker's PREVIOUS turn (``carry_mode``): "the gas stove" -> "how do i turn it on"
 
 
 def mode() -> str:
@@ -64,6 +68,35 @@ def mode() -> str:
 
     raw = str(flag(ENV) or "").strip().lower()
     return raw if raw in ("off", "shadow") else "enforce"   # anything else (unknown, empty) is a floor that enforces
+
+
+def carry_mode() -> str:
+    """``ZOE_CHILD_SAFETY_CARRY`` off (DEFAULT: nothing recorded, byte-identical) | shadow (log ``would_refuse`` only) | on."""
+    try:
+        from typed_env import flag
+
+        raw = str(flag(CARRY_ENV) or "").strip().lower()
+        return raw if raw in ("shadow", "on") else "off"
+    except Exception:  # noqa: BLE001
+        return "off"
+
+
+def _carry_step(key: tuple, s: str, rx: dict) -> Optional[tuple[str, str]]:
+    """SPLIT TURNS. The hazard class this speaker named in their IMMEDIATELY previous turn, in this session, at most
+    ``CARRY_TTL_S`` ago, when THIS turn names no hazard itself but is an ask that points back at it (lexicon ``carry_ask``: "turn it
+    on", "how do i use it", "can i have one"); else None. Every turn consumes the carry (one turn only), and a turn that names a
+    hazard - asked about or only mentioned ("we have a gas stove") - sets it. Per (user, session), in the bounded session store."""
+    e = _entry(key)
+    now = time.monotonic()
+    e["seq"] = seq = e.get("seq", 0) + 1
+    prev, e["carry"] = e.get("carry"), None
+    named = next(((cid, reply) for cid, terms, reply in rx["classes"] if terms.search(s)), None)
+    if named is not None:
+        e["carry"] = (named[0], named[1], now, seq)
+        return None
+    if prev and prev[3] == seq - 1 and now - prev[2] <= CARRY_TTL_S and rx["carry_ask"].search(s):
+        return prev[0], prev[1]
+    return None
 
 
 def _safe_mode() -> str:
@@ -108,6 +141,7 @@ def _rx(lang: str) -> Optional[dict]:
             "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
             "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
             "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
+            "carry_ask": w(e["carry_ask"]),
             "classes": [(c["id"], w(c["terms"]), c["reply"]) for c in e["classes"]]}
 
 
@@ -271,10 +305,13 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, f
         if said and key[1] and not dry:
             _entry(key)["child"] = True   # STICKY for the session: a later adult-age claim never clears it
         hit = hazard_class(s, rx)
+        carried = _carry_step(key, s, rx) if key[1] and not dry and carry_mode() != "off" else None
+        if hit is None and carried is not None:
+            hit = carried
         if hit is None or _owned_by_other_floor(text, floors_live):
             return None
         declared = bool(said) or held_child
-        return Pending(cls=hit[0], reply=hit[1], declared=bool(declared), key=key)
+        return Pending(cls=hit[0], reply=hit[1], declared=bool(declared), key=key, carried=hit is carried)
     except Exception as exc:  # noqa: BLE001
         logger.warning("CHILD_SAFETY_FLOOR check failed stage=%s (%s)", "after" if hit else "before", type(exc).__name__)
         return Pending(cls=hit[0] if hit else "error", reply=hit[1] if hit else FALLBACK_REPLY, declared=False, key=key, blind=True)
@@ -320,6 +357,10 @@ async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
             e["n"] += 1
             n = e["n"]
         m = _safe_mode()
+        if p.carried:   # the hazard was named in the previous turn: its own flag (shadow logs only)
+            cm = carry_mode()
+            logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s carry=%s would_refuse=1 n=%d", p.cls, source, m, cm, n)
+            return (p.reply or FALLBACK_REPLY) if m == "enforce" and cm == "on" else None
         logger.info("CHILD_SAFETY_FLOOR class=%s source=%s mode=%s n=%d", p.cls, source, m, n)
         return (p.reply or FALLBACK_REPLY) if m == "enforce" else None
     except Exception as exc:  # noqa: BLE001 - fail SAFE: a hazard ask we could not clear gets the cautious line
