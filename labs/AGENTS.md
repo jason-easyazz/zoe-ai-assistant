@@ -544,3 +544,10 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `gh` / network) -> verify re-runs the ORIGINAL reproduction, not-healed faults are parked. Has its
   own AGENTS.md with the Forbidden list. Local net: `python3 -m pytest labs/self-heal/tests` (fake
   engine, throwaway repos); `e2e_scratch.py` is the synthetic end-to-end proof.
+- `router-learning-loop/` - **the no-subscription self-evolution loop, lab** (2026-11-14): harvest (forget list
+  dropped FIRST, frozen-set overlap dropped, per-signal confidence ceilings, provenance per example) -> train a
+  stdlib STAND-IN classifier (no model is trained or loaded) -> evaluate on the frozen `needle-benchmark` 81 cases
+  + 8 synthetic safety cases -> deterministic gate (overall +2.0 pts, no intent -15 pts, safety intents keep every
+  case) -> a text-free proposal in the `evolution_queue.propose` shape (lab file, never the live queue) -> byte-exact
+  rollback. Synthetic data only. Local net: `python3 -m pytest labs/router-learning-loop/tests` under the test-lane
+  flock (not CI-wired). README holds the measured runs and the ordered path to live.

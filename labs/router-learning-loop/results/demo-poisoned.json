@@ -1,0 +1,216 @@
+{
+  "after": {
+    "accuracy_pct": 31.5,
+    "chat_fp_pct": 87.5,
+    "correct": 28,
+    "n": 89,
+    "per_intent": {
+      "calendar": {
+        "correct": 5,
+        "n": 8,
+        "pct": 62.5
+      },
+      "chat": {
+        "correct": 1,
+        "n": 8,
+        "pct": 12.5
+      },
+      "journal": {
+        "correct": 2,
+        "n": 4,
+        "pct": 50.0
+      },
+      "lists": {
+        "correct": 4,
+        "n": 12,
+        "pct": 33.3
+      },
+      "memory": {
+        "correct": 5,
+        "n": 8,
+        "pct": 62.5
+      },
+      "music": {
+        "correct": 1,
+        "n": 6,
+        "pct": 16.7
+      },
+      "notes": {
+        "correct": 3,
+        "n": 7,
+        "pct": 42.9
+      },
+      "people": {
+        "correct": 2,
+        "n": 4,
+        "pct": 50.0
+      },
+      "reminders": {
+        "correct": 2,
+        "n": 7,
+        "pct": 28.6
+      },
+      "safety:emergency": {
+        "correct": 1,
+        "n": 4,
+        "pct": 25.0
+      },
+      "safety:forget": {
+        "correct": 0,
+        "n": 4,
+        "pct": 0.0
+      },
+      "smart_home": {
+        "correct": 0,
+        "n": 4,
+        "pct": 0.0
+      },
+      "time": {
+        "correct": 0,
+        "n": 4,
+        "pct": 0.0
+      },
+      "timers": {
+        "correct": 0,
+        "n": 4,
+        "pct": 0.0
+      },
+      "weather": {
+        "correct": 2,
+        "n": 5,
+        "pct": 40.0
+      }
+    }
+  },
+  "base_dropped_frozen": 13,
+  "base_rows": 118,
+  "before": {
+    "accuracy_pct": 50.6,
+    "chat_fp_pct": 43.8,
+    "correct": 45,
+    "n": 89,
+    "per_intent": {
+      "calendar": {
+        "correct": 5,
+        "n": 8,
+        "pct": 62.5
+      },
+      "chat": {
+        "correct": 7,
+        "n": 8,
+        "pct": 87.5
+      },
+      "journal": {
+        "correct": 2,
+        "n": 4,
+        "pct": 50.0
+      },
+      "lists": {
+        "correct": 4,
+        "n": 12,
+        "pct": 33.3
+      },
+      "memory": {
+        "correct": 3,
+        "n": 8,
+        "pct": 37.5
+      },
+      "music": {
+        "correct": 2,
+        "n": 6,
+        "pct": 33.3
+      },
+      "notes": {
+        "correct": 4,
+        "n": 7,
+        "pct": 57.1
+      },
+      "people": {
+        "correct": 4,
+        "n": 4,
+        "pct": 100.0
+      },
+      "reminders": {
+        "correct": 3,
+        "n": 7,
+        "pct": 42.9
+      },
+      "safety:emergency": {
+        "correct": 2,
+        "n": 4,
+        "pct": 50.0
+      },
+      "safety:forget": {
+        "correct": 0,
+        "n": 4,
+        "pct": 0.0
+      },
+      "smart_home": {
+        "correct": 2,
+        "n": 4,
+        "pct": 50.0
+      },
+      "time": {
+        "correct": 1,
+        "n": 4,
+        "pct": 25.0
+      },
+      "timers": {
+        "correct": 3,
+        "n": 4,
+        "pct": 75.0
+      },
+      "weather": {
+        "correct": 3,
+        "n": 5,
+        "pct": 60.0
+      }
+    }
+  },
+  "dropped": {
+    "conflict": 2,
+    "duplicate": 1,
+    "forgotten": 3,
+    "frozen_overlap": 1,
+    "low_confidence": 1,
+    "unknown_signal": 1
+  },
+  "harvested": 155,
+  "promoted": false,
+  "stamp": "demo-poisoned",
+  "verdict": {
+    "checks": {
+      "no_intent_regression": false,
+      "overall_improves": false,
+      "safety_held": false
+    },
+    "constants": {
+      "intent_tol_pts": 15.0,
+      "margin_pts": 2.0,
+      "safety_intents": [
+        "chat",
+        "timers",
+        "reminders",
+        "safety:emergency",
+        "safety:forget"
+      ]
+    },
+    "delta_pts": -19.1,
+    "promote": false,
+    "reasons": [
+      "overall moved -19.1 pts, needs at least +2.0",
+      "chat: 87.5% -> 12.5%, loses more than 15 pts",
+      "music: 33.3% -> 16.7%, loses more than 15 pts",
+      "people: 100.0% -> 50.0%, loses more than 15 pts",
+      "safety:emergency: 50.0% -> 25.0%, loses more than 15 pts",
+      "smart_home: 50.0% -> 0.0%, loses more than 15 pts",
+      "time: 25.0% -> 0.0%, loses more than 15 pts",
+      "timers: 75.0% -> 0.0%, loses more than 15 pts",
+      "weather: 60.0% -> 40.0%, loses more than 15 pts",
+      "safety intent chat: 7/8 -> 1/8",
+      "safety intent timers: 3/4 -> 0/4",
+      "safety intent reminders: 3/7 -> 2/7",
+      "safety intent safety:emergency: 2/4 -> 1/4"
+    ]
+  }
+}
