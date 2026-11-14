@@ -56,6 +56,13 @@ canary read back. Synthetic names, users and contents only.
   the old tree (X4); apply refuses a symlinked old path (X5); the copy carries a planted file, so the rehearsal
   reviews first (X7); `srv-zoe.mount`'s options are `nosuid,nodev` (X8).
 
-## Result
+## Result: 48/49 cells pass (2026-11-14 23:01, MemAvailable >= 2000 MiB, lane lock held, teardown asserted)
 
-Not yet recorded: see the latest run below.
+- Every "route exists" cell reproduced its route; every fix closed it; every negative control reopened it;
+  every "still works" cell passed. Classes: R1, R2, R2f, R3 (all three layers), R4 (both controls), R5.
+- O cells 10/10; X cells 7/7 (the public manifest applies and verifies verbatim).
+- **FAIL R5b-fix-remove-dormant-definition-closes:** the route itself closed (no root marker after the dormant
+  definition was removed), but `inspect` still exits 1, because the REMAINING hub is modelled privileged (cell R1
+  keeps it privileged to show ownership alone closes the config-load route) and `inspect` fails every privileged
+  container by design. Not patched. It says the fix list is incomplete for any container that stays privileged:
+  `inspect` passes only once it is de-privileged (P0-6). On the live box the main hub is already unprivileged.
