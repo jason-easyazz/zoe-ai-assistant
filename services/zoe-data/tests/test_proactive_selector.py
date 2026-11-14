@@ -54,7 +54,10 @@ class _Sqlite:
     def execute(self, sql, params=()):
         """The compat layer's own dual-mode result (await / async with)."""
         async def _run():
-            cur = self.conn.execute(sql, tuple(params))
+            cur = self.conn.cursor()
+            if " FROM events " in f" {' '.join(sql.split())} ":
+                cur.row_factory = sqlite3.Row         # the pool's records read by name, as the shared calendar read path needs
+            cur.execute(sql, tuple(params))
             rows = cur.fetchall()
             self.conn.commit()
             return _Cursor(rows, rowcount=cur.rowcount)
