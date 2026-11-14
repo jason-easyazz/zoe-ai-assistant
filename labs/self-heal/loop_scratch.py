@@ -5,6 +5,7 @@ never this project's repo or any of its worktrees, never GitHub, never a real en
     python3 labs/self-heal/loop_scratch.py --scenario retry --shape this_unit # also PRINTS the PR commands
     python3 labs/self-heal/loop_scratch.py --scenario rollback                # main moves; the merged tree fails
     python3 labs/self-heal/loop_scratch.py --engine dryrun-codex              # prints the CLI command, runs nothing
+    (add --lab-noon between 01:30 and 05:00: the hard quiet window refuses a real-clock run, reason quiet_hours)
 
 Prints ONE JSON object: the loop result with the measures (fault_to_verified_fix_s, attempts, rollbacks,
 refusals_by_reason), the ledger and where the scratch lives.
@@ -12,6 +13,7 @@ refusals_by_reason), the ledger and where the scratch lives.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import shutil
 import sys
@@ -62,7 +64,11 @@ def main(argv=None, now=None) -> int:
     ap.add_argument("--engine", choices=["fake", "dryrun-codex", "dryrun-claude"], default="fake")
     ap.add_argument("--shape", choices=sorted(SHAPES), default="sold_unit")
     ap.add_argument("--keep", action="store_true", help="keep the scratch directory")
+    ap.add_argument("--lab-noon", action="store_true",
+                    help="scratch clock fixed at 12:00 (the loop refuses 01:30-05:00 by its hard floor: quiet_hours)")
     a = ap.parse_args(argv)
+    if a.lab_noon:
+        now = lambda: dt.datetime(2026, 11, 14, 12, 0)   # noqa: E731
     tmp = Path(tempfile.mkdtemp(prefix="self-heal-loop-"))
     try:
         cfg, junit = build(tmp, a.shape)

@@ -11,7 +11,8 @@ healed / not healed; a fault that is not healed is parked, not retried forever.
 
 ## Ownership
 
-`selfheal/` (config, safety, sandbox, binaries, detectors, engines, gates, gitops, landing, runner, CLI),
+`selfheal/` (config, safety, sandbox, binaries, detectors, engines, proposer, gates, supervisor, gitops, landing,
+locallander, ledger, runner, loop, CLI), `loop_scratch.py` (the complete loop on scratch repos, prints the result JSON),
 `tests/` (fake-engine tests on throwaway repos), `e2e_scratch.py` (synthetic end-to-end proof),
 `systemd/` (user unit + timer TEMPLATES), `self-heal.example.json`, `README.md`.
 
@@ -35,6 +36,20 @@ healed / not healed; a fault that is not healed is parked, not retried forever.
   available = `no_engine`, nothing touched. The engine environment is an allow-list (no tokens).
 - `board: multica` mirrors one issue per fault (backlog, no assignee, never `todo`); best effort,
   never required, never touches Multica dispatch or its kill switch.
+- The propose() protocol (`selfheal/proposer.py`): an engine adapter gets a FAULT PACKET and returns a
+  PATCH, nothing else. Packet file text comes from the base commit only; a forbidden / secret-path /
+  pinned / symlink / binary / secret-shaped file is withheld; the failure text is a sandboxed re-run's
+  output through `redact`. The patch may edit `allow_edit` and add `allow_new` files only; budgets
+  (`engine_timeout_s`, `engine_max_turns`, `engine_max_tokens`, 64 kB) may only be lowered.
+- Landing with no GitHub (`selfheal/locallander.py`): merge -> proof on the MERGED tree (supervised gate
+  + offline lane) -> apply -> health window -> ledger; any failure restores the snapshot. Intent phases
+  `merged` / `proven` / `watching`; the next start finishes a `watching` landing (window re-run) and
+  rolls back anything earlier. `unit_shape` `sold_unit` refuses a repo with a remote; `this_unit` only
+  RETURNS the push / draft-PR command lines.
+- `<state_dir>/ledger.jsonl` (`selfheal/ledger.py`) is append-only and hash-chained: landed /
+  rolled_back / refused, a reason token, the proof hash. Allow-listed keys, single-token values.
+- The loop driver (`selfheal/loop.py`): every non-heal is ONE reason from `loop.REASONS`; a retry is a
+  lookup in `loop.RETRY` under a round cap clamped to the per-fault cap.
 
 ## Forbidden
 
@@ -99,6 +114,20 @@ The loop (and anyone running it) must never:
 - remove or bypass `~/.zoe/multica_dispatch_paused` or any other kill switch, or create a board issue in `todo`;
 - be installed or enabled as a unit by an agent: the units under `systemd/` are operator opt-in templates;
 - run against the real repo's real faults in a lab session (scratch repos only, see `e2e_scratch.py`);
+- build or run a real engine adapter for the propose() protocol, or promise a sold-unit feature, before
+  the vendor's terms for driving a consumer subscription unattended have been checked (UNVERIFIED today);
+- hand an engine anything but a `FaultPacket`: no worktree path, no repo, no state dir, no environment;
+  read packet file text from the disk instead of the base commit; "clean and send" a secret-shaped file;
+- apply a patch that `check_patch` did not pass, or skip the runner's own `inspect_worktree` + `check_diff`
+  after applying it; accept a rename, copy, delete, mode change, symlink or binary section;
+- let anything an engine returns (text, a severity, a score) decide a retry, a landing or a gate: the
+  retry table and the round cap are the only inputs; raise the round cap above the per-fault cap;
+- apply a landing before the merged tree's proof passed; advance the integration ref without the repo
+  landing lock, the phase-stamped intent and the snapshot; clear a `watching` intent without a full
+  green health window or a verified rollback;
+- execute the `this_unit` push / PR command lines from the lab, or run `sold_unit` on a repo with a remote;
+- edit, truncate or rewrite `ledger.jsonl`, add a free-text field to it, or extend a chain that does not verify;
+- run the loop driver or any landing test against anything but a scratch repo it created under a temp dir;
 - implement a live `apply` (fast-forward the live checkout, restart services) without an owner step.
 
 ## Work Guidance
@@ -110,7 +139,8 @@ The loop (and anyone running it) must never:
 ## Verification
 
 `flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider labs/self-heal/tests -q`
-(local net; labs are not in CI by design). End-to-end: `python3 labs/self-heal/e2e_scratch.py --help`.
+(local net; labs are not in CI by design; the whole suite exceeds the 180 s lane cap: run it one or two
+files at a time). End-to-end: `python3 labs/self-heal/e2e_scratch.py --help`, `loop_scratch.py --help`.
 
 ## Child DOX Index
 
