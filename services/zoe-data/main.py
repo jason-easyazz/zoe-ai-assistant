@@ -1305,6 +1305,9 @@ async def lifespan(app: FastAPI):
         import alarms as _alarms
         if _alarms.enabled():
             _alarm_music.register()  # clock-radio music starts/stops with a ring
+            import alarm_push as _alarm_push
+            _alarm_push.register()  # panels hear "the ringing set changed" at once (ZOE_ALARMS_RINGING_PUSH); the poll stays
+            asyncio.create_task(_alarm_push.beat_loop(), name="alarms_ring_push_beat")
             asyncio.create_task(_alarms.run_loop(), name="alarms_ring")
     except Exception as _alarms_exc:
         logger.warning("alarm ring loop not started (non-fatal): %s", _alarms_exc)
@@ -2841,19 +2844,19 @@ async def _run_push_ws_loop(
         while True:
             data = await _receive_ws_text_with_deadline(websocket)
             if data == "ping":
-                await websocket.send_json({"type": "pong"})
+                await broadcaster.send_to(websocket, {"type": "pong"})
             elif allow_catchup and data.startswith("catchup:"):
                 _, _, raw_seq = data.partition(":")
                 try:
                     seq = int(raw_seq)
                 except (TypeError, ValueError):
-                    await websocket.send_json({
+                    await broadcaster.send_to(websocket, {
                         "type": "error",
                         "error": "invalid_catchup_sequence",
                     })
                     continue
                 if seq < 0:
-                    await websocket.send_json({
+                    await broadcaster.send_to(websocket, {
                         "type": "error",
                         "error": "invalid_catchup_sequence",
                     })

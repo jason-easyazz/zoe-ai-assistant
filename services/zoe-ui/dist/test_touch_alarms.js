@@ -84,13 +84,16 @@ function boot(opts) {
     show: (id) => { shown.push(id); }, cur: () => 'home', sound: snd,
   };
   const store = {};
-  const window = { localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } } };
+  const wl = {}; const dl = {};
+  const window = { localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } },
+    addEventListener: (t, fn) => { (wl[t] = wl[t] || []).push(fn); } };
+  document.hidden = false; document.addEventListener = (t, fn) => { (dl[t] = dl[t] || []).push(fn); };
   const ctx = vm.createContext({ window, document, setTimeout: setTimeoutF, setInterval: setIntervalF, clearTimeout: clearF, clearInterval: clearF,
     Date: { now: () => now }, console, Promise });
   // `new Date(ms)` is used for the ring clock; keep the real constructor but a fixed now() for skew maths
   ctx.Date = class extends Date { static now() { return now; } };
   vm.runInContext(SRC, ctx);
-  return { window, document, host, calls, shown, advance, clock: () => now, store, snd, all, byId, stage };
+  return { window, document, host, calls, shown, advance, clock: () => now, store, snd, all, byId, stage, wl, dl };
 }
 const flush = () => new Promise((r) => setImmediate(r));
 const ring = (over) => Object.assign({ id: 'a1', label: 'Gym', time_hhmm: '07:00', sound_kind: 'tone', sound_id: 'sunrise', sound_name: 'Sunrise',
@@ -422,6 +425,44 @@ async function ringing(over, postFn) {
     ok(w2.ZoeAlarmSound.start('chime', () => 0, 30) === true && resumes >= 1, 'start wakes a suspended context');
     tm2.filter((x) => x.on).forEach((x) => x.fn()); ok(resumes >= 2, 'the ramp timer keeps asking (a rejected resume is not fatal)'); w2.ZoeAlarmSound.stop();
     const before = made.osc.length; S.start('sunrise', () => 0, 30); S.preview('chime'); ok(made.osc.length === before + S.plan('sunrise').length, 'a preview never overlaps a ring'); S.stop(); }
+
+  // PUSH, POLL AS THE SAFETY NET (ZOE_ALARMS_RINGING_PUSH). Worst-case lateness: push healthy = the push itself; socket closed = an
+  // immediate read, then 2 s; socket silently dead = within 3 s of its last beat (2.5 s stale + 0.5 s watch), then 2 s; old / flag-off server = 2 s (today).
+  { const reads = (b) => b.calls.filter((c) => c[0] === 'GET' && c[1] === '/api/alarms/ringing').length;
+    const frame = (b, msg) => (b.wl['zoe:push-frame'] || []).forEach((fn) => fn({ detail: msg }));
+    const hello = (b, seq) => frame(b, seq == null ? { type: 'connected', panel_id: 'p1' } : { type: 'connected', panel_id: 'p1', alarms_ringing_seq: seq });
+    const beat = (b, seq) => frame(b, { type: 'alarms_ringing_beat', data: { seq } });
+    const changed = (b, seq) => frame(b, { type: 'alarms_ringing_changed', data: { seq } });
+    const settle = async () => { await flush(); await flush(); };
+    // the clock in 500 ms steps so every read settles; `seq` given = the server's 2 s beat at that seq
+    async function run(b, ms, seq) { for (let t = 0; t < ms; t += 500) { if (seq != null && b.clock() % 2000 < 500) beat(b, seq); b.advance(500); await settle(); } }
+    async function boot2(get) { const b = boot({ get: get || (() => ({ now: 1000, ringing: [] })) }); b.window.ZoeAlarms.init(b.host); await run(b, 500); return b; }
+    async function slow(get) { const b = await boot2(get); hello(b, 0); await run(b, 32000, 0); return b; }
+    { const b = await boot2(); hello(b); const n = reads(b); await run(b, 60000); ok(reads(b) - n >= 28, 'old/flag-off server: the 2 s poll stays'); }
+    { const b = await boot2(); const n = reads(b); await run(b, 60000); ok(reads(b) - n >= 28, 'no push socket at all: the 2 s poll stays'); }
+    { const b = await boot2(); hello(b); const n = reads(b); await run(b, 60000, 0); ok(reads(b) - n >= 28, 'beats after a hello without the capability: still 2 s'); }
+    { const b = await boot2(); hello(b, 0); const n = reads(b); await run(b, 28000, 0); ok(reads(b) - n >= 12, 'proven for under 30 s: still the 2 s poll'); }
+    { const b = await slow(); const n = reads(b); await run(b, 60000, 0); const r = reads(b) - n; ok(r >= 2 && r <= 4, 'proven push: the poll slows to 20 s (' + r + '/min)'); }
+    { const b = await boot2(); hello(b); changed(b, 1); await run(b, 32000, 1); const n = reads(b); await run(b, 60000, 1); ok(reads(b) - n <= 4, 'a first change push proves the capability'); }
+    { const b = await slow(); const n = reads(b); changed(b, 1); await settle(); ok(reads(b) === n + 1, 'a change push reads at once'); }
+    { const b = await slow(); const n = reads(b); hello(b, 7); await settle(); ok(reads(b) === n + 1, 'a reconnect (hello) reads at once'); }
+    { const b = await slow(); const n = reads(b); beat(b, 0); await settle(); ok(reads(b) === n, 'a beat at the same seq reads nothing');
+      beat(b, 3); await settle(); ok(reads(b) === n + 1, 'a beat whose seq moved (a missed push) reads at once'); }
+    { const b = await slow(); beat(b, 0); const n = reads(b); for (let t = 0; t < 3000; t += 100) { b.advance(100); await settle(); }
+      ok(reads(b) >= n + 1, 'a silent socket is caught within 3 s of its last beat and read at once');
+      const m = reads(b); await run(b, 10000); ok(reads(b) - m >= 4, 'then the 2 s poll'); }
+    { const b = await slow(); const n = reads(b); (b.wl['zoe:push-closed'] || []).forEach((fn) => fn()); await settle();
+      ok(reads(b) === n + 1, 'the socket closing reads at once');
+      const m = reads(b); await run(b, 20000); ok(reads(b) - m >= 9, 'socket down: the 2 s poll');
+      hello(b, 0); const k = reads(b); await run(b, 28000, 0); ok(reads(b) - k >= 13, 'back: 2 s until healthy for 30 s');
+      const j = reads(b); await run(b, 40000, 0); ok(reads(b) - j <= 3, 'then 20 s again'); }
+    { const b = await slow(); const n = reads(b); (b.dl.visibilitychange || []).forEach((fn) => fn()); await settle(); ok(reads(b) === n + 1, 'the page becoming visible reads at once'); }
+    { let fail = false; const b = await slow(() => (fail ? new Error('http 502') : { now: 1000, ringing: [] }));
+      fail = true; const n = reads(b); changed(b, 1); await run(b, 2500, 1); ok(reads(b) >= n + 2, 'a failed read is retried within 2 s, not at the slow poll'); }
+    { let fail = false; const b = await slow(() => (fail ? new Error('http 502') : { now: 1000, ringing: [ring()] }));
+      const n = reads(b); await run(b, 20000, 0); ok(reads(b) - n >= 9, 'a ring on screen keeps the 2 s poll');
+      fail = true; await run(b, 6000, 0); ok(b.byId().alarmRing.classList.contains('on'), 'a failed read never clears a ring'); }
+  }
 
   // the estate wires it: script tag before the inline code, init with the host's api, tabs on the timer screen
   ok(HOME.includes('<script src="/js/touch-alarms.js?v=al-4"></script>') && HOME.includes('/js/touch-alarm-sound.js?v=as-1'), 'home.html loads the modules');
