@@ -546,3 +546,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   status + token; its in-process residual is in the README). Has its
   own AGENTS.md with the Forbidden list. Local net: `python3 -m pytest labs/self-heal/tests` (fake
   engine, throwaway repos); `e2e_scratch.py` is the synthetic end-to-end proof.
+- `memory-claims-lab/` - **the memory-correction golden set's baseline runner** (2026-11-14): `run_baseline.py` scores TODAY'S
+  `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
+  on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
+  `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
