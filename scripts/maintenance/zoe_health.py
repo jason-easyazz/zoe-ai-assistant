@@ -10,7 +10,9 @@ Probes, all bounded (2 s HTTP, 5 s docker/systemctl):
   * the spine's real ``/health`` (never ``is-active``, which lies while a model loads): zoe-data :8000,
     the 4B llama-server :11434, the Flue 2.x brain :3579, Kokoro :10201, the FunctionGemma router :11436;
   * Postgres (``pg_isready`` in zoe-database), containers in ``(unhealthy)`` / ``Restarting``;
-  * failed user units (a failed backup or verify job shows up here), disk on /, MemAvailable.
+  * failed user units (a failed backup or verify job shows up here), disk on /, MemAvailable;
+  * the forget ledger: zoe-data's ``/health`` field ``forget_ledger`` (an enum; the secret itself is never read here).
+    ``unconfigured`` is red (a forget is not permanent); unreadable is ``unknown``, never red on its own.
 While the night window is open (``~/.zoe/night-window/WINDOW_OPEN``) the spine is stopped ON PURPOSE: its probes
 are skipped, not failed.
 
@@ -63,6 +65,7 @@ class Check:
     name: str
     ok: bool
     detail: str
+    unknown: bool = False      # no verdict this run: printed, but neither alerts nor recovers (``transitions`` skips it)
 
 
 def http_ok(port: int, path: str = "/health", timeout: float = 2.0) -> tuple[bool, str]:
@@ -104,8 +107,29 @@ def _foreign_unit(unit: str) -> bool:
     return unit.startswith(FOREIGN_UNIT_PREFIXES)
 
 
+def fetch_forget_ledger(timeout: float = 2.0) -> Optional[str]:
+    """zoe-data's published forget-ledger state (``configured`` / ``unconfigured``), or None when it cannot be read."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{SPINE['zoe-data']}/health", timeout=timeout) as r:
+            state = json.loads(r.read().decode("utf-8", "replace")).get("forget_ledger")
+    except Exception:  # noqa: BLE001 - down / 503 / not JSON: the zoe-data check already covers down
+        return None
+    return state if state in ("configured", "unconfigured") else None
+
+
+def forget_ledger_check(state: Optional[str]) -> Check:
+    """Red while forgets cannot be permanent ("forgotten means forever" needs the ledger secret). Names no value."""
+    if state == "configured":
+        return Check("forget ledger", True, "configured")
+    if state == "unconfigured":
+        return Check("forget ledger", False, "unconfigured: a forget is not permanent until ZOE_FORGET_LEDGER_SALT is set "
+                                            "in zoe-data's env")
+    return Check("forget ledger", True, "unknown (zoe-data status unreadable)", unknown=True)
+
+
 def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _run,
-          night_open: Optional[bool] = None) -> list[Check]:
+          night_open: Optional[bool] = None,
+          forget_ledger: Optional[Callable[[], Optional[str]]] = None) -> list[Check]:
     out: list[Check] = []
     night = NIGHT_MARKER.exists() if night_open is None else night_open
     for name, port in SPINE.items():
@@ -133,6 +157,8 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
     except OSError:
         pass
     out.append(Check("memory", avail >= MEM_WARN_MB, f"MemAvailable {avail} MB"))
+    if forget_ledger is not None:
+        out.append(forget_ledger_check(forget_ledger()))
     return out
 
 
@@ -142,6 +168,8 @@ def transitions(checks: list[Check], state: dict) -> tuple[list[str], dict]:
     lines: list[str] = []
     new = dict(state)
     for c in checks:
+        if c.unknown:
+            continue
         s = dict(new.get(c.name, {"fails": 0, "alerted": False}))
         if c.ok:
             if s["alerted"]:
@@ -188,12 +216,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dry-run", action="store_true")
     ns = ap.parse_args(argv)
-    checks = probe()
+    checks = probe(forget_ledger=fetch_forget_ledger)
     stamp = datetime.now().isoformat(timespec="seconds")
     if NIGHT_MARKER.exists():
         print(f"[{stamp}] night window open: spine probes skipped")
     for c in checks:
-        print(f"[{stamp}] {'ok  ' if c.ok else 'FAIL'} {c.name}: {c.detail}")
+        print(f"[{stamp}] {'?   ' if c.unknown else 'ok  ' if c.ok else 'FAIL'} {c.name}: {c.detail}")
     if ns.dry_run:
         return 0 if all(c.ok for c in checks) else 1
     try:
