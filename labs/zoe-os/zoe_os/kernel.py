@@ -1,6 +1,7 @@
 """The kernel: the services wired together, and the loop that feeds events to skills."""
 from __future__ import annotations
 
+import itertools
 import time
 from typing import Callable
 
@@ -37,7 +38,11 @@ class Kernel:
         self.grants = GrantStore(people, on_change=self._grant_changed)
         self.enforcer = Enforcer(self.grants)
         self.spine = Spine(path, self.enforcer, queue_size=queue_size, clock=clock)
+        # grant ids must not restart at g1: a receipt names the grant it ran under
+        self.grants._ids = itertools.count(1 + self.spine._db.execute(
+            "SELECT COUNT(*) FROM events WHERE kind = 'grant_change'").fetchone()[0])
         self.actions = Dispatcher(self.spine, self.enforcer)
+        self.recovered = self.actions.recover()     # intents a dead kernel left open: uncertain
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
         self._skills: list[tuple[object, object, Context]] = []

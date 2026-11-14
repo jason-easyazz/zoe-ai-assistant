@@ -21,6 +21,9 @@ from zoe_os.skills.malicious import Malicious
 HERE = Path(__file__).parent
 HELPER = Malicious.name
 CARDS = {"skill": "cards", "reads": {"offer": "private"}}     # a surface that shows offers
+MOVER = {"skill": "mover", "reads": {"calendar_change": "private", "offer_response": "private",
+                                     "action_receipt": "private"},
+         "emits": ["offer", "claim"], "acts": ["alarm.move", "light.toggle"]}
 
 
 class Child:
@@ -49,8 +52,10 @@ class Box:
         (self.base / "kernel").mkdir(mode=0o700)
         (self.base / "run").mkdir(mode=0o755)
         self.db, self.socket = str(self.base / "kernel/zoe-os.db"), str(self.base / "run/k.sock")
+        self.device = str(self.base / "device.jsonl")      # the fake outside world, see kernel_proc
         self.cfg = {"db_dir": str(self.base / "kernel"), "socket": self.socket, "server": server,
-                    "install": [Malicious.manifest, LeavingCatch.manifest, CARDS], "surfaces": ["panel"]}
+                    "device": self.device, "surfaces": ["panel"], "controls": [],
+                    "install": [Malicious.manifest, LeavingCatch.manifest, CARDS, MOVER]}
         self._clients: dict[str, Client] = {}
         self.children: list[Child] = []
         self.start()
@@ -61,7 +66,7 @@ class Box:
         self.proc.stdin.write(json.dumps(self.cfg) + "\n")
         self.proc.stdin.flush()
         ready = json.loads(self.proc.stdout.readline())
-        self.pid, self.creds = ready["pid"], ready["creds"]
+        self.pid, self.creds, self.recovered = ready["pid"], ready["creds"], ready["recovered"]
         self._clients.clear()
 
     def sup(self, cmd: str, **more) -> dict:
@@ -69,6 +74,20 @@ class Box:
         self.proc.stdin.write(json.dumps({"cmd": cmd, **more}) + "\n")
         self.proc.stdin.flush()
         return json.loads(self.proc.stdout.readline())
+
+    def restart(self, *controls: str) -> None:
+        """Start a NEW kernel process on the same database (the old one was killed or is killed
+        now). ``controls`` are applied before it opens the database, so they cover recovery."""
+        self.proc.kill()
+        self.proc.wait()
+        self.cfg["controls"] = list(controls)
+        self.start()
+
+    def written(self) -> list:
+        """What actually reached the outside world, read from the file, not from the kernel."""
+        if not os.path.exists(self.device):
+            return []
+        return [json.loads(line) for line in open(self.device)]
 
     def control(self, name: str) -> None:
         self.sup("control", name=name)

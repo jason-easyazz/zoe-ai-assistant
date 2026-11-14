@@ -19,6 +19,7 @@ file itself. Only file permissions and a separate user do that (see the README).
 """
 from __future__ import annotations
 
+import dataclasses
 import hmac
 import os
 import re
@@ -251,9 +252,7 @@ class KernelServer:
     def _op_act(self, conn: _Conn, a: dict) -> dict:
         r = self.kernel.actions.act(conn.name, a["action"], a["on_behalf_of"], a["args"],
                                     caused_by=tuple(a["caused_by"]))
-        return {"id": r.id, "seq": r.seq, "action": r.action, "skill": r.skill,
-                "on_behalf_of": r.on_behalf_of, "grant_id": r.grant_id, "proof": r.proof,
-                "verified": r.verified}
+        return dataclasses.asdict(r)
 
     def _op_explain(self, conn: _Conn, a: dict) -> dict:
         """With ``seq``: that event and its causes, as far as the caller may read them.

@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS forget_ledger (
 CREATE TABLE IF NOT EXISTS shield (fp BLOB PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS entity_shield (subject TEXT NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (subject, fp));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS intents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, skill TEXT NOT NULL, action TEXT NOT NULL,
+  person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER
+);
 """
 
 
@@ -242,12 +246,13 @@ class Spine:
                 return "cites an event it may not read"
         return ""
 
-    def _kernel_append(self, event: Event) -> Event:
-        """Kernel services (receipts, grants, forget) append without the publish checks."""
+    def _kernel_append(self, event: Event, then: Callable[[int], None] | None = None) -> Event:
+        """Kernel services (receipts, grants, forget) append without the publish checks.
+        ``then(seq)`` runs INSIDE the same transaction: the event and its bookkeeping land together."""
         with self._lock:
-            return self._append([event])[0]
+            return self._append([event], then)[0]
 
-    def _append(self, events: list[Event]) -> list[Event]:
+    def _append(self, events: list[Event], then: Callable[[int], None] | None = None) -> list[Event]:
         out: list[Event] = []
         now = self._clock()
         self._db.execute("BEGIN IMMEDIATE")
@@ -269,6 +274,8 @@ class Spine:
                                          [(seq, c) for c in ev.caused_by])
                 out.append(Event(ev.kind, ev.source, ev.subject, ev.visibility, ev.payload,
                                  ev.mentions, ev.caused_by, seq=seq, ts=now))
+            if then is not None:
+                then(out[-1].seq)
             self._db.execute("COMMIT")
         except BaseException:
             self._db.execute("ROLLBACK")
