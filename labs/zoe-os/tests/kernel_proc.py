@@ -77,9 +77,18 @@ class Device:
             self.k.alarms.at[person] = args["to"]
         self._crash("after_write")          # the write landed; the receipt is not stored yet
 
+    def _lines(self) -> list:
+        return [json.loads(line) for line in open(self.path)] if os.path.exists(self.path) else []
+
     def verify(self, person, args, result):
-        done = [json.loads(line) for line in open(self.path)] if os.path.exists(self.path) else []
-        return {"written": args} if [person, args] in done else None
+        return {"written": args} if [person, args] in self._lines() else None
+
+    def snapshot(self, person, args):               # the alarm as the file has it now
+        mine = [a["to"] for p, a in self._lines() if p == person and "to" in a]
+        return {"to": mine[-1] if mine else None}
+
+    def undo(self, person, args, before):
+        self.do(person, {"to": before["to"]})
 
 
 def main() -> None:
@@ -92,7 +101,8 @@ def main() -> None:
         k.grants.install(manifest)
     device = Device(cfg["device"], k)
     k.actions.register("light.toggle", device.do, device.verify, needs_accept=False)
-    k.actions.register("alarm.move", device.do, device.verify)
+    k.actions.register("alarm.move", device.do, device.verify,
+                       snapshot=device.snapshot, undo=device.undo)
     srv = KernelServer(k, cfg["socket"], **cfg.get("server", {}))
     creds = {name: srv.issue(name, surface=name in cfg.get("surfaces", ())).hex()
              for name in k.grants.manifests}

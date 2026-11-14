@@ -33,6 +33,15 @@ class Alarms:
     def verify(self, person, args, result):
         return {"alarm": self.at[person]} if self.at.get(person) == args["to"] else None
 
+    def snapshot(self, person, args):               # what an undo would put back
+        return {"alarm": self.at.get(person)}
+
+    def undo(self, person, args, before):
+        if before["alarm"] is None:
+            self.at.pop(person, None)
+        else:
+            self.at[person] = before["alarm"]
+
 
 class Lights:
     def __init__(self):
@@ -54,7 +63,8 @@ def household(tmp_path):
         k.grants.install(m)
     k.grants.grant(ALEX, "audit")
     k.alarms, k.lights = Alarms(), Lights()
-    k.actions.register("alarm.move", k.alarms.do, k.alarms.verify)
+    k.actions.register("alarm.move", k.alarms.do, k.alarms.verify,
+                       snapshot=k.alarms.snapshot, undo=k.alarms.undo)
     k.actions.register("light.toggle", k.lights.do, k.lights.verify, needs_accept=False)
     return k
 

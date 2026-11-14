@@ -27,7 +27,7 @@ def ok(sock, op, **args):
 
 def test_the_op_table_is_the_whole_surface():
     assert sorted(wire.OPS) == ["act", "explain", "forget", "grant", "poll", "publish", "revoke",
-                                "subscribe"]
+                                "subscribe", "undo"]
     assert wire.VERSION == 1 and wire.MAX_FRAME == 64 * 1024
 
 

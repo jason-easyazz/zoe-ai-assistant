@@ -121,6 +121,11 @@ _HOW = {"verified": "and the read-back confirmed it", "uncertain": "but the outc
 def _sentence(ev: Event, chain, grant, then, hidden: int) -> str:
     """One plain sentence (then the chain). Kinds, names and ids only: never free text."""
     p = ev.payload
+    if ev.kind is Kind.ACTION_RECEIPT and p.get("action") == "undo":
+        how = _HOW[p.get("outcome", "unverified")]
+        head = (f"{p.get('of')} (#{p.get('undoes')}) was undone for {ev.subject} because "
+                f"{p.get('asked_by')} asked, {how}.")
+        return head
     if ev.kind is Kind.ACTION_RECEIPT:
         how = _HOW[p.get("outcome") or ("verified" if p.get("verified") else "unverified")]
         yes = next((c for c in chain if c.kind is Kind.OFFER_RESPONSE), None)

@@ -12,6 +12,9 @@ A frame is a 4-byte big-endian length, then that many bytes of UTF-8 JSON (one o
 There is NO source / reader / skill field in a request: who is asking is the connection's
 verified identity and nothing the client writes can change it. ``OPS`` is the whole surface:
 every op and every argument it takes. Anything else is ``bad_request``, never a new feature.
+
+The version changes when the meaning of an op or a required argument changes. A NEW op or a
+new optional argument is additive: an older kernel refuses it cleanly as unknown.
 """
 from __future__ import annotations
 
@@ -46,6 +49,7 @@ OPS: dict[str, dict[str, tuple[tuple[type, ...], bool]]] = {
     "revoke": {"person": ((str,), True), "skill": ((str,), True)},
     "act": {"action": ((str,), True), "on_behalf_of": ((str,), True), "args": ((dict,), True),
             "caused_by": ((list,), True)},
+    "undo": {"person": ((str,), True), "actor": ((str,), True)},
     "explain": {"seq": ((int,), False), "person": ((str,), False), "last": ((str,), False)},
 }
 
