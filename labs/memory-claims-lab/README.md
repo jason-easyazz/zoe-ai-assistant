@@ -18,3 +18,20 @@ python3 labs/memory-claims-lab/run_baseline.py --write-baseline # re-record base
 Run under `flock -x -w 14000 /tmp/zoe-test-lane.lock` like any heavy command. It is a report and is not collected by pytest; the one test that
 runs it is `test_the_baseline_runner_reproduces_the_committed_score`. Registry expectations (`registry`, `side_effects`) are recorded for the
 redesign and are not scored here. Synthetic data only.
+
+## The redesigned path: `run_claims.py`
+
+`run_claims.py` drives every case through the idle claim pass, the validator and the guarded writer (mode `on`, corrections
+and health events) on a scratch store, with a SCRIPTED model that returns the oracle claim and the blind row readings in
+`oracle_readings.json`. Its score is what the code does with an honest reader's output: an upper bound for a real model,
+to be read beside `baseline-today.json`. The last recorded run is `score-claims.json`.
+
+```
+python3 labs/memory-claims-lab/run_claims.py                # text table
+python3 labs/memory-claims-lab/run_claims.py --write-score  # re-record score-claims.json (review the diff)
+```
+
+Lab-only choices (also in the module text): turn `t` of a case is taken as said `t` seconds later, the case's `flag_turns` are
+handed over as marker ids (`trigger` reports how many the old detector alone flags), the value registry is an in-memory
+double of the writer's seam, and health events are matched by content. `oracle_readings.json` is written WITHOUT looking at
+the correction: a row that says "a dentist appointment" is read as `dentist appointment`.
