@@ -98,6 +98,7 @@ ALLOWED = [("POST", "/v1.47/containers/zoe-music-assistant/start"), ("POST", "/c
            ("GET", "/v1.47/version")]
 DENIED = [("POST", "/v1.47/containers/zoe-database/exec"), ("POST", "/v1.47/exec/" + "a" * 64 + "/start"),
           ("GET", "/v1.47/exec/" + "a" * 64 + "/json"), ("POST", "/v1.47/exec/" + "a" * 64 + "/resize"),
+          ("POST", "/v1.23/containers/livekit/start"), ("POST", "/v1.9/containers/zoe-music-assistant/start"),
           ("POST", "/v1.47/containers/create"), ("POST", "/v1.47/build"), ("POST", "/v1.47/images/create"),
           ("POST", "/v1.47/containers/homeassistant/exec"), ("POST", "/v1.47/containers/zoe-omnigent/exec"),
           ("POST", "/v1.47/containers/zoe-ui/restart"), ("GET", "/v1.47/containers/zoe-auth/json"),

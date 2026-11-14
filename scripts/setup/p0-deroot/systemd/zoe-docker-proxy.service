@@ -13,7 +13,8 @@
 # exec API takes Privileged and User from the request BODY, which the proxy cannot see, so an allowed exec is a
 # privileged root process in a container. Database work goes through the fixed root helper zoe-db-exec instead.
 # start re-resolves the container's bind sources as root, so the proxy is enabled for start only after P0-2 has
-# moved those sources to root-owned paths (docs/architecture/p0-deroot.md 4.2).
+# moved those sources to root-owned paths (docs/architecture/p0-deroot.md 4.2). start/stop only on API >= 1.24: older
+# versions let start carry a HostConfig body (binds, privileges) the proxy cannot see.
 [Unit]
 Description=Allowlisted Docker API socket for Zoe (P0 de-root)
 After=docker.service
@@ -32,7 +33,7 @@ ExecStart=/usr/local/bin/socket-proxy \
   -allowHEAD=(/v1[.][0-9]+)?/_ping \
   -allowGET=(/v1[.][0-9]+)?/(_ping|version|containers/json) \
   -allowGET=(/v1[.][0-9]+)?/containers/(zoe-music-assistant|livekit|zoe-database)/json \
-  -allowPOST=(/v1[.][0-9]+)?/containers/(zoe-music-assistant|livekit)/(start|stop)
+  -allowPOST=(/v1[.](2[4-9]|[3-9][0-9]))?/containers/(zoe-music-assistant|livekit)/(start|stop)
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes
