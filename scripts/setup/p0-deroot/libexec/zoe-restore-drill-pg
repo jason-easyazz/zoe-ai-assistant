@@ -32,9 +32,10 @@ set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 077
-if [ "$(id -u)" = 0 ]; then
-  # as root nothing from the caller's environment or cwd reaches docker (sudo's env_reset is not relied on)
-  unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_CERT_PATH DOCKER_TLS_VERIFY DOCKER_API_VERSION ZOE_DRILL_PG_IMAGE
+if [ "$(id -u)" -eq 0 ]; then
+  # as root nothing from the caller's environment or cwd reaches docker (sudo's env_reset is not relied on); the
+  # image override is honoured only in the non-root branch below
+  unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_CERT_PATH DOCKER_TLS_VERIFY DOCKER_API_VERSION
   HOME=/root; export HOME
   cd /
 fi
