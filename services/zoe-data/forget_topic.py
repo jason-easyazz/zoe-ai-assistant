@@ -357,6 +357,12 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     res.forgotten = len(archived)
     if archived:
         res.preview = _preview(archived[0].text)
+    try:    # instrument (counts only, read-only): corrections about the topic the in-process memory still holds (0 since #2487)
+        import value_correction
+        value_correction.log_held_after_forget("topic", user_id, pattern=lambda t: any(row_matches([g], t) for g in groups),
+                                               texts=turn_texts + row_texts)
+    except Exception:  # noqa: BLE001
+        pass
     logger.info("forget_topic: user=%s found=%d forgotten=%d failed=%d retracted=%d words=%d",
                 user_id, res.found, res.forgotten, res.failed, res.turns_retracted, res.words_erased)
     return res

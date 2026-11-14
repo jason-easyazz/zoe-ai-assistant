@@ -2310,6 +2310,11 @@ class MemoryService:
                 await asyncio.to_thread(warm_speaker.forget_user, user_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
+            try:    # instrument (counts only, read-only): the member's corrections still held in process (0 since #2487)
+                import value_correction
+                value_correction.log_held_after_forget("member", user_id)
+            except Exception:  # noqa: BLE001
+                pass
             needles: list[str] = []
             try:
                 ids = await self._run_sync(self._list_ids_for_user, user_id)
