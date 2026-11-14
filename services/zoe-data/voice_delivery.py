@@ -132,7 +132,18 @@ def resolve(text: str, *, hour: Optional[int] = None) -> Delivery:
     # Guard 1: short utterances are the phrase cache's bread and butter.
     if len(body) <= min_chars():
         return NEUTRAL
+    return _profile(body, hour)
 
+
+def resolve_reply(text: str, *, hour: Optional[int] = None) -> Delivery:
+    """ONE delivery for a whole reply (ZOE_KOKORO_STYLE_PIN): :func:`resolve` without the length guard, decided once per
+    turn from the first unit, so a short first clause and the rest of its sentence never play at two speeds."""
+    if not expressive_enabled():
+        return NEUTRAL
+    return _profile((text or "").strip(), hour)
+
+
+def _profile(body: str, hour: Optional[int]) -> Delivery:
     if hour is None:
         hour = datetime.now(zoe_timezone()).hour
 

@@ -9,6 +9,9 @@ Both flags default OFF:
                                 Each unit is a standalone Kokoro utterance (a pitch reset): ear-check before enabling.
 * ``ZOE_FIRST_SOUND_TOOL_ACK``  on a brain turn the router calls tool-class that the tiers did not fulfil, speak ONE cached line
                                 when the brain is dispatched, not when the sidecar's tool-start sentinel finally arrives.
+* ``ZOE_FIRST_SOUND_POLISH_EARLY`` (unset = follows CLAUSE) reply_polish releases the first clause early, only when polishing
+                                cannot change it (``reply_polish.PolishStream``); without it the clause cut never sees a clause.
+* ``ZOE_KOKORO_STYLE_PIN`` / ``..._LEN`` one Kokoro style row and one speed for every reply chunk of a turn (no pitch reset).
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ import asyncio
 import re
 from typing import TYPE_CHECKING, AsyncIterator, Optional
 
-from typed_env import env_bool, env_int
+from typed_env import env_bool, env_int, flag
 
 if TYPE_CHECKING:  # pragma: no cover
     from voice_spacer import SpacerTurn
@@ -28,6 +31,25 @@ def clause_enabled() -> bool:
 
 def tool_ack_enabled() -> bool:
     return env_bool("ZOE_FIRST_SOUND_TOOL_ACK", default=False)
+
+
+def polish_early_enabled() -> bool:
+    """ZOE_FIRST_SOUND_POLISH_EARLY; unset or blank, it follows ZOE_FIRST_SOUND_CLAUSE (the narration-early pattern). On:
+    reply_polish releases the first clause before its sentence closes, but only when polishing cannot change it."""
+    raw = str(flag("ZOE_FIRST_SOUND_POLISH_EARLY") or "").strip().lower()
+    if not raw:
+        return clause_enabled()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def style_pin_enabled() -> bool:
+    """ZOE_KOKORO_STYLE_PIN (default OFF): every reply chunk of a turn gets ONE Kokoro style row and ONE speed."""
+    return bool(flag("ZOE_KOKORO_STYLE_PIN"))
+
+
+def style_pin_len() -> int:
+    """ZOE_KOKORO_STYLE_PIN_LEN (default 120), clamped to Kokoro's 1..510 style rows."""
+    return max(1, min(510, int(flag("ZOE_KOKORO_STYLE_PIN_LEN"))))
 
 # ── first-clause extraction ──
 # A word whose trailing period/comma belongs to the word, not to the clause or sentence.

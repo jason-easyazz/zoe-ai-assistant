@@ -820,6 +820,11 @@ def _observe_memory_packet_stage(ctx_timings: dict[str, float]) -> None:
         pass
 
 
+#: the VOICE TIMING ``fs_unit`` / ``fs_lead`` enums (anything else is logged as ``none``: the line never carries text)
+_FS_UNITS = ("sentence", "clause", "clause60", "softcap", "flush")
+_FS_LEADS = ("tool_ack", "tool_filler", "processing_ack")
+
+
 def _log_voice_timing(
     *,
     turn: str,
@@ -830,8 +835,12 @@ def _log_voice_timing(
     brain_ttft_s: Optional[float],
     llm_first_token_s: Optional[float],
     packet_state: str = "eager",
+    first_sound: Optional[dict] = None,
 ) -> None:
     """One ``VOICE TIMING`` INFO line per voice brain turn (ms; -1 = no token).
+
+    ``first_sound`` (the stream loop's per-turn dict) appends fixed ``fs_*`` fields: integers in ms from brain dispatch
+    (-1 = absent), enums and counts, never text. Without it the line is unchanged.
 
     Read it with the same session's ``FLUE_PROMPT_CACHE`` line: a high
     ``brain_ttft_ms`` next to a large ``first_prompt_n`` is a llama-server
@@ -846,15 +855,26 @@ def _log_voice_timing(
         return int(round(v * 1000)) if v is not None else -1
 
     try:
-        logger.info(
-            "VOICE TIMING turn=%s session=%s path=%s pre_brain_ms=%d memory_packet_ms=%d "
-            "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d packet=%s",
+        fmt = ("VOICE TIMING turn=%s session=%s path=%s pre_brain_ms=%d memory_packet_ms=%d "
+               "(history=%d memory=%d domain=%d) brain_ttft_ms=%d llm_first_token_ms=%d packet=%s")
+        args: list = [
             turn, session_id, path, _ms(pre_brain_s),
             _ms(ctx_timings.get("memory_packet", 0.0)), _ms(ctx_timings.get("history", 0.0)),
             _ms(ctx_timings.get("memory", 0.0)), _ms(ctx_timings.get("domain", 0.0)),
             _ms(brain_ttft_s), _ms(llm_first_token_s),
             packet_state,
-        )
+        ]
+        if first_sound is not None:
+            fs = first_sound
+            fmt += (" fs_unit=%s fs_unit_chars=%d fs_text_to_unit_ms=%d fs_unit_ms=%d fs_synth_ms=%d fs_pcm_ms=%d"
+                    " fs_lead=%s fs_pin=%d fs_pin_len=%d fs_units=%d")
+            args += [
+                fs.get("unit") if fs.get("unit") in _FS_UNITS else "none", int(fs.get("unit_chars", 0)),
+                _ms(fs.get("text_to_unit_s")), _ms(fs.get("unit_s")), _ms(fs.get("synth_s")), _ms(fs.get("pcm_s")),
+                fs.get("lead") if fs.get("lead") in _FS_LEADS else "none", int(bool(fs.get("pin"))),
+                int(fs.get("pin_len", 0)), int(fs.get("units", 0)),
+            ]
+        logger.info(fmt, *args)
     except Exception:  # instrumentation must never fail a turn
         pass
 
@@ -1307,6 +1327,12 @@ def _voice_tool_name_from_sentinel(delta: str) -> "Optional[str]":
 
 
 def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
+    """``_extract_first_unit_ex`` without the kind (scripts/perf import this two-tuple form)."""
+    unit, rest, _kind = _extract_first_unit_ex(buffer)
+    return unit, rest
+
+
+def _extract_first_unit_ex(buffer: str) -> tuple[Optional[str], str, str]:
     """Pull the FIRST speakable unit out of a streaming buffer as early as possible.
 
     Each unit is synthesized as a STANDALONE Kokoro utterance, so every split point
@@ -1325,19 +1351,19 @@ def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     token or a number ("8:05", "12.4", "22,") can never trigger a split — the trailing
     unpunctuated remainder is emitted by the stream loop's end-of-turn flush.
     ZOE_FIRST_SOUND_CLAUSE (default OFF) adds a clause-boundary first unit; with it off this is unchanged.
-    Returns (unit|None, remainder)."""
+    Returns (unit|None, remainder, kind): kind is sentence | clause | clause60 | softcap ('' when no unit)."""
     stripped = buffer.lstrip()
     if len(stripped) < _FIRST_UNIT_MIN_CHARS:
-        return None, buffer
+        return None, buffer, ""
     # 1. A complete sentence closed → emit it whole (never sub-split a short reply).
     m = re.search(r"(.{%d,}?[.!?])\s" % _FIRST_UNIT_MIN_CHARS, buffer)
     if m:
-        return m.group(1).strip(), buffer[m.end():]
+        return m.group(1).strip(), buffer[m.end():], "sentence"
     # ZOE_FIRST_SOUND_CLAUSE (default OFF): cut at the first clause boundary instead of waiting (voice_first_sound.py).
     if _first_sound.clause_enabled():
         clause, rest = _first_sound.extract_first_clause(buffer)
         if clause:
-            return clause, rest
+            return clause, rest, "clause"
     # 2. Long opening with no sentence end yet → clause-break to keep first-audio
     #    snappy. The boundary itself must be at least _FIRST_UNIT_CLAUSE_MIN chars in
     #    (not just the buffer), so a short sentence with an early comma is never split
@@ -1346,13 +1372,13 @@ def _extract_first_unit(buffer: str) -> tuple[Optional[str], str]:
     if len(buffer) >= _FIRST_UNIT_CLAUSE_MIN:
         m = re.search(r"(.{%d,}?[,;:—–])\s" % _FIRST_UNIT_CLAUSE_MIN, buffer)
         if m:
-            return m.group(1).strip(), buffer[m.end():]
+            return m.group(1).strip(), buffer[m.end():], "clause60"
     # 3. Very long opening, still no punctuation → flush at a word boundary.
     if len(buffer) >= _FIRST_UNIT_SOFT_CAP:
         cut = buffer.rfind(" ", _FIRST_UNIT_MIN_CHARS, _FIRST_UNIT_SOFT_CAP)
         if cut > 0:
-            return buffer[:cut].strip(), buffer[cut:]
-    return None, buffer
+            return buffer[:cut].strip(), buffer[cut:], "softcap"
+    return None, buffer, ""
 
 
 def _skybridge_only() -> bool:
@@ -5476,6 +5502,15 @@ async def voice_command(
                 # through _emit_sentence), so _t_first_audio stays None even though
                 # the user already heard audio — track it separately.
                 _processing_ack_audio_sent = False
+                # Per-turn first-sound fields for the VOICE TIMING line (integers / enums only, never text), and the
+                # turn's ONE (style_len, speed) when ZOE_KOKORO_STYLE_PIN is on (decided at the first reply unit).
+                _fs: dict = {"unit": "none", "unit_chars": 0, "text_to_unit_s": None, "unit_s": None, "synth_s": None,
+                             "pcm_s": None, "lead": "none", "pin": False, "pin_len": 0, "units": 0}
+                _pin: Optional[tuple] = None
+                try:
+                    _pin_on = _first_sound.style_pin_enabled()
+                except Exception:  # noqa: BLE001 - an optional delivery choice never fails a turn
+                    _pin_on = False
                 # Delivery-cadence pacing (ZOE_VOICE_TTS_MIN_SENTENCE_CADENCE_MS):
                 # monotonic time the previous spoken sentence was DELIVERED, so the
                 # next one can be held back to the cadence floor. None until the
@@ -5539,11 +5574,29 @@ async def voice_command(
                     _last_emit_ts = time.monotonic()
 
                 try:
-                    async def _emit_sentence(sentence: str, *, record: bool = True):
-                        nonlocal chunk_index, _t_first_audio
+                    async def _emit_sentence(sentence: str, *, record: bool = True, unit_kind: str = "sentence"):
+                        nonlocal chunk_index, _t_first_audio, _pin
                         s = sentence.strip()
                         if not s:
                             return
+                        _first_reply = record and _fs["units"] == 0
+                        _now = time.monotonic()
+                        if _first_reply:
+                            _fs.update(unit=unit_kind, unit_chars=len(s),
+                                       unit_s=_now - _t_brain_dispatch if _t_brain_dispatch is not None else None,
+                                       text_to_unit_s=(_now - t_chat_start - _t_first_token
+                                                       if _t_first_token is not None else None))
+                        _synth_kw: dict = {}
+                        if record and _pin_on:
+                            if _pin is None:
+                                try:
+                                    import voice_delivery as _vd
+                                    _pin = (_first_sound.style_pin_len(), _vd.resolve_reply(s).speed or 1.0)
+                                except Exception:  # noqa: BLE001 - unpinned delivery is still speech
+                                    _pin = ()
+                                _fs.update(pin=bool(_pin), pin_len=_pin[0] if _pin else 0)
+                            if _pin:
+                                _synth_kw = {"style_len": _pin[0], "speed": _pin[1]}
                         # record=False for the leading tool filler: it's spoken but
                         # must NOT join the persisted/displayed answer (it's an
                         # acknowledgement, not part of what Zoe actually answered).
@@ -5556,10 +5609,13 @@ async def voice_command(
 
                         # Prefer kokoro-sidecar (natural GPU voice); fall back to the
                         # full /synthesize waterfall (local → Edge → espeak) if it's down.
-                        wav_bytes = await _synthesize_kokoro_sidecar(s)
+                        wav_bytes = await _synthesize_kokoro_sidecar(s, **_synth_kw)
                         _tts_provider = "kokoro-sidecar"
+                        if _first_reply:
+                            _fs["synth_s"] = time.monotonic() - _now
                         if wav_bytes:
                             await _pace_delivery()
+                            _note_first_sound(record, unit_kind)
                             if _t_first_audio is None:
                                 _t_first_audio = time.monotonic() - t_chat_start
                                 try:
@@ -5580,6 +5636,7 @@ async def voice_command(
                         # Sidecar down — fall back to the full synth waterfall.
                         audio_resp = await synthesize({"text": s}, caller=caller)
                         await _pace_delivery()
+                        _note_first_sound(record, unit_kind)
                         if _t_first_audio is None:
                             _t_first_audio = time.monotonic() - t_chat_start
                             try:
@@ -5595,6 +5652,15 @@ async def voice_command(
                         yield (header + "\n").encode()
                         yield base64.b64encode(audio_resp.body) + b"\n"
                         chunk_index += 1
+
+                    def _note_first_sound(record: bool, unit_kind: str) -> None:
+                        if not record:
+                            if _fs["units"] == 0 and _fs["lead"] == "none":
+                                _fs["lead"] = unit_kind
+                            return
+                        if _fs["units"] == 0 and _t_brain_dispatch is not None:
+                            _fs["pcm_s"] = time.monotonic() - _t_brain_dispatch
+                        _fs["units"] += 1
 
                     async def _emit_line(line: dict):
                         yield (_json.dumps(line) + "\n").encode()
@@ -5622,6 +5688,7 @@ async def voice_command(
                                 yield str(ack_event["audio_base64"]).encode() + b"\n"
                                 chunk_index += 1
                                 _processing_ack_audio_sent = True
+                                _fs["lead"] = "processing_ack"
                             else:
                                 async for out_line in _emit_line({"processing_ack": True, "text": ack_text, "panel_id": panel_id}):
                                     yield out_line
@@ -5651,7 +5718,7 @@ async def voice_command(
                     if _ack_line:
                         _brain_stream = _prefetched = _first_sound.prefetch(_brain_stream)
                         _filler_emitted = True
-                        async for out_chunk in _emit_sentence(_ack_line, record=False):
+                        async for out_chunk in _emit_sentence(_ack_line, record=False, unit_kind="tool_ack"):
                             yield out_chunk
                         logger.info("FIRST_SOUND tool_ack domain=%s line=%r", _router_decision.get("routed"), _ack_line)
                     async for delta in _brain_stream:
@@ -5681,7 +5748,7 @@ async def voice_command(
                                     # one spacer per turn, never a repeat of the panel's last line, none on a disclosure
                                     _tool_line = _spacer.tool_filler_line(_voice_tool_filler(_tool_name))
                                     if _tool_line:
-                                        async for out_chunk in _emit_sentence(_tool_line, record=False):
+                                        async for out_chunk in _emit_sentence(_tool_line, record=False, unit_kind="tool_filler"):
                                             yield out_chunk
                             continue
                         if _t_first_token is None:
@@ -5695,9 +5762,9 @@ async def voice_command(
                         # Snap the FIRST audio out on a short clause so the reply
                         # starts almost immediately instead of after a full sentence.
                         if _t_first_audio is None and _fast_first_audio_enabled():
-                            first_unit, token_buf = _extract_first_unit(token_buf)
+                            first_unit, token_buf, _unit_kind = _extract_first_unit_ex(token_buf)
                             if first_unit:
-                                async for out_chunk in _emit_sentence(first_unit):
+                                async for out_chunk in _emit_sentence(first_unit, unit_kind=_unit_kind):
                                     yield out_chunk
                         ready, token_buf = _extract_complete_sentences(token_buf)
                         for sentence in ready:
@@ -5705,7 +5772,7 @@ async def voice_command(
                                 yield out_chunk
 
                     if token_buf.strip():
-                        async for out_chunk in _emit_sentence(token_buf):
+                        async for out_chunk in _emit_sentence(token_buf, unit_kind="flush"):
                             yield out_chunk
                         token_buf = ""
 
@@ -5752,6 +5819,7 @@ async def voice_command(
                             ),
                             llm_first_token_s=_t_first_token,
                             packet_state=_v_packet.state(),
+                            first_sound=_fs,
                         )
                     # Persist whatever the user actually HEARD — the streaming
                     # lane never reaches voice_command's tail save, and a
