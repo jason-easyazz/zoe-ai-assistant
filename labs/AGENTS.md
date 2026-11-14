@@ -550,7 +550,7 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
   on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
   `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
-- `plan-loop/` - **the plan loop lab** (2026-11-14): `corpus.json` is 55 frozen synthetic multi-part asks (reminders, lists, calendar, timers,
+- `plan-loop/` - **the plan loop lab** (2026-11-14): `corpus.json` is 56 frozen synthetic multi-part asks (reminders, lists, calendar, timers,
   memory, tool faults, and the adversarial set: child / guest / unrecognised voice / list deletion / repeated tool / planted
   instructions); `harness.py` runs them through the real `services/zoe-data/plan_loop*.py` with a scripted planner and in-memory
   tool fakes and prints the numbers (false claims must be 0; ground truth is the fake world). No database, model or network.
