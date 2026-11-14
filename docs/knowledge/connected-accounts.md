@@ -75,12 +75,38 @@ an opted-out member gets nothing stored from any feed (no row, no candidate, no 
 member, their attendees and alarms). Registered in [forget-reach.md](forget-reach.md). Still open (owner decision): the member's
 calendar-less local events, and their reminders, lists, notes, journal and transactions, which default to household visibility.
 
-## What Stage 1 (read-only calendar) builds on this
+## Stage 1 core: the calendar subscription engine (`calendar_feed.py`, alembic 0079)
 
-Connect via `auth_handoff` (QR on the panel, finish on the phone) into `connected_accounts` + the chosen secret backend; one sync worker
-per account using `start_run` / `finish_run`; `calendar_ical.store_parsed` and the connector moved onto `upsert_by_external_id` keyed by
-`(calendar_id, external_uid, recurrence_id)` with `etag` / `sequence`; the shared calendar read path with recurrence expansion (audit X3,
-X4); disconnect deleting the account's calendars and events after the fence.
+Built 2026-11-14, flag `ZOE_CALENDAR_FEED` = off (default) | shadow | on. Lab proof: `labs/calendar-feed/` (README holds the counts).
+
+**It stores no link and no secret.** A subscription address is a bearer credential, and Zoe stores none until the credential vault
+lands (owner decision). The engine is handed the feed BYTES by an injected fetcher: `sync_account(account_id, fetcher)` calls
+`fetcher(FetchRequest(account_id, etag, last_modified, max_bytes))` and gets a `FetchResult` (status class `ok` / `not_modified` /
+`unauthorized` / `not_found` / `rate_limited` / `too_large` / `network` / `server_error` / `blocked`, the bytes, new validators). The
+fetcher will be a separate broker process; `account_secrets` still refuses every put and get, no purpose was added, no URL column
+exists (0079's own test pins that), and `calendars.source_calendar_id` is the constant `feed`, never the address or its hash.
+
+| step | what happens |
+|---|---|
+| fetch | conditional (ETag / Last-Modified travel back to the fetcher); 304, or a body whose sha256 equals the last good one = everything unchanged, no parse; over `ZOE_CALENDAR_FEED_MAX_BYTES` (10 MB) = `quota` / `too_large`; an HTML or non-VCALENDAR body = `provider` / `not_calendar`; 401/403 = `auth` / `revoked_link`, 404 = `auth` / `http_404`, SSRF refusal = `config` / `ssrf_blocked`; backoff 30 min doubling to 6 h, never sooner than a 429's Retry-After (`sync_runs.backoff_until`, `calendars.consecutive_failures`) |
+| parse | `calendar_ical.parse_ics` in `proactive.scheduler.run_blocking`; masters and RECURRENCE-ID overrides stay stored rows; kept = overlaps [today - 7 d, today + 400 d] (a master by any occurrence, an override also by its original date); a rule `calendar_read` cannot read is kept and counted `rrule_unsupported` |
+| reconcile | one transaction per batch of 200, each inside `erase_gate.writing` and `still_current` (false = stop, that batch unwritten, the run `fenced` or dropped); `upsert_by_external_id(version_col="content_hash")` keyed (calendar, UID, RECURRENCE-ID); `content_hash` = sha256 of the normalised event + attendees + alarms (DTSTAMP is never read); attendees / alarms replaced only on created / updated, `event_attendees.member_user_id` set from `member_identities`; overrides linked to their master (`series_id`); no UID = skipped; a duplicate key keeps the highest SEQUENCE; rows are `source='subscription'` (read-only provider source: "That one comes from a subscribed calendar; change it there."), `read_only=1`, `account_generation`, `last_synced_at` |
+| visibility | the MORE PRIVATE of the calendar's `default_visibility` and the event's CLASS (`parse_ics` maps CLASS:PUBLIC to `family`): a provider never widens a private calendar; a calendar the engine creates is `personal` and not writable |
+| remote delete | a stored key absent from a complete fetch is hard-deleted with its attendees, alarms and anticipation offers; one that left the window is counted `pruned`. MASS-DELETE GUARD (`mass_delete_suspect`): 0 events while rows exist, or > 50 % and > 20 rows to delete, deletes nothing, records `partial` / `provider` / `suspect_empty`, and only a second consecutive IDENTICAL body confirms it |
+| forget shield | `forget_feed_event(user, event_id)` writes `memory_forgotten.add_feed_item` (scope `feed_item`, HMAC of `feed|<uid>|<recurrence id>`, no near probes, permanent) BEFORE it deletes; forgetting a master shields its whole series; the key survives disconnect and reconnect. Every batch re-reads the shield (strict) under the erase-gate lock and counts hits `suppressed`. FAIL CLOSED: an unconfigured ledger refuses the sync (`config` / `ledger_unavailable`) and the forget (`FeedForgetRefused`, nothing deleted), and an unreadable one refuses the sync too |
+| shadow | fetch, parse and count against the stored rows; only `sync_runs` is written |
+| disconnect | `disconnect_feed(account_id)`: `connected_accounts.disconnect` (the fence) first, then the account's calendars, events, attendees, alarms and offers. Forget-me reaches the same rows (`calendar_forget.forget_user` now also withdraws the anticipation offers on the erased events) |
+
+0079 also adds `sync_runs` `n_unchanged` / `n_skipped` / `n_pruned` / `n_suppressed` / `n_rrule_unsupported` / `bytes` / `duration_ms` /
+`error_code`, `connected_accounts.last_error_code` (both CHECKed against `connected_accounts.ERROR_CODES`: `http_404 too_large
+not_calendar ssrf_blocked parse_failed revoked_link suspect_empty ledger_unavailable`), `calendars.last_success_at` and the
+`(calendar_id, account_generation)` index. `finish_run` writes the 0079 fields only when given. Logs carry the account id, counts,
+outcome, class and code only (a caplog sweep plants titles, places, people and a URL and finds none).
+
+**Not built yet:** the scheduler tick (`is_due` is ready; night-window aware, one account at a time), the connect flow (handoff kind,
+phone page, status route), the broker that holds the address and fetches it, `icalendar` in `requirements.txt` (voice-gated), and moving
+anticipation onto `events_in_window` (a sibling PR). Before the flag goes on: the vault and broker, a confirmed `ZOE_FORGET_LEDGER_SALT`,
+a shadow week, and the QA round in the design note.
 
 ## The calendar feed fetcher contract (`calendar_feed.py`; the real fetcher is not built yet)
 
