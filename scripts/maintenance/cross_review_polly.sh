@@ -40,6 +40,15 @@ SERVER="${OMNIGENT_SERVER:-http://127.0.0.1:6767}"
 # binds too) — it validates nothing. See omnigent_issue_executor._omnigent_agent_id.
 POLLY_ID="${OMNIGENT_POLLY_ID:-057995d1517418e6839f51d340785dd6}"
 CONTAINER="${OMNIGENT_CONTAINER:-zoe-omnigent}"
+# P0-2 (docs/architecture/p0-deroot.md section 8, B4): exec into the omnigent container through the root helper
+# once it is installed AND sudo allows it, else `docker exec` exactly as before. The helper takes the docker-exec
+# argv minus `docker exec`, so only this prefix changes (pinned by tests/unit/test_omnigent_exec_routing.py).
+omnigent_exec_prefix() {
+  local helper="${OMNIGENT_EXEC_HELPER:-/usr/local/libexec/zoe-priv/zoe-omnigent-exec}"
+  if [ -x "$helper" ] && sudo -n -l "$helper" >/dev/null 2>&1; then OMNI_EXEC=(sudo -n "$helper")
+  else OMNI_EXEC=(docker exec); fi
+}
+omnigent_exec_prefix
 # 1800, not 2400: the poll budget is the only large term in the BUDGET
 # arithmetic below, and 2400 put the wrapper's worst-case wall ABOVE the
 # caller's 2500s subprocess timeout (Codex, #1618). It came down again once the
@@ -249,7 +258,7 @@ stop_worker() {
   # '"$SID"' quote dance below. (The directive is needed only because the
   # timeout(1) prefix stops shellcheck recognising the `sh -c` payload as code.)
   # shellcheck disable=SC2016
-  timeout -k "$TIMEOUT_KILL_AFTER_S" "$CLEANUP_MAX_S" docker exec "$CONTAINER" sh -c \
+  timeout -k "$TIMEOUT_KILL_AFTER_S" "$CLEANUP_MAX_S" "${OMNI_EXEC[@]}" "$CONTAINER" sh -c \
     'pids=$(grep -la "'"$SID"'" /proc/[0-9]*/cmdline 2>/dev/null | cut -d/ -f3 | grep -vx "$$"); n=0
      for p in $pids; do kill "$p" 2>/dev/null && n=$((n+1)); done
      [ "$n" -gt 0 ] || { echo none; exit 0; }
@@ -328,7 +337,7 @@ BRIEF_B64=$(printf %s "$BRIEF" | base64 -w0)
 # above holds end to end (Codex, #1618).
 # The kick's cwd is the per-review dir (or `/`), NEVER the live checkout: the omnigent CLI
 # puts its cwd on sys.path, so it is also deliberately not the PR checkout itself.
-timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" docker exec -d "$CONTAINER" sh -c "cd $KICK_CWD && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
+timeout -k "$TIMEOUT_KILL_AFTER_S" "$KICK_MAX_S" "${OMNI_EXEC[@]}" -d "$CONTAINER" sh -c "cd $KICK_CWD && omnigent run --server $SERVER --harness claude-sdk -r $SID -p \"\$(echo $BRIEF_B64 | base64 -d)\" --no-log > $KICK_LOG 2>&1" \
   || { echo "ALARM: docker-exec kick failed" >&2; exit 2; }
 
 # Poll. The loop lives in cross_review_poll.py so that every response body is
