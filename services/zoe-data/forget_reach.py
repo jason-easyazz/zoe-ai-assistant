@@ -92,11 +92,14 @@ TABLES: tuple[Store, ...] = (
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("omi_day_candidates", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("conversation_notes", WORDS, REACHED, member="conversation_notes.forget_user", entity="conversation_notes.erase_entity"),
-    # routines (0082, routines_store.py): checklists can hold health words (a medicine step), so they are REACHED from day one
+    # routines (0081, routines_store.py): checklists can hold health words (a medicine step), so they are REACHED from day one
     _t("routines", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),
     _t("routine_steps", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),
     _t("routine_days", METADATA, REACHED, member=_ROUT_M),               # a date and open/closed times: deleted with the routine
     _t("routine_day_steps", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),   # the day's lines (one-offs too); actor blanked on others'
+    # the superseded-value registry (0080): ids, closed labels and numbers only, but an age is household content, so WORDS-grade.
+    # Also erased by the topic forget, "forget that" and MemoryService.erase_rows (pinned in tests/test_memory_value_registry.py).
+    _t("memory_value_registry", WORDS, REACHED, member="memory_value_registry.forget_user", entity="memory_value_registry.erase_entity"),
     _t("contact_fields", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("contact_sources", METADATA, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("source_contacts", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),

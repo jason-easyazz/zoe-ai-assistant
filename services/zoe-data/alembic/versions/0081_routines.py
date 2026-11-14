@@ -1,4 +1,4 @@
-"""0082 - routines, stage 1: the store (``routines_store.py``; record ``docs/knowledge/routines.md``; flag ``ZOE_ROUTINES``, default off).
+"""0081 - routines, stage 1: the store (``routines_store.py``; record ``docs/knowledge/routines.md``; flag ``ZOE_ROUTINES``, default off).
 
 A routine is a named, ordered checklist for ONE person (the subject), tied to a moment of the day, that starts fresh each day.
 Four tables, every column TEXT / INTEGER (timestamps are ISO text, as ``0001``):
@@ -32,8 +32,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0082"
-down_revision = "0079"
+revision = "0081"
+down_revision = "0080"
 branch_labels = None
 depends_on = None
 

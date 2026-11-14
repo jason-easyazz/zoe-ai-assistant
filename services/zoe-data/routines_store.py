@@ -1,4 +1,4 @@
-"""Routines, stage 1: the store (alembic 0082; record ``docs/knowledge/routines.md``).
+"""Routines, stage 1: the store (alembic 0081; record ``docs/knowledge/routines.md``).
 
 A routine is a named, ordered checklist for ONE person (the subject), tied to a moment of the day, that starts fresh each day. This
 module owns the four tables and every rule that keeps a tick honest. It speaks nothing and prompts nothing: the voice tier
