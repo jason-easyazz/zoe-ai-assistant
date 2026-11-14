@@ -312,3 +312,87 @@ def test_subject_forms(subject, form, value):
                                       ("son", False), ("petsitter", False), (None, False)])
 def test_the_pet_marker_is_correction_apply_s(rel, pet):
     assert mc.is_pet_relationship(rel) is pet
+
+
+# -- spelled numbers: the accumulator (review of PR 2477) ----------------------------------------------------------
+
+def test_one_hundred_is_a_hundred_not_one():
+    assert mc.normalise("count", "one hundred").value == {"v": 100}
+    assert mc.normalise("count", "a hundred").value == {"v": 100}
+    assert mc.normalise("count", "one hundred dogs").value == {"v": 100}
+
+
+def test_several_scale_words_are_not_scaled_twice():
+    assert mc.normalise("amount", "two hundred thousand").value["v"] == "200000"
+    assert mc.normalise("amount", "one million five hundred thousand").value["v"] == "1500000"
+    assert mc.normalise("amount", "one million five hundred thousand dollars").value["v"] == "1500000"
+
+
+_ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen " \
+        "eighteen nineteen".split()
+_TENS_W = "twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def _words(n: int, *, and_=False) -> str:
+    """An independent number-to-words writer (not memory_claims' reader): 0..999,999,999."""
+    def below_1000(k: int) -> str:
+        parts = []
+        if k >= 100:
+            parts.append(_ONES[k // 100] + " hundred")
+            k %= 100
+            if k and and_:
+                parts.append("and")
+        if k >= 20:
+            parts.append(_TENS_W[k // 10 - 2] + ("-" + _ONES[k % 10] if k % 10 else ""))
+        elif k:
+            parts.append(_ONES[k])
+        return " ".join(parts)
+
+    if n == 0:
+        return "zero"
+    out = []
+    for scale, word in ((1_000_000, "million"), (1000, "thousand"), (1, "")):
+        if n >= scale:
+            out.append((below_1000(n // scale) + (" " + word if word else "")).strip())
+            n %= scale
+    return " ".join(out)
+
+
+SPOT = [0, 7, 10, 11, 19, 20, 21, 99, 100, 101, 110, 999, 1000, 1001, 1100, 12000, 13500, 99999, 100000, 200000,
+        999999, 1000000, 1500000, 999999999, 1000500, 250075, 40000013]
+
+
+@pytest.mark.parametrize("n", SPOT)
+@pytest.mark.parametrize("and_", [False, True])
+def test_spelled_and_digit_numbers_agree(n, and_):
+    words = _words(n, and_=and_)
+    assert mc.normalise("count", words).value == {"v": n}, words
+    assert mc.normalise("count", f"{n:,}").value == {"v": n}
+    assert mc.normalise("count", str(n)).value == {"v": n}
+    assert mc.normalise("amount", words + " dollars").value["v"] == str(n), words
+    assert mc.normalise("amount", f"${n:,}").value["v"] == str(n)
+
+
+def test_the_test_writer_is_itself_sane():
+    assert _words(1500000) == "one million five hundred thousand"
+    assert _words(101, and_=True) == "one hundred and one" and _words(21) == "twenty-one"
+
+
+@pytest.mark.parametrize("text", [
+    "a couple of hundred", "five six", "twenty thirty", "one hundred five twenty", "thousand million",
+    "one thousand one million", "hundred", "one hundred and", "and five", "zero five", "one zero", "a five",
+    "five hundred hundred", "a few thousand", "one hundred thousand thousand",
+])
+def test_spelled_numbers_it_cannot_read_with_certainty_abstain(text):
+    assert mc.normalise("count", text) is None
+    assert mc.normalise("amount", text) is None
+
+
+@pytest.mark.parametrize("text, v, scale", [
+    ("12 thousand", "12000", 1000), ("13.5k", "13500", 1000), ("2 grand", "2000", 1000), ("two grand", "2000", 1000),
+    ("1.2m", "1200000", 1_000_000), ("1.5 billion", "1500000000", 1_000_000_000),
+    ("one hundred and five thousand", "105000", 1000), ("a hundred thousand", "100000", 1000),
+])
+def test_scale_words_after_numerals_and_inside_spelled_numbers(text, v, scale):
+    got = mc.normalise("amount", text)
+    assert got.value["v"] == v and got.scale == scale

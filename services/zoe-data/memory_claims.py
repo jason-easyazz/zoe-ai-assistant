@@ -359,37 +359,46 @@ def _dec(tok: str) -> Optional[Decimal]:
 _SMALL = {w: i for i, w in enumerate(("zero one two three four five six seven eight nine ten eleven twelve thirteen "
                                        "fourteen fifteen sixteen seventeen eighteen nineteen").split())}
 _TENS = {w: 10 * (i + 2) for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split())}
-_SCALES = {"thousand": 1000, "million": 1_000_000}
+_SCALES = {"thousand": 1000, "million": 1_000_000, "billion": 1_000_000_000}
+_NUMBER_WORDS = frozenset(_SMALL) | frozenset(_TENS) | frozenset(_SCALES) | {"hundred", "and", "a"}
 
 
 def _words_number(toks: list) -> Optional[int]:
-    """"twelve thousand" / "a hundred and five" / "twenty four" -> int; anything else None."""
-    if not toks:
+    """Spelled numbers by the standard accumulator: units / teens / tens add to ``current``, "hundred" multiplies it,
+    thousand / million / billion move ``max(current, 1) * scale`` into ``total`` ("one million five hundred thousand" is
+    1,500,000; "a hundred and five" is 105; "twenty-one" arrives as two tokens). Anything it cannot read with certainty -
+    a stray word, two numbers side by side ("five six", "twenty thirty"), a scale out of order ("thousand million"),
+    "zero" inside a number, a trailing "and" - is ``None``."""
+    if not toks or ("zero" in toks and len(toks) > 1):
         return None
     total = cur = 0
-    prev = ""
+    prev, last_scale = "", None
     for i, t in enumerate(toks):
-        if t == "a" and i == 0 and len(toks) > 1 and toks[1] in ("hundred", *_SCALES):
-            cur = 1
-        elif t == "and" and prev in ("hundred", *_SCALES) and i + 1 < len(toks):
-            pass
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        if t == "a":
+            if i != 0 or nxt not in ("hundred", *_SCALES):
+                return None
+        elif t == "and":
+            if prev not in ("hundred", *_SCALES) or not (nxt in _SMALL or nxt in _TENS):
+                return None
         elif t in _SMALL:
-            if prev in _SMALL or (prev in _TENS and not 1 <= _SMALL[t] <= 9):
+            if prev in _SMALL or (prev in _TENS and not 1 <= _SMALL[t] <= 9) or prev == "a":
                 return None
             cur += _SMALL[t]
         elif t in _TENS:
-            if prev in _SMALL or prev in _TENS:
+            if prev in _SMALL or prev in _TENS or prev == "a" or cur % 100:
                 return None
             cur += _TENS[t]
         elif t == "hundred":
-            if not cur or cur >= 100:
+            if not (prev == "a" or (prev in _SMALL and _SMALL[prev] > 0)) or cur >= 100:
                 return None
-            cur *= 100
+            cur = max(cur, 1) * 100
         elif t in _SCALES:
-            if not cur:
+            scale = _SCALES[t]
+            if (cur == 0 and prev != "a") or (last_scale is not None and scale >= last_scale) or cur >= 1000:
                 return None
-            total += cur * _SCALES[t]
-            cur = 0
+            total += max(cur, 1) * scale
+            cur, last_scale = 0, scale
         else:
             return None
         prev = t
@@ -594,7 +603,8 @@ _CURRENCY = {"$": None, "aud": "AUD", "usd": "USD", "nzd": "NZD", "eur": "EUR", 
              "dollar": None, "dollars": None, "bucks": None, "buck": None, "euro": "EUR", "euros": "EUR",
              "pound": "GBP", "pounds": "GBP"}
 _CURRENCY_PREFIX = {"us": "USD", "nz": "NZD", "a": "AUD", "au": "AUD"}     # "us$", "a$"
-_AMOUNT_SCALE = {"k": 1000, "grand": 1000, "thousand": 1000, "m": 1_000_000, "million": 1_000_000, "mil": 1_000_000}
+_AMOUNT_SCALE = {"k": 1000, "grand": 1000, "thousand": 1000, "m": 1_000_000, "million": 1_000_000, "mil": 1_000_000,
+                 "b": 1_000_000_000, "bn": 1_000_000_000, "billion": 1_000_000_000}
 DEFAULT_CURRENCY = "AUD"
 _NOT_A_COUNT = frozenset(_UNIT_WORDS) | frozenset(_CURRENCY) | _AGE_TAIL | {"cents", "cent"}
 
@@ -604,7 +614,7 @@ def norm_count(text: str) -> Optional[Norm]:
     if _NEGATIVE_RE.search(str(text or "")):
         return None
     toks = _toks(text)
-    if len(toks) > 1 and toks[-1].isalpha() and toks[-1] not in _SMALL and toks[-1] not in _TENS and toks[-1] not in _SCALES:
+    if len(toks) > 1 and toks[-1].isalpha() and toks[-1] not in _NUMBER_WORDS:
         if toks[-1] in _NOT_A_COUNT:
             return None
         toks = toks[:-1]
@@ -634,8 +644,13 @@ def norm_amount(text: str) -> Optional[Norm]:
     while toks and toks[-1] in _CURRENCY:
         take(toks.pop())
     scale = 1
-    if toks and toks[-1] in _AMOUNT_SCALE:
+    # a scale word after a NUMERAL ("13.5k", "12 thousand", "2 grand") multiplies it; after spelled words the scale is part
+    # of the spelled number ("two hundred thousand", "one million five hundred thousand") and the accumulator reads it -
+    # stripping it there applied it twice
+    if len(toks) == 2 and toks[-1] in _AMOUNT_SCALE and _dec(toks[0]) is not None:
         scale, toks = _AMOUNT_SCALE[toks[-1]], toks[:-1]
+    elif toks and toks[-1] == "grand" and not any(t in _SCALES for t in toks):
+        scale, toks = 1000, toks[:-1]
     if any(t in ("cents", "cent") for t in toks):
         return None
     v = _number(toks)
