@@ -524,10 +524,6 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     return affect
 
 
-#: A row's wording is logged whole up to this many characters (a distilled sentence is <= 150 by the extractor prompt).
-_ROW_LOG_WORDING_MAX = 200
-
-
 def _claim_label(md: dict) -> str:
     """``<pred>/<pol>/<mod>/<tense>:<lexical>><structural>`` of a row's claim row, or ``-``: what the extractor read and what
     each floor made of it (labels only)."""
@@ -548,24 +544,28 @@ def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
 
         MEMORY_ROW lane=<turn_digest|digest|emotional> outcome=<stored|parked|edited|held> user=<id> id=<row id>
         class=<authority class> promoted=<yes|no> basis=<authority basis> status=<row status> type=<memory type>
-        wording='<the ROW text, as stored>'
+        row=len=<chars> utt=<12 hex>
+
+    ``row`` is ``log_redaction.utterance_tag`` of the stored row text - the length and an equality key, NEVER the words: the
+    service log sits outside the forget cascade and rotates by size, so household memory text must not be written to it
+    (privacy sweep 2026-11-14; the line used to carry ``wording='<row text>'``). Read the row itself by ``id`` from the store.
 
     ``promoted`` is the promotion verdict: yes = the owner's one verbatim sentence ENTAILED the fact
     (``memory_authority.VERBATIM_BASIS``), so a retraction earns the standing of the owner's own words; no = it did
-    not (a candidate is parked as a dispute instead). The wording is the row's own text - the extractor's distilled
-    sentence after the write boundary's scrub - never the owner's turn (no ``source_excerpt`` / anchor is read here).
-    Post-turn only (the background digest); never raises; ``%r`` so a newline in a wording cannot forge a line."""
+    not (a candidate is parked as a dispute instead). The tag covers the row's own text, never the owner's turn (no
+    ``source_excerpt`` / anchor is read here). Post-turn only (the background digest); never raises; the tag is
+    hex and digits, so a newline in the text cannot forge a line."""
     try:
         if ref is None:
             return
         md = getattr(ref, "metadata", None) or {}
         basis = str(md.get("authority_basis") or "-")
-        wording = " ".join(str(getattr(ref, "text", "") or "").split())[:_ROW_LOG_WORDING_MAX]
         logger.info(
-            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s wording=%r",
+            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s row=%s",
             lane, outcome, user_id, getattr(ref, "id", "-"), md.get("authority_class") or "-",
             "yes" if basis == memory_authority.VERBATIM_BASIS else "no", basis,
-            md.get("status") or "-", md.get("memory_type") or "-", wording)
+            md.get("status") or "-", md.get("memory_type") or "-",
+            _log_redaction.utterance_tag(getattr(ref, "text", "") or ""))
         label = _claim_label(md)
         if label != "-":
             # the claim row's own line (the MEMORY_ROW format above is a pinned contract): what the extractor read, and what each

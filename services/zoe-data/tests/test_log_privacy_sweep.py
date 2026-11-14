@@ -130,13 +130,53 @@ def test_device_confirm_member_line_carries_a_tag_not_the_words(caplog):
     assert _leaks(caplog) == []
 
 
+def test_memory_row_line_carries_a_tag_not_the_row_text_on_every_handler():
+    """``memory_digest.log_row`` (the MEMORY_ROW line): proved on the LOG RECORD (message AND args), and through two
+    handlers with different formatters (the app.log / stderr pair), so no handler can re-introduce the words."""
+    import io
+    import memory_digest
+    row_text = f"{NAME} keeps a spare tangerine key"
+    ref = types.SimpleNamespace(id="row-1", text=row_text, metadata={"authority_class": "user_stated_derived"})
+    seen: list[logging.LogRecord] = []
+
+    class _Cap(logging.Handler):
+        def emit(self, record):
+            seen.append(record)
+
+    streams = [io.StringIO(), io.StringIO()]
+    handlers = [_Cap(level=logging.DEBUG)]
+    for st, fmt in zip(streams, ("%(message)s", "%(asctime)s %(name)s %(levelname)s %(message)r")):
+        h = logging.StreamHandler(st)
+        h.setFormatter(logging.Formatter(fmt))
+        handlers.append(h)
+    lg = logging.getLogger(memory_digest.__name__)
+    old = lg.level
+    lg.setLevel(logging.DEBUG)
+    for h in handlers:
+        lg.addHandler(h)
+    try:
+        memory_digest.log_row("turn_digest", "u-1", ref, "stored")
+    finally:
+        for h in handlers:
+            lg.removeHandler(h)
+        lg.setLevel(old)
+    assert seen
+    for r in seen:
+        for part in (r.getMessage(), str(r.msg), repr(r.args)):
+            assert "Quillon" not in part and "tangerine" not in part, part
+    assert any("MEMORY_ROW " in r.getMessage() and log_redaction.utterance_tag(row_text) in r.getMessage() for r in seen)
+    for st in streams:
+        assert "Quillon" not in st.getvalue() and "tangerine" not in st.getvalue()
+        assert log_redaction.utterance_tag(row_text) in st.getvalue()
+
+
 # ── static pin: every other touched site ─────────────────────────────────────
 
 #: file -> variables that hold fact / turn / name text in that file. Passing one bare or sliced to a logger call leaks
 #: it; wrapping it in a reducing call (the tag, len, type) is fine.
 PINNED = {
     "expert_dispatch.py": {"text"},
-    "memory_digest.py": {"fact", "text", "synthesis_text", "fact_text"},
+    "memory_digest.py": {"fact", "text", "synthesis_text", "fact_text", "wording"},
     "memory_extractor.py": {"name", "text"},
     "person_extractor.py": {"name", "name_a", "name_b", "text"},
     "person_extractor_llm.py": {"name", "value"},
