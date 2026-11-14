@@ -541,7 +541,9 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   the base branch -> a coding engine (codex | claude adapter, the buyer's subscription) fixes it in
   `~/.worktrees/heal-<id>` -> diff policy (forbidden paths, 300-line cap) + local gates -> landing
   adapter (`github`: DRAFT PR only; `local`: snapshot, fast-forward, verify, automatic rollback, no
-  `gh` / network) -> verify re-runs the ORIGINAL reproduction, not-healed faults are parked. Has its
+  `gh` / network) -> verify re-runs the ORIGINAL reproduction, not-healed faults are parked. `full` + `local` (no human
+  reads the diff) requires the supervised gate (one sandboxed process per base node, verdict = exit
+  status + token; its in-process residual is in the README). Has its
   own AGENTS.md with the Forbidden list. Local net: `python3 -m pytest labs/self-heal/tests` (fake
   engine, throwaway repos); `e2e_scratch.py` is the synthetic end-to-end proof.
 - `memory-claims-lab/` - **the memory-correction golden set's baseline runner** (2026-11-14): `run_baseline.py` scores TODAY'S
