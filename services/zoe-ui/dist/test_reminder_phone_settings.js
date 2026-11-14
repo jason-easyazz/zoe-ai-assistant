@@ -6,11 +6,12 @@
  * Pins: state loads from the GET; hidden when Telegram is not linked, and unless the GET says eligible === true (a child, an older
  * server without the field); the toggle sends exactly {channels:["telegram"], full_text:false};
  * the full-text checkbox maps to full_text; another channel already chosen (web_push) is kept; nothing says "Saved" before the server
- * answered and the controls are disabled meanwhile; a failed PUT reverts the control and says so; a 403 (not an adult) reverts and
+ * answered and the controls are disabled meanwhile; a failed PUT reverts the control and says so, staying disabled until the
+ * recovery GET settles (answers or fails); a 403 (not an adult) reverts and
  * replaces the section with one plain sentence; no server message is rendered; desktop-only wiring (never /touch/).
  * Negative controls (run on scratch copies): drop the telegram_linked check in shown() -> "not linked" goes red; drop the eligible
  * check in shown() -> "eligible false" (a child) goes red; in the PUT failure branch, store the clicked body into state.view and skip
- * the re-read -> "reverts" goes red.
+ * the re-read -> "reverts" goes red; clear busy before the recovery GET settles -> "stay disabled during the recovery GET" goes red.
  */
 'use strict';
 const fs = require('fs');
@@ -135,6 +136,38 @@ eq(RP.putBody({ channels: [] }, 'other', true), null, 'an unknown control sends 
   ok(s.calls[s.calls.length - 1][0] === 'GET', 'then re-reads the stored state');
   await m.change(input('full', false));
   ok(isOn(root.innerHTML, 'full') === true, 'failed PUT: the checkbox is back on too');
+
+  /* ---------- a failed PUT keeps the controls disabled until the recovery GET settles ---------- */
+  for (const getFails of [false, true]) {
+    const tag = getFails ? 'recovery GET fails' : 'recovery GET answers';
+    const calls = [];
+    let gets = 0, releaseGet = null;
+    const truth = { channels: ['telegram'], full_text: false, telegram_linked: true, mode: 'on', eligible: true };  // a timeout that DID save
+    const fj = function (method, url, body) {
+      calls.push([method, url, body]);
+      if (method === 'PUT') return Promise.reject(err(500));
+      if (++gets === 1) return Promise.resolve({ channels: [], full_text: false, telegram_linked: true, mode: 'on', eligible: true });
+      return new Promise(function (res, rej) { releaseGet = function () { if (getFails) rej(err(502)); else res(JSON.parse(JSON.stringify(truth))); }; });
+    };
+    root = fakeRoot();
+    m = RP.mount(root, { fetchJson: fj });
+    await m.ready;
+    const pending = m.change(input('send', true));
+    for (let i = 0; i < 5 && !releaseGet; i++) await Promise.resolve();
+    ok(typeof releaseGet === 'function', tag + ': the recovery GET is in flight');
+    ok(isDisabled(root.innerHTML, 'send') && isDisabled(root.innerHTML, 'full'), tag + ': controls stay disabled during the recovery GET');
+    await m.change(input('full', true));
+    eq(calls.filter(function (c) { return c[0] === 'PUT'; }).length, 1, tag + ': a click during the recovery GET sends nothing');
+    releaseGet();
+    await pending;
+    ok(isDisabled(root.innerHTML, 'send') === false && isDisabled(root.innerHTML, 'full') === false, tag + ': re-enabled once it settled');
+    ok(root.innerHTML.indexOf(RP.FAILED) !== -1, tag + ': the stored-state message stays');
+    if (getFails) {
+      ok(isOn(root.innerHTML, 'send') === false && isOn(root.innerHTML, 'full') === false, tag + ': the last known server state');
+    } else {
+      ok(isOn(root.innerHTML, 'send') === true && isOn(root.innerHTML, 'full') === false, tag + ': the final state is what the GET returned');
+    }
+  }
 
   /* ---------- web_push already chosen is kept ---------- */
   s = server({ channels: ['web_push'] });

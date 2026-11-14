@@ -97,11 +97,14 @@
         paint();
         return doc;
       }, function (e) {
-        state.busy = false;
-        if (e && e.status === 403) { state.refused = true; state.message = ''; paint(); return null; }
+        if (e && e.status === 403) { state.busy = false; state.refused = true; state.message = ''; paint(); return null; }
         state.message = FAILED;
-        paint();                                                            // back to the last stored state,
-        return load();                                                      // then re-read it (a timeout may still have saved)
+        paint();                                       // back to the last stored state, still disabled,
+        return load().then(function (v) {             // then re-read it (a timeout may still have saved); load() never rejects.
+          state.busy = false;                          // Re-enabled only once that read settled, so no click races it; a failed
+          paint();                                     // read leaves the last known server state and the message.
+          return v;
+        });
       });
     }
     if (rootEl.addEventListener) rootEl.addEventListener('change', change);
