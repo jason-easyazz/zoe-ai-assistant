@@ -11,7 +11,9 @@ failures, and adopt it only if it fixes them without breaking anything. Contract
                 TIME split: the newest 20% of wordings are the held-out "known failures", never trained on
       ORACLE    the local brain labels every example blind (full tool menu, no hint); kept only where it AGREES with the label
       TRAIN     warm-start continuation of the SERVED generation's checkpoint (the lineage; ZOE_ROUTER_WARM_START before the
-                first adoption) on the train split + a replay sample of the committed corpus (against forgetting)
+                first adoption) on the train split + a replay sample of the committed corpus (against forgetting). A FORGET:
+                weights cannot unlearn in place, so a generation flagged needs_retrain (it or an ancestor learned a forgotten
+                example) is never a parent; the newest clean ancestor is, else the base (``warm_start_choice``)
       GATE      deterministic, no model-judged score; candidate and incumbent on the SAME scratch rig, back to back:
                 (a) the held-out failures: >= MIN_HOLDOUT of them, and fixed - broken >= max(3, 25% of the incumbent's misses)
                 (b) the frozen 81-case corpus: no case the incumbent answers may break, aggregate >=, chat-FP 0, p50 < budget
@@ -502,11 +504,31 @@ def served_record(data: dict) -> Optional[dict]:
     return rec if rs.sha256(rs.SERVED_GGUF) == rec.get("gguf_sha256") else None
 
 
-def warm_start_for(data: dict) -> Path:
+def warm_start_choice(data: dict) -> dict:
+    """Which checkpoint the next generation continues from, and why (counts only).
+
+    A forget cannot be removed from trained weights, so a generation that learned a forgotten example (``needs_retrain``, set by
+    ``router_retrain_ledger.forget`` on it and on its descendants) must never be a warm-start parent: a child would inherit the
+    example. Walk the served generation's lineage newest first and take the newest generation whose WHOLE chain is unflagged; with
+    none, the base checkpoint (``rs.WARM_START``, the committed-data lineage, which never saw a household example). An unflagged
+    served generation is chosen exactly as before (and a clean generation whose checkpoint is gone still means the base)."""
     rec = served_record(data)
-    if rec and rec.get("merged") and Path(rec["merged"]).exists():
-        return Path(rec["merged"])
-    return rs.WARM_START
+    if rec is None:
+        return {"path": rs.WARM_START, "gen": None, "why": "base: no served generation", "skipped_flagged": 0}
+    chain = ledger.lineage(data, rec.get("gen"))
+    for i, r in enumerate(chain):
+        if any(x.get("needs_retrain") for x in chain[i:]):
+            continue                                   # it, or an ancestor it inherited from, learned a forgotten example
+        if r.get("merged") and Path(r["merged"]).exists():
+            why = "served generation" if i == 0 else "newest ancestor that never saw a forgotten example"
+            return {"path": Path(r["merged"]), "gen": r.get("gen"), "why": why, "skipped_flagged": i}
+        return {"path": rs.WARM_START, "gen": None, "why": "base: the clean generation's checkpoint is missing", "skipped_flagged": i}
+    return {"path": rs.WARM_START, "gen": None, "why": "base: every generation in the lineage saw a forgotten example",
+            "skipped_flagged": len(chain)}
+
+
+def warm_start_for(data: dict) -> Path:
+    return warm_start_choice(data)["path"]
 
 
 def estimates(data: dict) -> tuple[float, float]:
@@ -754,7 +776,9 @@ def run(mode: str, *, collect_only: bool = False) -> int:
         _write_private(train_file, _jsonl(rows))
         hold_file = work / f"holdout{ledger.TEXT_SUFFIX}"
         _write_private(hold_file, _jsonl(holdout_cases(holdout)))
-        warm = warm_start_for(data)
+        choice = warm_start_choice(data)
+        warm = choice["path"]
+        rec["warm_start_choice"] = {k: choice[k] for k in ("gen", "why", "skipped_flagged")}
         if not warm.exists():
             raise SystemExit(f"ABORT: warm-start checkpoint {warm} is missing (the lineage rule: never cold-start silently)")
         run_dir = work / "run"
@@ -798,7 +822,7 @@ def run(mode: str, *, collect_only: bool = False) -> int:
         rec.update(gate={"checks": decision.checks, "reasons": decision.reasons, "numbers": n},
                    gguf=str(cand_gguf), gguf_sha256=rs.sha256(cand_gguf), measure={**journal.get("train", {}),
                    "total_minutes": round((time.time() - t_start) / 60.0, 1)}, warm_start=str(warm),
-                   parent=(served_record(data) or {}).get("gen"))
+                   parent=choice["gen"])               # the lineage is what the weights inherit, not what was serving
 
         # ---- 6. ADOPT (on only) ----------------------------------------------------
         act(mode, decision, rec, stamp=stamp, cand_gguf=cand_gguf, run_dir=run_dir, inc_live=inc_live, train=train, journal=journal)
