@@ -403,6 +403,19 @@ const run = (box, code) => vm.runInContext(code, box);
       if (leftover(b).length || b.shown.join() !== 'person') bad.push('a change before the first tick is taken as the starting state');
       return bad;
     },
+    // a 401 drops the member session, then a GUEST session is provisioned: that arrival is a change too, or the screen stays blank
+    guestArrivalRepaints(text) {
+      const b = scBox(text, 'day'), bad = [];
+      b.live = ''; b.meta = null; vm.runInContext('sessionCheck()', b);
+      if (leftover(b).length || b.shown.join() !== 'day') bad.push('losing the member session does not clear and repaint');
+      b.live = 'G1'; b.meta = GUEST; vm.runInContext('sessionCheck()', b);
+      if (b.shown.join() !== 'day,day') bad.push('the provisioned guest session does not repaint the open screen');
+      b.live = 'G2'; b.meta = Object.assign({}, GUEST, { session_id: 'G2' }); vm.runInContext('sessionCheck()', b);
+      if (b.shown.join() !== 'day,day,day') bad.push('a new guest session is not seen as a change');
+      vm.runInContext('sessionCheck()', b);
+      if (b.shown.length !== 3) bad.push('no change must repaint nothing');
+      return bad;
+    },
   };
   Object.keys(scChecks).forEach((k) => check('session change: ' + k, () => assert.deepStrictEqual(scChecks[k](HOME), [])));
   check('control: a session change that only repaints (no synchronous clear) is seen', () =>
@@ -411,6 +424,8 @@ const run = (box, code) => vm.runInContext(code, box);
     assert(scChecks.clearsAllAtOnce(plant("work:['wkBody','wkMeta']", "work:['wkMeta']")).length > 0));
   check('control: a baseline taken lazily at the first tick is seen', () =>
     assert(scChecks.firstChangeSeen(plant('var _paintFor=sessKey();', 'var _paintFor=null;').replace('function sessionCheck(){var k=sessKey();if(k===_paintFor)return;', 'function sessionCheck(){var k=sessKey();if(_paintFor===null||k===_paintFor){_paintFor=k;return;}')).length > 0));
+  check('control: a session key that ignores guest sessions is seen', () =>
+    assert(scChecks.guestArrivalRepaints(plant("function sessKey(){return String(sid()||'')+(sessionMember()?'|m':'|g');}", "function sessKey(){var m=sessionMember();return m?String(m.session_id):'';}")).length > 0));
   check('the clear list names every private screen and only containers the page really has', () => {
     const m = /var PRIVATE_BOXES=(\{[\s\S]*?\});/.exec(HOME); assert(m, 'PRIVATE_BOXES missing');
     const boxes = vm.runInNewContext('(' + m[1] + ')');

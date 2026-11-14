@@ -2120,7 +2120,7 @@
     if(typeof _evd!=='undefined')_evd=null;
     estClose();
     if(typeof dbody!=='undefined'&&dbody)dbody.querySelectorAll('.pc.tchip').forEach(function(c){c.remove();});}
-  function sessKey(){var m=sessionMember();return m?String(m.session_id):'';}
+  function sessKey(){return String(sid()||'')+(sessionMember()?'|m':'|g');}   // the ACTUAL session (a guest's too): a newly provisioned guest is a change, so its screen loads
   function sessLive(s0){return sid()===s0;}
   function sessionCheck(){var k=sessKey();if(k===_paintFor)return;
     _paintFor=k;_tmMemo.p=null;_lst.lists=[];_lst.sel=null;_calEvents={};
