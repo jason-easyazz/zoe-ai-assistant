@@ -1217,6 +1217,11 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                     if (msg.type === 'connected') {
                         state.pushPanelId = String(msg.panel_id || '').trim();
                     }
+                    // js/touch-alarms.js: the hello (capability + seq baseline) and the alarm ring push/beat. They carry no
+                    // alarm detail; the page re-reads /api/alarms/ringing itself. Its poll is the safety net.
+                    if (msg.type === 'connected' || msg.type === 'alarms_ringing_changed' || msg.type === 'alarms_ringing_beat') {
+                        try { window.dispatchEvent(new CustomEvent('zoe:push-frame', { detail: msg })); } catch (_) { /* ignore */ }
+                    }
                     if (msg.type === 'panel_pin_request' && msg.data) {
                         const d = (msg.data && msg.data.data) ? msg.data.data : msg.data;
                         const actionId = String((d && d.challenge_id) || '').trim() || ('push_pin_' + Date.now());
@@ -1356,6 +1361,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 if (state.pushWs !== ws) return;   // a newer socket already replaced this one
                 if (state.pushPing) { clearInterval(state.pushPing); state.pushPing = null; }
                 state.pushWs = null;
+                try { window.dispatchEvent(new CustomEvent('zoe:push-closed')); } catch (_) { /* ignore */ }
                 schedulePushReconnect();
             };
         } catch (e) {
