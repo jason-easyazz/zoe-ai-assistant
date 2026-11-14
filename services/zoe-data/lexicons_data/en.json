@@ -1672,6 +1672,8 @@
   ],
   "lead_strip": "^(?:(?:hey|hi|ok|okay|um|so|and) )*(?:zoe )?[,. ]*",
   "opener": "how|what|whats|which|where|when|who|can|could|may|should|would|will|do|does|is|are|am|tell|show|explain|teach|walk|give|get|bring|find|grab|pass|turn|switch|light|start|use|open|plug|make|let|lets|please|try",
+  "clause_opener": "which|what(?! an? )|whats|where|wheres|how|who|when",
+  "clause_break": "and|so|but|then|also|ok|okay",
   "ask": "can i|could i|may i|should i|can you|could you|will you|would you|how (?:do|can|to|would|should|much|many)|show me|tell me|teach me|help me|walk me|explain|i (?:want|wanna|need|would like|d like) to|let me|lets|please|is it (?:ok|okay|safe|alright)|am i allowed|instructions|steps|what happens if|what would happen if",
   "factual": "^(?:why|whys) .*|^what (?:is|are|was|were) (?:a |an |the )?.{0,40}(?:made of|made from|called)$",
   "factual_not": "i|me|my|we|us|our|im|ive",
@@ -1695,7 +1697,7 @@
    },
    {
     "id": "fire",
-    "terms": "fire(?!\\s+(?:drills?|trucks?|engines?|fighters?|station|brigade|alarms?|type|emblem|ants?))s?|flames?|(?<!have )(?<!got )gas|(?:hot|boiling) (?:oil|pans?|pots?|water|plates?|trays?|stove|grill)|(?<!the )heat (?:up|it up)|kettles?|microwave|frying pan|deep fry\\w*|toaster|burn|burning|stoves?|stovetop|cooktop|hob|ovens?|gas (?:stove|burner|ring|bottle|heater)|turn on the gas|burners?|lighters?|matchbox|matchsticks?|box of matches|(?:light|strike) (?:a |the )?match(?:es)?|(?:light|lighting) (?:a |the |some )?candles?|(?:light|set off|let off) (?:the |some |a )?(?:fireworks?|sparklers?|crackers?)|firecrackers?|(?:light|start|make|build) (?:a |the )?fire|campfire|bonfire|fireplace|bbq|barbecue",
+    "terms": "fire(?!\\s+(?:drills?|trucks?|engines?|fighters?|station|brigade|alarms?|type|emblem|ants?))s?|flames?|(?<!have )(?<!got )gas|(?:hot|boiling) (?:oil|pans?|pots?|water|plates?|trays?|stove|grill)|(?<!the )heat (?:up|it up)|kettles?|microwave|frying pan|deep fry\\w*|toaster|burn|burning|stoves?|stovetop|cooktop|hob|ovens?|gas (?:stove|burner|ring|bottle|heater)|turn on the gas|burners?|lighters?|matchbox|matchsticks?|box of matches|matches|(?:light|strike) (?:a |the )?match(?:es)?|(?:light|lighting) (?:a |the |some )?candles?|(?:light|set off|let off) (?:the |some |a )?(?:fireworks?|sparklers?|crackers?)|firecrackers?|(?:light|start|make|build) (?:a |the )?fire|campfire|bonfire|fireplace|bbq|barbecue",
     "reply": "That one needs a grown-up. Can you ask one to help you with anything hot or with fire?"
    },
    {

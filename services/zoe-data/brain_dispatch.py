@@ -575,9 +575,10 @@ async def _fallback_oneshot(message: str, session_id: str, user_id: str, **kwarg
 
 
 async def _flue_streaming_with_failover(
-    message: str, session_id: str, user_id: str, **kwargs: Any
+    message: str, session_id: str, user_id: str, _observed: Optional[tuple] = None, **kwargs: Any
 ) -> AsyncIterator[str]:
-    """Flue streaming turn with ONE bounded retry on the lane below it."""
+    """Flue streaming turn with ONE bounded retry on the lane below it. ``_observed``: the breaker view ``_route`` already took
+    for this turn (it is never taken twice); None = take it here."""
     from zoe_flue_client import FlueTransportError, run_flue_brain_streaming
 
     other = _fallback_lane()
@@ -604,7 +605,7 @@ async def _flue_streaming_with_failover(
     generation = 0
 
     try:
-        skip_flue, generation = _observe_circuit()
+        skip_flue, generation = _observed if _observed is not None else _observe_circuit()
         if skip_flue:
             record.emit(
                 attempted=other,
@@ -686,9 +687,9 @@ async def _flue_streaming_with_failover(
 
 
 async def _flue_oneshot_with_failover(
-    message: str, session_id: str, user_id: str, **kwargs: Any
+    message: str, session_id: str, user_id: str, _observed: Optional[tuple] = None, **kwargs: Any
 ) -> str:
-    """Flue one-shot turn with ONE bounded retry on the lane below it."""
+    """Flue one-shot turn with ONE bounded retry on the lane below it. ``_observed``: as in the streaming wrapper."""
     from zoe_flue_client import FlueTransportError, run_flue_brain
 
     other = _fallback_lane()
@@ -704,7 +705,7 @@ async def _flue_oneshot_with_failover(
     record = _LaneRecord(session_id)
 
     try:
-        skip_flue, generation = _observe_circuit()
+        skip_flue, generation = _observed if _observed is not None else _observe_circuit()
         if skip_flue:
             record.emit(
                 attempted=other,
@@ -1018,30 +1019,42 @@ def brain_streaming(message: str, session_id: str, user_id: str = "", **kwargs: 
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
     kwargs = _sanitize_kwargs(kwargs)
-    floor = _child_floor_check(message, session_id, user_id, kwargs)
+    route = _route()
+    floor = _child_floor_check(message, session_id, user_id, kwargs, route)
     if floor is not None:
-        return _child_floor_stream(floor, message, session_id, user_id, kwargs)
-    return _brain_streaming_lanes(message, session_id, user_id, **kwargs)
+        return _child_floor_stream(floor, message, session_id, user_id, kwargs, route)
+    return _brain_streaming_lanes(message, session_id, user_id, _route_=route, **kwargs)
 
 
-def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> Any:
+def _route() -> tuple:
+    """This turn's lane decision, taken ONCE: ``(use_flue, observed)``. ``observed`` is the failover breaker view
+    (``_observe_circuit`` also claims the half-open probe, so it is never taken twice) or None when failover is off. The lanes
+    reuse it, and the child floor reads from it whether this turn will reach the Flue seam's floors."""
+    if not use_flue_brain():
+        return (False, None)
+    return (True, _observe_circuit() if failover_enabled() else None)
+
+
+def _floors_live(route: tuple) -> bool:
+    """Will this turn actually reach the Flue seam, where the distress / medical floors run? Not on another lane, and not when
+    the failover breaker is open (that turn goes to the fallback lane)."""
+    try:
+        use_flue, observed = route
+        return bool(use_flue) and not (observed is not None and observed[0])
+    except Exception:  # noqa: BLE001 - not knowing: assume they do not, so the child floor never defers to nothing
+        return False
+
+
+def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict[str, Any], route: tuple) -> Any:
     """``child_safety_floor.check`` (sync, pure): None on every turn that is not a hazard request, so those turns are dispatched exactly as before."""
     try:
         import child_safety_floor
 
         return child_safety_floor.check(message, session_id, user_id, dry=bool(kwargs.get("replay_isolation")),
-                                        floors_live=_floors_live())
+                                        floors_live=_floors_live(route))
     except Exception:  # noqa: BLE001 - FAIL SAFE: a floor that cannot run lets only a positively adult speaker through
         logger.warning("CHILD_SAFETY_FLOOR source=error stage=dispatch")
         return _CHILD_FLOOR_BROKEN
-
-
-def _floors_live() -> bool:
-    """Do the distress / medical floors run on the lane this turn takes? They live in the Flue seam only."""
-    try:
-        return bool(use_flue_brain())
-    except Exception:  # noqa: BLE001 - not knowing: assume they do not, so the child floor never defers to nothing
-        return False
 
 
 #: needs no lexicon and no floor module: what a speaker who is not positively an adult hears when the floor cannot run at all
@@ -1071,13 +1084,14 @@ async def _child_floor_reply(floor: Any, user_id: str) -> str:
         return "" if await _positively_adult(user_id) else (getattr(floor, "reply", "") or _CHILD_FLOOR_GENERIC)
 
 
-async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any]) -> AsyncIterator[str]:
+async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id: str, kwargs: dict[str, Any],
+                              route: tuple) -> AsyncIterator[str]:
     """A hazard ask: a child (or a speaker the floor could not clear) gets its fixed line and no lane runs; an adult gets the lanes unchanged."""
     reply = await _child_floor_reply(floor, user_id)
     if reply:
         yield reply
         return
-    inner = _brain_streaming_lanes(message, session_id, user_id, **kwargs)
+    inner = _brain_streaming_lanes(message, session_id, user_id, _route_=route, **kwargs)
     try:
         async for delta in inner:
             yield delta
@@ -1087,11 +1101,13 @@ async def _child_floor_stream(floor: Any, message: str, session_id: str, user_id
             await aclose()
 
 
-def _brain_streaming_lanes(message: str, session_id: str, user_id: str = "", **kwargs: Any) -> AsyncIterator[str]:
-    if use_flue_brain():
-        if failover_enabled():
+def _brain_streaming_lanes(message: str, session_id: str, user_id: str = "", *, _route_: tuple, **kwargs: Any) -> AsyncIterator[str]:
+    use_flue, observed = _route_
+    if use_flue:
+        if observed is not None:
             return _provenance_tracked_stream(_claim_guarded(
-                _flue_streaming_with_failover(message, session_id, user_id, **kwargs), message, user_id, kwargs, session_id),
+                _flue_streaming_with_failover(message, session_id, user_id, _observed=observed, **kwargs),
+                message, user_id, kwargs, session_id),
                 message, session_id, user_id, bool(kwargs.get("replay_isolation")))
         return _provenance_tracked_stream(_claim_guarded(
             _flue_streaming_labeled(message, session_id, user_id, **kwargs), message, user_id, kwargs, session_id),
@@ -1109,7 +1125,8 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     Configured lane selection; runtime failover only behind ``ZOE_BRAIN_FAILOVER``.
     """
     kwargs = _sanitize_kwargs(kwargs)
-    floor = _child_floor_check(message, session_id, user_id, kwargs)
+    route = _route()
+    floor = _child_floor_check(message, session_id, user_id, kwargs, route)
     if floor is not None:
         reply = await _child_floor_reply(floor, user_id)
         if reply:
@@ -1118,10 +1135,11 @@ async def brain_oneshot(message: str, session_id: str, user_id: str = "", **kwar
     reply = ""
     started = _receipts_begin()
     implied = _take_deferred_write()
+    use_flue, observed = route
     try:
-        if use_flue_brain():
-            if failover_enabled():
-                reply = await _flue_oneshot_with_failover(message, session_id, user_id, **kwargs)
+        if use_flue:
+            if observed is not None:
+                reply = await _flue_oneshot_with_failover(message, session_id, user_id, _observed=observed, **kwargs)
             else:
                 reply = await _flue_oneshot_labeled(message, session_id, user_id, **kwargs)
             reply = _claim_guarded_text(reply, message, user_id, started, kwargs, implied, session_id)

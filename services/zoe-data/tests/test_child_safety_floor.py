@@ -571,3 +571,46 @@ def test_benign_verb_with_an_instrument_or_more_refuses(cls, text, end, _clean):
 def test_benign_object_only_still_passes(text, _clean):
     _clean["kid-a"] = "child"
     assert floor(text, uid="kid-a") is None
+
+
+# 15. a question word opening ANY clause makes it a question ("im 10, which knife is sharpest" has no "?") -------------------
+@pytest.mark.parametrize("cls,text", [("blades", "im 10, which knife is sharpest"), ("fire", "im 9 and where do you keep the matches"),
+                                      ("blades", "im 10 so how sharp is the big knife")])
+def test_question_word_at_a_clause_start(cls, text):
+    assert floor(text) == reply_of(cls)
+    assert floor(text.replace("im 10", "im 40").replace("im 9", "im 40"), sid="adult") is None   # control: an adult
+
+
+@pytest.mark.parametrize("text", ["i cut my finger, which plaster should i use", "my hand hurts, where is mum",
+                                  "dad used the drill today, what a mess"])
+def test_clause_question_leaves_reports_and_exclamations_alone(text, _clean):
+    _clean["kid-a"] = "child"
+    assert floor(text, uid="kid-a") is None
+
+
+# 16. the floors are deferred to only when THIS turn will reach the Flue seam (the route is taken once) -----------------------
+def test_open_breaker_means_the_child_floor_answers(monkeypatch, _clean):
+    _clean["kid-a"] = "child"
+    text = "what do i do the kitchen is on fire"                  # the distress floor owns it - when it runs
+    monkeypatch.setattr(bd, "use_flue_brain", lambda: True)
+    monkeypatch.setattr(bd, "failover_enabled", lambda: True)
+    assert bd._floors_live((True, (True, 3))) is False and bd._floors_live((True, (False, 3))) is True
+    p = bd._child_floor_check(text, "s1", "kid-a", {}, (True, (True, 3)))
+    assert p is not None and asyncio.run(csf.resolve(p, "kid-a")) == csf.URGENT_REPLY
+    assert bd._child_floor_check(text, "s1", "kid-a", {}, (True, (False, 3))) is None   # control: breaker closed, it defers
+    assert bd._child_floor_check(text, "s1", "kid-a", {}, (True, None)) is None          # failover off: as today
+
+
+def test_the_breaker_is_observed_once_per_turn(monkeypatch):
+    seen, calls = [], []
+    monkeypatch.setattr(bd, "use_flue_brain", lambda: True)
+    monkeypatch.setattr(bd, "failover_enabled", lambda: True)
+    monkeypatch.setattr(bd, "_observe_circuit", lambda: calls.append(1) or (False, 5))
+
+    async def fake_failover(message, session_id, user_id, _observed=None, **kw):
+        seen.append(_observed)
+        yield "ok"
+
+    monkeypatch.setattr(bd, "_flue_streaming_with_failover", fake_failover)
+    assert asyncio.run(_collect("hello there", "s1", "adult-a")) == ["ok"]
+    assert calls == [1] and seen == [(False, 5)]                  # one observe, and the lane reuses it

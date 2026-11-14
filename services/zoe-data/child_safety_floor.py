@@ -98,6 +98,8 @@ def _rx(lang: str) -> Optional[dict]:
     return {"adult": int(e["adult_age"]), "max_year": int(e["max_school_year"]), "nums": nums,
             "own": [comp(p) for p in e["own_age"]], "school": [comp(p) for p in e["school"]],
             "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
+            # a question word at the start of ANY clause ("im 10, which knife is sharpest"; "im 9 and where do you keep the matches")
+            "clause_q": re.compile(rf"(?:[,;:.!?]\s*|(?<!\w)(?:{e['clause_break']})\s+)(?:{e['clause_opener']})(?!\w)"),
             "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
             "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
             "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
@@ -133,9 +135,10 @@ def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
 
 
 def is_request(s: str, rx: dict) -> bool:
-    """A request or question: a ``?``, an ``ask`` cue anywhere, or an ``opener`` as the first word. A plain statement is not one."""
+    """A request or question: a ``?``, an ``ask`` cue anywhere, an ``opener`` as the first word, or a question word opening any later
+    clause (``clause_q``). A plain statement is not one."""
     head = rx["lead"].sub("", s, count=1)
-    return "?" in s or bool(rx["ask"].search(s)) or bool(rx["opener"].match(head))
+    return "?" in s or bool(rx["ask"].search(s)) or bool(rx["opener"].match(head)) or bool(rx["clause_q"].search(s))
 
 
 def _cue_before(s: str, pos: int, rx: dict) -> bool:
