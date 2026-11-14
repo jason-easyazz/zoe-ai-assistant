@@ -912,6 +912,58 @@ def test_no_gate_taking_eraser_runs_under_the_memory_lock():
     assert not bad, bad
 
 
+def test_a_failing_in_lock_step_still_runs_the_gate_erasers_and_the_delete_still_fails(tmp_path, monkeypatch):
+    """The three gate-taking erasers (reply ledger, commitments, pendant recordings) run AFTER the memory lock, in a ``finally``:
+    an in-lock step that raises (here the alarms erase) must not skip them, and ``delete_user`` must still report the failure.
+    Every other store of the member erase is stubbed: nothing on the box is touched."""
+    import importlib
+
+    import memory_service
+
+    ran = []
+
+    async def ok(*_a, **_k):
+        return 0
+
+    def ok_sync(*_a, **_k):
+        return 0
+
+    for mod, fn in (("omi_day_review", "forget_user"), ("conversation_notes", "forget_user"), ("memory_value_registry", "forget_user"),
+                    ("notifications_store", "forget_user"), ("reminder_delivery", "forget_user"), ("connected_accounts", "forget_user"),
+                    ("member_identities", "forget_user"), ("calendar_forget", "forget_user"), ("exact_words", "delete_user"),
+                    ("night_mind", "delete_user"), ("now_card", "forget_user"), ("struggle_detector", "delete_user"),
+                    ("restraint", "erase_user"), ("proactive.outcome_edges", "erase_user"), ("member_register", "forget_user"),
+                    ("contacts_store", "forget_user")):
+        monkeypatch.setattr(importlib.import_module(mod), fn, ok)
+    for mod, fn in (("local_text_logs", "erase_all_text"), ("warm_speaker", "forget_user"), ("forget_redact", "clear_turn_caches")):
+        monkeypatch.setattr(importlib.import_module(mod), fn, ok_sync)
+    for mod in ("reply_ledger", "commitments", "omi_recordings"):
+        async def record(uid, _m=mod):
+            ran.append(_m)
+        monkeypatch.setattr(importlib.import_module(mod), "forget_user", record)
+
+    async def alarms_down(_uid):
+        raise ConnectionError("alarms store lost")
+    monkeypatch.setattr(importlib.import_module("alarms"), "forget_user", alarms_down)
+    svc = memory_service.MemoryService(data_dir=str(tmp_path / "palace"))
+    monkeypatch.setattr(svc, "_list_ids_for_user", lambda uid: [])
+    monkeypatch.setattr(svc, "_delete_audit_for_user_sync", lambda uid: 0)
+    with pytest.raises(memory_service.MemoryServiceError, match="alarm erasure failed"):
+        run(svc.delete_user(A, actor=A))
+    assert ran == ["reply_ledger", "commitments", "omi_recordings"]          # none skipped by the in-lock failure
+
+    # and a pendant erase failure with nothing failing in the lock still fails the delete closed
+    ran.clear()
+    monkeypatch.setattr(importlib.import_module("alarms"), "forget_user", ok)
+
+    async def pendant_down(_uid):
+        raise ConnectionError("pendant store lost")
+    monkeypatch.setattr(importlib.import_module("omi_recordings"), "forget_user", pendant_down)
+    with pytest.raises(memory_service.MemoryServiceError, match="pendant erasure failed"):
+        run(svc.delete_user(A, actor=A))
+    assert ran == ["reply_ledger", "commitments"]
+
+
 def test_the_static_lock_order_check_is_not_vacuous():
     src = "async def f(lock):\n    async with lock:\n        await memory_value_registry.erase_for_rows('u', [])\n"
     tree = ast.parse(src)
