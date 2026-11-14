@@ -2350,6 +2350,12 @@ class MemoryService:
                     await asyncio.to_thread(warm_speaker.forget_user, user_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
+                # The presence-fusion store (presence_fusion.py: which signals saw the member, when and in which room). In memory, no words.
+                try:
+                    import presence_fusion
+                    presence_fusion.forget_user(user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: presence observations not erased for a deleted user (%s)", type(exc).__name__)
                 needles: list[str] = []
                 try:
                     ids = await self._run_sync(self._list_ids_for_user, user_id)

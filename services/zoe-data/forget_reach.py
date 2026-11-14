@@ -271,6 +271,10 @@ OTHER: tuple[Store, ...] = (
     Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
           "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
           member="warm_speaker.forget_user", markers=("warm-speaker.json",)),
+    Store("presence_fusion_memory", "memory", METADATA, REACHED, "presence_fusion.py's in-process store (ZOE_PRESENCE_FUSION, default off): per member, "
+          "the newest observation of each presence signal (kind, time, room), the room and the decided events (left/arrived/woke/room change). "
+          "No words, no biometrics, nothing on disk; delete_user erases the member, and a member who turns tracking off is erased the same way.",
+          member="presence_fusion.forget_user", markers=("presence_fusion",)),
     Store("account_secrets", "vault", CONFIG, REACHED, "Connected-account credentials (account_secrets.py seam). No backend is configured yet, so "
           "nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user.",
           member="connected_accounts.forget_user", markers=("account_secrets",)),
