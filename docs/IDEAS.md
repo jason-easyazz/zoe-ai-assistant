@@ -147,3 +147,35 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 
 ### A bounded multi-step problem loop ("move my dentist reminder to Friday and add floss to the list") — 💡 pinned
 - **Core:** run a multi-step ask as at most 6 tool steps / 90 s, each step judged by the household authority table first, a step done only when a receipt proves it, ending in a "here's what I tried, here's what I need from you" card. Built 2026-11-05 as `problem_loop.py` but never wired to a turn; deleted in the 2026-11-13 gap audit (git history keeps it; the authority table stays, see [authority-table.md](knowledge/authority-table.md)).
+
+### Presence, feeds and self-evolution pieces from the 2026-11-14 design work — 💡 pinned
+- **Source:** the voice, calendar and self-evolution design notes behind [ROADMAP.md](ROADMAP.md) Now 2-5 (working notes, not in the repo). Not built; each needs its own number before and after.
+- 💡 **She tunes her own end-of-turn wait per person** (owner idea, 2026-11-14): from counts of talk after the close, household-wide first, then per person once voice ID is verified, inside a floor and ceiling, with a spoken override ("give me a second to think"). Scheduled as ROADMAP Next 2.
+- 💡 **A visual "heard you" glow**: the orb softens the instant she stops listening. Truthful, silent, works at night; the silent half of every receipt sound.
+- 💡 **A rising "mm?" when only her name was said**: replaces the follow-up beep; true by construction, she heard her name and is waiting.
+- 💡 **An honest "this one's taking me a minute"** past about 5 s on slow chat turns, in place of silence.
+- 💡 **The receipt matches how the person spoke**: a quiet, slow voice gets the softest take, a brisk one a short take or none; from speech level and pace only, never a claimed feeling. Needs the instrument first.
+- 💡 **A held pause before a comforting reply**: a planned silence of about 400 ms before the first word, presence rather than dead air.
+- 💡 **Back-channel sounds during a long story** (research): only at long sentence-final pauses, rare; blocked while the speaker-mic mutes itself during playback.
+- 💡 **She learns each person's pauses**: a person who often keeps talking after the close gets a longer wait and fewer receipt sounds; counts only.
+- 💡 **The calendar fetch moves into the credential broker**, so a calendar link never reaches the assistant's own service.
+- 💡 **The router learns how to talk to the brain from outcomes**: a route hint (tool groups, rule ids) learned from what worked, flag-dark and A/B'd on the voice corpus; the no-subscription evolution tier.
+- 💡 **A speculative start on pre-brain work while the person is still speaking** (recall, embeddings, context assembly), narrower than the flag-dark whole-turn speculation of B1.1.
+
+### Routines: a daily checklist she walks you through, and catches what you forgot — 💡 pinned
+- **Source:** owner idea, 2026-11-14. Not built; nothing measured.
+- **Core:** a routine is a named, ordered checklist per person, tied to an anchor (waking, a meal, leaving, bed) rather than a clock time, and started fresh each day. Each step is pending, done, skipped or snoozed, and she knows which because she was told, the panel was tapped, or a sensor saw it; when she is not sure she asks ("have you had your tablets?") rather than ticking.
+- 💡 **A one-off joins tomorrow's routine**: "remind me to take the drill to work tomorrow" is not a to-do and not a clock reminder; it is one extra line on tomorrow's morning routine, gone the day after.
+- 💡 **The leaving catch**: an undone "take with you" step plus a leaving signal (the phone drops off the home network, a door sensor) sends a message: "I think you forgot the drill."
+- 💡 **A step can carry its how-to**: a carer writes the procedure once and she reads it back one line at a time, exactly as written. She never invents or changes a dose or a number (the medical safety floor stands).
+- 💡 **A step can carry a reading with bounds the carer set**: the spoken number is logged; outside the bounds she tells the carer and repeats the carer's own written instruction, never her own advice.
+- 💡 **The carer loop**: a missed step is prompted gently, then again, then the carer is told; one summary a day.
+- 💡 **Care mode** for someone who needs routine support: the day, the place, who is coming and what happens next, in the same calm short wording every time, on request and at waking.
+- **Order:** (1) routines, one-offs, ask-and-tick by voice and panel, carer told; no new sensors (builds on reminders, lists, proactive and push). (2) The leaving catch from phone presence. (3) Sensors confirm steps. (4) Care mode and a panel in a second home.
+- **Rules:** opt-in per person and per routine, silent for everyone else (unprompted speech stays off by default). A sensed tick for a medicine step must never be wrong: unsure means ask. Numbers to take before building: steps prompted, confirmed and missed per day; wrong ticks; time from a missed step to the carer being told; leaving catches right and wrong.
+
+### Deferred from review, 2026-11-14 (neither loses data) — 💡 pinned
+- 💡 **loop_block_stacks: snapshot the completed episode's lag at completion.** If the watcher is delayed past a second overdue tick, a stall's length can be attributed to the wrong episode. Diagnostic only.
+- 💡 **Value guard: count only number words used as quantities.** An incidental number word in a row ("one of them", "the two of us") makes `drops_value` refuse a replacement it could allow. It fails safe: both rows stay.
+- 💡 **A send timeout for voice frames on the panel socket.** `broadcast()` has none, so a voice send that hangs forever holds that socket's send lock: alarm frames to it are skipped as busy until the panel notices staleness (about 3 s) and falls back to its 2 s poll. Give voice sends the same bounded send, drop and close as the panel broadcast.
+- 💡 **push.py: a sender to a disconnected socket skips rather than taking a throwaway lock.** Today a late sender to a just-disconnected socket gets a throwaway lock and could overlap a send still in flight. It only affects a dead socket.

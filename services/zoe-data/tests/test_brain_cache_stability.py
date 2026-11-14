@@ -22,12 +22,13 @@ from pathlib import Path
 import pytest
 
 import flue_prompt_corpus as corpus
+import flue_turn_rig as rig
 import zoe_flue_client as zfc
 
 pytestmark = pytest.mark.ci_safe
 
 GOLDEN = json.loads((Path(__file__).parent / "fixtures" / "flue_prompt_golden.json").read_text())
-FLAGS = ("ZOE_BRAIN_VOLATILE_AFTER_USER", "ZOE_CONTINUITY_CEILING_S")
+FLAGS = ("ZOE_BRAIN_VOLATILE_AFTER_USER", "ZOE_CONTINUITY_CEILING_S", "ZOE_WRITE_CLAIM_CORRECTION")
 
 
 @pytest.fixture(autouse=True)
@@ -73,16 +74,96 @@ def _strip_envelopes(msg: str) -> str:
         msg = msg[m.end():]
 
 
-async def test_flag_on_the_words_lead_and_the_whole_recall_packet_moves_together(monkeypatch):
+def _expected_on(off_wire: str, words: str, risk: str = "", every_turn: str = "") -> str:
+    """What the flag-on message must be, derived from the flag-off bytes: the words, then the risk / every-turn blocks
+    that followed them, then the run that preceded them (verbatim, so its order and multiplicity are fixed), then the
+    rest of what followed. Exact string, no sorting."""
+    off = _strip_envelopes(off_wire)
+    i = off.index(words)
+    pre, post = off[:i].rstrip("\n"), off[i + len(words):]
+    lead = words
+    for b in (risk, every_turn):
+        if b and f"\n{b}" in post:
+            post = post.replace(f"\n{b}", "", 1)
+            lead = f"{lead}\n{b}"
+    return lead + (f"\n{pre}" if pre else "") + post
+
+
+@pytest.mark.parametrize("turn", corpus.TURNS, ids=[t[0] for t in corpus.TURNS])
+async def test_flag_on_exact_order_and_multiplicity_in_every_scenario(monkeypatch, turn):
     monkeypatch.setenv("ZOE_BRAIN_VOLATILE_AFTER_USER", "1")
-    turn = next(t for t in corpus.TURNS if t[0] == "recall_marker")
     on = _strip_envelopes(await corpus.render(monkeypatch, turn))
-    off = _strip_envelopes(GOLDEN["recall_marker"])
-    assert on.startswith(turn[1] + "\n")
-    packet = turn[2]["recall"]
-    assert packet in on and packet in off                         # the packet, marker inside, is intact and contiguous
-    assert sorted(on.split("\n")) == sorted(off.split("\n"))      # same lines, only their order changed
-    assert on.index(turn[2]["identity"]) < on.index(packet)       # the run keeps its own order
+    expected = _expected_on(GOLDEN[turn[0]], turn[1], turn[2].get("risk", ""), turn[2].get("every_turn", ""))
+    assert on == expected
+    for name, block in turn[2].items():                            # every block that was sent is sent exactly once
+        if block and name not in ("persona", "manner", "register", "now_card") and block in GOLDEN[turn[0]]:
+            assert on.count(block) == GOLDEN[turn[0]].count(block) == 1, name
+
+
+async def _with_correction(monkeypatch, blocks, sid):
+    """A REAL pending claim correction for ``sid`` (claim_correction.note -> _claim_correction_line -> take)."""
+    import claim_correction
+
+    cap = rig.install(monkeypatch, blocks)
+    monkeypatch.setenv("ZOE_WRITE_CLAIM_CORRECTION", "1")
+    claim_correction.note(sid, "en", ["reminder"])
+    line = claim_correction.render("en", ("reminder",))
+    assert line
+    return cap, line
+
+
+@pytest.mark.parametrize("flag", ["0", "1"])
+async def test_the_real_claim_correction_moves_with_the_recall_packet(monkeypatch, flag):
+    monkeypatch.setenv("ZOE_BRAIN_VOLATILE_AFTER_USER", flag)
+    words = "What did I ask you to remind me about?"
+    recall = corpus.mem("- synthetic reminder fact\n(pending correction: synthetic marker)")
+    cap, line = await _with_correction(monkeypatch, {"identity": corpus.IDENTITY, "recall": recall}, "voice-panel-cc")
+    on = _strip_envelopes(await rig.outbound(cap, words, session_id="voice-panel-cc"))
+    if flag == "1":
+        assert on == f"{words}\n{corpus.IDENTITY}\n{line}\n{recall}"
+    else:   # off: exactly as before - the run, then the correction opening the user's message
+        assert on == f"{corpus.IDENTITY}\n{recall}\n{line}\n{words}"
+
+
+async def test_flag_on_safety_blocks_sit_right_after_the_words(monkeypatch):
+    monkeypatch.setenv("ZOE_BRAIN_VOLATILE_AFTER_USER", "1")
+    words = "I'm going to drive after two beers."
+    risk = corpus.mem("- risk: synthetic")
+    et = corpus.mem("- synthetic durable fact")
+    blocks = {"identity": corpus.IDENTITY, "bridge": corpus.mem("x", "where you and this user left off"),
+              "notes": corpus.mem("y", "notes from earlier conversations with this person"),
+              "fastpath": corpus.mem("z", "what was just said in this same conversation"), "risk": risk, "every_turn": et}
+    cap, line = await _with_correction(monkeypatch, blocks, "voice-panel-safe")
+    on = _strip_envelopes(await rig.outbound(cap, words, session_id="voice-panel-safe"))
+    assert on == "\n".join([words, risk, et, corpus.IDENTITY, blocks["bridge"], blocks["notes"], blocks["fastpath"], line])
+
+
+@pytest.mark.parametrize("which", ["distress", "medical", "restraint"])
+@pytest.mark.parametrize("flag", ["0", "1"])
+async def test_distress_medical_restraint_answer_before_any_block(monkeypatch, which, flag):
+    """These three answer in code before the turn assembles anything: with the flag on or off the fixed reply is the
+    whole turn, in that precedence order, and no message reaches the sidecar."""
+    import distress_handoff
+    import medical_safety
+    import restraint
+
+    monkeypatch.setenv("ZOE_BRAIN_VOLATILE_AFTER_USER", flag)
+    cap = rig.install(monkeypatch, {n: corpus.mem(n) for n in rig.BLOCK_NAMES if n != "verify"})
+    order = []
+
+    def stub(name, reply):
+        async def _f(*_a, **_k):
+            order.append(name)
+            return reply
+        return _f
+
+    monkeypatch.setattr(distress_handoff, "handle", stub("distress", "FIXED-D" if which == "distress" else ""))
+    monkeypatch.setattr(medical_safety, "handle", stub("medical", "FIXED-M" if which == "medical" else ""))
+    monkeypatch.setattr(restraint, "handle_turn", stub("restraint", "FIXED-R" if which == "restraint" else ""))
+    out = [c async for c in zfc.run_flue_brain_streaming("synthetic words", "voice-panel-sf", "rig-member")]
+    assert out == [{"distress": "FIXED-D", "medical": "FIXED-M", "restraint": "FIXED-R"}[which]]
+    assert order == ["distress", "medical", "restraint"][: ["distress", "medical", "restraint"].index(which) + 1]
+    assert "msg" not in cap and cap["calls"] == []                 # nothing assembled, nothing sent
 
 
 async def test_flag_on_the_envelope_lines_are_untouched(monkeypatch):

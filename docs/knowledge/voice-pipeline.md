@@ -256,8 +256,9 @@ changed since the session's previous turn (`member_switch`, `tool_block_changed`
 also logs `FLUE_PREPOST total_ms= ... <block>_ms=`: what the context-block awaits cost before the POST (numbers only).
 
 **Prompt-cache stability flags (flag-dark, 2026-11-14 speed audit B3 / B6; replay-gate before turning on).**
-`ZOE_BRAIN_VOLATILE_AFTER_USER=1` moves the delimited blocks that ride BEFORE the user's words (identity, bridge, notes,
-fast-path, the recall packet whole, offer / list share, hop preamble) to right after them, in the same order. The sidecar
+`ZOE_BRAIN_VOLATILE_AFTER_USER=1`: the user's words lead; right after them the risk-cue and every-turn blocks; then the run
+that rode BEFORE the words, in its own order (identity, bridge, notes, fast-path, the claim-correction line, the recall
+packet whole, offer / list share, hop preamble); then continuity / hop / brief / raise / date / verify as before. The sidecar
 elides every block from older user messages (`ZOE_BRAIN_ELIDE_STALE_BLOCKS`), so with the blocks first the previous turn's
 cached bytes diverge before its words; after the words they stay equal through them (pinned, hash-equal, by
 `services/zoe-data/tests/test_brain_cache_stability.py`; off = byte-identical to a golden corpus). The saving per elided

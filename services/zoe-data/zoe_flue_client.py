@@ -1830,7 +1830,8 @@ async def _continuity_debug_uid(user_id: str) -> bool:
 # ~20 sequential context-block awaits run before every brain POST and nothing measured them. One line per turn that
 # reaches the POST: ``total_ms`` (wrapper entry -> payload built), one ``<block>_ms`` per await that ran (a skipped
 # block has no field), ``other_ms`` (the rest: the synchronous note_turn calls, assembly). Numbers and fixed block
-# names only - never text, never an id other than the session. Measurement only: nothing awaited changes order or bytes.
+# names only - never text, never a raw id (the session is a short hash, ``sid=``). Measurement only: nothing awaited
+# changes order or bytes.
 _PREPOST_BLOCKS = (
     # the wrapper (run_flue_brain_streaming), in call order
     "distress", "medical", "restraint", "brief", "raise", "debug",
@@ -1900,7 +1901,8 @@ class _PrepostTimer:
         ran = [b for b in _PREPOST_BLOCKS if b in self.ms]
         blocks = sum(self.ms[b] for b in ran if b not in _PREPOST_NESTED)
         fields = " ".join(f"{b}_ms={int(round(self.ms[b]))}" for b in ran)
-        return (f"FLUE_PREPOST session={session_id} total_ms={int(round(total))} blocks_ms={int(round(blocks))} "
+        # ``sid`` is a short hash, never the raw session id (join: ``_short_hash(<session id>)``)
+        return (f"FLUE_PREPOST sid={_short_hash(str(session_id or ''))} total_ms={int(round(total))} blocks_ms={int(round(blocks))} "
                 f"other_ms={int(round(max(0.0, total - blocks)))} "
                 f"awaited={sum(1 for b in ran if b not in _PREPOST_NESTED)}" + (f" {fields}" if fields else ""))
 
@@ -3210,10 +3212,11 @@ async def run_flue_brain_streaming(
 
 
 def _volatile_after_user_enabled() -> bool:
-    """``ZOE_BRAIN_VOLATILE_AFTER_USER`` (default OFF; speed audit 2026-11-14 B3). The run of delimited blocks that today
-    rides BEFORE the user's words (identity -> bridge -> notes -> fast-path -> recall packet -> offer / list share ->
-    hop preamble; the recall packet whole, any marker inside it included) moves to right AFTER them, ahead of the
-    continuity / hop / risk / every-turn / brief / raise blocks, keeping its own order. Why: the sidecar elides every
+    """``ZOE_BRAIN_VOLATILE_AFTER_USER`` (default OFF; speed audit 2026-11-14 B3). The user's words lead the message.
+    Right after them: the risk cue and every-turn blocks (the turn's safety / own-fact context). Then the run that today
+    rides BEFORE the words, in its own order: identity -> bridge -> notes -> fast-path -> the claim-correction line ->
+    the recall packet (whole, any marker inside it included) -> offer / list share -> hop preamble. Then continuity /
+    hop / brief / raise / date / verify as before. (Distress, medical and restraint answer in code before any of this.) Why: the sidecar elides every
     block from all but the newest user message (ZOE_BRAIN_ELIDE_STALE_BLOCKS), so the stored copy of the previous turn
     changes at the block's position; with the block first that re-prefills the words, the reply and the new turn, with
     the block after the words the previous turn's cached bytes still match through the words. Off = exactly the bytes
@@ -3456,19 +3459,31 @@ async def _run_flue_brain_streaming_turn(
     # sidecar's history still holds the claim the model made with no tool call, so this turn opens with one plain line saying it
     # did not happen. Not a delimited block, so the sidecar's stale-block elision keeps it next to the claim it corrects.
     correction = "" if kwargs.get("replay_isolation") else _claim_correction_line(session_id)
-    if correction:
-        safe_message = f"{correction}\n{safe_message}"
-    if _blocks and _volatile_after_user_enabled():
-        brain_message = f"{safe_message}\n{_blocks}"   # B3: the words lead; an elided block diverges only after them
+    volatile_after = _volatile_after_user_enabled()
+    if volatile_after:
+        # B3: the words lead, so an elided block diverges only after them. Straight after the words come the risk cue and
+        # the member's own facts (the turn's safety / correctness context, unchanged in content), then the run that used to
+        # ride ahead of the words, in its own order, with the claim correction moved WITH it (ahead of the recall packet:
+        # it corrects the reply the history holds, and the packet is what the model answers from).
+        brain_message = safe_message
+        for b in (risk_block, every_turn_block):
+            if b:
+                brain_message = f"{brain_message}\n{b}"
+        _run = "\n".join(b for b in (identity_block, bridge_block, notes_block, fastpath_block, correction, recall_block,
+                                      offer_block, hop_block if hop_placement == "preamble" else "") if b)
+        if _run:
+            brain_message = f"{brain_message}\n{_run}"
     else:
+        if correction:
+            safe_message = f"{correction}\n{safe_message}"
         brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"
     if hop_block and hop_placement != "preamble":   # block: the delimited block after the words; suffix: ONE line
         brain_message = f"{brain_message}\n{hop_block}"
-    if risk_block:   # after the user's words, like the hop block (the two are never both present)
+    if risk_block and not volatile_after:   # after the user's words, like the hop block (the two are never both present)
         brain_message = f"{brain_message}\n{risk_block}"
-    if every_turn_block:   # after the user's words; never beside another memory block (gated above)
+    if every_turn_block and not volatile_after:   # after the user's words; never beside another memory block (gated above)
         brain_message = f"{brain_message}\n{every_turn_block}"
     # First-turn day brief (brief_first_turn, default OFF): same position as the
     # continuity block — after the user's words, inside the latest user message.
