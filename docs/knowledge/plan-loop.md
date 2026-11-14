@@ -78,6 +78,33 @@ with source `plan_loop`, which is how the write-claim guard sees exactly the pro
 The table gained three receipt kinds the writers already record: `list_remove` -> `list_removed`, `memory_store` -> `memory`,
 `memory_retire` -> `forget`.
 
+## The truthful reply (`services/zoe-data/plan_loop_reply.py`)
+
+`render(result)` writes one sentence per part, in plan order, from the outcomes. No model writes a word of it.
+
+| outcome | what is said |
+|---|---|
+| `done` (write) | the TOOL's own sentence with the step's arguments: "I added floss to the shopping list." |
+| `done` (read) | what the read returned |
+| `failed` | "I couldn't add floss to the shopping list." |
+| `uncertain` (timeout / error) | "I tried to ..., but I can't confirm it went through, so please check before asking again." |
+| `uncertain` (no receipt) | "I asked to ..., but I can't confirm it happened." |
+| `skipped` | "I ran out of time before I could ..." / "I didn't ..., because the step before it didn't work." |
+| a part with no tool | "I don't have a way to do this yet: “move my dentist reminder to friday”." |
+| a refused plan | "I haven't done any of that." plus one line: needs a grown-up / needs a household member / needs someone I recognise / needs a yes first / the fridge rule / too many at once |
+
+The words of a done sentence come from the tool that ran, never from how the person phrased the ask, so a new reminder is
+"I set a reminder", never "I moved it". Only the `done` branch can produce a sentence that says something happened. Argument
+text is cut to one short clause (no sentence breaks), so a list item cannot carry a second sentence into the reply.
+
+`speak(result, speaker, started)` then passes the text through the existing write-claim guard
+(`write_claim_guard.guard_text`, lane `plan_loop`) with the caller's turn start. It is integrated, not replaced: every done
+phrase is one the guard reads as a claim of that tool's receipt kind (pinned by a test over the whole table), and the guard
+finds the receipt because the core re-recorded each proven write in the caller's turn. If the renderer ever claimed an
+unproven write, the guard would replace the sentence (negative control: a forged `done` outcome).
+
+A plan refused by a safety floor renders as nothing: the distress / medical floor owns that turn's reply.
+
 ## The flag
 
 `ZOE_PLAN_LOOP` = `off` (default: `run` returns before touching anything) | `shadow` (judge the plan, log codes and counts,
