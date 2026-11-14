@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import sys
+import sysconfig
 import time
 
 import pytest
@@ -37,6 +39,18 @@ def _block_other(s: float) -> None:
 def _block_with_secret(sentence: str, s: float) -> None:
     said = sentence.upper()  # noqa: F841 - a local holding what a person said
     time.sleep(s)
+
+
+def _wrapper(s: float) -> None:
+    time.sleep(s)
+
+
+def _caller_a() -> None:
+    _wrapper(0.4)
+
+
+def _caller_b() -> None:
+    _wrapper(0.4)
 
 
 def _two_calls() -> None:
@@ -124,7 +138,8 @@ async def test_third_party_call_is_attributed_via_its_package(watcher, caplog, t
 async def test_no_local_or_argument_reaches_any_record_even_at_debug(watcher, caplog):
     lines = await _blocked(caplog, _block_with_secret, PLANTED, 0.4)
     assert ":_block_with_secret:" in _field(lines[0], "top")
-    assert any(r.getMessage().startswith("EVENT_LOOP_BLOCK_FRAMES") for r in caplog.records)  # DEBUG ran
+    frames = [r for r in caplog.records if r.getMessage().startswith("EVENT_LOOP_BLOCK_FRAMES")]
+    assert frames and frames[0].levelno == logging.WARNING  # first sight of this fp: the WARNING line is the one checked
     text = " ".join(r.getMessage() for r in caplog.records) + repr(lbs.snapshot())
     assert "Quillon" not in text and "QUILLON" not in text and "twins" not in text.lower()
 
@@ -199,3 +214,77 @@ async def test_clean_shutdown(watcher):
     t = time.monotonic()
     lbs.stop()
     assert not watcher.is_alive() and time.monotonic() - t < 1.5
+
+
+STD = sysconfig.get_paths()["stdlib"]
+
+
+def _raw(caller: str | None, wrapper: bool = True) -> list:
+    """A synthetic httpx call through brain_scheduler's send wrapper, outermost first."""
+    raw = [(f"{STD}/asyncio/events.py", "_run", 80)]
+    if caller:
+        raw.append((os.path.join(lbs.ROOT, caller), "answer", 12))
+    raw.append(("/v/lib/python3.12/site-packages/httpx/_client.py", "post", 1100))
+    if wrapper:
+        raw.append((os.path.join(lbs.ROOT, "brain_scheduler.py"), "send", 282))
+    raw += [("/v/lib/python3.12/site-packages/httpx/_client.py", "send", 1600),
+            ("/v/lib/python3.12/site-packages/httpcore/_sync.py", "handle", 10)]
+    return raw
+
+
+def test_registered_wrapper_is_transparent_and_reported_as_thru():
+    r = lbs.reduce(_raw("routers/fake_chat.py"))
+    assert r["top"] == "routers/fake_chat.py:answer:12" and r["via"] == "httpx"
+    assert r["thru"] == "brain_scheduler.py:send"
+    assert r["frames"] == ["brain_scheduler.py:send:282", "routers/fake_chat.py:answer:12"]  # the path stays honest
+    assert lbs.reduce(_raw("routers/fake_other.py"))["fp"] != r["fp"]  # different callers, different fingerprints
+    plain = lbs.reduce(_raw("routers/fake_chat.py", wrapper=False))  # control: an unwrapped own frame is named as today
+    assert plain["top"] == "routers/fake_chat.py:answer:12" and plain["thru"] == "-"
+
+
+def test_wrapper_with_no_own_caller_gives_no_top():
+    r = lbs.reduce(_raw(None))
+    assert r["top"] == "-" and r["thru"] == "brain_scheduler.py:send" and r["via"] == "httpcore"
+
+
+def test_negative_control_empty_registry_names_the_wrapper_again(monkeypatch):
+    monkeypatch.setattr(lbs, "PASSTHROUGH", frozenset())
+    r = lbs.reduce(_raw("routers/fake_chat.py"))
+    assert r["top"] == "brain_scheduler.py:send:282" and r["thru"] == "-"
+
+
+async def test_live_block_through_a_wrapper_names_each_caller(watcher, caplog, monkeypatch):
+    monkeypatch.setattr(lbs, "PASSTHROUGH", frozenset({("test_loop_block_stacks.py", "_wrapper")}))
+    a = (await _blocked(caplog, _caller_a))[0]
+    b = (await _blocked(caplog, _caller_b, expect=2))[1]
+    assert _field(a, "top").startswith(f"{HERE}:_caller_a:") and _field(b, "top").startswith(f"{HERE}:_caller_b:")
+    assert _field(a, "thru") == f"{HERE}:_wrapper" and a.endswith(f" thru={HERE}:_wrapper")
+    assert _field(a, "fp") != _field(b, "fp")
+
+
+def test_no_own_frame_lists_package_frames_bounded():
+    long_fn = "validate_" + "x" * 300
+    raw = [(f"{STD}/asyncio/events.py", "_run", 80)] + [
+        (f"/v/lib/python3.12/site-packages/pydantic/m{i}.py", long_fn if i == 6 else f"f{i}", i) for i in range(7)]
+    r = lbs.reduce(raw)
+    assert r["top"] == "-" and r["via"] == "pydantic" and r["thru"] == "-"
+    assert len(r["frames"]) == lbs.OWN_FRAMES and r["frames"][1:] == [f"pydantic:f{i}:{i}" for i in (5, 4, 3, 2)]
+    assert all("/" not in f and "site-packages" not in f for f in r["frames"])
+
+
+def test_frames_line_warns_on_first_sight_then_debug_and_is_capped(caplog):
+    caplog.set_level(logging.DEBUG, logger="loop_block_stacks")
+    w = lbs._Watcher()
+
+    def levels(fp):
+        return [x.levelno for x in caplog.records if x.getMessage().startswith(f"EVENT_LOOP_BLOCK_FRAMES fp={fp} ")]
+
+    r = {"top": "x.py:f:1", "via": "-", "depth": 3, "fp": "0000aaaa", "frames": ["x.py:f:1"], "thru": "-"}
+    w._emit(0.3, r, None)
+    w._emit(0.3, r, None)
+    assert levels("0000aaaa") == [logging.WARNING, logging.DEBUG]
+    for i in range(30):
+        w._emit(0.3, {**r, "fp": f"{i:08x}", "frames": ["p:" + "y" * 300]}, None)
+    warned = [x for x in caplog.records if x.levelno == logging.WARNING and "BLOCK_FRAMES" in x.getMessage()]
+    assert len(warned) == lbs.FRAMES_WARN_FPS
+    assert max(len(x.getMessage().split(" frames=", 1)[1]) for x in warned) == lbs.LABEL_MAX  # the long label was cut
