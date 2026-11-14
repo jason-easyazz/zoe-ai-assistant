@@ -26,7 +26,7 @@ only: the in-process registry keeps deciding until a later step flips it.
 | `role` | `superseded` (corrected away) or `asserted` (corrected to) |
 | `value_norm` | canonical JSON of numbers and enum codes in the value shapes of `memory_claims` (PR #2477): `{"v":8.0}` (age), `{"cur":"AUD","v":"13500"}` (amount: a decimal numeral string), `{"v":3}` (count), `{"d":19,"m":12}`; `normalise` refuses anything else |
 | `said_at`, `expires_at`, `created_at` | epoch seconds; rows expire 7 days after `said_at` (swept on the next record) |
-| `by_claim`, `source_turn_id`, `row_ids` | ids only: the claim, the turn's content id (`people_graph.content_turn_id`), the memory rows involved |
+| `by_claim`, `source_turn_id`, `row_ids` | ids of their REAL shapes only, refused otherwise: a claim hash (`[vc-]` + 16 hex), the turn's content id (`ut-` + 16 hex), memory row ids of THIS member (`zoe_<member>_<24 hex>`); `subject_ref` is `self` or a uuid4; `user_id` is a member id, never a guest |
 
 The read: `is_superseded(user, subject_ref, attribute, value, said_at)`. Only entries said AFTER `said_at` count. The newest assertion
 of a value cancels an older `superseded` of it (A -> B -> A keeps A). For `age` and `birthday` (one value per person) a newer
@@ -51,7 +51,7 @@ Erased in every flag mode (rows written while the flag was on must still go afte
 | "forget that" | `erase_for_turn` (the turn's content id, tied rows) | `intent_router` `memory_forget_last` |
 | any physical row erase | `erase_for_rows` (fail closed, before the rows go) | `MemoryService.erase_rows` |
 
-A record racing a forget loses: it writes under the member's erase gate and re-checks after its commit that the person still exists.
+A record racing a forget loses. Every eraser runs under the member's erase gate (the lock `record` holds through its commit; the cascade's entity step, which shares the cascade's connection, is the one exception) and bumps a per-member partial-erase epoch when it starts and ends. `record` snapshots that epoch when it is scheduled and takes itself back if it moved, before its insert and again after its commit, and it also re-checks that the person still exists.
 The inventory entry is in `forget_reach.py`; the topic / turn / rows call sites are pinned by `test_memory_value_registry.py`.
 
 ## Log lines (counts and fixed codes only: no user id, subject or value)

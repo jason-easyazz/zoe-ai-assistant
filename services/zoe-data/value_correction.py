@@ -942,6 +942,18 @@ async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
     return max(len(ids), 1)
 
 
+def _registry_snapshot(user_id: str) -> tuple:
+    """``(partial_at, scheduled_at)`` for the shadow registry record: the erase epochs as this correction started. Never raises."""
+    try:
+        import memory_value_registry as reg
+        import user_erase_gate
+
+        uid = (user_id or "").strip().lower()
+        return reg.partial_epoch(uid), user_erase_gate.generation(uid)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
 _PLAIN_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z'’\-]{0,24}(?: [A-Za-z][A-Za-z'’\-]{0,24})?$")
 
 
@@ -952,7 +964,8 @@ def _age_norm(value: Optional[str]) -> Optional[dict]:
     return {"v": x} if x is not None else None
 
 
-async def _shadow_record(user_id: str, user_message: str, corr: "Correction", displaced: list, row_ids) -> None:
+async def _shadow_record(user_id: str, user_message: str, corr: "Correction", displaced: list, row_ids,
+                         partial_at: Optional[int] = None, scheduled_at: Optional[int] = None) -> None:
     """``ZOE_MEMORY_SUPERSEDED_REGISTRY`` shadow: record this correction in the durable registry BESIDE ``_remember`` (which keeps
     deciding). v1 records only what it can normalise without words: an AGE of a plain name that resolves to exactly ONE person of
     the member by an exact (folded) name match - never a prefix or token match (the Ana / Ana-Lise class), never a relation, label
@@ -988,7 +1001,7 @@ async def _shadow_record(user_id: str, user_message: str, corr: "Correction", di
         turn = content_turn_id(uid, user_message)
         claim = "vc-" + hashlib.sha256(f"{uid}|{turn}|{said_at!r}".encode("utf-8")).hexdigest()[:16]
         await reg.record(uid, res.person_id, "age", superseded=olds, asserted=new, said_at=said_at, by_claim=claim,
-                         source_turn_id=turn, row_ids=[i for i in row_ids if i])
+                         source_turn_id=turn, row_ids=[i for i in row_ids if i], partial_at=partial_at, scheduled_at=scheduled_at)
     except Exception as exc:  # noqa: BLE001 - shadow bookkeeping never touches the correction
         logger.debug("value_correction: shadow registry skipped (%s)", type(exc).__name__)
 
@@ -1002,6 +1015,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
     corr = statement(user_message)
     if corr is None:
         return 0
+    _reg_snap = _registry_snapshot(user_id)       # before the rows are read: an erase from here on drops the shadow record
     try:
         from correction_apply import SOURCE, _is_unidentified, note_correction
 
@@ -1078,7 +1092,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         for old in [d for d in displaced if d] or [None]:
             _remember(user_id, corr._replace(old=old) if old else corr)
         if not hits or len(hits) > MAX_ROWS:
-            await _shadow_record(user_id, user_message, corr, displaced, ())
+            await _shadow_record(user_id, user_message, corr, displaced, (), *_reg_snap)
             return 0
         excerpt = " ".join(user_message.split())
         done = 0
@@ -1091,7 +1105,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
             if ref is not None:
                 done += 1
                 tied.append(getattr(ref, "id", None))
-        await _shadow_record(user_id, user_message, corr, displaced, tied)
+        await _shadow_record(user_id, user_message, corr, displaced, tied, *_reg_snap)
         if done:
             logger.info("VALUE_CORRECTION_APPLIED user=%s rows=%d", user_id, done)
         return done

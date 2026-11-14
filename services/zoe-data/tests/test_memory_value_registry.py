@@ -12,12 +12,14 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
+import hashlib
 import importlib.util
 import json
 import logging
 import re
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -35,7 +37,29 @@ pytestmark = pytest.mark.ci_safe
 SVC = Path(__file__).resolve().parents[1]
 MIG = SVC / "alembic/versions/0080_memory_value_registry.py"
 A, B = "demo_mvr_member_a", "demo_mvr_member_b"
-JUNO, WREN, OTHER_JUNO = "p-0001", "p-0002", "p-0003"
+
+
+def U(tag: str) -> str:
+    """A people.id as every people writer mints it (uuid4)."""
+    return str(uuid.UUID(hashlib.md5(tag.encode()).hexdigest(), version=4))
+
+
+def R(user: str, tag: str) -> str:
+    """A memory row id as memory_service._memory_id mints it: zoe_<member>_<sha256[:24]>."""
+    return f"zoe_{user}_{hashlib.sha256(tag.encode()).hexdigest()[:24]}"
+
+
+def T(tag: str) -> str:
+    """A turn content id (people_graph.content_turn_id's shape)."""
+    return "ut-" + hashlib.sha1(tag.encode()).hexdigest()[:16]
+
+
+def C(tag) -> str:
+    """A claim id (memory_claims.claim_id's shape)."""
+    return hashlib.sha256(str(tag).encode()).hexdigest()[:16]
+
+
+JUNO, WREN, OTHER_JUNO = U("juno"), U("wren"), U("juno-b")
 T0 = float(int(time.time()))
 NAMES = ("Juno", "Wren")
 PEOPLE = ("CREATE TABLE people (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, relationship TEXT, deleted INTEGER DEFAULT 0, "
@@ -107,14 +131,14 @@ def _age(x):
 
 def _rec(user, subject, old, new, at, *, attribute="age", turn=None, rows=(), claim=None):
     return run(reg.record(user, subject, attribute, superseded=[old] if old is not None else [], asserted=new, said_at=at,
-                          by_claim=claim or f"c-{int(at)}", source_turn_id=turn, row_ids=rows, now=at))
+                          by_claim=claim or C(int(at)), source_turn_id=turn, row_ids=rows, now=at))
 
 
 def _seed(db):
     """Member A: Juno 7 -> 8 (turn t1, rows r1/r1n), Wren 3 -> 4 (turn t2, rows r2/r2n). Member B: their own Juno."""
-    assert _rec(A, JUNO, _age(7), _age(8), T0, turn="ut-aaaa", rows=["zoe_x_r1", "zoe_x_r1n"]) == 2
-    assert _rec(A, WREN, _age(3), _age(4), T0 + 1, turn="ut-bbbb", rows=["zoe_x_r2", "zoe_x_r2n"]) == 2
-    assert _rec(B, OTHER_JUNO, _age(5), _age(6), T0 + 2, turn="ut-cccc", rows=["zoe_y_r9"]) == 2
+    assert _rec(A, JUNO, _age(7), _age(8), T0, turn=T("aaaa"), rows=[R(A, "r1"), R(A, "r1n")]) == 2
+    assert _rec(A, WREN, _age(3), _age(4), T0 + 1, turn=T("bbbb"), rows=[R(A, "r2"), R(A, "r2n")]) == 2
+    assert _rec(B, OTHER_JUNO, _age(5), _age(6), T0 + 2, turn=T("cccc"), rows=[R(B, "r9")]) == 2
     return db
 
 
@@ -264,19 +288,31 @@ def test_entries_expire_after_seven_days(db):
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"subject": "Juno"},                     # a NAME is not a person id: no people row has that id
-    {"subject": "Juno Hale"},                # not even id-shaped
-    {"subject": "p-nobody"},                 # an id of nobody
+    {"subject": "Juno"}, {"subject": "juno"}, {"subject": "daughter"}, {"subject": "Juno Hale"},   # a NAME is never a person id
+    {"subject": U("nobody")},                # a well-shaped id of nobody (no people row)
+    {"subject": OTHER_JUNO},                 # another member's person
     {"old": {"v": "seven"}},
-    {"turn": "my daughter juno is 8"},       # words where an id goes
-    {"rows": ["a row text with spaces"]},
-    {"claim": "juno is 8 not 7"},
+    {"turn": "Juno"}, {"turn": "daughter"}, {"turn": "secret_note"}, {"turn": "my daughter juno is 8"},
+    {"turn": "ut-juno"}, {"turn": "ut-" + "a" * 15},
+    {"rows": ["Juno"]}, {"rows": ["daughter"]}, {"rows": ["secret_note"]}, {"rows": ["a row text with spaces"]},
+    {"rows": [R(B, "r1")]},                  # another member's row id
+    {"rows": ["zoe_" + A + "_juno"]},
+    {"claim": "Juno"}, {"claim": "daughter"}, {"claim": "secret_note"}, {"claim": "juno is 8 not 7"}, {"claim": "vc-juno"},
+    {"user": "Juno Hale"}, {"user": "guest-1234"}, {"user": "guest"}, {"user": ""},
 ])
 def test_record_refuses_names_words_and_unknown_subjects(db, kwargs):
-    assert run(reg.record(A, kwargs.get("subject", JUNO), "age", superseded=[kwargs.get("old", _age(7))], asserted=_age(8),
-                          said_at=T0, by_claim=kwargs.get("claim", "c-1"), source_turn_id=kwargs.get("turn", "ut-1"),
-                          row_ids=kwargs.get("rows", ["zoe_x_r1"]), now=T0)) == 0
+    assert run(reg.record(kwargs.get("user", A), kwargs.get("subject", JUNO), "age", superseded=[kwargs.get("old", _age(7))],
+                          asserted=_age(8), said_at=T0, by_claim=kwargs.get("claim", C(1)), source_turn_id=kwargs.get("turn", T("1")),
+                          row_ids=kwargs.get("rows", [R(A, "r1")]), now=T0)) == 0
     assert db.q("SELECT COUNT(*) FROM memory_value_registry") == [(0,)]
+
+
+def test_the_well_shaped_ids_are_accepted(db):
+    """Control for the refusals above: the same call with every id in its real shape writes."""
+    assert run(reg.record(A, JUNO, "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim=C(1), source_turn_id=T("1"),
+                          row_ids=[R(A, "r1")], now=T0)) == 2
+    assert run(reg.record(A, JUNO, "age", superseded=[_age(8)], asserted=_age(9), said_at=T0 + 1, by_claim="vc-" + C(2),
+                          now=T0 + 1)) == 2
 
 
 def test_a_member_erase_in_flight_drops_the_record(db):
@@ -285,7 +321,7 @@ def test_a_member_erase_in_flight_drops_the_record(db):
     async def go():
         async with user_erase_gate.erasing(A):
             pass
-        return await reg.record(A, JUNO, "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim="c-1",
+        return await reg.record(A, JUNO, "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim=C(1),
                                 scheduled_at=gen, now=T0)
     assert run(go()) == 0
     assert db.q("SELECT COUNT(*) FROM memory_value_registry") == [(0,)]
@@ -306,6 +342,94 @@ def test_a_subject_forgotten_while_the_record_writes_takes_the_record_with_it(db
 
 
 # ── 4. forget reach: every path, each with its control ─────────────────────────────────────
+
+SAID = "juno is 8 not 7"
+
+
+def _erasers():
+    from people_graph import content_turn_id
+
+    return {
+        "topic": lambda: reg.erase_topic(A, row_ids=[R(A, "r7")]),
+        "turn": lambda: reg.erase_for_turn(A, SAID),
+        "rows": lambda: reg.erase_for_rows(A, [R(A, "r7")]),
+    }, content_turn_id(A, SAID)
+
+
+async def _naive_erase(db):
+    """The race the gate closes: read, select and delete with no gate and no epoch (what ``_erase_where`` did before)."""
+    rows = await reg._fetch(db, "SELECT id, row_ids FROM memory_value_registry WHERE user_id = ?", (A,))
+    await asyncio.sleep(0.01)
+    for r in rows:
+        if R(A, "r7") in json.loads(r[1]):
+            db.conn.execute("DELETE FROM memory_value_registry WHERE id = ?", (r[0],))
+    db.conn.commit()
+
+
+def _race(db, monkeypatch, eraser, *, before_insert=True):
+    """A record pauses INSIDE its write (holding the gate, after its pre-insert checks) while ``eraser`` starts; returns the
+    record's result and the entries left that the erase should have reached."""
+    _er, turn = _erasers()
+
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        real = reg._person_live
+        calls = {"n": 0}
+
+        async def paused(conn, uid, pid):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                entered.set()
+                await release.wait()
+            return await real(conn, uid, pid)
+        monkeypatch.setattr(reg, "_person_live", paused)
+        rec = asyncio.create_task(reg.record(A, JUNO, "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim=C(7),
+                                             source_turn_id=turn, row_ids=[R(A, "r7")], now=T0))
+        await entered.wait()
+        er = asyncio.create_task(eraser())
+        await asyncio.sleep(0.02)            # the eraser has started: queued on the gate (or, ungated, already read)
+        release.set()
+        out = await rec
+        await er
+        return out
+    out = run(go())
+    return out, db.q("SELECT COUNT(*) FROM memory_value_registry WHERE user_id = ?", (A,))[0][0]
+
+
+def test_the_race_is_real_without_the_gate(db, monkeypatch):
+    """Harness control: an ungated read-select-delete erase that starts while a record is writing leaves the record's entries."""
+    out, left = _race(db, monkeypatch, lambda: _naive_erase(db))
+    assert out == 2 and left == 2
+
+
+@pytest.mark.parametrize("path", ["topic", "turn", "rows"])
+def test_an_erase_that_starts_while_a_record_writes_leaves_nothing(db, monkeypatch, path):
+    erasers, _turn = _erasers()
+    out, left = _race(db, monkeypatch, erasers[path])
+    assert left == 0, f"{path}: an entry survived a completed forget"
+    assert out == 0                               # the record took itself back (the epoch moved under it)
+
+
+@pytest.mark.parametrize("path", ["topic", "turn", "rows"])
+def test_a_record_scheduled_before_an_erase_never_lands_after_it(db, path):
+    erasers, turn = _erasers()
+    part, gen = reg.partial_epoch(A), user_erase_gate.generation(A)       # the record is SCHEDULED here...
+    run(erasers[path]())                                                    # ...the erase runs to completion...
+    assert run(reg.record(A, JUNO, "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim=C(7), source_turn_id=turn,
+                          row_ids=[R(A, "r7")], partial_at=part, scheduled_at=gen, now=T0)) == 0     # ...and the late write is dropped
+    assert db.q("SELECT COUNT(*) FROM memory_value_registry") == [(0,)]
+
+
+def test_the_scheduled_before_control_writes_when_no_erase_ran(db):
+    part, gen = reg.partial_epoch(A), user_erase_gate.generation(A)
+    assert run(reg.record(A, JUNO, "age", superseded=[_age(7)], asserted=_age(8), said_at=T0, by_claim=C(7), row_ids=[R(A, "r7")],
+                          partial_at=part, scheduled_at=gen, now=T0)) == 2
+
+
+def test_an_entity_erase_on_the_cascade_connection_also_drops_a_record_in_flight(db, monkeypatch):
+    out, left = _race(db, monkeypatch, lambda: reg.erase_entity(A, re.compile(r"\bzzz\b"), db=db))
+    assert out == 0 and left == 0                 # no name matched, yet the in-flight record took itself back (over-forget is safe)
+
 
 def test_member_erase_removes_every_row_of_the_member_only(db):
     _seed(db)
@@ -407,7 +531,7 @@ def test_topic_forget_through_the_real_path_removes_the_tied_and_the_named(db, f
     import forget_topic
 
     _seed(db)
-    svc = _registry_svc(("zoe_x_r1n", "User's daughter Juno is 8 years old and started school"))
+    svc = _registry_svc((R(A, "r1n"), "User's daughter Juno is 8 years old and started school"))
     res = run(forget_topic.forget(svc, A, "juno's school"))
     assert not res.store_down and res.forgotten == 1
     assert _subjects(db, A) == [WREN] and _subjects(db, B) == [OTHER_JUNO]
@@ -415,7 +539,7 @@ def test_topic_forget_through_the_real_path_removes_the_tied_and_the_named(db, f
 
 def test_topic_forget_by_a_tied_row_alone(db):
     _seed(db)
-    assert run(reg.erase_topic(A, row_ids=["zoe_x_r2"], name_matches=lambda _n: False)) == 2
+    assert run(reg.erase_topic(A, row_ids=[R(A, "r2")], name_matches=lambda _n: False)) == 2
     assert _subjects(db, A) == [JUNO]
 
 
@@ -425,7 +549,7 @@ def test_topic_forget_fails_closed_when_the_registry_cannot_be_reached(db, forge
     async def down(*_a, **_k):
         raise ConnectionError("pool lost")
     monkeypatch.setattr(reg, "erase_topic", down)
-    res = run(forget_topic.forget(_registry_svc(("zoe_x_r1n", "User's daughter Juno is 8 years old and started school")), A, "juno's school"))
+    res = run(forget_topic.forget(_registry_svc((R(A, "r1n"), "User's daughter Juno is 8 years old and started school")), A, "juno's school"))
     assert res.store_down and res.forgotten == 0                         # nothing archived behind a registry that kept its rows
 
 
@@ -464,15 +588,15 @@ def test_forget_that_through_the_real_path_removes_what_that_turn_recorded(db, m
 
     said = "juno is 8 not 7"
     turn = content_turn_id(A, said)
-    _rec(A, JUNO, _age(7), _age(8), T0, turn=turn, rows=["zoe_x_r5"])
-    _rec(A, WREN, _age(3), _age(4), T0, turn="ut-other", rows=["zoe_x_r6"])
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=turn, rows=[R(A, "r5")])
+    _rec(A, WREN, _age(3), _age(4), T0, turn=T("other"), rows=[R(A, "r6")])
     assert _forget_last(monkeypatch, said).startswith("Done")
     assert _subjects(db, A) == [WREN]
 
 
 def test_forget_that_also_reaches_entries_tied_to_the_turns_rows(db, monkeypatch):
-    _rec(A, JUNO, _age(7), _age(8), T0, turn="ut-not-this-text", rows=["zoe_x_r5"])
-    _forget_last(monkeypatch, "something else entirely", rows=["zoe_x_r5"])
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=T("not-this-text"), rows=[R(A, "r5")])
+    _forget_last(monkeypatch, "something else entirely", rows=[R(A, "r5")])
     assert _subjects(db, A) == []
 
 
@@ -491,14 +615,14 @@ def test_the_physical_row_erase_clears_tied_entries_before_the_rows_go(db, tmp_p
     svc = memory_service.MemoryService(data_dir=str(tmp_path / "palace"))
     monkeypatch.setattr(svc, "_owned_rows_sync", lambda uid, ids: ([], []))
     _seed(db)
-    assert run(svc.erase_rows(A, ["zoe_x_r1"], actor=A)) == {"rows_removed": 0}
+    assert run(svc.erase_rows(A, [R(A, "r1")], actor=A)) == {"rows_removed": 0}
     assert _subjects(db, A) == [WREN]
 
     async def down(*_a, **_k):
         raise ConnectionError("pool lost")
     monkeypatch.setattr(reg, "erase_for_rows", down)
     with pytest.raises(memory_service.MemoryServiceError):              # fail closed: no row is erased behind a kept entry
-        run(svc.erase_rows(A, ["zoe_x_r2"], actor=A))
+        run(svc.erase_rows(A, [R(A, "r2")], actor=A))
 
 
 def test_every_eraser_is_a_no_op_on_a_store_that_was_never_migrated(tmp_path, monkeypatch):
@@ -579,7 +703,7 @@ class _VcRow:
 
 class _VcSvc:
     def __init__(self, *texts):
-        self.rows = [_VcRow(f"zoe_x_r{i}", t) for i, t in enumerate(texts)]
+        self.rows = [_VcRow(R(A, f"r{i}"), t) for i, t in enumerate(texts)]
         self.edits = []
 
     async def list_by_status(self, **_k):
@@ -587,7 +711,7 @@ class _VcSvc:
 
     async def review(self, rid, decision=None, edits=None, **_k):
         self.edits.append((rid, edits))
-        return _VcRow(f"{rid}n", edits)
+        return _VcRow(R(A, "new-" + rid), edits)
 
 
 def _vc_apply(monkeypatch, text, *texts):
@@ -612,7 +736,7 @@ def test_flag_off_records_nothing_reads_nothing_and_decides_the_same(db, monkeyp
     monkeypatch.setattr(reg, "record", never)
     monkeypatch.setattr(people_graph, "resolve_person", never)
     _f, svc, n = _vc_apply(monkeypatch, "juno is 8 not 7", "User's daughter Juno is 7 years old")
-    assert n == 1 and svc.edits == [("zoe_x_r0", "User's daughter Juno is 8 years old")]
+    assert n == 1 and svc.edits == [(R(A, "r0"), "User's daughter Juno is 8 years old")]
     assert db.q("SELECT COUNT(*) FROM memory_value_registry") == [(0,)]
 
 
@@ -621,10 +745,11 @@ def test_shadow_records_an_age_by_person_id_and_the_old_path_still_decides(db, m
 
     monkeypatch.setenv(reg.FLAG, "shadow")
     _f, svc, n = _vc_apply(monkeypatch, "juno is 8 not 7", "User's daughter Juno is 7 years old")
-    assert n == 1 and svc.edits == [("zoe_x_r0", "User's daughter Juno is 8 years old")]          # unchanged decision
+    assert n == 1 and svc.edits == [(R(A, "r0"), "User's daughter Juno is 8 years old")]          # unchanged decision
     rows = db.q("SELECT subject_ref, attribute, role, value_norm, source_turn_id, row_ids FROM memory_value_registry ORDER BY role")
-    assert rows == [(JUNO, "age", "asserted", '{"v":8.0}', content_turn_id(A, "juno is 8 not 7"), '["zoe_x_r0", "zoe_x_r0n"]'),
-                    (JUNO, "age", "superseded", '{"v":7.0}', content_turn_id(A, "juno is 8 not 7"), '["zoe_x_r0", "zoe_x_r0n"]')]
+    tied = json.dumps([R(A, "r0"), R(A, "new-" + R(A, "r0"))])
+    assert rows == [(JUNO, "age", "asserted", '{"v":8.0}', content_turn_id(A, "juno is 8 not 7"), tied),
+                    (JUNO, "age", "superseded", '{"v":7.0}', content_turn_id(A, "juno is 8 not 7"), tied)]
 
 
 @pytest.mark.parametrize("text", [
@@ -664,7 +789,7 @@ def test_no_row_or_log_line_carries_words_names_or_ids_of_the_member(db, monkeyp
     _rec(A, WREN, _age(3), _age(4), T0)
     run(reg.is_superseded(A, JUNO, "age", _age(7), T0 - 10))
     run(reg.shadow_check(A, "User's daughter Juno is 7 years old", T0 - 10, True))
-    run(reg.erase_topic(A, row_ids=["zoe_x_r0"]))
+    run(reg.erase_topic(A, row_ids=[R(A, "r0")]))
     run(reg.forget_user(A))
     # every logged line of the module: fixed codes and counts only
     mine = [r.getMessage() for r in caplog.records if r.name == reg.__name__]
@@ -673,8 +798,13 @@ def test_no_row_or_log_line_carries_words_names_or_ids_of_the_member(db, monkeyp
         for needle in ("Juno", "juno", "Wren", "daughter", A, said):
             assert needle not in line, line
         assert re.fullmatch(r"[A-Z_]+(?: [a-z_]+=[a-z_0-9,-]+)*|memory_value_registry: [a-z ]+\([A-Za-z]+\)|[A-Z_]+ \([A-Za-z]+\)", line), line
-    # every stored cell: ids, closed labels, numbers - never a name or a word of the turn
-    _rec(A, JUNO, _age(7), _age(8), T0, turn="ut-1234", rows=["zoe_x_r1"])
+    # every stored cell: ids, closed labels, numbers - never a name or a word of the turn. Name-shaped SINGLE tokens are offered in
+    # every id column (a token is a valid "id-looking" string, which is exactly what the shape checks exist to refuse)
+    for kw in ({"turn": "Juno"}, {"claim": "juno"}, {"rows": ["Wren"]}, {"rows": ["daughter"]}, {"subject": "Juno"}):
+        assert run(reg.record(A, kw.get("subject", JUNO), "age", superseded=[_age(7)], asserted=_age(8), said_at=T0,
+                              by_claim=kw.get("claim", C(9)), source_turn_id=kw.get("turn", T("9")),
+                              row_ids=kw.get("rows", [R(A, "r9")]), now=T0)) == 0
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=T("1234"), rows=[R(A, "r1")])
     cells = [c for row in db.q("SELECT * FROM memory_value_registry") for c in row]
     assert cells
     for c in cells:

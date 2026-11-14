@@ -14,7 +14,8 @@ What it stores - and what it never stores:
     ``memory_claims`` (PR #2477): an age ``{"v": 8.0}``, an amount ``{"v": "13500", "cur": "AUD"}`` (a decimal NUMERAL string),
     a count ``{"v": 3}``, dates ``{"y", "m", "d"}``. A string anywhere in it that is not a decimal numeral, a currency code, a unit,
     a weekday or a frequency code is REFUSED, so no free text can enter through this module.
-  * ``by_claim`` / ``source_turn_id`` / ``row_ids`` are ids (``_ID_RE``). Log lines carry counts and fixed codes only - no user
+  * ``user_id`` is a member id (``_MEMBER_RE``, never a guest); ``by_claim`` / ``source_turn_id`` / ``row_ids`` are ids of their
+    REAL shapes (a claim hash, ``ut-`` + hex, ``zoe_<member>_<hex>``) and ``subject_ref`` is ``self`` or a uuid4. Log lines carry counts and fixed codes only - no user
     id, no subject, no value.
 
 The read: ``is_superseded(user_id, subject_ref, attribute, value_norm, said_at)`` - only entries said AFTER ``said_at`` count. A
@@ -68,10 +69,33 @@ FREQS = ("daily", "weekly", "monthly", "yearly")
 WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
 _CUR_RE = re.compile(r"^[A-Z]{3}$")
 _DEC_RE = re.compile(r"^(?:0|[1-9][0-9]{0,12})(?:\.[0-9]{0,5}[1-9])?$")
-_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$")      # person / claim / turn / memory-row ids (``zoe_<user>_<hex>``)
+# Every id column holds ONE real id shape, never a free token (a name such as "Juno" is a valid single token, so "any token"
+# is not a check). The shapes are the ones the source tables mint:
+#: ``people.id``: ``str(uuid.uuid4())`` at every people writer (contacts_store, named_relations, person_extractor, pending_suggestions,
+#: skybridge_service, intent_router)
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+#: a claim id: ``memory_claims.claim_id`` (sha256[:16]) or value_correction's shadow claim (``vc-`` + sha256[:16])
+_CLAIM_RE = re.compile(r"^(?:vc-)?[0-9a-f]{16}$")
+#: a turn's content id: ``people_graph.content_turn_id`` (``ut-`` + sha1[:16])
+_TURN_RE = re.compile(r"^ut-[0-9a-f]{16}$")
+#: a member id (the key every per-member table uses): lower-case, no spaces; a guest / unidentified principal is refused separately
+_MEMBER_RE = re.compile(r"^[a-z0-9][a-z0-9_.@-]{0,63}$")
 
 #: in-process counters (counts only): what was recorded / refused / compared
 COUNTS: Counter = Counter()
+
+#: the per-member PARTIAL-erase epoch (topic / turn / rows / entity): bumped when such an erase starts and when it ends. A record
+#: snapshots it when it is scheduled and drops itself if it moved - before its insert and again after its commit - so a matching
+#: entry can never slip in around an erase's read-select-delete. (A whole-member erase moves ``user_erase_gate``'s generation.)
+_PARTIAL: dict = {}
+
+
+def partial_epoch(user_id: str) -> int:
+    return _PARTIAL.get((user_id or "").strip().lower(), 0)
+
+
+def _partial_bump(uid: str) -> None:
+    _PARTIAL[uid] = _PARTIAL.get(uid, 0) + 1
 
 
 def mode() -> str:
@@ -183,12 +207,32 @@ def normalise(attribute: str, value: Any) -> Optional[str]:
     return json.dumps(v, sort_keys=True, separators=(",", ":")) if v is not None else None
 
 
-def _ok_id(v: Any) -> bool:
-    return isinstance(v, str) and bool(_ID_RE.match(v))
+def _ok_member(uid: Any) -> bool:
+    if not isinstance(uid, str) or not _MEMBER_RE.match(uid):
+        return False
+    try:
+        from user_filters import is_unidentified
+
+        return not is_unidentified(uid)
+    except Exception:  # noqa: BLE001 - cannot tell: refuse (the stricter side)
+        return False
 
 
 def _ok_subject(v: Any) -> bool:
-    return v == SELF or _ok_id(v)
+    return v == SELF or (isinstance(v, str) and bool(_UUID_RE.match(v)))
+
+
+def _ok_claim(v: Any) -> bool:
+    return isinstance(v, str) and bool(_CLAIM_RE.match(v))
+
+
+def _ok_turn(v: Any) -> bool:
+    return isinstance(v, str) and bool(_TURN_RE.match(v))
+
+
+def _ok_row(uid: str, v: Any) -> bool:
+    """A memory row id of THIS member: ``memory_service._memory_id`` mints ``zoe_<user_id>_<sha256[:24]>``."""
+    return isinstance(v, str) and re.fullmatch(rf"zoe_{re.escape(uid)}_[0-9a-f]{{24}}", v, re.IGNORECASE) is not None
 
 
 def entry_id(user_id: str, by_claim: str, role: str, value_norm: str) -> str:
@@ -236,11 +280,13 @@ async def _person_live(db, user_id: str, person_id: str) -> bool:
 
 async def record(user_id: str, subject_ref: str, attribute: str, *, superseded: Sequence[Any] = (), asserted: Any = None,
                  said_at: float, by_claim: str, source_turn_id: Optional[str] = None, row_ids: Iterable[str] = (),
-                 scheduled_at: Optional[int] = None, now: Optional[float] = None) -> int:
+                 scheduled_at: Optional[int] = None, partial_at: Optional[int] = None, now: Optional[float] = None) -> int:
     """Record one correction: each value in ``superseded`` was corrected away, ``asserted`` (optional) is the value it was
-    corrected to, said at ``said_at`` (epoch seconds). Every value is validated by ``normalise`` and every id by ``_ID_RE``; ANY
+    corrected to, said at ``said_at`` (epoch seconds). Every value is validated by ``normalise`` and every id by its real shape; ANY
     invalid input refuses the whole record. Written under the member's erase gate (``scheduled_at`` = the erase generation when the
-    write was scheduled; a member erase since then drops it). Returns the entries written (0 = nothing). Never raises."""
+    write was scheduled; a member erase since then drops it) and against the partial-erase epoch (``partial_at``, snapshotted when
+    the write was scheduled; any topic / turn / rows / entity erase since then drops it, also when it lands between this write's
+    insert and its commit). Returns the entries written (0 = nothing). Never raises."""
     import user_erase_gate as erase_gate
 
     t = time.time() if now is None else float(now)
@@ -248,23 +294,24 @@ async def record(user_id: str, subject_ref: str, attribute: str, *, superseded: 
     olds = [normalise(attribute, v) for v in list(superseded or ())[:MAX_VALUES + 1]]
     new = normalise(attribute, asserted) if asserted is not None else None
     ids = [str(i) for i in dict.fromkeys(row_ids or ())]
-    if (not uid or not _ok_subject(subject_ref) or attribute not in ATTRIBUTES or not _ok_id(by_claim)
-            or (source_turn_id is not None and not _ok_id(source_turn_id)) or len(olds) > MAX_VALUES
+    if (not _ok_member(uid) or not _ok_subject(subject_ref) or attribute not in ATTRIBUTES or not _ok_claim(by_claim)
+            or (source_turn_id is not None and not _ok_turn(source_turn_id)) or len(olds) > MAX_VALUES
             or any(o is None for o in olds) or (asserted is not None and new is None) or not (olds or new)
-            or len(ids) > MAX_ROW_IDS or not all(_ok_id(i) for i in ids)
+            or len(ids) > MAX_ROW_IDS or not all(_ok_row(uid, i) for i in ids)
             or not isinstance(said_at, (int, float)) or isinstance(said_at, bool) or not math.isfinite(float(said_at))):
         COUNTS["refused"] += 1
         logger.info("MEMORY_SUPERSEDED_REFUSED attribute=%s", attribute if attribute in ATTRIBUTES else "-")
         return 0
     entries = [("superseded", o) for o in dict.fromkeys(olds) if o != new] + ([("asserted", new)] if new else [])
     gen = erase_gate.generation(uid) if scheduled_at is None else scheduled_at
+    part = partial_epoch(uid) if partial_at is None else partial_at
     written: list = []
     n_new = 0
     try:
         async with erase_gate.writing(uid, gen) as live, _db() as db:
-            if not live:
+            if not live or partial_epoch(uid) != part:
                 COUNTS["dropped_erased"] += 1
-                return 0             # forgotten means forever: a correction from before a member erase is never written
+                return 0             # forgotten means forever: a correction from before an erase is never written
             if subject_ref != SELF and not await _person_live(db, uid, subject_ref):
                 COUNTS["no_subject"] += 1
                 return 0
@@ -279,8 +326,9 @@ async def record(user_id: str, subject_ref: str, attribute: str, *, superseded: 
                 written.append(eid)
                 n_new += int(getattr(cur, "rowcount", 0) or 0)
             await db.commit()
-            if subject_ref != SELF and not await _person_live(db, uid, subject_ref):
-                # an entity forget soft-deleted the subject while this was writing: its sweep may have run before the insert
+            if partial_epoch(uid) != part or (subject_ref != SELF and not await _person_live(db, uid, subject_ref)):
+                # an erase started while this was writing (the entity erase runs on the cascade's connection, outside the gate), or
+                # an entity forget soft-deleted the subject: its sweep may have read before the insert, so this write takes itself back
                 for eid in written:
                     await db.execute(f"DELETE FROM {TABLE} WHERE id = ? AND user_id = ?", (eid, uid))
                 await db.commit()
@@ -434,6 +482,7 @@ async def erase_entity(user_id: str, rx: Any, *, db=None, person_ids: Iterable[s
     uid = (user_id or "").strip().lower()
     if not uid:
         return 0
+    _partial_bump(uid)          # before the read: a record in flight takes itself back (it re-checks after its commit)
 
     async def go(conn) -> int:
         doomed = {str(p) for p in person_ids or ()}
@@ -447,21 +496,32 @@ async def erase_entity(user_id: str, rx: Any, *, db=None, person_ids: Iterable[s
         await conn.commit()
         return n
 
-    if db is not None:
-        n = await go(db)
-    else:
-        async with _db() as conn:
-            n = await go(conn)
+    try:
+        if db is not None:
+            n = await go(db)        # the cascade's own connection: taking the gate while holding it could deadlock the pool
+        else:
+            import user_erase_gate as erase_gate
+
+            async with erase_gate.erasing(uid, bump=False), _db() as conn:
+                n = await go(conn)
+    finally:
+        _partial_bump(uid)
     logger.info("MEMORY_SUPERSEDED_ERASED path=entity rows=%d", n)
     return n
 
 
 async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str) -> int:
+    """Read, select and delete under the member's erase gate - the lock ``record`` holds from before its connection to after its
+    commit - so a record in flight lands first and is erased here, and the partial epoch (bumped before the gate is awaited)
+    drops any record scheduled before this erase that has not written yet."""
+    import user_erase_gate as erase_gate
+
     uid = (user_id or "").strip().lower()
     if not uid:
         return 0
+    _partial_bump(uid)
     try:
-        async with _db() as db:
+        async with erase_gate.erasing(uid, bump=False), _db() as db:
             rows = await _fetch(db, f"SELECT id, subject_ref, source_turn_id, row_ids FROM {TABLE} WHERE user_id = ?", (uid,))
             names: dict = {}
             if any(str(r[1]) != SELF for r in rows):
@@ -481,6 +541,8 @@ async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str)
             return 0
         logger.error("memory_value_registry: rows NOT erased (path=%s, %s)", path, type(exc).__name__)
         raise
+    finally:
+        _partial_bump(uid)
     logger.info("MEMORY_SUPERSEDED_ERASED path=%s rows=%d", path, n)
     return n
 
@@ -523,3 +585,4 @@ async def erase_for_rows(user_id: str, row_ids: Iterable[str]) -> int:
 
 def reset_state() -> None:
     COUNTS.clear()
+    _PARTIAL.clear()
