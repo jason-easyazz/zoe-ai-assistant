@@ -1051,13 +1051,30 @@ PANEL_SED = (
     "t",
     r"s/^" + _PTS + r".*Recorded (command|follow-up):.*$/\1 R/p",
     "t",
+    # The daemon's first-sound instrument (zoe_voice_daemon.py FIRST_SOUND): the WHOLE line shape is pinned, so a line
+    # that carries any extra token matches nothing here and falls through to the timestamp-only rule below. Only the
+    # nine captures (timestamp + eight integers / one 0-1 flag) leave the device; the enums are matched, never captured.
+    r"s/^" + _PTS + r".*FIRST_SOUND close=[a-z_]{1,10}=[0-9]{1,5}ms post_ms=-?[0-9]{1,6} reflex=[a-z]{1,5} skip=[a-z_-]{1,24} "
+    r"reflex_at_ms=(-?[0-9]{1,6}) reflex_dur_ms=-?[0-9]{1,6} reflex_cut=[01] reflex_wait_ms=[0-9]{1,6} "
+    r"server_first_ms=(-?[0-9]{1,6}) server_kind=[a-z_]{1,10} gap_ms=-?[0-9]{1,6} still_talking=([01]) "
+    r"talk_chunks=(-?[0-9]{1,6}) chunks=[0-9]{1,6} underrun_max_ms=([0-9]{1,6}) underrun_sum_ms=([0-9]{1,7}) "
+    r"obs_ms=([0-9]{1,6}) win=[a-z]{1,12} quiet_ms=-?[0-9]{1,6} fall=[a-z]{1,12} muted_ms=(-?[0-9]{1,6}) first_end_ms=-?[0-9]{1,6}$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
+    "t",
     r"s/^" + _PTS + r".*$/\1 E/p",  # any other timestamped line: its timestamp only, to prove how far the log reaches
 )
 PANEL_LOG = "/home/pi/.zoe-voice/voice.log"
-_PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R)|E)$")
+_PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R)|F (-?\d+) (-?\d+) ([01]) (-?\d+) (\d+) (\d+) (\d+) (-?\d+)|E)$")
 #: The voice lane's bars: a turn "feels answered" when ANY sound starts inside 1 s of speech end; 0.6 s is the reflex bar.
 FIRST_SOUND_BANDS_MS = (1000, 600)
 TAIL_FLOOR_MS = {"deep": 640.0, "quiet": 800.0}  # live .env.voice floors per lane 4 (used only when close= is absent)
+
+
+def _panel_ts(raw: str) -> "dt.datetime | None":
+    """A reduced row's timestamp; None for a regex-shaped but impossible one (month 99): that row is skipped."""
+    try:
+        return dt.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
+    except ValueError:
+        return None
 
 
 def panel_command(log_path: str = PANEL_LOG) -> str:
@@ -1077,7 +1094,9 @@ def panel_pairs(reduced_lines: Iterable[str], since: dt.datetime, until: dt.date
         m = _PANEL_LINE_RE.match(line.strip())
         if not m:
             continue
-        t = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
+        t = _panel_ts(m.group(1))
+        if t is None:
+            continue
         ttfa, close, tail, rec = m.group(2), m.group(3), m.group(4), m.group(5)
         if close is not None:
             last = (t, float(close))
@@ -1101,7 +1120,9 @@ def panel_metric(reduced: list[str], since: dt.datetime, until: dt.datetime) -> 
     for r in reduced:
         m = _PANEL_LINE_RE.match(r.strip())
         if m:
-            stamps.append(dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ))
+            t = _panel_ts(m.group(1))
+            if t is not None:
+                stamps.append(t)
     if not stamps:
         return unmeasured("speech_end_first_sound", title, "panel log returned no timestamped lines", window=w)
     stamps.sort()
@@ -1129,16 +1150,104 @@ def panel_metric(reduced: list[str], since: dt.datetime, until: dt.datetime) -> 
                         "under_1000_ms": under[1000], "under_600_ms": under[600], "turns": len(totals)})
 
 
-def m_panel(host: str, since, until) -> dict:
+def panel_first_sound_rows(reduced_lines: Iterable[str], since: dt.datetime, until: dt.datetime) -> list[tuple[int, ...]]:
+    """The FIRST_SOUND rows inside the window as (reflex_at_ms, server_first_ms, still_talking, talk_chunks,
+    underrun_max_ms, underrun_sum_ms, obs_ms, muted_ms). Input is the allowlist output; anything not in that exact shape is ignored."""
+    rows: list[tuple[int, ...]] = []
+    for line in reduced_lines:
+        m = _PANEL_LINE_RE.match(line.strip())
+        if not m or m.group(6) is None:
+            continue
+        t = _panel_ts(m.group(1))
+        if t is not None and since <= t < until:
+            rows.append(tuple(int(m.group(i)) for i in range(6, 14)))
+    return rows
+
+
+PANEL_MEASURED_ROWS = (("first_sound_from_close", "First sound after the close, panel (measured)"),
+                       ("panel_post_close_talk", "Speech after the close, panel (measured)"),
+                       ("panel_playback_underrun", "Playback starvation, panel (measured)"),
+                       ("panel_server_first", "Server first sound after the close, panel (measured)"))
+
+
+def panel_first_sound_metrics(reduced: list[str], since: dt.datetime, until: dt.datetime) -> list[dict]:
+    """Measured first sound from the daemon's own FIRST_SOUND lines (ms from the committed close, so it excludes the
+    ~0.8 s the recording needs to decide the person stopped). Four rows, each with n; `unmeasured` when no such line."""
+    w = wstr(since, until)
+    rows = panel_first_sound_rows(reduced, since, until)
+    keys = PANEL_MEASURED_ROWS
+    if not rows:
+        return [unmeasured(k, t, "no FIRST_SOUND lines in window (daemon without the instrument, or no turns)", window=w)
+                for k, t in keys]
+    method = ("Pi voice.log FIRST_SOUND line (integers only), ms from the committed endpoint close; first sound is the "
+              "time the first audio bytes were OFFERED to the player (a lower bound: first_end_ms on the line is when the "
+              "write returned, and neither includes the player's device-open latency)")
+    firsts = []
+    servers = []
+    for reflex_at, server_first, *_ in rows:
+        known = [x for x in (reflex_at, server_first) if x >= 0]
+        if known:
+            firsts.append(float(min(known)))
+        if server_first >= 0:
+            servers.append(float(server_first))
+    out = []
+    if firsts:
+        under = {ms: sum(1 for x in firsts if x < ms) for ms in FIRST_SOUND_BANDS_MS}
+        out.append(metric(keys[0][0], keys[0][1],
+                          (f"p50 {pct(firsts, 50) / 1000:.2f} s / p90 {pct(firsts, 90) / 1000:.2f} s; "
+                           f"under 1.0 s {frac(under[1000], len(firsts))}; under 0.6 s {frac(under[600], len(firsts))}"),
+                          n=len(firsts), window=w, method=method, label="[Proven]",
+                          data={"p50_ms": pct(firsts, 50), "p90_ms": pct(firsts, 90),
+                                "under_1000_ms": under[1000], "under_600_ms": under[600], "turns": len(firsts)}))
+    else:
+        out.append(unmeasured(keys[0][0], keys[0][1], "no turn in window made a sound", window=w))
+    heard = [r for r in rows if r[3] >= 0]  # talk_chunks -1 = no barge monitor listened
+    if heard:
+        talking = sum(r[2] for r in heard)
+        out.append(metric(keys[1][0], keys[1][1],
+                          (f"{100.0 * talking / len(heard):.1f} per 100 turns with 3+ speech chunks inside 1.5 s of the close "
+                           f"({talking} of {len(heard)}); {sum(r[3] for r in heard)} speech chunks in all; "
+                           f"full 1.5 s window seen on {sum(1 for r in heard if r[6] >= 1400)} of {len(heard)} turns"),
+                          n=len(heard), window=w, method=method + "; counted by the barge monitor, blind between close and mic open",
+                          label="[Experimental]",
+                          data={"still_talking": talking, "turns": len(heard), "talk_chunks": sum(r[3] for r in heard),
+                                "full_window_turns": sum(1 for r in heard if r[6] >= 1400)}))
+    else:
+        out.append(unmeasured(keys[1][0], keys[1][1], "no turn in window had a listening barge monitor", window=w))
+    wrote = rows  # a turn that played nothing carries 0/0, so it never starves the maths
+    out.append(metric(keys[2][0], keys[2][1],
+                      f"max {max(r[4] for r in wrote)} ms; total {sum(r[5] for r in wrote)} ms; "
+                      f"{sum(1 for r in wrote if r[4] > 0)} of {len(wrote)} turns starved; "
+                      f"mic muted on {sum(1 for r in wrote if r[7] > 0)} of {sum(1 for r in wrote if r[7] >= 0)} turns",
+                      n=len(wrote), window=w, method=method, label="[Proven]",
+                      data={"max_ms": max(r[4] for r in wrote), "sum_ms": sum(r[5] for r in wrote),
+                            "starved_turns": sum(1 for r in wrote if r[4] > 0), "turns": len(wrote),
+                            "muted_turns": sum(1 for r in wrote if r[7] > 0)}))
+    if servers:
+        out.append(metric(keys[3][0], keys[3][1], f"p50 {pct(servers, 50) / 1000:.2f} s", n=len(servers), window=w,
+                          method=method, label="[Proven]", data={"p50_ms": pct(servers, 50), "turns": len(servers)}))
+    else:
+        out.append(unmeasured(keys[3][0], keys[3][1], "no turn in window had server audio", window=w))
+    return out
+
+
+def m_panel(host: str, since, until) -> list[dict]:
+    """The panel rows: the inferred first-sound row, then the four measured FIRST_SOUND rows, from ONE ssh."""
     title = "Speech end to first sound, panel (inferred)"
+    extra = PANEL_MEASURED_ROWS
+
+    def fail(reason: str) -> list[dict]:
+        return [unmeasured("speech_end_first_sound", title, reason)] + [unmeasured(k, t, reason) for k, t in extra]
+
     try:
         p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, panel_command()],
                            capture_output=True, text=True, timeout=40)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return unmeasured("speech_end_first_sound", title, f"ssh to the panel failed ({type(exc).__name__})")
+        return fail(f"ssh to the panel failed ({type(exc).__name__})")
     if p.returncode != 0:
-        return unmeasured("speech_end_first_sound", title, f"ssh to the panel failed (rc={p.returncode})")
-    return panel_metric(p.stdout.splitlines(), since, until)
+        return fail(f"ssh to the panel failed (rc={p.returncode})")
+    lines = p.stdout.splitlines()
+    return [panel_metric(lines, since, until)] + panel_first_sound_metrics(lines, since, until)
 
 
 # ---------------------------------------------------------------------------
@@ -1463,10 +1572,11 @@ def build(args) -> dict:
         out.append(unmeasured("commitments", "Commitments ledger rows", db_err))
 
     if args.panel:
-        out.append(m_panel(args.panel_host, since, until))
+        out.extend(m_panel(args.panel_host, since, until))
     else:
-        out.append(unmeasured("speech_end_first_sound", "Speech end to first sound, panel",
-                              "panel log lives on the Pi; skipped by default (pass --panel to read it over ssh)"))
+        reason = "panel log lives on the Pi; skipped by default (pass --panel to read it over ssh)"
+        out.append(unmeasured("speech_end_first_sound", "Speech end to first sound, panel", reason))
+        out.extend(unmeasured(k, t, reason) for k, t in PANEL_MEASURED_ROWS)
 
     out.append(logs["brain_first_text"])
     out.append(m_nights(os.path.join(args.log_dir, "night-window.log"), until, args.nights))

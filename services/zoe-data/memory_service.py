@@ -2271,6 +2271,11 @@ class MemoryService:
                 forget_redact.clear_turn_caches(user_id)
             except Exception:  # noqa: BLE001
                 logger.warning("memory_service: in-process turn caches not cleared for a deleted user")
+            try:   # ... and the in-process correction memory (value_correction._REMEMBERED: names + values for 6 h). Never raises.
+                import value_correction
+                value_correction.forget_user(user_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("memory_service: in-process correction memory not cleared for a deleted user")
             # The wake-warm speaker memo (panel -> member id + time): a cache-shaping guess, no words. Gone with the member.
             try:
                 import warm_speaker
@@ -3677,6 +3682,11 @@ class MemoryService:
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
                 if not owned:
                     return {"rows_removed": 0}
+                try:   # the in-process correction memory naming what these rows said (value_correction; never raises)
+                    import value_correction
+                    value_correction.forget_in_texts(user_id, texts)
+                except Exception:  # noqa: BLE001
+                    pass
                 needles = _needles_for_texts(texts) if physical_erase_enabled() else []
                 tomb_id = _delete_tombstone_id(user_id, owned)
                 await self._run_sync(
