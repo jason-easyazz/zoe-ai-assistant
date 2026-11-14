@@ -32,6 +32,18 @@ import argparse, json, os, re, shlex, signal, socket, statistics, subprocess, sy
 import http.client, urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import zoe_priv  # noqa: E402 - P0-1: the fixed root helpers when installed, else the old sudo command
+_ROUTES_LOGGED: set = set()
+
+
+def _priv(name: str, args: tuple, legacy: list) -> list:
+    path, argv = zoe_priv.route(name, args, legacy)
+    if name not in _ROUTES_LOGGED:
+        _ROUTES_LOGGED.add(name)
+        print(zoe_priv.route_line(name, path), file=sys.stderr, flush=True)
+    return argv
+
 HOME = Path.home()
 BRAIN_URL = "http://127.0.0.1:11434"
 BENCH_PORT = 11435
@@ -173,7 +185,8 @@ def meminfo(key="MemAvailable") -> int:
 
 def nvmap_kb(pid: int) -> int:
     try:
-        o = subprocess.run(["sudo", "-n", "cat", "/sys/kernel/debug/nvmap/iovmm/clients"], capture_output=True, text=True, timeout=10).stdout
+        o = subprocess.run(_priv("zoe-nvmap-read", ("clients",), ["sudo", "-n", "cat", "/sys/kernel/debug/nvmap/iovmm/clients"]),
+                           capture_output=True, text=True, timeout=10).stdout
         return sum(int(re.match(r"(\d+)K", l.split()[-1]).group(1)) for l in o.splitlines() if re.search(rf"\s{pid}\s", l))
     except Exception:
         return -1
@@ -210,7 +223,9 @@ class Guard(threading.Thread):
 
 
 def drop_caches(level=1) -> None:
-    subprocess.run(["sudo", "-n", "sh", "-c", f"echo {level} > /proc/sys/vm/drop_caches"], check=False, timeout=30)
+    legacy = ["sudo", "-n", "sh", "-c", f"echo {level} > /proc/sys/vm/drop_caches"]
+    argv = _priv("zoe-mem-compact", ("1",), legacy) if str(level) == "1" else legacy   # 3 would also compact: keep it legacy
+    subprocess.run(argv, check=False, timeout=30)
 
 
 class DropLoop(threading.Thread):

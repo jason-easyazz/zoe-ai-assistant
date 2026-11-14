@@ -146,14 +146,21 @@ class Sandbox:
     """Runs the fixed-function helper. ``base`` is its argv prefix."""
     base: list[str]
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run
+    route: str = "override"
 
     @classmethod
     def default(cls) -> "Sandbox":
+        """Routes: ``override`` (lab / tests), ``helper`` (the owner's root-owned copy via sudo; after P0-3 sudoers
+        allows exactly its fixed argv), ``legacy`` (the repo copy as ``zoe``, which needs the docker group). The route
+        is printed as one fixed line."""
         if os.environ.get("ZOE_DRILL_HELPER"):              # lab / tests
-            return cls(os.environ["ZOE_DRILL_HELPER"].split())
-        if HELPER_INSTALLED.is_file():                       # after P0: the owner's root-owned copy
-            return cls(["sudo", "-n", str(HELPER_INSTALLED)])
-        return cls(["sh", str(HELPER_REPO)])                 # before P0: zoe is still in the docker group
+            sb = cls(os.environ["ZOE_DRILL_HELPER"].split(), route="override")
+        elif HELPER_INSTALLED.is_file():                     # after P0: the owner's root-owned copy
+            sb = cls(["sudo", "-n", str(HELPER_INSTALLED)], route="helper")
+        else:
+            sb = cls(["sh", str(HELPER_REPO)], route="legacy")    # before P0: zoe is still in the docker group
+        print(f"priv-route zoe-restore-drill-pg={sb.route}", flush=True)
+        return sb
 
     def call(self, *args: str, stdin=None, text_input: Optional[str] = None, timeout: int = 1800):
         kw: dict = {"capture_output": True, "timeout": timeout}

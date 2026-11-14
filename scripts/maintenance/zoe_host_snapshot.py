@@ -61,19 +61,25 @@ def _load_offbox():
 ob = _load_offbox()
 
 
-def ha_helper_cmd() -> Optional[list[str]]:
-    """The installed root helper through sudo; ZOE_HA_EXPORT_CMD (lab, tests) names a stand-in. None = not
-    installed (an owner step), and nothing else is tried."""
+def ha_route() -> tuple[str, Optional[list[str]]]:
+    """``(route, argv)``. The installed root helper through sudo (route ``helper``; after P0-3 sudoers allows exactly
+    this argv); ZOE_HA_EXPORT_CMD (lab, tests) names a stand-in (``override``). Not installed = ``none`` (an owner
+    step), and nothing else is tried: there is no legacy path, root-owned files are never read another way."""
     if os.environ.get("ZOE_HA_EXPORT_CMD"):
-        return os.environ["ZOE_HA_EXPORT_CMD"].split() + ["storage"]
+        return "override", os.environ["ZOE_HA_EXPORT_CMD"].split() + ["storage"]
     if HELPER_INSTALLED.is_file():
-        return ["sudo", "-n", str(HELPER_INSTALLED), "storage"]
-    return None
+        return "helper", ["sudo", "-n", str(HELPER_INSTALLED), "storage"]
+    return "none", None
+
+
+def ha_helper_cmd() -> Optional[list[str]]:
+    return ha_route()[1]
 
 
 def export_ha_storage(out_dir: Path, ts: str) -> tuple[Optional[Path], list[str], list[str]]:
     """``(file, warnings, errors)``."""
-    cmd = ha_helper_cmd()
+    route, cmd = ha_route()
+    print(f"priv-route zoe-ha-config-export={route}")
     if cmd is None:
         return None, [f"HA .storage/.cloud NOT captured: the root helper is not installed ({HELPER_INSTALLED}; "
                       "owner step, docs/knowledge/offbox-backup.md section 7)"], []

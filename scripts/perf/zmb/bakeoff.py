@@ -46,6 +46,8 @@ from typing import Any, Callable, Optional
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "scripts" / "perf"))
+sys.path.insert(0, str(REPO / "scripts" / "lib"))
+import zoe_priv  # noqa: E402 - P0-1: the fixed root helpers when installed, else the old sudo command
 #: the in-process egress hook (``sitecustomize.py``) lives in the repo, so the instrument is reviewed and tested like the rest
 EGRESS_AUDIT_DIR = REPO / "scripts" / "perf" / "zmb" / "egress_audit"
 #: RAM lab 2026-10-06 (docs/research/bakeoff-ram-latency-optimisation-2026-10-06.md): an import trim for the Hindsight server (MCP, Gemini, the OTLP exporter are never used on
@@ -441,6 +443,11 @@ def compact_script(drop_caches: bool = True) -> str:
     return COMPACT_DROP if drop_caches else COMPACT_ONLY
 
 
+def compact_level(drop_caches: bool = True) -> str:
+    """The ``zoe-mem-compact`` argument that does what ``compact_script`` does: 3 = drop all + compact, 0 = compact only."""
+    return "3" if drop_caches else "0"
+
+
 def operator_compact_command(drop_caches: bool = True) -> str:
     return f"sudo sh -c '{compact_script(drop_caches)}'"
 
@@ -630,10 +637,21 @@ class Window:
         return frag
 
     def sudo_ok(self) -> bool:
-        """Passwordless sudo available (``sudo -n true``)? A read-only probe, cached for the window."""
+        """Can the window compact memory? A read-only probe, cached for the window: ``sudo -n -l`` of the installed
+        ``zoe-mem-compact`` (P0-1: after P0-3 ``sudo -n true`` fails while the helper is allowed), else ``sudo -n true``."""
         if getattr(self, "_sudo", None) is None:
-            self._sudo = self.host.run(["sudo", "-n", "true"], timeout=10, mutating=False).rc == 0
+            self._sudo = zoe_priv.can_run(lambda argv: self.host.run(argv, timeout=10, mutating=False).rc,
+                                          "zoe-mem-compact", (compact_level(self.cfg.drop_caches),))
         return self._sudo
+
+    def priv_argv(self, name: str, args: "tuple[str, ...]", legacy: "list[str]") -> "list[str]":
+        """The routed argv for a privileged call (``zoe_priv.route``); its route is logged ONCE per window as a fixed line."""
+        path, argv = zoe_priv.route(name, args, legacy)
+        seen = self.__dict__.setdefault("_priv_logged", set())
+        if name not in seen:
+            seen.add(name)
+            self.log(zoe_priv.route_line(name, path))
+        return argv
 
     def compact_memory(self, where: str) -> bool:
         """Drop the page cache and compact physical memory, ONLY when ``sudo -n true`` works; buddyinfo is logged before and after. Never raises. False = not done."""
@@ -642,7 +660,8 @@ class Window:
                 self.log(f"compact_memory {where}: SKIPPED - passwordless sudo is not available. Run by hand: {operator_compact_command(self.cfg.drop_caches)}")
                 return False
             before = self.log_frag(f"before compaction ({where})")
-            r = self.host.run(["sudo", "-n", "sh", "-c", compact_script(self.cfg.drop_caches)], timeout=120)
+            r = self.host.run(self.priv_argv("zoe-mem-compact", (compact_level(self.cfg.drop_caches),),
+                                             ["sudo", "-n", "sh", "-c", compact_script(self.cfg.drop_caches)]), timeout=120)
             if self.dry:                                    # DryHost printed the command and ran nothing: there is no "after" to report
                 return True
             if r.rc != 0:

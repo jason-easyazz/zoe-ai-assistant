@@ -68,7 +68,12 @@ install() {
   [ -e "$parked" ] || echo "WARNING: the parked 12B unit $parked is missing: every window will refuse (it generates the 12B command from that file)" >&2
   [ -e "$HOME/models/gemma4-12b-qat/gemma-4-12b-it-qat-q4_0.gguf" ] || echo "WARNING: the 12B QAT model file is missing" >&2
   [ -x "${NIGHT_PY:-$HOME/.zoe/venvs/zoe-data-py312/bin/python}" ] || echo "WARNING: the zoe-data py312 venv is missing: night_window.sh will not start" >&2
-  sudo -n true 2>/dev/null || echo "WARNING: passwordless sudo is not available: the window cannot compact RAM and will refuse whenever RAM is fragmented (docs/knowledge/night-window.md)" >&2
+  # P0-1: the installed zoe-mem-compact helper is allowed by exact argv (sudo -n -l asks the policy, runs nothing); else the broad grant
+  if [ -x /usr/local/libexec/zoe-priv/zoe-mem-compact ]; then
+    sudo -n -l /usr/local/libexec/zoe-priv/zoe-mem-compact 3 >/dev/null 2>&1 || echo "WARNING: sudo does not allow /usr/local/libexec/zoe-priv/zoe-mem-compact 3: the window cannot compact RAM and will refuse whenever RAM is fragmented (docs/architecture/p0-deroot.md)" >&2
+  else
+    sudo -n true 2>/dev/null || echo "WARNING: passwordless sudo is not available: the window cannot compact RAM and will refuse whenever RAM is fragmented (docs/knowledge/night-window.md)" >&2
+  fi
   local dreaming_was prior disabled_it=0
   dreaming_was=$("$SYSTEMCTL" --user is-enabled zoe-dreaming.timer 2>/dev/null || true)
   # A reinstall sees the timer this tool already disabled: the ORIGINAL state is in the record, and it must survive (else uninstall would leave neither nightly schedule running).

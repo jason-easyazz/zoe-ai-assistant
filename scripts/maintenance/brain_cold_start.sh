@@ -53,6 +53,9 @@ LOGFILE="$STATE_DIR/loop.log"
 LOCKFILE="$STATE_DIR/launch.lock"
 SELF="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 DROP_CMD='echo 1 > /proc/sys/vm/drop_caches'
+# P0-1 (docs/architecture/p0-deroot.md): the owner's fixed root helper when installed (sudoers allows exactly
+# `zoe-mem-compact 1`, which syncs and drops the page cache), else the old `sudo sh -c` (only the broad grant allows it).
+MEM_COMPACT=/usr/local/libexec/zoe-priv/zoe-mem-compact
 MAX_DROP_FAILURES=5
 
 log() {
@@ -61,12 +64,26 @@ log() {
     logger -t brain-cold-start -- "$*" >/dev/null 2>&1 || true
 }
 
+priv_route() {
+    # the fixed route word (helper|legacy): logged once per start, never an argument
+    if [ -f "$MEM_COMPACT" ] && [ ! -L "$MEM_COMPACT" ] && [ -x "$MEM_COMPACT" ]; then echo helper; else echo legacy; fi
+}
+
 have_sudo() {
-    command -v sudo >/dev/null 2>&1 && timeout 10 sudo -n true >/dev/null 2>&1
+    command -v sudo >/dev/null 2>&1 || return 1
+    if [ "$(priv_route)" = helper ]; then
+        timeout 10 sudo -n -l "$MEM_COMPACT" 1 >/dev/null 2>&1      # asks the policy, runs nothing (after P0-3 `sudo -n true` fails)
+    else
+        timeout 10 sudo -n true >/dev/null 2>&1
+    fi
 }
 
 drop_once() {
-    timeout 20 sudo -n sh -c "$DROP_CMD" >/dev/null 2>&1
+    if [ "$(priv_route)" = helper ]; then
+        timeout 20 sudo -n "$MEM_COMPACT" 1 >/dev/null 2>&1
+    else
+        timeout 20 sudo -n sh -c "$DROP_CMD" >/dev/null 2>&1
+    fi
 }
 
 healthy() {
@@ -220,6 +237,7 @@ run_pre() {
         log "disabled (BRAIN_COLD_START_DISABLE=1): nothing done"
         return 0
     fi
+    log "priv-route zoe-mem-compact=$(priv_route)"
     if ! have_sudo; then
         log "SKIPPED: passwordless sudo is not available, so the page cache cannot be dropped. If the start fails on NvMap error 12 run: sudo sh -c '$DROP_CMD'  (repeatedly, while it starts)"
         return 0

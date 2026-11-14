@@ -223,6 +223,7 @@ def high_order_mib(frag: "dict[int, int]", min_order: int = 9, page_kb: int = 4)
 
 
 NVMAP_FREE = "/sys/kernel/debug/nvmap/iovmm/free_size"
+NVMAP_CLIENTS = "/sys/kernel/debug/nvmap/iovmm/clients"
 
 
 def parse_nvmap_free_mib(text: str) -> "Optional[float]":
@@ -1683,10 +1684,10 @@ class NightWindow(bk.Window):
         return self.host.mem_field_mb(self.cfg.meminfo, "MemFree")
 
     def nvmap_free_mib(self) -> "Optional[float]":
-        """NvMap's largest allocatable block (read-only, ``sudo -n cat`` of a debugfs file); None without sudo or on a kernel that has no such file."""
+        """NvMap's largest allocatable block (read-only: the ``zoe-nvmap-read free`` helper, else ``sudo -n cat`` of the debugfs file); None without sudo or on a kernel that has no such file."""
         if not self.sudo_ok():
             return None
-        return parse_nvmap_free_mib(self.host.run(["sudo", "-n", "cat", NVMAP_FREE], mutating=False).out)
+        return parse_nvmap_free_mib(self.host.run(self.priv_argv("zoe-nvmap-read", ("free",), ["sudo", "-n", "cat", NVMAP_FREE]), mutating=False).out)
 
     def sleep_units(self) -> "tuple[float, float]":
         """Stop the units, wait for the processes to be gone and compact; returns (MemAvailable, MemFree) in MiB. Compaction is repeated (up to 4 times, as the June 2026 12B bring-up
@@ -2331,10 +2332,10 @@ class NightWindow(bk.Window):
 
     # ── the speed sweep ──
     def nvmap_client_mib(self, pid: "Optional[int]") -> "Optional[float]":
-        """NvMap's own size for the 12B's process (read-only ``sudo -n cat`` of a debugfs file): what the GPU side of the process holds, whatever the load mode."""
+        """NvMap's own size for the 12B's process (read-only: ``zoe-nvmap-read clients``, else ``sudo -n cat`` of the debugfs file): what the GPU side of the process holds, whatever the load mode."""
         if not self.sudo_ok():
             return None
-        return ss.parse_nvmap_client_mib(self.host.run(["sudo", "-n", "cat", "/sys/kernel/debug/nvmap/iovmm/clients"], mutating=False).out, pid)
+        return ss.parse_nvmap_client_mib(self.host.run(self.priv_argv("zoe-nvmap-read", ("clients",), ["sudo", "-n", "cat", NVMAP_CLIENTS]), mutating=False).out, pid)
 
     def llm_journal(self) -> str:
         return self.host.run(["journalctl", "--user", "-u", NIGHT_UNITS["llm"], "-n", "1500", "--no-pager", "-o", "cat"], mutating=False).out

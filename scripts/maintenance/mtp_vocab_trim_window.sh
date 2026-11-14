@@ -35,8 +35,16 @@ restore() {
   # A cold start can fail with NvMap error 12 / cudaMalloc OOM while the page cache is full (three times on
   # 2026-10-10): drop the cache (passwordless sudo if present, else skipped) and retry up to 4 starts.
   healthy=0
+  # P0-1: the owner's fixed helper when installed (sudoers allows exactly `zoe-mem-compact 1`), else the old command
+  MEM_COMPACT=/usr/local/libexec/zoe-priv/zoe-mem-compact
+  if [ -f "$MEM_COMPACT" ] && [ ! -L "$MEM_COMPACT" ] && [ -x "$MEM_COMPACT" ]; then ROUTE=helper; else ROUTE=legacy; fi
+  echo "priv-route zoe-mem-compact=$ROUTE" | tee -a "$OUT/window.log"
   for attempt in 1 2 3 4; do
-    sudo -n sh -c 'sync; echo 1 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+    if [ "$ROUTE" = helper ]; then
+      sudo -n "$MEM_COMPACT" 1 2>/dev/null || true
+    else
+      sudo -n sh -c 'sync; echo 1 > /proc/sys/vm/drop_caches' 2>/dev/null || true
+    fi
     systemctl --user reset-failed llama-server 2>/dev/null
     systemctl --user start llama-server
     for i in $(seq 1 60); do

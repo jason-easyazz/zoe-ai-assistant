@@ -63,11 +63,26 @@ def test_the_gpu_recipe_compacts_immediately_before_the_worker_starts_and_uses_t
     assert calls == ["prep", ("run", None, True)]
 
 
-def test_gpu_prep_is_the_drop_caches_plus_compact_command(monkeypatch):
+def test_gpu_prep_is_the_drop_caches_plus_compact_command(monkeypatch, tmp_path):
     seen: list = []
     monkeypatch.setattr(rp.subprocess, "run", lambda cmd, **kw: seen.append(cmd))
+    monkeypatch.setattr(rp, "MEM_COMPACT_HELPER", str(tmp_path / "not-installed"))
     rp.gpu_prep()
     assert seen[0][:3] == ["sudo", "-n", "sh"] and "echo 3 > /proc/sys/vm/drop_caches" in seen[0][4] and "echo 1 > /proc/sys/vm/compact_memory" in seen[0][4]
+
+
+def test_gpu_prep_uses_the_p0_helper_when_installed(monkeypatch, tmp_path):
+    """P0-1: the owner's root helper (sudoers allows exactly `zoe-mem-compact 3` after the broad grant goes)."""
+    helper = tmp_path / "zoe-mem-compact"
+    helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
+    seen: list = []
+    monkeypatch.setattr(rp.subprocess, "run", lambda cmd, **kw: seen.append(cmd))
+    monkeypatch.setattr(rp, "MEM_COMPACT_HELPER", str(helper))
+    rp.gpu_prep()
+    assert seen == [["sudo", "-n", str(helper), "3"]] and rp.gpu_prep_argv()[0] == "helper"
+    helper.chmod(0o644)                              # negative control: not executable = not installed
+    assert rp.gpu_prep_argv()[0] == "legacy"
 
 
 def test_parakeet_decodes_the_output_objects_sequences_and_qwen_strips_the_prompt():

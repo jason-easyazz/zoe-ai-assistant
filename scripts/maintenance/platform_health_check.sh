@@ -57,24 +57,30 @@ check_json_health() {
     fi
 }
 
-if ! docker info >/dev/null 2>&1; then
+# P0-1 (docs/architecture/p0-deroot.md 4.2): only calls the allowlisted Docker proxy permits. `docker version`
+# (GET /version), not `docker info` (GET /info is refused); ONE `docker ps` (GET /containers/json) carries state and
+# health for every container, not `docker inspect` per name (inspect is allowed for three containers only).
+health_of() {
+    case "$1" in
+        *"(unhealthy)"*) echo unhealthy ;;
+        *"(health: "*) local h="${1##*(health: }"; echo "${h%%)*}" ;;
+        *"(healthy)"*) echo healthy ;;
+        *) echo "" ;;
+    esac
+}
+if ! docker version >/dev/null 2>&1; then
     fail "Docker daemon is unreachable"
 else
     container_count=0
-    while IFS=$'\t' read -r name status health; do
+    while IFS=$'\t' read -r name status detail; do
         ((container_count++)) || true
+        health="$(health_of "$detail")"
         if [[ "$status" != "running" ]]; then
             fail "Docker container $name is $status"
         elif [[ -n "$health" && "$health" != "healthy" ]]; then
             fail "Docker container $name health is $health"
         fi
-    done < <(
-        docker ps --format '{{.Names}}' |
-            while read -r name; do
-                docker inspect --format '{{.Name}}{{"\t"}}{{.State.Status}}{{"\t"}}{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$name" |
-                    sed 's#^/##'
-            done
-    )
+    done < <(docker ps --format '{{.Names}}{{"\t"}}{{.State}}{{"\t"}}{{.Status}}')
     if [[ "$container_count" -eq 0 ]]; then
         fail "Docker returned zero running containers"
     elif [[ "$failed" -eq 0 ]]; then

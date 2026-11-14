@@ -191,11 +191,24 @@ def models_dir() -> str:
 def gpu_prep() -> None:
     """THE GPU RECIPE (round-2 bake-off, after earlier NvMap error-12 failures): with the 4B, Kokoro, the router and zoe-data stopped, drop the page cache and compact physical
     memory IMMEDIATELY before the model loads, and load ONE model alone (the worker loads nothing else on the GPU). Best effort: no passwordless sudo = the window's own compaction stands."""
+    route, argv = gpu_prep_argv()
+    logger.info("priv-route zoe-mem-compact=%s", route)
     try:
-        subprocess.run(["sudo", "-n", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory"], timeout=60, check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(argv, timeout=60, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         pass
+
+
+MEM_COMPACT_HELPER = "/usr/local/libexec/zoe-priv/zoe-mem-compact"
+
+
+def gpu_prep_argv() -> "tuple[str, list[str]]":
+    """P0-1 (docs/architecture/p0-deroot.md): the owner's fixed root helper when installed (sudoers allows exactly
+    ``zoe-mem-compact 3``: sync, drop all caches, compact), else the old command, which only the broad grant allows."""
+    p = MEM_COMPACT_HELPER
+    if os.path.isfile(p) and not os.path.islink(p) and os.access(p, os.X_OK):
+        return "helper", ["sudo", "-n", p, "3"]
+    return "legacy", ["sudo", "-n", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory"]
 
 
 def holds_audio() -> bool:
