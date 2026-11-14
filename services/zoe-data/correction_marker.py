@@ -105,6 +105,33 @@ def generation(user_id: str) -> tuple:
         return _epoch, _gen.get(user_id, 0)
 
 
+def retire_subject(user_id: str, keys: tuple, reason: str = "superseded") -> int:
+    """A later correction about the same subject REWROTE the stored row: the member's older pending markers for that subject are
+    retired, or the packet would put the older words above the now-correct row. Same subject = a shared subject key (sha256 of the
+    folded ``value_correction.statement`` subject); a marker with no key (``looks_like_correction`` only) is never matched."""
+    wanted = set(keys or ())
+    if not wanted:
+        return 0
+    with _LOCK:
+        marks = _by_user.get(user_id) or {}
+        gone = [t for t, m in marks.items() if wanted & set(m.keys)]
+        for t in gone:
+            marks.pop(t)
+    _log("cleared", reason, user_id, len(gone))
+    return len(gone)
+
+
+async def _opted_out(user_id: str) -> bool:
+    """The member's ``memory_opt_out`` preference, read through ``user_prefs.is_memory_opted_out`` - the check every memory writer
+    makes. Fails CLOSED here (the writers fail open so a fact is never lost; a marker is an extra, so a failed read keeps it out)."""
+    try:
+        import user_prefs
+
+        return bool(await user_prefs.is_memory_opted_out(user_id))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def forget_user(user_id: str, reason: str = "forget") -> int:
     """ANY forget for the member drops every marker of theirs and moves their forget generation. Sync."""
     global _epoch
@@ -205,9 +232,15 @@ async def note_turn(user_message: str, user_id: str, session_id: Optional[str], 
     try:
         from user_filters import is_unidentified
 
-        if not enabled() or speaker_verified is False or not session_id or rewrote > 0 or is_unidentified(user_id):
+        if not enabled() or speaker_verified is False or not session_id or is_unidentified(user_id):
             return False
         shaped, keys = correction_shaped(user_message)
+        if rewrote > 0:                                         # the rewriter closed this turn: nothing pending for it, and its
+            retire_subject(user_id, keys)                       # subject's older markers would now contradict the stored row
+            return False
+        if await _opted_out(user_id):                           # memory_opt_out: nothing is recorded
+            logger.info("PENDING_CORRECTION skipped reason=opted_out user=%s n=1", user_id)
+            return False
         snap = generation(user_id)                              # BEFORE the first await
         turn_id = await _find_turn_id(user_id, session_id, user_message) if shaped else None
         import turn_forget
@@ -232,6 +265,9 @@ async def texts_for_packet(user_id: str, *, now: Optional[float] = None) -> list
     or no marker: [] with no read. Never raises."""
     try:
         live = pending(user_id, now=now)[:MAX_SERVED] if enabled() else []
+        if live and await _opted_out(user_id):                  # opted out since they were recorded: never replayed
+            forget_user(user_id, reason="opted_out")
+            return []
         found = await _fetch_texts(user_id, [m.turn_id for m in live]) if live else {}
     except Exception as exc:  # noqa: BLE001
         logger.debug("PENDING_CORRECTION skipped reason=read_error user=%s err=%s", user_id, type(exc).__name__)

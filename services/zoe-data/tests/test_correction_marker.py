@@ -30,7 +30,8 @@ HEAD = "## A newer correction from the member"
 CHAT: dict = {}                                                     # id -> {user, session, content, off}; insertion order = time
 _REAL_DB = cm._db
 ON_FETCH: list = []
-FORGOTTEN: set = set()                                              # the member's forget ledger, as lower-case words                                                 # coroutines run INSIDE the text fetch (the race tests)
+FORGOTTEN: set = set()                                              # the member's forget ledger, as lower-case words
+OPTED_OUT: set = set()                                              # members with memory_opt_out                                                 # coroutines run INSIDE the text fetch (the race tests)
 
 
 class _ChatDb:
@@ -71,6 +72,13 @@ def _state(monkeypatch):
     async def ledger(user_id, text, **_):
         return user_id == MEMBER and bool(FORGOTTEN & set(re.findall(r"[a-z]+", text.lower())))
     monkeypatch.setattr(memory_forgotten, "matches", ledger)
+    import user_prefs
+
+    OPTED_OUT.clear()
+
+    async def opted_out(user_id, **_):
+        return user_id in OPTED_OUT
+    monkeypatch.setattr(user_prefs, "is_memory_opted_out", opted_out)
     monkeypatch.setenv("ZOE_CORRECTION_PENDING_MARKER", "1")
     monkeypatch.setattr(cm, "_db", lambda: _ChatDb())          # only the marker's reads; every other store is untouched
     yield
@@ -538,3 +546,37 @@ async def test_a_forgets_own_exception_still_propagates(monkeypatch):
         await forget_topic.forget(object(), MEMBER, "the book club")
     with pytest.raises(ValueError, match="own failure"):
         await mfc.cascade_forget(MEMBER, "Wren")
+
+
+# ── memory_opt_out, and a later successful correction retiring older markers ───────────────────────────────────────────
+
+async def test_an_opted_out_member_gets_nothing_recorded_or_replayed(monkeypatch):
+    OPTED_OUT.add(MEMBER)
+    assert await _note() is False and cm.pending(MEMBER) == []
+    CHAT.clear()
+    assert await _note(user=OTHER) is True                                         # control: an opted-in member is unchanged
+    OPTED_OUT.clear()
+    assert await _note(tid="t5") is True and HEAD in _packet(monkeypatch)["packet"]
+    OPTED_OUT.add(MEMBER)                                                          # opted out AFTER the marker was recorded
+    assert HEAD not in _packet(monkeypatch)["packet"] and cm.pending(MEMBER) == []
+
+
+LATER = "No, the book club is on the 26th, not the 19th"                       # synthetic: the same subject, a newer value
+OTHER_SUBJECT = "No, Juno is 34, not 33"
+
+
+async def test_a_later_successful_correction_retires_the_older_marker_for_that_subject(monkeypatch):
+    assert await _note(OTHER_SUBJECT, tid="t0") is True                          # a different subject
+    assert await _note(tid="t1") is True                                           # correction A: the row was not rewritten
+    CHAT["t2"] = {"user": MEMBER, "session": "s-panel", "content": LATER}
+    assert await cm.note_turn(LATER, MEMBER, "s-panel", rewrote=1) is False        # correction B rewrote the row
+    assert [m.turn_id for m in cm.pending(MEMBER)] == ["t0"]                       # A retired; the other subject survives
+    pkt = _packet(monkeypatch)["packet"]
+    assert FIX not in pkt and OTHER_SUBJECT in pkt
+
+
+async def test_a_failed_later_correction_retires_nothing():
+    assert await _note(tid="t1") is True
+    CHAT["t2"] = {"user": MEMBER, "session": "s-panel", "content": LATER}
+    assert await cm.note_turn(LATER, MEMBER, "s-panel", rewrote=0) is True         # not rewritten: it is pending too
+    assert sorted(m.turn_id for m in cm.pending(MEMBER)) == ["t1", "t2"]
