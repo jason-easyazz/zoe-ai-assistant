@@ -550,3 +550,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   `value_correction` / `memory_quality` / emergency-filing code against `services/zoe-data/tests/fixtures/memory_claims_golden.json`
   on in-memory doubles (no database, no model, no network) as a REPORT (PASS / FAIL / NOT_RUNNABLE), never a gate.
   `baseline-today.json` is the committed score; `test_memory_claims_golden.py` pins it. Synthetic data only.
+- `listen-pace/` - **the listen-pace shadow replayer** (2026-11-14; `docs/knowledge/voice-listen-pace.md`): `replay.py` reads the
+  panel daemon's `FIRST_SOUND` lines from a FILE (no live reads, no ssh), runs the real `services/zoe-data/listen_pace.py`
+  controller as if on, and prints cut-offs per 100 eligible turns (observed vs predicted), cut-offs avoided, mean wait and ms
+  saved per 100 turns: numbers only. `test_replay.py` generates synthetic lines; hand-run under `flock -x /tmp/zoe-test-lane.lock`
+  (no `ci_safe`, not CI-wired). README is the record (no real panel data yet).
