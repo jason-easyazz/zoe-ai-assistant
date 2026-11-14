@@ -1358,6 +1358,52 @@ def inst_alarm_seen(logs: LogSet, since, until) -> dict:
                   data={"lines": len(rows), "rang_ms": rang, "other_ms": other, "never": never})
 
 
+#: labs/self-heal/selfheal/runner.py `_finish` outcomes (a fixed vocabulary; anything else prints as `other`).
+SELF_HEAL_OUTCOMES = frozenset({"healed_local", "healed", "not_healed", "discarded", "rolled_back", "rollback_stuck",
+                                "pr_open", "pr_closed", "interrupted", "failed"})
+
+
+def inst_self_heal_fix(path: str, since, until) -> dict:
+    """The self-heal lab's audit.jsonl `result` rows: `fix_s` on a verified heal (healed_local | healed) is the seconds from the
+    detect run that ticketed the fault to the passing reproduction (labs/self-heal/selfheal/runner.py `_fix_seconds`)."""
+    key, title = "inst_self_heal_fix", "Self-heal fault-to-fix time (lab)"
+    w = wstr(since, until)
+    if not path or not os.path.exists(path):
+        return unmeasured(key, title, "no self-heal audit log (the lab loop is not installed or has never run)", window=w)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            raw = fh.read().splitlines()
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot read the self-heal audit log ({type(exc).__name__})", window=w)
+    fix, outcomes, bad = [], {}, 0
+    for line in raw:
+        try:
+            row = json.loads(line)
+            if row.get("step") != "result":
+                continue
+            t = dt.datetime.fromisoformat(str(row["ts"]))
+        except (ValueError, KeyError, TypeError, AttributeError):
+            bad += 1          # an impossible timestamp or a torn line: skipped, counted
+            continue
+        t = t if t.tzinfo else t.replace(tzinfo=LOCAL_TZ)
+        if not (since <= t < until):
+            continue
+        o = row.get("outcome") if row.get("outcome") in SELF_HEAL_OUTCOMES else "other"
+        outcomes[o] = outcomes.get(o, 0) + 1
+        v = row.get("fix_s")
+        if o in ("healed_local", "healed") and isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0:
+            fix.append(float(v))
+    n = sum(outcomes.values())
+    if not n:
+        return unmeasured(key, title, "no self-heal result in window", window=w)
+    fix_txt = f"s {_ms_txt(fix, 50, 90)} / max {max(fix):.0f} (n={len(fix)})" if fix else "unmeasured (no verified heal)"
+    out_txt = ", ".join(f"{k} {v}" for k, v in sorted(outcomes.items()))
+    return metric(key, title, f"fault-to-fix {fix_txt}; results {n}: {out_txt}", n=n, window=w,
+                  method=("labs/self-heal audit.jsonl step=result rows by ts; fix_s on healed_local / healed = detect run to "
+                          f"passing reproduction; lines skipped (unreadable or impossible ts): {bad}"),
+                  label="[Experimental]", data={"fix_s": fix, "outcomes": outcomes, "skipped": bad})
+
+
 def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
     """The INSTRUMENTS rows (long window, narrowed to the retained logs like the ALERTS app-log rows)."""
     jobs = (
@@ -1371,6 +1417,8 @@ def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
         ("inst_search_embed", "Query embeds per memory search", INSTRUMENTS, lambda: inst_search_embed(logs, long_since, until)),
         ("inst_palace_embed", "Palace embed call latency", INSTRUMENTS, lambda: inst_palace_embed(logs, long_since, until)),
         ("inst_alarm_seen", "Ring change to panel re-read", INSTRUMENTS, lambda: inst_alarm_seen(logs, long_since, until)),
+        ("inst_self_heal_fix", "Self-heal fault-to-fix time", INSTRUMENTS,
+         lambda: inst_self_heal_fix(getattr(args, "self_heal_audit", None) or "", long_since, until)),
     )
     return _run_rows(jobs)
 
@@ -1874,6 +1922,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backup-log", help="backup verify log (default: <log-dir>/backup-verify.log)")
     ap.add_argument("--backup-state", default=os.path.expanduser("~/.local/state/zoe-offbox/last_restore_drill.json"))
     ap.add_argument("--health-log", help="zoe_health.py log (default: <log-dir>/health.log)")
+    ap.add_argument("--self-heal-audit", default=os.path.expanduser("~/.zoe/self-heal/audit.jsonl"),
+                    help="the self-heal lab's audit log (labs/self-heal; default its state_dir)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     try:

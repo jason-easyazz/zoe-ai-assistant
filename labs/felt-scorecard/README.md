@@ -132,6 +132,7 @@ twice with `--long-since/--until` on each side of the deploy.
 | `inst_search_embed` | `MEMORY_SEARCH_EMBED_SUMMARY` (`memory_service._semantic_search`, A4) | query embeds per search (1.00 = A4 working; up to 2 without it); all traffic |
 | `inst_palace_embed` | `PALACE_EMBED_SUMMARY` (`palace_embed`, #2460) | embed-call ms p50/p90 as fixed-bucket bounds, mean ms, texts per call, fallbacks; all traffic |
 | `inst_alarm_seen` | `ALARM_RING_SEEN event= ms= changes=` (`alarm_ring_lateness`, called by `alarms._emit` and the panel's `GET /api/alarms/ringing`) | ring-set change committed to the first panel re-read, server clock: p50/p90/max for a ring starting and for every change; `ms=-1` = no panel read within 10 min. Before #2472 this is the 2 s poll, after it the push. Not ring-to-screen: the response trip and the paint are not in it |
+| `inst_self_heal_fix` | `labs/self-heal` `audit.jsonl` `step=result` rows (`--self-heal-audit`, default `~/.zoe/self-heal/audit.jsonl`) | `fix_s` on `healed_local` / `healed`: detect run that ticketed the fault to the passing reproduction, p50/p90/max; results by (allowlisted) outcome; unreadable or impossible-timestamp lines skipped and counted. `e2e_scratch.py` prints `fault_to_fix_s` (fault injected to proof) for the synthetic run |
 
 ## Sample output (real run, 2026-11-12 09:21 local, default windows)
 
