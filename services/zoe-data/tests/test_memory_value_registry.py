@@ -831,6 +831,95 @@ def test_the_physical_row_erase_clears_tied_entries_before_the_rows_go(db, tmp_p
         run(svc.erase_rows(A, [R(A, "r2")], actor=A))
 
 
+def _lock_svc(monkeypatch, tmp_path):
+    import memory_service
+
+    svc = memory_service.MemoryService(data_dir=str(tmp_path / "palace"))
+    monkeypatch.setattr(svc, "_owned_rows_sync", lambda uid, ids: ([], []))
+    return svc
+
+
+async def _approve_like(svc, uid, gate_held, go_on):
+    """omi_review_apply.approve's lock order: the member's ERASE GATE first, then (inside ingest) the memory lock."""
+    async with user_erase_gate.writing(uid, user_erase_gate.generation(uid)):
+        gate_held.set()
+        await go_on.wait()                                   # the row forget starts while the gate is held
+        async with svc._user_locks.setdefault(uid, asyncio.Lock()):
+            return "approved"
+
+
+def test_a_pendant_approval_and_a_row_forget_for_one_member_both_finish(db, tmp_path, monkeypatch):
+    """Thread PRRT_kwDOPZpkks63dULH: erase_rows used to hold the memory lock and THEN take the erase gate (the registry erase),
+    the reverse of approve. Interleaved for the same member, both now finish (the registry erase runs before the memory lock)."""
+    svc = _lock_svc(monkeypatch, tmp_path)
+    _seed(db)
+
+    async def go():
+        gate_held, go_on = asyncio.Event(), asyncio.Event()
+        approve = asyncio.create_task(_approve_like(svc, A, gate_held, go_on))
+        await gate_held.wait()
+        forget = asyncio.create_task(svc.erase_rows(A, [R(A, "r1")], actor=A))
+        await asyncio.sleep(0.05)                             # the forget is now waiting on what approve holds
+        go_on.set()
+        return await asyncio.wait_for(asyncio.gather(approve, forget), timeout=5)
+    out = run(go())
+    assert out[0] == "approved" and out[1] == {"rows_removed": 0}
+    assert _subjects(db, A) == [WREN]                         # and the forget still reached the registry
+
+
+def test_the_old_lock_order_deadlocks(db, tmp_path, monkeypatch):
+    """Negative control, under a hard timeout: the memory lock taken FIRST and the gate (the registry erase) inside it - the old
+    order - against approve's gate-then-lock never finishes."""
+    svc = _lock_svc(monkeypatch, tmp_path)
+    _seed(db)
+
+    async def old_erase_rows(uid, ids):
+        async with svc._user_locks.setdefault(uid, asyncio.Lock()):
+            await asyncio.sleep(0.02)                         # holds the memory lock while approve holds the gate
+            await reg.erase_for_rows(uid, ids)
+
+    async def go():
+        gate_held, go_on = asyncio.Event(), asyncio.Event()
+        approve = asyncio.create_task(_approve_like(svc, A, gate_held, go_on))
+        await gate_held.wait()
+        forget = asyncio.create_task(old_erase_rows(A, [R(A, "r1")]))
+        await asyncio.sleep(0.01)                             # the old forget takes the memory lock first
+        go_on.set()
+        try:
+            await asyncio.wait_for(asyncio.gather(approve, forget), timeout=1.5)
+        except asyncio.TimeoutError:
+            return "deadlocked"
+        return "finished"
+    assert run(go()) == "deadlocked"
+
+
+def test_no_gate_taking_eraser_runs_under_the_memory_lock():
+    """The lock order, statically: inside MemoryService, no ``async with lock`` block (the per-member memory lock) calls a module whose
+    forget takes the member's erase gate. The list is every module that uses ``user_erase_gate``."""
+    gate_modules = {p.stem for p in SVC.glob("*.py")
+                    if p.stem not in ("user_erase_gate", "forget_reach")
+                    and re.search(r"erase_gate\.(?:erasing|writing)\(", p.read_text(encoding="utf-8", errors="replace"))}
+    assert {"memory_value_registry", "reply_ledger", "commitments", "omi_recordings"} <= gate_modules
+    tree = ast.parse((SVC / "memory_service.py").read_text(encoding="utf-8"))
+    bad = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncWith) and any(isinstance(i.context_expr, ast.Name) and i.context_expr.id == "lock"
+                                                    for i in node.items):
+            for n in ast.walk(node):
+                if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in gate_modules
+                        and n.attr in ("forget_user", "erase_for_rows", "erase_entity", "erase_topic", "erase_for_turn")):
+                    bad.append(f"{n.value.id}.{n.attr} (line {n.lineno})")
+    assert not bad, bad
+
+
+def test_the_static_lock_order_check_is_not_vacuous():
+    src = "async def f(lock):\n    async with lock:\n        await memory_value_registry.erase_for_rows('u', [])\n"
+    tree = ast.parse(src)
+    hits = [n for node in ast.walk(tree) if isinstance(node, ast.AsyncWith) for n in ast.walk(node)
+            if isinstance(n, ast.Attribute) and n.attr == "erase_for_rows"]
+    assert hits
+
+
 def test_every_eraser_is_a_no_op_on_a_store_that_was_never_migrated(tmp_path, monkeypatch):
     bare = _Sqlite(str(tmp_path / "bare.db"))
     bare.conn.executescript(PEOPLE + ";")

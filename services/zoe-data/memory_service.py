@@ -2317,18 +2317,8 @@ class MemoryService:
             try:   # BM5: the in-process "what my last reply stood on" ledger and off-the-record marks go with the user
                 import memory_provenance
                 memory_provenance.reset(user_id)
-                import reply_ledger     # ... and so do the persisted per-reply rows (migration 0044)
-                await reply_ledger.forget_user(user_id)
-                import commitments      # ... and the promises Zoe made to them
-                await commitments.forget_user(user_id)
             except Exception:  # noqa: BLE001
                 pass
-            pendant_failure = None
-            try:   # ... and their pendant recordings (migration 0045) and learned voices: audio, transcript, times, biometrics. FAIL CLOSED:
-                import omi_recordings   # a pendant erase that left anything behind must not read as "forgotten" (the caller retries)
-                await omi_recordings.forget_user(user_id)
-            except Exception as exc:  # noqa: BLE001
-                pendant_failure = exc
             try:   # ... and their alarms (migration 0063): the labels are their words. Fail closed, like the night mind.
                 import alarms
                 await alarms.forget_user(user_id)
@@ -2344,9 +2334,20 @@ class MemoryService:
                 await contacts_store.forget_user(user_id)
             except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
                 pass
-            if pendant_failure is not None:
-                raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
-            return len(ids)
+        # AFTER the memory lock is released (LOCK ORDER, see erase_rows): these three take the member's erase gate.
+        try:
+            import reply_ledger     # ... the persisted per-reply rows (migration 0044)
+            await reply_ledger.forget_user(user_id)
+            import commitments      # ... and the promises Zoe made to them
+            await commitments.forget_user(user_id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:   # ... and their pendant recordings (migration 0045) and learned voices: audio, transcript, times, biometrics. FAIL CLOSED:
+            import omi_recordings   # a pendant erase that left anything behind must not read as "forgotten" (the caller retries)
+            await omi_recordings.forget_user(user_id)
+        except Exception as exc:  # noqa: BLE001
+            raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(exc).__name__})") from exc
+        return len(ids)
 
     async def list_by_status(
         self,
@@ -3672,13 +3673,20 @@ class MemoryService:
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
         if not want:
             return {"rows_removed": 0}
+        # LOCK ORDER (the same everywhere): the member's ERASE GATE (user_erase_gate) is never taken while this service's per-member
+        # memory lock (_user_locks) is held. The writers hold the gate and THEN take the memory lock (omi_review_apply.approve ->
+        # ingest), so the reverse order here deadlocked a pendant approval against a row forget. Every gate-taking eraser therefore
+        # runs before the memory lock is taken (or after it is released).
+        try:
+            # FIRST, fail closed, OUTSIDE the memory lock (it takes the erase gate): the superseded-value registry's entries tied
+            # to these rows (migration 0080). Before the owned-rows check, so a retry whose rows already went still clears them.
+            import memory_value_registry
+            await memory_value_registry.erase_for_rows(user_id, want)
+        except Exception as exc:
+            raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:
-                # FIRST, fail closed: the superseded-value registry's entries tied to these rows (migration 0080). Before the owned-rows
-                # check, so a retry whose rows already went still clears what was tied to them.
-                import memory_value_registry
-                await memory_value_registry.erase_for_rows(user_id, want)
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
                 if not owned:
                     return {"rows_removed": 0}
