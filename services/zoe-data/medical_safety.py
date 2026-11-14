@@ -439,14 +439,17 @@ def _sa_present_re() -> "re.Pattern":
     """One regex of every frame in the data file, slots filled from its slot lists; the condition and its article are {C}."""
     d = _sa_data()
     slots = {k: "(?:" + "|".join(_phrase_rx(p) for p in sorted(v, key=len, reverse=True)) + ")" for k, v in d["slots"].items()}
-    slots.update(_sa_verbs()[0])       # {ING} / {ED} / {BASE}: the verb forms of a condition
-    cond = _SA_A + _sa_cond()[0]
+    verbs = _sa_verbs()[0]
     frames = []
-    for f in d["frames"]:
+    for i, f in enumerate(d["frames"]):
         rx = ""
         for tok in re.split(r"(\{[A-Z]+\})", f):
             if tok == "{C}":
-                rx += cond
+                # the condition is captured in its OWN named slot (one name per frame), never re-searched in the whole match:
+                # a subject named like a condition ("is tia having a stroke") must not become the condition
+                rx += _SA_A + f"(?P<c{i}>" + _sa_cond()[0] + ")"
+            elif tok[1:-1] in verbs:
+                rx += f"(?P<v{i}>" + verbs[tok[1:-1]] + ")"
             elif re.fullmatch(r"\{[A-Z]+\}", tok):
                 rx += slots[tok[1:-1]]
             elif tok:
@@ -464,7 +467,7 @@ def _sa_recall_res() -> "tuple[re.Pattern, re.Pattern]":
     recall = re.compile(
         rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)\s+{_SA_A}{cond}"
         rf"(?:\s+{_RECALL_TIME})?$")
-    past_q = re.compile(rf"(?<!\w)(?:did|have|has|had)\s+{_SA_WHO}\s+(?:just\s+|ever\s+)?(?:have|had)\s+{_SA_A}{cond}")
+    past_q = re.compile(rf"(?<!\w)(?:did|have|has|had)\s+{_SA_WHO}\s+(?:just\s+|ever\s+)?(?:have|had)\s+{_SA_A}(?P<cpast>{cond})")
     return recall, past_q
 
 def self_assess_mode() -> str:
@@ -499,15 +502,15 @@ def self_assessment(text: str) -> Verdict:
             clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip() and not _RQ_FILLER_ONLY_RE.match(c.strip())]
             if not _PRESENT_MARK_RE.search(s) and clauses and all(recall_re.match(c) for c in clauses):
                 return NONE
-        cond_rx, keys = _sa_cond()
-        verb_rx, verb_keys = _sa_verbs()
-        found = re.search(cond_rx, m.group(0))
-        if found:
-            term = re.sub(r"[\s-]+", " ", found.group(0)).strip()
-            key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
+        _cond_rx, keys = _sa_cond()
+        _verb_rx, verb_keys = _sa_verbs()
+        # the matched frame's own condition / verb slot (present-frame match), else the past-question shape's single condition
+        slot = next(((name, val) for name, val in (m.groupdict() if m.re.groupindex else {}).items() if val), None)
+        if slot is not None and slot[0].startswith("v"):
+            key = verb_keys[re.sub(r"(?:\s+on\s+.*)$", "", slot[1]).strip().lower()]
         else:
-            term = next(mm.group(0) for rx in verb_rx.values() for mm in [re.search(rx, m.group(0))] if mm)
-            key = verb_keys[term.lower()]
+            term = re.sub(r"[\s-]+", " ", slot[1]).strip()
+            key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
         cls = _sa_data().get("verdicts", {}).get(key, "red_call")
         if cls == "ingest_human":
             rx = _rx()
@@ -823,6 +826,22 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
     return out
 
 
+#: THE URGENCY ORDER, most urgent first: when more than one detector reads the turn, the reply is the MOST urgent verdict, never the
+#: first one computed ("i have a headache, am i having a stroke?" is a stroke, not a headache). ``(cls, key)``; key None = any key of
+#: that class. The poisoning / call-now tier keeps ``detect``'s own choice between ingestion and a red flag (an urgent object or a
+#: poison before a red flag, a red flag before a harmless-looking object).
+URGENCY: tuple = (("ingest_human", "object_urgent"), ("ingest_human", "poison_human"), ("red_call", None),
+                  ("ingest_human", "object_minor"), ("ingest_animal", None), ("number", None), ("red_soon", None), ("glucose", None))
+
+
+def urgency(v: Verdict) -> int:
+    """The verdict's place in ``URGENCY`` (0 = most urgent); ``len(URGENCY)`` for no verdict. Pure."""
+    for i, (cls, key) in enumerate(URGENCY):
+        if v.cls == cls and (key is None or v.key == key):
+            return i
+    return len(URGENCY)
+
+
 async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool = False) -> Optional[str]:
     """The seam. The fixed reply when this turn is a medical-safety class in ENFORCE (the caller must NOT ask the brain), else None. NEVER raises."""
     try:
@@ -830,15 +849,16 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool
         if m == "off":
             return None
         v = detect(text)
-        if not v.cls:
-            sa = self_assessment(text)
-            if sa.cls:
-                sam = self_assess_mode()
-                if sam != "off":
-                    logger.info("MEDICAL_SELF_ASSESS user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest",
-                                sa.cls, sa.key, sam)
-                if sam == "enforce":
-                    v = sa          # the call-now floor (shadow and off: the reply is exactly what it was)
+        # EVERY detector is read, and the MOST urgent verdict wins (URGENCY): a lower-urgency class detect found (a see-today
+        # symptom, a blood sugar, the emergency-number question) never hides the self-assessment's call-now
+        sa = self_assessment(text)
+        if sa.cls and urgency(sa) < urgency(v):
+            sam = self_assess_mode()
+            if sam != "off":
+                logger.info("MEDICAL_SELF_ASSESS user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest",
+                            sa.cls, sa.key, sam)
+            if sam == "enforce":
+                v = sa          # the call-now floor (shadow and off: the reply is exactly what it was)
         if not v.cls:
             held = _detect(text, recall_gate=False)
             if held.cls in ("red_call", "red_soon"):

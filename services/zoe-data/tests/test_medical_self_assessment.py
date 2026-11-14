@@ -350,3 +350,92 @@ def test_the_overdosed_on_idiom_never_fires_but_a_substance_does(text):
                                   "could this be an overdose", "am i overdozing"])
 def test_overdose_verb_forms_fire_from_the_data(text):
     assert medical_safety.self_assessment(text).cls == "ingest_human"
+
+
+# ── review #2525 PRRT ...ethI: the MOST urgent verdict wins, never the first computed ─────────────────────────────────────────
+def test_the_urgency_order_is_explicit_and_pinned():
+    assert medical_safety.URGENCY == (("ingest_human", "object_urgent"), ("ingest_human", "poison_human"), ("red_call", None),
+                                      ("ingest_human", "object_minor"), ("ingest_animal", None), ("number", None),
+                                      ("red_soon", None), ("glucose", None))
+    assert medical_safety.urgency(medical_safety.NONE) == len(medical_safety.URGENCY)
+
+
+#: one phrase per LOWER-urgency class detect returns; each must be outranked by every self-assessment condition
+LOWER = {("red_soon", "vision"): "my vision is blurry", ("red_soon", "blood_out"): "there is blood in my wee",
+         ("glucose", "glucose"): "my blood sugar is 6.5", ("number", "emergency_number"): "what number do i ring",
+         ("ingest_human", "object_minor"): "my son swallowed a coin"}
+CONDITION_ASKS = {"heart": "am i having a heart attack", "stroke": "is this a stroke", "breathing": "is this anaphylaxis",
+                  "poison_human": "am i overdosing"}
+
+
+def _pairings() -> list:
+    out = []
+    for (cls, key), lower in LOWER.items():
+        for cond, ask in CONDITION_ASKS.items():
+            for text in (f"{lower}, {ask}?", f"{ask}? {lower}"):
+                out.append((text, (cls, key), cond))
+    return out
+
+
+@pytest.mark.parametrize("text, lower, cond", _pairings())
+def test_a_lower_urgency_class_never_hides_the_self_assessment_in_either_order(text, lower, cond, monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    assert medical_safety.detect(text).cls == lower[0]                       # detect alone reads the lesser class
+    want = _expected(cond)
+    assert medical_safety.urgency(want) < medical_safety.urgency(medical_safety.detect(text))
+    assert run(medical_safety.handle(text, "demo_bar_00000001")) == medical_safety.build_reply(want)
+
+
+def test_control_first_verdict_wins_gives_the_lesser_reply(monkeypatch):
+    monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, "enforce")
+    monkeypatch.setattr(medical_safety, "urgency", lambda v: 0 if v.cls else 99)     # a43fd2235's rule: detect first, whatever it is
+    text = "my vision is blurry, is this a stroke?"
+    assert run(medical_safety.handle(text, "demo_bar_00000001")) == medical_safety.build_reply(medical_safety.detect(text))
+
+
+def test_shadow_still_changes_no_reply_when_a_lower_class_is_present():
+    text = "my vision is blurry, is this a stroke?"
+    assert run(medical_safety.handle(text, "demo_bar_00000001")) == medical_safety.build_reply(medical_safety.detect(text))
+
+
+# ── review #2525 PRRT ...ethM: the condition comes from its named slot, never from re-searching the match ─────────────────────
+def _name_like_terms() -> list:
+    """Every single-word condition term or verb form in the data: each could be someone's name or a word in the subject slot."""
+    d = medical_safety._data()["self_assess"]
+    words = [t for ts in d["conditions"].values() for t in ts if " " not in t and "-" not in t]
+    words += [t for forms in d.get("verb_conditions", {}).values() for ts in forms.values() for t in ts]
+    return sorted(set(words))
+
+
+def _collisions() -> list:
+    d = medical_safety._data()["self_assess"]
+    term_key = {t: k for k, ts in d["conditions"].items() for t in ts}
+    out = []
+    for frame in d["frames"]:
+        who_slots = [n for n in re.findall(r"\{([A-Z]+)\}", frame) if any("{who}" in p for p in d["slots"].get(n, []))]
+        if not who_slots:
+            continue
+        slot = who_slots[0]
+        idx = next(i for i, p in enumerate(d["slots"][slot]) if "{who}" in p)
+        for name in _name_like_terms():
+            for term, key in _terms_for(frame):
+                if term_key.get(name) == key or (key == "poison_human" and name in [t for ts in d["verb_conditions"]["poison_human"].values() for t in ts]):
+                    continue                                                  # the name must differ from the condition's own class
+                out.append((_expand(frame, term, {slot: idx, "who": name}), key))
+                break
+    return out
+
+
+def test_a_subject_named_like_a_condition_never_becomes_the_condition():
+    pairs = _collisions()
+    assert len(pairs) > 100 and any(" tia " in f" {t} " for t, _k in pairs)
+    wrong = [(t, k, medical_safety.self_assessment(t).key) for t, k in pairs if medical_safety.self_assessment(t) != _expected(k)]
+    assert wrong == []
+
+
+def test_control_re_searching_the_whole_match_picks_the_name():
+    text = "is tia having a heart attack"
+    cond_rx, _keys = medical_safety._sa_cond()
+    m = medical_safety._sa_present_re().search(text)
+    assert re.search(cond_rx, m.group(0)).group(0) == "tia"                     # a43fd2235's extraction: the NAME
+    assert medical_safety.self_assessment(text) == _expected("heart")           # the named slot: the condition

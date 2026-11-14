@@ -85,6 +85,12 @@ accidental-sounding question ("did i just overdose by accident", "am i overdosin
 it falls through to this floor. A third party's ingestion ("my son swallowed my tablets") is the poisoning floor's (`detect`). A dose
 question that is not an emergency ("what is the maximum dose of paracetamol") matches no floor and the brain answers it, as before.
 
+Urgency (review of #2525): when more than one detector reads a turn, the reply is the MOST urgent verdict, never the first computed:
+`medical_safety.URGENCY` is the one ranked list (an urgent object or a poison, then a call-now red flag, then a harmless-looking
+object, a pet, the emergency-number question, a see-today symptom, a blood sugar). "my vision is blurry, is this a stroke?" gets the
+stroke reply. The condition is taken from its own named slot in the frame match, so a subject named like a condition ("is tia having a
+heart attack") never becomes the condition.
+
 ## Limits (stated, not hidden)
 
 - Two emergency events are one record by `(person, kind, date)`, and the person is the NAME when one follows "User's/my <relation>" (`medical_safety.event_key`). So two different people who share a name, with the same kind of emergency on the same day, merge into one event record. Accepted as rare (review of #2491); a relation with no name, or two different names, never merge.
