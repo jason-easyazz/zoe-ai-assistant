@@ -25,6 +25,7 @@ import os
 from collections import Counter
 from typing import Any, Optional
 
+import user_erase_gate as erase_gate
 from user_filters import is_unidentified
 
 logger = logging.getLogger(__name__)
@@ -376,6 +377,7 @@ def _warn_if_all_zero(session_id: str, user_id: str, turns: int, user_in: int, u
         pass
 
 
+@erase_gate.scheduled_at_call("user_id")       # a direct call is scheduled when called; the sweep's earlier snapshot wins
 async def consolidate_session(session_id: str, user_id: str,
                               since: Optional[Any] = None,
                               *, get_ctx=None) -> int:
@@ -540,6 +542,8 @@ async def run_idle_consolidation_sweep() -> dict:
         return {"enabled": False}
     result = {"enabled": True, "sessions": 0, "stored": 0}
     from db_pool import get_db_ctx
+
+    seen = erase_gate.snapshot()     # the sweep is scheduled NOW: a member erased while it runs keeps nothing it writes for them
     # Short-lived listing connection: ensure the state table + list idle sessions,
     # then RELEASE it before doing any per-session work. No pooled connection is
     # held across the batch loop — each session opens its own short-lived conns.
@@ -552,7 +556,8 @@ async def run_idle_consolidation_sweep() -> dict:
         # session's watermark is left un-advanced, so it retries next sweep.
         try:
             # `since` comes straight from the batch query (no per-session round-trip).
-            stored = await consolidate_session(s["session_id"], s["user_id"], s["since"])
+            with erase_gate.scheduled(s["user_id"], seen.get(s["user_id"], 0)):
+                stored = await consolidate_session(s["session_id"], s["user_id"], s["since"])
             result["sessions"] += 1
             result["stored"] += stored
         except Exception as exc:
