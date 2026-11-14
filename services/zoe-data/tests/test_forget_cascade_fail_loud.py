@@ -89,7 +89,8 @@ async def test_a_lost_pool_is_a_failure_in_every_store(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR):
         res = await cascade.cascade_forget(USER, FRIEND)
     assert not res.complete
-    assert set(res.failed) == {"database", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "conversation_notes"}
+    assert set(res.failed) == {"database", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "conversation_notes",
+                                "routines"}                    # routines (0082): a lost pool cannot clear them either
     assert any("FORGET_CASCADE_INCOMPLETE" in r.getMessage() and USER in r.getMessage() for r in caplog.records)
     assert FRIEND not in caplog.text            # counts / labels only, never the name
     # control: the SAME failure in a process that never had a pool is "nothing to clear", not a failure
