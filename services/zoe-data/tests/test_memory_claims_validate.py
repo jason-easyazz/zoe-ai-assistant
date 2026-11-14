@@ -399,8 +399,8 @@ def test_the_vocabulary_is_tied_to_the_code_it_names():
 
 GOLDEN_CLASSES = ("correction", "kind", "emergency")
 GOLDEN_SKIPS_PATH = HERE / "fixtures" / "memory_claims_golden_validator_skips.json"
-#: the number of skipped golden cases when the list was written (2026-11-14): it may only go DOWN
-GOLDEN_SKIP_CEILING = 77
+#: the number of skipped golden cases (77 when the list was written, 10 since steps 6-7): it may only go DOWN
+GOLDEN_SKIP_CEILING = 10
 
 
 def _golden() -> tuple:
@@ -430,13 +430,38 @@ def _golden_params() -> list:
     return out or [pytest.param(None, id="golden-absent")]
 
 
+def _end_to_end():
+    """The steps 6-7 lab runner (``labs/memory-claims-lab/run_claims.py``: idle pass -> validator -> guarded writer on a
+    scratch store, scripted model), or ``(None, None)`` where it is not present."""
+    lab = HERE.parents[2] / "labs" / "memory-claims-lab"
+    if not (lab / "run_claims.py").exists():
+        return None, None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("memory_claims_lab_run_claims", lab / "run_claims.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod, json.loads((lab / "oracle_readings.json").read_text(encoding="utf-8"))
+
+
+E2E, E2E_READINGS = _end_to_end()
+
+
 def _golden_problems(case) -> list:
+    """What this validator-only runner gets wrong; a case it cannot decide alone (no stored attributes, an end-to-end
+    outcome) is then put to the end-to-end runner, whose PASS settles it."""
     if case["id"] not in GOLDEN_ORACLE_OUT:
         return ["no oracle output"]
     try:
-        return disagreements(case, run_case(case, GOLDEN_ORACLE_OUT[case["id"]]))
+        problems = disagreements(case, run_case(case, GOLDEN_ORACLE_OUT[case["id"]]))
     except Exception as exc:  # noqa: BLE001 - a case the runner cannot read is a reported failure
-        return [f"runner error {type(exc).__name__}"]
+        problems = [f"runner error {type(exc).__name__}"]
+    if problems and E2E is not None:
+        status, _reason, detail = E2E.run_case(case, GOLDEN_ORACLE_OUT[case["id"]], E2E_READINGS)
+        if status == E2E.PASS and not detail.get("rule_unobserved"):
+            return []
+        problems += [f"end to end: {f}" for f in detail.get("fails", [])] or [f"end to end: {status}"]
+    return problems
 
 
 @pytest.mark.parametrize("case", _golden_params())
