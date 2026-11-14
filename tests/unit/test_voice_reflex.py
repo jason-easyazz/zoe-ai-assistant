@@ -49,7 +49,8 @@ ON = R.Settings(enabled=True)
 TAKES = ("mm_01", "mm_02", "mm_03", "mm_04")
 #: the otherwise-clean context: every explicit input states its safe value
 CLEAN = dict(rule="deep", speech_ms=1200, turn_kind="wake", local_hour=12, bank_voice="af_sky", current_voice="af_sky",
-             takes=TAKES, committed=True, guest=False, speaker_conf=0.9, media_active=False)
+             takes=TAKES, committed=True, guest=False, speaker_accept=True, speaker_model=R.KNOWN_SPEAKER_MODELS[0],
+             verdict_ms=90, media_active=False)
 
 
 def ok_ctx(**kw):
@@ -65,7 +66,8 @@ SKIP_CASES = {
     "not_committed": (dict(committed=None), ON),
     "media": (dict(media_active=None), ON),
     "guest": (dict(guest=True), ON),
-    "low_confidence": (dict(speaker_conf=0.5), ON),
+    "low_confidence": (dict(speaker_accept=False), ON),
+    "late": (dict(verdict_ms=300), ON),
     "not_wake": (dict(turn_kind="followup"), ON),
     "capped": (dict(rule="max_duration"), ON),
     "short": (dict(speech_ms=400), ON),
@@ -113,8 +115,9 @@ SITE_CASES = {
     "night": (dict(local_hour=23), ON),
     "idle_greeting": (dict(idle_h=5.0), ON),
     "guest": (dict(guest=True), ON),
-    "conf_missing": (dict(speaker_conf=None), ON),
-    "conf_low": (dict(speaker_conf=0.5), ON),
+    "late": (dict(verdict_ms=251), ON),
+    "model_unknown": (dict(speaker_model="resemblyzer"), ON),
+    "not_accepted": (dict(speaker_accept=None), ON),
     "prev_question": (dict(turn_kind="conversation", prev_question=True), replace(ON, chain_enabled=True)),
     "budget_gap": (dict(since_last_s=12.0), ON),
     "budget_chain": (dict(turn_kind="followup", chain_turns_since=1), replace(ON, chain_enabled=True)),
@@ -150,7 +153,7 @@ def _mutant(site: str):
 
 def test_every_guard_site_has_a_case():
     assert set(_sites()) == set(SITE_CASES) | {"except"}
-    assert len(_sites()) == 22
+    assert len(_sites()) == 23
 
 
 @pytest.mark.parametrize("site", sorted(SITE_CASES))
@@ -185,7 +188,7 @@ _GARBAGE = (None, "5", True, float("nan"), float("inf"), float("-inf"), [1], -1)
 
 @pytest.mark.parametrize("field,value", [(f, v) for f in ("speech_ms", "muted_ms", "idle_h") for v in _GARBAGE]
                          + [("noise_dbfs", v) for v in _GARBAGE if v != -1]
-                         + [(f, v) for f in ("since_last_s", "chain_turns_since") for v in _GARBAGE if v is not None]
+                         + [(f, v) for f in ("since_last_s", "chain_turns_since", "verdict_ms") for v in _GARBAGE if v is not None]
                          + [("local_hour", v) for v in _GARBAGE + (7.5, 24, -1)])
 def test_garbage_numeric_inputs_are_silence(field, value):
     s = replace(ON, chain_enabled=True)
@@ -206,18 +209,23 @@ def test_the_explicit_inputs_fail_silent():
         assert R.decide(ok_ctx(guest=v), s=ON).skip == "guest"                  # unknown speaker = guest
     allow = replace(ON, for_guests=True)
     assert R.decide(ok_ctx(guest=True), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None, speaker_conf=0.8), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None, speaker_conf=None), s=allow).skip == "low_confidence"  # still needs a score
-    # speaker confidence: missing, low, NaN, inf or a non-number is silence, always
-    for v in (None, 0.69, float("nan"), float("inf"), "0.9", True, [0.9], 1.0000001, 1.5, 1e9, -0.1):
-        assert R.decide(ok_ctx(speaker_conf=v), s=ON).skip == "low_confidence"   # over 1.0 is not a score
-    assert R.decide(ok_ctx(speaker_conf=1.0), s=ON).kind == "heard"              # exactly 1.0 still plays
+    assert R.decide(ok_ctx(guest=None), s=allow).kind == "heard"
+    assert R.decide(ok_ctx(guest=None, speaker_accept=None), s=allow).skip == "low_confidence"  # still needs an accept
+    # the model's own accept: exactly True, nothing else (a raw score or a truthy stand-in is not a decision)
+    for v in (None, False, 1, 0.9, "yes", "True", [True]):
+        assert R.decide(ok_ctx(speaker_accept=v), s=ON).skip == "low_confidence"
+    # the model id: a known one only; the retired Resemblyzer, a near-miss spelling, a non-string or nothing is silence
+    for v in (None, "", "resemblyzer", "wespeaker_resnet34", R.KNOWN_SPEAKER_MODELS[0].upper(), 7, ("x",)):
+        assert R.decide(ok_ctx(speaker_model=v), s=ON).skip == "low_confidence"
     for v in (0.001, 3.0, 1e9):                                                   # dBFS above full scale is not a reading
         assert R.decide(ok_ctx(noise_dbfs=v), s=ON).skip == "error"
     assert R.decide(ok_ctx(noise_dbfs=0.0), s=replace(ON, noise_floor_dbfs=0.0)).skip != "error"   # 0 dBFS is a reading
-    assert R.decide(ok_ctx(speaker_conf=0.70), s=ON).kind == "heard"
-    assert R.decide(ok_ctx(speaker_conf=1), s=ON).kind == "heard"
-    assert R.decide(ok_ctx(speaker_conf=0.75), s=replace(ON, min_speaker_conf=0.8)).skip == "low_confidence"
+    # the deadline: the boundary plays, a hair over or an unknown time is late
+    assert R.decide(ok_ctx(verdict_ms=250), s=ON).kind == "heard"
+    assert R.decide(ok_ctx(verdict_ms=0), s=ON).kind == "heard"
+    for v in (250.001, 5000, None):
+        assert R.decide(ok_ctx(verdict_ms=v), s=ON).skip == "late"
+    assert R.decide(ok_ctx(verdict_ms=200), s=replace(ON, score_deadline_ms=150)).skip == "late"
     # the safe defaults: a bare Ctx (the daemon stated nothing) is silent
     bare = R.Ctx(rule="deep", speech_ms=1200, bank_voice="af_sky", current_voice="af_sky", takes=TAKES)
     assert R.decide(bare, s=ON).skip == "not_committed"
@@ -342,7 +350,8 @@ def test_defaults_are_the_s1_constants():
     s = R.settings({})
     assert (s.enabled, s.min_speech_ms, s.max_ms, s.seam_ms, s.min_gap_s, s.idle_greet_h, s.night_start, s.night_end,
             s.gain_db) == (False, 480, 600, 120, 30, 4, 22, 7, -3)
-    assert (s.for_guests, s.min_speaker_conf) == (False, 0.70)
+    assert (s.for_guests, s.score_deadline_ms) == (False, 250)
+    assert not hasattr(s, "min_speaker_conf")               # removed: the reflex no longer owns a score threshold
     assert not hasattr(s, "require_speaker")                # removed: a missing score is always silence
 
 
@@ -353,12 +362,30 @@ def test_env_overrides_are_clamped():
     assert s.enabled is True and s.min_gap_s == 10 and s.max_ms == 1000 and s.seam_ms == 40
     assert s.min_speech_ms == 480 and s.gain_db == 0 and s.idle_greet_h == 4 and (s.night_start, s.night_end) == (21, 6)
     assert s.chain_every == 2
-    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_MIN_SPEAKER_CONF": "7"})
-    assert t.for_guests and t.min_speaker_conf == 1.0
-    assert R.settings({"REFLEX_MIN_SPEAKER_CONF": "-1"}).min_speaker_conf == 0.0
+    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_SCORE_DEADLINE_MS": "99999"})
+    assert t.for_guests and t.score_deadline_ms == 1000
+    assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "-1"}).score_deadline_ms == 50
+    assert R.settings({"REFLEX_SCORE_DEADLINE_MS": "nan"}).score_deadline_ms == 250
     assert R.settings({"REFLEX_ENABLED": "maybe"}).enabled is False
     assert R.settings({"REFLEX_NIGHT": "25-07"}).night_start == 22
     assert R.settings({"REFLEX_NIGHT": "7-7"}).night_start == 7 and not R.is_night(23, R.settings({"REFLEX_NIGHT": "7-7"}))
+
+
+def test_known_speaker_models_mirror_the_panel_model_id():
+    """Drift pin: the one trusted id is exactly zoe_speaker_resnet34.MODEL_ID (read from its source: that module needs
+    numpy), and the retired model is not trusted."""
+    src = (_MOD.parent / "zoe_speaker_resnet34.py").read_text(encoding="utf-8")
+    parts = {k: re.search(rf'^{k} = "([^"]+)"$', src, re.M).group(1) for k in ("FAMILY", "QUANT", "CENTRE_VERSION")}
+    assert re.search(r'^MODEL_ID = FAMILY \+ "\+" \+ QUANT \+ "\+" \+ CENTRE_VERSION$', src, re.M)
+    assert R.KNOWN_SPEAKER_MODELS == ("+".join((parts["FAMILY"], parts["QUANT"], parts["CENTRE_VERSION"])),)
+    assert "resemblyzer" not in R.KNOWN_SPEAKER_MODELS
+
+
+def test_no_raw_score_threshold_is_left():
+    """The retired Resemblyzer-scale bar (0.70) and the raw ``speaker_conf`` input are gone from the module."""
+    src = _MOD.read_text(encoding="utf-8")
+    assert "0.70" not in src and "speaker_conf" not in src and "MIN_SPEAKER_CONF" not in src
+    assert "speaker_conf" not in R.Ctx.__dataclass_fields__
 
 
 def test_module_is_stdlib_only():
