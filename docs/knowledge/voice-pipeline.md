@@ -255,6 +255,17 @@ A household panel turn that re-prefills more than 500 prompt tokens logs `PANEL_
 changed since the session's previous turn (`member_switch`, `tool_block_changed`, `elided_block`, ...). Every brain turn
 also logs `FLUE_PREPOST total_ms= ... <block>_ms=`: what the context-block awaits cost before the POST (numbers only).
 
+**Prompt-cache stability flags (flag-dark, 2026-11-14 speed audit B3 / B6; replay-gate before turning on).**
+`ZOE_BRAIN_VOLATILE_AFTER_USER=1`: the user's words lead; right after them the risk-cue and every-turn blocks; then the run
+that rode BEFORE the words, in its own order (identity, bridge, notes, fast-path, the claim-correction line, the recall
+packet whole, offer / list share, hop preamble); then continuity / hop / brief / raise / date / verify as before. The sidecar
+elides every block from older user messages (`ZOE_BRAIN_ELIDE_STALE_BLOCKS`), so with the blocks first the previous turn's
+cached bytes diverge before its words; after the words they stay equal through them (pinned, hash-equal, by
+`services/zoe-data/tests/test_brain_cache_stability.py`; off = byte-identical to a golden corpus). The saving per elided
+turn is the previous turn's words and template tokens only: the previous reply and the new turn still re-prefill.
+`ZOE_CONTINUITY_CEILING_S` (default 3.0, unchanged) is the continuity packet's wait; **0.4 is the candidate** (the household
+fallback's budget): a late packet is simply not carried, so SEAM_CONTINUITY matches may drop on a slow day.
+
 **The clip set is PINNED (2026-10-13).** The probe used to replay "the newest N clips by mtime", so every
 new recording silently changed the set and the speed bar with it (STT read ~400 ms against a 921 ms
 baseline recorded on another set; a 2x STT regression would have passed). Now the baseline stores
