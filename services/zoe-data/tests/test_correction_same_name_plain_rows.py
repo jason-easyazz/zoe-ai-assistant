@@ -97,3 +97,39 @@ def test_a_relation_or_date_word_in_another_sentence_is_not_a_second_person():
 def test_linked_people_ambiguity_still_abstains():
     svc = _Svc(_Row("r0", "Quorbel is 41", "person-a"), _Row("r1", "Quorbel is 41 years old", "person-b"))
     assert run(vc.apply(SAID, UID, None, svc=svc)) == 0 and svc.edits == []
+
+
+@pytest.mark.parametrize("a,b", [
+    ("quorbel tandry is 41", "quorbel vesk is 41"),                         # voice transcripts are lower-case
+    ("Quorbel Tandry is 41", "quorbel vesk is 41"),                         # mixed case
+    ("Quorbel Tandry-Vesk is 41", "Quorbel Tandry is 41"),                  # hyphenated surname folds to its own name
+])
+def test_surnames_are_read_case_insensitively(a, b):
+    svc = _Svc(_Row("r0", a), _Row("r1", b))
+    assert run(vc.apply(SAID, UID, None, svc=svc)) == 0 and svc.edits == []
+
+
+def test_one_linked_person_and_one_plain_row_with_another_age_abstains(caplog):
+    caplog.set_level(logging.DEBUG)
+    svc = _Svc(_Row("r0", "Quorbel is 41", "person-a"), _Row("r1", "Quorbel is 52"))
+    assert run(vc.apply(SAID, UID, None, svc=svc)) == 0 and svc.edits == []
+    assert f"VALUE_CORRECTION_AMBIGUOUS_SUBJECT user={UID} rows=1 people=2" in caplog.text
+
+
+def test_one_linked_person_and_a_plain_row_with_no_cue_is_one_person():
+    svc = _Svc(_Row("r0", "Quorbel is 41", "person-a"), _Row("r1", "quorbel likes tea"))
+    assert run(vc.apply(SAID, UID, None, svc=svc)) == 1
+
+
+@pytest.mark.parametrize("other", [
+    "quorbel likes tea", "quorbel and tandry went swimming", "quorbel swims, on monday", "quorbel plays chess",
+    "quorbel in march booked a trip", "Quorbel Monday swim", "quorbel has a dentist visit", "Quorbel Swimming is on",
+    "quorbel is my sister", "quorbel went to the shops, then home"])
+def test_ordinary_words_after_a_name_are_not_surnames(other):
+    svc = _Svc(_Row("r0", "quorbel is 41"), _Row("r1", other))
+    assert run(vc.apply(SAID, UID, None, svc=svc)) == 1
+
+
+def test_two_stale_values_for_one_person_over_abstain_by_design():
+    svc = _Svc(_Row("r0", "Quorbel is 40"), _Row("r1", "Quorbel is 41"))
+    assert run(vc.apply(SAID, UID, None, svc=svc)) == 0
