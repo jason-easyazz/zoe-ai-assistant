@@ -1092,7 +1092,7 @@ def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict
         import child_safety_floor
 
         return child_safety_floor.check(message, session_id, user_id, dry=bool(kwargs.get("replay_isolation")),
-                                        floors_live=_floors_live(route))
+                                        floors_live=_floors_live(route), voice=bool(kwargs.get("voice_mode")))
     except Exception:  # noqa: BLE001 - FAIL SAFE: a floor that cannot run lets only a positively adult speaker through
         logger.warning("CHILD_SAFETY_FLOOR source=error stage=dispatch")
         return _CHILD_FLOOR_BROKEN
