@@ -301,35 +301,64 @@ def _glucose(s: str, rx: dict) -> Optional[Verdict]:
 
 
 # A RECALL QUESTION about the past ("did i have chest pain last month?", "have i ever had chest pain?", "has my wife had chest pain?")
-# asks what memory holds; it reports nothing happening now (QA round 10a: three such questions got "Ring 000 now"). The tense is the
-# module's own: the inverted question form of _PAST_RE's perfect ("has had" -> "has <who> had") and the past auxiliary "did". It
-# loses the floor ONLY when EVERY clause of the turn is one, with no present marker and no present-tense verb anywhere: any
-# present relevance ("have i had chest pain today?", "my chest hurts, did i have a heart attack?"), or anything else in the turn
-# that is not such a question, keeps the floor. If in doubt, the floor fires.
+# asks what memory holds; it reports nothing happening now (QA round 10a: three such questions got "Ring 000 now"). An ALLOW-LIST,
+# never a classifier of what is left over: a clause loses the floor only when the WHOLE clause is exactly
+#   [filler] (did <who> [ever] have | have|has|had <who> [ever] had) <symptom> [<one past-time phrase from _RECALL_TIME>]
+# where <symptom> is ONE exact red-flag phrase and nothing else (leading intensity words aside: _SYM_FILLER). The turn is split at punctuation only,
+# so a run-on is one clause and any trailing word ("its back", "it never stopped", another symptom, "and now", a typo, another
+# language) is a leftover that keeps the floor. Every clause must be one (filler-only clauses aside), and no present marker may
+# appear anywhere. If in doubt, the floor fires.
 _RQ_FILLER = r"(?:hey|hi|ok|okay|so|um+|uh+|oh|well|zoe|quick question)"
 _RQ_FILLER_ONLY_RE = re.compile(rf"^(?:{_RQ_FILLER}\s*)+$")
-_RECALL_Q_RE = re.compile(rf"^(?:{_RQ_FILLER}\s+)*"
-                          r"(?:did\s+(?:\w+\s+){1,3}?(?:ever\s+)?\w+|(?:have|has|had)\s+(?:\w+\s+){1,3}?(?:ever\s+)?had)(?!\w)")
+_MONTHS = "january|february|march|april|may|june|july|august|september|october|november|december"
+#: THE CLOSED past-time list. "recently" is deliberately NOT in it: it can be present-relevant ("did i have chest pain recently"
+#: from someone with it now), so it keeps the floor.
+_RECALL_TIME = (
+    r"(?:last\s+(?:week|month|year|night|summer|winter|spring|autumn|christmas|easter)"
+    r"|yesterday"
+    rf"|in\s+(?:{_MONTHS})"
+    r"|in\s+(?:19|20)\d\d"
+    r"|(?:\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|a\s+few|several)\s+(?:days?|weeks?|months?|years?)\s+ago"
+    r"|years\s+ago"
+    r"|before"
+    r"|in\s+the\s+past"
+    r"|at\s+(?:christmas|easter)"
+    r"|when\s+(?:i|he|she|they|we|you)\s+(?:was|were)\s+(?:younger|little|small|a\s+kid|a\s+child|a\s+baby))"
+)
+_RQ_WHO = r"(?:i|you|he|she|we|they|(?:my|our|your)\s+[a-z]+|[a-z]+)"
+_RECALL_SHAPE_RE = re.compile(
+    rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)"
+    rf"\s+(?P<sym>[a-z ]+?)(?:\s+{_RECALL_TIME})?$")
+#: the only words a symptom may carry BEFORE the red flag itself
+_SYM_FILLER = frozenset({"a", "an", "any", "some", "the", "crushing", "bad", "severe", "sharp"})
 _PRESENT_MARK_RE = re.compile(r"(?<!\w)(?:just|now|still|again|today|tonight|this\s+(?:morning|afternoon|evening|week)|since|"
-                              r"all\s+day|at\s+the\s+moment|currently|right\s+now|anymore)(?!\w)")
-_PRESENT_VERB_RE = re.compile(r"(?<!\w)(?:am|is|are|isnt|arent|cant|cannot|wont|feel|feels|feeling|hurts?|hurting|keeps?|"
-                              r"do|does|dont|doesnt|having|(?:i|he|she|they|we|you)\s+(?:have|has|got))(?!\w)")
-_CLAUSE_RE = re.compile(r"[.!?;,\n]+|\s+(?:and|but|because|cos|so|then)\s+")
+                              r"all\s+day|at\s+the\s+moment|currently|right\s+now|anymore|recently|lately)(?!\w)")
+_CLAUSE_RE = re.compile(r"[.!?;,\n]+")
 
 
-def _recall_question(s: str) -> bool:
+def _only_a_symptom(sym: str, rx: dict) -> bool:
+    """Is ``sym`` exactly ONE red-flag PHRASE (call or see-today tier), with only ``_SYM_FILLER`` words beside it? The paraphrase
+    ``pairs`` are NOT accepted here: a body word and a symptom word a few words apart also fit "chest pain hurts", so a symptom
+    the exact phrases do not cover keeps the floor. Pure."""
+    words = sym.split()
+    while words and words[0] in _SYM_FILLER:      # LEADING intensity words only ("crushing chest pain"): a trailing one is a leftover
+        words.pop(0)
+    core = " ".join(words)
+    return bool(core) and any(pat.fullmatch(core) for _fid, _t, pat in rx["flags"])
+
+
+def _recall_question(s: str, rx: Optional[dict] = None) -> bool:
     """Is the (folded) turn ONLY a recall question about the past (above)? Pure; False whenever in doubt."""
+    rx = rx or _rx()
     if _PRESENT_MARK_RE.search(s):
         return False
     clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip()]
-    if not clauses:
-        return False
     clauses = [c for c in clauses if not _RQ_FILLER_ONLY_RE.match(c)]       # "hey zoe, did i ..."
     if not clauses:
         return False
     for c in clauses:
-        m = _RECALL_Q_RE.match(c)
-        if not m or _PRESENT_VERB_RE.search(c[m.end():]):
+        m = _RECALL_SHAPE_RE.match(c)
+        if not m or not _only_a_symptom(m.group("sym"), rx):
             return False
     return True
 
@@ -348,7 +377,7 @@ def _detect(text: str, *, recall_gate: bool) -> Verdict:
         c = _canon(s)
         ing = _ingestion_all(s, rx)
         call = _flag(s, rx, "call") or _pair(c, rx, "call")
-        recall_q = recall_gate and _recall_question(s)
+        recall_q = recall_gate and _recall_question(s, rx)
         if recall_q:
             call = None      # a symptom ASKED ABOUT in the past is answered from memory; an ingestion is never withheld
         if ing and ing.key == "object_minor" and not call:

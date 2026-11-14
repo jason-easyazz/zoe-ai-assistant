@@ -20,7 +20,8 @@ def run(coro):
 
 # ── E1: both sides of the floor ───────────────────────────────────────────────────────────────────────────────────────────────
 #: QA round 10a recorded these three (shape kept, names generic): each got "Ring 000 now" instead of an answer from memory
-QA10A_RECALL = ["did i have chest pain recently", "has my partner had chest pain", "have i ever had chest pain"]
+QA10A_RECALL = ["has my partner had chest pain", "have i ever had chest pain"]
+#: the third QA 10a phrasing, "did i have chest pain recently", now KEEPS the floor: "recently" can be present-relevant (FLIPPED)
 RECALL_QUESTIONS = QA10A_RECALL + [
     "did i have chest pain?", "did i have chest pain last month?", "have i ever had chest pain?", "has dad ever had chest pain",
     "did my wife have chest pain last week", "had i had chest pain before", "did my son have trouble breathing last year",
@@ -37,8 +38,65 @@ FLOOR = [
     "has my wife had chest pain this morning", "my wife has chest pain, did she have it last week", "have i had chest pain all day",
     "is my chest pain still there", "she has chest pain, has she had it before", "did i have chest pain tonight", "chest pain",
     "have i had chest pain at the moment", "did i have chest pain and shortness of breath", "hey zoe, i have chest pain",
-    "my partner has chest pain and is sweating a lot",
+    "my partner has chest pain and is sweating a lot", "did i have chest pain recently",
 ]
+#: review of #2491: a recall prefix followed by ANYTHING unlisted keeps the floor (an allow-list, never a classifier of the leftover)
+LEFTOVER_FLOOR = [
+    "did i have chest pain last month its back", "did i have chest pain it never stopped", "did i have chest pain its bak",
+    "did i have chest pain ahora me duele", "did i have chest pain chest pain ongoing",
+    # run-ons with no punctuation: the whole turn is one clause
+    "did i have chest pain last week and its come back", "have i ever had chest pain because i think i have it",
+    "did my wife have chest pain last year she says it hurts", "did i have chest pain before its really bad",
+    # contractions and markers
+    "did i have chest pain last month it's back", "did i have chest pain its back", "have i had chest pain still",
+    "did i have chest pain and now", "did i have chest pain last year and now its worse",
+    # negation
+    "did i have chest pain it hasnt gone away", "did i have chest pain its not gone", "have i had chest pain that never went away",
+    "did i have chest pain that wont stop",
+    # typos and other languages
+    "did i have chest pain its baack", "did i have chest pain rn", "did i have chest pain me duele ahora",
+    "did i have chest pain jetzt", "did i have chest pain maintenant",
+    # a second symptom tacked on
+    "did i have chest pain and trouble breathing", "did i have chest pain and my arm is numb", "did i have chest pain sweating",
+    # a trailing present clause after a comma or "but"
+    "did i have chest pain last month, it hurts", "did i have chest pain last month, its back", "did i have chest pain before but it hurts",
+    "have i ever had chest pain, my chest is tight", "did i have chest pain in march, i think its happening",
+    # an unlisted time phrase keeps the floor too
+    "did i have chest pain earlier", "did i have chest pain this week", "did i have chest pain lately",
+]
+#: one token appended to an accepted recall question: random words, the present markers, gibberish, another language
+APPEND_BAG = ["back", "again", "now", "still", "today", "tonight", "since", "currently", "lately", "recently", "xqzv", "asdf",
+              "ahora", "jetzt", "maintenant", "ongoing", "hurts", "bad", "worse", "help", "please", "and", "but", "its", "it", "pain",
+              "the", "a", "some", "any", "crushing", "sharp", "severe", "chest", "ow", "no", "not", "never", "yes", "x"]
+
+
+@pytest.mark.parametrize("text", LEFTOVER_FLOOR)
+def test_any_leftover_after_a_recall_shape_keeps_the_floor(text):
+    assert medical_safety.detect(text).cls == "red_call"
+
+
+@pytest.mark.parametrize("token", APPEND_BAG)
+def test_property_appending_any_one_token_to_an_accepted_recall_question_keeps_the_floor(token):
+    for q in RECALL_QUESTIONS:
+        base = q.rstrip("?")
+        assert medical_safety.detect(f"{base} {token}").cls == "red_call", (q, token)
+
+
+def _old_unanchored(s: str) -> bool:
+    """The withdrawn check, kept HERE only as the negative control: a recall prefix, then anything not on an incomplete verb list."""
+    import re
+
+    filler = r"(?:hey|hi|ok|okay|so|um+|uh+|oh|well|zoe|quick question)"
+    prefix = re.compile(rf"^(?:{filler}\s+)*(?:did\s+(?:\w+\s+){{1,3}}?(?:ever\s+)?\w+|(?:have|has|had)\s+(?:\w+\s+){{1,3}}?(?:ever\s+)?had)(?!\w)")
+    present = re.compile(r"(?<!\w)(?:am|is|are|isnt|arent|cant|cannot|wont|feel|feels|feeling|hurts?|hurting|keeps?|do|does|dont|"
+                         r"doesnt|having|(?:i|he|she|they|we|you)\s+(?:have|has|got))(?!\w)")
+    m = prefix.match(s)
+    return bool(m) and not present.search(s[m.end():])
+
+
+@pytest.mark.parametrize("text", LEFTOVER_FLOOR[:5])
+def test_control_the_old_unanchored_check_lost_the_floor_on_the_review_examples(text):
+    assert _old_unanchored(medical_safety._fold(text))
 FALL_FLOOR = ["i fell over in the shower and cant get up", "my brother fell and cant get up", "she fell over and cant get up"]
 
 
