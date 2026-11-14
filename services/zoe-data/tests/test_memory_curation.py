@@ -796,7 +796,7 @@ def test_an_opt_out_cannot_interleave_with_a_curators_in_flight_add(env):
 
         env.svc.ingest = paused
         adding = asyncio.create_task(mc.add(env.db, curator, ADULT, "Wren's bins go out on Monday night", "routines", svc=env.svc))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 10)      # bounded: an add that never reaches its ingest FAILS here, it does not hang the lane
         opting_out = asyncio.create_task(mc.set_my_optin(env.db, ADULT, "routines", False, svc=env.svc))
         await asyncio.sleep(0.05)                       # the opt-out runs now unless the add holds the member's lock
         gate.set()
@@ -842,7 +842,7 @@ def test_a_curators_forget_cannot_be_overtaken_by_a_concurrent_edit(env):
 
         env.svc.review = paused
         forgetting = asyncio.create_task(mc.forget(env.db, curator, KID, rid, svc=env.svc))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 10)      # bounded: an add that never reaches its ingest FAILS here, it does not hang the lane
         editing = asyncio.create_task(mc.edit(env.db, curator, KID, rid, "Juno's teacher is Mr Ray", svc=env.svc))
         await asyncio.sleep(0.05)
         gate.set()
