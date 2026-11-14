@@ -318,8 +318,12 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     try:     # the in-process correction memory: a correction about any topic word, or about a subject the topic's rows name
         import value_correction
 
+        # the RETRACTED turns too, not only the rows: a correction said before any row existed ("my daughter Juno is 8, not 7")
+        # holds no topic word in its subject or values, but its own turn is one of the forgotten ones
+        turn_texts = list(said) + list(indexed)
         value_correction.forget_matching(user_id, lambda text: any(row_matches([g], text) for g in groups))
-        value_correction.forget_in_texts(user_id, [getattr(r, "text", "") or "" for r in rows])
+        value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, t) for t in turn_texts])
+        value_correction.forget_in_texts(user_id, turn_texts + [getattr(r, "text", "") or "" for r in rows])
     except Exception:  # noqa: BLE001 - in-process and never raises; nothing here may break the forget
         pass
     try:     # the superseded-value registry (0080): entries tied to these rows, or about a person a topic word names (raises on a store error)
