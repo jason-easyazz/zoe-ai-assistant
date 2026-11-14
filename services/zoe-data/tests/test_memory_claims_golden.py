@@ -7,7 +7,7 @@ oracle.json`` holds the claim an honest reader would emit per case (nothing cons
 
 THIS FILE DOES NOT REQUIRE TODAY'S CODE TO PASS THE CASES: ``labs/memory-claims-lab/run_baseline.py`` scores today's code as a report,
 and the last test pins that score to ``baseline-today.json`` so a heuristic patch that moves it shows up as a diff. No skip / xfail
-markers in this file. Write the lock: ``python3 test_memory_claims_golden.py --write-lock``. Synthetic data only.
+markers in this file. Write the lock: ``python3 test_memory_claims_golden.py --write-lock`` (a deleted id needs ``--allow-removal <ids> --reason "..."``, recorded in ``memory_claims_golden.removals.json``). Synthetic data only.
 """
 from __future__ import annotations
 
@@ -159,13 +159,101 @@ def test_the_baseline_runner_reproduces_the_committed_score():
     assert {i: r["status"] for i, r in got["results"].items()} == {i: r["status"] for i, r in want["results"].items()}
 
 
+# -- the lock writer: a removal is always explicit and visible -------------------------------------------------------------------------
+
+REMOVALS_PATH = FIX / "memory_claims_golden.removals.json"
+REMOVALS = json.loads(REMOVALS_PATH.read_text(encoding="utf-8")) if REMOVALS_PATH.exists() else []
+
+
+def write_lock(cases, lock_path, removals_path, allow_removal=(), reason=""):
+    """Rebuild the lock from ``cases``. Refuses (ValueError) when the existing lock holds ids that ``cases`` lacks, unless
+    ``allow_removal`` names EXACTLY those ids and a non-empty ``reason`` is given; each removal is then appended to the removals record,
+    so it is visible in review. A changed ``expect`` still needs ``reason_if_changed``."""
+    old = json.loads(lock_path.read_text(encoding="utf-8")) if lock_path.exists() else {}
+    have = {c["id"] for c in cases}
+    missing, allowed = sorted(set(old) - have), sorted(set(allow_removal))
+    if missing != allowed:
+        if missing:
+            raise ValueError(f"case ids missing from the fixture: {missing}; removing needs --allow-removal naming exactly them plus --reason"
+                             if not allowed else f"--allow-removal {allowed} does not match the missing ids {missing}")
+        raise ValueError(f"--allow-removal names ids that are not missing: {allowed}")
+    if missing and not (reason or "").strip():
+        raise ValueError(f"removing {missing} needs a non-empty --reason")
+    new = {}
+    for c in cases:
+        sha = expect_sha(c)
+        if c["id"] in old and old[c["id"]] != sha and not (c["reason_if_changed"] or "").strip():
+            raise ValueError(f"{c['id']}: expect changed without a reason_if_changed")
+        new[c["id"]] = sha
+    if missing:
+        log = json.loads(removals_path.read_text(encoding="utf-8")) if removals_path.exists() else []
+        log += [{"id": i, "reason": reason.strip()} for i in missing]
+        removals_path.write_text(json.dumps(log, indent=1) + "\n", encoding="utf-8")
+    lock_path.write_text(json.dumps(new, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return new
+
+
+def test_every_removed_id_is_on_record_with_a_reason():
+    ids = {c["id"] for c in CASES}
+    assert all(r["id"] not in ids and r["reason"].strip() for r in REMOVALS)
+    assert len({r["id"] for r in REMOVALS}) == len(REMOVALS)
+
+
+@pytest.fixture
+def lockdir(tmp_path):
+    lock = tmp_path / "x.lock"
+    lock.write_text(LOCK_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    return lock, tmp_path / "removals.json"
+
+
+def test_the_lock_writer_refuses_a_deleted_case_and_names_it(lockdir):
+    lock, rem = lockdir
+    before = lock.read_text(encoding="utf-8")
+    with pytest.raises(ValueError, match="K11"):
+        write_lock([c for c in CASES if c["id"] != "K11"], lock, rem)
+    assert lock.read_text(encoding="utf-8") == before and not rem.exists()
+
+
+def test_a_named_removal_with_a_reason_succeeds_and_is_recorded(lockdir):
+    lock, rem = lockdir
+    new = write_lock([c for c in CASES if c["id"] != "K11"], lock, rem, ["K11"], "superseded by K11b")
+    assert "K11" not in new and "K11" not in json.loads(lock.read_text(encoding="utf-8"))
+    assert json.loads(rem.read_text(encoding="utf-8")) == [{"id": "K11", "reason": "superseded by K11b"}]
+    with pytest.raises(ValueError, match="reason"):
+        write_lock([c for c in CASES if c["id"] != "K10"], lock, rem, ["K10"], " ")
+
+
+def test_allow_removal_naming_an_id_that_is_not_missing_fails(lockdir):
+    lock, rem = lockdir
+    with pytest.raises(ValueError, match="not missing"):
+        write_lock(CASES, lock, rem, ["K11"], "why")
+    with pytest.raises(ValueError, match="does not match"):
+        write_lock([c for c in CASES if c["id"] != "K11"], lock, rem, ["K11", "K10"], "why")
+
+
+def test_an_ordinary_append_still_works_and_changes_nothing_else(lockdir):
+    lock, rem = lockdir
+    extra = dict(CASES[0], id="K99", expect=dict(CASES[0]["expect"]))
+    new = write_lock([*CASES, extra], lock, rem)
+    assert set(new) == set(LOCK) | {"K99"} and all(new[i] == LOCK[i] for i in LOCK) and not rem.exists()
+
+
+def test_the_committed_lock_is_what_the_writer_produces():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        lock = Path(d) / "l"
+        lock.write_text(LOCK_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        write_lock(CASES, lock, Path(d) / "r")
+        assert lock.read_text(encoding="utf-8") == LOCK_PATH.read_text(encoding="utf-8")
+
+
 if __name__ == "__main__":
     if "--write-lock" in sys.argv:
-        new = {}
-        for c in CASES:
-            sha = expect_sha(c)
-            if c["id"] in LOCK and LOCK[c["id"]] != sha and not (c["reason_if_changed"] or "").strip():
-                sys.exit(f"{c['id']}: expect changed without a reason_if_changed")
-            new[c["id"]] = sha
-        LOCK_PATH.write_text(json.dumps(new, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        print(f"wrote {len(new)} entries")
+        args = sys.argv[1:]
+        allow = [a for a in args[args.index("--allow-removal") + 1:] if not a.startswith("--")] if "--allow-removal" in args else []
+        why = args[args.index("--reason") + 1] if "--reason" in args else ""
+        try:
+            print(f"wrote {len(write_lock(CASES, LOCK_PATH, REMOVALS_PATH, allow, why))} entries")
+        except ValueError as exc:
+            sys.exit(str(exc))
