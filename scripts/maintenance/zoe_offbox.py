@@ -656,7 +656,7 @@ def alert(text: str) -> None:
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(mod)
-        mod._telegram(f"Zoe backup: {text}")
+        mod.deliver("backup", f"Zoe backup: {text}")   # the shared outbox retries it if Telegram is down
     except Exception as exc:  # noqa: BLE001 - the alert path must never mask the failure it reports
         print(f"alert not delivered: {type(exc).__name__}", file=sys.stderr)
 
