@@ -60,6 +60,7 @@ def _t(key, holds, status, why="", member=None, entity=None):
 # memory_forget_cascade.py. The omi_* family hangs off omi_recordings.forget_user / omi_devices.forget_user / omi_voices.forget_user.
 _OMI_M = "omi_recordings.forget_user"
 _CONTACTS_M = "contacts_store.forget_user"
+_ROUT_M, _ROUT_E = "routines_store.forget_user", "routines_store.erase_entity"
 _OWN = "Member-owned product data; the member edits and deletes it in the app. Not erased by delete_user."
 _NOWORDS = "No words and no biometrics: ids, flags, times or counters only."
 
@@ -91,6 +92,11 @@ TABLES: tuple[Store, ...] = (
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("omi_day_candidates", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("conversation_notes", WORDS, REACHED, member="conversation_notes.forget_user", entity="conversation_notes.erase_entity"),
+    # routines (0082, routines_store.py): checklists can hold health words (a medicine step), so they are REACHED from day one
+    _t("routines", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),
+    _t("routine_steps", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),
+    _t("routine_days", METADATA, REACHED, member=_ROUT_M),               # a date and open/closed times: deleted with the routine
+    _t("routine_day_steps", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),   # the day's lines (one-offs too); actor blanked on others'
     _t("contact_fields", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("contact_sources", METADATA, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
     _t("source_contacts", WORDS, REACHED, member=_CONTACTS_M, entity="contacts_store.forget_entity"),
