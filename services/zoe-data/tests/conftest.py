@@ -97,6 +97,11 @@ _STATE_PINS = (
 )
 for _var, _leaf in _STATE_PINS:
     os.environ[_var] = os.path.join(ZOE_TEST_STORE_DIR, _leaf)
+# ``main`` discovers this host's LAN address AT IMPORT by "connecting" a UDP socket to a public address when ``ZOE_HOST_LAN_IP`` is unset,
+# so every test that imports ``main`` asked the host's routing table and got an allow-list that differs online vs offline (measured
+# 2026-11-14: 17 ``ci_safe`` files). Pinned to the value ``zoe_agent`` already defaults to, so the prompt bytes do not change.
+# ``setdefault``: a lane that sets its own keeps it. Pinned by test_host_lan_ip_pinned.py.
+os.environ.setdefault("ZOE_HOST_LAN_IP", "192.168.1.218")
 # The session-wide value, kept so test_live_store_isolation can prove this layer on its own (the per-test fixture overrides the variable).
 os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"] = os.environ["ZOE_WARM_SPEAKER_STATE"]
 
