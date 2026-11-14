@@ -1664,7 +1664,8 @@
    "(?:i am|im|i m)(?: (?:only|just))? {AGE}(?: (?:years?|yrs?) old| yo)?{END}",
    "i (?:just )?turned {AGE}{END}",
    "my age is {AGE}{END}",
-   "(?:said|says|say|told|tells|reckons|reckoned|thinks|thought|goes|went) (?:me )?(?:that )?i was {AGE}{END}"
+   "(?:said|says|say|told|tells|reckons|reckoned|thinks|thought|goes|went) (?:me )?(?:that )?i was {AGE}{END}",
+   "(?:(?:i am|im|i m)(?: (?:only|just))?|as) an? {AGE}[ -]?(?:years?|yrs?)[ -]?old(?!\\w)"
   ],
   "school": [
    "(?:i am|im|i m) in (?:year|yr|grade|class) {AGE}(?! of)(?!\\w)",
@@ -1676,6 +1677,7 @@
   "clause_break": "and|so|but|then|also|ok|okay",
   "back_refs": "it its one ones that this them those these",
   "aux_openers": "can could may should would will do does is are am",
+  "aux_subjects": "the a an my your his her our their this that these those it there you we they he she i",
   "ask": "can i|could i|may i|should i|can you|could you|will you|would you|how (?:do|can|to|would|should|much|many)|show me|tell me|teach me|help me|walk me|explain|i (?:want|wanna|need|would like|d like) to|let me|lets|please|is it (?:ok|okay|safe|alright)|am i allowed|instructions|steps|what happens if|what would happen if",
   "factual": "^(?:why|whys) .*|^what (?:is|are|was|were) (?:a |an |the )?.{0,40}(?:made of|made from|called)$",
   "factual_not": "i|me|my|we|us|our|im|ive",
