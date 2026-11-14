@@ -3,7 +3,7 @@ type: architecture
 title: Zoe OS - one spine every part plugs into
 date: 2026-11-14
 status: design record plus a lab prototype (labs/zoe-os/). Nothing here is wired to production; no flag exists yet.
-prototype: labs/zoe-os/ (stdlib Python, SQLite in a temp dir, synthetic people only)
+prototype: labs/zoe-os/ (stdlib Python, SQLite in a temp dir, a kernel process behind a Unix socket, synthetic people only)
 related: zoe-abilities.md, identity-presence-engine.md, communication-preferences.md, anticipation-loop.md, credential-vault.md
 ---
 
@@ -41,10 +41,16 @@ forget guarantee and receipts work together as one small program; three toy skil
 malicious skill makes ten attempts across three attacks and all ten are refused and recorded; and each
 guarantee has a negative control that shows the attack succeeding when that one guarantee is removed.
 
-**What is not proven:** that it is fast enough inside the live voice turn, that it survives a process boundary
-(the prototype is in-process, so a hostile skill in the same process could simply reach around it), that the
-real modules can publish to it without regressions, and everything about presence, memory and self-care as
-kernel services. Section 8 lists every place the vision outruns the proof.
+**Proven since, in the lab** (sections 4 and 5, all **[lab]**): the kernel runs in its own process behind a
+local Unix socket with a closed, versioned protocol; the same malicious skill, run from another process, is
+refused ten times out of ten, and six further attacks that a socket makes possible are refused with a negative
+control each; forget works by entity and by topic as well as by person; receipts, the used-yes register and the
+auditor's place survive a killed kernel, and a kill between a write and its receipt is reported as uncertain.
+
+**What is not proven:** that it is fast enough inside the live voice turn; that the database file is out of
+reach of a skill on the real box (the socket does not stop a process running as the same OS user: section 4);
+that the real modules can publish to it without regressions; and everything about presence, memory and
+self-care as kernel services. Section 8 lists every place the vision outruns the proof.
 
 **The migration never needs a rewrite.** Stage 1 is five one-line publish calls behind a flag that defaults
 off, carrying ids only (section 6). Nothing reads the spine until it has been shown to be boring.
@@ -96,8 +102,8 @@ offer, a claim, and five kinds only the kernel may write), one `subject` person,
   Trusted adapters (voice, calendar) record first-hand reality and need no cause;
 - a refusal is itself an event (who, what was tried, why) and never carries content.
 
-**Missing.** A process boundary; schema versioning; retention (the lab log grows for ever); multi-process
-writers; any production publisher.
+**Missing.** Schema versioning of the event record (the socket protocol is versioned, the stored events are
+not); retention (the lab log grows for ever); more than one kernel process; any production publisher.
 
 **Migration.** Section 6: publish ids from five call sites, flag off by default, nothing subscribes.
 
@@ -159,10 +165,21 @@ offline during the forget and replays later gets nothing. Nobody can bring the w
 forgot (`memory_forgotten.py`), a cascade over derived stores (`memory_forget_cascade.py`), an erase gate that
 wins races with background writers (`user_erase_gate.py`), and the inventory test (`forget_reach.py`).
 
+**Entity and topic [lab]** (`forget_match.py`, `Spine.forget(entity=... | topic=...)`). The shapes were read in
+`memory_forgotten.py` and `forget_topic.py` **[code]** and rebuilt, not imported. An entity is a name of one to
+six whole words, case and punctuation blind; the person's events that name it are erased with everything
+derived, and a keyed hash of the name is kept per person (never the name), so a skill that writes the name about
+that person again is refused, in new words, nested, or as a dictionary key. A first-hand mention is recorded and
+lifts nothing; only the person's explicit release does. A topic is its content words, and an event is about it
+only when it holds every one; more than twelve matching events is refused whole. A scope with no words is
+refused and never widens to "everything".
+
 **Missing, and the honest limits of the lab version.** A skill that already copied the words into its own
 memory keeps them: the kernel can refuse to take them back and can tell the skill to forget, but cannot reach
-into another program. The words reworded are not caught (the hash is of the exact normalised text). The lab
-forgets by person or by named events; production forgets by entity and topic, which the spine would need.
+into another program. **Reworded content is not caught**: a paraphrase that avoids the name and the exact old
+sentences, a near spelling, part of a name, a pronoun or a role ("my sister"). A test asserts that the first
+three get through, so the limit is pinned. Production has near-spelling probes and asks "did you also
+mean ...?" **[code]**; the lab does not.
 
 **Migration.** The spine does not replace the 62 reached stores. It becomes store number 104 on day one
 (a new row in `forget_reach.py`, reached by one call), and it shrinks the inventory only as features move
@@ -183,9 +200,17 @@ nothing gets an unverified receipt, and the honest skill then makes no claim (te
 `write_claim_guard.py` are exactly this idea for five kinds of write, enforced where every brain turn ends
 (`brain_dispatch.py` `_claim_guarded`, line 915). `anticipation.py` already offers before acting.
 
-**Missing.** A receipt today proves "a row was written", in process memory, for the claim guard's use
-**[code: `write_receipts.py`]**. It does not record under whose consent, it is not durable, and device
-actions and messages have no read-back. "Plan" is not prototyped at all: the lab goes from an accepted offer
+**Durable [lab].** Before the driver is called the dispatcher writes an intent row; the receipt closes it in the
+same transaction. An intent still open when the kernel starts gets a receipt with outcome `uncertain` and an
+audit finding; no driver is called and nothing is run again. The used-yes register and the auditor's cursor are
+in the database. Tested by killing the kernel process before the write, and after the write but before the
+receipt. "Durable" means against a killed process: SQLite runs with `synchronous=NORMAL`, so power loss was not
+tested and is not claimed.
+
+**Missing.** A receipt in production today proves "a row was written", in process memory, for the claim guard's
+use **[code: `write_receipts.py`]**. It does not record under whose consent, it is not durable, and device
+actions and messages have no read-back. In the lab an `uncertain` receipt is where the kernel stops: resolving
+it (a read-back, or asking the person) is not built. "Plan" is not prototyped at all: the lab goes from an accepted offer
 straight to one action **[vision]** for multi-step plans.
 
 ### 2.6 Attention budget
@@ -237,14 +262,44 @@ Written against the kernel with invented people and words, to prove the shape en
   citing the forgotten event, citing something else, nesting the words, posing as the voice adapter, and
   writing a kernel-only kind). All ten are refused and all ten refusals are events with no content in them.
 
-## 4. Trust boundary: what the prototype does not defend
+## 4. Trust boundary: what the socket defends, and what it does not
 
-The prototype runs in one Python process. A skill there can call a private method or read the database file.
-The tests show that the *rules* are complete and consistent when every call goes through the kernel; they do
-not show isolation. In production the kernel must be its own process under its own user, skills must reach it
-over a socket, and the database file must be readable by the kernel alone. The work to give each service its
-own unprivileged user is already planned ([p0-deroot.md](p0-deroot.md)) and is a prerequisite, the same way it
-is for the credential broker ([credential-vault.md](credential-vault.md)).
+The first version ran in one Python process, where a skill could call a private method or read the database
+file. That is no longer the only shape **[lab]**: `zoe_os/server.py` serves the kernel over a local Unix socket
+from its own process, and a skill is another process that is handed a socket path and one credential.
+
+**The protocol** (`zoe_os/wire.py`). A frame is a four-byte length and one JSON object. Version 1. Eight
+operations and nothing else: `publish`, `subscribe`, `poll`, `forget`, `grant`, `revoke`, `act`, `explain`,
+each with a fixed list of arguments. No request names its caller: the kernel proves who is on a connection once
+(a challenge and a keyed answer, so the credential never crosses the socket) and uses that identity for every
+request. `forget`, `grant` and `revoke` are a person's decisions and are accepted only from a credential issued
+to a trusted surface.
+
+**What was attacked [lab]**, each refused and recorded, each with a control that removes one mechanism and
+shows the attack working:
+
+| Attack from another process | Control that makes it succeed |
+|---|---|
+| the ten attempts of the malicious skill (read, act, resurrect) | the same four as in-process |
+| forged identity: another skill's name, a `source` field, a skill granting itself | no credential check |
+| replayed credential: a captured handshake, a credential that was re-issued | a predictable challenge |
+| oversized frame (refused before its body is read) | no size cap |
+| 23 malformed frames | no validator |
+| slow clients holding every connection | no frame deadline |
+| a client that dies mid-frame, after a whole request, or by a kill | subscriptions not released |
+
+**What the socket does not defend.** A skill running as the **same OS user** as the kernel does not need the
+socket: a lab test has the skill ask the socket for the kernel's process id, read `/proc`, open the database file
+and find another person's private words, and the test asserts that this **succeeds**. What stops it is file
+permissions and a separate OS user. Two tests show that (a skill started as a second user still speaks the
+protocol and is denied the file) with a control (loosen the modes, it reads the file). They run only as root and
+skip otherwise, because a sandbox with one user cannot prove it. They were run in a root sandbox with a
+throwaway user, not with the service users of [p0-deroot.md](p0-deroot.md), which remains the prerequisite,
+the same way it is for the credential broker ([credential-vault.md](credential-vault.md)).
+
+Also not defended: a flood of failed handshakes (each writes a refusal event, so a local process that can reach
+the socket can grow the log; no rate limit); a credential stolen from the skill it was issued to (it is not
+bound to the peer's OS user); anything that needs more than one kernel process.
 
 ## 5. Measures
 
@@ -267,8 +322,40 @@ measured. For scale **[inferred]**: a household produces thousands of events a d
 throughput is not the constraint; the number that matters for the bridge is the added time at a call site on
 the live voice path, which is **not measured**.
 
-Tests **[lab]**: 84 tests in 7 files, all passing, run twice (local time zone and `TZ=UTC`), 1.3 s. Twelve of
-them are negative controls that remove one guarantee and assert the specific bad outcome.
+Tests of the first version **[lab]**: 84 tests in 7 files, all passing, run twice (local time zone and
+`TZ=UTC`), 1.3 s on that box. Twelve of them are negative controls.
+
+### 5.1 The socket hop
+
+Read in a **cloud sandbox, NOT the target hardware**: 4 virtual cores of an Intel Xeon at 2.1 GHz, 15 GB of
+memory, Linux, Python 3.13.18, otherwise idle (load average 0.5). The Jetson was not available to this work, so
+these say only that the hop is not obviously too slow. One kernel process, one client, no concurrency, one
+request at a time, each timed from send to reply (`python3 labs/zoe-os/bench_socket.py 2000`). Three runs; the
+table gives, for each row, the run whose p50 was the **middle of the three**, and the range of p50 across the
+three runs. Microseconds.
+
+| Request | n per run | p50 | p95 | p99 | max | p50 across 3 runs |
+|---|---|---|---|---|---|---|
+| `publish` (one durable commit) | 2,000 | 138 | 222 | 615 | 10,313 | 135 to 174 |
+| the same publish in process, no socket | 2,000 | 29 | 61 | 119 | 10,242 | 28 to 31 |
+| `poll`, one event waiting | 2,000 | 90 | 136 | 251 | 2,583 | 89 to 95 |
+| `poll`, nothing waiting | 2,000 | 81 | 112 | 177 | 414 | 67 to 82 |
+| a refused `publish` (also writes the refusal event) | 2,000 | 133 | 181 | 304 | 13,261 | 128 to 134 |
+| `explain` (own standing) | 2,000 | 208 | 337 | 448 | 805 | 193 to 232 |
+| `act` (includes the test device's own `fsync`) | 200 | 933 | 1,554 | 9,293 | 9,805 | 872 to 1,097 |
+| connect and handshake | 200 | 434 | 855 | 1,525 | 2,438 | 392 to 455 |
+
+Reading it **[inferred]**: the hop costs about 0.1 ms at the median on this machine (138 against 29 for the same
+publish), and the tail is the database commit, not the socket (the in-process maximum is the same 10 ms).
+`explain` scans every refusal on the log, so its time grows with the number of refusals; it was measured with
+almost none on the log, which is its best case. The `act` row is dominated by the fake device syncing a file and says little about the kernel.
+Not measured: concurrent clients, a busy box, the Jetson's storage, a cold start, memory.
+
+The older table above was re-read once in this sandbox for scale, not as a replacement: 12,206 single publishes
+per second, 54,558 batched, forget 195 ms (one run, `python3 labs/zoe-os/bench.py`).
+
+Tests now **[lab]**: 181 tests in 12 files, all passing as root (three runs plus one with `TZ=UTC`); 179 passed
+and 2 skipped as an ordinary user (the two second-user tests). Thirty-six are negative controls that remove one mechanism and assert the specific bad outcome.
 
 ## 6. The bridge plan: five call sites, no rewrite
 
@@ -296,29 +383,65 @@ Order of work, each step its own small change behind the flag:
 
 ## 7. What to build next, in order
 
-1. **Process boundary.** Move the lab kernel behind a local socket with its own user and prove the malicious
-   skill again from a separate process. Until this exists the consent model is a convention.
-2. **Bridge step 1 and 2** above, flag off, and the measure: events per day and publish time at each call site.
-3. **Forget by entity and topic**, matching what `memory_forgotten.py` does, so one forget covers both.
-4. **Receipts made durable**: `write_receipts.record` publishes a receipt event; the claim guard reads it.
-   This retires the in-memory receipt list rather than adding a second one.
+Done in the lab since the first version: the process boundary (section 4), forget by entity and topic (2.4),
+durable receipts (2.5). What follows is the order from here.
+
+1. **Wire one production call site, flag off.** The exact step is 7.1 below. It is described, not made.
+2. **The second OS user on the real box.** Run the kernel under its own user, per
+   [p0-deroot.md](p0-deroot.md), and repeat the two second-user tests there. Until then the file is one
+   `open()` away from any skill.
+3. **Bridge steps 2 to 4** of section 6, each behind the flag, with the measure at each call site.
+4. **Durable grants and manifests.** They are in memory: after a restart everything is denied until granted
+   again. That fails closed and it is not durability.
 5. **Attention as the one gate** for offers from `anticipation.py`, with the per-person setting.
 6. **Presence engine** per its own design record, publishing to the spine; then the leaving catch for real.
 7. **Skills as packages** with manifests, starting with one that exists (anticipation) rather than a new one.
 
 `docs/ROADMAP.md` owns the order of all work. This list is the order *within* this design if it is taken up.
 
+### 7.1 The exact next step: `reminder_fired`, one call, flag off
+
+Call site 2 of section 6, chosen because it is off the voice path and already has the ids in scope
+**[code: `services/zoe-data/proactive/triggers/reminders.py`, after `await fire_notification(...)`, about line
+176]**. Nothing below has been done.
+
+1. **A kernel unit.** A systemd unit that starts the lab kernel's server as its own process, with its database
+   in a directory only that unit's user can read and its socket in a runtime directory the zoe-data user can
+   reach. Its manifest list has one entry: an origin adapter `bridge.reminders` that may emit `reminder_fired`.
+   The unit hands zoe-data that one credential (a file readable by the zoe-data user only).
+2. **A flag.** `ZOE_OS_SPINE`, default `off`, registered in the flag registry in the same change
+   (`docs/knowledge/flag-registry.md`).
+3. **A bridge module in zoe-data** that owns one client connection and a small bounded queue with one worker
+   thread. The lab client is blocking, so the call site must never talk to the socket itself.
+4. **The one call.** After `fire_notification` returns: build the event with the lab adapter's shape
+   (`bridge.reminder_fired(user_id=..., item_id=..., pending_id=...)`, ids only) and put it on the queue without
+   waiting. Queue full, kernel down or refused: drop it and count it. The reminder is never slower or less
+   reliable because of the spine.
+5. **Nothing subscribes.** No skill, no reader. The forget registry row (`forget_reach.py`) goes in with the
+   first change that can store a person's events, which is this one.
+6. **What to measure before turning the flag to `on` anywhere**, on the Jetson, with the live assistant
+   running: the time the call adds at the call site (it should be an enqueue: microseconds); publish p50, p99
+   and maximum through the socket under a voice turn; events per day; dropped events; the kernel's memory and
+   its database growth over a week; and that a reminder still fires with the kernel unit stopped.
+
 ## 8. Where the vision outruns the proof
 
-- **Isolation** is not proven at all (section 4).
-- **Speed on the live path** is not measured. The lab numbers are for a quiet single process and say only that
-  the design is not obviously too slow.
+- **Isolation** is proven for the protocol and not for the file (section 4): a skill running as the same OS
+  user reads the database around the kernel. The second-user result is from a sandbox, not the real box.
+- **Grants, manifests and credentials** are in memory. A restart denies everything until granted again.
+- **Power loss.** Durable means against a killed process. `synchronous=NORMAL` was not tested against a crash
+  of the machine.
+- **An `uncertain` receipt** has no resolution step.
+- **Speed on the live path** is not measured. The lab numbers are for a quiet machine, and the socket numbers
+  are from a cloud sandbox, not the Jetson. They say only that the design is not obviously too slow.
 - **The real modules** have not published a single event. The call sites were read, not run.
 - **Presence, memory and self-care** as kernel services are a map, not a build.
-- **Forget** cannot reach a copy a skill already took, and does not catch reworded content.
+- **Forget** cannot reach a copy a skill already took, and does not catch reworded content, near spellings,
+  part of a name, or a pronoun.
 - **Plans** (more than one action from one intent) are not designed here.
 - **Retention, schema change and backup** of the spine are not designed. A log of every household event is
   itself sensitive, and "private by default" does not answer how long it is kept.
 - **The manifest format** is a lab format. It has not met a real third-party skill.
-- **One writer.** SQLite with one in-process lock. Several services publishing at once is untested.
-- **"OS"** is a direction. What exists is a kernel of about a thousand lines in a lab directory.
+- **One writer.** One kernel process with one lock. Several clients were tested for correctness (a slow one
+  does not block an honest one), not for throughput.
+- **"OS"** is a direction. What exists is a kernel of about two thousand lines in a lab directory.
