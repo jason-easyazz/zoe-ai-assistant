@@ -838,6 +838,7 @@ def test_first_sound_allowlist_emits_integers_only_and_text_emits_nothing(tmp_pa
         _FS_OK.replace("post_ms=120", "post_ms=LEAKME"),
         _FS_OK.replace("talk_chunks=4", "talk_chunks=4 name=LEAKME"),
         _FS_OK.replace("still_talking=1", "still_talking=maybe"),
+        _FS_OK.replace("server_kind=content", "server_kind=purple umbrella"),   # lower-case words with a space
         _FS_OK.replace("win=wake", "win=wake LEAKME"),
         _FS_OK.replace("fall=clean", "fall=LEAK ME"),
         _FS_OK + " muted_ms=5",
