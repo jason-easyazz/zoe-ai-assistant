@@ -2,7 +2,7 @@
  * Panel alarms (ZOE_ALARMS, flag-dark server side) - the touch estate only. Design: docs/architecture/alarms.md.
  *
  * Two surfaces, both drawn with createElement/textContent only (a server string - a label - is never parsed as HTML):
- *   1. THE RING SCREEN. Polls GET /api/alarms/ringing every 2 s. A ringing alarm takes the sleep clock page and a full-screen
+ *   1. THE RING SCREEN. Reads GET /api/alarms/ringing: at once on a push (below), else by poll. A ringing alarm takes the sleep clock page and a full-screen
  *      animated overlay: TAP ANYWHERE snoozes; the one deliberate control is "Hold to turn off" (press and hold 1 s, a fill
  *      shows progress, releasing early does nothing - and never snoozes). The state lives on the server, so a reload, a voice
  *      turn that reloads the page or a zoe-data restart mid-ring all re-show it. A snooze/off that could not reach the server is
@@ -10,12 +10,20 @@
  *   2. THE ALARMS TAB on the Timer screen: a list (time, repeat, on/off switch) and a touch editor - time wheels, repeat chips,
  *      tone chips, snooze chips. No keyboard: a label is voice-set ("called gym") or phone-set.
  * With the flag off the server answers 404; the tab stays hidden and the poller checks again only every few minutes.
+ *
+ * PUSH, POLL AS THE SAFETY NET (ZOE_ALARMS_RINGING_PUSH). The executor's /ws/push socket relays three frames as `zoe:push-frame`:
+ * the `connected` hello (carries `alarms_ringing_seq` only from a server that pushes), `alarms_ringing_changed` {seq} and a 2 s
+ * `alarms_ringing_beat` {seq}. None carries alarm detail: on each the page re-reads /api/alarms/ringing through the authenticated
+ * route. It reads at once on a change, a hello (a reconnect), a beat whose seq moved (a missed change), the page becoming visible,
+ * and the moment the push stops being healthy. The poll is 2 s (today's) UNLESS the push is proven: the capability seen (hello or a
+ * change frame) AND a frame within BEAT_STALE_MS AND that for HEALTHY_HOLD_MS; then 20 s. A ring on screen or an unconfirmed
+ * snooze/off keeps 2 s. An old or flag-off server never sends the capability, so the page polls every 2 s exactly as before.
  */
 (function () {
     'use strict';
     if (window.ZoeAlarms) return;
 
-    var POLL_MS = 2000, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64, MUSIC_DEADLINE_MS = 10000, STOP_GRACE_MS = 5000;
+    var POLL_MS = 2000, SLOW_POLL_MS = 20000, BEAT_STALE_MS = 5000, HEALTHY_HOLD_MS = 30000, WATCH_MS = 1000, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64, MUSIC_DEADLINE_MS = 10000, STOP_GRACE_MS = 5000;
     var ACK_KEY = 'zoe_alarm_acks';
     var DAYS = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]];
     var PRESETS = [['Once', 'once'], ['Every day', 'daily'], ['Weekdays', 'weekdays'], ['Weekends', 'weekends']];
@@ -24,7 +32,8 @@
     var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     var MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
     var host = null;
-    var st = { enabled: null, ring: null, skew: 0, pollT: null, holdT: null, musicT: null, toneOn: false, clockT: null, acks: {}, inflight: {}, tones: {} };
+    var st = { enabled: null, ring: null, skew: 0, pollT: null, holdT: null, musicT: null, toneOn: false, clockT: null, acks: {}, inflight: {}, tones: {},
+               nextAt: 0, inPoll: false, again: false, push: { cap: false, seq: null, rxAt: 0, healthySince: 0, was: false } };
 
     // ---- pure helpers (exported for the node harness) -------------------------------------------------------------------
     function to24h(h12, mi, mer) {
@@ -222,7 +231,10 @@
     function turnOff() { answer('dismiss'); }
 
     function poll() {
+        if (st.inPoll) { st.again = true; return; }  // a push during a read: read again after it (that read may predate the change)
+        st.inPoll = true;
         host.apiGet('/api/alarms/ringing').then(function (d) {
+            st.inPoll = false;
             st.enabled = true;
             if (d && d.now) st.skew = d.now * 1000 - Date.now();
             var live = ((d && d.ringing) || []).filter(function (a) { return !st.acks[ackKey(a)] && !overdue(a); });
@@ -239,17 +251,64 @@
                 if (!st.ring || st.ring.id !== live[0].id || st.ring.ring_started_at !== live[0].ring_started_at) startRing(live[0]);
                 else { st.ring = live[0]; paintRing(); applySound(); }
             } else if (st.ring) stopRing();  // answered elsewhere, auto-stopped, or edited off
-            schedule(POLL_MS);
+            schedule(st.again ? 0 : pollEvery());
+            st.again = false;
         }).catch(function (e) {
+            st.inPoll = false;
             if (overdue(st.ring, STOP_GRACE_MS)) stopRing();  // the server is unreachable past the ring's own limit: never ring on and on
-            if (/http 404/.test(String(e && e.message))) { st.enabled = false; hideTabs(); schedule(OFF_RECHECK_MS); } else schedule(POLL_MS * 2);
+            // a failed read keeps the last known state (no stale "stopped") and retries at the fast rate whatever the push says
+            st.again = false;
+            if (/http 404/.test(String(e && e.message))) { st.enabled = false; hideTabs(); schedule(OFF_RECHECK_MS); } else schedule(POLL_MS);
         });
+    }
+    function pollNow() {
+        if (st.inPoll) { st.again = true; return; }
+        if (st.pollT) { clearTimeout(st.pollT); st.pollT = null; }
+        poll();
+    }
+    // Proven push: the capability seen AND a frame (hello, change or beat) within BEAT_STALE_MS. The server beats every 2 s.
+    function pushHealthy() { return st.push.cap && Date.now() - st.push.rxAt <= BEAT_STALE_MS; }
+    function pollEvery() {
+        var p = st.push, t = Date.now();
+        if (!pushHealthy()) { p.healthySince = 0; return POLL_MS; }
+        if (!p.healthySince) p.healthySince = t;
+        if (st.ring || Object.keys(st.acks).length) return POLL_MS;  // ringing / an unconfirmed answer: today's cadence
+        return t - p.healthySince >= HEALTHY_HOLD_MS ? SLOW_POLL_MS : POLL_MS;
+    }
+    // Every WATCH_MS (no network): the push just went unhealthy -> read NOW and fall back to 2 s; a slow wait longer than the rate due
+    // now is cut short. A silently dead socket is therefore caught within BEAT_STALE_MS + WATCH_MS, not at the next slow poll.
+    function watch() {
+        if (st.enabled === false || st.inPoll) return;
+        var healthy = pushHealthy(), every = pollEvery();
+        if (st.push.was && !healthy) { st.push.was = false; pollNow(); return; }
+        st.push.was = healthy;
+        if (st.nextAt > Date.now() + every) schedule(every);
+    }
+    function onFrame(msg) {
+        var p = st.push, t = Date.now();
+        if (!msg || !msg.type) return;
+        if (msg.type === 'connected') {  // (re)connected: anything may have changed while it was down; 30 s healthy before slowing again
+            p.cap = typeof msg.alarms_ringing_seq === 'number';
+            p.seq = p.cap ? msg.alarms_ringing_seq : null;
+            p.rxAt = t; p.healthySince = 0;
+            if (st.enabled !== false) pollNow();
+            return;
+        }
+        var seq = msg.data && typeof msg.data.seq === 'number' ? msg.data.seq : null;
+        if (seq === null) return;
+        p.rxAt = t;
+        if (msg.type === 'alarms_ringing_changed') { p.cap = true; p.seq = seq; pollNow(); return; }
+        if (msg.type === 'alarms_ringing_beat') {
+            if (p.seq !== null && seq !== p.seq) pollNow();  // the seq moved without a change frame reaching us: a missed push
+            p.seq = seq;
+        }
     }
     function hideTabs() {  // the feature went away at runtime (flag flipped off): no stale Alarms tab, back to the Timers pane
         if (st.tabsCtl) { st.tabsCtl.tabsEl.hidden = true; st.tabsCtl.setTab('timers'); }
     }
     function schedule(ms) {
         if (st.pollT) clearTimeout(st.pollT);
+        st.nextAt = Date.now() + ms;
         st.pollT = setTimeout(poll, ms);
     }
 
@@ -573,9 +632,17 @@
         host = h;
         loadAcks();
         schedule(300);
+        if (window.addEventListener) {
+            window.addEventListener('zoe:push-frame', function (e) { onFrame(e && e.detail); });
+            window.addEventListener('zoe:push-closed', function () { st.push.rxAt = 0; watch(); });
+        }
+        if (typeof document.addEventListener === 'function') {
+            document.addEventListener('visibilitychange', function () { if (!document.hidden && st.enabled !== false) pollNow(); });
+        }
+        setInterval(watch, WATCH_MS);
     }
 
-    window.ZoeAlarms = { init: init, attachTabs: attachTabs, mount: mount, _poll: poll, _state: st,
+    window.ZoeAlarms = { init: init, attachTabs: attachTabs, mount: mount, _poll: poll, _state: st, _frame: onFrame,
                          pure: { to24h: to24h, from24h: from24h, clockText: clockText, wheelIndex: wheelIndex, repeatOf: repeatOf, chipsOf: chipsOf,
                                  addDays: addDays, dayLabel: dayLabel, subline: subline, householdNow: householdNow },
                          HOLD_MS: HOLD_MS };

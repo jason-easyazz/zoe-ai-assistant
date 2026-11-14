@@ -1285,6 +1285,9 @@ async def lifespan(app: FastAPI):
         import alarms as _alarms
         if _alarms.enabled():
             _alarm_music.register()  # clock-radio music starts/stops with a ring
+            import alarm_push as _alarm_push
+            _alarm_push.register()  # panels hear "the ringing set changed" at once (ZOE_ALARMS_RINGING_PUSH); the poll stays
+            asyncio.create_task(_alarm_push.beat_loop(), name="alarms_ring_push_beat")
             asyncio.create_task(_alarms.run_loop(), name="alarms_ring")
     except Exception as _alarms_exc:
         logger.warning("alarm ring loop not started (non-fatal): %s", _alarms_exc)

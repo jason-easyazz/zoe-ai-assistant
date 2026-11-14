@@ -107,6 +107,7 @@ class PushBroadcaster:
             "channel": panel_channel,
             "panel_id": panel_id,
             "sequence": self._sequence,
+            **_panel_hello_fields(),
         })
 
     def disconnect(self, websocket: WebSocket, channel: str = "all"):
@@ -170,6 +171,21 @@ class PushBroadcaster:
             self.disconnect(ws, channel)
 
         return delivered
+
+    async def broadcast_to_panel_sockets(self, event_type: str, data: dict) -> tuple[int, int]:
+        """Send to every socket that PROVED a panel (``connect_panel``), once each; ``(delivered, audience)``.
+
+        Not ``all`` (members' own sockets are there) and not a ``panel_<id>`` channel by name (an admin may join one)."""
+        self._sequence += 1
+        targets = list(self._ws_panels.items())
+        delivered = 0
+        for ws, pid in targets:
+            try:
+                await ws.send_json({"type": event_type, "channel": f"panel_{pid}", "data": data, "sequence": self._sequence})
+                delivered += 1
+            except Exception:
+                self.disconnect(ws, f"panel_{pid}")
+        return delivered, len(targets)
 
     async def broadcast_to_panel(self, panel_id: str, event_type: str, data: dict) -> int:
         """Send an event to the named panel's dedicated channel.
@@ -315,6 +331,16 @@ class PushBroadcaster:
             "current_sequence": self._sequence,
             "message": "Full state refresh recommended"
         })
+
+
+def _panel_hello_fields() -> dict:
+    """Capabilities a panel's ``connected`` frame advertises (today: the alarm ring push). Never breaks a connect."""
+    try:
+        import alarm_push
+
+        return alarm_push.hello_fields()
+    except Exception:
+        return {}
 
 
 broadcaster = PushBroadcaster()
