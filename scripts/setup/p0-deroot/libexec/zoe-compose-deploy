@@ -1,0 +1,257 @@
+#!/usr/bin/python3 -I
+"""P0 de-root root helper (docs/architecture/p0-deroot.md section 4.4, phase P0-1). NOT installed by anything: the
+owner installs it root:root 0755 at /usr/local/libexec/zoe-priv/zoe-compose-deploy, and sudoers.d/60-zoe-deroot
+lets the deploy run it with exact argv:
+
+    zoe-compose-deploy zoe-auth            (recreate zoe-auth from the reviewed tree, no build)
+    zoe-compose-deploy zoe-auth --build    (build zoe-auth from the reviewed tree, then recreate)
+    zoe-compose-deploy zoe-ui              (nginx -t on the reviewed config, recreate, restart: the conf is an
+                                            inode-pinned file mount, so the restart is part of the verb)
+    zoe-compose-deploy modules             (recreate the RUNNING services of docker-compose.modules.yml, plus any
+                                            a failed earlier run left pending, --wait; profile-gated ones never)
+    zoe-compose-deploy logs zoe-auth|zoe-ui   (the last 80 log lines of that container; read-only, no stdin)
+
+These are every Docker step deploy.yml runs. The commit to deploy is ONE line on STDIN: 40 lowercase hex. It is not an argument because sudoers (1.9.9 on the
+box) has no argument regex, and a `*` would match any argv; stdin keeps the sudoers lines exact.
+
+What it trusts: nothing the caller controls. It fetches `main` from the PUBLIC GitHub URL below into a root-owned
+mirror, refuses unless the commit is on `main`, exports that commit's tree root-owned (git archive), and runs
+`docker compose` from that tree against the root-owned env file. Every bind SOURCE of the service must be a
+path no unprivileged uid can swap (section 2.6): no symlink in any component, every directory above it root-owned
+and not group/world-writable, and either inside the exported tree (read-only binds only: that is reviewed code)
+or under /srv/zoe/ (data, moved there in P0-2). Until P0-2 moves zoe-auth's data and zoe-ui's dist/ssl, the check
+refuses with exit 6 ("not ready") and the caller (scripts/deploy/compose_deploy.sh) keeps today's direct path.
+
+Exit: 0 deployed; 2 usage (bad argv or bad stdin); 3 the commit is not on main; 4 another deploy holds the lock;
+5 a step failed (fetch, export, compose, nginx -t); 6 not ready (a bind source or the env file fails the checks).
+"""
+import fcntl
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+
+ORIGIN = "https://github.com/jason-easyazz/zoe-ai-assistant.git"
+PROJECT = "assistant"            # the compose project of the live stack (the checkout's directory name)
+STATE = "/var/lib/zoe-compose-deploy"
+ENV_FILE = "/etc/zoe/compose.env"
+SRV = "/srv/zoe/"
+GIT = "/usr/bin/git"
+DOCKER = "/usr/bin/docker"
+KEEP_TREES = 3
+VERBS = {("zoe-auth",): "deploy", ("zoe-auth", "--build"): "deploy", ("zoe-ui",): "deploy", ("modules",): "modules",
+         ("logs", "zoe-auth"): "logs", ("logs", "zoe-ui"): "logs"}
+LOG_LINES = "80"
+NGINX_IMAGE = re.compile(r"^nginx@sha256:[0-9a-f]{64}$")
+SHA = re.compile(r"^[0-9a-f]{40}$")
+USAGE = ("usage: echo <40-hex sha on main> | zoe-compose-deploy zoe-auth [--build] | zoe-ui | modules;"
+         "  zoe-compose-deploy logs zoe-auth|zoe-ui")
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0"}
+
+
+def fail(msg, code):
+    print(f"zoe-compose-deploy: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run(argv, code=5, **kw):
+    r = subprocess.run(argv, env=ENV, capture_output=True, encoding="utf-8", errors="replace", **kw)
+    if r.returncode != 0:
+        fail(f"{os.path.basename(argv[0])} {argv[1] if len(argv) > 1 else ''} failed (rc {r.returncode}): "
+             f"{(r.stderr or r.stdout).strip()[-300:]}", code)
+    return r.stdout
+
+
+def read_sha():
+    data = sys.stdin.buffer.read(64)
+    try:
+        line = data.decode("ascii").rstrip("\n")
+    except UnicodeDecodeError:
+        fail(USAGE, 2)
+    if not SHA.fullmatch(line):
+        fail(USAGE, 2)
+    return line
+
+
+def unswappable(path):
+    """None when no unprivileged uid can redirect `path`: absolute, normalised, no symlink anywhere, every directory
+    above it root-owned and not group/world-writable. Otherwise the reason."""
+    if not path.startswith("/") or os.path.normpath(path) != path:
+        return f"not a normalised absolute path: {path}"
+    cur = "/"
+    parts = [p for p in path.split("/") if p]
+    for i, comp in enumerate(parts):
+        cur = os.path.join(cur, comp)
+        try:
+            st = os.lstat(cur)
+        except OSError as exc:
+            return f"{cur}: {exc.strerror}"
+        if stat.S_ISLNK(st.st_mode):
+            return f"{cur} is a symlink"
+        if i < len(parts) - 1 and (st.st_uid != 0 or st.st_mode & 0o022):
+            return f"{cur} is not root-owned or is group/world-writable"
+    return None
+
+
+def check_service(cfg, svc, tree):
+    """Refuses (exit 6) anything a root-run container start would resolve through a path zoe could swap."""
+    s = (cfg.get("services") or {}).get(svc)
+    if not isinstance(s, dict):
+        fail(f"{svc} is not in the reviewed compose file", 5)
+    if s.get("privileged"):
+        fail(f"{svc} is privileged; refusing", 6)
+    for v in s.get("volumes") or []:
+        if v.get("type") != "bind":
+            continue
+        src = v.get("source", "")
+        in_tree = src == tree or src.startswith(tree + "/")
+        if in_tree and not v.get("read_only"):
+            fail(f"{svc}: read-write bind into the reviewed tree ({src[len(tree):] or '/'}): move it under {SRV} (P0-2)", 6)
+        if not in_tree and not src.startswith(SRV):
+            fail(f"{svc}: bind source outside the reviewed tree and {SRV}: {src} (P0-2 moves it)", 6)
+        why = unswappable(src)
+        if why:
+            fail(f"{svc}: bind source not safe for a root-run mount: {why}", 6)
+    return s
+
+
+def export_tree(mirror, sha):
+    trees = os.path.join(STATE, "trees")
+    os.makedirs(trees, mode=0o700, exist_ok=True)
+    tree = os.path.join(trees, sha)
+    if os.path.lexists(tree):
+        st = os.lstat(tree)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0:
+            fail(f"{tree} is not a root-owned directory; refusing", 5)
+        if os.path.exists(os.path.join(tree, ".zoe-compose-deploy-complete")):
+            return tree
+        shutil.rmtree(tree)
+    tmp = tree + ".partial"
+    if os.path.lexists(tmp):
+        shutil.rmtree(tmp)
+    os.mkdir(tmp, 0o755)
+    archive = subprocess.Popen([GIT, "--git-dir", mirror, "archive", "--format=tar", sha], env=ENV,
+                               stdout=subprocess.PIPE)
+    untar = subprocess.run(["/usr/bin/tar", "-x", "--no-same-owner", "--no-same-permissions", "-C", tmp],
+                           env=ENV, stdin=archive.stdout, capture_output=True, text=True)
+    archive.stdout.close()
+    if archive.wait() != 0 or untar.returncode != 0:
+        fail(f"export of {sha[:12]} failed: {untar.stderr.strip()[-200:]}", 5)
+    open(os.path.join(tmp, ".zoe-compose-deploy-complete"), "w").close()
+    os.chmod(trees, 0o755)        # the daemon (root) reads it; the containers see only their binds
+    os.rename(tmp, tree)
+    return tree
+
+
+def prune_trees(keep):
+    trees = os.path.join(STATE, "trees")
+    names = sorted((n for n in os.listdir(trees) if SHA.fullmatch(n)),
+                   key=lambda n: os.lstat(os.path.join(trees, n)).st_mtime, reverse=True)
+    for n in names[KEEP_TREES:]:
+        if n != keep:
+            shutil.rmtree(os.path.join(trees, n), ignore_errors=True)
+
+
+def prepare(sha):
+    """Lock, env-file check, fetch main, the on-main check, the root-owned export. Returns the tree."""
+    os.makedirs(STATE, mode=0o700, exist_ok=True)
+    st = os.lstat(STATE)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022:
+        fail(f"{STATE} is not a root-owned, non-writable directory", 5)
+    global _LOCK
+    _LOCK = open(os.path.join(STATE, "lock"), "w")
+    try:
+        fcntl.flock(_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fail("another deploy holds the lock", 4)
+    why = unswappable(ENV_FILE)
+    est = os.lstat(ENV_FILE) if why is None else None
+    if est is None or est.st_uid != 0 or est.st_mode & 0o077 or not stat.S_ISREG(est.st_mode):
+        fail(f"{ENV_FILE} must be a root-owned 0600 regular file ({why or 'owner/mode'})", 6)
+    mirror = os.path.join(STATE, "mirror.git")
+    if not os.path.isdir(mirror):
+        run([GIT, "init", "--quiet", "--bare", mirror])
+    run([GIT, "--git-dir", mirror, "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+         "-c", "protocol.file.allow=always", "fetch", "--quiet", "--no-tags", "--prune", ORIGIN,
+         "+refs/heads/main:refs/heads/main"], timeout=600)
+    if subprocess.run([GIT, "--git-dir", mirror, "merge-base", "--is-ancestor", sha, "refs/heads/main"],
+                      env=ENV, capture_output=True).returncode != 0:
+        fail(f"{sha[:12]} is not on main", 3)
+    return export_tree(mirror, sha)
+
+
+def compose_cmd(tree, file):
+    return [DOCKER, "compose", "--project-name", PROJECT, "--project-directory", tree,
+            "-f", os.path.join(tree, file), "--env-file", ENV_FILE]
+
+
+def deploy(svc, build, tree):
+    compose = compose_cmd(tree, "docker-compose.yml")
+    cfg = json.loads(run(compose + ["config", "--format", "json", svc]))
+    s = check_service(cfg, svc, tree)
+    if svc == "zoe-ui":
+        image = s.get("image", "")
+        if not NGINX_IMAGE.fullmatch(image):
+            fail("zoe-ui image is not a digest-pinned nginx", 6)
+        test = [DOCKER, "run", "--rm", "--network", "none", "--add-host", "zoe-auth:127.0.0.1",
+                "--add-host", "host.docker.internal:127.0.0.1"]
+        for v in s.get("volumes") or []:
+            if v.get("type") == "bind":
+                test += ["-v", f"{v['source']}:{v['target']}:ro"]
+        run(test + [image, "nginx", "-t"], timeout=300)
+    run(compose + ["up", "-d", "--no-deps"] + (["--build"] if build else []) + [svc], timeout=3600)
+    if svc == "zoe-ui":
+        run([DOCKER, "restart", svc], timeout=120)       # nginx.conf is an inode-pinned file mount
+
+
+def modules(tree):
+    compose = compose_cmd(tree, "docker-compose.modules.yml")
+    cfg = json.loads(run(compose + ["config", "--format", "json"]))
+    known = sorted((cfg.get("services") or {}).keys())
+    running = set(run(compose + ["ps", "--services", "--status", "running"]).split())
+    pending_file = os.path.join(STATE, "modules-pending")
+    try:
+        pending = set(open(pending_file).read().split())
+    except OSError:
+        pending = set()
+    targets = [n for n in known if n in running or n in pending]
+    if not targets:
+        print("zoe-compose-deploy: no running module containers to recreate")
+        return
+    for n in targets:
+        check_service(cfg, n, tree)
+    with open(pending_file, "w") as fh:
+        fh.write("\n".join(targets) + "\n")
+    run(compose + ["up", "-d", "--no-deps", "--wait", "--wait-timeout", "180"] + targets, timeout=900)
+    os.unlink(pending_file)
+
+
+def main(argv):
+    kind = VERBS.get(tuple(argv))
+    if kind is None:
+        fail(USAGE, 2)
+    os.umask(0o022)
+    if kind == "logs":
+        r = subprocess.run([DOCKER, "logs", "--tail", LOG_LINES, argv[1]], env=ENV, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=60)
+        sys.stdout.buffer.write(r.stdout)
+        return 0 if r.returncode == 0 else 5
+    sha = read_sha()
+    tree = prepare(sha)
+    if kind == "modules":
+        modules(tree)
+    else:
+        deploy(argv[0], argv[1:] == ["--build"], tree)
+    prune_trees(sha)
+    print(f"zoe-compose-deploy: {' '.join(argv)} at {sha[:12]}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except subprocess.TimeoutExpired as exc:
+        fail(f"timed out: {os.path.basename(str(exc.cmd[0]))}", 5)
