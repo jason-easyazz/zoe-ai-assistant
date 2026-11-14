@@ -135,7 +135,7 @@ conflicting high-confidence memories."**
    >    explicitly disabled — it depends on the `zoe-data` process staying up across
    >    Sunday 04:00.
    > 2. **Cron (secondary)** — `daily_consolidation.py:56` Sunday branch
-   >    (`weekday()==6`), installed by `scripts/setup/setup_overnight_training*.sh`.
+   >    (`weekday()==6`), once installed by `scripts/setup/setup_overnight_training*.sh` (removed 2026-11-14 with the retired nightly training job; not in the live crontab).
    > 3. **Admin route** — `POST /memories/consolidate` (`routers/system.py`).
    >
    > **Don't confuse this with the dream cycle.** The nightly dream timers
