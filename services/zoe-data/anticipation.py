@@ -20,6 +20,12 @@ STORE. Rows of ``pending_suggestions`` with ``session_id = action_type = 'antici
 readers never select them). ``description`` = the event title (what a forget matches), ``list_type`` = offer kind, ``when_hint`` =
 expiry (UTC ISO), ``amount_hint`` = the dedupe key, ``pre_filled_slots`` = the facts. ``resolved``: see ``OPEN`` .. ``CLAIMED``.
 
+THE ENGINE (docs/knowledge/anticipation.md). The same night pass also runs the rule pack (``anticipation_rules.offers`` over
+``anticipation_facts.load``: the member's next 36 hours) and stores its offers in the SAME rows (``list_type`` = the rule id,
+``pre_filled_slots`` holds ``engine``, the sentence template, the tool and its exact arguments). They surface, are answered, expire
+and are forgotten through the same code below; an engine offer is re-checked by running the pack again (its key must still be
+made). Phase 1's own wake / leave / packing offers win over the pack's for the same event.
+
 PRIVACY. Only the event's owner, only a real member account, only a chat session (voice surfacing is phase 1b). A member who is not
 positively an adult gets no alarm offers. Logs carry counts and kinds only - never a title, a place or a line. ``off`` = every entry
 point returns before any I/O.
@@ -420,6 +426,7 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
         return None
     now = now or datetime.now(timezone.utc)
     counts = {"events": 0, "wake": 0, "leave": 0, "packing": 0, "stored": 0, "withdrawn": 0}
+    rules: dict = {}
     try:
         async with _conn(db) as conn:
             events = await _events(conn, uid, now)
@@ -431,7 +438,7 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
             if m == "on":
                 existing = await _rows(conn, uid)
                 for r in existing:
-                    if r["resolved"] != OPEN:
+                    if r["resolved"] != OPEN or r["slots"].get("engine"):
                         continue
                     if await _offered(conn, uid, r["slots"]) is None or (r["expires"] is not None and r["expires"] <= now):
                         await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**r["slots"], "outcome": "withdrawn"}, only_from=OPEN)
@@ -450,12 +457,116 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
                     keys.add(o.key)
                     counts["stored"] += 1
                 await conn.commit()
+            await _engine_night(conn, uid, now, m, offers, counts, rules)
     except Exception as exc:  # noqa: BLE001 - the night pass must never break the digest
         logger.warning("ANTICIPATION mode=%s user=%s failed: %s", m, uid, type(exc).__name__)
         return {"status": "error", "mode": m}
-    logger.info("ANTICIPATION mode=%s user=%s events=%d wake=%d leave=%d packing=%d stored=%d withdrawn=%d", m, uid, counts["events"],
-                counts["wake"], counts["leave"], counts["packing"], counts["stored"], counts["withdrawn"])
-    return {"status": "ok", "mode": m, **counts}
+    logger.info("ANTICIPATION mode=%s user=%s events=%d wake=%d leave=%d packing=%d stored=%d withdrawn=%d rules=%s", m, uid,
+                counts["events"], counts["wake"], counts["leave"], counts["packing"], counts["stored"], counts["withdrawn"],
+                ",".join(f"{k}:{v}" for k, v in sorted(rules.items())) or "-")
+    return {"status": "ok", "mode": m, **counts, "rules": rules}
+
+
+# -- the engine: the rule pack's offers in the same rows -----------------------------------------------------------------------------
+async def _engine_offers(conn: Any, uid: str, now: datetime) -> list:
+    """What the rule pack offers this member now (``anticipation_rules.Offer``, best first). Raises on a store error."""
+    import anticipation_facts
+    import anticipation_rules
+
+    return anticipation_rules.offers(await anticipation_facts.load(conn, uid, now), uid)
+
+
+def _source_event(sources: Any) -> str:
+    first = str((list(sources or [""]) or [""])[0])
+    return first.partition(":")[2].partition("@")[0] if first.startswith("event:") else ""
+
+
+async def _engine_night(conn: Any, uid: str, now: datetime, m: str, phase1: list, counts: dict, rules: dict) -> None:
+    """The rule pack's half of the night pass, after phase 1 has committed: count per rule (``shadow``: that is all); ``on`` =
+    store what is new and withdraw the open engine offers the pack no longer makes. Its failure never undoes phase 1."""
+    try:
+        made = await _engine_offers(conn, uid, now)
+        taken = {(o.kind, o.event_id) for o in phase1}                # phase 1 already offers this kind for this event
+        fresh = [o for o in made if (o.rule, _source_event(o.sources)) not in taken]
+        for o in fresh:
+            rules[o.rule] = rules.get(o.rule, 0) + 1
+        if m != "on":
+            return
+        existing = await _rows(conn, uid)
+        live = {o.key for o in made}
+        for r in existing:
+            if r["resolved"] == OPEN and r["slots"].get("engine") and (r["key"] not in live or (r["expires"] and r["expires"] <= now)):
+                await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**r["slots"], "outcome": "withdrawn"}, only_from=OPEN)
+                counts["withdrawn"] += 1
+        keys = {r["key"] for r in existing}
+        own_titles = {str(r[0]): str(r[1] or "") for r in await _all(conn, "SELECT id, title FROM events WHERE user_id = ?", (uid,))}
+        for o in fresh:
+            if o.key in keys:
+                continue
+            slots = {"engine": 1, "rule": o.rule, "template": o.template, "day": o.day, "start_date": o.day, "tool": o.tool,
+                     "args": o.args, "priority": o.priority, "sources": list(o.sources), "surface_from": _iso(o.surface_from),
+                     "surfaced_n": 0}
+            title = own_titles.get(_source_event(o.sources), "") or o.rule        # what a forget matches (the args are in the slots)
+            await conn.execute(
+                "INSERT INTO pending_suggestions (id, user_id, session_id, action_type, description, list_type, when_hint,"
+                " amount_hint, offer_phrase, pre_filled_slots, created_at, turns_elapsed, expire_after_turns, resolved)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0)",
+                (str(uuid.uuid4()), uid, SESSION, ACTION, title[:_TITLE_MAX], o.rule, _iso(o.expires), o.key, o.text(now.astimezone(_tz())),
+                 json.dumps(slots, sort_keys=True), _iso(now), MAX_SURFACED))
+            keys.add(o.key)
+            counts["stored"] += 1
+        await conn.commit()
+    except Exception as exc:  # noqa: BLE001 - the pack is optional; phase 1's offers are already stored
+        rules["error"] = 1
+        logger.warning("ANTICIPATION_ENGINE mode=%s user=%s failed: %s", m, uid, type(exc).__name__)
+
+
+async def _still_holds(conn: Any, uid: str, r: dict, now: datetime, cache: Optional[dict] = None) -> bool:
+    """Is the reason for this offer still true? Phase 1: its occurrence is still as offered (``_offered``). Engine: the pack still makes this key."""
+    s = r["slots"]
+    if not s.get("engine"):
+        return await _offered(conn, uid, s) is not None
+    cache = cache if cache is not None else {}
+    if "keys" not in cache:
+        try:
+            cache["keys"] = {o.key for o in await _engine_offers(conn, uid, now)}
+        except Exception as exc:  # noqa: BLE001 - cannot re-check = do not say it
+            logger.warning("ANTICIPATION_ENGINE recheck user=%s failed: %s", uid, type(exc).__name__)
+            cache["keys"] = set()
+    return r["key"] in cache["keys"]
+
+
+def _priority(r: dict) -> int:
+    if r["slots"].get("engine"):
+        return int(r["slots"].get("priority") or 0)
+    return {"wake": 90, "leave": 70, "packing": 50}.get(r["kind"], 0)
+
+
+def _question(r: dict, now: datetime) -> str:
+    s = r["slots"]
+    if s.get("engine"):
+        import anticipation_rules
+
+        return anticipation_rules.render(str(s.get("template") or ""), str(s.get("day") or ""), now.astimezone(_tz()))
+    return phrase(r["kind"], s, now)
+
+
+def _quiet_hours(now: datetime) -> bool:
+    """The household quiet window (``comm_prefs``): no offer is made in it, even on a turn the member starts."""
+    try:
+        import comm_prefs
+
+        local = now.astimezone(_tz())
+        return comm_prefs.in_quiet_hours({}, local.hour * 60 + local.minute)
+    except Exception:  # noqa: BLE001 - not knowing is quiet
+        return True
+
+
+async def _other_offer_open(conn: Any, uid: str, session_id: str) -> bool:
+    """Never stacked: another kind of offer (a save card, a contact offer) is already waiting on this conversation."""
+    rows = await _all(conn, "SELECT COUNT(*) FROM pending_suggestions WHERE user_id = ? AND session_id = ? AND resolved = 0"
+                            " AND action_type <> ?", (uid, str(session_id), ACTION))
+    return bool(rows and int(rows[0][0] or 0))
 
 
 # -- day: surface -----------------------------------------------------------------------------------------------------------------
@@ -483,9 +594,14 @@ async def pick_for_turn(user_id: str, session_id: str, *, now: Optional[datetime
         return None
     now = now or datetime.now(timezone.utc)
     day = _local_day(now)
+    if _quiet_hours(now):
+        return None
     try:
         async with _conn(db) as conn:
+            if await _other_offer_open(conn, uid, session_id):
+                return None
             rows = await _rows(conn, uid)
+            recheck: dict = {}
             for r in rows:
                 answered = _parse_iso(r["slots"].get("answered_at"))
                 if r["resolved"] == DECLINED and answered is not None and now - answered < COOLDOWN:
@@ -494,7 +610,7 @@ async def pick_for_turn(user_id: str, session_id: str, *, now: Optional[datetime
             if sum(1 for r in rows if r["slots"].get("last_day") == day) >= PER_DAY:
                 return None
             open_rows = sorted((r for r in rows if r["resolved"] == OPEN),
-                               key=lambda r: (r["expires"] or now, KINDS.index(r["kind"]) if r["kind"] in KINDS else 9))
+                               key=lambda r: (-_priority(r), r["expires"] or now, r["key"]))
             for r in open_rows:
                 s = r["slots"]
                 start = _parse_iso(s.get("surface_from"))
@@ -511,10 +627,10 @@ async def pick_for_turn(user_id: str, session_id: str, *, now: Optional[datetime
                     await _edge(conn, uid, r["id"], r["kind"], "ignored", now, day=s.get("last_day"))
                     _log_outcome(uid, r["kind"], "ignored")
                     continue
-                if await _offered(conn, uid, s) is None:
+                if not await _still_holds(conn, uid, r, now, recheck):
                     await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**s, "outcome": "withdrawn"}, only_from=OPEN)
                     continue
-                question = phrase(r["kind"], s, now)
+                question = _question(r, now)
                 s2 = {**s, "surfaced_n": int(s.get("surfaced_n") or 0) + 1, "last_day": day, "last_session": str(session_id),
                       "last_surfaced_at": _iso(now)}
                 if not await _set(conn, r["id"], uid, resolved=OPEN, slots=s2, only_from=OPEN):
@@ -530,7 +646,7 @@ async def pick_for_turn(user_id: str, session_id: str, *, now: Optional[datetime
 
 def card(s: Surfaced) -> dict:
     """The Yes/No card for a surfaced offer, on the existing pending-suggestion accept/dismiss routes."""
-    yes = {"wake": "Set the alarm", "leave": "Remind me", "packing": "Start the list"}.get(s.kind, "Yes")
+    yes = {"wake": "Set the alarm", "leave": "Remind me", "packing": "Start the list", "alarm_for_event": "Set the alarm"}.get(s.kind, "Remind me")
     return {"type": "action_card", "title": s.question,
             "actions": [{"label": yes, "action": "pending_suggestion_accept", "suggestion_id": s.id},
                         {"label": "No thanks", "action": "pending_suggestion_dismiss", "suggestion_id": s.id}]}
@@ -568,9 +684,57 @@ async def _own_row(conn: Any, uid: str, row_id: str) -> Optional[dict]:
     return None
 
 
-async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[Optional[str], dict]:
+async def _remind(conn: Any, uid: str, title: str, due_date: str, due_time: str, now: datetime) -> dict:
+    from models import ReminderCreate
+    from reminder_service import create_reminder_record
+
+    rows = await _all(conn, "SELECT id, role, name FROM users WHERE id = ?", (uid,))
+    if not rows:
+        raise LookupError("no user row")
+    user = {"user_id": str(rows[0][0]), "role": str(rows[0][1] or "user"), "username": str(rows[0][2] or "")}
+    return await create_reminder_record(ReminderCreate(title=title, due_date=due_date, due_time=due_time, visibility="personal"),
+                                        user=user, db=conn, now_utc=now)
+
+
+async def _private_list(conn: Any, uid: str, name: str, items: Any) -> dict:
+    import list_service
+    import write_receipts
+
+    lst = await list_service.create_list_record(conn, user_id=uid, name=name, list_type="personal", visibility="personal")
+    for text in items:
+        await list_service.create_item_record(conn, list_id=lst["id"], text=str(text))
+    await conn.commit()
+    write_receipts.record(uid, "list", lst["id"], "anticipation")
+    return lst
+
+
+async def _do_engine(conn: Any, uid: str, s: dict, now: datetime) -> tuple[Optional[str], dict]:
+    """An engine offer's one action, with the exact arguments the rule stored (``anticipation_rules.TOOLS``)."""
+    tool, a = str(s.get("tool") or ""), dict(s.get("args") or {})
+    today = now.astimezone(_tz()).date()
+    when = _day(_date(a.get("due_date") or a.get("once_date") or s.get("day")) or today, today)
+    if tool == "alarm.create":
+        import alarms
+
+        if not alarms.enabled():
+            return None, {}
+        alarm = await alarms.create_alarm(conn, uid, time_hhmm=a["time_hhmm"], repeat="once", once_date=a["once_date"],
+                                          label=a.get("label") or "", now=now.timestamp())
+        return (f"Done - a one-off alarm for {_clock(a['time_hhmm'])} {when}. Your usual alarm stays as it is.", {"alarm_id": alarm.get("id")})
+    if tool == "reminder.create":
+        rem = await _remind(conn, uid, str(a["title"]), str(a["due_date"]), str(a["due_time"]), now)
+        return f"Done - I'll remind you at {_clock(a['due_time'])} {when}.", {"reminder_id": rem.get("id")}
+    if tool == "list.create":
+        lst = await _private_list(conn, uid, str(a["name"]), a.get("items") or ())
+        return "Done - I've started a private packing list with a few basics. Only you can see it.", {"list_id": lst["id"]}
+    raise ValueError(f"unknown offer tool {tool!r}")
+
+
+async def _do(conn: Any, uid: str, r: dict, ev: Optional[Event], now: datetime) -> tuple[Optional[str], dict]:
     """Run the real tool. ``(reply, receipt)``; reply None = unavailable (``ALARMS_OFF``)."""
     s, kind = r["slots"], r["kind"]
+    if s.get("engine"):
+        return await _do_engine(conn, uid, s, now)
     today = now.astimezone(_tz()).date()
     when = _day(_date(s.get("start_date")) or today, today)
     if kind == "wake":
@@ -583,28 +747,11 @@ async def _do(conn: Any, uid: str, r: dict, ev: Event, now: datetime) -> tuple[O
         return (f"Done - a one-off alarm for {_clock(s['wake_time'])} {when}. Your usual alarm stays as it is.",
                 {"alarm_id": alarm.get("id")})
     if kind == "leave":
-        from models import ReminderCreate
-        from reminder_service import create_reminder_record
-
-        rows = await _all(conn, "SELECT id, role, name FROM users WHERE id = ?", (uid,))
-        if not rows:
-            raise LookupError("no user row")
-        user = {"user_id": str(rows[0][0]), "role": str(rows[0][1] or "user"), "username": str(rows[0][2] or "")}
-        payload = ReminderCreate(title=f"Leave for your {s.get('label') or 'event'}", due_date=s["start_date"],
-                                 due_time=s["leave_time"], visibility="personal")
-        rem = await create_reminder_record(payload, user=user, db=conn, now_utc=now)
+        rem = await _remind(conn, uid, f"Leave for your {s.get('label') or 'event'}", s["start_date"], s["leave_time"], now)
         return (f"Done - I'll remind you to leave by {_clock(s['leave_time'])} {when}.", {"reminder_id": rem.get("id")})
     if kind == "packing":
-        import list_service
-        import write_receipts
-
-        name = f"Packing: {(ev.title or 'trip').strip()[:60]}"
-        lst = await list_service.create_list_record(conn, user_id=uid, name=name, list_type="personal", visibility="personal")
         items = (PACKING_TRAVEL_DOCS if s.get("event_kind") in ("flight", "train") else ()) + PACKING_BASICS
-        for text in items:
-            await list_service.create_item_record(conn, list_id=lst["id"], text=text)
-        await conn.commit()
-        write_receipts.record(uid, "list", lst["id"], "anticipation")
+        lst = await _private_list(conn, uid, f"Packing: {((ev.title if ev else '') or 'trip').strip()[:60]}", items)
         return ("Done - I've started a private packing list with a few basics. Only you can see it.", {"list_id": lst["id"]})
     raise ValueError(f"unknown offer kind {kind!r}")
 
@@ -627,14 +774,15 @@ async def answer(user_id: str, suggestion_id: str, accept: bool, *, now: Optiona
                 await _edge(conn, uid, r["id"], r["kind"], "dismissed", now, day=s.get("last_day"))
                 _log_outcome(uid, r["kind"], "dismissed")
                 return DECLINED_REPLY
-            ev = await _offered(conn, uid, s)
-            if ev is None or (r["expires"] is not None and r["expires"] <= now):
+            ev = None if s.get("engine") else await _offered(conn, uid, s)
+            gone = not await _still_holds(conn, uid, r, now) if s.get("engine") else ev is None
+            if gone or (r["expires"] is not None and r["expires"] <= now):
                 await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**s, "outcome": "withdrawn"}, only_from=OPEN)
                 return GONE
             if not await _set(conn, r["id"], uid, resolved=CLAIMED, slots=s, only_from=OPEN):
                 return STALE           # a second "yes" (the card and the voice at once): only one runs the tool
             try:
-                reply, receipt = await _do(conn, uid, r, ev, now)  # type: ignore[arg-type]
+                reply, receipt = await _do(conn, uid, r, ev, now)
             except Exception as exc:  # noqa: BLE001 - the write did not land: the offer stays open, the reply says so
                 logger.warning("ANTICIPATION_ACT user=%s kind=%s failed: %s", uid, r["kind"], type(exc).__name__)
                 await _set(conn, r["id"], uid, resolved=OPEN, slots=s, only_from=CLAIMED)

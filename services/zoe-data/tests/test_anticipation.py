@@ -110,6 +110,8 @@ def _env(monkeypatch):
     monkeypatch.setenv("ZOE_ANTICIPATION", "on")
     monkeypatch.delenv("ZOE_ALARMS", raising=False)
     monkeypatch.delenv("ZOE_OUTCOME_EDGES", raising=False)
+    monkeypatch.setenv("ZOE_QUIET_START_HOUR", "0")      # these tests run their turns at 10 pm: no quiet window (it has its own
+    monkeypatch.setenv("ZOE_QUIET_END_HOUR", "0")        # test in test_anticipation_engine.py)
 
     async def adult(uid, db=None):
         return True

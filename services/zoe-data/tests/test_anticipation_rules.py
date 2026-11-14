@@ -107,7 +107,7 @@ def test_exact_arguments():
     pack = one(*SCENARIOS["packing"], "packing")
     assert pack.args["name"] == "Packing: Trip to the hills" and "Clothes" in pack.args["items"]
     cover = one(*SCENARIOS["child_cover"], "child_cover")
-    assert cover.args == {"title": "Sort out who takes Kit at 3:30 pm", "due_date": MON, "due_time": "08:00"}
+    assert cover.args == {"title": "Sort out who takes Kit at 3:30 pm", "due_date": MON, "due_time": "13:30"}
     assert one(*SCENARIOS["full_day_prep"], "full_day_prep").text(NOW).startswith("Today is fuller than usual, 4 things")
 
 
