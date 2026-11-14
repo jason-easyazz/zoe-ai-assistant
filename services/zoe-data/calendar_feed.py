@@ -9,11 +9,14 @@ decision). The engine never sees one: it is handed an injected ``Fetcher`` (late
 new validators). ``account_secrets`` still refuses everything; no URL column exists.
 
 THE FETCHER CONTRACT (the real fetcher is NOT in this module; it moves to the broker). The engine enforces only what it can see:
-  * a hard, ENGINE-OWNED bound on every fetch (``FETCH_TIMEOUT_S``): an async fetcher is cancelled at it; a sync fetcher runs in this
-    module's own small thread pool (``MAX_FETCH_THREADS``), and at the bound the engine stops waiting and records the run failed
-    (class ``network``, ``SyncReport.detail`` ``fetch_timeout``). A Python thread cannot be killed: the stuck call keeps its worker
-    until it returns, so a feed with a fetch still outstanding is refused (``fetch_outstanding``, the fetcher is not called), and at
-    most ``MAX_FETCH_THREADS`` stuck calls can exist at once (more queue, and a queued one is cancelled at its bound);
+  * a hard, ENGINE-OWNED bound on every fetch (``FETCH_TIMEOUT_S``). An async fetch runs as its own task; at the bound the engine
+    cancels it and ABANDONS it (never waits for the cancellation, so a fetcher that swallows ``CancelledError`` cannot hold the sync;
+    the task is kept referenced and its eventual result or exception is retrieved and dropped). A sync fetcher runs in this module's
+    own small thread pool (``MAX_FETCH_THREADS``), and at the bound the engine stops waiting. Either way the run is recorded failed
+    (class ``network``, ``SyncReport.detail`` ``fetch_timeout``). Neither a thread nor a task that ignores cancellation can be
+    killed, so a feed with a fetch still running is refused (``fetch_outstanding``, the fetcher is not called), at most
+    ``MAX_FETCH_THREADS`` stuck calls can exist (more queue, and a queued one is cancelled at its bound), and while
+    ``MAX_ABANDONED_FETCHES`` abandoned tasks are still running no new async fetch starts (``fetch_capacity``);
   * the size cap on the RESULT: the seam hands over bytes, so a body over ``max_bytes`` is refused (``quota`` / ``too_large``)
     whatever status came with it, before anything is parsed or written. Aborting AT the cap while reading belongs to the fetcher;
   * the fetcher's own text never reaches a log, a row or the report: a raised exception is logged by its type name only.
@@ -57,10 +60,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import functools
 import hashlib
 import inspect
 import json
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -87,6 +92,7 @@ WINDOW_FUTURE_DAYS = calendar_read.MAX_WINDOW_DAYS
 BATCH = 200
 FETCH_TIMEOUT_S = 45.0             # the engine's own bound on one fetch, whatever the fetcher does
 MAX_FETCH_THREADS = 2              # the sync-fetcher pool: a bound on how many stuck calls can pile up
+MAX_ABANDONED_FETCHES = 4          # async fetches abandoned at the bound and still running: a bound on how many can pile up
 BACKOFF_BASE_S = 30 * 60
 BACKOFF_MAX_S = 6 * 3600
 
@@ -143,15 +149,20 @@ class SyncReport:
     n_bytes: int = 0
     duration_ms: int = 0
     backoff_until: Optional[str] = None
-    detail: Optional[str] = None                  # a fixed word (fetch_timeout / fetch_outstanding / busy); not persisted
+    detail: Optional[str] = None                  # a fixed word (fetch_timeout / fetch_outstanding / fetch_capacity / busy); not
+                                                  # persisted
 
 
 class FetchTimeout(Exception):
     """The fetch did not finish inside the engine's bound."""
 
 
-#: account ids with a fetch not yet finished. An async fetch leaves at its bound (cancelled); a thread leaves when it returns.
+#: account ids with a fetch not yet finished: in flight, or abandoned at the bound and still running (a task that ignored its
+#: cancellation, or a thread). Released when the last of them ends.
 _outstanding: set = set()
+_tasks: dict = {}                 # abandoned async fetch task -> account id (the strong reference that keeps it alive)
+_threads: dict = {}               # sync fetch future still running -> account id
+_lock = threading.Lock()          # thread callbacks touch these too
 _pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
 
 
@@ -276,41 +287,51 @@ class _Item:
     hash: str
 
 
-def plan(parsed: list, *, policy: str, w0: date, w1: date, report: SyncReport) -> "dict[tuple[str, str], _Item]":
-    """The kept items by key. Counts ``seen``, ``skipped`` (with reasons) and ``rrule_unsupported`` into ``report``."""
+def plan(parsed: list, *, policy: str, w0: date, w1: date, report: SyncReport,
+         outside: Optional[dict] = None) -> "dict[tuple[str, str], _Item]":
+    """The kept items by key. Counts ``seen``, ``skipped`` (with reasons) and ``rrule_unsupported`` into ``report``. ``outside``
+    receives the items the feed still carries that fall outside the window, by key (the caller decides what a stored copy of one
+    becomes: it must never keep its old time)."""
     c, why = report.counts, report.skipped
     c["seen"] = len(parsed)
     best: dict = {}
+    far: dict = {}
     for p in parsed:
         ev = p["event"]
         if not ev.get("external_uid"):
             why["no_uid"] = why.get("no_uid", 0) + 1
             continue
+        target = best
         if not in_window(ev, w0, w1):
             why["out_of_window"] = why.get("out_of_window", 0) + 1
-            continue
+            target = far
         k = _key(ev["external_uid"], ev.get("recurrence_id"))
-        if k in best:
-            why["duplicate"] = why.get("duplicate", 0) + 1
-            if int(ev.get("sequence") or 0) < int(best[k]["event"].get("sequence") or 0):
+        if k in target:
+            if target is best:
+                why["duplicate"] = why.get("duplicate", 0) + 1
+            if int(ev.get("sequence") or 0) < int(target[k]["event"].get("sequence") or 0):
                 continue
-        best[k] = p
-    out: dict = {}
-    for k, p in best.items():
-        ev = p["event"]
-        values = {col: ev.get(col) for col in _BASE_COLS}
-        values["all_day"] = 1 if ev.get("all_day") else 0
-        for col in _PARSED_EXTRA:
-            v = ev.get(col)
-            values[col] = json.dumps(v) if col in ("rdates", "exdates") and v is not None else v
-        values["visibility"] = clamp_visibility(policy, ev.get("visibility"))
-        values["provider_updated_at"] = ev.get("provider_updated_at")
-        values["category"] = values.get("category") or "general"
-        if rrule_unsupported(ev):
-            c["rrule_unsupported"] = c.get("rrule_unsupported", 0) + 1
-        out[k] = _Item(k, values, p["attendees"], p["alarms"], content_hash(values, p["attendees"], p["alarms"]))
+        target[k] = p
+    out = {k: _item(k, p, policy, c) for k, p in best.items()}
+    if outside is not None:
+        outside.update({k: _item(k, p, policy, None) for k, p in far.items() if k not in out})
     c["skipped"] = sum(why.values())
     return out
+
+
+def _item(k: "tuple[str, str]", p: dict, policy: str, counts: Optional[dict]) -> _Item:
+    ev = p["event"]
+    values = {col: ev.get(col) for col in _BASE_COLS}
+    values["all_day"] = 1 if ev.get("all_day") else 0
+    for col in _PARSED_EXTRA:
+        v = ev.get(col)
+        values[col] = json.dumps(v) if col in ("rdates", "exdates") and v is not None else v
+    values["visibility"] = clamp_visibility(policy, ev.get("visibility"))
+    values["provider_updated_at"] = ev.get("provider_updated_at")
+    values["category"] = values.get("category") or "general"
+    if counts is not None and rrule_unsupported(ev):
+        counts["rrule_unsupported"] = counts.get("rrule_unsupported", 0) + 1
+    return _Item(k, values, p["attendees"], p["alarms"], content_hash(values, p["attendees"], p["alarms"]))
 
 
 # -- the engine -------------------------------------------------------------------------------------------------------------------
@@ -322,6 +343,18 @@ async def _account(account_id: str) -> Optional[dict]:
     if row is None:
         return None
     return {"user_id": str(row[0]), "provider": str(row[1]), "kind": str(row[2]), "status": str(row[3])}
+
+
+async def _failures_since_success(account_id: str) -> int:
+    """Failed runs of the account since its last good one (``sync_runs``; 0 when none). The run being recorded is still
+    ``running``, so it is not counted."""
+    async with _db() as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM sync_runs WHERE account_id = ? AND outcome = 'error' AND started_at >= COALESCE("
+            "(SELECT MAX(started_at) FROM sync_runs WHERE account_id = ? AND outcome IN ('ok', 'partial')), '')",
+            (account_id, account_id))
+        row = await cur.fetchone()
+    return int(row[0] or 0) if row else 0
 
 
 async def _calendar(user_id: str, account_id: str) -> Optional[dict]:
@@ -409,33 +442,83 @@ async def _link_members(db, event_id: str, attendees: list) -> None:
                          (member, event_id, value))
 
 
+def _release(account_id: str) -> None:
+    with _lock:
+        if account_id not in _tasks.values() and account_id not in _threads.values():
+            _outstanding.discard(account_id)
+
+
 def _thread_done(account_id: str, fut: "concurrent.futures.Future") -> None:
-    _outstanding.discard(account_id)
+    with _lock:
+        _threads.pop(fut, None)
+    _release(account_id)
     if not fut.cancelled():
         fut.exception()                          # retrieved, so a late failure is never reported anywhere with its text
+
+
+def _prune_dead() -> None:
+    """Forget abandoned tasks whose event loop has closed: they can never finish or call back (a process normally has one loop
+    for its life; a script or a test that runs several would otherwise leak entries and, at the bound, refuse every fetch)."""
+    with _lock:
+        dead = [(t, aid) for t, aid in _tasks.items() if t.get_loop().is_closed()]
+        for t, _aid in dead:
+            _tasks.pop(t, None)
+    for _t, aid in dead:
+        _release(aid)
+
+
+def _task_done(account_id: str, task: "asyncio.Task") -> None:
+    with _lock:
+        _tasks.pop(task, None)
+    _release(account_id)
+    if not task.cancelled():
+        task.exception()                         # retrieved: no "exception was never retrieved" line, no text anywhere
+
+
+async def _bounded(awaitable: Any, timeout: float, account_id: str) -> Any:
+    """Await ``awaitable`` for at most ``timeout`` seconds without ever waiting on its cancellation: at the bound the task is
+    cancelled and abandoned (see the module docstring). Raises ``FetchTimeout``."""
+    task = asyncio.ensure_future(awaitable)
+    try:
+        done, _pending = await asyncio.wait({task}, timeout=timeout)
+    except asyncio.CancelledError:              # the sync itself was cancelled: do not leave the fetch unaccounted for
+        _abandon(task, account_id)
+        raise
+    if not done:
+        _abandon(task, account_id)
+        raise FetchTimeout()
+    return task.result()
+
+
+def _abandon(task: "asyncio.Task", account_id: str) -> None:
+    task.cancel()
+    with _lock:
+        _tasks[task] = account_id
+        _outstanding.add(account_id)
+    task.add_done_callback(functools.partial(_task_done, account_id))
 
 
 async def _fetch(fetcher: Fetcher, req: FetchRequest, timeout: float) -> FetchResult:
     """The fetch under the engine's bound (see the module docstring). Raises ``FetchTimeout`` at the bound."""
     aid = req.account_id
-    _outstanding.add(aid)
-    threaded = False
+    with _lock:
+        _outstanding.add(aid)
     deadline = time.monotonic() + timeout
     try:
         if inspect.iscoroutinefunction(fetcher) or inspect.iscoroutinefunction(getattr(fetcher, "__call__", None)):
-            res = await asyncio.wait_for(fetcher(req), timeout)
+            res = await _bounded(fetcher(req), timeout, aid)
         else:
             cf = _fetch_pool().submit(fetcher, req)
-            threaded = True
-            cf.add_done_callback(lambda f: _thread_done(aid, f))
+            with _lock:
+                _threads[cf] = aid
+            cf.add_done_callback(functools.partial(_thread_done, aid))
             res = await asyncio.wait_for(asyncio.wrap_future(cf), timeout)     # cancels a call still queued at the bound
             if inspect.isawaitable(res):
-                res = await asyncio.wait_for(res, max(0.0, deadline - time.monotonic()))
+                res = await _bounded(res, max(0.0, deadline - time.monotonic()), aid)
     except asyncio.TimeoutError:
         raise FetchTimeout() from None
     finally:
-        if not threaded:
-            _outstanding.discard(aid)
+        _release(aid)
     if (not isinstance(res, FetchResult) or res.status not in FETCH_STATUSES
             or not isinstance(res.body, (bytes, bytearray))):
         raise TypeError("the fetcher returned something that is not a FetchResult with a bytes body")
@@ -507,7 +590,9 @@ async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[st
         return rep
 
     async def failed(error_class: str, error_code: Optional[str], retry_after: Optional[int] = None) -> SyncReport:
-        failures = (cal_row or {}).get("failures", 0) + 1
+        # the failures so far come from the run log, which is written from the very first run: a feed that has only ever
+        # failed (no calendar row yet) still backs off further each time, across a restart too
+        failures = max((cal_row or {}).get("failures", 0), await _failures_since_success(account_id)) + 1
         if cal_row is not None and writes:
             async def bump(db, _w):
                 await db.execute("UPDATE calendars SET consecutive_failures = consecutive_failures + 1, last_sync_status = ?, "
@@ -524,8 +609,12 @@ async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[st
         return await failed("config", "ledger_unavailable")
 
     cap = max_bytes()
+    _prune_dead()
     if account_id in _outstanding:                # its last fetch has not returned: never stack another on a stuck call
         rep.detail = "fetch_outstanding"
+        return await failed("network", None)
+    if len(_tasks) >= MAX_ABANDONED_FETCHES:      # too many abandoned fetches still running: start no more until they end
+        rep.detail = "fetch_capacity"
         return await failed("network", None)
     # the stored digest is keyed by the window's first day: on a new day the validators are NOT sent, so a byte-identical feed is
     # fetched and re-parsed as its window rolls forward (a 304 has no body to re-parse); the same day still skips
@@ -584,7 +673,11 @@ async def _sync_once(account_id: str, fetcher: Fetcher, *, run_mode: Optional[st
         logger.warning("CALENDAR_FEED parse failed account=%s (%s)", account_id, type(exc).__name__)
         return await failed("provider", "parse_failed")
 
-    items = plan(parsed, policy=policy, w0=w0, w1=w1, report=rep)
+    outside: dict = {}
+    items = plan(parsed, policy=policy, w0=w0, w1=w1, report=rep, outside=outside)
+    # an event the provider MOVED outside the window must never keep its old time: this stage (no deletes) rewrites the stored
+    # copy with what the feed now says; it is still out of the window, so no reader lists it there
+    items.update({k: it for k, it in outside.items() if k in stored})
     # this stage never deletes: a stored key the feed no longer carries stays as it is, and is counted
     rep.counts["absent"] = sum(1 for k in stored if k not in items)
 
