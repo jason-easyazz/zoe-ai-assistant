@@ -18,6 +18,11 @@ or injury report ("the stove is on", "I cut my finger"), a factual question ("wh
 drill work"), an adult, and an adult talking ABOUT a child ("my daughter is 10" is not the speaker's own age). Age is never inferred
 from a voice or a topic.
 
+GUEST VOICES (``ZOE_CHILD_SAFETY_GUESTS`` off | shadow | on, DEFAULT off). On a VOICE-panel turn (``brain_dispatch`` passes
+``voice_mode``) whose speaker is a guest id or empty (an unrecognised voice may be a child), ``on`` answers a hazard request with
+``guest_reply`` (why; "if you live here, sign in with your PIN" helps only a member whose voice was not recognised - a real guest has no PIN); ``shadow`` only logs ``source=guest ... would_refuse=1``; ``off``
+is byte-identical to before. Typed chat, a recognised or signed-in member and an authenticated service caller are never "guests" here.
+
 WORDS ARE DATA: ``lexicons_data/<lang>.json`` "child_safety" (English today; a language with no entry falls back to the English one).
 FLAG ``ZOE_CHILD_SAFETY_FLOOR`` off | shadow | enforce (DEFAULT enforce like the other floors; an unknown value enforces). The log is
 one line, ``CHILD_SAFETY_FLOOR class=<id> source=<role|declared|unverified|error> mode=<m> n=<count>``: never the words or the age.
@@ -37,6 +42,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 ENV = "ZOE_CHILD_SAFETY_FLOOR"
+GUESTS_ENV = "ZOE_CHILD_SAFETY_GUESTS"
+#: an unrecognised voice at the panel, guests flag on: why, and the one honest way through (a household member's PIN sign-in)
+GUEST_REPLY = "I don't know your voice, so I'm playing it safe with that one. Ask a grown-up, or if you live here, sign in with your PIN and ask me again."
 LEXICON_KEY = "child_safety"
 FALLBACK_LANG = "en"
 FALLBACK_REPLY = "That one needs a grown-up. Can you ask one to help you?"
@@ -57,6 +65,8 @@ class Pending:
     declared: bool
     key: tuple
     blind: bool = False   # the floor itself failed: refuse unless the speaker is POSITIVELY an adult
+    voice: bool = False   # a voice-panel turn: an unrecognised voice there may be a child (``guests_mode``)
+    guest_reply: str = ""
 
 
 def mode() -> str:
@@ -64,6 +74,17 @@ def mode() -> str:
 
     raw = str(flag(ENV) or "").strip().lower()
     return raw if raw in ("off", "shadow") else "enforce"   # anything else (unknown, empty) is a floor that enforces
+
+
+def guests_mode() -> str:
+    """``ZOE_CHILD_SAFETY_GUESTS`` off (DEFAULT: a guest voice is answered as before) | shadow (log ``would_refuse`` only) | on."""
+    try:
+        from typed_env import flag
+
+        raw = str(flag(GUESTS_ENV) or "").strip().lower()
+        return raw if raw in ("shadow", "on") else "off"
+    except Exception:  # noqa: BLE001
+        return "off"
 
 
 def _safe_mode() -> str:
@@ -108,6 +129,7 @@ def _rx(lang: str) -> Optional[dict]:
             "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
             "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
             "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
+            "guest_reply": str(e.get("guest_reply") or ""),
             "classes": [(c["id"], w(c["terms"]), c["reply"]) for c in e["classes"]]}
 
 
@@ -247,7 +269,8 @@ def _entry(key: tuple) -> dict:
     return e
 
 
-def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, floors_live: bool = True) -> Optional[Pending]:
+def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, floors_live: bool = True,
+          voice: bool = False) -> Optional[Pending]:
     """The sync pre-check. None = not a hazard request (or the floor is off): the turn goes on exactly as before. NEVER raises.
     FAIL SAFE: an error AFTER a hazard was found keeps that class's refusal; an error BEFORE detection could run (lexicon, import,
     regex) refuses with the generic line - both ``blind``, so ``resolve`` lets only a positively adult speaker through."""
@@ -274,7 +297,7 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, f
         if hit is None or _owned_by_other_floor(text, floors_live):
             return None
         declared = bool(said) or held_child
-        return Pending(cls=hit[0], reply=hit[1], declared=bool(declared), key=key)
+        return Pending(cls=hit[0], reply=hit[1], declared=bool(declared), key=key, voice=bool(voice), guest_reply=str(rx.get("guest_reply") or ""))
     except Exception as exc:  # noqa: BLE001
         logger.warning("CHILD_SAFETY_FLOOR check failed stage=%s (%s)", "after" if hit else "before", type(exc).__name__)
         return Pending(cls=hit[0] if hit else "error", reply=hit[1] if hit else FALLBACK_REPLY, declared=False, key=key, blind=True)
@@ -304,6 +327,21 @@ async def _who(user_id: str) -> str:
 _SOURCE = {"child": "role", "unverified": "unverified"}
 
 
+def _guest(p: Pending) -> Optional[str]:
+    """An unrecognised voice on a voice-panel turn (``guests_mode``). off: None, exactly as before (no log line)."""
+    g = guests_mode()
+    if g == "off":
+        return None
+    m = _safe_mode()
+    refuse = g == "on" and m == "enforce"
+    logger.info("CHILD_SAFETY_FLOOR class=%s source=guest mode=%s guests=%s would_refuse=1", p.cls, m, g)
+    if not refuse:
+        return None
+    if p.cls == "live" or p.reply == URGENT_REPLY:
+        return p.reply or URGENT_REPLY   # a live hazard: "move away" first, never a sign-in hint
+    return p.guest_reply or GUEST_REPLY
+
+
 async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
     """The fixed reply when the speaker of a hazard ask is (or could be) a child and the floor ENFORCES, else None (ask the brain).
     NEVER raises; an error refuses."""
@@ -311,7 +349,10 @@ async def resolve(p: Pending, user_id: str = "") -> Optional[str]:
         if p.blind:
             source = "" if await _who(user_id) == "adult" else "error"
         else:
-            source = "declared" if p.declared else _SOURCE.get(await _who(user_id), "")
+            who = "" if p.declared else await _who(user_id)
+            if who == "guest" and p.voice:
+                return _guest(p)
+            source = "declared" if p.declared else _SOURCE.get(who, "")
         if not source:
             return None
         n = 1
