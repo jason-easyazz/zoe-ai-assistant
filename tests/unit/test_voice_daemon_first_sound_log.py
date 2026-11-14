@@ -826,3 +826,24 @@ def test_back_to_back_chunks_are_not_starved_even_when_each_write_blocks(daemon,
 def test_first_ms_is_the_offer_time_even_when_the_write_returns_at_once(daemon, monkeypatch):
     fs = _feed_script(daemon, monkeypatch, [0.0], [(500.4, 400)])
     assert fs.rel_ms(fs.first_at) == 400 and fs.rel_ms(fs.first_end) == 400   # no player latency in either number
+
+
+def test_whole_blob_playback_records_no_first_sound_time(daemon, monkeypatch, caplog):
+    clock = _Clock(100.0)
+    daemon._turn_close.update(t=99.9, rule="deep", ms=640, seq=1)
+    j = lambda o: json.dumps(o).encode()  # noqa: E731
+    wire = [(0.3, j({"transcript": TRANSCRIPT})),
+            (0.2, j({"full_audio": base64.b64encode(_wav(400)).decode(), "content_type": "audio/wav",
+                     "provider": "greeting", "chunk": -2, "reply": "Good morning."})),
+            (0.1, j({"done": True, "reply": "Good morning."}))]
+    _stream_turn_setup(daemon, monkeypatch, clock, wire=wire)
+    played = []
+    monkeypatch.setattr(daemon, "play_audio_b64", lambda *a, **k: played.append(1) or True)
+    with caplog.at_level(logging.INFO, logger=daemon.log.name):
+        daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", wake_turn=True)
+    assert played
+    (line,) = _msgs(caplog, "FIRST_SOUND")
+    m = FIRST_SOUND_RE.match(line)
+    # dispatch is not a sound: no time is claimed (-1), the kind is still known, and no PCM chunk was written
+    assert m.group(4, 5, 8) == ("-1", "greeting", "0")
+    assert _msgs(caplog, "PCM_WRITE")[0].startswith("PCM_WRITE n=0 first_ms=-1")
