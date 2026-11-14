@@ -1,5 +1,5 @@
 """The distress hand-off (``distress_handoff``): detector, per-tier precision/recall, language independence, the fixed reply, the notification.
-Synthetic phrases only (``fixtures/distress_labelled.json``, 444 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
+Synthetic phrases only (``fixtures/distress_labelled.json``, 471 turns, en + es). Each guard has a negative control that goes red without it. ``ci_safe``."""
 from __future__ import annotations
 
 import ast
@@ -22,7 +22,7 @@ NEVER_WAKE = "I want to go to sleep and never wake up"
 IDEATION_MISSES = {"i keep thinking i should kill myself",                # no "should" desire (a bare "I should die" is common hyperbole)
                    "been feeling suicidal since monday and i dont know why"}   # no subject: a bare form would also fire on "she has been feeling suicidal"
 KNOWN_MISSES = {NEVER_WAKE, "he is dying of cancer and I am scared"} | IDEATION_MISSES      # the limits stated in docs/knowledge/distress-handoff.md
-OVERDOSE = [(lang, label, t) for s in ("overdose_4", "overdose_4_probe") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
+OVERDOSE = [(lang, label, t) for s in ("overdose_4", "overdose_4_probe", "overdose_4_relief") for lang, tiers in SETS[s].items() for label, items in tiers.items() for t in items]
 # Over-triggers that were ALREADY there before the intent cues (overdose_bare has no required subject; overdose_now takes "all my tablets"
 # and the inner "i" of "i think i took..."). Kept on purpose: the safe direction, and weakening the floor is an owner decision.
 OVERDOSE_PREEXISTING_HANDOFF = {"my friend took too many pills on purpose", "my brother overdosed last year", "i think i took too many painkillers, is that bad",
@@ -421,7 +421,10 @@ def test_an_intentional_overdose_is_a_handoff_and_accident_story_fiction_and_idi
     ("ive taken an overdose", "handoff"), ("im overdosing", "handoff"), ("i took them all, i want it to stop", "handoff"),
     ("i took too many by accident", "none"), ("i think i took too many", "none"), ("did i take too many", "none"),        # the medical floor's, never grabbed here
     ("i didnt take them all on purpose", "none"), ("i took my pills on purpose today", "none"), ("i took my pills to stop the pain", "none"),
-    ("i took 2 panadol to stop the pain", "none"), ("i took too many photos on purpose", "none"), ("i ate too many cookies on purpose", "none"),
+    ("i took 2 panadol to stop the pain", "none"), ("i took my medicine because i wanted to stop coughing", "none"),
+    ("i took my tablets so i could stop feeling sick", "none"), ("i took my tablets so i dont wake up in the night", "none"),
+    ("i took too many to stop the pain in my knee", "none"), ("i took my pills because i want it to stop", "handoff"),
+    ("i took the whole bottle to stop the pain", "handoff"), ("i took my pills so i wont wake up", "handoff"), ("i took too many photos on purpose", "none"), ("i ate too many cookies on purpose", "none"),
     ("my friend took them all to end it", "gentle"), ("years ago i took too many on purpose", "gentle"), ("i took too many on purpose years ago", "gentle"),
 ])
 def test_the_overdose_intent_cues_and_their_guards(text, tier):

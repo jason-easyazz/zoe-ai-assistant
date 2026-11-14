@@ -54,7 +54,7 @@ Rollback: `ZOE_DISTRESS_HANDOFF=off` (restart); the lexicon section can be delet
 | `ZOE_DISTRESS_NOTIFY=all` (default) \| `minors` \| `off` | owner decision: **`all`** tells the contact about any member (the brief); **`minors`** keeps an adult's disclosure private. Never the contact about themself, never a guest. Once per member per 6 h (in-process: a restart inside the window can repeat it once); a `danger`-class event (physical emergency) has its own 10 min window per member, so it is never swallowed by an earlier self-harm notice. |
 | Mark each child as a minor (persona `member_modes.minor`) | the only child record; unflagged, a child gets the adult wording and, under `minors`, no notification. |
 
-## Measured (444 synthetic phrases, English + Spanish, `tests/fixtures/distress_labelled.json`)
+## Measured (471 synthetic phrases, English + Spanish, `tests/fixtures/distress_labelled.json`)
 Three sets: **dev** (written with the lexicon, tuned on); **held_out_1** and **blind_2** (written after the lexicon froze, scored once, THEN used to fix whole classes of cue).
 First-run (the honest out-of-sample estimate of a hand-written lexicon) vs after the class fixes (a regression set now):
 
@@ -97,6 +97,13 @@ The must-not rows that hand off were ALL handing off before these cues and are p
 ("my brother overdosed last year", "my friend took too many pills on purpose", "i overdosed on chocolate"), and `overdose_now` fires on "all my tablets" without an intent
 word and on the inner "i" of "I think I took too many painkillers". Kept: the safe direction, and "I took all my tablets" alone must hand off; narrowing them is an owner
 decision, alongside the medical poisoning floor. Unseen-phrasing recall for this class is the probe's first run (11 / 20), not the final column.
+
+**Symptom relief is not intent (`overdose_4_relief`, 27 rows, written before the fix).** The reason after the verb counts only when it is a self-harm complement
+(die, end it all, stop existing / living / being here, sleep forever, the thoughts / voices) or a BARE "stop / end / go away / make it stop / wake up" at the end of its clause.
+"to stop coughing", "so I could stop feeling sick", "so I don't wake up in the night" are medication talk: none. A bare "because I want it to stop" stays a hand-off
+(ambiguous, the safe side). A QUANTITY plus a plain "to stop the pain" hands off (more than a dose, the reason unnamed: ambiguous, the safe side); a named
+ailment after it ("the pain in my knee", "my cough") does not; with no quantity, pain relief never does. Before the fix: 9 / 12 hand-off, 9 / 15 must-not kept below
+(6 relief sentences handed off); after: 12 / 12 and 15 / 15, every other fixture row unchanged.
 
 ## No-store map (`tests/test_distress_no_store.py`, real code, control for each: flag off stores it)
 extractor + ingest choke point (`blocks_write`), per-turn digest (`is_off_record`), exact-words index, person extractors, latent-intent detector (all via `is_off_record`, text test, stateless);

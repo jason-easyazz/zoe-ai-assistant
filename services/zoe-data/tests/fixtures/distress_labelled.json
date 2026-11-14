@@ -68,5 +68,12 @@
    "gentle": ["my sister took them all to make it stop", "he swallowed a bottle of pills on purpose", "when i was fifteen i took too many on purpose", "i took too many on purpose years ago", "why do people take overdoses on purpose"],
    "none": ["i took too many vitamins on purpose", "in my story the hero takes too many pills on purpose", "i took too many by mistake", "i accidentally took all my tablets at once", "i think i took too much medicine", "i took too many shots on purpose at the party", "i took all the credit on purpose", "i took the whole box of chocolates on purpose", "can taking too many pills on purpose kill you", "i didnt take too many on purpose", "i never took them all on purpose", "i took all my tablets on time today", "the dog took too many treats on purpose", "i took all of them to school to share", "i took the lot to the tip deliberately"]
   }
+ },
+ "overdose_4_relief": {
+  "en": {
+   "handoff": ["i took my pills because i want it to stop", "i took my pills because i wanted it all to stop", "i took my tablets so i could stop existing", "i took my meds to stop living", "i took my pills so i wont wake up", "i took my sleeping pills to never wake up again", "i took my pills to end it all", "i took my medication to make everything stop", "i took the pills so i could die", "i took my tablets to stop being here", "i took too many to make it stop", "i took the whole bottle to stop the pain"],
+   "gentle": [],
+   "none": ["i took my medicine because i wanted to stop coughing", "i took my tablets so i could stop feeling sick", "i took my pills to stop the pain in my knee", "i took my meds so the headache would stop", "i took my antihistamines to make the itching stop", "i took my pills because i want to stop being anxious", "i took my tablets so i dont wake up in the night", "i took my sleeping pills so i dont wake up at three again", "i took my medication to stop the shaking", "i took my painkillers so i could stop limping", "i took two panadol to make my headache go away", "i took my meds so it would stop hurting", "i took my tablets because i wanted the nausea to stop", "i took my pills to stop feeling dizzy", "i took too many to stop my cough"]
+  }
  }
 }
