@@ -623,7 +623,21 @@ def event_key(text: str) -> Optional[tuple]:
     (a medical emergency)") outweigh the kind word, so a word-overlap paraphrase test read the day's chest pain as a repeat of the
     day's fall and dropped it (QA round 10a). Pure."""
     m = _EVENT_TEXT_RE.match((text or "").strip())
-    return (m.group("who").strip().lower(), m.group("what").strip().lower(), m.group("date")) if m else None
+    return (_event_who(m.group("who")), m.group("what").strip().lower(), m.group("date")) if m else None
+
+
+#: "User's son Max" / "my son Max" / "Max's" -> "max": a relation word is dropped ONLY when a NAME follows it, so two extractors'
+#: forms of one named person are one record. A relation with no name ("User's son") stays as it is: it is never merged with a name.
+_EVENT_REL_NAME_RE = re.compile(r"^(?i:(?:the\s+)?(?:user['’]s|my)\s+(?:[a-z]+\s+)?)(?P<name>[A-Z][a-z'’-]+)$")
+
+
+def _event_who(who: str) -> str:
+    w = " ".join((who or "").split())
+    m = _EVENT_REL_NAME_RE.match(w)
+    if m and m.group("name").lower() not in _NOT_A_NAME:
+        w = m.group("name")
+    w = re.sub(r"['’]s$", "", w)
+    return w.casefold()
 
 
 def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> str:

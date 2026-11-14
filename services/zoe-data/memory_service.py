@@ -3926,7 +3926,7 @@ class MemoryService:
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
     _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup", GUEST_DROP,
-                                 "identity_drop"})
+                                 "identity_drop", "emergency_unfiled"})
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:

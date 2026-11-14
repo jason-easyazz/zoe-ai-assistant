@@ -233,5 +233,49 @@ def test_a_true_repeat_from_a_second_writer_still_dedups(mem):  # noqa: F811
 
 def test_event_key_reads_only_the_fixed_template():
     assert medical_safety.event_key("User had a fall on 14 November 2026 (a medical emergency).") == ("user", "a fall", "14 November 2026")
-    assert medical_safety.event_key("User's son Max had chest pain on 3 May 2026 (a medical emergency).")[0] == "user's son max"
+    assert medical_safety.event_key("User's son Max had chest pain on 3 May 2026 (a medical emergency).")[0] == "max"   # the NAME
     assert medical_safety.event_key("User had a fall on the stairs") is None and medical_safety.event_key("") is None
+
+
+# ── review #2491: the unfiled bystander emergency is a COUNTED refusal; one named person's event is one record ─────────────────
+def test_an_unfiled_emergency_is_counted_in_the_reject_summary(mem, monkeypatch, tmp_path):  # noqa: F811
+    import memory_reject_ledger as led
+    from memory_service import MemoryService
+
+    assert "emergency_unfiled" in MemoryService._REFUSED_STATUSES
+    monkeypatch.setenv("ZOE_MEMORY_REJECT_LEDGER", str(tmp_path / "ledger.json"))
+    led.reset_for_tests()
+    fact, said = BYSTANDER[0]
+    run(mem.ingest(fact, user_id=UID, source="turn_digest", source_excerpt=said, anchor_text=said))
+    s = led.summary(24)
+    assert s["reasons"].get("emergency_unfiled") == 1 and s["sources"].get("turn_digest") == 1
+    assert "emergency_unfiled:1" in led.format_summary(24)
+    led.reset_for_tests()
+
+
+@pytest.mark.parametrize("a, b, same", [
+    ("User's son Max had chest pain on 3 May 2026 (a medical emergency).", "Max had chest pain on 3 May 2026 (a medical emergency).", True),
+    ("my son Max had chest pain on 3 May 2026 (a medical emergency).", "Max's had chest pain on 3 May 2026 (a medical emergency).", True),
+    ("Max had chest pain on 3 May 2026 (a medical emergency).", "Rowan had chest pain on 3 May 2026 (a medical emergency).", False),
+    ("User's son had chest pain on 3 May 2026 (a medical emergency).", "Max had chest pain on 3 May 2026 (a medical emergency).", False),
+    ("User's son had chest pain on 3 May 2026 (a medical emergency).", "User had chest pain on 3 May 2026 (a medical emergency).", False),
+    ("Max had chest pain on 3 May 2026 (a medical emergency).", "Max had a fall on 3 May 2026 (a medical emergency).", False),
+])
+def test_event_key_folds_one_named_persons_forms_and_never_merges_two_people(a, b, same):
+    assert (medical_safety.event_key(a) == medical_safety.event_key(b)) is same
+
+
+def test_two_extractors_forms_of_one_named_persons_emergency_file_once(mem):  # noqa: F811
+    said = "my son max has crushing chest pain and cant breathe"
+    for fact, source in (("User's son Max has crushing chest pain", "turn_digest"), ("Max has crushing chest pain", "chat_regex")):
+        run(mem.ingest(fact, user_id=UID, source=source, source_excerpt=said, anchor_text=said))
+    events = [r.text for r in _rows(mem) if medical_safety.event_key(r.text)]
+    assert len(events) == 1 and medical_safety.event_key(events[0])[0] == "max"
+
+
+def test_control_the_raw_subject_key_files_the_same_person_twice(mem, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(medical_safety, "_event_who", lambda w: " ".join((w or "").split()).lower())
+    said = "my son max has crushing chest pain and cant breathe"
+    for fact, source in (("User's son Max has crushing chest pain", "turn_digest"), ("Max has crushing chest pain", "chat_regex")):
+        run(mem.ingest(fact, user_id=UID, source=source, source_excerpt=said, anchor_text=said))
+    assert len([r for r in _rows(mem) if medical_safety.event_key(r.text)]) == 2
