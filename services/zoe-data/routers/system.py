@@ -23,6 +23,7 @@ from auth import (
 from database import get_db
 from research_evidence import (
     WEB_LOOKUP_ERROR,
+    WEB_LOOKUP_NO_RESULTS,
     WEB_SEARCH_TOOL_DEADLINE_S,
     WEB_SEARCH_TOOL_MAX_RESULTS,
     WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,
@@ -32,6 +33,10 @@ from research_evidence import (
     web_search_tool_enabled,
     web_search_tool_payload,
 )
+from web_lookup_answer import screen_rows
+from web_lookup_provider import LiveProvider, lookup
+from web_lookup_scrub import ScrubResult, scrub_query
+from web_lookup_terms import household_private_terms
 from system_updates import (
     build_updates_snapshot,
     install_component,
@@ -2420,8 +2425,10 @@ async def intent_dispatch(body: _IntentDispatchBody, _: None = Depends(require_i
 # The Flue sidecar's `web_search` tool (labs/flue-zoe-brain-2x/src/tools/
 # zoe-tools.ts, registered only under its own ZOE_WEB_SEARCH_TOOL=1) is a thin
 # wrapper over this endpoint, which is itself just `research_evidence.
-# fetch_web_fallback` (B10.0: provider-aware, bounded, honest status). No new
-# HTTP client, no scraping beyond B10.0. Absent (404) unless zoe-data's
+# fetch_web_fallback` (B10.0: provider-aware, bounded, honest status) reached
+# through the privacy path: query scrubber -> provider seam -> row screen
+# (web_lookup_scrub / web_lookup_provider / web_lookup_answer). No new HTTP
+# client, no scraping beyond B10.0. Absent (404) unless zoe-data's
 # ZOE_WEB_SEARCH_TOOL=1, so the default box is byte-identical to before.
 # Same internal gate as intent-dispatch: the model can spend Tavily credits and
 # reach the network through it, so it is loopback / X-Internal-Token only.
@@ -2445,31 +2452,36 @@ async def web_search(body: _WebSearchBody, _: None = Depends(require_intent_disp
     if not query:
         raise HTTPException(status_code=400, detail="query required")
     max_results = max(1, min(int(body.max_results or WEB_SEARCH_TOOL_MAX_RESULTS), WEB_SEARCH_TOOL_MAX_RESULTS))
+    # PRIVACY (docs/knowledge/web-lookup.md): what leaves the house is the SCRUBBED
+    # query, never `query`. Names unreadable -> refuse (when in doubt, do not send).
+    terms = await household_private_terms()
+    scrub = scrub_query(query, terms) if terms is not None else ScrubResult(False, "", "private_names_unreadable")
     # Blocking urllib/httpx under the hood — keep it off the event loop.
     # ONE end-to-end budget (Greptile + Codex #1702): the per-provider timeout
     # only bounds each socket wait, so the lookup also shares a monotonic
     # deadline across Tavily → DDG (the second provider gets what is left and
-    # is never started once it is spent), and this endpoint answers honestly at
-    # that deadline instead of waiting on a slow-drip provider. No per-row page
+    # is never started once it is spent), and the seam (`web_lookup_provider.
+    # lookup`) answers honestly at that deadline instead of waiting on a
+    # slow-drip provider; the wait_for below is only a backstop. No per-row page
     # fetches (the payload drops `price`). A thread cannot be killed, so an
     # in-flight provider call may still finish in the background, bounded by its
     # own (remaining-budget) socket timeout — but nothing new is started.
+    provider = LiveProvider(lambda *a, **k: fetch_web_fallback(*a, **k))
     try:
         outcome = await asyncio.wait_for(
-            asyncio.to_thread(
-                fetch_web_fallback,
-                query,
-                max_results,
-                WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,
-                enrich_prices=False,
-                deadline_s=WEB_SEARCH_TOOL_DEADLINE_S,
-            ),
-            timeout=WEB_SEARCH_TOOL_DEADLINE_S,
+            asyncio.to_thread(lookup, provider, scrub, max_results=max_results, deadline_s=WEB_SEARCH_TOOL_DEADLINE_S),
+            timeout=WEB_SEARCH_TOOL_DEADLINE_S + 0.5,
         )
     except asyncio.TimeoutError:
         outcome = WebFallbackOutcome(
             WEB_LOOKUP_ERROR, "none", [], f"timeout: lookup exceeded {WEB_SEARCH_TOOL_DEADLINE_S:g}s deadline"
         )
+    # Page content is DATA: a row that reads as an instruction to the assistant is
+    # withheld here, before the brain sees it. Rows stay rows (the sidecar fences them).
+    kept, withheld = screen_rows(outcome.results)
+    if withheld:
+        note = f"{withheld} result(s) withheld: instruction-shaped page text"
+        outcome = WebFallbackOutcome(outcome.status if kept else WEB_LOOKUP_NO_RESULTS, outcome.provider, kept, note)
     return web_search_tool_payload(outcome)
 
 
