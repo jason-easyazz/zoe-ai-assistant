@@ -56,6 +56,11 @@ def on(monkeypatch):
     monkeypatch.setenv("ZOE_ROUTINES", "on")
     monkeypatch.setenv("ZOE_ROUTINE_VOICE", "on")
 
+    async def no_card(panel_id, member):          # the panel card push is covered by test_routines_card_api.py
+        return None
+
+    monkeypatch.setattr(rt, "_push_card", no_card)
+
 
 def say(text, member=ALEX, session="s1", *, channel="voice", verified=True, allow_writes=True):
     uid = (member or "guest") if channel == "chat" else "panel-1"            # chat: the signed-in member; voice: the panel device
