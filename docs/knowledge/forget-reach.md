@@ -104,6 +104,26 @@ answer both ways), and **control** (the layer's hooks off: the name IS served, s
 - Adding a derived layer: a `Layer` row + a `Probe` class (seed / erase / served / disable). A new layer that is erase-only goes in the open-problems
   line; one the probe cannot drive goes in `UNPROBED` and that line.
 
+## Forget commands are never mined (QA round 10a, 2026-11-14)
+
+What happened, by shape: a member taught a fact about a relative ("my brother <name> lives in <place>"), then said "forget that I
+told you about my brother". That is a TOPIC forget (`forget_topic.py`): it erases the rows, words, notes and offers holding the
+topic, but writes no `memory_forgotten` entry. The command's own saved turn was on the record, so idle consolidation (and the
+nightly digest, inside its lookback) re-read it, the extractor paraphrased it ("the user told Zoe about their brother"), and in a
+fresh session the household recall block served that row: "I do have a record of a past conversation about him". The fix is at the
+source: `turn_forget.is_forget_instruction` (the union of the existing detectors: `forget_topic.parse`, `turn_forget.is_forget_turn`,
+the entity-forget pattern) makes `routers/chat._save_chat_message` save a forget command `off_record` (every off-record-honouring
+reader leaves it out: idle consolidation, the digest loaders, the fast-path context, exact words, the pronoun lookback) and
+`memory_digest._skip_forgotten_turns` skip one saved before the fix (`services/zoe-data/tests/test_qa10_forget_command_leak.py`).
+Rows already minted that way are found by `scripts/maintenance/forget_command_rows_audit.py` (read-only, counts per member index
+and writer, row ids only to a 0600 file; a row is cleaned only when its own provenance - `source_excerpt` or `user_turn_id` - links
+it to a forget-command turn; unlinked idle / digest rows in the same session are reported as unproven "window" rows):
+`python3 scripts/maintenance/forget_command_rows_audit.py --ids-out ~/.zoe/forget-command-rows.json`, then, with zoe-data stopped,
+`~/.zoe/venvs/zoe-data-py312/bin/python scripts/maintenance/forget_command_rows_audit.py --erase-from ~/.zoe/forget-command-rows.json`
+(dry run) and the same with `--confirm --i-stopped-zoe-data`, which forgets them through the owner-forget path
+(`MemoryService.review(archive)` then `erase_rows`). Still open: a topic forget reaches less than an entity forget
+([open-problems.md](open-problems.md)).
+
 ## The inventory
 
 Generated from `forget_reach.py`; do not edit by hand.

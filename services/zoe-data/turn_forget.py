@@ -133,6 +133,40 @@ def is_forget_turn(text: str) -> bool:
         return False
 
 
+def is_forget_instruction(text: str) -> bool:
+    """Is ``text`` a FORGET COMMAND of any kind: a short retraction of the previous turn (``is_forget_turn``, bounded by
+    ``memory_quality.FORGET_MAX_WORDS`` exactly as the chat capture bounds it), a TOPIC forget ("forget that I told you about
+    my brother", ``forget_topic.parse``) or an ENTITY forget ("forget everything about Dana", ``intent_router._FORGET_ENTITY_RE``)?
+    The union of the existing detectors, no pattern of its own. Pure; never raises.
+
+    Such a turn is an instruction, never a fact: its saved row is flagged off the record and every transcript reader skips it
+    (QA round 10a: a topic forget writes no ledger entry, so idle consolidation re-mined the command itself into "the user told
+    Zoe about their brother", and Zoe then reported "a record of a past conversation about him")."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    try:
+        import memory_quality
+
+        if len(t.split()) <= memory_quality.FORGET_MAX_WORDS and is_forget_turn(t):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import forget_topic
+
+        if forget_topic.parse(t) is not None:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from intent_router import _FORGET_ENTITY_RE
+
+        return bool(_FORGET_ENTITY_RE.match(t))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ── the turn notes ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 def note_user_turn(user_id: Optional[str], text: str, *, now: Optional[float] = None) -> None:
