@@ -1001,6 +1001,33 @@ async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
     return max(len(ids), 1)
 
 
+def _plain_subjects(texts: list, subject: str) -> int:
+    """How many DISTINCT people the member's PLAIN memory rows (no person link) that name ``subject`` show, from positive evidence
+    only. Two rows are two people only when they carry different relations ("my sister Quorbel" / "my aunt Quorbel"), different
+    surnames, or different current ages for the same name; rows that merely differ in wording, or that carry no such cue, are
+    one person (never a false ambiguity). A subject that is not a bare first name ("my son", "the dentist") is 1. Pure."""
+    name = (owner_noun(subject) or (subject,))[0]
+    if re.match(r"(?i)^(?:the|my|our|a|an)\s", name or "") or not re.match(r"^[A-Za-z][A-Za-z'’\-]*$", name or ""):
+        return 1
+    rels, surnames, ages = set(), set(), set()
+    for t in texts:
+        sm = _subject_re(subject).search(t or "")
+        if not sm:
+            continue
+        head, tail = t[:sm.start()], t[sm.end():]
+        m = re.search(rf"(?:my|our|user['’]s)\s+({_REL})\s+$", head, re.IGNORECASE) or re.match(
+            rf"\s*[(,]?\s*(?:is\s+)?(?:(?:my|our|user['’]s)\s+)?({_REL})\b", tail, re.IGNORECASE)
+        if m:
+            rels.add(m.group(1).lower())
+        m = re.match(r"\s+([A-Z][a-z]{2,})\b", tail)
+        if m and m.group(1).lower() not in _DAY_NAMES | set(_MONTHS):
+            surnames.add(m.group(1).lower())
+        am = _age_matches(tail)
+        if am and _row_value(am[0]) is not None:
+            ages.add(_row_value(am[0]))
+    return max(len(rels), len(surnames), len(ages), 1)
+
+
 async def apply(user_message: str, user_id: str, session_id: Optional[str], *, svc=None,
                 speaker_verified: Optional[bool] = None) -> int:
     """Supersede the member's stored rows the correction in ``user_message`` is about. Returns the rows rewritten (0 = nothing
@@ -1029,6 +1056,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         uid = user_id.strip().lower()
         hits = []
         exact_subject_row = False
+        plain_texts = []
         exact_re = _subject_re(corr.subject, False)
         _on = owner_noun(corr.subject)
         # the exact OWNER, whatever attribute the row is about: "Carlos is 22" means Carlos exists, so "carlos swimming" is never Carlo's
@@ -1039,6 +1067,8 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 continue
             if exact_re.search(r.text or "") or (owner_re and owner_re.search(r.text or "")):
                 exact_subject_row = True
+                if str(meta.get("entity_type") or "").strip().lower() != "person":
+                    plain_texts.append(r.text or "")
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
@@ -1065,6 +1095,14 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 # the rows belong to MORE THAN ONE person who answers to this name (golden C27: two people with one name, both
                 # rewritten): nothing is rewritten, the correction stays as said
                 logger.info("VALUE_CORRECTION_AMBIGUOUS_SUBJECT user=%s rows=%d people=%d", user_id, len(hits), people)
+                return 0
+        if hits:
+            # ONE matching row is not proof of one person: two same-name people may exist only as plain rows, and the old value
+            # ("45 not 41") then points at just one of them. Positive evidence of two (different relation / surname / current age)
+            # abstains even when the old value matches a single row: the value may be the speaker's slip about the OTHER person.
+            plain = _plain_subjects(plain_texts, corr.subject)
+            if plain > 1:
+                logger.info("VALUE_CORRECTION_AMBIGUOUS_SUBJECT user=%s rows=%d people=%d", user_id, len(hits), plain)
                 return 0
         if corr.old is not None and session_id and not _is_unidentified(user_id):
             # the misheard / misspoken fact may not be stored yet (the post-turn digest of an earlier turn lands minutes later):
