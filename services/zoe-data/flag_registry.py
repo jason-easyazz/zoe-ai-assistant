@@ -1040,6 +1040,7 @@ _ENTRIES = (
     _f('ZOE_VOICE_PROBE_VAD_CHECK', 'bool', True, doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_VOICE_PROBE_VAD_CLIPS', 'int', 24),
     _f('ZOE_VOICE_PROFILE', 'str', 'zoe_au_natural_v1'),
+    _f('ZOE_VOICE_REFLEX_AWARE', 'bool', True, doc='services/zoe-data/AGENTS.md', note='inert unless the panel sends a reflex block; 0 = ignore blocks (rollback)'),
     _f('ZOE_VOICE_REPLAY_STT', 'str', 'inprocess', doc='docs/knowledge/chroma-1-5-migration.md'),
     _f('ZOE_VOICE_RESULTS', 'str', '', doc='docs/knowledge/voice-pipeline.md'),
     _f('ZOE_VOICE_SAMPLE_DIR', 'str', '/home/zoe/.zoe-voice-samples', doc='docs/research/arousal-detection-licence-scope-2026-10-04.md'),
