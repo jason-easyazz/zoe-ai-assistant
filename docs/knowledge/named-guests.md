@@ -47,7 +47,7 @@ she has had with that person".
 Code: `services/zoe-data/named_guests.py` (who, the claim, the panel feed, the brain block), `named_guest_enrol.py`,
 `named_guest_memory.py`, `named_guest_learning.py`, migrations `0071`-`0073`, the daemon's guest scoring in
 `scripts/setup/zoe_voice_daemon.py`. Pinned by `services/zoe-data/tests/test_named_guest*.py` and
-`tests/unit/test_named_guests_daemon.py`; the forget probe row is `named_guest_turns` in `tests/test_forget_completeness_probe.py`.
+`tests/unit/test_named_guests_daemon.py` (the audit's controls: `test_named_guest_controls*.py`); the forget probe row is `named_guest_turns` in `tests/test_forget_completeness_probe.py`.
 
 ## Where things live
 
@@ -194,6 +194,44 @@ Owner, 2026-11-08: "Can't Zoe learn a person's voice with enough conversation?"
   `{"name"}` ("that was Quinn this morning": a named guest in the naming member's layer), `DELETE /api/voice/unknown-voices/{id}`
   (or `all`). The nightly backup carries no row data of either table.
 - **Shadow first:** `shadow` keeps samples and logs `GUEST_LEARN ... action=ask` where Zoe WOULD ask, and never asks.
+
+## Negative controls (mutation audit, 2026-11-14)
+
+Every guard in `named_guests.py`, `named_guest_memory.py`, `named_guest_enrol.py`, `named_guest_learning.py`, `named_guest_clips.py`,
+`guest_asks.py`, the guest routes and wiring in `routers/voice_tts.py`, the forget hooks (`omi_voices.purge_people`,
+`contacts_store.FORGET_USER_TABLES`) and the daemon's two guest lines was removed in turn (158 single-guard mutations) and the
+named-guest, forget-probe, clip and daemon tests re-run. A mutation no test notices is a guarantee with no negative control.
+
+| | Guards |
+|---|---|
+| Caught by the tests as they stood | 88 |
+| Not caught; now pinned by `tests/test_named_guest_controls.py` and `tests/test_named_guest_controls_enrol.py` | 65 |
+| Left unpinned: a second check behind one that IS pinned | 4 |
+| Left unpinned: an open decision | 1 |
+
+What was not pinned before, by guarantee: the follow-up window's stricter bar for a guest; a pendant-only, other-model, switched-off or
+other-layer print never matching or reaching a panel; a NaN / infinite score; the forget wall asking the ledger STRICTLY (match, feed,
+recall, enrolment start, naming); stored names and words never opening a prompt block; "share nothing private" in every guest line;
+memory needing `ZOE_NAMED_GUESTS=on`; recall scoped to the layer; erase scoped to the caller's own layer and raising on failure;
+`forget_user` reaching `named_guest_turns`; every route's caller check (device on the LAN for enrolment and clip playback, admin for
+unknown voices and for another member's guest, a failed erase answering 500); ticket expiry and one live ticket per panel; the store
+refusing when off, on a ledger outage, on an unreadable member-likeness check; a REJECTED voice refused even while the member's fresh
+PIN is open on the panel (learn, forget, clips); read-only turns; a typed channel; "forget Quinn" from a guest or a child; only the
+ASKED voice answering with a name; shadow never naming; one ask a day; an answered ask always making a new person; the 30-sample cap.
+
+Left unpinned on purpose:
+
+- `_claim_gate`'s model check and `store_profile`'s model check: an unknown model has no threshold and no valid embedding shape, so
+  the next line refuses the same claim (both of those ARE pinned).
+- `_name_cluster`'s `expires_at` filter: `name_unknown` sweeps expired voices first (pinned).
+- `observe`'s "nobody to hold an unknown voice for" return: `panel_voice_clusters.user_id` is NOT NULL (0073), so the insert fails and
+  nothing is kept either way (the outcome is pinned).
+- **Open decision:** `named_guest_memory.erase` removes the PANEL print only. If the same person also has a pendant (Omi) print it
+  stays, although Zoe says "I've forgotten Quinn's voice". The entity forget ("forget everything about Quinn") takes both. Whether
+  "forget Quinn's voice" should too is the owner's call (open-problems.md).
+
+Three guards live inside `voice_command` and the sync route and are pinned by SOURCE text only (the house pattern since #2339): they
+prove the line is there, not that a turn behaves.
 
 ## Not built yet (follow-ups)
 
