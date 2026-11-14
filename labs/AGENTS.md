@@ -116,6 +116,9 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   through the live Kokoro sidecar after deploying an augmented voices bin. Not
   wired anywhere; deployment (augmented voices bin + env flip) is a documented
   operator step gated on the voice replay harness — see its README.
+- `calendar-fetcher/` — the calendar subscription fetcher behind `calendar_feed`'s seam (stdlib; SSRF policy after
+  resolution, pinned connect, capped redirects / body / time), written to be hosted by the credential broker after P0;
+  unwired. Owns a local regression net (`tests/`) and a loopback lab; see its `AGENTS.md`.
 - `flue-harness-spike/` — Flue autonomous-harness substrate spike (scout → implement
   → verify → openPR slice); README + RUNBOOK + FINDINGS are records, not contracts.
 - `flue-executor/` — Phase 1 of the Multica executor migration
