@@ -119,6 +119,8 @@ def _drive(tmp_path, monkeypatch, corpus, baseline, scripted, *, extra=(), env_f
 
     monkeypatch.setattr(vrp, "_acquire_harness_lock", lambda: None)
     monkeypatch.setattr(vrp, "mem_available_mb", lambda: 10_000)
+    # --self-test appends to DEFAULT_SELFTEST_TREND (~/.cache/zoe/...) whatever --trend says: keep it off the live home
+    monkeypatch.setattr(vrp, "DEFAULT_SELFTEST_TREND", tmp_path / "selftest-trend.jsonl")
     monkeypatch.setattr(vrp, "cleanup_replay_artifacts", lambda *a, **k: True)
     monkeypatch.setattr(vrp, "service_revision", lambda *_: None)
     monkeypatch.setattr(vrp, "resolve_service_python", lambda x: (sys.executable, "test"))

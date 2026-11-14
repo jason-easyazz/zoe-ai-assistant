@@ -100,6 +100,12 @@ for _var, _leaf in _STATE_PINS:
 # The session-wide value, kept so test_live_store_isolation can prove this layer on its own (the per-test fixture overrides the variable).
 os.environ["ZOE_TEST_SESSION_WARM_SPEAKER_STATE"] = os.environ["ZOE_WARM_SPEAKER_STATE"]
 
+# ``forget_session`` (stdlib-only) keeps its epochs at a module-level path under ``~/.zoe`` with no env knob. Session-wide pin here, so a
+# module-scoped fixture or a thread that outlives its test still cannot reach the live file; the autouse fixture below adds per-test isolation.
+import forget_session as _forget_session  # noqa: E402
+
+_forget_session._PATH = type(_forget_session._PATH)(ZOE_TEST_STORE_DIR) / "forget_session_epochs.json"
+
 
 import pytest  # noqa: E402
 
@@ -156,6 +162,19 @@ def _self_review_private_dirs(monkeypatch, tmp_path):
     monkeypatch.setenv("ZOE_SELF_REVIEW_IMPROVER_DIR", str(tmp_path / "self-improver"))
     monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "night-extract"))     # the shadow night pre-pass's proposals: the cascade / member erase use a per-test dir
     yield
+
+
+@pytest.fixture(autouse=True)
+def _forget_session_epochs_off_the_live_home(monkeypatch, tmp_path):
+    """``forget_session`` persists each member's latest-forget epoch to ``~/.zoe/forget_session_epochs.json`` and has no env knob, so
+    every test whose forget changed something wrote the box's LIVE file (measured 2026-11-14 with a throwaway HOME: 22 ``ci_safe``
+    files, real member ids among the keys), and the epochs an earlier test left there changed the sidecar session id a later test saw
+    (``test_flue_client_wire`` failed on a home that had run the suite before). Each test gets its own file and an empty table."""
+    import forget_session
+
+    monkeypatch.setattr(forget_session, "_PATH", tmp_path / "forget_session_epochs.json")
+    monkeypatch.setattr(forget_session, "_EPOCH", {})
+    monkeypatch.setattr(forget_session, "_LOADED", False)
 
 
 @pytest.fixture(autouse=True)
