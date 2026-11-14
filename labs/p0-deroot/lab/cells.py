@@ -99,8 +99,9 @@ cell("Z3-zoe-no-service-secrets", all("Permission denied" in run("runuser", "-u"
                                       for f in ("/etc/zoe/env/zoe-data.env", "/etc/zoe/env/flue-zoe-brain-2x.env")))
 cell("Z4-zoe-no-raw-docker", as_user("zoe", "GET", "/v1.47/containers/json", RAW) == "PermissionError")
 cases = [("POST", "/v1.47/containers/zoe-music-assistant/start", 200), ("POST", "/containers/livekit/stop", 200),
-         ("GET", "/v1.47/containers/zoe-database/json", 200), ("POST", "/v1.47/containers/zoe-database/exec", 200),
-         ("POST", "/v1.47/exec/" + "a" * 64 + "/start", 200), ("HEAD", "/_ping", 200),
+         ("GET", "/v1.47/containers/zoe-database/json", 200), ("POST", "/v1.47/containers/zoe-database/exec", 403),
+         ("POST", "/v1.47/exec/" + "a" * 64 + "/start", 403), ("HEAD", "/_ping", 200),
+         ("POST", "/v1.23/containers/livekit/start", 403),
          ("GET", "/v1.47/containers/json?all=1&filters=%7B%22name%22%3A%5B%22zoe%22%5D%7D", 200),
          ("POST", "/v1.47/containers/create?name=zoe-music-assistant", 403),
          ("POST", "/v1.47/containers/create", 403), ("POST", "/v1.47/build", 403), ("POST", "/v1.47/images/create", 403),
@@ -208,7 +209,12 @@ d_bad = [[DEPLOY], [DEPLOY, "zoe-ui", "--build"], [DEPLOY, "logs", "homeassistan
          [DEPLOY, "zoe-auth", "--build", "--pull"], ["/usr/bin/docker", "compose", "up"]]
 ok = [c for c in d_ok if run("runuser", "-u", "zoe", "--", "sudo", "-n", "-l", *c).returncode == 0]
 bad = [c for c in d_bad if run("runuser", "-u", "zoe", "--", "sudo", "-n", "-l", *c).returncode == 0]
-cell("P1-deploy-sudoers-exact", len(ok) == len(d_ok) and not bad, f"allowed {len(ok)}/{len(d_ok)}, leaked={bad}")
+inst = open(DEPLOY).read().splitlines()
+deliv = open("/opt/p0/deliverables/libexec/zoe-compose-deploy").read().splitlines()
+odiff = [(a, b) for a, b in zip(inst, deliv) if a != b]
+cell("P1-deploy-sudoers-exact", len(ok) == len(d_ok) and not bad and len(inst) == len(deliv) and len(odiff) == 1
+     and odiff[0][1].startswith("ORIGIN = ") and odiff[0][0] == 'ORIGIN = "file:///opt/p0/origin.git"',
+     f"allowed {len(ok)}/{len(d_ok)}, leaked={bad}; installed copy differs from the deliverable in {len(odiff)} line(s)")
 
 # P2: the helper's OWN validation (as root, so sudo is not what refuses): bad argv and bad stdin -> 2, no docker call
 fresh()
@@ -348,6 +354,24 @@ if SAFE:
 else:
     cell("P9-zoe-priv-routes", False, "not run: the vm sysctls could not be redirected")
 
+# P11: zoe-db-exec (database work without proxied exec): exact sudoers verbs, its own validation, the argv it runs
+DBX = HELPER + "zoe-db-exec"
+x_ok = [[DBX, "isready"], [DBX, "dump", "zoe"], [DBX, "dump", "multica"], [DBX, "dumpall-globals"], [DBX, "psql", "zoe"],
+        [DBX, "psql-at", "multica"], [DBX, "restore-list"], [DBX, "restore-schema"], [DBX, "restore-data"]]
+x_bad = [[DBX], [DBX, "dump", "postgres"], [DBX, "psql", "zoe", "-c"], [DBX, "exec"], [DBX, "isready", "-h", "x"]]
+ok11 = [c for c in x_ok if run("runuser", "-u", "zoe", "--", "sudo", "-n", "-l", *c).returncode == 0]
+bad11 = [c for c in x_bad if run("runuser", "-u", "zoe", "--", "sudo", "-n", "-l", *c).returncode == 0]
+self_rc = [subprocess.run([DBX, *a], input=i, capture_output=True, text=True).returncode
+           for a, i in ((["dump", "zoe"], "Bad;name\n"), (["dump", "zoe"], "*\n"), (["psql", "x"], ""), (["sh"], ""))]
+fresh()
+r11 = as_run("zoe", ["sudo", "-n", DBX, "dump", "zoe"], stdin="learned_voiceprints\n")
+c11 = dcalls()
+want = ["exec", "-i", "-u", "postgres", "zoe-database", "pg_dump", "-U", "zoe", "-Fc",
+        "--exclude-table-data=learned_voiceprints", "zoe"]
+cell("P11-db-exec", len(ok11) == len(x_ok) and not bad11 and set(self_rc) == {2} and r11.returncode == 0
+     and c11 == [want] and c11[0] and json.loads(open(DLOG).read().splitlines()[0])["uid"] == 0,
+     f"allowed {len(ok11)}/{len(x_ok)} leaked={bad11} self={self_rc} rc={r11.returncode} calls={c11}")
+
 # P10: the Docker proxy carries exactly what each rewired Docker caller needs, and refuses what they used to do
 x = "a" * 64
 need = {"zoe-data ma_ondemand / ma_idle_reap": [("HEAD", "/_ping"), ("GET", "/v1.47/containers/zoe-music-assistant/json"),
@@ -355,14 +379,13 @@ need = {"zoe-data ma_ondemand / ma_idle_reap": [("HEAD", "/_ping"), ("GET", "/v1
                                                 ("POST", "/v1.47/containers/zoe-music-assistant/stop")],
         "zoe-data voice_livekit": [("GET", "/v1.47/containers/livekit/json"), ("POST", "/v1.47/containers/livekit/start"),
                                    ("POST", "/v1.47/containers/livekit/stop")],
-        "backup / manifest / heartbeat / drill": [("GET", "/v1.47/containers/zoe-database/json"),
-                                                  ("POST", "/v1.47/containers/zoe-database/exec"),
-                                                  ("POST", f"/v1.47/exec/{x}/start"), ("GET", f"/v1.47/exec/{x}/json")],
+        "backup / drill (inspect only; their database work is zoe-db-exec)": [("GET", "/v1.47/containers/zoe-database/json")],
         "health (zoe_health, platform_health_check)": [("GET", "/v1.47/version"), ("GET", "/v1.47/containers/json")]}
 refuse = [("GET", "/v1.47/info"), ("GET", "/v1.47/containers/homeassistant/json"),
           ("GET", "/v1.47/containers/zoe-auth/logs"), ("POST", "/v1.47/containers/zoe-ui/restart"),
           ("POST", "/v1.47/containers/create?name=zoe-restore-drill"), ("GET", "/v1.47/containers/zoe-database/stats"),
-          ("POST", "/v1.47/containers/zoe-omnigent/exec")]
+          ("POST", "/v1.47/containers/zoe-omnigent/exec"), ("POST", "/v1.47/containers/zoe-database/exec"),
+          ("POST", f"/v1.47/exec/{x}/start"), ("GET", f"/v1.47/exec/{x}/json")]
 miss = [(k, m, u) for k, reqs in need.items() for m, u in reqs if as_user("zoe", m, u) != "200"]
 leak = [(m, u) for m, u in refuse if as_user("zoe", m, u) not in ("403", "405")]
 seen2 = set(run("cat", "/run/p0lab-dockerd.log").stdout.splitlines())

@@ -71,7 +71,11 @@ by inode (cell P0); unproven, the executing cells do not run. `zoe` has the allo
   exit-6 fallback. **P8** `brain_cold_start.sh`: helper without the grant (root wrote the drop), legacy with it, and
   neither (logs SKIPPED, writes nothing). **P9** `zoe_priv` with real sudo: helper routed + allowed + run as root;
   legacy with the grant; neither = `can_run` False. **P10** the proxy carries every request the Docker callers make
-  and refuses what they used to do (`info`, inspect of other containers, logs, restart, create, stats, omnigent exec).
+  and refuses what they used to do (`info`, inspect of other containers, logs, restart, create, stats, any exec).
+  **P11** `zoe-db-exec`: exact sudoers verbs, its own validation, and the unprivileged exec it runs as root.
+  Since the audit (design doc 5.2) Z5 expects exec in `zoe-database` and exec start to be REFUSED, and the lab's copy
+  of `zoe-compose-deploy` differs from the deliverable only in its ORIGIN line (it reads no system git config, so a
+  local origin cannot come from `insteadOf`); P1 proves that.
 
 Result: see the run recorded in the P0-1 commit message (or `last-result.json` after a run).
 

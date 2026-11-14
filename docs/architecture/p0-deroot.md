@@ -52,7 +52,7 @@ uid, so a compromised service or coding agent can neither become root nor read a
 | caller | calls | P0 route |
 |---|---|---|
 | zoe-data `ma_ondemand.py`, `routers/voice_livekit.py`; `ma_idle_reap.py` | inspect/start/stop `zoe-music-assistant`, `livekit` | proxy (allowlisted) |
-| backup, backup-verify, multica heartbeat, health check | inspect + `exec` in `zoe-database` (`pg_dump`, `pg_restore -l` / `-f -` for the dump manifest, `psql` SELECTs) | proxy (allowlisted; named volume only, see 2.6) |
+| backup, backup-verify, multica heartbeat, health check | inspect + `exec` in `zoe-database` (`pg_dump`, `pg_restore -l` / `-f -` for the dump manifest, `psql` SELECTs) | inspect: proxy; exec: root helper `zoe-db-exec` (P0-1 audit, 5.2: the proxy allows no exec) |
 | weekly restore drill (`zoe_restore_drill.py`, deep dive 2 S0-8) | `run` / `exec` / `rm` of ONE throwaway `zoe-restore-drill` container + its `--internal` network | container create = root: root helper `zoe-restore-drill-pg` (`up`, `down`, `restore <db> pre-data|data|post-data`, `inspect list|schema`, `psql <db>`) (pinned image, no binds, capped; exact argv in `60-zoe-deroot`) |
 | host backup (`zoe_host_snapshot.py`) | Home Assistant's root-owned `.storage` / `.cloud` (NOT `docker exec homeassistant`: a zoe-writable bind) | root helper `zoe-ha-config-export storage` (O_NOFOLLOW from `/` down, regular single-link files only, capped); at P0-2 its `HA_CONFIG` line moves to `/srv/zoe/homeassistant` |
 | zoe-data `omnigent_issue_executor.py` (Multica, `ZOE_MULTICA=true`) | `exec` in `zoe-omnigent` | **not** the proxy: a root helper that pins `-u 1000:1000` (P0-2) |
@@ -143,9 +143,9 @@ path any component of which an LLM-exposed uid can write.
 
 `zoe-docker-proxy.service` (system) serves `/run/zoe-docker-proxy/docker.sock` (`0660`, group `zoe-dockerproxy`).
 Allowed: `_ping`, `version`, `ps`; inspect `zoe-music-assistant` / `livekit` / `zoe-database`; start/stop of the
-first two; exec in `zoe-database` (named volume only, so exec-as-root reaches nothing on the host); exec start/inspect.
-Everything else is 403/405, including create, build, pull, restart, delete, and exec in any container with a
-zoe-writable bind (HA, Omnigent, zoe-ui). Clients set `DOCKER_HOST=unix:///run/zoe-docker-proxy/docker.sock`. The proxy matches the URL path only
+first two (API >= 1.24 only). **No exec of any kind** (P0-1 audit, 5.2): the exec body can ask for `Privileged` and
+`User=root`, which the proxy cannot see; database work goes through `zoe-db-exec`. Everything else is 403/405,
+including create, build, pull, restart and delete. Clients set `DOCKER_HOST=unix:///run/zoe-docker-proxy/docker.sock`. The proxy matches the URL path only
 (`r.URL.Path` in its `handlehttprequest.go`), so query strings such as `?all=1&filters=...` do not change a verdict.
 The binary is copied out of `wollomatic/socket-proxy:1.13.1@sha256:3935b709...689002` into `/usr/local/bin`.
 
@@ -219,7 +219,8 @@ present) is unchanged; after P0-0 the helper path runs; after P0-3 only the help
 | zoe-data `omi_repass.py` (voice-gated) | `sudo -n sh -c '<drop + compact>'` | `zoe-mem-compact 3` | unchanged |
 | backup HA export, restore drill | already helper-first | + the route line | none / the repo copy |
 | deploy (`compose_deploy.sh`) | `docker compose` as the runner | `zoe-compose-deploy <verb>`, sha on stdin | today's commands; also on exit 6 |
-| Docker CLI callers (zoe-data MA/LiveKit, backup, manifest, heartbeat, health, idle reap, drill inspect) | raw socket | the proxy via `DOCKER_HOST` (`environment.d/60-zoe-docker-proxy.conf`, `examples/runner.env.example`) | no file = today's socket |
+| Docker CLI callers (zoe-data MA/LiveKit, idle reap, ps/version, drill and backup inspect) | raw socket | the proxy via `DOCKER_HOST` (`environment.d/60-zoe-docker-proxy.conf`, `examples/runner.env.example`) | no file = today's socket |
+| database work: backup `pg_dump`, manifest reads, off-box globals, Multica heartbeat, both health checks | `docker exec zoe-database ...` | `zoe-db-exec <verb>` (unprivileged exec as postgres) | today's `docker exec` |
 
 Not rewired, by design: zoe-data `system_updates.py` (compose/exec from zoe-data: **retire in P0-2**; nothing in P0-1
 depends on it), `main.py` digarr and `omnigent_issue_executor.py` (P0-2), the bake-off's scratch wipe and the
@@ -242,6 +243,42 @@ scripts/deploy/compose_deploy.sh zoe-ui`, and `docker logs --tail=40 zoe-ui` wit
 logs zoe-ui`. Modules step: replace from `docker compose -f docker-compose.modules.yml config -q` to the final
 `rm -f "${PENDING_FILE}"` with `bash scripts/deploy/compose_deploy.sh modules`. The seam keeps the exact current
 commands as its legacy path, so the change is behaviour-identical until the helper is installed and P0-2 is done.
+
+### 5.2 P0-1 audit of the root helpers and the proxy (2026-11-14)
+
+The bar: a root helper reads nothing a non-root user can write; sudoers lines are exact argv; the proxy allows
+nothing that lets a caller start or reach a container that mounts the host. Pinned by
+`tests/unit/test_p0_helpers_hardening.py`, `test_p0_deroot_files.py`, `test_p0_route_callers.py`.
+
+| check | finding | resolution |
+|---|---|---|
+| sudoers: wildcards, caller-controlled args | none; the deploy commit and SQL / dump input come on stdin | stdin treated as hostile: one bounded read, a deadline, exact charset, no trailing data |
+| helper inherits caller env or cwd | sudo's `env_reset` was relied on; cwd was the caller's | every helper drops `DOCKER_*`, sets `HOME` to a root-owned dir and `cd /`; `zoe-compose-deploy` gives children a fixed env only (python `-I`) |
+| git as root | read system/global config and hooks | `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `core.hooksPath=/dev/null`, one protocol, fixed URL, root-owned mirror |
+| compose as root | project dir and env file | the root-owned export and a root 0600 `/etc/zoe/compose.env`, checked before use |
+| bind sources, check vs use | a path re-resolved at container start | refused unless no component is a symlink and every directory above it is root-owned and not group/world-writable: a swap between check and use then needs root |
+| proxy exec | **exec was allowed in the database container**; the exec body can ask for `Privileged` and `User=root`, which the proxy cannot see | **removed**; database work goes through the fixed helper `zoe-db-exec` (unprivileged exec as postgres, one container, fixed verbs) |
+| proxy start/stop | the two on-demand containers have bind sources a non-root user can swap until P0-2 | the proxy may serve `start` only after P0-2 moves those sources; P0-3 must not precede P0-2 |
+| proxy inspect | the database container's inspect shows its environment | gives database superuser, which the same uid already holds; not host root |
+
+Allowed proxy endpoints after the audit, and why none reaches host root: `HEAD/GET _ping`, `GET version`,
+`GET containers/json` (read-only lists); `GET containers/<three names>/json` (read-only); `POST
+containers/<two names>/start|stop` (no body honoured by start in API >= 1.24, no create, so mounts and privileges are
+the ones compose gave the container; safe once P0-2 makes their bind sources root-owned). Everything else, including
+create, exec, build, pull, restart, delete, archive and update, is 403/405.
+
+Sudoers entries beside the plan line they implement:
+
+| alias | entries | plan (section) |
+|---|---|---|
+| `ZOE_MEM` | `zoe-mem-compact 0|1|3`, `zoe-nvmap-read free|clients` | 4.3 night window, cold start |
+| `ZOE_MODEL_UNITS`, `ZOE_SVC_UNITS` | `systemctl start|stop|restart` of the three model units, `restart` of the three service units | 4.3 (match nothing until P0-4) |
+| `ZOE_BACKUP` | `zoe-ha-config-export storage`, `zoe-restore-drill-pg` fixed verbs | 4.3, offbox-backup 7 |
+| `ZOE_DEPLOY` | `zoe-compose-deploy zoe-auth [--build] | zoe-ui | modules | logs zoe-auth|zoe-ui` | 4.4 |
+| `ZOE_DB` | `zoe-db-exec isready | dump zoe|multica | dumpall-globals | psql[-at] zoe|multica | restore-list|schema|data` | 4.2 (replaces proxied exec) |
+
+Still open: `deploy/migrate.sh` (deploy-time DDL through `docker exec ... sh -c`) is not covered by `zoe-db-exec` and
+fails loudly after P0-3; it needs a route through the `psql` verb or an owner step.
 
 **Owner approvals needed:** P0-0 (create users, install sudoers/helpers/proxy, the CUDA smoke); P0-1 (the
 deploy/helper PR merge and the `DOCKER_HOST` switch); P0-2 (each container move, the zoe-data duty moves);

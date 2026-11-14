@@ -81,7 +81,10 @@ G="git -C $W -c user.name=lab -c user.email=lab@lab.invalid"
 $G add -A && $G commit -qm main-1 && $G push -q "$O" main
 $G checkout -qb side && echo off > "$W/off" && $G add -A && $G commit -qm off-main && $G push -q "$O" side
 printf 'main %s\noff %s\n' "$(git -C "$O" rev-parse main)" "$(git -C "$O" rev-parse side)" > /opt/p0/shas
-git config --system url."file://$O".insteadOf https://github.com/jason-easyazz/zoe-ai-assistant.git
+# The deploy helper reads no system/global git config (GIT_CONFIG_NOSYSTEM), so the lab's copy has its ONE ORIGIN line
+# pointed at the local repo; cell P1 proves that is the only difference from the deliverable.
+sed -i 's#^ORIGIN = "https://github.com/jason-easyazz/zoe-ai-assistant.git"$#ORIGIN = "file:///opt/p0/origin.git"#' \
+  /usr/local/libexec/zoe-priv/zoe-compose-deploy
 git config --system --add safe.directory /opt/p0/checkout
 git clone -q "$O" /opt/p0/checkout
 install -d /opt/p0/checkout/scripts/deploy /opt/p0/checkout/scripts/maintenance /opt/p0/checkout/scripts/lib
