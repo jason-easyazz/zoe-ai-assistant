@@ -68,6 +68,8 @@ def _state(monkeypatch):
     import memory_tombstones
 
     cm.reset(), turn_forget.reset(), CHAT.clear(), ON_FETCH.clear(), FORGOTTEN.clear(), memory_tombstones.clear_all()
+    _Svc.meta = {}
+    monkeypatch.setenv("ZOE_RESTRAINT", "off")                 # the restraint tests below set their own mode
 
     async def ledger(user_id, text, **_):
         return user_id == MEMBER and bool(FORGOTTEN & set(re.findall(r"[a-z]+", text.lower())))
@@ -91,8 +93,10 @@ async def _note(words=FIX, user=MEMBER, tid="t1", **kw):
 
 
 class _Svc:
+    meta: dict = {}                                                 # the stored row's provenance (a test sets its class)
+
     async def load_for_prompt(self, user_id, *, limit=20):
-        return [MemoryRef(id="old12345", text=OLD_ROW, metadata={}, score=0.0)]
+        return [MemoryRef(id="old12345", text=OLD_ROW, metadata=dict(_Svc.meta), score=0.0)]
 
     async def search(self, q, *, user_id, limit=10, **_):
         return []
@@ -580,3 +584,95 @@ async def test_a_failed_later_correction_retires_nothing():
     CHAT["t2"] = {"user": MEMBER, "session": "s-panel", "content": LATER}
     assert await cm.note_turn(LATER, MEMBER, "s-panel", rewrote=0) is True         # not rewritten: it is pending too
     assert sorted(m.turn_id for m in cm.pending(MEMBER)) == ["t1", "t2"]
+
+
+# ── only the member's own words, and never a secret ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("said", [
+    "No, mum said it is the 26th, not the 19th",                                   # reported speech
+    "No, the email says the book club is on the 26th, not the 19th",               # reported by a message
+    'No, my sister said "the book club is on the 26th, not the 19th"',             # quoted direct speech
+    "No, the book club is on 'the 26th, not the 19th' apparently",                 # a quoted span
+])
+async def test_quoted_or_reported_correction_is_not_the_members_own(said):
+    assert cm.correction_shaped(said)[0]                                            # it IS correction-shaped ...
+    assert await _note(said) is False and cm.pending(MEMBER) == []                 # ... but not the member's own words
+
+
+@pytest.mark.parametrize("said", [FIX, "No, I said it is the 26th, not the 19th"])
+async def test_the_members_own_correction_is_marked(said):                         # control
+    assert await _note(said) is True
+
+
+@pytest.mark.parametrize("said", ["No, my PIN is 4821, not 1234", "Actually the wifi password is plum-ladder-9, not the old one"])
+async def test_a_correction_carrying_a_secret_is_never_marked(said, caplog):
+    from memory_service import scrub_pii
+
+    caplog.set_level(logging.DEBUG)
+    assert cm.correction_shaped(said)[0] and scrub_pii(said)[0] != said             # the scrubber catches this one
+    assert await _note(said) is False and cm.pending(MEMBER) == []
+    msgs = [r.getMessage() for r in caplog.records if "PENDING_CORRECTION" in r.getMessage()]
+    assert any("reason=pii" in m for m in msgs) and not [m for m in msgs if "4821" in m or "plum" in m]
+
+
+async def test_a_marker_whose_text_now_carries_a_secret_is_dropped_not_replayed(monkeypatch):
+    await _note()
+    assert HEAD in _packet(monkeypatch)["packet"]                                   # control
+    CHAT["t1"]["content"] = "No, my PIN is 4821, not 1234"
+    pkt = _packet(monkeypatch)["packet"]
+    assert HEAD not in pkt and "4821" not in pkt and cm.pending(MEMBER) == []
+
+
+# ── restraint before the fold; a curated row is beyond a spoken correction ──────────────────────────────────────────────
+
+SENSITIVE = "No, the biopsy is on the 26th, not the 19th"                       # synthetic; a health-class sentence
+
+
+async def _restraint_packet(monkeypatch, mode):
+    import restraint
+
+    monkeypatch.setenv("ZOE_RESTRAINT", mode)
+    monkeypatch.setattr(restraint, "list_mutes", lambda _u: _ret([]))
+    return _packet(monkeypatch)["packet"]
+
+
+async def test_restraint_enforce_withholds_a_sensitive_marker_and_keeps_an_ordinary_one(monkeypatch):
+    await _note(SENSITIVE, tid="t1")
+    await _note(tid="t2")
+    pkt = await _restraint_packet(monkeypatch, "enforce")
+    assert "biopsy" not in pkt and FIX in pkt                       # the ordinary correction is the control
+    assert len(cm.pending(MEMBER)) == 2                              # withheld from this packet, not forgotten
+
+
+@pytest.mark.parametrize("mode", ["shadow", "off"])
+async def test_restraint_shadow_and_off_withhold_nothing_exactly_like_the_recall_path(monkeypatch, mode):
+    await _note(SENSITIVE)
+    assert "biopsy" in await _restraint_packet(monkeypatch, mode)   # shadow logs only: this gate is inert until enforce
+
+
+@pytest.mark.parametrize("cls", ["curated", "operator"])
+async def test_a_curated_or_operator_row_beats_a_spoken_correction(monkeypatch, cls):
+    _Svc.meta = {"authority_class": cls}
+    await _note()
+    pkt = _packet(monkeypatch)["packet"]
+    assert HEAD not in pkt and OLD_ROW in pkt                        # the curated value stands
+
+
+async def test_a_childs_correction_never_beats_their_guardians_curated_row(monkeypatch):
+    _Svc.meta = {"authority_class": "curated", "curated_by": "member-guardian"}
+    assert await _note(user="member-child") is True                 # recorded (it is still their own words) ...
+    pkt = _packet(monkeypatch, user="member-child")["packet"]
+    assert HEAD not in pkt and OLD_ROW in pkt                        # ... but never folded over the curated fact
+
+
+@pytest.mark.parametrize("cls", ["user_stated", "user_confirmed"])
+async def test_a_member_row_still_gets_the_marker(monkeypatch, cls):     # control: user_confirmed is overridable by speech
+    _Svc.meta = {"authority_class": cls}
+    await _note()
+    assert HEAD in _packet(monkeypatch)["packet"]
+
+
+async def test_a_curated_row_about_something_else_does_not_block_the_marker(monkeypatch):
+    _Svc.meta = {"authority_class": "curated"}
+    await _note(OTHER_SUBJECT)                                       # "Juno ..." shares no subject word with the book club row
+    assert OTHER_SUBJECT in _packet(monkeypatch)["packet"]
