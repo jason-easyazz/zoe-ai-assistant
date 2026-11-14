@@ -517,6 +517,7 @@ _ENTRIES = (
     _f('ZOE_MEMORIES_VOICE', 'bool', False, doc='docs/knowledge/memories-voice.md'),
     _f('ZOE_MEMORY_AUDIT_COLLECTION', 'str', 'mempalace_audit'),
     _f('ZOE_MEMORY_AUTHORITY', 'str', 'enforce', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/memory-authority.md', note='live: unset (code default in force)'),
+    _f('ZOE_MEMORY_CLAIMS', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/memory-claims.md'),
     _f('ZOE_MEMORY_COMPOSE_ENABLED', 'str', '', doc='docs/knowledge/relationship-memory-flag-enable.md'),
     _f('ZOE_MEMORY_DIGEST_LOOKBACK_HOURS', 'str', '', doc='docs/knowledge/live-acceptance-2026-10.md'),
     _f('ZOE_MEMORY_EPISODES', 'bool', False, doc='docs/knowledge/memory-views.md'),

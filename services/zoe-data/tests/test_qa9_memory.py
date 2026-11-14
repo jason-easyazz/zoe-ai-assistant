@@ -774,9 +774,9 @@ def test_every_writer_path_is_kind_guarded():
     writers = sorted(p.name for p in sources if p.name != "memory_service.py"
                      and re.search(r'decision="edit"|\.supersede_by\(', p.read_text(encoding="utf-8")))
     assert writers, "no writer module found: the scan is broken (never a vacuous pass)"
-    assert writers == ["correction_apply.py", "expert_dispatch.py", "hold_the_fact.py", "memory_curation.py", "memory_digest.py",
-                       "memory_extractor.py", "memory_supersede.py", "named_relations.py", "person_extractor.py",
-                       "value_correction.py"], writers
+    assert writers == ["correction_apply.py", "expert_dispatch.py", "hold_the_fact.py", "memory_claims_apply.py",
+                       "memory_curation.py", "memory_digest.py", "memory_extractor.py", "memory_supersede.py",
+                       "named_relations.py", "person_extractor.py", "value_correction.py"], writers
 
 
 # -- a restatement is remembered with the value it displaced ------------------------------------------------------------------------
