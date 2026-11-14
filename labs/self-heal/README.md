@@ -1,4 +1,4 @@
-# Zoe self-heal loop (lab, v2)
+# Zoe self-heal loop (lab, v3)
 
 Owner directive (2026-11-13): "if someone buys a zoe and adds in their chatgpt or claude
 subscription then i want zoe to be able to evolve using this, but at the moment this box should
@@ -110,11 +110,11 @@ enters a repo, log, ticket or PR body, and the engine's environment is an allow-
 | executor unavailable -> thin fallback; nothing linked -> `no_engine`, no code touched, no cap spent | `engines.select_engine`, runner | `test_executor_unavailable_falls_back_to_thin_adapter`, `test_no_engine_linked_does_nothing_to_code` |
 | board mirror: one issue per fault, `backlog`, no assignee, never `todo`; outage harmless; Multica + Omnigent + GitHub all absent still heals | `board.py` | `test_board_mirror_one_issue_per_fault_never_todo`, `test_board_mirror_done_on_heal`, `test_board_outage_is_harmless`, `test_runs_with_multica_omnigent_and_github_all_absent` |
 | local gates (validate_structure, py_compile, relevant pytest under the flock) | `gates.py` | `test_gate_failure_discards` |
-| a "fix" that weakens the test is not a heal | `gitops.run_repro` restores the reproducing file from the base commit | `test_full_local_landing_rolls_back_when_fix_only_weakened_the_test` |
+| a "fix" that weakens the test is not a heal | `gitops.run_repro` restores the reproducing file from the base commit; in full + local the supervised gate runs the base copy | `test_full_local_landing_refuses_a_fix_that_only_weakened_the_test` |
 | DRAFT only, label `self-heal`, marker block, one finding per PR, never ready / merge / --admin / --force | `GithubLanding` (no option exists to do otherwise) | `test_github_landing_opens_draft_only` |
 | cross-review unavailable = not reviewed; the PR carries the review STATUS only, never the reviewer's text | `landing.cross_review` | `test_cross_review_unavailable_is_not_reviewed` |
 | dispatch dry / local / full | `Runner` | `test_dry_plans_only`, `test_local_mode_commits_and_verifies_without_landing`, `test_full_local_landing_heals` |
-| local landing: snapshot, CAS fast-forward, apply, health, verify, rollback, park. Health checks are an ALLOW-LIST checked at load and again at run: `true`/`false`, `systemctl --user is-active <unit>`, `<python> -m <module>` or `<python> <rel/path.py>`; no shell strings, no network-capable binary or shell (curl, wget, gh, ssh, scp, rsync, nc, git, docker, bash, sh, env, ...), no absolute/`..` paths, no `python -c`; each runs with its own timeout in a FRESH worktree of the integration tip, never the live checkout | `LocalLanding`, `config.check_health_argv` | `test_full_local_landing_heals`, `..._rolls_back_on_failed_health_check`, `..._when_fix_only_weakened_the_test`, `test_local_landing_refuses_when_integration_moved`, R `test_health_check_not_allow_listed_fails_the_load` (18 argvs), `test_health_check_allowed_forms`, `test_health_check_runs_in_a_fresh_integration_worktree` |
+| local landing: snapshot, CAS fast-forward, apply, health, verify, rollback, park. Health checks are an ALLOW-LIST checked at load and again at run: `true`/`false`, `systemctl --user is-active <unit>`, `<python> -m <module>` or `<python> <rel/path.py>`; no shell strings, no network-capable binary or shell (curl, wget, gh, ssh, scp, rsync, nc, git, docker, bash, sh, env, ...), no absolute/`..` paths, no `python -c`; each runs with its own timeout in a FRESH worktree of the integration tip, never the live checkout | `LocalLanding`, `config.check_health_argv` | `test_full_local_landing_heals`, `..._rolls_back_on_failed_health_check`, `test_full_local_landing_refuses_a_fix_that_only_weakened_the_test`, `test_local_landing_refuses_when_integration_moved`, R `test_health_check_not_allow_listed_fails_the_load` (18 argvs), `test_health_check_allowed_forms`, `test_health_check_runs_in_a_fresh_integration_worktree` |
 | local landing rolls back on ANY exit that is not a confirmed heal: a failed check, an exception in apply / health / verify (recorded as `exception:<Class>`, never the message), even KeyboardInterrupt / SystemExit (rolled back and recorded, then re-raised); the fault is parked like a failed verify; a failing live rollback is recorded as `rollback_apply_failed:<Class>` with the ref still restored | `LocalLanding.land` | `tests/test_self_heal_round3.py`: `test_apply_raises`, `test_health_check_raises_when_systemctl_is_missing`, `test_verify_raises`, `test_base_exception_rolls_back_records_then_reraises` (x2), `test_rollback_apply_failure_is_recorded_and_ref_still_restored` |
 | local landing uses no gh, no GitHub, no network | `LocalLanding` | `test_local_landing_needs_no_gh_and_no_network` (gh shadowed by a failing stub, `socket.connect` raises, command log has no fetch/push/pull/clone/gh) |
 | verify after merge + deploy; not healed twice = parked | `Runner.verify_pending`, `_finish` | `test_verify_after_merge_heals_or_parks`, `test_not_healed_twice_parks` |
@@ -356,20 +356,112 @@ that looks like a report by name or by a `<testsuite(s)>` root (`report_planted`
 `test_exit_zero_without_a_fresh_report_fails_the_gate` (code that `os._exit(0)`s plus passing
 reports planted where v1 read them), `test_stale_report_at_the_real_path_is_refused`.
 
-**Residual, not closed: an in-process forged report.** The code under test runs INSIDE the pytest
-process that writes the report, with the same privileges: it can read the report path from
-`sys.argv`, write a passing report there (or patch pytest's own reporter) and exit 0. A nonce does
-not help, since anything pytest knows, code in the same process can read. Closing it needs the
-verdict to come from OUTSIDE the process that runs the engine's code (e.g. a supervisor that
-collects per-test results over a channel the test process cannot write, or one subprocess per
-node with exit status as the only signal), which is not cheap and is not built. What still stands
-in the way: a forgery must be written into the engine's diff, which the github landing shows a
-non-engine reviewer (draft PR); the `local` landing has no human in the loop, so this is a reason
-not to switch `full` + `local` on without that supervisor. (g) `selfheal/binaries.py` resolves git, gh, systemctl,
+**In-process forged report**: in `full` + `local` the verdict no longer comes from a report (the
+supervised gate, v3 below; what it cannot close is stated there); the JUnit gate above stays for `local` dispatch and draft PRs, where a human reads the diff. (g) `selfheal/binaries.py` resolves git, gh, systemctl,
 true, false, flock, bwrap, prlimit, pgrep, bash and both engine CLIs to absolute paths from
 `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (an engine CLI elsewhere must be configured with an
 absolute path), records them in the `preflight` audit row, and refuses a group/world-writable or
 foreign-owned file or one under the worktrees, the state dir or a temp dir (`unsafe_binary`).
+
+## v3: the supervised gate (`selfheal/supervisor.py`, `selfheal/node_runner.py`)
+
+The JUnit gate decides from a report written by the pytest process that imports the engine's code,
+so that code can forge it (`--junitxml` path from `sys.argv` + `os._exit(0)`, an `atexit` that
+rewrites the report, a reporter hook). The supervised gate takes the verdict from outside that process.
+
+**Choice.** (a) one sandboxed process per test node, the supervisor owning the node list and reading
+only how each process ended: CHOSEN. (b) per-test results over a pipe with a per-run secret:
+REFUTED as a trust boundary: the reporter that would hold the secret runs in the same interpreter as
+the code under test, so everything it can read (the secret, the fd), that code can read too. A pipe
+adds bandwidth, not trust. (c) the combination that was built: (a), with the 8-bit exit status widened
+by a 256-bit token on an fd passed at spawn. The token turns a BLIND forgery (exit 0, guessed code)
+from 1-in-254 into 2^-256. That is all it buys.
+
+**Trust argument, in ten lines.**
+1. The supervisor runs in the runner process and never imports tree code.
+2. The node list and the baseline come from a pytest run over the BASE commit only (base code is trusted).
+3. The reproduction must FAIL at base under the same per-node runner, not only in the report.
+4. The candidate tree is materialized fresh: the base commit plus exactly the policy-checked files.
+5. The base test files that hold the nodes are restored from the base commit into that tree.
+6. Every pinned file (those tests, every conftest / pytest.ini / pyproject / setup.cfg / tox.ini /
+   sitecustomize / usercustomize / *.pth) must equal the base blob, or the gate refuses (`pinned_changed`).
+7. Each node runs alone in its own bwrap, the tree READ-ONLY, a fresh scratch dir, `python -I -B`.
+8. The runner gets a nonce on stdin only, derives the token before any tree import, and writes it
+   only when exactly that node ran with setup / call / teardown passed (no skip, xfail, xpass, deselect).
+9. Passed = exit 0 AND the exact token on the passed fd; anything else is a failure.
+10. What this does NOT stop: code that targets the runner from inside the interpreter (residual 1).
+
+**Injection routes considered** (each attack has a test in `tests/test_self_heal_supervisor.py`):
+
+| route | old JUnit gate | supervised gate |
+|---|---|---|
+| report forged in-process + `os._exit(0)` | ACCEPTED | refused: no report is read; no token (`no_proof`) |
+| `atexit` handler rewrites the report after pytest wrote it | ACCEPTED | refused: the runner leaves by `os._exit`, the test fails |
+| `conftest.py` turns every test into a no-op | ACCEPTED (gate alone; diff policy refuses it first) | refused: `pinned_changed` |
+| `-p plugin` from a new `pytest.ini` addopts | ACCEPTED (gate alone) | refused: `pinned_changed` |
+| reproduction edited / replaced | ACCEPTED (only verify caught it) | refused: the base copy runs |
+| reproduction renamed / other test deleted | refused (node missing) | refused: the base copy runs |
+| skip / xfail called from the code under test | refused | refused: call phase not passed |
+| deselect (conftest) / zero collected (module-level skip) | refused | refused: `pinned_changed` / not exactly one item |
+| `sys.exit(0)` inside the test | refused | refused: pytest reports SystemExit as failed |
+| `sitecustomize.py` / `usercustomize.py` / `*.pth` added | not loaded (measured: `python -m` imports site before cwd joins `sys.path`; `.pth` only in site dirs) | refused: `pinned_changed`; also on the forbidden list now |
+| `PYTEST_ADDOPTS` / `PYTEST_PLUGINS` / `PYTHONSTARTUP` / `PYTHONPATH` | env allow-list | env allow-list, `-I`, and the runner deletes `PYTEST_*` / `PYTHON*` |
+| nonce guessed from argv, env, `/proc/self`, `/proc/1` | (no nonce) | refused: stdin only, consumed before import; supervisor in another pid namespace |
+| planted `.pyc` (`__pycache__` is never measured by the diff policy), gitignored files | not covered | not in the materialized tree; `pycache_prefix` in the node scratch |
+| one node leaves something for the next | shared worktree | read-only tree, fresh scratch per node, own pid namespace |
+| setuptools plugin autoload | on | left on: plugins come from read-only site-packages (base tests need e.g. pytest-asyncio) |
+
+**Residuals, plainly.**
+1. **Code written against the runner passes.** From the moment pytest imports the tree, the code
+   under test shares the runner's interpreter: whatever the runner knows when it decides, that code
+   can read (frames, `gc`, memory), and whatever the runner does to signal a pass, that code can do.
+   `test_the_targeted_residual_is_not_closed_by_the_gate` reads the token from the runner's frame and
+   PASSES the gate. No in-process construction closes this: a nonce computed before import still sits
+   in memory; a two-phase handshake hands the secret to whoever asks first; seccomp cannot tell the
+   runner from code it imported; a trace hook or thread can rewrite the test it is called from. What
+   would close it: the assertion evaluated in a process the code under test does not control, i.e. a
+   data-only boundary (the reproduction expressed as calls + expected values, run by the supervisor
+   against a sandboxed callee that returns serialized values only). That fits data-shaped
+   reproductions, not arbitrary pytest tests with fixtures and mocks. Otherwise: a reader of the diff
+   (the github landing's draft PR). In `full` + `local` the PROCESS_CONTROL screen refuses added
+   non-test python that exits, introspects frames / heap / interpreter or loads code dynamically. It
+   is a speed bump: reflection can spell every one of these another way.
+2. **Goodhart.** A change that satisfies the test without fixing the cause (special-casing the
+   test's inputs, an object whose `__eq__` is always true) passes any test-runner gate. Only review sees it.
+3. **The whole lane is still exit-status only.** `offline_lane` and `voice_replay` in `full` + `local`
+   read an exit code: a hostile diff can hide breakage outside the relevant test files. Closing it
+   means supervising the whole lane node by node (cost below).
+4. **Engine-added tests are not evidence** and are not run by the supervised gate (base nodes only);
+   the offline lane runs them.
+5. **Isolation changes semantics**: a node that passes only after another test in the same file
+   fails under the supervisor (a false refusal, the safe direction).
+6. **The base is trusted by definition**, including what earlier heals landed on it.
+
+**Cost (measured on this Jetson, scratch repo, 2 nodes, real fix, median of 3).** JUnit gate 0.98 s;
+supervised gate 4.53 s; one supervised node (spawn + bwrap + interpreter + pytest import + collect +
+run) 1.24 s. Estimate for a 50-node relevant set: about 50 x 1.24 + ~3 s = ~65 s against a few
+seconds for the JUnit gate, before the tests' own run time; with zoe-data's heavier conftest imports
+the per-node figure will be several seconds, so 2 to 4 minutes (unmeasured). Mitigation: a trusted
+zygote that imports pytest and the repo's third-party dependencies (never tree code) once and forks
+one child per node, each child in its own pid and mount namespace. That removes the interpreter +
+import cost per node; it needs care so no child outlives its turn. Cheaper first step: cache the base
+side (baseline run + reproduction at base) per base sha across attempts.
+
+**Policy (enforced in `Config.validate` and again at run start):**
+
+| dispatch | landing | who reads the diff | pytest gate |
+|---|---|---|---|
+| `dry` | any | nothing runs | none |
+| `local` | none (unlanded branch) | the owner, before it goes anywhere | JUnit (`relevant_pytest`) allowed |
+| `full` | `github` | a non-engine reviewer marks the draft ready | JUnit allowed; `supervised_pytest` may be added |
+| `full` | `local` | nobody | `supervised_pytest` REQUIRED (else refused at load / run start), supervised verify, PROCESS_CONTROL screen |
+
+**A sold unit (`full` + `local`): allowed with conditions.** The conditions are enforced in code:
+the supervised gate, the supervised verify, and the screen. What stays open is residual 1 (an engine
+that deliberately attacks the gate, with knowledge of this public runner, and spells its attack past
+the screen) and residual 2 (passing the test without fixing the cause). The snapshot / rollback and
+the caps bound the damage but do not detect either. Switching it on means the owner accepts that
+a hostile or prompt-injected engine can land code that passes the gate.
 
 ## Known risks before switching on (read these first)
 

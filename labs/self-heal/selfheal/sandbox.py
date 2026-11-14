@@ -79,7 +79,7 @@ class Sandbox:
             env["PYTHONUSERBASE"] = site.getuserbase()   # the user-site packages are re-bound read-only
         return env
 
-    def argv(self, cmd: list, wt: str, rw: str | None = None) -> list:
+    def argv(self, cmd: list, wt: str, rw=None, *, tree_ro: bool = False, ro=()) -> list:
         c, wt = self.cfg, os.path.realpath(wt)
         # prlimit runs INSIDE the sandbox, so by its real path (a symlink under /tmp would be hidden)
         limits = [os.path.realpath(binaries.which("prlimit")), f"--as={c.sandbox_mem_mb << 20}",
@@ -100,38 +100,49 @@ class Sandbox:
         for d in _ro_dirs():
             if any(d.startswith(m + "/") for m in masked):
                 a += ["--ro-bind", d, d]
-        a += ["--bind", wt, wt]
-        if rw:   # the runner's private report dir: the only writable path besides the worktree
-            a += ["--bind", rw, rw]
+        a += ["--ro-bind" if tree_ro else "--bind", wt, wt]
+        for d in ([rw] if isinstance(rw, str) else list(rw or ())):   # runner-owned dirs (report, scratch)
+            a += ["--bind", d, d]
+        for d in ro:   # runner-owned, read-only inside (the supervisor's node runner)
+            a += ["--ro-bind", d, d]
         for d in [*masked, "/dev"]:
             a += ["--remount-ro", d]
         return [*a, "--chdir", wt, "--", *limits, *cmd]
 
-    def run(self, cmd: list, wt: str, timeout: int, lock: list = (), rw: str | None = None) -> tuple[int | None, str]:
+    def run(self, cmd: list, wt: str, timeout: int, lock: list = (), rw=None, *, tree_ro: bool = False,
+            ro=(), scratch: str | None = None, stdin: str | None = None, pass_fds=()) -> tuple[int | None, str]:
         """(rc, stdout), or (None, 'timeout' | 'worktree_quota'). On timeout the whole process group
-        is killed; a worktree that GREW by more than `sandbox_disk_mb` fails the step."""
+        is killed; a worktree that GREW by more than `sandbox_disk_mb` fails the step. With `scratch`
+        (the supervisor's per-node runs) HOME / TMPDIR are that runner-owned dir, it is what the growth
+        cap measures, and `tree_ro` makes the tree itself read-only inside."""
         if self.backend == "none" and self.cfg.dispatch != "dry":
             raise Refused("sandbox_unavailable", self.why)
-        tmp = os.path.join(os.path.realpath(wt), TMP_NAME)
-        before = tree_bytes(wt)
+        own = scratch is None
+        tmp = os.path.join(os.path.realpath(wt), TMP_NAME) if own else scratch
+        measured = wt if own else scratch
+        rws = [rw] if isinstance(rw, str) else list(rw or ())
+        before = tree_bytes(measured)
         os.makedirs(tmp, exist_ok=True)
         try:
-            argv = [*lock, *(self.argv(cmd, wt, rw) if self.backend == "bwrap" else cmd)]
+            argv = [*lock, *(self.argv(cmd, wt, rws + ([] if own else [scratch]), tree_ro=tree_ro, ro=ro)
+                             if self.backend == "bwrap" else cmd)]
             if argv and argv[0] == "flock":
                 argv[0] = binaries.which("flock")
-            p = subprocess.Popen(argv, cwd=wt, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL, text=True, env=self.env(tmp), start_new_session=True)
+            p = subprocess.Popen(argv, cwd=wt, stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=self.env(tmp),
+                                 start_new_session=True, pass_fds=tuple(pass_fds))
             try:
-                out, _ = p.communicate(timeout=timeout)
+                out, _ = p.communicate(input=stdin, timeout=timeout)
             except subprocess.TimeoutExpired:
                 os.killpg(p.pid, signal.SIGKILL)
                 p.communicate()
                 return None, "timeout"
-            if tree_bytes(wt) - before > self.cfg.sandbox_disk_mb << 20:
+            if tree_bytes(measured) - before > self.cfg.sandbox_disk_mb << 20:
                 return None, "worktree_quota"
             return p.returncode, out
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if own:
+                shutil.rmtree(tmp, ignore_errors=True)
 
     def run_report(self, cmd: list, wt: str, timeout: int, lock: list = ()) -> tuple[int | None, str, str | None]:
         """Run a pytest `cmd` with its JUnit report in a FRESH runner-owned dir OUTSIDE the worktree
