@@ -47,11 +47,14 @@ class Recording:
     events: list[dict]                                   # t, kind, source, subject, visibility, payload
     answers: dict[str, dict[str, str]] = field(default_factory=dict)   # person -> skill|"*" -> response
     no_accept: list[str] = field(default_factory=list)   # actions that need no yes (a light)
+    off: dict[str, list[str]] = field(default_factory=dict)   # person -> skills they did NOT enable ("*" = any)
+    meta: dict = field(default_factory=dict)             # where the day came from (date, seed, what was odd)
 
     def dumps(self) -> str:
         head = {"recording": FORMAT, "answers": self.answers, "no_accept": sorted(self.no_accept),
                 "people": [{"id": p.id, "role": p.role, "guardians": list(p.guardians)}
                            for p in self.people]}
+        head |= {key: value for key, value in (("off", self.off), ("meta", self.meta)) if value}
         return "".join(json.dumps(row, sort_keys=True) + "\n" for row in (head, *self.events))
 
     def save(self, path) -> None:
@@ -63,7 +66,8 @@ class Recording:
         if head.get("recording") != FORMAT:
             raise ValueError("not a recording this harness reads")
         people = [Person(p["id"], p.get("role", ADULT), tuple(p.get("guardians", ()))) for p in head["people"]]
-        return cls(people, rows, head.get("answers", {}), head.get("no_accept", []))
+        return cls(people, rows, head.get("answers", {}), head.get("no_accept", []),
+                   head.get("off", {}), head.get("meta", {}))
 
     @classmethod
     def load(cls, path) -> "Recording":
@@ -129,7 +133,9 @@ def _run(k: Kernel, rec: Recording, skills: list, now: list, label: str) -> Repo
         m = Manifest.from_dict(skill.manifest)
         for action in sorted(m.acts):
             k.actions.register(action, world.do, world.verify, needs_accept=action not in rec.no_accept)
-        for p in rec.people:                      # every member enabled every skill under test
+        for p in rec.people:                      # every member enabled every skill under test...
+            if {"*", m.skill} & set(rec.off.get(p.id, ())):
+                continue                          # ...except where the recording says they did not
             if p.role == ADULT:
                 k.grants.grant(p.id, m.skill)
             elif p.role == CHILD and p.guardians:
