@@ -177,3 +177,4 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 ### Deferred from review, 2026-11-14 (neither loses data) — 💡 pinned
 - 💡 **loop_block_stacks: snapshot the completed episode's lag at completion.** If the watcher is delayed past a second overdue tick, a stall's length can be attributed to the wrong episode. Diagnostic only.
 - 💡 **Value guard: count only number words used as quantities.** An incidental number word in a row ("one of them", "the two of us") makes `drops_value` refuse a replacement it could allow. It fails safe: both rows stay.
+- 💡 **A send timeout for voice frames on the panel socket.** `broadcast()` has none, so a voice send that hangs forever holds that socket's send lock: alarm frames to it are skipped as busy until the panel notices staleness (about 3 s) and falls back to its 2 s poll. Give voice sends the same bounded send, drop and close as the panel broadcast.
