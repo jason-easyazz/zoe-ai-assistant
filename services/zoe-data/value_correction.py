@@ -871,8 +871,12 @@ def drops_value(old_text: str, new_text: str) -> bool:
     standing in for one old value: a date needs a date; an age, amount or measure needs the same unit or a bare number; a bare
     number needs any number that is not a date. So "runs from the 3rd to the 5th" -> "on the 10th" (two dates, one left) is
     refused, as is two amounts -> one. Accepted conservative outcome: a real correction that REDUCES the count ("from the 3rd to
-    the 5th" -> "only on the 4th") is refused too, and both rows stay. Text with no number is never judged. A refused
-    replacement leaves the row as it was. Pure; never raises."""
+    the 5th" -> "only on the 4th") is refused too, and both rows stay. And at most ONE old value may be missing from the new text
+    (a value = date or not, plus its number, any spelling: "6" and "six" are one value), so another subject's value never stands
+    in for a lost one ("X is 6 and Y is 9" -> "X's age is unknown; Y is 10 and Z is 4" loses two: refused). A real correction
+    changes one value. Accepted conservative outcome: a two-value correction in one go ("from the 3rd to the 5th" -> "from the
+    4th to the 6th") is refused too and both rows stay: never less outranks a tidy merge. Text with no number is never judged. A
+    refused replacement leaves the row as it was. Pure; never raises."""
     try:
         from collections import Counter
 
@@ -904,7 +908,11 @@ def drops_value(old_text: str, new_text: str) -> bool:
                 ok = take(u, None)
             if not ok:
                 return True
-        return False
+
+        def values(text: str) -> Counter:
+            return Counter((_unit_at(text, q) == "date", q.value) for q in quantities(text))
+
+        return sum((values(old) - values(new)).values()) > 1
     except Exception:  # noqa: BLE001 - a pair that cannot be read is never replaced
         return True
 

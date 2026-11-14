@@ -262,6 +262,12 @@ def test_two_values_never_collapse_into_one():
     assert "User's caravan fund is 1500 dollars and 200 dollars in the jar" in _texts(store, "caravan")
 
 
+def test_one_correction_in_a_two_subject_row_applies_and_leaves_the_other_alone(quiet):
+    store = _Store("Xx is 6 years old and Yy is 9 years old")
+    assert _correct(store, "yy is 10 not 9") == 1
+    assert [r.text for r in store.live()] == ["Xx is 6 years old and Yy is 10 years old"]
+
+
 # -- the digest's two contradiction edits (the model's judgement stubbed to "contradicts") -------------------------------------------
 
 def test_the_weekly_contradiction_pass_never_replaces_with_less(monkeypatch):
@@ -296,11 +302,18 @@ def test_the_per_turn_digest_checks_before_its_contradiction_edit():
     ("User's weaving class is on the 10th of December", "User's weaving class was moved", True),
     ("Tobin is 6 years old", "", True),
     ("Tobin: turned 6", "Tobin: turned 7", False),
-    ("Tobin: turned 6", "Tobin: turned seven", False),
+    ("Tobin: turned 6", "Tobin: turned seven", False),                     # the new age in words still replaces
     ("User's festival runs from the 3rd to the 5th of March", "User's festival is on the 10th of March", True),   # 2 dates -> 1
     ("User owes 200 dollars to the bank and 50 dollars to Sam", "User owes 300 dollars to the bank", True),  # 2 amounts -> 1
     ("Tobin: 6, Ada: 9", "Tobin: 7", True),                                   # one bare number covers one old value, not two
-    ("User's festival runs from the 3rd to the 5th of March", "User's festival runs from the 4th to the 6th of March", False),                     # the new age in words still replaces
+    ("User's festival runs from the 3rd to the 5th of March", "User's festival is on the 3rd of March", True),  # one missing, but a date short
+    # two values corrected in one go: refused, both rows stay - "never less" outranks a tidy merge
+    ("User's festival runs from the 3rd to the 5th of March", "User's festival runs from the 4th to the 6th of March", True),
+    # another subject's value never stands in for a lost one: at most ONE old value may be missing
+    ("X is 6 years old and Y is 9 years old", "X's age is unknown; Y is 10 and Z is 4", True),
+    ("X is 6 years old and Y is 9 years old", "X is 7 years old and Y is 8 years old", True),      # two values replaced
+    ("X is 6 years old and Y is 9 years old", "X is 6 years old and Y is 10 years old", False),    # one correction
+    ("X is six years old and Y is 9 years old", "X is 6 years old and Y is 10 years old", False),  # "six" and "6" are one value
     ("Tobin is six years old", "Tobin is seven years old", False),
     ("User has saved 1500 dollars for the caravan", "User has 1800 saved for the caravan", False),
     ("User's weaving class is on the 10th of December", "Weaving moved again on the seventeenth", False),
