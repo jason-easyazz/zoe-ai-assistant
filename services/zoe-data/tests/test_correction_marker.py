@@ -29,7 +29,8 @@ OLD_ROW = "The book club meets on the 12th"
 HEAD = "## A newer correction from the member"
 CHAT: dict = {}                                                     # id -> {user, session, content, off}; insertion order = time
 _REAL_DB = cm._db
-ON_FETCH: list = []                                                 # coroutines run INSIDE the text fetch (the race tests)
+ON_FETCH: list = []
+FORGOTTEN: set = set()                                              # the member's forget ledger, as lower-case words                                                 # coroutines run INSIDE the text fetch (the race tests)
 
 
 class _ChatDb:
@@ -62,7 +63,14 @@ class _ChatDb:
 
 @pytest.fixture(autouse=True)
 def _state(monkeypatch):
-    cm.reset(), turn_forget.reset(), CHAT.clear(), ON_FETCH.clear()
+    import memory_forgotten
+    import memory_tombstones
+
+    cm.reset(), turn_forget.reset(), CHAT.clear(), ON_FETCH.clear(), FORGOTTEN.clear(), memory_tombstones.clear_all()
+
+    async def ledger(user_id, text, **_):
+        return user_id == MEMBER and bool(FORGOTTEN & set(re.findall(r"[a-z]+", text.lower())))
+    monkeypatch.setattr(memory_forgotten, "matches", ledger)
     monkeypatch.setenv("ZOE_CORRECTION_PENDING_MARKER", "1")
     monkeypatch.setattr(cm, "_db", lambda: _ChatDb())          # only the marker's reads; every other store is untouched
     yield
@@ -346,3 +354,116 @@ async def test_log_lines_carry_no_text(caplog, monkeypatch):
     msgs = [r.getMessage() for r in caplog.records if "PENDING_CORRECTION" in r.getMessage()]
     assert [m.split()[1] for m in msgs] == ["set", "served", "cleared"] and "reason=forget_turn" in msgs[-1]
     assert "book" in FIX and not [m for m in msgs if "book" in m or "19th" in m]   # control: the planted words exist
+
+
+def test_mark_forgotten_clears_markers_again_after_the_rows_are_flagged():
+    """``turn_forget.retract`` clears the member's markers BEFORE the transcript rows are flagged; a marker set in between
+    must not outlive the forget, so ``mark_forgotten`` (called once the rows are gone) clears again. Another member's stays."""
+    import turn_forget
+
+    cm.reset()
+    turn = turn_forget.Turn(text="x", ts=0.0, h="h", tid=7)
+    turn_forget.retract(MEMBER, turn)
+    cm.put(MEMBER, "turn-set-in-between")
+    cm.put(OTHER, "their-turn")
+    assert cm.pending(MEMBER)
+    turn_forget.mark_forgotten(MEMBER, turn)
+    assert not cm.pending(MEMBER)
+    assert cm.pending(OTHER)
+    cm.reset()
+
+
+# ── ordering against the forgets, and a forgotten subject ─────────────────────────────────────────────────────────────
+
+async def test_a_marker_set_during_the_entity_cascade_does_not_outlive_it(monkeypatch):
+    import memory_forget_cascade as mfc
+
+    async def step(user_id, rx, mutes, res, **k):              # a cascade step while the forget runs
+        cm.put(MEMBER, "t-during")
+    monkeypatch.setattr(mfc, "_clear", step)
+    monkeypatch.setattr(mfc, "retry_pending", lambda *a, **k: _ret(None))
+    cm.put(OTHER, "t7")
+    await mfc.cascade_forget(MEMBER, "Wren")
+    assert cm.pending(MEMBER) == [] and len(cm.pending(OTHER)) == 1
+
+
+async def test_a_marker_set_during_delete_user_does_not_outlive_it(monkeypatch, tmp_path):
+    from test_memory_loss_class import _Col, _svc
+
+    monkeypatch.setattr(memory_service, "_invalidate_agent_user_facts_cache", lambda _u: cm.put(MEMBER, "t-during"))
+    cm.put(OTHER, "t7")
+    await _svc(_Col(["zoe_wren_aa"]), _Col(), tmp_path).delete_user(MEMBER, actor="admin", reason="rtbf")
+    assert cm.pending(MEMBER) == [] and len(cm.pending(OTHER)) == 1
+
+
+async def test_the_same_turn_re_marked_during_the_fetch_is_not_served():
+    import time
+
+    await _note()
+
+    async def forget_and_re_add():
+        cm.forget_user(MEMBER, reason="forget_entity")
+        cm.put(MEMBER, "t1", now=time.time() + 1)               # a NEW marker for the same turn id
+    ON_FETCH.append(forget_and_re_add)
+    assert await cm.texts_for_packet(MEMBER) == []
+    assert len(await cm.texts_for_packet(MEMBER)) == 1         # control: the new marker itself is served on the next read
+
+
+async def test_topic_forget_flags_the_transcript_before_its_final_clear(monkeypatch):
+    import conversation_notes
+    import forget_topic
+
+    order, real_clear = [], cm.forget_user
+
+    async def erase_words(user_id, groups):
+        order.append("flag")
+        return 1, 1
+
+    def clear(user_id, reason="forget"):
+        order.append("clear")
+        return real_clear(user_id, reason)
+    monkeypatch.setattr(forget_topic, "_owned_rows", lambda *a: _ret([]))
+    monkeypatch.setattr(forget_topic, "_index_hits", lambda *a: _ret({}))
+    monkeypatch.setattr(forget_topic, "_withdraw_offers", lambda *a: _ret(0))
+    monkeypatch.setattr(forget_topic, "_erase_words", erase_words)
+    monkeypatch.setattr(conversation_notes, "erase_topic", lambda *a: _ret(0))
+    monkeypatch.setattr(cm, "forget_user", clear)
+    await forget_topic.forget(object(), MEMBER, "the book club")
+    assert "flag" in order and order[-1] == "clear" and order.index("flag") < len(order) - 1
+
+
+async def test_entity_forget_redacts_and_cascades_before_its_final_clear(monkeypatch):
+    import intent_router
+    import memory_forget_cascade as mfc
+
+    order, real_clear = [], cm.forget_user
+
+    async def step(*a, **k):
+        order.append("cascade")
+
+    def clear(user_id, reason="forget"):
+        order.append("clear")
+        return real_clear(user_id, reason)
+    monkeypatch.setattr(mfc, "_clear", step)
+    monkeypatch.setattr(mfc, "retry_pending", lambda *a, **k: _ret(None))
+    monkeypatch.setattr(cm, "forget_user", clear)
+    await mfc.cascade_forget(MEMBER, "Wren")
+    assert order[-1] == "clear" and order.index("cascade") < len(order) - 1
+    # the entity forget redacts the transcript (``_erase_named`` -> forget_redact.on_forget) before EACH cascade call
+    src = inspect.getsource(intent_router.execute_intent)
+    erase = [m.start() for m in re.finditer(r"await _erase_named\(", src)]
+    cascade = [m.start() for m in re.finditer(r"await _forget_cascade_note\(", src)]
+    assert src.index("forget_redact.on_forget") < erase[0] and len(erase) == len(cascade) == 2
+    assert all(e < c for e, c in zip(erase, cascade))
+
+
+async def test_a_new_correction_about_a_forgotten_subject_waits_for_a_re_teach(monkeypatch):
+    said = "No, Wren is 34, not 33"
+    FORGOTTEN.add("wren")                                       # "forget Wren" finished: the ledger names it
+    assert await _note(said) is False and cm.pending(MEMBER) == []
+    assert await _note("No, Juno is 34, not 33", tid="t2") is True   # control: an unforgotten subject is marked
+    cm.reset(), CHAT.clear()                                    # (the new turn is the only one with those words)
+    FORGOTTEN.clear()                                           # an explicit re-teach released the ledger entry
+    assert await _note(said, tid="t3") is True and said in _packet(monkeypatch)["packet"]
+    FORGOTTEN.add("wren")                                       # forgotten again after the marker was set: not served
+    assert HEAD not in _packet(monkeypatch)["packet"] and cm.pending(MEMBER) == []

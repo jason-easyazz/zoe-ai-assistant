@@ -259,8 +259,14 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
     rx = _name_re(name)
     import correction_marker
 
-    correction_marker.forget_user(user_id, reason="forget_entity")   # any forget drops the member's pending corrections
+    correction_marker.forget_user(user_id, reason="forget_entity")   # any forget drops the member's pending corrections ...
+    try:
+        return await _cascade(user_id, name, rx, res, db)
+    finally:   # ... and again AFTER the cascade: a marker set while it ran must not outlive the forget
+        correction_marker.forget_user(user_id, reason="forget_entity")
 
+
+async def _cascade(user_id: str, name: str, rx, res: CascadeResult, db) -> CascadeResult:
     async def mutes() -> int:
         import restraint
 

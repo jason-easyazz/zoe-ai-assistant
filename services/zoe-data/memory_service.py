@@ -2310,6 +2310,11 @@ class MemoryService:
                 await contacts_store.forget_user(user_id)
             except Exception:  # noqa: BLE001 - logged at ERROR inside; the palace rows ARE gone either way
                 pass
+            try:   # pending-correction markers again, AFTER every store went: one set while the delete ran must not outlive it
+                import correction_marker
+                correction_marker.forget_user(user_id, reason="delete_user")
+            except Exception:  # noqa: BLE001
+                pass
             if pendant_failure is not None:
                 raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
             return len(ids)

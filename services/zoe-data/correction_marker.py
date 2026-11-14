@@ -168,6 +168,18 @@ async def _fetch_texts(user_id: str, turn_ids: list) -> dict:
     return dict(await _rows(_sql(f"AND cm.id IN ({', '.join('?' for _ in turn_ids)})"), (user_id, *turn_ids)))
 
 
+async def _names_forgotten(user_id: str, text: str) -> bool:
+    """Does ``text`` name something the member asked to forget (the durable ledger or the fast tombstone)? The SAME test the
+    memory reads and ``MemoryService.ingest`` apply. Fails CLOSED: an error counts as forgotten."""
+    try:
+        import memory_forgotten
+        from memory_tombstones import matching_tombstone
+
+        return bool(matching_tombstone(user_id, text) or await memory_forgotten.matches(user_id, text, strict=True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 # ── the two hooks ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 async def note_turn(user_message: str, user_id: str, session_id: Optional[str], *, speaker_verified: Optional[bool] = None,
@@ -185,6 +197,9 @@ async def note_turn(user_message: str, user_id: str, session_id: Optional[str], 
 
         if not turn_id or turn_forget.blocks_write(user_id, user_message):   # not saved, or "forget that" won the race
             return False
+        if await _names_forgotten(user_id, user_message):    # a forgotten subject stays forgotten until the member re-teaches it
+            logger.info("PENDING_CORRECTION skipped reason=forgotten user=%s n=1", user_id)
+            return False
         put(user_id, turn_id, keys=keys)
         return True
     except Exception as exc:  # noqa: BLE001 - a marker never costs the turn anything
@@ -201,17 +216,19 @@ async def texts_for_packet(user_id: str, *, now: Optional[float] = None) -> list
     except Exception as exc:  # noqa: BLE001
         logger.debug("PENDING_CORRECTION skipped reason=read_error user=%s err=%s", user_id, type(exc).__name__)
         return []
-    # A forget that landed WHILE the fetch was awaited cleared the marker: what was read for it is dropped, never served. (The
-    # fetch itself filters off-the-record turns, so a turn the forget flagged is not returned either.)
-    still = {m.turn_id for m in pending(user_id, now=now)}
-    out = []
+    texts = {}
     for m in live:
-        if m.turn_id not in still:
-            continue
         text = " ".join((found.get(m.turn_id) or "").split())
-        if text:
-            out.append(text[:TEXT_CAP])
-        else:
+        if not text:
             clear(user_id, m.turn_id, reason="turn_gone")
+        elif await _names_forgotten(user_id, text):        # forgotten since the marker was set: never served
+            clear(user_id, m.turn_id, reason="forgotten")
+        else:
+            texts[m] = text[:TEXT_CAP]
+    # LAST, after every await: a forget that landed meanwhile cleared the marker, and a marker re-added for the same turn since is
+    # a different marker (its own said_at). Only the very markers that were read are served. (The fetch itself filters
+    # off-the-record turns, so a turn the forget flagged is not returned either.)
+    still = set(pending(user_id, now=now))
+    out = [t for m, t in texts.items() if m in still]
     _log("served", "packet", user_id, len(out))
     return out

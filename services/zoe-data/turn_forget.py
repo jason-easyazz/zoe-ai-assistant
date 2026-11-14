@@ -223,6 +223,12 @@ def mark_forgotten(user_id: str, turn: Turn) -> None:
         for tr in _turns.get(user_id) or ():
             if tr.tid == turn.tid:
                 tr.text = ""
+    try:  # the rows are flagged off the record by now: clear the pending corrections AGAIN, after the flagging (retract
+        import correction_marker  # cleared them before it; a marker set in between must not outlive the forget)
+
+        correction_marker.forget_user(user_id, reason="forget_turn")
+    except Exception:  # noqa: BLE001
+        logger.warning("turn_forget.mark_forgotten: marker clear failed", exc_info=True)
 
 
 def _live(user_id: str, t: float) -> list:
