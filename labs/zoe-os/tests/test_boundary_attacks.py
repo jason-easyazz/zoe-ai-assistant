@@ -176,7 +176,8 @@ def test_slow_clients_are_cut_off_and_cannot_hold_every_connection():
     try:
         slow = [stall(box), stall(box)]                      # both slots are taken
         assert alive(box)                                    # served once the deadline frees one
-        assert box.reasons(HELPER) == ["frame deadline"] * 2
+        # the second slow client is cut off a moment after the first: wait for it, do not race it
+        assert until(lambda: box.reasons(HELPER) == ["frame deadline"] * 2)
         assert all(wire.read_frame(s, idle=2)["error"]["reason"] == "frame deadline" for s in slow)
     finally:
         box.close()

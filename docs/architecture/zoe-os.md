@@ -562,3 +562,58 @@ lab's numbers are from a cloud sandbox (section 5.1).
 - **The second OS user** (section 4): the two file-permission tests, repeated with the real service users.
 - **The night window** (`scripts/AGENTS.md`): that a sweep, a forget or a restart of the kernel does not land in
   the brain-window quiet hours.
+
+## 11. The household twin: rehearsing before trusting
+
+**What it is.** A private simulation of a household that the system can rehearse against before it changes
+itself or makes an offer. All of it is in the lab (`labs/zoe-os/zoe_os/twin/`), on synthetic days with invented
+placeholder people **[lab]**. Section 12 says why none of it is yet evidence about a real household.
+
+| Part | What it does **[lab]** |
+|---|---|
+| Day generator (`days.py`) | A small household description (people, roles, usual wake, leave, back, dinner and bed times with spread, weekly events) becomes synthetic days of kernel events, deterministic for a seed. Every third working day is awkward on purpose: a forgotten phone, a sick child at home, a guest, a late night, a flight, a missed routine step. |
+| Baseline (`baseline.py`) | A kernel skill that reduces a person's private presence and routine events to a few facts a day, and reports what is normal as counts and ranges. It says "not enough days yet" until it has ten working days (six weekend days) for that person. |
+| Rehearsal (`rehearse.py`) | Runs the current and a changed version of a skill over generated and recorded days and reports, in this order: privacy failures, totals, and every difference day by day. |
+| Unusual today (`unusual.py`) | Lists departures from a person's own baseline as "this differs from the last N days in this way". Fixed sentences filled with times and counts: it cannot give a reason. |
+
+**Consent.** There is no separate "tracking" switch. The twin is a skill, so a person who has not enabled it is
+never delivered to it: no baseline, no line about them. It reads private events only, so a guest the household
+can see is tracked by no one.
+
+**Forget [lab, tested with a planted sentinel and a negative control].** The baseline is derived from a person's
+events, so a forget must change or remove it:
+- forgetting a person removes their baseline and leaves everyone else's unchanged;
+- forgetting one thing (by name) removes what was derived from those events and keeps the rest;
+- a twin that ignores the forget notice still knows what was forgotten. That is the control, and it is also the
+  standing limit of any skill: the twin's memory is outside the kernel, and it forgets because it obeys.
+- a forgotten person is not banned: new days start a new baseline, from "not enough days yet".
+
+### Owner decision: what the twin keeps, and for how long
+
+**Status: open.** The lab uses 56 days as a placeholder, and the code says so. The twin's reduced facts are a
+second copy of what the log held: clock times, rooms, and which routine steps were done, per person per day. No
+free text, but a routine item's or a room's label is kept as the name of a count.
+
+One thing makes this a real decision **[lab]**: **the twin's copy can outlive the kernel's**. Under retention
+option B (section 9) presence is kept in full for 14 days, and a twin with a longer window still holds what it
+derived from days the kernel has already reduced to a skeleton. A forget of the person still reaches the twin
+then (tested). A forget by name does **not**: the kernel has no content left to match, so it erases nothing and
+the twin keeps the label (a test pins this).
+
+| Option | What is kept | What it allows | What it costs |
+|---|---|---|---|
+| A. Nothing stored | no twin memory; the baseline is recomputed from the log each time | the simplest rule: nothing outlives the log, and every forget is complete | under retention B, 14 days of presence is exactly ten working days: a working-day baseline that is always on the edge of "not enough", and never a weekend one (it needs six weekend days). Not built: the lab twin keeps its facts in memory |
+| B. Reduced facts for 28 days | times, rooms and step counts for four weeks | 20 working days and 8 weekend days: both baselines, with some room | a reduced copy two weeks older than the kernel's presence events; the name-forget limit above applies to those two weeks |
+| C. Reduced facts for 56 days (the lab placeholder) | the same, eight weeks | a steadier baseline; a one-off odd day weighs less | six weeks beyond the kernel's copy; the same limit for longer |
+
+In every option: **generated days are never stored** (a seed regenerates them); a rehearsal report is text that
+quotes offers, so a report made from a real recording is a copy outside the kernel and should not outlive that
+recording; and a recording of real days written to a file is itself a copy no forget can reach. The lab's
+`record` writes such a file because its days are synthetic. For real days the replay should read the log
+directly. That is not built.
+
+**Recommendation: B**, and state the twin's window as its own line in the retention policy rather than leaving
+it inside a skill. It is the shortest window that gives both baselines. If the owner prefers the simple rule
+that nothing outlives the log, choose A and lengthen presence in section 9 to 28 days instead, which moves the
+same cost into the log where a forget by name still works. Both are **[inferred]** from the lab's arithmetic
+(ten working days, six weekend days), which is itself a judgement and not a measurement.
