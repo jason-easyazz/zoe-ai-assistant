@@ -935,6 +935,46 @@ def test_forget_held_row_counts_forgets_with_a_correction_still_held():
     assert "malformed marker" in sc.inst_forget_held(bad, SINCE, UNTIL)["reason"]   # ...a word in a code field is not
 
 
+def _embed_line(calls, texts, ms_sum, fallback, ms_b, len_b):
+    import perf_summary as ps
+    parts = [f"s=600 calls={calls} texts={texts} ms_sum={ms_sum} fallback={fallback}"]
+    parts += [f"{n}={v}" for n, v in zip(ps.bucket_names("ms", ps.MS_BUCKETS), ms_b)]
+    parts += [f"{n}={v}" for n, v in zip(ps.bucket_names("len", ps.LEN_BUCKETS), len_b)]
+    return "PALACE_EMBED_SUMMARY " + " ".join(parts)
+
+
+def test_summary_rows_sum_lines_across_intervals_and_keep_harness_lines():
+    lines = parsed([
+        L("06T10:00:00", "SQL_ADAPT_MEMO_SUMMARY s=600 hits=90 misses=10 size=40"),
+        L("06T10:10:00", "SQL_ADAPT_MEMO_SUMMARY s=600 hits=10 misses=0 size=40 traffic=harness"),  # all-traffic counts
+        L("06T10:00:01", "MEMORY_SEARCH_EMBED_SUMMARY s=600 searches=4 embeds=4 reused=4"),
+        L("06T10:10:01", "MEMORY_SEARCH_EMBED_SUMMARY s=600 searches=2 embeds=4 reused=0"),
+        L("06T10:00:02", _embed_line(10, 12, 80, 0, [6, 3, 1, 0, 0, 0, 0, 0], [8, 2, 0, 0, 0, 0, 0])),
+        L("06T10:10:02", _embed_line(10, 40, 900, 1, [0, 0, 2, 5, 3, 0, 0, 0], [5, 0, 0, 0, 5, 0, 0])),
+    ])
+    logs = _logset(lines, sc.parse_ts(L("01T00:00:00", "")))
+    q = sc.inst_sql_memo(logs, SINCE, UNTIL)
+    assert q["data"] == {"lines": 2, "hits": 100, "misses": 10} and q["value"].startswith("hits 100 of 110")
+    e = sc.inst_search_embed(logs, SINCE, UNTIL)
+    assert e["data"] == {"lines": 2, "searches": 6, "embeds": 8, "reused": 4} and "embeds per search 1.33" in e["value"]
+    p = sc.inst_palace_embed(logs, SINCE, UNTIL)
+    assert p["data"]["calls"] == 20 and p["data"]["ms_buckets"] == [6, 3, 3, 5, 3, 0, 0, 0] and p["data"]["fallback"] == 1
+    assert "ms p50 <=20 / p90 <=100 (mean 49.0)" in p["value"] and "texts per call p50 <=1 / p90 <=16" in p["value"]
+
+
+def test_summary_rows_absent_malformed_and_bucket_pct():
+    empty = _logset([], sc.parse_ts(L("01T00:00:00", "")))
+    for fn in (sc.inst_sql_memo, sc.inst_search_embed, sc.inst_palace_embed):
+        assert fn(empty, SINCE, UNTIL)["status"] == "unmeasured"
+    bad = _logset(parsed([L("06T10:00:00", "SQL_ADAPT_MEMO_SUMMARY s=600 hits=9 misses=1")]), sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_sql_memo(bad, SINCE, UNTIL)["reason"]       # a missing field is not the format
+    txt = _logset(parsed([L("06T10:00:00", "MEMORY_SEARCH_EMBED_SUMMARY s=600 searches=x embeds=1 reused=1")]),
+                  sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_search_embed(txt, SINCE, UNTIL)["reason"]
+    assert sc.bucket_pct([0, 0, 0], (1, 2), 50) == "-"
+    assert sc.bucket_pct([0, 0, 4], (1, 2), 50) == ">2" and sc.bucket_pct([1, 1, 0], (1, 2), 50) == "<=1"
+
+
 # --- the daemon's FIRST_SOUND line (measured first sound) -------------------------------------------------
 
 _FS_OK = ("2026-11-10 05:30:00,123 [voice-daemon] INFO FIRST_SOUND close=deep=640ms post_ms=120 reflex=none skip=- "
