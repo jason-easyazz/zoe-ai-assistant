@@ -4135,11 +4135,23 @@ async def _execute_forget_last(user_id: str) -> str:
         await exact_words.forget_transcript(user_id, text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory_forget_last: words erase failed (%s)", type(exc).__name__)
+    try:    # the in-process correction memory of that turn (value_correction._REMEMBERED; never raises)
+        import value_correction
+        value_correction.forget_turns(user_id, [value_correction.turn_id_of(user_id, text)])
+        value_correction.forget_in_texts(user_id, [text])
+    except Exception:  # noqa: BLE001
+        pass
     try:    # a short note about an earlier conversation that rests on the same words goes too (conversation_notes; over-forgets)
         import conversation_notes
         await conversation_notes.erase_for_text(user_id, text, at=ts)
     except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
+        failed += 1
+    try:    # the superseded-value registry (0080): what this turn corrected, and entries tied to the rows it wrote
+        import memory_value_registry
+        await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows])
+    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
+        logger.warning("memory_forget_last: value registry erase failed (%s)", type(exc).__name__)
         failed += 1
     logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
     if failed:

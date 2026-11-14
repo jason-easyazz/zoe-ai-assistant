@@ -24,6 +24,7 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 import panel_principal
 import untrusted_content
+import user_erase_gate as _erase_gate
 import voice_phrases
 from intent_router import detect_intent, detect_and_extract_intent, execute_intent, Intent
 from browser_broker import create_default_browser_broker
@@ -904,6 +905,9 @@ def _extract_memory_candidates(user_message: str, assistant_response: str):
     ]
 
 
+# The member's erase generation is read HERE, when the turn queues this task (``ensure_future(_persist_memory_candidates(...))``):
+# every memory write the passes below make is dropped if the member is erased after that (``user_erase_gate.scheduled``).
+@_erase_gate.scheduled_at_call("user_id")
 async def _persist_memory_candidates(user_id: str, session_id: str, user_message: str, assistant_response: str):
     """Single post-turn memory hook.
 
@@ -1211,6 +1215,14 @@ async def _save_chat_message(
                     pass
             if _mp.claim_turn(user_id, clean_content):
                 meta["off_record"] = True
+            else:
+                # A FORGET COMMAND is an instruction, never a fact: the transcript readers (idle consolidation, the nightly digest,
+                # the fast-path context, exact words) must never mine it or hand it back - a topic forget writes no ledger entry,
+                # so "forget that I told you about my brother" itself was re-mined into a row about the brother (QA round 10a).
+                import turn_forget as _tf_cmd
+
+                if _tf_cmd.is_forget_instruction(_capture_words(clean_content)):
+                    meta["off_record"] = True
         elif user_id and role == "assistant" and _mp.reply_is_off_record(user_id):
             meta["off_record"] = True
     except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
