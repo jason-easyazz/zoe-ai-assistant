@@ -77,7 +77,10 @@ DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", 
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
               "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs",
-              "self_review", "night_extract", "conversation_notes", "value_registry")
+              "self_review", "night_extract", "conversation_notes", "value_registry", "value_registry_topic")
+#: a TOPIC forget whose registry erase failed (``forget_topic``): the retracted turns' ids cannot be stored in the ledger (hashes of
+#: fixed labels only), so the retry over-forgets the member's whole superseded-value registry (a 7-day shadow cache: the safe error)
+VALUE_REGISTRY_TOPIC = "value_registry_topic"
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -309,6 +312,19 @@ async def retry_pending(user_id: str, *, db=None) -> Optional[CascadeResult]:
         labels = await memory_forgotten.pending_labels(user_id, ALL_LABELS)
         if not labels:
             return None
+        if VALUE_REGISTRY_TOPIC in labels:
+            # needs no forgotten name (the ledger pattern may be empty: a topic forget writes no name): drain it on its own
+            try:
+                import memory_value_registry
+
+                await memory_value_registry.forget_user(user_id)
+                await memory_forgotten.clear_pending(user_id, [VALUE_REGISTRY_TOPIC])
+                logger.info("FORGET_CASCADE_RETRY user=%s value_registry_topic=cleared", user_id)
+            except Exception as exc:  # noqa: BLE001 - the marker stays for the next healthy pass
+                logger.error("FORGET_CASCADE_RETRY user=%s value_registry_topic NOT cleared (%s)", user_id, type(exc).__name__)
+            labels = [label for label in labels if label != VALUE_REGISTRY_TOPIC]
+            if not labels:
+                return CascadeResult()
         rx = await memory_forgotten.ledger_pattern(user_id)
         if rx is None:       # nothing forgotten any more (every entity was explicitly re-taught): there is nothing left to clear
             await memory_forgotten.clear_pending(user_id, labels)

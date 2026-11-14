@@ -47,7 +47,7 @@ Erased in every flag mode (rows written while the flag was on must still go afte
 |---|---|---|
 | member erase | `forget_user` (fail closed) | `MemoryService.delete_user` |
 | "forget <name>" | `erase_entity` (by person id, live or soft-deleted) | forget cascade step `value_registry` (durable retry) |
-| "forget what I told you about <topic>" | `erase_topic` (tied rows, or a person a topic word names) | `forget_topic.forget` |
+| "forget what I told you about <topic>" | `erase_topic` (tied rows, a person a topic word names, or an entry recorded from a retracted turn) | `forget_topic.forget`, BEFORE the turn notes and exact words are erased; a failure leaves them intact and a durable ledger marker (`value_registry_topic`) that the next healthy pass (`memory_forget_cascade.retry_pending`) drains by over-forgetting the member's entries |
 | "forget that" | `erase_for_turn` (the turn's content id, tied rows) | `intent_router` `memory_forget_last` |
 | any physical row erase | `erase_for_rows` (fail closed, before the rows go) | `MemoryService.erase_rows` |
 

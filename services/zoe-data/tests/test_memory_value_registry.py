@@ -618,6 +618,94 @@ def test_erase_topic_by_turn_ids_over_forgets_what_it_cannot_rule_out(db):
     assert run(reg.erase_topic(A, turn_ids=[None])) == 2 and _subjects(db, A) == []
 
 
+@pytest.fixture
+def ledger(monkeypatch):
+    """The forget ledger configured (salt set) on its in-process backend: where the durable retry marker lives."""
+    import memory_forget_cascade
+    import memory_forgotten
+
+    monkeypatch.setenv(memory_forgotten.SALT_ENV, "s" * 40)
+    monkeypatch.delenv(memory_forgotten.SHIELD_DAYS_ENV, raising=False)
+    memory_forgotten.set_backend(memory_forgotten.MemoryBackend())
+    memory_forget_cascade.reset_state()
+    yield memory_forgotten
+    memory_forgotten.set_backend(None)
+    memory_forget_cascade.reset_state()
+
+
+def _flaky_erase_topic(monkeypatch, failures=1):
+    """The registry erase fails ``failures`` times with a lost connection, then works."""
+    real = reg.erase_topic
+    left = {"n": failures}
+
+    async def flaky(uid, **kw):
+        if left["n"] > 0:
+            left["n"] -= 1
+            raise ConnectionError("pool lost")
+        return await real(uid, **kw)
+    monkeypatch.setattr(reg, "erase_topic", flaky)
+
+
+def _sister_seed(db):
+    import turn_forget
+    import value_correction
+
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=value_correction.turn_id_of(A, SISTER), rows=[])
+    _rec(B, OTHER_JUNO, _age(5), _age(6), T0, turn=value_correction.turn_id_of(B, SISTER), rows=[])
+    turn_forget.note_user_turn(A, SISTER)
+
+
+def test_a_failed_registry_erase_then_a_healthy_retry_leaves_nothing(db, forget_env, ledger, monkeypatch):
+    """Thread PRRT_kwDOPZpkks63chdS: the first "forget what I told you about my sister" loses the store at the registry erase;
+    the member says it again once the store is back. Nothing of theirs may remain, and the retry must not report store_down."""
+    import forget_topic
+    import turn_forget
+    import memory_forget_cascade as cascade
+
+    _sister_seed(db)
+    _flaky_erase_topic(monkeypatch)
+    first = run(forget_topic.forget(_registry_svc(), A, "my sister"))
+    assert first.store_down
+    assert turn_forget.turns_matching(A, lambda t: "sister" in t)          # the evidence is intact (nothing erased before it)
+    assert cascade.VALUE_REGISTRY_TOPIC in run(ledger.pending_labels(A, cascade.ALL_LABELS))   # and the retry is durable
+    second = run(forget_topic.forget(_registry_svc(), A, "my sister"))
+    assert not second.store_down
+    assert _subjects(db, A) == [] and _subjects(db, B) == [OTHER_JUNO]
+    assert run(ledger.pending_labels(A, cascade.ALL_LABELS)) == []
+
+
+def test_the_durable_marker_drains_even_if_nobody_repeats_the_forget(db, forget_env, ledger, monkeypatch):
+    """The next healthy pass (the nightly pre-read, the next forget of any kind) finishes it from the marker alone - no turn id,
+    row id or name is needed: the member's registry entries are over-forgotten."""
+    import forget_topic
+    import memory_forget_cascade as cascade
+
+    _sister_seed(db)
+    _flaky_erase_topic(monkeypatch)
+    assert run(forget_topic.forget(_registry_svc(), A, "my sister")).store_down
+    run(forget_topic._erase_words(A, forget_topic.topic_groups("my sister")))   # even with every turn note gone
+    run(cascade.retry_pending(A))
+    assert _subjects(db, A) == [] and _subjects(db, B) == [OTHER_JUNO]
+
+
+def test_the_old_ordering_leaks_the_entry(db, forget_env, ledger, monkeypatch):
+    """Negative control: the order before this fix (the words erased first, no marker) - the retry finds no turn id, row id or
+    name, and the registry entry outlives a forget that then reports success."""
+    import forget_topic
+    import memory_forget_cascade as cascade
+
+    _sister_seed(db)
+    _flaky_erase_topic(monkeypatch)
+
+    async def no_marker(*_a, **_k):
+        return False
+    monkeypatch.setattr(cascade, "_mark_pending", no_marker)
+    assert run(forget_topic.forget(_registry_svc(), A, "my sister")).store_down
+    run(forget_topic._erase_words(A, forget_topic.topic_groups("my sister")))   # what the old order had already done
+    second = run(forget_topic.forget(_registry_svc(), A, "my sister"))
+    assert not second.store_down and _subjects(db, A) == [JUNO]
+
+
 def test_topic_forget_by_a_tied_row_alone(db):
     _seed(db)
     assert run(reg.erase_topic(A, row_ids=[R(A, "r2")], name_matches=lambda _n: False)) == 2
