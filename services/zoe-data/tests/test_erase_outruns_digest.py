@@ -358,3 +358,200 @@ def test_forget_that_mid_digest_is_already_closed_by_the_turn_wall_not_the_erase
     asyncio.run(go())
     assert erase_gate.generation(UID) == 0, "the erase gate played no part"
     assert _rows(col, UID) == []
+
+
+# ── the erase is visible for its WHOLE span (review of #2569) ────────────────────────────────────────────────────────────
+#
+# ``erasing`` bumps the generation on enter and exit of each INNER eraser. A routed write scheduled after the last of those bumps (here:
+# inside the memory lock, after the rows are deleted, while the remaining stores are erased) snapshotted the final generation, waited for
+# the memory lock, passed the check and stored AFTER the deletion. ``delete_user`` now runs whole inside ``erase_span``.
+
+import alarms  # noqa: E402
+import conversation_notes  # noqa: E402
+import exact_words  # noqa: E402
+
+
+def _pause_first(monkeypatch, module, name, *, boom=False):
+    """The first call of ``module.name`` signals ``reached`` and waits for ``release`` (then raises when ``boom``); later calls pass."""
+    real, st = getattr(module, name), {"calls": 0}
+
+    async def paused(*a, **k):
+        st["calls"] += 1
+        if st["calls"] == 1:
+            st["reached"].set()
+            await st["release"].wait()
+            if boom:
+                raise RuntimeError("synthetic store outage")
+        return await real(*a, **k)
+
+    monkeypatch.setattr(module, name, paused)
+    return st
+
+
+def _arm(st):
+    st["reached"], st["release"] = asyncio.Event(), asyncio.Event()
+
+
+def _writer(svc, release):
+    """A routed post-turn writer: its snapshot is taken when it is CALLED; it stores once ``release`` is set."""
+    @erase_gate.scheduled_at_call("user_id")
+    async def write(user_id, text):
+        await release.wait()
+        return await svc.ingest(text, user_id=user_id, source="turn_digest", memory_type="profile", confidence=0.82,
+                                status="approved")
+    return write
+
+
+BEES = "User keeps bees on the roof"
+
+
+@pytest.mark.parametrize("where", ["after-last-inner-eraser", "before-memory-lock"])
+def test_a_write_scheduled_inside_the_erase_span_stores_nothing_even_after_the_erase_finished(env, monkeypatch, caplog, where):
+    """The exact interleaving, with events: ``delete_user`` is held at ``where``; a routed writer is scheduled THERE and held until the
+    erase has fully returned; then it stores. ``after-last-inner-eraser`` is the hole (it stored on the old code); ``before-memory-lock``
+    is the gap between the day-review eraser returning and the memory lock being taken."""
+    svc, col = env
+    st = _pause_first(monkeypatch, *((alarms, "forget_user") if where == "after-last-inner-eraser"
+                                     else (conversation_notes, "forget_user")))
+
+    async def go():
+        _arm(st)
+        go_write = asyncio.Event()
+        erase = asyncio.ensure_future(_erase(svc))
+        await asyncio.wait_for(st["reached"].wait(), 10)
+        write = asyncio.ensure_future(_writer(svc, go_write)(UID, BEES))      # scheduled inside the span
+        await asyncio.sleep(0)
+        st["release"].set()
+        removed = await asyncio.wait_for(erase, 10)
+        go_write.set()
+        return removed, await asyncio.wait_for(write, 10)
+
+    removed, ref = asyncio.run(go())
+    assert removed == 0 and ref is None and _rows(col, UID) == []
+    assert [r.getMessage() for r in _drops(caplog)] == ["ERASE_GATE_DROP lane=turn_digest code=erased_since_scheduled"]
+
+
+def test_a_digest_scheduled_inside_the_erase_span_stores_nothing(env, monkeypatch, caplog):
+    svc, col = env
+    gate = _hold_before_store(monkeypatch)
+    st = _pause_first(monkeypatch, alarms, "forget_user")
+
+    async def post_turn(user_id, words):
+        return await memory_digest.run_turn_digest(user_id, words, session_id="s-1")
+
+    async def go():
+        _arm(st)
+        erase = asyncio.ensure_future(_erase(svc))
+        await asyncio.wait_for(st["reached"].wait(), 10)
+        digest = asyncio.ensure_future(erase_gate.scheduled_at_call("user_id")(post_turn)(UID, T1))
+        held = asyncio.ensure_future(gate(UID)[0].wait())
+        await asyncio.wait({digest, held}, timeout=10, return_when=asyncio.FIRST_COMPLETED)
+        st["release"].set()
+        await asyncio.wait_for(erase, 10)
+        gate(UID)[1].set()
+        held.cancel()
+        return await asyncio.wait_for(digest, 10)
+
+    asyncio.run(go())
+    assert _rows(col, UID) == []
+    assert _drops(caplog) and all(r.getMessage() == "ERASE_GATE_DROP lane=turn_digest code=erased_since_scheduled"
+                                  for r in _drops(caplog))
+
+
+def test_a_write_scheduled_while_the_erase_holds_the_memory_lock_stores_nothing(env, monkeypatch):
+    svc, col = env
+    st = _pause_first(monkeypatch, exact_words, "delete_user")      # the first step inside the memory lock
+
+    async def go():
+        _arm(st)
+        now = asyncio.Event()
+        now.set()
+        erase = asyncio.ensure_future(_erase(svc))
+        await asyncio.wait_for(st["reached"].wait(), 10)
+        write = asyncio.ensure_future(_writer(svc, now)(UID, BEES))     # goes straight to ingest: waits for the memory lock
+        await asyncio.sleep(0)
+        st["release"].set()
+        await asyncio.wait_for(erase, 10)
+        return await asyncio.wait_for(write, 10)
+
+    assert asyncio.run(go()) is None and _rows(col, UID) == []
+
+
+def test_a_write_scheduled_just_after_the_erase_finished_stores_normally(env):
+    svc, col = env
+
+    async def go():
+        await _erase(svc)
+        assert not erase_gate.in_progress(UID)
+        now = asyncio.Event()
+        now.set()
+        return await _writer(svc, now)(UID, BEES)
+
+    assert asyncio.run(go()) is not None and [d for d, _ in _rows(col, UID)] == [BEES]
+
+
+def test_an_erase_that_raises_midway_leaves_the_member_not_in_progress_and_drops_only_older_writes(env, monkeypatch):
+    """Rule: a failed erase still ends its span with a bump, so writes scheduled BEFORE or DURING it are dropped (the caller retries the
+    erase); the member is not stuck, and a write scheduled after the failure stores."""
+    svc, col = env
+    st = _pause_first(monkeypatch, conversation_notes, "forget_user", boom=True)
+
+    async def go():
+        _arm(st)
+        go_old = asyncio.Event()
+        old = asyncio.ensure_future(_writer(svc, go_old)(UID, "User keeps hens"))      # scheduled before the erase
+        erase = asyncio.ensure_future(_erase(svc))
+        await asyncio.wait_for(st["reached"].wait(), 10)
+        assert erase_gate.in_progress(UID)
+        st["release"].set()
+        with pytest.raises(memory_service.MemoryServiceError):
+            await asyncio.wait_for(erase, 10)
+        assert not erase_gate.in_progress(UID)
+        go_old.set()
+        dropped = await asyncio.wait_for(old, 10)
+        now = asyncio.Event()
+        now.set()
+        later = await _writer(svc, now)(UID, BEES)
+        return dropped, later
+
+    dropped, later = asyncio.run(go())
+    assert dropped is None and later is not None
+    assert [d for d, _ in _rows(col, UID)] == [BEES]
+
+
+def test_two_overlapping_erases_keep_the_member_in_progress_until_both_finish(env, monkeypatch):
+    svc, col = env
+    st = _pause_first(monkeypatch, conversation_notes, "forget_user")      # only the FIRST erase is held
+
+    async def go():
+        _arm(st)
+        first = asyncio.ensure_future(_erase(svc))
+        await asyncio.wait_for(st["reached"].wait(), 10)
+        await asyncio.wait_for(_erase(svc), 10)                         # the second runs to the end
+        assert erase_gate.in_progress(UID), "the first erase is still running"
+        now = asyncio.Event()
+        now.set()
+        between = await _writer(svc, now)(UID, "User keeps hens")       # scheduled between the two ends: dropped
+        st["release"].set()
+        await asyncio.wait_for(first, 10)
+        assert not erase_gate.in_progress(UID)
+        after = await _writer(svc, now)(UID, BEES)
+        return between, after
+
+    between, after = asyncio.run(go())
+    assert between is None and after is not None
+    assert [d for d, _ in _rows(col, UID)] == [BEES]
+
+
+def test_the_erase_span_counts_and_always_ends():
+    erase_gate.reset()
+    with erase_gate.erase_span(UID):
+        with erase_gate.erase_span(UID):
+            assert erase_gate.in_progress(UID)
+        assert erase_gate.in_progress(UID)
+    assert not erase_gate.in_progress(UID) and erase_gate.generation(UID) == 4
+    with pytest.raises(RuntimeError):
+        with erase_gate.erase_span(OTHER):
+            raise RuntimeError("synthetic")
+    assert not erase_gate.in_progress(OTHER) and erase_gate.generation(OTHER) == 2
+    erase_gate.reset()

@@ -43,6 +43,48 @@ def snapshot() -> dict:
     return dict(_generation)
 
 
+#: whole-member erases running now, per member (a COUNT: two overlapping erases of one member are both visible until both finish)
+_in_progress: dict = {}
+
+
+def in_progress(user_id: str) -> bool:
+    """A whole-member erase of ``user_id`` is running (``erase_span``)."""
+    return _in_progress.get(user_id, 0) > 0
+
+
+@contextlib.contextmanager
+def erase_span(user_id: str) -> Iterator[None]:
+    """The WHOLE of a member erase (``MemoryService.delete_user``, first step to after its memory lock is released).
+
+    The inner erasers' ``erasing`` bumps are not enough on their own: a write scheduled after the first inner eraser RETURNS would
+    snapshot the generation it leaves, and that value never moves again. So while the span runs the member is ``in_progress``
+    (``erased_since_scheduled`` is True for every scheduled write of theirs), and the span bumps the generation on entry and AGAIN on
+    exit, in a ``finally``: any snapshot taken before or inside the span is stale for good, and one taken after it is clean.
+
+    An erase that RAISES still decrements and bumps: the member is never left stuck in progress, and every write scheduled before or
+    during the failed attempt is dropped (the caller retries the erase; nothing that attempt was erasing comes back meanwhile)."""
+    _in_progress[user_id] = _in_progress.get(user_id, 0) + 1
+    _generation[user_id] = generation(user_id) + 1
+    try:
+        yield
+    finally:
+        left = _in_progress.get(user_id, 1) - 1
+        if left > 0:
+            _in_progress[user_id] = left
+        else:
+            _in_progress.pop(user_id, None)
+        _generation[user_id] = generation(user_id) + 1
+
+
+def whole_member_erase(method):
+    """Decorate ``async def delete_user(self, user_id, ...)``: the whole call runs inside ``erase_span(user_id)``."""
+    @functools.wraps(method)
+    async def call(self, user_id, *args, **kwargs):
+        with erase_span(user_id):
+            return await method(self, user_id, *args, **kwargs)
+    return call
+
+
 def _lock(user_id: str) -> asyncio.Lock:
     table = _locks.setdefault(asyncio.get_running_loop(), {})
     lock = table.get(user_id)
@@ -84,8 +126,8 @@ def scheduled(user_id: str, scheduled_at: int) -> Iterator[None]:
     For the MemoryService writers (the turn digest and every post-turn pass, the nightly digest, idle consolidation). Their rows are
     guarded by the store's own per-user lock, which ``delete_user`` holds while it enumerates, so ``MemoryService.ingest`` /
     ``review(edit)`` check ``erased_since_scheduled`` UNDER that lock rather than taking ``writing``: ``delete_user`` takes this
-    module's lock inside its memory lock, so a writer holding ``writing`` while it waits for the memory lock would deadlock it. The
-    generation has already moved before ``delete_user`` takes its memory lock (its first step, the day-review erase, bumps it)."""
+    module's lock inside its memory lock, so a writer holding ``writing`` while it waits for the memory lock would deadlock it.
+    ``delete_user`` runs whole inside ``erase_span``, so the member reads as erased from its first step until it has finished."""
     token = _scheduled.set((user_id, scheduled_at))
     try:
         yield
@@ -102,9 +144,10 @@ def scheduled_here(user_id: str) -> "contextlib.AbstractContextManager":
 
 
 def erased_since_scheduled(user_id: str) -> bool:
-    """True when the current task is background work for ``user_id`` and the member was erased since it was scheduled."""
+    """True when the current task is background work for ``user_id`` and the member was erased since it was scheduled, or a whole-member
+    erase of them is running now (``erase_span``)."""
     held = _scheduled.get()
-    return held is not None and held[0] == user_id and generation(user_id) != held[1]
+    return held is not None and held[0] == user_id and (generation(user_id) != held[1] or in_progress(user_id))
 
 
 def scheduled_at_call(user_arg: str):
@@ -131,5 +174,6 @@ def scheduled_at_call(user_arg: str):
 
 
 def reset() -> None:
-    """Forget all generations (tests)."""
+    """Forget all generations and running erases (tests)."""
     _generation.clear()
+    _in_progress.clear()

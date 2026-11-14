@@ -2161,6 +2161,9 @@ class MemoryService:
             frontier = nxt
         return rows, chain
 
+    # The WHOLE erase, first step to after the memory lock is released, runs inside ``user_erase_gate.erase_span``: every background
+    # write scheduled for the member before it ends is dropped, even one scheduled between two inner erasers (decorator: no reindent).
+    @_erase_gate.whole_member_erase
     async def delete_user(self, user_id: str, *, actor: str, reason: str = "") -> int:
         """Right-to-be-forgotten. Returns number of rows removed.
 
