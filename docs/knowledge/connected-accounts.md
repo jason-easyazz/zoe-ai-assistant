@@ -82,7 +82,7 @@ per account using `start_run` / `finish_run`; `calendar_ical.store_parsed` and t
 `(calendar_id, external_uid, recurrence_id)` with `etag` / `sequence`; the shared calendar read path with recurrence expansion (audit X3,
 X4); disconnect deleting the account's calendars and events after the fence.
 
-## The calendar feed fetcher contract (`calendar_feed.py`; the real fetcher is not built yet)
+## The calendar feed fetcher contract (`calendar_feed.py`; the real fetcher is a lab module, unwired)
 
 The engine never holds a subscription address; an injected fetcher hands it bytes. It enforces what it can see itself:
 
@@ -96,8 +96,43 @@ The engine never holds a subscription address; an injected fetcher hands it byte
 - a fetcher's exception is logged by its type name only; its text reaches no log, row or report (a test plants a token in the
   address and in the exception and dumps every table, every log record and every report).
 
-The real fetcher (it belongs to the credential broker, a later change) MUST: stream the body and stop at `FetchRequest.max_bytes`;
+The real fetcher (it belongs to the credential broker; built in the lab, see below) MUST: stream the body and stop at `FetchRequest.max_bytes`;
 use connect / read timeouts shorter than the engine's bound; follow at most 3 redirects and re-check every hop; refuse loopback,
 link-local, private, multicast, reserved and cloud-metadata addresses AFTER DNS resolution and connect to the address it checked
 (`agent_safety.assert_public_url` plus a pinned address), answering `blocked`; and never put the address, host or a token in an
 exception, a log line or a result field.
+
+### What exists and what does not (2026-11-14)
+
+- **Exists, UNWIRED:** [`labs/calendar-fetcher/calendar_fetcher.py`](../../labs/calendar-fetcher/calendar_fetcher.py), a
+  standard-library fetcher that implements the contract above, plus its tests (no real network: a fake resolver and an
+  in-process socket pair) and a loopback lab (`lab_happy_path.py --lab`) that drives the engine's `sync_account` on a scratch
+  store. It resolves once per hop, refuses every non-public answer (IPv4 and IPv6, v4-mapped / NAT64 / 6to4 judged as the
+  IPv4 they carry, numeric host spellings and internal names refused before any lookup), connects to the checked address with
+  the host in `Host` and SNI, follows at most 3 redirects with every check re-run and never https -> http, streams to
+  `max_bytes`, bounds every phase inside 30 s, sends and returns validators, and answers with the engine's status list
+  (pinned by a test). It does not use `agent_safety` (the broker must not import zoe-data) and it is not httpx (no public
+  IP-pinning hook, and it reads proxy settings from the environment). `http://` exists only as a constructor argument for the
+  lab, to loopback only.
+- **Does not exist:** anything that calls it from zoe-data, any stored link, a broker verb that runs it, the unit it runs in,
+  the scheduler tick, and the connect flow below. `account_secrets` still refuses every `put`.
+- **Where it runs (the broker integration, after P0):** not in the `zoe-vaultd` core, whose sandbox allows loopback only
+  ([credential-vault.md](../architecture/credential-vault.md) 5.1). The same split as the login browser: a small egress unit
+  of its own (public addresses only, `IPAddressDeny=` over loopback, private and link-local ranges as a second wall) that the
+  core hands ONE link per call, and that returns the result's fields only. zoe-data asks by account id and receives a
+  `FetchResult`; it never sees the link, the host or the fetcher's reason word.
+
+## Connecting a calendar subscription (design only; nothing built)
+
+The general flow is [app-connection-handoff.md](app-connection-handoff.md) (QR on the panel, finish on the phone, VISION
+principle 8). What is particular to a subscription link, because the link is the credential:
+
+1. The member says "connect my calendar" or taps Settings > Connected accounts. The panel shows a QR (a new handoff kind); a
+   linked member may get the Telegram "send to my phone" link instead. Nothing is typed on the panel.
+2. The phone page shows the consent text, short "where to find the secret address" help per provider, ONE paste box and a
+   visibility choice (default: only me).
+3. **The pasted link goes to the broker's phone unit, not to zoe-data** (nginx routes that path straight to the broker's socket,
+   as the vault's approve page does). The broker checks it, makes one test fetch, stores it, and tells zoe-data only "account
+   created" plus the counts. zoe-data never receives the link, even once.
+4. The panel card follows the handoff live and says "connected" with the count of things in the next two weeks; a refusal
+   is said in plain words from the fixed error code (for example "That address is on a home network; I can't use those").
