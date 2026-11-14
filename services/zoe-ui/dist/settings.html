@@ -517,6 +517,7 @@ html.light-mode .topbar { background: rgba(244,244,248,0.90); }
 <script src="js/auth.js"></script>
 <script src="js/bluetooth-settings.js?v=2"></script>
 <script src="js/omi-pendant-settings.js?v=1"></script>
+<script src="js/reminder-phone-settings.js?v=1"></script>
 <script>
 'use strict';
 
@@ -998,6 +999,9 @@ function buildSections() {
         <button class="btn btn-primary" onclick="setTelegramManual()">Save</button>
       </div>
     </div>
+
+    <!-- Reminders on my phone (component js/reminder-phone-settings.js, desktop only; shown only once Telegram is linked) -->
+    <div id="tg-reminders-root"></div>
   </div>
 
   <!-- Bluetooth devices (flag-dark ZOE_BLUETOOTH_SETTINGS; admin only) -->
@@ -1103,9 +1107,17 @@ async function probeFeatures() {
 
 /* ── Telegram linking ─────────────────────────────────────── */
 let _tgPoll = null;
+/* Reminders on my phone (js/reminder-phone-settings.js): re-read whenever the Telegram link changes, since it shows only when linked. */
+let _tgReminders = null;
+function loadReminderPhone() {
+  if (!window.ZoeReminderPhone) return;
+  if (_tgReminders) { _tgReminders.reload(); return; }
+  _tgReminders = ZoeReminderPhone.mount(document.getElementById('tg-reminders-root'), { fetchJson: btFetch });
+}
 function stopTgPoll() { if (_tgPoll) { clearInterval(_tgPoll); _tgPoll = null; } }
 
 function renderTgStatus(tid) {
+  loadReminderPhone();
   const statusEl = document.getElementById('tg-status');
   const connectBtn = document.getElementById('tg-connect-btn');
   const unlinkBtn = document.getElementById('tg-unlink-btn');
