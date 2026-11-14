@@ -934,6 +934,44 @@ def reset_state() -> None:
     _REMEMBERED.clear()
 
 
+async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
+    """How many DISTINCT people the rows a correction would rewrite belong to, from data only. (1) The rows' own linkage: a
+    person id (``entity_id`` of an ``entity_type`` person row, never a pending ``slug:``) - two ids are two people. (2) Rows with
+    no such linkage: the people graph for the typed NAME (``people_graph`` via ``person_extractor._resolve_person``): an
+    ambiguous answer is that many people. Neither can tell (no linkage, the graph unique / empty / unreadable, or the subject is
+    no name: "my son", "the dentist"): 1, i.e. today's behaviour, every matching row rewritten. Never raises."""
+    ids = set()
+    unlinked = 0
+    for r in rows:
+        meta = getattr(r, "metadata", None) or {}
+        eid = str(meta.get("entity_id") or "").strip()
+        if str(meta.get("entity_type") or "").strip().lower() == "person" and eid and not eid.startswith("slug:"):
+            ids.add(eid)
+        else:
+            unlinked += 1
+    if len(ids) > 1:
+        return len(ids)
+    name = (owner_noun(subject) or (subject,))[0]
+    if not unlinked or re.match(r"(?i)^(?:the|my|our|a|an)\s", name or "") or not re.match(r"^[A-Za-z][A-Za-z'’\-]*$", name or ""):
+        return max(len(ids), 1)
+    try:
+        import person_extractor as pe
+
+        db, opened = await pe._ensure_db(None)
+        if db is None:
+            return max(len(ids), 1)
+        try:
+            res = await pe._resolve_person(name, user_id, db)
+        finally:
+            if opened:
+                await db.close()
+        if res is not None and getattr(res, "ambiguous", False):
+            return max(len(getattr(res, "matches", ()) or ()), 2)
+    except Exception:  # noqa: BLE001
+        pass
+    return max(len(ids), 1)
+
+
 async def apply(user_message: str, user_id: str, session_id: Optional[str], *, svc=None,
                 speaker_verified: Optional[bool] = None) -> int:
     """Supersede the member's stored rows the correction in ``user_message`` is about. Returns the rows rewritten (0 = nothing
@@ -992,6 +1030,13 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 new_text = rewrite(r.text or "", corr, lazy_s=True)
                 if new_text and new_text != r.text:
                     hits.append((r, new_text))
+        if len(hits) > 1:
+            people = await _distinct_people([r for r, _t in hits], corr.subject, user_id)
+            if people > 1:
+                # the rows belong to MORE THAN ONE person who answers to this name (golden C27: two people with one name, both
+                # rewritten): nothing is rewritten, the correction stays as said
+                logger.info("VALUE_CORRECTION_AMBIGUOUS_SUBJECT user=%s rows=%d people=%d", user_id, len(hits), people)
+                return 0
         if corr.old is not None and session_id and not _is_unidentified(user_id):
             # the misheard / misspoken fact may not be stored yet (the post-turn digest of an earlier turn lands minutes later):
             # that digest rewrites the old value before it writes (correction_apply.correct_fact)
