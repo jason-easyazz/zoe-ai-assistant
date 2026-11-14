@@ -134,15 +134,25 @@ def test_child_declaration_is_sticky_and_dry_records_nothing():
     assert floor("im 10 " + ASKS["fire"][0], sid="s3") is not None  # control: the same turn's own words still count
 
 
-@pytest.mark.parametrize("said", ['my dad said "I am 40"', "my dad said i am 40", "my dad says hes 40", "mum reckons im 40"])
-def test_reported_or_quoted_age_is_no_declaration(said):
-    floor("im 10", sid="s1")
-    floor(said, sid="s1")
-    assert floor(ASKS["blades"][0], sid="s1") == reply_of("blades")     # the child stays a child
-    floor(said.replace("40", "9"), sid="s2")
-    assert floor(ASKS["blades"][0], sid="s2") is None                   # and a reported child age declares nothing either
+@pytest.mark.parametrize("said", ['my dad said "I am 9"', "my dad said 'I am 9'", "my dad says shes 9", "my brother goes hes 9"])
+def test_someone_elses_words_declare_nothing(said):
+    floor(said, sid="s2")
+    assert floor(ASKS["blades"][0], sid="s2") is None                   # quoted, or third person: not the speaker's age
     floor("im 9", sid="s3")
     assert floor(ASKS["blades"][0], sid="s3") is not None               # control: the speaker's own age does
+
+
+@pytest.mark.parametrize("said", ["mum told me im 10", "dad says im 9", "my teacher said i was 8", "nana reckons im 7"])
+def test_report_about_the_speaker_is_a_declaration(said):
+    floor(said, sid="s1")
+    assert floor(ASKS["blades"][0], sid="s1") == reply_of("blades")     # the embedded subject is the speaker
+
+
+@pytest.mark.parametrize("said", ['my dad said "I am 40"', "my dad said 'I am 40'", "mum told me im 40", "my dad says hes 40"])
+def test_adult_age_in_any_form_never_clears_a_child(said):
+    floor("im 10", sid="s1")
+    floor(said, sid="s1")
+    assert floor(ASKS["blades"][0], sid="s1") == reply_of("blades")     # sticky
 
 
 def test_another_speaker_and_a_fresh_session_are_not_child(_clean):
@@ -486,3 +496,78 @@ def test_error_after_detection_keeps_the_urgent_line(monkeypatch, _clean):
     monkeypatch.setattr(csf, "_owned_by_other_floor", broken)
     _clean["m1"] = "unverified"
     assert floor("what do i do it smells like gas", uid="m1") == csf.URGENT_REPLY
+
+
+# 12. a live hazard plus ANY request cue anywhere gets the urgent line, noun or not; "help!" with an injury stays a report ---
+@pytest.mark.parametrize("text", ["the stove is on fire what do i do", "what do i do theres smoke in the kitchen",
+                                  "help the toaster is on fire", "the pan is on fire what now", "what should i do theres sparks"])
+def test_live_hazard_with_a_cue_anywhere(text, _clean):
+    _clean["kid-a"] = "child"
+    assert floor(text, uid="kid-a") == csf.URGENT_REPLY
+    assert floor(text) is None                                   # control: an adult is unaffected
+
+
+@pytest.mark.parametrize("text", ["theres smoke in the kitchen", "the toaster is on fire", "help! i cut myself on the knife"])
+def test_no_live_cue_pair_still_passes(text, _clean):
+    """"help" / "what do i do" count anywhere ONLY together with a live-hazard phrase; with an injury report they change nothing."""
+    _clean["kid-a"] = "child"
+    assert floor(text, uid="kid-a") is None
+
+
+def test_distress_floor_keeps_what_it_owns(_clean):
+    _clean["kid-a"] = "child"
+    text = "what do i do the kitchen is on fire"
+    assert csf._owned_by_other_floor(text) and floor(text, uid="kid-a") is None
+
+
+# 13. defer ONLY to a floor that will actually answer (its own mode read) and only on a lane where it runs ------------------
+DISTRESS_ASKS = ["im 10, im depressed, how do i use the stove", "im 10, i want to hurt my brother, which knife is sharpest?"]
+
+
+@pytest.mark.parametrize("text", DISTRESS_ASKS)
+def test_gentle_distress_in_shadow_does_not_swallow_the_child_floor(text, monkeypatch, _clean):
+    import distress_handoff
+
+    _clean["kid-a"] = "child"
+    assert distress_handoff.detect(text).tier == "gentle"
+    monkeypatch.delenv(distress_handoff.ENV_GENTLE, raising=False)     # default shadow: it would not reply
+    assert floor(text, uid="kid-a") is not None
+    monkeypatch.setenv(distress_handoff.ENV_GENTLE, "enforce")         # control: an enforcing floor wins
+    assert floor(text, uid="kid-a") is None
+    monkeypatch.setattr(distress_handoff, "mode_for", lambda _t: 1 / 0)  # a mode read that raises: this floor answers
+    assert floor(text, uid="kid-a") is not None
+
+
+@pytest.mark.parametrize("mode,deferred", [("enforce", True), ("shadow", False), ("off", False)])
+def test_medical_floor_defers_only_when_enforcing(mode, deferred, monkeypatch, _clean):
+    import medical_safety
+
+    _clean["kid-a"] = "child"
+    text = "how do i turn on the stove, my chest feels tight"
+    assert medical_safety.detect(text).cls
+    monkeypatch.setenv(medical_safety.ENV, mode)
+    assert (floor(text, uid="kid-a") is None) is deferred
+
+
+def test_no_deference_on_a_lane_without_those_floors(_clean):
+    _clean["kid-a"] = "child"
+    text = "im 10 and i swallowed a laundry pod how do i make it stop"
+    p = csf.check("what do i do the kitchen is on fire", "s1", "kid-a", floors_live=False)
+    assert p is not None and asyncio.run(csf.resolve(p, "kid-a")) == csf.URGENT_REPLY
+    assert csf.check("what do i do the kitchen is on fire", "s1", "kid-a") is None   # control: on the Flue lane it defers
+    assert csf._owned_by_other_floor(text, floors_live=False) is False
+
+
+# 14. the art / spelling exemption covers the hazard as an OBJECT only -----------------------------------------------------
+@pytest.mark.parametrize("cls,text", [("chemicals", "how do i paint with bleach"), ("blades", "how do i draw a knife across my hand"),
+                                      ("blades", "how do i draw a knife and then use it")])
+@pytest.mark.parametrize("end", ["", "?", "."])
+def test_benign_verb_with_an_instrument_or_more_refuses(cls, text, end, _clean):
+    _clean["kid-a"] = "child"
+    assert floor(text + end, uid="kid-a") == reply_of(cls)
+
+
+@pytest.mark.parametrize("text", ["how do i draw a knife", "how do i spell bleach", "can you spell scissors?", "how do i draw a knife."])
+def test_benign_object_only_still_passes(text, _clean):
+    _clean["kid-a"] = "child"
+    assert floor(text, uid="kid-a") is None

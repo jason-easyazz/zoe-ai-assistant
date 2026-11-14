@@ -76,7 +76,10 @@ def _safe_mode() -> str:
 def _fold(text: str) -> str:
     import distress_handoff
 
-    return distress_handoff._strip(unicodedata.normalize("NFKC", text or "").casefold())[:MAX_CHARS]
+    s = unicodedata.normalize("NFKC", text or "").casefold()
+    # a QUOTING single quote ("dad said 'i am 40'") becomes a double quote before the apostrophes are dropped; "i'm" is untouched
+    s = re.sub(r"(?:^|(?<=\s))['\u2018\u2019`](?=\w)|(?<=[\w.!?,])['\u2018\u2019`](?=\s|$|[.,!?;:])", '"', s)
+    return distress_handoff._strip(s)[:MAX_CHARS]
 
 
 @lru_cache(maxsize=8)
@@ -95,7 +98,8 @@ def _rx(lang: str) -> Optional[dict]:
     return {"adult": int(e["adult_age"]), "max_year": int(e["max_school_year"]), "nums": nums,
             "own": [comp(p) for p in e["own_age"]], "school": [comp(p) for p in e["school"]],
             "ask": w(e["ask"]), "opener": re.compile(rf"(?:{e['opener']})(?!\w)"), "lead": re.compile(e["lead_strip"]),
-            "reported": frozenset(e["reported_speech"].split()), "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": w(e["benign"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
+            "factual": re.compile(e["factual"]), "factual_not": w(e["factual_not"]), "benign": re.compile(e["benign"]),
+            "body": w("|".join(e["body_parts"].split())), "live_ask": w(e["live_ask"]), "report": w(e["report"]), "in_progress": w(e["in_progress"]),
             "in_progress_not": frozenset(e["in_progress_not"].split()), "urgent": str(e.get("urgent_reply") or URGENT_REPLY),
             "classes": [(c["id"], w(c["terms"]), c["reply"]) for c in e["classes"]]}
 
@@ -107,12 +111,9 @@ def _age(token: str, nums: dict) -> int:
 
 
 def _not_own(s: str, pos: int, rx: dict) -> bool:
-    """Someone ELSE's words: inside double quotes, or after a reported-speech verb in the same clause ("my dad said i am 40")."""
-    before = s[:pos]
-    if sum(before.count(q) for q in '"\u201c\u201d') % 2:
-        return True
-    clause = re.split(r"[.!?;]", before)[-1]
-    return bool(set(re.findall(r"\w+", clause)[-6:]) & rx["reported"])
+    """Someone ELSE's words: inside quotes (single quotes are turned into double ones by ``_fold``). The own-age patterns are first
+    person only, so a report whose embedded subject is the speaker ("mum told me im 10") counts, and "dad says shes 40" never matches."""
+    return bool(sum(s[:pos].count(q) for q in '"\u201c\u201d') % 2)
 
 
 def own_age_says_child(s: str, rx: dict) -> Optional[bool]:
@@ -153,13 +154,17 @@ def in_progress(s: str, rx: dict) -> bool:
 
 def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
     """(class id, fixed reply) when ``s`` is a request or question naming one hazard and reports no danger, else None."""
-    core = re.sub(r"[\s.,!?;:]+$", "", rx["lead"].sub("", s, count=1))
+    core = re.sub(r"[\s.,!?;:\"]+$", "", rx["lead"].sub("", s, count=1))
+    live = in_progress(s, rx)
+    if live and (is_request(s, rx) or rx["live_ask"].search(s)):
+        # a hazard IN PROGRESS plus ANY request cue, anywhere ("the stove is on fire what do i do"): the urgent line, noun or not
+        return next(((cid, rx["urgent"]) for cid, terms, _r in rx["classes"] if terms.search(s)), ("live", rx["urgent"]))
     if rx["factual"].match(core) and not rx["ask"].search(core) and not rx["factual_not"].search(core):
         return None   # "why is fire hot": a pure factual question; "how does it work" / "how do I" / "can I" never match
-    s = rx["benign"].sub(" ", s)
+    if rx["benign"].fullmatch(core) and not rx["body"].search(core):
+        return None   # "how do i draw a knife": the hazard is only the OBJECT; "draw a knife across my hand" / "paint with bleach" never match
     if not is_request(s, rx):
         return None
-    live = in_progress(s, rx)
     rep = rx["report"].search(s)
     if rep and not live and not _cue_before(s, rep.start(), rx):
         return None   # a report ("i cut my finger") - unless a request cue came FIRST ("how do i cut my bread with a knife")
@@ -169,13 +174,20 @@ def hazard_class(s: str, rx: dict) -> Optional[tuple[str, str]]:
     return None
 
 
-def _owned_by_other_floor(text: str) -> bool:
+def _owned_by_other_floor(text: str, floors_live: bool = True) -> bool:
+    """Defer ONLY to a floor that will actually ANSWER this turn: it runs on this lane (``floors_live``: the Flue seam runs them) and its
+    own mode read for what it detected is enforce. A shadow / off floor, another lane, or any error: this floor answers."""
+    if not floors_live:
+        return False
     try:
         import distress_handoff
         import medical_safety
 
-        return distress_handoff.detect(text).tier != "none" or bool(medical_safety.detect(text).cls)
-    except Exception:  # noqa: BLE001 - a broken detector must not wave a child's hazard ask through: this floor still refuses
+        v = distress_handoff.detect(text)
+        if v.tier != "none" and distress_handoff.mode_for(v.tier) == "enforce":
+            return True
+        return bool(medical_safety.detect(text).cls) and medical_safety.mode() == "enforce"
+    except Exception:  # noqa: BLE001 - a broken detector or mode read must not wave a child's hazard ask through: this floor answers
         return False
 
 
@@ -192,7 +204,7 @@ def _entry(key: tuple) -> dict:
     return e
 
 
-def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -> Optional[Pending]:
+def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False, floors_live: bool = True) -> Optional[Pending]:
     """The sync pre-check. None = not a hazard request (or the floor is off): the turn goes on exactly as before. NEVER raises.
     FAIL SAFE: an error AFTER a hazard was found keeps that class's refusal; an error BEFORE detection could run (lexicon, import,
     regex) refuses with the generic line - both ``blind``, so ``resolve`` lets only a positively adult speaker through."""
@@ -216,7 +228,7 @@ def check(text: str, session_id: str, user_id: str = "", *, dry: bool = False) -
         if said and key[1] and not dry:
             _entry(key)["child"] = True   # STICKY for the session: a later adult-age claim never clears it
         hit = hazard_class(s, rx)
-        if hit is None or _owned_by_other_floor(text):
+        if hit is None or _owned_by_other_floor(text, floors_live):
             return None
         declared = bool(said) or held_child
         return Pending(cls=hit[0], reply=hit[1], declared=bool(declared), key=key)

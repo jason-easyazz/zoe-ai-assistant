@@ -1029,10 +1029,19 @@ def _child_floor_check(message: str, session_id: str, user_id: str, kwargs: dict
     try:
         import child_safety_floor
 
-        return child_safety_floor.check(message, session_id, user_id, dry=bool(kwargs.get("replay_isolation")))
+        return child_safety_floor.check(message, session_id, user_id, dry=bool(kwargs.get("replay_isolation")),
+                                        floors_live=_floors_live())
     except Exception:  # noqa: BLE001 - FAIL SAFE: a floor that cannot run lets only a positively adult speaker through
         logger.warning("CHILD_SAFETY_FLOOR source=error stage=dispatch")
         return _CHILD_FLOOR_BROKEN
+
+
+def _floors_live() -> bool:
+    """Do the distress / medical floors run on the lane this turn takes? They live in the Flue seam only."""
+    try:
+        return bool(use_flue_brain())
+    except Exception:  # noqa: BLE001 - not knowing: assume they do not, so the child floor never defers to nothing
+        return False
 
 
 #: needs no lexicon and no floor module: what a speaker who is not positively an adult hears when the floor cannot run at all
