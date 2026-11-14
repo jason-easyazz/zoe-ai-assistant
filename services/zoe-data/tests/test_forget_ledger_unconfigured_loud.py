@@ -106,13 +106,19 @@ def test_confirmed_alias_spelling_carries_the_note_only_when_unconfigured(monkey
     assert out == (base if salt == SALT else base + NOTE)
 
 
-def test_negative_control_the_check_sees_a_missing_note(monkeypatch):
-    """The pre-fix behaviour (no note) must fail the unconfigured assertion above."""
+def _assert_unconfigured_reply(svc):
+    """The SAME assertion the positive test makes."""
+    assert _forget("Caitlin", svc) == "Okay — I've forgotten 2 things about Caitlin." + NOTE
+
+
+def test_negative_control_the_assertion_can_see_a_missing_note(monkeypatch):
+    """Feature absent (no note) -> the shared assertion must FAIL, proving it can see the fault."""
     _salt(monkeypatch, None)
     monkeypatch.setattr(intent_router, "_forget_permanence_note", lambda: "")
     svc = _seeded_svc()
     monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
-    assert _forget("Caitlin", svc) != "Okay — I've forgotten 2 things about Caitlin." + NOTE
+    with pytest.raises(AssertionError):
+        _assert_unconfigured_reply(svc)
 
 
 @pytest.mark.parametrize("salt,state", [(SALT, "configured"), (None, "unconfigured"), ("too-short-salt", "unconfigured")])
@@ -135,3 +141,56 @@ def test_health_publishes_the_enum(monkeypatch, salt, state):
     body = asyncio.run(main.root_health())
     assert body["forget_ledger"] == state
     assert SALT not in str(body) and "too-short" not in str(body)
+
+
+def test_salt_length_does_not_leak(monkeypatch, caplog):
+    import main
+
+    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
+    seen = []
+    for salt in ("a" * 20 + "-synthetic-one", "b" * 61 + "-synthetic-two-longer"):
+        _salt(monkeypatch, salt)
+        caplog.clear()
+        with caplog.at_level(logging.DEBUG, logger="memory_forgotten"):
+            memory_forgotten.log_startup_state()
+        marker = [r.getMessage() for r in caplog.records]
+        body = asyncio.run(main.root_health())
+        seen.append(({k: v for k, v in body.items() if k.startswith("forget_ledger")}, marker))
+        assert not any(str(len(salt)) in str(v) for v in seen[-1][0].values())
+    assert seen[0] == seen[1] == ({"forget_ledger": "configured"}, ["FORGET_LEDGER state=configured"])
+
+
+def test_unestablishable_state_fails_closed(monkeypatch, caplog):
+    import main
+
+    _salt(monkeypatch, SALT)
+
+    def _boom():
+        raise RuntimeError("ledger broken")
+
+    monkeypatch.setattr(memory_forgotten, "ledger_state", _boom)
+    monkeypatch.setitem(main._pool_health_cache, "checked_at", 0.0)
+    body = asyncio.run(main.root_health())
+    assert body["forget_ledger"] == "unconfigured" and body["forget_ledger_reason"] == "module_error"
+    # the status then drives zoe_health red under its normal two-failing-runs rule
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location(
+        "zoe_health_t", pathlib.Path(__file__).resolve().parents[3] / "scripts/maintenance/zoe_health.py")
+    zh = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(__import__("sys").modules, "zoe_health_t", zh)
+    spec.loader.exec_module(zh)
+    chk = [zh.forget_ledger_check(body["forget_ledger"])]
+    assert not chk[0].ok and not chk[0].unknown
+    _, st = zh.transitions(chk, {})
+    lines, _ = zh.transitions(chk, st)
+    assert lines and lines[0].startswith("DOWN: forget ledger")
+
+
+def test_startup_marker_fails_closed(monkeypatch, caplog):
+    """main's lifespan guard: when the ledger module's startup call raises, the marker says unconfigured."""
+    import inspect
+    import main
+
+    src = inspect.getsource(main.lifespan)
+    assert 'FORGET_LEDGER state=unconfigured reason=module_error' in src and "state=unknown" not in src
