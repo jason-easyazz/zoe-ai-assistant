@@ -1,0 +1,237 @@
+"""A6 step 2: the nightly dreaming passes run their vector-store calls OFF the event loop, with the same writes, and a forget
+that lands mid-pass still wins.
+
+A deterministic in-memory store stands in for the drawers collection. The golden writes below are what origin/main's passes
+wrote for the same seed (checked by running this scenario on main before the change): same ids, documents, metadata.
+Negative controls: (1) the same slow-store harness with the store call put back inline shows the whole block; (2) the same
+racing forget with the write's re-check removed resurrects the erased row.
+"""
+from __future__ import annotations
+
+import asyncio
+import copy
+import datetime
+import time
+
+import pytest
+
+import memory_digest as md
+import memory_service as ms
+
+pytestmark = pytest.mark.ci_safe
+
+UID = "u-test"
+TODAY = datetime.datetime.utcnow().date().isoformat()
+
+
+class Store:
+    """Enough of a chroma collection for the four passes: get(where=/ids=, include=), upsert. Records every write."""
+
+    def __init__(self, rows: dict, slow_s: float = 0.0):
+        self.rows, self.slow_s, self.writes = rows, slow_s, []
+
+    @staticmethod
+    def _match(meta: dict, where: dict) -> bool:
+        if "$and" in where:
+            return all(Store._match(meta, w) for w in where["$and"])
+        (k, cond), = where.items()
+        op, v = next(iter(cond.items()))
+        return meta.get(k) == v if op == "$eq" else meta.get(k) != v
+
+    def get(self, *, ids=None, where=None, include=()):
+        slow = self.slow_s  # the read sees the rows as they were when it STARTED, then takes its time
+        keys = [i for i in (ids or self.rows) if i in self.rows and (where is None or self._match(self.rows[i][1], where))]
+        out = {"ids": keys}
+        if "documents" in include:
+            out["documents"] = [self.rows[i][0] for i in keys]
+        if "metadatas" in include:
+            out["metadatas"] = [copy.deepcopy(self.rows[i][1]) for i in keys]
+        if slow:
+            time.sleep(slow)
+        return out
+
+    def upsert(self, *, ids, documents, metadatas):
+        self.writes.append((list(ids), list(documents), copy.deepcopy(list(metadatas))))
+        for i, d, m in zip(ids, documents, metadatas):
+            self.rows[i] = (d, copy.deepcopy(m))
+
+
+class Svc:
+    def __init__(self, store: Store):
+        self.store, self._user_locks = store, {}
+
+    async def search(self, doc, *, user_id, limit):
+        return [type("R", (), {"id": i}) for i in sorted(self.store.rows) if self.store.rows[i][0] != doc][:limit]
+
+    async def tick_access(self, user_id, ids):
+        return None
+
+    async def ingest(self, text, **kw):
+        self.store.rows["syn-1"] = (text, {"user_id": UID, "status": "approved", "source": "synthesis"})
+        return type("R", (), {"id": "syn-1"})
+
+
+def _seed() -> dict:
+    rows = {}
+    for n in range(6):
+        rows[f"m{n}"] = (f"User fact number {n}.", {"user_id": UID, "status": "approved", "source": "chat",
+                                                    "added_at": f"{TODAY}T0{n}:00:00Z" if n < 2 else "2020-01-01T00:00:00Z",
+                                                    "concept_tags": "tea" if n >= 1 else "", "consolidation_count": 0,
+                                                    "unique_query_count": 5 if n == 3 else 0})
+    rows["p1"] = ("User is pending.", {"user_id": UID, "status": "pending", "added_at": "2020-01-01T00:00:00Z",
+                                       "unique_query_count": 4})
+    rows["p2"] = ("User is pending too.", {"user_id": UID, "status": "pending", "added_at": "2020-01-01T00:00:00Z",
+                                           "unique_query_count": 0})
+    rows["x1"] = ("Someone else.", {"user_id": "other", "status": "pending", "added_at": "2020-01-01T00:00:00Z"})
+    return rows
+
+
+class _Resp:
+    def json(self):
+        return {"choices": [{"message": {"content": "User has a steady tea habit across the week."}}]}
+
+
+class _Client:
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, *a, **k):
+        return _Resp()
+
+
+@pytest.fixture
+def store(monkeypatch):
+    st = Store(_seed())
+    svc = Svc(st)
+    monkeypatch.setattr(ms, "get_memory_service", lambda: svc)
+    monkeypatch.setattr(ms, "leased_drawers", lambda s: st)
+
+    async def _tags(doc):
+        return ["tea"]
+
+    monkeypatch.setattr(md, "_extract_concept_tags", _tags)
+    monkeypatch.setattr(md, "_promotion_score", lambda meta: 0.9 if meta.get("unique_query_count", 0) >= 3 else 0.1)
+    monkeypatch.setattr(md, "_passes_quality_gate", lambda t: True)
+    monkeypatch.setattr(md.httpx, "AsyncClient", _Client)
+    return st
+
+
+GOLDEN_REM_IDS = [["m1", "m2", "m3", "m4", "m5"], ["m0"], ["m0", "m2", "m3", "m4", "m5"], ["m1"]]
+
+
+async def test_passes_write_exactly_what_they_wrote_on_the_loop(store):
+    await md._rem_reinforce_pass(UID)
+    assert [w[0] for w in store.writes] == GOLDEN_REM_IDS
+    assert store.writes[1][2][0]["related_ids"].split(",") and store.writes[1][2][0]["consolidation_count"] == 1
+    assert store.writes[1][2][0]["concept_tags"] == "tea" and store.writes[1][1] == ["User fact number 0."]
+    rem = list(store.writes)
+    store.writes.clear()
+    await md._deep_sleep_pass(UID)
+    assert [(w[0], w[2][0]["status"], w[2][0]["consolidation_count"]) for w in store.writes] == [
+        (["p1"], "approved", 1), (["p2"], "archived", 1)]
+    store.writes.clear()
+    await md._synthesis_pass(UID)
+    (ids, docs, metas), = store.writes
+    assert ids == ["syn-1"] and docs == ["User has a steady tea habit across the week."]
+    assert metas[0]["concept_tags"] == "tea" and metas[0]["related_ids"] == "m0,m1,m2,m3,m4,m5"
+    assert all(len(w[0]) == len(w[1]) == len(w[2]) for w in rem)
+
+
+async def _max_gap_while(coro) -> float:
+    gaps, done = [], asyncio.Event()
+
+    async def tick():
+        last = time.perf_counter()
+        while not done.is_set():
+            await asyncio.sleep(0.01)
+            now = time.perf_counter()
+            gaps.append(now - last)
+            last = now
+
+    t = asyncio.create_task(tick())
+    await asyncio.sleep(0.03)
+    try:
+        await coro
+    finally:
+        done.set()
+        await t
+    return max(gaps)
+
+
+async def test_a_slow_store_call_no_longer_blocks_the_loop(store):
+    store.slow_s = 0.4
+    gap = await _max_gap_while(md._deep_sleep_pass(UID))
+    assert gap < 0.15, f"deep sleep pass blocked the loop {gap:.3f}s"
+
+
+async def test_negative_control_the_same_call_inline_blocks(store, monkeypatch):
+    async def inline(call, /, **kw):
+        return call(**kw)
+
+    monkeypatch.setattr(md, "_store", inline)
+    store.slow_s = 0.4
+    gap = await _max_gap_while(md._deep_sleep_pass(UID))
+    assert gap >= 0.36, f"negative control saw only {gap:.3f}s"
+
+
+async def _race_forget(store) -> None:
+    """An erase takes the owner's lock while the pass is reading, deletes p1, then releases."""
+    svc = ms.get_memory_service()
+    store.slow_s = 0.2
+    pass_task = asyncio.create_task(md._deep_sleep_pass(UID))
+    await asyncio.sleep(0.05)                     # the pass's read is in flight off the loop
+    async with svc._user_locks.setdefault(UID, asyncio.Lock()):
+        store.slow_s = 0.0
+        store.rows.pop("p1")                     # the erase lands
+        await asyncio.sleep(0.3)                  # ... and holds the lock past the read
+    await pass_task
+
+
+async def test_a_forget_during_a_pass_still_wins(store):
+    await _race_forget(store)
+    assert "p1" not in store.rows and [w[0] for w in store.writes] == [["p2"]]
+
+
+async def test_negative_control_without_the_recheck_the_forget_is_undone(store, monkeypatch):
+    async def blind(svc, user_id, col, *, ids, documents, metadatas):
+        await md._store(col.upsert, ids=ids, documents=documents, metadatas=metadatas)
+
+    monkeypatch.setattr(md, "_store_upsert", blind)
+    await _race_forget(store)
+    assert "p1" in store.rows  # resurrected: the case the re-check prevents
+
+
+async def test_link_resolver_reads_off_the_loop(store, monkeypatch):
+    import memory_extractor
+    import person_extractor
+
+    store.rows["pp"] = ("User met someone.", {"user_id": UID, "entity_type": "person_pending",
+                                              "entity_id": "slug:robin_ash"})
+    monkeypatch.setattr(md, "memory_link_resolver_enabled", lambda: True)
+
+    async def _db(db):
+        return object(), False
+
+    async def _uuid(name, uid, db):
+        return "11111111-1111-1111-1111-111111111111"
+
+    relinked = []
+
+    async def _relink(uid, mem_id, et, eid):
+        relinked.append((mem_id, et, eid))
+        return True
+
+    monkeypatch.setattr(person_extractor, "_ensure_db", _db)
+    monkeypatch.setattr(memory_extractor, "_resolve_unique_person_uuid", _uuid)
+    ms.get_memory_service().relink_entity = _relink
+    store.slow_s = 0.3
+    t0 = time.perf_counter()
+    gap = await _max_gap_while(md._resolve_pending_person_links(UID))
+    res_ok = relinked == [("pp", "person", "11111111-1111-1111-1111-111111111111")]
+    assert res_ok and gap < 0.15 and time.perf_counter() - t0 >= 0.3

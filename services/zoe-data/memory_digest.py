@@ -148,6 +148,35 @@ def _name_from_pending_slug(entity_id: str) -> str:
     return s.replace("_", " ").strip()
 
 
+async def _store(call: Callable, /, **kw: Any) -> Any:
+    """One ``leased_drawers`` read OFF the event loop (A6 step 2): ``MemoryService._run_sync``, the executor + lease
+    search and ingest use, so the store call (and any compaction-gate wait) no longer holds the single worker."""
+    from memory_service import MemoryService
+    return await MemoryService._run_sync(functools.partial(call, **kw))
+
+
+async def _store_upsert(svc: Any, user_id: str, col: Any, *, ids: list, documents: list, metadatas: list) -> None:
+    """A pass's ``col.upsert`` off the loop, under the owner's memory lock, written only for ids that still exist.
+
+    On the loop the old upsert could not interleave with a forget that had not started; off the loop it can, so the
+    write re-reads inside the lock ``erase_rows`` holds: a row erased since the pass read it is never written back
+    (forgotten means forever). Rows that still exist get exactly the old write."""
+    def _write() -> None:
+        alive = set(col.get(ids=list(ids), include=["metadatas"]).get("ids") or [])
+        keep = [k for k, i in enumerate(ids) if i in alive]
+        if keep:
+            col.upsert(ids=[ids[k] for k in keep], documents=[documents[k] for k in keep],
+                       metadatas=[metadatas[k] for k in keep])
+
+    from memory_service import MemoryService
+    locks = getattr(svc, "_user_locks", None)
+    if locks is None:
+        await MemoryService._run_sync(_write)
+        return
+    async with locks.setdefault(user_id, asyncio.Lock()):
+        await MemoryService._run_sync(_write)
+
+
 async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
     """Idle pass: re-link ``person_pending`` facts to a real ``people.id``.
 
@@ -180,7 +209,8 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
         svc = get_memory_service()
         col = leased_drawers(svc)   # per-call lease: never a handle across an await
         # Owner + status scoped scan: only THIS user's still-pending person facts.
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"entity_type": {"$eq": "person_pending"}},
@@ -2696,7 +2726,8 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
         # ChromaDB $gte only supports int/float — filter by user_id only, then
         # post-filter by added_at date in Python (ISO strings compare correctly
         # lexicographically for same-length prefix matching).
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"user_id": {"$eq": user_id}},
             include=["documents", "metadatas"],
         )
@@ -2745,7 +2776,7 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
                 linked += 1
 
                 # Write related_ids on neighbours (bidirectional)
-                nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
+                nb_result = await _store(col.get, ids=neighbour_ids, include=["metadatas", "documents"])
                 nb_ids = nb_result.get("ids") or []
                 nb_docs = nb_result.get("documents") or []
                 nb_metas = nb_result.get("metadatas") or []
@@ -2757,11 +2788,11 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
                     nm["related_ids"] = ",".join(i for i in nb_related if i)
                     new_nb_metas.append(nm)
                 if nb_ids:
-                    col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
+                    await _store_upsert(svc, user_id, col, ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
 
             # Mark as REM-processed
             meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-            col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+            await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta])
 
     except Exception as exc:
         logger.warning("REM reinforce pass failed user=%s: %s", user_id, exc)
@@ -2836,7 +2867,8 @@ async def _deep_sleep_pass(user_id: str) -> dict:
     cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=14)).isoformat() + "Z"
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [{"user_id": {"$eq": user_id}}, {"status": {"$eq": "pending"}}]},
             include=["documents", "metadatas"],
         )
@@ -2856,12 +2888,12 @@ async def _deep_sleep_pass(user_id: str) -> dict:
             if score >= 0.8 and uqc >= 3:
                 meta["status"] = "approved"
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta])
                 promoted += 1
             elif added_at and added_at < cutoff:
                 meta["status"] = "archived"
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta])
                 archived += 1
 
     except Exception as exc:
@@ -2925,7 +2957,8 @@ async def _synthesis_pass(user_id: str) -> dict:
     synthesized = 0
 
     try:
-        results = col.get(
+        results = await _store(
+            col.get,
             where={"$and": [
                 {"user_id": {"$eq": user_id}},
                 {"status": {"$eq": "approved"}},
@@ -2985,12 +3018,12 @@ async def _synthesis_pass(user_id: str) -> dict:
                 if ref:
                     # Link synthesized memory back to source cluster
                     source_ids = [mid for mid, _ in sample]
-                    col_result = col.get(ids=[ref.id], include=["metadatas", "documents"])
+                    col_result = await _store(col.get, ids=[ref.id], include=["metadatas", "documents"])
                     if col_result.get("ids"):
                         sm = dict((col_result["metadatas"] or [{}])[0])
                         sm["related_ids"] = ",".join(source_ids)
                         sm["concept_tags"] = tag
-                        col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
+                        await _store_upsert(svc, user_id, col, ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
                     synthesized += 1
             except Exception as exc:
                 logger.warning("synthesis failed for tag=%s user=%s: %s", tag, user_id, exc)
