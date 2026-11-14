@@ -1,7 +1,7 @@
 ---
 type: roadmap
 audience: Jason + every agent
-updated: 2026-11-13
+updated: 2026-11-14
 ---
 # Zoe roadmap
 
@@ -20,70 +20,138 @@ what is ON in the running processes is read with `scripts/maintenance/zoe_ground
 Now; (4) triage the week's new [`knowledge/open-problems.md`](knowledge/open-problems.md) lines into items here, `wontfix`, or delete (a fixed line is deleted, never kept);
 (5) retire absorbed research records per [`research/index.md`](research/index.md). Update this file in the same PR as the change that moves an item.
 
-**Item shape.** outcome in plain words · owner (`agent` / `owner` / both) · flag and its default · acceptance (the bar, gate or test id) · PR or record.
+**Item shape.** outcome in plain words · the number it must move, with today's measured value where one exists · state, with PR numbers
+(merged / open / draft; **built but off is not done**) · what gates it (a replay, an owner decision, a prerequisite) · flag and its default · record.
 
 ---
 
 ## Now (this week, at most 5)
 
-**Samantha direction (2026-11-03):** the plan of record is [docs/research/samantha-initiative-2026-11-03.md](research/samantha-initiative-2026-11-03.md). Its first four opportunities are: push memory into every household turn (recall gate enforce, now card, history 8 rows); judged end of turn + duck-decide-resume live; one voice for every tier; night-mind readers to `serve` + the outcome edge. Owner decisions in its section 11.
+**The order (owner, 2026-11-14: "your plan sounds fine, get it all done asap"):** make failure loud, then sound human, then know you,
+then feeds in, then evolve herself. Inputs: [gap audit](research/gap-audit-2026-11-13.md) section 9 and the
+[Samantha frontier](research/samantha-frontier-2026-11-11.md). "Today" values are the felt scorecard's before-reading of 2026-11-14
+(7-day window unless named); a predicted gain is labelled as one.
 
-1. ~~**Close the unauthenticated surface the deep dive found (A2).**~~ ✅ landed: music writes (#2108) and reads (#2121) need a member or the panel, `GET /api/settings` is an allowlist,
-   the Multica webhook secret is checked first, and `services/zoe-data/tests/test_mutating_routes_declare_auth.py` fails a mutating route with no auth dependency. Identity half: #2089, #2097, #2099.
-2. **Stop blocking the event loop in the turn path (A1).** Partly landed #2117: `semantic_router.route` runs off the loop (`tests/test_router_off_loop.py`), and
-   `zoe_event_loop_lag_seconds` is on `/metrics` (`event_loop_lag.py`). Not done: the single worker still stalls for 1 s or more 4 to 16 times a day (`EVENT_LOOP_LAG`
-   in the app log, 2026-11-07 to 11-12), from blockers not yet attributed. Acceptance: the lag marker names what was running, and the 1 s stalls stop.
-3. **Data safety: backups and forgetting (A5, A6, A7).** Off-box encrypted backups with a restore drill in `zoe-backup-verify` (owner picks the target and key); "forgotten" reaches every
-   store that holds household words (router shadow log, training copy, retired agent session stores); delete the retired training timer and its duplicate corpus. Owner: owner decision
-   for the target and the deletions, agent for the build. Acceptance: a restore drill that passes; an inventory test of where household text lives. Record: deep dive A5-A7.
-4. **Owner decisions that gate other work.** (a) The household-communications decisions (section 8.5 of the deep dive: the411 RAM and second address, Matrix hybrid or not, PA as
-   member-initiated speech, who may ring whom, backup target, a Zoe-owned app or Element X) gate all of D. (b) Night mind: decided (owner, 2026-10-18), it stays in enforce in the window and zoe-data serves what it wrote with `ZOE_NIGHT_MIND=serve` (PR #2122; the owner step is
-   setting it in `services/zoe-data/.env` after a voice replay gate). Live fact as of 2026-11-13, not a code default: the window writes nightly in enforce and
-   `ZOE_NIGHT_MIND=serve` is set in zoe-data's `.env` and process, so the readers serve it. (c) Which shadow-mode features get flipped to enforce, each after its offline A/B: restraint
-   `[default ZOE_RESTRAINT=unset]`, the recall gate `[default ZOE_RECALL_GATE=shadow]`, the struggle detector `[default ZOE_STRUGGLE_DETECT=unset]`, the delivery ledger
-   `[default ZOE_DELIVERY_LEDGER=unset]` (for the first, third and fourth, unset means the reader runs `shadow`; see `PLANS.md`). Owner: owner. Record: deep dive section 8.5; [`PLANS.md`](PLANS.md) live flag block.
-5. **Landing the roadmap itself.** This file, `live-state.json`, `research/index.md`, and the open-problems triage
-   (C1, C3; this PR). Next after it: C2, decide whether to enforce the pace rule (2 to 4 coherent PRs a day) or rewrite it honestly (owner policy). Done already: A8 and
-   C4 (#2107).
+**Cross-cutting: you cannot manage what you cannot measure.** The felt scorecard (`labs/felt-scorecard`, #2424, extended by #2456 with
+first sound under 1 s, corrections applied and alerts by source) is the instrument: every item names its number and reports before and
+after, including when it did not move. Speed: one embedding fix (#2460, open: the palace embedder pads each batch to its longest text,
+not 256 tokens) measured on this box, synthetic bench, p50: memory writes 55.6 to 16.9 ms (about 3x), lookups 48.6 to 8.1 ms (about
+6x); the recall-side half merged as #2452. A whole-system speed audit for more of the same was done on 2026-11-14 (kept privately, numbers only): its estimate is a first spoken word at about 1.6-1.9 s after the top fixes, a floor near 1.5 s without changing the models, and under 1 s only with the panel's own sound, a fast path for common commands, or end-of-turn prediction; its items are on branches, no PR yet. Brain cache
+misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no item below may raise it.
+
+1. **Make failure loud.** Undeliverable owner alerts are kept and retried, and broken alerting surfaces on a second channel (#2458,
+   open, ready; zoe-data, so replay-gated). The restore drill retries daily until it passes, and a stale drill alarms (#2459, draft,
+   after #2458; then the timer install and the first real drill are live steps). The health check that was not running: #2457 merged,
+   and read on the box 2026-11-14 its timer runs every 5 minutes and checks the night-window timer. An unconfigured forget ledger is a
+   red health check and an honest reply (#2462, draft; this box is configured, it protects a fresh install). Numbers: owner alerts lost
+   9 (2026-10-28 to 11-03), to 0; restore drill passes 0 ever (last run 2026-11-08 failed), to one pass and then weekly; night windows
+   ok 22 of 30. Agent build, owner for the live installs.
+2. **Sound human, step 1: first-clause streaming with a pinned voice style.** Speak the first clause as soon as it is safe, with one
+   Kokoro style and speed for the whole reply. Number: speech end to first sound p50 2.73 s / p90 4.47 s (47 panel turns); expected
+   p50 about 2.3-2.5 s (predicted, not measured); the share of turns with first sound inside 1 s (8.5%) does NOT move with this step.
+   State: built on a branch, no PR yet. The clause splitter already exists `[default ZOE_FIRST_SOUND_CLAUSE=off]` but gains nothing
+   alone (reply polishing releases text only at sentence ends), so the build adds a clause release with byte-identical text. Gate: an
+   exhaustive text-equivalence test, the voice replay with the flag off and on, then an owner listen.
+3. **Know you: the structural memory redesign.** The model proposes a structured claim; code validates it against the people graph
+   and stored attributes; anything ambiguous is left as said. One permanent golden set (synthetic names), no per-phrase patches.
+   First a same-turn pending-correction marker (new flag, off) and the golden set scored against today's path as a report; then QA
+   round 10 against it. Number: corrections applied to stored memory 0 in 7 days (n=0, a count: household volume cannot carry a
+   bar); golden-set pass rate of today's path: not measured yet (that report is the first step). State: hyphenated-name guard #2461
+   open, ready; golden set and marker on branches, no PR. Gate: the flip bar (owner decisions below), the replay, and the cache-miss
+   count above.
+4. **Feeds in: an external calendar, read-only,** connected by QR on the panel and finished on the phone. State: stage 0 plumbing
+   #2440 merged 2026-11-13; one shared calendar read path #2447 merged; the remaining readers moved onto it #2463 (draft). Built but
+   off: the connected-accounts secret store refuses every write by design, so nothing can connect yet. The engine is being built to
+   take calendar bytes from a separate fetcher and store no link: a calendar link is a credential, and the owner's standing rule is
+   that no real credential is held until the services are de-privileged and the credential broker exists. **So de-privileging and
+   the broker (Next 4) are on the critical path for feeds.** Number: connected calendars 0; sync-run counts are the instrument.
+   Gate: Next 4, the owner decisions below, the replay (a new parser dependency).
+5. **Evolve herself: self-heal on this unit, with a supervisor outside the process.** A fault becomes a fix in a worktree, passes
+   sandboxed gates and lands by PR here. State: lab only, nothing installed: #2443 and #2451 merged (gates in a sandbox; "fixed" means
+   the reproduction test passes); the owner inbox and a measure step that cannot pass unmeasured #2453 merged (a yes records the
+   decision and dispatches nothing yet; board mirror `[default ZOE_EVOLUTION_BOARD_MIRROR=off]`); the supervisor is on a branch, no
+   PR. Number: evolution proposals decided 0 of 777 open; fault-to-verified-fix time unmeasured. Gate: no unattended run until the
+   supervisor exists; then the owner's dry, local and full steps, each a live change.
+
+## Owner decisions waiting (recommendation first)
+
+- **Where connected-account secrets live:** in the credential broker, after the assistant's over-privileged service account is
+  de-privileged; no key file readable by the assistant's own service.
+- **Who sees a newly connected calendar:** only its owner. **Calendars hosted on the home network:** not yet.
+- **Forgotten calendar events stay hidden for good,** even when the source sends them again: yes. **What a disconnect keeps:** nothing
+  but the forget markers.
+- **Fully automatic self-healing without a reviewer:** not until the outside supervisor exists and is proven.
+- **The memory redesign's flip bar:** golden set at 100%, lab runs with zero false claims, the replay; household shadow only has to
+  show no disagreement, because household correction volume is near zero.
+- **The distress contact is not set** `[default ZOE_DISTRESS_CONTACT_USER=unset]`, so a distress hand-off tells nobody: set one.
+- **The forget ledger secret is created automatically on first start:** yes, kept where the secrets decision puts it; #2462 makes the
+  gap loud until then.
+- Carried: the end-of-turn wait trade (Next 2); the household-communications decisions (deep dive section 8.5) that gate all of D;
+  which shadow features flip to enforce after their offline A/B: restraint `[default ZOE_RESTRAINT=unset]`, the recall gate
+  `[default ZOE_RECALL_GATE=shadow]`, the struggle detector `[default ZOE_STRUGGLE_DETECT=unset]`, the delivery ledger
+  `[default ZOE_DELIVERY_LEDGER=unset]` (unset means the reader runs `shadow`); C2, enforce the pace rule or rewrite it honestly.
 
 ## Next (at most 10)
 
-1. ~~**A3** give every dispatchable intent a direct handler, delete the `mcporter` fallback, set `ZOE_MCP_STRICT_USER_ID=true` (replay).~~ ✅ merged #2127 (2026-10-19).
-2. ~~**A4** retire `/ws/voice/` and the orphaned `touch/voice.html`~~ ✅ merged #2127 (2026-10-19); remaining: extend the lane-parity rig to LiveKit and non-stream chat.
-3. ~~**A9 + A10** Telegram token env name and a loopback notify route; LiveKit hygiene (pin the image, memory cap, per-session rooms).~~ ✅ merged #2108 (pin, cap, Telegram via the bot) and #2117 (room per session).
-4. ~~**A11** server-side panel targeting: every voice UI event carries `panel_id`.~~ ✅ merged #2117.
-5. **B1** brain lanes: `flue` as the in-code default pinned by `test_canonical_invariants`; promote `labs/flue-zoe-brain-2x` and the bot out of `labs/`; decide core (delete or parity-test). Owner decision, agent build.
-6. **B3** finish the OpenClaw and Hermes removal, including the `~/.hermes/.env` loads and the root `AGENTS.md` "Hermes-first" section. Agent, DOX pass.
-7. **B4** resume the `voice_tts.py` split (leaves first), then a size ratchet test; plan the `intent_router.py` split. Agent, replay on every step.
-8. **B8** memory evidence bound to commits: refuse dirty-tree runs for the trend, run the bar and day-sim weekly on a clean checkout after the night window.
-9. **D1** LAN PA and push-to-talk intercom (Opus over the panel WebSocket, room targeting on the server, sender log, guest denial) behind a flag; after item 4 of Now.
-10. **Voice enrolment and speaker model go-live.** Enrolment offers `[default ZOE_ENROLL_OFFER=off]`, voice sessions `[default ZOE_VOICE_SESSION=off]`, the dual-run speaker model
-    (`ZOE_SPEAKER_MODEL=dual` is the switch; the call sites disagree on whether the unset default is empty or `resemblyzer`, so no default is claimed here) and face ID `[default ZOE_FACE_ID_ENABLED=off]` are all off in code and switched on per box; record the live values, then the
-    shadow-week FA/FR review before strict mode relaxes. Record: [`architecture/panel-identity-plan.md`](architecture/panel-identity-plan.md).
+1. **Sound human, step 2: the panel's own truthful "I heard you" sound.** A non-lexical receipt in Zoe's voice, played by the panel
+   when the recording closes, wake turns first, behind a panel flag (off). First a week of a new log-only instrument (close timing,
+   talk after the close, false closes). Number: share of turns with first sound inside 1 s, 8.5% today; predicted 40-70% of eligible
+   turns. Inside 0.6 s stays 0%: detection on today's endpoint cannot reach it, and prediction is blocked because the speaker-mic mutes
+   itself during playback. State: instrument on a branch, no PR. Gate: the instrument week, zero overlap with speech, a panel rehearsal.
+2. **Sound human, step 3: she tunes her own end-of-turn wait** (owner idea, 2026-11-14) from counts of talk after the close,
+   household-wide first, per person once voice ID is verified on the turn, inside a floor and ceiling, with a spoken override.
+   Includes the owner's call on the faster clean tail `[default ZOE_VAD_CLEAN_TAIL_MS=0]` (560 closes a clean stop about 160 ms
+   earlier at a measured 2 percent mid-sentence cut; a lost command is a bug). Gate: the instrument week.
+3. **Know you, the rest:** the claim pass at idle in shadow (counts-only disagreement lines, a scorecard row), then correction, kind
+   and emergency classes flipped one at a time, emergency last; then the old regex paths retired by removing.
+4. **De-privilege the assistant's service account, then the credential broker** (Vaultwarden plus a narrow broker; V0 and V1
+   lab-proven 2026-10-19, nothing on the box; [design](architecture/credential-vault.md)). On the critical path for feeds (Now 4).
+   Owner for the live changes, agent for the build.
+5. **Calendar stage 1 proper, then contacts, then mail metadata:** the fetcher in the broker, the connect flow, a night-aware sync
+   job, delete detection, the forget shield for remote events. Records: [`zoe-abilities.md`](architecture/zoe-abilities.md),
+   [`connected-accounts.md`](knowledge/connected-accounts.md).
+6. **Evolve with no subscription: the router learns from its own outcomes.** Failure capture on behind the replay; router
+   self-train `[default ZOE_ROUTER_SELFTRAIN=off]` in shadow, then on; a flag-dark route hint from the router to the brain, A/B on the
+   voice corpus. Owner decision for each switch-on.
+7. **A sold unit runs the same stack on the buyer's own subscription,** linked by QR on the panel, with local landing (gates, merge,
+   verify, automatic rollback) instead of GitHub. Gate: Now 5; vendor terms for driving a consumer subscription unattended are
+   unverified and must be checked before this is a product promise.
+8. **A1 stop blocking the event loop in the turn path.** Partly landed #2117 (router off the loop; `zoe_event_loop_lag_seconds` on
+   `/metrics`). Not done: 1 s or longer stalls 4 to 16 times a day (2026-11-07 to 11-12) from blockers not yet attributed.
+   Acceptance: the lag marker names what was running, and the 1 s stalls stop.
+9. **A5-A7 data safety, the rest:** off-box encrypted backups (owner picks the target and key); "forgotten" reaches every store that
+   holds household words (router shadow log, training copy, retired agent session stores); delete the retired training timer and its
+   duplicate corpus. Acceptance: an inventory test of where household text lives.
+10. **B4** resume the `voice_tts.py` split (leaves first), then a size ratchet test; plan the `intent_router.py` split. Agent, replay
+    on every step.
 
 ## Later (link list)
 
 **Platform and structure** (deep dive B): [B2 harness out of zoe-data](research/architecture-deep-dive-2026-10-18/lane-C-brain-ops-roadmap.md), B5 tool schemas from one registry, B6 flag registry,
 B7 observability and `turn_id`, B9 ops hygiene (track every live unit, container caps, `.env` reaping), [tech-debt plan](architecture/tech-debt-remediation-plan.md) Wave 4
 (chat split, typed config; plan untouched since July), [desktop UI overhaul](architecture/desktop-ui-overhaul-plan.md) (function-first waves, not started).
+Also: B1 brain lanes (`flue` as the in-code default pinned by `test_canonical_invariants`, promote the 2.x brain and the bot out of `labs/`); B3 finish the
+OpenClaw and Hermes removal; B8 memory evidence bound to commits (weekly clean-checkout bar and day-sim); A4 remainder, the lane-parity rig for LiveKit and non-stream chat.
 
 **Contract size.** `services/zoe-data/AGENTS.md` size: split it LOSSLESSLY into per-topic child `AGENTS.md` files (moving text verbatim, a mechanical move checked by a line-multiset equality test), not condensation; condensation dropped about 250 binding clauses and could not be proven complete (#2112 review, 8 rounds).
 
-**Household communications** (deep dive D, after the decisions in Now 4): D2 messages and backups on the411, D3 calls panel to phone, D4 household to household, D5 the one Zoe app, D6 Apple-parity pieces.
+**Household communications** (deep dive D, after the owner decisions above): D1 LAN PA and push-to-talk intercom behind a flag, D2 messages and backups on the411, D3 calls panel to phone, D4 household to household, D5 the one Zoe app, D6 Apple-parity pieces.
 Related designs: [panel anywhere](architecture/panel-anywhere.md), [panel remote access](architecture/panel-remote-access.md) (relay lab R1 is flag-dark with listed go-live blockers),
 [communication preferences](architecture/communication-preferences.md), [credential vault](architecture/credential-vault.md) (de-root the Zoe services first).
 
-**Product programmes** (status in [`PLANS.md`](PLANS.md)): Ask-card live conversation and generative tiles ([plan](architecture/ask-card-conversation-plan.md)); Samantha evolution
+**Product programmes** (status in [`PLANS.md`](PLANS.md)): the [Samantha initiative](research/samantha-initiative-2026-11-03.md) (direction record); voice enrolment and
+speaker-model go-live (enrolment offers `[default ZOE_ENROLL_OFFER=off]`, voice sessions `[default ZOE_VOICE_SESSION=off]`, face ID `[default ZOE_FACE_ID_ENABLED=off]`,
+switched on per box; then the shadow-week FA/FR review, [plan](architecture/panel-identity-plan.md)); Ask-card live conversation and generative tiles ([plan](architecture/ask-card-conversation-plan.md)); Samantha evolution
 ([plan](architecture/samantha-evolution-plan.md): RAM-reclamation gate W3 stands, no waiver; W4.1 stays blocked until the W3 profile shows 2 GB freed); Samantha-grade memory
 ([build plan](architecture/zoe-memory-samantha-buildplan.md)) and memory fidelity; the Omi pendant day review and voice tagging; the struggle detector (phase 3 designed);
 the web-search tool `[default ZOE_WEB_SEARCH_TOOL=off]` and the risk-cue tier `[default ZOE_RISK_CUES=off]`; contacts and calendar sync; Zoe abilities (connected accounts) and the
-action agent (research only); music discovery; router self-training `[default ZOE_ROUTER_SELFTRAIN=off]`; Flue convergence and the Multica retirement gates
+action agent (research only); music discovery; Flue convergence and the Multica retirement gates
 ([plan](architecture/zoe-flue-integration.md), [gates](architecture/multica-retirement-gates.md)); the beat-the-bar tracker ([evidence record](architecture/beat-the-bar-2026-program.md)).
 
 **Operator steps waiting on the owner** (summarised from the private after-night ledger; no household details here): finish the remaining dependency batches once the age window
 passes and each is replay-probed; re-run the Omnigent container recreate after its pending PR lands; rotate any credential that was ever echoed into a transcript and
 revoke the long-lived tokens named in [`knowledge/open-problems.md`](knowledge/open-problems.md); recreate the HA bridge and database containers so they bind loopback as `main`'s compose already says;
-deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window; the owner call on the adaptive end-of-speech tail `[default ZOE_VAD_CLEAN_TAIL_MS=0]` (a value of 560 closes a clean stop about 160 ms earlier at a measured 2 percent mid-sentence cut, and a lost command is a bug, so it is Jason's decision).
+deploy the omi-sync Pi package by hand after its PRs merge; the pending brain-model re-upload swap in its own window.
 
 **Evidence and ledgers.** Open problems: [`knowledge/open-problems.md`](knowledge/open-problems.md) (triaged 2026-10-18; a line is deleted when its fix is verified).
 Ideas: [`IDEAS.md`](IDEAS.md). Research records: [`research/index.md`](research/index.md). Task list this roadmap derives from: deep dive section 10.
