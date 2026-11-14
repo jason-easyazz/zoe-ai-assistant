@@ -234,7 +234,8 @@ class KernelServer:
 
     def _op_forget(self, conn: _Conn, a: dict) -> dict:
         self._person_op(conn, "forget")
-        r = self.kernel.spine.forget(a["subject"], actor=a["actor"], seqs=a.get("seqs"))
+        r = self.kernel.spine.forget(a["subject"], actor=a["actor"], seqs=a.get("seqs"),
+                                     entity=a.get("entity"), topic=a.get("topic"))
         return {"count": r.count, "upto": r.upto}
 
     def _op_grant(self, conn: _Conn, a: dict) -> dict:

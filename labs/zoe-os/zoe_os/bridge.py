@@ -62,7 +62,8 @@ class Bridge:
             self.dropped += 1
             return False
 
-    def forget(self, *, user_id: str, actor: str) -> bool:
+    def forget(self, *, user_id: str, actor: str, entity: str | None = None,
+               topic: str | None = None) -> bool:
         """``MemoryService.delete_user`` / ``memory_forgotten.add``: the spine forgets too.
 
         Unlike ``publish`` this is NOT best effort in production: a forget that cannot reach
@@ -71,7 +72,7 @@ class Bridge:
         if self.spine is None:
             return False
         try:
-            self.spine.forget(user_id, actor=actor)
+            self.spine.forget(user_id, actor=actor, entity=entity, topic=topic)
             return True
         except Exception:
             self.dropped += 1
