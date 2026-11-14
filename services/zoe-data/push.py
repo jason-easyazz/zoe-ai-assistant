@@ -22,6 +22,10 @@ DEAF_PANEL_ERROR_INTERVAL_S = 600.0
 # A panel counts as live (see ``panel_live``) if it acked a UI action this recently.
 PANEL_LIVE_WINDOW_S = 60.0
 
+# One send to one panel socket in ``broadcast_to_panel_sockets`` may take at most this long; slower = dropped (and closed).
+PANEL_SEND_TIMEOUT_S = 0.5
+_CLOSING: set = set()  # strong refs to the fire-and-forget closes
+
 
 # A voice turn with no usable panel id pushes to this channel, which no socket can ever join (connect_panel subscribes
 # ``panel_<id>``; a colon never appears there), so its events reach nobody instead of every screen.
@@ -177,14 +181,23 @@ class PushBroadcaster:
 
         Not ``all`` (members' own sockets are there) and not a ``panel_<id>`` channel by name (an admin may join one)."""
         self._sequence += 1
-        targets = list(self._ws_panels.items())
+        seq, targets = self._sequence, list(self._ws_panels.items())
+
+        async def one(ws, pid):
+            msg = {"type": event_type, "channel": f"panel_{pid}", "data": data, "sequence": seq}
+            await asyncio.wait_for(ws.send_json(msg), PANEL_SEND_TIMEOUT_S)
+
+        # concurrently, each send bounded: one stalled panel must not hold the beat or a ring change back from the others
+        results = await asyncio.gather(*(one(ws, pid) for ws, pid in targets), return_exceptions=True)
         delivered = 0
-        for ws, pid in targets:
-            try:
-                await ws.send_json({"type": event_type, "channel": f"panel_{pid}", "data": data, "sequence": self._sequence})
+        for (ws, pid), r in zip(targets, results):
+            if isinstance(r, BaseException):
+                self.disconnect(ws, f"panel_{pid}")  # the broadcaster's dead-socket path
+                t = asyncio.ensure_future(_close_quietly(ws))  # half-sent and unsubscribed: close it so the panel reconnects, never deaf
+                _CLOSING.add(t)
+                t.add_done_callback(_CLOSING.discard)
+            else:
                 delivered += 1
-            except Exception:
-                self.disconnect(ws, f"panel_{pid}")
         return delivered, len(targets)
 
     async def broadcast_to_panel(self, panel_id: str, event_type: str, data: dict) -> int:
@@ -331,6 +344,13 @@ class PushBroadcaster:
             "current_sequence": self._sequence,
             "message": "Full state refresh recommended"
         })
+
+
+async def _close_quietly(ws) -> None:
+    try:
+        await asyncio.wait_for(ws.close(1011), PANEL_SEND_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - already gone, or the close itself stalled
+        pass
 
 
 def _panel_hello_fields() -> dict:

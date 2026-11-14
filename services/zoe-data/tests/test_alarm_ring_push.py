@@ -10,6 +10,9 @@ Negative controls (run by hand when written; each turns the named test red):
   * drop the flag read from ``alarm_push.enabled`` -> test_flag_off_sends_nothing_and_hello_has_no_capability;
   * drop ``_seq += 1`` -> test_each_change_reaches_every_panel_and_nobody_else (seq increases);
   * make ``_changes_ring_set`` true for every event -> test_edits_and_misses_that_do_not_touch_the_ringing_set_send_nothing.
+  * send to panels one after another with no timeout (``for ws, pid in targets: await ws.send_json(...)``) ->
+    test_a_stalled_panel_does_not_hold_back_the_others_and_is_dropped and test_the_beat_survives_a_stalled_panel;
+  * ``PANEL_SEND_TIMEOUT_S = None`` (concurrent, unbounded) -> test_a_stalled_panel_does_not_hold_back_the_others_and_is_dropped.
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ import importlib.util
 import json
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -187,3 +191,78 @@ def test_hello_carries_the_capability_and_the_beat_reaches_panels_only(bus):
     beats = s["kitchen"].pushes()
     assert beats and all(m == {**m, "type": "alarms_ringing_beat", "data": {"seq": 0}} for m in beats)
     assert all(s[k].pushes() == [] for k in ("member", "anon", "admin_by_name"))
+
+
+class _Stuck(_WS):
+    """A panel whose send never completes (a wedged TCP peer); records the close the broadcaster sends it."""
+
+    closed = False
+
+    async def send_json(self, msg):
+        if msg.get("type") == "connected":
+            return await super().send_json(msg)
+        await asyncio.Event().wait()
+
+    async def close(self, code=1000):
+        self.closed = True
+
+
+class _Broken(_WS):
+    async def send_json(self, msg):
+        if msg.get("type") == "connected":
+            return await super().send_json(msg)
+        raise RuntimeError("socket gone")
+
+    async def close(self, code=1000):
+        pass
+
+
+class _Timed(_WS):
+    async def send_json(self, msg):
+        self.sent.append({**msg, "_at": time.monotonic()})
+
+
+def test_a_stalled_panel_does_not_hold_back_the_others_and_is_dropped(bus):
+    async def go():
+        ok, stuck, broken = _Timed(), _Stuck(), _Broken()
+        await bus.connect_panel(stuck, "stuck")
+        await bus.connect_panel(ok, "kitchen")
+        await bus.connect_panel(broken, "broken")
+        t0 = time.monotonic()
+        res = await asyncio.wait_for(bus.broadcast_to_panel_sockets("alarms_ringing_changed", {"seq": 1}), 2.0)
+        took = time.monotonic() - t0
+        await asyncio.sleep(0)  # let the fire-and-forget close run
+        return ok, stuck, broken, res, took, t0
+
+    ok, stuck, broken, res, took, t0 = asyncio.run(go())
+    frame = [m for m in ok.sent if m["type"] == "alarms_ringing_changed"]
+    assert frame and frame[0]["_at"] - t0 < 0.1, "the healthy panel's frame waited behind the stalled one"
+    assert res == (1, 3) and took < push.PANEL_SEND_TIMEOUT_S + 0.4, (res, took)
+    assert set(bus._ws_panels.values()) == {"kitchen"}, "a stalled or raising socket stays in the panel set"
+    assert stuck.closed, "a dropped panel socket is closed so the panel reconnects instead of going deaf"
+
+
+def test_a_healthy_set_is_unaffected(bus):
+    async def go():
+        a, b = _WS(), _WS()
+        await bus.connect_panel(a, "kitchen")
+        await bus.connect_panel(b, "hall")
+        return await bus.broadcast_to_panel_sockets("alarms_ringing_beat", {"seq": 0}), a, b
+
+    res, a, b = asyncio.run(go())
+    assert res == (2, 2) and len(a.pushes()) == len(b.pushes()) == 1 and len(bus._ws_panels) == 2
+
+
+def test_the_beat_survives_a_stalled_panel(bus):
+    async def go():
+        ok, stuck = _WS(), _Stuck()
+        await bus.connect_panel(stuck, "stuck")
+        await bus.connect_panel(ok, "kitchen")
+        task = asyncio.create_task(alarm_push.beat_loop(0.05))
+        await asyncio.sleep(1.0)
+        alive = not task.done()
+        task.cancel()
+        return ok, alive
+
+    ok, alive = asyncio.run(go())
+    assert alive and len(ok.pushes()) >= 5, f"beats delivered to the healthy panel: {len(ok.pushes())}"

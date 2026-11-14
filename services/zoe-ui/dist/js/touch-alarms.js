@@ -16,14 +16,14 @@
  * `alarms_ringing_beat` {seq}. None carries alarm detail: on each the page re-reads /api/alarms/ringing through the authenticated
  * route. It reads at once on a change, a hello (a reconnect), a beat whose seq moved (a missed change), the page becoming visible,
  * and the moment the push stops being healthy. The poll is 2 s (today's) UNLESS the push is proven: the capability seen (hello or a
- * change frame) AND a frame within BEAT_STALE_MS AND that for HEALTHY_HOLD_MS; then 20 s. A ring on screen or an unconfirmed
+ * change frame) AND a frame within BEAT_STALE_MS (2.5 s: one 2 s beat + 0.5 s) AND that for HEALTHY_HOLD_MS; then 20 s. A ring on screen or an unconfirmed
  * snooze/off keeps 2 s. An old or flag-off server never sends the capability, so the page polls every 2 s exactly as before.
  */
 (function () {
     'use strict';
     if (window.ZoeAlarms) return;
 
-    var POLL_MS = 2000, SLOW_POLL_MS = 20000, BEAT_STALE_MS = 5000, HEALTHY_HOLD_MS = 30000, WATCH_MS = 1000, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64, MUSIC_DEADLINE_MS = 10000, STOP_GRACE_MS = 5000;
+    var POLL_MS = 2000, SLOW_POLL_MS = 20000, BEAT_STALE_MS = 2500, HEALTHY_HOLD_MS = 30000, WATCH_MS = 500, OFF_RECHECK_MS = 300000, HOLD_MS = 1000, ITEM_H = 64, MUSIC_DEADLINE_MS = 10000, STOP_GRACE_MS = 5000;
     var ACK_KEY = 'zoe_alarm_acks';
     var DAYS = [['M', 1], ['T', 2], ['W', 3], ['T', 4], ['F', 5], ['S', 6], ['S', 7]];
     var PRESETS = [['Once', 'once'], ['Every day', 'daily'], ['Weekdays', 'weekdays'], ['Weekends', 'weekends']];
@@ -276,7 +276,8 @@
         return t - p.healthySince >= HEALTHY_HOLD_MS ? SLOW_POLL_MS : POLL_MS;
     }
     // Every WATCH_MS (no network): the push just went unhealthy -> read NOW and fall back to 2 s; a slow wait longer than the rate due
-    // now is cut short. A silently dead socket is therefore caught within BEAT_STALE_MS + WATCH_MS, not at the next slow poll.
+    // now is cut short. A silently dead socket is caught within BEAT_STALE_MS + WATCH_MS = 3 s of its LAST beat, so a change right
+    // after that beat is read at most ~3 s late (today's 2 s poll: up to 2 s); a beat later than 0.5 s only costs a 30 s fast spell.
     function watch() {
         if (st.enabled === false || st.inPoll) return;
         var healthy = pushHealthy(), every = pollEvery();

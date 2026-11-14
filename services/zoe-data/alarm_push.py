@@ -56,7 +56,11 @@ async def on_event(event: str, alarm: dict) -> None:
     if not enabled() or not _changes_ring_set(event, alarm or {}):
         return
     _seq += 1
-    sent, audience = await _send("alarms_ringing_changed")
+    try:
+        sent, audience = await _send("alarms_ringing_changed")
+    except Exception as exc:  # noqa: BLE001 - the transition is committed; the panel's poll is the safety net
+        logger.warning("ALARM_RING_PUSH failed seq=%d (%s)", _seq, type(exc).__name__)
+        return
     logger.info("ALARM_RING_PUSH event=%s seq=%d sent=%d audience=%d", event, _seq, sent, audience)
 
 

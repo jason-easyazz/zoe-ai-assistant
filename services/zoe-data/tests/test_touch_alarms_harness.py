@@ -38,6 +38,8 @@ PUSH_CONTROLS = [
     ("p.cap = typeof msg.alarms_ringing_seq === 'number';", "p.cap = true;", "beats after a hello without the capability"),
     ("HEALTHY_HOLD_MS = 30000", "HEALTHY_HOLD_MS = 0", "proven for under 30 s"),
     ("SLOW_POLL_MS = 20000", "SLOW_POLL_MS = 2000", "the poll slows to 20 s"),
+    ("BEAT_STALE_MS = 2500", "BEAT_STALE_MS = 5000", "caught within 3 s of its last beat"),
+    ("WATCH_MS = 500,", "WATCH_MS = 1000,", "caught within 3 s of its last beat"),
     ("hideTabs(); schedule(OFF_RECHECK_MS); } else schedule(POLL_MS);", "hideTabs(); schedule(OFF_RECHECK_MS); } else schedule(pollEvery());",
      "a failed read is retried within 2 s"),
     ("if (st.ring || Object.keys(st.acks).length) return POLL_MS;", "", "a ring on screen keeps the 2 s poll"),

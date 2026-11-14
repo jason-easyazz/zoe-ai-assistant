@@ -427,7 +427,7 @@ async function ringing(over, postFn) {
     const before = made.osc.length; S.start('sunrise', () => 0, 30); S.preview('chime'); ok(made.osc.length === before + S.plan('sunrise').length, 'a preview never overlaps a ring'); S.stop(); }
 
   // PUSH, POLL AS THE SAFETY NET (ZOE_ALARMS_RINGING_PUSH). Worst-case lateness: push healthy = the push itself; socket closed = an
-  // immediate read, then 2 s; socket silently dead = BEAT_STALE_MS + the 1 s watch, then 2 s; old / flag-off server = 2 s (today).
+  // immediate read, then 2 s; socket silently dead = within 3 s of its last beat (2.5 s stale + 0.5 s watch), then 2 s; old / flag-off server = 2 s (today).
   { const reads = (b) => b.calls.filter((c) => c[0] === 'GET' && c[1] === '/api/alarms/ringing').length;
     const frame = (b, msg) => (b.wl['zoe:push-frame'] || []).forEach((fn) => fn({ detail: msg }));
     const hello = (b, seq) => frame(b, seq == null ? { type: 'connected', panel_id: 'p1' } : { type: 'connected', panel_id: 'p1', alarms_ringing_seq: seq });
@@ -448,7 +448,8 @@ async function ringing(over, postFn) {
     { const b = await slow(); const n = reads(b); hello(b, 7); await settle(); ok(reads(b) === n + 1, 'a reconnect (hello) reads at once'); }
     { const b = await slow(); const n = reads(b); beat(b, 0); await settle(); ok(reads(b) === n, 'a beat at the same seq reads nothing');
       beat(b, 3); await settle(); ok(reads(b) === n + 1, 'a beat whose seq moved (a missed push) reads at once'); }
-    { const b = await slow(); const n = reads(b); await run(b, 6500); ok(reads(b) >= n + 1, 'a silent socket is caught within 6.5 s and read at once');
+    { const b = await slow(); beat(b, 0); const n = reads(b); for (let t = 0; t < 3000; t += 100) { b.advance(100); await settle(); }
+      ok(reads(b) >= n + 1, 'a silent socket is caught within 3 s of its last beat and read at once');
       const m = reads(b); await run(b, 10000); ok(reads(b) - m >= 4, 'then the 2 s poll'); }
     { const b = await slow(); const n = reads(b); (b.wl['zoe:push-closed'] || []).forEach((fn) => fn()); await settle();
       ok(reads(b) === n + 1, 'the socket closing reads at once');
