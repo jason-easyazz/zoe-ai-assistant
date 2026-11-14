@@ -420,10 +420,12 @@ def _sa_cond() -> "tuple[str, dict]":
 @lru_cache(maxsize=1)
 def _sa_verbs() -> "tuple[dict, dict]":
     """({slot: regex} for the VERB forms of a condition ("am i overdosing", "has she overdosed", "did i just overdose"),
-    {term: reply key}). "<verb> on <something that is not a substance>" ("overdosed on chocolate / netflix") is an idiom and never
-    matches; a substance from the ingestion lexicon ("overdosed on her tablets") does."""
-    sub = _data()["ingest"]["substance"]
-    guard = rf"(?!\s+on\s+(?!(?:(?:my|his|her|their|the|some|all|those|these|a|an|too|many|much)\s+)*(?:{sub})(?!\w)))"
+    {term: reply key}). FAIL-SAFE: "<verb> on <X>" FIRES for any X ("overdosing on heroin", "on my dad's tablets", "on zorblex")
+    EXCEPT an object from the CLOSED idiom list (``verb_idiom_objects``: "overdosed on chocolate / netflix"); the drug-name list
+    never gates firing. The caffeine family (``verb_idiom_unless_asked``) is handled in ``self_assessment``."""
+    idioms = _sa_data().get("verb_idiom_objects", [])
+    idiom_rx = "|".join(r"\s+".join(map(re.escape, w.split())) for w in sorted(idioms, key=len, reverse=True)) or "(?!)"
+    guard = rf"(?!\s+on\s+(?:(?:my|his|her|their|the|some|all|that|this|those|these|a|an|so|way|too|much|many|lots|of)\s+)*(?:{idiom_rx})(?!\w))"
     slots: dict = {}
     keys: dict = {}
     for key, forms in _sa_data().get("verb_conditions", {}).items():
@@ -485,6 +487,12 @@ def self_assess_mode() -> str:
     return "off" if raw == "off" else "enforce"
 
 
+def _sa_asked(s: str) -> bool:
+    """Is the (folded) turn a present QUESTION about it (a "?" or a question head: am / is / are / could / might / do / does /
+    did / have / has, after filler)? Pure."""
+    return "?" in s or bool(re.match(rf"^(?:{_RQ_FILLER}\s+)*(?:am|is|are|could|might|can|do|does|did|have|has)(?!\w)", s))
+
+
 def self_assessment(text: str) -> Verdict:
     """The call-now verdict for a PRESENT self-assessment of a closed-list condition (above), else ``NONE``. Pure; never raises."""
     try:
@@ -508,6 +516,14 @@ def self_assessment(text: str) -> Verdict:
         slot = next(((name, val) for name, val in (m.groupdict() if m.re.groupindex else {}).items() if val), None)
         if slot is not None and slot[0].startswith("v"):
             key = verb_keys[re.sub(r"(?:\s+on\s+.*)$", "", slot[1]).strip().lower()]
+            # the caffeine family is an idiom ("ive overdosed on coffee today") unless the turn ASKS about it in the present
+            # ("am i overdosing on caffeine?", "could he be overdosing on energy drinks"): a real, rare overdose
+            asked = _sa_data().get("verb_idiom_unless_asked", [])
+            after = s[m.end(slot[0]):]
+            if asked and re.match(r"\s+on\s+(?:(?:my|his|her|their|the|some|so|way|too|much|many|lots|of)\s+)*(?:"
+                                  + "|".join(r"\s+".join(map(re.escape, w.split())) for w in asked) + r")(?!\w)", after) \
+                    and not _sa_asked(s):
+                return NONE
         else:
             term = re.sub(r"[\s-]+", " ", slot[1]).strip()
             key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")

@@ -439,3 +439,72 @@ def test_control_re_searching_the_whole_match_picks_the_name():
     m = medical_safety._sa_present_re().search(text)
     assert re.search(cond_rx, m.group(0)).group(0) == "tia"                     # a43fd2235's extraction: the NAME
     assert medical_safety.self_assessment(text) == _expected("heart")           # the named slot: the condition
+
+
+# ── review #2525 PRRT ...e3tI: "overdos* on X" FIRES unless X is a closed idiom object (fail-safe) ─────────────────────────────
+def _sa():
+    return medical_safety._data()["self_assess"]
+
+
+@pytest.mark.parametrize("text", ["am i overdosing on heroin", "my dad is overdosing on cocaine"])
+def test_the_threads_examples_fire(text):
+    assert medical_safety.self_assessment(text) == _expected("poison_human")
+
+
+@pytest.mark.parametrize("text", ["am i overdosing on zorblex", "is she overdosing on my dads tablets", "has he overdosed on pain killers",
+                                  "shes overdosed on something and she wont wake up", "am i overdosing", "has she overdosed on it"])
+def test_an_unknown_object_a_multi_word_object_more_clause_or_none_fires(text):
+    assert medical_safety.self_assessment(text) == _expected("poison_human")
+
+
+def _drug_and_unknown_objects() -> list:
+    return _sa()["drug_names"][::3] + ["zorblex", "something", "my dads tablets", "whatever he had", "those pills"]
+
+
+def _overdose_on_fire() -> list:
+    """Every verb form x every speaker form x drug names and unknown words, the third-party forms included."""
+    forms = _sa()["verb_conditions"]["poison_human"]
+    slots = _sa()["slots"]
+    out = set()
+    for x in _drug_and_unknown_objects():
+        for ing in forms["ING"]:
+            for q in slots["Q"]:
+                out.add(f"{q} {ing} on {x}".replace("{who}", "my dad"))
+        for ed in forms["ED"]:
+            for h in slots["HAS"] + slots["PERF"]:
+                out.add(f"{h} {ed} on {x}".replace("{who}", "my wife"))
+    return sorted(out)
+
+
+def test_generated_overdose_on_x_fires_for_every_form_speaker_and_object():
+    fire = _overdose_on_fire()
+    assert len(fire) > 400
+    assert [t for t in fire if medical_safety.self_assessment(t) != _expected("poison_human")] == []
+
+
+def test_firing_does_not_depend_on_the_drug_list(monkeypatch):
+    monkeypatch.setitem(medical_safety._data()["self_assess"], "drug_names", [])
+    assert medical_safety.self_assessment("am i overdosing on heroin") == _expected("poison_human")
+
+
+def test_every_idiom_object_with_every_verb_form_never_fires():
+    forms = _sa()["verb_conditions"]["poison_human"]
+    nots = [f"ive {ed} on {x}" for x in _sa()["verb_idiom_objects"] for ed in forms["ED"]]
+    nots += [f"am i {ing} on {x}" for x in _sa()["verb_idiom_objects"] for ing in forms["ING"]]
+    nots += [f"i think i {ed} on so much {x}" for x in _sa()["verb_idiom_objects"] for ed in forms["ED"]]
+    assert len(nots) > 300
+    assert [t for t in nots if medical_safety.self_assessment(t).cls] == []
+
+
+@pytest.mark.parametrize("text, fires", [("ive overdosed on coffee today", False), ("i overdosed on caffeine this morning lol", False),
+                                         ("am i overdosing on caffeine?", True), ("could he be overdosing on energy drinks", True),
+                                         ("is she overdosing on caffeine", True), ("we have overdosed on tea", False)])
+def test_the_caffeine_family_is_an_idiom_unless_asked_about_now(text, fires):
+    assert (medical_safety.self_assessment(text) == _expected("poison_human")) is fires
+
+
+def test_control_the_old_substance_gate_missed_the_threads_examples():
+    sub = medical_safety._data()["ingest"]["substance"]
+    old_guard = re.compile(rf"overdosing(?!\s+on\s+(?!(?:(?:my|his|her|their|the|some|all|those|these|a|an|too|many|much)\s+)*(?:{sub})(?!\w)))")
+    for text in ("am i overdosing on heroin", "my dad is overdosing on cocaine"):
+        assert not old_guard.search(text) and medical_safety.self_assessment(text).cls == "ingest_human"
