@@ -233,7 +233,7 @@ def test_negative_control_unclamped_claim_label_would_leak():
 PINNED = {
     "expert_dispatch.py": {"text"},
     "memory_digest.py": {"fact", "text", "synthesis_text", "fact_text", "wording", "moment", "emotion", "tag", "pred", "obj", "subj",
-                         "quote", "claim", "label", "item", "candidate"},
+                         "quote", "claim", "label", "item"},
     "memory_extractor.py": {"name", "text"},
     "person_extractor.py": {"name", "name_a", "name_b", "text"},
     "person_extractor_llm.py": {"name", "value"},

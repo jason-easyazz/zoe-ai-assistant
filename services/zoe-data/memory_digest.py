@@ -581,11 +581,11 @@ def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
             "yes" if basis == memory_authority.VERBATIM_BASIS else "no", basis,
             md.get("status") or "-", md.get("memory_type") or "-",
             _log_redaction.utterance_tag(getattr(ref, "text", "") or ""))
-        label = _claim_label(md)
-        if label != "-":
+        clamped = _claim_label(md)  # every part is from a closed vocabulary (see _closed); never raw extractor text
+        if clamped != "-":
             # the claim row's own line (the MEMORY_ROW format above is a pinned contract): what the extractor read, and what each
             # floor made of it
-            logger.info("MEMORY_ROW_CLAIM lane=%s id=%s claim=%s", lane, getattr(ref, "id", "-"), label)
+            logger.info("MEMORY_ROW_CLAIM lane=%s id=%s claim=%s", lane, getattr(ref, "id", "-"), clamped)
     except Exception:  # noqa: BLE001 - a log line must never fail a digest
         pass
 
