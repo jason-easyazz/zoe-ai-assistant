@@ -505,7 +505,8 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   section 4, P1): one read-only script, `scorecard.py`, that prints (table or `--json`) whether
   the memory circuit is closed on real household turns, from live log-marker counts, aggregate
   Postgres SELECTs (read-only session + read-only transaction; queries must return numbers),
-  MemPalace `chroma.sqlite3` opened `mode=ro`, and `night-window.log`. It prints counts and
+  MemPalace `chroma.sqlite3` opened `mode=ro`, and `night-window.log`; an ALERTS section reads the
+  crash-loop, backup-verify and health logs and the night reports (labels allowlisted). It prints counts and
   timings only, never a log line, row or env value; unmeasurable numbers print `unmeasured`
   with the reason. The panel log on the Pi is opt-in (`--panel`, over ssh; the Pi side emits only an
   allowlist of timestamps and numeric timing fields). `test_scorecard.py` feeds the parsers synthetic lines
