@@ -463,6 +463,7 @@ _ENTRIES = (
     _f('ZOE_LATENCY_WARN_RATIO', 'float', 1.5),
     _f('ZOE_LAYOUT_MEMORY', 'str', '', doc='docs/knowledge/feature-audit-2026-09-25.md'),
     _f('ZOE_LISTEN_HOST', 'str', '', doc='docs/knowledge/lan-exposure-hardening-2026-10-19.md'),
+    _f('ZOE_LISTEN_PACE', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/voice-listen-pace.md', note='self-tuned end-of-turn wait; unwired until the voice_tts.py wiring PR'),
     _f('ZOE_LIST_SHARE_HEADSUP', 'bool', True, doc='docs/knowledge/voice-list-create-share.md', note="the one-time 'X has shared a list with you' mention to the other members"),
     _f('ZOE_LIVEKIT_BRAIN_TIMEOUT_S', 'int', 20, doc='docs/architecture/remediation-packets-2026-07.md'),
     _f('ZOE_LIVEKIT_CONTAINER', 'str', 'livekit'),
