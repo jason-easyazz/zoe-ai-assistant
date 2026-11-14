@@ -159,6 +159,7 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 - 💡 **Back-channel sounds during a long story** (research): only at long sentence-final pauses, rare; blocked while the speaker-mic mutes itself during playback.
 - 💡 **She learns each person's pauses**: a person who often keeps talking after the close gets a longer wait and fewer receipt sounds; counts only.
 - 💡 **The calendar fetch moves into the credential broker**, so a calendar link never reaches the assistant's own service.
+- 💡 **Store a calendar fetch that timed out or was refused as still outstanding** (`fetch_timeout`, `fetch_outstanding`): today they are a report detail and a logged word only, because the stored sync error codes are a closed list; a later migration adds them so the sync history shows them.
 - 💡 **The router learns how to talk to the brain from outcomes**: a route hint (tool groups, rule ids) learned from what worked, flag-dark and A/B'd on the voice corpus; the no-subscription evolution tier.
 - 💡 **A speculative start on pre-brain work while the person is still speaking** (recall, embeddings, context assembly), narrower than the flag-dark whole-turn speculation of B1.1.
 
