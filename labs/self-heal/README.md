@@ -529,3 +529,35 @@ kept out by where the text comes from, not by the patterns: tracked files at a c
 of a sandboxed process that cannot read the home or the state dir. A repo that itself tracks personal
 data would leak it; the public repo rule and the secret-path list are the guards. The packet DOES go
 to the engine vendor's cloud: "no GitHub" is possible, "offline" is not.
+
+### Landing with no GitHub (`selfheal/locallander.py`, `selfheal/ledger.py`)
+
+`LedgerLanding` extends the v2 `LocalLanding` (snapshot ref, write-ahead intent, compare-and-swap,
+verified rollback). The runner takes it through its `landing=` argument; `make_landing` is unchanged.
+
+```
+ gates (heal worktree) -> repo lock -> shape preflight -> merge (ff, or a real merge when main moved)
+   -> snapshot + intent(phase=merged) -> CAS main -> PROOF on the merged tree (supervised gate with the
+   pre-merge tip as base + the whole offline lane, sandboxed) -> intent(proven) -> apply (noop in the lab)
+   -> health checks -> intent(watching) -> health WINDOW (probe polled) -> ledger `landed` -> intent cleared
+ any failure after the CAS -> main back to the snapshot (verified) -> ledger `rolled_back` + the reason
+```
+
+| property | how | test (`tests/test_self_heal_locallanding.py`) |
+|---|---|---|
+| the merged tree is proven before anything is applied | `_prove` runs before `applier.apply`; a moved main is merged (`git merge --no-ff` in a throwaway worktree of the scratch repo) and the proof runs on THAT tree, base = the pre-merge tip | `test_a_moved_main_is_merged_and_the_merged_tree_is_what_gets_proven` |
+| a correct fix that breaks an unrelated test after the merge is rolled back, and the ledger says so | main gains a test that relies on the bug while the engine works; the textual merge is clean; the offline lane on the merged tree is red | `test_a_correct_fix_that_breaks_an_unrelated_test_after_merge_is_rolled_back`; negative control `test_negative_control_without_the_post_merge_proof_the_broken_merge_stays` (proof stubbed out: the broken merge stays on main) |
+| a textual conflict refuses, main does not move | `merge_conflict` | `test_a_textual_conflict_refuses_and_main_does_not_move` |
+| health window: one red reading inside it rolls back | `_watch` with an injected clock; the lab probe is `FakeProbe` | `test_health_window` (red on the third reading: rolled back; all green: landed after 4 readings over the 30 s window) |
+| append-only ledger with a proof hash | one JSON line per landed / rolled_back / refused, hash-chained; `proof` = sha256 over base, merged sha, merged tree, heal sha, every gate's name / status / detail before and after the merge, the node runner's hash; tokens only | `test_ledger_is_a_hash_chain_and_refuses_to_extend_a_broken_one` (edited, removed, reordered lines all break it; the stated limit, a cut tail, verifies), `test_ledger_takes_tokens_only_and_known_keys_only` |
+| killed mid-landing: the next start finishes or rolls back, main is never left advanced and unproven | intent phases; `Runner._recover` calls `finish_intent` (only for `watching`: proven + applied; the window is re-run in full) else `rollback_intent`; ledger writes are idempotent per landing | `test_a_kill_mid_landing_is_finished_or_rolled_back_by_the_next_start` (kill after intent / after the CAS / after the proof: rolled back; while watching / after the ledger line: kept, no duplicate line), `test_a_watching_landing_whose_probe_is_red_on_restart_is_rolled_back`; negative control `test_negative_control_without_recovery_main_stays_advanced_and_unproven` |
+| two loops, one repo: one wins, one refuses | a lock file in the git dir (`landing_busy`), then the compare-and-swap (`lost_race`); a duplicate heal that finishes after the other landed fails its proof (the reproduction already passes at the new tip) and is rolled back | `test_two_loops_on_one_repo_the_one_mid_landing_wins_the_other_refuses` (with its no-lock control), `test_a_main_that_moves_under_the_landing_loses_the_compare_and_swap`, `test_a_duplicate_heal_that_finishes_after_the_other_landed_does_not_land` |
+| two shapes, one interface | `SoldUnit`: a repo with ANY remote is refused (`remote_present`), no `gh` / fetch / push / clone in the command log. `ThisUnit`: the same landing, and the `git push` + `gh pr create --draft` command lines are RETURNED (`would_run`), never executed | `test_sold_unit_lands_proves_and_records_with_no_remote_and_no_network`, `test_sold_unit_refuses_a_repo_that_has_a_remote`, `test_this_unit_lands_locally_and_only_prints_the_pr_commands` |
+
+`HardKill` is a test seam standing for SIGKILL: it skips the rollback and every record, as a real
+kill would. All git work happens in the scratch repo the test or `loop_scratch.py` creates.
+
+Honest limits. The proof costs the gates a second time (supervised nodes + the whole lane) on every
+landing. The ledger shares the loop's trust domain: it shows edits, not a cut tail, and code that owns
+the state dir can rewrite it whole. `finish_intent` trusts the recorded phase. The health probe and
+the applier are fakes: what "healthy" means on a deployed unit is not designed here.

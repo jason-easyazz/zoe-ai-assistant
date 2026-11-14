@@ -188,6 +188,9 @@ class Config:
     integration_branch: str = "main"
     health_checks: list = field(default_factory=list)   # argv lists, allow-listed (see check_health_argv)
     health_timeout_s: int = 120
+    unit_shape: str = "sold_unit"                        # sold_unit (no remote at all) | this_unit (also prints the PR commands)
+    health_window_s: int = 0                             # locallander: poll the health probe this long after apply
+    health_interval_s: int = 5
     apply_target: str = ""                               # lab: none; refused if it is the live checkout
 
     @classmethod
@@ -253,6 +256,10 @@ class Config:
             check_script_argv(self.voice_replay_cmd, "voice_replay_cmd")
         for argv in self.health_checks:
             check_health_argv(argv, self.python)
+        if self.unit_shape not in ("sold_unit", "this_unit"):
+            raise ValueError(f"unit_shape must be sold_unit|this_unit, not {self.unit_shape!r}")
+        if not all(isinstance(getattr(self, n), int) and getattr(self, n) >= 0 for n in ("health_window_s", "health_interval_s")):
+            raise ValueError("health_window_s / health_interval_s must be non-negative integers")
         if self.unattended() and SUPERVISED_GATE not in self.local_gates:
             raise ValueError("full + local landing lands with no human reading the diff: local_gates must "
                              f"include {SUPERVISED_GATE!r} (the JUnit gate can be forged from inside the run)")
