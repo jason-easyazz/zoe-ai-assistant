@@ -430,6 +430,67 @@ def test_an_unrelated_text_drops_nothing():
     assert _subjects(A) == ["Asha's swimming", "Wynne"]
 
 
+# ── Codex P1 (class): every turn-keyed clear runs BEFORE any destructive step ─────────────────────
+
+def _one_shot_failure(monkeypatch, step):
+    """Make one destructive step of the topic forget fail ONCE (then work), as a store blip would."""
+    import conversation_notes
+    import forget_topic
+
+    left = {"n": 1}
+
+    def once(real):
+        async def flaky(*a, **k):
+            if left["n"] > 0:
+                left["n"] -= 1
+                raise ConnectionError("pool lost")
+            return await real(*a, **k)
+        return flaky
+    if step == "words":
+        monkeypatch.setattr(forget_topic, "_erase_words", once(forget_topic._erase_words))
+    elif step == "notes":
+        monkeypatch.setattr(conversation_notes, "erase_topic", once(conversation_notes.erase_topic))
+    elif step == "archive":
+        monkeypatch.setattr(_Svc, "review", once(_Svc.review))
+    return left
+
+
+@pytest.mark.parametrize("step", ["words", "notes", "archive"])
+def test_a_failed_destructive_step_then_a_healthy_retry_leaves_nothing(forget_env, monkeypatch, step):
+    """Thread PRRT_kwDOPZpkks63cwpI, as a class: a one-shot failure in EACH later step in turn. The correction was said before
+    any row existed; after the failed call and a healthy retry, nothing of the member's correction remains, and member B's
+    identical one is untouched."""
+    import forget_topic
+
+    _said_before_any_row(monkeypatch)
+    vc._remember(B, vc.Correction("Wynne", "6", "5"), SAID)
+    left = _one_shot_failure(monkeypatch, step)
+    svc = _Svc(("zoe_r9", "User's daughter has a piano lesson"))
+    run(forget_topic.forget(svc, A, "my daughter"))
+    assert left["n"] == 0                                           # the injected failure really happened
+    assert "Wynne" not in _subjects(A)                              # already gone after the FAILED call: cleared first
+    run(forget_topic.forget(svc, A, "my daughter"))                 # the healthy retry
+    assert "Wynne" not in _subjects(A) and "Wynne" in _subjects(B)
+
+
+def test_the_old_ordering_leaks_on_a_notes_failure(forget_env, monkeypatch):
+    """Negative control: the order before this fix - the words erased, the notes erase failing, so the in-process clear (after
+    it) never ran - and then a healthy retry that finds no turn left to match: the correction outlives the forget."""
+    import forget_topic
+
+    _said_before_any_row(monkeypatch)
+    real = {"m": vc.forget_matching, "t": vc.forget_turns, "x": vc.forget_in_texts}
+    skipped = {"on": True}
+    monkeypatch.setattr(vc, "forget_matching", lambda *a: 0 if skipped["on"] else real["m"](*a))
+    monkeypatch.setattr(vc, "forget_turns", lambda *a: 0 if skipped["on"] else real["t"](*a))
+    monkeypatch.setattr(vc, "forget_in_texts", lambda *a: 0 if skipped["on"] else real["x"](*a))
+    _one_shot_failure(monkeypatch, "notes")
+    run(forget_topic.forget(_Svc(), A, "my daughter"))              # words erased, notes failed, clear skipped (old order)
+    skipped["on"] = False
+    run(forget_topic.forget(_Svc(), A, "my daughter"))              # the healthy retry: no retracted turn names it any more
+    assert "Wynne" in _subjects(A)
+
+
 # ── the call sites, by AST, each with its break-the-fix control ─────────────────────────────
 
 CALL_SITES = (
