@@ -26,6 +26,7 @@ Exit: 0 deployed; 2 usage (bad argv or bad stdin); 3 the commit is not on main; 
 5 a step failed (fetch, export, compose, nginx -t); 6 not ready (a bind source or the env file fails the checks).
 """
 import fcntl
+import signal
 import json
 import os
 import re
@@ -49,7 +50,11 @@ NGINX_IMAGE = re.compile(r"^nginx@sha256:[0-9a-f]{64}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 USAGE = ("usage: echo <40-hex sha on main> | zoe-compose-deploy zoe-auth [--build] | zoe-ui | modules;"
          "  zoe-compose-deploy logs zoe-auth|zoe-ui")
-ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0"}
+# The ONLY environment any child sees (nothing is inherited: no DOCKER_*, COMPOSE_*, GIT_*, XDG_*). HOME is the
+# root-owned 0700 state dir, git reads no system or global config, and the docker CLI's config dir is root-owned too.
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": STATE, "LC_ALL": "C", "GIT_TERMINAL_PROMPT": "0",
+       "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "DOCKER_CONFIG": STATE + "/docker-config"}
+STDIN_TIMEOUT_S = 10
 
 
 def fail(msg, code):
@@ -66,14 +71,16 @@ def run(argv, code=5, **kw):
 
 
 def read_sha():
-    data = sys.stdin.buffer.read(64)
-    try:
-        line = data.decode("ascii").rstrip("\n")
-    except UnicodeDecodeError:
+    """STDIN is hostile: read ONCE, bounded (41 bytes + 1 to detect more), within a deadline; exactly 40 lowercase hex
+    and at most one trailing newline. Anything else, or anything after it, refuses."""
+    signal.signal(signal.SIGALRM, lambda *a: fail("no commit on stdin in time", 2))
+    signal.alarm(STDIN_TIMEOUT_S)
+    data = sys.stdin.buffer.read(41)
+    extra = sys.stdin.buffer.read(1) if len(data) == 41 else b""
+    signal.alarm(0)
+    if extra or not re.fullmatch(rb"[0-9a-f]{40}\n?", data):
         fail(USAGE, 2)
-    if not SHA.fullmatch(line):
-        fail(USAGE, 2)
-    return line
+    return data[:40].decode("ascii")
 
 
 def unswappable(path):
@@ -174,9 +181,10 @@ def prepare(sha):
     mirror = os.path.join(STATE, "mirror.git")
     if not os.path.isdir(mirror):
         run([GIT, "init", "--quiet", "--bare", mirror])
-    run([GIT, "--git-dir", mirror, "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
-         "-c", "protocol.file.allow=always", "fetch", "--quiet", "--no-tags", "--prune", ORIGIN,
-         "+refs/heads/main:refs/heads/main"], timeout=600)
+    scheme = ORIGIN.split(":", 1)[0]          # https on the box (the lab's copy points ORIGIN at a local file:// repo)
+    run([GIT, "--git-dir", mirror, "-c", "protocol.allow=never", "-c", f"protocol.{scheme}.allow=always",
+         "-c", "core.hooksPath=/dev/null", "-c", "transfer.fsckObjects=true", "fetch", "--quiet", "--no-tags",
+         "--prune", ORIGIN, "+refs/heads/main:refs/heads/main"], timeout=600)
     if subprocess.run([GIT, "--git-dir", mirror, "merge-base", "--is-ancestor", sha, "refs/heads/main"],
                       env=ENV, capture_output=True).returncode != 0:
         fail(f"{sha[:12]} is not on main", 3)
@@ -230,10 +238,11 @@ def modules(tree):
 
 
 def main(argv):
+    os.umask(0o022)
+    os.chdir("/")                            # sudo keeps the caller's cwd; nothing may resolve against it
     kind = VERBS.get(tuple(argv))
     if kind is None:
         fail(USAGE, 2)
-    os.umask(0o022)
     if kind == "logs":
         r = subprocess.run([DOCKER, "logs", "--tail", LOG_LINES, argv[1]], env=ENV, stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, timeout=60)

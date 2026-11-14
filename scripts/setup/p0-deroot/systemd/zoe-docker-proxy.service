@@ -6,10 +6,14 @@
 #   sudo install -m 0644 zoe-docker-proxy.service /etc/systemd/system/ && sudo systemctl enable --now zoe-docker-proxy
 # Clients: DOCKER_HOST=unix:///run/zoe-docker-proxy/docker.sock, member of group zoe-dockerproxy.
 # The proxy anchors every pattern (^...$) and matches the URL PATH. It cannot see request bodies, so the list
-# below never allows container create, build, image pull, restart, delete, or exec into a container that has a
-# bind mount from a path `zoe` controls (exec can ask for User=root). Patterns use [.] not \. (systemd escapes).
-# Allowed today: inspect/start/stop of the two on-demand containers (zoe-data's ma_ondemand + voice_livekit,
-# ma_idle_reap), ps, inspect + exec of zoe-database (backup, backup-verify, multica heartbeat, health check).
+# below never allows container create, build, image pull, restart, delete, or ANY exec (exec can ask for
+# Privileged and User=root in its body). Patterns use [.] not \. (systemd escapes).
+# Allowed: inspect/start/stop of the two on-demand containers (zoe-data's ma_ondemand + voice_livekit, ma_idle_reap),
+# ps, version, and inspect of zoe-database (the restore drill reads its image). NO exec of any kind (P0-1 audit): the
+# exec API takes Privileged and User from the request BODY, which the proxy cannot see, so an allowed exec is a
+# privileged root process in a container. Database work goes through the fixed root helper zoe-db-exec instead.
+# start re-resolves the container's bind sources as root, so the proxy is enabled for start only after P0-2 has
+# moved those sources to root-owned paths (docs/architecture/p0-deroot.md 4.2).
 [Unit]
 Description=Allowlisted Docker API socket for Zoe (P0 de-root)
 After=docker.service
@@ -28,10 +32,7 @@ ExecStart=/usr/local/bin/socket-proxy \
   -allowHEAD=(/v1[.][0-9]+)?/_ping \
   -allowGET=(/v1[.][0-9]+)?/(_ping|version|containers/json) \
   -allowGET=(/v1[.][0-9]+)?/containers/(zoe-music-assistant|livekit|zoe-database)/json \
-  -allowGET=(/v1[.][0-9]+)?/exec/[0-9a-f]{64}/json \
-  -allowPOST=(/v1[.][0-9]+)?/containers/(zoe-music-assistant|livekit)/(start|stop) \
-  -allowPOST=(/v1[.][0-9]+)?/containers/zoe-database/exec \
-  -allowPOST=(/v1[.][0-9]+)?/exec/[0-9a-f]{64}/(start|resize)
+  -allowPOST=(/v1[.][0-9]+)?/containers/(zoe-music-assistant|livekit)/(start|stop)
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes
