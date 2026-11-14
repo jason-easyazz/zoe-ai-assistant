@@ -1801,8 +1801,6 @@ class MemoryService:
             if _erase_gate.erased_since_scheduled(user_id):      # background work scheduled before an erase of this member: dropped
                 _log_erase_drop(source)
                 return None
-            if await _erase_watermark.erased_since_cycle(user_id, source or "ingest"):   # a night pass (own process) that began before it
-                return None
             if idem_key in self._seen_keys:
                 self._bump("dedup", source)
                 return None
@@ -1915,10 +1913,16 @@ class MemoryService:
                     self._remember_seen_key(user_id, idem_key)
                     return None
 
+            async def _write():
+                await self._run_sync(self._write_row, mem_id, scrubbed, metadata)
+                return mem_id
+
+            async def _undo(mid):
+                await self._undo_night_write(user_id, [mid], source or "ingest")
             try:
-                await self._run_sync(
-                    self._write_row, mem_id, scrubbed, metadata
-                )
+                # a night pass (its own process) that began before the member's erase: checked right before and after the write
+                if await _erase_watermark.guarded_write(user_id, source or "ingest", _write, _undo) is None:
+                    return None
             except LiveStoreViolation:
                 raise
             except Exception as exc:
@@ -2693,8 +2697,12 @@ class MemoryService:
             if _erase_gate.erased_since_scheduled(user_id):      # same rule as ingest: an erase since the work was scheduled wins
                 _log_erase_drop(origin or actor)
                 return None
-            if await _erase_watermark.erased_since_cycle(user_id, origin or actor or "review"):
-                return None
+            if await self._run_sync(self._get_sync, mem_id) is None:
+                return None      # read before the lock, erased since (this process's erase holds this lock): never written back
+            phase = origin or actor or "review"
+
+            async def _undo(ids):          # a night pass's write raced an erase in the API process: exactly what it wrote goes
+                await self._undo_night_write(user_id, ids, phase)
             if decision in {"approve", "reject", "archive"}:
                 new_status = {
                     "approve": "approved",
@@ -2736,9 +2744,11 @@ class MemoryService:
                     new_meta["edge_applied_id"] = new_edge
                     new_meta["supersedes_edge_id"] = disputed[len(_EDGE_REF):]
                     disputed = ""
-                await self._run_sync(
-                    self._write_row, mem_id, current.text, new_meta
-                )
+                async def _write_decision():
+                    await self._run_sync(self._write_row, mem_id, current.text, new_meta)
+                    return [mem_id]
+                if await _erase_watermark.guarded_write(user_id, phase, _write_decision, _undo) is None:
+                    return None
                 await self._append_audit(
                     mem_id=mem_id,
                     user_id=user_id,
@@ -2864,21 +2874,25 @@ class MemoryService:
             # safe order expert_dispatch._maybe_supersede uses. "superseded" is in
             # _BLOCKED_READ_STATUSES (instantly invisible on read); marking the old
             # row first and then failing the new write would make the fact vanish.
-            await self._run_sync(
-                self._write_row, new_id, scrubbed, new_meta
-            )
-            # Guard new_id != mem_id: an edit whose text+durable identity hash to the
-            # same mem_id just overwrote the row in place, so there is no distinct old
-            # row to retire — superseding it would hide the only surviving copy.
-            if new_id != mem_id:
-                old_meta = dict(current.metadata)
-                old_meta["status"] = "superseded"
-                old_meta["superseded_by_id"] = new_id
-                old_meta.update(_temporal.retire_fields(
-                    old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
+            async def _write_edit():
                 await self._run_sync(
-                    self._write_row, mem_id, current.text, old_meta
+                    self._write_row, new_id, scrubbed, new_meta
                 )
+                # Guard new_id != mem_id: an edit whose text+durable identity hash to the
+                # same mem_id just overwrote the row in place, so there is no distinct old
+                # row to retire — superseding it would hide the only surviving copy.
+                if new_id != mem_id:
+                    old_meta = dict(current.metadata)
+                    old_meta["status"] = "superseded"
+                    old_meta["superseded_by_id"] = new_id
+                    old_meta.update(_temporal.retire_fields(
+                        old_meta, new_meta, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
+                    await self._run_sync(
+                        self._write_row, mem_id, current.text, old_meta
+                    )
+                return {new_id, mem_id}
+            if await _erase_watermark.guarded_write(user_id, phase, _write_edit, _undo) is None:
+                return None
             await self._append_audit(
                 mem_id=new_id,
                 user_id=user_id,
@@ -3427,8 +3441,9 @@ class MemoryService:
                 return False
             lock = self._user_locks.setdefault(uid, asyncio.Lock())
             async with lock:
-                # the row was read OUTSIDE the lock: an erase that ran since must not have it written back (the write is an upsert)
-                if await _erase_watermark.erased_since_cycle(uid, "archive_duplicate") or await self.get(mem_id) is None:
+                # the row was read OUTSIDE the lock: an erase that ran since (this process: under this lock) must not have it written
+                # back (the write is an upsert). A night pass's erase runs in ANOTHER process: guarded_write checks before and after.
+                if await self.get(mem_id) is None:
                     return False
                 md = dict(cur.metadata)
                 md.update(status="archived", reviewed_by=actor,
@@ -3436,11 +3451,19 @@ class MemoryService:
                           review_note=note[:1024], duplicate_of=keeper_id)
                 md.update(_temporal.archive_fields(
                     cur.metadata, now=datetime.datetime.now(datetime.timezone.utc).timestamp()))
-                await self._run_sync(self._write_row, mem_id, cur.text, md)
-                await self._append_audit(
-                    mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
-                    before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
-                    reason=note)
+
+                async def write():
+                    await self._run_sync(self._write_row, mem_id, cur.text, md)
+                    await self._append_audit(
+                        mem_id=mem_id, user_id=uid, actor=actor, action="archive_duplicate",
+                        before={"status": "approved"}, after={"status": "archived", "duplicate_of": keeper_id},
+                        reason=note)
+                    return mem_id
+
+                async def undo(mid):
+                    await self._undo_night_write(uid, [mid], "archive_duplicate")
+                if await _erase_watermark.guarded_write(uid, "archive_duplicate", write, undo) is None:
+                    return False
             _invalidate_agent_user_facts_cache(uid)
             return True
         except Exception as exc:  # noqa: BLE001
@@ -3574,12 +3597,18 @@ class MemoryService:
             dup = await self._existing_candidate(user_id, scrubbed, contradicts)
             if dup is not None:
                 return dup.id
-            if await _erase_watermark.erased_since_cycle(user_id, writer or "candidate"):
+            async def _write():
+                if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
+                    _log_erase_drop(writer)
+                    return None
+                await self._run_sync(self._write_row, mem_id, scrubbed, md)
+                return mem_id
+
+            async def _undo(mid):
+                await self._undo_night_write(user_id, [mid], writer or "candidate")
+            # a night pass (its own process) that began before the member's erase: checked right before and after the write
+            if await _erase_watermark.guarded_write(user_id, writer or "candidate", _write, _undo) is None:
                 return None
-            if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
-                _log_erase_drop(writer)
-                return None
-            await self._run_sync(self._write_row, mem_id, scrubbed, md)
             await self._append_audit(
                 mem_id=mem_id, user_id=user_id, actor=writer, action="authority_candidate",
                 before=None, after={"contradicts_id": contradicts, "kind": kind,
@@ -3736,8 +3765,14 @@ class MemoryService:
                 n += len(ids)
         return n
 
+    async def _undo_night_write(self, user_id: str, ids: Iterable[str], phase: str) -> None:
+        """A night write that raced a member erase (``erase_watermark.guarded_write``) is removed through the audited erase, under the
+        member's lock this caller already holds. RAISES when it cannot (the row must not quietly stay)."""
+        await self.erase_rows(user_id, ids, actor=f"night_undo:{phase}"[:64], reason="night write raced a member erase",
+                              lock_held=True)
+
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
-                         reason: str = "forgotten by request") -> dict[str, Any]:
+                         reason: str = "forgotten by request", lock_held: bool = False) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
         a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
         rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
@@ -3749,7 +3784,8 @@ class MemoryService:
         want = [i for i in dict.fromkeys(str(x) for x in ids) if i]
         if not want:
             return {"rows_removed": 0}
-        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        # ``lock_held``: the caller already holds this member's lock (a night write undoing itself inside ingest / review): not re-entrant
+        lock = contextlib.nullcontext() if lock_held else self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)

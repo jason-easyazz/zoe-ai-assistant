@@ -338,15 +338,20 @@ async def rebuild_user_model_card(user_id: str, db=None) -> dict[str, Any]:
 
         async def _write(conn) -> dict[str, Any]:
             import erase_watermark
-            if await erase_watermark.erased_since_cycle(uid, "user_model_card"):    # rows read before the member's erase
-                return {"status": "erased_since_cycle", "items": 0, "chars": 0, "version": ""}
             card = build_card(await _display_name(conn, uid), rows, portrait)
             text = render_card(card)
             version = card_version(text)
             built = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-            await conn.execute(_UPSERT, (uid, json.dumps(card, ensure_ascii=False), text,
-                                         version, built, len(rows)))
-            await conn.commit()
+
+            async def write():
+                await erase_watermark.run_sql(conn, _UPSERT, (uid, json.dumps(card, ensure_ascii=False), text, version, built, len(rows)))
+                return uid
+
+            async def undo(_uid):
+                await erase_watermark.run_sql(conn, "DELETE FROM user_model_cards WHERE user_id = ?", (uid,))
+            # rows read before the member's erase (a night pass): checked right before and right after the write
+            if await erase_watermark.guarded_write(uid, "user_model_card", write, undo) is None:
+                return {"status": "erased_since_cycle", "items": 0, "chars": 0, "version": ""}
             return {"status": "ok", "items": len(card["items"]), "chars": len(text),
                     "version": version}
         if db is not None:

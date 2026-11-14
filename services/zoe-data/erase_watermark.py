@@ -253,3 +253,38 @@ async def erased_since_cycle(user_id: str, phase: str) -> bool:
         logger.info("ERASE_WATERMARK_PHASE_SKIP phase=%s", phase)
         return True
     return False
+
+
+async def guarded_write(user_id: str, phase: str, write: Callable[[], Any], undo: Callable[[Any], Any]) -> Any:
+    """The ONE write rule for a night pass, whose erase check can go stale while it writes: ``delete_user`` runs in another process and
+    no in-process lock spans the two. (1) re-check the mark right before the write, (2) ``await write()`` (returns what it wrote: ids,
+    keys), (3) re-check right after; a mark at or after the pass start now means the erase raced the write, so ``await undo(written)``
+    deletes exactly that and the result is None. Why this closes it: ``delete_user`` records the mark BEFORE it erases anything, so a write
+    that commits after the erase enumerated the store sees the mark at step (3); one that commits before it is erased by the erase itself.
+    Outside a night pass both checks are no-ops (a plain write). A failed undo RAISES (logged, codes only): the row must not quietly stay."""
+    if await erased_since_cycle(user_id, phase):
+        return None
+    written = await write()
+    if written is None:
+        return None              # the write itself declined: nothing to keep, nothing to undo
+    if not await erased_since_cycle(user_id, phase):
+        return written
+    try:
+        await undo(written)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("ERASE_WATERMARK_COMPENSATE_FAILED phase=%s code=%s", phase, type(exc).__name__)
+        raise
+    logger.warning("ERASE_WATERMARK_COMPENSATED phase=%s", phase)
+    return None
+
+
+async def run_sql(db, sql: str, params: tuple) -> None:
+    """Execute + commit on ``db``, or on a short-lived pooled connection when ``db`` is None (a ``guarded_write`` undo step)."""
+    if db is not None:
+        await db.execute(sql, params)
+        await db.commit()
+        return
+    from db_pool import get_db_ctx  # type: ignore[import]
+    async with get_db_ctx() as conn:
+        await conn.execute(sql, params)
+        await conn.commit()

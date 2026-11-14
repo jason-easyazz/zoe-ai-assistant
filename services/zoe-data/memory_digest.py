@@ -2771,38 +2771,47 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
             neighbours = await svc.search(doc, user_id=user_id, limit=6)
             # Exclude self
             neighbour_ids = [n.id for n in neighbours if n.id != mem_id][:5]
-            # the upserts below write back rows READ before the awaits above: after a member erase they would recreate them
-            if await _erase_watermark.erased_since_cycle(user_id, "rem"):
+
+            # the upserts write back rows READ before the awaits above: after a member erase (another process) they would recreate
+            # them, so they run through the night-write rule (checked right before and right after; what was written is undone)
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, neighbour_ids=neighbour_ids) -> list:
+                nonlocal linked
+                written = [mem_id]
+                if neighbour_ids:
+                    # Bump access on neighbours (reinforcement)
+                    await svc.tick_access(user_id, neighbour_ids)
+
+                    # Write related_ids on new memory
+                    existing_related = set((meta.get("related_ids") or "").split(","))
+                    existing_related.update(neighbour_ids)
+                    meta["related_ids"] = ",".join(i for i in existing_related if i)
+                    linked += 1
+
+                    # Write related_ids on neighbours (bidirectional)
+                    nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
+                    nb_ids = nb_result.get("ids") or []
+                    nb_docs = nb_result.get("documents") or []
+                    nb_metas = nb_result.get("metadatas") or []
+                    new_nb_metas = []
+                    for nm in nb_metas:
+                        nm = dict(nm) if nm else {}
+                        nb_related = set((nm.get("related_ids") or "").split(","))
+                        nb_related.add(mem_id)
+                        nm["related_ids"] = ",".join(i for i in nb_related if i)
+                        new_nb_metas.append(nm)
+                    if nb_ids:
+                        col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
+                        written += list(nb_ids)
+
+                # Mark as REM-processed
+                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
+                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                return written
+
+            async def _undo(ids: list) -> None:      # through the audited erase (tombstone first), never a bare collection delete
+                await svc.erase_rows(user_id, ids, actor="night_undo", reason="night write raced a member erase")
+            if await _erase_watermark.guarded_write(user_id, "rem", _write, _undo) is None:
                 break
-
-            if neighbour_ids:
-                # Bump access on neighbours (reinforcement)
-                await svc.tick_access(user_id, neighbour_ids)
-
-                # Write related_ids on new memory
-                existing_related = set((meta.get("related_ids") or "").split(","))
-                existing_related.update(neighbour_ids)
-                meta["related_ids"] = ",".join(i for i in existing_related if i)
-                linked += 1
-
-                # Write related_ids on neighbours (bidirectional)
-                nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
-                nb_ids = nb_result.get("ids") or []
-                nb_docs = nb_result.get("documents") or []
-                nb_metas = nb_result.get("metadatas") or []
-                new_nb_metas = []
-                for nm in nb_metas:
-                    nm = dict(nm) if nm else {}
-                    nb_related = set((nm.get("related_ids") or "").split(","))
-                    nb_related.add(mem_id)
-                    nm["related_ids"] = ",".join(i for i in nb_related if i)
-                    new_nb_metas.append(nm)
-                if nb_ids:
-                    col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
-
-            # Mark as REM-processed
-            meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-            col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
 
     except Exception as exc:
         logger.warning("REM reinforce pass failed user=%s: %s", user_id, exc)
@@ -2893,18 +2902,27 @@ async def _deep_sleep_pass(user_id: str) -> dict:
 
             if meta.get("challenged_by_turn"):
                 continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
-            if await _erase_watermark.erased_since_cycle(user_id, "deep_sleep"):   # an upsert of a row read before an erase recreates it
-                break
-
             if score >= 0.8 and uqc >= 3:
-                meta["status"] = "approved"
-                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
-                promoted += 1
+                new_status = "approved"
             elif added_at and added_at < cutoff:
-                meta["status"] = "archived"
+                new_status = "archived"
+            else:
+                continue
+
+            # an upsert of a row read before a member erase (another process) recreates it: the night-write rule
+            async def _write(mem_id=mem_id, doc=doc, meta=meta, new_status=new_status) -> list:
+                meta["status"] = new_status
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
                 col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                return [mem_id]
+
+            async def _undo(ids: list) -> None:      # through the audited erase (tombstone first), never a bare collection delete
+                await svc.erase_rows(user_id, ids, actor="night_undo", reason="night write raced a member erase")
+            if await _erase_watermark.guarded_write(user_id, "deep_sleep", _write, _undo) is None:
+                break
+            if new_status == "approved":
+                promoted += 1
+            else:
                 archived += 1
 
     except Exception as exc:
@@ -3033,7 +3051,15 @@ async def _synthesis_pass(user_id: str) -> dict:
                         sm = dict((col_result["metadatas"] or [{}])[0])
                         sm["related_ids"] = ",".join(source_ids)
                         sm["concept_tags"] = tag
-                        col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
+
+                        async def _link(rid=ref.id, sm=sm, text=synthesis_text) -> list:
+                            col.upsert(ids=[rid], documents=[text], metadatas=[sm])
+                            return [rid]
+
+                        async def _unlink(ids: list) -> None:
+                            await svc.erase_rows(user_id, ids, actor="night_undo", reason="night write raced a member erase")
+                        if await _erase_watermark.guarded_write(user_id, "synthesis", _link, _unlink) is None:
+                            continue
                     synthesized += 1
             except Exception as exc:
                 logger.warning("synthesis failed for tag=%s user=%s: %s", tag, user_id, exc)
@@ -3351,8 +3377,6 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     if not candidates:
         return _done("ok")
     import erase_watermark
-    if await erase_watermark.erased_since_cycle(user_id, "open_loops"):    # erased since the night pass began: its reads are stale
-        return _done("erased_since_cycle")
 
     try:
         async with _get_compat_db() as _db:
@@ -3363,19 +3387,33 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 (user_id,),
             ) as cur:
                 seen = [_content_tokens(r[0]) for r in await cur.fetchall()]
-            for text, hint, weight, days in candidates:
-                tokens = _content_tokens(text)
-                if _loop_is_dup(tokens, seen):
-                    result["skipped_dup"] += 1
-                    continue
-                await _db.execute(
-                    """INSERT INTO open_loops
-                       (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
-                       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
-                    (user_id, text, hint, weight, days),
-                )
-                result["inserted"] += 1
-                seen.append(tokens)
+
+            async def write() -> list:
+                wrote = []
+                for text, hint, weight, days in candidates:
+                    tokens = _content_tokens(text)
+                    if _loop_is_dup(tokens, seen):
+                        result["skipped_dup"] += 1
+                        continue
+                    await _db.execute(
+                        """INSERT INTO open_loops
+                           (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
+                           VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP + make_interval(days => ?::int))""",
+                        (user_id, text, hint, weight, days),
+                    )
+                    result["inserted"] += 1
+                    seen.append(tokens)
+                    wrote.append(text)
+                return wrote
+
+            async def undo(texts: list) -> None:      # exactly the loops this pass inserted (an unresolved loop text is unique per member)
+                for text in texts:
+                    await _db.execute("DELETE FROM open_loops WHERE user_id = ? AND loop_text = ? AND resolved IS NOT TRUE", (user_id, text))
+                await _db.commit()
+                result["inserted"] = 0
+            # erased since the night pass began (its reads are stale): checked right before and right after the inserts
+            if await erase_watermark.guarded_write(user_id, "open_loops", write, undo) is None:
+                return _done("erased_since_cycle")
     except Exception as exc:
         # Class + constraint only: a driver message can echo a bound value.
         logger.warning("open_loops: DB write failed user=%s: %s constraint=%s", user_id,

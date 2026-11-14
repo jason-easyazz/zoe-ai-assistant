@@ -359,8 +359,6 @@ async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db
     if is_unidentified(user_id):
         logger.info("GUEST_MEMORY_DISCARD writer=portrait")
         return
-    if await erase_watermark.erased_since_cycle(user_id, "portrait"):    # the night pass read the rows before the member's erase
-        return
     sql = """INSERT INTO user_portraits (user_id, portrait_text, portrait_version,
                    generated_from_memory_count, last_generated)
                VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP)
@@ -370,18 +368,16 @@ async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db
                    generated_from_memory_count = excluded.generated_from_memory_count,
                    last_generated = CURRENT_TIMESTAMP"""
     params = (user_id, portrait_text, memory_count)
+
+    async def write():
+        await erase_watermark.run_sql(db, sql, params)     # a short-lived pooled connection when db is None
+        return user_id
+
+    async def undo(_written):
+        await erase_watermark.run_sql(db, "DELETE FROM user_portraits WHERE user_id = ?", (user_id,))
     try:
-        from db_pool import get_db_ctx  # type: ignore[import]
-        if db is not None:
-            await db.execute(sql, params)
-            await db.commit()
-        else:
-            # Short-lived pooled acquire for the write — the bare
-            # `async for db in get_db(): break` form leaves the generator
-            # suspended at the yield, closing the connection mid-write.
-            async with get_db_ctx() as _db:
-                await _db.execute(sql, params)
-                await _db.commit()
+        # a night pass read the rows before the member's erase: checked right before and right after the write (erase_watermark)
+        await erase_watermark.guarded_write(user_id, "portrait", write, undo)
     except Exception as exc:
         logger.error("portrait: save failed user=%s: %s", user_id, exc)
 

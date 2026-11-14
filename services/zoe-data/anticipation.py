@@ -429,8 +429,6 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
             for o in offers:
                 counts[o.kind] += 1
             import erase_watermark
-            if await erase_watermark.erased_since_cycle(uid, "anticipation"):
-                return {**counts, "status": "erased_since_cycle"}
             if m == "on":
                 existing = await _rows(conn, uid)
                 for r in existing:
@@ -440,19 +438,33 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
                         await _set(conn, r["id"], uid, resolved=WITHDRAWN, slots={**r["slots"], "outcome": "withdrawn"}, only_from=OPEN)
                         counts["withdrawn"] += 1
                 keys = {r["key"] for r in existing}
-                for o in offers:
-                    if o.key in keys:
-                        continue
-                    slots = {**o.slots, "surface_from": _iso(o.surface_from), "surfaced_n": 0}
-                    await conn.execute(
-                        "INSERT INTO pending_suggestions (id, user_id, session_id, action_type, description, list_type, when_hint,"
-                        " amount_hint, offer_phrase, pre_filled_slots, created_at, turns_elapsed, expire_after_turns, resolved)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0)",
-                        (str(uuid.uuid4()), uid, SESSION, ACTION, (o.title or "")[:_TITLE_MAX], o.kind, _iso(o.expires_at), o.key,
-                         phrase(o.kind, o.slots, now), json.dumps(slots, sort_keys=True), _iso(now), MAX_SURFACED))
-                    keys.add(o.key)
-                    counts["stored"] += 1
-                await conn.commit()
+
+                async def write() -> list:
+                    ids = []
+                    for o in offers:
+                        if o.key in keys:
+                            continue
+                        slots = {**o.slots, "surface_from": _iso(o.surface_from), "surfaced_n": 0}
+                        ids.append(str(uuid.uuid4()))
+                        await conn.execute(
+                            "INSERT INTO pending_suggestions (id, user_id, session_id, action_type, description, list_type, when_hint,"
+                            " amount_hint, offer_phrase, pre_filled_slots, created_at, turns_elapsed, expire_after_turns, resolved)"
+                            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0)",
+                            (ids[-1], uid, SESSION, ACTION, (o.title or "")[:_TITLE_MAX], o.kind, _iso(o.expires_at), o.key,
+                             phrase(o.kind, o.slots, now), json.dumps(slots, sort_keys=True), _iso(now), MAX_SURFACED))
+                        keys.add(o.key)
+                        counts["stored"] += 1
+                    await conn.commit()
+                    return ids
+
+                async def undo(ids: list) -> None:     # exactly the offers just inserted
+                    for oid in ids:
+                        await conn.execute("DELETE FROM pending_suggestions WHERE id = ?", (oid,))
+                    await conn.commit()
+                    counts["stored"] = 0
+                # offers from a calendar read before the member's erase (a night pass): checked right before and right after the inserts
+                if await erase_watermark.guarded_write(uid, "anticipation", write, undo) is None:
+                    return {**counts, "status": "erased_since_cycle"}
     except Exception as exc:  # noqa: BLE001 - the night pass must never break the digest
         logger.warning("ANTICIPATION mode=%s user=%s failed: %s", m, uid, type(exc).__name__)
         return {"status": "error", "mode": m}

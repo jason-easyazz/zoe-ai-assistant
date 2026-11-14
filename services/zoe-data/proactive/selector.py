@@ -261,24 +261,34 @@ async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict 
         scored = score_all(*await _gather(db, user_id, now), now)
         kept = rank(scored)
         import erase_watermark
-        if await erase_watermark.erased_since_cycle(user_id, "proactive_selector"):
+
+        async def write() -> list:
+            if restraint.mode() != "off":
+                # The thread classes are decided here, in code, and stored (invalidate, never delete).
+                await restraint.store_thread_classes(
+                    db, user_id, [(c.source_ref, c.text, c.kind) for c in kept], await _people_names(db, user_id), now)
+            for c in kept:
+                await db.execute(
+                    """INSERT INTO proactive_candidates (id, user_id, kind, source_ref, text, hint,
+                           salience, on_open, cue_words, expires_at, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT (user_id, kind, source_ref) DO UPDATE SET text = excluded.text,
+                           hint = excluded.hint, salience = excluded.salience, on_open = excluded.on_open,
+                           cue_words = excluded.cue_words, expires_at = excluded.expires_at,
+                           updated_at = excluded.updated_at""",
+                    (uuid.uuid4().hex, user_id, c.kind, c.source_ref, c.text, c.hint, c.salience,
+                     1, c.cues, _iso(c.expires_at), stamp, stamp),
+                )
+            return [(c.kind, c.source_ref) for c in kept]
+
+        async def undo(keys: list) -> None:          # exactly the candidates just written (+ the erased member's thread classes)
+            for kind, ref in keys:
+                await db.execute("DELETE FROM proactive_candidates WHERE user_id = ? AND kind = ? AND source_ref = ?", (user_id, kind, ref))
+            await db.commit()
+            await restraint.erase_user(user_id)
+        # a night pass that ranked rows read before the member's erase: checked right before and right after the upserts
+        if await erase_watermark.guarded_write(user_id, "proactive_selector", write, undo) is None:
             return {"user_id": user_id, "status": "erased_since_cycle"}
-        if restraint.mode() != "off":
-            # The thread classes are decided here, in code, and stored (invalidate, never delete).
-            await restraint.store_thread_classes(
-                db, user_id, [(c.source_ref, c.text, c.kind) for c in kept], await _people_names(db, user_id), now)
-        for c in kept:
-            await db.execute(
-                """INSERT INTO proactive_candidates (id, user_id, kind, source_ref, text, hint,
-                       salience, on_open, cue_words, expires_at, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT (user_id, kind, source_ref) DO UPDATE SET text = excluded.text,
-                       hint = excluded.hint, salience = excluded.salience, on_open = excluded.on_open,
-                       cue_words = excluded.cue_words, expires_at = excluded.expires_at,
-                       updated_at = excluded.updated_at""",
-                (uuid.uuid4().hex, user_id, c.kind, c.source_ref, c.text, c.hint, c.salience,
-                 1, c.cues, _iso(c.expires_at), stamp, stamp),
-            )
         await db.execute(
             # a 'commitment' candidate (commitments.py) is not the nightly pass's to expire: it lives until its own expiry
             "UPDATE proactive_candidates SET expires_at = ? WHERE user_id = ? AND updated_at < ? "

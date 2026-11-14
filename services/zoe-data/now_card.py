@@ -362,9 +362,17 @@ async def rebuild(uid: str, *, today: Optional[_dt.date] = None, svc: Any = None
         text = render(today.isoformat(), lines)
         card = json.dumps({"built_on": today.isoformat(), "lines": lines}, ensure_ascii=False, sort_keys=True)
         import erase_watermark
-        if await erase_watermark.erased_since_cycle(uid, "now_card"):
+
+        async def write():
+            await _store.write(uid, card, text, version(text), today.isoformat(), now.isoformat(timespec="seconds"))
+            return uid
+
+        async def undo(_uid):          # the card just written (keyed by the member)
+            await _store.remove(uid)
+            invalidate(uid)
+        # lines gathered before the member's erase (a night pass): checked right before and right after the write
+        if await erase_watermark.guarded_write(uid, "now_card", write, undo) is None:
             return {"user_id": uid, "status": "erased_since_cycle"}
-        await _store.write(uid, card, text, version(text), today.isoformat(), now.isoformat(timespec="seconds"))
         invalidate(uid)
         kinds = [k for k, _t, _r in lines]
         out = {"status": "ok" if lines else "empty", "tokens": est_tokens(text), "lines": len(lines), "threads": kinds.count("thread"),
