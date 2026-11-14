@@ -911,3 +911,24 @@ def test_instrument_rows_are_not_member_candidates_and_uncovered_is_unmeasured()
     rot = sc.Rotation("zoe-data.app.log.1.gz", first=sc.parse_ts(L("01T00:00:00", "")), last=UNTIL, error="EOFError")
     rows = sc.instrument_section(None, sc.LogSet(lines, [rot]), SINCE, UNTIL)
     assert rows and all(r["status"] == "unmeasured" and r["section"] == sc.INSTRUMENTS for r in rows)
+
+
+def test_forget_held_row_counts_forgets_with_a_correction_still_held():
+    lines = parsed([
+        L("06T10:00:00", "FORGET_CORRECTION_HELD path=topic held=1 live=3"),
+        L("06T10:01:00", "FORGET_CORRECTION_HELD path=name held=0 live=2"),
+        L("06T10:02:00", "FORGET_CORRECTION_HELD path=last held=2 live=2"),
+        L("06T10:03:00", "FORGET_CORRECTION_HELD path=member held=-1 live=-1"),
+        L("06T10:04:00", "FORGET_CORRECTION_HELD path=name held=5 live=5 traffic=harness"),   # QA traffic: excluded
+    ])
+    logs = _logset(lines, sc.parse_ts(L("01T00:00:00", "")))
+    m = sc.inst_forget_held(logs, SINCE, UNTIL)
+    assert m["data"] == {"forgets": 4, "with_held": 2, "held": 3, "unknown": 1,
+                         "by_path": {"topic": 1, "name": 1, "last": 1, "member": 1}}
+    assert m["value"].startswith("forgets with a correction still held 2 of 4")
+    assert sc.inst_forget_held(_logset([], sc.parse_ts(L("01T00:00:00", ""))), SINCE, UNTIL)["status"] == "unmeasured"
+    bad = _logset(parsed([L("06T10:00:00", "FORGET_CORRECTION_HELD path=name held=1 live=1 subject=Juno")]),
+                  sc.parse_ts(L("01T00:00:00", "")))
+    assert sc.inst_forget_held(bad, SINCE, UNTIL)["status"] == "measured"      # an extra field after the format is tolerated...
+    bad = _logset(parsed([L("06T10:00:00", "FORGET_CORRECTION_HELD path=Juno held=1 live=1")]), sc.parse_ts(L("01T00:00:00", "")))
+    assert "malformed marker" in sc.inst_forget_held(bad, SINCE, UNTIL)["reason"]   # ...a word in a code field is not

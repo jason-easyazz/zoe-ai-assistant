@@ -71,7 +71,7 @@ MARKERS = (
     # ALERTS section (counted only; never member-joined, never printed): see alert_* below
     "DISTRESS_NO_CONTACT", "PANEL_KV_MISS", "kv_miss_alert: alert not delivered",
     # INSTRUMENTS section (counted only; never member-joined, never printed): see inst_* below
-    "EVENT_LOOP_BLOCK ms=", "FORGET_LEDGER state=", "FLUE_PREPOST ",
+    "EVENT_LOOP_BLOCK ms=", "FORGET_LEDGER state=", "FLUE_PREPOST ", "FORGET_CORRECTION_HELD ",
 )
 USER_MARKERS = ("SEAM_CONTINUITY", "PROVENANCE_REPLY", "RECALL_EVERY_TURN", "DAY_REVIEW_RAISE", "VALUE_CORRECTION")
 SESSION_MARKERS = ("FLUE_TOOLS", "VOICE TIMING")
@@ -1179,6 +1179,42 @@ def inst_flue_prepost(logs: LogSet, since, until) -> dict:
                         "blocks_p50": pct(blocks, 50), "blocks_p90": pct(blocks, 90)})
 
 
+_FORGET_HELD_RE = re.compile(r"\bFORGET_CORRECTION_HELD path=(topic|name|last|member|other) held=(-1|\d{1,4}) "
+                             r"live=(-1|\d{1,4})(?:\s|$)")
+
+
+def inst_forget_held(logs: LogSet, since, until) -> dict:
+    """FORGET_CORRECTION_HELD (services/zoe-data/value_correction.log_held_after_forget): at each forget's completion, the
+    corrections about what was forgotten that the in-process memory still holds. Before #2487 > 0 is possible; after, 0."""
+    key, title = "inst_forget_held", "Forgotten subjects still held in process after a forget"
+    got = _inst_lines(logs, since, until, key, title, "FORGET_CORRECTION_HELD ",
+                      "the instrument is not deployed, or no household forget ran")
+    if isinstance(got, dict):
+        return got
+    since, w, rows = got
+    by_path: dict[str, int] = {}
+    with_held = held = unknown = 0
+    for _, line in rows:
+        m = _FORGET_HELD_RE.search(line)
+        if not m:
+            return malformed_metric(key, title, sum(1 for _, x in rows if not _FORGET_HELD_RE.search(x)), since, until)
+        by_path[m.group(1)] = by_path.get(m.group(1), 0) + 1
+        h = int(m.group(2))
+        if h < 0:
+            unknown += 1
+        else:
+            held += h
+            with_held += h > 0
+    paths = ", ".join(f"{k} {v}" for k, v in sorted(by_path.items()))
+    return metric(key, title,
+                  (f"forgets with a correction still held {frac(with_held, len(rows))} ({held} held in all); by path: "
+                   f"{paths}; could not count {unknown}"),
+                  n=len(rows), window=w,
+                  method=("zoe-data app log FORGET_CORRECTION_HELD path= held= live= at each forget's completion (topic, name, "
+                          "'forget that', member erase); harness traffic excluded; should be 0 after #2487"),
+                  data={"forgets": len(rows), "with_held": with_held, "held": held, "unknown": unknown, "by_path": by_path})
+
+
 def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
     """The INSTRUMENTS rows (long window, narrowed to the retained logs like the ALERTS app-log rows)."""
     jobs = (
@@ -1186,6 +1222,8 @@ def instrument_section(args, logs: LogSet, long_since, until) -> list[dict]:
         ("inst_forget_ledger", "Forget ledger state at each start", INSTRUMENTS,
          lambda: inst_forget_ledger(logs, long_since, until)),
         ("inst_flue_prepost", "Pre-POST chain cost", INSTRUMENTS, lambda: inst_flue_prepost(logs, long_since, until)),
+        ("inst_forget_held", "Forgotten subjects still held in process", INSTRUMENTS,
+         lambda: inst_forget_held(logs, long_since, until)),
     )
     return _run_rows(jobs)
 

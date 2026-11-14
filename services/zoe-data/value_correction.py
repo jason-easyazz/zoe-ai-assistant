@@ -963,6 +963,48 @@ def reset_state() -> None:
     _REMEMBERED.clear()
 
 
+# -- FORGET_CORRECTION_HELD: how much of a forgotten subject the in-process correction memory still holds (counts only) ------------
+# A forget erases the stores; ``_REMEMBERED`` keeps the corrected subject's name and both values for ``REMEMBER_S`` (gap audit
+# 2026-11-14, #2487). This is the INSTRUMENT, read-only: at a forget's completion it counts the member's live entries the forget
+# names. Before #2487 the count can be > 0; after it, 0. It never changes ``_REMEMBERED`` and never raises.
+
+#: The forget paths that write the line (a fixed vocabulary: the line carries no other text).
+FORGET_HELD_PATHS = frozenset({"topic", "name", "last", "member"})
+
+
+def held_after_forget(user_id, *, pattern=None, texts=None) -> "tuple[int, int]":
+    """(live entries of the member that the forget names, all live entries of the member). ``pattern``: a callable or anything
+    with ``.search`` over the entry's subject + values; ``texts``: words the forget retracted, which name the entry's subject (the
+    correction's own matchers, lazy or exact). Neither = the member erase, every live entry. (-1, -1) when it cannot count."""
+    import time
+
+    try:
+        uid = str(user_id or "").strip().lower()
+        now = time.time()
+        live = [c for t, c in list(_REMEMBERED.get(uid) or ()) if now - t <= REMEMBER_S] if uid else []
+        if pattern is None and texts is None:
+            return len(live), len(live)
+        test = getattr(pattern, "search", pattern)
+        blob = " ".join(str(x or "") for x in ([texts] if isinstance(texts, str) else (texts or ())))
+
+        def named(c) -> bool:
+            if test is not None and test(" ".join(str(x) for x in (c.subject, c.new, c.old) if x)):
+                return True
+            return bool(blob.strip()) and bool(_subject_re(c.subject, True).search(blob) or _subject_re(c.subject).search(blob))
+        return sum(1 for c in live if named(c)), len(live)
+    except Exception:  # noqa: BLE001 - an instrument never breaks a forget
+        return -1, -1
+
+
+def log_held_after_forget(path: str, user_id, *, pattern=None, texts=None) -> None:
+    """One ``FORGET_CORRECTION_HELD path=<enum> held=<n> live=<n>`` INFO line at a forget's completion. Never raises."""
+    try:
+        held, live = held_after_forget(user_id, pattern=pattern, texts=texts)
+        logger.info("FORGET_CORRECTION_HELD path=%s held=%d live=%d", path if path in FORGET_HELD_PATHS else "other", held, live)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
     """How many DISTINCT people the rows a correction would rewrite belong to, from data only. (1) The rows' own linkage: a
     person id (``entity_id`` of an ``entity_type`` person row, never a pending ``slug:``) - two ids are two people. (2) Rows with
