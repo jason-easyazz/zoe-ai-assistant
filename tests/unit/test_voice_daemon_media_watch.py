@@ -455,7 +455,7 @@ def test_flag_is_off_by_default_and_off_logs_unknown(daemon):
     ep = types.SimpleNamespace(tail_rule="deep", close_ms=640, _quiet=8, _hesitating=False)
     daemon._stamp_close(10.0, ep, "silence")
     line = daemon._FirstSound(speculative=False).line((-1, 0, 0))
-    assert line.endswith(" muted_ms=-1 first_end_ms=-1 media=-1 media_age_ms=-1")
+    assert " muted_ms=-1 first_end_ms=-1 media=-1 media_age_ms=-1 " in line
 
 
 @pytest.mark.parametrize("media,age,tail", [(True, 120, "media=1 media_age_ms=120"), (False, 0, "media=0 media_age_ms=0"),
@@ -465,5 +465,5 @@ def test_first_sound_carries_the_close_snapshot(daemon, monkeypatch, media, age,
     ep = types.SimpleNamespace(tail_rule="deep", close_ms=640, _quiet=8, _hesitating=False)
     daemon._stamp_close(10.0, ep, "silence")
     line = daemon._FirstSound(speculative=False).line((-1, 0, 0))
-    assert line.endswith(" " + tail)
-    assert line.split(" ")[-3].startswith("first_end_ms=")      # appended AFTER first_end_ms, at the very end
+    assert " " + tail + " spk=" in line
+    assert line.split(" ")[-5].startswith("first_end_ms=")      # appended AFTER first_end_ms, before the speaker pair

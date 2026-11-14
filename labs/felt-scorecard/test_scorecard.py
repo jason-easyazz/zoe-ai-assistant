@@ -848,6 +848,9 @@ def test_first_sound_allowlist_emits_integers_only_and_text_emits_nothing(tmp_pa
         _FS_OK + " media=1 media_age_ms=5 transcript=LEAKME",
         _FS_OK + " media=1",
         _FS_OK + " media=2 media_age_ms=5",
+        _FS_OK + " media=1 media_age_ms=5 spk=member_a spk_ms=5",
+        _FS_OK + " media=1 media_age_ms=5 spk=1 spk_ms=5 x=LEAKME",
+        _FS_OK + " spk=1 spk_ms=5",
     ]
     log.write_text("\n".join([_FS_OK] + texty) + "\n")
     out = subprocess.run(sc.panel_command(str(log)), shell=True, capture_output=True, text=True, check=True).stdout
@@ -864,9 +867,10 @@ def test_first_sound_allowlist_emits_integers_only_and_text_emits_nothing(tmp_pa
 @pytest.mark.skipif(shutil.which("sed") is None, reason="needs sed")
 def test_first_sound_line_with_the_media_tail_gives_the_same_row(tmp_path):
     log = tmp_path / "voice.log"
-    log.write_text("\n".join([_FS_OK, _FS_OK + " media=1 media_age_ms=120", _FS_OK + " media=-1 media_age_ms=-1"]) + "\n")
+    log.write_text("\n".join([_FS_OK, _FS_OK + " media=1 media_age_ms=120", _FS_OK + " media=-1 media_age_ms=-1",
+                              _FS_OK.replace("skip=-", "skip=no_bank") + " media=0 media_age_ms=40 spk=1 spk_ms=190"]) + "\n")
     out = subprocess.run(sc.panel_command(str(log)), shell=True, capture_output=True, text=True, check=True).stdout
-    assert out.splitlines() == ["2026-11-10 05:30:00 F -1 870 1 4 40 55 1500 160"] * 3
+    assert out.splitlines() == ["2026-11-10 05:30:00 F -1 870 1 4 40 55 1500 160"] * 4
 
 
 def test_first_sound_metrics():
