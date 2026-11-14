@@ -263,7 +263,16 @@ def test_main_also_applies_text_log_retention_and_never_changes_the_exit_status(
     assert "ancient words" in shadow.read_text() and "1/1 records carry text" in capsys.readouterr().out
 
 
-def test_a_failing_text_log_part_fails_the_job_closed(tmp_path, monkeypatch, capsys):
+@pytest.fixture
+def not_root():
+    """The failure this test provokes is a permission failure (``chmod 0o500`` on the backup root), and root is not bound by
+    file modes: as root the expiry succeeds and there is nothing to fail closed on.
+    Skips WITH the reason when run as root outside CI; under ``CI`` it runs (and would fail loudly) - a runner is never root."""
+    if os.geteuid() == 0 and not os.environ.get("CI"):
+        pytest.skip("a chmod-based permission failure cannot be provoked as root: this test needs a non-root user")
+
+
+def test_a_failing_text_log_part_fails_the_job_closed(tmp_path, monkeypatch, capsys, not_root):
     """A retention pass that stopped working must show red, after the rotation itself ran.
     Break: make ``sweep_text_logs`` ignore a -1 part -> exit 0."""
     import time

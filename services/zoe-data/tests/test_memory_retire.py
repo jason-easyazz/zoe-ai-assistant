@@ -40,6 +40,10 @@ def lab(monkeypatch):
     svc = lab_driver.load_service()
     ls = lab_driver.LabService(svc, tag="retire")
     mr.reset_state()
+    # load_service() hands every test the SAME service object, and its forget tombstones (a 300 s shield) live on it. The one
+    # test here that really forgets "cello" left that shield up, so every test that ran after it within five minutes saw
+    # "refused: forgotten_entity" (22 failures in one random order; file order hides it because that test runs near the end).
+    svc.memory_tombstones.clear_all(U)
     yield ls
     ls.close()
     mr.reset_state()
