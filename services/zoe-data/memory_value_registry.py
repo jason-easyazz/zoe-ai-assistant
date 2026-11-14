@@ -12,8 +12,8 @@ What it stores - and what it never stores:
   * ``attribute`` is one of ``ATTRIBUTES`` (number-valued only; CHECKed by the migration too).
   * ``value_norm`` is canonical JSON built by ``normalise`` from numbers and enum codes only, in the value shapes of
     ``memory_claims`` (PR #2477): an age ``{"v": 8.0}``, an amount ``{"v": "13500", "cur": "AUD"}`` (a decimal NUMERAL string),
-    a count ``{"v": 3}``, dates ``{"y", "m", "d"}``. A string anywhere in it that is not a decimal numeral, a currency code, a unit,
-    a weekday or a frequency code is REFUSED, so no free text can enter through this module.
+    a count ``{"v": 3}``, dates ``{"y", "m", "d"}``. A string anywhere in it that is not a decimal numeral or a member of a CLOSED code set (``CURRENCIES``,
+    ``UNITS``, ``WEEKDAYS``, ``FREQS``) is REFUSED, so no free text can enter through this module.
   * ``user_id`` is a member id (``_MEMBER_RE``, never a guest); ``by_claim`` / ``source_turn_id`` / ``row_ids`` are ids of their
     REAL shapes (a claim hash, ``ut-`` + hex, ``zoe_<member>_<hex>``) and ``subject_ref`` is ``self`` or a uuid4. Log lines carry counts and fixed codes only - no user
     id, no subject, no value.
@@ -67,7 +67,10 @@ MAX_VALUES = 4
 UNITS = ("km", "kg", "minute", "hour", "second", "day", "week", "month", "year", "metre", "cm", "litre", "mile", "percent")
 FREQS = ("daily", "weekly", "monthly", "yearly")
 WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
-_CUR_RE = re.compile(r"^[A-Z]{3}$")
+#: CLOSED vocabularies for every string a value_norm may hold besides a decimal numeral. A shape check is not enough: "^[A-Z]{3}$"
+#: passes three-letter NAMES (AMY, JOE, ZOE). These are exactly the codes ``memory_claims`` (PR #2477) emits: ``_CURRENCY`` /
+#: ``_CURRENCY_PREFIX`` / ``DEFAULT_CURRENCY`` produce only these five; a new currency there needs a deliberate entry here.
+CURRENCIES = frozenset({"AUD", "EUR", "GBP", "NZD", "USD"})
 _DEC_RE = re.compile(r"^(?:0|[1-9][0-9]{0,12})(?:\.[0-9]{0,5}[1-9])?$")
 # Every id column holds ONE real id shape, never a free token (a name such as "Juno" is a valid single token, so "any token"
 # is not a check). The shapes are the ones the source tables mint:
@@ -169,24 +172,24 @@ def _value(attribute: str, v: Any) -> Optional[dict]:
         if set(v) != {"v", "cur"}:
             return None
         amount, cur = _decimal(v.get("v")), v.get("cur")
-        return {"cur": cur, "v": amount} if amount is not None and isinstance(cur, str) and _CUR_RE.match(cur) else None
+        return {"cur": cur, "v": amount} if amount is not None and type(cur) is str and cur in CURRENCIES else None
     if attribute == "measure":
         if set(v) != {"u", "v"}:
             return None
         x = _decimal(v.get("v"))
-        return {"u": v["u"], "v": x} if x is not None and v.get("u") in UNITS else None
+        return {"u": v["u"], "v": x} if x is not None and type(v.get("u")) is str and v["u"] in UNITS else None
     if attribute == "count":
         n = _int(v.get("v"), 0, 10 ** 6) if set(v) == {"v"} else None
         return {"v": n} if n is not None else None
     if attribute == "time_of_day":
         return _hm(v)
     if attribute == "schedule":
-        if not set(v) <= {"freq", "byday", "time"} or v.get("freq") not in FREQS:
+        if not set(v) <= {"freq", "byday", "time"} or type(v.get("freq")) is not str or v["freq"] not in FREQS:
             return None
         out: dict = {"freq": v["freq"]}
         if "byday" in v:
             days = v["byday"]
-            if not isinstance(days, list) or not days or any(d not in WEEKDAYS for d in days):
+            if not isinstance(days, list) or not days or any(type(d) is not str or d not in WEEKDAYS for d in days):
                 return None
             out["byday"] = sorted(set(days), key=WEEKDAYS.index)
         if "time" in v:

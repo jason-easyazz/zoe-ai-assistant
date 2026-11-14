@@ -235,6 +235,29 @@ def test_normalise_refuses_anything_that_could_carry_words(attribute, value):
     assert reg.normalise(attribute, value) is None
 
 
+@pytest.mark.parametrize("cur, ok", [("AUD", True), ("USD", True), ("EUR", True), ("GBP", True), ("NZD", True),
+                                     ("ZOE", False), ("AMY", False), ("JOE", False), ("XYZ", False), ("aud", False), ("AU", False)])
+def test_a_currency_is_a_closed_code_set_never_three_letters(cur, ok):
+    """Three-letter NAMES are real (AMY, JOE, ZOE): a shape check would store one in value_norm."""
+    assert (reg.normalise("amount", {"v": "12", "cur": cur}) is not None) is ok
+
+
+def test_every_value_norm_string_is_from_a_closed_set():
+    assert reg.CURRENCIES == frozenset({"AUD", "EUR", "GBP", "NZD", "USD"})
+    for bad in ({"v": "5", "u": "Zoe"}, {"v": "5", "u": "kms"}, {"v": "5", "u": ["km"]}):
+        assert reg.normalise("measure", bad) is None
+    for bad in ({"freq": "Juno"}, {"freq": "weekly", "byday": ["ZOE"]}, {"freq": "weekly", "byday": ["Mo"]}, {"freq": ["weekly"]}):
+        assert reg.normalise("schedule", bad) is None
+
+
+def test_a_name_shaped_currency_refuses_the_whole_record(db):
+    assert run(reg.record(A, "self", "amount", superseded=[{"v": "12000", "cur": "AUD"}], asserted={"v": "13500", "cur": "ZOE"},
+                          said_at=T0, by_claim=C(1), now=T0)) == 0
+    assert db.q("SELECT COUNT(*) FROM memory_value_registry") == [(0,)]
+    assert run(reg.record(A, "self", "amount", superseded=[{"v": "12000", "cur": "AUD"}], asserted={"v": "13500", "cur": "AUD"},
+                          said_at=T0, by_claim=C(1), now=T0)) == 2                                        # control
+
+
 # ── 3. record + is_superseded: the said-at rule ─────────────────────────────────────────────
 
 def test_only_corrections_said_after_the_fact_count(db):
