@@ -3708,6 +3708,232 @@ def _trim_chunk_silence(pcm: bytes, rate: int, ch: int, width: int) -> bytes:
         return pcm
 
 
+# ── Media watch (LOG-ONLY, flag MEDIA_WATCH_ENABLED, default off) ──────────
+# Is anything that is NOT this daemon playing into the panel's PulseAudio server (AirPlay via shairport-sync, the
+# kiosk browser, ...)? The voice reflex's ``media`` input (design: voice-reflex-prereqs note, section 1.2). A watcher
+# thread keeps a cached snapshot; the close only READS it (a lock and four floats) and never runs pactl. Today the
+# answer is only logged on FIRST_SOUND (``media=`` / ``media_age_ms=``); nothing acts on it.
+#   * re-reads ``pactl list sink-inputs`` on a ``pactl subscribe`` sink-input event (coalesced to at most one read per
+#     _MEDIA_MIN_GAP_S, so a ducker's volume ramp cannot storm it) and on a _MEDIA_HEARTBEAT_S heartbeat, so a missed
+#     event or a dead subscribe child can never leave the snapshot stale;
+#   * FOREIGN = an uncorked sink-input whose application.process.id is neither this process nor a direct child of it
+#     (its aplay / mpg123 players; checked by the parent pid in /proc/<pid>/stat, never by a binary name); a stream that
+#     cannot be attributed counts as foreign;
+#   * media_active: None (unknown) when the flag is off, the watcher thread is dead, the last read failed, no read has
+#     completed, the snapshot is older than _MEDIA_FRESH_MS, or fewer than _MEDIA_HOLD_MS of clean reads exist (just
+#     started / just recovered); True when a foreign stream was seen at the last read or went away under
+#     _MEDIA_HOLD_MS ago; False only otherwise. Unknown is always silence for the reflex.
+#   * bounded: one thread + one reader thread + one long-lived ``pactl subscribe`` child (respawned with a 1 s -> 60 s
+#     backoff when it dies or pactl is absent); the subscribe lines are read 512 bytes at most and discarded; a listing
+#     is parsed from at most _MEDIA_MAX_LIST_BYTES; the state is five scalars. CPU: at most one ``pactl list`` per
+#     _MEDIA_MIN_GAP_S on events, else one per second.
+MEDIA_WATCH_ENABLED = os.environ.get("MEDIA_WATCH_ENABLED", "false").lower() in ("1", "true", "yes")
+_MEDIA_FRESH_MS = 2000
+_MEDIA_HOLD_MS = 1000
+_MEDIA_HEARTBEAT_S = 1.0
+_MEDIA_MIN_GAP_S = 0.2
+_MEDIA_MAX_LIST_BYTES = 256 * 1024
+_MEDIA_BACKOFF_S = (1.0, 60.0)
+
+
+def _media_list_sink_inputs() -> "str | None":
+    """``pactl list sink-inputs`` in the C locale (so "Corked:" is never translated); None on any failure."""
+    try:
+        res = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True, timeout=1.5,
+                             env={**os.environ, "LC_ALL": "C"})
+        return res.stdout if res.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _media_spawn_subscribe():
+    """The long-lived ``pactl subscribe`` child (stdout piped, bytes). Raises when pactl cannot start."""
+    return subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, env={**os.environ, "LC_ALL": "C"})
+
+
+def _proc_ppid(pid: int) -> "int | None":
+    """The parent pid of ``pid`` from /proc/<pid>/stat (the comm may contain spaces and parens: split at the LAST ')')."""
+    try:
+        with open(f"/proc/{int(pid)}/stat", "rb") as fh:
+            raw = fh.read(1024).decode("ascii", "replace")
+        return int(raw[raw.rindex(")") + 2:].split()[1])
+    except Exception:
+        return None
+
+
+def _parse_sink_inputs(text: str) -> "list[tuple[bool, int | None]]":
+    """[(corked, pid or None)] per sink-input. A block with no Corked line counts as playing (uncorked)."""
+    out: list = []
+    for line in text[:_MEDIA_MAX_LIST_BYTES].splitlines():
+        if re.match(r"\s*Sink Input #\d+", line):
+            out.append([False, None])
+            continue
+        if not out:
+            continue
+        m = re.match(r"\s*Corked:\s*(\S+)", line)
+        if m:
+            out[-1][0] = m.group(1).lower() == "yes"
+            continue
+        m = re.search(r'application\.process\.id\s*=\s*"(\d+)"', line)
+        if m:
+            out[-1][1] = int(m.group(1))
+    return [(bool(c), p) for c, p in out]
+
+
+class _MediaWatch:
+    """The cached "is foreign media playing on this panel" snapshot. Every seam is injectable for tests (which NEVER
+    run real pactl): ``list_inputs`` -> listing text or None, ``spawn_subscribe`` -> a Popen-like with ``stdout``,
+    ``clock`` (monotonic), ``own_pid``, ``parent_of``."""
+
+    def __init__(self, *, list_inputs=None, spawn_subscribe=None, clock=None, own_pid=None, parent_of=None,
+                 heartbeat_s: float = _MEDIA_HEARTBEAT_S, min_gap_s: float = _MEDIA_MIN_GAP_S,
+                 backoff_s: "tuple[float, float]" = _MEDIA_BACKOFF_S):
+        self._list = list_inputs or _media_list_sink_inputs
+        self._spawn = spawn_subscribe or _media_spawn_subscribe
+        self._clock = clock or time.monotonic
+        self._own = int(own_pid if own_pid is not None else os.getpid())
+        self._parent_of = parent_of or _proc_ppid
+        self._heartbeat_s, self._min_gap_s, self._backoff = float(heartbeat_s), float(min_gap_s), backoff_s
+        self._lock = threading.Lock()
+        self._ok = False
+        self._refreshed_at: "float | None" = None
+        self._foreign = False
+        self._gone_at: "float | None" = None      # when a foreign stream was first seen gone
+        self._clean_since: "float | None" = None  # start of the current run of ok, foreign-free reads
+        self._dirty = threading.Event()
+        self._stop = threading.Event()
+        self._thread: "threading.Thread | None" = None
+        self._reader: "threading.Thread | None" = None
+        self._child = None
+
+    # -- the watcher side ------------------------------------------------------
+    def _is_ours(self, pid: "int | None") -> bool:
+        if pid is None:
+            return False
+        if pid == self._own:
+            return True
+        return self._parent_of(pid) == self._own
+
+    def refresh(self) -> None:
+        """One read of the sink-inputs; the parse runs OUTSIDE the lock, which is held only to store the result."""
+        now = self._clock()
+        try:
+            text = self._list()
+            foreign = None if text is None else any(not corked and not self._is_ours(pid)
+                                                    for corked, pid in _parse_sink_inputs(text))
+        except Exception:
+            foreign = None
+        with self._lock:
+            if foreign is None:
+                self._ok, self._clean_since = False, None
+            else:
+                if foreign:
+                    self._clean_since, self._gone_at = None, None
+                else:
+                    if self._foreign:
+                        self._gone_at = now
+                    if self._clean_since is None:
+                        self._clean_since = now
+                self._ok, self._foreign = True, bool(foreign)
+            self._refreshed_at = now
+
+    def _run(self) -> None:
+        last = None
+        while not self._stop.is_set():
+            self._dirty.wait(self._heartbeat_s)
+            self._dirty.clear()
+            if self._stop.is_set():
+                break
+            if last is not None:
+                gap = self._min_gap_s - (time.monotonic() - last)
+                if gap > 0:
+                    self._stop.wait(gap)  # coalesce an event storm into one read
+                    self._dirty.clear()
+            last = time.monotonic()
+            try:
+                self.refresh()
+            except Exception:
+                with self._lock:
+                    self._ok = False
+
+    def _read_events(self) -> None:
+        delay = self._backoff[0]
+        while not self._stop.is_set():
+            try:
+                child = self._spawn()
+                self._child = child
+                started = time.monotonic()
+                while not self._stop.is_set():
+                    line = child.stdout.readline(512)
+                    if not line:
+                        break  # the child died (or pulse restarted): respawn after the backoff
+                    if b"sink-input" in line:
+                        self._dirty.set()
+                if time.monotonic() - started > 30.0:
+                    delay = self._backoff[0]  # it ran a good while: a fresh failure starts the backoff again
+            except Exception:
+                pass
+            finally:
+                self._kill_child()
+            self._dirty.set()
+            self._stop.wait(delay)
+            delay = min(self._backoff[1], delay * 2)
+
+    def _kill_child(self) -> None:
+        child, self._child = self._child, None
+        if child is None:
+            return
+        try:
+            child.kill()
+            child.wait(timeout=1)
+        except Exception:
+            pass
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True, name="media-watch")
+        self._reader = threading.Thread(target=self._read_events, daemon=True, name="media-watch-events")
+        self._thread.start()
+        self._reader.start()
+        self._dirty.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._dirty.set()
+        self._kill_child()
+
+    # -- the close side: READ ONLY ----------------------------------------------
+    def snapshot(self, now: "float | None" = None) -> "tuple[bool | None, int]":
+        """(media_active, snapshot age ms); (None, -1) when no read ever completed. Never blocks beyond the lock."""
+        now = self._clock() if now is None else now
+        with self._lock:
+            ok, at, foreign, gone, clean = self._ok, self._refreshed_at, self._foreign, self._gone_at, self._clean_since
+        if at is None:
+            return None, -1
+        age = max(0, int(round((now - at) * 1000.0)))
+        if self._thread is None or not self._thread.is_alive() or not ok or age > _MEDIA_FRESH_MS:
+            return None, age
+        if foreign or (gone is not None and (now - gone) * 1000.0 < _MEDIA_HOLD_MS):
+            return True, age
+        if clean is None or (now - clean) * 1000.0 < _MEDIA_HOLD_MS:
+            return None, age
+        return False, age
+
+
+_MEDIA: "_MediaWatch | None" = None   # started in main() only when MEDIA_WATCH_ENABLED
+
+
+def _media_at_close(now: float) -> "tuple[bool | None, int]":
+    """The media snapshot at the close; (None, -1) with no watcher. Never raises."""
+    try:
+        w = _MEDIA
+        return (None, -1) if w is None else w.snapshot(now)
+    except Exception:
+        return None, -1
+
+
 # ── First-sound instrument (S0, LOG-ONLY, 2026-11-14) ───────────────────────
 # Measures, changes nothing: two log lines per turn, both written AFTER the stream ends (never inside the per-chunk
 # playback loop: a slow log handler must not stall audio; the per-chunk data lives in plain ints on _FirstSound).
@@ -3722,7 +3948,7 @@ def _trim_chunk_silence(pcm: bytes, rate: int, ch: int, width: int) -> bytes:
 #   FIRST_SOUND close=<rule>=<ms>ms post_ms=.. reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0
 #     reflex_wait_ms=0 server_first_ms=.. server_kind=<enum> gap_ms=-1 still_talking=<0|1> talk_chunks=..
 #     chunks=.. underrun_max_ms=.. underrun_sum_ms=.. obs_ms=.. win=<wake|followup|conversation|barge> quiet_ms=..
-#     fall=<clean|hesitating|none> muted_ms=.. first_end_ms=..
+#     fall=<clean|hesitating|none> muted_ms=.. first_end_ms=.. media=<1|0|-1> media_age_ms=<n|-1>
 # The reflex fields are constants until a reflex exists, so a parser written now never changes. -1 = unknown.
 _turn_close: dict = {}
 _CLOSE_RULES = ("deep", "quiet", "clean", "hesitation", "no_speech")
@@ -3746,7 +3972,9 @@ def _stamp_close(t_close: "float | None", endpointer: "_Endpointer", stop_reason
     if rule not in _CLOSE_RULES:
         rule = "cap" if stop_reason == "max_duration" else "other"
     closed = rule in _CLOSE_RULES
-    _turn_close.update(t=_fs_now() if t_close is None else t_close, rule=rule,
+    t = _fs_now() if t_close is None else t_close
+    media, media_age = _media_at_close(t)  # a READ of the watcher's cached snapshot: no pactl at the close
+    _turn_close.update(t=t, rule=rule, media=media, media_age_ms=int(media_age),
                        ms=int(endpointer.close_ms) if closed else 0,
                        quiet_ms=int(round(int(endpointer._quiet) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE)) if closed else -1,
                        fall=("hesitating" if endpointer._hesitating else "clean") if closed else "none",
@@ -3938,12 +4166,19 @@ class _FirstSound:
         return ("FIRST_SOUND close=%s=%dms post_ms=%d reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                 "reflex_cut=0 reflex_wait_ms=0 server_first_ms=%d server_kind=%s gap_ms=-1 still_talking=%d "
                 "talk_chunks=%d chunks=%d underrun_max_ms=%d underrun_sum_ms=%d obs_ms=%d win=%s quiet_ms=%d fall=%s "
-                "muted_ms=%d first_end_ms=%d") % (
+                "muted_ms=%d first_end_ms=%d media=%d media_age_ms=%d") % (
             rule, int(c["ms"]) if rule != "none" else 0, self.rel_ms(self.post_at), self.rel_ms(self.first_at),
             kind, int(talk[1]), int(talk[0]), self.writes, self.underrun_max, self.underrun_sum, int(talk[2]),
             self.win, int(c.get("quiet_ms", -1)) if c is not None else -1,
             c["fall"] if c is not None and c.get("fall") in ("clean", "hesitating") else "none",
-            self._muted(c), self.rel_ms(self.first_end))
+            self._muted(c), self.rel_ms(self.first_end), self._media(c),
+            int(c.get("media_age_ms", -1)) if c is not None else -1)
+
+    @staticmethod
+    def _media(c: "dict | None") -> int:
+        """1 / 0 for a stated media snapshot at the close, -1 for unknown (no watcher, stale, dead, or no close)."""
+        v = None if c is None else c.get("media")
+        return 1 if v is True else 0 if v is False else -1
 
 
 def _fs_note_write(t_start: float, t_end: float, dur_s: float) -> None:
@@ -5714,7 +5949,7 @@ def _start_health_server():
 
 
 def main():
-    global _INPUT_DEVICE_INDEX, _last_wake_at, _HTTP_SESSION, _WAKE_MODEL_SHA256
+    global _INPUT_DEVICE_INDEX, _last_wake_at, _HTTP_SESSION, _WAKE_MODEL_SHA256, _MEDIA
 
     if _CF_ACCESS_REFUSED:
         log.error("Refusing to start: fix ZOE_URL (public https tunnel host) or unset CF_ACCESS_CLIENT_ID/SECRET.")
@@ -5842,6 +6077,11 @@ def main():
         target=_ambient_capture_thread, daemon=True, name="ambient-capture"
     )
     _ambient_thread.start()
+
+    if MEDIA_WATCH_ENABLED and PANEL_PLATFORM != "mac":
+        _MEDIA = _MediaWatch()
+        _MEDIA.start()
+        log.info("Media watch started (log-only).")
 
     # P-W2.3: server-pushed spoken announcements (morning brief etc.).
     threading.Thread(
