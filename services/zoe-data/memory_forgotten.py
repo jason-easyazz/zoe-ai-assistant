@@ -38,6 +38,10 @@ PENDING MARKERS. ``mark_pending`` stores, for each cascade step that could not c
 ``memory_forget_cascade.retry_pending`` reads them back (``pending_labels``), finishes just those steps with ``LedgerPattern`` (a ``re.Pattern``-shaped matcher over this
 ledger's own hashes) and deletes them (``clear_pending``). Exact words only.
 
+FEED ITEMS. ``add_feed_item`` shields one calendar-feed event (scope ``feed_item``): the salted hash of ``feed|<uid>|<recurrence id>``,
+never a title. ``calendar_feed`` checks every incoming event against ``active_hashes`` (strict) before it writes, so a forgotten feed
+event is not re-imported; the key is the provider UID, so it survives a disconnect and reconnect.
+
 A lookup failure is fail-open on the last-known-good set (a DB blip must never lose a fact); a forget
 whose DB write fails still shields this process through the in-process overlay.
 """
@@ -638,6 +642,42 @@ async def clear_pending(user_id: str, labels: Iterable[str]) -> int:
         return 0
     _invalidate(user_id)
     return n
+
+
+# ── the feed-item shield: a forgotten calendar-feed event never comes back on the next sync ─────────────────────────────────────
+
+SCOPE_FEED_ITEM = "feed_item"
+_FEED_PREFIX = "feed" + chr(124)     # a pipe never occurs in a tokenised word, so no spoken text can hash to a feed key
+
+
+def feed_item_hash(user_id: str, external_uid: str, recurrence_id: Optional[str] = None) -> str:
+    """The ledger key of one feed event: ``feed|<uid>|<recurrence_id or ''>``, salted per member like every entry, hashed EXACTLY
+    (a provider UID is an opaque identifier: no word normalising, no near-spelling probes). '' when unconfigured or no UID."""
+    uid = str(external_uid or "").strip()
+    if not user_id or not uid or not configured():
+        return ""
+    return _Hasher(user_id).hash(_FEED_PREFIX + uid + chr(124) + str(recurrence_id or "").strip())
+
+
+async def add_feed_item(user_id: str, external_uid: str, recurrence_id: Optional[str] = None, *, actor: str = "") -> bool:
+    """Shield one feed event (``calendar_feed.forget_feed_event``): permanent by default like every forget. True only when the entry
+    is DURABLE; False when unconfigured or the DB write failed (the process is still shielded through the overlay, but the caller
+    must not treat the forget as done)."""
+    digest = feed_item_hash(user_id, external_uid, recurrence_id)
+    if not digest:
+        if not configured():
+            _warn_unconfigured()
+        return False
+    start = _now()
+    try:
+        await _put(user_id, digest, scope=SCOPE_FEED_ITEM, actor=actor or user_id, start=start, until=shield_until_for(start, None))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory_forgotten: could not persist a feed-item forget for user=%s (%s) - shielded in-process only",
+                       user_id, type(exc).__name__)
+        _invalidate(user_id)
+        return False
+    _invalidate(user_id)
+    return True
 
 
 class LedgerPattern:
