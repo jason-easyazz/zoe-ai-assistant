@@ -439,9 +439,76 @@ Call site 2 of section 6, chosen because it is off the voice path and already ha
 - **Forget** cannot reach a copy a skill already took, and does not catch reworded content, near spellings,
   part of a name, or a pronoun.
 - **Plans** (more than one action from one intent) are not designed here.
-- **Retention, schema change and backup** of the spine are not designed. A log of every household event is
-  itself sensitive, and "private by default" does not answer how long it is kept.
+- **Retention** has a lab mechanism and **no chosen policy**: section 9 is an open owner decision, and nothing
+  expires until it is made. **Schema change and backup** of the spine are not designed; a backup taken before
+  an event expired or was forgotten still holds it.
 - **The manifest format** is a lab format. It has not met a real third-party skill.
 - **One writer.** One kernel process with one lock. Several clients were tested for correctness (a slow one
   does not block an honest one), not for throughput.
 - **"OS"** is a direction. What exists is a kernel of about two thousand lines in a lab directory.
+
+## 9. Owner decision: how long the log is kept
+
+**Status: open. Nothing in the lab expires until a policy is chosen.** A log of every household event is itself
+sensitive, and "private by default" says who may read an event, not how long it exists. The mechanism is built
+and tested in the lab (`labs/zoe-os/zoe_os/retention.py`) **[lab]**; the numbers below are proposals. The code
+has no default: it refuses to run without a complete policy, and no option is applied unless someone asks.
+
+**The mechanism.** Each kind of event has two ages and passes through three stages:
+
+| Stage | What exists | What it still allows |
+|---|---|---|
+| 1. Full | the event as published | everything |
+| 2. Skeleton | sequence number, time, kind, and the links to whom it concerned and what derived from it. The content and the subject are erased from the row and from the disk | a forget still reaches everything built on it; counts per person; "something happened here" |
+| 3. Count only | the row is deleted. One number per day per kind, about no one | "42 utterances that day" |
+
+**How a forget interacts [lab, each tested with a planted sentinel]:**
+- A forget still reaches what was derived from an event whose content has aged out. That is why stage 2
+  exists, and why a skeleton is not reduced to a count while anything derived from it is on the log. Two negative
+  controls show the forget silently missing a copy when either rule is removed.
+- A forgotten event is later deleted without being counted. The forget notice never expires, so a subscriber
+  that was offline for years is still told. The keyed hashes of forgotten words and names are kept: they are
+  what stops the words coming back.
+- Expiry is not a forget: nothing is shielded, and the same words may be said or derived again.
+- **Limit:** a forget by entity or topic matches content, so it cannot match an event whose content has aged
+  out. A forget of the person still reaches it. A test pins this.
+
+**The options.** Days kept in full, then further days as a skeleton. Forget notices and grant changes are kept
+in every option (they carry no content, and the second is the record of consent).
+
+| What | Kinds | A. Short | B. Balanced | C. Long |
+|---|---|---|---|---|
+| What was said | utterance | 7, then 23 | 30, then 335 | 365, then 365 |
+| Where people were | presence, sensor | 3, then 27 | 14, then 351 | 90, then 640 |
+| What happened | routine step, calendar change, timer, reminder, turn end | 30, then 60 | 90, then 275 | 365, then 365 |
+| What was proposed | offer, answer, routing, claim | 30, then 60 | 90, then 275 | 365, then 365 |
+| Proof | action receipt, refusal, audit finding | 90, then 275 | 365, then 365 | 730, then 730 |
+
+**What is lost by shortening it.** Each of these stops working for anything older than the "full" age:
+- **"Why did you do that?"** An explanation is built from the chain of events. Expired links become "events you
+  may not see"; with the receipt gone there is nothing to explain.
+- **"Undo that."** The receipt holds what an undo needs. Expired, the action cannot be undone.
+- **Rehearsal and the baseline.** The replay harness and anything that learns "what is normal" only see what is
+  still in full. Option A gives a week of words and three days of presence, which is too little to tell an
+  unusual Tuesday from an ordinary one.
+- **A forget by name or topic** of older events (the limit above).
+- **The audit trail.** After the proof age nobody can show that an action was done under a grant.
+- **A reader that was offline** longer than the full age never sees what it missed.
+- **Debugging.** "It did something odd last month" has no record under option A.
+
+What is *gained* by shortening it is the point of the question: less to leak, less to subpoena, less to be
+wrong about, and a smaller answer to "what does it know about me".
+
+**Recommendation: option B, with one change to consider.** Words for 30 days and presence for 14 are long
+enough to rehearse a change against a few ordinary weeks and short enough that last season's conversations are
+not on the box; proof for a year matches how long a person might reasonably ask "did you really do that". The
+change to consider: presence at 14 days is the least certain number, because where people were is both the most
+sensitive kind and the one a baseline needs most. This is a recommendation from reading the design
+**[inferred]**, not from a measurement: event volumes per day, and how many days a useful baseline needs, have
+not been measured on a real household.
+
+**Not decided by this section, and not built:** who may change the policy later and whether shortening it
+applies to events already kept; whether each person may choose a shorter age for their own events; backups (a
+backup taken before an expiry still holds the content, exactly as `docs/knowledge/forget-reach.md` says of a
+forget); the action-intent rows and the forget ledger, which are not events and are not aged; and a scheduler
+(the sweep runs only when called).
