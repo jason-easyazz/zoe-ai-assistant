@@ -550,13 +550,22 @@ async def _erase_where(user_id: str, doomed: Callable[[tuple], bool], path: str)
     return n
 
 
-async def erase_topic(user_id: str, *, row_ids: Iterable[str] = (), name_matches: Optional[Callable[[str], bool]] = None) -> int:
-    """"Forget what I told you about <topic>" (``forget_topic.forget``): rows tied to the topic's memory rows, and rows about a person
-    whose name a topic word names (``name_matches(name)``; over-forgetting is the safe error). RAISES on a store failure."""
+async def erase_topic(user_id: str, *, row_ids: Iterable[str] = (), name_matches: Optional[Callable[[str], bool]] = None,
+                      turn_ids: Iterable[Any] = ()) -> int:
+    """"Forget what I told you about <topic>" (``forget_topic.forget``): rows tied to the topic's memory rows, rows about a person
+    whose name a topic word names (``name_matches(name)``), and rows RECORDED FROM one of the turns the forget retracted
+    (``turn_ids``: their content ids - a correction said before any row existed holds no row id and maybe no topic word, but its
+    turn is a forgotten one). With any turn retracted, a row with no source turn cannot be ruled out and goes too, and an id that
+    could not be computed (None) takes every row of the member. Over-forgetting is the safe error. RAISES on a store failure."""
     gone = {str(i) for i in row_ids or ()}
+    raw = list(turn_ids or ())
+    every = any(not isinstance(i, str) or not i for i in raw)
+    turns = {i for i in raw if isinstance(i, str) and i}
 
     def doomed(r: tuple) -> bool:
-        subject, name, _turn, tied = r
+        subject, name, turn, tied = r
+        if every or (raw and (not turn or turn in turns)):
+            return True
         return bool(tied & gone) or (subject != SELF and bool(name) and name_matches is not None and bool(name_matches(name)))
 
     return await _erase_where(user_id, doomed, "topic")

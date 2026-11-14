@@ -568,6 +568,56 @@ def test_topic_forget_through_the_real_path_removes_the_tied_and_the_named(db, f
     assert _subjects(db, A) == [WREN] and _subjects(db, B) == [OTHER_JUNO]
 
 
+SISTER = "Juno is 8 not 7, she is my sister"
+
+
+def test_topic_forget_reaches_an_entry_recorded_before_any_row(db, forget_env):
+    """Thread PRRT_kwDOPZpkks63cEWh: the entry has empty row_ids and the topic ("my sister") matches neither a row id nor the
+    person's name; the forget retracts the turn it was said in, and that turn's id reaches it."""
+    import forget_topic
+    import turn_forget
+    import value_correction
+
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=value_correction.turn_id_of(A, SISTER), rows=[])
+    _rec(A, WREN, _age(3), _age(4), T0, turn=value_correction.turn_id_of(A, "wren is 4 not 3"), rows=[])
+    _rec(B, OTHER_JUNO, _age(5), _age(6), T0, turn=value_correction.turn_id_of(B, SISTER), rows=[])
+    turn_forget.note_user_turn(A, SISTER)
+    res = run(forget_topic.forget(_registry_svc(), A, "my sister"))
+    assert not res.store_down and res.turns_retracted == 1
+    assert _subjects(db, A) == [WREN] and _subjects(db, B) == [OTHER_JUNO]
+
+
+def test_without_the_turn_ids_the_entry_survives(db, forget_env, monkeypatch):
+    """Control: the leak is real - with the turn ids dropped from the call, the entry outlives the forget."""
+    import forget_topic
+    import turn_forget
+    import value_correction
+
+    real = reg.erase_topic
+
+    async def no_turns(uid, **kw):
+        kw.pop("turn_ids", None)
+        return await real(uid, **kw)
+    monkeypatch.setattr(reg, "erase_topic", no_turns)
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=value_correction.turn_id_of(A, SISTER), rows=[])
+    turn_forget.note_user_turn(A, SISTER)
+    run(forget_topic.forget(_registry_svc(), A, "my sister"))
+    assert _subjects(db, A) == [JUNO]
+
+
+def test_erase_topic_by_turn_ids_over_forgets_what_it_cannot_rule_out(db):
+    import value_correction
+
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=value_correction.turn_id_of(A, SISTER), rows=[])
+    _rec(A, WREN, _age(3), _age(4), T0 + 1, rows=[])                                  # no source turn
+    db.conn.execute("INSERT INTO people (id, user_id, name, deleted) VALUES (?, ?, 'Rook', 0)", (U("rook"), A))
+    db.conn.commit()
+    _rec(A, U("rook"), _age(9), _age(10), T0 + 2, turn=value_correction.turn_id_of(A, "rook is 10 not 9"), rows=[])
+    assert run(reg.erase_topic(A, turn_ids=[value_correction.turn_id_of(A, "juno is 8 NOT 7,  she is my sister")])) == 4
+    assert _subjects(db, A) == [U("rook")]
+    assert run(reg.erase_topic(A, turn_ids=[None])) == 2 and _subjects(db, A) == []
+
+
 def test_topic_forget_by_a_tied_row_alone(db):
     _seed(db)
     assert run(reg.erase_topic(A, row_ids=[R(A, "r2")], name_matches=lambda _n: False)) == 2

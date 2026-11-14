@@ -1166,7 +1166,7 @@ async def _shadow_record(user_id: str, user_message: str, corr: "Correction", di
         import time
 
         import db_compat
-        from people_graph import content_turn_id, resolve_person
+        from people_graph import resolve_person
 
         uid = user_id.strip().lower()
         async with db_compat.get_compat_db() as db:
@@ -1175,7 +1175,7 @@ async def _shadow_record(user_id: str, user_message: str, corr: "Correction", di
             reg.COUNTS["unrecorded_unresolved"] += 1
             return
         said_at = time.time()
-        turn = content_turn_id(uid, user_message)
+        turn = turn_id_of(uid, user_message)
         claim = "vc-" + hashlib.sha256(f"{uid}|{turn}|{said_at!r}".encode("utf-8")).hexdigest()[:16]
         await reg.record(uid, res.person_id, "age", superseded=olds, asserted=new, said_at=said_at, by_claim=claim,
                          source_turn_id=turn, row_ids=[i for i in row_ids if i], partial_at=partial_at, scheduled_at=scheduled_at)

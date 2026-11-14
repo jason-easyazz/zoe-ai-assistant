@@ -329,8 +329,11 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
     try:     # the superseded-value registry (0080): entries tied to these rows, or about a person a topic word names (raises on a store error)
         import memory_value_registry
 
+        import value_correction
+
         await memory_value_registry.erase_topic(user_id, row_ids=[r.id for r in rows],
-                                                name_matches=lambda name: any(row_matches([g], name) for g in groups))
+                                                name_matches=lambda name: any(row_matches([g], name) for g in groups),
+                                                turn_ids=[value_correction.turn_id_of(user_id, t) for t in list(said) + list(indexed)])
     except Exception as exc:  # noqa: BLE001
         logger.warning("forget_topic: value registry erase failed (%s)", type(exc).__name__)
         res.store_down = True
