@@ -510,6 +510,7 @@ _ENTRIES = (
     _f('ZOE_MCP_USER_ID', 'str', ''),
     _f('ZOE_MCP_USER_ROLE', 'str', ''),
     _f('ZOE_MEDICAL_SAFETY', 'str', 'enforce', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/medical-safety.md'),
+    _f('ZOE_MEDICAL_TOO_MANY', 'str', 'shadow', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/medical-safety.md', note='too many / too much of a medicine, present or recent ("did i take too many"): unset = shadow (logs MEDICAL_TOO_MANY only); exactly off/shadow below enforce; any other value, a typo included, ENFORCES; replay before enforce'),
     _f('ZOE_MEDICAL_SELF_ASSESS', 'str', 'shadow', allowed=('off', 'shadow', 'enforce'), doc='docs/knowledge/medical-safety.md', note='present self-assessment of a closed-list condition ("am i having a heart attack?"): unset = shadow (logs MEDICAL_SELF_ASSESS only); exactly off/shadow below enforce; any other value, a typo included, ENFORCES like every floor; replay before enforce'),
     _f('ZOE_MEMBER_REGISTER', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/member-register.md'),
     _f('ZOE_MEMBER_REGISTER_KIDS', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/member-register.md'),

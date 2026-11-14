@@ -87,9 +87,26 @@ question that is not an emergency ("what is the maximum dose of paracetamol") ma
 
 Urgency (review of #2525): when more than one detector reads a turn, the reply is the MOST urgent verdict, never the first computed:
 `medical_safety.URGENCY` is the one ranked list (an urgent object or a poison, then a call-now red flag, then a harmless-looking
-object, a pet, the emergency-number question, a see-today symptom, a blood sugar). "my vision is blurry, is this a stroke?" gets the
+object, a pet, the emergency-number question, a VERY LOW blood sugar, a see-today symptom, any other blood sugar; `detect` reads
+both a see-today symptom and a blood sugar and lets this list decide). "my vision is blurry, is this a stroke?" gets the
 stroke reply. The condition is taken from its own named slot in the frame match, so a subject named like a condition ("is tia having a
 heart attack") never becomes the condition. Every frame match in the turn is read (an idiom voids only the match it is in: "my dad is overdosing on cake and he is having a stroke" is a stroke) and the most urgent verdict wins; the pet (vet) reply is given only when the matched frame's OWN subject is an animal ("is my dog overdosing"), never because an animal is mentioned elsewhere ("is alex overdosing? the dog is fine" stays human). Wording between two emergencies (ruling on #2525): a caffeine-class poison (only ever via the "asked now" path) ranks below every call-now condition (`URGENCY` `poison_caffeine`, same poisoning reply), and the speaker's own call-now (subject slot i / we) wins over a poison verdict about someone else; otherwise `URGENCY` decides. Across detectors: when the chosen reply is an ingestion / poisoning one (calling now conditional on the other person's signs) and the SPEAKER's own call-now condition is also in the turn, the reply is BOTH fixed replies, the speaker's call-now first, then the poisoning one (`MEDICAL_SAFETY_COMBINED`, codes only; enforce only). Every other case keeps today's single reply. A condition is refused only by an EXPLICIT idiom / sport / art phrase in the data (`condition_not_after`: "stroke of luck", "stroke in the pool", "heart attack on a plate"), never by a bare following word ("am i having a stroke on my left side" fires; a test pins that no exclusion is a bare function word). A present-relevant past question ("have i had a stroke today?") joins the urgency choice beside any present frame ("is my dog overdosing? have i had a stroke today?" gets the stroke reply); it is a recall question only when every clause without a present frame is wholly the recall shape with no present marker.
+
+## Too many / too much of a medicine (`ZOE_MEDICAL_TOO_MANY`: unset = shadow; exactly `off` / `shadow`; any other value, a typo included, = enforce; 2026-11-14)
+
+"did i take too many", "i just took too many", "she has had too much of her medicine", "i think i took too many tablets" name no
+substance, or use a verb the ingestion rule does not read, so the poisoning floor never saw them. `medical_safety.too_many_ingestion`
+reads a closed allow-list in `medical_safety_data/en.json` `too_many` over the `self_assess` slots (i / we / you / they / he / she / a
+person present): a take or swallow form needs no substance but must END the clause (or be "of them", "now", "again", "by accident",
+"by mistake": "took too many photos" never fires); "had" needs a substance from the ingestion lexicon or the extra list ("had too many
+biscuits" never fires). A past time or a condition ("in 2019", "what happens if ...") never fires; the present perfect "has had" is
+recent. A named drug from the self-assessment's `drug_names` is a substance here ("i took too much cocaine"), except the words that are also food or drink (`drug_words_also_food_or_drink`: ice, coke, crack). It gives the human poisoning reply (the Poisons line), the vet reply only when the matched frame's OWN subject is an animal, and is ranked
+through `URGENCY` like the self-assessment ("am i having a heart attack, i took too much cocaine" gets the poisoning reply: both are the speaker's and the poison verdict ranks first). Read by `handle` only; shadow logs `MEDICAL_TOO_MANY` (codes only). Order, pinned in
+`tests/test_medical_too_many.py`: the distress hand-off runs first and answers an intentional statement it catches ("i took all my
+tablets because i want to die"); an accidental one ("did i just take too many by accident") reaches this floor; a third party's ("my
+son took too many of my pills") is the ingestion detector's. Not grabbed, by design, and logged in open-problems as findings:
+"i took too many on purpose" / "i took them all because i want it to stop" (distress tier none today; the distress lexicon is being fixed on another branch) and alcohol ("i had too
+much to drink", "i drank too much": no floor today). Food, vitamins and dose questions keep today's behaviour.
 
 ## Limits (stated, not hidden)
 
