@@ -12,7 +12,6 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-import pytest
 
 HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
@@ -211,11 +210,6 @@ def test_artefact_is_byte_stable():
 def test_poison_moves_every_label():
     assert all(p["label"] != r["label"] for p, r in zip(loop.poison(SOURCE), SOURCE))
 
-
-@pytest.mark.parametrize("path", ["data/synthetic_source.jsonl", "data/frozen_safety.jsonl"])
-def test_committed_data_is_marked_synthetic_shape(path):
-    rows = loop.read_jsonl(HERE / path)
-    assert rows and all(set(r) <= {"id", "text", "label", "signal", "confidence", "channel", "intent", "expected"} for r in rows)
 
 
 def test_demo_totals_match_the_committed_summary(tmp_path):

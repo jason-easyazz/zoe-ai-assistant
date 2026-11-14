@@ -9,7 +9,6 @@ worse. Nothing here reads a live log, a database, the network or a model.
     python3 loop.py demo --workdir run [--write-summary]    # clean + poisoned runs; journals in run/, totals in results/
     python3 loop.py run --source S.jsonl --forget F.jsonl --workdir W
     python3 loop.py rollback --workdir W                     # put the previous router back, byte for byte
-    python3 loop.py status --workdir W
 """
 from __future__ import annotations
 
@@ -375,19 +374,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     d = sub.add_parser("demo")
     d.add_argument("--workdir", required=True)
     d.add_argument("--write-summary", action="store_true", help="rewrite results/summary.json (the pinned totals)")
-    for name in ("rollback", "status"):
-        sub.add_parser(name).add_argument("--workdir", required=True)
+    sub.add_parser("rollback").add_argument("--workdir", required=True)
     a = ap.parse_args(argv)
     wd = Path(a.workdir)
     if a.cmd == "rollback":
         ok = rollback(wd)
         print("rolled back to the previous router" if ok else "no previous router: nothing changed")
         return 0 if ok else 1
-    if a.cmd == "status":
-        cur, prev = artefacts(wd)
-        for p in (cur, prev):
-            print(p.name, hashlib.sha256(p.read_bytes()).hexdigest()[:16] if p.exists() else "absent")
-        return 0
     if a.cmd == "run":
         rows = read_jsonl(Path(a.source))
         rows = poison(rows) if a.poison else rows

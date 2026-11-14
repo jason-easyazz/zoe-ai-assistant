@@ -13,7 +13,6 @@ frozen guard, the gate, the proposal and the rollback. The stand-in only needs t
 python3 loop.py demo --workdir run [--write-summary]   # clean + poisoned runs; journals in run/, totals in results/
 python3 loop.py run --source S.jsonl --forget F.jsonl --workdir W [--poison]
 python3 loop.py rollback --workdir W          # previous router back, byte for byte
-python3 loop.py status --workdir W            # sha of current / previous
 flock -x -w 14000 /tmp/zoe-test-lane.lock python3 -m pytest -p no:cacheprovider -q labs/router-learning-loop/tests
 ```
 
@@ -85,20 +84,12 @@ The stand-in's absolute numbers mean nothing about the real router. The live rou
 (0.70 floor). Only the deltas and the gate's behaviour carry over. The stand-in also never gets forget asks right (0/4), which
 is why the safety rule says "no worse than before", not "perfect". The real router already sends these to deterministic tiers.
 
-## Tests (`tests/test_loop.py`, local net, not CI-wired)
+## Tests (`tests/test_loop.py`, 23, local net, not CI-wired)
 
-- Forget is honoured first, by id and by word-free key: a re-worded forgotten utterance under a new id is still dropped. A row
-  that is forgotten AND frozen AND badly labelled is counted only as forgotten. Negative control: with no forget list the rows
-  do train.
-- Frozen leak: the planted frozen case is dropped; every one of the 89 frozen cases, planted in a different case, is dropped.
-  Negative control: an empty guard lets one through. The base seeds are frozen-guarded too.
-- Gate: each of the three conditions has a pass and a fail case, including "a 12.5-point chat loss inside the general tolerance
-  is still refused". Negative control: the same size of loss on a non-safety intent does not trip the safety check.
-- The proposal contains no text from the source or the frozen set, and matches the live queue's classes, statuses, tiers,
-  title and tag limits, and `normalize_evidence`.
-- The poisoned run is refused: the artefact sha is unchanged, no `previous.json`, no proposal.
-- Rollback restores the previous artefact byte for byte. With no previous artefact it changes nothing. Artefacts are
-  byte-stable.
+Forget first (by id and by word-free key), frozen leak (one planted case and all 89), each gate condition with a fail case,
+a text-free proposal that passes the live queue's own validation, poisoned refused, byte-exact rollback, and the demo
+totals against `results/summary.json`. Negative controls are in the tests; mutating out the forget, frozen or safety check
+turns 3, 6 and 1 of them red.
 
 ## Path to live (ordered; nothing here is done)
 
@@ -131,9 +122,3 @@ Each step needs the one before it.
    how to undo it".
 7. **Owner registers the timer and flips the flag** (`ZOE_ROUTER_SELFTRAIN` shadow, then on), after one shadow round whose
    proposal they have read.
-
-## Files
-
-`loop.py` (the loop) · `data/synthetic_source.jsonl` (synthetic harvest source with one control row per harvest rule) ·
-`data/forget.jsonl` (two ids and one text key) · `data/frozen_safety.jsonl` (8 synthetic safety cases) · `results/summary.json`
-(the pinned totals) · `tests/test_loop.py`. `run/` is a git-ignored scratch workdir.
