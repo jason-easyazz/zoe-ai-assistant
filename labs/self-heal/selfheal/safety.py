@@ -207,6 +207,9 @@ def check_diff(cfg: Config, report: DiffReport, *, ticket_has_repro_test: bool) 
     hits = forbidden_hits(cfg, report.files)
     if hits:
         raise Refused("forbidden_path", ", ".join(sorted(hits)[:10]))
+    scratch = [f for f in report.files if f == ".selfheal-tmp" or f.startswith(".selfheal-tmp/")]
+    if scratch:   # the gates' scratch dir: never an engine's to write, never carried into a tree
+        raise Refused("scratch_planted", ", ".join(scratch[:10]))
     if report.planted_reports:
         raise Refused("report_planted", ", ".join(report.planted_reports[:10]))
     if report.deleted_tests:   # a heal may add or edit tests, never remove or rename one

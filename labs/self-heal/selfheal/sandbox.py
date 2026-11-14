@@ -113,11 +113,13 @@ class Sandbox:
             ro=(), scratch: str | None = None, stdin: str | None = None, pass_fds=()) -> tuple[int | None, str]:
         """(rc, stdout), or (None, 'timeout' | 'worktree_quota'). On timeout the whole process group
         is killed; a worktree that GREW by more than `sandbox_disk_mb` fails the step. With `scratch`
-        (the supervisor's per-node runs) HOME / TMPDIR are that runner-owned dir, it is what the growth
-        cap measures, and `tree_ro` makes the tree itself read-only inside."""
+        (the supervisor's per-node runs; it must be `<wt>/.selfheal-tmp`) HOME / TMPDIR are that dir,
+        it is what the growth cap measures, and `tree_ro` makes the rest of the tree read-only inside."""
         if self.backend == "none" and self.cfg.dispatch != "dry":
             raise Refused("sandbox_unavailable", self.why)
         own = scratch is None
+        if not own and scratch != os.path.join(os.path.realpath(wt), TMP_NAME):
+            raise Refused("scratch_outside_tree", "")   # contract: no writable scratch outside the worktree
         tmp = os.path.join(os.path.realpath(wt), TMP_NAME) if own else scratch
         measured = wt if own else scratch
         rws = [rw] if isinstance(rw, str) else list(rw or ())

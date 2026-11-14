@@ -36,7 +36,7 @@ from pathlib import Path
 from . import gitops
 from .detectors import node_statuses
 from .safety import Refused
-from .sandbox import Sandbox
+from .sandbox import TMP_NAME, Sandbox
 
 RUNNER = Path(__file__).with_name("node_runner.py")
 RUNNER_SHA = hashlib.sha256(RUNNER.read_bytes()).hexdigest()
@@ -108,8 +108,17 @@ def expected_token(nonce: str, node: str) -> bytes:
 
 def run_node(cfg, tree: str, node: str) -> str:
     """'passed' only when the node's own sandboxed process exits 0 AND wrote the nonce's token;
-    otherwise the reason class (timeout, rc=N, no_proof, runner_hash)."""
-    rdir, scratch = tempfile.mkdtemp(prefix="selfheal-runner-"), tempfile.mkdtemp(prefix="selfheal-node-")
+    otherwise the reason class (timeout, worktree_quota, rc=N, no_proof, runner_hash, scratch_present).
+
+    The node's only writable path is its scratch, `<tree>/.selfheal-tmp`: created fresh here, bound
+    writable over the read-only tree, counted by the growth cap, deleted after the node. It is never on
+    sys.path (`-I`, the runner sets the path), so nothing dropped there is imported. The runner dir is
+    outside the tree and READ-ONLY; the proof path is a pipe, not a file."""
+    scratch = os.path.join(os.path.realpath(tree), TMP_NAME)
+    if os.path.lexists(scratch):   # left by someone else: never reuse it, never let it be a node's input
+        return "scratch_present"
+    rdir = tempfile.mkdtemp(prefix="selfheal-runner-")
+    os.mkdir(scratch, 0o700)
     r, w = os.pipe()
     try:
         runner = os.path.join(rdir, "node_runner.py")
@@ -139,7 +148,7 @@ def run_node(cfg, tree: str, node: str) -> str:
             if fd >= 0:
                 os.close(fd)
         shutil.rmtree(rdir, ignore_errors=True)
-        shutil.rmtree(scratch, ignore_errors=True)
+        shutil.rmtree(scratch, ignore_errors=True)   # does not follow symlinks a node left inside
 
 
 @contextlib.contextmanager

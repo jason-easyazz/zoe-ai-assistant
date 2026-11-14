@@ -83,6 +83,8 @@ The loop (and anyone running it) must never:
 - advance the integration ref without a write-ahead `landing_intent`, or clear it before a confirmed heal
   or a VERIFIED rollback (ref read back == snapshot); while a rollback is `rollback_stuck`, run anything
   (dry included) but the retry;
+- give a supervised node any writable path but a FRESH `<tree>/.selfheal-tmp` (never reused, deleted
+  after the node, inside the growth cap, never on `sys.path`, never copied into a tree);
 - give a sandboxed step a writable `/tmp` or any scratch outside the worktree, or skip the worktree
   growth cap (`sandbox_disk_mb` may only be lowered);
 - read a JUnit report from inside a worktree, or accept a missing, stale or unparseable report (or exit 0

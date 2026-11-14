@@ -385,7 +385,7 @@ from 1-in-254 into 2^-256. That is all it buys.
 5. The base test files that hold the nodes are restored from the base commit into that tree.
 6. Every pinned file (those tests, every conftest / pytest.ini / pyproject / setup.cfg / tox.ini /
    sitecustomize / usercustomize / *.pth) must equal the base blob, or the gate refuses (`pinned_changed`).
-7. Each node runs alone in its own bwrap, the tree READ-ONLY, a fresh scratch dir, `python -I -B`.
+7. Each node runs alone in its own bwrap, the tree READ-ONLY except its scratch `<tree>/.selfheal-tmp`, `python -I -B`.
 8. The runner gets a nonce on stdin only, derives the token before any tree import, and writes it
    only when exactly that node ran with setup / call / teardown passed (no skip, xfail, xpass, deselect).
 9. Passed = exit 0 AND the exact token on the passed fd; anything else is a failure.
@@ -409,7 +409,21 @@ from 1-in-254 into 2^-256. That is all it buys.
 | nonce guessed from argv, env, `/proc/self`, `/proc/1` | (no nonce) | refused: stdin only, consumed before import; supervisor in another pid namespace |
 | planted `.pyc` (`__pycache__` is never measured by the diff policy), gitignored files | not covered | not in the materialized tree; `pycache_prefix` in the node scratch |
 | one node leaves something for the next | shared worktree | read-only tree, fresh scratch per node, own pid namespace |
+| a node plants sitecustomize / usercustomize / `.pth` (also in a `$HOME/.local` user-site layout) / conftest / a shadow module / an outward symlink in its scratch | (n/a) | no effect: the scratch is never on `sys.path` (`-I`, the runner sets the path), only the node's own file is collected, the next node gets a new empty scratch, `rmtree` does not follow symlinks (`test_scratch_is_the_only_writable_path_and_plants_have_no_effect`) |
+| a pre-existing or engine-written `.selfheal-tmp` | (n/a) | the node refuses to start (`scratch_present`); the diff policy refuses any path under it (`scratch_planted`) |
 | setuptools plugin autoload | on | left on: plugins come from read-only site-packages (base tests need e.g. pytest-asyncio) |
+
+**Where a node may write.** Only its scratch, `<tree>/.selfheal-tmp`, as the v2 sandbox contract
+requires (no writable scratch outside the worktree; `Sandbox.run` refuses one, `scratch_outside_tree`):
+created fresh before the node (an existing one is never reused), bound writable over the read-only
+tree, counted by the growth cap (`sandbox_disk_mb`, `test_scratch_fill_is_capped`), deleted after the
+node. It never enters a candidate tree: the tree is built from base + the checked files, and the diff
+policy refuses any path under it. The runner dir is outside the tree and READ-ONLY; the proof path is
+a pipe. Inside the tree was checked against outside for a concrete loss and none was found: the
+scratch is not on any import or collection path in either place, and inside it is capped and refused
+as an engine change. What a node can still do there: start a non-isolated child interpreter with
+`HOME` = scratch, which would honour a `.pth` it planted under `$HOME/.local`; that child is the same
+untrusted code in the same sandbox with no token, so it adds nothing to residual 1.
 
 **Residuals, plainly.**
 1. **Code written against the runner passes.** From the moment pytest imports the tree, the code

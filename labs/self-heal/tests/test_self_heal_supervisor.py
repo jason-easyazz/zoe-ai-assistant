@@ -203,3 +203,92 @@ def test_process_control_screen_applies_to_full_local_only(local_scratch):
     out = runner(cfg, FakeEngine(exits)).run_once()
     assert out["outcome"] == "discarded" and out["why"] == "process_control", out
     assert any(a["step"] == "result" and a["outcome"] == "discarded" for a in audit(cfg))
+
+
+# --- the per-node scratch lives INSIDE the tree, fresh per node, the only writable path ----------
+
+PLANT = """import os, sys
+
+def test_plant():
+    t = os.environ["TMPDIR"]
+    root = os.getcwd()
+    assert t == os.environ["HOME"] == os.path.join(root, ".selfheal-tmp") and os.listdir(t) == []
+    assert not any(p and os.path.realpath(p).startswith(t) for p in sys.path)        # never importable
+    for name, body in (("sitecustomize.py", "import os\\nos._exit(0)\\n"), ("usercustomize.py", "import os\\nos._exit(0)\\n"),
+                       ("evil.pth", "import os; os._exit(0)\\n"), ("conftest.py", "raise SystemExit(0)\\n"),
+                       ("calc.py", "raise SystemExit(0)\\n")):
+        open(os.path.join(t, name), "w").write(body)
+    user_site = os.path.join(t, ".local/lib/python%d.%d/site-packages" % sys.version_info[:2])   # HOME's user site
+    os.makedirs(user_site)
+    open(os.path.join(user_site, "evil.pth"), "w").write("import os; os._exit(0)\\n")
+    os.symlink(root, os.path.join(t, "up"))
+    for target in (os.path.join(root, "calc.py"), os.path.join(root, "conftest.py"), os.path.join(root, "x"),
+                   os.path.join(root, "tests", "test_calc.py"), os.path.join(os.path.dirname(sys.argv[0]), "node_runner.py"),
+                   os.path.join(t, "up", "calc.py")):
+        try:
+            open(target, "a").write("x")
+        except OSError:
+            continue
+        raise AssertionError("wrote outside the scratch: " + target)
+"""
+CLEAN = """import os, sys
+
+def test_clean():
+    t = os.environ["TMPDIR"]
+    assert os.listdir(t) == []                                       # nothing survives from the last node
+    for hook in ("sitecustomize", "usercustomize"):   # the distro's own /usr/lib sitecustomize is fine; never the tree's
+        m = sys.modules.get(hook)
+        assert m is None or not os.path.realpath(m.__file__).startswith(os.path.realpath(os.getcwd()))
+    import calc
+    assert os.path.dirname(os.path.realpath(calc.__file__)) == os.path.realpath(os.getcwd())
+"""
+
+
+def _probe_tree(cfg):
+    from selfheal import supervisor
+    tree = Path(cfg.worktree_root) / "probe"
+    gitops.add_worktree(cfg.repo, str(tree), base="main")
+    (tree / "tests" / "test_plant.py").write_text(PLANT)
+    (tree / "tests" / "test_clean.py").write_text(CLEAN)
+    return supervisor, tree
+
+
+def test_scratch_is_the_only_writable_path_and_plants_have_no_effect(local_scratch):
+    """Node 1 drops sitecustomize / usercustomize / .pth (also in a user-site layout) / conftest / a shadow
+    module and a symlink out into its scratch, and fails to write the tree, the pinned test, the runner or
+    through the symlink. Node 2 sees an empty scratch and imports the tree's module, not the plant: had a
+    plant been imported or a .pth processed, its os._exit(0) would leave no token."""
+    supervisor, tree = _probe_tree(local_scratch.cfg)
+    assert supervisor.run_node(local_scratch.cfg, str(tree), "tests/test_plant.py::test_plant") == "passed"
+    assert not (tree / ".selfheal-tmp").exists() and (tree / "calc.py").read_text() == "def add(a, b):\n    return a - b\n"
+    assert supervisor.run_node(local_scratch.cfg, str(tree), "tests/test_clean.py::test_clean") == "passed"
+    assert not (tree / ".selfheal-tmp").exists()
+
+
+def test_a_scratch_that_already_exists_is_never_used(local_scratch):
+    supervisor, tree = _probe_tree(local_scratch.cfg)
+    (tree / ".selfheal-tmp").mkdir()
+    (tree / ".selfheal-tmp" / "sitecustomize.py").write_text("import os\nos._exit(0)\n")
+    assert supervisor.run_node(local_scratch.cfg, str(tree), "tests/test_clean.py::test_clean") == "scratch_present"
+
+
+def test_scratch_fill_is_capped(local_scratch):
+    supervisor, tree = _probe_tree(local_scratch.cfg)
+    (tree / "tests" / "test_fill.py").write_text(
+        "import os\n\ndef test_fill():\n    for i in range(30):\n"
+        "        open(os.path.join(os.environ['TMPDIR'], f'f{i}'), 'wb').write(b'0' * (100 << 10))\n")
+    local_scratch.cfg.sandbox_disk_mb = 2
+    assert supervisor.run_node(local_scratch.cfg, str(tree), "tests/test_fill.py::test_fill") == "worktree_quota"
+    assert not (tree / ".selfheal-tmp").exists()
+
+
+def test_scratch_outside_the_tree_is_refused(local_scratch, tmp_path):
+    from selfheal.safety import Refused
+    from selfheal.sandbox import Sandbox
+    with pytest.raises(Refused):
+        Sandbox(local_scratch.cfg).run(["true"], str(local_scratch.live), 10, tree_ro=True, scratch=str(tmp_path))
+
+
+def test_engine_planted_scratch_is_refused_by_the_diff_policy(local_scratch):
+    out = runner(local_scratch.cfg, FakeEngine(lambda wt: (fix_calc(wt), _write(".selfheal-tmp/notes.py", "x = 1\n")(wt)))).run_once()
+    assert out["outcome"] == "discarded" and out["why"] == "scratch_planted", out
