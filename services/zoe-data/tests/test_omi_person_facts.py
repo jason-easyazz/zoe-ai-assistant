@@ -156,8 +156,9 @@ def env(monkeypatch, tmp_path):
 
     erased: list = []
 
-    async def erase_rows(user_id, ids, *, actor, reason=""):
-        """The seam: ``erase_rows`` itself (drawers, audit, physical residue) is pinned by the memory suite; here, the owner's rows go."""
+    async def erase_rows(user_id, ids, *, actor, reason="", gate_held=False):
+        """The seam: ``erase_rows`` itself (drawers, audit, physical residue) is pinned by the memory suite; here, the owner's rows go.
+        ``gate_held``: the day review's forgets hold the member's erase gate when they get here (they say so)."""
         erased.append((user_id, list(ids), reason))
         gone = [i for i in ids if i in col.rows and col.rows[i][1].get("user_id") == user_id]
         for i in gone:

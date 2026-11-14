@@ -3677,7 +3677,7 @@ class MemoryService:
         return n
 
     async def erase_rows(self, user_id: str, ids: Iterable[str], *, actor: str,
-                         reason: str = "forgotten by request") -> dict[str, Any]:
+                         reason: str = "forgotten by request", gate_held: bool = False) -> dict[str, Any]:
         """HARD-erase specific rows of ONE user, the part of "forgotten means forever" that is the drawers:
         a content-free ``forget_erase`` intent row (counts and short id hashes, never text or name), the
         rows themselves, their per-row audit trail, a ``forget_erase_done`` row, then the physical erase
@@ -3696,8 +3696,10 @@ class MemoryService:
         try:
             # FIRST, fail closed, OUTSIDE the memory lock (it takes the erase gate): the superseded-value registry's entries tied
             # to these rows (migration 0080). Before the owned-rows check, so a retry whose rows already went still clears them.
+            # ``gate_held``: a caller INSIDE this member's erase gate (the pendant day review's person / name / recording forgets,
+            # via omi_review_apply.unwrite) says so - the gate is not reentrant, and taking it again here would hang that forget
             import memory_value_registry
-            await memory_value_registry.erase_for_rows(user_id, want)
+            await memory_value_registry.erase_for_rows(user_id, want, gate_held=gate_held)
         except Exception as exc:
             raise MemoryServiceError(f"erase_rows failed: {exc}") from exc
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())

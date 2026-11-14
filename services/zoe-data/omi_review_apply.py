@@ -377,7 +377,7 @@ async def write_conversation_note(user_id: str, c: dict, via: str) -> str:
                                                    at_epoch=at)
 
 
-async def unwrite(user_id: str, rows: list) -> int:
+async def unwrite(user_id: str, rows: list, *, gate_held: bool = False) -> int:
     """Erase what ``person_fact`` / ``person_relation`` candidates wrote (forget: the person, the name, the recording). A memory row
     is HARD-erased (``MemoryService.erase_rows``: drawers, audit trail, the physical residue); a relationship goes back to empty only
     while it still holds the value this approval set. An ``approving`` candidate a crash left without ``written_ref`` is covered too:
@@ -415,7 +415,8 @@ async def unwrite(user_id: str, rows: list) -> int:
                 mem += [m.id for m in await svc._run_sync(svc._entity_rows_sync, [pid], user_id)
                         if any(_written_by(m, cid) for cid in cids)]
         if mem:
-            out = await svc.erase_rows(user_id, mem, actor=user_id, reason="forgotten by request (pendant review)")
+            # ``gate_held``: the forgets that reach here from the day review already hold the member's erase gate (not reentrant)
+            out = await svc.erase_rows(user_id, mem, actor=user_id, reason="forgotten by request (pendant review)", gate_held=gate_held)
             n += int(out.get("rows_removed") or 0)
     if rels:
         from db_compat import get_compat_db

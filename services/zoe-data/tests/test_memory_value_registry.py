@@ -964,6 +964,84 @@ def test_a_failing_in_lock_step_still_runs_the_gate_erasers_and_the_delete_still
     assert ran == ["reply_ledger", "commitments"]
 
 
+OMI_CANDIDATES = ("CREATE TABLE omi_day_candidates (id TEXT PRIMARY KEY, review_id TEXT, user_id TEXT NOT NULL, day_local TEXT, "
+                  "kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', evidence TEXT NOT NULL DEFAULT '[]', "
+                  "recording_ids TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'pending', written_ref TEXT, created_at TEXT)")
+
+
+def _pendant_fact(db, monkeypatch, tmp_path, evidence="[]", recordings="[]"):
+    """An APPROVED pendant person_fact for Juno that wrote memory row r1, and a registry entry tied to that row."""
+    import memory_service
+
+    db.conn.row_factory = sqlite3.Row                 # the day review reads rows by column name, as asyncpg's Records allow
+    db.conn.execute(OMI_CANDIDATES)
+    db.conn.execute("INSERT INTO omi_day_candidates (id, user_id, kind, payload, evidence, recording_ids, status, written_ref) VALUES "
+                    "('c1', ?, 'person_fact', ?, ?, ?, 'approved', ?)",
+                    (A, json.dumps({"person_id": JUNO}), evidence, recordings, "memory:" + R(A, "r1")))
+    db.conn.commit()
+    _rec(A, JUNO, _age(7), _age(8), T0, turn=T("p1"), rows=[R(A, "r1")])
+    _rec(B, OTHER_JUNO, _age(5), _age(6), T0, turn=T("p2"), rows=[R(B, "r1")])
+    svc = memory_service.MemoryService(data_dir=str(tmp_path / "palace"))
+    monkeypatch.setattr(svc, "_owned_rows_sync", lambda uid, ids: ([], []))
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: svc)
+    return svc
+
+
+@pytest.mark.parametrize("path", ["forget_people", "erase_entity", "forget_recording"])
+def test_a_pendant_forget_inside_the_erase_gate_finishes_and_erases_the_registry(db, tmp_path, monkeypatch, path):
+    """Thread PRRT_kwDOPZpkks63eAIg: the day review's person / name / recording forgets hold the member's erase gate when they reach
+    erase_rows (via omi_review_apply.unwrite); the registry erase there must not take the non-reentrant gate again. Each path
+    finishes under wait_for(..., 5), the entry tied to the erased row is gone, member B's is untouched."""
+    import omi_day_review
+
+    _pendant_fact(db, monkeypatch, tmp_path, evidence='["juno is 8"]', recordings='["rec1"]')
+
+    async def go():
+        if path == "forget_people":
+            coro = omi_day_review.forget_people(A, [JUNO])
+        elif path == "erase_entity":
+            coro = omi_day_review.erase_entity(A, re.compile(r"\bjuno\b", re.I), strict=True)
+        else:                                          # omi_recordings.delete_recording holds the gate's WRITE side around it
+            async def held():
+                async with user_erase_gate.writing(A, user_erase_gate.generation(A)):
+                    return await omi_day_review.forget_recording(A, "rec1")
+            coro = held()
+        return await asyncio.wait_for(coro, timeout=5)
+    run(go())
+    assert _subjects(db, A) == [] and _subjects(db, B) == [OTHER_JUNO]
+
+
+def test_without_gate_held_the_pendant_forget_deadlocks(db, tmp_path, monkeypatch):
+    """Negative control, under a hard timeout: the unwrite reaching erase_rows WITHOUT saying it holds the gate (the code before this
+    fix) waits on the gate its own forget holds."""
+    import omi_day_review
+    import omi_review_apply
+
+    _pendant_fact(db, monkeypatch, tmp_path)
+    real = omi_review_apply.unwrite
+
+    async def unwrite_without_flag(user_id, rows, **_kw):
+        return await real(user_id, rows)
+    monkeypatch.setattr(omi_review_apply, "unwrite", unwrite_without_flag)
+
+    async def go():
+        try:
+            await asyncio.wait_for(omi_day_review.forget_people(A, [JUNO]), timeout=1.5)
+        except asyncio.TimeoutError:
+            return "deadlocked"
+        return "finished"
+    assert run(go()) == "deadlocked"
+
+
+def test_every_caller_inside_the_gate_says_so():
+    """Statically: the one funnel the day review's gated forgets use passes ``gate_held=True``; the approval path (outside the
+    gate) does not."""
+    src = (SVC / "omi_day_review.py").read_text(encoding="utf-8")
+    assert "omi_review_apply.unwrite(user_id, done, gate_held=True)" in src
+    apply_src = (SVC / "omi_review_apply.py").read_text(encoding="utf-8")
+    assert "gate_held=gate_held)" in apply_src and 'await unwrite(user_id, [{"kind": c["kind"], "written_ref": ref' in apply_src
+
+
 def test_the_static_lock_order_check_is_not_vacuous():
     src = "async def f(lock):\n    async with lock:\n        await memory_value_registry.erase_for_rows('u', [])\n"
     tree = ast.parse(src)
