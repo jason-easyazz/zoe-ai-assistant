@@ -29,7 +29,7 @@ stored anywhere new):
                               subject is a person the name names (by person id, live or soft-deleted) are DELETED
   * ``night_extract``       - the shadow night pre-pass's proposed facts (``~/.zoe/night-extract/``, ``night_extract.erase_entity``): a fact of the
                               member that names the entity is dropped
-  * ``routines``            - the member's routines (alembic 0082, ``routines_store.erase_entity``): a routine whose name names the
+  * ``routines``            - the member's routines (alembic 0081, ``routines_store.erase_entity``): a routine whose name names the
                               entity is deleted whole; a template step or a day line naming it is deleted
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
                               or whose name / email names the entity, loses the link AND the name and email (the row
@@ -251,7 +251,7 @@ async def _clear(user_id: str, rx, mutes, res: CascadeResult, *, db=None, only: 
     async def routines_() -> int:
         import routines_store
 
-        # the member's routines (alembic 0082): a routine named for the entity, or a step / day line naming it, is deleted
+        # the member's routines (alembic 0081): a routine named for the entity, or a step / day line naming it, is deleted
         return await routines_store.erase_entity(user_id, rx, strict=True)
 
     if want("restraint_mutes"):

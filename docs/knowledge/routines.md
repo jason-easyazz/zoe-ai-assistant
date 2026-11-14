@@ -37,12 +37,12 @@ In the owner's words. Each line is checkable in the lab with synthetic members.
 
 | PR | what | acceptance it moves |
 |---|---|---|
-| 1a | the tables (alembic `0082_routines.py`), routines + steps in `services/zoe-data/routines_store.py`, both erasers, forget reach | 11 (for the four tables that exist) |
+| 1a | the tables (alembic `0081_routines.py`), routines + steps in `services/zoe-data/routines_store.py`, both erasers, forget reach | 11 (for the four tables that exist) |
 | 1b | the day: lazy day copies, one-off lines, the walk (`note_named`) and the said / tapped ticks | 3 (store-level tick rule) |
 
 ### PR 1 (1a + 1b) - the store
 
-- **Tables** (alembic `0082`): `routines` (the subject in `user_id`, an anchor, an optional window and days rule, `personal` by
+- **Tables** (alembic `0081`): `routines` (the subject in `user_id`, an anchor, an optional window and days rule, `personal` by
   default), `routine_steps` (template lines), `routine_days` (one routine's copy for one household date), `routine_day_steps` (that
   day's lines with their state, who ticked, whether the voice was verified, how often Zoe named it). Readings, carer links and the
   carer outbox are later PRs with their own migration.

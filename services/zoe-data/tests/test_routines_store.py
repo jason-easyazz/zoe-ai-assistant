@@ -1,4 +1,4 @@
-"""Routines stage 1, the store (``routines_store.py``, alembic 0082). Synthetic members only.
+"""Routines stage 1, the store (``routines_store.py``, alembic 0081). Synthetic members only.
 
 Every rule has a negative control beside it: the arm that proves the check can fail (another person, a guest, a family routine
 asked to hold a medicine line, an inventory with the entries removed).
@@ -141,7 +141,7 @@ def test_erase_entity_deletes_routines_and_steps_that_name_the_entity(store):
 
 
 def test_the_forget_inventory_reaches_every_routine_table_and_would_catch_a_missing_entry():
-    found = fr.discover_user_tables([rs.__file__.replace("routines_store.py", "alembic/versions/0082_routines.py")])
+    found = fr.discover_user_tables([rs.__file__.replace("routines_store.py", "alembic/versions/0081_routines.py")])
     assert TABLES == set(found)                                                     # the discovery sees all four (children too)
     assert not set(fr.uncovered_tables(found)) & TABLES
     assert all(fr.BY_KEY[k].status == fr.REACHED and fr.BY_KEY[k].member == "routines_store.forget_user" for k in TABLES)

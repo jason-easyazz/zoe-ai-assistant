@@ -92,7 +92,7 @@ TABLES: tuple[Store, ...] = (
     _t("omi_day_reviews", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("omi_day_candidates", WORDS, REACHED, member="omi_day_review.forget_user", entity="omi_day_review.erase_entity"),
     _t("conversation_notes", WORDS, REACHED, member="conversation_notes.forget_user", entity="conversation_notes.erase_entity"),
-    # routines (0082, routines_store.py): checklists can hold health words (a medicine step), so they are REACHED from day one
+    # routines (0081, routines_store.py): checklists can hold health words (a medicine step), so they are REACHED from day one
     _t("routines", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),
     _t("routine_steps", WORDS, REACHED, member=_ROUT_M, entity=_ROUT_E),
     _t("routine_days", METADATA, REACHED, member=_ROUT_M),               # a date and open/closed times: deleted with the routine

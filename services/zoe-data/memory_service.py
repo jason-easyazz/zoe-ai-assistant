@@ -2251,7 +2251,7 @@ class MemoryService:
             await reminder_delivery.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: reminder delivery ledger erasure failed ({type(exc).__name__})") from exc
-        try:   # routines (alembic 0082, routines_store.py): the member's checklists, their steps, day copies and lines. Fail closed;
+        try:   # routines (alembic 0081, routines_store.py): the member's checklists, their steps, day copies and lines. Fail closed;
             import routines_store   # outside the memory lock: it takes the member's erase gate.
 
             await routines_store.forget_user(user_id)
