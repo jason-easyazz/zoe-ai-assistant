@@ -29,10 +29,12 @@ class Kind(str, Enum):
     FORGET = "forget"
     GRANT_CHANGE = "grant_change"
     AUDIT_FINDING = "audit_finding"
+    ATTENTION = "attention"              # how an offer was routed to a person, and why
 
 
 KERNEL_ONLY = frozenset(
-    {Kind.ACTION_RECEIPT, Kind.REFUSAL, Kind.FORGET, Kind.GRANT_CHANGE, Kind.AUDIT_FINDING}
+    {Kind.ACTION_RECEIPT, Kind.REFUSAL, Kind.FORGET, Kind.GRANT_CHANGE, Kind.AUDIT_FINDING,
+     Kind.ATTENTION}
 )
 
 
