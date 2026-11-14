@@ -22,13 +22,21 @@ The rule, in one sentence each:
 A "cut event" is the person talking after the close: ``still_talking=1`` on the daemon's FIRST_SOUND line (>= 3 speech chunks
 inside the fixed 1.5 s window after the close), weight 1; the server's trailing-"and" hold merging a continuation, weight 0.5.
 
-Flag: ``ZOE_LISTEN_PACE`` = off (default) | shadow | on, read by ``mode()``. Nothing in this module acts on it; the callers
-(the persistence/wire layer, not wired yet) do.
+Flag: ``ZOE_LISTEN_PACE`` = off (default) | shadow | on, read by ``mode()``. The controller above the persistence section does
+not read it; the narrow calls at the bottom (``done_frame_field``, ``record_outcome``) are no-ops while it is off. Nothing in
+the voice path calls them yet (the wiring note in the doc names the call sites). ``forget_user`` runs whatever the flag says.
 """
 from __future__ import annotations
 
+import json
 import math
-from dataclasses import dataclass, field, replace
+import os
+import secrets
+import tempfile
+import threading
+import time
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Mapping, Optional
 
 # ── constants (design note section 3) ───────────────────────────────────────────────────────────────────────────────────────
@@ -414,3 +422,266 @@ def level_for(states: Mapping[str, State], panel_id: str, member: Optional[str],
     if mkey != hkey:
         return new_state(child=child).level, mkey, "default"
     return DEFAULT_LEVEL, hkey, "default"
+
+
+# ── persistence: one small JSON file, atomic, 0600, bounded ─────────────────────────────────────────────────────────────────
+# ``{"v": 1, "subjects": {"<panel>|<member or *>": {state fields}}}``: integers, short enums and times only. A malformed file
+# is an empty book (every subject back to its default, which is today's behaviour); a malformed entry is dropped alone.
+STATE_FILE = "~/.zoe/listen-pace.json"
+MAX_SUBJECTS = 256
+_MAX_FILE_BYTES = 256 * 1024
+
+
+def state_to_dict(s: State) -> dict:
+    return {"level": s.level, "floor": s.floor, "default": s.default, "run": s.run, "ring": s.ring,
+            "after_lengthen": s.after_lengthen, "bad": [[lvl, at] for lvl, at in s.bad], "last_step_at": s.last_step_at,
+            "pin": s.pin, "pin_until": s.pin_until, "quicker_guard": s.quicker_guard, "eligible": s.eligible,
+            "events_half": s.events_half, "last_heard_at": s.last_heard_at}
+
+
+def _num(v, *, lo: float, hi: float, integer: bool = False):
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not lo <= v <= hi:
+        raise ValueError("bad number")
+    if integer and int(v) != v:
+        raise ValueError("not an integer")
+    return int(v) if integer else float(v)
+
+
+def state_from_dict(d) -> Optional[State]:
+    """A stored subject, strictly; ``None`` when anything is off (that subject falls back to its default)."""
+    try:
+        if not isinstance(d, Mapping):
+            return None
+        floor = _num(d["floor"], lo=LEVEL_MIN, hi=LEVEL_MAX, integer=True)
+        default = _num(d["default"], lo=LEVEL_MIN, hi=LEVEL_MAX, integer=True)
+        ring = d["ring"]
+        if not isinstance(ring, str) or len(ring) > WINDOW or any(c not in "012" for c in ring):
+            return None
+        pin = d["pin"]
+        if pin not in ("", "longer", "quicker") or not isinstance(d["after_lengthen"], bool):
+            return None
+        opt = lambda k: None if d.get(k) is None else _num(d[k], lo=0, hi=1e11)   # noqa: E731
+        bad = tuple((_num(lvl, lo=LEVEL_MIN, hi=LEVEL_MAX, integer=True), _num(at, lo=0, hi=1e11)) for lvl, at in d["bad"])[-16:]
+        return State(level=clamp_level(_num(d["level"], lo=LEVEL_MIN, hi=LEVEL_MAX, integer=True), floor), floor=floor,
+                     default=default, run=_num(d["run"], lo=0, hi=1e9, integer=True), ring=ring,
+                     after_lengthen=d["after_lengthen"],
+                     bad=bad, last_step_at=opt("last_step_at"), pin=pin, pin_until=_num(d["pin_until"], lo=0, hi=1e11),
+                     quicker_guard=_num(d["quicker_guard"], lo=0, hi=QUICKER_GUARD_TURNS, integer=True),
+                     eligible=_num(d["eligible"], lo=0, hi=1e12, integer=True),
+                     events_half=_num(d["events_half"], lo=0, hi=1e12, integer=True), last_heard_at=opt("last_heard_at"))
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def _bounded(states: Mapping[str, State]) -> "dict[str, State]":
+    keep = sorted(states.items(), key=lambda kv: kv[1].last_heard_at or 0.0, reverse=True)[:MAX_SUBJECTS]
+    return dict(keep)
+
+
+def dumps(states: Mapping[str, State]) -> str:
+    return json.dumps({"v": 1, "subjects": {k: state_to_dict(s) for k, s in _bounded(states).items()}}, sort_keys=True)
+
+
+def loads(text: str) -> "dict[str, State]":
+    try:
+        raw = json.loads(text)
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(raw, Mapping) or raw.get("v") != 1 or not isinstance(raw.get("subjects"), Mapping):
+        return {}
+    out = {}
+    for k, d in raw["subjects"].items():
+        panel, _, member = str(k).partition("|")
+        if subject_key(panel, None if member == HOUSEHOLD else member) != k:
+            continue
+        s = state_from_dict(d)
+        if s is not None:
+            out[k] = s
+    return _bounded(out)
+
+
+def load(path: str) -> "dict[str, State]":
+    try:
+        p = Path(os.path.expanduser(path))
+        if p.stat().st_size > _MAX_FILE_BYTES:
+            return {}
+        return loads(p.read_text())
+    except OSError:
+        return {}
+
+
+def save(path: str, states: Mapping[str, State]) -> bool:
+    """Atomic write (temp file + ``os.replace``), 0600 from the first byte. False on any failure, never raises."""
+    tmp = None
+    try:
+        p = Path(os.path.expanduser(path))
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=p.name + ".", suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
+            fh.write(dumps(states))
+        os.replace(tmp, p)
+        return True
+    except Exception:  # noqa: BLE001
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return False
+
+
+# ── the book: the live state behind one lock, plus the per-turn tokens ──────────────────────────────────────────────────────
+TOKEN_TTL_S = 600.0
+MAX_TOKENS = 512
+WINDOW_TTL_S = 30
+
+
+class Book:
+    """Subjects + tokens. ``path=None`` keeps everything in memory (tests, and any process under pytest by default)."""
+
+    def __init__(self, path: Optional[str] = None):
+        self.path = path
+        self._lock = threading.Lock()
+        self._states: "dict[str, State]" = load(path) if path else {}
+        self._tokens: "dict[str, tuple[float, dict]]" = {}
+
+    def _persist(self) -> None:
+        if self.path:
+            save(self.path, self._states)
+
+    def states(self) -> "dict[str, State]":
+        with self._lock:
+            return dict(self._states)
+
+    def frame(self, panel_id: str, member: Optional[str], *, now: float, child: bool = False, apply: bool = False,
+              window_ttl_s: int = WINDOW_TTL_S) -> Optional[dict]:
+        """The done frame's ``listen`` value for ``panel_id``'s next recording (``member`` = the carried verified speaker or
+        None). Issues a one-shot token that maps the outcome back to the subject whose level the panel was handed."""
+        with self._lock:
+            hl, hkey, _ = level_for(self._states, panel_id, None, now)
+            if not hkey:
+                return None
+            ml, mkey, msrc = level_for(self._states, panel_id, member, now, child=child) if member else (hl, hkey, "household")
+            tok = secrets.token_urlsafe(12)
+            self._tokens = {t: v for t, v in self._tokens.items() if now - v[0] < TOKEN_TTL_S}
+            while len(self._tokens) >= MAX_TOKENS:
+                self._tokens.pop(next(iter(self._tokens)))
+            self._tokens[tok] = (now, {"wake": (hkey, hl), "window": (mkey, ml), "child": child})
+        out = {"v": 1, "apply": bool(apply), "panel": dict(profile(hl).as_frame(), level=hl), "token": tok}
+        if mkey != hkey:
+            out["next"] = dict(profile(ml).as_frame(), level=ml, ttl_s=int(window_ttl_s))
+        return out
+
+    def record(self, body: Mapping, *, now: float, reflex_on: bool = False) -> Optional[Change]:
+        """One turn's outcome POST. ``None`` for an unknown / expired / reused token or an unusable body: nothing changes."""
+        try:
+            tok = body.get("token")
+            with self._lock:
+                ent = self._tokens.pop(tok, None) if isinstance(tok, str) else None
+            if ent is None or now - ent[0] >= TOKEN_TTL_S:
+                return None
+            fields = dict(body)
+            # The level the panel ACTUALLY used: the one it says it applied, else today's tails (assumed L0: the panel's
+            # .env.voice is the household default). In shadow every outcome is therefore an L0 observation.
+            if fields.get("level_used") in (None, "", "-"):
+                fields["level_used"] = DEFAULT_LEVEL
+            o = outcome_from_fields(fields)
+            if o is None or o.win == "barge":
+                return None
+            key, _lvl = ent[1]["wake" if o.win == "wake" else "window"]
+            with self._lock:
+                cur = self._states.get(key)
+                if cur is None:
+                    lvl, _k, _s = level_for(self._states, key.split("|", 1)[0], None, now)
+                    cur = new_state(child=ent[1]["child"] and not key.endswith("|" + HOUSEHOLD), level=lvl)
+                nxt, ch = step(cur, o, now, reflex_on=reflex_on)
+                if nxt is not cur:
+                    self._states[key] = nxt
+                    self._persist()
+            return ch
+        except Exception:  # noqa: BLE001
+            return None
+
+    def say(self, panel_id: str, member: Optional[str], kind: str, *, now: float, guest: bool = False,
+            child: bool = False) -> Optional[Change]:
+        """A spoken override for the verified member (the panel's household row when unverified). A guest stores nothing."""
+        if guest:
+            return None
+        with self._lock:
+            lvl, key, _src = level_for(self._states, panel_id, member, now, child=child)
+            if not key:
+                return None
+            cur = self._states.get(key) or new_state(child=child and not key.endswith("|" + HOUSEHOLD), level=lvl)
+            nxt, ch = override(cur, kind, now)
+            if nxt is not cur:
+                self._states[key] = nxt
+                self._persist()
+        return ch
+
+    def forget_user(self, member_id: str) -> int:
+        m = (member_id or "").strip()
+        if not m:
+            return 0
+        with self._lock:
+            gone = [k for k in self._states if k.split("|", 1)[1] == m]
+            for k in gone:
+                self._states.pop(k, None)
+            self._tokens = {t: v for t, v in self._tokens.items()
+                            if not any(v[1][w][0].endswith("|" + m) for w in ("wake", "window"))}
+            self._persist()
+        return len(gone)
+
+
+# ── the narrow calls voice_tts.py makes (wiring note in the doc); every one is a no-op while ZOE_LISTEN_PACE=off ────────────
+_book: Optional[Book] = None
+_book_lock = threading.Lock()
+
+
+def _default_path() -> Optional[str]:
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return None                     # a test never touches the live file
+    return STATE_FILE
+
+
+def book() -> Book:
+    global _book
+    with _book_lock:
+        if _book is None:
+            _book = Book(_default_path())
+        return _book
+
+
+def done_frame_field(panel_id: str, member: Optional[str] = None, *, child: bool = False,
+                     now: Optional[float] = None) -> Optional[dict]:
+    """The ``listen`` key for a done frame, or None (flag off, unusable panel, any error). ``member`` is the carried
+    verified speaker (``carried_speaker.current``), never this turn's raw claim."""
+    try:
+        m = mode()
+        if m == "off":
+            return None
+        return book().frame(panel_id, member, now=time.time() if now is None else now, child=child, apply=m == "on")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def record_outcome(body: Mapping, *, now: Optional[float] = None, reflex_on: bool = False) -> Optional[str]:
+    """``POST /api/voice/turn_outcome``'s handler body. Returns the change reason (for the server's PACE log line) or None."""
+    try:
+        if mode() == "off" or not isinstance(body, Mapping):
+            return None
+        ch = book().record(body, now=time.time() if now is None else now, reflex_on=reflex_on)
+        return None if ch is None else ch.reason
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def forget_user(member_id: str) -> int:
+    """Member forget (``MemoryService.delete_user``): the member's rows on every panel, in memory and in the file. Runs
+    whatever the flag says, so a forget is never skipped because the feature was off. Never raises."""
+    try:
+        if _book is None and _default_path() and not Path(os.path.expanduser(STATE_FILE)).exists():
+            return 0
+        return book().forget_user(member_id)
+    except Exception:  # noqa: BLE001
+        return 0

@@ -2350,6 +2350,13 @@ class MemoryService:
                     await asyncio.to_thread(warm_speaker.forget_user, user_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("memory_service: warm-speaker memo not erased for a deleted user (%s)", type(exc).__name__)
+                # Listen pace (per panel+member end-of-turn wait level, a derived timing trait): gone with the member, whatever
+                # ZOE_LISTEN_PACE says.
+                try:
+                    import listen_pace
+                    await asyncio.to_thread(listen_pace.forget_user, user_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("memory_service: listen-pace rows not erased for a deleted user (%s)", type(exc).__name__)
                 needles: list[str] = []
                 try:
                     ids = await self._run_sync(self._list_ids_for_user, user_id)

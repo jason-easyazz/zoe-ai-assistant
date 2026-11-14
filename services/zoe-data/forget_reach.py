@@ -271,6 +271,10 @@ OTHER: tuple[Store, ...] = (
     Store("warm_speaker_memo", "file", METADATA, REACHED, "~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker "
           "(a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member.",
           member="warm_speaker.forget_user", markers=("warm-speaker.json",)),
+    Store("listen_pace_levels", "file", DERIVED, REACHED, "~/.zoe/listen-pace.json (0600): per (panel, member) end-of-turn wait LEVEL and its "
+          "counters and times (no words, no audio; flag-dark ZOE_LISTEN_PACE). A derived timing trait, so delete_user removes the member's rows "
+          "on every panel (listen_pace.forget_user). No name to match, so the entity forget has nothing to locate.",
+          member="listen_pace.forget_user", markers=("listen-pace.json",)),
     Store("account_secrets", "vault", CONFIG, REACHED, "Connected-account credentials (account_secrets.py seam). No backend is configured yet, so "
           "nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user.",
           member="connected_accounts.forget_user", markers=("account_secrets",)),

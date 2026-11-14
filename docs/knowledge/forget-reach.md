@@ -132,7 +132,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-133 stores: 59 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+134 stores: 60 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -257,6 +257,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `night_extract_facts` | file | words | reached | member: `struggle_detector.delete_user` / entity: `night_extract.erase_entity` | ~/.zoe/night-extract/: the SHADOW night pre-pass (night_extract.py, ZOE_NIGHT_EXTRACT). <night>.night-extract.jsonl holds the facts the GLiNEREL extractor PROPOSED from the member's day (person names, ages, places, pet and kin words; 0600, never off-box, never a turn's text) and <night>.night-extract-summary.json counts only. An entity forget drops the member's facts naming it (cascade step night_extract); a member erase (struggle_detector.delete_user calls night_extract.delete_user) drops all of the member's facts and summary line; load_facts re-checks the ledger. |
 | `self_improver_candidates` | file | derived | reached | entity: `self_review.erase_entity` | ~/.zoe/self-improver/candidate-cells.jsonl: synthetic asks the 12B invented in the SHAPE of a manner failure; a guard refuses any that shares a content word with the household's turn, a deny term, a name-like word, a number or an address, and no record names its turn or member. The entity forget sweeps it too (any ask naming the entity is dropped, self_review.erase_entity); with no member on a line, a member erase has nothing to locate. |
 | `warm_speaker_memo` | file | metadata | reached | member: `warm_speaker.forget_user` | ~/.zoe/warm-speaker.json: panel id -> member id + time, the wake KV warm's likely speaker (a cache-shaping guess, never an identity, no words). Capped at 12 h; delete_user and voice-profile delete / consent revoke remove the member. |
+| `listen_pace_levels` | file | derived | reached | member: `listen_pace.forget_user` | ~/.zoe/listen-pace.json (0600): per (panel, member) end-of-turn wait LEVEL and its counters and times (no words, no audio; flag-dark ZOE_LISTEN_PACE). A derived timing trait, so delete_user removes the member's rows on every panel (listen_pace.forget_user). No name to match, so the entity forget has nothing to locate. |
 | `account_secrets` | vault | config | reached | member: `connected_accounts.forget_user` | Connected-account credentials (account_secrets.py seam). No backend is configured yet, so nothing is stored; whatever backend the owner picks erases the member's secrets through connected_accounts.forget_user. |
 | `reminder_phone_ledger` | db | metadata | reached | member: `reminder_delivery.forget_user` | app_settings rows reminder_phone:<member>:<hash>:<channel> = an outcome class: the at-most-once claim of a reminder's phone send (reminder_delivery.py). Ids only, no words; delete_user removes the member's rows. |
 | `omi_audio_files` | file | biometric | reached | member: `omi_recordings.forget_user` / entity: `omi_recordings.erase_entity` | Pendant audio on disk goes with the recording (omi_recordings.forget_user removes rows and files). |
