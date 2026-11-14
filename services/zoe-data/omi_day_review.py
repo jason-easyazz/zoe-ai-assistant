@@ -1971,7 +1971,10 @@ async def _unwrite(user_id: str, rows: Sequence[Any]) -> int:
     if not done:
         return 0
     import omi_review_apply
-    return await omi_review_apply.unwrite(user_id, done)
+    # EVERY caller holds this member's erase gate: erase_entity / forget_people (``erasing``) and forget_recording (under
+    # omi_recordings.delete_recording's ``writing``). The gate is not reentrant, so say so - the registry erase inside erase_rows
+    # would otherwise wait on the gate this very forget holds.
+    return await omi_review_apply.unwrite(user_id, done, gate_held=True)
 
 
 # --- the daytime fallback lane (zoe-data, the live 4B, only when idle) ------------------------------------------

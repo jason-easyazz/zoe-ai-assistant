@@ -4147,6 +4147,12 @@ async def _execute_forget_last(user_id: str) -> str:
     except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
         logger.warning("memory_forget_last: conversation notes erase failed (%s)", type(exc).__name__)
         failed += 1
+    try:    # the superseded-value registry (0080): what this turn corrected, and entries tied to the rows it wrote
+        import memory_value_registry
+        await memory_value_registry.erase_for_turn(user_id, text, row_ids=[r.id for r in rows])
+    except Exception as exc:  # noqa: BLE001 - not erased: the reply below says so and "forget that" again finishes it
+        logger.warning("memory_forget_last: value registry erase failed (%s)", type(exc).__name__)
+        failed += 1
     logger.info("memory_forget_last: user=%s rows=%d failed=%d", user_id, len(gone), failed)
     if failed:
         # some of it is still saved: say so, and keep the target so "forget that" again finishes the same turn

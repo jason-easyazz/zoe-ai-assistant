@@ -132,7 +132,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 
 <!-- BEGIN GENERATED: forget_reach.py -->
 
-132 stores: 58 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
+133 stores: 59 reached, 31 out of scope, 43 known gaps (`GAPS` in `services/zoe-data/forget_reach.py`).
 
 | store | kind | holds | status | erased by | note |
 |---|---|---|---|---|---|
@@ -162,6 +162,7 @@ Generated from `forget_reach.py`; do not edit by hand.
 | `omi_day_reviews` | pg_table | words | reached | member: `omi_day_review.forget_user` / entity: `omi_day_review.erase_entity` | - |
 | `omi_day_candidates` | pg_table | words | reached | member: `omi_day_review.forget_user` / entity: `omi_day_review.erase_entity` | - |
 | `conversation_notes` | pg_table | words | reached | member: `conversation_notes.forget_user` / entity: `conversation_notes.erase_entity` | - |
+| `memory_value_registry` | pg_table | words | reached | member: `memory_value_registry.forget_user` / entity: `memory_value_registry.erase_entity` | - |
 | `contact_fields` | pg_table | words | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
 | `contact_sources` | pg_table | metadata | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
 | `source_contacts` | pg_table | words | reached | member: `contacts_store.forget_user` / entity: `contacts_store.forget_entity` | - |
