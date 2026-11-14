@@ -239,6 +239,33 @@ def test_a_repeating_event_is_read_from_the_calendar_and_its_offer_survives_the_
     assert still is not None and wrong_day is None         # the offer holds while the rule still lands on its day, and only then
 
 
+def test_an_offer_is_withdrawn_when_its_events_rule_becomes_unreadable(dbpath):
+    """The recheck applies the same guard as ``_events``: a repeat rule we cannot place gives no offer, so an EXISTING offer
+    does not survive (and ``answer`` does not act) once its event's rule changes to one. A supported rule keeps the offer."""
+    today = NOW.astimezone(ant._tz()).date()
+    anchor = (today - timedelta(days=70)).isoformat()
+
+    async def go(db):
+        await db.execute("INSERT INTO events (id, user_id, title, start_date, start_time, end_date, location, all_day, recurring)"
+                         " VALUES ('ev-rep', ?, 'Physio', ?, '23:30', '', '12 Example Street', 0, 'weekly')", (ANN, anchor))
+        await db.commit()
+        await ant.generate_for_user(ANN, now=NOW, db=db)
+        row = next(r for r in await _offers(db) if r["slots"]["event_id"] == "ev-rep")
+        await db.execute("UPDATE events SET recurring = 'daily' WHERE id = 'ev-rep'")          # control: still a supported rule
+        await db.commit()
+        kept = await ant._offered(db, ANN, row["slots"])
+        # an unreadable rule reads as its BASE date only, so put that base on the offered day (the case the guard exists for)
+        await db.execute("UPDATE events SET recurring = 'every blue moon', start_date = ? WHERE id = 'ev-rep'", (row["slots"]["start_date"],))
+        await db.commit()
+        dropped = await ant._offered(db, ANN, row["slots"])
+        reply = await ant.answer(ANN, row["id"], True, now=NOW, db=db)
+        return kept, dropped, reply, await ant._own_row(db, ANN, row["id"])
+
+    kept, dropped, reply, row = run(_with(dbpath, go))
+    assert kept is not None and dropped is None
+    assert reply == ant.GONE and row["resolved"] == ant.WITHDRAWN
+
+
 def test_a_zoned_flight_gets_household_times(dbpath):
     """A flight stored at 09:40 in Sydney (UTC+11 in November) is 06:40 in Perth: the leave and wake times follow the household
     clock. Before the shared read path the wall clock was read as household time (leave 07:10)."""

@@ -369,11 +369,15 @@ def _local_day(now: datetime) -> str:
 
 async def _offered(db: Any, uid: str, slots: dict) -> Optional[Event]:
     """The offer's occurrence if it still exists exactly as offered (same event, household day and start), else None: a delete,
-    a cancel, an EXDATE, an override that moved it or a re-time withdraws the offer."""
+    a cancel, an EXDATE, an override that moved it, a re-time or a repeat rule that is no longer understood withdraws the offer."""
     d = _date(slots.get("start_date"))
     if d is None:
         return None
+    from calendar_read import repeat_understood
+
     for o in await _occurrences(db, uid, d, d):
+        if not repeat_understood(o["event"]):          # the same guard as ``_events``: a rule we cannot place gives no offer
+            continue
         ev = _as_event(o)
         start_m = None if ev.all_day else _hhmm(ev.start_time)
         if (ev.id == str(slots.get("event_id") or "") and ev.start_date == d.isoformat()
