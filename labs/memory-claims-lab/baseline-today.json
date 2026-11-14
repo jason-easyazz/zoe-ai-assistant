@@ -1,4 +1,4 @@
-{"cases": 94, "weak_passes": {"K08": "passes by refusing on text/graph words; today's code has no notion of an ambiguous name (rule D.5), so the pass is incidental", "C14": "passes only because C13's year-bearing rewrite bug leaves the row untouched, not because the year is judged ambiguous", "C42": "passes because of the MAX_ROWS cap of today's rewrite loop, not because twin rows are recognised as ambiguous"}, "totals": {"PASS": 68, "FAIL": 22, "NOT_RUNNABLE": 4}, "by_class": {"correction": {"PASS": 38, "FAIL": 14, "NOT_RUNNABLE": 0}, "emergency": {"PASS": 17, "FAIL": 5, "NOT_RUNNABLE": 0}, "forget": {"PASS": 0, "FAIL": 0, "NOT_RUNNABLE": 4}, "kind": {"PASS": 12, "FAIL": 3, "NOT_RUNNABLE": 0}, "log": {"PASS": 1, "FAIL": 0, "NOT_RUNNABLE": 0}}, "failing_ids": ["K11", "K13", "K14", "C23", "C23b", "C25", "C25b", "C40", "C09", "C10b", "C13", "C18", "C22b", "C34", "C35", "C36", "C37", "E03", "E04", "E05", "E06", "E06e"], "not_runnable": {"F01": "needs_registry", "F02": "needs_registry", "F03": "needs_marker", "F04": "needs_registry"}, "results": {
+{"cases": 94, "weak_passes": {"K08": "passes by refusing on text/graph words; today's code has no notion of an ambiguous name (rule D.5), so the pass is incidental", "C14": "passes only because C13's year-bearing rewrite bug leaves the row untouched, not because the year is judged ambiguous", "C42": "passes because of the MAX_ROWS cap of today's rewrite loop, not because twin rows are recognised as ambiguous"}, "totals": {"PASS": 70, "FAIL": 20, "NOT_RUNNABLE": 4}, "by_class": {"correction": {"PASS": 40, "FAIL": 12, "NOT_RUNNABLE": 0}, "emergency": {"PASS": 17, "FAIL": 5, "NOT_RUNNABLE": 0}, "forget": {"PASS": 0, "FAIL": 0, "NOT_RUNNABLE": 4}, "kind": {"PASS": 12, "FAIL": 3, "NOT_RUNNABLE": 0}, "log": {"PASS": 1, "FAIL": 0, "NOT_RUNNABLE": 0}}, "failing_ids": ["K11", "K13", "K14", "C23", "C23b", "C40", "C09", "C10b", "C13", "C18", "C22b", "C34", "C35", "C36", "C37", "E03", "E04", "E05", "E06", "E06e"], "not_runnable": {"F01": "needs_registry", "F02": "needs_registry", "F03": "needs_marker", "F04": "needs_registry"}, "results": {
  "K01": {"class": "kind", "status": "PASS", "reason": "", "detail": ""},
  "K02": {"class": "kind", "status": "PASS", "reason": "", "detail": ""},
  "K03": {"class": "kind", "status": "PASS", "reason": "", "detail": ""},
@@ -22,8 +22,8 @@
  "C23": {"class": "correction", "status": "FAIL", "reason": "differs", "detail": "row r0"},
  "C23b": {"class": "correction", "status": "FAIL", "reason": "differs", "detail": "row r0"},
  "C24": {"class": "correction", "status": "PASS", "reason": "", "detail": ""},
- "C25": {"class": "correction", "status": "FAIL", "reason": "differs", "detail": "row r0; rewrote despite left_as_mined"},
- "C25b": {"class": "correction", "status": "FAIL", "reason": "differs", "detail": "row r1"},
+ "C25": {"class": "correction", "status": "PASS", "reason": "", "detail": ""},
+ "C25b": {"class": "correction", "status": "PASS", "reason": "", "detail": ""},
  "C26": {"class": "correction", "status": "PASS", "reason": "", "detail": ""},
  "C27": {"class": "correction", "status": "PASS", "reason": "", "detail": ""},
  "C28": {"class": "correction", "status": "PASS", "reason": "", "detail": ""},

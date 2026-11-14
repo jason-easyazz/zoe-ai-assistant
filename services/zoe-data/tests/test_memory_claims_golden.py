@@ -248,11 +248,31 @@ def test_the_committed_lock_is_what_the_writer_produces():
         assert lock.read_text(encoding="utf-8") == LOCK_PATH.read_text(encoding="utf-8")
 
 
+def parse_lock_args(argv):
+    """``(allow_removal, reason)`` from ``--write-lock [--allow-removal ID ...] [--reason TEXT]`` in either order."""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="test_memory_claims_golden.py")
+    ap.add_argument("--write-lock", action="store_true", required=True)
+    ap.add_argument("--allow-removal", nargs="+", default=[], metavar="ID")
+    ap.add_argument("--reason", default="")
+    ns = ap.parse_args(argv)
+    return ns.allow_removal, ns.reason
+
+
+@pytest.mark.parametrize("argv", [
+    ["--write-lock", "--allow-removal", "K11", "--reason", "superseded by K11b"],
+    ["--write-lock", "--reason", "superseded by K11b", "--allow-removal", "K11"],
+])
+def test_the_lock_writer_arguments_parse_in_either_order(argv):
+    assert parse_lock_args(argv) == (["K11"], "superseded by K11b")
+    assert parse_lock_args(["--write-lock", "--allow-removal", "K11", "K10", "--reason", "x y"]) == (["K11", "K10"], "x y")
+    assert parse_lock_args(["--write-lock"]) == ([], "")
+
+
 if __name__ == "__main__":
     if "--write-lock" in sys.argv:
-        args = sys.argv[1:]
-        allow = [a for a in args[args.index("--allow-removal") + 1:] if not a.startswith("--")] if "--allow-removal" in args else []
-        why = args[args.index("--reason") + 1] if "--reason" in args else ""
+        allow, why = parse_lock_args(sys.argv[1:])
         try:
             print(f"wrote {len(write_lock(CASES, LOCK_PATH, REMOVALS_PATH, allow, why))} entries")
         except ValueError as exc:
