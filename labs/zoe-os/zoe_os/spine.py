@@ -243,7 +243,7 @@ class Spine:
             if row[-1]:
                 return "derives from a forgotten event"
             if not self.authorizer.is_origin(source) and \
-                    not self.authorizer.may_read(source, _row_to_event(row[:-1])).allowed:
+                    not self._deliverable(source, _row_to_event(row[:-1])):   # a FORGET notice may be cited
                 return "cites an event it may not read"
         return ""
 
