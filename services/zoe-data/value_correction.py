@@ -1222,13 +1222,23 @@ async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
 
 
 def _registry_snapshot(user_id: str) -> tuple:
-    """``(partial_at, scheduled_at)`` for the shadow registry record: the erase epochs as this correction started. Never raises."""
+    """``(partial_at, scheduled_at)`` for the shadow registry record: the erase epochs as of when this correction's work was QUEUED.
+
+    Inside a post-turn task (``user_erase_gate.scheduled_at_call`` on the chat / voice / legacy hooks) that is the hook's snapshot,
+    taken when the turn queued it: a member erase that ran to completion before this task reached ``apply`` has moved the generation
+    past it, so ``record`` drops. A partial erase (topic / turn / rows / entity) that started or ended since then makes ``partial_at``
+    ``-1``, which no epoch equals. A direct call (no such task) snapshots now, as before. Never raises."""
     try:
         import memory_value_registry as reg
         import user_erase_gate
 
         uid = (user_id or "").strip().lower()
-        return reg.partial_epoch(uid), user_erase_gate.generation(uid)
+        queued = user_erase_gate.scheduled_snapshot(user_id)
+        if queued is None:
+            return reg.partial_epoch(uid), user_erase_gate.generation(uid)
+        gen, at = queued
+        part = -1 if at is not None and reg.partial_bumped_since(uid, at) else reg.partial_epoch(uid)
+        return part, gen
     except Exception:  # noqa: BLE001
         return None, None
 

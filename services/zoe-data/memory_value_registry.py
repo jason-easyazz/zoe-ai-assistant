@@ -98,8 +98,20 @@ def partial_epoch(user_id: str) -> int:
     return _PARTIAL.get((user_id or "").strip().lower(), 0)
 
 
+#: ``time.monotonic()`` of each member's latest partial-epoch bump: lets a correction whose work was QUEUED before its snapshot was
+#: taken (``value_correction._registry_snapshot`` inside a post-turn task) ask whether a partial erase started or ended since then
+_PARTIAL_MONO: dict = {}
+
+
 def _partial_bump(uid: str) -> None:
     _PARTIAL[uid] = _PARTIAL.get(uid, 0) + 1
+    _PARTIAL_MONO[uid] = time.monotonic()
+
+
+def partial_bumped_since(user_id: str, at: float) -> bool:
+    """A partial erase of ``user_id`` started or ended at or after monotonic time ``at``."""
+    last = _PARTIAL_MONO.get((user_id or "").strip().lower())
+    return last is not None and last >= at
 
 
 def _member_erased_since(uid: str, gen: int) -> bool:
@@ -625,3 +637,4 @@ async def erase_for_rows(user_id: str, row_ids: Iterable[str], *, gate_held: boo
 def reset_state() -> None:
     COUNTS.clear()
     _PARTIAL.clear()
+    _PARTIAL_MONO.clear()
