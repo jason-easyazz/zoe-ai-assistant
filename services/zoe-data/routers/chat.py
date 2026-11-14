@@ -1211,6 +1211,14 @@ async def _save_chat_message(
                     pass
             if _mp.claim_turn(user_id, clean_content):
                 meta["off_record"] = True
+            else:
+                # A FORGET COMMAND is an instruction, never a fact: the transcript readers (idle consolidation, the nightly digest,
+                # the fast-path context, exact words) must never mine it or hand it back - a topic forget writes no ledger entry,
+                # so "forget that I told you about my brother" itself was re-mined into a row about the brother (QA round 10a).
+                import turn_forget as _tf_cmd
+
+                if _tf_cmd.is_forget_instruction(_capture_words(clean_content)):
+                    meta["off_record"] = True
         elif user_id and role == "assistant" and _mp.reply_is_off_record(user_id):
             meta["off_record"] = True
     except Exception:  # noqa: BLE001 - bookkeeping must never lose a saved turn
