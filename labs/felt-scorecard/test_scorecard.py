@@ -509,3 +509,312 @@ def test_pendant_writers_are_not_panel_supply():
     assert d["rows"] == 3 and d["approved"] == 2 and d["pendant_rows_excluded"] == 6
     assert d["by_source"] == {"digest": 2, "other": 1}
 
+
+
+# --- corrections applied (VALUE_CORRECTION) -------------------------------------------------------------
+
+def test_corrections_member_only_rows_summed():
+    lines = parsed([
+        L("06T10:00:00", f"VALUE_CORRECTION_APPLIED user={MEMBER} rows=2"),
+        L("06T10:01:00", f"VALUE_CORRECTION_APPLIED user={MEMBER} rows=3"),
+        L("06T10:02:00", "VALUE_CORRECTION_APPLIED user=someone-else rows=7"),           # not a member
+        L("06T10:03:00", f"VALUE_CORRECTION_APPLIED user={MEMBER} rows=9 traffic=harness"),  # harness
+        L("06T10:04:00", "VALUE_CORRECTION_APPLIED user=demo_bar_abc123 rows=4"),          # synthetic user
+        L("06T10:05:00", f"VALUE_CORRECTION_STALE lane=idle_consolidation user={MEMBER} session={MSESS}"),
+        L("06T10:06:00", f"VALUE_CORRECTION_KIND_GUESS lane=idle_consolidation user={MEMBER} session={MSESS}"),
+        L("06T10:07:00", f"VALUE_CORRECTION_KIND_GUESS lane=idle_consolidation user={MEMBER} session=qa-x"),  # harness session
+        L("01T10:00:00", f"VALUE_CORRECTION_APPLIED user={MEMBER} rows=50"),               # outside window
+    ])
+    m = sc.m_corrections(lines, SINCE, UNTIL, MEMBERS)
+    assert m["status"] == "measured" and m["n"] == 2
+    assert m["data"] == {"applied": 2, "rows": 5, "stale": 1, "kind_guess": 1}
+
+
+def test_corrections_malformed_rows_is_unmeasured_and_zero_lines_is_n0():
+    bad = parsed([L("06T10:00:00", f"VALUE_CORRECTION_APPLIED user={MEMBER} rows=lots")])
+    m = sc.m_corrections(bad, SINCE, UNTIL, MEMBERS)
+    assert m["status"] == "unmeasured" and "malformed marker" in m["reason"]
+    empty = sc.m_corrections([], SINCE, UNTIL, MEMBERS)
+    assert empty["status"] == "measured" and empty["n"] == 0 and empty["data"]["applied"] == 0
+
+
+def test_correction_marker_does_not_change_existing_candidates_or_metrics():
+    """VALUE_CORRECTION joined MARKERS/USER_MARKERS: a log without it yields the same candidates and metrics as before,
+    and a correction line only adds its own user= candidate (never a session)."""
+    base = [
+        L("06T10:00:00", f"SEAM_CONTINUITY user={MEMBER} matched=True"),
+        L("06T10:00:02", f"FLUE_TOOLS session={MSESS} tools=[]"),
+        L("06T10:00:03", f"PROVENANCE_REPLY user={MEMBER} seq=1 kind=brain served=1 used=0"),
+    ]
+    before = sc.candidate_values(parsed(base), SINCE, UNTIL)
+    assert before == ([MEMBER], [MSESS])
+    extra = base + [L("06T10:00:04", f"VALUE_CORRECTION_STALE lane=idle_consolidation user=member-b session=voice-panel-b"),
+                    L("06T10:00:05", "VALUE_CORRECTION_APPLIED user=demo_x_1 rows=1")]
+    assert sc.candidate_values(parsed(extra), SINCE, UNTIL) == ([MEMBER, "member-b"], [MSESS])
+    for fn in (sc.m_continuity, sc.m_tools, sc.m_provenance):
+        assert fn(parsed(base), SINCE, UNTIL, MEMBERS)["data"] == fn(parsed(extra), SINCE, UNTIL, MEMBERS)["data"]
+
+
+# --- first sound under 1 s / 0.6 s ----------------------------------------------------------------------
+
+def test_panel_first_sound_bands_are_strictly_under():
+    since = dt.datetime(2026, 11, 10, 0, 0, tzinfo=sc.LOCAL_TZ)
+    until = dt.datetime(2026, 11, 10, 12, 0, tzinfo=sc.LOCAL_TZ)
+    rows = ["2026-11-09 23:00:00 E"]
+    # close + TTFA per turn: 599, 600 (not under 0.6), 999, 1000 (not under 1), 1500
+    for i, (close, ttfa) in enumerate([(400, "0.199"), (400, "0.2"), (640, "0.359"), (640, "0.36"), (800, "0.7")]):
+        rows += [f"2026-11-10 0{i + 1}:00:00 C {close}", f"2026-11-10 0{i + 1}:00:03 T {ttfa}"]
+    rows += [f"2026-11-10 {h:02d}:00:00 E" for h in range(6, 12)]
+    m = sc.panel_metric(rows, since, until)
+    assert m["status"] == "measured" and m["n"] == 5
+    assert (m["data"]["under_1000_ms"], m["data"]["under_600_ms"]) == (3, 1)
+    assert "under 1 s 3 of 5 (60.0%)" in m["value"] and "under 0.6 s 1 of 5 (20.0%)" in m["value"]
+
+
+# --- ALERTS ----------------------------------------------------------------------------------------------
+
+RED, GREEN = sc.CRASH_ALERT, sc.CRASH_RECOVERY
+LONG_SINCE = dt.datetime(2026, 10, 20, tzinfo=TZ8)
+
+
+def _hourly(start: dt.datetime, end: dt.datetime, fmt: str, body: str) -> list[tuple[dt.datetime, str]]:
+    out, t = [], start
+    while t <= end:
+        out.append((t, fmt.format(t=t) + body))
+        t += dt.timedelta(hours=1)
+    return out
+
+
+def _crash_log(path, extra: list[tuple[dt.datetime, str]], start=dt.datetime(2026, 10, 15, tzinfo=TZ8)):
+    rows = _hourly(start, UNTIL + dt.timedelta(hours=1), "{t:%Y-%m-%dT%H:%M:%S%z} ", "crash-watch: healthy, restarts=0 (+0 since last check)")
+    rows += extra
+    rows.sort(key=lambda r: r[0])
+    path.write_text("\n".join(r for _, r in rows) + "\n", encoding="utf-8")
+
+
+def test_crash_loops_counts_alerts_recoveries_by_allowlisted_unit(tmp_path):
+    log = tmp_path / "crash-loop-watch.log"
+    at = lambda d, h, m: dt.datetime(2026, 11, d, h, m, tzinfo=TZ8)  # noqa: E731
+    _crash_log(log, [
+        (at(6, 10, 30), f"{RED} Zoe is crash-looping. | zoe-data.service restarted 6x since the last check (total 9), ActiveState=activating, /health not responding. | Zoe cannot be talked to right now."),
+        (at(6, 11, 30), f"{GREEN} Zoe recovered — zoe-data.service is healthy again (total restarts 9)."),
+        (at(7, 10, 30), f"{RED} kokoro-tts.service is crash-looping: restarted 5x in the last 15 min (total 5), ActiveState=activating. | Check: journalctl --user -u kokoro-tts.service"),
+        (at(7, 12, 30), f"{RED} private-thing.service is crash-looping: restarted 5x in the last 15 min (total 5), ActiveState=failed."),
+        (at(7, 12, 31), "crash-watch: telegram send failed: HTTP Error 401"),
+        (dt.datetime(2026, 10, 1, tzinfo=TZ8), f"{RED} zoe-data.service is crash-looping"),  # outside the window
+    ])
+    m = sc.alert_crash_loops(str(log), LONG_SINCE, UNTIL)
+    assert m["status"] == "measured", m
+    assert (m["data"]["alerts"], m["data"]["recoveries"], m["data"]["undelivered"]) == (3, 1, 1)
+    assert m["data"]["by_unit"] == {"zoe-data.service": 1, "kokoro-tts.service": 1, "other": 1}
+    import json as _json
+    assert "private-thing" not in _json.dumps(m)
+
+
+def test_crash_loops_missing_unreadable_and_uncovered(tmp_path):
+    m = sc.alert_crash_loops(str(tmp_path / "nope.log"), LONG_SINCE, UNTIL)
+    assert m["status"] == "unmeasured" and "FileNotFoundError" in m["reason"]
+    log = tmp_path / "crash-loop-watch.log"
+    _crash_log(log, [], start=dt.datetime(2026, 11, 1, tzinfo=TZ8))           # starts after the window
+    assert "after the window start" in sc.alert_crash_loops(str(log), LONG_SINCE, UNTIL)["reason"]
+    rows = [r for r in log.read_text().splitlines() if not r.startswith("2026-11-08")]   # watcher silent a day
+    log.write_text("\n".join(rows) + "\n")
+    m = sc.alert_crash_loops(str(log), dt.datetime(2026, 11, 2, tzinfo=TZ8), UNTIL)
+    assert m["status"] == "unmeasured" and "silent" in m["reason"]
+
+
+def test_crash_loops_alert_straddling_window_edge_is_not_counted(tmp_path):
+    log = tmp_path / "crash-loop-watch.log"
+    _crash_log(log, [(LONG_SINCE + dt.timedelta(minutes=1), f"{RED} zoe-data.service is crash-looping")])
+    since = LONG_SINCE + dt.timedelta(minutes=30)  # the alert lies between the stamps at 00:00 and 01:00; since=00:30
+    m = sc.alert_crash_loops(str(log), since, UNTIL)
+    assert m["data"]["alerts"] == 0 and m["data"]["edge"] == 1
+
+
+def _report(d, day, mode="night", outcome="ok", **kw):
+    import json as _json
+    (d / f"{day}.json").write_text(_json.dumps({"mode": mode, "outcome": outcome, "started": f"{day}T02:50:00", **kw}))
+
+
+def test_nights_buckets_alarms_and_missing(tmp_path):
+    since, until = dt.datetime(2026, 11, 1, 12, tzinfo=sc.LOCAL_TZ), dt.datetime(2026, 11, 8, 12, tzinfo=sc.LOCAL_TZ)
+    _report(tmp_path, "2026-10-30")                                        # before the window: proves coverage
+    _report(tmp_path, "2026-11-02", outcome="ok", decode_alert="12B slow")
+    _report(tmp_path, "2026-11-03", outcome="degraded: digest@12B")
+    _report(tmp_path, "2026-11-04", outcome="refused: busy", restore_status="NOT HEALTHY: x")
+    _report(tmp_path, "2026-11-05", outcome="aborted: no load", night_lost="did not load")
+    _report(tmp_path, "2026-11-06")
+    _report(tmp_path, "2026-11-06-rehearse", mode="rehearse", outcome="failed: x")   # not a real night
+    # 2026-11-07 and 2026-11-08 have no report
+    (tmp_path / "2026-10-31.json").write_text("{not json")                 # corrupt, but outside the window
+    (tmp_path / "2026-11-07-rehearse.json").write_text("{not json")        # corrupt, but not a real-night report
+    m = sc.alert_nights(str(tmp_path), since, until)
+    d = m["data"]
+    assert m["status"] == "measured" and m["n"] == 7 and m["window"] == "nights 2026-11-02..2026-11-08"
+    assert (d["ok"], d["degraded"], d["not_ok"], d["no_report"]) == (2, 1, 2, 2)
+    assert (d["alarm"], d["decode_slow"], d["restore_failed"], d["night_lost"]) == (3, 1, 1, 1)
+    assert d["unreadable"] == 1 and d["alarm_file_now"] is False
+    assert "x" not in m["value"] and "did not load" not in str(m)
+
+
+@pytest.mark.parametrize("name,body", [("2026-11-04.json", "{not json"), ("2026-11-04-1530.json", "[1, 2]"),
+                                       ("2026-11-04.json", '{"mode": "night", "started": "2026-11-04T02:50:00"}'),
+                                       ("2026-11-04.json", '{"mode": "night", "outcome": "ok", "started": "garbage"}')])
+def test_nights_unreadable_report_in_window_is_unmeasured_not_missing(tmp_path, name, body):
+    since, until = dt.datetime(2026, 11, 1, 12, tzinfo=sc.LOCAL_TZ), dt.datetime(2026, 11, 8, 12, tzinfo=sc.LOCAL_TZ)
+    _report(tmp_path, "2026-10-30")
+    _report(tmp_path, "2026-11-03")
+    (tmp_path / name).write_text(body)
+    m = sc.alert_nights(str(tmp_path), since, until)
+    assert m["status"] == "unmeasured" and "1 night report(s) in the window exist but cannot be read" in m["reason"]
+
+
+def test_nights_missing_dir_and_narrowed_window(tmp_path):
+    assert sc.alert_nights(str(tmp_path / "nope"), SINCE, UNTIL)["status"] == "unmeasured"
+    assert sc.alert_nights(str(tmp_path), SINCE, UNTIL)["status"] == "unmeasured"   # empty dir
+    _report(tmp_path, "2026-11-08")
+    m = sc.alert_nights(str(tmp_path), SINCE, UNTIL)
+    assert m["status"] == "measured" and "narrowed" in m["window"] and m["window"].startswith("nights 2026-11-08..")
+
+
+BACKUP_LOG = """ok: zoe: zoe-1-1.dump.gz restored, 10 tables, 100 rows, Alembic 1
+restore drill: all checks passed
+zoe-backup-verify: done
+refused: MemAvailable 900 MB < floor 1100 MB
+ALERT: weekly restore drill refused: MemAvailable 900 MB < floor 1100 MB
+zoe-backup-verify: on-box restore drill REFUSED to run (low memory / stuck backup / stale; alerted)
+zoe-backup-verify: 1 problem(s) detected
+FINDING: host archive: something private was MISSING
+ALERT: weekly restore drill FAILED (1): host archive: something private was MISSING
+ALERT: a brand new secret kind of alert
+alert not delivered: RuntimeError
+zoe-backup-verify: 1 problem(s) detected
+"""
+
+
+def test_backups_whole_log_counts_and_kinds(tmp_path):
+    log, state = tmp_path / "backup-verify.log", tmp_path / "state.json"
+    log.write_text(BACKUP_LOG)
+    state.write_text('{"time": "2026-11-08T05:31:52+08:00", "ok": false, "findings": ["private finding"]}')
+    m = sc.alert_backups(str(log), str(state))
+    assert m["status"] == "measured" and m["window"].startswith("whole log")
+    d = m["data"]
+    assert (d["alerts"], d["runs"], d["problem_runs"], d["undelivered"], d["last_drill_ok"]) == (3, 3, 2, 1, False)
+    assert d["by_kind"] == {"drill_refused": 1, "drill_failed": 1, "other": 1}
+    assert "private" not in str(m) and "secret" not in str(m)
+    assert "2026-11-08 05:31" in m["method"] and "passed: no" in m["method"]
+
+
+@pytest.mark.parametrize("state_body", [None, "{not json", '{"ok": true}', '{"time": "2026-11-08T05:31:52+08:00", "ok": "yes"}',
+                                        '{"time": "not a time", "ok": true}', "[1]"])
+def test_backups_unreadable_or_malformed_state_is_unmeasured(tmp_path, state_body):
+    log, state = tmp_path / "backup-verify.log", tmp_path / "state.json"
+    log.write_text(BACKUP_LOG)
+    if state_body is not None:
+        state.write_text(state_body)
+    m = sc.alert_backups(str(log), str(state))
+    assert m["status"] == "unmeasured" and "drill state file" in m["reason"]
+    assert "(readable: 3 ALERT lines over 3 runs)" in m["reason"] and "private" not in str(m)
+
+
+def test_backups_missing_log_and_state(tmp_path):
+    assert sc.alert_backups(str(tmp_path / "nope.log"), str(tmp_path / "s.json"))["status"] == "unmeasured"
+    log = tmp_path / "backup-verify.log"
+    log.write_text("ALERT: weekly restore drill FAILED (1): x\n")  # a run cut before its last line
+    state = tmp_path / "state.json"
+    state.write_text('{"time": "2026-11-08T05:31:52+08:00", "ok": true}')
+    m = sc.alert_backups(str(log), str(state))
+    assert m["data"]["runs"] == 0 and m["data"]["alerts"] == 1 and "unterminated last run: yes" in m["method"]
+    assert sc.alert_backups(str(log), str(tmp_path / "missing.json"))["status"] == "unmeasured"
+
+
+def _health_log(path, extra, start=dt.datetime(2026, 10, 15, tzinfo=TZ8), step=dt.timedelta(minutes=5)):
+    rows, t = [], start
+    while t <= UNTIL + dt.timedelta(minutes=10):
+        rows.append((t, f"[{t.astimezone(sc.LOCAL_TZ):%Y-%m-%dT%H:%M:%S}] ok   postgres: pg_isready rc=0"))
+        t += step
+    rows += [(t, f"[{t.astimezone(sc.LOCAL_TZ):%Y-%m-%dT%H:%M:%S}] {body}") for t, body in extra]
+    rows.sort(key=lambda r: r[0])
+    path.write_text("\n".join(r for _, r in rows) + "\n")
+
+
+def test_health_alerts_by_check_with_allowlist(tmp_path):
+    log = tmp_path / "health.log"
+    at = dt.datetime(2026, 11, 6, 10, 0, tzinfo=TZ8)
+    _health_log(log, [
+        (at, "ALERT DOWN: night-window timer (zoe-night-window.timer is inactive / disabled)"),
+        (at + dt.timedelta(minutes=5), "ALERT DOWN: someone's private check (x)"),
+        (at + dt.timedelta(minutes=10), "ALERT recovered: night-window timer (armed)"),
+        (dt.datetime(2026, 10, 16, tzinfo=TZ8), "ALERT DOWN: postgres (pg_isready rc=1)"),  # before the window
+    ])
+    m = sc.alert_health(str(log), LONG_SINCE, UNTIL)
+    assert m["status"] == "measured", m
+    assert (m["data"]["down"], m["data"]["recovered"]) == (2, 1)
+    assert m["data"]["by_check"] == {"night-window timer": 1, "other": 1}
+    assert "private" not in str(m) and "night-window timer 1" in m["value"]
+
+
+def test_health_missing_and_uncovered(tmp_path):
+    m = sc.alert_health(str(tmp_path / "health.log"), LONG_SINCE, UNTIL)
+    assert m["status"] == "unmeasured" and "cannot read health.log" in m["reason"]
+    log = tmp_path / "health.log"
+    _health_log(log, [], step=dt.timedelta(hours=1))      # a writer that runs hourly leaves 1 h holes
+    assert "silent" in sc.alert_health(str(log), LONG_SINCE, UNTIL)["reason"]
+    _health_log(log, [])
+    log.write_text(log.read_text() + "[2026-11-31T25:00:00] ALERT DOWN: postgres (x)\n")   # an ALERT that cannot be dated
+    m = sc.alert_health(str(log), LONG_SINCE, UNTIL)
+    assert m["status"] == "unmeasured" and "invalid timestamp" in m["reason"]
+
+
+def test_distress_and_kv_miss_from_app_log():
+    lines = parsed([
+        L("06T10:00:00", "DISTRESS_NO_CONTACT a hand-off fired and nobody was told: ZOE_DISTRESS_CONTACT_USER is not set"),
+        L("06T10:01:00", "DISTRESS_NO_CONTACT a hand-off fired and nobody was told traffic=harness"),
+        L("06T10:02:00", "PANEL_KV_MISS session=voice-panel-a kind=first first_prompt_n=900 first_cache_n=0 since_prev_s=-"),
+        L("06T11:02:00", "PANEL_KV_MISS session=voice-panel-a kind=warm first_prompt_n=900 first_cache_n=0 since_prev_s=30"),
+        L("07T10:02:00", "PANEL_KV_MISS session=voice-panel-a kind=first first_prompt_n=900 first_cache_n=0 since_prev_s=-"),
+        L("07T10:03:00", "PANEL_KV_MISS session=voice-panel-a kind=weird_private first_prompt_n=900 first_cache_n=0"),
+        L("07T10:04:00", "kv_miss_alert: alert not delivered (attempt 1/3): http_401"),
+        L("07T10:05:00", "kv_miss_alert: alert not delivered (attempt 2/3): http_401 traffic=harness"),
+        L("07T10:06:00", "kv_miss_alert: alert not delivered (attempt 3/3): http_401 traffic=ci"),
+        L("01T10:00:00", "PANEL_KV_MISS session=voice-panel-a kind=first first_prompt_n=900 first_cache_n=0"),  # outside
+    ])
+    logs = _logset(lines, sc.parse_ts(L("01T00:00:00", "")))
+    d = sc.alert_distress_no_contact(logs, SINCE, UNTIL)
+    assert d["status"] == "measured" and d["data"] == {"lines": 1, "harness": 1}
+    k = sc.perf_panel_kv_miss(logs, SINCE, UNTIL)
+    assert k["label"] == "[Performance]"
+    assert k["data"] == {"first": 2, "warm": 1, "other": 1, "days_first": 2, "undelivered": 1}
+    assert "weird_private" not in str(k) and "voice-panel-a" not in str(k)
+    # retention starting after the window start narrows the window (stated), never a silent partial count
+    late = _logset([x for x in lines if x[0] >= sc.parse_ts(L("06T10:01:30", ""))], sc.parse_ts(L("06T10:01:30", "")))
+    dl, kl = sc.alert_distress_no_contact(late, SINCE, UNTIL), sc.perf_panel_kv_miss(late, SINCE, UNTIL)
+    assert dl["status"] == kl["status"] == "measured" and "narrowed" in dl["window"] and "narrowed" in kl["window"]
+    assert dl["data"]["lines"] == 0 and kl["data"]["first"] == 2
+    # any other coverage failure (a damaged rotation) stays unmeasured
+    rot = sc.Rotation("zoe-data.app.log.1.gz", first=sc.parse_ts(L("01T00:00:00", "")), last=UNTIL, error="EOFError")
+    broken = sc.LogSet(lines, [rot])
+    assert sc.alert_distress_no_contact(broken, SINCE, UNTIL)["status"] == "unmeasured"
+    assert sc.perf_panel_kv_miss(broken, SINCE, UNTIL)["status"] == "unmeasured"
+
+
+def test_alert_markers_are_not_member_candidates():
+    lines = parsed([L("06T10:00:00", "PANEL_KV_MISS session=voice-panel-z kind=first"),
+                    L("06T10:00:01", "DISTRESS_NO_CONTACT user=member-z")])
+    assert sc.candidate_values(lines, SINCE, UNTIL) == ([], [])
+
+
+def test_alert_section_never_crashes_and_renders_sections(tmp_path, monkeypatch):
+    args = types.SimpleNamespace(log_dir=str(tmp_path), crash_log=None, night_reports=str(tmp_path / "nr"),
+                                 backup_log=None, backup_state=str(tmp_path / "s.json"), health_log=None)
+    monkeypatch.setattr(sc, "alert_backups", lambda *a: 1 / 0)
+    rows = sc.alert_section(args, sc.LogSet([], []), LONG_SINCE, UNTIL)
+    assert [r["key"] for r in rows] == ["alerts_crash_loops", "alerts_night", "alerts_backups", "alerts_health",
+                                        "alerts_distress_no_contact", "perf_panel_kv_miss"]
+    assert all(r["status"] == "unmeasured" for r in rows)
+    assert "reader failed (ZeroDivisionError)" in rows[2]["reason"]
+    assert rows[-1]["section"] == sc.PERFORMANCE and rows[0]["section"] == sc.ALERTS
+    text = sc.render({"generated_at": "x", "runtime_s": 0, "metrics": rows,
+                      "window": {"since": "a", "until": "b", "long_since": "c"}})
+    assert f"== {sc.ALERTS} ==" in text and f"== {sc.PERFORMANCE} ==" in text
+    assert text.index(sc.ALERTS) < text.index(sc.PERFORMANCE)
