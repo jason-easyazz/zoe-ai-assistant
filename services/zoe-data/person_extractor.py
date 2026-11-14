@@ -662,6 +662,16 @@ async def _reconcile_same_kind_entity_row(
                 "person_extractor: entity dedup-skip kept=%s kind=%s", r.id, pattern_type
             )
             return r.id
+    # A row whose value the candidate does not carry is never replaced (QA round 10: "Tobin: next month", filed as a birthday,
+    # replaced the birthday-typed row that held his age): it is left as it was, and the candidate is stored beside it.
+    from value_correction import drops_value
+
+    kept = [r for r in matches if not drops_value(r.text, text)]
+    if len(kept) != len(matches):
+        logger.info("PERSON_SUPERSEDE_REFUSED reason=drops_value kind=%s rows=%d", pattern_type, len(matches) - len(kept))
+    if not kept:
+        return None
+    matches = kept
     if pattern_type in MULTI_VALUED_KINDS and _correction_on():
         # A multi-valued kind: a different value is ANOTHER fact, never a replacement. Fall
         # through to the text reconcile + plain ingest (which keeps both).

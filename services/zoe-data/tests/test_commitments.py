@@ -536,7 +536,7 @@ def test_the_commitment_candidate_is_left_alone_by_the_nightly_selector_and_the_
     promise(env, "I'll check back tomorrow about the dentist.")
     env["db"].conn.execute("CREATE TABLE open_loops (id INTEGER PRIMARY KEY, user_id TEXT, loop_text TEXT, context TEXT, follow_up_hint TEXT, "
                            "emotional_weight INTEGER, created_at TEXT, follow_up_after TEXT, resolved BOOLEAN DEFAULT FALSE, resolved_at TEXT)")
-    env["db"].conn.execute("CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, deleted INTEGER DEFAULT 0)")
+    env["db"].conn.execute("CREATE TABLE events (id TEXT, user_id TEXT, title TEXT, start_date TEXT, start_time TEXT, deleted INTEGER DEFAULT 0, end_date TEXT, recurring TEXT, rrule TEXT, rdates TEXT, recurrence_id TEXT)")
     import memory_service
 
     class _Mem:
