@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Reminders on the phone (ZOE_REMINDER_PHONE_DELIVERY, flag-dark)
-description: How a due reminder reaches its owner's phone through the channels that already exist (web push, the Telegram bot's loopback notify route), chosen per member, with owner-only, adults-only, quiet-hours, neutral-text and at-most-once rules; the preference keys, the route, the desktop Settings toggle (built) and phone push prompt (not built), the lab rehearsal, and the owner's switch-on steps.
+description: How a due reminder reaches its owner's phone through the channels that already exist (web push, the Telegram bot's loopback notify route), chosen per member, with owner-only, adults-only, quiet-hours, neutral-text and at-most-once rules; the preference keys, the route, the desktop Settings toggle and the "Also send to this browser" web-push control (both built), the lab rehearsal, and the owner's switch-on steps.
 tags: [reminders, notifications, telegram, web-push, preferences, privacy]
 timestamp: 2026-11-13T00:00:00Z
 ---
@@ -69,7 +69,7 @@ Absent = none. No migration.
    to my phone" toggle and a "Show the full text of private reminders on my phone" checkbox (one line says a private reminder
    otherwise arrives as "You have a reminder."), shown only when the GET says `telegram_linked` AND `eligible === true` (a
    child, an unknown member or an older server without the field sees nothing); re-read whenever the page draws the Telegram
-   link status. The toggle adds or removes `telegram` only and keeps any `web_push` already chosen (the phone prompt below
+   link status. The toggle adds or removes `telegram` only and keeps any `web_push` already chosen (the browser control below
    owns that channel). A 403 on the PUT stays as the backstop: it reverts the control and replaces the section with one
    sentence ("for adult members").
    Nothing says "Saved." before the server answered; the controls are disabled while saving; a failed PUT reverts to the last
@@ -77,9 +77,23 @@ Absent = none. No migration.
    reminders are switched on. Only fixed strings are rendered. Pinned by `dist/test_reminder_phone_settings.js`
    (CI: `services/zoe-data/tests/test_reminder_phone_settings_ui_harness.py`); the GET/PUT agreement by
    `services/zoe-data/tests/test_reminder_phone_settings_api.py`.
-2. NOT BUILT: a web-push subscribe prompt on the phone: a button that calls `window.zoePushNotifications.subscribe()` (it must
-   run in a user gesture on iOS) and then adds `web_push` to `channels`. Unverified: iOS only allows web push for a site added
-   to the Home Screen over trusted HTTPS, which may be why there are no subscriptions today.
+2. BUILT: "Also send to this browser", in the same component and card. Shown only when this browser supports web push
+   (service worker + PushManager + Notification, secure context) AND the GET says `eligible === true`; Telegram need not be
+   linked. Checked = `web_push` is in `channels` AND this browser holds a push subscription (read with
+   `getRegistration('/')` + `getSubscription()`, which never prompts and never registers). The page never asks for
+   notification permission on load: `Notification.requestPermission()` is called only from the member's click on this
+   control and is the FIRST thing the click does (iOS drops a prompt that comes after an await). On: permission -> `GET
+   /api/push/vapid-public-key` -> register `/sw.js` if this page has no registration (settings.html does not register it;
+   other pages do) -> replace any old subscription -> `POST /api/push/subscribe {subscription: {endpoint, keys}}` -> the PUT
+   with `web_push` added (other channels and `full_text` kept). A denied or dismissed prompt (or a browser already blocking
+   Zoe) shows one plain line and changes nothing; a failed subscribe or store undoes the browser subscription; a failed PUT
+   (or the 403 backstop) also deletes the stored row again. Off: `DELETE /api/push/subscribe {endpoint}` and the browser
+   unsubscribe first, then the PUT without `web_push`; a failed DELETE changes nothing. It does NOT use
+   `js/push-notifications.js` (that file subscribes and prompts on page load and is loaded by no page; Settings must not
+   load it). `sw.js` was not changed: its existing `push` handler shows the notification.
+   Known, not changed: while `ZOE_REMINDER_PHONE_DELIVERY` is not `on`, `fire_notification` pushes every proactive
+   notification to ALL of a member's subscriptions, so subscribing a browser here means it gets those too until the flag is
+   `on`. Unverified on a device: iOS allows web push only for a site added to the Home Screen over trusted HTTPS.
 
 ## Lab rehearsal (before the shadow step)
 

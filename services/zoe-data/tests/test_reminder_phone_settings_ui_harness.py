@@ -3,7 +3,8 @@ docs/knowledge/reminder-phone-delivery.md).
 
 Runs dist/test_reminder_phone_settings.js (node + a fake root + a stubbed fetch, no browser): state from the GET, hidden when Telegram
 is not linked, the documented PUT body, full_text mapping, web_push kept, no "Saved" before the server answered, a failed PUT reverts,
-a 403 (not an adult) reverts and says so, desktop-only wiring. Fails (not skips) without node on CI.
+a 403 (not an adult) reverts and says so, desktop-only wiring; and "Also send to this browser": no permission prompt without a click
+(the click's first act), the exact PUT body, denial and failures revert and undo, hidden when unsupported or not eligible. Fails (not skips) without node on CI.
 """
 import os
 import shutil
