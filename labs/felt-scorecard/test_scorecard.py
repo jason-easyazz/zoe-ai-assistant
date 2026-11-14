@@ -703,7 +703,10 @@ def test_backups_whole_log_counts_and_kinds(tmp_path):
     assert (d["alerts"], d["runs"], d["problem_runs"], d["undelivered"], d["last_drill_ok"]) == (3, 3, 2, 1, False)
     assert d["by_kind"] == {"drill_refused": 1, "drill_failed": 1, "other": 1}
     assert "private" not in str(m) and "secret" not in str(m)
-    assert "2026-11-08 05:31" in m["method"] and "passed: no" in m["method"]
+    # the scorecard prints times in the box's local zone, so build the expected wall time the same way (was a fixed
+    # +08:00 string, which failed under TZ=UTC)
+    local = sc.dt.datetime.fromisoformat("2026-11-08T05:31:52+08:00").astimezone(sc.LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+    assert local in m["method"] and "passed: no" in m["method"]
 
 
 @pytest.mark.parametrize("state_body", [None, "{not json", '{"ok": true}', '{"time": "2026-11-08T05:31:52+08:00", "ok": "yes"}',
