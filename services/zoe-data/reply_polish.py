@@ -74,6 +74,8 @@ _USE_RX = re.compile(
     + "|".join(n.replace("_", r"[\s_]") for n in TOOL_NAMES if "_" in n) + r")\s+(?:tool|function|abilit(?:y|ies))\b(?:\s+to\b)?\s*",
     re.IGNORECASE)
 _IDENT_RX = re.compile(r"\b(" + "|".join(n for n in TOOL_NAMES if "_" in n) + r")\b")
+#: scrub's second pass ("I'd and then" -> "I'd"), which runs over the WHOLE sentence once anything in it was scrubbed
+_SCRUB_JOIN_RX = re.compile(r"\b(I'd|I'll|I would|I will|I can|I could|I'd then)\s+(and|then|to)\s+")
 
 
 def scrub(sentence: str) -> str:
@@ -84,7 +86,7 @@ def scrub(sentence: str) -> str:
     if s == sentence:
         return sentence
     s = re.sub(r"[ \t]{2,}", " ", s)
-    s = re.sub(r"\b(I'd|I'll|I would|I will|I can|I could|I'd then)\s+(and|then|to)\s+", r"\1 ", s)
+    s = _SCRUB_JOIN_RX.sub(r"\1 ", s)
     if len(re.findall(r"[A-Za-z']+", s)) < 3:
         return ""
     return s[:1].upper() + s[1:] if s[:1].islower() and sentence[:1].isupper() else s
@@ -225,8 +227,11 @@ def feeling_turn_policy(message: str, user_id: str, session_id: str) -> tuple:
 class PolishStream:
     """Incremental :func:`polish`. ``feed(delta)`` returns the text safe to emit now; ``finish()`` what is held."""
 
-    def __init__(self, lex, cap: bool, scrub_names: bool = True, strict_cap: bool = False, stock: bool = False) -> None:
+    def __init__(self, lex, cap: bool, scrub_names: bool = True, strict_cap: bool = False, stock: bool = False,
+                 early: bool = False) -> None:
         self.lex, self.scrub_names = lex, scrub_names
+        self.early = bool(early)       # ZOE_FIRST_SOUND_POLISH_EARLY: the first clause may go before its sentence closes
+        self._partial = ""             # that released clause (+ its one space), until the rest of its sentence arrives
         self.strict_cap, self.stock = bool(strict_cap), bool(stock)
         self.cap = bool((cap and lex is not None) or strict_cap)
         self._buf = ""
@@ -236,6 +241,7 @@ class PolishStream:
         self._out: list = []           # everything released (the caller reads the tail for the next turn's cap)
         self.scrubbed = 0
         self.dropped = 0
+        self.early_released = 0
 
     def _release(self, text: str) -> str:
         if not self._out:
@@ -244,20 +250,42 @@ class PolishStream:
             self._out.append(text)
         return text
 
+    def _early_clause(self) -> str:
+        """The first clause of the reply, released before its sentence ends, or ''. Only when polishing the WHOLE sentence
+        later cannot change a byte of it: nothing released or held yet, the scrub leaves it alone and cannot reach it, it
+        cannot open a stock line, and it has the three words the scrub's emptiness rule counts."""
+        if not self.early or self._out or self._held or self._partial:
+            return ""
+        import voice_first_sound
+
+        clause, rest = voice_first_sound.extract_first_clause(self._buf)
+        if not clause:
+            return ""
+        cut = len(self._buf) - len(rest)          # through the mark and the ONE whitespace after it
+        if (self._buf[cut - 1] != " " or not re.match(r"\w", clause) or scrub(clause) != clause
+                or re.search(r"[ \t]{2,}", clause) or _SCRUB_JOIN_RX.search(clause) or _STOCK_RX.match(clause)
+                or len(re.findall(r"[A-Za-z']+", clause)) < 3):
+            return ""
+        self._partial, self._buf = self._buf[:cut], self._buf[cut:]
+        self.early_released += 1
+        return self._release(self._partial)
+
     def _sentence(self, sent: str) -> str:
+        if self._partial:              # the rest of an early clause's sentence: judge the WHOLE sentence, release what is new
+            whole, self._partial = self._partial + sent, ""
+            text = self._sentence_text(whole)
+            if text is None or not text.startswith(whole[: len(whole) - len(sent)]):
+                logger.warning("REPLY_POLISH early clause diverged; the rest passed as it came")   # unreachable by construction
+                return self._release(sent)
+            is_q = text.rstrip().endswith("?")
+            if not (is_closing_question(text, self.lex) or (self.strict_cap and is_q)):
+                self._substance = True
+            return self._release(text[len(whole) - len(sent):])
         if self._held and not sent.strip():
             return ""               # trailing whitespace is not "text follows": a held closing question stays held (and is dropped)
-        text = sent
-        if self.scrub_names:
-            body = sent.strip()
-            lead = sent[: len(sent) - len(sent.lstrip())]
-            tail = sent[len(sent.rstrip()):]
-            clean = scrub(body)
-            if clean != body:
-                self.scrubbed += 1
-                if not clean:
-                    return ""         # only plumbing: dropped (a plumbing name never reaches the person); a held question stays held
-                text = lead + clean + tail
+        text = self._sentence_text(sent)
+        if text is None:
+            return ""                 # only plumbing: dropped (a plumbing name never reaches the person); a held question stays held
         if self._held and self.strict_cap and text.rstrip().endswith("?"):
             self._held += text          # a run of trailing questions stays held TOGETHER (scrubbed first): all dropped at the end, none released one by one
             return ""
@@ -277,13 +305,26 @@ class PolishStream:
             self._substance = True
         return out + self._release(text)
 
+    def _sentence_text(self, sent: str) -> Optional[str]:
+        """``sent`` with plumbing names scrubbed (lead and tail whitespace kept), or None when it was only plumbing."""
+        if not self.scrub_names:
+            return sent
+        body = sent.strip()
+        clean = scrub(body)
+        if clean == body:
+            return sent
+        self.scrubbed += 1
+        if not clean:
+            return None
+        return sent[: len(sent) - len(sent.lstrip())] + clean + sent[len(sent.rstrip()):]
+
     def feed(self, delta: str) -> str:
         self._buf += delta or ""
         out = ""
         while True:
             end = _next_end(self._buf)
             if end < 0:
-                return out
+                return out + self._early_clause()
             sent, self._buf = self._buf[:end], self._buf[end:]
             try:
                 out += self._sentence(sent)
@@ -294,7 +335,7 @@ class PolishStream:
 
     def finish(self) -> str:
         out = ""
-        if self._buf:
+        if self._buf or self._partial:
             sent, self._buf = self._buf, ""
             out += self._sentence(sent)
         if self._held:
@@ -317,6 +358,15 @@ def polish(text: str, message: str = "", previous_ended_on_question: bool = Fals
     return p.feed(text) + p.finish()
 
 
+def _early_enabled() -> bool:
+    try:
+        import voice_first_sound
+
+        return voice_first_sound.polish_early_enabled()
+    except Exception:  # noqa: BLE001 - an early release is optional
+        return False
+
+
 async def filter_stream(deltas: AsyncIterator[str], message: str, user_id: str = "", session_id: str = "") -> AsyncIterator[str]:
     """Wrap a brain delta stream. Mode ``off``: passed through untouched. ``aclose`` is forwarded so an early consumer exit closes the
     inner turn deterministically. A failure inside the polish passes the rest of the stream through as it came."""
@@ -326,7 +376,8 @@ async def filter_stream(deltas: AsyncIterator[str], message: str, user_id: str =
     if m != "off":
         try:
             strict, stock = feeling_turn_policy(message, user_id, session_id)
-            stream = PolishStream(closer_lexicon_for(message), ended_on_question(user_id, session_id), strict_cap=strict, stock=stock)
+            stream = PolishStream(closer_lexicon_for(message), ended_on_question(user_id, session_id), strict_cap=strict, stock=stock,
+                                  early=_early_enabled())
         except Exception:  # noqa: BLE001 - a polish is optional; the turn is not
             logger.warning("REPLY_POLISH setup failed; passing through", exc_info=True)
     emitted = False

@@ -47,8 +47,12 @@ WINDOW_OPEN = Path.home() / ".zoe" / "night-window" / "WINDOW_OPEN"
 LANDING_PGREP = r"^(/bin/)?[b]ash .*/(land_queue|land_voice_pr|docs_merge_chain)\.sh"
 LEAD_S, TAIL_S = 0.32, 0.85          # follow-up pre-roll; endpoint tail (config floor 0.8 s + slack)
 CARRIED_DELIVER_S, CARRIED_SINK_S = 0.084, 0.080   # Pi side, panel-ttfa-breakdown-2026-09-28.md
-DEFAULT_CONDITIONS = ("off:;clause:ZOE_FIRST_SOUND_CLAUSE=1;"
-                      "clause+ack:ZOE_FIRST_SOUND_CLAUSE=1,ZOE_FIRST_SOUND_TOOL_ACK=1")
+# "clause" keeps its 2026-10-09 meaning (POLISH_EARLY pinned 0; unset it would follow CLAUSE). "clause+polish" adds the early
+# first-clause release in reply_polish; "+pin" also holds ONE Kokoro style row and speed for the reply (voice-pipeline.md).
+DEFAULT_CONDITIONS = ("off:;clause:ZOE_FIRST_SOUND_CLAUSE=1,ZOE_FIRST_SOUND_POLISH_EARLY=0;"
+                      "clause+ack:ZOE_FIRST_SOUND_CLAUSE=1,ZOE_FIRST_SOUND_POLISH_EARLY=0,ZOE_FIRST_SOUND_TOOL_ACK=1;"
+                      "clause+polish:ZOE_FIRST_SOUND_CLAUSE=1,ZOE_FIRST_SOUND_POLISH_EARLY=1;"
+                      "clause+polish+pin:ZOE_FIRST_SOUND_CLAUSE=1,ZOE_FIRST_SOUND_POLISH_EARLY=1,ZOE_KOKORO_STYLE_PIN=1")
 
 # Generic on purpose: no household fact is quoted and no reply text is recorded.
 SHAPES = {
@@ -263,6 +267,15 @@ async def close_stream(stream) -> None:
         pass
 
 
+def pin_kwargs(fs, unit: str) -> dict:
+    """The live loop's ZOE_KOKORO_STYLE_PIN choice for the first reply unit: {} when the pin is off."""
+    if not getattr(fs, "style_pin_enabled", lambda: False)():
+        return {}
+    import voice_delivery
+
+    return {"style_len": fs.style_pin_len(), "speed": voice_delivery.resolve_reply(unit).speed or 1.0}
+
+
 async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) -> dict:
     """The brain-path half of one turn: drive ``stream`` by the live loop's own rules (voice_tts._generate_voice_stream) and stamp when
     SOUND started. A stamp is taken ONLY when synthesis returned audio (a failed Kokoro call is not a fast reply); each failed synthesis
@@ -313,7 +326,7 @@ async def time_first_sound(stream, rr, vt, fs, *, t_post: float, t_kw: float) ->
         t_audio = None
         if unit:
             t0 = time.monotonic()
-            if await vt._synthesize_kokoro_sidecar(unit):   # the brain keeps decoding meanwhile, as in the live loop
+            if await vt._synthesize_kokoro_sidecar(unit, **pin_kwargs(fs, unit)):   # the brain keeps decoding meanwhile, as in the live loop
                 t_audio = time.monotonic()
                 kokoro_s = round(t_audio - t0, 3)
             else:

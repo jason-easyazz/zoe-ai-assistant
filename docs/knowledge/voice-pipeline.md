@@ -155,6 +155,22 @@ never shown on the other, and desktop sockets no longer receive the household's 
   up until idle-sleep — which the sleep gate blocks in a lit room. Contract:
   `services/zoe-ui/AGENTS.md`; pinned by `dist/test_touch_voice_text_lifecycle.js`.
 
+## First clause, pinned style — W1 (flag-dark, 2026-11-14)
+
+- **`ZOE_FIRST_SOUND_POLISH_EARLY`** (unset = follows `ZOE_FIRST_SOUND_CLAUSE`): `reply_polish.PolishStream` passed text on
+  only at sentence ends, so the clause cut could never fire on the Flue lane. Now the reply's FIRST clause is released early,
+  and **a clause is released early only when polishing cannot change it**: nothing released or held yet, the scrub leaves it
+  alone and cannot reach it (no plumbing name, no double space, no "I'd and" join, three words), it cannot open a stock
+  line, one plain space follows its mark. The rest of the sentence is judged as the whole sentence. Proof: joined output ==
+  `polish(text)` for every 1/2/3-delta chunking of the corpus (`tests/test_reply_polish_first_clause.py`).
+- **`ZOE_KOKORO_STYLE_PIN`** (default off) + **`ZOE_KOKORO_STYLE_PIN_LEN`** (120, clamped 1..510): every reply chunk of a
+  turn is synthesised with ONE style row (the sidecar's `style_len`: a pack whose rows are all row `L-1`) and ONE speed
+  (`voice_delivery.resolve_reply` of the first unit, no length guard). Acks and fillers stay unpinned (cache hits). Pinned
+  audio caches under its own key (`<voice>#s<L>|text`), never the unpinned one. `/health` reports `style_pin: true`.
+- Before enabling: the replay gate (flags on) for said-vs-did, then the lab A/B
+  `scripts/perf/measure_first_sound.py` arms `clause+polish` / `clause+polish+pin` and an ear check. Unit tests cannot
+  measure first sound or hear a seam.
+
 ## Measuring it — the replay harness
 
 Jason's saved WAVs at **`~/.zoe-voice-samples`** (1001 curated clips as of 2026-08-04, and growing)
@@ -775,6 +791,12 @@ Join them on `session=`:
 VOICE TIMING turn=<ns> session=<sid> path=stream|command pre_brain_ms=… memory_packet_ms=… (history=… memory=… domain=…) brain_ttft_ms=… llm_first_token_ms=… packet=eager|lazy|interrupted|skipped
 FLUE_PROMPT_CACHE session=<sid> rounds=N first_prompt_n=… first_cache_n=… total_prompt_n=… per_round=p/c,…
 ```
+
+The stream path appends the per-turn first-sound fields (W1, 2026-11-14; integers in ms from brain dispatch, -1 = absent,
+enums and counts only, never text): `fs_unit=sentence|clause|clause60|softcap|flush|none` (the rule that cut the first reply
+unit), `fs_unit_chars`, `fs_text_to_unit_ms` (first post-filter text to that cut), `fs_unit_ms`, `fs_synth_ms` (the first
+reply unit's synth), `fs_pcm_ms` (its audio frame yielded to the Pi), `fs_lead=none|tool_ack|tool_filler|processing_ack`,
+`fs_pin=0|1`, `fs_pin_len`, `fs_units`. Join the Pi's `turn_stream TTFA` for the audible side.
 
 - **`pre_brain_ms`**: from command start to the brain branch. That covers the router, identity,
   fast tiers and scope gate. It is also the `pre_brain` stage on `zoe_voice_stage_seconds`.
