@@ -1625,6 +1625,49 @@ Jetson, not the Pi's torch-hub copy, so read chunk counts as ±1.
   of this, because it starts from saved recordings. `scripts/perf/measure_endpointing.py` is the
   endpointing instrument.
 
+## Panel first-sound instrument — `PCM_WRITE` / `FIRST_SOUND` (S0, log-only, 2026-11-14)
+
+The daemon logs two lines per streamed turn. They change nothing the panel does: no flag, no new sound. They
+carry **counts, ms and fixed enums only**: never a transcript, a name or any reply text. All ms are relative to
+`t_close`. That is the monotonic stamp taken where the capture loop ends: the chunk where `_Endpointer.push`
+returned True, or the cap. The stamp is taken in `record_command`, `_follow_up_listen` and the barge seed, and it
+reaches the next streamed turn through `_turn_close` (the same hand-off as `_pending_stt_stream`). `-1` means
+unknown.
+
+- `PCM_WRITE i=<k> at_ms=<close->write> dur_ms=<pcm ms after trim> underrun_ms=<n>`, one per chunk, logged after
+  the write. Underrun is starvation: the write landed after the previous chunk's modelled end. Chunks are modelled
+  back to back, each starting at max(its write, the previous end). The kept 130 ms tail is inside `dur_ms`.
+  `at_ms` of `i=0` is taken after the player spawned, so it includes the spawn.
+- `FIRST_SOUND close=<rule>=<ms>ms post_ms=<close->POST> reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1
+  reflex_cut=0 reflex_wait_ms=0 server_first_ms=<n> server_kind=<content|filler|tool_ack|greeting|canned|unknown|none>
+  gap_ms=-1 still_talking=<0|1> talk_chunks=<n> chunks=<n> underrun_max_ms=<n> underrun_sum_ms=<n>`.
+  Every `_do_single_turn_stream` call logs exactly one, after
+  `turn_stream TTFA=`, also when nothing played (`server_first_ms=-1 server_kind=none`).
+  - `close` is `deep|quiet|clean|hesitation|no_speech` with the rule limit (as on the `Recorded` line), `cap=0ms`,
+    `other=0ms`, or `none=0ms` when no close is known. `post_ms` is negative on a speculative turn, because the POST
+    goes out before the close.
+  - The `reflex*` and `gap_ms` fields are constants until the Pi reflex exists. A parser written now does not
+    change when it ships.
+  - `server_kind` is read from the first audio header: chunk -2 / `greeting` gives greeting; chunk -1 / `filler` /
+    `processing_ack` gives filler; provider `kokoro` gives canned (only `_canned_turn_response` sends it); `stitch`
+    gives content. A `kokoro-sidecar` sentence is content OR a tool ack, so it is `unknown` until the server adds a
+    `"kind"` field (enum-checked by the daemon) to the `_emit_sentence` headers.
+  - `talk_chunks` is the barge monitor's speech chunks (prob >= `VAD_ENDPOINT_THRESHOLD`) in its idle branch,
+    from monitor start until the first server sound. `still_talking=1` means >= 3 of them within 1.5 s of the close.
+    The count is `-1` when no monitor listened (barge-in off, or the mic did not open). It is blind to the gap
+    between the recording closing and the monitor's mic opening. The monitor's decisions never read it.
+- `_PLAYOUT` (the barge ledger) is untouched. The instrument keeps its own playout model, because noting
+  `_PLAYOUT` with duck off would grow it without a reset.
+- **Deploy (owner-run, Pi step is manual):** after the replay gate and landing, from a clean worktree at the merged commit
+  (never the live checkout) run `DRY_RUN=1 bash scripts/setup/deploy-pi-voice.sh`, then
+  `bash scripts/setup/deploy-pi-voice.sh` (rsync keeps `.bak-<ts>`, restarts `zoe-voice`, verifies). No `.env.voice`
+  change: there is no flag. Read the lines with `ssh zoe-pi "grep -E 'PCM_WRITE|FIRST_SOUND' /home/pi/.zoe-voice/voice.log"`.
+  **Rollback:** `cp -p /home/pi/.zoe-voice/zoe_voice_daemon.py.bak-<ts> /home/pi/.zoe-voice/zoe_voice_daemon.py` then
+  `systemctl --user restart zoe-voice` (the deploy script prints the exact commands). Nothing server-side changes.
+- Pinned by `tests/unit/test_voice_daemon_first_sound_log.py`. It covers field order, sentinels, underrun
+  arithmetic, close carry on wake and follow-up, talk counting, no text, the two existing lines byte-identical, and
+  identical playback, POSTs and barge decisions with the instrument stubbed out or raising.
+
 ## Long speech is one turn — caps, trailing "and", side speech (2026-10-12)
 
 **What the Pi log showed (2026-10-12, no transcripts here).** Four follow-up recordings
