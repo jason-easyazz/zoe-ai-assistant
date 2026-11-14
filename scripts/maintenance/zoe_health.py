@@ -41,6 +41,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import zoe_priv  # noqa: E402 - P0-1: zoe-db-exec when installed, else docker exec (the proxy refuses exec)
+
 HOME = Path(os.environ.get("HOME", str(Path.home())))
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE = Path(os.environ.get("ZOE_HEALTH_STATE", str(HOME / ".local" / "state" / "zoe-health" / "state.json")))
@@ -137,7 +140,9 @@ def probe(http: Callable[[int], tuple[bool, str]] = http_ok, run: Callable = _ru
             continue
         ok, why = http(port)
         out.append(Check(f"{name} :{port}", ok, why))
-    rc, _ = run(["docker", "exec", "zoe-database", "pg_isready", "-U", "zoe", "-q"])
+    route, argv = zoe_priv.db_route("zoe-database", ("isready",), ["docker", "exec", "zoe-database", "pg_isready", "-U", "zoe", "-q"])
+    zoe_priv.log_once("zoe-db-exec", route)
+    rc, _ = run(argv)
     out.append(Check("postgres", rc == 0, f"pg_isready rc={rc}"))
     rc, txt = run(["docker", "ps", "--format", "{{.Names}}\t{{.Status}}"])
     bad = [ln.split("\t")[0] for ln in txt.splitlines() if "(unhealthy)" in ln or "\tRestarting" in ln] if rc == 0 else []

@@ -84,3 +84,31 @@ def can_run(rc_of: Callable[["list[str]"], int], name: str, args: Sequence[str])
     if installed(name):
         return rc_of(["sudo", "-n", "-l", helper_path(name), *helper_argv(name, *args)[3:]]) == 0
     return rc_of(["sudo", "-n", "true"]) == 0
+
+
+DB_CONTAINER = "zoe-database"
+
+
+def db_route(container: str, args: Sequence[str], legacy: Sequence[str]) -> "tuple[str, list[str]]":
+    """Database work in zoe-database: the ``zoe-db-exec`` helper when it is installed AND the caller targets the
+    container the helper is fixed to; anything else keeps the caller's own ``docker exec`` (the Docker proxy refuses
+    exec, so after P0-3 only the helper path works)."""
+    if container == DB_CONTAINER and installed("zoe-db-exec"):
+        return HELPER, helper_argv("zoe-db-exec", *args)
+    return LEGACY, list(legacy)
+
+
+_LOGGED: "set[str]" = set()
+
+
+def log_once(name: str, path: str, emit: "Callable[[str], object] | None" = None) -> None:
+    """Print the fixed route line once per process (to stderr unless ``emit`` is given)."""
+    if name in _LOGGED:
+        return
+    _LOGGED.add(name)
+    line = route_line(name, path)
+    if emit is None:
+        import sys
+        print(line, file=sys.stderr, flush=True)
+    else:
+        emit(line)
