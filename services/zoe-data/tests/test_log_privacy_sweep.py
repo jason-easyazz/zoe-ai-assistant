@@ -226,6 +226,95 @@ def test_negative_control_unclamped_claim_label_would_leak():
     assert "Zorblax" in old_shape
 
 
+def test_no_exception_traceback_or_message_logged_in_memory_digest():
+    """``exc_info=`` / ``logger.exception`` print the exception MESSAGE in the traceback (which can quote the stored text); a
+    bare ``exc`` argument is ``str(exc)``. Neither may appear in a logger call of the digest module."""
+    src = (ROOT / "memory_digest.py").read_text(encoding="utf-8")
+    bad = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in LOG_METHODS:
+            owner = node.func.value
+            if "log" not in (owner.id if isinstance(owner, ast.Name) else getattr(owner, "attr", "")).lower():
+                continue
+            if node.func.attr == "exception" or any(k.arg == "exc_info" for k in node.keywords):
+                bad.append(node.lineno)
+    assert bad == []
+
+
+def test_negative_control_the_sweep_flags_a_bare_exception_argument():
+    src = "import logging\nlogger = logging.getLogger('x')\ntry:\n    pass\nexcept Exception as exc:\n    logger.warning('f: %s', exc)\n"
+    assert leaking_calls(src, {"exc"}) == [6]
+    ok = src.replace("'f: %s', exc", "'f: %s', type(exc).__name__")
+    assert leaking_calls(ok, {"exc"}) == []
+
+
+class _Boom(RuntimeError):
+    pass
+
+
+PLANTED = "Zorblax-tangerine-9137 lives at the shed"
+
+
+def _assert_type_only(caplog, expect="exc=_Boom"):
+    assert caplog.records
+    for r in caplog.records:
+        for part in (r.getMessage(), str(r.msg), repr(r.args)):
+            assert "Zorblax" not in part and "tangerine" not in part and "shed" not in part, part
+        assert r.exc_info is None
+    assert any(expect in r.getMessage() for r in caplog.records)
+
+
+def test_a_failing_vector_store_call_logs_the_exception_type_not_its_message(monkeypatch, caplog):
+    import memory_digest
+    import memory_service
+
+    class _Svc:
+        def __getattr__(self, _name):
+            async def boom(*_a, **_k):
+                raise _Boom(PLANTED)
+            return boom
+
+    monkeypatch.setattr(memory_service, "get_memory_service", lambda: _Svc())
+    caplog.set_level(logging.DEBUG)
+    asyncio.run(memory_digest.run_weekly_consolidation("u-1"))
+    _assert_type_only(caplog)
+    assert any("consolidation: sweep failed" in r.getMessage() for r in caplog.records)
+
+
+def test_a_failing_model_call_logs_the_exception_type_not_its_message(monkeypatch, caplog):
+    import memory_digest
+
+    class _Client:
+        def __init__(self, *_a, **_k):
+            pass
+
+        async def __aenter__(self):
+            raise _Boom(PLANTED)
+
+        async def __aexit__(self, *_a):
+            return False
+
+    monkeypatch.setattr(memory_digest.httpx, "AsyncClient", _Client)
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(memory_digest.ExtractorError):
+        asyncio.run(memory_digest._facts_call("transcript", 1.0))
+    _assert_type_only(caplog)
+    assert any("LLM call failed" in r.getMessage() for r in caplog.records)
+
+
+def test_negative_control_the_old_exception_shape_leaks_the_message(caplog):
+    caplog.set_level(logging.DEBUG)
+    exc = _Boom(PLANTED)
+    logging.getLogger("memory_digest").warning("consolidation: sweep failed user=%s: %s", "u-1", exc)
+    assert any("Zorblax" in r.getMessage() for r in caplog.records)
+    caplog.clear()
+    try:
+        raise exc
+    except _Boom:
+        logging.getLogger("memory_digest").error("failed", exc_info=True)
+    assert any(r.exc_info for r in caplog.records)      # a traceback would print the message too
+
+
 # ── static pin: every other touched site ─────────────────────────────────────
 
 #: file -> variables that hold fact / turn / name text in that file. Passing one bare or sliced to a logger call leaks
@@ -233,7 +322,7 @@ def test_negative_control_unclamped_claim_label_would_leak():
 PINNED = {
     "expert_dispatch.py": {"text"},
     "memory_digest.py": {"fact", "text", "synthesis_text", "fact_text", "wording", "moment", "emotion", "tag", "pred", "obj", "subj",
-                         "quote", "claim", "label", "item"},
+                         "quote", "claim", "label", "item", "exc", "je", "e", "err"},
     "memory_extractor.py": {"name", "text"},
     "person_extractor.py": {"name", "name_a", "name_b", "text"},
     "person_extractor_llm.py": {"name", "value"},
@@ -248,7 +337,7 @@ PINNED = {
     "stt_snap.py": set(),
     "device_confirm.py": set(),
 }
-SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "kind_refusal_tag", "len", "type", "bool"}   # never ``sorted``/``join``: they keep every string
+SAFE_CALLS = {"_utag", "_utt_tag", "utterance_tag", "kind_refusal_tag", "exc_tag", "len", "type", "bool"}   # never ``sorted``/``join``: they keep every string
 LOG_METHODS = {"debug", "info", "warning", "error", "critical", "exception", "log"}
 
 
@@ -258,6 +347,8 @@ def _raw(node: ast.AST, raw: set[str]) -> list[str]:
         name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
         if name in SAFE_CALLS:
             return []
+    if isinstance(node, ast.Attribute) and node.attr == "kind" and isinstance(node.value, ast.Name):
+        return []   # ``ExtractorError.kind``: the underlying exception CLASS NAME (or ``NoJSONArray``), never its message
     if isinstance(node, ast.Name):
         return [node.id] if node.id in raw else []
     if isinstance(node, ast.Attribute) and node.attr in raw:   # ``c.text``
