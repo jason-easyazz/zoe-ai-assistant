@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 import pytest
 
@@ -68,8 +69,15 @@ def _quiet(monkeypatch):
     monkeypatch.delenv(medical_safety.SELF_ASSESS_ENV, raising=False)
 
 
-def test_the_lists_are_big_enough():
-    assert len(FIRE) >= 40 and len(NOT) >= 40
+def test_every_condition_in_the_data_maps_to_an_existing_call_now_reply():
+    conditions = medical_safety._data()["self_assess"]["conditions"]
+    replies = medical_safety._data()["replies"]
+    assert set(conditions) == {"heart", "stroke", "breathing"}
+    for key, terms in conditions.items():
+        assert key in replies and terms
+        for term in terms:                                                    # each term and variant reaches its own reply
+            assert medical_safety.self_assessment(f"is this {term}") == medical_safety.Verdict("red_call", key), term
+    assert medical_safety.build_reply(medical_safety.Verdict("red_call", "heart")).startswith("Ring")
 
 
 @pytest.mark.parametrize("text", FIRE)
@@ -86,7 +94,7 @@ def test_knowledge_narrative_idiom_recall_and_fiction_never_fire(text, monkeypat
     assert run(medical_safety.handle(text, "demo_bar_00000001")) is None
 
 
-@pytest.mark.parametrize("value", ["off", "shadow", "", "typo"])
+@pytest.mark.parametrize("value", ["off", "shadow", ""])
 @pytest.mark.parametrize("text", FIRE[:12] + NOT[:6])
 def test_off_and_shadow_are_byte_identical_to_today(value, text, monkeypatch):
     if value:
@@ -96,15 +104,17 @@ def test_off_and_shadow_are_byte_identical_to_today(value, text, monkeypatch):
     assert got == run(medical_safety.handle(text, "demo_bar_00000001"))
 
 
-def test_the_default_and_an_unlisted_value_are_shadow():
-    assert medical_safety.self_assess_mode() == "shadow"
-    import os
-
-    os.environ[medical_safety.SELF_ASSESS_ENV] = "ENFORCE-ish"
-    try:
-        assert medical_safety.self_assess_mode() == "shadow"
-    finally:
-        del os.environ[medical_safety.SELF_ASSESS_ENV]
+@pytest.mark.parametrize("value, mode", [(None, "shadow"), ("", "shadow"), ("off", "off"), ("OFF", "off"), ("shadow", "shadow"),
+                                         ("enforce", "enforce"), ("enforced", "enforce"), ("on", "enforce"), ("1", "enforce"),
+                                         ("shadwo", "enforce"), ("garbage", "enforce")])
+def test_only_unset_off_or_shadow_stay_below_enforce_and_a_typo_enforces(value, mode, monkeypatch):
+    if value is None:
+        monkeypatch.delenv(medical_safety.SELF_ASSESS_ENV, raising=False)
+    else:
+        monkeypatch.setenv(medical_safety.SELF_ASSESS_ENV, value)
+    assert medical_safety.self_assess_mode() == mode
+    reply = run(medical_safety.handle("am i having a heart attack", "demo_bar_00000001"))
+    assert bool(reply) is (mode == "enforce")
 
 
 def test_shadow_logs_a_fixed_code_and_never_the_words(monkeypatch, caplog):
@@ -154,3 +164,89 @@ def test_the_flag_is_registered_with_its_modes():
 
     s = flag_registry.spec(medical_safety.SELF_ASSESS_ENV)
     assert s.default == "shadow" and tuple(s.allowed) == ("off", "shadow", "enforce")
+
+
+
+# ── generated from the SAME data the detector compiles: every condition term x every frame x speaker forms ────────────────────
+WHO_SAMPLES = ["my dad", "my wife", "grandma"]           # "{who}": a person present, named or by relation (placeholder words)
+
+
+def _expand(frame: str, term: str, choice: dict) -> str:
+    slots = medical_safety._data()["self_assess"]["slots"]
+    out = frame.replace("{C}", f"a {term}" if term[0] not in "aeiou" else f"an {term}")
+    for name in re.findall(r"\{([A-Z]+)\}", out):
+        out = out.replace("{" + name + "}", slots[name][choice.get(name, 0)], 1)
+    return out.replace("{who}", choice.get("who", WHO_SAMPLES[0]))
+
+
+def _generated_fire() -> list:
+    d = medical_safety._data()["self_assess"]
+    terms = [t for ts in d["conditions"].values() for t in ts]
+    out = set()
+    for frame in d["frames"]:
+        for term in terms:                                                    # every condition term and variant
+            out.add(_expand(frame, term, {}))
+        for name in [n for n in re.findall(r"\{([A-Z]+)\}", frame) if n != "C"]:   # every speaker / slot form
+            for i in range(len(d["slots"][name])):
+                for who in WHO_SAMPLES:
+                    out.add(_expand(frame, "heart attack", {name: i, "who": who}))
+    return sorted(out)
+
+
+NOT_FRAMES = ["what is {C}", "what are the signs of {C}", "how do you treat {C}", "tell me about {C}", "how common is {C}",
+              "{P} had {C} in 2019", "{P} had {C} last year", "{P} had {C} years ago", "{P} nearly had {C} when i saw the bill",
+              "{P} is having {C} in the movie", "a man in the news had {C}", "{P} read about {C} online",
+              "did my dad have {C} last year", "has my mum ever had {C} before", "what happens to someone who has {C}"]
+PEOPLE = ["i", "we", "he", "she", "my dad"]
+
+
+def _generated_not() -> list:
+    d = medical_safety._data()["self_assess"]
+    terms = [t for ts in d["conditions"].values() for t in ts]
+    out = set()
+    for f in NOT_FRAMES:
+        for term in terms:
+            art = f"a {term}" if term[0] not in "aeiou" else f"an {term}"
+            for p in (PEOPLE if "{P}" in f else [""]):
+                out.add(f.replace("{C}", art).replace("{P}", p))
+    return sorted(out)
+
+
+def test_generated_must_fire_set_is_large_and_every_one_fires():
+    fire = _generated_fire()
+    assert len(fire) > 1000
+    missed = [t for t in fire if medical_safety.self_assessment(t).cls != "red_call"]
+    assert missed == []
+
+
+def test_generated_must_not_set_never_fires():
+    nots = _generated_not()
+    assert len(nots) > 500
+    fired = [t for t in nots if medical_safety.self_assessment(t).cls or medical_safety.detect(t).cls]
+    assert fired == []
+
+
+@pytest.mark.parametrize("text", ["what if this is a heart attack", "do i have a heart attack", "could i have had a stroke",
+                                  "does my dad have a stroke", "could my wife have had a heart attack", "what if im having a stroke"])
+def test_the_three_review_shapes_and_their_class_fire(text):
+    assert medical_safety.self_assessment(text).cls == "red_call"
+
+
+@pytest.mark.parametrize("text, key", [("am i having a hart attack", "heart"), ("is he having a heart atack", "heart"),
+                                       ("is this a stoke", "stroke"), ("is my dad having a strok", "stroke"),
+                                       ("is it anafylaxis", "breathing"), ("could this be anaphalaxis", "breathing")])
+def test_listed_speech_to_text_variants_fire(text, key):
+    assert medical_safety.self_assessment(text) == medical_safety.Verdict("red_call", key)
+
+
+@pytest.mark.parametrize("text", ["stoke the fire", "can you stoke the fire for me", "is this a strike", "is it the heat",
+                                  "is that smoke", "is this a stroke of luck", "are you stoked", "is he having a heart to heart",
+                                  "is she having a hard time", "is that a heat wave", "is it a stroll"])
+def test_variants_never_fire_on_real_other_words(text):
+    assert medical_safety.self_assessment(text).cls == ""
+
+
+def test_control_the_previous_hand_regex_missed_the_review_shapes_and_typos():
+    old = re.compile(r"(?<!\w)(?:(?:am\s+i|is\s+\w+|are\s+(?:you|they|we))\s+having\s+(?:a\s+|an\s+)?(?:heart\s?attack|stroke))")
+    for text in ("what if this is a heart attack", "do i have a heart attack", "could i have had a stroke", "am i having a hart attack"):
+        assert not old.search(text) and medical_safety.self_assessment(text).cls == "red_call"

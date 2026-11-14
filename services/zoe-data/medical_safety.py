@@ -367,7 +367,9 @@ def _recall_question(s: str, rx: Optional[dict] = None) -> bool:
     return True
 
 
-# PRESENT SELF-ASSESSMENT (flag ZOE_MEDICAL_SELF_ASSESS = off | shadow (DEFAULT) | enforce): "am i having a heart attack?", "is this a
+# PRESENT SELF-ASSESSMENT (flag ZOE_MEDICAL_SELF_ASSESS: unset = shadow; exactly off / shadow; ANY other value, a typo included,
+# = enforce). The frames, slots, conditions and their speech-to-text variants are a CLOSED allow-list in medical_safety_data/en.json
+# "self_assess" (explicit variants, never fuzzy: edit distance 1 on "stroke" also accepts "strike"): "am i having a heart attack?", "is this a
 # stroke?" name a time-critical CONDITION, not a symptom, so the red flags above never saw them and the turn reached the brain with no
 # call-now reply. The CLOSED condition list and the existing reply each one gets:
 #   heart attack / cardiac arrest              -> heart      (no red flag names the condition itself; the symptoms are covered)
@@ -385,49 +387,87 @@ def _recall_question(s: str, rx: Optional[dict] = None) -> bool:
 # and a past recall question (the allow-list shape above, with the condition) do not. Read by ``handle`` only: ``detect`` and the
 # memory filing are unchanged in every mode; off and shadow change no reply.
 SELF_ASSESS_ENV = "ZOE_MEDICAL_SELF_ASSESS"
-_SA_COND = (r"(?:heart\s?attack|cardiac\s+arrest|(?:heat\s*|sun\s*)?stroke(?!\s+(?:of|on|in\s+(?:the|this|that)\s+"
-            r"(?:pool|water|game|round)))|mini[\s-]?stroke|tia|anaphyla\w+(?:\s+(?:shock|reaction))?)")
-_SA_COND_RE = re.compile(_SA_COND)
 _SA_A = r"(?:a\s+|an\s+|the\s+)?(?:(?:big|massive|major|small|little|minor|mild|serious|bad)\s+)?"
 _SA_WHO = r"(?:i|you|he|she|they|we|it|this|that|my\s+[a-z]+|our\s+[a-z]+|your\s+[a-z]+|the\s+(?:baby|kid|child|man|woman)|(?!(?:a|an|the|what|which|how|there|here)(?!\w))[a-z]+)"
 _SA_FICTION = r"(?!\s+(?:in|on)\s+(?:the|this|that)\s+(?:movie|film|show|book|game|episode|series|story|novel|play))"
-_SA_PRESENT_RE = re.compile(
-    r"(?<!\w)(?:"
-    # am i / is he / is my dad / are they  having | getting | going into  a COND
-    rf"(?:am\s+i|is\s+{_SA_WHO}|are\s+(?:you|they|we))\s+(?:having|getting|going\s+into|in\s+the\s+middle\s+of|in)\s+{_SA_A}{_SA_COND}"
-    # is this / could it be / might that be  a COND  (also "the start of a COND")
-    rf"|(?:is|could|might|may|can|would)\s+(?:this|it|that|these|those)\s+(?:be\s+|really\s+be\s+)?"
-    rf"(?:(?:the\s+)?(?:start|beginning|onset|signs?|symptoms?)\s+of\s+)?{_SA_A}{_SA_COND}"
-    # im / he is / my dad is / she might be  having a COND  ("i think im having", "do you think hes having")
-    rf"|(?:im|i\s+am|hes|shes|theyre|youre|{_SA_WHO}\s+is|{_SA_WHO}\s+(?:might|may|could|must)\s+be|"
-    rf"(?:i|he|she|they|you)\s+(?:might|may|could|must)\s+be|(?:could|might|may|can)\s+{_SA_WHO}\s+be)\s+having\s+{_SA_A}{_SA_COND}"
-    # are these / is this  (the) signs of a COND ;  i think / do you think  its / this is  a COND
-    rf"|(?:are|is)\s+(?:these|this|those|that)\s+(?:the\s+)?(?:signs?|symptoms?)\s+of\s+{_SA_A}{_SA_COND}"
-    rf"|(?:think|maybe|probably|reckon|worried|scared|afraid)\s+(?:that\s+)?(?:its|it\s+is|this\s+is|thats|that\s+is)\s+{_SA_A}{_SA_COND}"
-    rf"){_SA_FICTION}")
+#: a "stroke" that is not the condition: "stroke of luck / genius", a stroke on the water / in the pool / of the game
+_SA_NOT_AFTER_STROKE = r"(?!\s+(?:of|on|in\s+(?:the|this|that)\s+(?:pool|water|game|round)))"
+
+
+def _phrase_rx(phrase: str) -> str:
+    """A data phrase as a regex: words joined by whitespace, ``{who}`` = any present person (``_SA_WHO``)."""
+    parts = [(_SA_WHO if w == "{who}" else re.escape(w)) for w in phrase.split()]
+    return r"\s+".join(parts) if parts else ""
+
+
+@lru_cache(maxsize=1)
+def _sa_data() -> dict:
+    return _data()["self_assess"]
+
+
+@lru_cache(maxsize=1)
+def _sa_cond() -> "tuple[str, dict]":
+    """(regex of every condition term and variant, longest first; {term: reply key}) from the data file."""
+    keys = {t.lower(): k for k, terms in _sa_data()["conditions"].items() for t in terms}
+    alts = []
+    for t in sorted(keys, key=len, reverse=True):
+        rx = r"[\s-]?".join(re.escape(w) for w in re.split(r"[\s-]+", t))
+        alts.append(rx + (_SA_NOT_AFTER_STROKE if "stro" in t or t == "stoke" else ""))
+    return "(?:" + "|".join(alts) + r")(?!\w)", keys
+
+
+@lru_cache(maxsize=1)
+def _sa_present_re() -> "re.Pattern":
+    """One regex of every frame in the data file, slots filled from its slot lists; the condition and its article are {C}."""
+    d = _sa_data()
+    slots = {k: "(?:" + "|".join(_phrase_rx(p) for p in sorted(v, key=len, reverse=True)) + ")" for k, v in d["slots"].items()}
+    cond = _SA_A + _sa_cond()[0]
+    frames = []
+    for f in d["frames"]:
+        rx = ""
+        for tok in re.split(r"(\{[A-Z]+\})", f):
+            if tok == "{C}":
+                rx += cond
+            elif re.fullmatch(r"\{[A-Z]+\}", tok):
+                rx += slots[tok[1:-1]]
+            elif tok:
+                words = r"\s+".join(re.escape(w) for w in tok.split())
+                rx += (r"\s+" if tok[0].isspace() else "") + words + (r"\s+" if tok[-1].isspace() and words else "")
+        frames.append(rx)
+    return re.compile(r"(?<!\w)(?:" + "|".join(frames) + r")" + _SA_FICTION)
+
+
 #: a recall-question shape naming a condition ("did i have a stroke last year", "has dad had a heart attack before"): the same
 #: allow-list as the symptom one - the WHOLE clause, at most one closed past-time phrase, no present marker - or the floor fires
-_SA_RECALL_RE = re.compile(
-    rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)\s+{_SA_A}{_SA_COND}"
-    rf"(?:\s+{_RECALL_TIME})?$")
-_SA_PAST_Q_RE = re.compile(rf"(?<!\w)(?:did|have|has|had)\s+{_SA_WHO}\s+(?:just\s+|ever\s+)?(?:have|had)\s+{_SA_A}{_SA_COND}")
+@lru_cache(maxsize=1)
+def _sa_recall_res() -> "tuple[re.Pattern, re.Pattern]":
+    cond = _sa_cond()[0]
+    recall = re.compile(
+        rf"^(?:{_RQ_FILLER}\s+)*(?:did\s+{_RQ_WHO}\s+(?:ever\s+)?have|(?:have|has|had)\s+{_RQ_WHO}\s+(?:ever\s+)?had)\s+{_SA_A}{cond}"
+        rf"(?:\s+{_RECALL_TIME})?$")
+    past_q = re.compile(rf"(?<!\w)(?:did|have|has|had)\s+{_SA_WHO}\s+(?:just\s+|ever\s+)?(?:have|had)\s+{_SA_A}{cond}")
+    return recall, past_q
 _SA_OVERDOSE_RE = re.compile(
     rf"(?<!\w)(?:(?:am\s+i|is\s+{_SA_WHO}|are\s+(?:you|they)|im|hes|shes|theyre)\s+(?:having\s+an\s+)?overdos(?:ing|e)\b"
     rf"|(?:is|could|might)\s+(?:this|it|that)\s+(?:be\s+)?an\s+overdose"
     rf"|(?:ive|i\s+have|hes|he\s+has|shes|she\s+has|theyve|they\s+have|{_SA_WHO}\s+has|has\s+{_SA_WHO}|have\s+i|did\s+i\s+just)\s+"
     rf"(?:just\s+)?overdosed"
     rf"|(?:i|he|she|they)\s+just\s+overdosed)")
-_SA_KEY = (("heart", re.compile(r"heart|cardiac")), ("breathing", re.compile(r"anaphyla")), ("stroke", re.compile(r"stroke|tia")))
 
 
 def self_assess_mode() -> str:
-    """``ZOE_MEDICAL_SELF_ASSESS``: off | shadow (DEFAULT, also for an unlisted value) | enforce. Per-call read."""
+    """``ZOE_MEDICAL_SELF_ASSESS``: unset = shadow (the code default until the floor is replayed); exactly ``off`` or ``shadow`` =
+    that; ANY other value - "enforce", a typo, "on", "1" - = enforce, like every other floor (a typo never silences a floor).
+    Per-call read."""
     try:
-        from typed_env import flag
+        from typed_env import env_str
 
-        return str(flag(SELF_ASSESS_ENV))
+        raw = env_str(SELF_ASSESS_ENV, "shadow").strip().lower()
     except Exception:  # noqa: BLE001
         return "shadow"
+    if raw in ("", "shadow"):
+        return "shadow"
+    return "off" if raw == "off" else "enforce"
 
 
 def self_assessment(text: str) -> Verdict:
@@ -438,18 +478,20 @@ def self_assessment(text: str) -> Verdict:
             return NONE
         if _SA_OVERDOSE_RE.search(s):
             return Verdict("ingest_human", "poison_human")
-        m = _SA_PRESENT_RE.search(s)
+        m = _sa_present_re().search(s)
         if m is None:
-            m = _SA_PAST_Q_RE.search(s)
+            recall_re, past_q_re = _sa_recall_res()
+            m = past_q_re.search(s)
             if m is None:
                 return NONE
             # a past question naming the condition: a recall question only when EVERY clause is wholly the allow-listed shape and
             # no present marker appears anywhere; anything else ("did i just have a stroke", "... its back") is the floor
             clauses = [c.strip() for c in _CLAUSE_RE.split(s) if c and c.strip() and not _RQ_FILLER_ONLY_RE.match(c.strip())]
-            if not _PRESENT_MARK_RE.search(s) and clauses and all(_SA_RECALL_RE.match(c) for c in clauses):
+            if not _PRESENT_MARK_RE.search(s) and clauses and all(recall_re.match(c) for c in clauses):
                 return NONE
-        cond = _SA_COND_RE.search(m.group(0)).group(0)
-        key = next((k for k, rx in _SA_KEY if rx.search(cond)), "heart")
+        cond_rx, keys = _sa_cond()
+        term = re.sub(r"[\s-]+", " ", re.search(cond_rx, m.group(0)).group(0)).strip()
+        key = keys.get(term) or next((k for t, k in keys.items() if re.sub(r"[\s-]+", "", t) == term.replace(" ", "")), "heart")
         return Verdict("red_call", key)
     except Exception as exc:  # noqa: BLE001
         logger.warning("medical_safety self_assessment failed (%s)", type(exc).__name__)
