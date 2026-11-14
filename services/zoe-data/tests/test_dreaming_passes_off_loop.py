@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import functools
 import datetime
 import time
 
@@ -28,7 +29,7 @@ class Store:
     """Enough of a chroma collection for the four passes: get(where=/ids=, include=), upsert. Records every write."""
 
     def __init__(self, rows: dict, slow_s: float = 0.0):
-        self.rows, self.slow_s, self.writes = rows, slow_s, []
+        self.rows, self.slow_s, self.writes, self.after_get = rows, slow_s, [], None
 
     @staticmethod
     def _match(meta: dict, where: dict) -> bool:
@@ -48,6 +49,9 @@ class Store:
             out["metadatas"] = [copy.deepcopy(self.rows[i][1]) for i in keys]
         if slow:
             time.sleep(slow)
+        hook, self.after_get = self.after_get, None
+        if hook:
+            hook()
         return out
 
     def upsert(self, *, ids, documents, metadatas):
@@ -86,6 +90,9 @@ def _seed() -> dict:
     return rows
 
 
+ON_POST: list = []
+
+
 class _Resp:
     def json(self):
         return {"choices": [{"message": {"content": "User has a steady tea habit across the week."}}]}
@@ -102,6 +109,8 @@ class _Client:
         return False
 
     async def post(self, *a, **k):
+        for hook in ON_POST:
+            hook()
         return _Resp()
 
 
@@ -119,7 +128,10 @@ def store(monkeypatch):
     monkeypatch.setattr(md, "_promotion_score", lambda meta: 0.9 if meta.get("unique_query_count", 0) >= 3 else 0.1)
     monkeypatch.setattr(md, "_passes_quality_gate", lambda t: True)
     monkeypatch.setattr(md.httpx, "AsyncClient", _Client)
-    return st
+    ON_POST.clear()
+    yield st
+    ON_POST.clear()
+    ms._MAINTENANCE_OPEN.set()
 
 
 GOLDEN_REM_IDS = [["m1", "m2", "m3", "m4", "m5"], ["m0"], ["m0", "m2", "m3", "m4", "m5"], ["m1"]]
@@ -128,7 +140,8 @@ GOLDEN_REM_IDS = [["m1", "m2", "m3", "m4", "m5"], ["m0"], ["m0", "m2", "m3", "m4
 async def test_passes_write_exactly_what_they_wrote_on_the_loop(store):
     await md._rem_reinforce_pass(UID)
     assert [w[0] for w in store.writes] == GOLDEN_REM_IDS
-    assert store.writes[1][2][0]["related_ids"].split(",") and store.writes[1][2][0]["consolidation_count"] == 1
+    assert set(store.writes[1][2][0]["related_ids"].split(",")) == {"m1", "m2", "m3", "m4", "m5"}
+    assert store.writes[1][2][0]["consolidation_count"] == 1
     assert store.writes[1][2][0]["concept_tags"] == "tea" and store.writes[1][1] == ["User fact number 0."]
     rem = list(store.writes)
     store.writes.clear()
@@ -199,7 +212,7 @@ async def test_a_forget_during_a_pass_still_wins(store):
 
 
 async def test_negative_control_without_the_recheck_the_forget_is_undone(store, monkeypatch):
-    async def blind(svc, user_id, col, *, ids, documents, metadatas):
+    async def blind(svc, user_id, col, *, ids, documents, metadatas, **_):
         await md._store(col.upsert, ids=ids, documents=documents, metadatas=metadatas)
 
     monkeypatch.setattr(md, "_store_upsert", blind)
@@ -235,3 +248,111 @@ async def test_link_resolver_reads_off_the_loop(store, monkeypatch):
     gap = await _max_gap_while(md._resolve_pending_person_links(UID))
     res_ok = relinked == [("pp", "person", "11111111-1111-1111-1111-111111111111")]
     assert res_ok and gap < 0.15 and time.perf_counter() - t0 >= 0.3
+
+
+async def test_a_soft_forget_during_a_pass_still_wins(store):
+    """A forget that REJECTS the row (status, not delete) mid-pass: deep sleep must not write it back as approved."""
+    svc = ms.get_memory_service()
+    store.slow_s = 0.2
+    task = asyncio.create_task(md._deep_sleep_pass(UID))
+    await asyncio.sleep(0.05)
+    async with svc._user_locks.setdefault(UID, asyncio.Lock()):
+        store.slow_s = 0.0
+        doc, meta = store.rows["p1"]
+        store.rows["p1"] = (doc, {**meta, "status": "rejected"})
+        await asyncio.sleep(0.3)
+    await task
+    assert store.rows["p1"][1]["status"] == "rejected" and [w[0] for w in store.writes] == [["p2"]]
+
+
+async def test_negative_control_an_existence_only_recheck_undoes_the_soft_forget(store, monkeypatch):
+    monkeypatch.setattr(md, "_live_ids", lambda col, uid, ids, prior: set(col.get(ids=list(ids)).get("ids") or []))
+    svc = ms.get_memory_service()
+    store.slow_s = 0.2
+    task = asyncio.create_task(md._deep_sleep_pass(UID))
+    await asyncio.sleep(0.05)
+    async with svc._user_locks.setdefault(UID, asyncio.Lock()):
+        store.slow_s = 0.0
+        store.rows["p1"] = (store.rows["p1"][0], {**store.rows["p1"][1], "status": "rejected"})
+        await asyncio.sleep(0.3)
+    await task
+    assert store.rows["p1"][1]["status"] == "approved"  # resurrected: the case the live predicate prevents
+
+
+async def _forget_while_write_stalls_on_the_gate(store) -> float:
+    """Deep sleep reads, then the compaction gate closes before its write; a forget is issued meanwhile. Returns how long
+    the forget waited for the owner lock."""
+    svc = ms.get_memory_service()
+    gate = ms._MAINTENANCE_OPEN
+    store.after_get = gate.clear
+    task = asyncio.create_task(md._deep_sleep_pass(UID))
+    await asyncio.sleep(0.15)                       # read done, gate closed, the write is waiting on it
+    asyncio.get_running_loop().call_later(0.5, gate.set)
+    t0 = time.perf_counter()
+    async with svc._user_locks.setdefault(UID, asyncio.Lock()):
+        store.rows.pop("p1")                        # the forget lands
+    waited = time.perf_counter() - t0
+    await task
+    return waited
+
+
+async def test_a_forget_is_not_held_behind_a_write_stalled_on_the_gate(store):
+    waited = await _forget_while_write_stalls_on_the_gate(store)
+    assert waited < 0.1, f"the forget waited {waited:.3f}s behind the pass"
+    assert "p1" not in store.rows and [w[0] for w in store.writes] == [["p2"]]
+
+
+async def test_negative_control_holding_the_lock_across_the_gate_wait_makes_the_forget_wait(store, monkeypatch):
+    async def old(svc, user_id, col, *, ids, documents, metadatas, **_):   # the first version: lock around the leased call
+        async with svc._user_locks.setdefault(user_id, asyncio.Lock()):
+            await ms.MemoryService._run_sync(functools.partial(col.upsert, ids=ids, documents=documents, metadatas=metadatas))
+
+    monkeypatch.setattr(md, "_store_upsert", old)
+    waited = await _forget_while_write_stalls_on_the_gate(store)
+    assert waited >= 0.3, f"negative control: the forget waited only {waited:.3f}s"
+
+
+def _forget_m3_during_the_llm_call(store):
+    def hook():
+        doc, meta = store.rows["m3"]
+        store.rows["m3"] = (doc, {**meta, "status": "rejected"})
+    ON_POST.append(hook)
+
+
+async def test_synthesis_makes_nothing_from_a_source_forgotten_after_the_scan(store):
+    _forget_m3_during_the_llm_call(store)
+    await md._synthesis_pass(UID)
+    assert "syn-1" not in store.rows and store.writes == []
+
+
+async def test_negative_control_without_the_source_recheck_a_derived_row_is_made(store, monkeypatch):
+    monkeypatch.setattr(md, "_live_ids", lambda col, uid, ids, prior: set(ids))
+    _forget_m3_during_the_llm_call(store)
+    await md._synthesis_pass(UID)
+    assert "syn-1" in store.rows  # derived from a forgotten fact: the case the re-check prevents
+
+
+async def test_the_write_takes_the_owners_lock_even_under_an_alias(store):
+    import inspect
+
+    svc = ms.get_memory_service()
+    lock = svc._user_locks.setdefault(UID, asyncio.Lock())
+    await lock.acquire()                            # a forget holding the owner's lock
+    task = asyncio.create_task(md._deep_sleep_pass(UID))
+    await asyncio.sleep(0.2)
+    assert store.writes == []                      # the pass waits for it
+    lock.release()
+    await task
+    assert [w[0] for w in store.writes] == [["p1"], ["p2"]]
+    # review (the soft forget) keys its lock by the row's STORED owner; the pass's write keys by the same stored owner, so a
+    # write made under an ALIAS spelling of the user id still waits for a forget holding the canonical owner's lock.
+    assert 'user_id = current.metadata.get("user_id") or current.metadata.get("wing")' in inspect.getsource(
+        ms.MemoryService.review)
+    await lock.acquire()
+    doc, meta = store.rows["m1"]
+    write = asyncio.create_task(md._store_upsert(svc, UID.upper(), store, ids=["m1"], documents=[doc], metadatas=[meta]))
+    await asyncio.sleep(0.2)
+    assert not write.done()                        # the alias did not get its own lock
+    lock.release()
+    await write
+    assert UID.upper() not in svc._user_locks

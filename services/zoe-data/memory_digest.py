@@ -22,7 +22,7 @@ import os
 import re
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import brain_slot_guard
 import digest_pack
@@ -155,26 +155,80 @@ async def _store(call: Callable, /, **kw: Any) -> Any:
     return await MemoryService._run_sync(functools.partial(call, **kw))
 
 
-async def _store_upsert(svc: Any, user_id: str, col: Any, *, ids: list, documents: list, metadatas: list) -> None:
-    """A pass's ``col.upsert`` off the loop, under the owner's memory lock, written only for ids that still exist.
+_WRITE_ADMIT_S = 0.5   # under the owner lock a write waits at most this long for the store's lease, never for a compaction
+_WRITE_TRIES = 3
 
-    On the loop the old upsert could not interleave with a forget that had not started; off the loop it can, so the
-    write re-reads inside the lock ``erase_rows`` holds: a row erased since the pass read it is never written back
-    (forgotten means forever). Rows that still exist get exactly the old write."""
-    def _write() -> None:
-        alive = set(col.get(ids=list(ids), include=["metadatas"]).get("ids") or [])
-        keep = [k for k, i in enumerate(ids) if i in alive]
-        if keep:
-            col.upsert(ids=[ids[k] for k in keep], documents=[documents[k] for k in keep],
-                       metadatas=[metadatas[k] for k in keep])
 
+def _live_ids(col: Any, user_id: str, ids: list, prior_status: list) -> set:
+    """The ids that are still live for ``user_id`` NOW, by the read path's own predicate (``MemoryService._filter_visible``:
+    expiry, owner visibility, status). A row whose status is the one the pass read (deep sleep reads ``pending`` rows) counts
+    as unchanged; any other non-readable status - rejected (a soft forget), archived, superseded, disputed - is skipped."""
+    import datetime as _dt
     from memory_service import MemoryService
+
+    cur = col.get(ids=list(ids), include=["documents", "metadatas"])
+    want = dict(zip(ids, prior_status))
+    metas = []
+    for rid, meta in zip(cur.get("ids") or [], cur.get("metadatas") or []):
+        m = dict(meta or {})
+        if str(m.get("status", "approved") or "approved").strip().lower() == want.get(rid):
+            m["status"] = "approved"   # unchanged since the pass read it: judge it as the row the pass is updating
+        metas.append(m)
+    probe = {"ids": cur.get("ids") or [], "documents": cur.get("documents") or [], "metadatas": metas}
+    now = _dt.datetime.now(_dt.timezone.utc)
+    return {r.id for r in MemoryService._filter_visible(probe, user_id, now)}
+
+
+def _status_of(meta: Any) -> str:
+    return str((meta or {}).get("status", "approved") or "approved").strip().lower()
+
+
+async def _under_owner_lock(svc: Any, user_id: str, fn: Callable[[], Any]) -> Any:
+    """Run ``fn`` in the executor under the owner's memory lock (``svc._user_locks[user_id]``, the key ``erase_rows`` and
+    ``review`` take), BOUNDED: the compaction gate is waited for OUTSIDE the lock, and inside it the lease admission gives up
+    after ``_WRITE_ADMIT_S`` (then the lock is released and the gate waited for again). So a forget never queues behind a
+    store maintenance wait, only behind one admitted re-check + write."""
+    from memory_service import MemoryServiceError, _wait_for_maintenance_gate, collection_op
+
+    def _bounded() -> Any:
+        with collection_op(timeout=_WRITE_ADMIT_S):
+            return fn()
+
+    loop = asyncio.get_running_loop()
     locks = getattr(svc, "_user_locks", None)
-    if locks is None:
-        await MemoryService._run_sync(_write)
-        return
-    async with locks.setdefault(user_id, asyncio.Lock()):
-        await MemoryService._run_sync(_write)
+    for attempt in range(_WRITE_TRIES):
+        await loop.run_in_executor(None, _wait_for_maintenance_gate)
+        try:
+            if locks is None:
+                return await loop.run_in_executor(None, _bounded)
+            async with locks.setdefault(user_id, asyncio.Lock()):
+                return await loop.run_in_executor(None, _bounded)
+        except MemoryServiceError:
+            if attempt == _WRITE_TRIES - 1:
+                raise
+
+
+async def _store_upsert(svc: Any, user_id: str, col: Any, *, ids: list, documents: list, metadatas: list,
+                        prior_status: Optional[list] = None) -> None:
+    """A pass's ``col.upsert`` off the loop: re-checked and written under the owner's lock (``_under_owner_lock``), only
+    for rows still live (``_live_ids``). Off the loop a pass's write can interleave with a forget, so a row erased or
+    soft-forgotten since the pass read it is never written back (forgotten means forever); a live row gets exactly the
+    old write. ``prior_status`` = each row's status as the pass READ it (default: the status being written)."""
+    prior = list(prior_status) if prior_status is not None else [_status_of(m) for m in metadatas]
+    # The lock is keyed by the row's STORED owner - the key ``review`` (soft forget) takes from the row and ``erase_rows`` is
+    # called with - so an alias spelling of the pass's user id still serialises with a forget of the same rows.
+    owners: dict = {}
+    for k, m in enumerate(metadatas):
+        owners.setdefault(str((m or {}).get("user_id") or (m or {}).get("wing") or user_id), []).append(k)
+    for owner, idx in owners.items():
+        def _write(idx: list = idx) -> None:
+            live = _live_ids(col, user_id, [ids[k] for k in idx], [prior[k] for k in idx])
+            keep = [k for k in idx if ids[k] in live]
+            if keep:
+                col.upsert(ids=[ids[k] for k in keep], documents=[documents[k] for k in keep],
+                           metadatas=[metadatas[k] for k in keep])
+
+        await _under_owner_lock(svc, owner, _write)
 
 
 async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
@@ -2888,12 +2942,12 @@ async def _deep_sleep_pass(user_id: str) -> dict:
             if score >= 0.8 and uqc >= 3:
                 meta["status"] = "approved"
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], prior_status=["pending"])
                 promoted += 1
             elif added_at and added_at < cutoff:
                 meta["status"] = "archived"
                 meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
-                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta])
+                await _store_upsert(svc, user_id, col, ids=[mem_id], documents=[doc], metadatas=[meta], prior_status=["pending"])
                 archived += 1
 
     except Exception as exc:
@@ -3006,6 +3060,14 @@ async def _synthesis_pass(user_id: str) -> dict:
                     logger.debug("synthesis: dropped non-fact insight: %s", _log_redaction.utterance_tag(synthesis_text))
                     continue
 
+                # Every source must still be live right before a memory DERIVED from them is made (a forget since the scan
+                # wins). The re-check holds the owner lock; ingest takes the same lock itself, so it runs just after.
+                source_ids = [mid for mid, _ in sample]
+                live = await _under_owner_lock(
+                    svc, user_id, functools.partial(_live_ids, col, user_id, source_ids, ["approved"] * len(source_ids)))
+                if set(source_ids) - set(live or ()):
+                    logger.info("synthesis: skipped, a source is no longer live user=%s n=%d", user_id, len(source_ids))
+                    continue
                 ref = await svc.ingest(
                     synthesis_text,
                     user_id=user_id,
@@ -3017,7 +3079,6 @@ async def _synthesis_pass(user_id: str) -> dict:
                 )
                 if ref:
                     # Link synthesized memory back to source cluster
-                    source_ids = [mid for mid, _ in sample]
                     col_result = await _store(col.get, ids=[ref.id], include=["metadatas", "documents"])
                     if col_result.get("ids"):
                         sm = dict((col_result["metadatas"] or [{}])[0])
