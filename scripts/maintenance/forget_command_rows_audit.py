@@ -6,7 +6,8 @@ Why (QA round 10a, 2026-11-14; record docs/knowledge/forget-reach.md "Forget com
 idle consolidation and the nightly digest re-read the command itself and filed a row ABOUT the forgotten topic ("the user told
 Zoe about their brother"). The fix (``turn_forget.is_forget_instruction``) stops new ones; this finds the rows minted before it.
 
-A row is a CANDIDATE when its own provenance points at a forget command:
+A row is a CANDIDATE when its own provenance points at a forget command (PROVEN only by an actual forget-command turn of THAT
+member: its turn id, or the excerpt equal to that turn as the store saved it; anything else is ``unclear``, never erased):
   excerpt_is_command  the row's ``source_excerpt`` (the user's words it rests on) is itself a forget instruction
   excerpt_in_command  the excerpt is part of one of the member's forget-command turns
   turn_id             the row's ``user_turn_id`` is the content id (``memory_authority.turn_evidence``) of a forget-command turn
@@ -191,6 +192,24 @@ def iter_member_turns(psql_cmd: str, user_id: str, since: Optional[str] = None, 
         cursor = (str(batch[-1].get("at") or ""), str(batch[-1].get("id")))
 
 
+def proven_by_command(tid: str, excerpt: str, member_commands: list) -> bool:
+    """Is the link PROVEN by an actual forget-command turn of the member: the row's turn id IS that turn's content id, or its
+    (normalised) excerpt IS that turn as the store saves an excerpt? A substring, or another member's command, proves nothing. Pure."""
+    return bool((tid and any(tid == c["cid"] for c in member_commands))
+                or (excerpt and any(excerpt == c["saved"] for c in member_commands)))
+
+
+def _as_saved_excerpt(text: str) -> str:
+    """``text`` as the store saves a source excerpt (``memory_service.scrub_source_excerpt``: PII-scrubbed, capped). A store that
+    cannot be imported compares the raw text, which can only match LESS, never more."""
+    try:
+        from memory_service import scrub_source_excerpt
+
+        return scrub_source_excerpt(text) or ""
+    except Exception:  # noqa: BLE001
+        return str(text or "").strip()
+
+
 def _owner_decision(meta: dict, text: str) -> bool:
     """A row at or above the rank of the person speaking directly (user_stated / user_confirmed / curated / operator,
     ``memory_authority.USER_RANK``) is the OWNER's to forget, never this script's: listed, never erased (an authority inversion
@@ -220,7 +239,8 @@ def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 
     for t in turns:
         uid = t.get("user_id") or ""
         if uid and turn_forget.is_forget_instruction(t.get("content") or ""):
-            commands[uid].append({**t, "norm": _norm(t["content"]), "cid": turn_content_id(uid, t["content"]), "ts": _ts(t.get("at"))})
+            commands[uid].append({**t, "norm": _norm(t["content"]), "saved": _norm(_as_saved_excerpt(t["content"])),
+                                  "cid": turn_content_id(uid, t["content"]), "ts": _ts(t.get("at"))})
     cands: dict[str, list[dict]] = collections.defaultdict(list)
     window = []
     for r in rows:
@@ -238,7 +258,12 @@ def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 
         elif tid and tid in {c["cid"] for c in commands[uid]}:
             how = "turn_id"
         if how:
-            cands[uid].append({"row": r, "id": r["id"], "user_id": uid, "source": src, "how": how, "excerpt": excerpt, "tid": tid})
+            # PROVEN only by an ACTUAL forget-command turn of THIS member: its turn id, or the excerpt equal to that turn as the
+            # store saves an excerpt (scrub_source_excerpt, normalised). A command-shaped excerpt no command turn of theirs matches,
+            # or a mere substring of one, is unclear (never erased).
+            proven = proven_by_command(tid, excerpt, commands[uid])
+            cands[uid].append({"row": r, "id": r["id"], "user_id": uid, "source": src, "how": how, "excerpt": excerpt, "tid": tid,
+                               "proven": proven})
             continue
         if excerpt or tid.startswith("ut-") or src not in WINDOW_SOURCES:
             continue        # it rests on some other turn of the member's: not this audit's
@@ -267,7 +292,7 @@ def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 
                 readable = False
         for x in items:
             entry = {k: x[k] for k in ("id", "user_id", "source", "how")}
-            if not readable:
+            if not readable or not x["proven"]:
                 unclear.append(entry)
             elif x["id"] in ordinary:
                 kept.append(entry)

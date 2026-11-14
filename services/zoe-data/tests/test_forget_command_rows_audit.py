@@ -275,18 +275,43 @@ def _with_reteach(uid):
     return _transcript(uid) + (extra if uid == UID else [])
 
 
-def test_a_row_also_resting_on_an_ordinary_reteach_turn_is_kept():
+def test_a_row_also_resting_on_an_ordinary_reteach_turn_is_never_erased():
     rep = fca.audit(_reteach_rows(), _turns(), member_turns=_with_reteach)
-    assert "reteach" not in {x["id"] for x in rep["linked"]} and rep["counts"]["not_command_only"] == 1
+    assert "reteach" not in {x["id"] for x in rep["linked"]} and "reteach" in {x["id"] for x in rep["unclear"]}
     assert sorted(x["id"] for x in rep["linked"]) == ["minted_excerpt", "minted_turnid"]        # the leak is still found
     plan = {"linked": [{"id": "reteach", "user_id": UID}]}
     assert fca.plan_cleanup(_reteach_rows(), _turns(), plan, member_turns=_with_reteach) == ({}, ["reteach"])   # same rule
 
 
-def test_control_classifying_from_the_keyword_prefiltered_turns_erases_the_reteach():
-    prefiltered = lambda uid: [t for t in _with_reteach(uid) if re.search(fca._PREFILTER, t["content"])]   # noqa: E731
-    rep = fca.audit(_reteach_rows(), _turns(), member_turns=prefiltered)
-    assert "reteach" in {x["id"] for x in rep["linked"]}                    # the reviewed data loss, reproduced
+def test_an_ordinary_turn_holding_a_proven_excerpt_keeps_the_row():
+    keep = "please dont forget that i told you about my brother he matters to me"     # a teach, not a command
+    assert not turn_forget.is_forget_instruction(keep)
+    extra = {"id": "t11", "session_id": "sess-a", "at": "2026-11-14T10:00:00+08:00", "user_id": UID, "content": keep}
+    rep = fca.audit(_rows(), _turns(), member_turns=lambda uid: _transcript(uid) + ([extra] if uid == UID else []))
+    assert "minted_excerpt" not in {x["id"] for x in rep["linked"]} and rep["counts"]["not_command_only"] == 1
+
+
+def _unproven_rows():
+    return _rows() + [
+        {"id": "shaped_absent", "user_id": UID, "text": "User asked Zoe to forget something",
+         "meta": {"user_id": UID, "status": "approved", "source": "digest", "source_excerpt": "forget everything about tamsin"}},
+        {"id": "other_members_cmd", "user_id": UID, "text": "User mentioned Rowan",
+         "meta": {"user_id": UID, "status": "approved", "source": "digest", "source_excerpt": "forget everything about rowan"}},
+    ]
+
+
+def test_a_command_shaped_excerpt_with_no_command_turn_of_that_member_is_unclear():
+    rep = fca.audit(_unproven_rows(), _turns(), member_turns=_transcript)
+    assert {"shaped_absent", "other_members_cmd"} <= {x["id"] for x in rep["unclear"]}    # absent / another member's command
+    assert sorted(x["id"] for x in rep["linked"]) == ["minted_excerpt", "minted_turnid"]  # the matching cases still link
+    plan = {"linked": [{"id": "shaped_absent", "user_id": UID}, {"id": "other_members_cmd", "user_id": UID}]}
+    assert fca.plan_cleanup(_unproven_rows(), _turns(), plan, member_turns=_transcript) == ({}, ["shaped_absent", "other_members_cmd"])
+
+
+def test_control_the_old_any_command_shaped_excerpt_rule_links_them(monkeypatch):
+    monkeypatch.setattr(fca, "proven_by_command", lambda *_a: True)           # the withdrawn rule: never proven against a turn
+    rep = fca.audit(_unproven_rows(), _turns(), member_turns=_transcript)
+    assert {"shaped_absent", "other_members_cmd"} <= {x["id"] for x in rep["linked"]}
 
 
 def test_an_unreadable_transcript_makes_every_candidate_unclear_and_nothing_erasable():
