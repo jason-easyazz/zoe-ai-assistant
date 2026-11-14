@@ -135,8 +135,18 @@ def _pack(lang: str) -> Optional[_Pack]:
 
 def _scan(s: str, p: _Pack) -> Verdict:
     idioms = [m.span() for rx in p.idioms for m in rx.finditer(s)]
-    ends = [0] + [m.end() for m in p.breaks.finditer(s)]
-    near = lambda m: any(a < m.end() + 15 and b > m.start() - 15 for a, b in idioms)  # noqa: E731
+    brk = [m.span() for m in p.breaks.finditer(s)]
+    ends = [0] + [e for _b, e in brk]
+
+    def near(m) -> bool:
+        # An idiom voids only a cue it overlaps or sits beside IN ITS OWN CLAUSE: the old 15-character window AND no clause break
+        # (punctuation or a clause_breaks word) wholly inside the gap between the two spans. Strictly narrower than the window alone.
+        for a, b in idioms:
+            if a < m.end() + 15 and b > m.start() - 15:
+                lo, hi = min(b, m.end()), max(a, m.start())          # the gap; empty (lo > hi) when the spans overlap
+                if not any(lo <= x and y <= hi for x, y in brk):
+                    return True
+        return False
     best = NONE
     for cue in p.cues:
         for m in cue.rx.finditer(s):
