@@ -1482,6 +1482,7 @@ def build(args) -> dict:
     else:
         out.append(unmeasured("usage", "Members active / days of use", db_err))
 
+    out.append(m_qa_round(args.qa_results))
     out += alert_section(args, logset, long_since, until)
 
     for m in out:
@@ -1491,6 +1492,33 @@ def build(args) -> dict:
             "window": {"since": since.isoformat(), "until": until.isoformat(), "long_since": long_since.isoformat(),
                        "nights": args.nights},
             "runtime_s": round(time.monotonic() - t_start, 2), "metrics": out}
+
+
+# The QA round line (services/zoe-data/tests/qa_round.py ``scorecard_line``): fixed words, a round id, and per theme
+# ``<theme>=<passed>/<run>`` with an optional ``+<n>nr`` (not run). Nothing else in the result file is ever printed.
+QA_LINE_RE = re.compile(r"QA_ROUND round=[0-9a-z_-]{1,16} mode=(lab|live)( [a-z_]{1,24}=\d+/\d+(\+\d+nr)?)*")
+
+
+def m_qa_round(results_dir: str) -> dict:
+    """The newest ``round-*.json`` in ``results_dir``: its passed/run counts per theme, or unmeasured when there is none."""
+    key, title = "qa_round", "QA round passed/run per theme (latest round result)"
+    try:
+        files = sorted(glob.glob(os.path.join(results_dir, "round-*.json")), key=os.path.getmtime)
+    except OSError as exc:
+        return unmeasured(key, title, f"cannot list the round results ({type(exc).__name__})")
+    if not files:
+        return unmeasured(key, title, "no round result (run services/zoe-data/tests/qa_round.py --lab --out <dir>)")
+    try:
+        with open(files[-1], encoding="utf-8") as fh:
+            line = str(json.load(fh).get("scorecard") or "")
+        stamp = dt.datetime.fromtimestamp(os.path.getmtime(files[-1]), LOCAL_TZ)
+    except (OSError, ValueError, AttributeError) as exc:
+        return unmeasured(key, title, f"unreadable round result ({type(exc).__name__})")
+    if not QA_LINE_RE.fullmatch(line):
+        return unmeasured(key, title, "malformed round result (no valid QA_ROUND line)")
+    run = sum(int(t.split("/")[1].split("+")[0]) for t in line.split(" ")[3:])
+    return metric(key, title, line.removeprefix("QA_ROUND "), n=run, window=f"result written {stamp:%Y-%m-%d %H:%M}",
+                  method="tests/qa_round.py scorecard line of the newest round-*.json; passed/run per theme, +Nnr = not run")
 
 
 def render(report: dict) -> str:
@@ -1531,6 +1559,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--backup-log", help="backup verify log (default: <log-dir>/backup-verify.log)")
     ap.add_argument("--backup-state", default=os.path.expanduser("~/.local/state/zoe-offbox/last_restore_drill.json"))
     ap.add_argument("--health-log", help="zoe_health.py log (default: <log-dir>/health.log)")
+    ap.add_argument("--qa-results", default=os.path.expanduser("~/.zoe/qa-rounds"),
+                    help="directory of QA round results (round-*.json written by tests/qa_round.py)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
     try:

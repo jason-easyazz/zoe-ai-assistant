@@ -89,6 +89,7 @@ windows the two rules give identical counts.
 | 11 | Night windows completed, last N | `night-window.log` | a night counts when any `NIGHT_WINDOW_SUMMARY` for that run date has `outcome='ok...'`; nights with no summary are not completed |
 | 12 | Members active, days of use, real member turns | `chat_messages` x `chat_sessions` x `users` | `role='user'` rows of `role='member'` accounts, guest and synthetic excluded; days are local (Australia/Perth) calendar days |
 | 13 | Corrections applied to stored memory | `VALUE_CORRECTION_APPLIED` / `_STALE` / `_KIND_GUESS` | member lines, harness excluded; applied lines with `rows=` summed; stale and kind-guess refusals counted. A count, not a rate (a correction that matched no row writes no line) |
+| 14 | QA round passed/run per theme | newest `round-*.json` in `--qa-results` (default `~/.zoe/qa-rounds`) | the round's `scorecard` line from `services/zoe-data/tests/qa_round.py` (`<theme>=<passed>/<run>`, `+Nnr` = not run), matched against a fixed shape; `unmeasured` when there is no result or the line is malformed. Nothing else in the file is printed |
 | 9b | Share of turns with first sound under 1 s / 0.6 s | as row 9 | per-turn total strictly under 1000 ms / 600 ms (`FIRST_SOUND_BANDS_MS`) |
 
 ### ALERTS and PERFORMANCE (printed after the rows above, one row per source)
