@@ -11,7 +11,7 @@ another member's ``personal`` event NOT AT ALL, and nobody else's alarms, remind
 sees nothing. Every detector below reads the view, never ``facts``, so a situation cannot be built from a fact its person
 may not see. (Remove the clamp and ``tests/test_anticipation_situations.py`` fails: that is its negative control.)
 
-Kinds: ``travel_day`` ``early_start`` ``no_alarm`` ``double_booked`` ``clash`` ``child_uncovered`` ``birthday``
+Kinds: ``travel_day`` ``appointment`` ``early_start`` ``no_alarm`` ``double_booked`` ``clash`` ``child_uncovered`` ``birthday``
 ``chore_due`` ``full_day`` ``empty_day`` ``late_then_early`` ``tight_gap``. Event kinds (flight / train / trip /
 appointment) and the leave-by leads are phase 1's (``anticipation.classify``, ``LEAVE_LEAD_MIN``): one definition.
 """
@@ -34,7 +34,7 @@ EARLY_MIN = 8 * 60                # ... when the next day starts before this
 TIGHT_GAP_MIN = 30
 CHILD_EVENT_MAX_MIN = 180         # a longer child event (a school day) is not something an adult is "needed at the start" of
 FULL_DAY_MIN_EVENTS = 4
-KINDS = ("travel_day", "early_start", "no_alarm", "double_booked", "clash", "child_uncovered", "birthday", "chore_due",
+KINDS = ("travel_day", "appointment", "early_start", "no_alarm", "double_booked", "clash", "child_uncovered", "birthday", "chore_due",
          "full_day", "empty_day", "late_then_early", "tight_gap")
 _CHORE_RX = re.compile(r"\b(?:bins?|rubbish|recycling|garbage|green waste|chores?)\b", re.IGNORECASE)
 
@@ -205,6 +205,9 @@ def situations(facts: Facts, person: str) -> list:
             add("travel_day", day_of(e), [_src(e)], travel=k, start=fmt(s) if e.start else "",
                 leave_by=fmt(s - _p1.LEAVE_LEAD_MIN[k]) if e.start and s % 1440 >= _p1.LEAVE_LEAD_MIN[k] else "",
                 multi_day=bool(_d(e.end_day) and _d(e.end_day) > _d(e.day)), end_day=e.end_day)
+        elif k == "appointment" and e.start and spans[e.id][0] % 1440 >= _p1.LEAVE_LEAD_MIN[k]:
+            add("appointment", day_of(e), [_src(e)], start=fmt(spans[e.id][0]),
+                leave_by=fmt(spans[e.id][0] - _p1.LEAVE_LEAD_MIN[k]))
     for d, e in sorted(first_of_day.items()):                       # the morning: alarm too late, or no alarm at all
         s = spans[e.id][0] % 1440
         need = (s - _p1.LEAVE_LEAD_MIN.get(_kind(e) or "", DEFAULT_LEAD_MIN) - _p1.PREP_MIN) // 5 * 5
