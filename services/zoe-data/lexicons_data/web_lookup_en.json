@@ -1,0 +1,35 @@
+{
+  "lang": "en",
+  "enabled": true,
+  "_note": "Words for web_lookup_scrub.py (the query scrubber) and web_lookup_answer.py (the answer contract). drop_words never leave the house (people-pointing and filler words); question_words are kept but do not count as content; relation_words + naming_words mark the next word as a person's name; street_types close a street address. 'answer' holds every sentence the answer contract speaks; instruction_cues are regexes over lowercased page text that mark a row as an instruction aimed at the assistant (the row is withheld, never obeyed).",
+  "drop_words": ["i", "me", "my", "mine", "myself", "we", "us", "our", "ours", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "they", "them", "their", "theirs", "it", "its", "the", "a", "an", "this", "that", "these", "those", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "can", "could", "would", "should", "will", "shall", "may", "might", "must", "please", "hey", "hi", "ok", "okay", "zoe", "to", "of", "in", "on", "at", "for", "from", "with", "by", "about", "and", "or", "so", "as", "if", "than", "then", "there", "here", "just", "really", "sure", "tell", "know", "find", "look", "up", "search", "check", "near", "nearby", "around", "s"],
+  "question_words": ["who", "what", "when", "where", "why", "how", "which", "whose"],
+  "relation_words": ["wife", "husband", "partner", "spouse", "girlfriend", "boyfriend", "fiance", "fiancee", "son", "daughter", "child", "kid", "baby", "mother", "mum", "mom", "father", "dad", "brother", "sister", "grandmother", "grandma", "nan", "grandfather", "grandpa", "aunt", "uncle", "cousin", "niece", "nephew", "friend", "mate", "neighbour", "neighbor", "boss", "colleague", "coworker", "doctor", "dentist", "teacher", "landlord", "tenant", "dog", "cat", "pet"],
+  "naming_words": ["called", "named"],
+  "street_types": ["street", "st", "road", "rd", "avenue", "ave", "drive", "dr", "lane", "ln", "court", "ct", "crescent", "cres", "place", "pl", "way", "boulevard", "blvd", "terrace", "tce", "parade", "pde", "close", "highway", "hwy", "grove", "circuit", "mews"],
+  "instruction_cues": [
+    "\\b(?:ignore|disregard|forget|override)\\b.{0,40}\\b(?:previous|prior|above|earlier|all|your|system|these)\\b.{0,30}\\b(?:instructions?|prompts?|rules?|context|guidelines)\\b",
+    "\\byou are (?:now|no longer)\\b",
+    "\\b(?:new|updated|real) (?:instructions?|system prompt|task)\\b",
+    "\\b(?:system|developer|assistant) ?(?:prompt|message|note|override)\\b",
+    "\\b(?:as|dear|attention|note to|hey) (?:the |an? )?(?:ai|assistant|language model|llm|chatbot|zoe)\\b",
+    "\\b(?:ai|assistant|zoe|model)s?,? (?:must|should|shall|will|needs? to|please) \\b",
+    "\\b(?:do not|don't|never) (?:tell|inform|mention|reveal|cite)\\b",
+    "\\b(?:call|use|invoke|run|execute) (?:the |a )?(?:tool|function|command|web_search)\\b",
+    "\\b(?:reveal|print|repeat|send|post|email|upload|exfiltrate)\\b.{0,40}\\b(?:memory|memories|system prompt|password|passwords|secrets?|token|contacts|address|conversation)\\b",
+    "\\b(?:say|reply|respond|answer|output) (?:exactly|only|with|the (?:code|phrase|word))\\b",
+    "\\b(?:unlock|open|disarm|turn (?:on|off)|buy|order|purchase|transfer|delete|remember that|set a (?:timer|reminder|alarm)|add .{0,30} to (?:the|your|my) (?:list|calendar))\\b",
+    "\\bsearch (?:for|again)\\b",
+    "\\bbegin (?:untrusted|system)|\\bend (?:untrusted|system)|tool_call|start_of_turn|\\[/?inst\\]"
+  ],
+  "answer": {
+    "looked_up": "I looked that up.",
+    "claim": "{title} ({site}) says: {text}",
+    "no_results": "I looked that up and found nothing I can point to, so I can't confirm it.",
+    "blocked": "I tried to look that up, but the search was refused, so I couldn't check.",
+    "error": "I tried to look that up, but the lookup failed, so I couldn't check.",
+    "off": "Looking things up on the web is switched off here, so I couldn't check.",
+    "refused": "I didn't look that up, because the question carries private details I won't send off this box.",
+    "withheld": "I looked that up, but what came back wasn't something I can trust as a source, so I can't confirm it."
+  }
+}
