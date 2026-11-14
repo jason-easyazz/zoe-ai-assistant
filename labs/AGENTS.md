@@ -522,6 +522,14 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   (01:35-04:55 refused, `MemAvailable` >= 1500 MB, `flock /tmp/zoe-test-lane.lock`,
   asserts its own teardown). Host cgroup namespace (systemd will not boot otherwise),
   not `--privileged`. 47/47 on 2026-10-18; README is the record.
+- `p0-2-root-paths/` — **P0-2 root-path lab** (`docs/architecture/p0-deroot.md` section 8): each root route that
+  survives removing sudo and docker (config-load, bind-source swap incl. a crash-triggered restart and a file
+  bind, set-uid plant from an unprivileged root container, a root unit running a writable file, a dormant
+  container definition) shown open, closed by the shipped `scripts/setup/p0-deroot/p0-2/` deliverables with a
+  negative control each, and still working; plus the omnigent exec helper (B4). A runtime stand-in, no Docker
+  inside; one container, no network, no host mount, not `--privileged`, only `SYS_ADMIN` added. Hand-run via
+  `run.sh` (01:00-05:00 refused, no voice probe, `MemAvailable` >= 2000 MiB, the test-lane lock, asserts its
+  teardown). Unit net: `tests/unit/test_p0_2_paths.py`, `test_omnigent_exec_routing.py`. README is the record.
 - `credential-vault/` — **phases V0 + V1 of the credential vault** (`docs/architecture/credential-vault.md`
   section 16): an internal Docker network (no route out, cell H1) with Vaultwarden 1.37.4 (digest-pinned, non-root,
   256 MB), the test sites + witness (96 MB) and a client (768 MB) holding the official `bw` CLI 2026.9.1 (sha256-pinned
