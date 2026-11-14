@@ -105,6 +105,8 @@ def test_a_write_into_the_checkout_is_refused_wherever_the_checkout_sits(tmp_pat
     monkeypatch.setattr(state, "checkouts", [*state.checkouts, str(checkout)])
     (checkout / "services" / "zoe-data" / "data" / "music_prefs.json").write_text("{}")
     (checkout / ".pytest_cache").mkdir()                               # pytest's own cache is not a leak
+    (checkout / ".git").mkdir()                                        # nor is git's own directory: the affected-tests selector
+    (checkout / ".git" / "zoe-affected-tests-cache.json").write_text("{}")   # keeps its parse cache there (first CI run, 2026-11-14)
     got = guard.take()
     assert [os.path.basename(p) for _e, p, _t in got] == ["music_prefs.json"]
 

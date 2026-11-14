@@ -36,8 +36,9 @@ _WRITES = {
     "os.rename": ((0, 2), (1, 3)), "os.symlink": ((1, 2),), "os.link": ((1, 3),), "sqlite3.connect": ((0, None),),
 }
 
-# Path PARTS that are never a leak wherever they sit: interpreter and pytest caches.
-ALLOWED_PARTS = ("__pycache__", ".pytest_cache")
+# Path PARTS that are never a leak wherever they sit: interpreter and pytest caches, and git's own directory (the
+# affected-tests selector keeps its content-keyed parse cache in the clone's .git, and a test runs it in-process).
+ALLOWED_PARTS = ("__pycache__", ".pytest_cache", ".git")
 # Under the home directory (paths relative to it), each with its reason. Keep these short: a new entry is a decision.
 ALLOWED_TREES = (
     ".cache",            # tool caches (pip, uv, fontconfig, the zoe-auth test venv): not household state ...
