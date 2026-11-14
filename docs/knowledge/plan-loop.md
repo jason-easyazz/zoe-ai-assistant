@@ -78,6 +78,79 @@ with source `plan_loop`, which is how the write-claim guard sees exactly the pro
 The table gained three receipt kinds the writers already record: `list_remove` -> `list_removed`, `memory_store` -> `memory`,
 `memory_retire` -> `forget`.
 
+## The planner seam (`services/zoe-data/plan_loop_planner.py`)
+
+`maybe_run(utterance, speaker, started=...)` is the one entry a turn would call. It returns the reply for a multi-part ask, or
+`None`, which means "not mine, carry on exactly as today". In order:
+
+1. `ZOE_PLAN_LOOP` off: `None`, before anything else.
+2. `looks_multi_part` (deterministic, no model): two DIFFERENT action words and something joining them. "Add milk and eggs to
+   the list" is one action. A turn that fails this returns `None` at once, so a single-tool turn never reaches the planner.
+3. A turn the distress / medical floor owns, or that the child safety floor would answer for this speaker, returns `None`: it
+   is never planned, and the floor answers it on the normal path.
+4. The planner is asked ONCE, with the speaker's words and the tool list and nothing else: no history, no memory, no list
+   contents, no calendar titles, no tool output. The real call (`brain_planner`) is one JSON-schema-constrained request to the
+   Gemma brain inside `brain_scheduler.declare("turn:plan_loop")`, 8 s at most; a failure or timeout returns `None`.
+5. `parse_plan` validates the JSON in code. A step is DROPPED, never repaired and never guessed, when:
+
+   | code | when |
+   |---|---|
+   | `not_json` | the reply is not the schema at all (no plan) |
+   | `bad_shape` | a step is not `{tool, args, part}` |
+   | `unknown_tool` | the tool is not one of the 16 plannable registry tools (`TOOL_ARGS`) |
+   | `bad_args` | an argument is outside the tool's schema, missing, or the wrong type |
+   | `ungrounded` | a content word of the step's `part` or of a text argument is not a word the speaker said |
+   | `needs_dropped` | the step needs a step that was dropped |
+
+   A dropped step whose words ARE the speaker's is reported back as a part there is no way to do yet. An ungrounded step is
+   not reported at all: it was not the person's ask. Steps with a permission-shaped argument or a list deletion are passed on
+   so the gate refuses the WHOLE plan (stronger than dropping one step).
+6. A plan with fewer than two parts left returns `None` (a single-tool turn).
+7. `shadow`: the gate judges and logs, nothing runs, `None`. `on`: the plan runs and the reply is rendered and guarded.
+
+Once a tool may have run, the turn belongs to the loop: a failure after that point returns a fixed "something went wrong part
+way through, please check" line and never `None`, because handing the turn back to the brain could do the writes again.
+
+**Why text in a list item or a calendar title cannot give orders.** Three independent reasons: the planner never sees tool
+output (the plan is frozen before the first tool runs and there is no second planner call); every step's words must be the
+speaker's own (`ungrounded`); and what a read returns is only ever spoken, never parsed.
+
+`intent_executor` is the default executor: the same in-process fulfilment `POST /api/system/intent-dispatch` uses
+(`write_intent_gate.check`, then `intent_router.execute_intent`), so receipts are written in the step's own context.
+
+Shadow log, one line per multi-part turn, codes and counts only:
+
+```
+PLAN_LOOP_PLAN mode=shadow outcome=planned steps=3 unplanned=0 dropped=ungrounded tools=list_add,reminder_create,calendar_show ms=412
+```
+
+## The truthful reply (`services/zoe-data/plan_loop_reply.py`)
+
+`render(result)` writes one sentence per part, in plan order, from the outcomes. No model writes a word of it.
+
+| outcome | what is said |
+|---|---|
+| `done` (write) | the TOOL's own sentence with the step's arguments: "I added floss to the shopping list." |
+| `done` (read) | what the read returned |
+| `failed` | "I couldn't add floss to the shopping list." |
+| `uncertain` (timeout / error) | "I tried to ..., but I can't confirm it went through, so please check before asking again." |
+| `uncertain` (no receipt) | "I asked to ..., but I can't confirm it happened." |
+| `skipped` | "I ran out of time before I could ..." / "I didn't ..., because the step before it didn't work." |
+| a part with no tool | "I don't have a way to do this yet: “move my dentist reminder to friday”." |
+| a refused plan | "I haven't done any of that." plus one line: needs a grown-up / needs a household member / needs someone I recognise / needs a yes first / the fridge rule / too many at once |
+
+The words of a done sentence come from the tool that ran, never from how the person phrased the ask, so a new reminder is
+"I set a reminder", never "I moved it". Only the `done` branch can produce a sentence that says something happened. Argument
+text is cut to one short clause (no sentence breaks), so a list item cannot carry a second sentence into the reply.
+
+`speak(result, speaker, started)` then passes the text through the existing write-claim guard
+(`write_claim_guard.guard_text`, lane `plan_loop`) with the caller's turn start. It is integrated, not replaced: every done
+phrase is one the guard reads as a claim of that tool's receipt kind (pinned by a test over the whole table), and the guard
+finds the receipt because the core re-recorded each proven write in the caller's turn. If the renderer ever claimed an
+unproven write, the guard would replace the sentence (negative control: a forged `done` outcome).
+
+A plan refused by a safety floor renders as nothing: the distress / medical floor owns that turn's reply.
+
 ## The flag
 
 `ZOE_PLAN_LOOP` = `off` (default: `run` returns before touching anything) | `shadow` (judge the plan, log codes and counts,
@@ -98,4 +171,7 @@ reports that part as one it has no way to do; it never makes a second reminder a
 - Not wired. No turn calls the loop; `ZOE_PLAN_LOOP=on` changes nothing until a reviewed wiring PR.
 - A tool whose writer records a receipt for a row that did not commit would be believed. Receipts are recorded after the
   commit today (`write_receipts` callers); the loop inherits that trust.
-- English only where words are involved; the core itself has no words.
+- English only: the reply phrases and the multi-part pre-check (`looks_multi_part`) are English word lists.
+- `looks_multi_part` is a word test. A single-tool turn with two action words ("remind me to take the bins out and feed the cat") reaches the planner and is handed back as a one-step plan: correct, but it has paid one planner call. How often that happens is the shadow number `outcome=single`.
+- The real Gemma planner has not been run: every plan in the tests and the lab is scripted. Whether the 4B brain copies the speaker's words closely enough to pass the grounding check is unmeasured (shadow `dropped=ungrounded`).
+- A read's text is spoken as returned. A list item that is itself written like a claim ("I have added ...") would be judged by the write-claim guard like any sentence.
