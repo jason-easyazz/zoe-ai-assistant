@@ -226,13 +226,81 @@ def test_no_sequence_leaves_the_subject_with_less(attr, quiet, monkeypatch):
             assert all(vc.quantities(new) for old, new in store.replaced if vc.quantities(old)), (seq, op, store.replaced)
 
 
+#: what each correction, said in this order, leaves stored (None: that shape is not read today and must change NOTHING)
+_CHAIN = {
+    "age": [("correct", "Tobin: turned 7"), ("back", "Tobin: turned 6"), ("move", None), ("again", None), ("restate", "Tobin: turned 8")],
+    "amount": [("correct", "User's caravan fund is 1800 dollars"), ("back", "User's caravan fund is 1500 dollars"), ("move", None),
+               ("again", None), ("restate", None)],
+    "date": [("correct", "User's car rego is due on the 16th of December"), ("back", "User's car rego is due on the 9th of December"),
+             ("move", None), ("again", None), ("restate", None)],
+    "schedule": [("correct", "User's weaving class is on the 5th of December"), ("back", "User's weaving class is on the 3rd of December"),
+                 ("move", "User's weaving class is on the 10th of December"), ("again", "User's weaving class is on the 17th of December"),
+                 ("restate", None)],
+}
+
+
+@pytest.mark.parametrize("attr", sorted(_CHAIN))
+def test_each_ordinary_correction_really_changes_the_stored_value(attr, quiet):
+    row, word, said = _CASES[attr]
+    noun = word.split()[-1] if attr != "age" else "Tobin"
+    store, current = _Store(row), row
+    for op, want in _CHAIN[attr]:
+        n = _correct(store, said[op])
+        if want is None:
+            assert n == 0 and _texts(store, noun) == [current], (op, _texts(store, noun))
+        else:
+            assert n == 1 and _texts(store, noun) == [want], (op, _texts(store, noun))
+            current = want
+
+
+def test_two_values_never_collapse_into_one():
+    store = _Store("User's festival is from the 3rd to the 5th of March")
+    _idle(store, "User's festival is on the 10th of March")
+    assert "User's festival is from the 3rd to the 5th of March" in _texts(store, "festival")
+    store = _Store("User's caravan fund is 1500 dollars and 200 dollars in the jar")
+    _idle(store, "User's caravan fund is 1800 dollars")
+    assert "User's caravan fund is 1500 dollars and 200 dollars in the jar" in _texts(store, "caravan")
+
+
+# -- the digest's two contradiction edits (the model's judgement stubbed to "contradicts") -------------------------------------------
+
+def test_the_weekly_contradiction_pass_never_replaces_with_less(monkeypatch):
+    import memory_digest
+
+    async def contradicts(*_a, **_k):
+        return True
+
+    monkeypatch.setattr(memory_digest, "_is_contradiction", contradicts)
+    store = _Store("User's weaving class is on the 10th of December", "User's weaving class was moved")
+    store.rows[0].metadata["added_at"], store.rows[1].metadata["added_at"] = "2026-11-01", "2026-11-02"
+    assert run(memory_digest._resolve_contradictions(store, UID)) == 0
+    assert "User's weaving class is on the 10th of December" in _texts(store, "weaving")
+    store = _Store("User's weaving class is on the 10th of December", "User's weaving class is on the 17th of December")
+    store.rows[0].metadata["added_at"], store.rows[1].metadata["added_at"] = "2026-11-01", "2026-11-02"
+    assert run(memory_digest._resolve_contradictions(store, UID)) == 1      # control: a real new value still replaces
+    assert _texts(store, "weaving") == ["User's weaving class is on the 17th of December"] * 2
+
+
+def test_the_per_turn_digest_checks_before_its_contradiction_edit():
+    import inspect
+    import memory_digest
+
+    src = inspect.getsource(memory_digest.run_memory_digest)
+    guard = src.index("drops_value(existing_fact, fact)")
+    assert src.index("_is_contradiction(fact, existing_fact)") < guard < src.index('note="digest contradiction')
+
+
 @pytest.mark.parametrize("old, new, drops", [
     ("Tobin: turned 6", "Tobin: next month", True),
     ("Tobin: 6", "Tobin's birthday is on the 3rd of March", True),       # a different unit is not the value
     ("User's weaving class is on the 10th of December", "User's weaving class was moved", True),
     ("Tobin is 6 years old", "", True),
     ("Tobin: turned 6", "Tobin: turned 7", False),
-    ("Tobin: turned 6", "Tobin: turned seven", False),                     # the new age in words still replaces
+    ("Tobin: turned 6", "Tobin: turned seven", False),
+    ("User's festival runs from the 3rd to the 5th of March", "User's festival is on the 10th of March", True),   # 2 dates -> 1
+    ("User owes 200 dollars to the bank and 50 dollars to Sam", "User owes 300 dollars to the bank", True),  # 2 amounts -> 1
+    ("Tobin: 6, Ada: 9", "Tobin: 7", True),                                   # one bare number covers one old value, not two
+    ("User's festival runs from the 3rd to the 5th of March", "User's festival runs from the 4th to the 6th of March", False),                     # the new age in words still replaces
     ("Tobin is six years old", "Tobin is seven years old", False),
     ("User has saved 1500 dollars for the caravan", "User has 1800 saved for the caravan", False),
     ("User's weaving class is on the 10th of December", "Weaving moved again on the seventeenth", False),

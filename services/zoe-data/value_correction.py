@@ -867,10 +867,15 @@ def superseded_by_correction(user_id: str, fact: str, said_at: Optional[float] =
 def drops_value(old_text: str, new_text: str) -> bool:
     """Would replacing ``old_text`` with ``new_text`` leave the subject with LESS (QA round 10: "Tobin: turned 6" was replaced by
     "Tobin: next month" and the age was gone)? True when the new text is empty while the old one is not, or when a value the old
-    text holds (a number, a date, an amount) has no counterpart of its unit in the new text: a date needs a date; an age, amount
-    or measure needs the same unit or a bare number; a bare number needs any number that is not a date. Text with no number is
-    never judged. Conservative on purpose: a refused replacement leaves the row as it was. Pure; never raises."""
+    text holds (a number, a date, an amount) has no counterpart of its unit in the new text. Values are COUNTED, one new value
+    standing in for one old value: a date needs a date; an age, amount or measure needs the same unit or a bare number; a bare
+    number needs any number that is not a date. So "runs from the 3rd to the 5th" -> "on the 10th" (two dates, one left) is
+    refused, as is two amounts -> one. Accepted conservative outcome: a real correction that REDUCES the count ("from the 3rd to
+    the 5th" -> "only on the 4th") is refused too, and both rows stay. Text with no number is never judged. A refused
+    replacement leaves the row as it was. Pure; never raises."""
     try:
+        from collections import Counter
+
         old, new = old_text or "", new_text or ""
         if not old.strip():
             return False
@@ -879,9 +884,24 @@ def drops_value(old_text: str, new_text: str) -> bool:
         qo = quantities(old)
         if not qo:
             return False
-        units = {_unit_at(new, q) for q in quantities(new)}
-        for u in {_unit_at(old, q) for q in qo}:
-            ok = ("date" in units) if u == "date" else any(x != "date" for x in units) if u is None else (u in units or None in units)
+        pool = Counter(_unit_at(new, q) for q in quantities(new))
+
+        def take(*choices) -> bool:
+            for c in choices:
+                if pool[c] > 0:
+                    pool[c] -= 1
+                    return True
+            return False
+
+        # the most specific first: a date only a date covers; a named unit its own, then a bare number; a bare old number last,
+        # by any unused value that is not a date
+        for u in sorted((_unit_at(old, q) for q in qo), key=lambda x: 0 if x == "date" else 2 if x is None else 1):
+            if u == "date":
+                ok = take("date")
+            elif u is None:
+                ok = take(None, *[x for x in pool if x not in ("date", None)])
+            else:
+                ok = take(u, None)
             if not ok:
                 return True
         return False
