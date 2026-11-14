@@ -16,6 +16,10 @@ SAME session. This is the always-on, post-turn tier of the same machinery (it re
   ``superseded`` (not served), nothing else is touched. Evidence only: no matching row, or more than ``MAX_ROWS``, changes nothing.
   The correction is also registered for the digest of an earlier turn that has not landed yet (``note_correction``).
 
+Same-name guard: a correction abstains (nothing written) when the member's rows show two people under the subject's first name -
+linked person ids and plain rows counted together, plain rows by cue (relation, surname, current age; see ``_plain_subjects``).
+Known over-abstain: two stale values about ONE person ("is 40" and "is 41") read as two people; asking is the safe side.
+
 Pure matching (``statement``, ``rewrite``); the write is one ``review`` per row. Never raises.
 """
 from __future__ import annotations
@@ -1217,6 +1221,66 @@ async def _distinct_people(rows: list, subject: str, user_id: str) -> int:
     return max(len(ids), 1)
 
 
+_NOT_SURNAME = frozenset({
+    "is", "was", "are", "were", "am", "be", "been", "has", "had", "have", "does", "did", "do", "will", "would", "can", "could",
+    "and", "or", "but", "not", "also", "then", "than", "who", "whose", "which", "that", "this", "with", "for", "from", "the", "a", "an",
+    "of", "on", "at", "in", "by", "to", "as", "so", "if", "my", "our", "her", "his", "their", "its", "now", "just", "still", "really",
+    "actually", "likes", "loves", "hates", "wants", "needs", "goes", "plays", "swims", "lives", "works", "turns", "turned", "aged",
+    "born", "years", "year", "old", "yo", "birthday", "age", "mum", "mom", "dad"}) | _DAY_NAMES | frozenset(_MONTHS)
+
+
+def _surname_after(tail: str) -> Optional[str]:
+    """A possible SURNAME: the word straight after a first name, folded (``people_graph.fold_name``: case, accents, hyphen). Name-like
+    = not a function word / day / month / known verb (``_NOT_SURNAME``), not an -ing/-ed form, and either Title-cased in the row
+    or (rows are often lower-case voice text) lower-case but followed by "is/was/turned/aged", a comma, colon, bracket or the end -
+    the position a surname sits in ("quorbel tandry is 41"), not an object ("quorbel likes tea"). An unknown word in that position
+    counts as a surname: it only matters when a SECOND, different one exists, and then asking beats a wrong silent edit."""
+    m = re.match(r"\s+([A-Za-z][A-Za-z'’\-]{1,24})(?![A-Za-z'’\-])", tail)
+    if not m:
+        return None
+    w = m.group(1)
+    try:
+        from people_graph import fold_name
+
+        f = fold_name(w)
+    except Exception:  # noqa: BLE001
+        f = w.lower()
+    if not f or f in _NOT_SURNAME or re.search(r"(?:ing|ed)$", f):
+        return None
+    rest = tail[m.end():]
+    if w[:1].isupper() or re.match(r"\s*(?:$|[,:(;.])|\s+(?:is|was|turned|aged|turns)\b", rest, re.IGNORECASE):
+        return f
+    return None
+
+
+def _plain_subjects(texts: list, subject: str) -> int:
+    """How many DISTINCT people the rows given (the member's PLAIN rows plus one row per linked person) that name ``subject`` show, from
+    positive evidence only. KNOWN OVER-ABSTAIN: two stale values about the SAME person ("is 40", "is 41") read as two people - asking is
+    the safe side, and nothing is written. Two rows are two people only when they carry different relations ("my sister Quorbel" / "my aunt Quorbel"), different
+    surnames, or different current ages for the same name; rows that merely differ in wording, or that carry no such cue, are
+    one person (never a false ambiguity). A subject that is not a bare first name ("my son", "the dentist") is 1. Pure."""
+    name = (owner_noun(subject) or (subject,))[0]
+    if re.match(r"(?i)^(?:the|my|our|a|an)\s", name or "") or not re.match(r"^[A-Za-z][A-Za-z'’\-]*$", name or ""):
+        return 1
+    rels, surnames, ages = set(), set(), set()
+    for t in texts:
+        sm = _subject_re(subject).search(t or "")
+        if not sm:
+            continue
+        head, tail = t[:sm.start()], t[sm.end():]
+        m = re.search(rf"(?:my|our|user['’]s)\s+({_REL})\s+$", head, re.IGNORECASE) or re.match(
+            rf"\s*[(,]?\s*(?:is\s+)?(?:(?:my|our|user['’]s)\s+)?({_REL})\b", tail, re.IGNORECASE)
+        if m:
+            rels.add(m.group(1).lower())
+        sn = _surname_after(tail)
+        if sn:
+            surnames.add(sn)
+        am = _age_matches(tail)
+        if am and _row_value(am[0]) is not None:
+            ages.add(_row_value(am[0]))
+    return max(len(rels), len(surnames), len(ages), 1)
+
+
 async def apply(user_message: str, user_id: str, session_id: Optional[str], *, svc=None,
                 speaker_verified: Optional[bool] = None) -> int:
     """Supersede the member's stored rows the correction in ``user_message`` is about. Returns the rows rewritten (0 = nothing
@@ -1245,6 +1309,8 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         uid = user_id.strip().lower()
         hits = []
         exact_subject_row = False
+        plain_texts = []
+        linked_first = {}
         exact_re = _subject_re(corr.subject, False)
         _on = owner_noun(corr.subject)
         # the exact OWNER, whatever attribute the row is about: "Carlos is 22" means Carlos exists, so "carlos swimming" is never Carlo's
@@ -1255,6 +1321,11 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 continue
             if exact_re.search(r.text or "") or (owner_re and owner_re.search(r.text or "")):
                 exact_subject_row = True
+                _eid = str(meta.get("entity_id") or "").strip()
+                if str(meta.get("entity_type") or "").strip().lower() == "person" and _eid and not _eid.startswith("slug:"):
+                    linked_first.setdefault(_eid, r.text or "")      # one row per linked person: two rows of ONE person are not two
+                else:
+                    plain_texts.append(r.text or "")
             new_text = rewrite(r.text or "", corr)
             if new_text and new_text != r.text:
                 hits.append((r, new_text))
@@ -1281,6 +1352,15 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
                 # the rows belong to MORE THAN ONE person who answers to this name (golden C27: two people with one name, both
                 # rewritten): nothing is rewritten, the correction stays as said
                 logger.info("VALUE_CORRECTION_AMBIGUOUS_SUBJECT user=%s rows=%d people=%d", user_id, len(hits), people)
+                return 0
+        if hits:
+            # ONE matching row is not proof of one person: two same-name people may exist only as plain rows, and the old value
+            # ("45 not 41") then points at just one of them. Positive evidence of two (different relation / surname / current age)
+            # abstains even when the old value matches a single row: the value may be the speaker's slip about the OTHER person.
+            # linked people and plain rows are counted TOGETHER (one linked person + one plain row with a different cue = two)
+            plain = max(len(linked_first), _plain_subjects(plain_texts + list(linked_first.values()), corr.subject))
+            if plain > 1:
+                logger.info("VALUE_CORRECTION_AMBIGUOUS_SUBJECT user=%s rows=%d people=%d", user_id, len(hits), plain)
                 return 0
         if corr.old is not None and session_id and not _is_unidentified(user_id):
             # the misheard / misspoken fact may not be stored yet (the post-turn digest of an earlier turn lands minutes later):
