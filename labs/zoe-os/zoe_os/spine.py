@@ -34,6 +34,7 @@ from . import forget_match as fm
 from .events import CONTENT_KEYS, KERNEL_ONLY, Event, Kind, Visibility
 
 KERNEL = "kernel"
+FORGOTTEN, EXPIRED = 1, 2       # the two reasons a row's ``tombstoned`` is not 0
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -55,6 +56,9 @@ CREATE TABLE IF NOT EXISTS forget_ledger (
 CREATE TABLE IF NOT EXISTS shield (fp BLOB PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS entity_shield (subject TEXT NOT NULL, fp BLOB NOT NULL, PRIMARY KEY (subject, fp));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS retired_counts (
+  day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, kind)
+);
 CREATE TABLE IF NOT EXISTS intents (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, skill TEXT NOT NULL, action TEXT NOT NULL,
   person TEXT NOT NULL, grant_id TEXT, accept_seq INTEGER, caused_by TEXT, receipt_seq INTEGER,
@@ -241,7 +245,8 @@ class Spine:
             if row is None:
                 return "cites an event that does not exist"
             if row[-1]:
-                return "derives from a forgotten event"
+                return "derives from a forgotten event" if row[-1] == FORGOTTEN else \
+                    "derives from an event no longer kept"
             if not self.authorizer.is_origin(source) and \
                     not self._deliverable(source, _row_to_event(row[:-1])):   # a FORGET notice may be cited
                 return "cites an event it may not read"
@@ -437,9 +442,52 @@ class Spine:
             self._db.executemany("DELETE FROM shield WHERE fp = ?", [(fp,) for fp in again])
 
     def _tombstoned(self, seqs: list[int]) -> set[int]:
+        """Of these, the ones no longer live: forgotten, expired, or retired to a count."""
         marks = ",".join("?" * len(seqs))
-        return {r[0] for r in self._db.execute(
-            f"SELECT seq FROM events WHERE tombstoned = 1 AND seq IN ({marks})", seqs)}
+        live = {r[0] for r in self._db.execute(
+            f"SELECT seq FROM events WHERE tombstoned = 0 AND seq IN ({marks})", seqs)}
+        return set(seqs) - live
+
+    # ---- retention (zoe_os/retention.py decides WHEN; these are the two erasures) ------------
+    def _expire(self, seqs: list[int]) -> None:
+        """Stage 2, the skeleton: the content and the subject are erased from the row and the
+        disk; the sequence number, time, kind, and the links to whom it concerned and what it
+        derived from stay, so a later FORGET still finds it and everything built on it.
+        Not a forget: nothing is added to the shield, the words may be said or derived again."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                for chunk in _chunks(seqs):
+                    marks = ",".join("?" * len(chunk))
+                    self._db.execute(
+                        f"UPDATE events SET tombstoned = {EXPIRED}, payload = NULL, mentions = NULL,"
+                        f" subject = NULL WHERE tombstoned = 0 AND seq IN ({marks})", chunk)
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._epoch += 1                                   # live queues re-check themselves
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def _retire(self, seqs: list[int]) -> None:
+        """Stage 3, the count: the rows go. An expired row adds one to its day's count for its
+        kind (no person, no source); a forgotten row adds nothing."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                for chunk in _chunks(seqs):
+                    marks = ",".join("?" * len(chunk))
+                    self._db.execute(
+                        "INSERT INTO retired_counts (day, kind, n) SELECT date(ts, 'unixepoch'), kind,"
+                        f" COUNT(*) FROM events WHERE tombstoned = {EXPIRED} AND seq IN ({marks})"
+                        " GROUP BY 1, 2 ON CONFLICT(day, kind) DO UPDATE SET n = n + excluded.n", chunk)
+                    for table in ("events", "people", "causes"):
+                        self._db.execute(f"DELETE FROM {table} WHERE seq IN ({marks})", chunk)
+                self._db.execute("COMMIT")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     # ---- read ---------------------------------------------------------------------
     def _get(self, seq: int) -> Event | None:

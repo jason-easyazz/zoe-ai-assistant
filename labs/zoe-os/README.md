@@ -24,6 +24,10 @@ is invented.
 | `zoe_os/client.py` | the skill's side of the socket, and `RemoteKernel` so an in-process skill runs unchanged |
 | `zoe_os/skills/` | three toy skills: leaving catch, calendar heads-up, and a deliberately malicious one |
 | `zoe_os/bridge.py` | thin adapters for the five production call sites of the bridge plan (not imported by production) |
+| `zoe_os/explain.py` | "why did you do that?": the chain behind an action, refusal or offer, and one sentence built by code |
+| `zoe_os/replay.py` | the replay harness: a recorded day in, a deterministic report out, a diff between two skill versions |
+| `zoe_os/retention.py` | full, then a skeleton, then a count: three candidate policies, none applied by default |
+| `zoe_os/skills/reminders.py` | one real feature as a skill (create, fire, snooze, forget) against a fake store |
 | `bench.py` | one capped benchmark (60 s, 100k events) |
 | `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
 | `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
@@ -77,6 +81,16 @@ bad outcome.
 | an unbacked claim is found after a restart, once | `test_durable.py` | a trusting auditor finds nothing |
 | a kill between the write and the receipt is reported `uncertain`, never done, never retried | `test_durable.py` | no write-ahead intent: no trace; a recovery that says "done": a false claim passes |
 
+### Explain, undo, replay, reminders, retention
+
+| Guarantee | Test | Control: remove this, and the bad thing happens |
+|---|---|---|
+| an explanation never shows another person's private event, not even its number | `test_explain.py` | no visibility check: the private words are in the answer |
+| undo is for the person (or a child's guardian), once, and never faked | `test_undo.py` | no ownership check; no once rule; "the last reversible action" instead of "the last action" |
+| the same recording gives the same report, byte for byte | `test_replay.py` | (checked across three processes with different hash seeds and time zone) |
+| one person's yes cannot move another person's reminder | `test_reminders.py` | without the kernel's yes rule the rule-free store moves it |
+| a forget still reaches what derived from an event that aged out | `test_retention.py` | expiry that drops the links, or retires a skeleton early: the copy survives |
+
 In-process controls are monkeypatches in the tests. Controls for the kernel process are named patches in
 `tests/kernel_proc.py`, applied through the parent's pipe. Never switches in the kernel.
 
@@ -92,6 +106,11 @@ a name or a pronoun (`test_HONEST_LIMIT_reworded_content_...` asserts three of t
 "Durable" means against a killed process, not power loss. An `uncertain` receipt has no resolution step.
 Grants, manifests and credentials are in memory: a restart denies everything until granted again.
 
-One kernel process, one lock. No rate limit on failed handshakes. No retention policy. Presence, memory and
+A skill's own store is outside the kernel: a skill that ignores a forget notice keeps the words
+(`test_HONEST_LIMIT_a_skill_that_ignores_the_notice_...`). A forget by entity or topic cannot match an event
+whose content has aged out (`test_HONEST_LIMIT_a_scoped_forget_...`). Retention has a mechanism and no chosen
+policy: nothing expires until the owner decides (record, section 9).
+
+One kernel process, one lock. No rate limit on failed handshakes. Presence, memory and
 self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
 hardware. README and results are records, not contracts.
