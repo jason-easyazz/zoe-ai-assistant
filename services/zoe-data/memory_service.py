@@ -2397,10 +2397,10 @@ class MemoryService:
                 pass
             if pendant_failure is not None:
                 raise MemoryServiceError(f"delete_user failed: pendant erasure failed ({type(pendant_failure).__name__})") from pendant_failure
-            try:   # ... and the watermark moved to the END of the erase: a turn said while it ran is not mined either. Best-effort.
-                await _erase_watermark.record(user_id, actor=actor)
-            except Exception:  # noqa: BLE001 - the mark made at the start still holds
-                pass
+            try:   # ... and the watermark moved to the END of the erase: a turn said while it ran is not mined either. Fail closed: a
+                await _erase_watermark.record(user_id, actor=actor)     # failure is not "forgotten" (the start mark still holds; retry)
+            except Exception as exc:
+                raise MemoryServiceError(f"delete_user failed: final erase watermark not recorded ({type(exc).__name__})") from exc
             return len(ids)
 
     async def list_by_status(

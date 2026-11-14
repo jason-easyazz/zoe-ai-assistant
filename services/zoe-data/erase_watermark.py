@@ -97,11 +97,20 @@ class MemoryBackend:
 
 
 class SqlBackend:
-    """The ``memory_forgotten`` table over ``db_pool`` (portable SQL, so the tests run these statements on SQLite)."""
+    """The ``memory_forgotten`` table over ``db_pool`` (portable SQL, so the tests run these statements on SQLite). ``ctx`` is an
+    optional connection factory (an async context manager yielding an ``AsyncpgCompat``-style connection) for a script with no pool."""
+
+    def __init__(self, ctx: Optional[Callable[[], Any]] = None):
+        self._ctx = ctx
+
+    def _db(self):
+        if self._ctx is not None:
+            return self._ctx()
+        from db_pool import get_db_ctx  # type: ignore[import]
+        return get_db_ctx()
 
     async def put(self, user_id: str, at: str, actor: str) -> None:
-        from db_pool import get_db_ctx  # type: ignore[import]
-        async with get_db_ctx() as db:
+        async with self._db() as db:
             await db.execute(
                 """INSERT INTO memory_forgotten (user_id, key_hash, scope, actor, forgotten_at, shield_until)
                    VALUES (?, ?, ?, ?, ?, ?)
@@ -113,8 +122,7 @@ class SqlBackend:
             await db.commit()
 
     async def get(self, user_id: str) -> Optional[str]:
-        from db_pool import get_db_ctx  # type: ignore[import]
-        async with get_db_ctx() as db:
+        async with self._db() as db:
             cur = await db.execute("SELECT forgotten_at FROM memory_forgotten WHERE user_id = ? AND key_hash = ?", (user_id, KEY))
             row = await cur.fetchone()
         return str(row[0]) if row and row[0] else None
@@ -148,10 +156,10 @@ async def record(user_id: str, *, actor: str = "") -> datetime:
     return at
 
 
-async def watermark(user_id: str) -> Optional[datetime]:
+async def watermark(user_id: str, *, backend=None) -> Optional[datetime]:
     """When ``user_id`` was last erased, or None (never). RAISES ``Unavailable`` when the store cannot be read."""
     try:
-        raw = await get_backend().get(str(user_id))
+        raw = await (backend or get_backend()).get(str(user_id))
     except Exception as exc:  # noqa: BLE001
         raise Unavailable(f"erase watermark unreadable ({type(exc).__name__})") from exc
     if raw is None:
@@ -166,11 +174,11 @@ _UNREADABLE = object()
 
 
 async def keep_after(rows: Iterable[Any], *, owner: Union[str, Callable[[Any], Any]], at: Callable[[Any], Any], reader: str,
-                     strict: bool = True) -> list:
+                     strict: bool = True, backend=None) -> list:
     """``rows`` without the turns of an erased member said at or before their watermark. ``owner`` is the member id (or a function
     of the row, for a batch of several members' rows); ``at`` gives the row's time. Rows with no owner are kept (they are no
     member's). An unreadable watermark: ``strict`` raises ``Unavailable`` (the caller defers the pass), otherwise that member's
-    rows are dropped for this pass. Order is kept."""
+    rows are dropped for this pass. Order is kept. ``backend`` overrides the store (a script with its own connection)."""
     rows = list(rows)
     owner_of = owner if callable(owner) else (lambda _r: owner)
     marks: dict = {}
@@ -182,7 +190,7 @@ async def keep_after(rows: Iterable[Any], *, owner: Union[str, Callable[[Any], A
             continue
         if uid not in marks:
             try:
-                marks[uid] = await watermark(uid)
+                marks[uid] = await watermark(uid, backend=backend)
             except Unavailable as exc:
                 logger.warning("ERASE_WATERMARK_UNREADABLE reader=%s code=%s strict=%s", reader,
                                type(exc.__cause__ or exc).__name__, int(strict))

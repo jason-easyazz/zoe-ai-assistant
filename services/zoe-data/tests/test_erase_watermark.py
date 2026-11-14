@@ -323,3 +323,33 @@ def test_the_mark_survives_a_restart_is_seen_by_a_second_reader_and_is_invisible
     assert mark == W and other is None and text == "2026-11-14T01:00:00.250000Z"
     assert hashes == set() and users == [], "an entity-forget reader never sees the mark"
     assert raw == [(UID, ew.KEY, "erase", "test", "2026-11-14T01:00:00.250000Z", ew.NEVER)], "an id and a time: no text"
+
+
+class _FailSecond(ew.MemoryBackend):
+    """The first write (start of the erase) lands; the second (end of the erase) fails."""
+
+    async def put(self, user_id, at, actor):
+        if self.rows.get(user_id):
+            raise ConnectionError("store down")
+        await super().put(user_id, at, actor)
+
+
+@pytest.mark.parametrize("final_ok", [True, False], ids=["final-mark-written", "final-mark-fails"])
+def test_a_turn_said_during_the_erase_is_covered_by_the_mandatory_final_mark(env, monkeypatch, final_ok):
+    """The start mark is BEFORE a turn said while the erase runs; only the end mark covers that turn, so failing to write it must not
+    read as "forgotten": delete_user raises (the caller retries) and the start mark still stands."""
+    svc, _col = env
+    start, end = W, W + dt.timedelta(seconds=2)
+    clock = iter([start, end])
+    monkeypatch.setattr(ew, "_now", lambda: next(clock))
+    be = ew.MemoryBackend() if final_ok else _FailSecond()
+    ew.set_backend(be)
+    during = [("said-during-the-erase", start + dt.timedelta(seconds=1))]
+    if not final_ok:
+        with pytest.raises(memory_service.MemoryServiceError, match="final erase watermark not recorded"):
+            asyncio.run(_erase(svc))
+        assert asyncio.run(ew.watermark(UID)) == start, "the start mark still stands for the miners"
+        return
+    asyncio.run(_erase(svc))
+    assert asyncio.run(ew.watermark(UID)) == end
+    assert _keep(during, owner=UID) == [], "control: the end mark filters the turn said during the erase"
