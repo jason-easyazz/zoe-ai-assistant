@@ -512,3 +512,53 @@ applies to events already kept; whether each person may choose a shorter age for
 backup taken before an expiry still holds the content, exactly as `docs/knowledge/forget-reach.md` says of a
 forget); the action-intent rows and the forget ledger, which are not events and are not aged; and a scheduler
 (the sweep runs only when called).
+
+## 10. Migration ranking: which features to move first
+
+Zoe's existing features, ranked by how easy and how valuable each would be to move onto the kernel. Every fact
+in the "evidence" column was **read in code** under `services/zoe-data/` at the path and line given (line
+numbers as of this record's base commit); **nothing was run**. The two scores (1 low to 5 high) and the order
+are judgement **[inferred]**: they are an argument to check, not a measurement. "Move" means the feature's
+store sits behind kernel actions and its rules come from the kernel, as the lab reminders skill shows; it does
+not mean rewriting the feature.
+
+| # | Feature | Ease | Value | Evidence **[code]**: files read and the rules it re-implements today | Why this rank **[inferred]** |
+|---|---|---|---|---|---|
+| 1 | **Reminders** | 5 | 4 | `routers/reminders.py` (498 lines), `reminder_service.py` (282), `proactive/triggers/reminders.py` (346). Its own visibility filter (`routers/reminders.py:88`, used in six handlers); eight `require_feature_access` calls; owner-only snooze (`:334`); household quiet hours via `proactive/engine.py:99`; a receipt at `reminder_service.py:264`. **The `reminders` table is a known forget gap** (`forget_reach.py:150`). | Already written as a lab skill with 14 tests. Off the voice path for firing. Closes a real gap. The exactly-once claim (`proactive/triggers/reminders.py:43`) stays the feature's job. |
+| 2 | **Anticipation offers** | 4 | 4 | `anticipation.py` (726 lines), flag-dark `ZOE_ANTICIPATION=off\|shadow\|on` (docstring, line 1). It is already offer, then yes, then the real tool, then a reply built from what the tool returned. Its own member check (`:268`), adult check (`:287`), 24 h cooldown, and its own offer store in `pending_suggestions`. `proactive_candidates` is a forget gap (`forget_reach.py:118`). | The closest thing in production to the kernel's shape, by code only (no model), and already dark. The kernel would replace its private offer store, consent check and cooldown with offers, grants and the attention budget. It surfaces on a chat brain turn, so that part is gated. |
+| 3 | **Write receipts, in shadow** | 4 | 5 | `write_receipts.py` (167 lines): receipts live in a process-memory dict (`_STORE`, `:62`), written by one function (`record`, `:120`) that 22 call sites in 11 files use (`skybridge_service.py` 5, `list_service.py` 4, `intent_router.py` 3, `alarm_voice.py` 3, and seven files with one each). | One function is one call site: `record` can also publish a receipt event, so every writer gains a durable, per-person record with no change to the 22 callers. Shadow only: the claim guard keeps reading its own memory. |
+| 4 | **Alarms and timers** | 3 | 3 | `alarms.py` (739 lines) with its own `can_see` (`:214`) and `can_edit` (`:218`); receipts in `alarm_voice.py:532`, `:653`, `:673`. Forget already reaches it (`alarms.forget_user`, `:451`; `forget_reach.py:180`). | A natural fit for reversible actions and "undo that". Less to gain (forget already works) and it is on the voice path, so every step is replay-gated. |
+| 5 | **Notifications and the proactive engine** | 2 | 5 | `proactive/engine.py` (796 lines): one household-wide quiet window (`_is_in_quiet_hours`, `:70`), one global speech flag (`_spoken_enabled`, `:218`), `fire_notification` (`:80`) with 10 call sites in 5 files. Per-member preferences exist separately in `comm_prefs.py` (`in_quiet_hours`, `:181`). `proactive_pending` holds message text and is a forget gap (`forget_reach.py:169`). | The largest prize: one attention budget per person instead of two mechanisms. Hard because it owns delivery to panels and phones, catch-up and reconcile; a mistake here is a missed or doubled alert. |
+| 6 | **Lists** | 2 | 4 | `list_service.py` (909 lines), `routers/lists.py` (570): seven feature checks, 21 lines that mention visibility, four receipt sites. `lists` and `list_items` are forget gaps (`forget_reach.py:146`, `:147`). | Valuable for the forget alone. Household-shared lists need the kernel's household visibility to mean exactly what "family" means today, and list writes are on the voice path. |
+| 7 | **Notes, journal, transactions** | 3 | 2 | `routers/notes.py` (269), `routers/journal.py` (434), `routers/transactions.py` (359): each has the visibility filter and 4 to 9 feature checks; all three tables are forget gaps (`forget_reach.py:144`, `:145`, `:151`). | Simple stores, so moving them is mechanical, and the gain is forget reach only: they make no offers and take no actions for anyone. |
+| 8 | **Calendar** | 2 | 3 | `calendar_service.py` (449), `routers/calendar.py` (468): two feature checks, per-event visibility, a receipt at `calendar_service.py:141`; `events` is a partial forget gap (`forget_reach.py:127`). | Easy as a *publisher* (bridge call site 3). Hard as a skill: external account sync and recurrence are most of the code. |
+| 9 | **People and contacts** | 1 | 3 | `routers/people.py` (1,222 lines, 27 feature checks). | The entity forget cascade runs through it. Large, and tied to memory. |
+| 10 | **Presence** | 1 | 4 | `voice_session.py` (540 lines). | Needs the presence engine first (section 2.2). On the voice path. |
+| 11 | **Memory** | 1 | 5 | `memory_authority.py`, `memory_service.py` (section 2.7). | The strongest existing part. Change it last and least. |
+
+**Recommended first three, in this order.**
+1. **Reminders**, starting with the one call in section 7.1 (publish only), then the store behind kernel actions.
+2. **Anticipation offers**, while it is still dark: its offers, answers and cooldown become kernel offers, grants
+   and the attention budget, compared in shadow against what it does today using the replay harness.
+3. **Write receipts in shadow**: `write_receipts.record` also publishes a receipt event. Nothing reads it. After
+   a week of agreement between the two, the claim guard can be pointed at the durable one.
+
+They share three properties: each has a single seam, each can run beside what exists with a flag off, and none
+needs the presence engine or a change to memory.
+
+**What must be measured on the real hardware before any of them is wired.** None of this has been measured; the
+lab's numbers are from a cloud sandbox (section 5.1).
+- **The cost at the call site** with the live assistant running: it must be an enqueue, in microseconds, and
+  must not grow when the kernel is slow, stopped or refusing.
+- **Publish latency through the socket on the Jetson**, p50, p99 and maximum, idle and during a voice turn, on
+  the box's real storage. The sandbox tail (10 ms) was a database commit; the Jetson's is unknown.
+- **Memory.** The kernel process's resident size over a week. The box has 15.6 GB shared with the voice brain
+  and has run out before (`AGENTS.md`, the Serena section), so this is a gate, not a curiosity.
+- **Volume.** Events per day by kind and database growth per week. Section 9's retention numbers depend on it.
+- **For reminders:** lateness (due time to delivered) before and after, and that a reminder still fires with the
+  kernel unit stopped.
+- **For anything on the voice path** (anticipation's surfacing, alarms, list writes, receipts on a brain turn):
+  the voice replay gate, said against did and per-stage speed, as `AGENTS.md` requires for every voice change.
+- **The second OS user** (section 4): the two file-permission tests, repeated with the real service users.
+- **The night window** (`scripts/AGENTS.md`): that a sweep, a forget or a restart of the kernel does not land in
+  the brain-window quiet hours.
