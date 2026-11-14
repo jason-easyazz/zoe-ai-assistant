@@ -1336,7 +1336,7 @@ async def run_turn_digest(
 
     except Exception as exc:
         logger.warning("turn_digest: unexpected error for %s: %s", user_id, _log_redaction.exc_tag(exc))
-        result["error"] = type(exc).__name__
+        result["error"] = _error_field(exc)
 
     if result.get("new", 0) > 0:
         try:
@@ -1608,7 +1608,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             emotional_new = await _emotional_memory_pass(user_id, chat_text, svc)
             result["emotional_new"] = emotional_new
         except Exception as exc:
-            result["emotional_error"] = f"{type(exc).__name__}: {exc}"
+            result["emotional_error"] = type(exc).__name__
             logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
         # ── Night mind (ZOE_NIGHT_MIND, default OFF) ─────────────────────────
@@ -1625,7 +1625,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
 
     except Exception as exc:
         logger.error("memory_digest: failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
-        result["error"] = type(exc).__name__
+        result["error"] = _error_field(exc)
     finally:
         digest_pack.end_run(run_token)
         if run_cov.passes:
@@ -1797,6 +1797,14 @@ class TranscriptLoadError(RuntimeError):
     def __init__(self, cause: BaseException):
         self.kind = type(cause).__name__
         super().__init__(f"load_failed:{self.kind}")
+
+
+def _error_field(exc: BaseException) -> str:
+    """The value a digest RESULT dict carries for a failed step: ``load_failed:<cause type>`` for a ``TranscriptLoadError`` (its
+    message is built from the cause's class name alone, so it is message-free by construction; ``memory_metrics`` and the
+    nightly CLI read that shape), else the exception's TYPE name - never ``str(exc)``, which can quote stored text and reaches
+    the log through ``logger.info("memory_digest: %s", result)``."""
+    return str(exc) if isinstance(exc, TranscriptLoadError) else type(exc).__name__
 
 
 _LEGACY_TURN_LIMIT = 200
@@ -3593,7 +3601,7 @@ async def run_music_taste_digest(user_id: str) -> dict:
             ).fetchall()
     except Exception as exc:
         logger.warning("music_taste_digest: could not load events for %s: %s", user_id, _log_redaction.exc_tag(exc))
-        result["error"] = str(exc)
+        result["error"] = type(exc).__name__
         return result
 
     if not events:
@@ -3670,7 +3678,7 @@ async def run_music_taste_digest(user_id: str) -> dict:
         svc = get_memory_service()
     except Exception as exc:
         logger.warning("music_taste_digest: memory service unavailable: %s", _log_redaction.exc_tag(exc))
-        result["error"] = str(exc)
+        result["error"] = type(exc).__name__
         return result
 
     for fact_text, mem_type in facts:
