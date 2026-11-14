@@ -135,6 +135,28 @@ def configured() -> bool:
     return bool(_master())
 
 
+#: Said after a forget whose permanence rests on this ledger while it is UNCONFIGURED: the deletion happened, but only the
+#: 300 s tombstone guards the name, so the nightly digest can bring it back. Fixed text, no name in it.
+UNCONFIGURED_NOTE = (" But I can't promise it stays forgotten until my forget setting is fixed. "
+                     "Please tell whoever looks after me.")
+
+
+def ledger_state() -> str:
+    """``configured`` | ``unconfigured`` - an enum only, never the secret or its length (``/health`` and the startup line)."""
+    return "configured" if configured() else "unconfigured"
+
+
+def permanence_note() -> str:
+    """'' when a forget is durable; ``UNCONFIGURED_NOTE`` when the ledger cannot make it so (appended to the reply)."""
+    return "" if configured() else UNCONFIGURED_NOTE
+
+
+def log_startup_state() -> None:
+    """One ``FORGET_LEDGER state=<enum>`` line at startup; a warning when forgets cannot be permanent."""
+    state = ledger_state()
+    (logger.info if state == "configured" else logger.warning)("FORGET_LEDGER state=%s", state)
+
+
 def _warn_unconfigured() -> None:
     global _warned_unconfigured
     if not _warned_unconfigured:
