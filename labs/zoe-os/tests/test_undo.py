@@ -185,6 +185,20 @@ def test_nothing_to_undo_and_actions_never_confirmed_are_refused(k):
     assert k.alarms.at[SAM] == "07:00"
 
 
+def test_an_undo_cut_short_by_a_dead_kernel_is_uncertain_and_stays_spent(k):
+    """The recovery path for an undo intent (written in the undo PR, first tested here)."""
+    k.alarms.at[SAM] = "07:00"
+    done = move(k, SAM, "05:45")
+    k.actions.undo(SAM, actor=SAM)
+    k.spine._db.execute("UPDATE intents SET receipt_seq = NULL WHERE undoes IS NOT NULL")   # died mid-undo
+    (recovered,) = k.actions.recover()
+    assert recovered.payload["outcome"] == "uncertain" and recovered.payload["undoes"] == done.seq
+    assert recovered.payload["action"] == "undo" and not recovered.payload["verified"]
+    with pytest.raises(Refused, match="the last action was itself an undo"):
+        k.actions.undo(SAM, actor=SAM)                             # not run again
+    assert k.actions._undone(done.seq)
+
+
 # ---- forget still reaches it ---------------------------------------------------------------------
 def test_a_forget_erases_the_saved_before_state_and_the_undo_receipt(k):
     k.alarms.at[SAM] = SENTINEL                                # the old state is the person's data
