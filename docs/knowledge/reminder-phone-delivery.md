@@ -56,7 +56,9 @@ Rules (all tested in `services/zoe-data/tests/test_reminder_phone_delivery.py`):
 `user_prefs` key `reminder_delivery` = `{"channels": [], "full_text": false}`; channels from `telegram`, `web_push`.
 Absent = none. No migration.
 
-- `GET /api/user/profile/reminder-delivery` -> `{channels, full_text, telegram_linked, mode}` (own profile).
+- `GET /api/user/profile/reminder-delivery` -> `{channels, full_text, telegram_linked, mode, eligible}` (own profile).
+  `eligible` comes from the same check the PUT uses for its 403 (`routers/user_profile.py` `_phone_delivery_eligible`:
+  `audience_of` says `adult`); a failed or unknown lookup is `false`.
 - `PUT /api/user/profile/reminder-delivery` with `{channels, full_text}` -> stored document. Own profile only; 403 for
   anyone who is not an adult member.
 
@@ -65,14 +67,16 @@ Absent = none. No migration.
 1. BUILT: desktop Settings, Telegram section (`services/zoe-ui/dist/settings.html` `sec-telegram`, component
    `dist/js/reminder-phone-settings.js`, global `ZoeReminderPhone`; desktop only, no touch page loads it). A "Send my reminders
    to my phone" toggle and a "Show the full text of private reminders on my phone" checkbox (one line says a private reminder
-   otherwise arrives as "You have a reminder."), shown only when the GET says `telegram_linked`; re-read whenever the page
-   draws the Telegram link status. The toggle adds or removes `telegram` only and keeps any `web_push` already chosen (the
-   phone prompt below owns that channel). The GET does not say whether the member is an adult, so the controls show for any
-   linked member and a 403 on the PUT reverts the control and replaces the section with one sentence ("for adult members").
+   otherwise arrives as "You have a reminder."), shown only when the GET says `telegram_linked` AND `eligible === true` (a
+   child, an unknown member or an older server without the field sees nothing); re-read whenever the page draws the Telegram
+   link status. The toggle adds or removes `telegram` only and keeps any `web_push` already chosen (the phone prompt below
+   owns that channel). A 403 on the PUT stays as the backstop: it reverts the control and replaces the section with one
+   sentence ("for adult members").
    Nothing says "Saved." before the server answered; the controls are disabled while saving; a failed PUT reverts to the last
    stored state, says so, and re-reads the GET. When `mode` is not `on` a line says the choice is kept for when phone
    reminders are switched on. Only fixed strings are rendered. Pinned by `dist/test_reminder_phone_settings.js`
-   (CI: `services/zoe-data/tests/test_reminder_phone_settings_ui_harness.py`).
+   (CI: `services/zoe-data/tests/test_reminder_phone_settings_ui_harness.py`); the GET/PUT agreement by
+   `services/zoe-data/tests/test_reminder_phone_settings_api.py`.
 2. NOT BUILT: a web-push subscribe prompt on the phone: a button that calls `window.zoePushNotifications.subscribe()` (it must
    run in a user gesture on iOS) and then adds `web_push` to `channels`. Unverified: iOS only allows web push for a site added
    to the Home Screen over trusted HTTPS, which may be why there are no subscriptions today.

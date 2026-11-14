@@ -3,11 +3,11 @@
  *
  *   ZoeReminderPhone.mount(rootEl, { fetchJson(method, url, body) -> Promise<json> (rejects with err.status) })
  *
- * GET  /api/user/profile/reminder-delivery -> { channels, full_text, telegram_linked, mode }   (own profile)
+ * GET  /api/user/profile/reminder-delivery -> { channels, full_text, telegram_linked, mode, eligible }   (own profile)
  * PUT  /api/user/profile/reminder-delivery    { channels, full_text }  -> the stored document;  403 for anyone not an adult member.
  *
- * Shown only when telegram_linked. The GET does not say whether the member is an adult, so a 403 on the PUT reverts the control and
- * replaces the section with one plain sentence. The toggle adds / removes "telegram" only; any other channel the member already has
+ * Shown only when telegram_linked AND eligible === true (the server's own adult check, the same one the PUT uses). A 403 on the PUT
+ * (the backstop) reverts the control and replaces the section with one plain sentence. The toggle adds / removes "telegram" only; any other channel the member already has
  * (web_push, set by the phone's subscribe prompt) is kept as it is. Nothing says "Saved" until the server answered; a failed save
  * reverts to the last stored state. Only fixed strings are rendered (never a server message). One global: ZoeReminderPhone.
  * Tested without a browser by dist/test_reminder_phone_settings.js.
@@ -36,11 +36,18 @@
     return null;
   }
 
+  /* Controls only for a member the server POSITIVELY calls eligible (an adult) with Telegram linked; a missing field (an older
+   * server), false, or anything else hides them. The 403 on the PUT stays as the backstop. */
+  function shown(st) {
+    var v = st.view;
+    return !!(v && v.telegram_linked === true && v.eligible === true && !st.refused);
+  }
+
   /* ------------------------------------------------------------------ render (pure) */
   function render(st) {
     if (st.refused) return '<div class="card"><div class="row"><div class="row-info"><div class="row-sub">' + REFUSED + '</div></div></div></div>';
     var v = st.view;
-    if (!v || v.telegram_linked !== true) return '';
+    if (!shown(st)) return '';
     var dis = st.busy ? ' disabled' : '';
     var h = '<div class="card"><div class="card-header">Reminders on my phone</div>' +
       '<div class="row"><div class="row-info"><div class="row-label">Send my reminders to my phone</div>' +
@@ -78,8 +85,7 @@
       var t = ev && ev.target;
       var ctl = t && t.getAttribute ? t.getAttribute('data-ctl') : null;
       if (!ctl) return Promise.resolve(null);
-      var shown = !!(state.view && state.view.telegram_linked === true && !state.refused);   // only a control the page drew
-      var body = shown ? putBody(state.view, ctl, !!t.checked) : null;
+      var body = shown(state) ? putBody(state.view, ctl, !!t.checked) : null;   // only a control the page drew
       if (!body || state.busy) { paint(); return Promise.resolve(null); }   // a click while saving is undone, not queued
       state.busy = true;
       state.message = '';
@@ -103,5 +109,5 @@
     return { reload: load, change: change, state: function () { return state; }, ready: ready };
   }
 
-  return { putBody: putBody, render: render, mount: mount, API: API, REFUSED: REFUSED, FAILED: FAILED };
+  return { putBody: putBody, shown: shown, render: render, mount: mount, API: API, REFUSED: REFUSED, FAILED: FAILED };
 });

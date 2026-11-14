@@ -3,12 +3,14 @@
  * Run: node dist/test_reminder_phone_settings.js. CI: services/zoe-data/tests/test_reminder_phone_settings_ui_harness.py.
  * Record: docs/knowledge/reminder-phone-delivery.md. Invented data only.
  *
- * Pins: state loads from the GET; hidden when Telegram is not linked; the toggle sends exactly {channels:["telegram"], full_text:false};
+ * Pins: state loads from the GET; hidden when Telegram is not linked, and unless the GET says eligible === true (a child, an older
+ * server without the field); the toggle sends exactly {channels:["telegram"], full_text:false};
  * the full-text checkbox maps to full_text; another channel already chosen (web_push) is kept; nothing says "Saved" before the server
  * answered and the controls are disabled meanwhile; a failed PUT reverts the control and says so; a 403 (not an adult) reverts and
  * replaces the section with one plain sentence; no server message is rendered; desktop-only wiring (never /touch/).
- * Negative controls (run on scratch copies): drop the telegram_linked checks in render() and change() -> "not linked" goes red; in the
- * PUT failure branch, store the clicked body into state.view and skip the re-read -> "reverts" goes red.
+ * Negative controls (run on scratch copies): drop the telegram_linked check in shown() -> "not linked" goes red; drop the eligible
+ * check in shown() -> "eligible false" (a child) goes red; in the PUT failure branch, store the clicked body into state.view and skip
+ * the re-read -> "reverts" goes red.
  */
 'use strict';
 const fs = require('fs');
@@ -30,7 +32,7 @@ function err(status, msg) { const e = new Error(msg || ('HTTP ' + status)); e.st
 
 /* A stub server: GET answers `stored`; PUT answers per `next` (ok | a status) and stores on ok. */
 function server(stored) {
-  const s = { stored: Object.assign({ channels: [], full_text: false, telegram_linked: true, mode: 'on' }, stored), calls: [], next: 'ok', hold: null };
+  const s = { stored: Object.assign({ channels: [], full_text: false, telegram_linked: true, mode: 'on', eligible: true }, stored), calls: [], next: 'ok', hold: null };
   s.fetchJson = function (method, url, body) {
     s.calls.push([method, url, body]);
     if (method === 'GET') return Promise.resolve(JSON.parse(JSON.stringify(s.stored)));
@@ -64,6 +66,24 @@ eq(RP.putBody({ channels: [] }, 'other', true), null, 'an unknown control sends 
   eq(root.innerHTML, '', 'Telegram not linked: both controls hidden');
   await m.change(input('send', true));
   ok(s.puts().length === 0, 'not linked: a stray change event sends nothing');
+
+  /* ---------- not eligible (a child), or an older server without the field: hidden ---------- */
+  for (const [label, extra] of [['eligible false', { eligible: false }], ['eligible absent', { eligible: undefined }],
+                                ['eligible not a boolean', { eligible: 'yes' }]]) {
+    s = server(Object.assign({ channels: ['telegram'] }, extra));
+    if (extra.eligible === undefined) delete s.stored.eligible;
+    root = fakeRoot();
+    m = RP.mount(root, { fetchJson: s.fetchJson });
+    await m.ready;
+    eq(root.innerHTML, '', label + ': both controls hidden');
+    await m.change(input('send', false));
+    ok(s.puts().length === 0, label + ': a stray change event sends nothing');
+  }
+  s = server({});
+  root = fakeRoot();
+  m = RP.mount(root, { fetchJson: s.fetchJson });
+  await m.ready;
+  ok(isOn(root.innerHTML, 'send') === false && isOn(root.innerHTML, 'full') === false, 'eligible true + linked: both controls shown');
 
   /* ---------- GET failure: hidden ---------- */
   root = fakeRoot();
@@ -125,7 +145,7 @@ eq(RP.putBody({ channels: [] }, 'other', true), null, 'an unknown control sends 
   await m.change(input('send', true));
   eq(s.puts()[0][2], { channels: ['web_push', 'telegram'], full_text: false }, 'turning it on keeps web_push');
 
-  /* ---------- not an adult: 403 reverts and says so plainly ---------- */
+  /* ---------- the backstop: the GET said eligible but the PUT says 403 -> reverts and says so plainly ---------- */
   s = server({});
   s.next = 403;
   root = fakeRoot();
