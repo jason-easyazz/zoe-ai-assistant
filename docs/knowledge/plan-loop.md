@@ -86,7 +86,8 @@ The table gained three receipt kinds the writers already record: `list_remove` -
 1. `ZOE_PLAN_LOOP` off: `None`, before anything else.
 2. `looks_multi_part` (deterministic, no model): two DIFFERENT action words and something joining them. "Add milk and eggs to
    the list" is one action. A turn that fails this returns `None` at once, so a single-tool turn never reaches the planner.
-3. A turn the distress / medical floor owns returns `None`: it is never planned.
+3. A turn the distress / medical floor owns, or that the child safety floor would answer for this speaker, returns `None`: it
+   is never planned, and the floor answers it on the normal path.
 4. The planner is asked ONCE, with the speaker's words and the tool list and nothing else: no history, no memory, no list
    contents, no calendar titles, no tool output. The real call (`brain_planner`) is one JSON-schema-constrained request to the
    Gemma brain inside `brain_scheduler.declare("turn:plan_loop")`, 8 s at most; a failure or timeout returns `None`.

@@ -156,3 +156,13 @@ def test_negative_control_the_guard_replaces_a_done_sentence_no_receipt_backs():
 def test_negative_control_and_with_the_guard_off_it_is_spoken(monkeypatch):
     monkeypatch.setenv("ZOE_WRITE_CLAIM_GUARD", "off")
     assert reply.speak(FORGED, ADULT, write_receipts.begin(), utterance=SAID) == "I added floss to the shopping list."
+
+
+@pytest.mark.parametrize("date, said", [("tomorrow", "I set a reminder: bins tomorrow."), ("Tonight", "I set a reminder: bins Tonight."),
+                                        ("today", "I set a reminder: bins today."), ("friday", "I set a reminder: bins on friday."),
+                                        ("", "I set a reminder: bins.")])
+def test_a_day_word_that_takes_no_on_is_said_without_one(date, said):
+    step = pl.Step("reminder_create", {"title": "bins", "date": date, "time": ""}, "remind me about the bins")
+    assert reply.done_sentence(step) == said
+    assert reply.done_sentence(pl.Step("calendar_create", {"title": "lunch", "date": "tomorrow", "time": "1"}, "x")) == \
+        "I added lunch to your calendar tomorrow at 1."
