@@ -536,6 +536,8 @@ _ENTRIES = (
     _f('ZOE_MEMORY_REJECT_LEDGER', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_MEMORY_SLOT_CHECK', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/memory-views.md'),
     _f('ZOE_MEMORY_STARTUP_STRICT', 'bool', False, doc='docs/knowledge/python-312-venv-migration.md'),
+    _f('ZOE_MEMORY_TICK_DEFER_S', 'float', 0.0, doc='services/zoe-data/AGENTS.md',
+       note='prompt-read access ticks wait this long before writing (0 = at once, unchanged); 1.0 is the candidate'),
     _f('ZOE_MERGE_QUEUE_ENABLED', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_MERGE_QUEUE_LABEL', 'str', 'auto-merge'),
     _f('ZOE_MERGE_QUEUE_MAX_CANDIDATES', 'int', 50),
