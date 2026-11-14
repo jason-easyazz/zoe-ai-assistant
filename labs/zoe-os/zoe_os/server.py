@@ -27,7 +27,7 @@ import secrets
 import socket
 import threading
 
-from . import wire
+from . import explain, wire
 from .capability import ConsentError
 from .events import Event, Kind
 from .kernel import Kernel
@@ -255,9 +255,20 @@ class KernelServer:
         return dataclasses.asdict(r)
 
     def _op_explain(self, conn: _Conn, a: dict) -> dict:
-        """With ``seq``: that event and its causes, as far as the caller may read them.
+        """With ``person`` (surfaces only): the full answer of ``explain.Explainer.why``.
+        With ``seq``: that event and its causes, as far as the calling skill may read them.
         Without: the caller's own standing (manifest, who granted it, its recent refusals)."""
         spine, store = self.kernel.spine, self.kernel.grants
+        if "person" in a:               # a PERSON asks "why did you do that?", through a surface
+            self._person_op(conn, "explain for a person")
+            ex, seq = self.kernel.explainer, a.get("seq")
+            if seq is None:
+                if a.get("last", "action") not in explain.LAST:
+                    raise ValueError("last is action, offer or refusal")
+                seq = ex.last(a["person"], a.get("last", "action"))
+            return ex.why(seq if seq is not None else 0, person=a["person"])
+        if "last" in a:
+            raise ValueError("last needs a person")
         if "seq" in a:
             ev = spine._get(a["seq"])
             if ev is None or not spine._deliverable(conn.name, ev):
