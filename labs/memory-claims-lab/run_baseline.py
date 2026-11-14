@@ -222,6 +222,7 @@ def run_case(case):
 
 def run_all():
     cases = json.loads(GOLDEN.read_text(encoding="utf-8"))["cases"]
+    weak = {c["id"]: c["weak_pass_today"] for c in cases if c.get("weak_pass_today")}
     results, totals = {}, collections.defaultdict(lambda: collections.Counter())
     for c in cases:
         status, reason, detail = run_case(c)
@@ -229,10 +230,17 @@ def run_all():
         totals[c["class"]][status] += 1
     by_class = {k: {s: totals[k].get(s, 0) for s in (PASS, FAIL, NOT_RUNNABLE)} for k in sorted(totals)}
     allt = {s: sum(v[s] for v in by_class.values()) for s in (PASS, FAIL, NOT_RUNNABLE)}
-    return {"cases": len(cases), "totals": allt, "by_class": by_class,
+    return {"cases": len(cases), "weak_passes": {i: w for i, w in weak.items() if results[i]["status"] == PASS}, "totals": allt, "by_class": by_class,
             "failing_ids": [i for i, r in results.items() if r["status"] == FAIL],
             "not_runnable": {i: r["reason"] for i, r in results.items() if r["status"] == NOT_RUNNABLE},
             "results": results}
+
+
+def dump(rep) -> str:
+    """The report as JSON, one result per line (reviewable, small diffs)."""
+    head = {k: v for k, v in rep.items() if k != "results"}
+    body = ",\n".join(f" {json.dumps(i)}: {json.dumps(r)}" for i, r in rep["results"].items())
+    return json.dumps(head)[:-1] + ', "results": {\n' + body + "\n}}\n"
 
 
 def render(rep):
@@ -244,6 +252,8 @@ def render(rep):
         lines.append(f"{k:<12} pass {v[PASS]:>3}  fail {v[FAIL]:>3}  not_runnable {v[NOT_RUNNABLE]:>3}")
     t = rep["totals"]
     lines.append(f"{'TOTAL':<12} pass {t[PASS]:>3}  fail {t[FAIL]:>3}  not_runnable {t[NOT_RUNNABLE]:>3}  of {rep['cases']}")
+    if rep["weak_passes"]:
+        lines += ["", "WEAK PASSES (a pass here proves nothing yet):"] + [f"  {i}: {w}" for i, w in rep["weak_passes"].items()]
     return "\n".join(lines)
 
 
@@ -255,9 +265,9 @@ def main(argv=None):
     rep = run_all()
     print(render(rep))
     if a.json:
-        Path(a.json).write_text(json.dumps(rep, indent=1) + "\n", encoding="utf-8")
+        Path(a.json).write_text(dump(rep), encoding="utf-8")
     if a.write_baseline:
-        BASELINE.write_text(json.dumps(rep, indent=1) + "\n", encoding="utf-8")
+        BASELINE.write_text(dump(rep), encoding="utf-8")
     return 0
 
 
