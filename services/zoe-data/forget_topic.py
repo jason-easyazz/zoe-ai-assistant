@@ -315,6 +315,13 @@ async def forget(svc: Any, user_id: str, topic: str) -> Result:
         logger.warning("forget_topic: conversation notes erase failed (%s)", type(exc).__name__)
         res.store_down = True
         return res
+    try:     # the in-process correction memory: a correction about any topic word, or about a subject the topic's rows name
+        import value_correction
+
+        value_correction.forget_matching(user_id, lambda text: any(row_matches([g], text) for g in groups))
+        value_correction.forget_in_texts(user_id, [getattr(r, "text", "") or "" for r in rows])
+    except Exception:  # noqa: BLE001 - in-process and never raises; nothing here may break the forget
+        pass
     archived: list = []
     for r in rows:
         try:
