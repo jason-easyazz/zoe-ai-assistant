@@ -118,17 +118,26 @@ def _sql(tail: str) -> str:
             f"AND {message_owner_expr()} = ? AND {off_record_sql('cm')} {tail}")
 
 
-async def _rows(sql: str, params: tuple) -> list:
+def _db():
     from db_pool import get_db_ctx
 
-    async with get_db_ctx() as db:
+    return get_db_ctx()
+
+
+async def _rows(sql: str, params: tuple) -> list:
+    async with _db() as db:
         rows = await (await db.execute(sql, params)).fetchall()
     return [(str(r["id"]), r["content"] or "") if isinstance(r, dict) else (str(tuple(r)[0]), tuple(r)[1] or "") for r in rows]
 
 
-async def _session_turns(user_id: str, session_id: str) -> list:
-    """The member's recent on-the-record user turns in the session, newest first: ``[(id, content)]``."""
-    return await _rows(_sql("AND cm.session_id = ? ORDER BY cm.created_at::timestamptz DESC LIMIT 50"), (user_id, session_id))
+async def _exact_turns(user_id: str, session_id: str, want: str) -> tuple:
+    """``(an id, how many)`` of the member's on-the-record user turns in the WHOLE session whose saved text equals ``want``,
+    counted in SQL (no window: an identical older turn anywhere in the session makes it ambiguous)."""
+    sql = _sql("AND cm.session_id = ? AND cm.content = ?").replace("SELECT cm.id, cm.content", "SELECT MIN(cm.id), COUNT(*)", 1)
+    async with _db() as db:
+        row = (await (await db.execute(sql, (user_id, session_id, want))).fetchall() or [(None, 0)])[0]
+    row = tuple(row.values()) if isinstance(row, dict) else tuple(row)
+    return (str(row[0]) if row[0] is not None else None), int(row[1] or 0)
 
 
 def _saved_form(words: str) -> str:
@@ -147,11 +156,11 @@ async def _find_turn_id(user_id: str, session_id: str, words: str) -> Optional[s
     """``chat_messages.id`` of the ONE saved turn of this member in this session whose text EQUALS these words in saved form.
     None (logged ``not_found`` / ``ambiguous``) when no turn or more than one matches: a marker never binds a guessed turn."""
     want = _saved_form(words)
-    hits = [rid for rid, content in await _session_turns(user_id, session_id) if want and content == want]
-    if len(hits) != 1:
-        logger.info("PENDING_CORRECTION skipped reason=%s user=%s n=%d", "ambiguous" if hits else "not_found", user_id, len(hits))
+    turn_id, n = await _exact_turns(user_id, session_id, want) if want else (None, 0)
+    if n != 1 or not turn_id:
+        logger.info("PENDING_CORRECTION skipped reason=%s user=%s n=%d", "ambiguous" if n > 1 else "not_found", user_id, n)
         return None
-    return hits[0]
+    return turn_id
 
 
 async def _fetch_texts(user_id: str, turn_ids: list) -> dict:
@@ -192,8 +201,13 @@ async def texts_for_packet(user_id: str, *, now: Optional[float] = None) -> list
     except Exception as exc:  # noqa: BLE001
         logger.debug("PENDING_CORRECTION skipped reason=read_error user=%s err=%s", user_id, type(exc).__name__)
         return []
+    # A forget that landed WHILE the fetch was awaited cleared the marker: what was read for it is dropped, never served. (The
+    # fetch itself filters off-the-record turns, so a turn the forget flagged is not returned either.)
+    still = {m.turn_id for m in pending(user_id, now=now)}
     out = []
     for m in live:
+        if m.turn_id not in still:
+            continue
         text = " ".join((found.get(m.turn_id) or "").split())
         if text:
             out.append(text[:TEXT_CAP])

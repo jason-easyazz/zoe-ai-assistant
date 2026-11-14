@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import inspect
 import logging
+import re
 
 import pytest
 from fastapi import FastAPI
@@ -26,23 +27,44 @@ MEMBER, OTHER = "member-wren", "member-ober"
 FIX = "No, the book club is on the 19th, not the 12th"            # synthetic, correction-shaped
 OLD_ROW = "The book club meets on the 12th"
 HEAD = "## A newer correction from the member"
-CHAT: dict = {}                                                     # id -> {user, session, content}
-_REAL_FETCH, _REAL_TURNS = cm._fetch_texts, cm._session_turns
+CHAT: dict = {}                                                     # id -> {user, session, content, off}; insertion order = time
+_REAL_DB = cm._db
+ON_FETCH: list = []                                                 # coroutines run INSIDE the text fetch (the race tests)
+
+
+class _ChatDb:
+    """``chat_messages`` in memory, answering the two query shapes correction_marker builds (the SQL itself is pinned below):
+    owner = params[0], off-record rows excluded, then by id, or by session + exact content (COUNT over the whole session)."""
+
+    async def execute(self, sql, params):
+        rows = [(t, r) for t, r in reversed(CHAT.items()) if r["user"] == params[0] and not r.get("off")]
+        if "cm.id IN" in sql:
+            for hook in list(ON_FETCH):
+                ON_FETCH.remove(hook)
+                await hook()
+            self.out = [(t, r["content"]) for t, r in rows if t in params[1:]]
+        else:
+            window = re.search(r"LIMIT (\d+)", sql)                 # a windowed query (the old bug) sees only the newest N
+            rows = [(t, r) for t, r in rows if r["session"] == params[1]][: int(window.group(1)) if window else None]
+            hits = [t for t, r in rows if r["content"] == params[2]]
+            self.out = [(min(hits) if hits else None, len(hits))]
+        return self
+
+    async def fetchall(self):
+        return self.out
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
 
 
 @pytest.fixture(autouse=True)
 def _state(monkeypatch):
-    cm.reset(), turn_forget.reset(), CHAT.clear()
+    cm.reset(), turn_forget.reset(), CHAT.clear(), ON_FETCH.clear()
     monkeypatch.setenv("ZOE_CORRECTION_PENDING_MARKER", "1")
-
-    async def turns(user_id, session_id):        # the SQL's owner + session filter, newest first (pinned below)
-        return [(t, r["content"]) for t, r in reversed(CHAT.items()) if (r["user"], r["session"]) == (user_id, session_id)]
-
-    async def fetch(user_id, ids):
-        return {t: CHAT[t]["content"] for t in ids if t in CHAT and CHAT[t]["user"] == user_id}
-
-    monkeypatch.setattr(cm, "_session_turns", turns)
-    monkeypatch.setattr(cm, "_fetch_texts", fetch)
+    monkeypatch.setattr(cm, "_db", lambda: _ChatDb())          # only the marker's reads; every other store is untouched
     yield
     cm.reset(), turn_forget.reset()
 
@@ -188,9 +210,18 @@ async def test_the_real_read_filters_by_owner_and_off_record(monkeypatch):
             return False
 
     monkeypatch.setattr(db_pool, "get_db_ctx", lambda: _Db())
-    assert await _REAL_FETCH(MEMBER, ["t1"]) == {"t1": FIX} and await _REAL_TURNS(MEMBER, "s-panel") == [("t1", FIX)]
-    for (sql, params), tail in zip(seen, ("cm.id IN (?)", "cm.session_id = ? ORDER BY")):
+    monkeypatch.setattr(cm, "_db", _REAL_DB)                                       # the real seam, through db_pool
+    assert await cm._fetch_texts(MEMBER, ["t1"]) == {"t1": FIX}
+    seen_fetch = seen[-1]
+    _Db.fetchall = lambda self: _ret([("t1", 2)])
+    assert await cm._exact_turns(MEMBER, "s-panel", FIX) == ("t1", 2)
+    for (sql, params), tail in zip((seen_fetch, seen[-1]), ("cm.id IN (?)", "cm.session_id = ? AND cm.content = ?")):
         assert message_owner_expr() in sql and off_record_sql("cm") in sql and tail in sql and params[0] == MEMBER
+    assert "COUNT(*)" in seen[-1][0] and "LIMIT" not in seen[-1][0] and seen[-1][1] == (MEMBER, "s-panel", FIX)
+
+
+async def _ret(v):
+    return v
 
 
 async def test_every_forget_path_clears_only_that_member(monkeypatch):
@@ -226,6 +257,72 @@ async def test_the_real_delete_user_clears_the_marker_and_the_block(monkeypatch,
     await _svc(_Col(["zoe_wren_aa"]), _Col(), tmp_path).delete_user(MEMBER, actor="admin", reason="rtbf")
     assert cm.pending(MEMBER) == [] and len(cm.pending(OTHER)) == 1
     assert HEAD not in _packet(monkeypatch)["packet"]
+
+
+async def test_an_identical_turn_anywhere_in_the_session_makes_it_ambiguous():
+    CHAT["t00"] = {"user": MEMBER, "session": "s-panel", "content": FIX}          # oldest: outside any newest-50 window
+    for i in range(1, 61):
+        CHAT[f"t{i:02d}"] = {"user": MEMBER, "session": "s-panel", "content": f"filler turn {i}"}
+    CHAT["t99"] = {"user": MEMBER, "session": "s-panel", "content": FIX}
+    assert await cm.note_turn(FIX, MEMBER, "s-panel") is False and cm.pending(MEMBER) == []
+    del CHAT["t00"]                                                                 # control: then it is the only one
+    assert await cm.note_turn(FIX, MEMBER, "s-panel") is True and cm.pending(MEMBER)[0].turn_id == "t99"
+
+
+async def test_a_turn_flagged_off_the_record_is_never_served(monkeypatch):
+    await _note()
+    assert HEAD in _packet(monkeypatch)["packet"]                                   # control
+    CHAT["t1"]["off"] = True
+    assert HEAD not in _packet(monkeypatch)["packet"] and cm.pending(MEMBER) == []
+
+
+async def _forget_topic():
+    import forget_topic
+
+    await forget_topic.forget(object(), MEMBER, "the book club")
+
+
+async def _forget_entity():
+    import memory_forget_cascade as mfc
+
+    await mfc.cascade_forget(MEMBER, "Wren")
+
+
+async def _forget_member(tmp_path):
+    from test_memory_loss_class import _Col, _svc
+
+    await _svc(_Col(["zoe_wren_aa"]), _Col(), tmp_path).delete_user(MEMBER, actor="admin", reason="rtbf")
+
+
+@pytest.mark.parametrize("which", ["topic", "entity", "delete"])
+async def test_a_forget_landing_during_the_fetch_serves_nothing(monkeypatch, tmp_path, which):
+    import memory_forget_cascade as mfc
+
+    async def noop(*a, **k):
+        return None
+    monkeypatch.setattr(mfc, "_clear", noop)
+    monkeypatch.setattr(mfc, "retry_pending", noop)
+    monkeypatch.setattr(memory_service, "_invalidate_agent_user_facts_cache", lambda _u: None)
+    forget = {"topic": _forget_topic, "entity": _forget_entity, "delete": lambda: _forget_member(tmp_path)}[which]
+    await _note()
+    assert HEAD in _packet(monkeypatch)["packet"]                                   # control: no forget, served
+    ON_FETCH.append(forget)                                                         # the forget completes mid-fetch
+    assert await cm.texts_for_packet(MEMBER) == [] and cm.pending(MEMBER) == []
+    assert HEAD not in _packet(monkeypatch)["packet"]
+
+
+async def test_topic_forget_clears_markers_after_its_body_flagged_the_transcript(monkeypatch):
+    import forget_topic
+
+    seen = []
+
+    async def rows(svc, user_id, groups):                     # inside the body, before the transcript rows are flagged
+        seen.append(len(cm.pending(user_id)))
+        raise RuntimeError("store down")
+    monkeypatch.setattr(forget_topic, "_owned_rows", rows)
+    cm.put(MEMBER, "t1")
+    await forget_topic.forget(object(), MEMBER, "the book club")
+    assert seen == [1] and cm.pending(MEMBER) == []           # still there while the body ran; gone after (even on store_down)
 
 
 async def test_clear_by_turn_ttl_and_bound():

@@ -264,13 +264,19 @@ async def _withdraw_offers(user_id: str, groups: list, forgotten_texts: list) ->
 
 async def forget(svc: Any, user_id: str, topic: str) -> Result:
     """Forget the topic. Never raises: a failure is a ``Result`` that says what was and was not done."""
+    try:
+        return await _forget(svc, user_id, topic)
+    finally:   # any forget drops the member's pending corrections - AFTER their transcript turns went off the record
+        import correction_marker
+
+        correction_marker.forget_user(user_id, reason="forget_topic")
+
+
+async def _forget(svc: Any, user_id: str, topic: str) -> Result:
     res = Result()
     groups = topic_groups(topic)
     if not groups:
         return res
-    import correction_marker
-
-    correction_marker.forget_user(user_id, reason="forget_topic")   # any forget drops the member's pending corrections
     try:
         rows = await _owned_rows(svc, user_id, groups)
     except Exception as exc:  # noqa: BLE001
