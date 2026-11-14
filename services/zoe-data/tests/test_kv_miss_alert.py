@@ -168,46 +168,122 @@ def test_a_partial_prefix_hit_that_still_reprefilled_a_lot_is_a_first_miss_and_a
     assert len(calls) == 2
 
 
-def test_an_undelivered_alert_logs_why(monkeypatch, caplog, tmp_path):
-    """The 2026-10-28 alert logged only 'not delivered'; the sender's reason (and never the bot token) must reach the log."""
+def _ops_rig(monkeypatch, tmp_path, file_text: str, env_token: str):
+    """The REAL ops helper, loaded from its file and pointed at temp paths, with urlopen faked: kv_miss_alert's own send
+    path end to end, with no network and nothing under ~/.zoe."""
+    import importlib.util
+    import urllib.request
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "_zoe_clw_test", Path(kma._REPO_ROOT) / "scripts" / "maintenance" / "zoe_crash_loop_watch.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    envf = tmp_path / "bot.env"
+    envf.write_text(file_text)
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(envf))
+    monkeypatch.setattr(mod, "OUTBOX_PATH", str(tmp_path / "alert-outbox.json"))
+    monkeypatch.setattr(mod, "INLINE_BACKOFF_S", (0.0, 0.0))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", env_token)
+    monkeypatch.delenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", raising=False)
+    monkeypatch.setattr(kma, "_ops_mod", mod)
     monkeypatch.setenv("ZOE_KV_MISS_ALERT_STATE", str(tmp_path / "state.json"))
+    monkeypatch.delenv("ZOE_PANEL_KV_MISS_ALERT", raising=False)
     monkeypatch.setattr(kma, "_alerted_day", "")
     monkeypatch.setattr(kma, "_inflight", set())
     monkeypatch.setattr(kma, "_attempts", {})
     monkeypatch.setattr(kma, "_last_failure", "")
+    urls: list = []
+    up = [True]
 
-    def sender(text):
-        kma._last_failure = kma._redact("crash-watch: telegram send failed: <urlopen error timed out> /bot123:SECRET-tok/sendMessage")
-        assert kma._redact("recipient jason@example.com chat_id=123456 failed") == "other", "free text never reaches the log"
-        assert kma._redact("crash-watch: telegram send failed: HTTP Error 403: Forbidden") == "http_403"
-        return False
+    class _Resp:
+        status = 200
 
-    caplog.set_level("WARNING", logger="kv_miss_alert")
-    kma.note_first_miss(1087, 2154, now=DAY1, send=sender, sync=True)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        urls.append(req.full_url)
+        if not up[0]:
+            import io
+            import urllib.error
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b""))
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return mod, urls, up
+
+
+def test_kv_miss_alert_send_path_uses_the_bot_file_token_over_a_planted_env_token(monkeypatch, tmp_path):
+    """The owed proof for 2026-10-28..11-03 (nine alerts lost to HTTP 401): zoe-data's environment carried a retired
+    agent's token. kv_miss_alert's OWN path (note_first_miss -> _ops_send -> deliver -> the ops transport) must use the
+    bot file's token. Negative control: a file with no token falls back to the env token."""
+    mod, urls, _up = _ops_rig(monkeypatch, tmp_path, "TELEGRAM_BOT_TOKEN=file-token\nZOE_ALERT_TELEGRAM_CHAT_IDS=42\n",
+                              "env-token")
+    assert kma.note_first_miss(3400, 0, now=DAY1, sync=True)
+    assert len(urls) == 1 and "/botfile-token/" in urls[0] and "env-token" not in urls[0]
+    (tmp_path / "bot.env").write_text("ZOE_ALERT_TELEGRAM_CHAT_IDS=42\n")              # control: no file token
+    assert kma.note_first_miss(3400, 0, now=DAY2, sync=True)
+    assert "/botenv-token/" in urls[-1]
+
+
+def test_kv_alert_that_fails_is_held_and_delivered_once_later_and_the_daily_cap_holds(monkeypatch, tmp_path, caplog):
+    """The lesson of the nine lost alerts: a failed send is HELD in the outbox (not lost), a later drain delivers it
+    exactly once, the day stays capped at one alert, and the auth failure is recorded as "alerting is broken"."""
+    import json
+
+    mod, urls, up = _ops_rig(monkeypatch, tmp_path, "TELEGRAM_BOT_TOKEN=file-token\nZOE_ALERT_TELEGRAM_CHAT_IDS=42\n",
+                             "env-token")
+    caplog.set_level("INFO", logger="kv_miss_alert")
+    noticed: list = []
+    monkeypatch.setattr(kma, "_notice_owner_now", lambda: noticed.append(1))
+    up[0] = False
+    assert kma.note_first_miss(3400, 0, now=DAY1, sync=True)
+    assert noticed == [1], "zoe-data was the sender: the owner's panel notice is created at that moment"
+    assert len(urls) == 1, "an auth refusal is not retried inline"
+    assert json.loads((tmp_path / "state.json").read_text())["alerted"] is True, "the outbox owns it now"
+    assert mod.alerting_broken()["reason"] == "auth" and kma.alerting_broken()["reason"] == "auth"
+    for i in range(4):                                                     # more misses today: no second alert
+        assert kma.note_first_miss(3400, 0, now=DAY1 + 60 + i, sync=True) is None
+    assert len(urls) == 1
     msgs = " ".join(r.getMessage() for r in caplog.records)
-    assert "not delivered" in msgs and "timeout" in msgs
-    assert "SECRET-tok" not in msgs and "123" not in msgs.replace("2026", "")
+    assert "ALERT_DELIVERY event=broken code=kv_miss_first" in msgs and "held in the outbox" in msgs
+    assert "file-token" not in msgs
+
+    up[0] = True                                                           # the token is fixed
+    assert mod.drain(now=10**10) == {"kv_miss_first": ("delivered", "-")}
+    assert mod.drain(now=10**10 + 1) == {} and len(urls) == 2, "delivered once, never again"
+    assert mod.alerting_broken() is None
 
 
-def test_the_ops_send_failure_reason_does_not_redirect_the_process_stderr(monkeypatch):
-    """The sender reports its failure through a callback: sys.stderr is never swapped, so unrelated output is not swallowed."""
-    import sys
-    import types
+def test_the_direct_owner_notice_runs_on_zoe_datas_event_loop(monkeypatch):
+    """From the alert's worker thread, the panel notification is scheduled on the captured event loop (no tick wait)."""
+    import asyncio
+    import threading
 
-    seen = {}
+    import notifications_store
 
-    def fake_telegram(text, report=None):
-        seen["stderr_untouched"] = sys.stderr is real_stderr
-        report("crash-watch: telegram send failed: HTTP Error 403: Forbidden")
-        return False
+    ran: list = []
 
-    real_stderr = sys.stderr
-    fake = types.SimpleNamespace(_telegram=fake_telegram)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setattr(kma.importlib.util, "spec_from_file_location",
-                        lambda *a, **k: types.SimpleNamespace(loader=types.SimpleNamespace(exec_module=lambda m: None)))
-    monkeypatch.setattr(kma.importlib.util, "module_from_spec", lambda spec: fake)
-    monkeypatch.setattr(kma, "_last_failure", "")
-    assert kma._ops_send("x") is False
-    assert seen["stderr_untouched"] is True
-    assert kma._last_failure == "http_403"
+    async def fake_sync():
+        ran.append(threading.current_thread().name)
+        return 1
+
+    monkeypatch.setattr(notifications_store, "sync_alerting_broken", fake_sync)
+
+    async def main():
+        monkeypatch.setattr(kma, "_loop", asyncio.get_running_loop())
+        t = threading.Thread(target=kma._notice_owner_now, name="kv-miss-alert")
+        t.start()
+        t.join()
+        for _ in range(20):
+            await asyncio.sleep(0)
+        return threading.current_thread().name
+
+    loop_thread = asyncio.run(main())
+    assert ran == [loop_thread]
+    monkeypatch.setattr(kma, "_loop", None)
+    kma._notice_owner_now()                                    # no loop: nothing, no error

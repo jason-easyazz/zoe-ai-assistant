@@ -75,6 +75,11 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
 
 ## Owner decisions waiting (recommendation first)
 
+- **SAFETY GAP, next safety PR (found 2026-11-14):** a present-tense self-assessment question ("am I having a heart attack?",
+  "is this a stroke?") gets no emergency floor today; it goes to the brain with no fixed "call now" reply. Fix it as its own small
+  PR with paraphrase tests and a replay: yes. Record: [open-problems](knowledge/open-problems.md) once #2491 lands.
+- **Should an unrecognised voice asking how to use a hazard be told to ask a grown-up** (#2480 covers known and possible children
+  only)? Yes: a wrongly refused adult is an annoyance, a wrongly answered child is the failure the floor exists to stop.
 - **Where connected-account secrets live:** in the credential broker, after the assistant's over-privileged service account is
   de-privileged; no key file readable by the assistant's own service.
 - **Who sees a newly connected calendar:** only its owner. **Calendars hosted on the home network:** not yet.
@@ -97,7 +102,10 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
    when the recording closes, wake turns first, behind a panel flag (off). First a week of a new log-only instrument (close timing,
    talk after the close, false closes). Number: share of turns with first sound inside 1 s, 8.5% today; predicted 40-70% of eligible
    turns. Inside 0.6 s stays 0%: detection on today's endpoint cannot reach it, and prediction is blocked because the speaker-mic mutes
-   itself during playback. State: instrument on a branch, no PR. Gate: the instrument week, zero overlap with speech, a panel rehearsal.
+   itself during playback. State: instrument built on a branch (no PR yet); decision logic #2470 (draft, standalone, nothing wired). **It cannot play until two
+   things exist:** (a) the daemon reads the panel's media state (buildable: the same local source the screensaver gate uses), and
+   (b) a speaker identity before the close (the last confident speaker of the session, or a score on audio before the close);
+   until then every guard that is unsure stays silent. Gate: the instrument week, zero overlap with speech, a panel rehearsal.
 2. **Sound human, step 3: she tunes her own end-of-turn wait** (owner idea, 2026-11-14) from counts of talk after the close,
    household-wide first, per person once voice ID is verified on the turn, inside a floor and ceiling, with a spoken override.
    Includes the owner's call on the faster clean tail `[default ZOE_VAD_CLEAN_TAIL_MS=0]` (560 closes a clean stop about 160 ms
@@ -110,24 +118,27 @@ misses on household panel turns: 48 in 27 days (26 first-of-day, 22 warm); no it
 5. **Calendar stage 1 proper, then contacts, then mail metadata:** the fetcher in the broker, the connect flow, a night-aware sync
    job, delete detection, the forget shield for remote events. Records: [`zoe-abilities.md`](architecture/zoe-abilities.md),
    [`connected-accounts.md`](knowledge/connected-accounts.md).
-6. **Evolve with no subscription: the router learns from its own outcomes.** Failure capture on behind the replay; router
+6. **Routines, stage 1: a daily checklist she walks you through** (owner idea and placement, 2026-11-14). A routine is a
+   per-person checklist tied to a moment (waking, a meal, leaving, bed), fresh each day; "remind me to take it to work tomorrow"
+   becomes one line on tomorrow's morning routine; a calendar event can add a line; she asks and ticks by voice and panel, and tells a
+   named carer about a missed step. No new sensors; opt-in per person and per routine. She never invents or changes a dose. Not
+   built: design note first. Numbers: steps prompted, confirmed and missed per day; wrong ticks (must be 0). Later stages (the
+   leaving catch, sensors, care mode): [IDEAS.md](IDEAS.md).
+7. **Evolve with no subscription: the router learns from its own outcomes.** Failure capture on behind the replay; router
    self-train `[default ZOE_ROUTER_SELFTRAIN=off]` in shadow, then on; a flag-dark route hint from the router to the brain, A/B on the
    voice corpus. Owner decision for each switch-on.
-7. **A sold unit runs the same stack on the buyer's own subscription,** linked by QR on the panel, with local landing (gates, merge,
+8. **A sold unit runs the same stack on the buyer's own subscription,** linked by QR on the panel, with local landing (gates, merge,
    verify, automatic rollback) instead of GitHub. Gate: Now 5; vendor terms for driving a consumer subscription unattended are
    unverified and must be checked before this is a product promise.
-8. **A1 stop blocking the event loop in the turn path.** Partly landed #2117 (router off the loop; `zoe_event_loop_lag_seconds` on
+9. **A1 stop blocking the event loop in the turn path.** Partly landed #2117 (router off the loop; `zoe_event_loop_lag_seconds` on
    `/metrics`). Not done: 1 s or longer stalls 4 to 16 times a day (2026-11-07 to 11-12) from blockers not yet attributed.
    Acceptance: the lag marker names what was running, and the 1 s stalls stop.
-9. **A5-A7 data safety, the rest:** off-box encrypted backups (owner picks the target and key); "forgotten" reaches every store that
+10. **A5-A7 data safety, the rest:** off-box encrypted backups (owner picks the target and key); "forgotten" reaches every store that
    holds household words (router shadow log, training copy, retired agent session stores); delete the retired training timer and its
    duplicate corpus. Acceptance: an inventory test of where household text lives.
-10. **B4** resume the `voice_tts.py` split (leaves first), then a size ratchet test; plan the `intent_router.py` split. Agent, replay
-    on every step.
-
 ## Later (link list)
 
-**Platform and structure** (deep dive B): [B2 harness out of zoe-data](research/architecture-deep-dive-2026-10-18/lane-C-brain-ops-roadmap.md), B5 tool schemas from one registry, B6 flag registry,
+**Platform and structure** (deep dive B): B4 resume the `voice_tts.py` split (leaves first), then a size ratchet test, and plan the `intent_router.py` split (replay on every step; moved from Next 2026-11-14 to keep Next at 10), [B2 harness out of zoe-data](research/architecture-deep-dive-2026-10-18/lane-C-brain-ops-roadmap.md), B5 tool schemas from one registry, B6 flag registry,
 B7 observability and `turn_id`, B9 ops hygiene (track every live unit, container caps, `.env` reaping), [tech-debt plan](architecture/tech-debt-remediation-plan.md) Wave 4
 (chat split, typed config; plan untouched since July), [desktop UI overhaul](architecture/desktop-ui-overhaul-plan.md) (function-first waves, not started).
 Also: B1 brain lanes (`flue` as the in-code default pinned by `test_canonical_invariants`, promote the 2.x brain and the bot out of `labs/`); B3 finish the

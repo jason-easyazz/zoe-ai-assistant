@@ -1485,6 +1485,10 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     continue
                 if not await _is_contradiction(fact, existing_fact):
                     continue
+                from value_correction import drops_value
+
+                if drops_value(existing_fact, fact):
+                    continue        # never replace a row with one that holds less (QA round 10): both stay
                 try:
                     new_ref = await svc.review(
                         candidate.id,
@@ -2406,6 +2410,10 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
             pairs_checked += 1
             if not await _is_contradiction(newer.text, older.text):
                 continue
+            from value_correction import drops_value
+
+            if drops_value(older.text, newer.text):
+                continue            # never replace a row with one that holds less (QA round 10): both stay
             try:
                 if await svc.review(
                     older.id,
