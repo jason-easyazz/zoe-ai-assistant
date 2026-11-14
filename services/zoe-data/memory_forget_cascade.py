@@ -268,7 +268,24 @@ async def cascade_forget(user_id: str, name: str, *, db=None) -> CascadeResult:
     if not user_id or not (name or "").strip():
         return res
     rx = _name_re(name)
+    import correction_marker
 
+    _clear_markers(correction_marker, user_id)   # any forget drops the member's pending corrections ...
+    try:
+        return await _cascade(user_id, name, rx, res, db)
+    finally:   # ... and again AFTER the cascade: a marker set while it ran must not outlive the forget
+        _clear_markers(correction_marker, user_id)
+
+
+def _clear_markers(correction_marker, user_id: str) -> None:
+    """Never raises: a failing marker clear must not replace the cascade's own result or exception."""
+    try:
+        correction_marker.forget_user(user_id, reason="forget_entity")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PENDING_CORRECTION clear_failed reason=forget_entity user=%s err=%s", user_id, type(exc).__name__)
+
+
+async def _cascade(user_id: str, name: str, rx, res: CascadeResult, db) -> CascadeResult:
     async def mutes() -> int:
         import restraint
 

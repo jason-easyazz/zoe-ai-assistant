@@ -1290,7 +1290,31 @@ async def memory_for_prompt(
     # OBJECT, which is truthy and would silently skip the fold for every core / Flue packet.
     if not continuity and tool_call is not True and not _is_continuity_turn(message, user_id):
         result = await _fold_pending_contact_offers(result, user_id, message)
-    return result
+    return await _fold_pending_corrections(result, user_id)
+
+
+_PENDING_CORRECTION_HEAD = (
+    "## A newer correction from the member\n"
+    "In their own words, said after the memories below were stored. Where they disagree, these words win:"
+)
+
+
+async def _fold_pending_corrections(packet: dict[str, Any], user_id: str) -> dict[str, Any]:
+    """The member's pending corrections (``correction_marker``, ZOE_CORRECTION_PENDING_MARKER, default OFF) as the FIRST section
+    of the packet: first so the per-section truncation of the brain seams can never cut it, with a lead-in that dates it after the
+    rows. The packet rides inside the latest user message, after the cached prefix, so this costs the cache nothing the recalled
+    rows do not already cost. Flag off, or no marker: the packet is returned untouched (byte-identical)."""
+    import correction_marker
+
+    texts = await correction_marker.texts_for_packet(user_id)
+    lines = [f'- "{t}"' for t in (_safe_prompt_inline(x, cap=correction_marker.TEXT_CAP) for x in texts) if t]
+    if not lines:
+        return packet
+    block = _PENDING_CORRECTION_HEAD + "\n" + "\n".join(lines)
+    existing = packet.get("packet") or ""
+    packet["packet"] = f"{block}\n\n{existing}" if existing else block
+    packet["pending_corrections"] = len(lines)
+    return packet
 
 
 def _is_continuity_turn(message: str, user_id: str) -> bool:
