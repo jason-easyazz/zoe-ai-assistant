@@ -68,7 +68,7 @@ RULES = ("deep", "quiet", "clean", "hesitation", "no_speech", "max_duration")
 TURN_KINDS = ("wake", "followup", "conversation", "barge")
 #: in gate order (the first that applies is the one reported)
 SKIPS = ("disabled", "error", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
-         "idle_greeting", "late", "guest", "low_confidence", "prev_question", "budget", "no_bank", "voice_mismatch")
+         "idle_greeting", "guest", "low_confidence", "late", "prev_question", "budget", "no_bank", "voice_mismatch")
 LOAD_RESULTS = ("ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format", "too_long", "too_few")
 NO_SKIP = "-"
 
@@ -323,14 +323,14 @@ def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
         return "night"  # G:night
     if ctx.idle_h >= s.idle_greet_h:
         return "idle_greeting"  # G:idle_greeting
-    if ctx.verdict_ms is None or ctx.verdict_ms > s.score_deadline_ms:
-        return "late"  # G:late (the verdict came after REFLEX_SCORE_DEADLINE_MS, or when is unknown)
     if ctx.guest is not False and not s.for_guests:
         return "guest"  # G:guest (a guest or an unknown speaker: silent unless REFLEX_FOR_GUESTS)
     if not isinstance(ctx.speaker_model, str) or ctx.speaker_model not in KNOWN_SPEAKER_MODELS:
         return "low_confidence"  # G:model_unknown (no model, or a retired / unknown one: its accept means nothing here)
     if ctx.speaker_accept is not True:
         return "low_confidence"  # G:not_accepted (the model's own FAR 0.1 % accept, exactly True; None / False / 1 = silent)
+    if ctx.verdict_ms is None or ctx.verdict_ms > s.score_deadline_ms:
+        return "late"  # G:late (an accepted verdict that came after REFLEX_SCORE_DEADLINE_MS, or at an unknown time)
     if window and ctx.prev_question:
         return "prev_question"  # G:prev_question
     if ctx.since_last_s is not None and ctx.since_last_s < s.min_gap_s:
