@@ -1721,8 +1721,8 @@
   var TIMERS_MEMO_MS=10000,_tmMemo={at:0,p:null};
   function timersGet(now){
     now=now||Date.now();
-    if(_tmMemo.p&&now-_tmMemo.at<TIMERS_MEMO_MS)return _tmMemo.p;
-    _tmMemo.at=now;
+    if(_tmMemo.p&&_tmMemo.s===sessKey()&&now-_tmMemo.at<TIMERS_MEMO_MS)return _tmMemo.p;   // never the answer of another session
+    _tmMemo.at=now;_tmMemo.s=sessKey();
     var p=apiGet('/api/skybridge/timers');
     _tmMemo.p=p;
     p.catch(function(){if(_tmMemo.p===p)_tmMemo.p=null;});
@@ -2071,8 +2071,9 @@
       if(!arr||!arr.length)return '';
       return '<div class="wksec"><h4>'+esc(title)+' ('+arr.length+')</h4>'+arr.map(function(it){return itemHtml(it,cls,withReason);}).join('')+'</div>';
     }
+    var s0=sessKey();
     apiGet('/api/board/summary').then(function(d){
-      if(_cur!=='work')return;
+      if(_cur!=='work'||!sessLive(s0))return;
       if(!d||!d.ok){body.innerHTML='<div class="wkempty">Board unavailable — the runner or Multica may be down.</div>';if(meta)meta.textContent='';return;}
       var c=d.counts||{};
       if(meta)meta.textContent=(d.needs_attention?d.needs_attention+' need feedback · ':'')+(c.done||0)+' done · '+(c.todo||0)+' queued';
@@ -2082,7 +2083,7 @@
       h+=section('In review',d.in_review,'review',false);
       h+=section('Recently shipped',d.recently_done,'done',false);
       body.innerHTML=h||'<div class="wkempty">Nothing on the board yet.</div>';
-    }).catch(function(){if(_cur==='work')body.innerHTML='<div class="wkempty">Board unavailable.</div>';});
+    }).catch(function(){if(_cur==='work'&&sessLive(s0))body.innerHTML='<div class="wkempty">Board unavailable.</div>';});
   }
 
   // ---- live home data: real clock + weather + today's agenda (no placeholder data) ----
@@ -2103,6 +2104,32 @@
     var role=String(u.role||'').toLowerCase(),uid=String(u.user_id||'').toLowerCase();
     return (!role||role==='guest'||!uid||uid==='guest')?null:u;}
   // MEMBER-END
+  // SESSCHECK-BEGIN - a screen showing a member's data is painted for ONE session. sessLive(s0) is false once the session changed
+  // since the request started (s0 = sid() then), so a late answer for member A never paints for member B or a guest; sessionCheck()
+  // forgets every cached private answer and repaints the open private screen the moment the member session changes. Called by
+  // kioskAuthFail, estateAuthFail and convEnsureSession, and by a 2 s watch (the executor's own recovery rewrites the session).
+  // Every container a member's data is painted into, per screen. On a session change they are emptied SYNCHRONOUSLY, before any
+  // re-render, so nothing of the previous member stays on screen while the new session's request is in flight. A hidden screen
+  // holds no DOM (show() rebuilds each one from its FULL template); an open dialog (event sheet, contact, reminder) is closed and
+  // the dock's timer chips go too.
+  var PRIVATE_BOXES={home:['hToday'],day:['dayEvents','dayRems','dayCommsList'],calendar:['calBody'],reminder:['remList','remMeta'],
+    list:['lstTabs','lstItems','lstCount'],person:['ctGrid','ctAZ','ctDetail'],work:['wkBody','wkMeta'],timer:['tmRings','tmMore','alFull'],
+    settings:['setSecs']};
+  function clearPrivate(){
+    Object.keys(PRIVATE_BOXES).forEach(function(s){PRIVATE_BOXES[s].forEach(function(id){var el=document.getElementById(id);if(el){el.innerHTML='';el.onclick=null;}});});
+    if(typeof _evd!=='undefined')_evd=null;
+    estClose();
+    if(typeof dbody!=='undefined'&&dbody)dbody.querySelectorAll('.pc.tchip').forEach(function(c){c.remove();});}
+  function sessKey(){return String(sid()||'')+(sessionMember()?'|m':'|g');}   // the ACTUAL session (a guest's too): a newly provisioned guest is a change, so its screen loads
+  function sessLive(s0){return sessKey()===s0;}   // identity = the session AND whether it is a member: the same id dropping to guest is a change
+  function sessionCheck(){var k=sessKey();if(k===_paintFor)return;
+    _paintFor=k;_tmMemo.p=null;_lst.lists=[];_lst.sel=null;_calEvents={};
+    clearPrivate();
+    if(PRIVATE_BOXES[_cur])show(_cur);}
+  // Who the page is painted for is fixed NOW, before any private read, so the very first change is seen (not taken as the start).
+  var _paintFor=sessKey();
+  setInterval(sessionCheck,2000);
+  // SESSCHECK-END
   // Off-kiosk (a member's laptop/phone on the estate) a 401 means the stored
   // session is dead server-side: drop it and raise the estate's OWN who+PIN card
   // in place — never navigate to the retired /touch/index.html (2026-10-05: a
@@ -2111,7 +2138,7 @@
   // the session (a guest asking for something personal) and raises the card.
   var _authBounced=false;
   function estateAuthFail(status){
-    if(status===401){if(!_authBounced){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}}window.__needAuth=true;settingsSessionCheck();}
+    if(status===401){if(!_authBounced){_authBounced=true;try{localStorage.removeItem('zoe_session');}catch(e){}}window.__needAuth=true;sessionCheck();}
     if(window.__showAuthCard)window.__showAuthCard();
   }
   // Kiosk policy for a 401/403 from a data call. The who+PIN card is NOT the
@@ -2131,7 +2158,7 @@
     if(!window.__guestBootSettled)return;
     var pend=null;try{pend=sessionStorage.getItem('zoe_panel_auth_challenge');}catch(e){}
     if(pend){if(window.__showAuthCard)window.__showAuthCard();return;}
-    if(status===401){try{localStorage.removeItem('zoe_session');}catch(e){}settingsSessionCheck();
+    if(status===401){try{localStorage.removeItem('zoe_session');}catch(e){}sessionCheck();
       var now=Date.now();if(now-_guestRefillT>30000){_guestRefillT=now;convEnsureSession();}}
   }
   // every request helper carries a deadline; guarded because the touch harness (and an old WebView) has no AbortSignal
@@ -2201,14 +2228,15 @@
     if(_cur==='home')wxApplySky(wxSky(w.icon));
   }).catch(function(){});}
   function loadToday(){var host=document.getElementById('hToday');if(!host)return;var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
+    var s0=sessKey();
     apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){
-      if(_cur!=='home')return;
+      if(_cur!=='home'||!sessLive(s0))return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="tr" style="opacity:.55;grid-template-columns:1fr"><span class="tn">Nothing scheduled today</span></div>';return;}
       host.innerHTML=evs.slice(0,4).map(function(e,i){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="tr" data-i="'+i+'" style="cursor:pointer"><span class="dot" style="--c:'+cat+'"></span><span class="tt">'+esc(when)+'</span><span class="tn">'+esc(e.title||'Event')+'</span></div>';}).join('');
       // A tapped agenda row opens that event in the Day view (its sheet), like a tapped Day row.
       host.onclick=function(ev){var row=ev.target.closest('.tr[data-i]');if(!row)return;var e=evs[+row.getAttribute('data-i')];if(!e)return;show('day');editEvent(e);};
-    }).catch(function(e){host.onclick=null;host.innerHTML='<div class="tr"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn lderr">'+esc(loadErr('day',e))+'</span></div>';});}
+    }).catch(function(e){if(!sessLive(s0))return;host.onclick=null;host.innerHTML='<div class="tr"><span class="dot" style="--c:var(--cat-health)"></span><span class="tt"></span><span class="tn lderr">'+esc(loadErr('day',e))+'</span></div>';});}
   function initHome(){tickClock();_homeTick=setInterval(tickClock,15000);loadWeather();loadToday();loadCheckCard();
     _wxTick=setInterval(function(){if(_cur==='home'){loadWeather();loadToday();loadCheckCard();}},600000);}
 
@@ -3520,8 +3548,8 @@
     return '';
   }
   function wireReminder(){
-    var ttl=document.getElementById('remMeta'),host=document.getElementById('remList');
-    apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder')return;
+    var ttl=document.getElementById('remMeta'),host=document.getElementById('remList'),s0=sessKey();
+    apiGet('/api/reminders/').then(function(d){if(_cur!=='reminder'||!sessLive(s0))return;
       var rs=(d&&d.reminders)||[];
       if(!rs.length){if(ttl)ttl.textContent='';if(host)host.innerHTML='<div style="color:var(--ink-faint);font-size:22px;padding-top:8px">No reminders set — ask Zoe to remind you of something.</div>';return;}
       if(ttl)ttl.textContent=rs.length+' reminder'+(rs.length===1?'':'s');
@@ -3533,7 +3561,7 @@
           if(act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(rem.title||'this reminder')+'”?',function(){
             apiJson('DELETE','/api/reminders/'+encodeURIComponent(rid)).then(function(){wireReminder();}).catch(function(){toast('Couldn’t delete');});});return;}
           editReminder(rem);};}
-    }).catch(function(e){if(_cur!=='reminder')return;if(ttl)ttl.textContent='';if(host)host.innerHTML='<div class="lderr">'+esc(loadErr('reminders',e))+'</div>';});
+    }).catch(function(e){if(_cur!=='reminder'||!sessLive(s0))return;if(ttl)ttl.textContent='';if(host)host.innerHTML='<div class="lderr">'+esc(loadErr('reminders',e))+'</div>';});
   }
   // Touch-friendly date+time stepper (native <input type=date> is a poor fit on
   // the kiosk — tiny native pickers). Big ▲/▼ steppers for day/mon/yr/hr/min.
@@ -3625,9 +3653,9 @@
   var _lst={lists:[],sel:null};
   function wireListsFull(){
     var tabs=document.getElementById('lstTabs');if(!tabs)return;
-    tabs.innerHTML='<span class="ltab" style="opacity:.6">Loading…</span>';
+    tabs.innerHTML='<span class="ltab" style="opacity:.6">Loading…</span>';var s0=sessKey();
     Promise.all(LIST_TYPES.map(function(t){return apiJson('GET','/api/lists/'+t).then(function(d){return {ok:true,lists:(d.lists||[]).map(function(l){l.list_type=l.list_type||t;return l;})};}).catch(function(e){return {ok:false,auth:!!(e&&e.message==='auth')};});}))
-      .then(function(results){if(_cur!=='list')return;
+      .then(function(results){if(_cur!=='list'||!sessLive(s0))return;
         var m=mergeListGroups(results,_lst.lists);
         if(m.allFailed){
           // Every type failed (a deploy restart, typically). Keep the last good
@@ -3643,7 +3671,7 @@
         if(_lst.sel&&!_lst.lists.some(function(l){return l.id===_lst.sel;}))_lst.sel=null;
         if(!_lst.sel&&_lst.lists.length)_lst.sel=_lst.lists[0].id;
         paintListTabs();paintListBody();
-      }).catch(function(e){if(_cur==='list')tabs.innerHTML='<span class="ltab lderr">'+esc(loadErr('lists',e))+'</span>';});
+      }).catch(function(e){if(_cur==='list'&&sessLive(s0))tabs.innerHTML='<span class="ltab lderr">'+esc(loadErr('lists',e))+'</span>';});
   }
   // Pure: per-type results → the board to show. Pinned by dist/test_touch_resilience.js.
   function mergeListGroups(results,prev){
@@ -3694,7 +3722,7 @@
   function wireTimer(){
     // Timers | Alarms tabs (js/touch-alarms.js): the strip appears only when the server has alarms (ZOE_ALARMS).
     if(window.ZoeAlarms)ZoeAlarms.attachTabs({tabsEl:document.getElementById('alTabs'),timersEl:document.querySelector('.tfull'),alarmsEl:document.getElementById('alFull')});
-    function paint(){timersGet().then(function(d){if(_cur!=='timer')return;
+    function paint(){var s0=sessKey();timersGet().then(function(d){if(_cur!=='timer'||!sessLive(s0))return;
       var ts=(d.timers||[]).filter(function(t){return timerRemain(t)>0;}).sort(function(a,b){return timerRemain(a)-timerRemain(b);});
       var rings=document.getElementById('tmRings'),more=document.getElementById('tmMore');
       if(!rings)return;
@@ -3720,7 +3748,7 @@
       var host=document.querySelector('.tfull');
       if(host)host.onclick=function(e){var b=e.target.closest('button[data-tid]');if(!b)return;
         apiJson('POST','/api/skybridge/timers/cancel',{timer_id:b.getAttribute('data-tid')}).then(function(){if(_homeTick){clearInterval(_homeTick);_homeTick=null;}paint();renderDock();}).catch(function(){actFail('The timer didn’t stop');});};
-    }).catch(function(e){var rings=document.getElementById('tmRings');if(_cur==='timer'&&rings&&!rings.querySelector('.tunit'))rings.innerHTML='<div class="tsub lderr" style="width:100%;text-align:center">'+esc(loadErr('timers',e))+'</div>';});}
+    }).catch(function(e){var rings=document.getElementById('tmRings');if(_cur==='timer'&&sessLive(s0)&&rings&&!rings.querySelector('.tunit'))rings.innerHTML='<div class="tsub lderr" style="width:100%;text-align:center">'+esc(loadErr('timers',e))+'</div>';});}
     paint();_wxTick=setInterval(function(){if(_cur==='timer')paint();},15000);
   }
 
@@ -3729,8 +3757,8 @@
   var _openPerson=null;   // {id,intro} from a voice 'introduce' arrival, consumed by the next wireContacts load
   function wireContacts(){
     var grid=document.getElementById('ctGrid'),det=document.getElementById('ctDetail'),az=document.getElementById('ctAZ');
-    var want=_openPerson;_openPerson=null;
-    apiJson('GET','/api/people/').then(function(d){if(_cur!=='person')return;
+    var want=_openPerson;_openPerson=null;var s0=sessKey();
+    apiJson('GET','/api/people/').then(function(d){if(_cur!=='person'||!sessLive(s0))return;
       var ps=(d.people||[]).slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''));});
       var have={};
       function railKey(nm){var ch=String(nm||'').charAt(0);try{ch=ch.normalize('NFD').replace(/[\u0300-\u036f]/g,'');}catch(e){}ch=ch.toUpperCase();return /^[A-Z]$/.test(ch)?ch:'#';}
@@ -3812,7 +3840,7 @@
               .catch(function(){toast('Couldn’t link');});};
         }).catch(function(){toast('Couldn’t load relationship types');});
       }
-    }).catch(function(e){if(!grid)return;
+    }).catch(function(e){if(!grid||!sessLive(s0))return;
       // 'auth' = the guest is not allowed (a 403); anything else is a FAILED
       // load and must not read as "sign in" (AGENTS.md: empty ≠ failed ≠ unknown).
       if(e&&e.message==='auth'){grid.innerHTML='<div class="ctsign lderr" style="padding:12px 0;cursor:pointer">Sign in to see your contacts. <span style="color:var(--accent);text-decoration:underline">Tap to sign in</span></div>';
@@ -4299,37 +4327,31 @@
   function _setGuest(){return !sessionMember();}
   // A member-private row is written only for the session that ASKED: `s0` is sid() when the request started, and an answer that
   // lands after the session changed (member -> guest, or another member) is dropped, never painted.
-  function _setLine(id,html,s0){if(s0!==undefined&&sid()!==s0)return;var el=document.getElementById(id);if(el&&_cur==='settings')el.innerHTML=html;}
+  function _setLine(id,html,s0){if(s0!==undefined&&sessKey()!==s0)return;var el=document.getElementById(id);if(el&&_cur==='settings')el.innerHTML=html;}
   function _setErr(id,what,e,s0){_setLine(id,'<div class="srow2"><span class="lderr">'+esc(loadErr(what,e))+'</span></div>',s0);}
-  // Settings was painted for ONE session; when that changes while it is open (the kiosk downgrade, a refused 401, a fresh guest,
-  // a PIN switch) the screen is repainted at once - for a guest that drops every private row. A 2 s watch covers the changes
-  // this script does not see (the executor's own recovery writes the stored session).
-  var _setFor=null,_setWatch=null;
-  function settingsSessionCheck(){
-    if(_cur!=='settings'){if(_setWatch){clearInterval(_setWatch);_setWatch=null;}return;}
-    var m=sessionMember(),now=m?String(m.session_id):'';
-    if(now!==_setFor)wireSettings();}
+  // A session change while Settings is open repaints it (sessionCheck, SESSCHECK block) - for a guest that drops every private row.
   // SETGUEST-END
   function _setAgo(iso){var t=Date.parse(iso||'');if(!isFinite(t))return 'not yet';var m=Math.max(0,Math.floor((Date.now()-t)/60000));
     return m<2?'just now':m<90?m+' minutes ago':m<2160?Math.round(m/60)+' hours ago':Math.round(m/1440)+' days ago';}
   // Voice ID: the signed-in member's OWN enrolment state (GET /api/enrollment/state). Enrolling is by voice only.
-  function wireSetVoiceId(){var s0=sid();
+  function wireSetVoiceId(){var s0=sessKey();
     apiGet('/api/enrollment/state').then(function(d){
-      var on=!!(d&&d.voice&&d.voice.enrolled);
+      if(!(d&&d.voice&&typeof d.voice.enrolled==='boolean')){_setErr('setVid','voice ID',null,s0);return;}   // unknown is not "not enrolled"
+      var on=d.voice.enrolled;
       _setLine('setVid',on?'<div class="srow2"><span>Your voice is enrolled</span><span class="sv">Zoe knows it’s you</span></div>'
         :'<div class="srow2"><span>Your voice isn’t enrolled yet</span></div><div class="srow2"><span class="lderr">Say: “Zoe, learn my voice”</span></div>',s0);
     }).catch(function(e){_setErr('setVid','voice ID',e,s0);});
   }
   // Pendant: GET /api/omi/my-pendant (404 = pendant sync not switched on, ZOE_OMI_SYNC_ENABLED) + its health line (GET /api/omi/health).
   // Linking is by voice at this panel ("Zoe, link my pendant"): proof is a verified voice + the pendant in the hand, never a form.
-  function wireSetPendant(){var s0=sid();
+  function wireSetPendant(){var s0=sessKey();
     apiGet('/api/omi/my-pendant').then(function(v){
       var lk=(v&&v.linking)||{},ps=(v&&v.pendants)||[];
       if(!lk.enabled){_setLine('setPend','<div class="srow2"><span class="lderr">'+esc(lk.message||'Pendant linking isn’t switched on here yet.')+'</span></div>',s0);return;}
       _setLine('setPend',(ps.length?ps.map(function(p){return '<div class="srow2"><span>'+esc(p.label||'My pendant')+'</span><span class="sv">Linked · synced '+esc(_setAgo(p.last_sync_at))+'</span></div>';}).join('')
           :'<div class="srow2"><span>No pendant linked to you yet</span></div>')
         +'<div id="setPendH"></div><div class="srow2"><span>Hold it next to the panel</span><button class="sbtn" data-act="pendlink">Link my pendant</button></div>',s0);
-      if(!ps.length||sid()!==s0)return;
+      if(!ps.length||sessKey()!==s0)return;
       apiGet('/api/omi/health').then(function(h){
         _setLine('setPendH',((h&&h.pendants)||[]).map(function(p){var b=['last report '+_setAgo(p.reported_at)];
           if(p.battery&&p.battery.pct!=null)b.push('battery '+p.battery.pct+'%');
@@ -4341,7 +4363,7 @@
   }
   // Notifications: the member's unread rows (GET /api/notifications/pending), words only. Their Done / That's me buttons live on the
   // ONE notifications card (js/touch-review-cards.js), which the orb press / "what's up?" pushes to this panel - opened from here the same way.
-  function wireSetNotes(){var s0=sid();
+  function wireSetNotes(){var s0=sessKey();
     Promise.all([apiGet('/api/notifications/pending'),apiGet('/api/proactive/inbox').catch(function(){return null;})]).then(function(r){
       var ns=(r[0]&&r[0].notifications)||[],card=!!(r[1]&&('notify' in r[1]));
       if(!ns.length){_setLine('setNote','<div class="srow2"><span>No new notifications</span></div>',s0);return;}
@@ -4353,8 +4375,7 @@
   }
   function wireSettings(){
     var host=document.getElementById('setSecs');if(!host)return;
-    var u=sessionMember(),who=(u&&(u.username||u.user_id))||'Guest',guest=!u;
-    _setFor=u?String(u.session_id):'';if(!_setWatch)_setWatch=setInterval(settingsSessionCheck,2000);
+    var u=sessionMember(),who=(u&&(u.username||u.user_id))||'Guest',guest=!u,s0=sessKey();
     var LOAD='<div class="srow2"><span class="lderr">Loading…</span></div>';
     var secs=guest?[
       {t:'This panel',b:'<div id="setPanel">'+LOAD+'</div>'},
@@ -4383,7 +4404,7 @@
 
     // Display: the panel's real brightness/night/idle prefs, live-wired.
     apiGet('/api/system/display/preferences?device_id='+encodeURIComponent(_panelDevId())).then(function(d){
-      if(_cur!=='settings')return;var pr=(d&&d.preferences)||{};_setPrefs={};
+      if(_cur!=='settings'||!sessLive(s0))return;var pr=(d&&d.preferences)||{};_setPrefs={};
       var el=document.getElementById('setDisp');if(!el)return;
       // 0 is a legitimate saved brightness — only fall back when the value is
       // genuinely absent, or a truthy-|| would render (and later re-save) the default.
@@ -4399,7 +4420,7 @@
         var patch={};patch[r.getAttribute('data-pref')]=+r.value;_savePrefs(patch);};});
       el.querySelectorAll('.sw[data-pref-t]').forEach(function(sw){sw.onclick=function(){
         var on=sw.classList.toggle('on');var patch={};patch[sw.getAttribute('data-pref-t')]=on;_savePrefs(patch);};});
-    }).catch(function(e){_setErr('setDisp','display settings',e);});
+    }).catch(function(e){_setErr('setDisp','display settings',e,s0);});
 
     wireSetSys();
 
@@ -4410,7 +4431,7 @@
       var vhost=document.getElementById('setVoice');if(!vhost)return;
       function unavailable(msg){vhost.innerHTML='<div class="srow2"><span class="lderr">'+esc(msg)+'</span></div>';}
       apiGet('/api/voice/voices').then(function(d){
-        if(_cur!=='settings')return;
+        if(_cur!=='settings'||!sessLive(s0))return;
         var voices=(d&&d.voices)||[],cur=(d&&d.current)||'';
         if(!voices.length){unavailable('No voices available');return;}
         vhost.innerHTML=
@@ -4441,7 +4462,7 @@
           }).catch(function(){toast('Preview unavailable');})
             .then(function(){pv.disabled=false;},function(){pv.disabled=false;});
         };
-      }).catch(function(e){_setErr('setVoice','voice settings',e);});
+      }).catch(function(e){_setErr('setVoice','voice settings',e,s0);});
     })();
 
     // Idle-logout: how long with no voice/touch before the panel session lapses.
@@ -4449,14 +4470,14 @@
       var sel=document.getElementById('setIdleLogout');if(!sel)return;
       var OPTS=[[900,'15 min'],[1800,'30 min'],[3600,'1 hour'],[14400,'4 hours'],[43200,'12 hours']];
       apiGet('/api/system/panel/idle-logout').then(function(d){
-        if(_cur!=='settings')return;var cur=+((d&&d.seconds));if(isNaN(cur))cur=1800;
+        if(_cur!=='settings'||!sessLive(s0))return;var cur=+((d&&d.seconds));if(isNaN(cur))cur=1800;
         if(!OPTS.some(function(o){return o[0]===cur;})){OPTS.push([cur,Math.round(cur/60)+' min']);}
         OPTS.sort(function(a,b){return a[0]-b[0];});
         sel.innerHTML=OPTS.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===cur?' selected':'')+'>'+o[1]+'</option>';}).join('');
         sel.onchange=function(){apiJson('PUT','/api/system/panel/idle-logout',{seconds:+sel.value})
           .then(function(){toast('Idle logout set to '+sel.options[sel.selectedIndex].text);})
           .catch(function(){toast('Couldn’t save that setting');});};
-      }).catch(function(){sel.innerHTML='<option value="">unavailable</option>';});
+      }).catch(function(){if(sessLive(s0))sel.innerHTML='<option value="">unavailable</option>';});
     })();
 
     host.onclick=setClick;
@@ -4507,12 +4528,19 @@
   // is gone: every cell is the same ~144px and fits four chips.
   var CAL_MONTH_CHIPS=4;
   var _cal={view:'week',gen:0,raf:0};var _calEvents={};
+  // CALSHAPE-BEGIN - one repeating event is many rows: each occurrence is keyed by `instance_key` (falls back to `id` for the
+  // pre-occurrence shape), placed on its `occurrence_date`; edits and deletes still send `id`, the series. A `read_only` event
+  // (a synced calendar) offers no Edit or Delete. Pinned by dist/test_touch_home_honest_panel.js.
+  function ekey(e){return String(e.instance_key!=null&&e.instance_key!==''?e.instance_key:e.id);}
+  function eday(e){return e.occurrence_date||e.start_date;}
+  function eRO(e){var v=e&&e.read_only;return v===true||v===1||v==='1'||v==='true';}
+  // CALSHAPE-END
   function isoD(d){return d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());}
   // Chips for one month cell, with the counter TAKING the last slot when it
   // overflows (never adding a row, so nothing can clip).
   function calChips(es,max){
     function chip(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';
-      return '<div class="cev" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}
+      return '<div class="cev" data-eid="'+esc(ekey(e))+'" style="--c:'+c+'">'+esc(e.title||'')+'</div>';}
     if(es.length<=max)return es.map(chip).join('');
     var showN=max-1;
     return es.slice(0,showN).map(chip).join('')
@@ -4612,10 +4640,11 @@
     var start=_cal.view==='day'?new Date(now):win.gridStart,
         end  =_cal.view==='day'?new Date(now):win.gridEnd;
     if(ttl&&_cal.view==='day')ttl.textContent=calHeaderText('day',start,end,now);
-    apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen)return;
+    var s0=sessKey();
+    apiGet('/api/calendar/events?start_date='+isoD(start)+'&end_date='+isoD(end)).then(function(d){if(_cur!=='calendar'||gen!==_cal.gen||!sessLive(s0))return;
       var evs=((d&&d.events)||[]).filter(function(e){return !e.deleted;});
-      _calEvents={};evs.forEach(function(e){if(e.id!=null)_calEvents[e.id]=e;});
-      var byDay={};evs.forEach(function(e){var k=e.start_date;(byDay[k]=byDay[k]||[]).push(e);});
+      _calEvents={};evs.forEach(function(e){if(e.id!=null)_calEvents[ekey(e)]=e;});
+      var byDay={};evs.forEach(function(e){var k=eday(e);(byDay[k]=byDay[k]||[]).push(e);});
       Object.keys(byDay).forEach(function(k){byDay[k].sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});});
       var tk=isoD(now);
       if(_cal.view==='month'){
@@ -4629,11 +4658,11 @@
       } else if(_cal.view==='week'){
         var html2='<div class="calweek">';
         for(var c2=new Date(win.weekStart);c2<=win.weekEnd;c2=calAdd(c2,1)){var k2=isoD(c2),es2=byDay[k2]||[];
-          html2+='<div class="cwc'+(k2===tk?' today':(k2<tk?' past':''))+'" data-d="'+k2+'"><h5>'+c2.toLocaleDateString(undefined,{weekday:'short'})+' '+c2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(String(e.id))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
+          html2+='<div class="cwc'+(k2===tk?' today':(k2<tk?' past':''))+'" data-d="'+k2+'"><h5>'+c2.toLocaleDateString(undefined,{weekday:'short'})+' '+c2.getDate()+'</h5>'+(es2.map(function(e){var c=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="cwe" data-eid="'+esc(ekey(e))+'" style="--c:'+c+'">'+esc(e.title||'')+'<small>'+(e.all_day?'All day':esc(fmt12(e.start_time)))+'</small></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:13px;text-align:center;padding-top:12px">—</div>')+'</div>';}
         body.innerHTML=html2+'</div>';
       } else {
         var es3=byDay[isoD(now)]||[];
-        body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
+        body.innerHTML='<div class="caldaylist">'+(es3.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';return '<div class="dev" data-eid="'+esc(ekey(e))+'"><div class="t" style="width:96px;flex:none;font-size:21px;color:var(--ink-soft)">'+esc(e.all_day?'All day':fmt12(e.start_time))+'</div><span class="dot" style="--c:'+cat+';width:12px;height:12px;border-radius:50%;background:var(--c);box-shadow:0 0 10px var(--c);flex:none"></span><div><div class="en" style="font-size:23px;font-weight:500">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es" style="font-size:16px;color:var(--ink-faint)">'+esc(e.location)+'</div>':'')+'</div></div>';}).join('')||'<div style="color:var(--ink-faint);font-size:20px;padding-top:20px">Nothing scheduled today.</div>')+'</div>';
       }
       if(_cal.view!=='day'){
         var sc=calScroller();
@@ -4645,7 +4674,7 @@
         },{passive:true});
         calAnchorToday();
       }
-    }).catch(function(e){if(_cur!=='calendar'||gen!==_cal.gen)return;body.innerHTML='<div class="lderr">'+esc(loadErr('calendar',e))+'</div>';});
+    }).catch(function(e){if(_cur!=='calendar'||gen!==_cal.gen||!sessLive(s0))return;body.innerHTML='<div class="lderr">'+esc(loadErr('calendar',e))+'</div>';});
   }
 
   // ---- Calendar event sheet (js/touch-event-detail.js) ----
@@ -4738,18 +4767,18 @@
   function wireDay(){
     var ttl=document.getElementById('dayMeta'),host=document.getElementById('dayEvents'),rems=document.getElementById('dayRems');
     if(ttl)ttl.textContent=new Date().toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long'});
-    var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate());
-    apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host)return;
+    var d=new Date(),ds=d.getFullYear()+'-'+two(d.getMonth()+1)+'-'+two(d.getDate()),s0=sessKey();
+    apiGet('/api/calendar/events?start_date='+ds+'&end_date='+ds).then(function(data){if(_cur!=='day'||!host||!sessLive(s0))return;
       var evs=((data&&data.events)||[]).filter(function(e){return !e.deleted;}).sort(function(a,b){return (a.start_time||'').localeCompare(b.start_time||'');});
       if(!evs.length){host.innerHTML='<div class="dev" style="opacity:.6"><div class="t"></div><span class="dot" style="--c:var(--accent)"></span><div><div class="en">Nothing scheduled today</div></div></div>';return;}
-      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="dev" data-eid="'+esc(String(e.id))+'"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div class="dey"><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+'</div><span class="lact"><button data-act="edit" title="Edit">✎</button>'+(evRepeating(e)?'':'<button class="del" data-act="del" title="Delete">✕</button>')+'</span></div>';}).join('');
-      host.onclick=function(ev){var row=ev.target.closest('.dev[data-eid]');if(!row)return;var e=evs.filter(function(x){return String(x.id)===row.getAttribute('data-eid');})[0];if(!e)return;
+      host.innerHTML=evs.map(function(e){var cat=CAT[(e.category||'').toLowerCase()]||'var(--accent)';var when=e.all_day?'All day':fmt12(e.start_time);return '<div class="dev" data-eid="'+esc(ekey(e))+'"><div class="t">'+esc(when)+'</div><span class="dot" style="--c:'+cat+'"></span><div class="dey"><div class="en">'+esc(e.title||'Event')+'</div>'+(e.location?'<div class="es">'+esc(e.location)+'</div>':'')+(e.source_label?'<div class="es">From '+esc(e.source_label)+'</div>':'')+'</div>'+(eRO(e)?'':'<span class="lact"><button data-act="edit" title="Edit">✎</button>'+(evRepeating(e)?'':'<button class="del" data-act="del" title="Delete">✕</button>')+'</span>')+'</div>';}).join('');
+      host.onclick=function(ev){var row=ev.target.closest('.dev[data-eid]');if(!row)return;var e=evs.filter(function(x){return ekey(x)===row.getAttribute('data-eid');})[0];if(!e)return;
         var act=ev.target.closest('[data-act]');
         if(act&&act.getAttribute('data-act')==='del'&&evRepeating(e)){editEvent(e);return;}   // never a series delete from one row: open the read-only sheet
         if(act&&act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(e.title||'this event')+'”?',function(){apiJson('DELETE','/api/calendar/events/'+encodeURIComponent(e.id)).then(wireDay).catch(function(){toast('Couldn’t delete');});});return;}
         editEvent(e);};
-    }).catch(function(e){if(host)host.innerHTML='<div class="dev"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en lderr">'+esc(loadErr('day',e))+'</div></div></div>';});
-    apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems)return;
+    }).catch(function(e){if(host&&_cur==='day'&&sessLive(s0))host.innerHTML='<div class="dev"><div class="t"></div><span class="dot" style="--c:var(--cat-health)"></span><div><div class="en lderr">'+esc(loadErr('day',e))+'</div></div></div>';});
+    apiGet('/api/reminders/').then(function(d2){if(_cur!=='day'||!rems||!sessLive(s0))return;
       var rs=(d2&&d2.reminders)||[];
       if(!rs.length){rems.innerHTML='<div class="drem" style="opacity:.6"><span class="rt"></span><span>No reminders set</span></div>';return;}
       rems.innerHTML=rs.slice(0,6).map(function(r){var when=fmtRemWhen(r);
@@ -4758,7 +4787,7 @@
         var act=ev.target.closest('[data-act]');
         if(act&&act.getAttribute('data-act')==='del'){estConfirm('Delete “'+(r.title||'this reminder')+'”?',function(){apiJson('DELETE','/api/reminders/'+encodeURIComponent(r.id)).then(wireDay).catch(function(){toast('Couldn’t delete');});});return;}
         editReminder(r);};
-    }).catch(function(e){if(rems)rems.innerHTML='<div class="drem"><span class="rt"></span><span class="lderr">'+esc(loadErr('reminders',e))+'</span></div>';});
+    }).catch(function(e){if(rems&&_cur==='day'&&sessLive(s0))rems.innerHTML='<div class="drem"><span class="rt"></span><span class="lderr">'+esc(loadErr('reminders',e))+'</span></div>';});
     // Messages/email section stays hidden until a comms backend exists (no fake data).
   }
 
@@ -5056,7 +5085,7 @@
     return zfetch('/api/auth/guest',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({device_info:{source:'estate-conversation'}})})
       .then(function(r){return r.ok?r.json():null;})
       .then(function(d){
-        if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));}catch(e){}settingsSessionCheck();return d.session_id;}
+        if(d&&d.session_id){try{localStorage.setItem('zoe_session',JSON.stringify(d));}catch(e){}sessionCheck();return d.session_id;}
         return '';
       }).catch(function(){return '';});
   }
