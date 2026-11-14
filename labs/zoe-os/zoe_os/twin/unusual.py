@@ -17,11 +17,17 @@ It is built to be quiet:
 * something present is reported as rare only if it happened on at most ``RARE`` of them;
 * no baseline (not enough days yet) means silence, and a person who has not enabled the twin
   is never mentioned in a departure at all.
+
+WHO IS SHOWN A LINE (owner decision 2026-11-14, section 12 of the record): a line about a
+person is shown to THAT PERSON, and, for a child, to that child's guardians. To nobody else:
+not another adult of the household, not a guest, not a skill. ``unusual`` computes; a surface
+must pass its result through ``shown_to`` and show only what comes back.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..capability import CHILD, GUEST, Person
 from .baseline import OK, TIMES, Twin, day_type, hhmm
 
 MIN_MARGIN = 20        # minutes beyond the most extreme baseline day before a time is "unusual"
@@ -43,6 +49,19 @@ class Unusual:
     day: str
     departures: list[Departure] = field(default_factory=list)
     silent: dict[str, str] = field(default_factory=dict)      # person -> why nothing can be said
+
+
+def shown_to(result: Unusual, viewer: str, people: dict[str, Person]) -> list[Departure]:
+    """The departures ``viewer`` may be shown: their own, and those of a child they are a
+    guardian of. An unknown viewer, a guest or a skill gets nothing."""
+    me = people.get(viewer)
+    if me is None or me.role == GUEST:
+        return []
+    return [d for d in result.departures if _may_show(viewer, people.get(d.person))]
+
+
+def _may_show(viewer: str, about: Person | None) -> bool:
+    return about is not None and (about.id == viewer or (about.role == CHILD and viewer in about.guardians))
 
 
 def unusual(twin: Twin, day: str, *, as_of: int = END_OF_DAY) -> Unusual:

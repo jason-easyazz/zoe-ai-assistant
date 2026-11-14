@@ -19,9 +19,13 @@ How FORGET interacts, which is why stage 2 exists:
 * the forget notice itself must never expire (a subscriber that was offline has to be told),
   and the keyed hashes of forgotten words and names are not events and are kept.
 
-NO POLICY IS BUILT IN AND NOTHING RUNS BY ITSELF. ``Retention`` needs a complete policy (a
-rule for every kind) and someone to call ``sweep``. ``OPTIONS`` are the three candidates put
-to the owner in ``docs/architecture/zoe-os.md``; which one, or another, is their decision.
+THE POLICY IS THE OWNER'S DECISION (2026-11-14, ``docs/architecture/zoe-os.md`` section 9):
+option B, ``balanced``. ``POLICY`` is that choice and the kernel holds it as ``kernel.retention``.
+The other two ``OPTIONS`` stay as the record of what was not chosen. ``TWIN_WINDOW_DAYS`` is
+the same decision's line for the household twin's reduced facts (section 11).
+
+NOTHING RUNS BY ITSELF. There is no scheduler: events age only when ``sweep`` is called.
+``Retention`` still refuses an incomplete policy.
 """
 from __future__ import annotations
 
@@ -64,6 +68,11 @@ OPTIONS: dict[str, Policy] = {
     "balanced": _policy((30, 335), (14, 351), (90, 275), (90, 275), (365, 365)),
     "long": _policy((365, 365), (90, 640), (365, 365), (365, 365), (730, 730)),
 }
+
+
+CHOSEN = "balanced"                     # the owner's decision; change it there first, then here
+POLICY: Policy = OPTIONS[CHOSEN]
+TWIN_WINDOW_DAYS = 28                   # how long the twin keeps a person's reduced days
 
 
 class Retention:

@@ -439,8 +439,10 @@ Call site 2 of section 6, chosen because it is off the voice path and already ha
 - **Forget** cannot reach a copy a skill already took, and does not catch reworded content, near spellings,
   part of a name, or a pronoun.
 - **Plans** (more than one action from one intent) are not designed here.
-- **Retention** has a lab mechanism and **no chosen policy**: section 9 is an open owner decision, and nothing
-  expires until it is made. **Schema change and backup** of the spine are not designed; a backup taken before
+- **"Undo that"** means the person's last action (owner decision 2026-11-14). If that action cannot be reversed
+  the answer says so; nothing older is reversed in its place.
+- **Retention** has a lab mechanism and a chosen policy (section 9, option B) and **no scheduler**: nothing
+  expires until something calls the sweep. **Schema change and backup** of the spine are not designed; a backup taken before
   an event expired or was forgotten still holds it.
 - **The manifest format** is a lab format. It has not met a real third-party skill.
 - **One writer.** One kernel process with one lock. Several clients were tested for correctness (a slow one
@@ -454,10 +456,13 @@ Call site 2 of section 6, chosen because it is off the voice path and already ha
 
 ## 9. Owner decision: how long the log is kept
 
-**Status: open. Nothing in the lab expires until a policy is chosen.** A log of every household event is itself
-sensitive, and "private by default" says who may read an event, not how long it exists. The mechanism is built
-and tested in the lab (`labs/zoe-os/zoe_os/retention.py`) **[lab]**; the numbers below are proposals. The code
-has no default: it refuses to run without a complete policy, and no option is applied unless someone asks.
+**Status: decided by the owner on 2026-11-14: option B ("balanced"), as recommended below.** The lab kernel
+holds it (`retention.POLICY`, `kernel.retention`) and a test pins the numbers. Presence at 14 days was flagged as
+the least certain number and stays the first one to revisit once real volumes are measured. There is still no
+scheduler: events age only when a sweep is called. The options that were not chosen stay here as the record.
+
+A log of every household event is itself sensitive, and "private by default" says who may read an event, not
+how long it exists. The mechanism is built and tested in the lab (`labs/zoe-os/zoe_os/retention.py`) **[lab]**.
 
 **The mechanism.** Each kind of event has two ages and passes through three stages:
 
@@ -595,7 +600,10 @@ events, so a forget must change or remove it:
 
 ### Owner decision: what the twin keeps, and for how long
 
-**Status: open.** The lab uses 56 days as a placeholder, and the code says so. The twin's reduced facts are a
+**Status: decided by the owner on 2026-11-14: option B, reduced facts for 28 days, as recommended below.** It
+is held as `retention.TWIN_WINDOW_DAYS`, in the retention policy and not inside the skill, and a test pins it.
+The accepted cost is the one in the table: a reduced copy two weeks older than the kernel's presence events, and
+a forget by name that does not reach those two weeks. The twin's reduced facts are a
 second copy of what the log held: clock times, rooms, and which routine steps were done, per person per day. No
 free text, but a routine item's or a room's label is kept as the name of a count.
 
@@ -691,5 +699,19 @@ templates of times and counts, there is no code path that produces a reason, a t
 awkward day against a list of words, and the awkward-day labels (`sick_child` and the rest) exist only in the
 generator's metadata, which the twin never reads. That stops the *system* from saying it. It does not stop a
 *reader*: "the child did not leave today" invites the guess. So the rule that matters most is about who is shown
-a line, and **that is not built and not decided**: the lab returns the lines to its caller and shows them to no
-one. It belongs with the owner decisions, next to retention (sections 9 and 11), before any real day is fed in.
+a line.
+
+**Who is shown a line: decided by the owner on 2026-11-14.** The owner asked for the recommendations to be
+taken. For this question the record held a rule and no options, so the narrowest reading of that rule was
+applied, and it should be confirmed rather than assumed:
+
+- a line about a person is shown **to that person**;
+- a line about a **child** is also shown to that child's **guardians**, the same people who may forget, explain
+  and undo for the child elsewhere in the kernel;
+- to **nobody else**: not another adult of the household, not a guest, not a skill.
+
+In the lab **[lab]** this is `twin/unusual.py` `shown_to`, with a test (one adult is not shown the other adult's
+day; a guardian is shown the child's) and a negative control. Two things remain open and unbuilt: whether a
+person may choose to share their lines with another adult, and whether an older child's lines should stop going
+to a guardian. And the limit stands: the rule governs what a surface that calls `shown_to` displays. Nothing yet
+forces a surface to call it.

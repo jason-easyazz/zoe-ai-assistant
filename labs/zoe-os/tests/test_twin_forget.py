@@ -104,8 +104,9 @@ def test_HONEST_LIMIT_a_forget_by_name_after_the_events_aged_out_does_not_reach_
 
 
 def test_the_twins_window_is_its_retention_and_too_short_a_window_never_says_anything(tmp_path):
-    k, twin, _ = taught(tmp_path / "56")
-    assert len(twin.days["alex"]) == 28
+    k, twin, _ = taught(tmp_path / "28", n=35)                              # the decided window
+    assert len(twin.days["alex"]) == 28 and twin.window_days == 28
+    assert twin.normal("alex", "workday").days == 20 and twin.normal("alex", "weekend").days == 8
     k.close()
     k, twin, _ = taught(tmp_path / "14", twin=Twin(window_days=14))
     assert len(twin.days["alex"]) == 14 and min(twin.days["alex"]) == "2030-03-18"
