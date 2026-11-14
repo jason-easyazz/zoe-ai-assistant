@@ -90,8 +90,9 @@ class Client:
     def revoke(self, person: str, skill: str) -> dict:
         return self.call("revoke", person=person, skill=skill)
 
-    def explain(self, seq: int | None = None) -> dict:
-        return self.call("explain", **({} if seq is None else {"seq": seq}))
+    def explain(self, seq: int | None = None, **more) -> dict:
+        """``person=`` (a surface asking for a person) and ``last=`` go through as given."""
+        return self.call("explain", **({} if seq is None else {"seq": seq}), **more)
 
     # the Context shape a skill's ``on_event(ev, ctx)`` expects
     now = staticmethod(time.time)

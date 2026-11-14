@@ -8,6 +8,7 @@ from typing import Callable
 from .attention import Attention
 from .capability import Enforcer, Grant, GrantStore, Person
 from .events import Event, Kind, Visibility
+from .explain import Explainer
 from .receipts import ClaimAuditor, Dispatcher, Receipt
 from .spine import KERNEL, Refused, Spine
 
@@ -45,6 +46,7 @@ class Kernel:
         self.recovered = self.actions.recover()     # intents a dead kernel left open: uncertain
         self.auditor = ClaimAuditor(self.spine, self.enforcer)
         self.attention = Attention(self.spine, self.grants.people)
+        self.explainer = Explainer(self.spine, self.grants.people)
         self._skills: list[tuple[object, object, Context]] = []
 
     def _grant_changed(self, change: str, g: Grant) -> None:
