@@ -501,6 +501,13 @@ that wants a regression net owns it locally and says so in its Child DOX Index e
   rebuild from survivors, FTS optimize), a fail-closed serve wall, and a salted re-ingest ledger. Seeded property tests with a
   lineage-less negative control (hand-run, never CI-wired, scratch temp-dir data only) + `bench.py` (forget latency, fan-out,
   on-disk residue per strategy). README is the record, including a writer-lineage table read from `services/zoe-data`.
+- `calendar-feed/` - **calendar subscription engine, end to end** (2026-11-14; record `docs/knowledge/connected-accounts.md`):
+  `run_lab.py` drives the REAL `services/zoe-data/calendar_feed.py` against a loopback `http.server` serving a synthetic .ics
+  with an ETag (mutated between runs), a scratch SQLite database (migrations 0052 / 0078 / 0079, temp dir, removed after) and the
+  forget ledger's in-memory backend: create, unchanged (304 and same sha256), change, remote delete, the mass-delete guard, the
+  forget shield and disconnect. `--big N` measures parse time and peak RSS of a synthetic N MB feed in child processes. The
+  loopback address lives in the process only; nothing stores a link. Needs `icalendar` on `PYTHONPATH`; hand-run under
+  `flock -x /tmp/zoe-test-lane.lock`, never CI-wired. README is the record (counts table + the 5 MB measurement).
 - `felt-scorecard/` - **felt scorecard** (`docs/research/samantha-frontier-2026-11-11.md`
   section 4, P1): one read-only script, `scorecard.py`, that prints (table or `--json`) whether
   the memory circuit is closed on real household turns, from live log-marker counts, aggregate
