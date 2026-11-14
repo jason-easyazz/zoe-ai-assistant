@@ -36,14 +36,14 @@ Input: an ordered plan of `Step(tool, args, part, needs)` and a `Speaker(user_id
 the piece of the speaker's own words the step supports. Output: `PlanResult(status, outcomes, refusal, elapsed_s)`.
 
 **Gate first, all or nothing** (`judge`, pure, runs no tool). In order: the safety floors on the speaker's words
-(`distress_handoff.detect`, `medical_safety.detect`; a floor that cannot be asked refuses), a valid table, the step bound, then
+(`distress_handoff.detect`, `medical_safety.detect`; a floor that cannot be asked refuses) and the child safety floor (`child_safety_floor.check`, asked read-only: a hazard request passes only for a speaker who is positively an adult and has not said this session that they are a child), a valid table, the step bound, then
 per step: argument shape, no self-widening, the fridge rule, a known tool, no repeat, and `household_authority.decide` for the
 speaker's effective role (an unverified member and an unknown role are judged as an unrecognised voice). One refusal refuses
 the whole plan; nothing has run. The closed list of reasons:
 
 | reason | when |
 |---|---|
-| `safety_floor` | the speaker's words belong to the distress or medical floor |
+| `safety_floor` | the speaker's words belong to the distress or medical floor, or the child safety floor would answer this speaker |
 | `table_invalid` | the authority table failed to load (every decision is then never) |
 | `empty_plan` / `too_many_steps` | no steps, or more than 6 |
 | `bad_arguments` | arguments are not a flat map of plain values, or `needs` points at itself or a later step |
