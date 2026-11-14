@@ -437,10 +437,12 @@ def rule_9_targets(claim: mc.CorrectionClaim, old: Optional[mc.Norm], ref: Mappi
 
 
 def rule_11_year(attribute: str, new: Mapping, stored: Mapping, said_at: datetime) -> Mapping:
-    """A date restated without a year keeps the row's year only when the result is on or after the day it was said."""
+    """A date restated without a year keeps the row's year only when the result is on or after the day it was said. A
+    completed date that does not exist ("the 31st" over a February row) is no value at all (D.8)."""
     if attribute not in mc.DATE_ATTRIBUTES:
         return dict(new)
     merged, inherited = mc.merge_date(new, stored)
+    _need(merged is not None, 8)
     _need(not inherited or mc.date_not_before(merged, said_at.date()), 11)
     return merged
 

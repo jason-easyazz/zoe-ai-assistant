@@ -273,6 +273,19 @@ def test_an_unexpected_error_inside_is_an_abstain(monkeypatch):
     assert [(v.verdict, v.rule) for v in run_case(case, DATA["oracle"]["C01"])] == [("abstain", 0)]
 
 
+def test_a_day_that_the_stored_month_does_not_have_abstains_on_rule_8():
+    text = "Book club is on the 12th of February"
+    rows = [vm.Row("r0", text, attrs=(vm.Attr({"kind": "label", "key": "book club"}, "event_date", {"m": 2, "d": 12},
+                                              "date", f"{text.index('12th')}:{len(text)}"),))]
+    ctx = _ctx(rows=rows, texts=("book club moved to the 31st",))
+    claim = {"type": "correction", "turn": 0, "quote": "book club moved to the 31st", "subject": "book club",
+             "attribute": "event_date", "new": "the 31st", "time": "current"}
+    assert [(v.verdict, v.rule) for v in vm.validate({"claims": [claim]}, ctx)] == [("abstain", 8)]
+    ok = dict(claim, quote="book club moved to the 28th", new="the 28th")
+    ctx = _ctx(rows=rows, texts=("book club moved to the 28th",))
+    assert vm.validate({"claims": [ok]}, ctx)[0].edits[0].new == {"m": 2, "d": 28}
+
+
 # -- chains: an older claim never overwrites a newer one ----------------------------------------------------------
 
 def _book(d: int, minute: int):
