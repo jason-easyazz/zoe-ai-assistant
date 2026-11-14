@@ -1120,6 +1120,14 @@ async def lifespan(app: FastAPI):
 
     configure_logging()
 
+    try:  # forgotten means forever only with the ledger secret set: say which, loudly (enum only, never the value)
+        import memory_forgotten
+
+        memory_forgotten.log_startup_state()
+    except Exception:  # noqa: BLE001
+        # fail closed: a status that cannot be established is "unconfigured", never "unknown" (enum + reason token only)
+        logger.warning("FORGET_LEDGER state=unconfigured reason=module_error")
+
     # Reasoning scheduler (ZOE_BRAIN_SCHEDULER, default log-only): one httpx choke point that counts/refuses a daytime 4B call
     # made outside a person's turn. Installed first, right after logging, before any background loop can reach the brain.
     try:
@@ -2511,6 +2519,13 @@ async def root_health():
         body["panel_speaker"] = _psh.snapshot()
     except Exception:  # noqa: BLE001
         body["panel_speaker"] = None
+    # Forget ledger (memory_forgotten): "configured" | "unconfigured", read by scripts/maintenance/zoe_health.py. An enum only.
+    try:
+        import memory_forgotten
+        body["forget_ledger"] = memory_forgotten.ledger_state()
+    except Exception:  # noqa: BLE001
+        body["forget_ledger"] = "unconfigured"      # fail closed: unreadable ledger state is never reported as fine
+        body["forget_ledger_reason"] = "module_error"
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body
