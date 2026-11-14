@@ -112,7 +112,7 @@ a shadow week, and the QA round in the design note.
 
 The engine never holds a subscription address; an injected fetcher hands it bytes. It enforces what it can see itself:
 
-- a hard, engine-owned bound on every fetch (`FETCH_TIMEOUT_S`, 45 s). An async fetcher is cancelled at it. A sync fetcher runs
+- a hard, engine-owned bound on every fetch (`FETCH_TIMEOUT_S`, 45 s). An async fetch runs as its own task: at the bound it is cancelled and ABANDONED (never awaited, so a fetcher that swallows `CancelledError` cannot hold the sync), kept referenced until it ends, its late result or exception dropped unread; its feed is refused while it runs, and at `MAX_ABANDONED_FETCHES` (4) still running no new async fetch starts (`fetch_capacity`). A sync fetcher runs
   in the module's own pool of `MAX_FETCH_THREADS` (2) threads; at the bound the run is recorded failed (class `network`, report
   detail `fetch_timeout`). A Python thread cannot be killed, so the stuck call keeps its worker until it returns: a feed whose fetch
   is still outstanding is refused (`fetch_outstanding`, the fetcher is not called), and at most two stuck calls can exist (more
