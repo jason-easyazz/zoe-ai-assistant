@@ -470,7 +470,7 @@ def test_a_recovery_never_overtakes_its_undelivered_loop_alert(tmp_path, monkeyp
 def test_alert_codes_are_fixed_per_unit():
     assert mod._unit_code("unit_crash_loop", BOT) == "unit_crash_loop.flue-zoe-telegram"
     assert mod._unit_code("unit_crash_loop", "not-watched.service") == "unit_crash_loop"
-    assert all(mod._CODE_RE.match(mod._unit_code(p, u)) for u in mod.OTHER_UNITS for p in ("unit_crash_loop", "unit_recovered"))
+    assert all(mod._safe_code(mod._unit_code(p, u)) == mod._unit_code(p, u) for u in mod.OTHER_UNITS for p in ("unit_crash_loop", "unit_recovered"))
 
 
 def test_the_bot_and_the_brains_are_watched():

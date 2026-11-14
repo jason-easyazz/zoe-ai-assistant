@@ -166,12 +166,15 @@ def _telegram_all(text: str, report=None) -> "tuple[str, int, int]":
         return "config", 0, 0
     fails: list[str] = []
     ok = 0
+    if len(users) > MAX_RECIPIENTS:
+        report(f"crash-watch: {len(users)} alert recipients configured; only the first {MAX_RECIPIENTS} are sent to")
+        users = users[:MAX_RECIPIENTS]
     for chat_id in users:
         try:
             data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
             req = urllib.request.Request(
                 f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=SEND_TIMEOUT_S) as resp:
                 if resp.status == 200:
                     ok += 1
                 else:
@@ -179,9 +182,12 @@ def _telegram_all(text: str, report=None) -> "tuple[str, int, int]":
         except urllib.error.HTTPError as exc:      # before URLError: it is a subclass
             report(f"crash-watch: telegram send failed: HTTP Error {exc.code}")
             fails.append(_http_class(exc.code))
-        except urllib.error.URLError as exc:       # DNS / connect / connect timeout: nothing reached Telegram
+        except urllib.error.URLError as exc:
             report(f"crash-watch: telegram send failed: {exc}")
-            fails.append("network")
+            # urlopen WRAPS a socket timeout in URLError. A timeout may have happened after the request went out, so it
+            # may have been delivered: "uncertain" (never re-sent), not "network" (retried, which could send it twice).
+            # Anything else (DNS, refused, unreachable) never reached Telegram.
+            fails.append("uncertain" if isinstance(exc.reason, (TimeoutError, socket.timeout)) else "network")
         except (TimeoutError, socket.timeout) as exc:   # sent, reply lost: may have been delivered
             report(f"crash-watch: telegram send failed: {exc}")
             fails.append("uncertain")
@@ -226,11 +232,34 @@ RETRY_BASE_S = 120               # first later retry after 2 min, doubling, capp
 RETRY_MAX_S = 3600
 INLINE_BACKOFF_S = (2.0, 6.0)    # the new alert's own retries: 3 attempts in ~8 s, transient failures only
 DRAIN_LIMIT = 10
-CLAIM_LEASE_S = 300              # > the longest send (recipients x 15 s x 3 + 8 s): a claim older than this was a dead sender
+SEND_TIMEOUT_S = 15              # per request
+MAX_RECIPIENTS = 5               # a hard cap, so the longest possible send is bounded and the lease below can cover it
+INLINE_ATTEMPTS = 3
+# The lease must outlive the LONGEST possible send of everything one sender claims, or a second sender would take an
+# entry over mid-send and deliver it twice. Worst case for one sender: the freshly raised entry gets INLINE_ATTEMPTS
+# rounds (each MAX_RECIPIENTS x SEND_TIMEOUT_S) plus the inline backoff, and each of the other DRAIN_LIMIT - 1 claimed
+# entries gets one round; plus a margin. A claim older than this was a dead sender (a live one releases its claims in
+# step (c) straight away, so the lease only delays a retry after a process was killed mid-send).
+_ROUND_S = MAX_RECIPIENTS * SEND_TIMEOUT_S
+CLAIM_LEASE_S = int(_ROUND_S * INLINE_ATTEMPTS + sum(INLINE_BACKOFF_S) + (DRAIN_LIMIT - 1) * _ROUND_S + 120)
 SPELLS_KEPT = 20
 BROKEN = ("auth", "config")
 TRANSIENT = ("network", "server")
-_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,39}$")
+#: Alert codes are a CLOSED list (they reach logs and the outbox): the fixed ones below, plus the per-unit forms built by
+#: _unit_code for the units in OTHER_UNITS. Anything else - a typo, or text that is not a code at all - becomes "other".
+FIXED_CODES = frozenset({"crash_loop", "recovered", "unit_crash_loop", "unit_recovered", "health", "backup",
+                         "kv_miss_first", "other"})
+
+
+def _safe_code(code) -> str:
+    if not isinstance(code, str):
+        return "other"
+    if code in FIXED_CODES:
+        return code
+    for prefix in ("unit_crash_loop.", "unit_recovered."):
+        if code.startswith(prefix) and (code[len(prefix):] + ".service") in OTHER_UNITS:
+            return code
+    return "other"
 
 
 def _stderr_log(line: str) -> None:
@@ -382,7 +411,7 @@ def _send_claimed(claims: list[dict], transport, sleep) -> list[tuple[dict, str,
     fail the rest too (they are released unsent in (c))."""
     done = []
     for c in claims:
-        res, used = _attempt(transport, c["text"], 3 if c["inline"] else 1, sleep)
+        res, used = _attempt(transport, c["text"], INLINE_ATTEMPTS if c["inline"] else 1, sleep)
         c["partial"] = int(getattr(_last_partial, "failed", 0) or 0)
         done.append((c, res, used))
         if res not in ("delivered", "uncertain"):
@@ -459,7 +488,7 @@ def deliver(code: str, text: str, *, transport=None, now: "float | None" = None,
     Never raises an Exception (a BaseException - the process being killed - propagates; the entry is already durable)."""
     log = log or _stderr_log
     transport = transport or _ops_transport
-    code = code if isinstance(code, str) and _CODE_RE.match(code) else "other"
+    code = _safe_code(code)
     text = str(text or "")[:MAX_TEXT]
     t = time.time() if now is None else float(now)
     _marker(log, "raised", code)
@@ -484,11 +513,12 @@ def deliver(code: str, text: str, *, transport=None, now: "float | None" = None,
                 _bump(box, "gave_up")
                 _marker(log, "gave_up", old.get("code", "other"), old.get("tries", 0), "outbox_full", len(entries))
             claims = _claim_due(box, t, inline=code)
-    except Exception as exc:   # the outbox cannot be stored: one direct send, and the failure is never silent
-        res, used = _attempt(transport, text, 3, sleep)
-        outcome = res if res in ("delivered", "uncertain") else "failed"
-        _marker(log, outcome, code, used, res if outcome == "failed" else type(exc).__name__)
-        return outcome, res
+    except Exception:
+        # The outbox cannot be stored. NEVER send unstored (the contract: durable before any send - an unrecorded send
+        # can neither be retried nor counted). Loud failure; the caller keeps its own last resort (the crash watcher's
+        # ``pending`` state re-raises on its next tick).
+        _marker(log, "failed", code, 0, "outbox_write")
+        return "failed", "outbox_write"
     done = _send_claimed(claims, transport, sleep)        # (b) no lock held
     try:                                                  # (c)
         with _outbox_locked() as box:

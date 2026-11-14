@@ -312,7 +312,7 @@ def test_a_recovery_never_overtakes_its_outage_alert_and_other_units_are_not_blo
     is not held up by that."""
     quiet = dict(sleep=lambda _s: None, log=lambda _l: None)
     down = Transport("auth")
-    assert mod.deliver("unit_crash_loop.alpha", "alpha down", transport=down, now=T0, **quiet)[0] == "queued"
+    assert mod.deliver("unit_crash_loop.kokoro-tts", "alpha down", transport=down, now=T0, **quiet)[0] == "queued"
     sent: list[str] = []
 
     def ok(text):
@@ -322,9 +322,9 @@ def test_a_recovery_never_overtakes_its_outage_alert_and_other_units_are_not_blo
     # a drain BEFORE the loop alert is due again: the recovery (due now) and nothing of that family may go
     box_path = Path(mod.OUTBOX_PATH)
     data = json.loads(box_path.read_text())
-    data["entries"].append({"code": "unit_recovered.alpha", "text": "alpha back", "first_ts": T0 + 1, "last_raised_ts": T0 + 1,
+    data["entries"].append({"code": "unit_recovered.kokoro-tts", "text": "alpha back", "first_ts": T0 + 1, "last_raised_ts": T0 + 1,
                             "raised": 1, "tries": 0, "next_ts": T0 + 1, "rev": 0})
-    data["entries"].append({"code": "unit_crash_loop.beta", "text": "beta down", "first_ts": T0 + 2, "last_raised_ts": T0 + 2,
+    data["entries"].append({"code": "unit_crash_loop.llama-server", "text": "beta down", "first_ts": T0 + 2, "last_raised_ts": T0 + 2,
                             "raised": 1, "tries": 0, "next_ts": T0 + 2, "rev": 0})
     box_path.write_text(json.dumps(data))
     mod.drain(transport=ok, now=T0 + 5, **quiet)
@@ -332,5 +332,94 @@ def test_a_recovery_never_overtakes_its_outage_alert_and_other_units_are_not_blo
     mod.drain(transport=ok, now=T0 + 99999, **quiet)
     assert sent == ["beta down", "alpha down", "alpha back"]     # the outage first, then its recovery
     assert mod._family("crash_loop") == mod._family("recovered") == "main"
-    assert mod._family("unit_crash_loop.alpha") == mod._family("unit_recovered.alpha") != mod._family("unit_recovered.beta")
+    assert mod._family("unit_crash_loop.kokoro-tts") == mod._family("unit_recovered.kokoro-tts") != mod._family("unit_recovered.llama-server")
     assert mod._family("health") == "health"
+
+
+# ── review round 3 (PR 2458) ──────────────────────────────────────────────────────────────────────────────────────
+def test_an_alert_that_cannot_be_stored_is_never_sent(box, monkeypatch):
+    """Durable before any send is the contract: if the outbox cannot be written, nothing goes out (an unrecorded send
+    can be neither retried nor counted), the failure is loud, and the caller keeps its own last resort."""
+    def boom(_box):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mod, "_write_outbox", boom)
+    lines: list[str] = []
+    t = Transport()
+    assert mod.deliver("health", "one", transport=t, now=T0, sleep=lambda _s: None, log=lines.append) == ("failed", "outbox_write")
+    assert t.sent == []
+    assert any("event=failed" in ln and "reason=outbox_write" in ln for ln in lines)
+
+
+def test_a_timeout_wrapped_in_urlerror_is_uncertain_not_network(tmp_path, monkeypatch):
+    """urlopen wraps a socket timeout in URLError. It may have been delivered, so it must never be retried as a network
+    failure (that could send the alert twice)."""
+    import socket
+
+    env = tmp_path / "bot.env"
+    env.write_text("TELEGRAM_BOT_TOKEN=file-token\nZOE_ALERT_TELEGRAM_CHAT_IDS=101\n")
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(env))
+    monkeypatch.delenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+
+    def wrapped(req, timeout=0):
+        raise urllib.error.URLError(socket.timeout("timed out"))
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", wrapped)
+    assert mod._telegram_all("x", report=lambda _l: None) == ("uncertain", 0, 1)
+
+    def refused(req, timeout=0):
+        raise urllib.error.URLError(ConnectionRefusedError("refused"))
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", refused)
+    assert mod._telegram_all("x", report=lambda _l: None) == ("network", 0, 1)     # nothing reached Telegram: retryable
+
+
+def test_the_lease_outlives_the_longest_possible_send_and_recipients_are_capped(tmp_path, monkeypatch):
+    longest = (mod.MAX_RECIPIENTS * mod.SEND_TIMEOUT_S * mod.INLINE_ATTEMPTS + sum(mod.INLINE_BACKOFF_S)
+               + (mod.DRAIN_LIMIT - 1) * mod.MAX_RECIPIENTS * mod.SEND_TIMEOUT_S)
+    assert mod.CLAIM_LEASE_S > longest
+    env = tmp_path / "bot.env"
+    ids = ",".join(str(200 + i) for i in range(mod.MAX_RECIPIENTS + 3))
+    env.write_text(f"TELEGRAM_BOT_TOKEN=file-token\nZOE_ALERT_TELEGRAM_CHAT_IDS={ids}\n")
+    monkeypatch.setattr(mod, "TELEGRAM_ENV", str(env))
+    monkeypatch.delenv("ZOE_ALERT_TELEGRAM_CHAT_IDS", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    asked: list[float] = []
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=0):
+        asked.append(timeout)
+        return Resp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen)
+    reports: list[str] = []
+    assert mod._telegram_all("x", report=reports.append) == ("delivered", mod.MAX_RECIPIENTS, 0)
+    assert asked == [mod.SEND_TIMEOUT_S] * mod.MAX_RECIPIENTS          # capped, each with the bounded timeout
+    assert any("only the first" in r for r in reports)                  # the cap is said, never silent
+
+
+@pytest.mark.parametrize("given,kept", [
+    ("crash_loop", "crash_loop"), ("recovered", "recovered"), ("health", "health"), ("backup", "backup"),
+    ("kv_miss_first", "kv_miss_first"), ("unit_crash_loop.kokoro-tts", "unit_crash_loop.kokoro-tts"),
+    ("unit_recovered.llama-server", "unit_recovered.llama-server"), ("unit_crash_loop", "unit_crash_loop"),
+    ("private_person_name", "other"), ("unit_crash_loop.not-a-watched-unit", "other"), ("Health", "other"),
+    ("", "other"), (None, "other"), ("health; rm", "other"),
+])
+def test_alert_codes_are_a_closed_list(box, given, kept):
+    """A code reaches logs and the outbox: only the fixed codes and the watched units' forms survive; anything else,
+    however well-formed, becomes ``other``."""
+    assert mod._safe_code(given) == kept
+    lines: list[str] = []
+    mod.deliver(given, "x", transport=Transport(), now=T0, sleep=lambda _s: None, log=lines.append)
+    assert all(f"code={kept} " in ln for ln in lines if ln.startswith("ALERT_DELIVERY"))
+    if given and kept == "other":
+        assert not any(str(given) in ln for ln in lines)
