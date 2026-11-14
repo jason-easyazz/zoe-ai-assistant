@@ -54,10 +54,20 @@ ts="$(date +%Y%m%d-%H%M%S)"
 tmpdir="$(mktemp -d /tmp/zoe-postgres-backup.XXXXXX)"
 trap 'rm -rf "$tmpdir"' EXIT
 
+# P0-1: the fixed root helper zoe-db-exec when installed (the Docker proxy refuses exec); it takes the same
+# exclusion list on stdin. Else the docker exec below, which needs the docker group.
+DB_EXEC=/usr/local/libexec/zoe-priv/zoe-db-exec
+if [ "$CONTAINER" = zoe-database ] && [ -f "$DB_EXEC" ] && [ ! -L "$DB_EXEC" ] && [ -x "$DB_EXEC" ]; then ROUTE=helper; else ROUTE=legacy; fi
+echo "priv-route zoe-db-exec=$ROUTE"
+pg_dump_db() {
+  case "$ROUTE:$1" in
+    helper:zoe|helper:multica) printf '%s\n' $BIOMETRIC_TABLES | sudo -n "$DB_EXEC" dump "$1" ;;
+    *) docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER" pg_dump -U zoe -Fc "${exclude_args[@]}" "$1" ;;
+  esac
+}
 for db in $DATABASES; do
   raw="$tmpdir/${db}.dump"
-  if ! docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$CONTAINER" \
-      pg_dump -U zoe -Fc "${exclude_args[@]}" "$db" > "$raw"; then
+  if ! pg_dump_db "$db" > "$raw"; then
     echo "postgres-nightly-backup: pg_dump failed for $db" >&2
     exit 2
   fi

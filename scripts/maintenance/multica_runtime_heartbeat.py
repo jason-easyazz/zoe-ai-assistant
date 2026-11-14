@@ -35,6 +35,10 @@ import sys
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+import re
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import zoe_priv  # noqa: E402 - P0-1: zoe-db-exec when installed, else docker exec (the proxy refuses exec)
 
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 
@@ -116,6 +120,16 @@ def _update_runtime(provider: str, online: bool) -> tuple[bool, str]:
         "-v", f"provider={provider}",
         "-v", f"st={status}",
     ]
+    if DB_USER == "zoe" and DB_NAME == "multica" and re.fullmatch(r"[0-9a-fA-F-]{36}", WORKSPACE_ID) \
+            and re.fullmatch(r"[a-z0-9_-]{1,32}", provider):
+        # the helper takes no -v: the same three variables are set by psql's own \set from validated values
+        route, argv = zoe_priv.db_route(DB_CONTAINER, ("psql", "multica"), cmd)
+        if route == zoe_priv.HELPER:
+            sql = f"\\set ws '{WORKSPACE_ID}'\n\\set provider '{provider}'\n\\set st '{status}'\n" + sql
+            cmd = argv
+    else:
+        route = zoe_priv.LEGACY
+    zoe_priv.log_once("zoe-db-exec", route)
     try:
         res = subprocess.run(cmd, input=sql, capture_output=True, text=True, timeout=15)
         if res.returncode != 0:

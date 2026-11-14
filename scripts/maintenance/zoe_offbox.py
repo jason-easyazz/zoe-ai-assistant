@@ -688,12 +688,23 @@ def _globals_dump(cfg: Config, tmpdir: Path) -> Optional[Source]:
         return None
     out = tmpdir / "globals.sql.gz"
     with open(out, "wb") as fh:
-        p1 = subprocess.Popen(["docker", "exec", container, "pg_dumpall", "-U", "zoe", "--globals-only"],
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        route, argv = _priv().db_route(container, ("dumpall-globals",),
+                                       ["docker", "exec", container, "pg_dumpall", "-U", "zoe", "--globals-only"])
+        _priv().log_once("zoe-db-exec", route)
+        p1 = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         p2 = subprocess.run(["gzip", "-c"], stdin=p1.stdout, stdout=fh)
         if p1.wait() != 0 or p2.returncode != 0:
             raise RuntimeError("pg_dumpall --globals-only failed")
     return Source("pg/globals.sql.gz", out)
+
+
+def _priv():
+    """scripts/lib/zoe_priv.py (P0-1 routing), loaded on first use."""
+    lib = str(Path(__file__).resolve().parents[1] / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import zoe_priv  # noqa: PLC0415
+    return zoe_priv
 
 
 def cmd_backup(p: Paths, cfg: Config, now: datetime) -> int:

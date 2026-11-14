@@ -459,8 +459,6 @@ SUBCOMMAND_API = {
     "inspect": lambda c: [("GET", f"/v1.47/containers/{c}/json")],
     "start": lambda c: [("POST", f"/v1.47/containers/{c}/start")],
     "stop": lambda c: [("POST", f"/v1.47/containers/{c}/stop")],
-    "exec": lambda c: [("POST", f"/v1.47/containers/{c}/exec"), ("POST", "/v1.47/exec/" + "a" * 64 + "/start"),
-                       ("GET", "/v1.47/exec/" + "a" * 64 + "/json")],
     "ps": lambda c: [("GET", "/v1.47/containers/json")],
     "version": lambda c: [("GET", "/v1.47/version")],
 }
@@ -470,12 +468,12 @@ DOCKER_CALLERS = {
     "services/zoe-data/ma_ondemand.py": ({"inspect", "start"}, "zoe-music-assistant"),
     "services/zoe-data/routers/voice_livekit.py": ({"inspect", "start", "stop"}, "livekit"),
     "scripts/maintenance/ma_idle_reap.py": ({"inspect", "stop"}, "zoe-music-assistant"),
-    "scripts/maintenance/postgres-nightly-backup.sh": ({"inspect", "exec"}, "zoe-database"),
-    "scripts/maintenance/pg_dump_manifest.py": ({"exec"}, "zoe-database"),
-    "scripts/maintenance/zoe_offbox.py": ({"exec"}, "zoe-database"),
-    "scripts/maintenance/multica_runtime_heartbeat.py": ({"exec"}, "zoe-database"),
-    "scripts/maintenance/zoe_health.py": ({"exec", "ps"}, "zoe-database"),
-    "scripts/maintenance/platform_health_check.sh": ({"version", "ps", "exec"}, "zoe-database"),
+    "scripts/maintenance/postgres-nightly-backup.sh": ({"inspect"}, "zoe-database"),
+    "scripts/maintenance/pg_dump_manifest.py": (set(), "zoe-database"),
+    "scripts/maintenance/zoe_offbox.py": (set(), "zoe-database"),
+    "scripts/maintenance/multica_runtime_heartbeat.py": (set(), "zoe-database"),
+    "scripts/maintenance/zoe_health.py": ({"ps"}, "zoe-database"),
+    "scripts/maintenance/platform_health_check.sh": ({"version", "ps"}, "zoe-database"),
     "scripts/maintenance/zoe_restore_drill.py": ({"inspect"}, "zoe-database"),
 }
 _PY_SUB = re.compile(r"""(?:["']docker["']\s*,\s*["']|_docker(?:_cmd)?\(\s*["'])([a-z]+)""")
@@ -495,6 +493,9 @@ def docker_subcommands(path: Path) -> "set[str]":
 def test_docker_caller_uses_only_proxy_allowed_calls(caller):
     subs, container = DOCKER_CALLERS[caller]
     found = docker_subcommands(REPO / caller)
+    if "exec" in found:      # the proxy refuses exec: its only allowed home is the legacy branch of a zoe-db-exec route
+        assert "zoe-db-exec" in (REPO / caller).read_text(), f"{caller}: docker exec without the zoe-db-exec route"
+        found = found - {"exec"}
     assert found <= set(SUBCOMMAND_API), f"{caller}: docker {sorted(found - set(SUBCOMMAND_API))} is not proxied"
     rules = proxy_rules()
     for sub in subs:
@@ -525,3 +526,66 @@ def test_docker_host_switch_is_an_example_not_a_default():
     for caller in DOCKER_CALLERS:          # nobody hard-codes either socket: the CLI reads DOCKER_HOST itself
         code = (REPO / caller).read_text()
         assert "docker.sock" not in code and "DOCKER_HOST" not in code, caller
+
+
+# ── zoe-database work goes through zoe-db-exec (the proxy refuses exec) ──────────────────────────────────────
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_db_route_helper_only_for_the_fixed_container(privdir, installed):
+    p = privdir("zoe-db-exec") if installed else None
+    legacy = ["docker", "exec", "zoe-database", "pg_isready"]
+    assert zoe_priv.db_route("zoe-database", ("isready",), legacy) == \
+        (("helper", ["sudo", "-n", p, "isready"]) if installed else ("legacy", legacy))
+    assert zoe_priv.db_route("other-db", ("isready",), legacy) == ("legacy", legacy)     # the helper is fixed to one
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_health_probe_routes_pg_isready(privdir, installed):
+    sys.path.insert(0, str(REPO / "scripts" / "maintenance"))
+    health = _load("zoe_health", REPO / "scripts" / "maintenance" / "zoe_health.py")
+    p = privdir("zoe-db-exec") if installed else None
+    seen = []
+
+    def run(argv, timeout=5.0):
+        seen.append(argv)
+        return 0, ""
+    health.probe(http=lambda port: (True, "x"), run=run, night_open=False)
+    assert (["sudo", "-n", p, "isready"] if installed else ["docker", "exec", "zoe-database", "pg_isready", "-U", "zoe", "-q"]) in seen
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_manifest_routes_its_reads(privdir, installed):
+    sys.path.insert(0, str(REPO / "scripts" / "maintenance"))
+    man = _load("pg_dump_manifest", REPO / "scripts" / "maintenance" / "pg_dump_manifest.py")
+    p = privdir("zoe-db-exec") if installed else None
+    assert man._db("zoe-database", ("restore-list",), ["docker", "x"]) == (["sudo", "-n", p, "restore-list"] if installed else ["docker", "x"])
+    assert man._db("zoe-database", None, ["docker", "y"]) == ["docker", "y"]        # a db the helper does not take
+
+
+@pytest.mark.parametrize("installed", [False, True])
+def test_heartbeat_routes_and_moves_variables_into_validated_set_lines(privdir, monkeypatch, installed):
+    sys.path.insert(0, str(REPO / "scripts" / "maintenance"))
+    hb = _load("multica_runtime_heartbeat", REPO / "scripts" / "maintenance" / "multica_runtime_heartbeat.py")
+    p = privdir("zoe-db-exec") if installed else None
+    monkeypatch.setattr(hb, "WORKSPACE_ID", "0123abcd-0123-4567-89ab-0123456789ab")
+    seen = []
+    monkeypatch.setattr(hb.subprocess, "run", lambda cmd, **kw: seen.append((cmd, kw["input"])) or
+                        types.SimpleNamespace(returncode=0, stdout="UPDATE 1", stderr=""))
+    hb._update_runtime("zoe", True)
+    cmd, sql = seen[0]
+    if installed:
+        assert cmd == ["sudo", "-n", p, "psql", "multica"] and sql.startswith("\\set ws '0123abcd-")
+    else:
+        assert cmd[:4] == ["docker", "exec", "-i", hb.DB_CONTAINER] and not sql.startswith("\\set")
+    monkeypatch.setattr(hb, "WORKSPACE_ID", "x'; DROP TABLE t; --")                    # negative control: never inlined
+    seen.clear()
+    hb._update_runtime("zoe", True)
+    assert seen[0][0][:2] == ["docker", "exec"] and "DROP" not in seen[0][1]
+
+
+def test_backup_and_health_shell_callers_route_db_exec():
+    backup = (REPO / "scripts" / "maintenance" / "postgres-nightly-backup.sh").read_text()
+    assert 'sudo -n "$DB_EXEC" dump "$1"' in backup and "printf '%s\\n' $BIOMETRIC_TABLES" in backup
+    assert "priv-route zoe-db-exec=$ROUTE" in backup
+    phc = (REPO / "scripts" / "maintenance" / "platform_health_check.sh").read_text()
+    assert 'sudo -n "$DB_EXEC" isready' in phc

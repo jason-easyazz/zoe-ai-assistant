@@ -88,7 +88,13 @@ else
     fi
 fi
 
-if docker exec zoe-database pg_isready -U zoe -d zoe >/dev/null 2>&1; then
+DB_EXEC=/usr/local/libexec/zoe-priv/zoe-db-exec      # P0-1: no exec through the Docker proxy
+if [ -f "$DB_EXEC" ] && [ ! -L "$DB_EXEC" ] && [ -x "$DB_EXEC" ]; then echo "priv-route zoe-db-exec=helper"; else echo "priv-route zoe-db-exec=legacy"; fi
+pg_ready() {
+    if [ -f "$DB_EXEC" ] && [ ! -L "$DB_EXEC" ] && [ -x "$DB_EXEC" ]; then sudo -n "$DB_EXEC" isready
+    else docker exec zoe-database pg_isready -U zoe -d zoe; fi
+}
+if pg_ready >/dev/null 2>&1; then
     pass "PostgreSQL accepts connections"
 else
     fail "PostgreSQL is unavailable"

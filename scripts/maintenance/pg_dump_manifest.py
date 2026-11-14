@@ -137,11 +137,23 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _db(container: str, args, legacy: list[str]) -> list[str]:
+    """P0-1: the zoe-db-exec helper when installed (the Docker proxy refuses exec), else the caller's docker exec."""
+    lib = str(Path(__file__).resolve().parents[1] / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import zoe_priv  # noqa: PLC0415
+    route, argv = zoe_priv.db_route(container, args, legacy) if args else (zoe_priv.LEGACY, legacy)
+    zoe_priv.log_once("zoe-db-exec", route)
+    return argv
+
+
 def _psql(container: str, db: str, sql: str) -> list[str]:
     # `-e PGPASSWORD` (no value) copies it from this process's environment: never on a command line.
-    r = subprocess.run(["docker", "exec", "-i", "-e", "PGPASSWORD", container, "psql", "-U", "zoe", "-d", db, "-XAt",
-                        "-v", "ON_ERROR_STOP=1", "-f", "-"], input=sql, capture_output=True, text=True,
-                       timeout=120)
+    argv = _db(container, ("psql-at", db) if db in ("zoe", "multica") else None,
+               ["docker", "exec", "-i", "-e", "PGPASSWORD", container, "psql", "-U", "zoe", "-d", db, "-XAt",
+                "-v", "ON_ERROR_STOP=1", "-f", "-"])
+    r = subprocess.run(argv, input=sql, capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         raise RuntimeError(f"catalog read failed: {r.stderr.strip()[-200:]}")
     return [ln for ln in r.stdout.splitlines() if ln.strip()]
@@ -192,13 +204,13 @@ def plain_dump(path: Path):
 
 def _manifest(ns, plain: Path) -> dict:
     with open(plain, "rb") as fh:
-        toc = subprocess.run(["docker", "exec", "-i", ns.container, "pg_restore", "-l"], stdin=fh,
+        toc = subprocess.run(_db(ns.container, ("restore-list",), ["docker", "exec", "-i", ns.container, "pg_restore", "-l"]), stdin=fh,
                              capture_output=True, timeout=600)
     if toc.returncode != 0:
         raise RuntimeError(f"pg_restore -l failed: {toc.stderr.decode(errors='replace').strip()[-200:]}")
     with open(plain, "rb") as fh, tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as sql:
         # -f - : SQL to stdout, NO database connection (nothing is restored anywhere)
-        p = subprocess.run(["docker", "exec", "-i", ns.container, "pg_restore", "--data-only", "-f", "-"],
+        p = subprocess.run(_db(ns.container, ("restore-data",), ["docker", "exec", "-i", ns.container, "pg_restore", "--data-only", "-f", "-"]),
                            stdin=fh, stdout=sql, stderr=subprocess.PIPE, timeout=1800)
         if p.returncode != 0:
             raise RuntimeError(f"pg_restore --data-only failed: {p.stderr.decode(errors='replace').strip()[-200:]}")
@@ -215,7 +227,7 @@ def _manifest(ns, plain: Path) -> dict:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import pg_restore_plan as plan  # noqa: PLC0415
         with open(plain, "rb") as fh:
-            sch = subprocess.run(["docker", "exec", "-i", ns.container, "pg_restore", "-s", "-f", "-"], stdin=fh,
+            sch = subprocess.run(_db(ns.container, ("restore-schema",), ["docker", "exec", "-i", ns.container, "pg_restore", "-s", "-f", "-"]), stdin=fh,
                                  capture_output=True, timeout=600)
         if sch.returncode != 0:
             raise RuntimeError(f"pg_restore -s failed: {sch.stderr.decode(errors='replace').strip()[-200:]}")
