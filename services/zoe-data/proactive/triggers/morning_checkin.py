@@ -30,6 +30,22 @@ def _due_iso(value) -> str | None:
     return (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).isoformat()
 
 
+async def _today_events(db, user_id: str, today: str) -> list[dict]:
+    """The member's OWN events starting today (household date), at most 5, via the shared read path: a repeat's occurrence
+    today counts, a cancelled one or an EXDATE does not, and a zoned event shows its household time."""
+    import calendar_read
+
+    out = []
+    for o in await calendar_read.events_in_window(db, user_id, today, today, own_only=True):
+        if o["date"] != today:            # starts today only (a trip that began yesterday is not today's)
+            continue
+        row = o["event"]
+        out.append({"title": o["title"], "start": o["start_time"] or "", "end": o["end_time"] or "",
+                    "location": o["location"] or "", "end_date": o["end_date"] if row.get("end_date") else "",
+                    "duration": row.get("duration")})
+    return out[:5]
+
+
 async def _build_morning_context(db, user_id: str, today: str, *, include_board: bool = True) -> dict:
     """Collect open loops, emotional moments, calendar events, and portrait for the brief.
 
@@ -62,21 +78,9 @@ async def _build_morning_context(db, user_id: str, today: str, *, include_board:
 
     # Today's calendar events
     try:
-        async with db.execute(
-            """SELECT title, start_time, end_time, location, end_date, duration
-               FROM events
-               WHERE start_date=? AND user_id=? AND deleted=0
-               ORDER BY start_time
-               LIMIT 5""",
-            (today, user_id),
-        ) as cur:
-            events = await cur.fetchall()
+        events = await _today_events(db, user_id, today)
         if events:
-            ctx["calendar"] = [
-                {"title": row[0], "start": row[1] or "", "end": row[2] or "", "location": row[3] or "",
-                 "end_date": row[4] or "", "duration": row[5]}
-                for row in events
-            ]
+            ctx["calendar"] = events
     except Exception as exc:
         log.debug("morning_checkin: calendar load failed (non-fatal): %s", exc)
 

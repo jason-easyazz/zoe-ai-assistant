@@ -1429,9 +1429,11 @@ async def _on_calendar(db, user_id: str, c: "Candidate") -> bool:
     """An event the owner already has at that date and time (often the very command they gave Zoe, which the pendant also heard)."""
     if c.kind != "calendar_event" or not c.payload.get("date"):
         return False
-    try:
-        rows = await _fetch(db, "SELECT title, start_time FROM events WHERE user_id = ? AND start_date = ? AND (deleted = 0 OR deleted IS NULL)",
-                            (user_id, c.payload["date"]))
+    try:            # the shared read path, own events only: a repeat's occurrence that day counts, a cancelled one does not
+        import calendar_read
+
+        day = str(c.payload["date"])[:10]
+        rows = [o for o in await calendar_read.events_in_window(db, user_id, day, day, own_only=True) if o["date"] == day]
     except Exception:  # noqa: BLE001
         return False
     want, title = c.payload.get("time") or "", _norm(c.payload.get("title") or "")
