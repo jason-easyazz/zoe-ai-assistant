@@ -27,7 +27,16 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_PATH = Path.home() / ".zoe" / "forget_session_epochs.json"
+_REAL_PATH = Path.home() / ".zoe" / "forget_session_epochs.json"
+_PATH = _REAL_PATH
+
+
+def _real_store_in_a_test() -> bool:
+    """A test run must never read or write the household's real epoch file (2026-11-14: test runs that reached a real forget
+    path wrote five entries into it, one for a real member id, and a later test changed result depending on run order).
+    True while pytest is running a test and ``_PATH`` still points at the real file; the test conftest points it at a
+    temporary file, so this only fires for a test collected without that conftest."""
+    return bool(os.environ.get("PYTEST_CURRENT_TEST")) and Path(_PATH) == _REAL_PATH
 # user id -> epoch (ms) of that member's latest forget that changed something; loaded once, written through
 _EPOCH: "dict[str, int]" = {}
 _LOADED = False
@@ -38,6 +47,8 @@ def _load() -> None:
     if _LOADED:
         return
     _LOADED = True
+    if _real_store_in_a_test():
+        return
     try:
         raw = json.loads(_PATH.read_text())
         if isinstance(raw, dict):
@@ -51,6 +62,9 @@ def _load() -> None:
 
 
 def _save() -> None:
+    if _real_store_in_a_test():
+        logger.warning("forget_session: refusing to write the real epoch file from a test run")
+        return
     try:
         _PATH.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(_PATH.parent), prefix=".forget_session.")
