@@ -42,6 +42,7 @@ PHRASES: Mapping[str, tuple[str, str]] = {
 _DEFAULTS = {"list_type": "shopping"}
 _MAX_VALUE_CHARS = 60
 _CLAUSE_BREAK = re.compile(r"[.!?;:\n\r\"]+")
+_BARE_DAYS = frozenset({"today", "tomorrow", "tonight"})
 
 REFUSED_LEAD = "I haven't done any of that."
 _REFUSED = {
@@ -61,7 +62,8 @@ def _value(v: Any) -> str:
 
 def _when(args: Mapping[str, Any]) -> str:
     date, clock = _value(args.get("date") or ""), _value(args.get("time") or "")
-    return (f" on {date}" if date else "") + (f" at {clock}" if clock else "")
+    day = "" if not date else (f" {date}" if date.casefold() in _BARE_DAYS else f" on {date}")
+    return day + (f" at {clock}" if clock else "")
 
 
 def _fill(template: str, step: plan_loop.Step) -> Optional[str]:

@@ -8,7 +8,8 @@ arguments plus the part of the speaker's words the step supports); its output is
 The guarantees, each pinned by a test with a negative control (``tests/test_plan_loop.py``):
 
   - GATE FIRST, ALL OR NOTHING. Before any tool runs, the whole plan is judged (``judge``): the safety floors on the speaker's
-    words (distress, medical), the bounds, then every step against the household authority table for the speaker's role
+    words (distress, medical, and the child safety floor for who is speaking), the bounds, then every step against the
+    household authority table for the speaker's role
     (child / guest / unverified voice / member) and the fridge rule. One step that is not allowed refuses the WHOLE plan with a
     reason from the closed list ``REFUSALS``; nothing has run.
   - BOUNDS. At most ``MAX_STEPS`` steps, ``MAX_SECONDS`` wall clock, ``STEP_TIMEOUT_S`` per step. A caller may tighten a bound,
@@ -130,6 +131,7 @@ class StepRejected(Exception):
 
 Executor = Callable[[Step], Awaitable[Mapping[str, Any]]]
 Floors = Callable[[str], str]
+ChildFloor = Callable[[str, "Speaker", str], str]
 
 
 def mode() -> str:
@@ -156,6 +158,24 @@ def safety_floor(utterance: str) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.warning("PLAN_LOOP floor check failed (%s): refusing", type(exc).__name__)
         return "floor_error"
+
+
+def child_floor(utterance: str, speaker: "Speaker", session_id: str = "") -> str:
+    """"child" when the child safety floor would answer this turn ("" = it would not). Asked READ-ONLY (``dry``: it records no
+    age statement here; ``brain_dispatch`` does that on the real turn). A hazard request passes only for a speaker who is
+    positively an adult and has not said in this session that they are a child; a floor that cannot be asked refuses the same
+    way (fail safe). Refusing here only hands the turn back, where the floor itself answers."""
+    adult = effective_role(speaker) in ("owner", "adult")
+    try:
+        import child_safety_floor
+
+        pending = child_safety_floor.check(utterance, session_id, speaker.user_id, dry=True)
+        if pending is None:
+            return ""
+        return "child" if pending.declared or not adult else ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PLAN_LOOP child floor check failed (%s)", type(exc).__name__)
+        return "" if adult else "child_floor_error"
 
 
 def effective_role(speaker: Speaker) -> str:
@@ -192,10 +212,11 @@ def _args_problem(args: Any) -> str:
 
 
 def judge(plan: Sequence[Step], speaker: Speaker, *, utterance: str = "", floors: Floors = safety_floor,
+          child: ChildFloor = child_floor, session_id: str = "",
           max_steps: int = MAX_STEPS) -> tuple[Optional[Refusal], tuple[str, ...]]:
     """Pure gate over the WHOLE plan: (refusal or None, the action class of every step). Runs no tool."""
     role = effective_role(speaker)
-    if floors(utterance or ""):
+    if floors(utterance or "") or child(utterance or "", speaker, session_id):
         return Refusal("safety_floor", role=role), ()
     if authority.table() is None:
         return Refusal("table_invalid", role=role), ()
@@ -311,6 +332,7 @@ def _log(result: PlanResult, m: str, steps: int) -> None:
 
 
 async def run(plan: Sequence[Step], speaker: Speaker, *, utterance: str, execute: Executor, floors: Floors = safety_floor,
+              child: ChildFloor = child_floor, session_id: str = "",
               max_steps: int = MAX_STEPS, max_seconds: float = MAX_SECONDS, step_timeout_s: float = STEP_TIMEOUT_S,
               clock: Callable[[], float] = time.monotonic) -> PlanResult:
     """Judge the whole plan, then (``on`` only) run each step once and prove it. Never raises for a tool failure."""
@@ -321,7 +343,8 @@ async def run(plan: Sequence[Step], speaker: Speaker, *, utterance: str, execute
     started = clock()
     max_seconds = max(0.0, min(float(max_seconds), MAX_SECONDS))
     step_timeout_s = max(0.001, min(float(step_timeout_s), STEP_TIMEOUT_S))
-    refusal, classes = judge(plan, speaker, utterance=utterance, floors=floors, max_steps=max_steps)
+    refusal, classes = judge(plan, speaker, utterance=utterance, floors=floors, child=child, session_id=session_id,
+                             max_steps=max_steps)
     if refusal is not None or m != "on":
         result = PlanResult("refused" if refusal else "shadow", (), refusal, clock() - started)
         _log(result, m, len(plan))

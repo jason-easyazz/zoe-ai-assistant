@@ -5,7 +5,8 @@
   1. ``ZOE_PLAN_LOOP`` off -> None before anything else.
   2. ``looks_multi_part`` (deterministic, no model): a turn that does not join two different actions returns None at once, so a
      single-tool turn never reaches the planner and keeps today's path untouched.
-  3. A turn the distress / medical floor owns returns None: it is never planned.
+  3. A turn the distress / medical floor owns, or that the child safety floor would answer for this speaker, returns None: it is
+     never planned (the floor answers it on the normal path).
   4. The planner is asked ONCE. It is given the speaker's words and the tool list - nothing else: no history, no memory, no
      list contents, no calendar titles, no tool output. The plan is frozen before the first tool runs, so text inside a list
      item or an event title has no path to the planner.
@@ -232,7 +233,8 @@ BROKE = "Something went wrong part way through, so I can't tell you what was don
 
 async def maybe_run(utterance: str, speaker: plan_loop.Speaker, *, started: float,
                     execute: Optional[plan_loop.Executor] = None, planner: Planner = brain_planner,
-                    floors: plan_loop.Floors = plan_loop.safety_floor, session_id: str = "",
+                    floors: plan_loop.Floors = plan_loop.safety_floor,
+                    child: plan_loop.ChildFloor = plan_loop.child_floor, session_id: str = "",
                     step_timeout_s: float = plan_loop.STEP_TIMEOUT_S) -> Optional[LoopReply]:
     """The reply for a multi-part ask, or None = "not mine, carry on as today" (off, shadow, a single-part turn, a safety-floor
     turn, or a planner that failed). ``started`` is the caller's ``write_receipts.begin()``. Never raises."""
@@ -240,7 +242,7 @@ async def maybe_run(utterance: str, speaker: plan_loop.Speaker, *, started: floa
     if mode == "off" or not looks_multi_part(utterance):
         return None
     try:
-        if floors(utterance):
+        if floors(utterance) or child(utterance, speaker, session_id):
             return None
         began = time.monotonic()
         try:
@@ -262,6 +264,7 @@ async def maybe_run(utterance: str, speaker: plan_loop.Speaker, *, started: floa
     try:
         result = await plan_loop.run(parsed.steps, speaker, utterance=utterance,
                                      execute=execute or intent_executor(speaker, utterance), floors=floors,
+                                     child=child, session_id=session_id,
                                      max_seconds=plan_loop.MAX_SECONDS - (time.monotonic() - began),
                                      step_timeout_s=step_timeout_s)
         if mode != "on" or result.status not in ("ran", "refused"):

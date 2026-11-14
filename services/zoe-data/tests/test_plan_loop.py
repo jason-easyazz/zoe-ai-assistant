@@ -256,3 +256,46 @@ def test_every_code_is_from_the_closed_lists():
         result, _ = run([ADD, SHOW], tools=Tools({"list_add": fault, "calendar_show": fault}))
         seen |= {(o.status, o.code) for o in result.outcomes}
     assert seen and all(status in pl.STATUSES and code in pl.CODES[status] for status, code in seen)
+
+
+# ── the child safety floor (child_safety_floor.py, on main since #2480) ──────────────────────────────────────────────────────
+
+HAZARD = "add milk to the shopping list and how do i use the gas stove"
+HAZARD_PLAN = [pl.Step("list_add", {"item": "milk"}, "add milk to the shopping list"),
+               pl.Step("note_search", {"query": "gas stove"}, "how do i use the gas stove")]
+
+
+def test_a_childs_hazard_ask_refuses_the_whole_plan_and_an_adults_does_not():
+    result, tools = run(HAZARD_PLAN, speaker=CHILD, utterance=HAZARD)
+    assert result.refusal.reason == "safety_floor" and tools.calls == []
+    for speaker in (GUEST, pl.Speaker("member-a", "adult", verified=False)):        # not positively an adult: same answer
+        assert run(HAZARD_PLAN, speaker=speaker, utterance=HAZARD)[0].refusal.reason == "safety_floor"
+    assert run(HAZARD_PLAN, utterance=HAZARD)[0].status == "ran"
+    assert pl.child_floor("add milk to the shopping list and remind me about the dentist", CHILD) == ""
+
+
+def test_negative_control_without_the_child_floor_the_childs_hazard_plan_runs():
+    result, tools = run(HAZARD_PLAN, speaker=CHILD, utterance=HAZARD, child=lambda text, speaker, session_id: "")
+    assert result.status == "ran" and tools.calls == ["list_add", "note_search"]
+
+
+def test_a_speaker_who_said_they_are_a_child_this_session_is_refused_whatever_the_account_says():
+    import child_safety_floor
+
+    child_safety_floor._SESSIONS.clear()
+    assert child_safety_floor.check("i am 10 years old", "s1", "member-a") is None   # the real turn records the statement
+    assert pl.child_floor(HAZARD, ADULT, "s1") == "child" and pl.child_floor(HAZARD, ADULT, "s2") == ""
+    result, tools = run(HAZARD_PLAN, utterance=HAZARD, session_id="s1")
+    assert result.refusal.reason == "safety_floor" and tools.calls == []
+    # the loop's own check is read-only: a statement seen only by it is NOT recorded
+    assert pl.child_floor("i am 10 years old and " + HAZARD, ADULT, "s3") == "child"
+    assert ("member-a", "s3") not in child_safety_floor._SESSIONS
+    child_safety_floor._SESSIONS.clear()
+
+
+def test_a_child_floor_that_cannot_be_asked_lets_only_an_adult_through(monkeypatch):
+    import child_safety_floor
+
+    monkeypatch.setattr(child_safety_floor, "check", lambda *a, **k: 1 / 0)
+    assert pl.child_floor(HAZARD, CHILD) == "child_floor_error" and pl.child_floor(HAZARD, GUEST) == "child_floor_error"
+    assert pl.child_floor(HAZARD, ADULT) == ""

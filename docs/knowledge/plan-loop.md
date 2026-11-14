@@ -36,14 +36,14 @@ Input: an ordered plan of `Step(tool, args, part, needs)` and a `Speaker(user_id
 the piece of the speaker's own words the step supports. Output: `PlanResult(status, outcomes, refusal, elapsed_s)`.
 
 **Gate first, all or nothing** (`judge`, pure, runs no tool). In order: the safety floors on the speaker's words
-(`distress_handoff.detect`, `medical_safety.detect`; a floor that cannot be asked refuses), a valid table, the step bound, then
+(`distress_handoff.detect`, `medical_safety.detect`; a floor that cannot be asked refuses) and the child safety floor (`child_safety_floor.check`, asked read-only: a hazard request passes only for a speaker who is positively an adult and has not said this session that they are a child), a valid table, the step bound, then
 per step: argument shape, no self-widening, the fridge rule, a known tool, no repeat, and `household_authority.decide` for the
 speaker's effective role (an unverified member and an unknown role are judged as an unrecognised voice). One refusal refuses
 the whole plan; nothing has run. The closed list of reasons:
 
 | reason | when |
 |---|---|
-| `safety_floor` | the speaker's words belong to the distress or medical floor |
+| `safety_floor` | the speaker's words belong to the distress or medical floor, or the child safety floor would answer this speaker |
 | `table_invalid` | the authority table failed to load (every decision is then never) |
 | `empty_plan` / `too_many_steps` | no steps, or more than 6 |
 | `bad_arguments` | arguments are not a flat map of plain values, or `needs` points at itself or a later step |
@@ -86,7 +86,8 @@ The table gained three receipt kinds the writers already record: `list_remove` -
 1. `ZOE_PLAN_LOOP` off: `None`, before anything else.
 2. `looks_multi_part` (deterministic, no model): two DIFFERENT action words and something joining them. "Add milk and eggs to
    the list" is one action. A turn that fails this returns `None` at once, so a single-tool turn never reaches the planner.
-3. A turn the distress / medical floor owns returns `None`: it is never planned.
+3. A turn the distress / medical floor owns, or that the child safety floor would answer for this speaker, returns `None`: it
+   is never planned, and the floor answers it on the normal path.
 4. The planner is asked ONCE, with the speaker's words and the tool list and nothing else: no history, no memory, no list
    contents, no calendar titles, no tool output. The real call (`brain_planner`) is one JSON-schema-constrained request to the
    Gemma brain inside `brain_scheduler.declare("turn:plan_loop")`, 8 s at most; a failure or timeout returns `None`.

@@ -291,3 +291,28 @@ def test_shadow_says_nothing_even_when_the_plan_would_be_refused(monkeypatch, ca
     with caplog.at_level(logging.INFO):
         assert go(fakes, speaker=pl.Speaker("member-c", "child")) is None
     assert fakes.tool_calls == [] and "status=refused" in caplog.text and "refusal=not_allowed" in caplog.text
+
+
+CHILD_HAZARD = "add milk to the shopping list and tell me how to use the gas stove"
+
+
+def test_a_turn_the_child_floor_would_answer_is_never_planned():
+    child = pl.Speaker("member-c", "child", at_panel=True)
+    assert planner.looks_multi_part(CHILD_HAZARD) and pl.child_floor(CHILD_HAZARD, child) == "child"
+    fakes = Fakes()
+    assert go(fakes, said=CHILD_HAZARD, speaker=child) is None and fakes.planner_calls == [] and fakes.tool_calls == []
+    grown_up = Fakes(plan([{"tool": "list_add", "args": {"item": "milk"}, "part": "add milk to the shopping list"}]))
+    go(grown_up, said=CHILD_HAZARD)
+    assert grown_up.planner_calls == [CHILD_HAZARD]            # an adult's same words are planned as usual
+
+
+def test_negative_control_without_the_child_floor_the_childs_hazard_turn_reaches_the_planner():
+    fakes = Fakes(plan([]))
+
+    async def turn():
+        return await planner.maybe_run(CHILD_HAZARD, pl.Speaker("member-c", "child"), started=write_receipts.begin(),
+                                       execute=fakes.execute, planner=fakes.planner, floors=lambda t: "",
+                                       child=lambda text, speaker, session_id: "")
+
+    asyncio.run(turn())
+    assert fakes.planner_calls == [CHILD_HAZARD]
