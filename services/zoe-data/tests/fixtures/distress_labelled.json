@@ -75,5 +75,12 @@
    "gentle": [],
    "none": ["i took my medicine because i wanted to stop coughing", "i took my tablets so i could stop feeling sick", "i took my pills to stop the pain in my knee", "i took my meds so the headache would stop", "i took my antihistamines to make the itching stop", "i took my pills because i want to stop being anxious", "i took my tablets so i dont wake up in the night", "i took my sleeping pills so i dont wake up at three again", "i took my medication to stop the shaking", "i took my painkillers so i could stop limping", "i took two panadol to make my headache go away", "i took my meds so it would stop hurting", "i took my tablets because i wanted the nausea to stop", "i took my pills to stop feeling dizzy", "i took too many to stop my cough"]
   }
+ },
+ "overdose_4_voices": {
+  "en": {
+   "handoff": ["i took all of them so the voices stop forever", "i took too many to stop the voices", "i took the whole bottle to make the thoughts stop", "i took them all to make the voices stop", "i swallowed a whole packet so the thoughts would stop for good", "i took my meds to kill myself and stop the voices", "i took my pills to die so the voices stop"],
+   "gentle": [],
+   "none": ["i take my medication to stop the voices", "i took my meds to stop the voices", "i took my tablets to stop the thoughts", "i took my pills to make the voices stop", "i took my antipsychotic so the voices would stop", "i take my anxiety meds to stop the racing thoughts", "i took my medication to make the thoughts go away", "the doctor gave me pills to stop the voices", "i took my meds because i want the voices to stop", "i took my tablets so the thoughts would quiet down", "i took my pills so i could stop the voices", "i took my medicine to stop the intrusive thoughts"]
+  }
  }
 }
