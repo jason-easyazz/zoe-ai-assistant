@@ -1626,6 +1626,17 @@ class MemoryService:
             _event = _ms.emergency_event(text, anchor_text if anchor_text is not None else source_excerpt)
         except Exception:  # noqa: BLE001
             _event = None
+        if _event is None and source in MEMORY_OPT_OUT_SOURCES:
+            # a present emergency the converter declined (a bystander, two people): as mined it reads as a STANDING condition
+            # ("... cannot get up" under Routines; QA round 10a), so an automatic writer does not file it (medical_safety.unfiled_emergency)
+            try:
+                _unfiled = _ms.unfiled_emergency(text, anchor_text if anchor_text is not None else source_excerpt)
+            except Exception:  # noqa: BLE001
+                _unfiled = False
+            if _unfiled:
+                self._bump("emergency_unfiled", source)
+                logger.info("MEDICAL_EVENT_UNFILED user=%s source=%s", user_id, source)
+                return None
         _mined = None
         if _event is not None:
             logger.info("MEDICAL_EVENT_FILED user=%s source=%s", user_id, source)
@@ -3885,8 +3896,17 @@ class MemoryService:
     async def _recent_paraphrase(self, user_id: str, text: str) -> bool:
         """True when a row an automatic writer stored within ``_RECENT_AUTO_TTL_S`` says the same thing (and is still approved)."""
         now = time.monotonic()
+        try:   # a filed emergency event is the same record as another only by (person, kind, date), never by word overlap (QA round 10a)
+            import medical_safety as _ms
+
+            ev = _ms.event_key(text)
+        except Exception:  # noqa: BLE001
+            _ms, ev = None, None
         for ts, mem_id, stored in reversed(self._recent_auto.get(user_id, ())):
-            if now - ts > _RECENT_AUTO_TTL_S or not _is_paraphrase(text, stored):
+            if now - ts > _RECENT_AUTO_TTL_S:
+                continue
+            sk = _ms.event_key(stored) if ev is not None else None
+            if not ((ev == sk) if (ev is not None and sk is not None) else _is_paraphrase(text, stored)):
                 continue
             try:
                 row = await self._run_sync(self._get_sync, mem_id)
@@ -3916,7 +3936,7 @@ class MemoryService:
     # durable reject ledger (memory_reject_ledger) so the nightly summary can say why an
     # ingest left no row. ``error`` is separate (a failed write is loud, never a reject).
     _REFUSED_STATUSES = frozenset({"opt_out", "pii_reject", "tombstone_drop", "forgotten_drop", "dedup", GUEST_DROP,
-                                 "identity_drop"})
+                                 "identity_drop", "emergency_unfiled"})
 
     def _bump(self, status: str, source: str) -> None:
         if _METRICS_OK:
