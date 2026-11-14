@@ -1053,16 +1053,17 @@ PANEL_SED = (
     "t",
     # The daemon's first-sound instrument (zoe_voice_daemon.py FIRST_SOUND): the WHOLE line shape is pinned, so a line
     # that carries any extra token matches nothing here and falls through to the timestamp-only rule below. Only the
-    # seven captures (timestamp + six integers / one 0-1 flag) leave the device; the enums are matched, never captured.
+    # nine captures (timestamp + eight integers / one 0-1 flag) leave the device; the enums are matched, never captured.
     r"s/^" + _PTS + r".*FIRST_SOUND close=[a-z_]{1,10}=[0-9]{1,5}ms post_ms=-?[0-9]{1,6} reflex=[a-z]{1,5} skip=[a-z_-]{1,24} "
     r"reflex_at_ms=(-?[0-9]{1,6}) reflex_dur_ms=-?[0-9]{1,6} reflex_cut=[01] reflex_wait_ms=[0-9]{1,6} "
     r"server_first_ms=(-?[0-9]{1,6}) server_kind=[a-z_]{1,10} gap_ms=-?[0-9]{1,6} still_talking=([01]) "
-    r"talk_chunks=(-?[0-9]{1,6}) chunks=[0-9]{1,6} underrun_max_ms=([0-9]{1,6}) underrun_sum_ms=([0-9]{1,7})$/\1 F \2 \3 \4 \5 \6 \7/p",
+    r"talk_chunks=(-?[0-9]{1,6}) chunks=[0-9]{1,6} underrun_max_ms=([0-9]{1,6}) underrun_sum_ms=([0-9]{1,7}) "
+    r"obs_ms=([0-9]{1,6}) win=[a-z]{1,12} quiet_ms=-?[0-9]{1,6} fall=[a-z]{1,12} muted_ms=(-?[0-9]{1,6})$/\1 F \2 \3 \4 \5 \6 \7 \8 \9/p",
     "t",
     r"s/^" + _PTS + r".*$/\1 E/p",  # any other timestamped line: its timestamp only, to prove how far the log reaches
 )
 PANEL_LOG = "/home/pi/.zoe-voice/voice.log"
-_PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R)|F (-?\d+) (-?\d+) ([01]) (-?\d+) (\d+) (\d+)|E)$")
+_PANEL_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (?:T (\d+(?:\.\d+)?)|C (\d+)|Q (deep|quiet)|(R)|F (-?\d+) (-?\d+) ([01]) (-?\d+) (\d+) (\d+) (\d+) (-?\d+)|E)$")
 #: The voice lane's bars: a turn "feels answered" when ANY sound starts inside 1 s of speech end; 0.6 s is the reflex bar.
 FIRST_SOUND_BANDS_MS = (1000, 600)
 TAIL_FLOOR_MS = {"deep": 640.0, "quiet": 800.0}  # live .env.voice floors per lane 4 (used only when close= is absent)
@@ -1139,7 +1140,7 @@ def panel_metric(reduced: list[str], since: dt.datetime, until: dt.datetime) -> 
 
 def panel_first_sound_rows(reduced_lines: Iterable[str], since: dt.datetime, until: dt.datetime) -> list[tuple[int, ...]]:
     """The FIRST_SOUND rows inside the window as (reflex_at_ms, server_first_ms, still_talking, talk_chunks,
-    underrun_max_ms, underrun_sum_ms). Input is the allowlist output; anything not in that exact shape is ignored."""
+    underrun_max_ms, underrun_sum_ms, obs_ms, muted_ms). Input is the allowlist output; anything not in that exact shape is ignored."""
     rows: list[tuple[int, ...]] = []
     for line in reduced_lines:
         m = _PANEL_LINE_RE.match(line.strip())
@@ -1147,7 +1148,7 @@ def panel_first_sound_rows(reduced_lines: Iterable[str], since: dt.datetime, unt
             continue
         t = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=LOCAL_TZ)
         if since <= t < until:
-            rows.append(tuple(int(m.group(i)) for i in range(6, 12)))
+            rows.append(tuple(int(m.group(i)) for i in range(6, 14)))
     return rows
 
 
@@ -1188,19 +1189,23 @@ def panel_first_sound_metrics(reduced: list[str], since: dt.datetime, until: dt.
         talking = sum(r[2] for r in heard)
         out.append(metric(keys[1][0], keys[1][1],
                           (f"{100.0 * talking / len(heard):.1f} per 100 turns with 3+ speech chunks inside 1.5 s of the close "
-                           f"({talking} of {len(heard)}); {sum(r[3] for r in heard)} speech chunks in all"),
+                           f"({talking} of {len(heard)}); {sum(r[3] for r in heard)} speech chunks in all; "
+                           f"full 1.5 s window seen on {sum(1 for r in heard if r[6] >= 1400)} of {len(heard)} turns"),
                           n=len(heard), window=w, method=method + "; counted by the barge monitor, blind between close and mic open",
                           label="[Experimental]",
-                          data={"still_talking": talking, "turns": len(heard), "talk_chunks": sum(r[3] for r in heard)}))
+                          data={"still_talking": talking, "turns": len(heard), "talk_chunks": sum(r[3] for r in heard),
+                                "full_window_turns": sum(1 for r in heard if r[6] >= 1400)}))
     else:
         out.append(unmeasured(keys[1][0], keys[1][1], "no turn in window had a listening barge monitor", window=w))
     wrote = rows  # a turn that played nothing carries 0/0, so it never starves the maths
     out.append(metric(keys[2][0], keys[2][1],
                       f"max {max(r[4] for r in wrote)} ms; total {sum(r[5] for r in wrote)} ms; "
-                      f"{sum(1 for r in wrote if r[4] > 0)} of {len(wrote)} turns starved",
+                      f"{sum(1 for r in wrote if r[4] > 0)} of {len(wrote)} turns starved; "
+                      f"mic muted on {sum(1 for r in wrote if r[7] > 0)} of {sum(1 for r in wrote if r[7] >= 0)} turns",
                       n=len(wrote), window=w, method=method, label="[Proven]",
                       data={"max_ms": max(r[4] for r in wrote), "sum_ms": sum(r[5] for r in wrote),
-                            "starved_turns": sum(1 for r in wrote if r[4] > 0), "turns": len(wrote)}))
+                            "starved_turns": sum(1 for r in wrote if r[4] > 0), "turns": len(wrote),
+                            "muted_turns": sum(1 for r in wrote if r[7] > 0)}))
     if servers:
         out.append(metric(keys[3][0], keys[3][1], f"p50 {pct(servers, 50) / 1000:.2f} s", n=len(servers), window=w,
                           method=method, label="[Proven]", data={"p50_ms": pct(servers, 50), "turns": len(servers)}))

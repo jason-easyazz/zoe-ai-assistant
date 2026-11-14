@@ -824,7 +824,8 @@ def test_alert_section_never_crashes_and_renders_sections(tmp_path, monkeypatch)
 
 _FS_OK = ("2026-11-10 05:30:00,123 [voice-daemon] INFO FIRST_SOUND close=deep=640ms post_ms=120 reflex=none skip=- "
           "reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0 reflex_wait_ms=0 server_first_ms=870 server_kind=content "
-          "gap_ms=-1 still_talking=1 talk_chunks=4 chunks=3 underrun_max_ms=40 underrun_sum_ms=55")
+          "gap_ms=-1 still_talking=1 talk_chunks=4 chunks=3 underrun_max_ms=40 underrun_sum_ms=55 "
+          "obs_ms=1500 win=wake quiet_ms=640 fall=clean muted_ms=160")
 
 
 @pytest.mark.skipif(shutil.which("sed") is None, reason="needs sed")
@@ -837,17 +838,20 @@ def test_first_sound_allowlist_emits_integers_only_and_text_emits_nothing(tmp_pa
         _FS_OK.replace("post_ms=120", "post_ms=LEAKME"),
         _FS_OK.replace("talk_chunks=4", "talk_chunks=4 name=LEAKME"),
         _FS_OK.replace("still_talking=1", "still_talking=maybe"),
+        _FS_OK.replace("win=wake", "win=wake LEAKME"),
+        _FS_OK.replace("fall=clean", "fall=LEAK ME"),
+        _FS_OK + " muted_ms=5",
     ]
     log.write_text("\n".join([_FS_OK] + texty) + "\n")
     out = subprocess.run(sc.panel_command(str(log)), shell=True, capture_output=True, text=True, check=True).stdout
     rows = out.splitlines()
     assert "LEAK" not in out and "voice-daemon" not in out and "content" not in out
     assert all(sc._PANEL_LINE_RE.match(r) for r in rows)
-    assert rows[0] == "2026-11-10 05:30:00 F -1 870 1 4 40 55"
+    assert rows[0] == "2026-11-10 05:30:00 F -1 870 1 4 40 55 1500 160"
     assert all(r.endswith(" E") for r in rows[1:])  # timestamp only, nothing else
     since = dt.datetime(2026, 11, 1, tzinfo=sc.LOCAL_TZ)
     until = dt.datetime(2026, 11, 30, tzinfo=sc.LOCAL_TZ)
-    assert sc.panel_first_sound_rows(rows, since, until) == [(-1, 870, 1, 4, 40, 55)]
+    assert sc.panel_first_sound_rows(rows, since, until) == [(-1, 870, 1, 4, 40, 55, 1500, 160)]
 
 
 def test_first_sound_metrics():
@@ -856,18 +860,22 @@ def test_first_sound_metrics():
     # (reflex_at, server_first, still, talk, um, us): firsts 500, 600(not <0.6), 999, 1000(not <1), 1500; one no-sound turn
     spec = [(-1, 500, 0, 0, 0, 0), (-1, 600, 1, 3, 60, 100), (-1, 999, 0, -1, 0, 0), (-1, 1000, 0, 2, 0, 0),
             (-1, 1500, 0, 0, 20, 20), (-1, -1, 0, 0, 0, 0)]
+    obs = [1500, 1500, 0, 900, 1500, 1500]   # per-turn observed window; muted ms: -1 unknown, 0 none, 80 some
+    muted = [0, 80, -1, 0, 0, 160]
     rows = ["2026-11-09 23:00:00 E"]
     for i, (a, b, c, d, e, f) in enumerate(spec):
-        rows.append(f"2026-11-10 0{i + 1}:00:00 F {a} {b} {c} {d} {e} {f}")
-    rows += ["2026-11-10 07:00:00 F 5 100 0 0 0 0"]  # a reflex at 5 ms: first sound = min(reflex, server)
+        rows.append(f"2026-11-10 0{i + 1}:00:00 F {a} {b} {c} {d} {e} {f} {obs[i]} {muted[i]}")
+    rows += ["2026-11-10 07:00:00 F 5 100 0 0 0 0 1500 0"]  # a reflex at 5 ms: first sound = min(reflex, server)
     m = {x["key"]: x for x in sc.panel_first_sound_metrics(rows, since, until)}
     fs = m["first_sound_from_close"]
     assert fs["n"] == 6 and (fs["data"]["under_1000_ms"], fs["data"]["under_600_ms"]) == (4, 2)
     assert fs["data"]["p50_ms"] == 799.5  # 5, 500, 600, 999, 1000, 1500
     talk = m["panel_post_close_talk"]
     assert talk["n"] == 6 and talk["data"]["still_talking"] == 1 and talk["data"]["talk_chunks"] == 5  # talk -1 turn excluded
+    assert talk["data"]["full_window_turns"] == 5 and "full 1.5 s window seen on 5 of 6" in talk["value"]  # the 900 ms turn is not full
     un = m["panel_playback_underrun"]
     assert un["data"]["max_ms"] == 60 and un["data"]["sum_ms"] == 120 and un["data"]["starved_turns"] == 2 and un["n"] == 7
+    assert un["data"]["muted_turns"] == 2 and "mic muted on 2 of 6 turns" in un["value"]  # the -1 turn is unknown, not clean
     assert m["panel_server_first"]["n"] == 6 and m["panel_server_first"]["data"]["p50_ms"] == 799.5
     empty = sc.panel_first_sound_metrics(["2026-11-10 05:00:00 E"], since, until)
     assert len(empty) == 4 and all(x["status"] == "unmeasured" for x in empty)

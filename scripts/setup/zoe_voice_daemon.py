@@ -2130,7 +2130,7 @@ class _BargeMonitor:
                 break
             if _record_cap_stop(len(frames), caps, endpointer):
                 break
-        _stamp_close(t_close, endpointer, stop_reason)
+        _stamp_close(t_close, endpointer, stop_reason, frames)
         _note_capture_end(stop_reason, len(frames), caps, endpointer)
         self.seed = _frames_to_wav(self._pa, frames)
         log.info("Barge-in seed: %.2fs from onset (stop=%s) — next turn runs on it, no beep",
@@ -2754,7 +2754,7 @@ def record_command(pa: pyaudio.PyAudio, stream=None, speculation: "_SpeculativeT
             speculation.fire(_frames_to_wav(pa, frames))
         if _record_cap_stop(n_read, caps, endpointer):
             break
-    _stamp_close(t_close, endpointer, stop_reason)
+    _stamp_close(t_close, endpointer, stop_reason, frames, n_pre)
     _note_capture_end(stop_reason, n_read, caps, endpointer)
     if owns_stream:
         stream.stop_stream()
@@ -3710,13 +3710,15 @@ def _trim_chunk_silence(pcm: bytes, rate: int, ch: int, width: int) -> bytes:
 #   PCM_WRITE i=<k> at_ms=<close->write> dur_ms=<pcm ms> underrun_ms=<starvation before this write>
 #   FIRST_SOUND close=<rule>=<ms>ms post_ms=.. reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0
 #     reflex_wait_ms=0 server_first_ms=.. server_kind=<enum> gap_ms=-1 still_talking=<0|1> talk_chunks=..
-#     chunks=.. underrun_max_ms=.. underrun_sum_ms=..
+#     chunks=.. underrun_max_ms=.. underrun_sum_ms=.. obs_ms=.. win=<wake|followup|conversation|barge> quiet_ms=..
+#     fall=<clean|hesitating|none> muted_ms=..
 # The reflex fields are constants until a reflex exists, so a parser written now never changes. -1 = unknown.
 _turn_close: dict = {}
 _CLOSE_RULES = ("deep", "quiet", "clean", "hesitation", "no_speech")
 _SERVER_KINDS = ("content", "filler", "tool_ack", "greeting", "canned")
-_STILL_TALKING_S = 1.5       # post-close speech inside this window of the close counts toward still_talking
-_STILL_TALKING_CHUNKS = 3    # ... and this many such chunks make still_talking=1
+_OBS_MS = 1500               # the FIXED post-close observation window for the talk count (ms from the close)
+_STILL_TALKING_CHUNKS = 3    # this many speech chunks inside it make still_talking=1
+_FS_WINS = ("wake", "followup", "conversation", "barge")
 _fs_local = threading.local()  # .turn = the _FirstSound of the streamed turn running on this thread
 
 
@@ -3724,13 +3726,20 @@ def _fs_now() -> float:
     return time.monotonic()
 
 
-def _stamp_close(t_close: "float | None", endpointer: "_Endpointer", stop_reason: str) -> None:
-    """The recording just closed: remember when and by which rule, for the turn that follows."""
+def _stamp_close(t_close: "float | None", endpointer: "_Endpointer", stop_reason: str, frames: "list | None" = None,
+                 skip: int = 0) -> None:
+    """The recording just closed: remember when, by which rule, the endpointer's own quiet run and fall type at the
+    commit (read, never recomputed) and the recording's frames (its muted ms is summed later, at the turn's end, off
+    the path to the first sound), for the turn that follows."""
     rule = endpointer.tail_rule if stop_reason == "silence" else ""
     if rule not in _CLOSE_RULES:
         rule = "cap" if stop_reason == "max_duration" else "other"
+    closed = rule in _CLOSE_RULES
     _turn_close.update(t=_fs_now() if t_close is None else t_close, rule=rule,
-                       ms=int(endpointer.close_ms) if rule in _CLOSE_RULES else 0,
+                       ms=int(endpointer.close_ms) if closed else 0,
+                       quiet_ms=int(round(int(endpointer._quiet) * CHUNK_SIZE * 1000.0 / SAMPLE_RATE)) if closed else -1,
+                       fall=("hesitating" if endpointer._hesitating else "clean") if closed else "none",
+                       frames=frames, skip=int(skip),
                        seq=int(_turn_close.get("seq", 0)) + 1)
 
 
@@ -3755,17 +3764,22 @@ def _server_kind(header: dict) -> str:
 
 
 class _PostCloseTalk:
-    """Speech the barge monitor hears after the close and before the first server sound (its idle branch).
-    Counts only; the monitor's decisions never read it. Blind to the gap between the recording closing and the
-    monitor's mic opening."""
+    """Speech the barge monitor hears after the close, in its idle branch, inside a FIXED window: from the close
+    to _OBS_MS after it, or until the first server sound if that is earlier (playback registering ends the idle
+    branch anyway; a reply that finished inside the window must not feed its own echo back in). ``obs_ms`` is the
+    window actually observed (from the monitor's first idle chunk, which is after the close), so a short window is
+    visible and never read as "nobody spoke". Counts only; the monitor's decisions never read it."""
 
     def __init__(self):
         self.armed = self.opened = self.stopped = False
-        self.chunks = self.early = 0
+        self.chunks = 0
+        self.first_cap: "float | None" = None
+        self.last_end: "float | None" = None
 
     def begin(self) -> None:
         self.armed, self.opened, self.stopped = True, False, False
-        self.chunks = self.early = 0
+        self.chunks = 0
+        self.first_cap = self.last_end = None
 
     def mic_open(self) -> None:
         self.opened = True
@@ -3774,20 +3788,30 @@ class _PostCloseTalk:
         self.stopped = True
 
     def feed(self, prob: float, captured_at: float) -> None:
-        if not self.armed or self.stopped or not prob >= VAD_ENDPOINT_THRESHOLD:
-            return
-        self.chunks += 1
         t = _turn_close.get("t")
-        if t is not None and 0.0 <= captured_at - t <= _STILL_TALKING_S:
-            self.early += 1
+        if not self.armed or self.stopped or t is None:
+            return
+        rel = captured_at - t
+        if rel < 0.0 or rel >= _OBS_MS / 1000.0:
+            return
+        if self.first_cap is None:
+            self.first_cap = captured_at
+        self.last_end = captured_at + _CHUNK_S
+        if prob >= VAD_ENDPOINT_THRESHOLD:
+            self.chunks += 1
 
-    def take(self) -> "tuple[int, int]":
-        """(talk_chunks, still_talking); (-1, 0) when no monitor listened for this turn."""
-        heard = self.armed and self.opened
+    def take(self) -> "tuple[int, int, int]":
+        """(talk_chunks, still_talking, obs_ms); (-1, 0, 0) when no monitor listened for this turn or no close is known."""
+        t = _turn_close.get("t")
+        heard = self.armed and self.opened and t is not None
         self.armed = False
         if not heard:
-            return -1, 0
-        return self.chunks, 1 if self.early >= _STILL_TALKING_CHUNKS else 0
+            return -1, 0, 0
+        obs = 0
+        if self.first_cap is not None and self.last_end is not None:
+            end = min(self.last_end, t + _OBS_MS / 1000.0)
+            obs = max(0, int(round((end - max(self.first_cap, t)) * 1000.0)))
+        return self.chunks, 1 if self.chunks >= _STILL_TALKING_CHUNKS else 0, obs
 
 
 _TALK = _PostCloseTalk()
@@ -3796,7 +3820,8 @@ _TALK = _PostCloseTalk()
 class _FirstSound:
     """One streamed turn's first-sound record. Holds numbers only."""
 
-    def __init__(self, *, speculative: bool):
+    def __init__(self, *, speculative: bool, win: str = "barge"):
+        self.win = win if win in _FS_WINS else "barge"
         self._speculative = speculative
         self._seq0 = int(_turn_close.get("seq", 0))
         self._close: "dict | None" = None
@@ -3850,7 +3875,18 @@ class _FirstSound:
         return "PCM_WRITE i=%d at_ms=%d dur_ms=%d underrun_ms=%d" % (
             i, self.rel_ms(at), int(round(dur_s * 1000.0)), under)
 
-    def line(self, talk: "tuple[int, int]") -> str:
+    @staticmethod
+    def _muted(c: "dict | None") -> int:
+        """Digital-silence ms of the recording behind this turn, as the ``Recorded command`` line's ``muted=``;
+        -1 when no recording is known. Summed here (turn end), not at the close."""
+        if c is None or c.get("frames") is None:
+            return -1
+        try:
+            return int(_muted_ms(c["frames"], int(c.get("skip", 0))))
+        except Exception:
+            return -1
+
+    def line(self, talk: "tuple[int, int, int]") -> str:
         c = self._close
         if c is None and self._speculative:
             self._take_close()
@@ -3859,9 +3895,13 @@ class _FirstSound:
         kind = self.kind if self.kind in _SERVER_KINDS + ("unknown", "none") else "unknown"
         return ("FIRST_SOUND close=%s=%dms post_ms=%d reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                 "reflex_cut=0 reflex_wait_ms=0 server_first_ms=%d server_kind=%s gap_ms=-1 still_talking=%d "
-                "talk_chunks=%d chunks=%d underrun_max_ms=%d underrun_sum_ms=%d") % (
+                "talk_chunks=%d chunks=%d underrun_max_ms=%d underrun_sum_ms=%d obs_ms=%d win=%s quiet_ms=%d fall=%s "
+                "muted_ms=%d") % (
             rule, int(c["ms"]) if rule != "none" else 0, self.rel_ms(self.post_at), self.rel_ms(self.first_at),
-            kind, int(talk[1]), int(talk[0]), self.writes, self.underrun_max, self.underrun_sum)
+            kind, int(talk[1]), int(talk[0]), self.writes, self.underrun_max, self.underrun_sum, int(talk[2]),
+            self.win, int(c.get("quiet_ms", -1)) if c is not None else -1,
+            c["fall"] if c is not None and c.get("fall") in ("clean", "hesitating") else "none",
+            self._muted(c))
 
 
 def _fs_note_write(at: float, dur_s: float) -> None:
@@ -4048,7 +4088,9 @@ def _do_single_turn_stream(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: 
 
     Every call logs ONE ``FIRST_SOUND`` line after the turn (log-only instrument, see _FirstSound).
     """
-    fs = _FirstSound(speculative=speculation is not None)
+    fs = _FirstSound(speculative=speculation is not None,
+                     win=("wake" if wake_turn or (speculation is not None and not window) else
+                          window if window in ("followup", "conversation") else "barge"))
     prev = getattr(_fs_local, "turn", None)
     _fs_local.turn = fs
     try:
@@ -4655,6 +4697,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
         log.info("Recording follow-up command (max %ds, up to %.0fs while still speaking)...",
                  RECORD_SECONDS, caps[1] * _CHUNK_S)
         frames = list(lookback)
+        n_lookback = len(frames)
         if stream_upload:
             uploader = _start_stt_stream(frames)  # same bytes, same order as the WAV below
         # The trigger chunk was already-detected speech — seed the endpointer so
@@ -4677,7 +4720,7 @@ def _follow_up_listen(pa: pyaudio.PyAudio, window_s: float | None = None,
                 speculation.fire(_frames_to_wav(pa, frames))
             if _record_cap_stop(n_read, caps, endpointer):
                 break
-        _stamp_close(t_close, endpointer, stop_reason)
+        _stamp_close(t_close, endpointer, stop_reason, frames, n_lookback)
         _note_capture_end(stop_reason, n_read, caps, endpointer)
         stream.stop_stream()
         stream.close()

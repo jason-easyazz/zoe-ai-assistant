@@ -1640,7 +1640,8 @@ unknown.
   `at_ms` of `i=0` is taken after the player spawned, so it includes the spawn.
 - `FIRST_SOUND close=<rule>=<ms>ms post_ms=<close->POST> reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1
   reflex_cut=0 reflex_wait_ms=0 server_first_ms=<n> server_kind=<content|filler|tool_ack|greeting|canned|unknown|none>
-  gap_ms=-1 still_talking=<0|1> talk_chunks=<n> chunks=<n> underrun_max_ms=<n> underrun_sum_ms=<n>`.
+  gap_ms=-1 still_talking=<0|1> talk_chunks=<n> chunks=<n> underrun_max_ms=<n> underrun_sum_ms=<n>
+  obs_ms=<n> win=<wake|followup|conversation|barge> quiet_ms=<n> fall=<clean|hesitating|none> muted_ms=<n>`.
   Every `_do_single_turn_stream` call logs exactly one, after
   `turn_stream TTFA=`, also when nothing played (`server_first_ms=-1 server_kind=none`).
   - `close` is `deep|quiet|clean|hesitation|no_speech` with the rule limit (as on the `Recorded` line), `cap=0ms`,
@@ -1652,10 +1653,20 @@ unknown.
     `processing_ack` gives filler; provider `kokoro` gives canned (only `_canned_turn_response` sends it); `stitch`
     gives content. A `kokoro-sidecar` sentence is content OR a tool ack, so it is `unknown` until the server adds a
     `"kind"` field (enum-checked by the daemon) to the `_emit_sentence` headers.
-  - `talk_chunks` is the barge monitor's speech chunks (prob >= `VAD_ENDPOINT_THRESHOLD`) in its idle branch,
-    from monitor start until the first server sound. `still_talking=1` means >= 3 of them within 1.5 s of the close.
-    The count is `-1` when no monitor listened (barge-in off, or the mic did not open). It is blind to the gap
-    between the recording closing and the monitor's mic opening. The monitor's decisions never read it.
+  - `talk_chunks` is the barge monitor's speech chunks (prob >= `VAD_ENDPOINT_THRESHOLD`) in its idle branch inside
+    a FIXED window: from the close to 1500 ms after it, or until the first server sound if that is earlier (a reply
+    that finished inside the window must not feed its own echo back in). `still_talking=1` means >= 3 of them.
+    `obs_ms` is the window actually observed, from the monitor's first idle chunk (the mic opens after the close) to
+    the end of its last in-window chunk, so a fast canned reply or a late mic shows as a short `obs_ms` and is never
+    read as "nobody spoke". `talk_chunks=-1 obs_ms=0` when no monitor listened (barge-in off, mic did not open) or no
+    close is known. The monitor's decisions never read any of it.
+  - `win` is the turn kind: `wake`, `followup`, `conversation`, or `barge` (a barge-in seed turn, no window).
+  - `quiet_ms` is the endpointer's own measured quiet run at the commit (its `_quiet` counter, in ms), beside the
+    rule limit in `close=`; `fall` is its own `_hesitating` flag (`clean` / `hesitating`). Both read at the commit,
+    never recomputed; `-1` / `none` when the recording ended on the cap or no close is known.
+  - `muted_ms` is the digital-silence ms of the recording behind the turn (the figure `Recorded command` prints as
+    `muted=`), for every turn kind, so the follow-up path has it without touching its own line. It is summed at the
+    turn's end, off the path to the first sound. `-1` when no recording is known.
 - `_PLAYOUT` (the barge ledger) is untouched. The instrument keeps its own playout model, because noting
   `_PLAYOUT` with duck off would grow it without a reset.
 - **Deploy (owner-run, Pi step is manual):** after the replay gate and landing, from a clean worktree at the merged commit

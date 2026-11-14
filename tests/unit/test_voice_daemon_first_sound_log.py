@@ -42,7 +42,9 @@ FIRST_SOUND_RE = re.compile(
     r"^FIRST_SOUND close=(deep|quiet|clean|hesitation|no_speech|cap|other|none)=(\d+)ms post_ms=(-?\d+) "
     r"reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 reflex_cut=0 reflex_wait_ms=0 "
     r"server_first_ms=(-?\d+) server_kind=(content|filler|tool_ack|greeting|canned|unknown|none) gap_ms=-1 "
-    r"still_talking=([01]) talk_chunks=(-?\d+) chunks=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+)$")
+    r"still_talking=([01]) talk_chunks=(-?\d+) chunks=(\d+) underrun_max_ms=(\d+) underrun_sum_ms=(\d+) "
+    r"obs_ms=(\d+) win=(wake|followup|conversation|barge) quiet_ms=(-?\d+) fall=(clean|hesitating|none) "
+    r"muted_ms=(-?\d+)$")
 PCM_WRITE_RE = re.compile(r"^PCM_WRITE i=(\d+) at_ms=(-?\d+) dur_ms=(\d+) underrun_ms=(\d+)$")
 
 
@@ -114,29 +116,33 @@ def _wav(ms: int, rate: int = 24000, amp: int = 3000) -> bytes:
 
 def test_line_with_nothing_known_is_all_sentinels(daemon):
     fs = daemon._FirstSound(speculative=False)
-    line = fs.line((-1, 0))
+    line = fs.line((-1, 0, 0))
     assert line == ("FIRST_SOUND close=none=0ms post_ms=-1 reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                     "reflex_cut=0 reflex_wait_ms=0 server_first_ms=-1 server_kind=none gap_ms=-1 still_talking=0 "
-                    "talk_chunks=-1 chunks=0 underrun_max_ms=0 underrun_sum_ms=0")
+                    "talk_chunks=-1 chunks=0 underrun_max_ms=0 underrun_sum_ms=0 obs_ms=0 win=barge quiet_ms=-1 fall=none "
+                    "muted_ms=-1")
     assert FIRST_SOUND_RE.match(line)
 
 
 def test_field_order_is_fixed(daemon, monkeypatch):
     clock = _Clock(50.0)
     monkeypatch.setattr(daemon, "_fs_now", clock)
-    ep = types.SimpleNamespace(tail_rule="deep", close_ms=640)
-    daemon._stamp_close(50.0, ep, "silence")
-    fs = daemon._FirstSound(speculative=False)
+    ep = types.SimpleNamespace(tail_rule="deep", close_ms=640, _quiet=9, _hesitating=True)
+    muted = np.zeros(1280, dtype=np.int16).tobytes()   # one digitally silent chunk = 80 ms
+    daemon._stamp_close(50.0, ep, "silence", [muted, muted, b"\x05\x00" * 1280], 1)
+    fs = daemon._FirstSound(speculative=False, win="followup")
     fs.post_at = 50.21
     fs.header({"chunk": -2, "provider": "greeting"})
     fs.write(51.5, 0.4)
-    line = fs.line((4, 1))
+    line = fs.line((4, 1, 1500))
     keys = [kv.split("=", 1)[0] for kv in line.split(" ")[1:]]
     assert keys == ["close", "post_ms", "reflex", "skip", "reflex_at_ms", "reflex_dur_ms", "reflex_cut",
                     "reflex_wait_ms", "server_first_ms", "server_kind", "gap_ms", "still_talking", "talk_chunks",
-                    "chunks", "underrun_max_ms", "underrun_sum_ms"]
+                    "chunks", "underrun_max_ms", "underrun_sum_ms", "obs_ms", "win", "quiet_ms", "fall", "muted_ms"]
     m = FIRST_SOUND_RE.match(line)
     assert m and m.group(1, 2, 3, 4, 5, 6, 7, 8) == ("deep", "640", "210", "1500", "greeting", "1", "4", "1")
+    # the four appended fields: the observed window, the turn kind, the endpointer's own state at the commit, muted ms
+    assert m.group(11, 12, 13, 14, 15) == ("1500", "followup", "720", "hesitating", "80")
 
 
 @pytest.mark.parametrize("header,kind", [
@@ -172,7 +178,7 @@ def test_underrun_is_starvation_against_back_to_back_playout(daemon):
         "PCM_WRITE i=4 at_ms=2850 dur_ms=50 underrun_ms=0",
     ]
     assert (fs.underrun_max, fs.underrun_sum, fs.writes) == (100, 100, 5)
-    assert FIRST_SOUND_RE.match(fs.line((0, 0))).group(4) == "500"
+    assert FIRST_SOUND_RE.match(fs.line((0, 0, 0))).group(4) == "500"
     # NEGATIVE CONTROL: modelling each chunk's end as its own write + duration (ignoring the queue) would call the
     # third write starved by 500 ms (102.1 - 101.6) - the schedule above is chosen so that error is visible.
     naive_end_after_1 = 100.6 + 1.0
@@ -262,10 +268,11 @@ def test_followup_recording_stamps_and_an_empty_window_does_not(daemon, monkeypa
 
 
 def test_a_cap_close_is_named_cap(daemon):
-    ep = types.SimpleNamespace(tail_rule="", close_ms=0)
+    ep = types.SimpleNamespace(tail_rule="", close_ms=0, _quiet=3, _hesitating=False)
     daemon._stamp_close(5.0, ep, "max_duration")
     assert daemon._turn_close["rule"] == "cap" and daemon._turn_close["ms"] == 0
-    daemon._stamp_close(6.0, types.SimpleNamespace(tail_rule="no_speech", close_ms=3040), "silence")
+    assert (daemon._turn_close["quiet_ms"], daemon._turn_close["fall"]) == (-1, "none")   # no commit: no measured run
+    daemon._stamp_close(6.0, types.SimpleNamespace(tail_rule="no_speech", close_ms=3040, _quiet=38, _hesitating=False), "silence")
     assert (daemon._turn_close["rule"], daemon._turn_close["ms"]) == ("no_speech", 3040)
 
 
@@ -278,7 +285,7 @@ def test_speculative_stream_takes_only_its_own_close(daemon):
     assert plain.rel_ms(5.0) == 4000                                    # NEGATIVE CONTROL: a plain turn takes it
     daemon._turn_close.update(t=5.3, rule="deep", ms=640, seq=8)         # now the recording closes
     assert spec.rel_ms(5.9) == 600
-    assert FIRST_SOUND_RE.match(spec.line((-1, 0))).group(3) == "-300"  # the POST went out before the close
+    assert FIRST_SOUND_RE.match(spec.line((-1, 0, 0))).group(3) == "-300"  # the POST went out before the close
 
 
 class _FakeProc:
@@ -361,7 +368,8 @@ def test_turn_lines_are_relative_to_the_carried_close(daemon, monkeypatch, caplo
     (line,) = _msgs(caplog, "FIRST_SOUND")
     assert line == ("FIRST_SOUND close=deep=640ms post_ms=100 reflex=none skip=- reflex_at_ms=-1 reflex_dur_ms=-1 "
                     "reflex_cut=0 reflex_wait_ms=0 server_first_ms=600 server_kind=greeting gap_ms=-1 still_talking=0 "
-                    "talk_chunks=-1 chunks=3 underrun_max_ms=500 underrun_sum_ms=500")
+                    "talk_chunks=-1 chunks=3 underrun_max_ms=500 underrun_sum_ms=500 obs_ms=0 win=wake quiet_ms=-1 fall=none "
+                    "muted_ms=-1")   # the hand-stamped close carries no quiet run, fall or frames: sentinels
 
 
 def test_followup_window_turn_is_relative_to_its_carried_close(daemon, monkeypatch, caplog):
@@ -399,12 +407,33 @@ def test_talk_counting(daemon):
     script = [(10.10, 0.9), (10.18, 0.2), (10.26, 0.5), (10.34, 0.35), (11.6, 0.9), (11.68, 0.9), (12.0, 0.1)]
     for at, prob in script:
         talk.feed(prob, at)
-    # >= 0.35 counts: 10.10, 10.26, 10.34 inside 1.5 s; 11.6, 11.68 outside it
-    assert (talk.chunks, talk.early) == (5, 3)
+    # >= 0.35 counts: 10.10, 10.26, 10.34 inside the fixed 1.5 s window; 11.6, 11.68 outside it
+    assert talk.chunks == 3
     talk.first_sound()
     talk.feed(0.9, 10.5)                       # after the first server sound: not counted
-    assert talk.take() == (5, 1)
-    assert talk.take() == (-1, 0)              # taken once: the next turn's line cannot reuse it
+    # observed from the monitor's first chunk (10.10) to the end of its last in-window chunk (10.34 + 80 ms)
+    assert talk.take() == (3, 1, 320)
+    assert talk.take() == (-1, 0, 0)           # taken once: the next turn's line cannot reuse it
+
+
+def test_talk_window_is_fixed_not_cut_by_the_first_sound(daemon):
+    """A listener that fed chunks the whole window sees obs_ms=1500; a first server sound at +300 ms shortens the
+    observed window and says so (never a silent 'nobody spoke')."""
+    daemon._turn_close.update(t=10.0, rule="deep", ms=640, seq=1)
+    full = daemon._PostCloseTalk()
+    full.begin()
+    full.mic_open()
+    for k in range(40):                        # chunks every 80 ms from the close, well past the window
+        full.feed(0.0, 10.0 + 0.08 * k)
+    assert full.take() == (0, 0, 1500)
+    fast = daemon._PostCloseTalk()
+    fast.begin()
+    fast.mic_open()
+    for k in range(40):
+        if k == 4:
+            fast.first_sound()                 # a fast canned reply starts playing at +320 ms
+        fast.feed(0.0, 10.0 + 0.08 * k)
+    assert fast.take() == (0, 0, 320)
 
 
 def test_talk_negative_controls(daemon):
@@ -414,16 +443,21 @@ def test_talk_negative_controls(daemon):
     talk.mic_open()
     for at in (10.1, 10.2, 11.55):             # third chunk is 1.55 s after the close: outside the window
         talk.feed(0.9, at)
-    assert talk.take() == (3, 0)
+    assert talk.take() == (2, 0, 180)
     talk.begin()                               # monitor started, but its mic never opened
     talk.feed(0.9, 10.1)
-    assert talk.take() == (-1, 0)
+    assert talk.take() == (-1, 0, 0)
     talk.begin()
     talk.mic_open()
     for at in (10.1, 10.2, 10.3):
         talk.feed(0.34, at)                     # just under the endpointer's speech threshold
     talk.feed(float("nan"), 10.4)
-    assert talk.take() == (0, 0)
+    assert talk.take() == (0, 0, 380)
+    daemon._turn_close.clear()                  # no close known: nothing to measure from
+    talk.begin()
+    talk.mic_open()
+    talk.feed(0.9, 10.1)
+    assert talk.take() == (-1, 0, 0)
 
 
 class _MonStream:
@@ -473,7 +507,7 @@ def _run_monitor(daemon, monkeypatch, *, talk_feed=None):
 
 def test_monitor_counts_idle_speech_only(daemon, monkeypatch):
     decisions, talk = _run_monitor(daemon, monkeypatch)
-    assert talk == (5, 1) and decisions
+    assert talk == (5, 1, 800) and decisions
 
 
 def test_monitor_decisions_are_identical_without_or_with_a_broken_instrument(daemon, monkeypatch):
@@ -485,7 +519,7 @@ def test_monitor_decisions_are_identical_without_or_with_a_broken_instrument(dae
 
     broken, _ = _run_monitor(daemon, monkeypatch, talk_feed=_boom)
     assert base == off == broken and base
-    assert talk_off == (0, 0)     # NEGATIVE CONTROL: with the count stubbed out nothing is counted
+    assert talk_off == (0, 0, 0)     # NEGATIVE CONTROL: with the count stubbed out nothing is counted
 
 
 # ── 5. no text can reach either line ─────────────────────────────────────────
@@ -512,9 +546,9 @@ def test_a_transcript_object_cannot_be_formatted_into_a_line(daemon):
     """The numeric fields are %d: a text-bearing object there raises instead of printing (caught by the caller)."""
     fs = daemon._FirstSound(speculative=False)
     fs.kind = "the words someone said"
-    assert "said" not in fs.line((0, 0))
+    assert "said" not in fs.line((0, 0, 0))
     with pytest.raises((TypeError, ValueError)):
-        fs.line(("three chunks", 0))
+        fs.line(("three chunks", 0, 0))
 
 
 # ── 6. the existing lines are unchanged ──────────────────────────────────────
@@ -583,3 +617,81 @@ def test_playback_and_posts_identical_with_and_without_the_instrument(daemon, mo
         broken = _effects(daemon, m, "broken")
     assert on == off == broken
     assert on[0] is True and len(on[1]) == 3 and len(on[3]) == 1
+
+
+# ── 8. the appended fields: win, quiet_ms, fall, muted_ms ─────────────────────
+
+def test_win_follows_the_turn_kind(daemon, monkeypatch, caplog):
+    seen = {}
+    for name, kw in (("wake", dict(wake_turn=True)), ("followup", dict(window="followup", prompt_on_empty=False)),
+                     ("conversation", dict(window="conversation", prompt_on_empty=False)),
+                     ("barge", dict(prompt_on_empty=False))):
+        caplog.clear()
+        daemon._turn_close.update(t=99.0, rule="deep", ms=640, seq=1)
+        with monkeypatch.context() as m:
+            _stream_turn_setup(daemon, m, _Clock(100.0))
+            with caplog.at_level(logging.INFO, logger=daemon.log.name):
+                daemon._do_single_turn_stream(_FakePA(), b"RIFFwav", **kw)
+        (line,) = _msgs(caplog, "FIRST_SOUND")
+        seen[name] = FIRST_SOUND_RE.match(line).group(12)
+    assert seen == {k: k for k in ("wake", "followup", "conversation", "barge")}
+
+
+def test_unknown_win_is_barge_never_text(daemon):
+    assert daemon._FirstSound(speculative=False, win="a transcript").win == "barge"
+
+
+def test_quiet_run_and_fall_are_read_from_the_endpointer_at_the_commit(daemon, monkeypatch):
+    clock = _Clock(10.0)
+    _vad_mode(daemon, monkeypatch, clock)
+    stream = _ScriptStream(daemon, monkeypatch, clock, [SPEECH] * 20)
+    assert daemon.record_command(_FakePA(), stream=stream)
+    c = daemon._turn_close
+    assert (c["rule"], c["ms"], c["quiet_ms"], c["fall"]) == ("deep", 640, 640, "clean")   # 8 deep chunks at 80 ms
+    # a hesitation: speech, quiet, speech again, then the long quiet run -> the endpointer's own _hesitating flag
+    clock2 = _Clock(30.0)
+    _vad_mode(daemon, monkeypatch, clock2)
+    probs = [SPEECH] * 10 + [DEEP] * 3 + [0.2] * 20
+    stream2 = _ScriptStream(daemon, monkeypatch, clock2, probs, tail=0.2)
+    assert daemon.record_command(_FakePA(), stream=stream2)
+    c = daemon._turn_close
+    assert c["fall"] == "hesitating" and c["quiet_ms"] >= c["ms"] > 0
+
+
+def test_muted_ms_rides_the_first_sound_line_for_wake_and_followup(daemon, monkeypatch, caplog):
+    muted_chunk = np.zeros(1280, dtype=np.int16).tobytes()
+    clock = _Clock(10.0)
+    _vad_mode(daemon, monkeypatch, clock)
+    # wake: two silent chunks inside the recording (the 20 speech chunks first, so no pre-roll is skipped)
+    stream = _ScriptStream(daemon, monkeypatch, clock, [SPEECH] * 20)
+    reads = stream.read
+
+    def _read(*a, **k):
+        data = reads(*a, **k)
+        return muted_chunk if stream.reads in (4, 5) else data   # reads 4 and 5: the mic was muted (digital silence)
+
+    stream.read = _read
+    assert daemon.record_command(_FakePA(), stream=stream)
+    fs = daemon._FirstSound(speculative=False)
+    assert FIRST_SOUND_RE.match(fs.line((-1, 0, 0))).group(15) == "160"
+    # follow-up path: its own instrument field, the existing 'Recorded follow-up' line gains nothing
+    monkeypatch.setattr(daemon, "_new_vad_stream", lambda: object())
+    clock3 = _Clock(20.0)
+    _vad_mode(daemon, monkeypatch, clock3)
+    probs = [DEEP, DEEP] + [SPEECH] * 10 + [0.2] * 10
+    s3 = _ScriptStream(daemon, monkeypatch, clock3, probs, tail=0.2)
+    assert daemon._follow_up_listen(_FakePA(s3), window_s=5.0)
+    fs3 = daemon._FirstSound(speculative=False)
+    assert FIRST_SOUND_RE.match(fs3.line((-1, 0, 0))).group(15) == "0"          # present, and 0 for a clean recording
+    # a failure computing it never costs the line
+    daemon._turn_close["frames"] = object()
+    assert FIRST_SOUND_RE.match(daemon._FirstSound(speculative=False).line((-1, 0, 0))).group(15) == "-1"
+
+
+def test_barge_seed_stamps_too(daemon, monkeypatch):
+    clock = _Clock(40.0)
+    _vad_mode(daemon, monkeypatch, clock)
+    stream = _ScriptStream(daemon, monkeypatch, clock, [SPEECH] * 6)
+    mon = daemon._BargeMonitor(_FakePA(stream))
+    mon._capture_seed(stream, [], daemon._new_vad_stream() if False else object())
+    assert daemon._turn_close["rule"] in ("deep", "quiet", "clean", "cap", "other") and daemon._turn_close["frames"] is not None
