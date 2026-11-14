@@ -132,6 +132,8 @@ DEFAULT_QUIET_POLL_PATHS: tuple[str, ...] = (
     "/api/panels/*/config",
     "/api/proactive/inbox",
     "/api/system/stats",            # the desktop dashboard's System card, every 30 s
+    "/api/alarms/ringing",          # the panel's ring screen, every 2 s: ~70% of all app-log lines (2026-11-14)
+    "/api/omi/device-status",       # the panel Pi's omi-sync numbers-only heartbeat POST (see HEARTBEAT_POST_PATHS)
 )
 DEFAULT_QUIET_POLL_SLOW_MS = 1000
 
@@ -154,10 +156,12 @@ def _quiet_poll_slow_ms() -> int:
         return DEFAULT_QUIET_POLL_SLOW_MS
 
 
-#: The one non-GET that is a poll: the panel's periodic UI-state heartbeat.
-#: Every other write (PUT/POST/PATCH/DELETE) is a *change* someone made and must
-#: always leave a trace, even on a path that is otherwise a polled read.
-HEARTBEAT_POST_PATHS: tuple[str, ...] = ("/api/ui/state/sync",)
+#: The non-GETs that are polls: the panel's periodic UI-state heartbeat and the
+#: panel Pi's omi-sync health heartbeat (its last report is kept in the DB and
+#: read back by ``GET /api/omi/health``, so a 200 line adds nothing). Every other
+#: write (PUT/POST/PATCH/DELETE) is a *change* someone made and must always leave
+#: a trace, even on a path that is otherwise a polled read.
+HEARTBEAT_POST_PATHS: tuple[str, ...] = ("/api/ui/state/sync", "/api/omi/device-status")
 
 
 def is_quiet_poll(
