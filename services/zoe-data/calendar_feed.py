@@ -8,6 +8,20 @@ decision). The engine never sees one: it is handed an injected ``Fetcher`` (late
 ``FetchRequest`` (the account id, the last validators, the size cap) and returns a ``FetchResult`` (a status class, the bytes, the
 new validators). ``account_secrets`` still refuses everything; no URL column exists.
 
+THE FETCHER CONTRACT (the real fetcher is NOT in this module; it moves to the broker). The engine enforces only what it can see:
+  * a hard, ENGINE-OWNED bound on every fetch (``FETCH_TIMEOUT_S``): an async fetcher is cancelled at it; a sync fetcher runs in this
+    module's own small thread pool (``MAX_FETCH_THREADS``), and at the bound the engine stops waiting and records the run failed
+    (class ``network``, ``SyncReport.detail`` ``fetch_timeout``). A Python thread cannot be killed: the stuck call keeps its worker
+    until it returns, so a feed with a fetch still outstanding is refused (``fetch_outstanding``, the fetcher is not called), and at
+    most ``MAX_FETCH_THREADS`` stuck calls can exist at once (more queue, and a queued one is cancelled at its bound);
+  * the size cap on the RESULT: the seam hands over bytes, so a body over ``max_bytes`` is refused (``quota`` / ``too_large``)
+    whatever status came with it, before anything is parsed or written. Aborting AT the cap while reading belongs to the fetcher;
+  * the fetcher's own text never reaches a log, a row or the report: a raised exception is logged by its type name only.
+What the fetcher MUST do itself: stream the body and stop at ``FetchRequest.max_bytes``; use connect / read timeouts shorter than
+``FETCH_TIMEOUT_S``; follow at most 3 redirects and re-check every hop; refuse loopback, link-local, private, multicast, reserved
+and cloud-metadata addresses AFTER DNS resolution and connect to the address it checked (``agent_safety.assert_public_url`` plus a
+pinned address), returning ``blocked``; and never put the address, host or a token in an exception, a log line or a result field.
+
 * Fetch: conditional (ETag / Last-Modified go back to the fetcher); a 304, or a body whose sha256 equals the last good one, means
   everything unchanged and the parse is skipped. The engine re-checks the size cap (``ZOE_CALENDAR_FEED_MAX_BYTES``) and that the
   body is a calendar at all. A failure maps to an error CLASS plus a plain-words CODE (``connected_accounts.ERROR_CODES``) and an
@@ -31,6 +45,7 @@ Logs carry the account id, counts, outcome, class and code ONLY: never a title, 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import inspect
 import json
@@ -58,6 +73,8 @@ PARSER_VERSION = 1                 # a bump discards the stored validators: the 
 WINDOW_PAST_DAYS = 7
 WINDOW_FUTURE_DAYS = calendar_read.MAX_WINDOW_DAYS
 BATCH = 200
+FETCH_TIMEOUT_S = 45.0             # the engine's own bound on one fetch, whatever the fetcher does
+MAX_FETCH_THREADS = 2              # the sync-fetcher pool: a bound on how many stuck calls can pile up
 BACKOFF_BASE_S = 30 * 60
 BACKOFF_MAX_S = 6 * 3600
 
@@ -114,6 +131,23 @@ class SyncReport:
     n_bytes: int = 0
     duration_ms: int = 0
     backoff_until: Optional[str] = None
+    detail: Optional[str] = None                  # a fixed word (fetch_timeout / fetch_outstanding); not persisted
+
+
+class FetchTimeout(Exception):
+    """The fetch did not finish inside the engine's bound."""
+
+
+#: account ids with a fetch not yet finished. An async fetch leaves at its bound (cancelled); a thread leaves when it returns.
+_outstanding: set = set()
+_pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
+
+
+def _fetch_pool() -> concurrent.futures.ThreadPoolExecutor:
+    global _pool
+    if _pool is None:
+        _pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_FETCH_THREADS, thread_name_prefix="calendar-feed-fetch")
+    return _pool
 
 
 # -- flags and small helpers ------------------------------------------------------------------------------------------------------
@@ -344,24 +378,44 @@ async def _link_members(db, event_id: str, attendees: list) -> None:
                          (member, event_id, value))
 
 
-async def _fetch(fetcher: Fetcher, req: FetchRequest) -> FetchResult:
-    if asyncio.iscoroutinefunction(fetcher):
-        res = await fetcher(req)
-    else:
-        from proactive.scheduler import run_blocking
+def _thread_done(account_id: str, fut: "concurrent.futures.Future") -> None:
+    _outstanding.discard(account_id)
+    if not fut.cancelled():
+        fut.exception()                          # retrieved, so a late failure is never reported anywhere with its text
 
-        res = await run_blocking(fetcher, req)
-    if inspect.isawaitable(res):                 # a callable object with an async __call__
-        res = await res
-    if not isinstance(res, FetchResult) or res.status not in FETCH_STATUSES:
-        raise TypeError("the fetcher returned something that is not a FetchResult")
+
+async def _fetch(fetcher: Fetcher, req: FetchRequest, timeout: float) -> FetchResult:
+    """The fetch under the engine's bound (see the module docstring). Raises ``FetchTimeout`` at the bound."""
+    aid = req.account_id
+    _outstanding.add(aid)
+    threaded = False
+    deadline = time.monotonic() + timeout
+    try:
+        if inspect.iscoroutinefunction(fetcher) or inspect.iscoroutinefunction(getattr(fetcher, "__call__", None)):
+            res = await asyncio.wait_for(fetcher(req), timeout)
+        else:
+            cf = _fetch_pool().submit(fetcher, req)
+            threaded = True
+            cf.add_done_callback(lambda f: _thread_done(aid, f))
+            res = await asyncio.wait_for(asyncio.wrap_future(cf), timeout)     # cancels a call still queued at the bound
+            if inspect.isawaitable(res):
+                res = await asyncio.wait_for(res, max(0.0, deadline - time.monotonic()))
+    except asyncio.TimeoutError:
+        raise FetchTimeout() from None
+    finally:
+        if not threaded:
+            _outstanding.discard(aid)
+    if (not isinstance(res, FetchResult) or res.status not in FETCH_STATUSES
+            or not isinstance(res.body, (bytes, bytearray))):
+        raise TypeError("the fetcher returned something that is not a FetchResult with a bytes body")
     return res
 
 
 async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[str] = None, now: Optional[datetime] = None,
-                       scheduled_at: Optional[int] = None) -> SyncReport:
+                       scheduled_at: Optional[int] = None, fetch_timeout_s: Optional[float] = None) -> SyncReport:
     """One sync of one feed account. Never raises for a provider or parse problem (it is recorded on the run); raises only on a
-    programming error. ``run_mode`` overrides the flag (the lab); ``now`` fixes the clock (tests)."""
+    programming error. ``run_mode`` overrides the flag (the lab); ``now`` fixes the clock and ``fetch_timeout_s`` shortens the
+    engine's fetch bound (tests; it can only shorten it)."""
     m = run_mode or mode()
     rep = SyncReport(account_id, m, "skipped")
     if m not in ("shadow", "on"):
@@ -394,9 +448,9 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
             rep.outcome = "erased"
         else:
             rep.outcome = "fenced"
-        logger.info("CALENDAR_FEED run account=%s mode=%s outcome=%s class=%s code=%s seen=%d created=%d updated=%d deleted=%d "
+        logger.info("CALENDAR_FEED run account=%s mode=%s outcome=%s class=%s code=%s detail=%s seen=%d created=%d updated=%d deleted=%d "
                     "unchanged=%d skipped=%d pruned=%d suppressed=%d rrule_unsupported=%d bytes=%d ms=%d", account_id, m,
-                    rep.outcome, error_class, error_code, *(int(rep.counts.get(k, 0)) for k in (
+                    rep.outcome, error_class, error_code, rep.detail, *(int(rep.counts.get(k, 0)) for k in (
                         "seen", "created", "updated", "deleted", "unchanged", "skipped", "pruned", "suppressed",
                         "rrule_unsupported")), rep.n_bytes, rep.duration_ms)
         return rep
@@ -414,15 +468,25 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
         return await finish("error", error_class=error_class, error_code=error_code, retry_after=retry_after, failures=failures)
 
     cap = max_bytes()
+    if account_id in _outstanding:                # its last fetch has not returned: never stack another on a stuck call
+        rep.detail = "fetch_outstanding"
+        return await failed("network", None)
     req = FetchRequest(account_id, cursor.get("etag"), cursor.get("last_modified"), cap)
+    bound = min(FETCH_TIMEOUT_S, fetch_timeout_s) if fetch_timeout_s else FETCH_TIMEOUT_S
     try:
-        res = await _fetch(fetcher, req)
+        res = await _fetch(fetcher, req, bound)
     except TypeError:
         raise
+    except FetchTimeout:
+        logger.warning("CALENDAR_FEED fetch timed out account=%s", account_id)
+        rep.detail = "fetch_timeout"
+        return await failed("network", None)
     except Exception as exc:  # noqa: BLE001 - a fetcher failure is a network-class failure; its text is never logged
         logger.warning("CALENDAR_FEED fetch failed account=%s (%s)", account_id, type(exc).__name__)
         return await failed("network", None)
-    rep.n_bytes = len(res.body or b"")
+    rep.n_bytes = len(res.body)
+    if rep.n_bytes > cap:                         # however it was delivered and whatever status came with it
+        return await failed("quota", "too_large")
     if res.status in _FAILURES:
         cls, code = _FAILURES[res.status]
         return await failed(cls, code, res.retry_after_s)
@@ -443,9 +507,7 @@ async def sync_account(account_id: str, fetcher: Fetcher, *, run_mode: Optional[
 
     if res.status == "not_modified":
         return await unchanged()
-    body = res.body or b""
-    if len(body) > cap:
-        return await failed("quota", "too_large")
+    body = bytes(res.body)
     if not _looks_like_calendar(body, res.content_type):
         return await failed("provider", "not_calendar")
     sha = hashlib.sha256(body).hexdigest()

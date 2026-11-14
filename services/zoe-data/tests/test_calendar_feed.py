@@ -14,6 +14,8 @@ import json
 import logging
 import re
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -328,10 +330,126 @@ def test_off_does_nothing_and_shadow_writes_only_the_run(db):
     assert "Club practice" in events(db) and db.one("SELECT sync_cursor FROM calendars") == cursor   # ... and writes nothing
 
 
-def test_no_secret_is_stored_anywhere():
-    """The engine takes bytes from an injected fetcher; the secret seam still refuses everything and gained no purpose."""
+def _dump(d) -> str:
+    """Every column of every row of every table in the scratch store, as text."""
+    tables = [r[0] for r in d.rows("SELECT name FROM sqlite_master WHERE type = 'table'")]
+    return "\n".join(f"{t}: {row!r}" for t in tables for row in d.rows(f"SELECT * FROM {t}"))
+
+
+def _logged(caplog) -> str:
+    fmt = logging.Formatter("%(message)s %(exc_text)s")
+    return "\n".join(fmt.format(r) + " " + repr(r.args) for r in caplog.records)
+
+
+SENTINEL = "SENTINEL-7f3a9c2e"
+
+
+@needs_ics
+def test_no_secret_is_stored_anywhere(db, caplog):
+    """The fetcher holds an address carrying a token; the engine is handed bytes only. Across a good sync, a fetch that RAISES with
+    the address in its text, one that times out and a thread fetcher that raises, the token reaches no row of any table, no log
+    record (message, args or traceback) and no report. The secret seam still refuses everything and gained no purpose."""
+    caplog.set_level(logging.DEBUG)
+    address = f"https://calendar.example/private/feed.ics?token={SENTINEL}"
+    a = account()
+    state = {"mode": "ok"}
+
+    async def fetch(req):
+        if state["mode"] == "raise":
+            raise ConnectionError(f"GET {address} failed with 401")
+        if state["mode"] == "hang":
+            await asyncio.Event().wait()
+        return feed.FetchResult("ok", body=ics(*THREE), etag='"e1"', content_type="text/calendar")
+
+    def thread_fetch(req):
+        raise RuntimeError(f"{address} could not be reached")
+
+    reports = [sync(a, fetch)]
+    state["mode"] = "raise"
+    reports.append(sync(a, fetch))
+    state["mode"] = "hang"
+    reports.append(run(feed.sync_account(a, fetch, run_mode="on", now=NOW, fetch_timeout_s=0.05)))
+    reports.append(sync(a, thread_fetch))
+    assert [r.outcome for r in reports] == ["ok", "error", "error", "error"] and reports[2].detail == "fetch_timeout"
+    assert db.one("SELECT COUNT(*) FROM events") == 3
+    for where, text in (("the database", _dump(db)), ("the logs", _logged(caplog)), ("the reports", repr(reports))):
+        assert SENTINEL not in text and "calendar.example" not in text, where
+    assert "ConnectionError" in _logged(caplog)                                    # the failure is logged, by its type only
+    # negative control: the dump does read every table - a planted value is found
+    db.conn.execute("UPDATE calendars SET description = ?", (address,))
+    db.conn.commit()
+    assert SENTINEL in _dump(db)
     assert account_secrets.PURPOSES == ("oauth_refresh", "app_password") and not account_secrets.configured()
     with pytest.raises(account_secrets.SecretsUnavailable):
         run(account_secrets.put("acct_1", user_id="ann", purpose="app_password", secret=b"not-a-real-secret"))
     src = (SVC / "calendar_feed.py").read_text(encoding="utf-8")
     assert "account_secrets" not in src.split('"""', 2)[2]                            # the engine never calls the seam
+
+
+# -- the engine's own fetch bounds -------------------------------------------------------------------------------------------------
+
+def _until(cond, seconds=3.0):
+    end = time.monotonic() + seconds
+    while not cond() and time.monotonic() < end:
+        time.sleep(0.01)
+    return cond()
+
+
+@needs_ics
+def test_a_fetch_that_never_returns_is_cut_off_and_other_feeds_still_sync(db):
+    a, b = account(), account("ben", "ben-subject")
+
+    async def hang(req):
+        await asyncio.Event().wait()
+    t0 = time.monotonic()
+    r = run(feed.sync_account(a, hang, run_mode="on", now=NOW, fetch_timeout_s=0.05))
+    assert (r.outcome, r.error_class, r.detail) == ("error", "network", "fetch_timeout") and time.monotonic() - t0 < 2
+    assert a not in feed._outstanding                                              # an async fetch is cancelled at the bound
+
+    gate, calls = threading.Event(), []
+
+    def stuck(req):                                                                # a sync fetcher: its thread cannot be killed
+        calls.append(1)
+        gate.wait(10)
+        raise ConnectionError("late")
+    try:
+        r = run(feed.sync_account(a, stuck, run_mode="on", now=NOW, fetch_timeout_s=0.05))
+        assert (r.outcome, r.detail) == ("error", "fetch_timeout") and a in feed._outstanding
+        r = run(feed.sync_account(a, stuck, run_mode="on", now=NOW, fetch_timeout_s=0.05))
+        assert (r.outcome, r.detail, len(calls)) == ("error", "fetch_outstanding", 1)   # refused: never stacked on the stuck call
+        r = sync(b, Feed(ics(*THREE)))                                             # another feed is not held up
+        assert (r.outcome, r.counts["created"]) == ("ok", 3)
+    finally:
+        gate.set()
+    assert _until(lambda: a not in feed._outstanding)
+    assert sync(a, Feed(ics(*THREE))).counts["created"] == 3                       # once the thread returns, the feed syncs again
+    assert db.rows("SELECT outcome FROM sync_runs WHERE account_id = ? ORDER BY rowid", (a,)) == [
+        ("error",), ("error",), ("error",), ("ok",)]
+
+
+@needs_ics
+def test_fetch_bound_negative_control(db, monkeypatch):
+    """Without the engine's bound, a fetcher that never returns holds the sync forever (the outer test timeout fires instead)."""
+    async def unbounded(fetcher, req, timeout):
+        return await fetcher(req)
+    monkeypatch.setattr(feed, "_fetch", unbounded)
+
+    async def hang(req):
+        await asyncio.Event().wait()
+    a = account()
+    with pytest.raises(asyncio.TimeoutError):
+        run(asyncio.wait_for(feed.sync_account(a, hang, run_mode="on", now=NOW, fetch_timeout_s=0.05), 0.3))
+
+
+@needs_ics
+def test_an_oversized_body_is_refused_whatever_its_status_and_nothing_is_written(db, monkeypatch):
+    body = ics(*THREE)
+    monkeypatch.setenv("ZOE_CALENDAR_FEED_MAX_BYTES", str(len(body) - 1))
+    a = account()
+    for status in ("ok", "server_error", "not_modified"):
+        r = sync(a, lambda req, status=status: feed.FetchResult(status, body=body, content_type="text/calendar"))
+        assert (r.outcome, r.error_class, r.error_code, r.n_bytes) == ("error", "quota", "too_large", len(body)), status
+    for table in ("events", "event_attendees", "event_alarms", "calendars"):
+        assert db.one(f"SELECT COUNT(*) FROM {table}") == 0, table
+    monkeypatch.setenv("ZOE_CALENDAR_FEED_MAX_BYTES", str(len(body)))             # negative control: at the cap it is accepted
+    assert sync(a, Feed(body)).counts["created"] == 3
