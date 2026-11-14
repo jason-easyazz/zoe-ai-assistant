@@ -357,7 +357,7 @@ def test_the_urgency_order_is_explicit_and_pinned():
     assert medical_safety.URGENCY == (("ingest_human", "object_urgent"), ("ingest_human", "poison_human"), ("red_call", None),
                                       ("ingest_human", "poison_caffeine"), ("ingest_human", "object_minor"),
                                       ("ingest_animal", "poison_animal"), ("ingest_animal", None), ("number", None),
-                                      ("red_soon", None), ("glucose", None))
+                                      ("glucose", "glucose_low"), ("red_soon", None), ("glucose", None))
     assert medical_safety.urgency(medical_safety.NONE) == len(medical_safety.URGENCY)
 
 

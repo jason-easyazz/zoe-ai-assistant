@@ -610,6 +610,96 @@ def speaker_call_now(text: str) -> Verdict:
         return NONE
 
 
+# TOO MANY / TOO MUCH OF A MEDICINE (flag ZOE_MEDICAL_TOO_MANY: unset = shadow; exactly off / shadow; ANY other value = enforce): "did i
+# take too many", "i just took too many", "she has had too much of her medicine" name no substance (or a verb the ingestion rule does not
+# read), so the poisoning floor never saw them. A CLOSED allow-list in medical_safety_data/en.json "too_many", over the self_assess
+# slots (i / we / he / she / a person present). The human poisoning reply (the Poisons line); a pet -> the vet reply. A past time or a
+# condition (_not_now: "in 2019", "what happens if ...") never fires; an intentional-sounding statement is the distress hand-off's
+# (it runs first; this is never widened to grab "on purpose"). Read by ``handle`` only: ``detect`` and filing are unchanged.
+TOO_MANY_ENV = "ZOE_MEDICAL_TOO_MANY"
+
+
+def too_many_mode() -> str:
+    """``ZOE_MEDICAL_TOO_MANY``: unset = shadow; exactly off / shadow = that; ANY other value (a typo too) = enforce. Per call."""
+    try:
+        from typed_env import env_str
+
+        raw = env_str(TOO_MANY_ENV, "shadow").strip().lower()
+    except Exception:  # noqa: BLE001
+        return "shadow"
+    if raw in ("", "shadow"):
+        return "shadow"
+    return "off" if raw == "off" else "enforce"
+
+
+@lru_cache(maxsize=1)
+def _too_many_re() -> "re.Pattern":
+    d, sa = _data()["too_many"], _sa_data()
+    slots = {k: "(?:" + "|".join(_phrase_rx(p) for p in sorted(v, key=len, reverse=True)) + ")" for k, v in sa["slots"].items()}
+    # the self-assessment's drug names (one list), minus the ones that are also food or drink here ("too much ice cream / coke")
+    food_too = set(d.get("drug_words_also_food_or_drink", []))
+    extra = list(d["extra_substances"]) + [x for x in sa.get("drug_names", []) if x not in food_too]
+    sub = "(?:" + _data()["ingest"]["substance"] + "|" + "|".join(r"\s+".join(map(re.escape, x.split())) for x in extra) + r")(?!\w)"
+    poss = r"(?:(?:of\s+)?(?:(?:my|his|her|their|the|those|these|some|our|your)\s+)*)"
+    amt = "(?:" + "|".join(r"\s+".join(map(re.escape, a.split())) for a in sorted(d["amount"], key=len, reverse=True)) + ")"
+    # a take form: the substance is optional, but with none the clause must END ("took too many photos" is not a medicine)
+    end = (r"(?=\s*(?:[.!?,;]|$)|\s+(?:of\s+(?:them|those|these|it)|now|just\s+now|again|today|tonight|by\s+accident|by\s+mistake|"
+           r"accidentally|and|but|so|because|cos)(?!\w))")       # a conjunction ends the clause too
+    take_obj = rf"\s+{amt}(?:\s+{poss}{sub}|{end})"
+    need_obj = rf"\s+{amt}\s+{poss}{sub}"
+    verbs = {k: "(?:" + "|".join(map(re.escape, v)) + ")" for k, v in d["verbs"].items()}
+    frames = []
+    for i, f in enumerate(d["frames"]):
+        rx = ""
+        j = 0
+        for tok in re.split(r"(\{[A-Z]+\})", f):
+            if tok[1:-1] in _SA_SUBJECT_SLOTS:
+                rx += f"(?P<s{i}_{j}>" + slots[tok[1:-1]] + ")"       # the frame's SUBJECT (who took it), read on its own
+                j += 1
+                continue
+            if tok in ("{TAKE}", "{SWALLOW}"):
+                rx += verbs[tok[1:-1]] + take_obj
+            elif tok == "{HAD}":
+                rx += verbs["HAD"] + need_obj
+            elif re.fullmatch(r"\{[A-Z]+\}", tok):
+                rx += slots[tok[1:-1]]
+            elif tok:
+                words = r"\s+".join(re.escape(w) for w in tok.split())
+                rx += (r"\s+" if tok[0].isspace() else "") + words + (r"\s+" if tok[-1].isspace() and words else "")
+        frames.append(rx)
+    return re.compile(r"(?<!\w)(?:" + "|".join(frames) + r")" + _SA_FICTION)
+
+
+#: not present / recent for THIS detector: a past time (_PAST_RE, except its present perfect "has had": "she has had too much of her
+#: medicine" is recent) or a condition ("if", "in case", "unless", "whenever", "next time"; "might" / "could" are uncertainty here)
+_TM_CONDITION_RE = re.compile(r"(?<!\w)(?:if|in\s+case|unless|whenever|next\s+time)(?!\w)")
+
+
+def _tm_not_now(s: str) -> bool:
+    return bool(_TM_CONDITION_RE.search(s) or any(not re.fullmatch(r"(?:had|has|have)\s+had", m.group(0), re.IGNORECASE)
+                                                   for m in _PAST_RE.finditer(s)))
+
+
+def too_many_ingestion(text: str) -> Verdict:
+    """The poisoning verdict for too many / too much of a medicine, present or recent (above), else ``NONE``. Pure; never raises."""
+    try:
+        s = _fold(text)
+        if not s or _tm_not_now(s):
+            return NONE
+        rx = _rx()
+        found = []
+        for m in _too_many_re().finditer(s):
+            # an animal ONLY when the frame's own SUBJECT is one ("my dog has had too many of my tablets"); an animal mentioned
+            # anywhere else leaves it human - when unsure, human (the safe reply)
+            subject = " ".join(v for n, v in m.groupdict().items() if v and n.startswith("s"))
+            animal = bool(subject) and bool(rx["animal"].search(subject)) and not rx["human"].search(subject)
+            found.append(Verdict("ingest_animal", "poison_animal") if animal else Verdict("ingest_human", "poison_human"))
+        return min(found, key=urgency) if found else NONE
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("medical_safety too_many_ingestion failed (%s)", type(exc).__name__)
+        return NONE
+
+
 def detect(text: str) -> Verdict:
     """The class of one turn (``NONE`` = leave it to the brain). Pure; never raises."""
     return _detect(text, recall_gate=True)
@@ -641,9 +731,12 @@ def _detect(text: str, *, recall_gate: bool) -> Verdict:
             key = "emergency_number_poison" if rx["poison_event"].search(s[first:]) else "emergency_number"
             return Verdict("number", key, lead=s[:first])
         soon = None if recall_q else (_flag(s, rx, "soon") or _pair(c, rx, "soon"))
-        if soon:
-            return soon
-        return _glucose(s, rx) or NONE
+        gl = _glucose(s, rx)
+        # BOTH are read and URGENCY decides: a very low blood sugar can need the number now and outranks a see-today symptom
+        # ("my vision is blurry and my blood sugar is 2.1"); any other reading stays below it
+        if soon and gl:
+            return gl if urgency(gl) < urgency(soon) else soon
+        return soon or gl or NONE
     except Exception as exc:  # noqa: BLE001 - a floor must not break a turn
         logger.warning("medical_safety detect failed (%s)", type(exc).__name__)
         return NONE
@@ -920,14 +1013,16 @@ def build_reply(v: Verdict, *, minor: bool = False, intercom: bool = False) -> s
 #: poison before a red flag, a red flag before a harmless-looking object).
 URGENCY: tuple = (("ingest_human", "object_urgent"), ("ingest_human", "poison_human"), ("red_call", None),
                   ("ingest_human", "poison_caffeine"), ("ingest_human", "object_minor"), ("ingest_animal", "poison_animal"),
-                  ("ingest_animal", None), ("number", None),
+                  ("ingest_animal", None), ("number", None), ("glucose", "glucose_low"),
                   ("red_soon", None), ("glucose", None))
 
 
 def urgency(v: Verdict) -> int:
     """The verdict's place in ``URGENCY`` (0 = most urgent); ``len(URGENCY)`` for no verdict. Pure."""
+    # a blood sugar is ranked by its BAND ("glucose_low" outranks a see-today symptom; any other reading does not)
+    band = _band(v.value, v.unit) if v.cls == "glucose" and v.value and v.unit else ""
     for i, (cls, key) in enumerate(URGENCY):
-        if v.cls == cls and (key is None or v.key == key):
+        if v.cls == cls and (key is None or v.key == key or (cls == "glucose" and key == band)):
             return i
     return len(URGENCY)
 
@@ -949,6 +1044,14 @@ async def handle(text: str, user_id: str = "", *, dry: bool = False, voice: bool
                             sa.cls, sa.key, sam)
             if sam == "enforce":
                 v = sa          # the call-now floor (shadow and off: the reply is exactly what it was)
+        tm = too_many_ingestion(text)
+        if tm.cls and urgency(tm) < urgency(v):
+            tmm = too_many_mode()
+            if tmm != "off":
+                logger.info("MEDICAL_TOO_MANY user=%s cls=%s key=%s mode=%s", (user_id or "guest").strip() or "guest",
+                            tm.cls, tm.key, tmm)
+            if tmm == "enforce":
+                v = tm          # the poisoning reply (shadow and off: the reply is exactly what it was)
         if not v.cls:
             held = _detect(text, recall_gate=False)
             if held.cls in ("red_call", "red_soon"):
