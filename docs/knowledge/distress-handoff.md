@@ -23,10 +23,13 @@ Every language with a section is scanned on every turn (code-switching works); t
 
 * A **cue** is a closed-vocabulary sequence (`seq`: named `groups` joined by a closed `fillers` list, so "I want my mum to die" is not "I want to die") or a regex. Text and patterns are folded alike
   (NFKC, casefold, accents off Latin letters, apostrophes dropped).
-* **Tiers.** `handoff`: a first-person cue stands in its own clause (clauses end at punctuation and the lexicon's `clause_breaks`). `gentle`: the same cue behind a **negation** ("I don't want to die") or a
-  **story/quote marker** ("in the film he says..."), a bare topical word ("the film was about suicide"), a third party at risk ("my friend said she wanted to die"), ordinary low mood.
-  `none`: nothing, or an **idiom** ("dying to see it", "kill for a coffee", "I can't live without my phone").
-* **Over-triggering is preferred to missing**: a guard only ever lowers handoff to gentle, never to none; only the idiom list voids a cue; a marker AFTER a cue never demotes it.
+* **Tiers.** `handoff`: a first-person cue stands in its own clause (clauses end at punctuation and the lexicon's `clause_breaks`); this includes first-person
+  **ideation** ("I'm thinking about suicide", "I've had suicidal thoughts", "I feel suicidal" (the speaker's own state, or "suicidal" + thoughts / ideas / feelings: "I have suicidal friends / patients" is a third party, gentle), "I keep thinking about killing myself", "I've been thinking about not being
+  here anymore"), added 2026-11-14 after a live test scored "im thinking about suicide" gentle because "suicide" was only a topic word. `gentle`: the same cue behind a **negation** ("I don't want to die") or a
+  **story/quote marker** ("in the film he says..."), a bare topical word ("the film was about suicide"), a third party at risk ("my friend said she wanted to die"), ordinary low mood, a resolved past ("I used to think about suicide", "I used to have suicidal thoughts": the closed vocabulary has no "used to", the same as
+  every other class), a professional or study mention ("I work in suicide prevention", "suicide prevention training", "suicide rate"). Simple past is NOT resolved: "I had
+  suicidal thoughts last night" / "I thought about suicide" hand off (over-trigger). `none`: nothing, or an **idiom** ("dying to see it", "kill for a coffee", "I can't live without my phone", "ending it with my boyfriend").
+* **Over-triggering is preferred to missing**: a guard only ever lowers handoff to gentle, never to none; only the idiom list voids a cue, and only a cue it overlaps or sits beside IN ITS OWN CLAUSE (no punctuation or `clause_breaks` word between them: "I'm dying to see it. I want to die." hands off; a property test crosses every lexicon idiom with every hand-off row, both orders); a marker AFTER a cue never demotes it.
 
 ## Where it sits (voice-path change: the replay gate applies)
 1. `fast_tiers.resolve` wrapper, **before** the provenance tier and every other tier (chat fast path, voice, LiveKit, Telegram-through-chat): `DispatchResult(tier="distress_handoff")`.
@@ -48,7 +51,7 @@ Rollback: `ZOE_DISTRESS_HANDOFF=off` (restart); the lexicon section can be delet
 | `ZOE_DISTRESS_NOTIFY=all` (default) \| `minors` \| `off` | owner decision: **`all`** tells the contact about any member (the brief); **`minors`** keeps an adult's disclosure private. Never the contact about themself, never a guest. Once per member per 6 h (in-process: a restart inside the window can repeat it once); a `danger`-class event (physical emergency) has its own 10 min window per member, so it is never swallowed by an earlier self-harm notice. |
 | Mark each child as a minor (persona `member_modes.minor`) | the only child record; unflagged, a child gets the adult wording and, under `minors`, no notification. |
 
-## Measured (208 synthetic phrases, English + Spanish, `tests/fixtures/distress_labelled.json`)
+## Measured (343 synthetic phrases, English + Spanish, `tests/fixtures/distress_labelled.json`)
 Three sets: **dev** (written with the lexicon, tuned on); **held_out_1** and **blind_2** (written after the lexicon froze, scored once, THEN used to fix whole classes of cue).
 First-run (the honest out-of-sample estimate of a hand-written lexicon) vs after the class fixes (a regression set now):
 
@@ -60,6 +63,22 @@ First-run (the honest out-of-sample estimate of a hand-written lexicon) vs after
 
 **Read the left column as the real expectation: about two thirds of unseen hand-off phrasings were caught the first time.** The right column is not a promise on new phrasings. The failure
 that matters (a hand-off turn scored `none`) is pinned: the only one left is "I want to go to sleep and never wake up"; the other pinned miss is a grief statement. The test fails if the set changes.
+
+**Ideation class (2026-11-14, `ideation_3` + `ideation_3_probe`, 135 phrases, both directions).** `ideation_3` (48 must-hand-off, 47 must-not: negated, quoted, third party,
+topical, professional, resolved past, idioms; en + es) was written BEFORE the cues. Same author wrote both, so its first run is not a blind estimate; `ideation_3_probe` (20 + 20,
+en, written after that run) is the closer one.
+
+| set | old lexicon (the bug) | first run of the new cues | final |
+|---|---|---|---|
+| ideation_3 must-hand-off recall (48) | 0.19 (9; "im thinking about suicide" = gentle `topic`) | 1.00 | 1.00 |
+| ideation_3 must-not kept below hand-off (47) | 46 (one existing over-trigger: "ending it with my boyfriend") | 47 | 47 |
+| ideation_3_probe must-hand-off (20) | not run | 14 / 20 | 18 / 20 |
+| ideation_3_probe must-not (20) | not run | 20 / 20 | 20 / 20 |
+| the three older sets (208) | as above | unchanged (every case the same tier) | unchanged |
+
+Probe class fixes: "can't stop thinking about", "considered", "I was thinking about", "I feel like killing myself". The two probe misses are pinned (they score gentle, never none):
+"I keep thinking I should kill myself" (no `should` desire: "I should die" is common hyperbole) and a subject-less "been feeling suicidal since Monday" (a bare form would also fire on
+"she has been feeling suicidal"). Speech-to-text often drops the subject: subject-less ideation stays gentle (logged), a known limit.
 
 ## No-store map (`tests/test_distress_no_store.py`, real code, control for each: flag off stores it)
 extractor + ingest choke point (`blocks_write`), per-turn digest (`is_off_record`), exact-words index, person extractors, latent-intent detector (all via `is_off_record`, text test, stateless);
