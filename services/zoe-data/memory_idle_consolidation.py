@@ -561,12 +561,28 @@ async def run_idle_consolidation_sweep() -> dict:
     return result
 
 
+async def _claims_tick() -> None:
+    """The idle claim pass (``memory_claims_pass``) rides this loop's tick but has its OWN flag (``ZOE_MEMORY_CLAIMS``,
+    default off: the sweep returns at once) and is not gated by ``ZOE_IDLE_CONSOLIDATION_ENABLED``. Never raises."""
+    try:
+        from typed_env import flag
+
+        if str(flag("ZOE_MEMORY_CLAIMS")) == "off":
+            return                       # dark: not even the import
+        import memory_claims_pass
+
+        await memory_claims_pass.run_sweep()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory claims pass failed (non-fatal): %s", type(exc).__name__)
+
+
 async def start_idle_consolidation_loop() -> None:
     """Background loop: every CHECK_INTERVAL, consolidate any newly-idle conversation.
     Self-gates on the enable flag EACH iteration so the task persists and picks up a
     dynamically-flipped ZOE_IDLE_CONSOLIDATION_ENABLED without a service restart."""
     logged_disabled = False
     while True:
+        await _claims_tick()
         if not _enabled():
             if not logged_disabled:
                 logger.info("idle consolidation disabled (ZOE_IDLE_CONSOLIDATION_ENABLED=0); loop idling")

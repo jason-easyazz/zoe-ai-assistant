@@ -66,6 +66,7 @@ DECLARED: dict[str, tuple[str, str]] = {
     "structural_reader": (POST_TURN, "post-turn structural read of the turn"),
     "structural_verifier": (POST_TURN, "post-turn verifier of that read"),
     "quote_retire_judge": (POST_TURN, "post-turn retirement judge for the turn"),
+    "memory_claims_pass": (POST_TURN, "idle claim read of a correction turn just spoken (ZOE_MEMORY_CLAIMS, default off)"),
     "wake_prewarm": (EXCEPTION, "loads the household prefix when a person wakes the panel"),
     "prefix_keeper": (EXCEPTION, "re-loads the household prefix a helper batch displaced, so the next wake is warm"),
     "contact_backfill._llm_extract_people": (REQUEST, "explicit person-triggered contact backfill"),

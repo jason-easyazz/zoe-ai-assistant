@@ -45,6 +45,22 @@ are applied by the guarded writer; a health event is still not filed unless the 
   `old_only`, `disagree` or `abstain`; `rule` is the validator rule that stopped the claim, or `-`.
 - `MEMORY_CLAIM_INVALID class= verdict= rule= lane=`: a claim that changed nothing, by rule number.
 
+## The idle claim pass
+
+`memory_claims_pass.run_sweep()` rides the idle-consolidation loop's 60 s tick (its own flag; it does nothing at all when
+`off`). A session is read once it has been quiet for the idle time and holds a turn the pending-correction marker or the old
+detector flagged; a session without one costs no model call. Per session: one claim read, then one blind read of the
+attributes of the stored rows the claim could touch. Bounds: 3 flagged turns and 60 s per sweep, 30 calls an hour, a
+breaker after 3 failures.
+
+The brain has one llama slot (`--parallel 1`), so a helper cannot be given a slot or session of its own. The pass protects
+the panel's prompt cache by scheduling: `brain_slot_guard.run_background` (waits for quiet, cancelled by a household turn,
+and `brain_prefix_keeper` re-loads the household prefix after the batch) and `brain_scheduler` (declared `post_turn`:
+allowed while a household turn ended within the post-turn window, otherwise the call is not made). Whether `PANEL_KV_MISS`
+moves is measured live in shadow: compare its daily count before and after, with `MEMORY_CLAIM_PASS calls=` beside it.
+
+`MEMORY_CLAIM_PASS mode= sessions= flagged= calls= claims= skipped= ms=`: one line per sweep that did or skipped something.
+
 ## Known limits
 
 - The superseded-value registry is reached through a seam. It keys a subject by `self` or a person id, so a correction about
