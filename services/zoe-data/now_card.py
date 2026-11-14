@@ -361,6 +361,9 @@ async def rebuild(uid: str, *, today: Optional[_dt.date] = None, svc: Any = None
         lines = compose(inp, today)
         text = render(today.isoformat(), lines)
         card = json.dumps({"built_on": today.isoformat(), "lines": lines}, ensure_ascii=False, sort_keys=True)
+        import erase_watermark
+        if await erase_watermark.erased_since_cycle(uid, "now_card"):
+            return {"user_id": uid, "status": "erased_since_cycle"}
         await _store.write(uid, card, text, version(text), today.isoformat(), now.isoformat(timespec="seconds"))
         invalidate(uid)
         kinds = [k for k, _t, _r in lines]

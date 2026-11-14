@@ -428,6 +428,9 @@ async def generate_for_user(user_id: str, *, now: Optional[datetime] = None, db:
             counts["events"] = len(events)
             for o in offers:
                 counts[o.kind] += 1
+            import erase_watermark
+            if await erase_watermark.erased_since_cycle(uid, "anticipation"):
+                return {**counts, "status": "erased_since_cycle"}
             if m == "on":
                 existing = await _rows(conn, uid)
                 for r in existing:

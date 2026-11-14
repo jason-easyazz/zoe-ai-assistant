@@ -22,6 +22,8 @@ reader, a code and counts: never an id, never text.
 """
 from __future__ import annotations
 
+import contextvars
+import functools
 import logging
 import re
 from datetime import datetime, timezone
@@ -214,3 +216,40 @@ async def keep_after(rows: Iterable[Any], *, owner: Union[str, Callable[[Any], A
     if skipped or unread:
         logger.info("ERASE_WATERMARK_SKIP reader=%s skipped=%d unreadable=%d kept=%d", reader, skipped, unread, len(kept))
     return kept
+
+
+# ── night writers: a member erased after the pass STARTED is skipped (the reads it already made are pre-erase) ─────────────────
+#: when the current night pass started (``night_cycle``); None outside one
+_cycle: "contextvars.ContextVar" = contextvars.ContextVar("erase_watermark_cycle", default=None)
+
+
+def night_cycle(fn):
+    """Decorate an async night pass (the dreaming cycle, the nightly digest, a weekly / music / portrait pass): its start is recorded for
+    ``erased_since_cycle``. A pass already inside one keeps the outer, earlier start."""
+    @functools.wraps(fn)
+    async def call(*args, **kwargs):
+        token = _cycle.set(_now()) if _cycle.get() is None else None
+        try:
+            return await fn(*args, **kwargs)
+        finally:
+            if token is not None:
+                _cycle.reset(token)
+    return call
+
+
+async def erased_since_cycle(user_id: str, phase: str) -> bool:
+    """True = do NOT write for ``user_id`` now: inside a night pass, and the member was erased at or after the pass started (what the
+    pass read about them is from before the erase), or the mark cannot be read (fail closed). False outside a night pass. A night pass
+    runs in its own process, where the in-memory erase gate never moves, so this is the check that reaches it. Logs a phase name only."""
+    started = _cycle.get()
+    if started is None or not user_id:
+        return False
+    try:
+        mark = await watermark(str(user_id))
+    except Unavailable as exc:
+        logger.warning("ERASE_WATERMARK_UNREADABLE reader=%s code=%s strict=1", phase, type(exc.__cause__ or exc).__name__)
+        return True
+    if mark is not None and mark >= started:
+        logger.info("ERASE_WATERMARK_PHASE_SKIP phase=%s", phase)
+        return True
+    return False

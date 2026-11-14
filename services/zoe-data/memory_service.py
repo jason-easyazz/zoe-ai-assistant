@@ -1801,6 +1801,8 @@ class MemoryService:
             if _erase_gate.erased_since_scheduled(user_id):      # background work scheduled before an erase of this member: dropped
                 _log_erase_drop(source)
                 return None
+            if await _erase_watermark.erased_since_cycle(user_id, source or "ingest"):   # a night pass (own process) that began before it
+                return None
             if idem_key in self._seen_keys:
                 self._bump("dedup", source)
                 return None
@@ -2239,6 +2241,13 @@ class MemoryService:
             await conversation_notes.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: conversation-notes erasure failed ({type(exc).__name__})") from exc
+        # What Zoe DERIVED about the member (portrait, user-model card, open loops, proactive candidates / deliveries / spoken lines,
+        # pending offers: member_derived_forget). Fail closed. What they AUTHORED or the household shares is an owner decision.
+        try:
+            import member_derived_forget
+            await member_derived_forget.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: derived-store erasure failed ({type(exc).__name__})") from exc
         # Household notifications (notifications_store): titles / messages written for the member. Same rule: fail closed. Outside the
         # memory lock: it takes the member's erase gate, which a notification create holds through its commit.
         try:
@@ -2683,6 +2692,8 @@ class MemoryService:
         async with lock:
             if _erase_gate.erased_since_scheduled(user_id):      # same rule as ingest: an erase since the work was scheduled wins
                 _log_erase_drop(origin or actor)
+                return None
+            if await _erase_watermark.erased_since_cycle(user_id, origin or actor or "review"):
                 return None
             if decision in {"approve", "reject", "archive"}:
                 new_status = {
@@ -3416,6 +3427,9 @@ class MemoryService:
                 return False
             lock = self._user_locks.setdefault(uid, asyncio.Lock())
             async with lock:
+                # the row was read OUTSIDE the lock: an erase that ran since must not have it written back (the write is an upsert)
+                if await _erase_watermark.erased_since_cycle(uid, "archive_duplicate") or await self.get(mem_id) is None:
+                    return False
                 md = dict(cur.metadata)
                 md.update(status="archived", reviewed_by=actor,
                           reviewed_at=datetime.datetime.utcnow().isoformat() + "Z",
@@ -3560,6 +3574,8 @@ class MemoryService:
             dup = await self._existing_candidate(user_id, scrubbed, contradicts)
             if dup is not None:
                 return dup.id
+            if await _erase_watermark.erased_since_cycle(user_id, writer or "candidate"):
+                return None
             if _erase_gate.erased_since_scheduled(user_id):    # no await between this check and the write's dispatch
                 _log_erase_drop(writer)
                 return None

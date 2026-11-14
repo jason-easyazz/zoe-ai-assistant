@@ -31,6 +31,7 @@ from llm_json import strip_code_fence
 import memory_authority
 import own_words
 import trait_challenge
+import erase_watermark as _erase_watermark
 import user_erase_gate as erase_gate
 from memory_overlap import dedup_verdict, richness
 from routers.journal import CREATED_AT_VALID_TIMESTAMP_SQL
@@ -1345,6 +1346,7 @@ async def run_turn_digest(
 
 
 @erase_gate.scheduled_at_call("user_id")      # an on-demand run is scheduled when called; the nightly pass's earlier snapshot wins
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_memory_digest(user_id: str, db=None) -> dict:
     """Extract facts from today's chat history and write to MemPalace + memory_items.
 
@@ -2464,6 +2466,7 @@ async def _implicit_conflict_pass(user_id: str) -> dict | None:
     return await memory_supersede.nightly_conflict_pass(get_memory_service(), user_id)
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_weekly_consolidation(user_id: str) -> dict:
     """Per-user Sunday pass: merge duplicates, resolve contradictions, soft-archive.
 
@@ -2768,6 +2771,9 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
             neighbours = await svc.search(doc, user_id=user_id, limit=6)
             # Exclude self
             neighbour_ids = [n.id for n in neighbours if n.id != mem_id][:5]
+            # the upserts below write back rows READ before the awaits above: after a member erase they would recreate them
+            if await _erase_watermark.erased_since_cycle(user_id, "rem"):
+                break
 
             if neighbour_ids:
                 # Bump access on neighbours (reinforcement)
@@ -2887,6 +2893,8 @@ async def _deep_sleep_pass(user_id: str) -> dict:
 
             if meta.get("challenged_by_turn"):
                 continue    # the owner doubted this: held for a person to decide, never auto-approved or auto-archived
+            if await _erase_watermark.erased_since_cycle(user_id, "deep_sleep"):   # an upsert of a row read before an erase recreates it
+                break
 
             if score >= 0.8 and uqc >= 3:
                 meta["status"] = "approved"
@@ -3342,6 +3350,9 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     result["extracted"] = len(candidates)
     if not candidates:
         return _done("ok")
+    import erase_watermark
+    if await erase_watermark.erased_since_cycle(user_id, "open_loops"):    # erased since the night pass began: its reads are stale
+        return _done("erased_since_cycle")
 
     try:
         async with _get_compat_db() as _db:
@@ -3374,6 +3385,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     return _done("ok")
 
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool = True) -> dict:
     """Run the full dreaming cycle for a user.
 
@@ -3549,6 +3561,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
 # and genres by play/skip behaviour, and writes preference facts to MemPalace.
 # ═══════════════════════════════════════════════════════════════════════════
 
+@_erase_watermark.night_cycle      # its start is the line a member erase must not cross (erase_watermark.erased_since_cycle)
 async def run_music_taste_digest(user_id: str) -> dict:
     """Consolidate 30 days of music events into MemPalace preference memories.
 

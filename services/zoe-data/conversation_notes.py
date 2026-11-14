@@ -394,6 +394,9 @@ async def save(owner: str, people_id: str, convo: Convo, note: Note, *, source: 
         async with (_gate_already_held() if gate_held else erase_gate.writing(owner, gen)) as live, _db() as db:
             if not live:
                 return None             # forgotten means forever: a note made from a pre-erase transcript is never written
+            import erase_watermark
+            if await erase_watermark.erased_since_cycle(owner, "conversation_notes"):
+                return None             # ... and the night process's view of the same rule (its erase gate never moves)
             if partial_epoch(owner) != part:
                 return None             # a partial erase ran while the model was reading: its words may be the forgotten ones
             async with db.execute("SELECT id FROM conversation_notes WHERE user_id = ? AND people_id = ? AND episode_key = ?",

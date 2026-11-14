@@ -337,6 +337,9 @@ async def rebuild_user_model_card(user_id: str, db=None) -> dict[str, Any]:
         portrait = await load_portrait(uid, db=db, max_chars=0)
 
         async def _write(conn) -> dict[str, Any]:
+            import erase_watermark
+            if await erase_watermark.erased_since_cycle(uid, "user_model_card"):    # rows read before the member's erase
+                return {"status": "erased_since_cycle", "items": 0, "chars": 0, "version": ""}
             card = build_card(await _display_name(conn, uid), rows, portrait)
             text = render_card(card)
             version = card_version(text)

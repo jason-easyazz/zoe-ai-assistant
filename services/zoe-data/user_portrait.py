@@ -20,6 +20,8 @@ import time
 
 import httpx
 
+import erase_watermark
+
 from gemma_endpoint import gemma_base
 
 logger = logging.getLogger(__name__)
@@ -220,6 +222,7 @@ async def build_portrait_prompt(
     return prompt
 
 
+@erase_watermark.night_cycle
 async def run_portrait_synthesis(user_id: str, db=None) -> dict:
     """Synthesize a fresh user portrait, then rebuild the user-model card.
 
@@ -355,6 +358,8 @@ async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db
 
     if is_unidentified(user_id):
         logger.info("GUEST_MEMORY_DISCARD writer=portrait")
+        return
+    if await erase_watermark.erased_since_cycle(user_id, "portrait"):    # the night pass read the rows before the member's erase
         return
     sql = """INSERT INTO user_portraits (user_id, portrait_text, portrait_version,
                    generated_from_memory_count, last_generated)

@@ -260,6 +260,9 @@ async def select_for_user(user_id: str, *, now: datetime | None = None) -> dict 
     async with get_compat_db() as db:
         scored = score_all(*await _gather(db, user_id, now), now)
         kept = rank(scored)
+        import erase_watermark
+        if await erase_watermark.erased_since_cycle(user_id, "proactive_selector"):
+            return {"user_id": user_id, "status": "erased_since_cycle"}
         if restraint.mode() != "off":
             # The thread classes are decided here, in code, and stored (invalidate, never delete).
             await restraint.store_thread_classes(
