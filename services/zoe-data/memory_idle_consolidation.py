@@ -490,6 +490,13 @@ async def consolidate_session(session_id: str, user_id: str,
             guessed = value_correction.kind_guess_on_correction(text, user_turn_list)
         except Exception:  # noqa: BLE001 - the check never costs the session its facts
             stale = guessed = False
+        try:    # ZOE_MEMORY_SUPERSEDED_REGISTRY shadow: the durable registry's verdict, counts only, beside the one that decides
+            import memory_value_registry
+
+            if memory_value_registry.recording():
+                await memory_value_registry.shadow_check(user_id, text, _fact_said_at(item, text, rows), bool(stale))
+        except Exception:  # noqa: BLE001
+            pass
         if guessed:
             rejected += 1
             logger.info("VALUE_CORRECTION_KIND_GUESS lane=idle_consolidation user=%s session=%s", user_id, session_id)

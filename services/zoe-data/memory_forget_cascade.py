@@ -25,6 +25,8 @@ stored anywhere new):
                               record of the member whose words or review name the entity is dropped and that night's report re-rendered
   * ``conversation_notes``  - short notes about past conversations (alembic 0074, ``conversation_notes.erase_entity``): a note of the
                               member's layer (guests' included) whose text names the entity is deleted
+  * ``value_registry``      - the superseded-value registry (alembic 0080, ``memory_value_registry.erase_entity``): the entries whose
+                              subject is a person the name names (by person id, live or soft-deleted) are DELETED
   * ``night_extract``       - the shadow night pre-pass's proposed facts (``~/.zoe/night-extract/``, ``night_extract.erase_entity``): a fact of the
                               member that names the entity is dropped
   * ``event_attendees``     - on the member's OWN events (alembic 0052): an attendee linked to the forgotten person,
@@ -71,11 +73,11 @@ RETRY_DELAY_S = 0.25   # one retry of a failed step after this pause (a pool bli
 #: The cascade's fixed step labels (what ``CascadeResult.failed`` holds and what a pending marker is keyed by). ``database`` is the
 #: connection itself: when it is pending every DB step is.
 DB_STEPS = frozenset(("portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
-                      "calendar_attendees", "anticipation_offers"))
+                      "calendar_attendees", "anticipation_offers", "value_registry"))
 DB_LABELS = DB_STEPS.union(("database",))
 ALL_LABELS = ("database", "portrait", "card", "open_loops", "proactive_candidates", "people", "edges", "contacts", "voiceprints",
               "calendar_attendees", "anticipation_offers", "restraint_mutes", "commitments", "omi_recordings", "omi_day_review", "text_logs",
-              "self_review", "night_extract", "conversation_notes")
+              "self_review", "night_extract", "conversation_notes", "value_registry")
 
 # {user_id: (recorded_at_monotonic, [person ids], closed_at_iso)}
 _last_cascade: dict[str, tuple[float, list[str], str]] = {}
@@ -470,6 +472,13 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
 
         return await anticipation.erase_entity(db, user_id, rx)
 
+    async def value_registry() -> int:
+        # the superseded-value registry (0080): entries whose subject is a person the name names, live or soft-deleted (by id: the
+        # registry holds no name). Independent of the people step, like contacts.
+        import memory_value_registry
+
+        return await memory_value_registry.erase_entity(user_id, rx, db=db, person_ids=res.person_ids)
+
     def want(label: str) -> bool:
         return only is None or label in only
 
@@ -493,6 +502,8 @@ async def _run(db, user_id: str, rx, res: CascadeResult, *, only: Optional[froze
         res.attendees = await _step("calendar_attendees", attendees, res)
     if want("anticipation_offers"):
         res.offers = await _step("anticipation_offers", anticipation_offers, res)
+    if want("value_registry"):
+        await _step("value_registry", value_registry, res)
     if "people" in res.failed and "edges" not in res.failed:
         # edges closes the relationships of the people the people step resolved; with that step failed there were no ids, so edges
         # "succeeded" over nothing. It is pending together with its parent, or the contact's open edges would stay open for good.

@@ -2157,6 +2157,13 @@ class MemoryService:
             await conversation_notes.forget_user(user_id)
         except Exception as exc:
             raise MemoryServiceError(f"delete_user failed: conversation-notes erasure failed ({type(exc).__name__})") from exc
+        # The superseded-value registry (migration 0080): which values the member corrected away. Fail closed; outside the memory lock
+        # (it takes the member's erase gate, which a registry record holds through its commit).
+        try:
+            import memory_value_registry
+            await memory_value_registry.forget_user(user_id)
+        except Exception as exc:
+            raise MemoryServiceError(f"delete_user failed: value-registry erasure failed ({type(exc).__name__})") from exc
         # Household notifications (notifications_store): titles / messages written for the member. Same rule: fail closed. Outside the
         # memory lock: it takes the member's erase gate, which a notification create holds through its commit.
         try:
@@ -3639,6 +3646,10 @@ class MemoryService:
         lock = self._user_locks.setdefault(user_id, asyncio.Lock())
         async with lock:
             try:
+                # FIRST, fail closed: the superseded-value registry's entries tied to these rows (migration 0080). Before the owned-rows
+                # check, so a retry whose rows already went still clears what was tied to them.
+                import memory_value_registry
+                await memory_value_registry.erase_for_rows(user_id, want)
                 owned, texts = await self._run_sync(self._owned_rows_sync, user_id, want)
                 if not owned:
                     return {"rows_removed": 0}

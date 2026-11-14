@@ -536,6 +536,8 @@ _ENTRIES = (
     _f('ZOE_MEMORY_REJECT_LEDGER', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_MEMORY_SLOT_CHECK', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/memory-views.md'),
     _f('ZOE_MEMORY_STARTUP_STRICT', 'bool', False, doc='docs/knowledge/python-312-venv-migration.md'),
+    _f('ZOE_MEMORY_SUPERSEDED_REGISTRY', 'str', 'off', allowed=('off', 'shadow', 'on'), doc='docs/knowledge/memory-superseded-registry.md',
+       note='shadow-only: on is reserved and behaves as shadow; the value_correction in-process registry keeps deciding'),
     _f('ZOE_MERGE_QUEUE_ENABLED', 'str', '', doc='services/zoe-data/AGENTS.md'),
     _f('ZOE_MERGE_QUEUE_LABEL', 'str', 'auto-merge'),
     _f('ZOE_MERGE_QUEUE_MAX_CANDIDATES', 'int', 50),
