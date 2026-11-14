@@ -95,3 +95,21 @@ def test_retention_drops_old_iso_stamped_lines_and_old_captures(stores, monkeypa
     assert not (cap / "tg-c.txt").exists() and (cap / "tg-a.txt").exists()
     assert out["voice_stt"] == 1 and out["telegram_capture"] == 3              # tg-c pair + the orphan wav
 
+
+
+def test_evolution_notice_never_logs_the_missed_words():
+    """The intent-gap notice logged the cluster's representative utterance (``rep[:60]``) into the service log, which no forget
+    reaches; it now logs ``log_redaction.utterance_tag``. Static pin: no logger call passes ``rep`` (bare or sliced)."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse((Path(__file__).resolve().parents[1] / "evolution_notice.py").read_text(encoding="utf-8"))
+    bad = []
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in ("info", "warning", "debug", "error")
+                and isinstance(n.func.value, ast.Name) and n.func.value.id == "logger"):
+            for a in n.args[1:]:
+                base = a.value if isinstance(a, ast.Subscript) else a
+                if isinstance(base, ast.Name) and base.id in ("rep", "members", "text", "texts"):
+                    bad.append(n.lineno)
+    assert not bad, f"evolution_notice.py logs missed-utterance text at line(s) {bad}"
