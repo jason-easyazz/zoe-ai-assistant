@@ -22,10 +22,14 @@ PEERS = frozenset({SERVER})
 
 
 @pytest.fixture(scope="module")
-def agent():
-    spec = importlib.util.spec_from_file_location("zoe_panel_agent", AGENT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+def agent(tmp_path_factory):
+    # The agent creates ``~/.zoe-panel-agent`` AT IMPORT: load it with HOME on a temporary directory, or every run of this
+    # file makes that directory in the real home (found 2026-11-14 by the home-write guard).
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("HOME", str(tmp_path_factory.mktemp("panel-agent-home")))
+        spec = importlib.util.spec_from_file_location("zoe_panel_agent", AGENT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
     return mod
 
 

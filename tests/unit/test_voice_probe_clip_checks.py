@@ -128,6 +128,9 @@ def _drive(tmp_path, monkeypatch, corpus, baseline, scripted, *, extra=(), env_f
     bpath = tmp_path / "baseline.json"
     bpath.write_text(json.dumps(baseline))
     results = tmp_path / "last.json"
+    # A self-test run ignores --trend and appends to DEFAULT_SELFTEST_TREND (~/.cache/zoe/...): five tests here added a row to the
+    # box's real self-test trend on every run (found 2026-11-14 by the home-write guard).
+    monkeypatch.setattr(vrp, "DEFAULT_SELFTEST_TREND", tmp_path / "selftest-trend.jsonl")
     monkeypatch.setattr(sys, "argv", [
         "probe", "--results", str(results), "--baseline", str(bpath),
         "--trend", str(tmp_path / "t.jsonl"), "--service-dir", str(tmp_path),

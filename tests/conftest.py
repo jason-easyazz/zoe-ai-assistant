@@ -140,3 +140,43 @@ def mock_household():
             {"user_id": "test_user_456", "role": "member"}
         ]
     }
+
+
+def _load_home_write_guard():
+    """tools/ci/home_write_guard.py, loaded by path (one module however many lanes' conftests load it)."""
+    import importlib.util
+    name = "zoe_home_write_guard"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, os.path.join(PROJECT_ROOT, "tools", "ci", "home_write_guard.py"))
+        sys.modules[name] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
+
+
+_home_write_guard = _load_home_write_guard()
+_home_write_guard.install(checkout=PROJECT_ROOT)
+# test_sys_modules_stub_guard.py builds two throwaway suites INSIDE tests/unit on purpose (they must run under this lane's
+# conftest.py) and removes them: the one deliberate writer into the checkout.
+_home_write_guard.allow(os.path.join(PROJECT_ROOT, "tests", "unit", "stubguard_"))
+
+
+@pytest.fixture(autouse=True)
+def _no_writes_under_the_real_home_or_the_checkout(request):
+    """A ``ci_safe`` test that writes under the real home directory or into the checkout fails, naming the path
+    (tools/ci/home_write_guard.py). Unmarked tests are not enforced: they run only on the device, where their writes were never measured."""
+    yield from _home_write_guard.fixture_body(enforce=request.node.get_closest_marker("ci_safe") is not None)
+
+
+@pytest.fixture(autouse=True)
+def _night_and_self_review_dirs_are_per_test(monkeypatch, tmp_path):
+    """``MemoryService.delete_user`` and the forget cascade reach the night pre-pass's proposals and the self-review records, which
+    default under ``~/.zoe``. The zoe-data suite pins them per test; this lane did not, and ``test_memory_service_fixes.py`` wrote
+    ``~/.zoe/night-extract/.erased.json`` on every run (found 2026-11-14 by the home-write guard)."""
+    monkeypatch.setenv("ZOE_NIGHT_EXTRACT_DIR", str(tmp_path / "night-extract"))
+    monkeypatch.setenv("ZOE_SELF_REVIEW_DIR", str(tmp_path / "self-review"))
+    monkeypatch.setenv("ZOE_SELF_REVIEW_IMPROVER_DIR", str(tmp_path / "self-improver"))
+    # ... and the two stores the same erasers REWRITE or DELETE in (recall_gate_trace.erase_*, the pendant re-pass work files).
+    # Nothing was written there in a clean home, which is why no write showed: on a box that has them, a delete_user test edits them.
+    monkeypatch.setenv("ZOE_RECALL_GATE_TRACE_DIR", str(tmp_path / "recall-gate-trace"))
+    monkeypatch.setenv("ZOE_OMI_REPASS_DIR", str(tmp_path / "omi-repass"))
+    yield
