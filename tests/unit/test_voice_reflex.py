@@ -61,6 +61,7 @@ def ok_ctx(**kw):
 # ── the gate: one case per skip reason ───────────────────────────────────────────────────────────────────────────────────────
 SKIP_CASES = {
     "disabled": (dict(), R.Settings(enabled=False)),
+    "error": (dict(speech_ms=None), ON),
     "not_committed": (dict(committed=None), ON),
     "media": (dict(media_active=None), ON),
     "guest": (dict(guest=True), ON),
@@ -96,20 +97,104 @@ def test_each_skip(skip):
     assert (d.kind, d.take, d.skip) == ("none", None, skip)
 
 
-@pytest.mark.parametrize("skip", sorted(SKIP_CASES))
-def test_each_guard_is_load_bearing(skip):
-    """Negative control: with this skip's ``return`` removed from gate(), its otherwise-clean case PLAYS (``heard``): a removed
-    guard is proven to let a sound through, not merely to change the reason."""
-    src = _MOD.read_text(encoding="utf-8")
-    mutated, n = re.subn(rf'return "{skip}"', "pass", src)
-    assert n >= 1
-    M = _load(f"zoe_voice_reflex_mut_{skip}", mutated)
-    kw, s = SKIP_CASES[skip]
-    s = M.Settings(**{f: getattr(s, f) for f in s.__dataclass_fields__})
+#: one otherwise-clean case per guard SITE (a ``# G:<site>`` marker in the module), so guards that share a reason are proven
+#: one by one. ``except`` is the decide() handler: its mutant re-raises and is killed by test_decide_never_raises below.
+SITE_CASES = {
+    "disabled": (dict(), R.Settings(enabled=False)),
+    "input": (dict(idle_h=float("nan")), ON),             # unvalidated, NaN slips past ``idle_h >= 4``
+    "not_committed": (dict(committed=None), ON),
+    "not_wake": (dict(turn_kind="followup"), ON),
+    "capped": (dict(rule="max_duration"), ON),
+    "short": (dict(speech_ms=400), ON),
+    "muted": (dict(muted_ms=80), ON),
+    "busy": (dict(other_player=True), ON),
+    "media": (dict(media_active=None), ON),
+    "noisy": (dict(noise_dbfs=-20.0), ON),
+    "night": (dict(local_hour=23), ON),
+    "idle_greeting": (dict(idle_h=5.0), ON),
+    "guest": (dict(guest=True), ON),
+    "conf_missing": (dict(speaker_conf=None), ON),
+    "conf_low": (dict(speaker_conf=0.5), ON),
+    "prev_question": (dict(turn_kind="conversation", prev_question=True), replace(ON, chain_enabled=True)),
+    "budget_gap": (dict(since_last_s=12.0), ON),
+    "budget_chain": (dict(turn_kind="followup", chain_turns_since=1), replace(ON, chain_enabled=True)),
+    "no_bank": (dict(takes=("mm_01", "mm_02")), ON),
+    "no_take": (dict(takes=("BAD 1", "BAD 2", "BAD 3")), ON),
+    "voice_mismatch": (dict(current_voice="bf_emma"), ON),
+}
+_SITE_RE = re.compile(r"# G:([a-z_]+)")
+
+
+def _sites() -> "dict[str, int]":
+    out = {}
+    for i, line in enumerate(_MOD.read_text(encoding="utf-8").splitlines()):
+        m = _SITE_RE.search(line)
+        if m:
+            assert m.group(1) not in out, f"duplicate guard marker {m.group(1)}"
+            out[m.group(1)] = i
+    return out
+
+
+def _mutant(site: str):
+    lines = _MOD.read_text(encoding="utf-8").splitlines()
+    i = _sites()[site]
+    if site == "except":
+        i += 1                                             # the handler's return is on the next line
+        new = re.sub(r"return .*$", "raise", lines[i])
+    else:
+        new = re.sub(r"return [^#]*", "pass  ", lines[i])
+    assert new != lines[i]
+    lines[i] = new
+    return _load(f"zoe_voice_reflex_mut_{site}", "\n".join(lines) + "\n")
+
+
+def test_every_guard_site_has_a_case():
+    assert set(_sites()) == set(SITE_CASES) | {"except"}
+    assert len(_sites()) == 22
+
+
+@pytest.mark.parametrize("site", sorted(SITE_CASES))
+def test_each_guard_site_is_load_bearing(site):
+    """Each guard SITE on its own: its case is silent as written, and with only that site's ``return`` removed the same case
+    PLAYS (``heard``). A removed guard is proven to let a sound through."""
+    kw, s = SITE_CASES[site]
+    assert R.decide(ok_ctx(**kw), s=s, seed=1).kind == "none"
+    M = _mutant(site)
+    ms = M.Settings(**{f: getattr(s, f) for f in s.__dataclass_fields__})
     base = dict(CLEAN)
     base.update(kw)
-    d = M.decide(M.Ctx(**base), s=s, seed=1)
-    assert (d.kind, d.skip) == ("heard", "-") and d.take in TAKES
+    d = M.decide(M.Ctx(**base), s=ms, seed=1)
+    assert (d.kind, d.skip) == ("heard", "-")
+    if base["takes"] == TAKES:
+        assert d.take in TAKES
+
+
+def test_decide_never_raises(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("synthetic")
+    monkeypatch.setattr(R, "is_night", boom)
+    assert R.decide(ok_ctx(), s=ON) == R.Decision("none", None, "error")
+    M = _mutant("except")                                  # the control: without the handler the same fault escapes
+    monkeypatch.setattr(M, "is_night", boom)
+    with pytest.raises(RuntimeError):
+        M.decide(M.Ctx(**CLEAN), s=M.Settings(enabled=True))
+
+
+_GARBAGE = (None, "5", True, float("nan"), float("inf"), float("-inf"), [1], -1)
+
+
+@pytest.mark.parametrize("field,value", [(f, v) for f in ("speech_ms", "muted_ms", "idle_h") for v in _GARBAGE]
+                         + [("noise_dbfs", v) for v in _GARBAGE if v != -1]
+                         + [(f, v) for f in ("since_last_s", "chain_turns_since") for v in _GARBAGE if v is not None]
+                         + [("local_hour", v) for v in _GARBAGE + (7.5, 24, -1)])
+def test_garbage_numeric_inputs_are_silence(field, value):
+    s = replace(ON, chain_enabled=True)
+    kw = {field: value, "turn_kind": "followup"} if field == "chain_turns_since" else {field: value}
+    assert R.decide(ok_ctx(**kw), s=s) == R.Decision("none", None, "error")
+
+
+def test_the_optional_numbers_accept_none():
+    assert R.decide(ok_ctx(since_last_s=None, chain_turns_since=None), s=ON).kind == "heard"
 
 
 def test_the_explicit_inputs_fail_silent():
@@ -121,13 +206,13 @@ def test_the_explicit_inputs_fail_silent():
         assert R.decide(ok_ctx(guest=v), s=ON).skip == "guest"                  # unknown speaker = guest
     allow = replace(ON, for_guests=True)
     assert R.decide(ok_ctx(guest=True), s=allow).kind == "heard"
-    assert R.decide(ok_ctx(guest=None, speaker_conf=None), s=allow).kind == "heard"
-    # speaker confidence: a known low / NaN / non-number score is silence; unknown is silence only when required
-    for v in (0.69, float("nan"), "0.9", True):
+    assert R.decide(ok_ctx(guest=None, speaker_conf=0.8), s=allow).kind == "heard"
+    assert R.decide(ok_ctx(guest=None, speaker_conf=None), s=allow).skip == "low_confidence"  # still needs a score
+    # speaker confidence: missing, low, NaN, inf or a non-number is silence, always
+    for v in (None, 0.69, float("nan"), float("inf"), "0.9", True, [0.9]):
         assert R.decide(ok_ctx(speaker_conf=v), s=ON).skip == "low_confidence"
     assert R.decide(ok_ctx(speaker_conf=0.70), s=ON).kind == "heard"
-    assert R.decide(ok_ctx(speaker_conf=None), s=ON).kind == "heard"            # requirement off + unknown: no fire
-    assert R.decide(ok_ctx(speaker_conf=None), s=replace(ON, require_speaker=True)).skip == "low_confidence"
+    assert R.decide(ok_ctx(speaker_conf=1), s=ON).kind == "heard"
     assert R.decide(ok_ctx(speaker_conf=0.75), s=replace(ON, min_speaker_conf=0.8)).skip == "low_confidence"
     # the safe defaults: a bare Ctx (the daemon stated nothing) is silent
     bare = R.Ctx(rule="deep", speech_ms=1200, bank_voice="af_sky", current_voice="af_sky", takes=TAKES)
@@ -140,7 +225,7 @@ def test_more_silence_rules():
     assert R.decide(ok_ctx(rule="banana"), s=ON).skip == "capped"        # unknown rule: cannot vouch for the close
     assert R.decide(ok_ctx(capped=True), s=ON).skip == "capped"
     assert R.decide(ok_ctx(turn_kind="barge"), s=replace(ON, chain_enabled=True)).skip == "not_wake"
-    assert R.decide(ok_ctx(noise_dbfs=float("nan")), s=ON).skip == "noisy"
+    assert R.decide(ok_ctx(noise_dbfs=float("nan")), s=ON).skip == "error"
     assert R.decide(ok_ctx(current_voice=None), s=ON).skip == "voice_mismatch"   # unknown voice: never the wrong one
     assert R.decide(ok_ctx(takes=("mm_01", "mm_02")), s=ON).skip == "no_bank"     # rotation needs a third take
     assert R.decide(ok_ctx(bank_voice=None), s=ON).skip == "no_bank"
@@ -194,7 +279,7 @@ def test_budget_one_per_min_gap():
     assert R.decide(ok_ctx(since_last_s=R.since_last(st, 129.9)), st, s=ON).skip == "budget"
     assert R.decide(ok_ctx(since_last_s=R.since_last(st, 130.0)), st, s=ON).kind == "heard"
     assert R.since_last({}, 5.0) is None and R.since_last({"last_at": True}, 5.0) is None
-    assert R.decide(ok_ctx(since_last_s=float("nan")), s=ON).skip == "budget"
+    assert R.decide(ok_ctx(since_last_s=float("nan")), s=ON).skip == "error"
 
 
 def test_chain_rule_is_flagged_off_and_bounded_when_on():
@@ -253,7 +338,8 @@ def test_defaults_are_the_s1_constants():
     s = R.settings({})
     assert (s.enabled, s.min_speech_ms, s.max_ms, s.seam_ms, s.min_gap_s, s.idle_greet_h, s.night_start, s.night_end,
             s.gain_db) == (False, 480, 600, 120, 30, 4, 22, 7, -3)
-    assert (s.for_guests, s.require_speaker, s.min_speaker_conf) == (False, False, 0.70)
+    assert (s.for_guests, s.min_speaker_conf) == (False, 0.70)
+    assert not hasattr(s, "require_speaker")                # removed: a missing score is always silence
 
 
 def test_env_overrides_are_clamped():
@@ -263,8 +349,8 @@ def test_env_overrides_are_clamped():
     assert s.enabled is True and s.min_gap_s == 10 and s.max_ms == 1000 and s.seam_ms == 40
     assert s.min_speech_ms == 480 and s.gain_db == 0 and s.idle_greet_h == 4 and (s.night_start, s.night_end) == (21, 6)
     assert s.chain_every == 2
-    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_REQUIRE_SPEAKER": "on", "REFLEX_MIN_SPEAKER_CONF": "7"})
-    assert t.for_guests and t.require_speaker and t.min_speaker_conf == 1.0
+    t = R.settings({"REFLEX_FOR_GUESTS": "1", "REFLEX_MIN_SPEAKER_CONF": "7"})
+    assert t.for_guests and t.min_speaker_conf == 1.0
     assert R.settings({"REFLEX_MIN_SPEAKER_CONF": "-1"}).min_speaker_conf == 0.0
     assert R.settings({"REFLEX_ENABLED": "maybe"}).enabled is False
     assert R.settings({"REFLEX_NIGHT": "25-07"}).night_start == 22

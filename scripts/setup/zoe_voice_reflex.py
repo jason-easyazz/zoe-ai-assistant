@@ -11,8 +11,9 @@ Truthfulness (design note W2 sections 0, 3; ``docs/knowledge/voice-reflex.md``):
 * non-lexical only: the bank holds "mm" takes, nothing that claims understanding or agreement;
 * one voice: the bank's manifest voice must equal the household's current voice, else silence (never the wrong voice);
 * silent when in doubt: every rule below that fails is ONE named skip reason from the fixed ``SKIPS`` enum, and the explicit
-  inputs ``committed``, ``guest`` and ``media_active`` are silence unless the daemon states the safe value (``speaker_conf``:
-  a known score under ``REFLEX_MIN_SPEAKER_CONF`` is silence; an unknown one only under ``REFLEX_REQUIRE_SPEAKER``).
+  inputs ``committed``, ``guest``, ``media_active`` and ``speaker_conf`` are silence unless the daemon states the safe value
+  (a MISSING speaker score is always silence: until a pre-close identity exists, the reflex stays silent); a non-finite or
+  non-numeric number, or any exception inside ``decide``, is silence with skip ``error``.
 
 Logs and the handshake carry integers and fixed enums only, never text or audio.
 """
@@ -42,8 +43,7 @@ REFLEX_NIGHT_END = 7            # ... to 07:00 (env REFLEX_NIGHT="22-07")
 REFLEX_GAIN_DB = -3.0           # a take's active-speech RMS relative to the reference reply speech
 REFLEX_NOISE_FLOOR_DBFS = -40.0  # pre-roll RMS above this = music / TV in the room; PROVISIONAL until S0 data sets it
 REFLEX_FOR_GUESTS = False       # a guest / unknown speaker gets silence unless the owner allows it
-REFLEX_REQUIRE_SPEAKER = False  # an UNKNOWN speaker confidence is silence only when this is on
-REFLEX_MIN_SPEAKER_CONF = 0.70  # a KNOWN speaker confidence under this is silence (the live voice claim threshold)
+REFLEX_MIN_SPEAKER_CONF = 0.70  # a speaker confidence under this is silence (the live claim threshold); a MISSING one too
 REFLEX_CHAIN_ENABLED = False    # S4 (later): follow-up / conversation turns under the chain rule
 REFLEX_CHAIN_EVERY = 3          # chain rule: at most one reflex per this many turns of a chain
 REFLEX_DIR = "~/.zoe-voice/reflex"
@@ -61,7 +61,7 @@ KINDS = ("heard", "none")
 RULES = ("deep", "quiet", "clean", "hesitation", "no_speech", "max_duration")
 TURN_KINDS = ("wake", "followup", "conversation", "barge")
 #: in gate order (the first that applies is the one reported)
-SKIPS = ("disabled", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
+SKIPS = ("disabled", "error", "not_committed", "not_wake", "capped", "short", "muted", "busy", "media", "noisy", "night",
          "idle_greeting", "guest", "low_confidence", "prev_question", "budget", "no_bank", "voice_mismatch")
 LOAD_RESULTS = ("ok", "missing", "bad_manifest", "voice_mismatch", "sha_mismatch", "bad_format", "too_long", "too_few")
 NO_SKIP = "-"
@@ -176,7 +176,6 @@ class Settings:
     gain_db: float = REFLEX_GAIN_DB
     noise_floor_dbfs: float = REFLEX_NOISE_FLOOR_DBFS
     for_guests: bool = REFLEX_FOR_GUESTS
-    require_speaker: bool = REFLEX_REQUIRE_SPEAKER
     min_speaker_conf: float = REFLEX_MIN_SPEAKER_CONF
     chain_enabled: bool = REFLEX_CHAIN_ENABLED
     chain_every: int = REFLEX_CHAIN_EVERY
@@ -198,7 +197,6 @@ def settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         gain_db=_env_num(env, "REFLEX_GAIN_DB", REFLEX_GAIN_DB, -24, 0),
         noise_floor_dbfs=_env_num(env, "REFLEX_NOISE_FLOOR_DBFS", REFLEX_NOISE_FLOOR_DBFS, -90, 0),
         for_guests=_env_bool(env, "REFLEX_FOR_GUESTS", REFLEX_FOR_GUESTS),
-        require_speaker=_env_bool(env, "REFLEX_REQUIRE_SPEAKER", REFLEX_REQUIRE_SPEAKER),
         min_speaker_conf=_env_num(env, "REFLEX_MIN_SPEAKER_CONF", REFLEX_MIN_SPEAKER_CONF, 0.0, 1.0),
         chain_enabled=_env_bool(env, "REFLEX_CHAIN_ENABLED", REFLEX_CHAIN_ENABLED),
         chain_every=int(_env_num(env, "REFLEX_CHAIN_EVERY", REFLEX_CHAIN_EVERY, 2, 20)),
@@ -210,13 +208,13 @@ def settings(env: Optional[Mapping[str, str]] = None) -> Settings:
 @dataclass(frozen=True)
 class Ctx:
     """What the daemon knows at the committed close: numbers and enums only. The four explicit-truth inputs default to
-    UNKNOWN (None), and unknown is silence (``speaker_conf`` alone: unknown is silence only under REFLEX_REQUIRE_SPEAKER)."""
+    UNKNOWN (None), and unknown is silence. Every numeric input must be a finite real number, else skip ``error``."""
     rule: str                           # RULES: the endpoint rule (tail_rule, or max_duration when the cap stopped it)
     speech_ms: int                      # speech chunks x 80 ms
     muted_ms: int = 0                   # the Jabra's playback mute inside this recording
     turn_kind: str = "wake"             # TURN_KINDS
     capped: bool = False                # _last_record_capped: the hard cap closed mid-speech
-    other_player: bool = False          # _active_playback() is not None (an announcement)
+    other_player: Optional[bool] = False          # _active_playback() is not None (an announcement)
     noise_dbfs: float = -120.0          # pre-roll RMS
     local_hour: int = 12
     since_last_s: Optional[float] = None    # seconds since the last reflex (None = never)
@@ -253,50 +251,81 @@ def is_night(hour: int, s: Settings) -> bool:
     return s.night_start <= h < s.night_end
 
 
+def _real(v) -> bool:
+    """A finite real number: not a bool, a string, None, NaN or an infinity."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+#: the numeric Ctx inputs; each must be a finite, non-negative real number (the two optional ones may also be None)
+NUMERIC_FIELDS = ("speech_ms", "muted_ms", "idle_h")
+SIGNED_FIELDS = ("noise_dbfs",)
+OPTIONAL_FIELDS = ("since_last_s", "chain_turns_since")
+
+
+def inputs_valid(ctx: Ctx) -> bool:
+    """Every numeric input is a finite real number (non-negative where it is a duration or a count) and ``local_hour`` is a
+    whole hour 0..23. Anything else is not a value the gate can vouch for."""
+    for f in NUMERIC_FIELDS:
+        v = getattr(ctx, f, None)
+        if not (_real(v) and v >= 0):
+            return False
+    for f in SIGNED_FIELDS:
+        if not _real(getattr(ctx, f, None)):
+            return False
+    for f in OPTIONAL_FIELDS:
+        v = getattr(ctx, f, None)
+        if v is not None and not (_real(v) and v >= 0):
+            return False
+    h = getattr(ctx, "local_hour", None)
+    return _real(h) and float(h).is_integer() and 0 <= h <= 23
+
+
+# Each guard returns on a line carrying a unique ``# G:<site>`` marker: tests/unit/test_voice_reflex.py mutates every site on
+# its own and proves the removed guard lets the otherwise-clean case play. Keep one return per marked line.
 def gate(ctx: Ctx, s: Optional[Settings] = None) -> Optional[str]:
     """The first silence rule ``ctx`` trips (a ``SKIPS`` member), or None when the reflex may play."""
     s = s or settings()
     if not s.enabled:
-        return "disabled"
+        return "disabled"  # G:disabled
+    if not inputs_valid(ctx):
+        return "error"  # G:input
     if ctx.committed is not True:
-        return "not_committed"          # the truthfulness rule: never a sound before the close is committed
+        return "not_committed"  # G:not_committed (the truthfulness rule: never a sound before the close is committed)
     window = ctx.turn_kind in ("followup", "conversation")
     if ctx.turn_kind != "wake" and not (window and s.chain_enabled):
-        return "not_wake"               # S1: wake turns only; a barge turn never gets one
+        return "not_wake"  # G:not_wake (S1: wake turns only; a barge turn never gets one)
     if ctx.rule not in RULES or ctx.rule == "max_duration" or ctx.capped:
-        return "capped"                 # an unknown rule is a close we cannot vouch for
-    if ctx.rule == "no_speech" or int(ctx.speech_ms) < s.min_speech_ms:
-        return "short"
-    if int(ctx.muted_ms) > 0:
-        return "muted"
-    if ctx.other_player:
-        return "busy"
+        return "capped"  # G:capped (an unknown rule is a close we cannot vouch for)
+    if ctx.rule == "no_speech" or ctx.speech_ms < s.min_speech_ms:
+        return "short"  # G:short
+    if ctx.muted_ms > 0:
+        return "muted"  # G:muted
+    if ctx.other_player is not False:
+        return "busy"  # G:busy (another player, or unknown)
     if ctx.media_active is not False:
-        return "media"                  # music / video through the panel, or unknown
-    if not (ctx.noise_dbfs <= s.noise_floor_dbfs):     # NaN counts as noisy
-        return "noisy"
+        return "media"  # G:media (music / video through the panel, or unknown)
+    if not ctx.noise_dbfs <= s.noise_floor_dbfs:
+        return "noisy"  # G:noisy
     if is_night(ctx.local_hour, s):
-        return "night"
+        return "night"  # G:night
     if ctx.idle_h >= s.idle_greet_h:
-        return "idle_greeting"
+        return "idle_greeting"  # G:idle_greeting
     if ctx.guest is not False and not s.for_guests:
-        return "guest"                  # a guest or an unknown speaker: silent unless REFLEX_FOR_GUESTS
+        return "guest"  # G:guest (a guest or an unknown speaker: silent unless REFLEX_FOR_GUESTS)
     if ctx.speaker_conf is None:
-        if s.require_speaker:
-            return "low_confidence"     # unknown confidence counts only when the owner requires a claim
-    elif (isinstance(ctx.speaker_conf, bool) or not isinstance(ctx.speaker_conf, (int, float))
-          or not ctx.speaker_conf >= s.min_speaker_conf):
-        return "low_confidence"         # a known score under the threshold (NaN / a non-number counts as under)
+        return "low_confidence"  # G:conf_missing (no pre-close speaker score: always silent)
+    if ctx.speaker_conf is not None and not (_real(ctx.speaker_conf) and ctx.speaker_conf >= s.min_speaker_conf):
+        return "low_confidence"  # G:conf_low (under the threshold, or not a finite number)
     if window and ctx.prev_question:
-        return "prev_question"
-    if ctx.since_last_s is not None and not (ctx.since_last_s >= s.min_gap_s):
-        return "budget"
+        return "prev_question"  # G:prev_question
+    if ctx.since_last_s is not None and ctx.since_last_s < s.min_gap_s:
+        return "budget"  # G:budget_gap (one per REFLEX_MIN_GAP_S)
     if window and ctx.chain_turns_since is not None and ctx.chain_turns_since < s.chain_every:
-        return "budget"                 # chain rule: one per REFLEX_CHAIN_EVERY turns, never two consecutive turns
+        return "budget"  # G:budget_chain (one per REFLEX_CHAIN_EVERY turns, never two consecutive turns)
     if not ctx.bank_voice or len(ctx.takes) < BANK_MIN_TAKES:
-        return "no_bank"
+        return "no_bank"  # G:no_bank
     if not ctx.current_voice or ctx.current_voice != ctx.bank_voice:
-        return "voice_mismatch"         # unknown counts: never the wrong voice
+        return "voice_mismatch"  # G:voice_mismatch (unknown counts: never the wrong voice)
     return None
 
 
@@ -318,15 +347,19 @@ def pick_take(takes, state: Optional[Mapping] = None, rng: Optional[random.Rando
 
 def decide(ctx: Ctx, state: Optional[Mapping] = None, *, s: Optional[Settings] = None,
            seed: Optional[int] = None) -> Decision:
-    """The reflex decision at the close. Pure: ``state`` is read, never written (``record`` writes it)."""
-    s = s or settings()
-    skip = gate(ctx, s)
-    if skip:
-        return _none(skip)
-    take = pick_take(ctx.takes, state, random.Random(seed) if seed is not None else None)
-    if take is None:
-        return _none("no_bank")
-    return Decision("heard", take, NO_SKIP)
+    """The reflex decision at the close. Pure: ``state`` is read, never written (``record`` writes it). NEVER raises: any
+    exception is silence with skip ``error``."""
+    try:
+        s = s or settings()
+        skip = gate(ctx, s)
+        if skip:
+            return _none(skip)
+        take = pick_take(ctx.takes, state, random.Random(seed) if seed is not None else None)
+        if take is None:
+            return _none("no_bank")  # G:no_take (a bank whose take ids are all malformed)
+        return Decision("heard", take, NO_SKIP)
+    except Exception:  # noqa: BLE001  # G:except (fail silent, whatever went wrong)
+        return Decision("none", None, "error")
 
 
 def record(state: Optional[Mapping], decision: Decision, now_s: float) -> dict:
