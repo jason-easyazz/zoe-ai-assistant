@@ -1,8 +1,9 @@
-"""Test rig for the process boundary: one kernel process and raw sockets to it."""
+"""Test rig for the process boundary: one kernel process, skill processes, raw sockets."""
 from __future__ import annotations
 
 import glob
 import json
+import os
 import shutil
 import socket
 import struct
@@ -13,12 +14,30 @@ import time
 from pathlib import Path
 
 from zoe_os import wire
+from zoe_os.client import Client
 from zoe_os.skills.leaving_catch import LeavingCatch
 from zoe_os.skills.malicious import Malicious
 
 HERE = Path(__file__).parent
 HELPER = Malicious.name
 CARDS = {"skill": "cards", "reads": {"offer": "private"}}     # a surface that shows offers
+
+
+class Child:
+    """A skill process. ``handed`` is everything it was ever given."""
+
+    def __init__(self, box: "Box", skill: str, user: int | None = None) -> None:
+        self.handed = {"socket": box.socket, "skill": skill, "cred": box.creds[skill]}
+        self.proc = subprocess.Popen(
+            [sys.executable, "-B", str(HERE / "skill_proc.py")], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, text=True, user=user, group=user,
+            extra_groups=[] if user is not None else None, env={"PATH": os.environ["PATH"]})
+        self.proc.stdin.write(json.dumps(self.handed) + "\n")
+
+    def do(self, *cmd) -> dict:
+        self.proc.stdin.write(json.dumps(cmd) + "\n")
+        self.proc.stdin.flush()
+        return json.loads(self.proc.stdout.readline())
 
 
 class Box:
@@ -32,6 +51,8 @@ class Box:
         self.db, self.socket = str(self.base / "kernel/zoe-os.db"), str(self.base / "run/k.sock")
         self.cfg = {"db_dir": str(self.base / "kernel"), "socket": self.socket, "server": server,
                     "install": [Malicious.manifest, LeavingCatch.manifest, CARDS], "surfaces": ["panel"]}
+        self._clients: dict[str, Client] = {}
+        self.children: list[Child] = []
         self.start()
 
     def start(self) -> None:
@@ -41,6 +62,7 @@ class Box:
         self.proc.stdin.flush()
         ready = json.loads(self.proc.stdout.readline())
         self.pid, self.creds = ready["pid"], ready["creds"]
+        self._clients.clear()
 
     def sup(self, cmd: str, **more) -> dict:
         """The supervisor's pipe (not the socket)."""
@@ -50,6 +72,15 @@ class Box:
 
     def control(self, name: str) -> None:
         self.sup("control", name=name)
+
+    def client(self, name: str) -> Client:
+        if name not in self._clients:
+            self._clients[name] = Client(self.socket, name, bytes.fromhex(self.creds[name]))
+        return self._clients[name]
+
+    def skill(self, name: str = HELPER, user: int | None = None) -> Child:
+        self.children.append(Child(self, name, user))
+        return self.children[-1]
 
     def raw(self, name: str | None = None, cred: str | None = None) -> socket.socket:
         """A bare socket, past the kernel's hello. With ``name``: authenticated as that skill."""
@@ -78,6 +109,10 @@ class Box:
         return b"".join(open(p, "rb").read() for p in glob.glob(self.db + "*"))
 
     def close(self) -> None:
+        for child in self.children:
+            child.proc.kill()
+        for c in self._clients.values():
+            c.close()
         self.proc.kill()
         self.proc.wait()
         shutil.rmtree(self.base, ignore_errors=True)
