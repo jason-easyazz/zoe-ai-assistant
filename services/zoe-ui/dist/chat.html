@@ -2451,8 +2451,29 @@
             return escaped.replace(/\n/g, '<br>');
         }
 
+        // For element TEXT (a newline becomes <br>). It escapes both quotes too, so a
+        // value that ends up inside an attribute cannot close it - but an attribute
+        // should use escapeAttr (no <br>), and NO escaper makes a value safe inside
+        // an inline on*="" handler: the browser decodes entities before it parses
+        // the script. Bind a listener instead.
         function escapeHtml(text) {
-            return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g, '<br>');
+            return String(text == null ? '' : text)
+                .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                .replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g, '<br>');
+        }
+
+        // A link built from a component's props may only be http(s) or a path on this
+        // origin: `javascript:` in an href runs on click. Parsed with the browser's own
+        // URL parser, so `java\tscript:` and leading control characters are seen as
+        // the browser would see them.
+        function safeComponentUrl(raw) {
+            const value = String(raw == null ? '' : raw).trim();
+            if (!value) return '#';
+            try {
+                const parsed = new URL(value, window.location.origin);
+                if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return value;
+            } catch (_) {}
+            return '#';
         }
 
         function enhanceCodeBlocks(rootEl) {
@@ -3384,7 +3405,7 @@
                 sessionsList.innerHTML = `
                     <div style="padding: 20px; text-align: center; color: #ef4444;">
                         <p>Error loading sessions</p>
-                        <p style="font-size: 12px;">${error.message}</p>
+                        <p style="font-size: 12px;">${escapeHtml(error.message)}</p>
                     </div>
                 `;
             }
@@ -4337,12 +4358,15 @@
         }
         
         function renderInfoCard(container, props) {
-            const actions = (props.actions || []).map(a =>
-                `<button class="card-action-btn" onclick="handleComponentAction('${escapeHtml(a.type || '')}', '${escapeHtml(a.data || '')}')">${escapeHtml(a.label || 'Action')}</button>`
+            // The action's type/data are looked up by index on click, never written
+            // into an onclick="" (see escapeHtml above).
+            const cardActions = Array.isArray(props.actions) ? props.actions : [];
+            const actions = cardActions.map((a, i) =>
+                `<button class="card-action-btn" data-card-action="${i}">${escapeHtml((a && a.label) || 'Action')}</button>`
             ).join('');
             container.innerHTML = `
                 <div class="info-card">
-                    ${props.icon ? `<div class="info-card-icon">${props.icon}</div>` : ''}
+                    ${props.icon ? `<div class="info-card-icon">${escapeHtml(props.icon)}</div>` : ''}
                     <div class="info-card-body">
                         <div class="info-card-title">${escapeHtml(props.title || '')}</div>
                         ${props.description ? `<div class="info-card-desc">${escapeHtml(props.description)}</div>` : ''}
@@ -4350,6 +4374,12 @@
                     ${actions ? `<div class="info-card-actions">${actions}</div>` : ''}
                 </div>
             `;
+            container.querySelectorAll('[data-card-action]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const a = cardActions[Number(btn.dataset.cardAction)] || {};
+                    handleComponentAction(String(a.type || ''), String(a.data || ''));
+                });
+            });
         }
         
         function renderConfirmation(container, props) {
@@ -4359,16 +4389,19 @@
                     <div class="confirmation-icon">⚠️</div>
                     <div class="confirmation-text">${escapeHtml(props.description || 'Are you sure?')}</div>
                     <div class="confirmation-actions">
-                        <button class="confirm-btn yes" onclick="handleConfirmation('${confirmId}', true, '${escapeHtml(props.yes_action || '')}')">
+                        <button class="confirm-btn yes">
                             ${escapeHtml(props.yes_label || 'Yes')}
                         </button>
-                        <button class="confirm-btn no" onclick="handleConfirmation('${confirmId}', false, '')">
+                        <button class="confirm-btn no">
                             ${escapeHtml(props.no_label || 'No')}
                         </button>
                     </div>
                 </div>
             `;
             container.id = confirmId;
+            const yesAction = String(props.yes_action || '');
+            container.querySelector('.confirm-btn.yes').addEventListener('click', () => handleConfirmation(confirmId, true, yesAction));
+            container.querySelector('.confirm-btn.no').addEventListener('click', () => handleConfirmation(confirmId, false, ''));
         }
         
         function renderProgress(container, props) {
@@ -4394,24 +4427,28 @@
             `;
         }
         
+        const FORM_INPUT_TYPES = ['text', 'number', 'email', 'tel', 'url', 'date', 'time', 'datetime-local', 'password', 'search'];
+
         function renderForm(container, props) {
             const fields = (props.fields || []).map(f => `
                 <div class="form-field">
                     <label>${escapeHtml(f.label || f.name)}</label>
-                    <input type="${f.type || 'text'}" name="${escapeHtml(f.name)}" 
-                           placeholder="${escapeHtml(f.placeholder || '')}" 
+                    <input type="${FORM_INPUT_TYPES.includes(f.type) ? f.type : 'text'}" name="${escapeAttr(f.name)}" 
+                           placeholder="${escapeAttr(f.placeholder || '')}" 
                            ${f.required ? 'required' : ''}>
                 </div>
             `).join('');
             container.innerHTML = `
                 <div class="form-component">
                     ${props.title ? `<div class="form-title">${escapeHtml(props.title)}</div>` : ''}
-                    <form onsubmit="handleFormSubmit(event, '${escapeHtml(props.action || '')}')">
+                    <form>
                         ${fields}
                         <button type="submit" class="form-submit">${escapeHtml(props.submit_label || 'Submit')}</button>
                     </form>
                 </div>
             `;
+            const formAction = String(props.action || '');
+            container.querySelector('form').addEventListener('submit', (event) => handleFormSubmit(event, formAction));
         }
 
         function renderResearchEvidence(container, props) {
@@ -4428,7 +4465,7 @@
             `).join('');
             const screenshotsHtml = screenshots.slice(0, 3).map((s) => {
                 if (!s.image_base64) return '';
-                return `<img style="max-width:100%;border-radius:10px;margin-top:8px;" src="data:image/png;base64,${String(s.image_base64).replace(/^data:image\/\\w+;base64,/, '')}" alt="">`;
+                return `<img style="max-width:100%;border-radius:10px;margin-top:8px;" src="data:image/png;base64,${escapeAttr(String(s.image_base64).replace(/^data:image\/\\w+;base64,/, ''))}" alt="">`;
             }).join('');
             const sourceHtml = sources.slice(0, 5).map((u) => `<li>${escapeHtml(String(u))}</li>`).join('');
             // B10.0: say plainly when the web lookup was refused / errored / found nothing,
@@ -4474,12 +4511,12 @@
                     </div>
                     <div class="cef-body">
                         <form onsubmit="submitCalendarEventForm(event,'${formId}')">
-                            <input type="hidden" name="category" class="cef-category-hidden" value="${escapeHtml(props.category || 'general')}">
+                            <input type="hidden" name="category" class="cef-category-hidden" value="${escapeAttr(props.category || 'general')}">
 
                             <div class="cef-field">
                                 <label>Event Title</label>
                                 <input class="cef-input" type="text" name="title"
-                                       value="${escapeHtml(props.title || '')}" required
+                                       value="${escapeAttr(props.title || '')}" required
                                        placeholder="e.g. Dentist appointment">
                             </div>
 
@@ -4487,12 +4524,12 @@
                                 <div class="cef-field">
                                     <label>Date</label>
                                     <input class="cef-input" type="date" name="start_date"
-                                           value="${escapeHtml(props.date || '')}" required>
+                                           value="${escapeAttr(props.date || '')}" required>
                                 </div>
                                 <div class="cef-field">
                                     <label>Start Time <span class="cef-optional">optional</span></label>
                                     <input class="cef-input" type="time" name="start_time"
-                                           value="${escapeHtml(props.time || '')}">
+                                           value="${escapeAttr(props.time || '')}">
                                 </div>
                             </div>
 
@@ -4612,7 +4649,7 @@
                             <div class="cef-field">
                                 <label>Title <span class="cef-optional">optional</span></label>
                                 <input class="cef-input" type="text" name="title"
-                                       value="${escapeHtml(props.title || '')}" placeholder="e.g. Meeting ideas">
+                                       value="${escapeAttr(props.title || '')}" placeholder="e.g. Meeting ideas">
                             </div>
                             <div class="cef-field">
                                 <label>Content</label>
@@ -4678,7 +4715,7 @@
                     <div class="cef-body">
                         <form onsubmit="submitJournalForm(event,'${id}')">
                             <input type="hidden" name="mood" class="cef-mood-hidden" value="">
-                            <input type="hidden" name="date" value="${escapeHtml(props.date||'')}">
+                            <input type="hidden" name="date" value="${escapeAttr(props.date||'')}">
                             <div class="cef-field">
                                 <label>How are you feeling?</label>
                                 <div class="cef-mood-row">${moodBtns}</div>
@@ -4749,11 +4786,11 @@
                     </div>
                     <div class="cef-body">
                         <form onsubmit="submitListAddForm(event,'${id}')">
-                            <input type="hidden" name="list_type" class="cef-category-hidden" value="${escapeHtml(props.list_type||'shopping')}">
+                            <input type="hidden" name="list_type" class="cef-category-hidden" value="${escapeAttr(props.list_type||'shopping')}">
                             <div class="cef-field">
                                 <label>Item</label>
                                 <input class="cef-input" type="text" name="item_text"
-                                       value="${escapeHtml(props.item||'')}" required placeholder="e.g. Milk, 2L">
+                                       value="${escapeAttr(props.item||'')}" required placeholder="e.g. Milk, 2L">
                             </div>
                             <div class="cef-row">
                                 <div class="cef-field">
@@ -4940,16 +4977,16 @@
                             <div class="cef-field">
                                 <label>Reminder</label>
                                 <input class="cef-input" type="text" name="title"
-                                       value="${escapeHtml(props.title||'')}" required placeholder="e.g. Call the dentist">
+                                       value="${escapeAttr(props.title||'')}" required placeholder="e.g. Call the dentist">
                             </div>
                             <div class="cef-row">
                                 <div class="cef-field">
                                     <label>Date</label>
-                                    <input class="cef-input" type="date" name="due_date" value="${escapeHtml(props.date||'')}" required>
+                                    <input class="cef-input" type="date" name="due_date" value="${escapeAttr(props.date||'')}" required>
                                 </div>
                                 <div class="cef-field">
                                     <label>Time <span class="cef-optional">optional</span></label>
-                                    <input class="cef-input" type="time" name="due_time" value="${escapeHtml(props.time||'')}">
+                                    <input class="cef-input" type="time" name="due_time" value="${escapeAttr(props.time||'')}">
                                 </div>
                             </div>
                             <div class="cef-field">
@@ -5008,7 +5045,7 @@
             const mins = parseInt(props.minutes) || 5;
             const label = props.label || 'Timer';
             container.innerHTML = `
-                <div class="cef-wrap" id="${id}" data-mins="${mins}" data-label="${escapeHtml(label)}">
+                <div class="cef-wrap" id="${id}" data-mins="${mins}" data-label="${escapeAttr(label)}">
                     <div class="cef-header">
                         <div class="cef-header-icon cef-icon-timer">⏱</div>
                         <div class="cef-header-text">
@@ -5077,8 +5114,8 @@
 
         function renderLinkPreview(container, props) {
             container.innerHTML = `
-                <a href="${escapeHtml(props.url || '#')}" target="_blank" class="link-preview" rel="noopener">
-                    ${props.image ? `<img src="${escapeHtml(props.image)}" alt="" class="link-preview-img">` : ''}
+                <a href="${escapeAttr(safeComponentUrl(props.url))}" target="_blank" class="link-preview" rel="noopener">
+                    ${props.image ? `<img src="${escapeAttr(props.image)}" alt="" class="link-preview-img">` : ''}
                     <div class="link-preview-body">
                         <div class="link-preview-title">${escapeHtml(props.title || props.url || '')}</div>
                         ${props.description ? `<div class="link-preview-desc">${escapeHtml(props.description)}</div>` : ''}
@@ -5091,7 +5128,7 @@
         function renderImage(container, props) {
             container.innerHTML = `
                 <div class="image-component">
-                    <img src="${escapeHtml(props.url || '')}" alt="${escapeHtml(props.alt || '')}" style="max-width:100%; border-radius: 12px;">
+                    <img src="${escapeAttr(props.url || '')}" alt="${escapeAttr(props.alt || '')}" style="max-width:100%; border-radius: 12px;">
                     ${props.caption ? `<div class="image-caption">${escapeHtml(props.caption)}</div>` : ''}
                 </div>
             `;
@@ -5108,8 +5145,8 @@
                 // with a double quote, terminating the double-quoted attribute,
                 // and sendMessage() takes no arguments anyway. Delegated below.
                 const action = r.url
-                    ? `<a href="${escapeHtml(r.url)}" target="_blank" class="pt-action" rel="noopener">View</a>`
-                    : (r.action ? `<button class="pt-action" data-pt-action="${escapeHtml(r.action)}">${escapeHtml(r.action_label||'Select')}</button>` : '');
+                    ? `<a href="${escapeAttr(safeComponentUrl(r.url))}" target="_blank" class="pt-action" rel="noopener">View</a>`
+                    : (r.action ? `<button class="pt-action" data-pt-action="${escapeAttr(r.action)}">${escapeHtml(r.action_label||'Select')}</button>` : '');
                 return `<tr>
                     <td>${escapeHtml(r.store||r.name||'')}</td>
                     <td>${escapeHtml(r.product||r.desc||'')}</td>
@@ -5260,7 +5297,7 @@
             container.className += ' agent-trace-component';
             const steps = (props.steps || []).map(s => `
                 <div class="at-step">
-                    <span class="at-step-icon">${s.icon || '→'}</span>
+                    <span class="at-step-icon">${escapeHtml(s.icon || '→')}</span>
                     <div class="at-step-body">
                         <div class="at-step-name">${escapeHtml(s.name || s.tool || '')}</div>
                         ${s.detail ? `<div class="at-step-detail">${escapeHtml(s.detail)}</div>` : ''}
@@ -5982,7 +6019,7 @@
                 ];
                 tilesEl.innerHTML = tiles.map(t => `
                     <div class="context-tile" onclick="tryPrompt(${JSON.stringify(t.prompt)})">
-                        <span class="context-tile-dot ${escapeHtml(t.dot)}"></span>
+                        <span class="context-tile-dot ${escapeAttr(t.dot)}"></span>
                         <span class="context-tile-label">${escapeHtml(t.label)}</span>
                         <span class="context-tile-meta">${escapeHtml(t.meta)}</span>
                     </div>`).join('');
