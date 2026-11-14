@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import alarms
 from typed_env import flag
@@ -51,20 +52,29 @@ async def _send(event_type: str) -> tuple[int, int]:
 
 
 async def on_event(event: str, alarm: dict) -> None:
-    """``alarms.HOOKS`` listener. Never raises into the transition (``alarms._emit`` also guards it)."""
+    """``alarms.HOOKS`` listener: the transition is already committed, so an ordinary error here is logged
+    (``ALARM_RING_PUSH failed ... err=<type>``) and swallowed - the panel's poll is the safety net. ``CancelledError`` is NOT
+    swallowed: it only reaches this coroutine when the task running it is really cancelled (shutdown, or ``alarms._emit``'s
+    per-hook timeout cancelling a hung hook, which ``wait_for`` turns into a TimeoutError that ``_emit`` handles). The fan-out
+    itself never raises a send failure (``gather(return_exceptions=True)``), so no inner CancelledError can leak out of it."""
     global _seq
     if not enabled() or not _changes_ring_set(event, alarm or {}):
         return
     _seq += 1
     try:
         sent, audience = await _send("alarms_ringing_changed")
-    except Exception as exc:  # noqa: BLE001 - the transition is committed; the panel's poll is the safety net
-        logger.warning("ALARM_RING_PUSH failed seq=%d (%s)", _seq, type(exc).__name__)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ALARM_RING_PUSH failed seq=%d err=%s", _seq, type(exc).__name__)
         return
     logger.info("ALARM_RING_PUSH event=%s seq=%d sent=%d audience=%d", event, _seq, sent, audience)
 
 
-async def beat_loop(interval_s: float = BEAT_S) -> None:
+async def beat_loop(interval_s: float = BEAT_S, *, clock=time.monotonic, sleep=asyncio.sleep) -> None:
+    """A FIXED cadence (slot k at start + k*interval): a slow send never stretches the gap toward the panel's 2.5 s stale line.
+    A send that overran whole slots skips to the next future slot instead of bursting the missed ones."""
+    nxt = clock()
     while True:
         try:
             if enabled():
@@ -73,7 +83,11 @@ async def beat_loop(interval_s: float = BEAT_S) -> None:
             raise
         except Exception as exc:  # noqa: BLE001 - a missed beat only makes the panel poll fast for a while
             logger.warning("alarm push beat failed (%s)", type(exc).__name__)
-        await asyncio.sleep(interval_s)
+        nxt += interval_s
+        now = clock()
+        if now > nxt:
+            nxt += ((now - nxt) // interval_s + 1) * interval_s
+        await sleep(max(0.0, nxt - now))
 
 
 def register() -> None:

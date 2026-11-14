@@ -2817,19 +2817,19 @@ async def _run_push_ws_loop(
         while True:
             data = await _receive_ws_text_with_deadline(websocket)
             if data == "ping":
-                await websocket.send_json({"type": "pong"})
+                await broadcaster.send_to(websocket, {"type": "pong"})
             elif allow_catchup and data.startswith("catchup:"):
                 _, _, raw_seq = data.partition(":")
                 try:
                     seq = int(raw_seq)
                 except (TypeError, ValueError):
-                    await websocket.send_json({
+                    await broadcaster.send_to(websocket, {
                         "type": "error",
                         "error": "invalid_catchup_sequence",
                     })
                     continue
                 if seq < 0:
-                    await websocket.send_json({
+                    await broadcaster.send_to(websocket, {
                         "type": "error",
                         "error": "invalid_catchup_sequence",
                     })

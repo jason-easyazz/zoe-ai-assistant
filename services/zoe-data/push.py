@@ -81,6 +81,37 @@ class PushBroadcaster:
         # Epoch seconds this process started: the deaf clock for a panel never seen connecting.
         self._started_at = time.time()
         self._panel_acked_at: Dict[str, float] = {}
+        # ONE send at a time per socket: a websocket rejects overlapping sends, and the alarm beat, an alarm change, a voice
+        # broadcast and the loop's pong can all target the same panel socket at once. Every sender goes through ``send_to``.
+        self._send_locks: Dict[WebSocket, asyncio.Lock] = {}
+
+    def _lock(self, ws: WebSocket) -> asyncio.Lock:
+        lock = self._send_locks.get(ws)
+        if lock is None:
+            lock = asyncio.Lock()
+            if ws in self._ws_users or ws in self._ws_panels:  # a socket already disconnected gets a throwaway (no leak)
+                self._send_locks[ws] = lock
+        return lock
+
+    async def send_to(self, ws: WebSocket, message: dict) -> None:
+        """Send one frame on ``ws`` under its send lock (unbounded; raises what ``send_json`` raises)."""
+        async with self._lock(ws):
+            await ws.send_json(message)
+
+    async def _send_bounded(self, ws: WebSocket, message: dict) -> bool:
+        """At most PANEL_SEND_TIMEOUT_S for the lock, then at most PANEL_SEND_TIMEOUT_S for the send. ``False`` = the socket is
+        BUSY with another send (that frame is skipped, the socket is kept: the other send decides its fate); a send that itself
+        stalls or raises raises here and costs the socket."""
+        lock = self._lock(ws)
+        try:
+            await asyncio.wait_for(lock.acquire(), PANEL_SEND_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return False
+        try:
+            await asyncio.wait_for(ws.send_json(message), PANEL_SEND_TIMEOUT_S)
+        finally:
+            lock.release()
+        return True
 
     async def connect(self, websocket: WebSocket, channel: str = "all", user_id: str | None = None):
         await websocket.accept()
@@ -88,7 +119,7 @@ class PushBroadcaster:
             self._connections[channel] = set()
         self._connections[channel].add(websocket)
         self._ws_users[websocket] = user_id
-        await websocket.send_json({
+        await self.send_to(websocket, {
             "type": "connected",
             "channel": channel,
             "sequence": self._sequence
@@ -106,7 +137,7 @@ class PushBroadcaster:
         self._panel_connected_at[panel_id] = time.time()
         self._deaf_turns.pop(panel_id, None)
         self._deaf_errored_at.pop(panel_id, None)
-        await websocket.send_json({
+        await self.send_to(websocket, {
             "type": "connected",
             "channel": panel_channel,
             "panel_id": panel_id,
@@ -127,6 +158,8 @@ class PushBroadcaster:
             if "all" in self._connections:
                 self._connections["all"].discard(websocket)
         self._ws_users.pop(websocket, None)
+        if websocket not in self._ws_panels and not any(websocket in s for s in self._connections.values()):
+            self._send_locks.pop(websocket, None)
 
     async def broadcast(
         self,
@@ -166,7 +199,7 @@ class PushBroadcaster:
             if user_id is not None and ws_user != user_id:
                 continue
             try:
-                await ws.send_json(message)
+                await self.send_to(ws, message)
                 delivered += 1
             except Exception:
                 dead.add(ws)
@@ -184,13 +217,14 @@ class PushBroadcaster:
         seq, targets = self._sequence, list(self._ws_panels.items())
 
         async def one(ws, pid):
-            msg = {"type": event_type, "channel": f"panel_{pid}", "data": data, "sequence": seq}
-            await asyncio.wait_for(ws.send_json(msg), PANEL_SEND_TIMEOUT_S)
+            return await self._send_bounded(ws, {"type": event_type, "channel": f"panel_{pid}", "data": data, "sequence": seq})
 
         # concurrently, each send bounded: one stalled panel must not hold the beat or a ring change back from the others
         results = await asyncio.gather(*(one(ws, pid) for ws, pid in targets), return_exceptions=True)
         delivered = 0
         for (ws, pid), r in zip(targets, results):
+            if r is False:
+                continue  # busy with another send: kept; the panel's seq check / beat staleness covers the skipped frame
             if isinstance(r, BaseException):
                 self.disconnect(ws, f"panel_{pid}")  # the broadcaster's dead-socket path
                 t = asyncio.ensure_future(_close_quietly(ws))  # half-sent and unsubscribed: close it so the panel reconnects, never deaf
@@ -339,7 +373,7 @@ class PushBroadcaster:
 
     async def catchup(self, websocket: WebSocket, since_sequence: int):
         """Client reconnection catch-up. For now, just send current sequence."""
-        await websocket.send_json({
+        await self.send_to(websocket, {
             "type": "catchup",
             "current_sequence": self._sequence,
             "message": "Full state refresh recommended"

@@ -13,6 +13,12 @@ Negative controls (run by hand when written; each turns the named test red):
   * send to panels one after another with no timeout (``for ws, pid in targets: await ws.send_json(...)``) ->
     test_a_stalled_panel_does_not_hold_back_the_others_and_is_dropped and test_the_beat_survives_a_stalled_panel;
   * ``PANEL_SEND_TIMEOUT_S = None`` (concurrent, unbounded) -> test_a_stalled_panel_does_not_hold_back_the_others_and_is_dropped.
+  * no per-socket lock (a fresh lock per send) -> test_overlapping_sends_to_one_socket_are_serialised_not_dropped and
+    test_the_beat_and_a_change_together_drop_no_socket;
+  * a lock-wait timeout raises (drops) instead of skipping -> test_a_socket_busy_with_another_healthy_send_is_kept;
+  * disconnect keeps the lock, or a late sender re-creates it -> test_disconnect_frees_the_send_lock;
+  * ``except ValueError`` / ``except BaseException`` in on_event -> test_on_event_swallows_an_error_but_not_a_cancellation;
+  * ``sleep(interval_s)`` after the send, or no slot skip -> test_the_beat_keeps_a_fixed_cadence.
 """
 from __future__ import annotations
 
@@ -266,3 +272,132 @@ def test_the_beat_survives_a_stalled_panel(bus):
 
     ok, alive = asyncio.run(go())
     assert alive and len(ok.pushes()) >= 5, f"beats delivered to the healthy panel: {len(ok.pushes())}"
+
+
+class _OneAtATime(_WS):
+    """A real websocket rejects a send that starts while another is in flight: so does this one."""
+
+    def __init__(self, dur=0.02):
+        super().__init__()
+        self.busy, self.dur, self.closed = False, dur, False
+
+    async def send_json(self, msg):
+        if self.busy:
+            raise RuntimeError("overlapping send")
+        self.busy = True
+        try:
+            await asyncio.sleep(self.dur)
+            self.sent.append(msg)
+        finally:
+            self.busy = False
+
+    async def close(self, code=1000):
+        self.closed = True
+
+
+def test_overlapping_sends_to_one_socket_are_serialised_not_dropped(bus):
+    async def go():
+        ws = _OneAtATime()
+        await bus.connect_panel(ws, "kitchen")
+        res = await asyncio.gather(
+            bus.broadcast_to_panel_sockets("alarms_ringing_changed", {"seq": 1}),
+            bus.broadcast_to_panel_sockets("alarms_ringing_beat", {"seq": 1}),
+            bus.broadcast("panel_kitchen", "voice:done", {}),  # a voice frame on the same socket
+            bus.send_to(ws, {"type": "pong"}),  # the socket loop's pong
+        )
+        return ws, res
+
+    ws, res = asyncio.run(go())
+    assert res[:3] == [(1, 1), (1, 1), 1] and set(bus._ws_panels.values()) == {"kitchen"} and not ws.closed, res
+    alarm = [m for m in ws.sent if str(m["type"]).startswith("alarms_ringing")]
+    assert [m["type"] for m in alarm] == ["alarms_ringing_changed", "alarms_ringing_beat"], "both frames, in order"
+    assert len(ws.sent) == 5  # hello + 4
+
+
+def test_the_beat_and_a_change_together_drop_no_socket(bus):
+    async def go():
+        socks = [_OneAtATime(0.01) for _ in range(3)]
+        for i, ws in enumerate(socks):
+            await bus.connect_panel(ws, f"p{i}")
+        beat = asyncio.create_task(alarm_push.beat_loop(0.005))
+        await asyncio.gather(*(alarm_push.on_event("rang", {}) for _ in range(5)))
+        await asyncio.sleep(0.05)
+        beat.cancel()
+        return socks
+
+    socks = asyncio.run(go())
+    assert len(bus._ws_panels) == 3 and not any(ws.closed for ws in socks)
+    assert all([m["data"]["seq"] for m in ws.sent if m["type"] == "alarms_ringing_changed"] == [1, 2, 3, 4, 5] for ws in socks)
+
+
+def test_a_socket_busy_with_another_healthy_send_is_kept(bus):
+    async def go():
+        ws = _OneAtATime(push.PANEL_SEND_TIMEOUT_S + 0.2)  # a long but healthy voice frame holds the socket
+        await bus.connect_panel(ws, "kitchen")
+        voice = asyncio.create_task(bus.send_to(ws, {"type": "voice:responding"}))
+        await asyncio.sleep(0)
+        res = await bus.broadcast_to_panel_sockets("alarms_ringing_beat", {"seq": 0})
+        await voice
+        return ws, res
+
+    ws, res = asyncio.run(go())
+    assert res == (0, 1), "the beat is skipped for this socket while it is busy"
+    assert set(bus._ws_panels.values()) == {"kitchen"} and not ws.closed, "busy is not broken"
+
+
+def test_disconnect_frees_the_send_lock(bus):
+    async def go():
+        ws = _WS()
+        await bus.connect_panel(ws, "kitchen")
+        assert ws in bus._send_locks
+        bus.disconnect(ws, "panel_kitchen")
+        await bus.send_to(ws, {"type": "late"})  # a late sender after disconnect must not re-create it
+        return ws
+
+    ws = asyncio.run(go())
+    assert ws not in bus._send_locks
+
+
+def test_on_event_swallows_an_error_but_not_a_cancellation(bus, monkeypatch, caplog):
+    async def boom(*a, **k):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(bus, "broadcast_to_panel_sockets", boom)
+    with caplog.at_level(logging.WARNING, logger="alarm_push"):
+        assert asyncio.run(alarm_push.on_event("rang", {})) is None
+    assert "ALARM_RING_PUSH failed" in caplog.text and "err=RuntimeError" in caplog.text
+
+    async def hang(*a, **k):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(bus, "broadcast_to_panel_sockets", hang)
+
+    async def go():
+        t = asyncio.create_task(alarm_push.on_event("rang", {}))
+        await asyncio.sleep(0)
+        t.cancel()
+        await t
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(go())
+
+
+@pytest.mark.parametrize("durations,want", [([0.4] * 5, [0.0, 2.0, 4.0, 6.0, 8.0]), ([0.4, 4.5, 0.4, 0.4], [0.0, 2.0, 8.0, 10.0])])
+def test_the_beat_keeps_a_fixed_cadence(bus, monkeypatch, durations, want):
+    clock = {"t": 0.0}
+    starts = []
+
+    async def slow_send(kind):
+        starts.append(clock["t"])
+        clock["t"] += durations[len(starts) - 1]
+        return (1, 1)
+
+    async def scripted_sleep(dt):
+        if len(starts) >= len(durations):
+            raise asyncio.CancelledError
+        clock["t"] += dt
+
+    monkeypatch.setattr(alarm_push, "_send", slow_send)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(alarm_push.beat_loop(2.0, clock=lambda: clock["t"], sleep=scripted_sleep))
+    assert [round(s, 6) for s in starts] == want, "slow sends stretched the beat, or an overrun burst the missed slots"
