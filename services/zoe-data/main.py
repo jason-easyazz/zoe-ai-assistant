@@ -302,6 +302,11 @@ async def _build_readiness_report(*, use_cache: bool = True) -> dict:
 async def _wait_for_brain_startup() -> None:
     deadline = time.monotonic() + max(0.0, _env_float("ZOE_BRAIN_STARTUP_WAIT_S", 30.0))
     last: dict = {}
+    try:  # A6: the HTTP stack's first-use cost off the loop, before this probe makes the first real request (bounded, best-effort)
+        import startup_warmups
+        await asyncio.wait_for(asyncio.to_thread(startup_warmups.warm_http_stack_sync), startup_warmups.WARM_TIMEOUT_S + 0.5)
+    except Exception:  # noqa: BLE001 - never delays readiness beyond the bound, never raises into lifespan
+        pass
     while time.monotonic() < deadline:
         last = await _check_brain_ready(timeout_s=2.0)
         if last.get("ok"):
@@ -1154,6 +1159,11 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
     asyncio.create_task(_wait_for_brain_startup(), name="brain_startup_readiness_probe")
+    try:  # A6: FastAPI builds included routers' route tables (pydantic) on the first request; build them now, off the loop
+        import startup_warmups
+        asyncio.create_task(asyncio.to_thread(startup_warmups.prebuild_route_tables, app), name="route_table_prebuild")
+    except Exception:  # noqa: BLE001 - never raises into lifespan
+        pass
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin".
     # Gated behind a DB flag so the expensive ChromaDB scan only runs on first startup.
     try:

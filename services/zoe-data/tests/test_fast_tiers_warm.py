@@ -17,21 +17,37 @@ pytestmark = pytest.mark.ci_safe
 
 SERVICE = Path(__file__).resolve().parents[1]
 _CHILD = r"""
-import asyncio, sys, time
+import asyncio, importlib, sys, time
 sys.path.insert(0, sys.argv[1])
-import expert_dispatch, fast_tiers, semantic_router
-expert_dispatch.is_enabled = lambda: True
-semantic_router.is_enabled = lambda: True
-semantic_router.route = lambda t: (time.sleep(0.4), {"domain": "chat", "scores": {"chat": 0.9}})[1]
-if sys.argv[2] == "skip":
-    fast_tiers._WARM = True
+mode = sys.argv[2]
+def setup():
+    import expert_dispatch, fast_tiers, semantic_router
+    expert_dispatch.is_enabled = lambda: True
+    semantic_router.is_enabled = lambda: True
+    semantic_router.route = lambda t: (time.sleep(0.4), {"domain": "chat", "scores": {"chat": 0.9}})[1]
+    return fast_tiers
+if mode == "warm":
+    fast_tiers = setup()          # fast_tiers itself loaded; its tiers' lazy imports still cold (warm() moves them off the loop)
 async def main():
+    global fast_tiers
     gaps, done = [], asyncio.Event()
     async def tick():
         last = time.perf_counter()
         while not done.is_set():
             await asyncio.sleep(0.01); now = time.perf_counter(); gaps.append(now - last); last = now
     t = asyncio.create_task(tick()); await asyncio.sleep(0.03)
+    if mode != "warm":
+        # Timed window from here, warm-up disabled: the imports run ON the loop inside the window, as on a cold first turn.
+        fast_tiers = setup()
+        fast_tiers._WARM = True
+    if mode == "preloaded":       # control of the control: the same disabled warm-up with nothing left to import
+        for name in fast_tiers._lazy_modules():
+            try:
+                importlib.import_module(name)
+            except Exception:
+                pass
+        await asyncio.sleep(0.05)   # let the ticker step past the preload, then time only the call
+        gaps.clear()
     out = await fast_tiers.resolve("tell me a story", "u", "s", phase="domain")
     done.set(); await t
     print(f"{max(gaps):.3f} {out!r} {fast_tiers._WARM}")
@@ -55,6 +71,13 @@ def test_first_call_after_a_cold_start_does_not_block_the_loop():
 def test_negative_control_without_the_warm_up_the_first_call_blocks():
     gap, rest = _first_call_gap("skip")
     assert gap >= 0.2 and rest == "None True", f"negative control saw only {gap:.3f}s"
+
+
+def test_the_negative_control_goes_green_when_there_is_nothing_to_stall_on():
+    """The control is not vacuous: with the warm-up disabled but every lazy module already loaded, the same harness sees
+    no 200 ms gap, so the control's red above is the cold imports and nothing else."""
+    gap, rest = _first_call_gap("preloaded")
+    assert gap < 0.2 and rest == "None True", f"the harness itself stalled {gap:.3f}s"
 
 
 def test_lazy_module_list_is_read_from_the_tiers():
