@@ -891,11 +891,23 @@ async def _probe_runtimes() -> None:
     logger.info("Runtime health probe: local_llm=%s", _RUNTIME_HEALTH["local_llm"])
 
 
+async def _sync_alerting_notice() -> None:
+    """Owner alerting broken (recorded by the shared ops helper, maybe from a timer with no DB) -> the owner's panel
+    notification, created on this tick without anyone's request. Never raises."""
+    try:
+        import notifications_store
+
+        await notifications_store.sync_alerting_broken()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("alerting notice sync failed (non-fatal): %s", type(exc).__name__)
+
+
 async def _runtime_health_refresh_loop() -> None:
-    """Re-probe runtime health every 5 minutes."""
+    """Re-probe runtime health every 5 minutes (and surface a broken owner-alert path on the panel)."""
     while True:
         await asyncio.sleep(300)
         await _probe_runtimes()
+        await _sync_alerting_notice()
 
 
 _MEMPALACE_MIG_FLAG_KEY = "mempalace_wing_migration_done"
@@ -1120,6 +1132,14 @@ async def lifespan(app: FastAPI):
 
     configure_logging()
 
+    try:  # forgotten means forever only with the ledger secret set: say which, loudly (enum only, never the value)
+        import memory_forgotten
+
+        memory_forgotten.log_startup_state()
+    except Exception:  # noqa: BLE001
+        # fail closed: a status that cannot be established is "unconfigured", never "unknown" (enum + reason token only)
+        logger.warning("FORGET_LEDGER state=unconfigured reason=module_error")
+
     # Reasoning scheduler (ZOE_BRAIN_SCHEDULER, default log-only): one httpx choke point that counts/refuses a daytime 4B call
     # made outside a person's turn. Installed first, right after logging, before any background loop can reach the brain.
     try:
@@ -1285,6 +1305,9 @@ async def lifespan(app: FastAPI):
         import alarms as _alarms
         if _alarms.enabled():
             _alarm_music.register()  # clock-radio music starts/stops with a ring
+            import alarm_push as _alarm_push
+            _alarm_push.register()  # panels hear "the ringing set changed" at once (ZOE_ALARMS_RINGING_PUSH); the poll stays
+            asyncio.create_task(_alarm_push.beat_loop(), name="alarms_ring_push_beat")
             asyncio.create_task(_alarms.run_loop(), name="alarms_ring")
     except Exception as _alarms_exc:
         logger.warning("alarm ring loop not started (non-fatal): %s", _alarms_exc)
@@ -2511,6 +2534,13 @@ async def root_health():
         body["panel_speaker"] = _psh.snapshot()
     except Exception:  # noqa: BLE001
         body["panel_speaker"] = None
+    # Forget ledger (memory_forgotten): "configured" | "unconfigured", read by scripts/maintenance/zoe_health.py. An enum only.
+    try:
+        import memory_forgotten
+        body["forget_ledger"] = memory_forgotten.ledger_state()
+    except Exception:  # noqa: BLE001
+        body["forget_ledger"] = "unconfigured"      # fail closed: unreadable ledger state is never reported as fine
+        body["forget_ledger_reason"] = "module_error"
     if not _pool_health_cache["healthy"]:
         return JSONResponse(body, status_code=503)
     return body
@@ -2814,19 +2844,19 @@ async def _run_push_ws_loop(
         while True:
             data = await _receive_ws_text_with_deadline(websocket)
             if data == "ping":
-                await websocket.send_json({"type": "pong"})
+                await broadcaster.send_to(websocket, {"type": "pong"})
             elif allow_catchup and data.startswith("catchup:"):
                 _, _, raw_seq = data.partition(":")
                 try:
                     seq = int(raw_seq)
                 except (TypeError, ValueError):
-                    await websocket.send_json({
+                    await broadcaster.send_to(websocket, {
                         "type": "error",
                         "error": "invalid_catchup_sequence",
                     })
                     continue
                 if seq < 0:
-                    await websocket.send_json({
+                    await broadcaster.send_to(websocket, {
                         "type": "error",
                         "error": "invalid_catchup_sequence",
                     })

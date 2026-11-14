@@ -391,6 +391,9 @@ async function homeDeleteChecks(M, home) {
       apiGet: (url) => Promise.resolve(url.indexOf('/api/calendar/') >= 0 ? { events } : { reminders: [] }),
       apiJson: (method, url) => { calls.push(method + ' ' + url); return Promise.resolve({}); },
       estConfirm: (_msg, cb) => cb(), editEvent: (e) => opened.push(e.id), toast() {}, editReminder() {}, fmtRemWhen: () => '',
+      // the session guard and the occurrence-shape helpers wireDay now uses (same rules as home.html's SESSCHECK / CALSHAPE blocks)
+      sid: () => 's1', sessKey: () => 's1|m', sessLive: (s0) => s0 === 's1|m', ekey: (e) => String(e.instance_key != null && e.instance_key !== '' ? e.instance_key : e.id),
+      eRO: (e) => !!(e && (e.read_only === true || e.read_only === 1)),
       _cur: 'day', CAT: {}, fmt12: (x) => x || '', esc: M.esc, two: (n) => (n < 10 ? '0' : '') + n, loadErr: () => 'err'
     });
     vm.runInContext(extractFn(home, 'evRepeating') + '\n' + extractFn(home, 'wireDay'), ctx);
@@ -405,13 +408,15 @@ async function homeDeleteChecks(M, home) {
       d.ctx.wireDay(); await flush(); await flush();
       const rows = d.els.dayEvents.innerHTML.split('<div class="dev" ').slice(1);
       assert.strictEqual(rows.length, 2, 'two rows');
-      const rep = rows.find((r) => r.includes('data-eid="ev-series"')), one = rows.find((r) => r.includes('data-eid="ev-once"'));
+      // rows are keyed per occurrence (instance_key, else id); edits and deletes still act on the series id
+      const K = (e) => String(e.instance_key != null && e.instance_key !== '' ? e.instance_key : e.id);
+      const rep = rows.find((r) => r.includes('data-eid="' + K(OCCURRENCE) + '"')), one = rows.find((r) => r.includes('data-eid="' + K(ONEOFF) + '"'));
       assert(!rep.includes('data-act="del"'), 'the repeating row has no delete');
       assert(one.includes('data-act="del"'), 'the one-off row keeps its delete');
-      clickRow(d.els.dayEvents, 'ev-series', 'del'); await flush();
+      clickRow(d.els.dayEvents, K(OCCURRENCE), 'del'); await flush();
       assert.deepStrictEqual(d.calls, [], 'no DELETE for the series');
       assert.deepStrictEqual(d.opened, ['ev-series'], 'the read-only sheet opens instead');
-      clickRow(d.els.dayEvents, 'ev-once', 'del'); await flush();
+      clickRow(d.els.dayEvents, K(ONEOFF), 'del'); await flush();
       assert.deepStrictEqual(d.calls, ['DELETE /api/calendar/events/ev-once'], 'a one-off row still deletes');
     });
   }
