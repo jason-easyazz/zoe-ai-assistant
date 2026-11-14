@@ -397,7 +397,10 @@ def test_the_golden_set_passes_with_the_oracle_when_present():
     golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
     oracle = json.loads(GOLDEN_ORACLE.read_text(encoding="utf-8"))
     cases = golden.get("cases", golden) if isinstance(golden, dict) else golden
-    oracle = oracle.get("cases", oracle) if isinstance(oracle, dict) and "cases" in oracle else oracle
+    for key in ("oracle", "cases"):                  # the golden oracle file is {"version", "oracle": {id: output}}
+        if isinstance(oracle, dict) and isinstance(oracle.get(key), dict):
+            oracle = oracle[key]
+            break
     failures = []
     for case in cases:
         if case.get("class") not in GOLDEN_CLASSES:
