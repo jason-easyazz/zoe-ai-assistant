@@ -445,7 +445,12 @@ Call site 2 of section 6, chosen because it is off the voice path and already ha
 - **The manifest format** is a lab format. It has not met a real third-party skill.
 - **One writer.** One kernel process with one lock. Several clients were tested for correctness (a slow one
   does not block an honest one), not for throughput.
-- **"OS"** is a direction. What exists is a kernel of about two thousand lines in a lab directory.
+- **The household twin** (sections 11 and 12) is tested only against days its own author generated. Nothing it
+  shows is evidence about a real household, and who may be shown a line about a person is not decided.
+- **A consent gap the rehearsal found:** when two people enable the same skill, the kernel lets it derive
+  something for one of them from the other's private event. The rehearsal reports it; the kernel does not stop it.
+- **"OS"** is a direction. What exists is a kernel and a twin of about three thousand five hundred lines in a
+  lab directory.
 
 ## 9. Owner decision: how long the log is kept
 
@@ -617,3 +622,74 @@ it inside a skill. It is the shortest window that gives both baselines. If the o
 that nothing outlives the log, choose A and lengthen presence in section 9 to 28 days instead, which moves the
 same cost into the log where a forget by name still works. Both are **[inferred]** from the lab's arithmetic
 (ten working days, six weekend days), which is itself a judgement and not a measurement.
+
+## 12. The twin's honest limits
+
+**The generator and the things tested against it were written by the same hand.** That is the limit that
+contains the others. A day the generator produces is plausible to its author; it is not evidence about any real
+household. So, of the twin's lab results **[lab]**:
+
+| What the lab shows | What it does not show |
+|---|---|
+| The baseline recovers the habits written into the generator (20 working days, the phone step done on 19) | that a real person's days have a "usual" this arithmetic can find |
+| "Unusual today" is silent on the generator's ordinary days, for five seeds and a whole month | that it is quiet, or useful, on real ordinary days. Real days are not a habit with a symmetric spread |
+| A rehearsal finds the privacy failures planted in three changed skills | that a change which rehearses clean is safe. It did nothing wrong *on those days* |
+| A forget removes or changes the baseline | anything about a copy of the baseline made by something else |
+
+**What the generator leaves out, on purpose or by ignorance.** People do not affect each other (nobody is late
+because someone else was). Days do not carry over (a late night changes nothing the next morning; an illness
+lasts one day; the flight has no return). There is one kind of week: no shift work, shared custody, school
+holidays, seasons, or a person whose Tuesday looks nothing like their Thursday. Presence is perfect: every
+"left" is true and has the same confidence, whereas real presence is a phone left on a table, a child with no
+phone, a sensor that misses. Nothing arrives late, twice or out of order. Clock times are treated as UTC. The six
+awkward days are six I thought of.
+
+**What would have to be measured on a real household before any of this is trusted.** Each needs that
+household's informed choice, person by person, and none has been done.
+
+1. **Whether the events exist.** The twin needs "up", "left", "arrived", "bed" and rooms. Production has no
+   presence engine yet (section 2.2), so today most of these would simply be missing.
+2. **How wrong presence is.** For some weeks, compare what the system recorded with a diary the person keeps:
+   how often a "left" or "arrived" is wrong or absent. The baseline is at best as good as that.
+3. **Whether a person's times have a usual at all.** Look at the real distribution of each time. If it has two
+   humps (two work patterns), a median and a range describe neither.
+4. **How many days until the baseline stops moving.** This replaces the lab's judgement of ten working days and
+   six weekend days with a measured number, per person.
+5. **How often "unusual today" is noise.** Each line shown only to the person it is about, who marks it "yes,
+   that was unusual" or "no". Decide the acceptable rate before looking.
+6. **What it misses.** Things the person says were unusual that produced no line.
+7. **Whether generated days predict real ones.** Rehearse the same change on generated days and on recorded
+   real days and compare: every kind of line that appears only on real days is something the generator cannot
+   rehearse.
+8. **Whether anyone wants it.** Asked of each person separately, with "no" as the default and no cost to
+   saying no.
+9. **The cost on the box.** Time and memory to learn a baseline and to rehearse K days on the Jetson, beside
+   the voice brain. The lab's one timing (25 days, two versions, 0.6 s) is from a cloud sandbox.
+10. **A forget drill.** On a copy: forget a person, then search the twin, the log and the disk for a planted
+    marker, as the lab tests do.
+
+**What must never be inferred.** The twin sees when people are up, in, out and in which room. From that a
+system, or a reader, could guess at things nobody agreed to share. These are out of bounds, as conclusions and
+as wording:
+
+- **health**, physical or mental: illness, sleep quality, tiredness, pain, medication, pregnancy, anything a
+  clinician would name;
+- **mood** or state of mind;
+- **relationships**: who is with whom, who is avoiding whom, conflict, a partner's absence, a visitor's meaning;
+- drinking or any other use of substances; religious practice; money; work performance or whether someone has
+  a job;
+- a child's behaviour, development or honesty;
+- whether someone is safe, or telling the truth about where they were.
+
+And, as rules of use rather than of wording: no comparison between people and no score or ranking of a person;
+no "trend" framed as getting better or worse; no decision about a person (a permission, a level of trust) made
+from a departure; no offer triggered by a departure ("you were up late, shall I ...") until the owner has
+decided that separately; and no line about one person shown to another without that person's own choice.
+
+**What enforces this today, and what does not.** In the lab **[lab]** the departure sentences are fixed
+templates of times and counts, there is no code path that produces a reason, a test checks every line from every
+awkward day against a list of words, and the awkward-day labels (`sick_child` and the rest) exist only in the
+generator's metadata, which the twin never reads. That stops the *system* from saying it. It does not stop a
+*reader*: "the child did not leave today" invites the guess. So the rule that matters most is about who is shown
+a line, and **that is not built and not decided**: the lab returns the lines to its caller and shows them to no
+one. It belongs with the owner decisions, next to retention (sections 9 and 11), before any real day is fed in.
