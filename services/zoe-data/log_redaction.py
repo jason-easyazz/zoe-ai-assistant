@@ -70,3 +70,12 @@ def utterance_tag(text: object) -> str:
     """
     t = text if isinstance(text, str) else ("" if text is None else str(text))
     return f"len={len(t)} utt={hashlib.sha256(t.encode('utf-8')).hexdigest()[:12]}"
+
+
+def exc_tag(exc: BaseException) -> str:
+    """``exc=<ExceptionType>`` for a log line that reports a caught exception: the TYPE, never ``str(exc)``.
+
+    An exception raised around a vector-store or model call routinely carries the text it was handling (a Chroma write error
+    quotes the document, an HTTP error can echo a body), and ``exc_info`` / ``logger.exception`` print that message in the
+    traceback. The call site's own fixed log prefix is the site code. Pinned by ``tests/test_log_privacy_sweep.py``."""
+    return f"exc={type(exc).__name__}"

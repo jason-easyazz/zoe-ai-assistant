@@ -210,7 +210,7 @@ async def _resolve_pending_person_links(user_id: str, db=None) -> dict:
                     mem_id, person_uuid, user_id,
                 )
     except Exception as exc:
-        logger.warning("link_resolver: scan failed user=%s: %s", user_id, exc)
+        logger.warning("link_resolver: scan failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     finally:
         if opened and _db is not None:
             try:
@@ -525,20 +525,31 @@ def _affect_for_fact(fact: str, affect: str, sentence: str, message: str = "") -
     return affect
 
 
-#: A row's wording is logged whole up to this many characters (a distilled sentence is <= 150 by the extractor prompt).
-_ROW_LOG_WORDING_MAX = 200
+_LABELS = ("promote", "anchor", "hold")
+
+
+def _closed(value: Any, allowed: tuple[str, ...]) -> str:
+    """``value`` if it is one of the CLOSED set ``allowed``, else the fixed word ``other``: extractor output reaches a log
+    line only through this clamp (a claim row's fields come from model JSON, and ``pred`` can carry free text after ``kin:``)."""
+    return value if isinstance(value, str) and value in allowed else "other"
 
 
 def _claim_label(md: dict) -> str:
     """``<pred>/<pol>/<mod>/<tense>:<lexical>><structural>`` of a row's claim row, or ``-``: what the extractor read and what
-    each floor made of it (labels only)."""
+    each floor made of it. Every part is clamped to its closed vocabulary (``structural_claims.PREDICATES`` /
+    ``POLARITIES`` / ``MODALITIES`` / ``TENSES``; the lexical / structural labels are promote|anchor|hold) with anything else
+    logged as ``other``; a ``kin:<code>`` predicate logs as ``kin`` (its code is model text). Never the obj / subj / quote."""
     raw = md.get("claim")
     if not raw:
         return "-"
     try:
+        import structural_claims as sc
         c = json.loads(raw) if isinstance(raw, str) else dict(raw)
-        return "%s/%s/%s/%s:%s>%s" % (c.get("pred"), c.get("pol"), c.get("mod"), c.get("tense"),
-                                      md.get("claim_lexical") or "-", md.get("claim_structural") or "-")
+        pred = str(c.get("pred") or "")
+        pred = "kin" if pred.startswith("kin:") else _closed(pred, sc.PREDICATES)
+        return "%s/%s/%s/%s:%s>%s" % (pred, _closed(c.get("pol"), sc.POLARITIES), _closed(c.get("mod"), sc.MODALITIES),
+                                      _closed(c.get("tense"), sc.TENSES), _closed(md.get("claim_lexical") or "-", _LABELS + ("-",)),
+                                      _closed(md.get("claim_structural") or "-", _LABELS + ("-",)))
     except Exception:  # noqa: BLE001
         return "-"
 
@@ -549,29 +560,33 @@ def log_row(lane: str, user_id: str, ref, outcome: str) -> None:
 
         MEMORY_ROW lane=<turn_digest|digest|emotional> outcome=<stored|parked|edited|held> user=<id> id=<row id>
         class=<authority class> promoted=<yes|no> basis=<authority basis> status=<row status> type=<memory type>
-        wording='<the ROW text, as stored>'
+        row=len=<chars> utt=<12 hex>
+
+    ``row`` is ``log_redaction.utterance_tag`` of the stored row text - the length and an equality key, NEVER the words: the
+    service log sits outside the forget cascade and rotates by size, so household memory text must not be written to it
+    (privacy sweep 2026-11-14; the line used to carry ``wording='<row text>'``). Read the row itself by ``id`` from the store.
 
     ``promoted`` is the promotion verdict: yes = the owner's one verbatim sentence ENTAILED the fact
     (``memory_authority.VERBATIM_BASIS``), so a retraction earns the standing of the owner's own words; no = it did
-    not (a candidate is parked as a dispute instead). The wording is the row's own text - the extractor's distilled
-    sentence after the write boundary's scrub - never the owner's turn (no ``source_excerpt`` / anchor is read here).
-    Post-turn only (the background digest); never raises; ``%r`` so a newline in a wording cannot forge a line."""
+    not (a candidate is parked as a dispute instead). The tag covers the row's own text, never the owner's turn (no
+    ``source_excerpt`` / anchor is read here). Post-turn only (the background digest); never raises; the tag is
+    hex and digits, so a newline in the text cannot forge a line."""
     try:
         if ref is None:
             return
         md = getattr(ref, "metadata", None) or {}
         basis = str(md.get("authority_basis") or "-")
-        wording = " ".join(str(getattr(ref, "text", "") or "").split())[:_ROW_LOG_WORDING_MAX]
         logger.info(
-            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s wording=%r",
+            "MEMORY_ROW lane=%s outcome=%s user=%s id=%s class=%s promoted=%s basis=%s status=%s type=%s row=%s",
             lane, outcome, user_id, getattr(ref, "id", "-"), md.get("authority_class") or "-",
             "yes" if basis == memory_authority.VERBATIM_BASIS else "no", basis,
-            md.get("status") or "-", md.get("memory_type") or "-", wording)
-        label = _claim_label(md)
-        if label != "-":
+            md.get("status") or "-", md.get("memory_type") or "-",
+            _log_redaction.utterance_tag(getattr(ref, "text", "") or ""))
+        clamped = _claim_label(md)  # every part is from a closed vocabulary (see _closed); never raw extractor text
+        if clamped != "-":
             # the claim row's own line (the MEMORY_ROW format above is a pinned contract): what the extractor read, and what each
             # floor made of it
-            logger.info("MEMORY_ROW_CLAIM lane=%s id=%s claim=%s", lane, getattr(ref, "id", "-"), label)
+            logger.info("MEMORY_ROW_CLAIM lane=%s id=%s claim=%s", lane, getattr(ref, "id", "-"), clamped)
     except Exception:  # noqa: BLE001 - a log line must never fail a digest
         pass
 
@@ -996,7 +1011,7 @@ async def run_turn_digest(
                 # the claim row costs output tokens on the brain's one slot: log the call so the delta is measurable
                 logger.info("STRUCTURAL_EXTRACT lane=%s ms=%d max_tokens=%d", source, int((time.monotonic() - _t_llm) * 1000), _max_tokens)
         except Exception as exc:
-            logger.debug("turn_digest: LLM call failed for %s: %s", user_id, exc)
+            logger.debug("turn_digest: LLM call failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
             return result
 
         # Parse JSON array from response
@@ -1267,7 +1282,7 @@ async def run_turn_digest(
                             changed_refs.append(new_ref)
                         continue
                 except Exception as exc:
-                    logger.warning("turn_digest: supersede failed (%s) — plain ingest", exc)
+                    logger.warning("turn_digest: supersede failed (%s) — plain ingest", _log_redaction.exc_tag(exc))
             try:
                 fact_affect = _affect_for_fact(fact, turn_affect, affect_sentence, user_message)
                 ref = await svc.ingest(
@@ -1302,7 +1317,7 @@ async def run_turn_digest(
                     if fact_changes:
                         changed_refs.append(ref)
             except MemoryServiceError as exc:
-                logger.debug("turn_digest: ingest failed for %s: %s", user_id, exc)
+                logger.debug("turn_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
 
         if memory_authority.enabled() and session_id:
             import memory_disputes
@@ -1331,8 +1346,8 @@ async def run_turn_digest(
                 await rebuild_user_model_card(user_id)
 
     except Exception as exc:
-        logger.warning("turn_digest: unexpected error for %s: %s", user_id, exc)
-        result["error"] = str(exc)
+        logger.warning("turn_digest: unexpected error for %s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["error"] = _error_field(exc)
 
     if result.get("new", 0) > 0:
         try:
@@ -1390,7 +1405,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             # malformed fact reply must not cost the night's emotional moments
             # (Greptile P1 on #1682); both outcomes are recorded on the row.
             result["error"] = f"extractor_failed:{exc.kind}"
-            logger.warning("memory_digest: extractor failed for %s: %s", user_id, exc)
+            logger.warning("memory_digest: extractor failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
             facts = []
         result["extracted"] = len(facts)
 
@@ -1470,7 +1485,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                                 if held is not None and memory_authority.is_candidate(held):
                                     result["candidates"] = result.get("candidates", 0) + 1
                             except MemoryServiceError as exc:
-                                logger.debug("memory_digest: held observation not stored: %s", exc)
+                                logger.debug("memory_digest: held observation not stored: %s", _log_redaction.exc_tag(exc))
                         continue
                     fact = verdict.text
                     if verdict.basis == memory_authority.CITED_BASIS:
@@ -1489,7 +1504,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             try:
                 related = await svc.search(fact, user_id=user_id, limit=3, timeout_s=1.5)
             except Exception as exc:
-                logger.debug("memory_digest: contradiction-search failed: %s", exc)
+                logger.debug("memory_digest: contradiction-search failed: %s", _log_redaction.exc_tag(exc))
                 related = []
             for candidate in related:
                 existing_fact = (candidate.text or "").strip()
@@ -1517,7 +1532,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     )
                 except MemoryServiceError as exc:
                     logger.warning(
-                        "memory_digest: supersede failed for %s: %s", user_id, exc
+                        "memory_digest: supersede failed for %s: %s", user_id, _log_redaction.exc_tag(exc)
                     )
                     continue
                 if new_ref is not None:
@@ -1573,7 +1588,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                         logger.info("memory_digest: superseded %s with %s", target_id, _log_redaction.utterance_tag(fact))
                         continue
                 except Exception as exc:
-                    logger.warning("memory_digest: supersede failed (%s) — plain ingest", exc)
+                    logger.warning("memory_digest: supersede failed (%s) — plain ingest", _log_redaction.exc_tag(exc))
             try:
                 ref = await svc.ingest(
                     fact,
@@ -1588,7 +1603,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                     user_turn_id=turn_id,
                 )
             except MemoryServiceError as exc:
-                logger.warning("memory_digest: ingest failed for %s: %s", user_id, exc)
+                logger.warning("memory_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
                 continue
             if ref is not None and memory_authority.is_candidate(ref):
                 result["candidates"] = result.get("candidates", 0) + 1
@@ -1605,8 +1620,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             emotional_new = await _emotional_memory_pass(user_id, chat_text, svc)
             result["emotional_new"] = emotional_new
         except Exception as exc:
-            result["emotional_error"] = f"{type(exc).__name__}: {exc}"
-            logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, exc)
+            result["emotional_error"] = type(exc).__name__
+            logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
         # ── Night mind (ZOE_NIGHT_MIND, default OFF) ─────────────────────────
         # The chunked, cited reflection over the WHOLE day's own-words turns (the extractors above cut the transcript at 3,000 characters).
@@ -1621,8 +1636,8 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             logger.warning("memory_digest: night mind failed (non-fatal) user=%s: %s", user_id, type(exc).__name__)
 
     except Exception as exc:
-        logger.error("memory_digest: failed for %s: %s", user_id, exc, exc_info=True)
-        result["error"] = str(exc)
+        logger.error("memory_digest: failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["error"] = _error_field(exc)
     finally:
         digest_pack.end_run(run_token)
         if run_cov.passes:
@@ -1653,7 +1668,7 @@ async def _emotional_call(transcript: str, timeout: float) -> "list | None":
             resp.raise_for_status()
             raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "[]").strip()
     except Exception as exc:
-        logger.debug("emotional_pass: LLM call failed: %s", exc)
+        logger.debug("emotional_pass: LLM call failed: %s", _log_redaction.exc_tag(exc))
         return None
 
     # Parse JSON
@@ -1728,7 +1743,7 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
         try:
             from memory_quality import user_relationship_claim_unsupported
             if user_relationship_claim_unsupported(moment, ""):
-                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %r", moment[:70])
+                logger.info("memory_digest: dropped user-anchored relationship in emotional moment: %s", _log_redaction.utterance_tag(moment))
                 continue
         except Exception:
             pass
@@ -1745,9 +1760,9 @@ async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
             if ref is not None:
                 stored += 1
                 log_row("emotional", user_id, ref, "stored")
-                logger.info("emotional_pass: stored user=%s [%s] %s", user_id, emotion, moment[:60])
+                logger.info("emotional_pass: stored user=%s %s", user_id, _log_redaction.utterance_tag(moment))
         except MemoryServiceError as exc:
-            logger.debug("emotional_pass: ingest failed: %s", exc)
+            logger.debug("emotional_pass: ingest failed: %s", _log_redaction.exc_tag(exc))
     return stored
 
 
@@ -1794,6 +1809,14 @@ class TranscriptLoadError(RuntimeError):
     def __init__(self, cause: BaseException):
         self.kind = type(cause).__name__
         super().__init__(f"load_failed:{self.kind}")
+
+
+def _error_field(exc: BaseException) -> str:
+    """The value a digest RESULT dict carries for a failed step: ``load_failed:<cause type>`` for a ``TranscriptLoadError`` (its
+    message is built from the cause's class name alone, so it is message-free by construction; ``memory_metrics`` and the
+    nightly CLI read that shape), else the exception's TYPE name - never ``str(exc)``, which can quote stored text and reaches
+    the log through ``logger.info("memory_digest: %s", result)``."""
+    return str(exc) if isinstance(exc, TranscriptLoadError) else type(exc).__name__
 
 
 _LEGACY_TURN_LIMIT = 200
@@ -1852,7 +1875,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
                            user_id, _turn_limit())
         return await _transcript_from_rows(user_id, rows)
     except Exception as exc:
-        logger.warning("memory_digest: could not load messages for %s: %s", user_id, exc)
+        logger.warning("memory_digest: could not load messages for %s: %s", user_id, _log_redaction.exc_tag(exc))
         raise TranscriptLoadError(exc) from exc
 
 
@@ -1926,7 +1949,7 @@ async def load_day_messages(user_id: str, start_iso: str, end_iso: str, db=None)
                 rows = await (await _db.execute(sql, params)).fetchall()
         return await _transcript_from_rows(user_id, rows) if rows else ""
     except Exception as exc:
-        logger.warning("memory_digest: could not load the day's messages for %s: %s", user_id, exc)
+        logger.warning("memory_digest: could not load the day's messages for %s: %s", user_id, _log_redaction.exc_tag(exc))
         raise TranscriptLoadError(exc) from exc
 
 
@@ -2145,10 +2168,10 @@ async def _facts_call(transcript: str, timeout: float) -> list[dict]:
     except ExtractorError:
         raise
     except json.JSONDecodeError as je:
-        logger.warning("memory_digest: JSON parse error: %s", je)
+        logger.warning("memory_digest: JSON parse error: %s", _log_redaction.exc_tag(je))
         raise ExtractorError(type(je).__name__, str(je)) from je
     except Exception as exc:
-        logger.warning("memory_digest: LLM call failed: %s", exc)
+        logger.warning("memory_digest: LLM call failed: %s", _log_redaction.exc_tag(exc))
         raise ExtractorError(type(exc).__name__, str(exc)) from exc
 
 
@@ -2296,7 +2319,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         parsed = json.loads(text[start:end])
         return bool(parsed.get("contradicts"))
     except Exception as exc:
-        logger.debug("memory_digest: contradiction judge failed: %s", exc)
+        logger.debug("memory_digest: contradiction judge failed: %s", _log_redaction.exc_tag(exc))
         return False
 
 
@@ -2377,7 +2400,7 @@ async def _merge_near_duplicates(svc, user_id: str) -> int:
                         merged += 1
                 except Exception as exc:
                     logger.debug(
-                        "consolidation: merge skipped id=%s: %s", ref.id, exc
+                        "consolidation: merge skipped id=%s: %s", ref.id, _log_redaction.exc_tag(exc)
                     )
                 matched = True
                 break
@@ -2437,7 +2460,7 @@ async def _resolve_contradictions(svc, user_id: str, max_pairs: int = 50) -> int
                     resolved += 1
             except Exception as exc:
                 logger.debug(
-                    "consolidation: supersede skipped id=%s: %s", older.id, exc
+                    "consolidation: supersede skipped id=%s: %s", older.id, _log_redaction.exc_tag(exc)
                 )
     return resolved
 
@@ -2479,22 +2502,22 @@ async def run_weekly_consolidation(user_id: str) -> dict:
     try:
         summary["merged"] = await _merge_near_duplicates(svc, user_id)
     except Exception as exc:
-        logger.warning("consolidation: merge failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: merge failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     try:
         summary["resolved_contradictions"] = await _resolve_contradictions(svc, user_id)
     except Exception as exc:
-        logger.warning("consolidation: contradiction pass failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: contradiction pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     try:
         import memory_disputes
 
         summary["stale_disputes"] = await memory_disputes.expire_stale(svc, user_id)
     except Exception as exc:
-        logger.warning("consolidation: dispute expiry failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: dispute expiry failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     try:
         archived_ids = await svc.sweep_soft_archive(user_id=user_id, actor="decay_sweep")
         summary["archived"] = len(archived_ids)
     except Exception as exc:
-        logger.warning("consolidation: sweep failed user=%s: %s", user_id, exc)
+        logger.warning("consolidation: sweep failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
     logger.info("consolidation: %s", summary)
     return summary
 
@@ -2529,7 +2552,7 @@ async def run_weekly_consolidation_for_all(db=None) -> list[dict]:
             _message_owner_users_sql(today_only=False), db=db
         )
     except Exception as exc:
-        logger.error("consolidation: could not list users: %s", exc)
+        logger.error("consolidation: could not list users: %s", _log_redaction.exc_tag(exc))
         return []
     user_ids = drop_synthetic_users(user_ids, pass_name="consolidation", log=logger)
     results = []
@@ -2587,7 +2610,7 @@ async def newest_owned_user_turn_age_hours(db=None, cutoff=None) -> float | None
             return NO_OWNED_TURNS
         return float(row[0])
     except Exception as exc:
-        logger.warning("memory_digest: newest-turn probe failed (non-fatal): %s", exc)
+        logger.warning("memory_digest: newest-turn probe failed (non-fatal): %s", _log_redaction.exc_tag(exc))
         return None
 
 
@@ -2623,7 +2646,7 @@ async def run_digest_for_all_active_users(db=None, cutoff=None) -> list[dict]:
             params = (_DIGEST_LOOKBACK_HOURS,)
         user_ids = await _list_user_ids(sql, params, db=db)
     except Exception as exc:
-        logger.error("memory_digest: could not list active users: %s", exc)
+        logger.error("memory_digest: could not list active users: %s", _log_redaction.exc_tag(exc))
         return []
 
     for uid in user_ids:
@@ -2701,7 +2724,7 @@ async def _extract_concept_tags(fact: str) -> list[str]:
             tags = json.loads(text[start:end])
             return [str(t).lower().strip()[:30] for t in tags if t][:5]
     except Exception as exc:
-        logger.debug("concept extraction failed: %s", exc)
+        logger.debug("concept extraction failed: %s", _log_redaction.exc_tag(exc))
     return []
 
 
@@ -2796,7 +2819,7 @@ async def _rem_reinforce_pass(user_id: str) -> dict:
             col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
 
     except Exception as exc:
-        logger.warning("REM reinforce pass failed user=%s: %s", user_id, exc)
+        logger.warning("REM reinforce pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     summary = {"user_id": user_id, "linked": linked, "tagged": tagged}
     logger.info("dreaming/rem: %s", summary)
@@ -2897,7 +2920,7 @@ async def _deep_sleep_pass(user_id: str) -> dict:
                 archived += 1
 
     except Exception as exc:
-        logger.warning("deep sleep pass failed user=%s: %s", user_id, exc)
+        logger.warning("deep sleep pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     summary = {"user_id": user_id, "promoted": promoted, "archived": archived}
     logger.info("dreaming/deep_sleep: %s", summary)
@@ -3025,10 +3048,10 @@ async def _synthesis_pass(user_id: str) -> dict:
                         col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
                     synthesized += 1
             except Exception as exc:
-                logger.warning("synthesis failed for tag=%s user=%s: %s", tag, user_id, exc)
+                logger.warning("synthesis failed for tag=%s user=%s: %s", _log_redaction.utterance_tag(tag), user_id, _log_redaction.exc_tag(exc))
 
     except Exception as exc:
-        logger.warning("synthesis pass failed user=%s: %s", user_id, exc)
+        logger.warning("synthesis pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     summary = {"user_id": user_id, "synthesized": synthesized}
     logger.info("dreaming/synthesis: %s", summary)
@@ -3196,7 +3219,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
             ) as cur:
                 rows = await cur.fetchall()
     except Exception as exc:
-        logger.warning("open_loops: message load failed user=%s: %s", user_id, exc)
+        logger.warning("open_loops: message load failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
         return _done("load_error")
 
     rows = [r for r in rows if not distress_handoff.guarded_text(str(r[0]))]   # a distress hand-off turn is never mined for open loops
@@ -3269,7 +3292,7 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 resp.raise_for_status()
                 raw = resp.json()["choices"][0]["message"]["content"] or ""
         except Exception as exc:
-            logger.warning("open_loops: LLM call failed user=%s: %s: %s", user_id, type(exc).__name__, exc)
+            logger.warning("open_loops: LLM call failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
             cov.failed += 1
             llm_failed += 1
             continue
@@ -3358,8 +3381,8 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
                 seen.append(tokens)
     except Exception as exc:
         # Class + constraint only: a driver message can echo a bound value.
-        logger.warning("open_loops: DB write failed user=%s: %s constraint=%s", user_id,
-                       type(exc).__name__, getattr(exc, "constraint_name", "") or "-")
+        constraint = getattr(exc, "constraint_name", "") or "-"     # a schema identifier, never a bound value
+        logger.warning("open_loops: DB write failed user=%s: %s constraint=%s", user_id, type(exc).__name__, constraint)
         return _done("db_error")
 
     return _done("ok")
@@ -3393,7 +3416,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if link_result.get("scanned") or link_result.get("relinked"):
             result["link_resolver"] = link_result
     except Exception as exc:
-        logger.warning("dreaming: link resolver failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: link resolver failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.5: Open loops extraction — runs nightly so loops are detected the same
     # day they're mentioned, not deferred until Sunday.
@@ -3401,8 +3424,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         loops_result = await _extract_open_loops(user_id, db=db)
         result["open_loops"] = loops_result
     except Exception as exc:
-        logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, exc)
-        result["open_loops"] = {"status": "error", "error": str(exc)}
+        logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["open_loops"] = {"status": "error", "error": type(exc).__name__}
 
     # Phase 1.55: conversation notes (ZOE_CONVERSATION_NOTES, default OFF - a no-op without I/O when off): one short note per
     # finished conversation of this member (and of the named guests they enrolled), in their own layer, so Zoe can pick a topic
@@ -3414,7 +3437,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if notes_result.get("status") != "off":
             result["conversation_notes"] = notes_result
     except Exception as exc:
-        logger.warning("dreaming: conversation notes failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: conversation notes failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.6: proactivity selector (ZOE_PROACTIVE_SELECTOR, default OFF — a
     # no-op without I/O when off). Ranks tonight's loops/moments/events.
@@ -3425,7 +3448,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if selected is not None:
             result["proactive_select"] = selected
     except Exception as exc:
-        logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: proactive selector failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.65: anticipation offers from the member's calendar (ZOE_ANTICIPATION, default
     # off — a no-op without I/O when off). Code only: no model call, no network.
@@ -3436,7 +3459,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if anticipated is not None:
             result["anticipation"] = anticipated
     except Exception as exc:
-        logger.warning("dreaming: anticipation failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: anticipation failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     # Phase 1.7: implicit-conflict pass (ZOE_MEMORY_IMPLICIT_SUPERSEDE, default OFF — a
     # no-op without I/O when off). Before the Sunday portrait and the
@@ -3446,7 +3469,7 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
         if conflicts is not None:
             result["implicit_conflicts"] = conflicts
     except Exception as exc:
-        logger.warning("dreaming: implicit-conflict pass failed user=%s: %s", user_id, exc)
+        logger.warning("dreaming: implicit-conflict pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
 
     if is_sunday:
         deep = await _deep_sleep_pass(user_id)
@@ -3461,8 +3484,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
             portrait = await run_portrait_synthesis(user_id, db=db)
             result["portrait"] = portrait
         except Exception as exc:
-            logger.warning("dreaming: portrait synthesis failed user=%s: %s", user_id, exc)
-            result["portrait"] = {"status": "error", "error": str(exc)}
+            logger.warning("dreaming: portrait synthesis failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
+            result["portrait"] = {"status": "error", "error": type(exc).__name__}
 
         # Phase 5: Agent sync is system-wide, not per-user.  Callers that
         # iterate users should run it once for the first user only.
@@ -3472,8 +3495,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
                 sync_result = await run_agent_sync()
                 result["agent_sync"] = sync_result
             except Exception as exc:
-                logger.warning("dreaming: agent_sync failed: %s", exc)
-                result["agent_sync"] = {"status": "error", "error": str(exc)}
+                logger.warning("dreaming: agent_sync failed: %s", _log_redaction.exc_tag(exc))
+                result["agent_sync"] = {"status": "error", "error": type(exc).__name__}
 
     # Nightly: rebuild the user-model card (user_model_card.py; deterministic, no LLM) so
     # the always-present block tracks the store day by day. On Sundays the portrait
@@ -3508,8 +3531,8 @@ async def run_dreaming_cycle(user_id: str, db=None, run_agent_sync_phase: bool =
                 user_id, report.scanned, report.total,
             )
     except Exception as exc:
-        logger.warning("dreaming: lint pass failed user=%s: %s", user_id, exc)
-        result["lint"] = {"status": "error", "error": str(exc)}
+        logger.warning("dreaming: lint pass failed user=%s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["lint"] = {"status": "error", "error": type(exc).__name__}
 
     logger.info("dreaming cycle complete: %s", result)
     return result
@@ -3523,7 +3546,7 @@ async def run_dreaming_for_all(db=None) -> list[dict]:
             _message_owner_users_sql(today_only=False), db=db
         )
     except Exception as exc:
-        logger.error("dreaming: could not list users: %s", exc)
+        logger.error("dreaming: could not list users: %s", _log_redaction.exc_tag(exc))
         return []
     user_ids = drop_synthetic_users(user_ids, pass_name="dreaming", log=logger)
 
@@ -3591,8 +3614,8 @@ async def run_music_taste_digest(user_id: str) -> dict:
                 )
             ).fetchall()
     except Exception as exc:
-        logger.warning("music_taste_digest: could not load events for %s: %s", user_id, exc)
-        result["error"] = str(exc)
+        logger.warning("music_taste_digest: could not load events for %s: %s", user_id, _log_redaction.exc_tag(exc))
+        result["error"] = type(exc).__name__
         return result
 
     if not events:
@@ -3668,8 +3691,8 @@ async def run_music_taste_digest(user_id: str) -> dict:
         from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
         svc = get_memory_service()
     except Exception as exc:
-        logger.warning("music_taste_digest: memory service unavailable: %s", exc)
-        result["error"] = str(exc)
+        logger.warning("music_taste_digest: memory service unavailable: %s", _log_redaction.exc_tag(exc))
+        result["error"] = type(exc).__name__
         return result
 
     for fact_text, mem_type in facts:
@@ -3687,7 +3710,7 @@ async def run_music_taste_digest(user_id: str) -> dict:
                 result["facts_ingested"] += 1
                 logger.info("music_taste_digest: stored for %s: %s", user_id, _log_redaction.utterance_tag(fact_text))
         except Exception as exc:
-            logger.warning("music_taste_digest: ingest failed for %s: %s", user_id, exc)
+            logger.warning("music_taste_digest: ingest failed for %s: %s", user_id, _log_redaction.exc_tag(exc))
 
     logger.info("music_taste_digest: %s", result)
     return result
@@ -3701,7 +3724,7 @@ async def run_music_taste_digest_for_all(db=None) -> list[dict]:
             "SELECT DISTINCT user_id FROM music_listening_events", db=db
         )
     except Exception as exc:
-        logger.error("music_taste_digest: could not list users: %s", exc)
+        logger.error("music_taste_digest: could not list users: %s", _log_redaction.exc_tag(exc))
         return []
     user_ids = drop_synthetic_users(user_ids, pass_name="music_taste_digest", log=logger)
 
