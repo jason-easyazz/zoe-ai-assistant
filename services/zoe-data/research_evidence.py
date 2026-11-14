@@ -103,6 +103,8 @@ WEB_LOOKUP_MESSAGES = {
     WEB_LOOKUP_BLOCKED: "Web lookup unavailable right now — the search provider refused the request.",
     WEB_LOOKUP_ERROR: "Web lookup unavailable right now.",
     WEB_LOOKUP_OFF: "Web lookup is switched off.",
+    # web_lookup_provider.WEB_LOOKUP_REFUSED: the query scrubber withheld the query.
+    "refused": "Web lookup not sent — the question carries private details.",
 }
 _STOPWORDS = {
     "the",

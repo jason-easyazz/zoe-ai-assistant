@@ -76,8 +76,11 @@ class LiveProvider:
 
     name = "live"
 
+    def __init__(self, fetch: Callable[..., WebFallbackOutcome] | None = None) -> None:
+        self._fetch = fetch  # None = this module's fetch_web_fallback, looked up per call
+
     def search(self, query: str, max_results: int, deadline_s: float) -> WebFallbackOutcome:
-        return fetch_web_fallback(
+        return (self._fetch or fetch_web_fallback)(
             query,
             max_results,
             WEB_SEARCH_TOOL_PROVIDER_TIMEOUT_S,

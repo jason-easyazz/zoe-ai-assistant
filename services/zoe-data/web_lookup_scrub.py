@@ -90,14 +90,15 @@ class ScrubResult:
 @lru_cache(maxsize=1)
 def load_lexicon() -> dict:
     """Every enabled ``web_lookup_<lang>.json``, word lists unioned. A language with no file adds nothing."""
-    out: dict = {"answer": {}, "instruction_cues": []}
+    out: dict = {"answer": {}, "instruction_cues": [], "disclosure_cues": []}
     for path in sorted(_LEXICON_DIR.glob("web_lookup_*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
         if not data.get("enabled"):
             continue
         for key in ("drop_words", "question_words", "relation_words", "naming_words", "street_types"):
             out[key] = frozenset(out.get(key, frozenset())) | {fold(w) for w in data.get(key, [])}
-        out["instruction_cues"] = list(out["instruction_cues"]) + list(data.get("instruction_cues", []))
+        for key in ("instruction_cues", "disclosure_cues"):
+            out[key] = list(out[key]) + list(data.get(key, []))
         out["answer"].setdefault(data.get("lang", path.stem), data.get("answer", {}))
     return out
 
