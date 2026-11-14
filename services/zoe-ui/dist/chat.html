@@ -5256,10 +5256,6 @@
             });
         }
 
-        function escapeAttr(text) {
-            return String(text).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        }
-
         function renderAgentTrace(container, props) {
             container.className += ' agent-trace-component';
             const steps = (props.steps || []).map(s => `
@@ -6430,84 +6426,11 @@
             document.getElementById('moreOverlay').classList.remove('active');
         }
         
-        function navigateToPage(page) {
-            window.location.href = page;
-        }
-        
-        function openNotifications() {
-            document.getElementById('notificationsPanel').classList.add('open');
-            loadNotifications();
-            const notificationBtn = document.querySelector('.notifications-btn');
-            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
-        }
-        
-        function closeNotifications() {
-            document.getElementById('notificationsPanel').classList.remove('open');
-        }
-        
-        async function loadNotifications() {
-            try {
-                const response = await apiRequest('/reminders/notifications/pending');
-                const notifications = response.notifications || [];
-                displayNotifications(notifications);
-            } catch (error) {
-                console.error('Failed to load notifications:', error);
-                displayNotifications([]);
-            }
-        }
-        
-        function displayNotifications(notifications) {
-            const notificationsContent = document.getElementById('notificationsContent');
-            const notificationBtn = document.querySelector('.notifications-btn');
-            
-            if (notifications.length > 0 && notificationBtn) {
-                notificationBtn.classList.add('has-notifications');
-            } else if (notificationBtn) {
-                notificationBtn.classList.remove('has-notifications');
-            }
-            
-            if (notifications.length === 0) {
-                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
-                return;
-            }
-            
-            notificationsContent.innerHTML = notifications.map(notification => `
-                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
-                     onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${escapeHtml(String(notification.message == null ? '' : notification.message))}</div>
-                    <div class="notification-meta">
-                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
-        function formatNotificationTime(timeStr) {
-            const date = new Date(timeStr);
-            const now = new Date();
-            const diff = now - date;
-            const minutes = Math.floor(diff / 60000);
-            const hours = Math.floor(minutes / 60);
-            const days = Math.floor(hours / 24);
-            
-            if (minutes < 1) return 'Just now';
-            if (minutes < 60) return `${minutes}m ago`;
-            if (hours < 24) return `${hours}h ago`;
-            return `${days}d ago`;
-        }
-        
-        async function handleNotificationClick(notificationId) {
-            try {
-                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
-                    method: 'POST'
-                });
-                loadNotifications();
-            } catch (error) {
-                console.error('Failed to acknowledge notification:', error);
-            }
-            closeNotifications();
-        }
-        
+        // navigateToPage and the notification helpers (open/close/load/display/
+        // formatNotificationTime/handleNotificationClick) are defined ONCE, in the
+        // main script above. A second identical copy lived here until 2026-11-14;
+        // this later script ran last, so its copies were the live ones.
+
         // Update time/date display
         function updateTimeDate() {
             const now = new Date();
