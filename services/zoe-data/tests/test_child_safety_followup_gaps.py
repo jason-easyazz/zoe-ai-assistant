@@ -13,6 +13,15 @@ DEFERRED GAPS (running list; append each one the coordinator sends, with its thr
    played football") still marked the session (sticky). Reviewer ruling: the bare "as a N year old" form is DROPPED entirely.
    Only present-tense self-statements declare: "im a N-year-old", "i am a N year old", "i am only a N year old" (hyphens or not,
    digits or number words), plus the plain "im 9" forms. "when i was a 9 year old i ..." declares nothing.
+5. 2026-11-15 - PRRT_kwDOPZpkks63jkXF: "im a 10-year-old girl's mother" declared the ADULT a child (sticky). Rule: the age form must
+   END its noun phrase, on the FOLDED text (apostrophes dropped: "girl's" is "girls", "year-old's" is "year-olds"): after "year
+   old" comes the end of the statement (end, punctuation, or and / so / but / how / can / ...), optionally after ONE self-noun
+   (boy / girl / kid / child) - so "i am a ten year old boy" declares, but a possessive ("10 year olds dad", "girls mother") or
+   any other following noun ("10 year old daughters teacher") declares nothing. Cost: "im a 10 year old who ..." no longer
+   declares (a relative clause is not in the end list).
+6. 2026-11-15 - PRRT_kwDOPZpkks63jkXH (DEFERRED to the follow-up bundle, no code yet): a statement such as "dad cooks and does
+   the washing with bleach" is read as a question (the later-clause auxiliary "does" + subject word "the" + a hazard), so a child
+   saying it is refused. An over-refusal, the safe side.
 """
 from __future__ import annotations
 
@@ -128,5 +137,47 @@ def test_someone_elses_year_old_does_not_mark_the_session(said):
 
 @pytest.mark.parametrize("said", THE_SPEAKER)
 def test_the_speakers_own_year_old_still_declares(said):
+    _floor(said, "adult-a", sid="kid-s")
+    assert _refused(_floor(CANON[0], "adult-a", sid="kid-s")), said
+
+
+# gap 5: the age form must END its noun phrase, judged on the folded text (PRRT_kwDOPZpkks63jkXF) -------------------------------
+NOT_SELF = ["I'm a 10-year-old girl's mother", "I'm a 10 year old's dad", "I'm a 10-year-old boy's coach",
+            "im a 10 year olds dad", "im a 10-year-old girls mother", "im a 9 year old daughters teacher", "i am a 9-year-old's mum",
+            "i am a ten year old boys mum"]                                   # pinned: a self-noun WITH a possessive declares nothing
+SELF = ["I'm a 10-year-old", "im a 10 year old and i want to bake", "i am a ten year old boy",   # pinned: a self-noun alone declares
+        "im a 9-year-old, how do i make toast", "im a 10 year old girl, can i help"]
+
+
+@pytest.mark.parametrize("said", NOT_SELF)
+def test_age_form_that_does_not_end_its_noun_phrase_declares_nothing(said):
+    _floor(said, "adult-a", sid="adult-s")
+    assert _floor(CANON[0], "adult-a", sid="adult-s") is None    # the adult's session is NOT marked
+    assert _floor(f"{said}, {CANON[1]}", "adult-a") is None      # nor the same turn
+
+
+@pytest.mark.parametrize("said", SELF)
+def test_age_form_ending_its_noun_phrase_declares(said):
+    _floor(said, "adult-a", sid="kid-s")
+    assert _refused(_floor(CANON[0], "adult-a", sid="kid-s")), said
+
+
+# gap 5: the age form must END its noun phrase, judged on the folded text (PRRT_kwDOPZpkks63jkXF) -------------------------------
+NOT_SELF = ["I'm a 10-year-old girl's mother", "I'm a 10 year old's dad", "I'm a 10-year-old boy's coach",
+            "im a 10 year olds dad", "im a 10-year-old girls mother", "im a 9 year old daughters teacher", "i am a 9-year-old's mum",
+            "i am a ten year old boys mum"]                                   # pinned: a self-noun WITH a possessive declares nothing
+SELF = ["I'm a 10-year-old", "im a 10 year old and i want to bake", "i am a ten year old boy",   # pinned: a self-noun alone declares
+        "im a 9-year-old, how do i make toast", "im a 10 year old girl, can i help"]
+
+
+@pytest.mark.parametrize("said", NOT_SELF)
+def test_age_form_that_does_not_end_its_noun_phrase_declares_nothing(said):
+    _floor(said, "adult-a", sid="adult-s")
+    assert _floor(CANON[0], "adult-a", sid="adult-s") is None    # the adult's session is NOT marked
+    assert _floor(f"{said}, {CANON[1]}", "adult-a") is None      # nor the same turn
+
+
+@pytest.mark.parametrize("said", SELF)
+def test_age_form_ending_its_noun_phrase_declares(said):
     _floor(said, "adult-a", sid="kid-s")
     assert _refused(_floor(CANON[0], "adult-a", sid="kid-s")), said

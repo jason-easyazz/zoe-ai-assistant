@@ -1665,7 +1665,7 @@
    "i (?:just )?turned {AGE}{END}",
    "my age is {AGE}{END}",
    "(?:said|says|say|told|tells|reckons|reckoned|thinks|thought|goes|went) (?:me )?(?:that )?i was {AGE}{END}",
-   "(?:i am|im|i m)(?: (?:only|just))? an? {AGE}[ -]?(?:years?|yrs?)[ -]?old(?!\\w)"
+   "(?:i am|im|i m)(?: (?:only|just))? an? {AGE}[ -]?(?:years?|yrs?)[ -]?old(?: (?:boy|girl|kid|child))?{END}"
   ],
   "school": [
    "(?:i am|im|i m) in (?:year|yr|grade|class) {AGE}(?! of)(?!\\w)",
