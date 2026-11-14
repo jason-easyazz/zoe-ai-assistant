@@ -68,6 +68,7 @@ import datetime as _dt
 import hashlib
 import json
 import os
+import re
 import shlex
 import socket
 import sqlite3
@@ -92,8 +93,68 @@ ARCHIVE_NOTE = "forget_command_cleanup"
 DEFAULT_STATE_DIR = "~/.zoe/forget-command-cleanup"
 PENDING_FILE = "pending-recovery.json"
 REASON = "minted from a forget command's own turn (QA round 10a); forgotten through the owner-forget path"
-# a superset prefilter (every verb the detectors accept); the detector itself decides
-_PREFILTER = r"(forget|delete|remove|erase|scrap|never ?mind|remember|keep|sav|stor)"
+def _necessary_literals(seq) -> Optional[frozenset]:
+    """A set of lowercase words such that EVERY string the parsed regex ``seq`` matches contains at least one of them, or None when
+    none can be proven. Walks the ``re`` parse tree: a run of literal characters gives its longest letter chunk (>= 3 letters; any
+    substring of a required literal is required too); a group or a repeat with min >= 1 gives its content's set; an alternation
+    gives the UNION of its branches' sets (only when every branch has one); optional parts, classes and lookarounds give nothing.
+    Of the mandatory parts with a set, the one with the longest shortest word is kept. Pure."""
+    try:
+        from re import _constants as sc       # py >= 3.11
+    except ImportError:  # pragma: no cover - py 3.10
+        import sre_constants as sc
+    cands: list = []
+    run: list = []
+
+    def flush():
+        chunks = [c for c in re.split(r"[^a-z]+", "".join(run).lower()) if len(c) >= 3]
+        if chunks:
+            cands.append(frozenset({max(chunks, key=len)}))
+        run.clear()
+    for op, av in seq:
+        if op is sc.LITERAL:
+            run.append(chr(av))
+            continue
+        flush()
+        sub = None
+        if op is sc.SUBPATTERN:
+            sub = _necessary_literals(av[-1])
+        elif op is sc.BRANCH:
+            sets = [_necessary_literals(b) for b in av[1]]
+            sub = frozenset().union(*sets) if sets and all(sets) else None
+        elif op in (sc.MAX_REPEAT, sc.MIN_REPEAT) and av[0] >= 1:
+            sub = _necessary_literals(av[2])
+        if sub:
+            cands.append(sub)
+    flush()
+    # any candidate is provably necessary; prefer the most specific (longest shortest word, then MORE alternatives: a verb list
+    # over one common word)
+    return max(cands, key=lambda c: (min(len(w) for w in c), len(c))) if cands else None
+
+
+def prefilter_terms() -> Optional[list]:
+    """The SQL prefilter words, DERIVED from the detector's own patterns (``turn_forget.instruction_patterns``): the union of each
+    pattern's necessary literals, so every turn the detector can accept contains one of them (a provable superset: the detector
+    still decides). None when any pattern has no provable set: then there is no prefilter (every user turn is read)."""
+    import turn_forget
+
+    try:
+        from re import _parser as sp
+    except ImportError:  # pragma: no cover
+        import sre_parse as sp
+    terms: set = set()
+    for pat in turn_forget.instruction_patterns():
+        got = _necessary_literals(sp.parse(pat.pattern, pat.flags))
+        if not got:
+            return None
+        terms |= got
+    return sorted(terms)
+
+
+def prefilter_sql() -> str:
+    """``and content ~* '(...)' `` for ``turns_sql`` (letters only reach the SQL), or '' when there is no provable prefilter."""
+    terms = prefilter_terms()
+    return f"and content ~* '({'|'.join(terms)})'" if terms else ""
 
 
 def _norm(text: str) -> str:
@@ -136,30 +197,46 @@ def load_rows(palace: str) -> list[dict[str, Any]]:
         con.close()
 
 
-def turns_sql(since: Optional[str] = None) -> str:
-    """The one SELECT: every user turn that could be a forget instruction, the WHOLE history unless ``since`` (an ISO date,
-    validated: anything else raises ValueError, so nothing but a date reaches the SQL)."""
+#: one page of the candidate-turn read: RAM holds one page, and only the turns the detector accepts are kept
+TURN_PAGE = 500
+
+
+def turns_sql(since: Optional[str] = None, cursor: Optional[tuple[str, str]] = None, limit: int = TURN_PAGE) -> str:
+    """One page of the user turns that COULD be a forget instruction (the derived prefilter, ``prefilter_sql``), oldest first,
+    strictly after ``cursor`` = ``(created_at, id)``: the WHOLE history unless ``since`` (an ISO date, validated: anything else
+    raises ValueError, so nothing but a date reaches the SQL)."""
+    lit = lambda v: "'" + str(v).replace("'", "''") + "'"   # noqa: E731
     when = f"and created_at::timestamptz >= '{_dt.date.fromisoformat(since).isoformat()}'::date " if since else ""
-    return ("select coalesce(json_agg(json_build_object('id', id, 'session_id', session_id, 'at', created_at::text, "
-            "'meta', metadata, 'content', content)), '[]') from chat_messages where role = 'user' "
-            f"{when}and content ~* '{_PREFILTER}'")
+    after = f"and (created_at::text, id) > ({lit(cursor[0])}, {lit(cursor[1])}) " if cursor else ""
+    return ("select coalesce(json_agg(t), '[]') from (select id, session_id, created_at::text as at, metadata as meta, content "
+            f"from chat_messages where role = 'user' {when}{after}{prefilter_sql()} "
+            f"order by created_at::text, id limit {int(limit)}) t")
 
 
-def load_turns(psql_cmd: str, since: Optional[str] = None) -> list[dict[str, Any]]:
-    """The candidate user turns (``turns_sql``), JSON out, never printed."""
-    sql = turns_sql(since)
-    out = subprocess.run([*shlex.split(psql_cmd), "-Atc", sql], capture_output=True, text=True, timeout=120, check=True).stdout
-    turns = []
-    for t in json.loads(out.strip() or "[]"):
-        meta = t.get("meta")
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta)
-            except ValueError:
-                meta = {}
-        turns.append({"id": str(t.get("id")), "session_id": str(t.get("session_id") or ""), "at": str(t.get("at") or ""),
-                      "user_id": str((meta or {}).get("user_id") or ""), "content": str(t.get("content") or "")})
-    return turns
+def load_turns(psql_cmd: str, since: Optional[str] = None, page: int = TURN_PAGE) -> list[dict[str, Any]]:
+    """The FORGET-COMMAND turns (``turn_forget.is_forget_instruction``), read page by page over the prefiltered candidates; only
+    the commands are kept, so memory stays one page. Never printed."""
+    import turn_forget
+
+    turns, cursor = [], None
+    while True:
+        out = subprocess.run([*shlex.split(psql_cmd), "-Atc", turns_sql(since, cursor, page)],
+                             capture_output=True, text=True, timeout=120, check=True).stdout
+        batch = json.loads(out.strip() or "[]")
+        for t in batch:
+            meta = t.get("meta")
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except ValueError:
+                    meta = {}
+            content = str(t.get("content") or "")
+            if turn_forget.is_forget_instruction(content):
+                turns.append({"id": str(t.get("id")), "session_id": str(t.get("session_id") or ""), "at": str(t.get("at") or ""),
+                              "user_id": str((meta or {}).get("user_id") or ""), "content": content})
+        if len(batch) < page:
+            return turns
+        cursor = (str(batch[-1].get("at") or ""), str(batch[-1].get("id")))
 
 
 def _ts(value: Any) -> Optional[float]:
@@ -593,7 +670,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(json.dumps({**c, "turns_read": turn_dates(turns), "since": args.since}, indent=2))
     else:
         d = turn_dates(turns)
-        print(f"turns read: {d['from']} .. {d['to']}{' (since ' + args.since + ')' if args.since else ' (whole history)'}")
+        print(f"forget-command turns read: {d['from']} .. {d['to']}{' (since ' + args.since + ')' if args.since else ' (whole history)'}")
         print(f"forget-command turns read: {c['command_turns']}; rows minted only from one: linked={c['linked']} "
               f"{c['linked_by_how']}; owner decision (never erased)={c['owner_decision']}; unclear (never erased)={c['unclear']}; "
               f"also from an ordinary turn (kept)={c['not_command_only']}; window (unproven, report-only)={c['window']}")

@@ -133,6 +133,19 @@ def is_forget_turn(text: str) -> bool:
         return False
 
 
+def instruction_patterns() -> list:
+    """The compiled patterns ``is_forget_instruction`` decides by (through ``is_forget_turn``, ``memory_quality``, ``forget_topic``
+    and ``intent_router``): ONE list, so a reader that needs a coarse prefilter (``scripts/maintenance/forget_command_rows_audit.py``)
+    derives it from the detector itself instead of keeping a second word list. Pinned: blanking every pattern here makes the
+    detector accept nothing (``tests/test_forget_command_rows_audit.py``)."""
+    import forget_topic
+    import memory_quality
+    from intent_router import _FORGET_ENTITY_RE, _FORGET_LAST_RE
+
+    return [memory_quality._FORGET_WHOLE_RE, memory_quality._FORGET_I_SAID_RE, memory_quality._FORGET_CLAUSE_RE,
+            _FORGET_LAST_RE, _FORGET_ENTITY_RE, forget_topic._TOPIC_RE, forget_topic._CLAUSE_RE]
+
+
 def is_forget_instruction(text: str) -> bool:
     """Is ``text`` a FORGET COMMAND of any kind: a short retraction of the previous turn (``is_forget_turn``, bounded by
     ``memory_quality.FORGET_MAX_WORDS`` exactly as the chat capture bounds it), a TOPIC forget ("forget that I told you about

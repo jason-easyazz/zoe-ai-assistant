@@ -248,7 +248,7 @@ def test_window_rows_are_report_only_even_with_confirm(svc, monkeypatch, tmp_pat
 
 
 def test_turns_are_read_over_the_whole_history_unless_since_is_given(tmp_path, monkeypatch, capsys):
-    assert "created_at" not in fca.turns_sql().split("from chat_messages", 1)[1]        # no time bound by default
+    assert "::date" not in fca.turns_sql() and ">= " not in fca.turns_sql()           # no time bound by default
     assert "'2026-01-02'::date" in fca.turns_sql("2026-01-02")
     with pytest.raises(ValueError):
         fca.turns_sql("2026-01-02'; drop table chat_messages; --")                     # only a date reaches the SQL
@@ -262,7 +262,7 @@ def test_turns_are_read_over_the_whole_history_unless_since_is_given(tmp_path, m
     monkeypatch.setattr(fca, "iter_member_turns", lambda _cmd, uid, since=None, **_k: iter(_transcript(uid)))
     assert fca.main(["--palace", str(tmp_path)]) == 0
     out = capsys.readouterr().out
-    assert seen["since"] is None and "turns read: 2026-11-14 .. 2026-11-14 (whole history)" in out
+    assert seen["since"] is None and "forget-command turns read: 2026-11-14 .. 2026-11-14 (whole history)" in out
 
 
 
@@ -524,3 +524,98 @@ def test_control_without_the_pending_file_the_retry_exits_0_with_residue(svc, mo
     monkeypatch.setattr(svc, "erase_rows", good)
     assert _confirm(svc, monkeypatch, tmp_path, plan) == 0                  # "clean" ...
     assert trail == {"minted_excerpt", "minted_turnid"}                      # ... with the forgotten words in the audit trail
+
+
+
+# ── review #2482 PRRT ...dv8g: the prefilter is DERIVED from the detector, a provable superset ────────────────────────────────
+#: every shape the detectors accept that the review named, plus one per detector family (placeholder names only)
+COMMANDS = ["ignore that i said my brother lives in darwin", "disregard that i told you my sister is a nurse",
+            "forget that i told you about my brother", "forget everything about rowan", "forget that", "never mind what i said",
+            "scrap that", "delete that memory", "no, don't remember that, forget that", "forget what i said about being lonely",
+            "remove everything about tamsin", "erase what i told you about my mums heart", "please forget that i said i live in perth",
+            "stop remembering that", "dont save that"]
+OLD_PREFILTER = r"(forget|delete|remove|erase|scrap|never ?mind|remember|keep|sav|stor)"     # the withdrawn hand-kept list
+
+
+def _prefilter_re():
+    terms = fca.prefilter_terms()
+    assert terms, "every detector pattern must yield a provable literal set"
+    return re.compile("(" + "|".join(terms) + ")", re.IGNORECASE)            # what ``content ~* '(...)'`` does
+
+
+@pytest.mark.parametrize("text", COMMANDS)
+def test_every_accepted_command_passes_the_derived_prefilter(text):
+    if turn_forget.is_forget_instruction(text):
+        assert _prefilter_re().search(text)
+
+
+def test_the_two_review_examples_are_commands_and_the_old_list_missed_them():
+    for text in COMMANDS[:2]:
+        assert turn_forget.is_forget_instruction(text) and _prefilter_re().search(text)
+        assert not re.search(OLD_PREFILTER, text, re.IGNORECASE)                # the negative control
+
+
+def test_the_patterns_list_is_the_detectors_only_source(monkeypatch):
+    import forget_topic
+    import intent_router
+    import memory_quality
+
+    never = re.compile(r"(?!)")
+    for mod, name in ((memory_quality, "_FORGET_WHOLE_RE"), (memory_quality, "_FORGET_I_SAID_RE"),
+                      (memory_quality, "_FORGET_CLAUSE_RE"), (intent_router, "_FORGET_LAST_RE"), (intent_router, "_FORGET_ENTITY_RE"),
+                      (forget_topic, "_TOPIC_RE"), (forget_topic, "_CLAUSE_RE")):
+        assert getattr(mod, name) in turn_forget.instruction_patterns()
+        monkeypatch.setattr(mod, name, never)
+    assert not any(turn_forget.is_forget_instruction(t) for t in COMMANDS)   # nothing outside the list decides
+
+
+def test_a_verb_added_to_a_detector_reaches_the_prefilter_automatically(monkeypatch):
+    added = re.compile(r"^(?:please\s+)?(?:forget|zapify)\s+that\s+i\s+said", re.IGNORECASE)
+    monkeypatch.setattr(turn_forget, "instruction_patterns", lambda: [added])
+    assert fca.prefilter_terms() == ["forget", "zapify"]
+
+
+@pytest.mark.parametrize("pattern, sample, word", [
+    (r"(?:um\s+)?(?:ignore|disregard)\s+that", "um disregard that", "disregard"),
+    (r"(?:x|y)?forget(?:ting)?\s+it", "forgetting it", "forget"),
+    (r"(?:hey\s+)*(?:scrap|(?:do\s+not|stop)\s+(?:keeping|saving))\b", "stop saving", "saving"),
+])
+def test_necessary_literals_is_sound_on_small_patterns(pattern, sample, word):
+    try:
+        from re import _parser as sp
+    except ImportError:  # py 3.10
+        import sre_parse as sp
+
+    got = fca._necessary_literals(sp.parse(pattern, re.IGNORECASE))
+    assert got and word in got and any(w in sample for w in got)
+
+
+def _fake_psql(table):
+    """psql over an in-memory chat table: applies the SQL's own ``content ~* '(...)'`` prefilter, keyset paging and LIMIT."""
+    def run(argv, **_k):
+        sql = argv[-1]
+        m = re.search(r"content ~\* '\(([^)]*)\)'", sql)
+        rx = re.compile("(" + m.group(1) + ")", re.IGNORECASE) if m else None
+        cur = re.search(r"\(created_at::text, id\) > \('([^']*)', '([^']*)'\)", sql)
+        limit = int(re.search(r"limit (\d+)", sql).group(1))
+        rows = [r for r in table if (rx is None or rx.search(r["content"])) and (not cur or (r["at"], r["id"]) > (cur.group(1), cur.group(2)))]
+        rows = sorted(rows, key=lambda r: (r["at"], r["id"]))[:limit]
+        return type("R", (), {"stdout": json.dumps([{**r, "meta": json.dumps({"user_id": r["user_id"]})} for r in rows])})()
+    return run
+
+
+@pytest.mark.parametrize("prefilter, found", [(None, True), (OLD_PREFILTER, False)])
+def test_end_to_end_the_review_examples_are_read_and_their_leaked_rows_found(prefilter, found, monkeypatch):
+    import subprocess
+
+    table = [{"id": f"t{i}", "session_id": "sess-z", "at": f"2026-11-1{i}T08:00:00", "user_id": UID, "content": c}
+             for i, c in enumerate(COMMANDS[:2] + ["my brother rowan is a chef", "we went to the beach"])]
+    if prefilter:                                                           # the control: the old hand-kept list in the SQL
+        monkeypatch.setattr(fca, "prefilter_sql", lambda: f"and content ~* '{prefilter}'")
+    monkeypatch.setattr(subprocess, "run", _fake_psql(table))
+    turns = fca.load_turns("psql", page=2)
+    rows = [{"id": f"leak{i}", "user_id": UID, "text": "User mentioned a relative",
+             "meta": {"user_id": UID, "status": "approved", "source": "idle_consolidation", "source_excerpt": c}}
+            for i, c in enumerate(COMMANDS[:2])]
+    rep = fca.audit(rows, turns, member_turns=lambda uid: iter(table if uid == UID else []))
+    assert (sorted(x["id"] for x in rep["linked"]) == ["leak0", "leak1"]) is found
