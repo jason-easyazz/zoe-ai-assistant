@@ -50,7 +50,10 @@ Verify: re-run the audit - "linked: 0".
 
 Exit codes: 0 = report printed / dry run / cleanup complete (rows erased AND the residue scrub ok); 2 = refused or unreadable;
 5 = cleanup left rows behind; 6 = rows erased but the physical residue scrub failed or did not run (``physical_scrub_failed``;
-a re-run cannot retry it: run the palace-wide scrub ``POST /api/memories/maintenance/scrub-residue`` and the verifier).
+a re-run cannot retry it: run the palace-wide scrub ``POST /api/memories/maintenance/scrub-residue`` and the verifier);
+7 = an erase RAISED after its rows were archived (``erase_failed``): they stay archived WITH this script's marker (reviewed_by
+``forget_command_cleanup`` + the fixed note), the audit and plan_cleanup treat such rows as candidates again, so re-running the same
+``--erase-from`` command re-proves and erases them. An archive anyone else made is never touched.
 """
 from __future__ import annotations
 
@@ -78,6 +81,8 @@ DRAWERS = "mempalace_drawers"
 WINDOW_SOURCES = frozenset({"idle_consolidation", "digest", "turn_digest", "synthesis"})
 GONE = frozenset({"archived", "rejected", "deleted"})
 ACTOR = "forget_command_cleanup"
+#: the fixed note this script's OWN archive carries (with ``reviewed_by`` = ACTOR): no free text
+ARCHIVE_NOTE = "forget_command_cleanup"
 REASON = "minted from a forget command's own turn (QA round 10a); forgotten through the owner-forget path"
 # a superset prefilter (every verb the detectors accept); the detector itself decides
 _PREFILTER = r"(forget|delete|remove|erase|scrap|never ?mind|remember|keep|sav|stor)"
@@ -194,6 +199,12 @@ def iter_member_turns(psql_cmd: str, user_id: str, since: Optional[str] = None, 
         cursor = (str(batch[-1].get("at") or ""), str(batch[-1].get("id")))
 
 
+def _own_archive(meta: dict) -> bool:
+    """Was this row archived by THIS script's cleanup (``reviewed_by`` = ACTOR and the fixed note)? Pure."""
+    return (str(meta.get("status") or "").lower() == "archived" and meta.get("reviewed_by") == ACTOR
+            and meta.get("review_note") == ARCHIVE_NOTE)
+
+
 def proven_by_command(tid: str, excerpt: str, member_commands: list) -> bool:
     """Is the link PROVEN by an actual forget-command turn of the member: the row's turn id IS that turn's content id, or its
     (normalised) excerpt IS that turn as the store saves an excerpt? A substring, or another member's command, proves nothing. Pure."""
@@ -216,6 +227,9 @@ def _owner_decision(meta: dict, text: str) -> bool:
     """A row at or above the rank of the person speaking directly (user_stated / user_confirmed / curated / operator,
     ``memory_authority.USER_RANK``) is the OWNER's to forget, never this script's: listed, never erased (an authority inversion
     otherwise). Unreadable authority = owner decision."""
+    if _own_archive(meta):
+        # this script's OWN review stamp must not promote the row: rank it as it stood before the archive
+        meta = {k: v for k, v in meta.items() if k not in ("reviewed_by", "review_note", "reviewed_at", "status")}
     try:
         import memory_authority
 
@@ -247,7 +261,10 @@ def audit(rows: Iterable[dict], turns: Iterable[dict], *, window_hours: float = 
     window = []
     for r in rows:
         meta, uid = r.get("meta") or {}, r.get("user_id") or ""
-        if str(meta.get("status") or "approved").lower() in GONE or not commands.get(uid):
+        status = str(meta.get("status") or "approved").lower()
+        # an archive THIS script made and could not finish (erase_rows raised) is still a candidate, re-proven below, so a
+        # retry erases it; an archive anyone else made stays out
+        if (status in GONE and not _own_archive(meta)) or not commands.get(uid):
             continue
         src = str(meta.get("source") or meta.get("added_by") or "-")
         excerpt = _norm(meta.get("source_excerpt") or "")
@@ -358,26 +375,37 @@ def plan_cleanup(rows: list[dict], turns: list[dict], plan: dict, *, window_hour
     return {u: v for u, v in out.items() if v}, refused
 
 
-async def cleanup(todo: dict[str, list[str]], *, svc) -> dict[str, dict[str, int]]:
-    """The owner-forget path, per owner: archive each row (``review``), then ``erase_rows`` the archived ones. Counts only."""
+async def cleanup(todo: dict[str, list[str]], *, svc, premarked: Iterable[str] = ()) -> dict[str, dict[str, int]]:
+    """The owner-forget path, per owner: archive each row (``review``, marked ACTOR + ARCHIVE_NOTE), then ``erase_rows`` the
+    archived ones. ``premarked`` = rows a previous run archived but could not erase: they go straight to the erase. An erase
+    that RAISES leaves its rows archived with the marker (a retry re-proves and erases them) and is counted. Counts only."""
     done: dict[str, dict[str, int]] = {}
+    pre = set(premarked)
     for owner, ids in sorted(todo.items()):
         archived = []
         for rid in ids:
+            if rid in pre:
+                archived.append(rid)
+                continue
             try:
-                ref = await svc.review(rid, decision="archive", actor=ACTOR, note="forget_command_cleanup")
+                ref = await svc.review(rid, decision="archive", actor=ACTOR, note=ARCHIVE_NOTE)
             except Exception:  # noqa: BLE001 - never erased on top of a failed archive
                 ref = None
             if ref is not None:
                 archived.append(rid)
-        res = await svc.erase_rows(owner, archived, actor=ACTOR, reason=REASON) if archived else {"rows_removed": 0}
+        erase_failed = 0
+        try:
+            res = await svc.erase_rows(owner, archived, actor=ACTOR, reason=REASON) if archived else {"rows_removed": 0}
+        except Exception:  # noqa: BLE001 - the rows stay archived WITH the marker: a retry finishes them
+            res, erase_failed = {"rows_removed": 0, "physical": {"ok": True}}, len(archived)
         removed = int((res or {}).get("rows_removed") or 0)
         phys = (res or {}).get("physical")
         # the residue scrub (free pages, WAL, FTS5, index files) is DONE only when it reports ok: a failed, skipped (flag off)
         # or missing report means the forgotten words may survive on disk
         scrubbed = isinstance(phys, dict) and phys.get("ok") is True
         done[member_key(owner)] = {"asked": len(ids), "archived": len(archived), "rows_removed": removed,
-                                   "physical_scrub_failed": 0 if (scrubbed or not removed) else removed}
+                                   "physical_scrub_failed": 0 if (scrubbed or not removed) else removed,
+                                   "erase_failed": erase_failed}
     return done
 
 
@@ -440,10 +468,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
         from memory_service import MemoryService
 
-        done = asyncio.run(cleanup(todo, svc=MemoryService(data_dir=str(Path(args.palace).expanduser()))))
+        premarked = {r["id"] for r in rows if _own_archive(r.get("meta") or {})}
+        done = asyncio.run(cleanup(todo, svc=MemoryService(data_dir=str(Path(args.palace).expanduser())), premarked=premarked))
         left, _ = plan_cleanup(load_rows(args.palace), turns, plan, window_hours=args.window_hours, member_turns=mt)
         print(json.dumps({"done": done, "after": _member_counts(left), "remaining": sum(len(v) for v in left.values())}))
+        erase_failed = sum(d["erase_failed"] for d in done.values())
+        if erase_failed:
+            # archived (hidden from every read) but not erased: the words are still stored. The rows carry this script's marker,
+            # so a re-run re-proves and erases them.
+            print(f"erase_failed rows={erase_failed} members={sum(1 for d in done.values() if d['erase_failed'])}: the rows are "
+                  "archived (marked) but still stored; re-run the same --erase-from command to finish them.", file=sys.stderr)
         failed = sum(d["physical_scrub_failed"] for d in done.values())
+        if erase_failed:
+            return 7
         if failed:
             # the rows ARE erased (logically gone, not restored); the physical scrub is OWED. A re-run of this script cannot retry it
             # (it finds no rows left to erase): the palace-wide scrub does, then the verifier proves it.

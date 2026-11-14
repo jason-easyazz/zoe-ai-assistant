@@ -190,7 +190,7 @@ def test_cleanup_forgets_exactly_the_audited_ids_through_the_owner_forget_path(s
     done = asyncio.run(fca.cleanup(todo, svc=svc))
     assert sorted(calls["review"]) == [("minted_excerpt", "archive"), ("minted_turnid", "archive")]
     assert calls["erase"] == [(UID, ["minted_excerpt", "minted_turnid"])]
-    assert list(done.values()) == [{"asked": 2, "archived": 2, "rows_removed": 2, "physical_scrub_failed": 0}]
+    assert list(done.values()) == [{"asked": 2, "archived": 2, "rows_removed": 2, "physical_scrub_failed": 0, "erase_failed": 0}]
     assert "minted_excerpt" not in svc._col.rows and "minted_turnid" not in svc._col.rows
     for keep in ("ordinary", "forget_word", "window", "window_late", "other_member"):
         assert keep in svc._col.rows                                            # nothing else touched
@@ -378,3 +378,60 @@ def test_a_failed_or_skipped_residue_scrub_exits_non_zero_and_says_so(physical, 
     assert ("physical_scrub_failed rows=2 members=1" in err) is (code == 6)
     assert UID not in err and "brother" not in err
     assert "minted_excerpt" not in svc._col.rows                               # logically erased either way
+
+
+# ── review #2482 PRRT ...dCE8: an erase that RAISES after the archive is finished by a retry ──────────────────────────────────
+def _raising(*_a, **_k):
+    async def boom(*_x, **_y):
+        raise RuntimeError("intent audit write failed")
+    return boom
+
+
+def test_an_erase_that_raises_exits_7_and_a_retry_finishes_it(svc, monkeypatch, tmp_path, capsys):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _raising())
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    err = capsys.readouterr().err
+    assert "erase_failed rows=2 members=1" in err and UID not in err
+    for rid in ("minted_excerpt", "minted_turnid"):                       # stranded: archived WITH the marker, still stored
+        md = svc._col.rows[rid][1]
+        assert md["status"] == "archived" and md["reviewed_by"] == fca.ACTOR and md["review_note"] == fca.ARCHIVE_NOTE
+    monkeypatch.setattr(svc, "erase_rows", good)
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 0                # the retry re-proves and erases them
+    assert "minted_excerpt" not in svc._col.rows and "minted_turnid" not in svc._col.rows
+
+
+def test_the_retry_exits_6_when_its_scrub_fails(svc, monkeypatch, tmp_path):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _raising())
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    monkeypatch.setattr(svc, "erase_rows", good)
+    monkeypatch.setitem(PHYSICAL, "ok", False)
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 6 and "minted_excerpt" not in svc._col.rows
+
+
+def test_an_archive_someone_else_made_is_never_touched(svc, monkeypatch, tmp_path):  # noqa: F811
+    rows, calls = _store(svc, monkeypatch)
+    svc._col.rows["minted_excerpt"][1].update(status="archived", reviewed_by="demo_bar_00000001", review_note="owner archived it")
+    live = _live_rows(svc)
+    rep = fca.audit(live, _turns(), member_turns=_transcript)
+    assert "minted_excerpt" not in {x["id"] for x in rep["linked"] + rep["unclear"] + rep["owner_decision"]}
+    forged = {"linked": [{"id": "minted_excerpt", "user_id": UID}], "window": []}
+    assert _confirm(svc, monkeypatch, tmp_path, forged) == 0
+    assert "minted_excerpt" in svc._col.rows and all(rid != "minted_excerpt" for rid, _ in calls["review"])
+
+
+def test_control_the_old_filter_strands_the_row_and_exits_0(svc, monkeypatch, tmp_path):  # noqa: F811
+    rows, _ = _store(svc, monkeypatch)
+    good = svc.erase_rows
+    plan = fca.audit(rows, _turns(), member_turns=_transcript)
+    monkeypatch.setattr(svc, "erase_rows", _raising())
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 7
+    monkeypatch.setattr(svc, "erase_rows", good)
+    monkeypatch.setattr(fca, "_own_archive", lambda _m: False)             # the withdrawn rule: every archived row is out
+    assert _confirm(svc, monkeypatch, tmp_path, plan) == 0                  # "clean" exit ...
+    assert "minted_excerpt" in svc._col.rows                                # ... with the forgotten row still stored
