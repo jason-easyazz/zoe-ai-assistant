@@ -5,21 +5,28 @@ A lab-only prototype of the kernel described in
 with consent, forgetting and receipts as properties of the spine rather than of each feature.
 
 **Nothing here is wired to anything.** No production module imports it, there is no flag, no service, no
-unit. Standard library only (SQLite in a temp dir). Every person and every word in the tests is invented.
+unit. Standard library only (SQLite in a temp dir, a Unix socket). Every person and every word in the tests
+is invented.
 
 ## What is in it
 
 | File | What it is |
 |---|---|
 | `zoe_os/events.py` | the event record: a closed set of kinds, a subject, a visibility (private by default), a source |
-| `zoe_os/spine.py` | the bus: durable append, capability-filtered subscriptions, bounded queues, replay, forget |
+| `zoe_os/spine.py` | the bus: durable append, capability-filtered subscriptions, bounded queues, replay, forget (by person, named events, entity or topic) |
+| `zoe_os/forget_match.py` | pure matching for an entity (whole words, in order) and a topic (every content word) |
 | `zoe_os/capability.py` | skill manifests, per-person grants (a child needs a guardian), the one enforcer |
-| `zoe_os/receipts.py` | the action dispatcher, read-back receipts, the claim-without-receipt detector |
+| `zoe_os/receipts.py` | the action dispatcher, read-back receipts, the write-ahead intent and crash recovery, the claim-without-receipt detector |
 | `zoe_os/attention.py` | per-person routing of offers: card by default, spoken only if that person turned it on |
 | `zoe_os/kernel.py` | the services wired together and the loop that feeds events to skills |
+| `zoe_os/wire.py` | the socket protocol: frames, version 1, the closed table of eight ops and their arguments |
+| `zoe_os/server.py` | the kernel behind a Unix socket: handshake, per-connection identity, size cap, frame deadline |
+| `zoe_os/client.py` | the skill's side of the socket, and `RemoteKernel` so an in-process skill runs unchanged |
 | `zoe_os/skills/` | three toy skills: leaving catch, calendar heads-up, and a deliberately malicious one |
 | `zoe_os/bridge.py` | thin adapters for the five production call sites of the bridge plan (not imported by production) |
 | `bench.py` | one capped benchmark (60 s, 100k events) |
+| `bench_socket.py` | per-request latency of the socket hop (one kernel process, one client) |
+| `tests/kernel_proc.py`, `tests/skill_proc.py`, `tests/procs.py` | the kernel and a skill as separate processes, for the boundary and kill tests |
 
 ## Run it
 
@@ -27,6 +34,10 @@ The box has one shared test lane; follow the lane rules in force (memory floor, 
 
     python3 -m pytest -p no:cacheprovider -q labs/zoe-os/tests
     python3 labs/zoe-os/bench.py
+    python3 labs/zoe-os/bench_socket.py 2000
+
+The suite starts short-lived kernel and skill processes (about 12 s in all). Two tests need root to start a
+skill as a second OS user and skip otherwise; that skip is the honest result for a one-user run.
 
 `pytest.ini` `testpaths` and the CI lanes never collect `labs/`, so this suite is hand-run only.
 
@@ -48,10 +59,39 @@ bad outcome.
 | a consequential action needs the person's own unused yes | `test_receipts.py`, `test_skills.py` | (declined, missing, reused and someone else's yes are each refused) |
 | no claim without a verified receipt | `test_receipts.py` | `ClaimAuditor.backed` always yes: an unbacked claim is not found |
 
-Controls are monkeypatches in the tests, never switches in the kernel.
+### Across the process boundary
+
+| Guarantee | Test | Control: remove this, and the bad thing happens |
+|---|---|---|
+| the malicious skill, from another process: ten attempts, ten recorded refusals | `test_boundary.py` | the same four controls, applied inside the kernel process |
+| a skill cannot be another skill, name its own source, or speak for a person | `test_boundary_attacks.py` | no credential check: it becomes the panel and reads everything |
+| a captured handshake or a re-issued credential does not log in | `test_boundary_attacks.py` | a predictable challenge: the capture logs in |
+| an oversized frame is refused before its body is read | `test_boundary_attacks.py` | no size cap: it is stored |
+| a malformed frame is refused, recorded, and harms nothing (23 cases) | `test_boundary_attacks.py` | no validator: an unknown argument is accepted, nothing recorded |
+| slow clients cannot hold every connection | `test_boundary_attacks.py` | no frame deadline: an honest client is starved |
+| a dead client leaves nothing behind; a whole request runs once | `test_boundary_attacks.py` | no release: its subscriptions pile up |
+| a second OS user cannot open the database file (root only, else skipped) | `test_boundary_attacks.py` | loose file modes: it reads the file |
+| forget by entity and by topic keeps every forget guarantee | `test_forget_scope.py` | the cascade, the tombstone, the queue purge and the shields, each removed in turn |
+| a forgotten name stays forgotten in new words | `test_forget_scope.py` | `Spine._names_forgotten` always no |
+| a receipt and a used yes survive a killed kernel | `test_durable.py` | the used yes held in memory: one yes buys two actions |
+| an unbacked claim is found after a restart, once | `test_durable.py` | a trusting auditor finds nothing |
+| a kill between the write and the receipt is reported `uncertain`, never done, never retried | `test_durable.py` | no write-ahead intent: no trace; a recovery that says "done": a false claim passes |
+
+In-process controls are monkeypatches in the tests. Controls for the kernel process are named patches in
+`tests/kernel_proc.py`, applied through the parent's pipe. Never switches in the kernel.
 
 ## Limits (the same list as the record's section 8, short)
 
-In-process only, so no isolation: a skill in the same process can reach around the kernel. One writer.
-No retention policy. Forget cannot reach a copy a skill already took and does not catch reworded content.
-Presence, memory and self-care are not prototyped. README and results are records, not contracts.
+**The socket is not the whole boundary.** A skill running as the same OS user as the kernel finds the database
+through `/proc` and reads it; `test_HONEST_LIMIT_a_skill_running_as_the_same_user_...` asserts that it can.
+File permissions and a second OS user stop it, shown only in a root sandbox with a throwaway user.
+
+Forget cannot reach a copy a skill already took, and does not catch reworded content, near spellings, part of
+a name or a pronoun (`test_HONEST_LIMIT_reworded_content_...` asserts three of these get through).
+
+"Durable" means against a killed process, not power loss. An `uncertain` receipt has no resolution step.
+Grants, manifests and credentials are in memory: a restart denies everything until granted again.
+
+One kernel process, one lock. No rate limit on failed handshakes. No retention policy. Presence, memory and
+self-care are not prototyped. The socket latency in the record was read in a cloud sandbox, not on the target
+hardware. README and results are records, not contracts.
