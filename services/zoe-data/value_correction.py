@@ -330,7 +330,7 @@ def _owner_noun_re(owner: str, noun: str, lazy: bool = False):
     if lazy and _may_be_lazy(owner):
         alts.append(owner[:-1])
     alt = "|".join(re.escape(a) for a in sorted(alts, key=len, reverse=True))
-    return re.compile(rf"(?<![A-Za-z0-9'’])(?:{alt})(?:['’]s)?\s+{re.escape(noun)}(?![A-Za-z0-9])", re.IGNORECASE)
+    return re.compile(rf"(?<![A-Za-z0-9'’-])(?:{alt})(?:['’]s)?\s+{re.escape(noun)}(?![A-Za-z0-9-])", re.IGNORECASE)
 
 
 class Correction(NamedTuple):
@@ -443,7 +443,7 @@ def _subject_re(subject: str, lazy: bool = False):
     m = re.match(rf"(?i)(?:my|our)\s+({_REL})$", s)
     if m:
         # the USER's relative only: "User's dad ...", "my dad ...", or a row that opens on it - never "Arjun's dad ..."
-        return re.compile(rf"(?:^|\buser['’]s\s+|\b(?:my|our)\s+){re.escape(m.group(1))}(?![A-Za-z0-9])", re.IGNORECASE)
+        return re.compile(rf"(?:^|\buser['’]s\s+|\b(?:my|our)\s+){re.escape(m.group(1))}(?![A-Za-z0-9-])", re.IGNORECASE)
     m = re.match(r"(?i)(my|our)\s+(.+)$", s)
     if m:
         # the USER's own <noun> ("my birthday"): "User's birthday ..." or an unpossessed mention, never "Oliver's birthday ..."
@@ -455,8 +455,9 @@ def _subject_re(subject: str, lazy: bool = False):
     stem = s[:-1] if lazy and _may_be_lazy(s) else None
     if stem:
         # a name typed with a stray s ("kais 21 not 22" for Kai): the word as typed, or without its s
-        return re.compile(rf"(?<![A-Za-z0-9'’])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9])", re.IGNORECASE)
-    return re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(s)}(?![A-Za-z0-9])", re.IGNORECASE)   # exactly the word: "Carlo" never reaches "Carlos: 22"
+        return re.compile(rf"(?<![A-Za-z0-9'’-])(?:{re.escape(s)}|{re.escape(stem)}(?:s(?=:))?)(?![A-Za-z0-9-])", re.IGNORECASE)
+    # exactly the word: "Carlo" never reaches "Carlos: 22", and a hyphenated part is never the word ("ana" is not "Ana-Lise")
+    return re.compile(rf"(?<![A-Za-z0-9'’-]){re.escape(s)}(?![A-Za-z0-9-])", re.IGNORECASE)
 
 
 _AGE_IN_ROW = rf"(?P<pre>\b(?:is|aged?|turned|turns|was)\s+)(?P<num>{_NUM})(?P<half>{_HALF})?\b(?P<post>{_YEARS})"
@@ -695,6 +696,12 @@ def _date_expr_start(tail: str, q: "Quantity") -> str:
 
 
 def rewrite(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
+    """``_rewrite_row``, refused (None) when the result would hold LESS than the row did (``drops_value``). Pure."""
+    out = _rewrite_row(row_text, corr, lazy_s)
+    return None if out is not None and drops_value(row_text, out) else out
+
+
+def _rewrite_row(row_text: str, corr: Correction, lazy_s: bool = False) -> Optional[str]:
     """``row_text`` with the corrected value, or None when the row is not the fact being corrected. Pure.
 
     The row must name the subject; a value pair needs the old value as a whole word AFTER the subject's first mention (the
@@ -754,7 +761,7 @@ def invented_on_correction_turn(fact: str, user_message: str) -> bool:
     values = [v for v in (corr.new, corr.old) if v]
     low = (fact or "").lower()
     subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower()
-    if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+    if subj and re.search(rf"(?<![a-z0-9-]){re.escape(subj)}(?![a-z0-9-])", low):
         # a fact that names the corrected subject ("User's wife Margaret is 76") is about the correction - unless it gives the subject
         # a KIND the member never said: "kit is 10 not 9" is never "User's pet is named Kit" (QA round 9)
         return invented_kind(fact, user_message)
@@ -784,7 +791,7 @@ def kind_guess_on_correction(fact: str, turns: list) -> bool:
     for t in turns or ():
         corr = statement(t)
         subj = re.sub(r"(?i)^(?:the|my|our)\s+", "", corr.subject.strip()).lower() if corr else ""
-        if subj and re.search(rf"(?<![a-z0-9]){re.escape(subj)}(?![a-z0-9])", low):
+        if subj and re.search(rf"(?<![a-z0-9-]){re.escape(subj)}(?![a-z0-9-])", low):
             return invented_kind(fact, "\n".join(turns))
     return False
 
@@ -856,6 +863,59 @@ def superseded_by_correction(user_id: str, fact: str, said_at: Optional[float] =
     except Exception:  # noqa: BLE001
         return False
     return False
+
+
+def drops_value(old_text: str, new_text: str) -> bool:
+    """Would replacing ``old_text`` with ``new_text`` leave the subject with LESS (QA round 10: "Tobin: turned 6" was replaced by
+    "Tobin: next month" and the age was gone)? True when the new text is empty while the old one is not, or when a value the old
+    text holds (a number, a date, an amount) has no counterpart of its unit in the new text. Values are COUNTED, one new value
+    standing in for one old value: a date needs a date; an age, amount or measure needs the same unit or a bare number; a bare
+    number needs any number that is not a date. So "runs from the 3rd to the 5th" -> "on the 10th" (two dates, one left) is
+    refused, as is two amounts -> one. Accepted conservative outcome: a real correction that REDUCES the count ("from the 3rd to
+    the 5th" -> "only on the 4th") is refused too, and both rows stay. And at most ONE old value may be missing from the new text
+    (a value = date or not, plus its number, any spelling: "6" and "six" are one value), so another subject's value never stands
+    in for a lost one ("X is 6 and Y is 9" -> "X's age is unknown; Y is 10 and Z is 4" loses two: refused). A real correction
+    changes one value. Accepted conservative outcome: a two-value correction in one go ("from the 3rd to the 5th" -> "from the
+    4th to the 6th") is refused too and both rows stay: never less outranks a tidy merge. Text with no number is never judged. A
+    refused replacement leaves the row as it was. Pure; never raises."""
+    try:
+        from collections import Counter
+
+        old, new = old_text or "", new_text or ""
+        if not old.strip():
+            return False
+        if not new.strip():
+            return True
+        qo = quantities(old)
+        if not qo:
+            return False
+        pool = Counter(_unit_at(new, q) for q in quantities(new))
+
+        def take(*choices) -> bool:
+            for c in choices:
+                if pool[c] > 0:
+                    pool[c] -= 1
+                    return True
+            return False
+
+        # the most specific first: a date only a date covers; a named unit its own, then a bare number; a bare old number last,
+        # by any unused value that is not a date
+        for u in sorted((_unit_at(old, q) for q in qo), key=lambda x: 0 if x == "date" else 2 if x is None else 1):
+            if u == "date":
+                ok = take("date")
+            elif u is None:
+                ok = take(None, *[x for x in pool if x not in ("date", None)])
+            else:
+                ok = take(u, None)
+            if not ok:
+                return True
+
+        def values(text: str) -> Counter:
+            return Counter((_unit_at(text, q) == "date", q.value) for q in quantities(text))
+
+        return sum((values(old) - values(new)).values()) > 1
+    except Exception:  # noqa: BLE001 - a pair that cannot be read is never replaced
+        return True
 
 
 def _displaced(old_text: str, new_text: str) -> Optional[str]:
@@ -972,7 +1032,7 @@ async def apply(user_message: str, user_id: str, session_id: Optional[str], *, s
         exact_re = _subject_re(corr.subject, False)
         _on = owner_noun(corr.subject)
         # the exact OWNER, whatever attribute the row is about: "Carlos is 22" means Carlos exists, so "carlos swimming" is never Carlo's
-        owner_re = re.compile(rf"(?<![A-Za-z0-9'’]){re.escape(_on[0])}(?![A-Za-z0-9])", re.IGNORECASE) if _on else None
+        owner_re = re.compile(rf"(?<![A-Za-z0-9'’-]){re.escape(_on[0])}(?![A-Za-z0-9-])", re.IGNORECASE) if _on else None
         for r in await svc.list_by_status(user_id=user_id, status="approved", limit=SCAN_LIMIT):
             meta = r.metadata or {}
             if str(meta.get("user_id") or meta.get("wing") or "").strip().lower() != uid:
