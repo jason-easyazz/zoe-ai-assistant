@@ -226,3 +226,106 @@ including `exec -i` stream hijack (P0-0), and the real units' start under the sa
 - Exec in `zoe-database` gives DB superuser, which zoe-data's credentials already are.
 - Until P0-4 all `zoe` processes share one uid: no root, but an agent can read zoe-data's secrets (vault A6 waits).
 - The panel Pi (`pi` user), the Omnigent container's own token mounts, and HA's own tokens are separate work.
+
+## 8. P0-2 in detail: the surviving root routes, their fix, and the rehearsal (2026-11-14)
+
+**Status:** lab + deliverables, nothing applied. **Lab:** `labs/p0-2-root-paths/` (its README is the record).
+**Deliverables:** `scripts/setup/p0-deroot/p0-2/` (the move tool `zoe-p0-2-paths` with `apply`/`verify`/`revert`/`inspect`,
+`move.manifest`, `srv-zoe.mount`, a STANDALONE compose override example, the backup-helper line) and
+`libexec/zoe-omnigent-exec` + its sudoers alias. Pinned by `tests/unit/test_p0_2_paths.py` and
+`test_omnigent_exec_routing.py`. A read-only inventory on 2026-11-14 re-checked section 2.6 against the live box;
+box-specific findings are in the owner's private rehearsal file, not here.
+
+### 8.1 The classes, re-measured (the box modelled: after P0-3, before P0-2)
+
+| class | what lets the service user reach root | in 2.6? | lab (a) exists | (b) fix closes + negative control | (c) still works |
+|---|---|---|---|---|---|
+| R1 config-load | a privileged container loads code from a config dir the service user can write | #1 | cells R1a | config dir root-owned, every component (R1b); source dir owned by the service user reopens | hub loads its plugin, writes state |
+| R2 bind swap | a bind source is resolved by root at EVERY start; renamed + symlinked, the next start mounts what the symlink names. **Trigger needs no Docker right:** making the service crash under its restart policy re-resolves it (also: a proxied start, a reboot) | #2 (trigger new) | R2a | source chain root-owned (R2b); one parent owned by the service user reopens | service reads its config, writes state |
+| R2f file-bind swap | the same for a single-file bind (the realtime-media server's config): a swapped symlink hands a root-only file to the container | #2 (file case new) | R2f-a | same rule (R2f-b); the file's directory owned by the service user reopens | server reads its real config |
+| R3 set-uid plant | an **unprivileged** container that runs as root, with a read-write bind the service user can traverse: anything that runs as container root writes a set-uid-root file there, the service user runs it on the host. So removing `privileged` alone (P0-6) does NOT close R1 | new | R3a | three independent layers, each with its own control: source not traversable (R3b-1), container as its own non-root uid with no capabilities (R3b-2), `/srv/zoe` mounted `nosuid,nodev` (R3b-3) | service reads + writes its data |
+| R4 root unit runs a writable file | a ROOT system unit (or executor) runs a file the service user owns, even inside a root-owned directory; also a root-owned file in a directory the service user owns (the runner shape of #3) | #3 generalised; a live instance exists | R4a | file and its directory root-owned (R4b); file back to the service user reopens (nc1); root file in a service-user directory reopens and `verify` catches it (nc2) | the unit still runs |
+| R5 dormant definition | a stopped container definition (privileged, binding the OLD path) still exists; the old path stays for the rollback week, so starting it reopens R1 after the move | new | R5a | `docker rm` the definition; `inspect` (running AND stopped) passes (R5b); the definition coming back reopens | the moved container runs |
+
+Other findings the inventory added, generically: one container binds a whole shared data directory although it
+uses one cache in it (the move NARROWS that bind); `apply`'s data copy carries anything the service user planted
+in the old tree (cell X7, hence the review step below); a copy from an old path that resolves through a symlink is
+refused (X5). Design drift: the main Home Assistant container is no longer privileged (R3 still applies; R5 holds
+the privileged route).
+
+**Lab model, stated plainly:** no Docker inside the lab. A runtime stand-in (`lab/runtime.py`) reproduces the three
+behaviours the routes depend on: `mount --bind` of the source as root at every start (follows symlinks, like the
+daemon), a restart policy, and Docker's default capability set / `user:` / `cap_drop` / `no-new-privileges`
+through `setpriv`. The lab container is NOT privileged, has no network, no host mount and its own cgroup namespace;
+its one added capability is `SYS_ADMIN` (for mount/unshare inside it), strictly less than `labs/p0-deroot`.
+Not labbed (verified live in the rehearsal): Docker's own source resolution and compose `!override` merging.
+
+### 8.2 The fix (P0-2 text in section 5, made concrete)
+
+1. Every bind source moves to `/srv/zoe/<name>` (`move.manifest`): owned by root or the container's uid, `0700`
+   unless the content is read-only, every component from `/` root-owned and not renamable. The realtime-media
+   config file is on the list (the phase text omitted it). The old paths stay untouched for a week (rollback).
+2. `srv-zoe.mount` re-mounts `/srv/zoe` `nosuid,nodev` (no `noexec`: HA and MA load shared libraries from there).
+3. Each container is recreated from the override example: `volumes: !override`, `no-new-privileges`,
+   `cap_drop: [ALL]` plus the smallest `cap_add` where the image is known to run without root powers; HA keeps
+   Docker's default set until P0-6 measures what its integrations need.
+4. Stopped definitions that still bind an old path or are privileged are removed (`inspect` lists them).
+5. Root units / executors run only root-owned files in root-owned directories (`exec` manifest items).
+6. **B4:** the agent-orchestrator exec goes through `zoe-omnigent-exec` (one container, uid 1000:1000, flags
+   `-i -d -w` only, a fixed program list). Its four callers use it only when it is installed AND `sudo -n -l`
+   allows it, else `docker exec` exactly as before (dry-run proof in `test_omnigent_exec_routing.py`).
+7. **B5:** the music-discovery batch's `docker run` (unpinned image, credentials passed in its argv) is NOT given a
+   helper here: switch the feature off until one exists. The owner changes `ZOE_MUSIC_DISCOVERY=on` to
+   `ZOE_MUSIC_DISCOVERY=off` in zoe-data's `.env` and restarts zoe-data (the weekly playlist stops refreshing).
+8. **B6:** `services/zoe-data/system_updates.py` (compose + exec from inside zoe-data) is retired in its own PR, not
+   here: the removal is ~900 lines plus three routes in `routers/system.py`, its startup hook in `main.py`, the
+   desktop `updates.html` page and two test files, `tests/unit/test_compose_loopback_binds.py`'s guard and a
+   `flag-ratchet.json` entry. Plan: delete the module, the three `/updates` routes, the `main.py` hook, the
+   page's calls (desktop only), the two tests and the guard; regenerate the ratchet. Updates become an owner step.
+
+### 8.3 The rehearsal (by day; one container first; never first at night)
+
+**Pilot: the realtime-media server**, because it is started on demand (stopped at rest, so recreating it costs no
+user-visible downtime), its one bind is a read-only file, and rollback is one command. Then, each on its own day
+or with a pause to watch: tunnel, Music Assistant, the HA MCP bridge, the auth service, **Home Assistant** (with
+the backup-helper line), the SMB drop, the stopped definitions and root-unit files, and **the web UI last**, only
+after the deploy helper (P0-1, 4.4) can sync its static files into `/srv/zoe` (until then UI deploys would not
+reach the moved copy).
+
+Per container, as `zoe-admin`:
+
+1. **Pre-checks (stop if any fails):** a backup ran in the last 24 h and its archive lists; `night_busy.sh deploy`
+   says "may run" and the time is outside 01:00-05:00; `MemAvailable >= 2000` MiB; `/health` answers and the
+   voice stack is healthy (no voice probe running); `docker inspect` of the container saved (format in the tool's
+   docstring: no environment, no labels).
+2. `srv-zoe.mount` installed once, before the first container (its own verify: `findmnt -no OPTIONS /srv/zoe`).
+3. **Review** the old tree: a listing of executable or code-like files (`custom_components`, `deps`, scripts) is
+   compared with what the owner expects; anything unexpected is investigated before the copy (cell X7).
+4. Stop the container. `zoe-p0-2-paths apply move.manifest --only <name> --container-stopped`, then
+   `zoe-p0-2-paths verify move.manifest --only <name>`: must print `PASS`.
+5. Recreate it with the override block for that one service, then `inspect`: must print `PASS` for it.
+6. **Test its legitimate function** (below). Watch its logs for a minute.
+7. **Abort** if verify or inspect fails, the container does not reach running/healthy within 3 minutes, or the
+   function test fails: recreate with the old compose (the old paths are untouched), then
+   `zoe-p0-2-paths revert move.manifest --only <name>` (renames the new copy, never deletes it).
+
+**Downtime per container** = stop (Docker's 10 s grace) + copy (the 2026-11-14 sizes are all under 100 MB except a
+data dir the narrowed bind no longer copies, so seconds) + start until healthy. Estimates, to be replaced by the
+pilot's timer: realtime-media 0 s at rest, tunnel 10-20 s, MA 0 s at rest, MCP bridge and auth 15-30 s, Home
+Assistant 1-3 min (its own start), web UI 10-20 s. Nothing on the voice path restarts.
+
+**What could break, and how the owner tests it in plain terms:**
+
+| change | could break | owner test |
+|---|---|---|
+| Home Assistant | smart-home control, automations | ask Zoe to switch a light; open HA in the browser and see the dashboards and the automation list |
+| HA move + backup-helper line | the nightly host backup's HA part | run the backup once by hand; its host archive lists `.storage` |
+| realtime-media server | browser voice (WebRTC mode) | start a browser voice session and hear a reply |
+| Music Assistant | music playback | ask Zoe to play something; it plays |
+| tunnel | remote access | open the remote URL from a phone off Wi-Fi |
+| auth service | logins, the panel's session | log in on the desktop; the panel still shows the home screen |
+| exec helper | cross-review, Multica runs | run one cross-review; it reaches a verdict |
+| any | the night window | the next morning's night-window report is clean (or its `--dry-run` by day) |
+
+**Owner time:** about 2.5 h at a terminal in three day sessions (pilot 25 min including the one-off mount, then
+about 10-15 min per container, HA 25 min, the exec helper 10 min), plus a week before the old paths are deleted.

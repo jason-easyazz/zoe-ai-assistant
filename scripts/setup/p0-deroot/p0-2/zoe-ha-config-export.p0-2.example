@@ -1,0 +1,8 @@
+# P0-2: the ONE line of the installed backup helper /usr/local/libexec/zoe-priv/zoe-ha-config-export that changes
+# when Home Assistant's config moves (docs/architecture/p0-deroot.md section 8). Change it in the same sitting
+# as the homeassistant move, after HA is up on the new path:
+#   sudo sed -i 's#^HA_CONFIG = .*#HA_CONFIG = "/srv/zoe/homeassistant"#' /usr/local/libexec/zoe-priv/zoe-ha-config-export
+# Verify (read-only):  grep -c '^HA_CONFIG = "/srv/zoe/homeassistant"' /usr/local/libexec/zoe-priv/zoe-ha-config-export   -> 1
+#                      then one backup run: the host archive must contain .storage again.
+# Revert:              the same sed with "/home/zoe/assistant/homeassistant" (with the HA move's revert).
+HA_CONFIG = "/srv/zoe/homeassistant"

@@ -1,0 +1,262 @@
+#!/usr/bin/python3 -I
+"""P0-2 bind-source move (docs/architecture/p0-deroot.md section 8). NOT run by anything: the OWNER runs it as
+root, one container at a time, with that container STOPPED. Proven in labs/p0-2-root-paths/.
+
+  zoe-p0-2-paths apply  MANIFEST [--only NAME] --container-stopped   copy old -> new once, set owner/group/mode
+  zoe-p0-2-paths verify MANIFEST [--only NAME]                       READ-ONLY: one PASS/FAIL line per item
+  zoe-p0-2-paths revert MANIFEST [--only NAME]                       undo apply (see below)
+  zoe-p0-2-paths inspect -                                           READ-ONLY: container lines on stdin (below)
+Common options: --root PREFIX (tests and the lab: every manifest path is under PREFIX), --service-user NAME (the
+uid that must NOT be able to write any path component; default zoe), --state FILE (revert record).
+
+Manifest lines: `kind name old new owner group mode` (# comments). kind is
+  dir   a container's bind-source directory: copied from `old` on first apply (stamp `.p0-2-moved`), owner/group
+        applied recursively once, then only the top directory is re-asserted (the container owns its contents);
+  file  a single-file bind source (copied once, then re-asserted);
+  exec  a file a ROOT-run unit or executor runs IN PLACE (`old` and `new` are the same path): chown/chmod only.
+The rule verify enforces (p0-deroot.md section 2.6): every component from the item up to `/` is a real directory
+(no symlink), and none is writable by the service user (owner, group-writable through one of its groups, or
+other-writable without the sticky bit). A source the service user can rename is re-resolved, as root, at the next
+container start; a file it can write is code a root process runs.
+
+apply refuses an `old` that resolves through a symlink, and copies symlinks INSIDE it as links. It also copies
+whatever the service user planted there (lab cell X7): review the listing first (the rehearsal's step 3).
+apply never touches `old` (the rollback is "recreate with the old compose"; old paths stay a week). revert
+renames `new` to `new.reverted-<epoch>` (never deletes: data written after the move survives for a manual merge)
+and puts `exec` items back to the owner/mode apply recorded. Idempotent: a second apply copies nothing.
+
+inspect reads lines produced WITHOUT environment or labels (they can hold secrets):
+  docker inspect --format '{{json .Name}}|{{json .State.Status}}|{{json .HostConfig.Privileged}}|{{json .Config.User}}|{{json .HostConfig.CapDrop}}|{{json .HostConfig.SecurityOpt}}|{{json .Mounts}}' $(docker ps -aq)
+and fails a container (running OR stopped) that is privileged or binds a source the service user could rename.
+Exit codes: 0 all PASS, 1 a FAIL, 2 usage.
+"""
+import grp
+import json
+import os
+import pwd
+import shutil
+import stat
+import sys
+import time
+
+STAMP = ".p0-2-moved"
+KINDS = ("dir", "file", "exec")
+
+
+def usage(msg):
+    print(f"zoe-p0-2-paths: {msg}\n{__doc__.splitlines()[3]}", file=sys.stderr)
+    sys.exit(2)
+
+
+def parse_manifest(path):
+    items = []
+    for n, raw in enumerate(open(path, encoding="utf-8"), 1):
+        line = raw.split("#", 1)[0].split()
+        if not line:
+            continue
+        if len(line) != 7 or line[0] not in KINDS or not all(p.startswith("/") for p in line[2:4]):
+            usage(f"{path}:{n}: want `kind name old new owner group mode`")
+        kind, name, old, new, owner, group, mode = line
+        if kind == "exec" and old != new:
+            usage(f"{path}:{n}: an exec item is fixed in place (old == new)")
+        items.append({"kind": kind, "name": name, "old": old, "new": new, "owner": owner, "group": group,
+                      "mode": int(mode, 8)})
+    return items
+
+
+def uid_of(name):
+    return int(name) if name.isdigit() else pwd.getpwnam(name).pw_uid
+
+
+def gid_of(name):
+    return int(name) if name.isdigit() else grp.getgrnam(name).gr_gid
+
+
+class Svc:
+    def __init__(self, name):
+        pw = pwd.getpwnam(name)
+        self.name, self.uid = name, pw.pw_uid
+        self.gids = set(os.getgrouplist(name, pw.pw_gid))
+
+    def why_writable(self, st):
+        """Why the service user can write (or, for a directory, rename entries in) this inode; '' if it cannot."""
+        m = st.st_mode
+        if st.st_uid == self.uid:
+            return "owned by the service user"
+        if st.st_gid in self.gids and m & stat.S_IWGRP:
+            return "group-writable by a service-user group"
+        if m & stat.S_IWOTH and not (stat.S_ISDIR(m) and m & stat.S_ISVTX):
+            return "world-writable"
+        return ""
+
+
+def chain_problems(path, root, svc):
+    """Every component from path up to the root prefix: no symlink, nothing the service user can write."""
+    problems, cur = [], path
+    while True:
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            return [f"{cur} missing"]
+        if stat.S_ISLNK(st.st_mode):
+            problems.append(f"{cur} is a symlink")
+        elif why := svc.why_writable(st):
+            problems.append(f"{cur} {why}")
+        if cur == root or cur == os.path.dirname(cur):
+            return problems
+        cur = os.path.dirname(cur)
+
+
+def under(root, p):
+    return os.path.normpath(root + p) if root != "/" else p
+
+
+def verify_item(it, root, svc):
+    new = under(root, it["new"])
+    problems = chain_problems(new, root, svc)
+    if not problems:
+        st = os.lstat(new)
+        want = (uid_of(it["owner"]), gid_of(it["group"]), it["mode"])
+        got = (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode))
+        if got != want:
+            problems.append(f"{new} owner/group/mode {got[0]}:{got[1]} {got[2]:04o}, want "
+                            f"{want[0]}:{want[1]} {want[2]:04o}")
+        kind_ok = stat.S_ISDIR(st.st_mode) if it["kind"] == "dir" else stat.S_ISREG(st.st_mode)
+        if not kind_ok:
+            problems.append(f"{new} is not a {'directory' if it['kind'] == 'dir' else 'regular file'}")
+    return problems
+
+
+def chown_tree(path, uid, gid):
+    os.lchown(path, uid, gid)
+    for base, dirs, files in os.walk(path):
+        for n in dirs + files:
+            os.lchown(os.path.join(base, n), uid, gid)
+
+
+def apply_item(it, root, state):
+    old, new = under(root, it["old"]), under(root, it["new"])
+    uid, gid = uid_of(it["owner"]), gid_of(it["group"])
+    if it["kind"] == "exec":
+        st = os.lstat(new)
+        state.setdefault(it["name"], {"owner": st.st_uid, "group": st.st_gid, "mode": stat.S_IMODE(st.st_mode)})
+        os.chown(new, uid, gid, follow_symlinks=False)
+        os.chmod(new, it["mode"])
+        return "fixed in place"
+    parent = os.path.dirname(new)
+    if not os.path.isdir(parent):  # the /srv/zoe chain: root-owned, 0755, created only when absent
+        os.makedirs(parent, mode=0o755)
+    done = os.path.exists(os.path.join(new, STAMP)) if it["kind"] == "dir" else os.path.lexists(new)
+    if not done and os.path.lexists(old) and os.path.realpath(old) != os.path.normpath(old):
+        # The service user owns every component of `old`: a swapped-in symlink would make THIS root copy read
+        # whatever it points at (lab cell X5). Refuse; the owner looks at the path by hand.
+        raise RuntimeError(f"{old} resolves through a symlink ({os.path.realpath(old)}); refusing to copy")
+    if not done:
+        if it["kind"] == "dir":
+            if os.path.isdir(old):
+                shutil.copytree(old, new, symlinks=True)  # a planted symlink is copied as a link, never followed
+            else:
+                os.makedirs(new, exist_ok=True)
+            open(os.path.join(new, STAMP), "w").close()
+            chown_tree(new, uid, gid)
+        else:
+            if not os.path.isfile(old) or os.path.islink(old):
+                raise RuntimeError(f"{old} is not a regular file; nothing to copy")
+            shutil.copyfile(old, new, follow_symlinks=False)
+            os.chown(new, uid, gid)
+    os.chown(new, uid, gid, follow_symlinks=False)  # re-assert the top only: the container owns what is inside
+    os.chmod(new, it["mode"])
+    return "re-asserted" if done else "copied"
+
+
+def revert_item(it, root, state):
+    new = under(root, it["new"])
+    if it["kind"] == "exec":
+        prev = state.get(it["name"])
+        if not prev:
+            return "no apply record, left as is"
+        os.chown(new, prev["owner"], prev["group"], follow_symlinks=False)
+        os.chmod(new, prev["mode"])
+        state.pop(it["name"])
+        return f"restored {prev['owner']}:{prev['group']} {prev['mode']:04o}"
+    if not os.path.lexists(new):
+        return "nothing to revert"
+    dest = f"{new}.reverted-{int(time.time())}"
+    os.rename(new, dest)
+    return f"renamed to {dest}"
+
+
+def inspect(lines, svc, root):
+    fails = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            name, status, priv, user, capdrop, secopt, mounts = (json.loads(f) for f in line.rstrip("\n").split("|", 6))
+        except ValueError:
+            usage("inspect: each line must be the seven json fields of the documented --format")
+        problems = ["privileged"] if priv else []
+        for m in mounts or []:
+            if m.get("Type") == "bind":
+                problems += chain_problems(under(root, m["Source"]), root, svc)
+        if problems:
+            fails += 1
+        print(f"{'FAIL' if problems else 'PASS'} {name.lstrip('/')} ({status}, user={user or 'image default'}, "
+              f"cap_drop={capdrop or []}, security_opt={secopt or []}){': ' + '; '.join(problems) if problems else ''}")
+    return 1 if fails else 0
+
+
+def main(argv):
+    if not argv or argv[0] not in ("apply", "verify", "revert", "inspect"):
+        usage("first argument must be apply|verify|revert|inspect")
+    cmd, args = argv[0], argv[1:]
+    opts = {"--root": "/", "--service-user": "zoe", "--state": None, "--only": None}
+    flags, pos = set(), []
+    while args:
+        a = args.pop(0)
+        if a in opts:
+            if not args:
+                usage(f"{a} needs a value")
+            opts[a] = args.pop(0)
+        elif a == "--container-stopped":
+            flags.add(a)
+        elif a.startswith("-") and a != "-":
+            usage(f"unknown option {a}")
+        else:
+            pos.append(a)
+    if len(pos) != 1:
+        usage("exactly one MANIFEST (or `-` for inspect)")
+    root = os.path.normpath(opts["--root"])
+    svc = Svc(opts["--service-user"])
+    if cmd == "inspect":
+        return inspect(sys.stdin if pos[0] == "-" else open(pos[0]), svc, root)
+    items = [i for i in parse_manifest(pos[0]) if opts["--only"] in (None, i["name"])]
+    if not items:
+        usage(f"no manifest item named {opts['--only']}")
+    if cmd == "verify":
+        bad = 0
+        for it in items:
+            problems = verify_item(it, root, svc)
+            bad += bool(problems)
+            print(f"{'FAIL' if problems else 'PASS'} {it['kind']} {it['name']} {it['new']}"
+                  f"{': ' + '; '.join(problems) if problems else ''}")
+        return 1 if bad else 0
+    if cmd == "apply" and "--container-stopped" not in flags:
+        usage("apply copies live data: stop the container first, then pass --container-stopped")
+    state_path = opts["--state"] or under(root, "/var/lib/zoe-p0-2/revert.json")
+    state = json.load(open(state_path)) if os.path.exists(state_path) else {}
+    rc = 0
+    for it in items:
+        try:
+            print(f"{it['name']}: {(apply_item if cmd == 'apply' else revert_item)(it, root, state)}")
+        except (OSError, RuntimeError, KeyError) as exc:
+            print(f"{it['name']}: ERROR {exc}", file=sys.stderr)
+            rc = 1
+    os.makedirs(os.path.dirname(state_path), mode=0o700, exist_ok=True)
+    with open(state_path, "w") as fh:
+        json.dump(state, fh)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,68 @@
+# P0-2 compose OVERRIDE EXAMPLE (docs/architecture/p0-deroot.md section 8). STANDALONE: no compose file includes
+# it and nothing runs it. The owner copies the block for ONE service at a time to a root-owned
+# /etc/zoe/compose/p0-2.override.yml and recreates only that service:
+#   sudo docker compose -f docker-compose.yml -f /etc/zoe/compose/p0-2.override.yml up -d --no-deps <service>
+# Revert: the same command without the second -f (the old bind sources are untouched for a week).
+# `!override` replaces the service's whole volume list (compose >= 2.24.4; the box has 2.29.x) so no old bind
+# under /home survives a merge. Every source below is created by `zoe-p0-2-paths apply` and passes its verify.
+# Rules per service (labs/p0-2-root-paths): no `privileged`; `no-new-privileges`; `cap_drop: [ALL]` plus the
+# smallest cap_add the image is known to need; read-only mounts for anything the container only reads.
+# The tunnel credential file is not listed: its name is box-specific (the owner's private rehearsal has it).
+services:
+  homeassistant:
+    # Runs as root (the image's s6 init). Its config dir is 0700 root: zoe can neither write custom_components or
+    # deps (cell R1b) nor reach a file the container writes (R3b-1). Capabilities stay at Docker's default until
+    # P0-6 measures what the integrations need; cap_drop here without that measurement would break integrations.
+    volumes: !override
+    - /srv/zoe/homeassistant:/config
+    security_opt:
+    - no-new-privileges:true
+
+  zoe-auth:
+    # Narrowed: today it binds the whole shared data dir (other services' stores included); it needs its touch cache.
+    volumes: !override
+    - /srv/zoe/zoe-auth:/app/data
+    security_opt:
+    - no-new-privileges:true
+    cap_drop: [ALL]
+
+  zoe-ui:
+    # nginx master needs CHOWN/SETUID/SETGID to drop to its worker user and NET_BIND_SERVICE for 80/443.
+    volumes: !override
+    - /srv/zoe/zoe-ui/dist:/usr/share/nginx/html:ro
+    - /srv/zoe/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    - /srv/zoe/zoe-ui/nginx.d:/etc/nginx/zoe:ro
+    - /srv/zoe/zoe-ui/ssl:/etc/nginx/ssl:ro
+    security_opt:
+    - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, NET_BIND_SERVICE]
+
+  homeassistant-mcp-bridge:
+    volumes: !override
+    - /srv/zoe/homeassistant-mcp-bridge:/app:ro
+    security_opt:
+    - no-new-privileges:true
+    cap_drop: [ALL]
+
+  livekit:
+    # The realtime-media server's config (it holds the API secret): root 0600, read-only.
+    volumes: !override
+    - /srv/zoe/livekit/config.yaml:/config.yaml:ro
+    security_opt:
+    - no-new-privileges:true
+    cap_drop: [ALL]
+
+  cloudflared:
+    # Already non-root (65532). Add the credential-file line from the private rehearsal before using this block.
+    volumes: !override
+    - /srv/zoe/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+    - /srv/zoe/cloudflared/cert.pem:/etc/cloudflared/cert.pem:ro
+    security_opt:
+    - no-new-privileges:true
+    cap_drop: [ALL]
+
+# Not in these compose files: Music Assistant (its module compose: bind /srv/zoe/music-assistant:/data) and the
+# SMB drop (a `docker run`: bind /srv/zoe/smb-drop:/mount). Omnigent already runs as 1000:1000; add
+# `security_opt: [no-new-privileges:true]` in its module compose so the exec helper's sessions cannot gain root
+# through a set-uid binary in the image.
