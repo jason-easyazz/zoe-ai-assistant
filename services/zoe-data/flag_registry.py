@@ -494,6 +494,7 @@ _ENTRIES = (
     _f('ZOE_LOG_QUIET_POLL_PATHS', 'str', '', doc='docs/knowledge/log-review-2026-10-04.md'),
     _f('ZOE_LOG_QUIET_POLL_SLOW_MS', 'int', 1000, doc='docs/knowledge/incident-runbook.md'),
     _f('ZOE_LOG_REPEAT_WINDOW_S', 'str', '', doc='docs/knowledge/incident-runbook.md'),
+    _f('ZOE_LOOP_BLOCK_STACKS', 'bool', True, doc='services/zoe-data/AGENTS.md', note='A6: sample the loop stack on a >=250 ms block; code locations only'),
     _f('ZOE_LOOP_LIFECYCLE', 'bool', False, doc='docs/knowledge/synthetic-users-and-proactive-recipients.md'),
     _f('ZOE_MANNER_BLOCK', 'str', 'off', allowed=('off', 'on'), doc='docs/knowledge/converse-not-mirror.md', note='live .env: on'),
     _f('ZOE_MAX_BROWSER_TABS', 'int', 5),

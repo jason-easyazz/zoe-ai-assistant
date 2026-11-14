@@ -1830,7 +1830,8 @@ async def _continuity_debug_uid(user_id: str) -> bool:
 # ~20 sequential context-block awaits run before every brain POST and nothing measured them. One line per turn that
 # reaches the POST: ``total_ms`` (wrapper entry -> payload built), one ``<block>_ms`` per await that ran (a skipped
 # block has no field), ``other_ms`` (the rest: the synchronous note_turn calls, assembly). Numbers and fixed block
-# names only - never text, never an id other than the session. Measurement only: nothing awaited changes order or bytes.
+# names only - never text, never a raw id (the session is a short hash, ``sid=``). Measurement only: nothing awaited
+# changes order or bytes.
 _PREPOST_BLOCKS = (
     # the wrapper (run_flue_brain_streaming), in call order
     "distress", "medical", "restraint", "brief", "raise", "debug",
@@ -1883,7 +1884,8 @@ class _PrepostTimer:
         ran = [b for b in _PREPOST_BLOCKS if b in self.ms]
         blocks = sum(self.ms[b] for b in ran if b not in _PREPOST_NESTED)
         fields = " ".join(f"{b}_ms={int(round(self.ms[b]))}" for b in ran)
-        return (f"FLUE_PREPOST session={session_id} total_ms={int(round(total))} blocks_ms={int(round(blocks))} "
+        # ``sid`` is a short hash, never the raw session id (join: ``_short_hash(<session id>)``)
+        return (f"FLUE_PREPOST sid={_short_hash(str(session_id or ''))} total_ms={int(round(total))} blocks_ms={int(round(blocks))} "
                 f"other_ms={int(round(max(0.0, total - blocks)))} "
                 f"awaited={sum(1 for b in ran if b not in _PREPOST_NESTED)}" + (f" {fields}" if fields else ""))
 
