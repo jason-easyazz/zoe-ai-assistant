@@ -1620,8 +1620,23 @@ _CONTINUITY_PORTRAIT_MAX_CHARS = 240
 # Pre-brain budget for the continuity fetch (packet + portrait, concurrent). A
 # miss costs only the block, never the turn — voice latency outranks the floor.
 _CONTINUITY_TIMEOUT_S = 3.0
+# ZOE_CONTINUITY_CEILING_S (default 3.0 = the value above, unchanged): the packet wait, read per turn. 0.4 is the candidate
+# (speed audit 2026-11-14 B6; the household fallback's _HOUSEHOLD_FETCH_BUDGET_S): a late packet is simply not carried, as
+# today past 3 s. The portrait's own budget never exceeds this ceiling either. A value outside (0, 10] is the default.
+_CONTINUITY_CEILING_MAX_S = 10.0
 # The portrait is optional: a shorter budget measured from the same start.
 _CONTINUITY_PORTRAIT_TIMEOUT_S = 1.0
+
+
+def _continuity_timeout_s() -> float:
+    """The continuity packet's wait ceiling (``ZOE_CONTINUITY_CEILING_S``); never raises."""
+    try:
+        from typed_env import flag
+
+        v = float(flag("ZOE_CONTINUITY_CEILING_S"))
+    except Exception:  # noqa: BLE001
+        return _CONTINUITY_TIMEOUT_S
+    return v if 0.0 < v <= _CONTINUITY_CEILING_MAX_S else _CONTINUITY_TIMEOUT_S
 
 
 def _continuity_inject_enabled() -> bool:
@@ -1715,9 +1730,10 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
     # never retrieved" when the packet path returns early.
     portrait_task.add_done_callback(lambda t: t.cancelled() or t.exception())
     packet, portrait, focus = "", "", {}
+    ceiling = _continuity_timeout_s()
     try:
         try:
-            packet_res = await asyncio.wait_for(packet_task, timeout=_CONTINUITY_TIMEOUT_S) or {}
+            packet_res = await asyncio.wait_for(packet_task, timeout=ceiling) or {}
             packet = str(packet_res.get("packet") or "")
             focus = packet_res.get("continuity_focus") or {}
         except Exception as exc:  # noqa: BLE001 — continuity must never break a turn
@@ -1726,7 +1742,7 @@ async def _continuity_context_block(message: str, user_id: str) -> str:
                 exc,
             )
         if packet:
-            remaining = max(0.0, _CONTINUITY_PORTRAIT_TIMEOUT_S - (loop.time() - t0))
+            remaining = max(0.0, min(_CONTINUITY_PORTRAIT_TIMEOUT_S, ceiling) - (loop.time() - t0))
             try:
                 portrait = _portrait_line(
                     str(await asyncio.wait_for(portrait_task, timeout=remaining) or "")
@@ -3076,6 +3092,23 @@ async def run_flue_brain_streaming(
             )
 
 
+def _volatile_after_user_enabled() -> bool:
+    """``ZOE_BRAIN_VOLATILE_AFTER_USER`` (default OFF; speed audit 2026-11-14 B3). The run of delimited blocks that today
+    rides BEFORE the user's words (identity -> bridge -> notes -> fast-path -> recall packet -> offer / list share ->
+    hop preamble; the recall packet whole, any marker inside it included) moves to right AFTER them, ahead of the
+    continuity / hop / risk / every-turn / brief / raise blocks, keeping its own order. Why: the sidecar elides every
+    block from all but the newest user message (ZOE_BRAIN_ELIDE_STALE_BLOCKS), so the stored copy of the previous turn
+    changes at the block's position; with the block first that re-prefills the words, the reply and the new turn, with
+    the block after the words the previous turn's cached bytes still match through the words. Off = exactly the bytes
+    of before (pinned by tests/test_brain_cache_stability.py over a synthetic corpus). Never raises."""
+    try:
+        from typed_env import flag
+
+        return bool(flag("ZOE_BRAIN_VOLATILE_AFTER_USER"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def _run_flue_brain_streaming_turn(
     message: str,
     session_id: str,
@@ -3292,6 +3325,7 @@ async def _run_flue_brain_streaming_turn(
     except Exception:  # noqa: BLE001
         pass
     # ZOE_PERSONALISATION_HOP_PLACEMENT=preamble: the hop block rides BEFORE the user's words, behind the other blocks
+    # (ZOE_BRAIN_VOLATILE_AFTER_USER moves the whole run after the words - see _volatile_after_user_enabled)
     _blocks = "\n".join(b for b in (identity_block, bridge_block, notes_block, fastpath_block, recall_block, offer_block,
                                     hop_block if hop_placement == "preamble" else "") if b)
     # Sanitise BEFORE assembling: a user-typed " zoe-replay:" line must never reach
@@ -3305,7 +3339,10 @@ async def _run_flue_brain_streaming_turn(
     correction = "" if kwargs.get("replay_isolation") else _claim_correction_line(session_id)
     if correction:
         safe_message = f"{correction}\n{safe_message}"
-    brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
+    if _blocks and _volatile_after_user_enabled():
+        brain_message = f"{safe_message}\n{_blocks}"   # B3: the words lead; an elided block diverges only after them
+    else:
+        brain_message = f"{_blocks}\n{safe_message}" if _blocks else safe_message
     if continuity_block:
         brain_message = f"{brain_message}\n{continuity_block}"
     if hop_block and hop_placement != "preamble":   # block: the delimited block after the words; suffix: ONE line
