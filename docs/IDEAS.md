@@ -147,3 +147,17 @@ Settings > Bluetooth devices ([bluetooth-settings.md](knowledge/bluetooth-settin
 
 ### A bounded multi-step problem loop ("move my dentist reminder to Friday and add floss to the list") — 💡 pinned
 - **Core:** run a multi-step ask as at most 6 tool steps / 90 s, each step judged by the household authority table first, a step done only when a receipt proves it, ending in a "here's what I tried, here's what I need from you" card. Built 2026-11-05 as `problem_loop.py` but never wired to a turn; deleted in the 2026-11-13 gap audit (git history keeps it; the authority table stays, see [authority-table.md](knowledge/authority-table.md)).
+
+### Presence, feeds and self-evolution pieces from the 2026-11-14 design work — 💡 pinned
+- **Source:** the voice, calendar and self-evolution design notes behind [ROADMAP.md](ROADMAP.md) Now 2-5 (working notes, not in the repo). Not built; each needs its own number before and after.
+- 💡 **She tunes her own end-of-turn wait per person** (owner idea, 2026-11-14): from counts of talk after the close, household-wide first, then per person once voice ID is verified, inside a floor and ceiling, with a spoken override ("give me a second to think"). Scheduled as ROADMAP Next 2.
+- 💡 **A visual "heard you" glow**: the orb softens the instant she stops listening. Truthful, silent, works at night; the silent half of every receipt sound.
+- 💡 **A rising "mm?" when only her name was said**: replaces the follow-up beep; true by construction, she heard her name and is waiting.
+- 💡 **An honest "this one's taking me a minute"** past about 5 s on slow chat turns, in place of silence.
+- 💡 **The receipt matches how the person spoke**: a quiet, slow voice gets the softest take, a brisk one a short take or none; from speech level and pace only, never a claimed feeling. Needs the instrument first.
+- 💡 **A held pause before a comforting reply**: a planned silence of about 400 ms before the first word, presence rather than dead air.
+- 💡 **Back-channel sounds during a long story** (research): only at long sentence-final pauses, rare; blocked while the speaker-mic mutes itself during playback.
+- 💡 **She learns each person's pauses**: a person who often keeps talking after the close gets a longer wait and fewer receipt sounds; counts only.
+- 💡 **The calendar fetch moves into the credential broker**, so a calendar link never reaches the assistant's own service.
+- 💡 **The router learns how to talk to the brain from outcomes**: a route hint (tool groups, rule ids) learned from what worked, flag-dark and A/B'd on the voice corpus; the no-subscription evolution tier.
+- 💡 **A speculative start on pre-brain work while the person is still speaking** (recall, embeddings, context assembly), narrower than the flag-dark whole-turn speculation of B1.1.
