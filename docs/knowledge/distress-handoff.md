@@ -25,7 +25,10 @@ Every language with a section is scanned on every turn (code-switching works); t
   (NFKC, casefold, accents off Latin letters, apostrophes dropped).
 * **Tiers.** `handoff`: a first-person cue stands in its own clause (clauses end at punctuation and the lexicon's `clause_breaks`); this includes first-person
   **ideation** ("I'm thinking about suicide", "I've had suicidal thoughts", "I feel suicidal" (the speaker's own state, or "suicidal" + thoughts / ideas / feelings: "I have suicidal friends / patients" is a third party, gentle), "I keep thinking about killing myself", "I've been thinking about not being
-  here anymore"), added 2026-11-14 after a live test scored "im thinking about suicide" gentle because "suicide" was only a topic word. `gentle`: the same cue behind a **negation** ("I don't want to die") or a
+  here anymore"), added 2026-11-14 after a live test scored "im thinking about suicide" gentle because "suicide" was only a topic word. An **intentional overdose** in the speaker's own words is a hand-off too: a quantity ("too many", "them all", "the lot", "a bottle of", "twenty tablets") plus an intent
+  marker ("on purpose", "deliberately", "to make it stop", "so I won't wake up", "because I wanted it to stop"), or a strong intent with no quantity ("I took my pills to end it",
+  never a bare "on purpose" or "to stop the pain": that is ordinary use); "I've taken an overdose", "I'm overdosing". An accident ("by accident", "I think I took too many")
+  belongs to the medical poisoning floor and is not grabbed by these cues; someone else, a distant past ("years ago", "when I was sixteen"), fiction and idioms stay gentle or none. `gentle`: the same cue behind a **negation** ("I don't want to die") or a
   **story/quote marker** ("in the film he says..."), a bare topical word ("the film was about suicide"), a third party at risk ("my friend said she wanted to die"), ordinary low mood, a resolved past ("I used to think about suicide", "I used to have suicidal thoughts": the closed vocabulary has no "used to", the same as
   every other class), a professional or study mention ("I work in suicide prevention", "suicide prevention training", "suicide rate"). Simple past is NOT resolved: "I had
   suicidal thoughts last night" / "I thought about suicide" hand off (over-trigger). `none`: nothing, or an **idiom** ("dying to see it", "kill for a coffee", "I can't live without my phone", "ending it with my boyfriend").
@@ -51,7 +54,7 @@ Rollback: `ZOE_DISTRESS_HANDOFF=off` (restart); the lexicon section can be delet
 | `ZOE_DISTRESS_NOTIFY=all` (default) \| `minors` \| `off` | owner decision: **`all`** tells the contact about any member (the brief); **`minors`** keeps an adult's disclosure private. Never the contact about themself, never a guest. Once per member per 6 h (in-process: a restart inside the window can repeat it once); a `danger`-class event (physical emergency) has its own 10 min window per member, so it is never swallowed by an earlier self-harm notice. |
 | Mark each child as a minor (persona `member_modes.minor`) | the only child record; unflagged, a child gets the adult wording and, under `minors`, no notification. |
 
-## Measured (343 synthetic phrases, English + Spanish, `tests/fixtures/distress_labelled.json`)
+## Measured (471 synthetic phrases, English + Spanish, `tests/fixtures/distress_labelled.json`)
 Three sets: **dev** (written with the lexicon, tuned on); **held_out_1** and **blind_2** (written after the lexicon froze, scored once, THEN used to fix whole classes of cue).
 First-run (the honest out-of-sample estimate of a hand-written lexicon) vs after the class fixes (a regression set now):
 
@@ -79,6 +82,28 @@ en, written after that run) is the closer one.
 Probe class fixes: "can't stop thinking about", "considered", "I was thinking about", "I feel like killing myself". The two probe misses are pinned (they score gentle, never none):
 "I keep thinking I should kill myself" (no `should` desire: "I should die" is common hyperbole) and a subject-less "been feeling suicidal since Monday" (a bare form would also fire on
 "she has been feeling suicidal"). Speech-to-text often drops the subject: subject-less ideation stays gentle (logged), a known limit.
+
+**Intentional-overdose class (2026-11-14, `overdose_4` + `overdose_4_probe`, 101 phrases, English).** `overdose_4` was written before the cues; the probe after their first run.
+
+| set | old lexicon | first run of the new cues | final |
+|---|---|---|---|
+| overdose_4 must-hand-off (30) | 9 (20 of the misses were `none`: the brain answered) | 30 | 30 |
+| overdose_4 must-not (31) kept below hand-off | 26 | 26 | 26 |
+| overdose_4_probe must-hand-off (20) | not run | 11 | 20 |
+| overdose_4_probe must-not (20) | not run | 19 | 19 |
+| every older fixture row (343) | as above | unchanged | unchanged |
+
+The must-not rows that hand off were ALL handing off before these cues and are pinned (`OVERDOSE_PREEXISTING_HANDOFF`): `overdose_bare` needs no subject
+("my brother overdosed last year", "my friend took too many pills on purpose", "i overdosed on chocolate"), and `overdose_now` fires on "all my tablets" without an intent
+word and on the inner "i" of "I think I took too many painkillers". Kept: the safe direction, and "I took all my tablets" alone must hand off; narrowing them is an owner
+decision, alongside the medical poisoning floor. Unseen-phrasing recall for this class is the probe's first run (11 / 20), not the final column.
+
+**Symptom relief is not intent (`overdose_4_relief`, 27 rows, written before the fix).** The reason after the verb counts only when it is a self-harm complement
+(die, end it all, stop existing / living / being here, sleep forever, the thoughts / voices) or a BARE "stop / end / go away / make it stop / wake up" at the end of its clause.
+"to stop coughing", "so I could stop feeling sick", "so I don't wake up in the night" are medication talk: none. A bare "because I want it to stop" stays a hand-off
+(ambiguous, the safe side). A QUANTITY plus a plain "to stop the pain" hands off (more than a dose, the reason unnamed: ambiguous, the safe side); a named
+ailment after it ("the pain in my knee", "my cough") does not; with no quantity, pain relief never does. Before the fix: 9 / 12 hand-off, 9 / 15 must-not kept below
+(6 relief sentences handed off); after: 12 / 12 and 15 / 15, every other fixture row unchanged.
 
 ## No-store map (`tests/test_distress_no_store.py`, real code, control for each: flag off stores it)
 extractor + ingest choke point (`blocks_write`), per-turn digest (`is_off_record`), exact-words index, person extractors, latent-intent detector (all via `is_off_record`, text test, stateless);
