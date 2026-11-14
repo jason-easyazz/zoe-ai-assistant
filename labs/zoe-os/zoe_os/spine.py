@@ -7,21 +7,27 @@
   order and without loss, the next time it polls (backpressure by lag-to-replay);
 * every delivery is re-authorized at the moment it is handed over, so a revoked grant
   stops events already sitting in a queue;
-* a refusal is itself an event (kind REFUSAL, kernel visibility) and carries no content.
+* a refusal is itself an event (kind REFUSAL, kernel visibility) and carries no content;
+* FORGET is a property of the log, not of each feature (``Spine.forget``): a person's events,
+  everything derived from them and their bytes on disk are gone from replay, export and every
+  queue, every subscriber is told, and a skill cannot publish the forgotten words again.
 
 Trust boundary: this is an in-process prototype. Python cannot stop a skill in the same
 process from calling a private method; the real boundary is a process and a socket.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import sqlite3
 import threading
 import time
 from collections import deque
 from typing import Callable, Iterable, Iterator, NamedTuple, Protocol
 
-from .events import KERNEL_ONLY, Event, Kind, Visibility
+from .events import CONTENT_KEYS, KERNEL_ONLY, Event, Kind, Visibility
 
 KERNEL = "kernel"
 
@@ -38,6 +44,12 @@ CREATE INDEX IF NOT EXISTS people_person ON people(person, seq);
 CREATE TABLE IF NOT EXISTS causes (seq INTEGER NOT NULL, cause INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS causes_cause ON causes(cause);
 CREATE TABLE IF NOT EXISTS cursors (reader TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS forget_ledger (
+  id INTEGER PRIMARY KEY, subject TEXT NOT NULL, upto INTEGER NOT NULL, ts REAL NOT NULL,
+  count INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS shield (fp BLOB PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 """
 
 
@@ -54,6 +66,7 @@ class Authorizer(Protocol):
     def may_publish(self, source: str, event: Event) -> Decision: ...
     def may_subscribe(self, reader: str, kinds: frozenset[Kind] | None, subject: str | None) -> Decision: ...
     def may_read(self, reader: str, event: Event) -> Decision: ...
+    def may_forget(self, actor: str, subject: str) -> Decision: ...
 
 
 class DenyAll:
@@ -71,9 +84,47 @@ class DenyAll:
     def may_read(self, reader: str, event: Event) -> Decision:
         return Decision(False, "default deny")
 
+    def may_forget(self, actor: str, subject: str) -> Decision:
+        return Decision(False, "default deny")
+
 
 class Refused(Exception):
     """Raised to the caller; the same refusal is also appended as a REFUSAL event."""
+
+
+class ForgetResult(NamedTuple):
+    count: int      # events erased, including derived ones
+    upto: int       # the forget covers everything up to this sequence number
+
+
+def _strings(node):
+    """Every string value in a payload, at any depth."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from _strings(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _strings(value)
+
+
+def _content(node):
+    """The free-text values of a payload: strings held under a content key, at any depth."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in CONTENT_KEYS and isinstance(value, str):
+                yield value
+            else:
+                yield from _content(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _content(value)
+
+
+def _chunks(items: list, size: int = 500):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
 
 
 def _row_to_event(row: tuple) -> Event:
@@ -104,6 +155,13 @@ class Spine:
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.executescript(_SCHEMA)
         self._subs: list[Subscription] = []
+        self._epoch = 0     # bumped by every forget; a subscription re-checks its queue on a change
+        key = self._db.execute("SELECT value FROM meta WHERE key = 'shield_key'").fetchone()
+        if key is None:
+            key = (os.urandom(32),)
+            self._db.execute("INSERT INTO meta VALUES ('shield_key', ?)", key)
+        self._shield_key: bytes = key[0]
+        self._shield: set[bytes] = {r[0] for r in self._db.execute("SELECT fp FROM shield")}
         self.refusals = 0
         self.last_seq = self._db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
 
@@ -124,6 +182,9 @@ class Spine:
                 reason = self._publish_refusal(ev)
                 if reason:
                     self._refuse(ev.source, f"publish {ev.kind.value}", reason)
+            for ev in events:
+                if self._shield and self.authorizer.is_origin(ev.source):
+                    self._reassert(ev.payload)
             return self._append(events)
 
     def _publish_refusal(self, ev: Event) -> str:
@@ -134,19 +195,22 @@ class Spine:
             return verdict.reason or "not allowed"
         if not ev.caused_by and not self.authorizer.is_origin(ev.source):
             return "a skill must say which events its event derives from"
-        return self._cause_refusal(ev)
+        reason = self._cause_refusal(ev.source, ev.caused_by)
+        if not reason and not self.authorizer.is_origin(ev.source) and self._shielded(ev.payload):
+            reason = "carries forgotten content"
+        return reason
 
-    def _cause_refusal(self, ev: Event) -> str:
+    def _cause_refusal(self, source: str, caused_by: tuple[int, ...]) -> str:
         """A cause must exist, be live, and be something the publisher may itself read."""
-        for cause in ev.caused_by:
+        for cause in caused_by:
             row = self._db.execute(
                 f"SELECT {_COLS}, tombstoned FROM events WHERE seq = ?", (cause,)).fetchone()
             if row is None:
                 return "cites an event that does not exist"
             if row[-1]:
                 return "derives from a forgotten event"
-            if not self.authorizer.is_origin(ev.source) and \
-                    not self.authorizer.may_read(ev.source, _row_to_event(row[:-1])).allowed:
+            if not self.authorizer.is_origin(source) and \
+                    not self.authorizer.may_read(source, _row_to_event(row[:-1])).allowed:
                 return "cites an event it may not read"
         return ""
 
@@ -196,7 +260,92 @@ class Spine:
                                 payload={"who": who, "attempted": attempted, "reason": reason})])
         raise Refused(f"{who}: {attempted}: {reason}")
 
+    # ---- forget -------------------------------------------------------------------
+    def forget(self, subject: str, *, actor: str, seqs: Iterable[int] | None = None) -> ForgetResult:
+        """Erase a person's events (all of them, or the named ones) and all that derives from them."""
+        with self._lock:
+            verdict = self.authorizer.may_forget(actor, subject)
+            if not verdict.allowed:
+                self._refuse(actor, "forget", verdict.reason or "not theirs to forget")
+            upto = self.last_seq
+            seed = {r[0] for r in self._db.execute(
+                "SELECT seq FROM people WHERE person = ? AND seq <= ?", (subject, upto))}
+            if seqs is not None:
+                seed &= set(seqs)
+            dead = sorted(self._closure(seed))
+            self._tombstone(dead)
+            self._db.execute("INSERT INTO forget_ledger (subject, upto, ts, count) VALUES (?,?,?,?)",
+                             (subject, upto, self._clock(), len(dead)))
+            self._epoch += 1
+            self._append([Event(Kind.FORGET, KERNEL, visibility=Visibility.KERNEL,
+                                payload={"subject": subject, "upto": upto, "count": len(dead)})])
+            return ForgetResult(len(dead), upto)
+
+    def _closure(self, seed: set[int]) -> set[int]:
+        """The seed plus every event that derives from it, to any depth."""
+        dead, frontier = set(seed), list(seed)
+        while frontier:
+            chunk, frontier = frontier[:500], frontier[500:]
+            marks = ",".join("?" * len(chunk))
+            for (seq,) in self._db.execute(
+                    f"SELECT DISTINCT seq FROM causes WHERE cause IN ({marks})", chunk):
+                if seq not in dead:
+                    dead.add(seq)
+                    frontier.append(seq)
+        return dead
+
+    def _tombstone(self, seqs: list[int]) -> None:
+        """Erase the rows in place, remember a keyed hash of their first-hand free text."""
+        fps: set[bytes] = set()
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            for chunk in _chunks(seqs):
+                marks = ",".join("?" * len(chunk))
+                for source, payload in self._db.execute(
+                        f"SELECT source, payload FROM events WHERE seq IN ({marks})", chunk):
+                    if payload and self.authorizer.is_origin(source):
+                        fps.update(self._fp(text) for text in _content(json.loads(payload)))
+                self._db.execute(
+                    "UPDATE events SET tombstoned = 1, payload = NULL, mentions = NULL, subject = NULL,"
+                    f" caused_by = NULL WHERE seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM people WHERE seq IN ({marks})", chunk)
+                self._db.execute(f"DELETE FROM causes WHERE seq IN ({marks})", chunk)
+            self._db.executemany("INSERT OR IGNORE INTO shield VALUES (?)", [(fp,) for fp in fps])
+            self._db.execute("COMMIT")
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._shield |= fps
+        self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # old page images leave the WAL file
+
+    def _fp(self, text: str) -> bytes:
+        norm = " ".join(text.casefold().split()).encode()
+        return hmac.new(self._shield_key, norm, hashlib.sha256).digest()
+
+    def _shielded(self, payload: dict) -> bool:
+        """Does this payload carry, anywhere, a string a person asked to forget?"""
+        return bool(self._shield) and any(self._fp(s) in self._shield for s in _strings(payload))
+
+    def _reassert(self, payload: dict) -> None:
+        """A trusted adapter recorded these words again first-hand: that is new reality."""
+        again = {self._fp(text) for text in _content(payload)} & self._shield
+        if again:
+            self._shield -= again
+            self._db.executemany("DELETE FROM shield WHERE fp = ?", [(fp,) for fp in again])
+
+    def _tombstoned(self, seqs: list[int]) -> set[int]:
+        marks = ",".join("?" * len(seqs))
+        return {r[0] for r in self._db.execute(
+            f"SELECT seq FROM events WHERE tombstoned = 1 AND seq IN ({marks})", seqs)}
+
     # ---- read ---------------------------------------------------------------------
+    def _get(self, seq: int) -> Event | None:
+        """One live event by sequence number (kernel-internal: no capability check)."""
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {_COLS} FROM events WHERE seq = ? AND tombstoned = 0", (seq,)).fetchone()
+        return _row_to_event(row) if row else None
+
     def _fetch(self, after: int, kinds: frozenset[Kind] | None, subject: str | None,
                limit: int) -> list[Event]:
         """Live rows after a sequence number, in order. The ONE durable read path."""
@@ -206,7 +355,7 @@ class Spine:
             sql.append(f"AND kind IN ({','.join('?' * len(kinds))})")
             args += sorted(k.value for k in kinds)
         if subject:
-            sql.append("AND seq IN (SELECT seq FROM people WHERE person = ?)")
+            sql.append("AND (seq IN (SELECT seq FROM people WHERE person = ?) OR kind = 'forget')")
             args.append(subject)
         sql.append("ORDER BY seq LIMIT ?")
         args.append(limit)
@@ -214,7 +363,7 @@ class Spine:
             return [_row_to_event(r) for r in self._db.execute(" ".join(sql), args)]
 
     def _check_subscribe(self, reader: str, kinds, subject) -> frozenset[Kind] | None:
-        kinds = frozenset(Kind(k) for k in kinds) if kinds else None
+        kinds = frozenset(Kind(k) for k in kinds) | {Kind.FORGET} if kinds else None
         verdict = self.authorizer.may_subscribe(reader, kinds, subject)
         if not verdict.allowed:
             what = ",".join(sorted(k.value for k in kinds)) if kinds else "all kinds"
@@ -241,7 +390,8 @@ class Spine:
                 for e in self.replay(reader)]
 
     def _deliverable(self, reader: str, ev: Event) -> bool:
-        return self.authorizer.may_read(reader, ev).allowed
+        """The delivery-time check. A FORGET notice reaches every reader: it is a duty, not data."""
+        return ev.kind is Kind.FORGET or self.authorizer.may_read(reader, ev).allowed
 
     def subscribe(self, reader: str, *, kinds=None, subject: str | None = None,
                   from_seq: int | None = None) -> "Subscription":
@@ -267,9 +417,12 @@ class Subscription:
         self._tail = tail                     # every event up to here is queued or skipped
         self._live = tail == spine.last_seq   # False = must catch up from the log
         self.lagged = 0                       # times the queue filled and we fell back
+        self._epoch = spine._epoch
         self.closed = False
 
     def _matches(self, ev: Event) -> bool:
+        if ev.kind is Kind.FORGET:
+            return True
         if self.kinds and ev.kind not in self.kinds:
             return False
         return not self.subject or self.subject in ev.people
@@ -294,11 +447,19 @@ class Subscription:
         else:
             self._tail = rows[-1].seq
 
+    def _purge_forgotten(self) -> None:
+        """After a forget, withdraw any erased event still waiting in this queue."""
+        if self._epoch != self.spine._epoch and self._queue:
+            dead = self.spine._tombstoned([e.seq for e in self._queue])
+            self._queue = deque(e for e in self._queue if e.seq not in dead)
+        self._epoch = self.spine._epoch
+
     def poll(self, timeout: float = 0.0) -> Event | None:
         """The next event this reader may see, or None when there is none in time."""
         deadline = time.monotonic() + timeout
         with self.spine._wake:
             while not self.closed:
+                self._purge_forgotten()
                 if not self._queue and not self._live:
                     self._catch_up()
                 while self._queue:

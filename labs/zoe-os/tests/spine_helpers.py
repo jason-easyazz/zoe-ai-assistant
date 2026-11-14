@@ -25,6 +25,9 @@ class AllowList:
             return Decision(False, "no grant from that person")
         return Decision(reader in self.readers, "unknown reader")
 
+    def may_forget(self, actor, subject):
+        return Decision(actor == subject, "not theirs to forget")
+
     def may_read(self, reader, event: Event):
         allowed = self.readers.get(reader, set())
         if event.visibility is Visibility.KERNEL:
