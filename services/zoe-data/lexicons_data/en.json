@@ -1651,5 +1651,77 @@
    "rough",
    "overwhelm\\w*"
   ]
+ },
+ "child_safety": {
+  "_note": "child_safety_floor.py (ZOE_CHILD_SAFETY_FLOOR): run on text folded like distress_handoff (casefold, apostrophes dropped, punctuation kept). 'own_age' / 'school' are the SPEAKER's own age statements (first person only, so 'my dad says shes 40' declares nothing; 'mum told me im 10' / 'dad said i was 9' are the speaker's own; anything inside quotes, single or double, is someone else's words; a child declaration is sticky for the session) ({AGE} = a number or a number word, {END} = the end of the statement); a 'when / if / pretend' lead declares nothing. A class fires on one of its 'terms' in a REQUEST or QUESTION: a '?', an 'ask' cue anywhere, or an 'opener' as the first word (after 'lead_strip'). A STATEMENT that only mentions a hazard is not one. 'factual' questions (a why... question, or what is it made of / called, with no 'factual_not' first-person word and no ask cue) are exempt; 'benign' (spell / draw / paint / say) is exempt ONLY when the whole turn is that verb plus its object (no instrument preposition, no 'body_parts' word, nothing after it); a live hazard ('in_progress') with any request cue, including 'live_ask' anywhere, is never exempt and gets 'urgent_reply'; a 'report' (an injury) is not refused unless an ask / opener cue comes BEFORE it ('how do i cut my bread' is an ask). 'in_progress' (gas smell, smoke, fire, sparks, left on) is part of that same report list, split out: a statement stays answered, but a refused request carrying one (not negated by an 'in_progress_not' word just before it: 'without smoke') gets 'urgent_reply' instead of the class line, whatever the order. 'reply' is the whole fixed answer.",
+  "adult_age": 18,
+  "max_school_year": 12,
+  "number_words": "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen",
+  "tens_words": "twenty thirty forty fifty sixty seventy eighty ninety",
+  "lead_not": "when |if |until |till |once |pretend |pretend that |imagine |as if ",
+  "end": "(?=$|[.,!?;:]| (?:and|so|but|now|today|too|ok|okay|btw|how|can|could|what|which|is|please|zoe|i|im|my)(?!\\w))",
+  "own_age": [
+   "(?:i am|im|i m)(?: (?:only|just))? {AGE}(?: (?:years?|yrs?) old| yo)?{END}",
+   "i (?:just )?turned {AGE}{END}",
+   "my age is {AGE}{END}",
+   "(?:said|says|say|told|tells|reckons|reckoned|thinks|thought|goes|went) (?:me )?(?:that )?i was {AGE}{END}"
+  ],
+  "school": [
+   "(?:i am|im|i m) in (?:year|yr|grade|class) {AGE}(?! of)(?!\\w)",
+   "(?:i am|im|i m) in (?:kindy|kindergarten|prep|primary school|elementary school|middle school)(?!\\w)"
+  ],
+  "lead_strip": "^(?:(?:hey|hi|ok|okay|um|so|and) )*(?:zoe )?[,. ]*",
+  "opener": "how|what|whats|which|where|when|who|can|could|may|should|would|will|do|does|is|are|am|tell|show|explain|teach|walk|give|get|bring|find|grab|pass|turn|switch|light|start|use|open|plug|make|let|lets|please|try",
+  "clause_opener": "which|what(?! an? )|whats|where|wheres|how|who|when",
+  "clause_break": "and|so|but|then|also|ok|okay",
+  "back_refs": "it its one ones that this them those these",
+  "aux_openers": "can could may should would will do does is are am",
+  "ask": "can i|could i|may i|should i|can you|could you|will you|would you|how (?:do|can|to|would|should|much|many)|show me|tell me|teach me|help me|walk me|explain|i (?:want|wanna|need|would like|d like) to|let me|lets|please|is it (?:ok|okay|safe|alright)|am i allowed|instructions|steps|what happens if|what would happen if",
+  "factual": "^(?:why|whys) .*|^what (?:is|are|was|were) (?:a |an |the )?.{0,40}(?:made of|made from|called)$",
+  "factual_not": "i|me|my|we|us|our|im|ive",
+  "benign": "(?:(?:how (?:do|can|would|should) (?:i|you|we)|can you|could you|will you|would you|please|help me|teach me (?:how )?to|show me how to) )?(?:spell|say|pronounce|draw|write|paint|colou?r|sing) (?!(?:with|using|across|on|onto|into|through|in|over|under|around|along|at)(?!\\w))(?:a |an |the |some )?\\w+(?: \\w+)?",
+  "body_parts": "hand hands arm arms finger fingers thumb leg legs face skin wrist wrists neck head foot feet toe toes tongue mouth eye eyes ear ears belly tummy lip lips",
+  "report": "i cut|cut (?:my|myself)|bleed\\w*|blood|burnt|burned|burn(?:ed|t)? (?:my|myself)|i burn|hurts?|hurting|stings?|swallowed|ate|drank|emergency|fell|fallen|stuck|electric shock|got (?:a )?shock|electrocuted",
+  "in_progress": "on fire|flames?|smoke|smoky|smells? (?:like |of )?(?:gas|smoke|burning)|(?:gas|burning) smell|sparks?|sparking|(?:stove|oven|gas|cooktop|hob|heater|iron|bbq|barbecue|grill|fire|candle|burner)s? (?:is|are|was|were|has been|have been) (?:still )?(?:on|lit|burning|left on)|left (?:the \\w+ )?on|(?:wont|cant|doesnt) (?:turn|switch) off|(?:stove|oven|toaster|microwave|heater|pan|pot|kettle)s? (?:is |are |was |has |have )?(?:on fire|burning|smoking|sparking|caught fire)|(?:pan|oven|stove|toaster|microwave|grease) fire",
+  "live_ask": "what do i do|what should i do|what do we do|what should we do|what now|help",
+  "in_progress_not": "without no not never isnt arent wasnt any",
+  "urgent_reply": "Move away from it and tell a grown-up right now.",
+  "classes": [
+   {
+    "id": "medicine",
+    "terms": "pills?|medicines?|medications?|meds|panadol|paracetamol|nurofen|ibuprofen|aspirin|painkillers?|antibiotics|sleeping tablets?|pain tablets?|headache tablets?|cough (?:syrup|medicine)",
+    "reply": "That one needs a grown-up. Can you ask one to help you with any medicine?"
+   },
+   {
+    "id": "chemicals",
+    "terms": "chemicals?|bleach|(?:laundry|washing|detergent|dishwasher|tide) (?:pods?|powder|liquid|capsules?|tablets?)|detergent|(?:drain|oven|toilet) cleaner|cleaning (?:products?|chemicals?|spray|liquid)|ammonia|chlorine|pool chemicals|weed ?killer|rat poison|poison|pesticides?|(?:bug|fly|insect) spray|turps|kerosene|petrol|methylated spirits|metho|lighter fluid",
+    "reply": "That one needs a grown-up. Can you ask one to help you with cleaning things and chemicals?"
+   },
+   {
+    "id": "fire",
+    "terms": "fire(?!\\s+(?:drills?|trucks?|engines?|fighters?|station|brigade|alarms?|type|emblem|ants?))s?|flames?|(?<!have )(?<!got )gas|(?:hot|boiling) (?:oil|pans?|pots?|water|plates?|trays?|stove|grill)|(?<!the )heat (?:up|it up)|kettles?|microwave|frying pan|deep fry\\w*|toaster|burn|burning|stoves?|stovetop|cooktop|hob|ovens?|gas (?:stove|burner|ring|bottle|heater)|turn on the gas|burners?|lighters?|matchbox|matchsticks?|box of matches|matches|(?:light|strike) (?:a |the )?match(?:es)?|(?:light|lighting) (?:a |the |some )?candles?|(?:light|set off|let off) (?:the |some |a )?(?:fireworks?|sparklers?|crackers?)|firecrackers?|(?:light|start|make|build) (?:a |the )?fire|campfire|bonfire|fireplace|bbq|barbecue",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything hot or with fire?"
+   },
+   {
+    "id": "blades",
+    "terms": "knife|knives|scissors|cut(?!\\s+(?:and|&) paste)|cutting|chop(?:ping)?|slic(?:e|ing)|blades?|razors?|box cutter|stanley knife|cleaver|machete|axe|hatchet",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything sharp?"
+   },
+   {
+    "id": "power_tools",
+    "terms": "(?<!fire )drills?|power drill|(?:circular|table|mitre|miter|jig|chain|band|hand|hack|power|electric) ?saws?|nail ?guns?|sanders?|angle grinders?|grinders?|lawn ?mowers?|mowers?|hedge trimmers?|whipper snippers?|line trimmers?|soldering irons?|heat guns?|power tools?",
+    "reply": "That one needs a grown-up. Can you ask one to help you with power tools?"
+   },
+   {
+    "id": "electricity",
+    "terms": "electricity|electrics|(?:electric )?shocks?|shocked|electrocut\\w*|(?:power ?point|power socket|wall socket|power outlet|electrical outlet|socket|outlet)s?|wiring|(?:electrical|live|mains) wires?|fuse ?box|switchboard|circuit breakers?",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything electrical?"
+   },
+   {
+    "id": "heights",
+    "terms": "roofs?|rooftop|ladders?|climb (?:out )?(?:of |through |onto |on )?(?:the |a |my )?window|jump out (?:of )?(?:the |a |my )?window|window ?(?:sill|ledge)|balcony (?:rail|railing|edge|ledge)|top of the (?:fridge|wardrobe|cupboard|bookshelf)",
+    "reply": "That one needs a grown-up. Can you ask one to help you with anything high up?"
+   }
+  ]
  }
 }
