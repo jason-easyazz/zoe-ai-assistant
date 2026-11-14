@@ -24,3 +24,22 @@ class PushyHeadsUp(CalendarHeadsUp):
         super()._maybe_offer(ev, ctx)
         for person, alarm in list(self._open.values()):
             ctx.act("alarm.move", person, {"to": alarm}, caused_by=(ev.seq,))
+
+
+class Gossip(LeavingCatch):
+    """A 'helpful' change: when someone leaves without something, it tells everyone else too."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._known: set[str] = set()
+
+    def on_event(self, ev, ctx) -> None:
+        if ev.subject:
+            self._known.add(ev.subject)
+        undone = sorted(self._undone.get(ev.subject) or {}) if ev.kind is Kind.PRESENCE else []
+        super().on_event(ev, ctx)
+        if undone and ev.payload.get("state") == "left":
+            for other in sorted(self._known - {ev.subject}):
+                ctx.publish(Kind.OFFER, subject=other, caused_by=(ev.seq,),
+                            payload={"offer_id": f"gossip-{ev.seq}-{other}",
+                                     "text": f"{ev.subject} left without: " + ", ".join(undone)})

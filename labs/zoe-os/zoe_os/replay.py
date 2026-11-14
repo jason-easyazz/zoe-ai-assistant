@@ -226,6 +226,9 @@ def _report(rec: Recording, skills: list, facts: list, label: str) -> Report:
     return Report(head + body + tail, counts)
 
 
+build_report = _report      # for callers that run the kernel themselves (the twin's rehearsal)
+
+
 def diff(a: Report, b: Report, *, a_name: str = "current", b_name: str = "changed") -> str:
     """A unified diff of two reports. '' when the two versions behave the same."""
     lines = difflib.unified_diff([x for x in a.lines if not x.startswith("# zoe-os")],
